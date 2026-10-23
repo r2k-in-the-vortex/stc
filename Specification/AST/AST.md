@@ -180,7 +180,19 @@ Error
 This list is illustrative; the implementation may split nodes further (for example, separate
 `StructElem` from `VarDecl`) as long as the AST contract holds.
 
-### 3.3 CST invariants
+### 3.3 Stable `SyntaxKind`
+
+- `SyntaxKind` is `#[repr(u16)]` and `#[non_exhaustive]` with explicit discriminants.
+- Existing discriminants are never renumbered or reused. New kinds are appended; removed kinds
+  remain reserved.
+- Kind names and their canonical debug/JSON spellings are stable.
+- A checked-in stability table (name, discriminant) is enforced by a test. Additive changes update
+  the table and follow semver for `stc-syntax`.
+- The rest of the CST (node handles, traversal internals) remains internal in v1. The design keeps
+  spans, trivia, error nodes, and stable kinds so a public CST/traversal API can be added in
+  v2/v3 for IDE tools.
+
+### 3.4 CST invariants
 
 - Every non-terminal node has at least one child unless it is an `Error` node.
 - `Error` nodes may contain tokens and nested nodes; they never contain unreachable siblings.
@@ -255,6 +267,23 @@ pub enum ExprKind {
 Typed accessors return `Option` for optional children and `Result` only when a structural
 invariant is broken. The parser guarantees the shape; AST accessors do not re-validate grammar.
 
+### 4.0 Pragmas
+
+```rust
+pub struct PragmaAnnotation {
+    pub name: String,                     // after "stc:"
+    pub payload: Option<serde_json::Value>,
+    pub span: Span,
+}
+```
+
+- Leading pragmas attach to the following item; a trailing pragma on a variable declaration
+  attaches to that declaration.
+- `stc:` pragmas are parsed as strict JSON (objects, arrays, strings, numbers, booleans, null).
+  Non-`stc` pragmas remain raw and are ignored/warned.
+- The annotation keeps the raw JSON for metadata and future I/O/device keys. Unknown keys are
+  preserved where the pragma schema permits.
+
 ### 4.1 Typed AST invariants
 
 - A `FunctionDecl` has at most one result type and one body.
@@ -290,6 +319,20 @@ pub struct HirCrate {
     pub dependency_order: Vec<PackageId>,
     pub config: Option<ConfigHir>,
     pub exports: Vec<Export>,
+    pub retain_layout: Option<RetainLayout>,
+}
+
+pub struct RetainLayout {
+    pub leaves: Vec<RetainLeaf>, // sorted by path, then offset
+    pub size: u64,
+    pub layout_hash: u64,
+}
+
+pub struct RetainLeaf {
+    pub path: String, // e.g. Main.Timer.State
+    pub ty: TyId,
+    pub offset: u64,
+    pub size: u64,
 }
 
 pub struct Body {
@@ -460,7 +503,12 @@ Lowering is a single pass after type checking, with these transformations:
 8. **Initializers** are lowered to constant data when possible, otherwise to `stc_init` code.
 9. **Configuration** is lowered to `ConfigHir` with selected resources/tasks/programs and I/O
    bindings.
-10. **Pragmas** are resolved to HIR annotations (`test`, `export`, `no_mangle`, `inline`).
+10. **Pragmas** are resolved to HIR annotations (`test`, `export`, `no_mangle`, `inline`, `io`).
+11. **Retention**: the effective `RETAIN`/`NON_RETAIN` policy is computed per storage leaf
+    (explicit qualifier, section qualifier, instance inheritance, aggregate inheritance). The
+    result is a `RetainLayout` of persistable leaves; non-persistable retained fields
+    (references/interfaces/pointers) are diagnosed. Vtable/type pointers are excluded and
+    reinitialized before state load.
 
 Lowering never re-resolves a name and never inserts a conversion silently; every semantic choice
 is visible in HIR.
@@ -552,6 +600,8 @@ conversions. In this case both operands are `DINT`, so the HIR is a `Binary(Add)
 ## 12. Testing contract
 
 - **CST round-trip**: for every corpus file, `cst.text() == source`.
+- **SyntaxKind stability**: the checked-in name/discriminant table matches the enum exactly;
+  renumbering or reuse fails, additive changes update the table and follow semver.
 - **AST snapshots**: a compact debug dump of typed AST nodes and spans.
 - **HIR snapshots**: resolved names, types, and explicit casts.
 - **Error recovery**: malformed snippets produce expected diagnostics and no panic.
@@ -559,10 +609,9 @@ conversions. In this case both operands are `DINT`, so the HIR is a `Binary(Add)
   token/trivia coverage invariant.
 - **Fuzzing**: the lexer/parser entry point is fuzzed with arbitrary bytes.
 
-## 13. Open AST questions
+## 13. Resolved AST questions
 
-- Q-008: Unicode identifiers (currently ASCII-only).
-- Q-016: Whether to expose a stable `SyntaxKind` numbering for external tooling; v1 keeps it
-  internal.
-- Q-011: Whether the formatter should be part of v1; the CST supports it, but the CLI surface is
-  not committed yet.
+No open AST questions currently.
+
+- **Q-016 resolved (A-021):** `SyntaxKind` is stable and append-only; the full CST/traversal API
+  is planned for v2/v3 for IDE tooling.

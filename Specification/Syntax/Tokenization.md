@@ -40,7 +40,7 @@ references point at the 2013 edition where useful.
 - `STC-LEX-010`: Horizontal whitespace is space, tab, form feed, and vertical tab. Newlines are
   handled by §1.2. Whitespace is trivia.
 - `STC-LEX-011`: Non-ASCII characters are permitted in comments and in string literals whose
-  type supports them. They are not permitted in identifiers or keywords in v1 (Q-008).
+  type supports them. They are not permitted in identifiers or keywords in v1 (A-013).
 
 ## 2. Token stream
 
@@ -78,7 +78,7 @@ and are never discarded from the CST.
 | `TodLiteral` | `TOD#15:36:55.36` | |
 | `DateTimeLiteral` | `DT#1984-06-25-15:36:55.360227400` | |
 | `DirectVariable` | `%IX0.0`, `%QW28`, `%I*` | Process-image address |
-| `Pragma` | `{stc:test}`, `{VERSION 2.0}` | Raw content, no nesting |
+| `Pragma` | `{stc:test}`, `{stc:io {"device":"d1"}}` | Raw content; balanced JSON payload; no pragma nesting |
 | `Punct` | `;`, `,`, `:`, `:=`, `=>`, `?=`, `**`, `..`, `<>`, `<=`, `>=`, `^`, `(` ... | See §3 |
 | `Error` | | Malformed input; parser recovery |
 
@@ -169,7 +169,7 @@ ACTION END_ACTION STEP END_STEP INITIAL_STEP TRANSITION END_TRANSITION FROM
 - `STC-LEX-014`: Identifiers are case-insensitive. `abc`, `ABC`, and `aBc` denote the same
   symbol. The original spelling is kept for diagnostics and for emitted debug names.
 - `STC-LEX-015`: A Unicode letter is not part of an identifier in v1; it is an invalid character
-  outside strings/comments. This is an explicit profile restriction (Q-008).
+  outside strings/comments. This is an explicit profile restriction (A-013).
 - `STC-LEX-016`: The maximum identifier length is implementation-defined; `stc` accepts at least
   255 bytes and reports a diagnostic beyond its internal limit.
 
@@ -301,17 +301,38 @@ The full type/length/conversion semantics are in [UTF-8 Strings](../UTF8-Strings
 
 ## 8. Pragmas
 
-- `STC-LEX-052`: A pragma starts with `{` and ends at the matching first `}`. Pragmas do not
-  nest. A `}` inside a string literal inside the pragma still terminates the pragma; pragma
-  content is lexed as raw text, not as ST.
+- `STC-LEX-052`: A pragma starts with `{` and ends at the `}` that returns the outer brace depth
+  to zero. Pragmas do **not** nest as pragmas, but the body may contain balanced JSON braces.
+  The lexer scans with a small state machine:
+  - outer `{`: depth = 1;
+  - outside strings, `{` increments depth and `}` decrements it; depth 0 ends the pragma;
+  - inside a double-quoted JSON string, `\"` and `\\` are escapes and braces are ignored;
+  - inside a single-quoted payload string, `\'` and `\\` are escapes and braces are ignored;
+  - braces in comments are not special because pragma content is not lexed as ST.
+  This allows `{stc:io {"device":"drive1","channel":5}}` while keeping pragmas non-nested.
 - `STC-LEX-053`: Pragmas may appear anywhere whitespace is allowed, except inside a string
-  literal. They are tokens so the parser can attach them to declarations/statements.
-- `STC-LEX-054`: Pragmas whose first token is `stc:` are interpreted by `stc`. The current set:
-  `{stc:test}`, `{stc:export}`, `{stc:no_mangle}`, `{stc:inline}`, `{stc:deprecated("...")}`.
-  Unknown `stc:` pragmas are errors. Pragmas without the `stc:` prefix are ignored with
-  `STC-W-PRAGMA-001`, except `{attribute '...'}` which is reserved for future AX-compatible
-  metadata and currently ignored with the same warning.
-- `STC-LEX-055`: An unterminated pragma is an error at EOF.
+  literal. They are tokens so the parser can attach them to declarations/statements. A variable
+  declaration may have leading pragmas and one trailing pragma before `;`; see the grammar.
+- `STC-LEX-054`: A `stc:` pragma has the shape `{stc:<name> <json-value>?}` where `<name>` matches
+  `[A-Za-z_][A-Za-z0-9_]*` and the optional payload is a JSON value (object, array, string,
+  number, boolean, or null). Whitespace is allowed around the payload. Known names:
+  - `{stc:test {"cycles": 25}}` — test declaration; optional `cycles` (positive integer),
+    `timeout` (duration string), `expect-trap` (trap name string);
+  - `{stc:export}` / `{stc:no_mangle}` / `{stc:inline}` — no payload;
+  - `{stc:deprecated {"message": "..."}}` — deprecation note;
+  - `{stc:io {...}}` — I/O binding hint; object payload; only meaningful on an `AT` declaration.
+  Unknown `stc:` names are `STC-E-PRAGMA-001`. Unknown keys inside a known stc pragma are
+  `STC-W-PRAGMA-002` and preserved where the schema permits. Pragmas without the `stc:` prefix
+  are ignored with `STC-W-PRAGMA-001`; `{attribute '...'}` is reserved for future AX-compatible
+  metadata and currently follows the same ignore path.
+- `STC-LEX-055`: An unterminated pragma is `STC-E-LEX-007` at EOF.
+- `STC-LEX-056`: The JSON payload is parsed by the parser, not the lexer, using a strict JSON
+  parser. Invalid JSON is `STC-E-LEX-010`; duplicate object keys are `STC-E-LEX-011`; payloads
+  larger than 64 KiB or nested deeper than 32 levels are `STC-E-LEX-012`.
+- `STC-LEX-057`: A `stc:` pragma with a payload on a name that takes no payload, or without a
+  required payload, is `STC-E-PRAGMA-002`.
+- `STC-LEX-058`: The legacy parenthesized form `{stc:test(cycles := 25)}` is **not** accepted.
+  Use JSON: `{stc:test {"cycles": 25}}`.
 
 ## 9. Punctuation and compound tokens
 
@@ -357,6 +378,13 @@ Lexing is maximal-munch: `:=` wins over `:`, `**` over `*`, `..` over `.`, `<>` 
 | `STC-E-LEX-007` | Unterminated pragma |
 | `STC-E-LEX-008` | Malformed numeric/time/date literal |
 | `STC-E-LEX-009` | Invalid UTF-8 scalar escape |
+| `STC-E-LEX-010` | Invalid JSON pragma payload |
+| `STC-E-LEX-011` | Duplicate key in a JSON pragma payload |
+| `STC-E-LEX-012` | Pragma payload exceeds size/depth limits |
+| `STC-E-PRAGMA-001` | Unknown `stc:` pragma name |
+| `STC-E-PRAGMA-002` | Missing or unexpected pragma payload |
+| `STC-W-PRAGMA-001` | Non-`stc:` pragma ignored |
+| `STC-W-PRAGMA-002` | Unknown key in a known `stc:` pragma |
 | `STC-W-LEX-008` | Deprecated octal (`8#`) literal |
 
 ### 10.2 Recovery rules
@@ -395,10 +423,12 @@ pub struct TokenStream {
   pragma contents.
 - The lexer is independent of the parser; it can be tested and fuzzed alone.
 
-## 12. Open lexical questions
+## 12. Resolved lexical questions
 
-- Q-008: Should identifiers accept Unicode letters (e.g., `MOTOR_Δ`) or remain ASCII-only?
-  Current profile: ASCII-only.
+No open lexical questions currently.
+
+- **Q-008 resolved (A-013):** identifiers are ASCII-only; UTF-8 is supported in comments and
+  string literals. Unicode letters outside those contexts are invalid characters.
 - **Q-001 resolved (A-005):** `USTRING[n]` capacity is `n` characters; each scalar occupies
   4 bytes; storage is static; `LEN` counts characters; `LEN_CODE_UNIT` counts UTF-8 code units for
   interchange. This affects type layout, not tokenization.

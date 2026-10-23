@@ -16,6 +16,11 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | Execution | Generated programs behave correctly | `tests/execution` |
 | Conformance | Profile feature matrix and edge cases | `tests/conformance` |
 | Standard library | Functions and FBs | `tests/stdlib` |
+| Pragmas | JSON payload parsing, balanced braces, non-nesting, validation, precedence | `crates/stc-parser/tests`, `tests/ui` |
+| I/O metadata | Process-image layout, `AT` type checks, binding hints/overrides, unbound defaults | `tests/io` |
+| State/retain | Warm/cold restart, layout hash, CRC/corruption, atomic write, mismatch policy | `tests/state` |
+| Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests` |
+| Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
 | Lean | Exact-function models and proofs | `lean/`, `tests/vectors` |
 | CLI/manifest | Verbs, exit codes, JSON, configuration, dependency graph, `stc.lock`/`--locked` | `tests/cli` |
 | Fuzzing | Robustness of lexer/parser/analyzer | `fuzz/` |
@@ -40,7 +45,7 @@ END_FUNCTION
 ```
 
 ```st
-{stc:test(cycles := 25)}
+{stc:test {"cycles": 25}}
 PROGRAM TimerRuns
 VAR
   t : TON;
@@ -63,14 +68,20 @@ Rules:
 - A test `PROGRAM` is configured as the selected program, run for `cycles` scans, and checked for
   traps/assertions. Program tests are integration tests; they may inspect globals through
   assertions.
-- `{stc:test(cycles := N)}` overrides the default cycle count; `[[test.case]]` in `stc.toml` can
-  also override by POU name. A conflict is an error.
+- `{stc:test {"cycles": N}}` overrides the default cycle count; `[[test.case]]` in `stc.toml` can
+  also override by POU name. The JSON payload may also carry `timeout` and `expect-trap`.
+  A conflict between the pragma and the manifest is an error.
 - Test POU names must be unique within the package being tested.
 - Tests may live in the current package or in a separate test project that lists the code under
   test in `[dependencies]`. `stc test` compiles the dependencies but discovers and runs only test
   POUs in the current package.
 - Tests are compiled into a separate test binary; project `main`/executable code is not linked
   into the test binary unless a test needs it.
+- `stc build` (debug or release) does not load `[test].sources` and excludes `{stc:test}` POUs
+  from semantic analysis/codegen. Normal source files are still parsed; syntax errors in a normal
+  file are reported even if the file also contains test units. `stc test` includes test sources
+  and units and enables the assert prelude. Release builds additionally guarantee no assert calls
+  are emitted.
 
 ### 2.2 Assertions
 
@@ -85,8 +96,12 @@ END_FUNCTION
 
 - `STC_ASSERT(condition, message)` records a failure with the call site's source span and message.
 - Assertions do not abort the test by default; the runner collects all failures.
-- `STC_ASSERT` is a test/development facility. It is available in all builds in v1 but is not part
-  of the IEC surface; `{stc:test}` code should not ship in production modules.
+- `STC_ASSERT` is **test-only**. It resolves only in test-only units: POUs marked `{stc:test}` and
+  sources listed in `[test].sources`.
+- Production builds (debug and release) exclude test-only units and their asserts before
+  semantic analysis/codegen. A production POU using `STC_ASSERT` is `STC-E-ASSERT-001`; a
+  production POU referencing a test-only POU is `STC-E-TEST-001`.
+- Release artifacts contain no test POUs and no `stc_rt_assert` calls.
 - Equality helpers (`STC_ASSERT_EQ`) are future conveniences; comparison expressions are enough
   for v1.
 - A test that traps (overflow, bounds, null) fails with the trap code and span.
@@ -119,7 +134,7 @@ stc test Timer               # substring filter on POU name
 stc test --list              # list discovered tests
 stc test --no-run            # build the test binary only
 stc test -- --nocapture      # pass through runtime output
-stc test --test-threads 1    # serialize process launches
+# tests run sequentially in v1; no --test-threads
 stc test --timeout 2s        # override the default
 ```
 
@@ -189,10 +204,14 @@ Areas:
   structs, references),
 - conversions and overloads,
 - statements/control flow,
+- expression precedence (Annex A comparison split, `**`, unary, short-circuit),
+- syntax modes (strict semicolons by default; `--relaxed` accepted/rejected cases),
 - functions/FBs/programs,
 - OOP (inheritance, interfaces, override, access, THIS/SUPER, assignment attempt),
 - namespaces/USING,
 - configuration/tasks,
+- I/O (`AT`, process image, pragma hints, project bindings, unbound defaults),
+- retained state (warm/cold restart, layout changes, corruption, atomic save),
 - strings (STRING/WSTRING/USTRING),
 - standard functions/FBs,
 - traps and diagnostics.
@@ -317,5 +336,5 @@ lean/
 
 ## 9. Open testing questions
 
-- Q-013: Parallel test execution by default.
-- Q-015: Whether `STC_ASSERT` should be available in production builds or gated behind a profile.
+None currently. New testing questions are appended here or in [Decisions](../Decisions.md).
+

@@ -38,6 +38,7 @@ stc/
     stc-lexer/               tokenizer, trivia, literals, pragmas
     stc-syntax/              CST kinds, tree, typed AST wrappers
     stc-parser/              recursive descent + Pratt expressions, recovery
+    stc-fmt/                 fixed-style formatter over the CST
     stc-hir/                 arenas, DefId/HirId, types, HIR nodes
     stc-sema/                name resolution, type checking, const eval, lowering
     stc-codegen/             IR builder, ABI, mangling, module emission
@@ -86,8 +87,10 @@ stc-runtime is built independently and linked by the driver
     `ELSE`, `ELSIF`;
   - expression recovery at `)`, `]`, `,`, `;`, and block delimiters.
 - The parser never panics on arbitrary input; fuzzed.
-- It records pragmas and attaches them to the following item; `{stc:test}` and `{stc:export}`
-  become typed annotations.
+- It records pragmas and attaches leading pragmas to the following item and a trailing pragma to
+  the preceding variable declaration. `{stc:test}` and `{stc:export}` become typed annotations;
+  `stc:` payloads are parsed as strict JSON by `stc-syntax` (serde_json), with unknown keys
+  preserved where the schema permits.
 
 ### 3.3 Semantic analysis
 
@@ -204,8 +207,10 @@ storage and must not retain the pointer beyond the call.
 - `OVERLAP` structs are laid out as a byte array of the computed size; each field is accessed by a
   typed pointer at its declared offset. The analyzer verifies that fields fit and that
   overlap-addressed fields do not conflict unless they share the same `AT` range.
-- `AT` direct variables are not laid out as ordinary storage; they map to process-image offsets
-  computed by the runtime descriptor.
+- `AT` direct variables are not laid out as ordinary storage. The compiler computes their
+  process-image offsets and records them in metadata; it does not link them to hardware. Binding
+  process-image ranges to devices is runtime-owned (see [I/O and Devices](IO-and-Devices.md)).
+  Unbound inputs receive type defaults each cycle; unbound outputs are discarded.
 - FB/class inheritance uses a **prefix layout**: a derived struct's first field is the base
   struct. Field access walks the prefix chain. This makes upcasting a no-op pointer adjustment.
 - Interface references are fat pointers `{ptr data, ptr vtable}`. `NULL` is `{null, null}`.
@@ -289,9 +294,10 @@ storage and must not retain the pointer beyond the call.
   `stc_init`.
 - FB/class instance state is part of the global/local struct; `stc_init` zero-initializes and
   applies declared initial values.
-- `stc_init` initializes the runtime process image and all global/static state.
+- `stc_init` initializes the runtime process image, all global/static state, and vtables/type
+  descriptors, then optionally restores retained state (see [State and RETAIN](State-and-Retain.md)).
 - `stc_cycle` executes one scan of the configured programs/tasks.
-- `stc_shutdown` flushes runtime state and releases resources.
+- `stc_shutdown` saves retained state and releases resources.
 - Executable mode generates:
   ```llvm
   define i32 @main(i32 %argc, ptr %argv) {
@@ -448,6 +454,8 @@ The generated module calls a narrow C ABI:
 | `stc_rt_cycle_now_ns()` | Cycle time latched at `stc_cycle` entry |
 | `stc_rt_monotonic_now_ns()` | Live monotonic clock (runtime/host only) |
 | `stc_rt_set_cycle_time_ns()` | Override the next cycle's time (host/tests) |
+| `stc_retain_size/save/load/layout_hash()` | Generated retained-state functions |
+| `stc_rt_state_load/save/configure()` | State-file I/O and mismatch policy |
 | `stc_rt_io_image(ptr*, len*)` | Process-image access |
 | `stc_rt_attempt_cast(data, src_desc, dst_desc)` | Interface/reference downcast |
 | `stc_rt_len_*`, `stc_rt_str_*` | String helpers |
@@ -469,7 +477,5 @@ The full list and signatures are in [Runtime and Execution](Runtime-and-Executio
 
 ## 9. Open architecture questions
 
-- Q-006: I/O backend for direct variables (memory, file, callbacks) in executable mode.
-- Q-007: RETAIN/PERSISTENT storage in executable mode.
-- Q-010: Whether to support a `--strict` mode that disables the semicolon relaxation and other
-  supersets.
+None currently. Language-level open questions are tracked in
+[Decisions](../Decisions.md). New architecture questions are appended here.

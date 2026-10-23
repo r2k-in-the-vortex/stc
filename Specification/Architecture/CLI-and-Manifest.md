@@ -15,14 +15,15 @@ output goes to stdout.
 | --- | --- |
 | `stc new <path>` | Scaffold a project (`stc.toml`, `src/main.st`, `.gitignore`) |
 | `stc check` | Lex, parse, resolve, and type-check; no codegen |
-| `stc build` | Emit artifacts selected by `--emit` / manifest |
+| `stc build` | Emit artifacts selected by `--emit` / manifest; excludes test-only units |
 | `stc run` | Build an executable and run it |
-| `stc test` | Build and run the built-in test suite |
+| `stc test` | Build and run the built-in test suite; includes test-only units |
+| `stc fmt [paths...]` | Format sources with the fixed style; `--check` for CI |
 | `stc clean` | Remove the project's `target/stc` directory |
 | `stc metadata` | Print the selected configuration, ABI version, exports, and artifact layout |
 | `stc compliance` | Print the profile ID and supported feature matrix |
 
-Future commands (not v1): `stc fmt`, `stc lsp`, `stc doc`.
+Future commands (not v1): `stc lsp`, `stc doc`.
 
 ### 1.2 Common options
 
@@ -35,6 +36,12 @@ Future commands (not v1): `stc fmt`, `stc lsp`, `stc doc`.
 | `--clang <path>` | clang executable |
 | `--runtime <path>` | Runtime static library |
 | `--out-dir <path>` | Artifact directory; default `target/stc/<profile>` |
+| `--io <backend>` | Override `[io].backend` for `run`/`test` (`null`, `memory`, `file`) |
+| `--io-file <path>` | File used by the file backend |
+| `--relaxed` | Accept the documented semicolon-relaxation syntax superset |
+| `--state-file <path>` | Retained-state file for this run |
+| `--reset-retain` | Cold start: ignore existing state, overwrite on shutdown |
+| `--no-retain` | Disable retained-state load and save |
 | `--message-format <fmt>` | `human` (default), `json`, `short` |
 | `--color <when>` | `auto`, `always`, `never` |
 | `-v`, `-vv` | Verbose phase output; `-vv` includes clang commands and IR paths |
@@ -90,6 +97,24 @@ JSON format: one object per diagnostic on stdout, one per line:
 - Compiler panics are caught and reported as `STC-I-0001` with a bug-report note and the IR/source
   context. They never print a Rust backtrace by default (`RUST_BACKTRACE=1` for developers).
 
+### 1.5 Formatter (`stc fmt`)
+
+`stc fmt [paths...]` formats the project sources (or the given files) in place. `--check` writes
+nothing and exits 1 if any file would change.
+
+The v1 style is fixed:
+
+- keywords uppercase; identifiers keep their original spelling;
+- 2-space indentation; one statement per line;
+- one space around binary operators, after commas, and around `:=`/`=>`;
+- no space before a call's `(`; `name : TYPE` in declarations;
+- `END_*` on its own line; strict semicolons in the output even when the input used `--relaxed`;
+- comments preserved; existing line breaks preserved; no automatic line wrapping;
+- idempotent: formatting an already-formatted file produces no change.
+
+No configuration, range formatting, or lint integration in v1. The formatter uses the lossless
+CST and never rewrites tokens it does not understand.
+
 ## 2. Project manifest: `stc.toml`
 
 ### 2.1 Example
@@ -114,17 +139,47 @@ configuration = "Main"            # optional if exactly one CONFIGURATION exists
 target = "x86_64-pc-windows-msvc" # optional; default = clang host
 opt-level = 2
 debug = true
+syntax = "strict"                 # strict (default) | relaxed
 emit = ["exe", "ir"]              # default
 lib-type = "static"               # static | shared, used when emit includes "lib"
 out-dir = "target/stc"
 clang = "C:\\Program Files\\LLVM\\bin\\clang.exe"  # optional
 runtime = "target/debug/stc_runtime.lib"           # optional
 
+[io]
+backend = "null"                  # v1: null | memory | file
+file = "io.bin"                   # used when backend = "file"
+# input-bytes / output-bytes / marker-bytes are optional; the compiler computes them
+
+[[io.devices]]
+name = "drive1"
+kind = "ethercat"                 # opaque identifier; runtime-defined
+config = { vendor = "0x1234", revision = 3 }  # opaque to the compiler
+
+  [[io.devices.channels]]
+  name = "DI5"
+  direction = "input"
+  width = 1
+
+[[io.bindings]]
+variable = "Main.MyBool"
+device = "drive1"
+channel = 5
+direction = "input"
+
+[retain]
+enabled = true
+file = "motor.stcstate"     # relative to the project root
+on-mismatch = "error"       # error | reset
+
+[lints]
+warnings = "warn"           # warn | deny | allow (baseline for warning diagnostics)
+"STC-W-NAME-002" = "allow"  # per-code override
+"STC-W-LEX-008" = "deny"
+
 [run]
 cycles = 0                        # 0 = until interrupted
 cycle-time = "10ms"
-io = "null"                       # null | memory | file
-io-file = "io.bin"
 
 [test]
 sources = ["tests/**/*.st"]
@@ -165,13 +220,39 @@ timeout = "2s"
 - `[build] target` is passed to clang and emitted as the IR triple.
 - `[build] opt-level` is `0|1|2|3|"s"`; maps to clang `-O` flags.
 - `[build] debug` controls line tables / `-g`.
+- `[build] syntax` is `strict` (default) or `relaxed`. Strict requires the 2013 statement
+  terminator rules; relaxed enables the documented omitted-semicolon-after-block superset.
+  `--relaxed` overrides the manifest.
 - `[build] emit` is a non-empty subset of `ir,obj,exe,lib,metadata`. `exe` and `lib` may coexist.
 - `[build] lib-type` selects static or shared library output.
 - `[build] out-dir` is relative to the manifest and must stay inside the project unless the user
   passes `--out-dir`.
+- `[io]` is optional. `backend` is `null`, `memory`, or `file` in v1; hardware backend names are
+  runtime-defined in v2. `file` names the file used by the file backend.
+  `input-bytes`/`output-bytes`/`marker-bytes` are optional; the compiler computes them from `AT`
+  declarations when omitted. `[test] io` overrides the backend for test runs.
+- `[[io.devices]]` declares a device tree. `name` is unique; `kind` is an opaque string;
+  `config` is opaque TOML copied to metadata. `[[io.devices.channels]]` is optional and gives the
+  compiler enough information to validate hints (`name`, `direction`, `width`).
+- `[[io.bindings]]` is an optional project-level binding: `variable` is a fully qualified ST
+  variable, `device` must name a declared device, and `channel`/`direction` are optional hints.
+  The compiler resolves `variable` and emits the binding in metadata. Binding precedence is
+  runtime override > `[[io.bindings]]` > `{stc:io}` pragma > raw `%` address.
+- I/O binding to hardware is runtime-owned; the compiler only emits process-image and binding
+  metadata, including a default-value image for inputs. Unbound inputs receive type defaults each
+  cycle; unbound outputs are discarded. Details: [I/O and Devices](IO-and-Devices.md).
+- `[retain]` controls file-backed retained state:
+  `enabled` (default true), `file` (default `<artifact>.stcstate` in `out-dir`), and
+  `on-mismatch` (`error` default, or `reset`). The file path is relative to the project root.
+  `--state-file`, `--reset-retain`, and `--no-retain` override it. Details:
+  [State and RETAIN](State-and-Retain.md).
+- `[lints]` sets project lint levels. `warnings` is the baseline (`warn` default, `deny`, or
+  `allow`). Per-code keys are `"STC-W-*"`/`"STC-E-*"` with values `allow`, `warn`, or `deny`.
+  Errors cannot be downgraded below `error`; a manifest that tries is invalid. Unknown codes are
+  errors. CLI `-D`/`-W`/`-A` and `--deny warnings` override the manifest.
 - `[run] cycles` bounds executable runs; `stc run` overrides it with `--cycles`.
 - `[run] cycle-time` is a duration literal string (for example `"10ms"`). It is not ST syntax.
-- `[run] io` selects the default I/O backend.
+- `[test] io` overrides the `[io] backend` for test runs.
 - `[test]` keys define defaults; `[[test.case]]` entries override per POU name.
 - Unknown keys in known tables are errors with a "did you mean" suggestion. Unknown
   `[[test.case]]` keys are errors.
@@ -192,8 +273,11 @@ timeout = "2s"
 
 ### 2.4 Test manifest
 
-- `[test] sources` adds test-only source files to the current package. They are compiled together
-  with the package sources and its dependencies.
+- `[test] sources` adds test-only source files to the current package. They are compiled only for
+  `stc test`, together with the package sources and its dependencies. Production builds do not
+  load these files and exclude `{stc:test}` POUs from semantic analysis/codegen; release artifacts
+  contain no test code or `STC_ASSERT` calls. A production POU using `STC_ASSERT` or a test-only
+  POU is an error.
 - `[[test.case]] name` must match a POU carrying `{stc:test}`; duplicate names are errors.
 - A **separate test project** is a normal package with `{stc:test}` POUs and a dependency on the
   code under test:
@@ -253,7 +337,8 @@ Rules:
   `path` is an error in v1.
 - `--locked` fails if the lockfile is missing or would change (new/removed package, changed
   version/path/edge). CI uses `--locked`.
-- `stc clean` does not delete `stc.lock`. Deleting the lockfile is an explicit user action.
+- `stc clean` does not delete `stc.lock` or retained-state files. Deleting them is an explicit
+  user action.
 - Local source contents are not hashed in v1; editing a path dependency's sources does not
   rewrite the lockfile. A content-hash field can be added later without changing the schema's
   package identity.
@@ -289,7 +374,27 @@ target/stc/<profile>/
     { "name": "stc_cycle", "kind": "entry" },
     { "name": "stc_export_Main", "kind": "pou", "source": "Main" }
   ],
-  "io_image": { "inputs": 16, "outputs": 16, "markers": 64 },
+  "io": {
+    "backend": "null",
+    "image": { "input_bytes": 16, "output_bytes": 16, "marker_bytes": 64 },
+    "input_defaults_hex": "0000...",
+    "devices": [
+      { "name": "drive1", "kind": "ethercat", "config": { "revision": 3, "vendor": "0x1234" } }
+    ],
+    "bindings": [
+      { "variable": "Main.MyBool", "area": "I", "address": "IX5", "offset_bits": 5,
+        "type": "BOOL", "hint": { "device": "drive1", "channel": 5 }, "source": "pragma" }
+    ]
+  },
+  "retain": {
+    "size": 128,
+    "layout_hash": "0x9f2c...",
+    "file": "motor.stcstate",
+    "on_mismatch": "error",
+    "leaves": [
+      { "path": "Main.Counter", "type": "DINT", "offset": 0, "size": 4 }
+    ]
+  },
   "strings": [{ "type": "USTRING", "capacity": 255, "unit_bytes": 4, "length_unit": "character" }],
   "spans": { "files": ["src/main.st"], "entries": [[0, 0, 12]] },
   "retained": []
@@ -348,7 +453,5 @@ contains secrets; paths are printed as written by the user.
 
 ## 7. Open CLI/manifest questions
 
-- Q-010: `--strict` mode for strict 2013 semicolons and no syntax supersets.
-- Q-011: Formatter command and its style configuration.
-- Q-013: Whether `stc test` should support parallel test processes by default.
-- Q-014: Whether the manifest should support `[lints]` tables or only CLI lint flags.
+None currently. New CLI/manifest questions are appended here or in [Decisions](../Decisions.md).
+

@@ -19,6 +19,8 @@ specification is written before implementation, as required below.
 | [AST/CST/HIR](Specification/AST/AST.md) | Syntax tree and typed middle-end design |
 | [Architecture](Specification/Architecture/Architecture.md) | Pipeline, crates, LLVM IR, ABI |
 | [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) | Execution model, runtime, stdlib |
+| [I/O and Devices](Specification/Architecture/IO-and-Devices.md) | Process image, AT linking, device model, JSON pragma hints |
+| [State and RETAIN](Specification/Architecture/State-and-Retain.md) | File-backed retained state, warm/cold restart, layout hash |
 | [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) | Commands, diagnostics, `stc.toml` |
 | [Testing and Verification](Specification/Architecture/Testing-and-Verification.md) | Test framework, Lean, CI |
 | [Decisions and Open Questions](Specification/Decisions.md) | Rationale and backlog |
@@ -49,6 +51,10 @@ test runner, and inspectable artifacts.
 | Standard library | 2013 standard functions and FBs (`TON`, `TOF`, `TP`, counters, edge, bistable, strings, math); FBs in ST, clock latched once per scan |
 | Projects | `stc.toml` packages, local path dependencies, `stc.lock`, dependency graph, package-aware namespaces |
 | Testing | `{stc:test}` POUs; tests may live in a separate test project that depends on the code under test |
+| I/O | Runtime-owned linking; TwinCAT-like device tree in `stc.toml`; `{stc:io {...}}` hints on `AT`; unbound inputs use type defaults, unbound outputs do nothing |
+| I/O backends | v1: null/memory/file; v2 planned: EtherCAT, Modbus, MQTT |
+| Persistence | File-backed `RETAIN` state; warm restart restores, cold start initializes; layout hash + CRC |
+| Tooling API | Stable append-only `SyntaxKind`; public CST/IDE API planned for v2/v3 |
 | AX role | Syntax/UX inspiration only; AX preprocessor and vendor pragmas are out of profile |
 
 The 2013 PDF is a **local reference**, not a redistributable artifact. It is excluded from version
@@ -110,6 +116,7 @@ stc check               parse and analyse; no codegen
 stc build               emit IR/objects/executable/library
 stc run                 build and run an executable
 stc test                build and run the built-in test suite
+stc fmt                 format sources with the fixed style; --check for CI
 stc clean               remove the artifact directory
 stc metadata            print configuration, ABI, exports, layout
 stc compliance          print the profile and feature matrix
@@ -151,9 +158,11 @@ timeout = "5s"
 ```
 
 Local path dependencies are resolved into an acyclic package graph and pinned by a committed
-`stc.lock`; `--locked` refuses updates. The full schema, lockfile format, path rules, unknown-key
-policy, and environment overrides are in
-[CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md).
+`stc.lock`; `--locked` refuses updates. I/O binding is runtime-owned: `[io]` defines devices and
+optional bindings, `AT` declarations may carry `{stc:io {...}}` hints, and the runtime may
+override them. The full schema, lockfile format, I/O schema, path rules, unknown-key policy, and
+environment overrides are in [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md)
+and [I/O and Devices](Specification/Architecture/IO-and-Devices.md).
 
 ## Repository layout
 
@@ -167,6 +176,7 @@ stc/
     stc-lexer/               tokenizer, trivia, literals, pragmas
     stc-syntax/              CST and typed AST wrappers
     stc-parser/              recursive descent + expression parser, recovery
+    stc-fmt/                 fixed-style formatter over the lossless CST
     stc-hir/                 resolved/typed HIR, arenas, types
     stc-sema/                name resolution, type checking, constant eval, lowering
     stc-codegen/             textual LLVM IR builder, ABI, mangling
@@ -212,6 +222,20 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-025 | Tests use `{stc:test}` and may live in a separate test project. |
 | D-026 | Dependencies are local paths plus a committed `stc.lock`; `--locked` forbids updates. |
 | D-027 | The cycle time is latched once per scan and shared by all timers. |
+| D-028 | Hardware I/O linking is runtime-owned; v1 backends are null/memory/file; EtherCAT/Modbus/MQTT are v2. |
+| D-029 | `AT` takes one `{stc:io <json-object>}` hint; project bindings and runtime overrides take precedence. |
+| D-030 | Unbound inputs use type defaults or declared initializers; unbound outputs are discarded; `%M` persists. |
+| D-031 | Pragmas are non-nested but may carry balanced JSON payloads. |
+| D-032 | v1 persists `RETAIN` variables to a versioned, layout-hashed, CRC-checked state file with atomic writes. | Warm/cold restart behavior without a database or host dependency. |
+| D-033 | Identifiers are ASCII-only; UTF-8 is limited to comments and strings. | Avoids Unicode normalization/case-folding complexity. |
+| D-034 | Comparison precedence follows Annex A: relational binds tighter than equality. | Resolves the operator-table/Annex A disagreement. |
+| D-035 | Strict 2013 semicolon rules by default; relaxed syntax is opt-in. | Conformance by default with a compatibility mode. |
+| D-036 | v1 includes minimal `stc fmt` with one fixed style and `--check`. | Useful tooling without a configuration subsystem. |
+| D-037 | v1 runs a single task per scan; the full task model is parsed/analysed. | Bounded runtime scope. |
+| D-038 | `stc test` runs test processes sequentially. | Deterministic output and resource use. |
+| D-039 | Lint levels live in `[lints]`; CLI flags override; errors cannot be downgraded. | Shared policy with CI control. |
+| D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use is an error. | Clean release artifacts. |
+| D-041 | `SyntaxKind` is a stable, append-only API; full CST/IDE API is planned for v2/v3. | Future tooling without freezing internals now. |
 
 ## Question log
 
@@ -231,22 +255,22 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 | A-008 | How are tests declared and organised? | `{stc:test}` on POUs; separate test projects are supported; dependency system is v1. |
 | A-009 | Dependency system scope? | Local path dependencies plus a committed `stc.lock`; no registry/version solver in v1. |
 | A-010 | Standard FBs and time source? | FBs in ST stdlib; Rust clock latched once per scan cycle. |
+| A-011 | How is I/O linked? | Runtime-owned; TwinCAT-like device tree; `{stc:io}` JSON hints; unbound inputs default, outputs do nothing. |
+| A-012 | RETAIN persistence in v1? | File-backed state with layout hash, CRC, atomic save; warm/cold restart. |
+| A-013 | Unicode identifiers? | ASCII-only; UTF-8 only in comments and strings. |
+| A-014 | Comparison precedence? | Annex A split: relational binds tighter than equality; both left-associative. |
+| A-015 | Strict syntax mode? | Strict 2013 semicolons by default; `--relaxed` enables the superset. |
+| A-016 | Formatter in v1? | Minimal `stc fmt`, fixed style, `--check`; no configuration. |
+| A-017 | Multi-task scheduling in v1? | Single task per scan; full model parsed/analysed. |
+| A-018 | Parallel test processes? | Sequential only in v1. |
+| A-019 | Lint configuration? | Manifest `[lints]` with per-code entries; CLI overrides. |
+| A-020 | `STC_ASSERT` in production builds? | Test-only; production builds exclude test units and asserts; production use is an error. |
+| A-021 | Stable `SyntaxKind`/CST API? | Stable append-only `SyntaxKind`; public CST/IDE API planned for v2/v3. |
 
 ### Open
 
-| ID | Question | Proposed default |
-| --- | --- | --- |
-| Q-006 | Default I/O backend for direct variables? | Memory image; file via `--io=file`; host callbacks. |
-| Q-007 | RETAIN persistence in executable mode? | None in v1; parse/validate/warn. |
-| Q-008 | Unicode identifiers? | ASCII-only in v1. |
-| Q-009 | Comparison precedence / chained comparisons? | One level, left-assoc; chains normally type-error. |
-| Q-010 | Add `--strict` for strict 2013 syntax? | Later; default keeps the documented superset. |
-| Q-011 | Formatter in v1? | No; CST supports it later. |
-| Q-012 | Multi-task scheduling in v1? | No; single-task runtime, full model parsed. |
-| Q-013 | Parallel test processes by default? | No; sequential in v1. |
-| Q-014 | Manifest `[lints]` vs CLI flags? | CLI flags in v1. |
-| Q-015 | `STC_ASSERT` in production builds? | Available, documented as test/development. |
-| Q-016 | Stable `SyntaxKind` API for tools? | Internal in v1. |
+**None as of 2026-10-23.** All v1 planning questions Q-001 through Q-017 are resolved
+(A-005 through A-021). New questions will be added here one at a time.
 
 ## Dev environment
 

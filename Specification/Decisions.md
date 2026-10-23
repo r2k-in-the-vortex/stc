@@ -111,6 +111,132 @@ cycle cannot observe different times.
 - The standard FBs are ST source compiled with the user project; the runtime supplies only the
   clock and exact helpers.
 
+### A-011 — I/O linking
+
+**Answer:** Linking I/O variables to actual hardware is the runtime's job; I/O backends and
+schedules are v2. Primary planned backends are EtherCAT, Modbus, and MQTT (noted, not designed
+now). The project uses a TwinCAT-like device tree: `stc.toml` describes devices/channels, and an
+`AT` declaration may carry a `{stc:io ...}` JSON hint; the runtime may override it. If no linking
+is defined, inputs receive their type's default value and outputs do nothing externally.
+
+**Consequences:**
+- The compiler validates `AT` addresses/types, computes process-image offsets, and emits device,
+  binding, and default-value metadata. It never opens devices or schedules I/O.
+- Binding precedence: runtime override > `[[io.bindings]]` in `stc.toml` > `{stc:io}` pragma >
+  raw `%` address.
+- Unbound `%I` inputs are reset to type defaults (or a declared initializer) each cycle; unbound
+  `%Q` outputs are written to the output image and discarded at cycle end; `%M` markers persist.
+- v1 runtime backends: `null`, `memory`, `file`. EtherCAT/Modbus/MQTT are v2.
+- Pragmas remain non-nested but may carry balanced JSON payloads; the lexer tracks braces and
+  JSON strings, and the parser validates the JSON.
+
+### A-012 — RETAIN persistence
+
+**Answer:** File-backed state.
+
+**Consequences:**
+- v1 persists retained variables to a versioned state file with a magic/version header, profile
+  and layout hashes, payload length, and CRC32.
+- A valid file on startup is a warm restart; missing file or `--reset-retain` is a cold restart.
+  Layout/profile/corruption mismatch uses `on-mismatch = error|reset` (default error).
+- Saves are atomic (`tmp` + rename) at normal shutdown. v1 does not checkpoint every cycle.
+- The compiler emits a retained-leaf layout and `stc_retain_size/save/load/layout_hash` functions;
+  the runtime owns file I/O and policy. Library hosts may use the functions with their own
+  storage.
+- References/interfaces/pointers/vtable pointers are not persisted; vtable/type pointers are
+  reinitialized before load. Direct `AT` variables are excluded from file state with a warning.
+
+### A-013 — Identifier alphabet
+
+**Answer:** ASCII-only.
+
+**Consequences:** Identifiers use `[A-Za-z_][A-Za-z0-9_]*` with the 2013 underscore rules.
+UTF-8 remains supported in comments and string literals. No Unicode normalization or Unicode
+case folding is performed; non-ASCII characters outside strings/comments are rejected. This is a
+documented subset of the 2013 ISO/IEC 10646 character-set permission.
+
+### A-014 — Comparison precedence
+
+**Answer:** Annex A split.
+
+**Consequences:** Relational comparisons (`<`, `>`, `<=`, `>=`) bind tighter than equality
+(`=`, `<>`); both levels are left-associative. `A = B < C` parses as `A = (B < C)`. Chained
+comparisons at one level are left-associative and normally type-error. This resolves the
+disagreement between the 2013 operator table (one level) and Annex A's formal grammar.
+
+### A-015 — Strict syntax mode
+
+**Answer:** Strict by default.
+
+**Consequences:** v1 requires every statement to be terminated by `;` per the 2013 grammar.
+`--relaxed` (or `[build] syntax = "relaxed"`) enables the documented omitted-semicolon-after-
+block superset. The formatter always emits strict semicolons. The relaxed mode changes syntax
+only, not semantics.
+
+### A-016 — Formatter
+
+**Answer:** Minimal `stc fmt`.
+
+**Consequences:** v1 adds `stc fmt` with one fixed style and `--check`: uppercase keywords,
+2-space indentation, normalized operator/comma spacing, strict semicolons, preserved comments
+and line breaks, no configuration and no line wrapping. It is idempotent and uses the lossless
+CST. A configurable formatter is a later extension.
+
+### A-017 — Task scheduling
+
+**Answer:** Single task only.
+
+**Consequences:** v1 parses and analyses the full configuration/resource/task/program model but
+executes one task sequentially per scan. Multiple tasks/priorities are diagnosed or accepted for
+analysis but not scheduled. A cooperative or preemptive scheduler is a later milestone.
+
+### A-018 — Test process concurrency
+
+**Answer:** Sequential only.
+
+**Consequences:** `stc test` runs one test process at a time. `--test-threads` is rejected in v1
+(or accepted only with value 1). Parallel execution is a later extension; deterministic CI and
+simple output ordering take priority.
+
+### A-019 — Lint configuration
+
+**Answer:** Manifest `[lints]`, with CLI overrides.
+
+**Consequences:** `stc.toml` has a `[lints]` table: `warnings = "warn"|"deny"|"allow"` and
+per-code `"STC-W-*"`/`"STC-E-*"` entries. Errors cannot be downgraded. CLI `-D`/`-W`/`-A` and
+`--deny warnings` override the manifest; defaults apply otherwise. Unknown codes are errors.
+
+### A-020 — Assertions and test-only code
+
+**Answer:** `STC_ASSERT` is test-only. When compiling release, all test code is ignored and
+compiled out along with any asserts in it before error checking; asserts outside test code are
+errors.
+
+**Consequences:**
+- Test-only units are POUs marked `{stc:test}` and sources listed in `[test].sources`.
+- Production builds (debug and release) exclude test-only units from semantic analysis, codegen,
+  and artifact linking. Release artifacts contain no test POUs and no `stc_rt_assert` calls.
+- `STC_ASSERT` resolves only inside test-only units. A production POU using it is
+  `STC-E-ASSERT-001`; a production POU referencing a test-only POU is `STC-E-TEST-001`.
+- Because test-only units are removed before these checks, asserts inside them do not cause
+  production errors.
+- `stc test` compiles production sources plus test sources and enables the assert prelude.
+
+### A-021 — Syntax-kind/CST API stability
+
+**Answer:** Stable `SyntaxKind`, with IDE tooling in view for v2/v3.
+
+**Consequences:**
+- `SyntaxKind` is a `#[repr(u16)]`, `#[non_exhaustive]` enum with explicit discriminants,
+  published from `stc-syntax`. Existing kinds are never renumbered or reused; new kinds are
+  appended.
+- Kind names and their canonical debug/JSON spellings are stable. A checked-in stability table is
+  enforced by a test; additive changes update the table and follow semver.
+- The rest of the CST (node handles, traversal internals) remains internal in v1. The design
+  keeps spans, trivia, error nodes, and stable kinds so a supported public CST/traversal API can
+  be added in v2/v3 for IDE tools.
+- `stc-syntax` follows semver for the published `SyntaxKind` surface.
+
 ## 2. Confirmed decisions
 
 | ID | Decision | Rationale |
@@ -128,13 +254,27 @@ cycle cannot observe different times.
 | D-011 | v1 runtime is single-task; the full configuration model is parsed/analysed. | Bounded runtime scope; language surface remains complete. |
 | D-012 | Standard FBs are implemented in ST under `stdlib/`; standard functions live in the runtime. | Dogfoods the compiler; keeps FB behavior in ST. |
 | D-027 | The cycle time is latched once at `stc_cycle` entry and shared by all timers in that scan. | Determinism: same-cycle timer calls cannot disagree; tests can step a mock clock. |
+| D-028 | I/O hardware linking is runtime-owned; the compiler emits process-image and binding metadata. v1 backends are null/memory/file; EtherCAT/Modbus/MQTT are v2. | Keeps protocol/scheduling out of the compiler; enables the TwinCAT-like project model. |
+| D-029 | `AT` declarations accept one `{stc:io <json-object>}` hint; project bindings and runtime overrides take precedence over the pragma. | Local hints plus central device configuration, with runtime authority. |
+| D-030 | Unbound inputs receive type defaults (or declared initializers) each cycle; unbound outputs are discarded; `%M` markers persist. | "No linking" has defined, safe behavior rather than undefined reads/writes. |
+| D-031 | Pragmas are non-nested but their payload may contain balanced JSON; the parser validates JSON and rejects duplicates/oversize payloads. | Future-proof I/O and tooling metadata without a new language construct. |
+| D-032 | `RETAIN` variables persist to a versioned, layout-hashed, CRC-checked state file with atomic saves; warm restart restores, cold start initializes. | File-backed retention without a database or host dependency. |
+| D-033 | Identifiers are ASCII-only; UTF-8 is limited to comments and string literals. | Avoids Unicode normalization/case-folding/confusable complexity; matches 2013 examples. |
+| D-034 | Comparison precedence follows Annex A: relational binds tighter than equality; both left-associative. | Resolves the operator-table/Annex A disagreement; deterministic parsing. |
+| D-035 | Strict 2013 semicolon rules are the default; relaxed syntax is opt-in. | Conformance by default without rejecting common ST source irreversibly. |
+| D-036 | v1 includes a minimal `stc fmt` with one fixed style and `--check`, no configuration. | Useful tooling without a style-configuration subsystem. |
+| D-037 | v1 executes a single task per scan; the full task model is parsed/analysed. | Bounded runtime scope; scheduler can be added without front-end changes. |
+| D-038 | `stc test` runs test processes sequentially; `--test-threads` is not a v1 feature. | Deterministic output and resource use. |
+| D-039 | Lint levels live in `[lints]` with per-code entries; CLI flags override them; errors cannot be downgraded. | Shared project policy with CI control. |
+| D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use of either is an error. | Keeps test code and assertions out of shipped artifacts. |
+| D-041 | `SyntaxKind` is a stable, append-only, `#[non_exhaustive]` API; full CST/IDE API is planned for v2/v3. | Enables future tooling without freezing CST internals now. |
 | D-013 | Runtime ABI: `stc_init`, `stc_cycle`, `stc_shutdown`, plus `stc_rt_*` helpers; ABI version 1. | Stable C boundary for exe and host embedding. |
 | D-014 | Strings are length-prefixed fixed-capacity values. `USTRING[n]` stores `n` characters as 32-bit scalars (4 bytes each, static); default 255 characters. | Bounded storage, O(1) character indexing, room for every Unicode scalar. |
 | D-015 | Signed overflow, division by zero, bounds, and invalid conversions trap. | "Strict correctness" policy; no silent wraparound. |
 | D-016 | Boolean `AND`/`&`/`OR` short-circuit left-to-right. | Deterministic and standard-permitted. |
-| D-017 | All comparison operators share one precedence level and are left-associative. | Follows the 2013 operator table; recorded as an interpretation. |
-| D-018 | Identifiers are ASCII-only in v1. | 2013 examples and practical tooling; Unicode is Q-008. |
-| D-019 | Semicolon after block statements is optional before a block delimiter. | Common ST practice; syntax superset, strict mode is Q-010. |
+| D-017 | Relational comparisons bind tighter than equality; both are left-associative. | Follows Annex A's formal grammar (A-014). |
+| D-018 | Identifiers are ASCII-only in v1. | 2013 examples and practical tooling; resolved by A-013. |
+| D-019 | Strict 2013 semicolon rules are the default; `--relaxed` enables the optional-semicolon-after-block superset. | Conformance by default, with an explicit compatibility mode. |
 | D-020 | Project file is `stc.toml`, schema version 1. | Explicit profile/artifact/test configuration. |
 | D-021 | Build artifacts and local reference PDF are gitignored. | Reproducibility and copyright hygiene. |
 | D-022 | Diagnostics use stable codes (`STC-E-*`, `STC-W-*`) with spans and JSON output. | Cargo-like UX and testability. |
@@ -145,82 +285,9 @@ cycle cannot observe different times.
 
 ## 3. Open questions
 
-Answers are recorded here and in `README.md` one at a time. Each question has a proposed default
-so implementation can continue without blocking.
-
-### Q-006 — I/O backend
-
-**Question:** What should direct variables do in executable mode by default?
-
-**Proposed default:** A zeroed memory process image; `--io=file` reads/writes a file; library
-hosts install a callback backend.
-
-### Q-007 — RETAIN/PERSISTENT persistence
-
-**Question:** Does executable mode need persistent retained variables in v1?
-
-**Proposed default:** No persistence in v1; parse/validate and warn. Library hosts own
-persistence.
-
-### Q-008 — Unicode identifiers
-
-**Question:** ASCII-only identifiers or Unicode letters?
-
-**Proposed default:** ASCII-only; UTF-8 is supported in source, comments, and strings.
-
-### Q-009 — Comparison and grammar ambiguity policy
-
-**Question:** Should equality/inequality and relational comparisons share one precedence level
-(current) or follow Annex A's split? Are chained comparisons allowed?
-
-**Proposed default:** One level, left-associative; chained comparisons type-check and are normally
-rejected. Recorded as `STC-GRAM-009`.
-
-### Q-010 — Strict mode and syntax supersets
-
-**Question:** Should `stc` provide `--strict` to require strict 2013 semicolons and reject syntax
-supersets?
-
-**Proposed default:** Add `--strict` after v1; default behavior remains the documented superset.
-
-### Q-011 — Formatter
-
-**Question:** Is `stc fmt` part of v1?
-
-**Proposed default:** No; the lossless CST supports it later. No style configuration in v1.
-
-### Q-012 — Multi-task scheduling
-
-**Question:** Should v1 implement multiple tasks/priorities?
-
-**Proposed default:** No; parse/analyse the full model, run one task sequentially. A real
-scheduler is a later milestone.
-
-### Q-013 — Parallel test execution
-
-**Question:** Should `stc test` run test processes in parallel by default?
-
-**Proposed default:** Sequential in v1; `--test-threads N` is accepted but serializes until the
-runner is proven deterministic.
-
-### Q-014 — Lint configuration
-
-**Question:** Manifest `[lints]` table vs CLI flags only?
-
-**Proposed default:** CLI flags only in v1; manifest lints later.
-
-### Q-015 — ASSERT in production builds
-
-**Question:** Should `STC_ASSERT` be available outside tests?
-
-**Proposed default:** Available but documented as a test/development facility; future gating by
-profile.
-
-### Q-016 — Stable syntax-kind API
-
-**Question:** Should `SyntaxKind` numbering become a stable public API for external tools?
-
-**Proposed default:** Internal in v1; stabilize if a formatter/LSP becomes a supported tool.
+**None as of 2026-10-23.** All v1 planning questions Q-001 through Q-017 are resolved
+(A-005 through A-021). New questions will be appended here and in `README.md` one at a time, with
+a proposed default so implementation can continue without blocking.
 
 ## 4. Decision process
 

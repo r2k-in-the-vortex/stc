@@ -40,7 +40,7 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | UTF-8 source files | Implemented | Optional BOM; invalid UTF-8 is an error |
 | Case-insensitive keywords and identifiers | Implemented | Original spelling preserved for diagnostics |
 | ASCII identifier alphabet | Implemented (v1) | `[A-Za-z_][A-Za-z0-9_]*`; underscore rules per 2013 |
-| Unicode identifiers | Not in v1 | See Q-008 |
+| Unicode identifiers | Not in profile | ASCII-only (A-013); UTF-8 only in comments/strings |
 | `//` line comments | Implemented | |
 | `(* ... *)` nested block comments | Implemented | |
 | `/* ... */` nested block comments | Implemented | |
@@ -100,7 +100,7 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | --- | --- |
 | `VAR`, `VAR_INPUT`, `VAR_OUTPUT`, `VAR_IN_OUT`, `VAR_TEMP` | Implemented |
 | `VAR_GLOBAL`, `VAR_EXTERNAL`, `VAR_ACCESS`, `VAR_CONFIG` | Implemented |
-| `CONSTANT`, `RETAIN`, `NON_RETAIN` | Parsed/analysed; persistence policy in runtime spec |
+| `CONSTANT`, `RETAIN`, `NON_RETAIN` | Implemented; effective policy per leaf; file-backed state in v1 |
 | `AT` direct-variable declarations | Implemented |
 | `R_EDGE` / `F_EDGE` edge variables | Implemented |
 | Access specifiers on class/FB variables | Implemented |
@@ -215,7 +215,10 @@ same time; tests use a mock clock with the same semantics.
 - Human-machine interface and online debugging.
 - A network package registry and version-solving resolver in v1. Local path dependencies are in
   v1; a registry/version solver is a later extension (A-009).
-- Full RETAIN/PERSISTENT persistence in executable mode.
+- Hardware I/O backends and schedules (EtherCAT, Modbus, MQTT) in v1. They are v2; v1 uses
+  null/memory/file backends and runtime-owned binding.
+- `PERSISTENT` (not a 2013 keyword) and periodic/checkpointed state saves. v1 saves retained
+  state at normal shutdown.
 
 ## 8. Implementation-defined choices
 
@@ -235,13 +238,17 @@ The following are deliberately chosen and must be documented and tested:
 | USTRING representation | Length in characters + fixed `[n x i32]` scalar buffer; 4 bytes/character; static |
 | USTRING assignment | Capacity is part of the type; cross-capacity assignment/argument passing inserts a runtime check and traps on overflow |
 | Array bounds | Checked by default in hosted builds; release policy documented |
+| I/O binding | Runtime-owned; compiler emits process-image/device/binding metadata; `{stc:io}` JSON hints; runtime may override |
+| Unbound I/O | Inputs receive type defaults (or declared initializers) each cycle; outputs are written but discarded at cycle end; `%M` persists |
+| Retained state | File-backed, versioned, layout-hashed, CRC-checked; warm restart restores, cold start initializes; `on-mismatch` is `error` or `reset`; atomic saves at shutdown |
+| Assertions | `STC_ASSERT` is test-only; test-only units are excluded from production builds; production use is an error |
 | Variable-length arrays | Conformant parameters only; descriptor points at caller storage; no dynamic allocation |
 | Subrange assignment | Checked |
 | Identifier alphabet | ASCII letters/digits/underscore in v1 |
 | Default STRING/WSTRING/USTRING capacities | STRING/WSTRING 255 units; USTRING 255 characters (1020 bytes of data) unless declared |
 | Case normalization | Uppercase ASCII for symbol keys; original spelling retained |
-| Comparison associativity | All comparison operators share one precedence level, left-associative |
-| Semicolon handling | Semicolons terminate simple statements; block terminators may omit a trailing semicolon before a block delimiter |
+| Comparison precedence | Annex A split: relational (`< > <= >=`) binds tighter than equality (`= <>`); both left-associative |
+| Semicolon handling | Strict by default: every statement terminates with `;`; `--relaxed` allows omitted semicolons after block statements |
 | Task scheduling | Single task in v1; multiple tasks diagnosed as unsupported |
 
 ## 9. Project model (project feature, not an IEC claim)

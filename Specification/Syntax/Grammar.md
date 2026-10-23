@@ -182,6 +182,7 @@ var_decl           ::= pragmas
                        ( 'AT' DIRECT_VAR )?
                        ':' var_type
                        ( ':=' initializer )?
+                       pragmas?
                        ';' ;
 
 var_type           ::= type_spec
@@ -207,6 +208,9 @@ Rules and notes:
   `RETAIN`/`NON_RETAIN` are meaningful only on selected variable sections.
 - `AT` binds a variable or struct element to a directly represented address. `DIRECT_VAR` may be
   a wildcard (`%I*`, `%Q*`, `%M*`) in declarations and `VAR_ACCESS`.
+- A variable declaration may carry leading pragmas and one trailing pragma before `;`. The
+  trailing form is used for I/O hints: `MyBool AT %IX5 : BOOL {stc:io {...}};`. Leading and
+  trailing pragmas both attach to the declaration; duplicate `stc:io` pragmas are an error.
 - `edge_decl` is an alternative form for `BOOL` edge variables; it is written as a normal
   `var_decl` with the `R_EDGE`/`F_EDGE` suffix and no initializer.
 - `VAR_EXTERNAL` declares names owned by a global variable section; the analyzer links them.
@@ -450,10 +454,11 @@ Rules and notes:
 - `EXIT` exits the innermost `FOR`/`WHILE`/`REPEAT`. `CONTINUE` jumps to the loop's next
   iteration point. Both are supported for all three loop forms.
 - An empty statement is written as `;` and is allowed by `stmt_list`.
-- Semicolon relaxation: `stc` accepts an omitted semicolon after a block statement (`IF`, `CASE`,
-  `FOR`, `WHILE`, `REPEAT`) when the next token is a block delimiter (`ELSE`, `ELSIF`, `END_*`,
-  `UNTIL`) or another statement in a nested block. Simple statements still require `;`.
-  This accommodation matches common 2013-era ST source; it is a syntax superset and is tested.
+- Semicolon rule: v1 is **strict by default**. Every statement is terminated by `;` per the 2013
+  grammar. `--relaxed` accepts an omitted semicolon after a block statement (`IF`, `CASE`, `FOR`,
+  `WHILE`, `REPEAT`) when the next token is a block delimiter (`ELSE`, `ELSIF`, `END_*`, `UNTIL`)
+  or another statement in a nested block. The relaxed form is a syntax superset and is tested;
+  simple statements always require `;` in both modes.
 
 ## 9. Expressions
 
@@ -467,9 +472,9 @@ xor_expr           ::= and_expr ( 'XOR' and_expr )* ;
 
 and_expr           ::= compare_expr ( ( '&' | 'AND' ) compare_expr )* ;
 
-compare_expr       ::= add_expr ( compare_op add_expr )* ;
+compare_expr       ::= equ_expr ( ( '=' | '<>' ) equ_expr )* ;
 
-compare_op         ::= '=' | '<>' | '<' | '>' | '<=' | '>=' ;
+equ_expr           ::= add_expr ( ( '<' | '>' | '<=' | '>=' ) add_expr )* ;
 
 add_expr           ::= term ( ( '+' | '-' ) term )* ;
 
@@ -524,25 +529,28 @@ From highest to lowest:
 
 | Level | Operators | Associativity |
 | --- | --- | --- |
-| 11 | `(` `)` parentheses | — |
-| 10 | call `f(...)` / method call | left |
-| 9 | dereference `^`, subscripting `[]`, member access `.` | left |
-| 8 | unary `+`, unary `-`, `NOT` | right |
-| 7 | `**` | left |
-| 6 | `*`, `/`, `MOD` | left |
-| 5 | `+`, `-` | left |
-| 4 | `=`, `<>`, `<`, `>`, `<=`, `>=` | left |
+| 12 | `(` `)` parentheses | — |
+| 11 | call `f(...)` / method call | left |
+| 10 | dereference `^`, subscripting `[]`, member access `.` | left |
+| 9 | unary `+`, unary `-`, `NOT` | right |
+| 8 | `**` | left |
+| 7 | `*`, `/`, `MOD` | left |
+| 6 | `+`, `-` | left |
+| 5 | `<`, `>`, `<=`, `>=` (relational) | left |
+| 4 | `=`, `<>` (equality) | left |
 | 3 | `&`, `AND` | left |
 | 2 | `XOR` | left |
 | 1 | `OR` | left |
 
 Notes:
 
-- `STC-GRAM-009`: All comparison operators share precedence level 4 and are left-associative.
-  This follows Table 71 of the 2013 standard. Annex A splits equality from relational comparison;
-  `stc` resolves the inconsistency in favor of the operator table. A chained comparison such as
-  `A < B < C` parses as `(A < B) < C` and is normally a type error because the left operand is
-  `BOOL`.
+- `STC-GRAM-009`: Relational comparisons (`<`, `>`, `<=`, `>=`) bind tighter than equality
+  (`=`, `<>`); both are left-associative. This follows Annex A's formal grammar. `A = B < C`
+  parses as `A = (B < C)`. Table 71 lists all comparisons at one precedence level; `stc` follows
+  Annex A (A-014), documented as the resolution of that inconsistency.
+- Chained comparisons at the same level are left-associative. `A < B < C` parses as
+  `(A < B) < C` and is normally a type error because the left operand is `BOOL`. Parenthesize
+  comparisons explicitly.
 - `STC-GRAM-010`: `**` is left-associative, matching the standard's left-to-right rule for equal
   precedence. `A ** B ** C` means `(A ** B) ** C`.
 - `STC-GRAM-011`: Unary operators bind tighter than `**`, so `-2 ** 2` is `(-2) ** 2`. This
@@ -643,19 +651,19 @@ These are resolved by the parser/analyzer, in addition to the EBNF:
 10. **Pragmas** attach to the following declaration/statement. A pragma at the end of a block
     attaches to the block terminator and is reported as unused if it has no meaning.
 
-## 12. Semicolon and block rules (normative concession)
+## 12. Semicolon rules (strict by default; relaxed mode)
 
 The 2013 grammar writes `Stmt_List : (Stmt? ';')*`, which requires a terminator after each
-statement. Real-world ST commonly omits the semicolon after a block terminator. `stc` accepts
-both forms:
+statement. v1 is strict by default:
 
-- `IF ... END_IF;` and `IF ... END_IF` are both accepted when followed by another statement or a
-  block delimiter.
-- A simple statement (`x := 1`, a call, `RETURN`, `EXIT`, `CONTINUE`) requires `;`.
+- Every statement, including `IF`/`CASE`/`FOR`/`WHILE`/`REPEAT`, is followed by `;`.
 - `;;` is accepted as two empty statements.
+- `--relaxed` additionally accepts an omitted semicolon after a block statement when the next
+  token is a block delimiter (`ELSE`, `ELSIF`, `END_*`, `UNTIL`) or another statement in a nested
+  block. Simple statements always require `;`.
+- The formatter always emits semicolons, so formatted code is strict.
 
-This is a syntax superset, not a semantic change. The formatter always emits the semicolon after
-block statements for consistency.
+This is a syntax-only difference; semantics are unchanged. See A-015.
 
 ## 13. Constructs rejected with explicit diagnostics
 
@@ -689,11 +697,12 @@ block statements for consistency.
 | `STC-GRAM-013` | Boolean short-circuiting |
 | `STC-GRAM-014` | Operand evaluation order |
 | `STC-GRAM-015` | `NOT` precedence |
-| `STC-GRAM-016` | Semicolon relaxation |
+| `STC-GRAM-016` | Semicolon rules: strict by default, `--relaxed` superset |
 
-## 15. Open grammar questions
+## 15. Resolved grammar questions
 
-- Q-008: Unicode identifiers (currently rejected).
-- Q-009: Comparison precedence interpretation (one level vs. the Annex A split).
-- Q-010: Whether to keep the semicolon relaxation as a permanent syntax superset or require
-  strict 2013 semicolons behind a `--strict` flag.
+No open grammar questions currently.
+
+- **Q-009 resolved (A-014):** Annex A's split is used: relational binds tighter than equality.
+- **Q-010 resolved (A-015):** strict 2013 semicolons by default; `--relaxed` enables the
+  documented superset.

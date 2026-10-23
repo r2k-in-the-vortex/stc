@@ -106,12 +106,16 @@ typedef enum {
 } stc_trap_code;
 
 void stc_rt_trap(int32_t code, uint32_t span_id);
-void stc_rt_assert(int32_t condition, uint32_t span_id, const char* message);
+void stc_rt_assert(int32_t condition, uint32_t span_id, const char* message); /* test builds only */
 
 int64_t  stc_rt_cycle_now_ns(void);      /* latched at stc_cycle entry */
 uint64_t stc_rt_monotonic_now_ns(void);  /* live clock; runtime/host only */
 void     stc_rt_set_cycle_time_ns(int64_t ns); /* override next cycle */
 int64_t  stc_rt_local_date_ns(void);
+
+int32_t stc_rt_state_load(void* buffer, int64_t len, int64_t layout_hash);
+int32_t stc_rt_state_save(const void* buffer, int64_t len, int64_t layout_hash);
+void    stc_rt_state_configure(const char* path, int32_t policy, int32_t enabled);
 
 void stc_rt_io_image(uint8_t** base, uint64_t* len);
 void stc_rt_set_io_backend(const stc_io_backend* backend);
@@ -136,8 +140,14 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
       int32_t (*write_outputs)(void* user, const uint8_t* src, uint64_t len);
   } stc_io_backend;
   ```
-- Default backend: zeroed inputs, outputs discarded (or written to a file with `--io=file`).
-- Tests use a memory backend with explicit input/output images.
+- Default backend (`null`): unbound inputs are filled with the type's default value each cycle
+  (from `input_defaults_hex`), bound inputs are read from their backend, and unbound outputs are
+  discarded at cycle end. Inputs with no linking therefore see type defaults; outputs with no
+  linking do nothing externally. `%M` markers persist.
+- Tests use a memory backend with explicit input/output images; unbound inputs still receive
+  defaults unless the test overrides them.
+- Hardware backends (EtherCAT, Modbus, MQTT) and their schedules are v2; the compiler only emits
+  process-image metadata and binding hints. See [I/O and Devices](IO-and-Devices.md).
 - Direct variables inside functions/FB bodies are deprecated by the 2013 standard; `stc` accepts
   them with a warning (`STC-W-RUN-001`) and documents that they refer to the same process image.
 
@@ -250,13 +260,20 @@ See [Architecture](Architecture.md) §4.3. Strings are fixed-capacity, length-pr
 
 ## 5. RETAIN and PERSISTENT
 
-- `RETAIN`/`NON_RETAIN` are parsed and recorded in HIR.
-- **v1 executable mode**: RETAIN variables are not persisted across process restarts. The runtime
-  prints a warning at startup if the configuration declares retained variables and no persistence
-  backend is configured.
-- **v1 library mode**: the host owns persistence. The generated metadata lists retained variables
-  and their layout; a future ABI will expose snapshot/restore helpers.
+- `RETAIN`/`NON_RETAIN` are parsed and analysed; the compiler computes an effective policy per
+  storage leaf (explicit qualifier, section qualifier, instance inheritance, struct/array
+  inheritance).
+- **v1 executable mode**: retained values are persisted to a versioned state file. A valid file
+  is a warm restart; a missing file or `--reset-retain` is a cold restart. Layout/profile/version
+  mismatches and CRC failures follow `on-mismatch = error|reset` (default `error`). Saves are
+  atomic and happen at normal shutdown.
+- **v1 library mode**: the same behavior is available through `stc_retain_size/save/load` and
+  `stc_rt_state_*`; the host may use the file helpers or its own storage and policy.
+- The state file contains only persistable leaves; references/interfaces/pointers and vtable
+  pointers are excluded (vtable/type pointers are reinitialized before load). Direct `AT`
+  variables are excluded with `STC-W-RETAIN-001`.
 - `PERSISTENT` is not a 2013 keyword; it is out of profile unless added as a documented extension.
+- Full format, hashing, ABI, and diagnostics: [State and RETAIN](State-and-Retain.md).
 
 ## 6. Traps and diagnostics
 
@@ -309,6 +326,5 @@ Detailed test discovery and pragma syntax are in [Testing](Testing-and-Verificat
 
 ## 9. Open runtime questions
 
-- Q-006: I/O backend defaults and file/network backends.
-- Q-007: RETAIN persistence format and host ABI.
-- Q-012: Multi-task scheduling and whether `stc_cycle` should expose per-task stepping.
+None currently. New runtime questions are appended here or in [Decisions](../Decisions.md).
+

@@ -45,7 +45,9 @@ proved in Lean before implementation.
 - IEC 61131-3:2025 (Ed. 4.0) conformance. The project targets the 2013 language plus documented
   extensions and makes no Ed. 4 claim.
 - LD, FBD, SFC, and IL as input languages. Only ST is parsed.
-- The IEC communication model, remote I/O, HMI, online monitoring, and online debugging.
+- The IEC communication model, HMI, online monitoring, and online debugging.
+- Hardware I/O backends (EtherCAT, Modbus, MQTT) and their schedules in v1. They are planned for
+  v2 and are noted in the I/O spec; v1 uses null/memory/file backends.
 - Vendor project import (TIA Portal, CODESYS, etc.).
 - The SIMATIC AX preprocessor and vendor-specific pragma semantics. AX documentation is used
   only as syntax inspiration.
@@ -53,8 +55,8 @@ proved in Lean before implementation.
   v1; a registry/version solver is a later extension (A-009).
 - Formal verification of IEEE-754 transcendental functions. These remain test-based.
 - Multi-threaded PLC task execution in v1 (architecture must not preclude it).
-- Full RETAIN/PERSISTENT storage management in v1 executable mode (parsed and validated; the
-  embedding host owns persistence).
+- `PERSISTENT` (not a 2013 keyword) and periodic/checkpointed state saves. v1 persists retained
+  variables at normal shutdown; crash-time saves are a later extension.
 
 ## 4. Constraints and assumptions
 
@@ -69,6 +71,8 @@ proved in Lean before implementation.
 | Source encoding | UTF-8 (optional BOM), case-insensitive language keywords/identifiers |
 | Project dependencies | Local path dependencies plus committed `stc.lock` in v1; package graph is acyclic; `--locked` enforced; registry/version solver later (A-009) |
 | Standard FBs / time | ST stdlib; Rust clock latched once at `stc_cycle` entry and shared by all timers in that scan (A-010) |
+| I/O | Runtime-owned linking; compiler emits process-image/device/binding metadata; `{stc:io}` JSON hints; v1 null/memory/file; EtherCAT/Modbus/MQTT v2 (A-011) |
+| Retained state | File-backed, versioned, layout-hashed, CRC-checked, atomic save; warm/cold restart; v1 saves at shutdown (A-012) |
 | Standard text | Local IEC 61131-3:2013 PDF only; not committed or redistributed |
 | UTF-8 strings | Project-defined extension; `USTRING[n]` stores `n` characters as 32-bit scalars (4 bytes each), static storage, UTF-8 source/interchange |
 | Lean scope | Proofs for exact discrete functions cover the Lean model; Rust is tested against generated vectors (A-006); float/transcendental math is test-based |
@@ -86,7 +90,11 @@ single-threaded; concurrency primitives added by Ed. 4 are out of scope.
 - `Specification/AST/AST.md` — CST, AST, HIR, symbols, spans, diagnostics.
 - `Specification/Architecture/Architecture.md` — pipeline, crates, IR generation, ABI.
 - `Specification/Architecture/Runtime-and-Execution.md` — runtime, artifact modes, tasks,
-  standard functions/FBs, I/O, trap model.
+  standard functions/FBs, trap model.
+- `Specification/Architecture/IO-and-Devices.md` — process image, `AT` linking, device tree,
+  pragma hints, runtime override, unbound defaults.
+- `Specification/Architecture/State-and-Retain.md` — file-backed retained state, warm/cold
+  restart, layout hashing, atomic saves, ABI.
 - `Specification/Architecture/CLI-and-Manifest.md` — CLI verbs, diagnostics, `stc.toml`.
 - `Specification/Architecture/Testing-and-Verification.md` — test framework, conformance,
   Lean vector bridge, fuzzing, CI.
@@ -209,8 +217,8 @@ Exit criteria:
 ### M4 — LLVM IR core codegen
 
 Deliverables: typed HIR -> textual IR; scalar types and operators; control flow; functions and
-programs; globals and initialization; runtime ABI stubs; clang invocation; `--emit=ir,obj,exe`;
-execution tests; deterministic IR snapshots.
+programs; globals and initialization; process-image metadata for `AT`; runtime ABI stubs; clang
+invocation; `--emit=ir,obj,exe`; execution tests; deterministic IR snapshots.
 
 Exit criteria:
 - A set of small ST programs produces IR accepted by `clang` and runs correctly.
@@ -236,7 +244,8 @@ Exit criteria:
 ### M6 — Project system, CLI, and verification hardening
 
 Deliverables: full `stc.toml`, local path dependency graph, `stc.lock`, package-aware namespace
-visibility, configurations/tasks, build artifacts, JSON diagnostics, verbose output, `stc test`,
+visibility, configurations/tasks, I/O device tree/bindings/defaults metadata, file-backed
+retained state, build artifacts, JSON diagnostics, verbose output, `stc test`, minimal `stc fmt`,
 Lean vector integration, conformance corpus, fuzzing, CI matrix, docs.
 
 Exit criteria:
@@ -281,6 +290,8 @@ Exit criteria:
 | Lean proof scope creep | Stalls implementation | Restrict proofs to exact discrete functions; float math is test-based; define the model/implementation boundary |
 | Textual IR limitations | Debug info/optimization gaps | Start with a stable IR subset; add metadata/debug info incrementally; validate with clang |
 | Windows/LLVM toolchain drift | Build breakage | Pin Rust/Lean; discover clang via `--clang`/`STC_CLANG`; CI matrix with the pinned version |
+| I/O metadata/runtime contract drift | Unbound or mis-bound variables | Version the metadata, test binding precedence and defaults, keep protocol details runtime-side |
+| Retained-state corruption/layout drift | Failed starts or lost state | Magic/version/profile/layout hash + CRC, atomic save, `on-mismatch` policy, restart tests |
 | Case-insensitive names + namespaces | Resolution bugs | Canonical symbol keys; dedicated tests for shadowing and `USING` |
 | OOP dispatch/ABI | Hard-to-debug codegen | Vtable layout documented; ABI tests and IR snapshots |
 | UTF-8 representation/indexing | Silent data corruption | Fixed 4-byte scalar storage; character/UTF-8-byte APIs kept distinct; exhaustive invalid-sequence tests |
@@ -302,13 +313,29 @@ Exit criteria:
 - Local path dependencies compile topologically, `stc.lock` is deterministic and `--locked` is
   enforced in CI, package-aware namespaces resolve, and a separate test project can depend on the
   code under test.
+- Unbound I/O has defined behavior (inputs default, outputs discarded), and I/O metadata carries
+  devices, bindings, hints, and default values for the runtime.
+- Retained state round-trips across restart, rejects layout/profile mismatches and corruption by
+  policy, and writes atomically.
+- `stc fmt` is idempotent, preserves comments, emits strict semicolons, and supports `--check`.
+- Production and release artifacts contain no test-only units or `STC_ASSERT` calls; production
+  use of either is an error.
 - No known silent correctness gaps.
 
 ## 12. Immediate next actions
 
 1. Review and approve this plan, the conformance profile, and the tokenization/grammar/AST specs.
-2. Resolve the remaining open questions in `Specification/Decisions.md`, starting with Q-006
-   (I/O backend). Q-001 through Q-005 and Q-017 are resolved (A-005 to A-010).
-3. Create the Rust workspace skeleton and CI only after the M0–M2 specs are approved.
+2. All v1 planning questions Q-001 through Q-017 are resolved (A-005 through A-021). New
+   questions are logged in `Specification/Decisions.md` and `README.md` one at a time.
+3. Create the Rust workspace skeleton and CI after the M0–M2 specs are approved.
 4. Implement the lexer first; do not write codegen before the parser/analyzer contracts are
    stable.
+
+## 13. Post-v1 outlook
+
+- Public CST/traversal API for IDE tools (v2/v3), building on the stable `SyntaxKind`.
+- Hardware I/O backends and schedules: EtherCAT, Modbus, MQTT.
+- Multi-task scheduler (cooperative or preemptive) and task stepping.
+- Periodic/checkpointed RETAIN saves and stronger state integrity.
+- Registry/version solving for dependencies.
+- Configurable formatter and additional tooling (`stc lsp`, `stc doc`).
