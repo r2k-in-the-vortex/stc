@@ -1,1 +1,11 @@
 .claude/settings.local.json
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# Lean build artifacts
+/lean/.lake/
+
+# Local copyrighted reference: keep out of version control
+/Specification/Reference/*.pdf

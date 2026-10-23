@@ -1,0 +1,568 @@
+# AST, CST, and HIR
+
+Status: Draft  
+Profile: `stc-2013-oop-utf8-v1`  
+Related: [Tokenization](../Syntax/Tokenization.md), [Grammar](../Syntax/Grammar.md), [Architecture](../Architecture/Architecture.md)
+
+This document defines the compiler's syntax and semantic data structures. The design separates
+three layers so that diagnostics, formatting, name resolution, and codegen do not fight over one
+tree:
+
+1. **Token stream** — lexical tokens and trivia (defined in the tokenization spec).
+2. **CST** — a lossless concrete syntax tree that preserves every byte, including whitespace,
+   comments, and pragmas.
+3. **Typed AST views** — ergonomic, typed accessors over CST nodes, used by the parser tests,
+   formatter, and early analysis.
+4. **HIR** — a resolved, typed, desugared representation used by codegen. HIR does not reference
+   CST nodes; it owns stable IDs and spans.
+
+The parser produces the CST and typed AST. Name resolution and type checking consume the typed
+AST and produce HIR.
+
+## 1. Design goals
+
+- **Lossless**: `cst.text() == source` for every valid or invalid input.
+- **Span-complete**: every token, trivia item, CST node, AST node, HIR node, and diagnostic has a
+  `Span`.
+- **Error-tolerant**: malformed input produces `Error` nodes, not a panic or a discarded tree.
+- **Case-insensitive**: symbol lookup uses a normalized key; original spelling is retained.
+- **Stable ordering**: HIR declarations and expressions are indexed in source order where
+  possible, with deterministic tie-breaking for tests and IR output.
+- **No hidden state**: all resolution results are explicit in HIR; codegen never re-resolves a
+  name.
+- **Cheap to extend**: new syntax (future Ed. 4 features) adds CST kinds and typed wrappers
+  without rewriting the analyzer.
+
+## 2. Source map, spans, and symbols
+
+```rust
+pub struct FileId(u32);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Span {
+    pub file: FileId,
+    pub start: u32, // byte offset, inclusive
+    pub end: u32,   // byte offset, exclusive
+}
+
+pub struct SourceMap {
+    files: Vec<SourceFile>,
+    line_starts: Vec<Vec<u32>>, // per file
+}
+
+impl SourceMap {
+    pub fn location(&self, span: Span) -> Location; // line/column, 1-based
+    pub fn text(&self, span: Span) -> &str;
+    pub fn line_snippet(&self, span: Span) -> &str;
+}
+
+pub struct Location {
+    pub file: FileId,
+    pub line: u32,
+    pub column: u32, // Unicode scalar count, 1-based
+}
+```
+
+Symbols:
+
+```rust
+pub struct Symbol(u32);
+
+pub struct Interner {
+    // original text -> Symbol; normalized key handles case-insensitivity
+}
+
+impl Interner {
+    pub fn intern(&mut self, text: &str) -> Symbol;
+    pub fn text(&self, symbol: Symbol) -> &str;
+    pub fn normalized(&self, symbol: Symbol) -> &str; // ASCII uppercase
+}
+
+pub struct Name {
+    pub symbol: Symbol,
+    pub span: Span,
+}
+```
+
+- The lexer interns every identifier and keyword spelling it sees.
+- `Name` equality uses `Symbol` (case-insensitive). Diagnostics print `interner.text(symbol)`.
+- Namespace-qualified paths are represented as `Vec<Name>` (segments) plus a span covering the
+  whole path.
+
+## 3. CST
+
+### 3.1 Shape
+
+The CST is a rowan-style green/red tree or an equivalent arena tree. The implementation may use
+`rowan` or a hand-rolled arena; the contract is:
+
+- Nodes have a `SyntaxKind`, a `Span`, ordered children, and an optional parent pointer.
+- Tokens and trivia are leaves; no byte is lost.
+- `SyntaxNode::text()` concatenates leaves and equals the source slice for the node's span.
+- Nodes are immutable after construction.
+- The tree can be traversed pre-order, post-order, and by descendant token iteration.
+
+### 3.2 Syntax kinds
+
+Token kinds are defined in the tokenization spec. Node kinds:
+
+```
+SourceFile
+UsingDirective
+NamespaceDecl
+DataTypeDecl
+TypeDecl
+SimpleTypeDecl
+SubrangeTypeDecl
+EnumTypeDecl
+NamedValueTypeDecl
+ArrayTypeDecl
+StructTypeDecl
+StringTypeDecl
+RefTypeDecl
+VarSection
+VarDecl
+EdgeDecl
+AccessDecl
+FunctionDecl
+FunctionBlockDecl
+ProgramDecl
+ClassDecl
+InterfaceDecl
+MethodDecl
+MethodPrototype
+ConfigDecl
+ResourceDecl
+TaskConfig
+ProgramConfig
+ProgConfElem
+VarAccessSection
+ConfigInit
+ConfigInstInit
+
+StmtList
+AssignStmt
+RefAssignStmt
+AssignmentAttemptStmt
+CallStmt
+ReturnStmt
+IfStmt
+CaseStmt
+CaseSelection
+ForStmt
+WhileStmt
+RepeatStmt
+ExitStmt
+ContinueStmt
+EmptyStmt
+
+Expr
+BinaryExpr
+UnaryExpr
+CallExpr
+MemberExpr
+IndexExpr
+DerefExpr
+ParenExpr
+LiteralExpr
+PathExpr
+RefValueExpr
+
+Name
+Path
+TypeRef
+ParamList
+Param
+Pragma
+Error
+```
+
+This list is illustrative; the implementation may split nodes further (for example, separate
+`StructElem` from `VarDecl`) as long as the AST contract holds.
+
+### 3.3 CST invariants
+
+- Every non-terminal node has at least one child unless it is an `Error` node.
+- `Error` nodes may contain tokens and nested nodes; they never contain unreachable siblings.
+- A node's span is the union of its children's spans. Nodes with zero-width content (for example
+  a missing `;`) use an empty span at the insertion point.
+- Comments and whitespace are leaves attached to the CST, not discarded. The parser may attach
+  leading trivia to the next token.
+
+## 4. Typed AST views
+
+The typed AST is a set of zero-cost wrappers around CST nodes. It is not a second tree.
+
+```rust
+pub trait AstNode: Sized {
+    fn cast(node: &SyntaxNode) -> Option<Self>;
+    fn syntax(&self) -> &SyntaxNode;
+    fn span(&self) -> Span { self.syntax().span() }
+}
+
+pub struct SourceFile(SyntaxNode);
+pub struct FunctionDecl(SyntaxNode);
+pub struct VarSection(SyntaxNode);
+pub struct VarDecl(SyntaxNode);
+pub struct Stmt(SyntaxNode);
+pub struct Expr(SyntaxNode);
+
+pub enum Item {
+    Using(UsingDirective),
+    Namespace(NamespaceDecl),
+    DataType(DataTypeDecl),
+    Function(FunctionDecl),
+    FunctionBlock(FunctionBlockDecl),
+    Program(ProgramDecl),
+    Class(ClassDecl),
+    Interface(InterfaceDecl),
+    Configuration(ConfigDecl),
+    GlobalVars(VarSection),
+}
+
+pub enum StmtKind {
+    Assign(AssignStmt),
+    RefAssign(RefAssignStmt),
+    Attempt(AssignmentAttemptStmt),
+    Call(CallStmt),
+    Return(ReturnStmt),
+    If(IfStmt),
+    Case(CaseStmt),
+    For(ForStmt),
+    While(WhileStmt),
+    Repeat(RepeatStmt),
+    Exit(ExitStmt),
+    Continue(ContinueStmt),
+    Empty(EmptyStmt),
+    Error(ErrorNode),
+}
+
+pub enum ExprKind {
+    Binary(BinaryExpr),
+    Unary(UnaryExpr),
+    Call(CallExpr),
+    Member(MemberExpr),
+    Index(IndexExpr),
+    Deref(DerefExpr),
+    Paren(ParenExpr),
+    Literal(LiteralExpr),
+    Path(PathExpr),
+    RefValue(RefValueExpr),
+    Error(ErrorNode),
+}
+```
+
+Typed accessors return `Option` for optional children and `Result` only when a structural
+invariant is broken. The parser guarantees the shape; AST accessors do not re-validate grammar.
+
+### 4.1 Typed AST invariants
+
+- A `FunctionDecl` has at most one result type and one body.
+- `IfStmt` has one or more branches and an optional `ELSE` block.
+- `CaseStmt` has one or more selections; at most one `ELSE`.
+- `CallExpr` has a callee path and an argument list; arguments preserve source order and whether
+  they are named/positional/output.
+- `MethodDecl` records its enclosing POU kind (class, FB, interface) and access specifier.
+- Every node has a span; missing delimiters are represented by zero-width spans and an `Error`
+  node/flag.
+
+## 5. HIR
+
+HIR is where names and types become explicit. It is produced after name resolution and type
+checking. Codegen consumes only HIR.
+
+```rust
+pub struct PackageId(u32);
+pub struct DefId(u32);
+
+pub struct PackageInfo {
+    pub id: PackageId,
+    pub name: String,       // manifest name
+    pub root_namespace: String,
+}
+
+pub struct HirCrate {
+    pub defs: Arena<Def>,
+    pub bodies: Arena<Body>,
+    pub types: TypeArena,
+    pub globals: Vec<Global>,
+    pub packages: Vec<PackageInfo>,
+    pub dependency_order: Vec<PackageId>,
+    pub config: Option<ConfigHir>,
+    pub exports: Vec<Export>,
+}
+
+pub struct Body {
+    pub owner: DefId,
+    pub params: Vec<ParamHir>,
+    pub locals: Vec<LocalHir>,
+    pub stmts: Vec<StmtHir>,
+    pub span: Span,
+}
+
+pub struct StmtHir {
+    pub kind: StmtKindHir,
+    pub span: Span,
+}
+
+pub enum StmtKindHir {
+    Assign { place: PlaceHir, value: ExprHir },
+    RefAssign { place: PlaceHir, value: ExprHir },
+    Attempt { place: PlaceHir, value: ExprHir },
+    Call { callee: CalleeHir, args: Vec<ArgHir>, result: Option<PlaceHir> },
+    Return { value: Option<ExprHir> },
+    If { arms: Vec<(ExprHir, Vec<StmtHir>)>, else_body: Vec<StmtHir> },
+    Case { selector: ExprHir, arms: Vec<CaseArmHir>, else_body: Vec<StmtHir> },
+    For { var: PlaceHir, start: ExprHir, end: ExprHir, step: ExprHir, body: Vec<StmtHir> },
+    While { cond: ExprHir, body: Vec<StmtHir> },
+    Repeat { body: Vec<StmtHir>, cond: ExprHir },
+    Exit,
+    Continue,
+}
+
+pub enum ExprKindHir {
+    Literal(LiteralHir),
+    Local(LocalId),
+    Global(DefId),
+    Param(ParamId),
+    Field { base: Box<ExprHir>, field: FieldId },
+    Index { base: Box<ExprHir>, indices: Vec<ExprHir> },
+    Deref(Box<ExprHir>),
+    Binary { op: BinOp, lhs: Box<ExprHir>, rhs: Box<ExprHir>, ty: TyId },
+    Unary { op: UnOp, operand: Box<ExprHir>, ty: TyId },
+    Call { callee: CalleeHir, args: Vec<ArgHir>, ty: TyId },
+    Ref { target: PlaceHir },
+    Null,
+    Cast { operand: Box<ExprHir>, from: TyId, to: TyId, kind: CastKind },
+}
+```
+
+Notes:
+
+- `PlaceHir` is a resolved lvalue: local, parameter, global, field, index, or deref.
+- `CalleeHir` is `Function(DefId)`, `FunctionBlock(DefId)`, `Method { receiver, def }`, or
+  `InterfaceMethod { receiver, slot }`. The analyzer resolves overloads and stores the chosen
+  definition.
+- `ArgHir` records the formal parameter ID, direction (input/output/in-out), and expression.
+- `Cast` nodes are explicit. Codegen never inserts implicit conversions on its own.
+- `TyId` indexes the type arena; types are canonicalized (same type = same ID).
+- `ConfigHir` contains the selected configuration, resources, tasks, program instances, and
+  variable bindings needed by the runtime generator.
+- `Export` records `{stc:export}` symbols and their stable C names.
+
+## 6. Type representation
+
+```rust
+pub enum Ty {
+    Error,
+    Bool,
+    Int(IntTy),       // signed/unsigned, width
+    Real(RealTy),     // f32/f64
+    BitString(u16),   // BYTE/WORD/DWORD/LWORD width
+    Time(TimeTy),     // TIME/LTIME
+    Date(DateTy),     // DATE/LDATE/TOD/LTOD/DT/LDT
+    Char(CharTy),     // CHAR/WCHAR/UCHAR
+    String(StringTy), // STRING/WSTRING/USTRING + capacity
+    Array(ArrayTy),
+    Struct(StructTy),
+    Enum(EnumTy),
+    Subrange(SubrangeTy),
+    Ref(RefTy),
+    Class(ClassTy),
+    Interface(InterfaceTy),
+    FunctionBlock(FbTy),
+    Function(FunctionTy),
+    Program(ProgramTy),
+    Generic(GenericTy), // only in standard function signatures
+}
+```
+
+Canonicalization rules:
+
+- Integer and bit-string widths are explicit; `BOOL` is not an integer type for arithmetic.
+- Subrange types retain their base integer type and bounds; assignment checks the bounds.
+- Arrays retain element type and bounds; variable-length arrays carry a conformant marker and are
+  only valid as `VAR_IN_OUT`/FB parameters in v1 (A-007). Dynamic locals/globals/returns are
+  rejected.
+- Structs retain field order, `OVERLAP` flags, and `AT` bindings.
+- Class/FB types retain a base type, implemented interfaces, methods, fields, and vtable slots.
+- Interface types retain method prototypes and a stable slot order (sorted by name + signature).
+- String types retain kind (`SBCS`, `DBCS`, `Unicode`) and capacity. For `Unicode`, capacity is
+  characters and storage is 4 bytes per character (32-bit scalar); UTF-8 is the
+  source/interchange encoding, not the storage encoding.
+- `USTRING` is `String(StringTy { kind: Unicode, capacity: CharCount, scalar_width: 32 })`;
+  `UCHAR` is `Char(CharTy::UnicodeScalar32)`.
+
+## 7. Name resolution
+
+Resolution produces a `Resolution` map keyed by syntax node IDs or spans:
+
+```rust
+pub enum Res {
+    Def(DefId),
+    Local(LocalId),
+    Param(ParamId),
+    Field(FieldId),
+    Namespace(NamespaceId),
+    Package(PackageId),
+    StdFunction(StdFnId),
+    StdFb(StdFbId),
+    Err,
+}
+```
+
+Scopes, from innermost to outermost:
+
+1. POU local variables (`VAR`, `VAR_TEMP`, `VAR_INPUT`, `VAR_OUTPUT`, `VAR_IN_OUT`).
+2. POU name (function result / FB instance self).
+3. Class/FB members and inherited members (with access checks).
+4. Namespace scope, including `USING` imports.
+5. Package root namespace (for cross-package references).
+6. Global variables.
+7. Standard library prelude (functions and FBs).
+8. Built-in elementary types and literals.
+
+Resolution rules:
+
+- Case-insensitive, exact normalized-key matching.
+- A local variable shadows a member; a member shadows a namespace import; an explicit import
+  shadows a wildcard `USING`.
+- `THIS.member` resolves starting at the current class/FB type; `SUPER.member` starts at the
+  base type.
+- Qualified names resolve segment by segment; a namespace segment may be followed by a type,
+  POU, or variable.
+- Overload sets are resolved after argument typing; ambiguity is an error.
+- Unknown names produce `STC-E-NAME-*` diagnostics with a "did you mean" suggestion using a
+  bounded edit-distance search.
+- Access control is checked after resolution: `PRIVATE` (declaring POU only), `PROTECTED`
+  (declaring POU and derived types), `INTERNAL` (same package/namespace subtree), `PUBLIC`
+  (visible across packages).
+- Package boundaries participate in resolution: a dependency's package name (or alias) is a root
+  namespace; symbols from a dependency are not implicitly imported. `INTERNAL` symbols are not
+  visible outside their package.
+
+## 8. Lowering from AST to HIR
+
+Lowering is a single pass after type checking, with these transformations:
+
+1. **Implicit conversions** become explicit `Cast` nodes.
+2. **Overloaded standard functions** become concrete `CalleeHir::Function` entries; operator
+   nodes become calls to the corresponding standard function where the standard defines one.
+3. **FB calls** become `CalleeHir::FunctionBlock` with an instance receiver and parameter
+   assignments. Output bindings become assignment targets.
+4. **Method calls** become `CalleeHir::Method` with an explicit `this` receiver. Calls through an
+   interface or base-class reference become `InterfaceMethod`/virtual slots.
+5. **`VAR_IN_OUT`** parameters and `REF_TO` values become pointer/reference operations.
+6. **Class/interface references** become explicit reference values; assignment attempts become
+   runtime type checks.
+7. **`FOR`** retains its structure; codegen emits the initialization, condition, body, and
+   increment explicitly. The loop variable is a local with checked bounds.
+8. **Initializers** are lowered to constant data when possible, otherwise to `stc_init` code.
+9. **Configuration** is lowered to `ConfigHir` with selected resources/tasks/programs and I/O
+   bindings.
+10. **Pragmas** are resolved to HIR annotations (`test`, `export`, `no_mangle`, `inline`).
+
+Lowering never re-resolves a name and never inserts a conversion silently; every semantic choice
+is visible in HIR.
+
+## 9. Diagnostics and error nodes
+
+```rust
+pub struct Diagnostic {
+    pub code: &'static str,        // STC-E-..., STC-W-...
+    pub severity: Severity,
+    pub message: String,
+    pub primary: Span,
+    pub labels: Vec<(Span, String)>,
+    pub notes: Vec<String>,
+    pub suggestions: Vec<Suggestion>,
+}
+```
+
+- The parser reports syntax errors and produces `Error` nodes; it does not stop at the first
+  error.
+- The analyzer reports name/type errors and continues with `Ty::Error` to avoid cascades.
+- Codegen refuses to run if any error-severity diagnostic exists.
+- Error codes are stable and documented. Tests snapshot the code, message, span, and labels.
+- Suggestions include machine-applicable replacements where safe (`=`, `:=`, missing `;`,
+  misspelled keyword/identifier).
+
+## 10. Example
+
+Source:
+
+```st
+FUNCTION Add : DINT
+VAR_INPUT
+  a : DINT;
+  b : DINT;
+END_VAR
+  Add := a + b;
+END_FUNCTION
+```
+
+CST (abridged):
+
+```
+FunctionDecl
+  FUNCTION
+  Name "Add"
+  Colon
+  TypeRef Name "DINT"
+  VarSection VAR_INPUT
+    VarDecl Name "a" Colon TypeRef Name "DINT" Semicolon
+    VarDecl Name "b" Colon TypeRef Name "DINT" Semicolon
+  END_VAR
+  StmtList
+    AssignStmt
+      PathExpr Name "Add"
+      Assign
+      BinaryExpr
+        PathExpr Name "a"
+        Plus
+        PathExpr Name "b"
+      Semicolon
+  END_FUNCTION
+```
+
+HIR (abridged):
+
+```
+Def Function(Add) -> DINT
+Body(Add):
+  params: a: DINT, b: DINT
+  stmts:
+    Assign(place=Result(Add), value=Binary(Add, Local(a), Local(b)))
+```
+
+The lowering of `a + b` inserts the standard arithmetic function resolution and any implicit
+conversions. In this case both operands are `DINT`, so the HIR is a `Binary(Add)` with type
+`DINT`.
+
+## 11. Memory and performance
+
+- CST nodes and tokens are immutable and arena/slab allocated.
+- AST wrappers are `Copy`-able handles; no tree duplication.
+- HIR uses dense arenas (`Id<T>`) for defs, bodies, types, expressions, and statements.
+- Symbols are interned once per compiler session.
+- Name resolution uses `HashMap` keyed by `Symbol` in each scope; expected scope sizes are small.
+- No global mutable state; the driver owns the compiler session.
+- Parallelism is not required in v1; the data structures do not prevent per-POU checking later.
+
+## 12. Testing contract
+
+- **CST round-trip**: for every corpus file, `cst.text() == source`.
+- **AST snapshots**: a compact debug dump of typed AST nodes and spans.
+- **HIR snapshots**: resolved names, types, and explicit casts.
+- **Error recovery**: malformed snippets produce expected diagnostics and no panic.
+- **Property tests**: random token insertions/deletions do not panic and preserve the
+  token/trivia coverage invariant.
+- **Fuzzing**: the lexer/parser entry point is fuzzed with arbitrary bytes.
+
+## 13. Open AST questions
+
+- Q-008: Unicode identifiers (currently ASCII-only).
+- Q-016: Whether to expose a stable `SyntaxKind` numbering for external tooling; v1 keeps it
+  internal.
+- Q-011: Whether the formatter should be part of v1; the CST supports it, but the CLI surface is
+  not committed yet.
