@@ -142,6 +142,8 @@ Design:
   AArch64, or another clang target.
 - C ABI calls use `ptr`, `i8`, `i16`, `i32`, `i64`, `float`, and `double`; no target-specific
   calling conventions are emitted.
+- Host platforms do not change the emitted IR. The same module is valid for Windows MSVC and
+  Linux GNU targets; only clang's target triple and the runtime staticlib differ (D-042).
 - Targets whose C ABI differs in fundamental ways (for example exotic embedded ABIs) are out of
   scope until a target-specific test exists.
 
@@ -399,7 +401,7 @@ Rules:
 
 ## 6. Backend invocation
 
-### 5.1 clang discovery
+### 6.1 clang discovery
 
 Order:
 
@@ -412,7 +414,7 @@ Order:
 diagnostic if clang is missing or too old. The minimum tested version is recorded in CI; the
 project targets IR syntax accepted by LLVM 15 and later.
 
-### 5.2 Commands
+### 6.2 Commands
 
 | Artifact | Command shape |
 | --- | --- |
@@ -422,13 +424,16 @@ project targets IR syntax accepted by LLVM 15 and later.
 | Static library | `clang ... -c` then `llvm-ar rcs <name>.a <objects>` plus the runtime object |
 | Shared library | `clang --target=<triple> -shared <name>.ll <runtime> -o <name>.dll/.so` |
 
-- On Windows MSVC targets, clang uses `link.exe` or `lld-link`; the Rust runtime staticlib is
-  built with the same MSVC toolchain (`*-pc-windows-msvc`).
+- The runtime staticlib is built with the toolchain that matches the target C ABI: the MSVC
+  toolchain for `*-pc-windows-msvc` and the GNU toolchain for `*-unknown-linux-gnu`.
+- On Windows MSVC targets, clang uses `link.exe` or `lld-link`. On Linux targets it uses the
+  system linker (GNU `ld` or `lld`). Artifact suffixes and linker flags are selected from the
+  target triple, not hard-coded.
 - The runtime staticlib path is discovered from the workspace build output or `STC_RUNTIME`.
 - Linking errors are surfaced as build errors with the clang command (verbosity-gated) and the
   generated IR retained for inspection.
 
-### 5.3 Artifact layout
+### 6.3 Artifact layout
 
 ```
 target/stc/<profile>/
@@ -441,6 +446,19 @@ target/stc/<profile>/
 
 The `.stc-meta.json` includes the selected configuration, task list, exported symbols, string
 capacities, and source-span table for runtime diagnostics.
+
+### 6.4 Host platforms
+
+- Primary development host: Windows 11, x86-64, MSVC (D-007).
+- Planned additional hosts after basic development: Linux x86-64 and Linux AArch64 (ARM64), GNU
+  toolchain (D-042). Both are little-endian, so the state-file format and IR are unchanged.
+- Linux x86-64 and Linux AArch64 are valid clang targets from the start. Cross-target builds
+  need a runtime staticlib built for the target.
+- Host-specific operations are confined to the driver and runtime: clang/linker discovery,
+  executable/shared-library naming, path semantics, the monotonic clock, and atomic file
+  replace. The front end, HIR, and IR builder contain no host conditionals.
+- Linux host builds must pass the same workspace, execution, and conformance tests as Windows;
+  CI covers both hosts (see [Testing and Verification](Testing-and-Verification.md) §6).
 
 ## 7. Runtime boundary
 

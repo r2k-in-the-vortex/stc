@@ -72,7 +72,9 @@ called from a host thread; v1 is not thread-safe and requires external serializa
 - `crates/stc-runtime` is a Rust crate built as `staticlib` and optionally `cdylib`.
 - It exposes a C ABI (`extern "C"`, `#[no_mangle]`, `#[repr(C)]`).
 - No Rust types cross the ABI except `u8`/`i32`/`i64`/`f32`/`f64`/pointers.
-- The runtime is built with the same MSVC toolchain as the target on Windows.
+- The runtime is built with the toolchain that matches the target C ABI: MSVC for
+  `*-pc-windows-msvc`, GNU for `*-unknown-linux-gnu`. Windows x86-64 is the primary development
+  host; Linux x86-64 and AArch64 follow basic development (D-042).
 - Panics are caught at the ABI boundary and converted to `stc_rt_trap` where possible; the
   compiler-generated code does not rely on unwinding.
 
@@ -159,7 +161,9 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
 - `stc_rt_cycle_now_ns()` returns the latched time as signed 64-bit nanoseconds. This is what
   generated ST code calls.
 - `stc_rt_monotonic_now_ns()` returns the live monotonic clock and is for the runtime/host only.
-  Generated ST code does not call it.
+  Generated ST code does not call it. The runtime reads it through a host abstraction
+  (`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux) and converts
+  to nanoseconds; the ST-visible semantics are identical on every host (D-042).
 - In executable mode, the runtime latches the host monotonic clock at the start of each cycle.
   `--cycle-time` controls the loop deadline but does not change the value latched for the scan.
 - In library mode, the host owns the loop. By default `stc_cycle` latches the live monotonic

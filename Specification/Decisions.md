@@ -247,7 +247,7 @@ errors.
 | D-004 | Compiler emits textual LLVM IR; `clang` lowers/links to the target. | User requirement; removes LLVM API version coupling; IR is inspectable. |
 | D-005 | Both executable and library artifacts are supported via `--emit`. | User requirement. |
 | D-006 | Lean proofs cover exact functions; proofs are about the Lean model, and Rust is tested against generated vectors (A-006). | User requirement; transcendentals are not proof-feasible here. |
-| D-007 | Primary host is Windows x86-64 MSVC; targets are selected via clang. | Matches the development environment and the user's target statement. |
+| D-007 | Primary development host is Windows x86-64 MSVC; targets are selected via clang. Linux x86-64 and AArch64 hosts follow basic development (D-042). | Matches the development environment; Linux support is required later, not during initial development. |
 | D-008 | Input is ST only; LD/FBD/SFC/IL and the AX preprocessor are out of profile. | Keeps the front end bounded; AX docs are syntax inspiration only. |
 | D-009 | Specifications are original prose/grammar; the IEC PDF is not committed or redistributed. | Copyright compliance; the PDF is a local reference. |
 | D-010 | Rust Cargo workspace under `crates/`; spec docs under `Specification/`. | Standard Rust structure; the stray `src` file is removed. |
@@ -282,6 +282,15 @@ errors.
 | D-024 | v1 includes a project dependency system with local path dependencies, a dependency graph, and package-aware namespaces. | Separate test projects require it; source packages compile together. |
 | D-025 | Tests are declared with `{stc:test}` and may live in a separate test project that depends on the code under test. | Keeps test code out of production packages while sharing the language tooling. |
 | D-026 | Dependency resolution is local paths plus a committed `stc.lock`; `--locked` forbids updates; no registry/network/version solver in v1. | Reproducible multi-package builds without a registry subsystem. |
+| D-042 | After basic development, `stc` and its runtime also build and run natively on Linux x86-64 and Linux AArch64 (ARM64). Windows remains the primary development host; target selection stays with clang. | User requirement. Rust plus the narrow C ABI make the port additive if host-specific code stays behind a small platform layer. |
+
+D-042 is a host-portability requirement, not a language/profile change. It does not alter the IR,
+runtime ABI, or conformance profile. It requires host-specific operations (clang/linker
+discovery, artifact naming, path semantics, monotonic clock, atomic file replace) to be confined
+to the driver and runtime. Affected documents: [Architecture](Architecture/Architecture.md) §6.4,
+[Runtime](Architecture/Runtime-and-Execution.md) §2, [State](Architecture/State-and-Retain.md) §4.2,
+[Testing](Architecture/Testing-and-Verification.md) §6, and the [Project Plan](00-Project-Plan.md)
+M8.
 
 ## 3. Open questions
 

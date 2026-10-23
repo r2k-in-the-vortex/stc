@@ -57,6 +57,8 @@ proved in Lean before implementation.
 - Multi-threaded PLC task execution in v1 (architecture must not preclude it).
 - `PERSISTENT` (not a 2013 keyword) and periodic/checkpointed state saves. v1 persists retained
   variables at normal shutdown; crash-time saves are a later extension.
+- Native Linux host support during initial development. Linux x86-64 and Linux AArch64 host
+  builds are the first planned post-basic-development deliverable (M8, D-042).
 
 ## 4. Constraints and assumptions
 
@@ -66,7 +68,8 @@ proved in Lean before implementation.
 | IR | Textual LLVM IR (`.ll`); no LLVM FFI dependency required |
 | Backend driver | `clang` (and its linker) lowers IR to the selected target |
 | Dev toolchain | clang/LLVM 23.1.4, cargo 1.99.1, Lean 4.35.0 (Lake 5.0.0) |
-| Primary host | Windows 11, `x86_64-pc-windows-msvc` |
+| Primary host | Windows 11, `x86_64-pc-windows-msvc` (development host) |
+| Additional hosts | After basic development: Linux x86-64 and Linux AArch64 (ARM64), native builds and execution (D-042) |
 | Target selection | Host by default; `--target <triple>` passed to `clang` |
 | Source encoding | UTF-8 (optional BOM), case-insensitive language keywords/identifiers |
 | Project dependencies | Local path dependencies plus committed `stc.lock` in v1; package graph is acyclic; `--locked` enforced; registry/version solver later (A-009) |
@@ -79,6 +82,10 @@ proved in Lean before implementation.
 
 Assumption: the host is single-threaded for compiler execution in v1. The generated runtime is
 single-threaded; concurrency primitives added by Ed. 4 are out of scope.
+
+Host-specific code is confined to the driver and runtime. The front end, HIR, and IR builder are
+portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 port is additive
+(D-042).
 
 ## 5. Deliverables
 
@@ -263,6 +270,19 @@ Exit criteria:
 - Documented artifacts and ABI; reproducible IR; clean build from a fresh checkout.
 - Release checklist signed off.
 
+### M8 — Linux host portability
+
+Deliverables: host abstraction audit; native builds of `stc` and the runtime for Linux x86-64
+and Linux AArch64; clang/linker discovery and artifact naming on Linux; state-file atomicity on
+Linux; CI jobs on both hosts; host-support documentation.
+
+Exit criteria:
+- `cargo test --workspace` passes natively on Linux x86-64 and Linux AArch64.
+- `stc new/build/check/run/test/clean` work end-to-end on both hosts.
+- The execution suite and conformance corpus pass on both hosts; retained state round-trips.
+- No host-specific conditionals remain in `stc-lexer`, `stc-parser`, `stc-sema`, or
+  `stc-codegen`.
+
 ## 9. Verification strategy
 
 | Level | Method |
@@ -279,6 +299,7 @@ Exit criteria:
 | CLI/manifest | Integration tests for every verb, exit code, JSON shape, and error path |
 | Fuzzing | Lexer/parser/analyzer fuzz targets; no panics; bounded time/memory |
 | Cross-target | `clang --target` smoke tests on IR/object emission (execution where available) |
+| Host portability | Full workspace tests and end-to-end CLI on Linux x86-64 and Linux AArch64 |
 
 ## 10. Risks and mitigations
 
@@ -297,6 +318,7 @@ Exit criteria:
 | UTF-8 representation/indexing | Silent data corruption | Fixed 4-byte scalar storage; character/UTF-8-byte APIs kept distinct; exhaustive invalid-sequence tests |
 | Runtime ABI churn | Breaks host integration | Version the ABI; keep runtime calls narrow and documented |
 | Test runner hangs | CI instability | Per-test process isolation, timeouts, deterministic clocks |
+| Windows-only assumptions in compiler/runtime | Linux port requires rework | Confine host calls (paths, clock, linker, atomic replace) to a platform layer; run Linux CI from M1; no shell or drive-letter assumptions |
 
 ## 11. Definition of done for v1
 
@@ -320,6 +342,8 @@ Exit criteria:
 - `stc fmt` is idempotent, preserves comments, emits strict semicolons, and supports `--check`.
 - Production and release artifacts contain no test-only units or `STC_ASSERT` calls; production
   use of either is an error.
+- Host-specific code is isolated behind a small platform layer; the planned Linux x86-64/AArch64
+  port is additive (D-042).
 - No known silent correctness gaps.
 
 ## 12. Immediate next actions
@@ -328,11 +352,15 @@ Exit criteria:
 2. All v1 planning questions Q-001 through Q-017 are resolved (A-005 through A-021). New
    questions are logged in `Specification/Decisions.md` and `README.md` one at a time.
 3. Create the Rust workspace skeleton and CI after the M0–M2 specs are approved.
-4. Implement the lexer first; do not write codegen before the parser/analyzer contracts are
+4. Keep host-specific operations (paths, clock, linker discovery, atomic replace) behind a
+   platform layer from M1; Linux x86-64/AArch64 host support follows basic development
+   (M8, D-042).
+5. Implement the lexer first; do not write codegen before the parser/analyzer contracts are
    stable.
 
 ## 13. Post-v1 outlook
 
+- Linux x86-64 and Linux AArch64 host support (M8, D-042), then further hosts only on demand.
 - Public CST/traversal API for IDE tools (v2/v3), building on the stable `SyntaxKind`.
 - Hardware I/O backends and schedules: EtherCAT, Modbus, MQTT.
 - Multi-task scheduler (cooperative or preemptive) and task stepping.

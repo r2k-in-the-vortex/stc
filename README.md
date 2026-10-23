@@ -86,6 +86,9 @@ stc build --emit=exe,lib,ir         # all artifacts
 - Default is `exe,ir`; `stc build --emit=ir` stops after IR.
 - `--target <triple>` is passed to clang and emitted as the IR triple; without it, clang uses the
   host target.
+- Windows 11 x86-64 (MSVC) is the primary development host. After basic development, `stc` and
+  its runtime are expected to run natively on Linux x86-64 and Linux AArch64 (ARM64); target
+  selection stays with clang, so either host can cross-compile (D-042).
 - Executable mode generates a `main` that hands control to the runtime loop. Library mode exports
   `stc_init`, `stc_cycle`, `stc_shutdown`, and `{stc:export}` wrappers.
 
@@ -208,7 +211,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-004 | Emit textual LLVM IR; clang lowers/links to the target. |
 | D-005 | Executable and library artifacts via `--emit`. |
 | D-006 | Lean proofs cover exact functions; float math is test-based. |
-| D-007 | Primary host: Windows x86-64 MSVC; target selected via clang. |
+| D-007 | Primary development host: Windows x86-64 MSVC; Linux x86-64 and ARM64 hosts follow basic development (D-042); targets selected via clang. |
 | D-008 | ST only; no LD/FBD/SFC/IL and no AX preprocessor. |
 | D-009 | Specification is original; IEC PDF is local and not redistributed. |
 | D-010 | Rust workspace under `crates/`; spec under `Specification/`. |
@@ -236,6 +239,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-039 | Lint levels live in `[lints]`; CLI flags override; errors cannot be downgraded. | Shared policy with CI control. |
 | D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use is an error. | Clean release artifacts. |
 | D-041 | `SyntaxKind` is a stable, append-only API; full CST/IDE API is planned for v2/v3. | Future tooling without freezing internals now. |
+| D-042 | After basic development, `stc` and its runtime also run natively on Linux x86-64 and Linux AArch64 (ARM64); Windows remains the primary development host. |
 
 ## Question log
 
@@ -288,6 +292,9 @@ Lake version 5.0.0-src+eb6cafb (Lean version 4.35.0)
 PS C:\repos\stc> cargo -V
 cargo 1.99.1 (5f94df478 2026-08-27)
 ```
+
+Windows 11 x86-64 is the primary development host. Native Linux x86-64 and Linux AArch64 host
+support follows basic development (D-042).
 
 ## References
 

@@ -25,6 +25,7 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | CLI/manifest | Verbs, exit codes, JSON, configuration, dependency graph, `stc.lock`/`--locked` | `tests/cli` |
 | Fuzzing | Robustness of lexer/parser/analyzer | `fuzz/` |
 | Cross-target | IR/object emission for targets other than host | CI |
+| Host portability | Full workspace tests and end-to-end CLI on Linux x86-64 and Linux AArch64 | CI |
 
 ## 2. Built-in test suite
 
@@ -292,7 +293,7 @@ lean/
 | --- | --- |
 | `fmt` | `cargo fmt --check` |
 | `clippy` | `cargo clippy --all-targets -- -D warnings` |
-| `test` | `cargo test --workspace` on Windows x64 |
+| `test` | `cargo test --workspace` on Windows x64 (primary) and, after basic development, Linux x86-64 and Linux AArch64 (D-042) |
 | `ui` | diagnostic snapshots |
 | `conformance` | conformance corpus |
 | `execution` | compile/run tests |
@@ -304,8 +305,12 @@ lean/
 ### 6.2 Matrix
 
 - Primary: Windows 11, `x86_64-pc-windows-msvc`, pinned clang/LLVM 23.1.4.
-- Secondary: Ubuntu `x86_64-unknown-linux-gnu` (object/IR and execution tests).
-- Optional: `aarch64` cross-target object emission.
+- Secondary: Ubuntu `x86_64-unknown-linux-gnu` — workspace tests, execution tests, and
+  end-to-end CLI.
+- Host portability (after basic development, D-042): native or emulated Linux AArch64
+  (`aarch64-unknown-linux-gnu`) host jobs. Emulation is a smoke gate; release sign-off uses
+  native ARM64 runners. Further `aarch64` cross-target object emission remains in the
+  `cross-target` job.
 - Rust toolchain pinned in `rust-toolchain.toml`; Lean pinned in `lean/lean-toolchain`.
 - CI builds with `--locked`; a changed lockfile without a manifest change fails the job.
 - CI caches cargo and Lake builds; the clang version is printed in every job.

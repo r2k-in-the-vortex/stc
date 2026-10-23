@@ -80,6 +80,9 @@ Little-endian binary:
 - CRC32 detects corruption/truncation; it is not a security mechanism.
 - The format is versioned. A future version may add fields/migration; v1 rejects unknown
   versions.
+- The format is little-endian. Windows x86-64, Linux x86-64, and Linux AArch64 are all
+  little-endian, so a state file is portable across supported hosts when the profile and layout
+  hashes match (D-042).
 
 ### 3.1 Layout hash
 
@@ -117,7 +120,10 @@ Adding/removing/reordering a retained field changes the hash.
 ### 4.2 Atomic save
 
 - Write to `<state-file>.tmp` in the same directory, flush/sync, then rename over the target.
-- On failure, leave the previous state file intact and report `STC-E-RUN-RETAIN-003`.
+  Keeping the temporary file in the same directory makes the rename a same-filesystem operation.
+- Replace-on-rename is provided by the runtime's host platform layer on Windows and Linux; a
+  failed replace leaves the previous state file intact and reports `STC-E-RUN-RETAIN-003`
+  (D-042).
 - v1 saves at normal shutdown (including handled interrupt). A crash or power loss can lose the
   latest cycle's state; periodic saving is a future option.
 

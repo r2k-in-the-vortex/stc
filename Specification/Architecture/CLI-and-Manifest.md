@@ -263,8 +263,9 @@ timeout = "2s"
 
 ### 2.3 Source discovery
 
-- Globs use `*`, `**`, `?`, and character classes; matching is case-insensitive on Windows for
-  path comparison but the file name recorded in diagnostics is the on-disk spelling.
+- Globs use `*`, `**`, `?`, and character classes; matching is case-insensitive on Windows and
+  case-sensitive on Linux for path comparison, but the file name recorded in diagnostics is the
+  on-disk spelling. Manifest and lockfile paths use forward slashes on every host (D-042).
 - Hidden directories and `target/` are excluded by default.
 - Symlinked directories are not followed by default; a symlinked file is accepted if its real
   path is inside the project.
