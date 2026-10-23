@@ -1,0 +1,157 @@
+# crlf (329 bytes, 48 tokens, 57 trivia, 0 diagnostics)
+tokens:
+  [0] Pragma { terminated: true } 46..56 "{stc:test}"
+       leading=0..2 trailing=2..2
+  [1] Keyword(Program) 58..65 "PROGRAM"
+       leading=2..3 trailing=3..4
+  [2] Ident("MAIN") 66..70 "Main"
+       leading=4..4 trailing=4..4
+  [3] Keyword(Var) 72..75 "VAR"
+       leading=4..5 trailing=5..5
+  [4] Ident("COUNTER") 79..86 "counter"
+       leading=5..7 trailing=7..8
+  [5] Punct(Colon) 87..88 ":"
+       leading=8..8 trailing=8..9
+  [6] Keyword(Dint) 89..93 "DINT"
+       leading=9..9 trailing=9..10
+  [7] Punct(Assign) 94..96 ":="
+       leading=10..10 trailing=10..11
+  [8] IntLiteral 97..98 "0" literal=Numeric(NumericLiteral { kind: Integer, radix: Decimal, text: "0" })
+       leading=11..11 trailing=11..11
+  [9] Punct(Semicolon) 98..99 ";"
+       leading=11..11 trailing=11..11
+  [10] Ident("FLAG") 103..107 "flag"
+       leading=11..13 trailing=13..14
+  [11] Punct(Colon) 108..109 ":"
+       leading=14..14 trailing=14..15
+  [12] Keyword(Bool) 110..114 "BOOL"
+       leading=15..15 trailing=15..15
+  [13] Punct(Semicolon) 114..115 ";"
+       leading=15..15 trailing=15..15
+  [14] Keyword(EndVar) 117..124 "END_VAR"
+       leading=15..16 trailing=16..16
+  [15] Ident("COUNTER") 156..163 "counter"
+       leading=16..21 trailing=21..22
+  [16] Punct(Assign) 164..166 ":="
+       leading=22..22 trailing=22..23
+  [17] Ident("COUNTER") 167..174 "counter"
+       leading=23..23 trailing=23..24
+  [18] Punct(Plus) 175..176 "+"
+       leading=24..24 trailing=24..25
+  [19] IntLiteral 177..178 "1" literal=Numeric(NumericLiteral { kind: Integer, radix: Decimal, text: "1" })
+       leading=25..25 trailing=25..25
+  [20] Punct(Semicolon) 178..179 ";"
+       leading=25..25 trailing=25..27
+  [21] Ident("FLAG") 196..200 "flag"
+       leading=27..29 trailing=29..30
+  [22] Punct(Assign) 201..203 ":="
+       leading=30..30 trailing=30..31
+  [23] Ident("COUNTER") 204..211 "counter"
+       leading=31..31 trailing=31..32
+  [24] Keyword(Mod) 212..215 "MOD"
+       leading=32..32 trailing=32..33
+  [25] IntLiteral 216..217 "2" literal=Numeric(NumericLiteral { kind: Integer, radix: Decimal, text: "2" })
+       leading=33..33 trailing=33..34
+  [26] Punct(Equal) 218..219 "="
+       leading=34..34 trailing=34..35
+  [27] IntLiteral 220..221 "0" literal=Numeric(NumericLiteral { kind: Integer, radix: Decimal, text: "0" })
+       leading=35..35 trailing=35..35
+  [28] Punct(Semicolon) 221..222 ";"
+       leading=35..35 trailing=35..35
+  [29] Keyword(If) 226..228 "IF"
+       leading=35..37 trailing=37..38
+  [30] Ident("FLAG") 229..233 "flag"
+       leading=38..38 trailing=38..39
+  [31] Keyword(Then) 234..238 "THEN"
+       leading=39..39 trailing=39..39
+  [32] Ident("COUNTER") 244..251 "counter"
+       leading=39..41 trailing=41..42
+  [33] Punct(Assign) 252..254 ":="
+       leading=42..42 trailing=42..43
+  [34] Ident("COUNTER") 255..262 "counter"
+       leading=43..43 trailing=43..44
+  [35] Punct(Minus) 263..264 "-"
+       leading=44..44 trailing=44..45
+  [36] IntLiteral 265..266 "1" literal=Numeric(NumericLiteral { kind: Integer, radix: Decimal, text: "1" })
+       leading=45..45 trailing=45..45
+  [37] Punct(Semicolon) 266..267 ";"
+       leading=45..45 trailing=45..45
+  [38] Keyword(Else) 271..275 "ELSE"
+       leading=45..47 trailing=47..47
+  [39] Ident("COUNTER") 281..288 "counter"
+       leading=47..49 trailing=49..50
+  [40] Punct(Assign) 289..291 ":="
+       leading=50..50 trailing=50..51
+  [41] Ident("COUNTER") 292..299 "counter"
+       leading=51..51 trailing=51..52
+  [42] Punct(Plus) 300..301 "+"
+       leading=52..52 trailing=52..53
+  [43] IntLiteral 302..303 "2" literal=Numeric(NumericLiteral { kind: Integer, radix: Decimal, text: "2" })
+       leading=53..53 trailing=53..53
+  [44] Punct(Semicolon) 303..304 ";"
+       leading=53..53 trailing=53..53
+  [45] Keyword(EndIf) 308..314 "END_IF"
+       leading=53..55 trailing=55..55
+  [46] Keyword(EndProgram) 316..327 "END_PROGRAM"
+       leading=55..56 trailing=56..56
+  [47] Eof 329..329 ""
+       leading=56..57 trailing=57..57
+trivia:
+  [0] LineComment 0..44 "// Basic declaration and statement snapshot."
+  [1] Whitespace 44..46 "\r\n"
+  [2] Whitespace 56..58 "\r\n"
+  [3] Whitespace 65..66 " "
+  [4] Whitespace 70..72 "\r\n"
+  [5] Whitespace 75..77 "\r\n"
+  [6] Whitespace 77..79 "  "
+  [7] Whitespace 86..87 " "
+  [8] Whitespace 88..89 " "
+  [9] Whitespace 93..94 " "
+  [10] Whitespace 96..97 " "
+  [11] Whitespace 99..101 "\r\n"
+  [12] Whitespace 101..103 "  "
+  [13] Whitespace 107..108 " "
+  [14] Whitespace 109..110 " "
+  [15] Whitespace 115..117 "\r\n"
+  [16] Whitespace 124..126 "\r\n"
+  [17] Whitespace 126..128 "  "
+  [18] BlockComment 128..152 "(* update the counter *)"
+  [19] Whitespace 152..154 "\r\n"
+  [20] Whitespace 154..156 "  "
+  [21] Whitespace 163..164 " "
+  [22] Whitespace 166..167 " "
+  [23] Whitespace 174..175 " "
+  [24] Whitespace 176..177 " "
+  [25] Whitespace 179..180 " "
+  [26] LineComment 180..192 "// each scan"
+  [27] Whitespace 192..194 "\r\n"
+  [28] Whitespace 194..196 "  "
+  [29] Whitespace 200..201 " "
+  [30] Whitespace 203..204 " "
+  [31] Whitespace 211..212 " "
+  [32] Whitespace 215..216 " "
+  [33] Whitespace 217..218 " "
+  [34] Whitespace 219..220 " "
+  [35] Whitespace 222..224 "\r\n"
+  [36] Whitespace 224..226 "  "
+  [37] Whitespace 228..229 " "
+  [38] Whitespace 233..234 " "
+  [39] Whitespace 238..240 "\r\n"
+  [40] Whitespace 240..244 "    "
+  [41] Whitespace 251..252 " "
+  [42] Whitespace 254..255 " "
+  [43] Whitespace 262..263 " "
+  [44] Whitespace 264..265 " "
+  [45] Whitespace 267..269 "\r\n"
+  [46] Whitespace 269..271 "  "
+  [47] Whitespace 275..277 "\r\n"
+  [48] Whitespace 277..281 "    "
+  [49] Whitespace 288..289 " "
+  [50] Whitespace 291..292 " "
+  [51] Whitespace 299..300 " "
+  [52] Whitespace 301..302 " "
+  [53] Whitespace 304..306 "\r\n"
+  [54] Whitespace 306..308 "  "
+  [55] Whitespace 314..316 "\r\n"
+  [56] Whitespace 327..329 "\r\n"
+diagnostics:

@@ -1,0 +1,6 @@
+# empty (0 bytes, 1 tokens, 0 trivia, 0 diagnostics)
+tokens:
+  [0] Eof 0..0 ""
+       leading=0..0 trailing=0..0
+trivia:
+diagnostics:

@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Draft (target profile; no compiler code implemented yet)  
+Status: Draft (target profile; M1 lexical surface implemented)  
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
 Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`
@@ -245,6 +245,12 @@ The following are deliberately chosen and must be documented and tested:
 | Variable-length arrays | Conformant parameters only; descriptor points at caller storage; no dynamic allocation |
 | Subrange assignment | Checked |
 | Identifier alphabet | ASCII letters/digits/underscore in v1 |
+| Identifier length | Implementation limit 1024 bytes; at least 255 accepted (STC-LEX-016) |
+| Invalid UTF-8 recovery | One U+FFFD per invalid sequence; lexing continues; diagnostics keep the original byte offset and bytes (STC-LEX-002) |
+| BOM handling | An initial UTF-8 BOM is trivia and does not shift the first column; a BOM elsewhere outside comments, strings, and pragmas is an error (STC-LEX-001, STC-LEX-003) |
+| Trivia attachment | Same-line horizontal whitespace and single-line comments trail the previous token; line breaks and multi-line comments lead the next token |
+| UTF-8 string escapes | `$HH`, `$HHHH`, and `${HEX}` accepted; surrogates and values above U+10FFFF rejected lexically (STC-LEX-034, STC-LEX-036) |
+| Typed string/char literals | Typed prefixes determine encoding and accept either quote delimiter; unquoted `UCHAR#` accepts one UTF-8 escape (D-044) |
 | Default STRING/WSTRING/USTRING capacities | STRING/WSTRING 255 units; USTRING 255 characters (1020 bytes of data) unless declared |
 | Case normalization | Uppercase ASCII for symbol keys; original spelling retained |
 | Comparison precedence | Annex A split: relational (`< > <= >=`) binds tighter than equality (`= <>`); both left-associative |

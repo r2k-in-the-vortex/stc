@@ -1,0 +1,26 @@
+# errors (41 bytes, 6 tokens, 5 trivia, 5 diagnostics)
+tokens:
+  [0] Error 0..4 "1__2"
+       leading=0..0 trailing=0..0
+  [1] Error 5..10 "2#102"
+       leading=0..1 trailing=1..1
+  [2] CharLiteral { kind: Char, terminated: true } 11..20 "CHAR#'ab'" literal=Char(CharLiteral { kind: Char, value: None })
+       leading=1..2 trailing=2..2
+  [3] UStringLiteral { terminated: true } 21..32 "U#'${D800}'" literal=String(StringLiteral { encoding: Utf8, delimiter: '\'', units: [] })
+       leading=2..3 trailing=3..3
+  [4] StringLiteral { encoding: Sbcs, terminated: true } 33..40 "'$0041'" literal=String(StringLiteral { encoding: Sbcs, delimiter: '\'', units: [] })
+       leading=3..4 trailing=4..4
+  [5] Eof 41..41 ""
+       leading=4..5 trailing=5..5
+trivia:
+  [0] Whitespace 4..5 "\n"
+  [1] Whitespace 10..11 "\n"
+  [2] Whitespace 20..21 "\n"
+  [3] Whitespace 32..33 "\n"
+  [4] Whitespace 40..41 "\n"
+diagnostics:
+  error STC-E-LEX-008 0..4 "invalid underscore placement in numeric literal"
+  error STC-E-LEX-008 5..10 "malformed base-2 literal"
+  error STC-E-LEX-008 11..20 "CHAR literal must contain exactly one character, found 2"
+  error STC-E-LEX-009 24..31 "escape denotes invalid Unicode scalar U+D800"
+  error STC-E-LEX-005 34..39 "a single-byte literal escape uses two hexadecimal digits ($HH), not four"

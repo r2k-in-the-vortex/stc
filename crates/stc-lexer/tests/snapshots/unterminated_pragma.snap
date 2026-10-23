@@ -1,0 +1,23 @@
+# unterminated_pragma (22 bytes, 7 tokens, 4 trivia, 1 diagnostics)
+tokens:
+  [0] Keyword(Var) 0..3 "VAR"
+       leading=0..0 trailing=0..1
+  [1] Ident("X") 4..5 "x"
+       leading=1..1 trailing=1..2
+  [2] Punct(Colon) 6..7 ":"
+       leading=2..2 trailing=2..3
+  [3] Keyword(Int) 8..11 "INT"
+       leading=3..3 trailing=3..3
+  [4] Punct(Semicolon) 11..12 ";"
+       leading=3..3 trailing=3..4
+  [5] Pragma { terminated: false } 13..22 "{stc:test"
+       leading=4..4 trailing=4..4
+  [6] Eof 22..22 ""
+       leading=4..4 trailing=4..4
+trivia:
+  [0] Whitespace 3..4 " "
+  [1] Whitespace 5..6 " "
+  [2] Whitespace 7..8 " "
+  [3] Whitespace 12..13 " "
+diagnostics:
+  error STC-E-LEX-007 13..22 "unterminated pragma"

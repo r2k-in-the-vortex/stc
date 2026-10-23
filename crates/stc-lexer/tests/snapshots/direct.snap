@@ -1,0 +1,37 @@
+# direct (44 bytes, 12 tokens, 9 trivia, 0 diagnostics)
+tokens:
+  [0] DirectVariable 0..6 "%IX0.0" literal=Direct(DirectVariable { area: Some(Input), size: Some(Bit), wildcard: false, indices: [0, 0] })
+       leading=0..0 trailing=0..1
+  [1] DirectVariable 7..12 "%QW28" literal=Direct(DirectVariable { area: Some(Output), size: Some(Word), wildcard: false, indices: [28] })
+       leading=1..1 trailing=1..2
+  [2] DirectVariable 13..19 "%MD100" literal=Direct(DirectVariable { area: Some(Memory), size: Some(Dword), wildcard: false, indices: [100] })
+       leading=2..2 trailing=2..3
+  [3] DirectVariable 20..23 "%I*" literal=Direct(DirectVariable { area: Some(Input), size: None, wildcard: true, indices: [] })
+       leading=3..3 trailing=3..4
+  [4] DirectVariable 24..27 "%Q*" literal=Direct(DirectVariable { area: Some(Output), size: None, wildcard: true, indices: [] })
+       leading=4..4 trailing=4..5
+  [5] DirectVariable 28..31 "%M*" literal=Direct(DirectVariable { area: Some(Memory), size: None, wildcard: true, indices: [] })
+       leading=5..5 trailing=5..6
+  [6] DirectVariable 32..35 "%B0" literal=Direct(DirectVariable { area: None, size: Some(Byte), wildcard: false, indices: [0] })
+       leading=6..6 trailing=6..7
+  [7] Ident("A") 36..37 "a"
+       leading=7..7 trailing=7..7
+  [8] Punct(Dot) 37..38 "."
+       leading=7..7 trailing=7..7
+  [9] DirectVariable 38..41 "%X0" literal=Direct(DirectVariable { area: None, size: Some(Bit), wildcard: false, indices: [0] })
+       leading=7..7 trailing=7..8
+  [10] Punct(Percent) 42..43 "%"
+       leading=8..8 trailing=8..8
+  [11] Eof 44..44 ""
+       leading=8..9 trailing=9..9
+trivia:
+  [0] Whitespace 6..7 " "
+  [1] Whitespace 12..13 " "
+  [2] Whitespace 19..20 " "
+  [3] Whitespace 23..24 " "
+  [4] Whitespace 27..28 " "
+  [5] Whitespace 31..32 " "
+  [6] Whitespace 35..36 " "
+  [7] Whitespace 41..42 " "
+  [8] Whitespace 43..44 "\n"
+diagnostics:

@@ -1,0 +1,192 @@
+# literals (311 bytes, 63 tokens, 62 trivia, 0 diagnostics)
+tokens:
+  [0] Keyword(Var) 0..3 "VAR"
+       leading=0..0 trailing=0..0
+  [1] Ident("A") 6..7 "a"
+       leading=0..2 trailing=2..3
+  [2] Punct(Colon) 8..9 ":"
+       leading=3..3 trailing=3..4
+  [3] Keyword(Dint) 10..14 "DINT"
+       leading=4..4 trailing=4..5
+  [4] Punct(Assign) 15..17 ":="
+       leading=5..5 trailing=5..6
+  [5] IntLiteral 18..23 "123_4" literal=Numeric(NumericLiteral { kind: Integer, radix: Decimal, text: "1234" })
+       leading=6..6 trailing=6..6
+  [6] Punct(Semicolon) 23..24 ";"
+       leading=6..6 trailing=6..6
+  [7] Ident("B") 27..28 "b"
+       leading=6..8 trailing=8..9
+  [8] Punct(Colon) 29..30 ":"
+       leading=9..9 trailing=9..10
+  [9] Keyword(Real) 31..35 "REAL"
+       leading=10..10 trailing=10..11
+  [10] Punct(Assign) 36..38 ":="
+       leading=11..11 trailing=11..12
+  [11] RealLiteral 39..52 "3.14159_26E-2" literal=Numeric(NumericLiteral { kind: Real, radix: Decimal, text: "3.1415926E-2" })
+       leading=12..12 trailing=12..12
+  [12] Punct(Semicolon) 52..53 ";"
+       leading=12..12 trailing=12..12
+  [13] Ident("C") 56..57 "c"
+       leading=12..14 trailing=14..15
+  [14] Punct(Colon) 58..59 ":"
+       leading=15..15 trailing=15..16
+  [15] Keyword(Word) 60..64 "WORD"
+       leading=16..16 trailing=16..17
+  [16] Punct(Assign) 65..67 ":="
+       leading=17..17 trailing=17..18
+  [17] BasedLiteral 68..80 "16#DEAD_BEEF" literal=Numeric(NumericLiteral { kind: Integer, radix: Hexadecimal, text: "DEADBEEF" })
+       leading=18..18 trailing=18..18
+  [18] Punct(Semicolon) 80..81 ";"
+       leading=18..18 trailing=18..18
+  [19] Ident("D") 84..85 "d"
+       leading=18..20 trailing=20..21
+  [20] Punct(Colon) 86..87 ":"
+       leading=21..21 trailing=21..22
+  [21] Keyword(Byte) 88..92 "BYTE"
+       leading=22..22 trailing=22..23
+  [22] Punct(Assign) 93..95 ":="
+       leading=23..23 trailing=23..24
+  [23] BasedLiteral 96..107 "2#1010_1010" literal=Numeric(NumericLiteral { kind: Integer, radix: Binary, text: "10101010" })
+       leading=24..24 trailing=24..24
+  [24] Punct(Semicolon) 107..108 ";"
+       leading=24..24 trailing=24..24
+  [25] Ident("E") 111..112 "e"
+       leading=24..26 trailing=26..27
+  [26] Punct(Colon) 113..114 ":"
+       leading=27..27 trailing=27..28
+  [27] Keyword(Int) 115..118 "INT"
+       leading=28..28 trailing=28..29
+  [28] Punct(Assign) 119..121 ":="
+       leading=29..29 trailing=29..30
+  [29] TypedLiteral 122..130 "INT#-123" literal=Typed(TypedLiteral { ty: Int, sign: Some(Minus), value: Numeric(NumericLiteral { kind: Integer, radix: Decimal, text: "123" }) })
+       leading=30..30 trailing=30..30
+  [30] Punct(Semicolon) 130..131 ";"
+       leading=30..30 trailing=30..30
+  [31] Ident("F") 134..135 "f"
+       leading=30..32 trailing=32..33
+  [32] Punct(Colon) 136..137 ":"
+       leading=33..33 trailing=33..34
+  [33] Keyword(Time) 138..142 "TIME"
+       leading=34..34 trailing=34..35
+  [34] Punct(Assign) 143..145 ":="
+       leading=35..35 trailing=35..36
+  [35] DurationLiteral 146..171 "T#1d_2h_3m_4s_5ms_6us_7ns" literal=Duration(DurationLiteral { long: false, sign: None, components: [DurationComponent { value: "1", fraction: None, unit: Day }, DurationComponent { value: "2", fraction: None, unit: Hour }, DurationComponent { value: "3", fraction: None, unit: Minute }, DurationComponent { value: "4", fraction: None, unit: Second }, DurationComponent { value: "5", fraction: None, unit: Millisecond }, DurationComponent { value: "6", fraction: None, unit: Microsecond }, DurationComponent { value: "7", fraction: None, unit: Nanosecond }] })
+       leading=36..36 trailing=36..36
+  [36] Punct(Semicolon) 171..172 ";"
+       leading=36..36 trailing=36..36
+  [37] Ident("G") 175..176 "g"
+       leading=36..38 trailing=38..39
+  [38] Punct(Colon) 177..178 ":"
+       leading=39..39 trailing=39..40
+  [39] Keyword(Date) 179..183 "DATE"
+       leading=40..40 trailing=40..41
+  [40] Punct(Assign) 184..186 ":="
+       leading=41..41 trailing=41..42
+  [41] DateLiteral 187..199 "D#1984-06-25" literal=Date(DateLiteral { long: false, year: 1984, month: 6, day: 25 })
+       leading=42..42 trailing=42..42
+  [42] Punct(Semicolon) 199..200 ";"
+       leading=42..42 trailing=42..42
+  [43] Ident("H") 203..204 "h"
+       leading=42..44 trailing=44..45
+  [44] Punct(Colon) 205..206 ":"
+       leading=45..45 trailing=45..46
+  [45] Keyword(Tod) 207..210 "TOD"
+       leading=46..46 trailing=46..47
+  [46] Punct(Assign) 211..213 ":="
+       leading=47..47 trailing=47..48
+  [47] TodLiteral 214..236 "TOD#15:36:55.360227400" literal=Tod(TodLiteral { long: false, hour: 15, minute: 36, second: 55, fraction: Some("360227400") })
+       leading=48..48 trailing=48..48
+  [48] Punct(Semicolon) 236..237 ";"
+       leading=48..48 trailing=48..48
+  [49] Ident("I") 240..241 "i"
+       leading=48..50 trailing=50..51
+  [50] Punct(Colon) 242..243 ":"
+       leading=51..51 trailing=51..52
+  [51] Keyword(Dt) 244..246 "DT"
+       leading=52..52 trailing=52..53
+  [52] Punct(Assign) 247..249 ":="
+       leading=53..53 trailing=53..54
+  [53] DateTimeLiteral 250..275 "DT#1984-06-25-15:36:55.36" literal=DateTime(DateTimeLiteral { long: false, date: DateLiteral { long: false, year: 1984, month: 6, day: 25 }, tod: TodLiteral { long: false, hour: 15, minute: 36, second: 55, fraction: Some("36") } })
+       leading=54..54 trailing=54..54
+  [54] Punct(Semicolon) 275..276 ";"
+       leading=54..54 trailing=54..54
+  [55] Ident("J") 279..280 "j"
+       leading=54..56 trailing=56..57
+  [56] Punct(Colon) 281..282 ":"
+       leading=57..57 trailing=57..58
+  [57] Keyword(Bool) 283..287 "BOOL"
+       leading=58..58 trailing=58..59
+  [58] Punct(Assign) 288..290 ":="
+       leading=59..59 trailing=59..60
+  [59] TypedLiteral 291..301 "BOOL#FALSE" literal=Typed(TypedLiteral { ty: Bool, sign: None, value: Bool(false) })
+       leading=60..60 trailing=60..60
+  [60] Punct(Semicolon) 301..302 ";"
+       leading=60..60 trailing=60..60
+  [61] Keyword(EndVar) 303..310 "END_VAR"
+       leading=60..61 trailing=61..61
+  [62] Eof 311..311 ""
+       leading=61..62 trailing=62..62
+trivia:
+  [0] Whitespace 3..4 "\n"
+  [1] Whitespace 4..6 "  "
+  [2] Whitespace 7..8 " "
+  [3] Whitespace 9..10 " "
+  [4] Whitespace 14..15 " "
+  [5] Whitespace 17..18 " "
+  [6] Whitespace 24..25 "\n"
+  [7] Whitespace 25..27 "  "
+  [8] Whitespace 28..29 " "
+  [9] Whitespace 30..31 " "
+  [10] Whitespace 35..36 " "
+  [11] Whitespace 38..39 " "
+  [12] Whitespace 53..54 "\n"
+  [13] Whitespace 54..56 "  "
+  [14] Whitespace 57..58 " "
+  [15] Whitespace 59..60 " "
+  [16] Whitespace 64..65 " "
+  [17] Whitespace 67..68 " "
+  [18] Whitespace 81..82 "\n"
+  [19] Whitespace 82..84 "  "
+  [20] Whitespace 85..86 " "
+  [21] Whitespace 87..88 " "
+  [22] Whitespace 92..93 " "
+  [23] Whitespace 95..96 " "
+  [24] Whitespace 108..109 "\n"
+  [25] Whitespace 109..111 "  "
+  [26] Whitespace 112..113 " "
+  [27] Whitespace 114..115 " "
+  [28] Whitespace 118..119 " "
+  [29] Whitespace 121..122 " "
+  [30] Whitespace 131..132 "\n"
+  [31] Whitespace 132..134 "  "
+  [32] Whitespace 135..136 " "
+  [33] Whitespace 137..138 " "
+  [34] Whitespace 142..143 " "
+  [35] Whitespace 145..146 " "
+  [36] Whitespace 172..173 "\n"
+  [37] Whitespace 173..175 "  "
+  [38] Whitespace 176..177 " "
+  [39] Whitespace 178..179 " "
+  [40] Whitespace 183..184 " "
+  [41] Whitespace 186..187 " "
+  [42] Whitespace 200..201 "\n"
+  [43] Whitespace 201..203 "  "
+  [44] Whitespace 204..205 " "
+  [45] Whitespace 206..207 " "
+  [46] Whitespace 210..211 " "
+  [47] Whitespace 213..214 " "
+  [48] Whitespace 237..238 "\n"
+  [49] Whitespace 238..240 "  "
+  [50] Whitespace 241..242 " "
+  [51] Whitespace 243..244 " "
+  [52] Whitespace 246..247 " "
+  [53] Whitespace 249..250 " "
+  [54] Whitespace 276..277 "\n"
+  [55] Whitespace 277..279 "  "
+  [56] Whitespace 280..281 " "
+  [57] Whitespace 282..283 " "
+  [58] Whitespace 287..288 " "
+  [59] Whitespace 290..291 " "
+  [60] Whitespace 302..303 "\n"
+  [61] Whitespace 310..311 "\n"
+diagnostics:

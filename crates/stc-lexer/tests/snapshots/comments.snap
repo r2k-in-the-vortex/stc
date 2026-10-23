@@ -1,0 +1,33 @@
+# comments (135 bytes, 7 tokens, 15 trivia, 0 diagnostics)
+tokens:
+  [0] Keyword(Var) 114..117 "VAR"
+       leading=0..10 trailing=10..11
+  [1] Ident("X") 118..119 "x"
+       leading=11..11 trailing=11..12
+  [2] Punct(Colon) 120..121 ":"
+       leading=12..12 trailing=12..13
+  [3] Keyword(Int) 122..125 "INT"
+       leading=13..13 trailing=13..13
+  [4] Punct(Semicolon) 125..126 ";"
+       leading=13..13 trailing=13..14
+  [5] Keyword(EndVar) 127..134 "END_VAR"
+       leading=14..14 trailing=14..14
+  [6] Eof 135..135 ""
+       leading=14..15 trailing=15..15
+trivia:
+  [0] LineComment 0..15 "// line comment"
+  [1] Whitespace 15..16 "\n"
+  [2] DocComment 16..31 "/// doc comment"
+  [3] Whitespace 31..32 "\n"
+  [4] BlockComment 32..64 "/* block /* nested */ comment */"
+  [5] Whitespace 64..65 "\n"
+  [6] BlockComment 65..95 "(* other (* nested *) style *)"
+  [7] Whitespace 95..96 "\n"
+  [8] DocComment 96..113 "//// four slashes"
+  [9] Whitespace 113..114 "\n"
+  [10] Whitespace 117..118 " "
+  [11] Whitespace 119..120 " "
+  [12] Whitespace 121..122 " "
+  [13] Whitespace 126..127 " "
+  [14] Whitespace 134..135 "\n"
+diagnostics:

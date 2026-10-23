@@ -17,9 +17,14 @@ references point at the 2013 edition where useful.
   the start of a file and is not part of the first token.
 - `STC-LEX-002`: Invalid UTF-8 is a lexical error. The driver validates the file bytes before
   constructing the lexer; the lexer API receives a valid `&str`. The loader reports the byte
-  offset and the offending sequence and recovers at the next valid scalar boundary.
+  offset and the offending sequence and recovers at the next valid scalar boundary. `stc`
+  replaces each invalid sequence with one U+FFFD so lexing can continue; each diagnostic keeps
+  the original byte offset and the offending bytes.
 - `STC-LEX-003`: Byte order marks elsewhere, NUL bytes outside string literals, and unpaired
-  UTF-16 surrogates encoded in UTF-8 are errors.
+  UTF-16 surrogates encoded in UTF-8 are errors. A U+FEFF at the start of a file is BOM trivia;
+  inside comments, string literals, or pragma payloads it is an ordinary character (see
+  [UTF-8 Strings](../UTF8-Strings.md) §10). Raw NUL is rejected everywhere, including comments
+  and pragmas; inside a string literal use `$00` or `${0000}`.
 - `STC-LEX-004`: The lexer preserves the original source bytes for every token and trivia item.
   The lossless CST must be able to reproduce the file exactly.
 
@@ -58,6 +63,13 @@ Every token has:
 
 Pragmas are tokens, not trivia, because they carry semantics. Comments and whitespace are trivia
 and are never discarded from the CST.
+
+Trivia attachment is deterministic. After a token, same-line horizontal whitespace and
+single-line comments are its `trailing_trivia`; the first line terminator and everything after
+it are leading trivia of the next token. A multi-line block comment is therefore leading trivia
+of the following token. An initial BOM is represented as a `Bom` trivia item so the stream still
+covers the file exactly once. A token's text is recovered from its span with the source; the
+token does not store a second copy.
 
 ### 2.2 Token kinds
 
@@ -170,8 +182,9 @@ ACTION END_ACTION STEP END_STEP INITIAL_STEP TRANSITION END_TRANSITION FROM
   symbol. The original spelling is kept for diagnostics and for emitted debug names.
 - `STC-LEX-015`: A Unicode letter is not part of an identifier in v1; it is an invalid character
   outside strings/comments. This is an explicit profile restriction (A-013).
-- `STC-LEX-016`: The maximum identifier length is implementation-defined; `stc` accepts at least
-  255 bytes and reports a diagnostic beyond its internal limit.
+- `STC-LEX-016`: The maximum identifier length is implementation-defined; `stc` accepts up to
+  1024 bytes and reports `STC-E-LEX-003` beyond that limit. The requirement to accept at least
+  255 bytes is met.
 
 ## 5. Literals
 
@@ -221,6 +234,10 @@ ACTION END_ACTION STEP END_STEP INITIAL_STEP TRANSITION END_TRANSITION FROM
 | `$HH` | One 8-bit character with hex code `HH` (single-byte literals) |
 | `$HHHH` | One 16-bit character with hex code `HHHH` (double-byte literals) |
 
+Both `$'` and `$"` are accepted in any quoted literal and denote the corresponding quote
+character. `$L` and `$N` both denote U+000A; `$P`, `$R`, and `$T` denote U+000C, U+000D, and
+U+0009 respectively.
+
 - `STC-LEX-028`: In a single-byte literal, `$` followed by four hex digits is an error. In a
   double-byte literal, `$` followed by two hex digits is an error. A lone `$` or an escape with
   the wrong number of hex digits is an error.
@@ -228,7 +245,9 @@ ACTION END_ACTION STEP END_STEP INITIAL_STEP TRANSITION END_TRANSITION FROM
   The lexer continues to the closing delimiter and reports an unterminated-literal error if none
   is found before EOF.
 - `STC-LEX-030`: Typed string/character literals are `STRING#'...'`, `WSTRING#"..."`,
-  `WSTRING#'...'`, `CHAR#'X'`, and `WCHAR#"X"`. `CHAR` and `WCHAR` literals contain exactly one
+  `WSTRING#'...'`, `CHAR#'A'`, and `WCHAR#"A"`. Either quote delimiter may follow a typed
+  prefix; the prefix determines the encoding. Untyped literals keep the delimiter-based encoding
+  (`'` is single-byte, `"` is double-byte). `CHAR` and `WCHAR` literals contain exactly one
   character after escape decoding.
 - `STC-LEX-031`: The empty literals `''` and `""` are valid empty strings. Empty `CHAR`/`WCHAR`
   literals are errors.
@@ -246,9 +265,11 @@ The full type/length/conversion semantics are in [UTF-8 Strings](../UTF8-Strings
 - `STC-LEX-034`: The 2013 escapes are supported. In addition, `${HEX}` denotes one Unicode
   scalar value, where `HEX` is 1–6 hexadecimal digits. The value must be a valid scalar
   (not a surrogate, not above U+10FFFF). `$HH` is also accepted as U+00HH for compatibility with
-  the 2013 escape table.
+  the 2013 escape table, and the 2013 four-digit `$HHHH` form is accepted as a BMP scalar
+  (surrogates are rejected). Use `${...}` for values above U+FFFF and for clarity.
 - `STC-LEX-035`: `UCHAR#` literals use the same quoted forms and must decode to exactly one
-  Unicode scalar value. `UCHAR#${1F600}` is valid; `UCHAR#''` and `UCHAR#'ab'` are errors.
+  Unicode scalar value. `UCHAR#${1F600}` is valid; `UCHAR#''` and `UCHAR#'ab'` are errors. The
+  unquoted form accepts exactly one UTF-8 escape: a named escape, `$HH`, `$HHHH`, or `${HEX}`.
 - `STC-LEX-036`: A UTF-8 literal that contains an unpaired surrogate escape or an invalid
   `${...}` value is a lexical error with the offending scalar in the message.
 - `STC-LEX-037`: String equality and length operate on Unicode scalar values for `USTRING`, not
@@ -260,15 +281,17 @@ The full type/length/conversion semantics are in [UTF-8 Strings](../UTF8-Strings
 - `STC-LEX-038`: Duration prefixes are `T#`, `TIME#`, and `LTIME#` (case-insensitive). The body
   is an optional sign followed by one or more components:
   `d`, `h`, `m`, `s`, `ms`, `us`, `ns`, with optional fractional values on the last component.
-  Components may be separated by single underscores. Examples: `T#14ms`, `TIME#25h_15m`,
-  `LTIME#5d_14h_12m_18s_3.5ms`.
+  Components are separated by an optional single underscore; a digit immediately after a unit
+  begins the next component. Duration digits (including a fraction) contain no underscores.
+  Examples: `T#14ms`, `TIME#25h_15m`, `TIME#25h15m`, `LTIME#5d_14h_12m_18s_3.5ms`.
 - `STC-LEX-039`: The prefix must be immediately followed by `#`. No whitespace is allowed between
   the type name and `#` or within the body.
 - `STC-LEX-040`: Date/time prefixes are `DATE#`, `D#`, `LDATE#`, `LD#`, `TIME_OF_DAY#`, `TOD#`,
   `LTOD#`, `LTIME_OF_DAY#`, `DATE_AND_TIME#`, `DT#`, `LDT#`, and `LDATE_AND_TIME#`.
 - `STC-LEX-041`: Date body: `YYYY-MM-DD`. Time-of-day body: `HH:MM:SS` with an optional
-  fractional part. Date-and-time body: date, `-`, time. Underscores are allowed between digits
-  in the fractional part.
+  fractional part of 1–9 digits. Date-and-time body: date, `-`, time. Underscores are allowed
+  between digits in the fractional part. The 9-digit limit matches the nanosecond resolution of
+  `TIME`/`LTIME`/`TOD`/`LTOD`; additional precision is rejected lexically.
 - `STC-LEX-042`: The lexer validates the shape and digit counts; range validation (month, day,
   hour, minute, second, time zone-free date) is performed by the analyzer/constant evaluator.
   Out-of-range values produce an error, not a silent wrap.
@@ -277,7 +300,8 @@ The full type/length/conversion semantics are in [UTF-8 Strings](../UTF8-Strings
 
 - `STC-LEX-043`: A direct variable starts with `%`, followed by an optional area
   (`I`, `Q`, or `M`), an optional size (`X`, `B`, `W`, `D`, or `L`), and one or more
-  non-negative decimal integers separated by `.`.
+  non-negative decimal integers separated by `.`. Indices are parsed as 32-bit values; an
+  address beyond the 32-bit range is a malformed literal (`STC-E-LEX-008`).
 - `STC-LEX-044`: `%I*`, `%Q*`, and `%M*` wildcard forms are accepted in declarations and
   `VAR_ACCESS`. The wildcard is not allowed in an executable expression.
 - `STC-LEX-045`: Examples: `%IX0.0`, `%QW28`, `%MD100`, `%I*`, `%B0` (struct-relative address).
@@ -376,7 +400,7 @@ Lexing is maximal-munch: `:=` wins over `:`, `**` over `*`, `..` over `.`, `<>` 
 | `STC-E-LEX-005` | Invalid escape sequence |
 | `STC-E-LEX-006` | Unterminated block comment |
 | `STC-E-LEX-007` | Unterminated pragma |
-| `STC-E-LEX-008` | Malformed numeric/time/date literal |
+| `STC-E-LEX-008` | Malformed literal (numeric, time, date, typed, string prefix, character arity, or direct-variable index range) |
 | `STC-E-LEX-009` | Invalid UTF-8 scalar escape |
 | `STC-E-LEX-010` | Invalid JSON pragma payload |
 | `STC-E-LEX-011` | Duplicate key in a JSON pragma payload |
@@ -399,14 +423,38 @@ Lexing is maximal-munch: `:=` wins over `:`, `**` over `*`, `..` over `.`, `<>` 
 
 ```rust
 pub struct Lexer<'src> {
-    source: &'src str,
-    cursor: usize,
-    file_id: FileId,
-    diagnostics: &'d mut DiagnosticSink,
+    // file id, source, cursor
 }
 
-impl Lexer<'_> {
-    pub fn tokenize(&mut self) -> TokenStream;
+impl<'src> Lexer<'src> {
+    pub fn new(file_id: FileId, source: &'src str) -> Self;
+    pub fn tokenize(self, diagnostics: &mut DiagnosticSink) -> TokenStream;
+}
+
+pub fn tokenize(file_id: FileId, source: &str, diagnostics: &mut DiagnosticSink) -> TokenStream;
+
+pub fn tokenize_bytes(
+    file_id: FileId,
+    bytes: &[u8],
+    diagnostics: &mut DiagnosticSink,
+) -> LexedSource;
+
+pub struct LexedSource {
+    pub text: String,       // invalid sequences replaced by U+FFFD
+    pub stream: TokenStream,
+}
+
+pub struct Token {
+    pub kind: TokenKind,
+    pub span: Span,
+    pub leading_trivia: TriviaRange,  // indices into TokenStream::trivia
+    pub trailing_trivia: TriviaRange,
+    pub literal: Option<Box<Literal>>, // decoded literal payload
+}
+
+pub struct Trivia {
+    pub kind: TriviaKind,
+    pub span: Span,
 }
 
 pub struct TokenStream {
@@ -416,9 +464,14 @@ pub struct TokenStream {
 }
 ```
 
-- `tokenize` is total for any `&str`.
+- `tokenize` is total for any `&str`. `tokenize_bytes` validates UTF-8 first, replaces invalid
+  sequences with U+FFFD, reports `STC-E-LEX-001`, and then tokenizes the decoded text.
 - Token and trivia spans are monotonically non-decreasing and cover the entire input exactly
   once (whitespace/comments as trivia, pragmas/tokens as tokens).
+- A token's text is `source[token.span]`; no second copy is stored. Literal payloads carry decoded
+  values and normalized digit strings.
+- `TokenStream::check_invariants` and `TokenStream::reconstruct` expose the coverage and lossless
+  contracts for tests and the fuzz target.
 - The parser may re-scan a token's raw text for a pragma payload; the lexer does not interpret
   pragma contents.
 - The lexer is independent of the parser; it can be tested and fuzzed alone.
@@ -432,3 +485,35 @@ No open lexical questions currently.
 - **Q-001 resolved (A-005):** `USTRING[n]` capacity is `n` characters; each scalar occupies
   4 bytes; storage is static; `LEN` counts characters; `LEN_CODE_UNIT` counts UTF-8 code units for
   interchange. This affects type layout, not tokenization.
+
+## 13. Implementation notes (M1)
+
+These choices implement the latitude in the rules above and are covered by tests:
+
+- **Identifier limit:** 1024 bytes (`MAX_IDENTIFIER_LEN`); longer identifiers produce
+  `STC-E-LEX-003` but still become `Identifier` tokens for parser recovery (STC-LEX-016).
+- **UTF-8 recovery:** each maximal invalid sequence becomes one U+FFFD in the decoded text;
+  the diagnostic keeps the original byte offset and bytes (STC-LEX-002).
+- **BOM:** an initial BOM is a `Bom` trivia item with span `0..3`; a BOM elsewhere outside
+  comments, strings, and pragmas is `STC-E-LEX-002` (STC-LEX-001, STC-LEX-003).
+- **NUL:** a raw NUL is `STC-E-LEX-002` everywhere, including comments, pragmas, and string
+  literals (STC-LEX-003).
+- **Trivia attachment:** same-line horizontal whitespace and single-line comments trail the
+  preceding token; line breaks and multi-line comments lead the following token. This is parser
+  convenience only; the full trivia sequence is always preserved.
+- **Recovery tokens:** an unterminated block comment is kept as trivia through EOF and followed
+  by a zero-width `Error` token (STC-LEX-049). Malformed literals and invalid characters produce
+  `Error` tokens; invalid identifiers and unterminated strings/pragmas keep their token kind with
+  a diagnostic.
+- **Numeric values:** digit strings are normalized (underscores removed, hexadecimal uppercased)
+  and retain arbitrary precision; no range check is performed by the lexer (STC-LEX-023).
+- **USTRING escapes:** `${HEX}` (1–6 digits), `$HH`, and `$HHHH` are supported; surrogates and
+  values above U+10FFFF are `STC-E-LEX-009` (STC-LEX-034, STC-LEX-036).
+- **Duration and date shapes:** durations reject underscores inside digits; date/time fractions
+  accept underscores between digits (STC-LEX-038, STC-LEX-041).
+- **Direct variables:** dot-separated indices are 32-bit; overflow is `STC-E-LEX-008`
+  (STC-LEX-043).
+- **Tests:** `crates/stc-lexer/tests/` contains rule-named unit tests, committed snapshots under
+  `tests/snapshots/`, deterministic property tests, and a traceability test that maps every
+  `STC-LEX-*` rule to a named test. `fuzz/fuzz_targets/fuzz_lexer.rs` checks arbitrary bytes for
+  panics, hangs, coverage, and losslessness (STC-LEX-002, STC-LEX-004).

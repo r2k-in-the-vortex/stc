@@ -1,0 +1,13 @@
+[package]
+name = "stc-lexer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+stc-diag = { path = "../stc-diag" }
+stc-span = { path = "../stc-span" }
+
+[lints]
+workspace = true

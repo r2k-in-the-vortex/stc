@@ -1,0 +1,28 @@
+[package]
+name = "stc-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Fuzz targets use a separate workspace and the nightly toolchain.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+stc-diag = { path = "../crates/stc-diag" }
+stc-lexer = { path = "../crates/stc-lexer" }
+stc-span = { path = "../crates/stc-span" }
+
+[[bin]]
+name = "fuzz_lexer"
+path = "fuzz_targets/fuzz_lexer.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1
+overflow-checks = true

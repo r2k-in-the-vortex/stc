@@ -1,0 +1,24 @@
+# unterminated_string (19 bytes, 7 tokens, 5 trivia, 1 diagnostics)
+tokens:
+  [0] Keyword(Var) 0..3 "VAR"
+       leading=0..0 trailing=0..1
+  [1] Ident("X") 4..5 "x"
+       leading=1..1 trailing=1..2
+  [2] Punct(Colon) 6..7 ":"
+       leading=2..2 trailing=2..3
+  [3] Keyword(Int) 8..11 "INT"
+       leading=3..3 trailing=3..4
+  [4] Punct(Assign) 12..14 ":="
+       leading=4..4 trailing=4..5
+  [5] StringLiteral { encoding: Sbcs, terminated: false } 15..19 "'abc" literal=String(StringLiteral { encoding: Sbcs, delimiter: '\'', units: [97, 98, 99] })
+       leading=5..5 trailing=5..5
+  [6] Eof 19..19 ""
+       leading=5..5 trailing=5..5
+trivia:
+  [0] Whitespace 3..4 " "
+  [1] Whitespace 5..6 " "
+  [2] Whitespace 7..8 " "
+  [3] Whitespace 11..12 " "
+  [4] Whitespace 14..15 " "
+diagnostics:
+  error STC-E-LEX-004 15..19 "unterminated string literal"

@@ -1,0 +1,35 @@
+# pragmas (120 bytes, 11 tokens, 9 trivia, 0 diagnostics)
+tokens:
+  [0] Pragma { terminated: true } 0..25 "{stc:test {\"cycles\": 25}}"
+       leading=0..0 trailing=0..0
+  [1] Pragma { terminated: true } 26..66 "{stc:io {\"device\":\"drive1\",\"channel\":5}}"
+       leading=0..1 trailing=1..1
+  [2] Pragma { terminated: true } 67..85 "{attribute 'noop'}"
+       leading=1..2 trailing=2..2
+  [3] Pragma { terminated: true } 86..98 "{stc:export}"
+       leading=2..3 trailing=3..3
+  [4] Keyword(Var) 99..102 "VAR"
+       leading=3..4 trailing=4..5
+  [5] Ident("X") 103..104 "x"
+       leading=5..5 trailing=5..6
+  [6] Punct(Colon) 105..106 ":"
+       leading=6..6 trailing=6..7
+  [7] Keyword(Int) 107..110 "INT"
+       leading=7..7 trailing=7..7
+  [8] Punct(Semicolon) 110..111 ";"
+       leading=7..7 trailing=7..8
+  [9] Keyword(EndVar) 112..119 "END_VAR"
+       leading=8..8 trailing=8..8
+  [10] Eof 120..120 ""
+       leading=8..9 trailing=9..9
+trivia:
+  [0] Whitespace 25..26 "\n"
+  [1] Whitespace 66..67 "\n"
+  [2] Whitespace 85..86 "\n"
+  [3] Whitespace 98..99 "\n"
+  [4] Whitespace 102..103 " "
+  [5] Whitespace 104..105 " "
+  [6] Whitespace 106..107 " "
+  [7] Whitespace 111..112 " "
+  [8] Whitespace 119..120 "\n"
+diagnostics:

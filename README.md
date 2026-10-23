@@ -7,9 +7,11 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**Specification phase.** No compiler code has been written yet. The repository currently holds
-the project plan, the specification baseline, the decision log, the local IEC reference, and the
-M0 CI skeleton. The specification is written before implementation, as required below.
+**M1 lexer complete.** The repository now contains the Rust workspace, the source-map and
+diagnostics crates, the full tokenizer, committed lexer snapshots, deterministic property tests,
+and the `fuzz_lexer` target. M2 (parser and CST/AST) is next; no parser, analyzer, or code
+generator exists yet. The specification continues to be written before implementation, as
+required below.
 
 | Document | Purpose |
 | --- | --- |
@@ -176,10 +178,10 @@ stc/
   .github/workflows/         GitHub Actions CI
   .markdownlint-cli2.jsonc   Markdown lint configuration
   tools/ci/check_docs.py     specification, link, and profile checks
-  Cargo.toml                 workspace manifest (created at M1, after spec review)
+  Cargo.toml                 workspace manifest
   rust-toolchain.toml        pinned Rust toolchain
   crates/
-    stc-span/                FileId, Span, SourceMap, locations
+    stc-span/                FileId, Span, SourceMap, locations, UTF-8 decoding
     stc-diag/                diagnostics, codes, human/JSON rendering
     stc-lexer/               tokenizer, trivia, literals, pragmas
     stc-syntax/              CST and typed AST wrappers
@@ -192,6 +194,7 @@ stc/
     stc-runtime/             Rust runtime library with C ABI
     stc-test/                test discovery and runner
     stc-driver/              CLI binary `stc`
+  fuzz/                      cargo-fuzz workspace; `fuzz_lexer` target
   stdlib/                    standard function blocks in ST
   lean/                      Lake project: exact models, proofs, vector generator
   tests/                     conformance, UI, codegen, execution, projects
@@ -200,9 +203,9 @@ stc/
     Reference/               local IEC 61131-3:2013 PDF (gitignored)
 ```
 
-The specification is being written before any compiler code; the workspace is created only after
-M0–M2 documents are reviewed. The stray zero-byte `src` file has been removed; the real source
-tree will be `crates/`.
+The M0 baseline was reviewed before the workspace was created at M1. The real source tree is
+`crates/`; the lexer tests and snapshots live under `crates/stc-lexer/tests/`, and `fuzz/` is a
+separate cargo-fuzz workspace.
 
 ## Continuous integration
 
