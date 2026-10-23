@@ -213,8 +213,10 @@ on pull requests.
   reference-PDF exclusion (`tools/ci/check_docs.py`), and Markdown lint.
 - `fmt`, `clippy`, `test`, `ui`, `conformance`, `execution`, `lean`, `fuzz-smoke`, and
   `cross-target` activate when their inputs exist. `test`, `ui`, `conformance`, and `execution`
-  run on both Windows x64 and Ubuntu x64; the host-independent jobs (`fmt`, `clippy`, `lean`,
-  `fuzz-smoke`, `cross-target`) run on Ubuntu.
+  run on both Windows Server 2025 x64 and Ubuntu 24.04 x64; the host-independent jobs (`fmt`,
+  `clippy`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04.
+- Runner images are pinned (`windows-2025`, `ubuntu-24.04`) so `-latest` migrations do not change
+  the matrix silently.
 - Suite jobs call `cargo xtask test --suite <name> --locked`; the UI, conformance, and execution
   jobs activate with both the suite directory and `xtask`.
 - Every job prints the clang version; builds use `--locked`; warnings are denied.

@@ -17,13 +17,15 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
 
+# Runner images are pinned to named versions; `-latest` migrations must not
+# silently change the matrix.
 jobs:
   # The specification is written before the compiler. This job reports which
   # parts of the tree exist so the code-backed jobs can stay skipped until
   # their workspace, suite, or tool is added.
   detect:
     name: Detect project state
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       rust: ${{ steps.flags.outputs.rust }}
@@ -35,7 +37,7 @@ jobs:
       execution: ${{ steps.flags.outputs.execution }}
       cross_target: ${{ steps.flags.outputs.cross_target }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -61,17 +63,17 @@ jobs:
 
   docs:
     name: Docs and specification
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
           clang --version | head -n 1 || echo "clang unavailable"
       - name: Check specification tree
         run: python3 tools/ci/check_docs.py
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Markdown lint
@@ -81,10 +83,10 @@ jobs:
     name: Rust fmt
     needs: detect
     if: needs.detect.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -97,12 +99,12 @@ jobs:
     name: Rust clippy
     needs: detect
     if: needs.detect.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -119,13 +121,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -146,13 +148,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -169,13 +171,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -192,13 +194,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -212,10 +214,10 @@ jobs:
     name: Lean proofs
     needs: detect
     if: needs.detect.outputs.lean == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -254,10 +256,10 @@ jobs:
     name: Fuzz smoke
     needs: detect
     if: needs.detect.outputs.fuzz == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -285,10 +287,10 @@ jobs:
     name: Cross-target IR smoke
     needs: detect
     if: needs.detect.outputs.cross_target == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |

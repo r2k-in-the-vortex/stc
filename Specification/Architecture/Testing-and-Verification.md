@@ -312,9 +312,11 @@ exist, so the skeleton never reports a pass for a job that did not run.
 ### 6.2 Matrix
 
 - Primary: Windows x64, `x86_64-pc-windows-msvc`; the development host is Windows 11 and CI uses
-  GitHub's `windows-latest` runner. Pinned clang/LLVM 23.1.4.
-- Secondary: Ubuntu `x86_64-unknown-linux-gnu` — workspace tests, diagnostic snapshots,
-  conformance corpus, execution tests, and end-to-end CLI.
+  GitHub's `windows-2025` runner. Pinned clang/LLVM 23.1.4.
+- Secondary: Ubuntu 24.04 (`ubuntu-24.04`), `x86_64-unknown-linux-gnu` — workspace tests,
+  diagnostic snapshots, conformance corpus, execution tests, and end-to-end CLI.
+- Runner images are pinned (`windows-2025`, `ubuntu-24.04`); `-latest` labels are not used, so
+  image migrations do not silently change the matrix.
 - Host portability (after basic development, D-042): native or emulated Linux AArch64
   (`aarch64-unknown-linux-gnu`) host jobs. Emulation is a smoke gate; release sign-off uses
   native ARM64 runners. Further `aarch64` cross-target object emission remains in the
