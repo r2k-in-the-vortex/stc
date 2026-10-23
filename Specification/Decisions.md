@@ -78,6 +78,7 @@ project. Namespaces and a dependency system are expected in v1.
 **Dependency resolution:** A-009 selects local paths plus a lockfile.
 
 **Consequences:**
+
 - Test discovery is pragma-based; tests compile into a separate binary with a fresh runtime.
 - A test project is a normal ST project with `[dependencies]` pointing at the code under test.
 - v1 includes a project/dependency model: package manifests, a dependency graph, topological
@@ -103,6 +104,7 @@ in Rust. Time is latched once at the start of each scan cycle, so two timers eva
 cycle cannot observe different times.
 
 **Consequences:**
+
 - `stc_cycle` latches `cycle_now_ns` once at entry. All `TON`/`TOF`/`TP`/counter/edge/date-time
   operations in that cycle read the latched value via `stc_rt_cycle_now_ns()`.
 - The live monotonic clock is separate (`stc_rt_monotonic_now_ns()`) and is not visible to ST code.
@@ -120,6 +122,7 @@ now). The project uses a TwinCAT-like device tree: `stc.toml` describes devices/
 is defined, inputs receive their type's default value and outputs do nothing externally.
 
 **Consequences:**
+
 - The compiler validates `AT` addresses/types, computes process-image offsets, and emits device,
   binding, and default-value metadata. It never opens devices or schedules I/O.
 - Binding precedence: runtime override > `[[io.bindings]]` in `stc.toml` > `{stc:io}` pragma >
@@ -135,6 +138,7 @@ is defined, inputs receive their type's default value and outputs do nothing ext
 **Answer:** File-backed state.
 
 **Consequences:**
+
 - v1 persists retained variables to a versioned state file with a magic/version header, profile
   and layout hashes, payload length, and CRC32.
 - A valid file on startup is a warm restart; missing file or `--reset-retain` is a cold restart.
@@ -213,6 +217,7 @@ compiled out along with any asserts in it before error checking; asserts outside
 errors.
 
 **Consequences:**
+
 - Test-only units are POUs marked `{stc:test}` and sources listed in `[test].sources`.
 - Production builds (debug and release) exclude test-only units from semantic analysis, codegen,
   and artifact linking. Release artifacts contain no test POUs and no `stc_rt_assert` calls.
@@ -227,6 +232,7 @@ errors.
 **Answer:** Stable `SyntaxKind`, with IDE tooling in view for v2/v3.
 
 **Consequences:**
+
 - `SyntaxKind` is a `#[repr(u16)]`, `#[non_exhaustive]` enum with explicit discriminants,
   published from `stc-syntax`. Existing kinds are never renumbered or reused; new kinds are
   appended.

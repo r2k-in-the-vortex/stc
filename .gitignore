@@ -7,5 +7,9 @@
 # Lean build artifacts
 /lean/.lake/
 
+# Python bytecode from CI helper scripts
+__pycache__/
+*.pyc
+
 # Local copyrighted reference: keep out of version control
 /Specification/Reference/*.pdf

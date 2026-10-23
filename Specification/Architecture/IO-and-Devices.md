@@ -30,7 +30,7 @@ EtherCAT, Modbus, and MQTT are planned for v2 and are noted here but not designe
 
 Direct variables map into a contiguous process image:
 
-```
+```text
 +-------------------+-------------------+-------------------+
 | %I input image    | %Q output image   | %M marker image   |
 +-------------------+-------------------+-------------------+

@@ -68,7 +68,7 @@ Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LO
 
 Human format:
 
-```
+```text
 src/main.st:14:9: error[STC-E-TYPE-012]: cannot assign DINT to BOOL
    |
 14 |     flag := counter;
@@ -282,6 +282,7 @@ timeout = "2s"
 - `[[test.case]] name` must match a POU carrying `{stc:test}`; duplicate names are errors.
 - A **separate test project** is a normal package with `{stc:test}` POUs and a dependency on the
   code under test:
+
   ```toml
   [package]
   name = "motor-tests"
@@ -297,6 +298,7 @@ timeout = "2s"
   [test]
   timeout = "5s"
   ```
+
   `stc test` in that package compiles `motor-control` and the test sources but runs only the test
   POUs in `motor-tests`.
 - `cycles` overrides the test's default cycle count.
@@ -346,7 +348,7 @@ Rules:
 
 ## 4. Artifact and metadata layout
 
-```
+```text
 target/stc/<profile>/
   <name>.ll
   <name>.o
@@ -408,7 +410,7 @@ target/stc/<profile>/
 
 ## 5. `stc new` scaffold
 
-```
+```text
 <name>/
   stc.toml
   src/main.st
@@ -440,7 +442,7 @@ END_FUNCTION
 
 `stc build -v` prints phases and timings to stderr:
 
-```
+```text
 [stc] profile stc-2013-oop-utf8-v1
 [stc] manifest stc.toml
 [stc] sources 3 files, 812 lines
@@ -455,4 +457,3 @@ contains secrets; paths are printed as written by the user.
 ## 7. Open CLI/manifest questions
 
 None currently. New CLI/manifest questions are appended here or in [Decisions](../Decisions.md).
-

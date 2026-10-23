@@ -90,7 +90,7 @@ are **predeclared identifiers**, not keywords, except where they are also operat
 
 ### 3.1 Elementary and generic type keywords
 
-```
+```text
 BOOL SINT INT DINT LINT USINT UINT UDINT ULINT
 BYTE WORD DWORD LWORD REAL LREAL
 TIME LTIME DATE LDATE LDATE_AND_TIME
@@ -105,7 +105,7 @@ USTRING UCHAR                                  (* STC-UTF8 extension *)
 
 ### 3.2 Declaration and variable keywords
 
-```
+```text
 TYPE END_TYPE STRUCT END_STRUCT OVERLAP ARRAY OF AT
 VAR END_VAR VAR_INPUT VAR_OUTPUT VAR_IN_OUT VAR_TEMP
 VAR_GLOBAL VAR_EXTERNAL VAR_ACCESS VAR_CONFIG
@@ -115,7 +115,7 @@ REF_TO REF NULL
 
 ### 3.3 POU, OOP, and namespace keywords
 
-```
+```text
 FUNCTION END_FUNCTION FUNCTION_BLOCK END_FUNCTION_BLOCK
 PROGRAM END_PROGRAM CLASS END_CLASS INTERFACE END_INTERFACE
 METHOD END_METHOD EXTENDS IMPLEMENTS OVERRIDE FINAL ABSTRACT
@@ -125,7 +125,7 @@ NAMESPACE END_NAMESPACE USING
 
 ### 3.4 Statement and operator keywords
 
-```
+```text
 IF THEN ELSIF ELSE END_IF
 CASE END_CASE FOR TO BY DO END_FOR
 WHILE END_WHILE REPEAT UNTIL END_REPEAT
@@ -136,7 +136,7 @@ AND OR XOR NOT MOD
 
 ### 3.5 Configuration keywords
 
-```
+```text
 CONFIGURATION END_CONFIGURATION RESOURCE END_RESOURCE ON
 TASK SINGLE INTERVAL PRIORITY WITH
 READ_ONLY READ_WRITE
@@ -147,7 +147,7 @@ READ_ONLY READ_WRITE
 The compiler does not accept SFC bodies, but these 2013 keywords remain reserved so that a
 future SFC front end can be added without breaking identifiers:
 
-```
+```text
 ACTION END_ACTION STEP END_STEP INITIAL_STEP TRANSITION END_TRANSITION FROM
 ```
 

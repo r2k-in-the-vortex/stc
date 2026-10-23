@@ -11,7 +11,7 @@ compiler's primary output; `clang` is the backend driver that assembles, optimiz
 for the selected target. This keeps the compiler independent of the LLVM C++/C API and its
 version, and makes the generated IR inspectable and testable.
 
-```
+```text
 +--------+   +--------+   +----------+   +--------+   +-----------+   +--------+
 | source | ->| lexer  | ->| parser   | ->| sema   | ->| HIR       | ->| IR     |
 | (UTF-8)|   | tokens |   | CST/AST  |   | names/ |   | typed,    |   | text   |
@@ -28,7 +28,7 @@ version, and makes the generated IR inspectable and testable.
 
 ## 2. Workspace layout
 
-```
+```text
 stc/
   Cargo.toml                 workspace manifest
   rust-toolchain.toml        pinned stable toolchain
@@ -55,7 +55,7 @@ stc/
 
 Crate dependency direction is acyclic:
 
-```
+```text
 stc-span <- stc-diag
 stc-span <- stc-lexer <- stc-syntax <- stc-parser
 stc-span <- stc-hir <- stc-sema <- stc-parser
@@ -301,6 +301,7 @@ storage and must not retain the pointer beyond the call.
 - `stc_cycle` executes one scan of the configured programs/tasks.
 - `stc_shutdown` saves retained state and releases resources.
 - Executable mode generates:
+
   ```llvm
   define i32 @main(i32 %argc, ptr %argv) {
   entry:
@@ -309,14 +310,17 @@ storage and must not retain the pointer beyond the call.
     ret i32 %rc
   }
   ```
+
   `stc_rt_execute` owns the cycle loop, time base, cycle limit, signal handling, and error
   reporting. This keeps `main` tiny and the loop portable.
 - Library mode exports:
+
   ```llvm
   define void @stc_init()
   define void @stc_cycle()
   define void @stc_shutdown()
   ```
+
   plus any `{stc:export}` wrappers and a metadata symbol. The host owns the loop and the I/O
   backend.
 
@@ -324,7 +328,7 @@ storage and must not retain the pointer beyond the call.
 
 Mangled names are stable and C-identifier-safe:
 
-```
+```text
 stc_fn_<ns>_<name>_<sig_hash>       functions
 stc_fb_<ns>_<name>                  FB type
 stc_fb_body_<ns>_<name>_<sig_hash>  FB body function
@@ -435,7 +439,7 @@ project targets IR syntax accepted by LLVM 15 and later.
 
 ### 6.3 Artifact layout
 
-```
+```text
 target/stc/<profile>/
   <name>.ll
   <name>.o

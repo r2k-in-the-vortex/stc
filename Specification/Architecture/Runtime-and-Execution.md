@@ -11,7 +11,7 @@ executable and library artifacts differ.
 
 IEC 61131-3 programs execute cyclically. The generated code has three entry points:
 
-```
+```text
 stc_init()      initialize runtime, globals, FB/class instances, process image
 stc_cycle()     execute one scan of the configured tasks/programs
 stc_shutdown()  flush state and release resources
@@ -135,6 +135,7 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
 - The compiler computes offsets and sizes from the declarations; the layout is recorded in
   `<name>.stc-meta.json`.
 - The runtime provides default input/output image buffers and a `stc_io_backend` vtable:
+
   ```c
   typedef struct {
       void* user;
@@ -142,6 +143,7 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
       int32_t (*write_outputs)(void* user, const uint8_t* src, uint64_t len);
   } stc_io_backend;
   ```
+
 - Default backend (`null`): unbound inputs are filled with the type's default value each cycle
   (from `input_defaults_hex`), bound inputs are read from their backend, and unbound outputs are
   discarded at cycle end. Inputs with no linking therefore see type defaults; outputs with no
@@ -331,4 +333,3 @@ Detailed test discovery and pragma syntax are in [Testing](Testing-and-Verificat
 ## 9. Open runtime questions
 
 None currently. New runtime questions are appended here or in [Decisions](../Decisions.md).
-

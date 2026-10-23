@@ -1,0 +1,301 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  # The specification is written before the compiler. This job reports which
+  # parts of the tree exist so the code-backed jobs can stay skipped until
+  # their workspace, suite, or tool is added.
+  detect:
+    name: Detect project state
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.flags.outputs.rust }}
+      lean: ${{ steps.flags.outputs.lean }}
+      fuzz: ${{ steps.flags.outputs.fuzz }}
+      xtask: ${{ steps.flags.outputs.xtask }}
+      ui: ${{ steps.flags.outputs.ui }}
+      conformance: ${{ steps.flags.outputs.conformance }}
+      execution: ${{ steps.flags.outputs.execution }}
+      cross_target: ${{ steps.flags.outputs.cross_target }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+      - id: flags
+        name: Detect workspace, suites, and tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+          if [ -f Cargo.toml ]; then emit rust true; else emit rust false; fi
+          if [ -f lean/lakefile.lean ]; then emit lean true; else emit lean false; fi
+          if [ -f fuzz/Cargo.toml ] && compgen -G "fuzz/fuzz_targets/*.rs" > /dev/null; then
+            emit fuzz true
+          else
+            emit fuzz false
+          fi
+          if [ -d crates/xtask ] || [ -d tools/xtask ]; then emit xtask true; else emit xtask false; fi
+          if [ -d tests/ui ]; then emit ui true; else emit ui false; fi
+          if [ -d tests/conformance ]; then emit conformance true; else emit conformance false; fi
+          if [ -d tests/execution ]; then emit execution true; else emit execution false; fi
+          if [ -f tests/cross-target/smoke.ll ]; then emit cross_target true; else emit cross_target false; fi
+
+  docs:
+    name: Docs and specification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+      - name: Check specification tree
+        run: python3 tools/ci/check_docs.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Markdown lint
+        run: npx --yes markdownlint-cli2@0.24.0
+
+  fmt:
+    name: Rust fmt
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Rust clippy
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: Rust test (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+
+  # Suite jobs use the planned automation entry point:
+  #   cargo xtask test --suite <name> --locked
+  # xtask forwards --locked to the cargo commands it runs. The jobs stay
+  # skipped until both xtask and the suite directory exist.
+  ui:
+    name: UI diagnostics (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true' && needs.detect.outputs.xtask == 'true' && needs.detect.outputs.ui == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run UI diagnostic snapshots
+        run: cargo xtask test --suite ui --locked
+
+  conformance:
+    name: Conformance corpus (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true' && needs.detect.outputs.xtask == 'true' && needs.detect.outputs.conformance == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run conformance corpus
+        run: cargo xtask test --suite conformance --locked
+
+  execution:
+    name: Execution tests (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true' && needs.detect.outputs.xtask == 'true' && needs.detect.outputs.execution == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run execution tests
+        run: cargo xtask test --suite execution --locked
+
+  lean:
+    name: Lean proofs
+    needs: detect
+    if: needs.detect.outputs.lean == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: lean
+          build: true
+          test: false
+          lint: false
+      - name: Reject sorry/admit in exact modules
+        working-directory: lean
+        shell: bash
+        run: |
+          if [ ! -d Stc/Exact ]; then
+            echo "::error::Stc/Exact is missing"
+            exit 1
+          fi
+          if grep -rnwE 'sorry|admit' Stc/Exact; then
+            echo "::error::sorry/admit found in Stc/Exact"
+            exit 1
+          fi
+      - name: Regenerate exact-function vectors and check they are committed
+        if: hashFiles('lean/VectorCli.lean') != ''
+        working-directory: lean
+        shell: bash
+        run: |
+          lake exe vectors
+          if [ -n "$(git -C "$GITHUB_WORKSPACE" status --porcelain --untracked-files=all -- tests/vectors)" ]; then
+            git -C "$GITHUB_WORKSPACE" status --short -- tests/vectors
+            echo "::error::generated vectors are not committed"
+            exit 1
+          fi
+
+  fuzz-smoke:
+    name: Fuzz smoke
+    needs: detect
+    if: needs.detect.outputs.fuzz == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> target
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked
+      - name: Smoke each target for 60 seconds
+        working-directory: fuzz
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in fuzz_targets/*.rs; do
+            name="$(basename "$target" .rs)"
+            echo "::group::fuzz $name"
+            cargo +nightly fuzz run "$name" -- -max_total_time=60 -rss_limit_mb=2048 -timeout=25
+            echo "::endgroup::"
+          done
+
+  cross-target:
+    name: Cross-target IR smoke
+    needs: detect
+    if: needs.detect.outputs.cross_target == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+      - name: Assemble AArch64 object from IR
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cross-target"
+          clang --target=aarch64-unknown-linux-gnu -c tests/cross-target/smoke.ll \
+            -o "$RUNNER_TEMP/cross-target/smoke-aarch64.o"

@@ -115,9 +115,11 @@ END_FUNCTION
 - Mock clock starts at `0ns` by default; `mock-clock` sets it. Time is latched once at the start
   of each `stc_cycle`; two timers in the same scan see the same value. Tests schedule the next
   cycle's time through the test harness API:
+
   ```st
   STC_CLOCK_ADVANCE(T#10ms);
   ```
+
   The harness API is a test-only prelude; it lowers to `stc_rt_set_cycle_time_ns` for the next
   cycle. It does not change the time already latched in the current scan.
 - Default I/O backend is memory; tests can set input bytes with `STC_IO_SET_INPUT(...)` and read
@@ -129,7 +131,7 @@ END_FUNCTION
 
 ### 2.4 Filters and options
 
-```
+```sh
 stc test                     # all tests
 stc test Timer               # substring filter on POU name
 stc test --list              # list discovered tests
@@ -188,7 +190,7 @@ campaign locally/nightly.
 
 `tests/conformance/<area>/<case>.st` plus a small expectation file:
 
-```
+```toml
 # case.meta.toml
 profile = "stc-2013-oop-utf8-v1"
 kind = "compile-pass"        # compile-pass | compile-fail | run-pass | run-fail | trap
@@ -238,7 +240,7 @@ proved; they are tested against high-precision reference vectors with documented
 
 ### 5.2 Lean project
 
-```
+```text
 lean/
   lakefile.lean
   lean-toolchain          # pinned to Lean 4.35.0
@@ -291,22 +293,28 @@ lean/
 
 | Job | Runs |
 | --- | --- |
-| `fmt` | `cargo fmt --check` |
-| `clippy` | `cargo clippy --all-targets -- -D warnings` |
-| `test` | `cargo test --workspace` on Windows x64 (primary) and, after basic development, Linux x86-64 and Linux AArch64 (D-042) |
-| `ui` | diagnostic snapshots |
-| `conformance` | conformance corpus |
-| `execution` | compile/run tests |
+| `fmt` | `cargo fmt --all --check` |
+| `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| `test` | `cargo test --workspace --locked` on Windows x64 and Ubuntu x64; Linux AArch64 after basic development (D-042) |
+| `ui` | diagnostic snapshots on Windows x64 and Ubuntu x64 |
+| `conformance` | conformance corpus on Windows x64 and Ubuntu x64 |
+| `execution` | compile/run tests on Windows x64 and Ubuntu x64 |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
 | `cross-target` | `clang --target=aarch64-... -c` smoke (IR/object) |
-| `docs` | spec link check / markdown lint |
+| `docs` | required-document, spec link, and profile checks; Markdown lint |
+
+The workflow is `.github/workflows/ci.yml`; the documentation checks are implemented in
+`tools/ci/check_docs.py`. The `docs` job runs from M0. Jobs that need the Rust workspace, suite
+harnesses, Lean project, fuzz targets, or cross-target IR fixtures stay skipped until those inputs
+exist, so the skeleton never reports a pass for a job that did not run.
 
 ### 6.2 Matrix
 
-- Primary: Windows 11, `x86_64-pc-windows-msvc`, pinned clang/LLVM 23.1.4.
-- Secondary: Ubuntu `x86_64-unknown-linux-gnu` — workspace tests, execution tests, and
-  end-to-end CLI.
+- Primary: Windows x64, `x86_64-pc-windows-msvc`; the development host is Windows 11 and CI uses
+  GitHub's `windows-latest` runner. Pinned clang/LLVM 23.1.4.
+- Secondary: Ubuntu `x86_64-unknown-linux-gnu` — workspace tests, diagnostic snapshots,
+  conformance corpus, execution tests, and end-to-end CLI.
 - Host portability (after basic development, D-042): native or emulated Linux AArch64
   (`aarch64-unknown-linux-gnu`) host jobs. Emulation is a smoke gate; release sign-off uses
   native ARM64 runners. Further `aarch64` cross-target object emission remains in the
@@ -342,4 +350,3 @@ lean/
 ## 9. Open testing questions
 
 None currently. New testing questions are appended here or in [Decisions](../Decisions.md).
-

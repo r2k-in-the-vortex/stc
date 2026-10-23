@@ -106,7 +106,7 @@ The CST is a rowan-style green/red tree or an equivalent arena tree. The impleme
 
 Token kinds are defined in the tokenization spec. Node kinds:
 
-```
+```text
 SourceFile
 UsingDirective
 NamespaceDecl
@@ -551,7 +551,7 @@ END_FUNCTION
 
 CST (abridged):
 
-```
+```text
 FunctionDecl
   FUNCTION
   Name "Add"
@@ -575,7 +575,7 @@ FunctionDecl
 
 HIR (abridged):
 
-```
+```text
 Def Function(Add) -> DINT
 Body(Add):
   params: a: DINT, b: DINT

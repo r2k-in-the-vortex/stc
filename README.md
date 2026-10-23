@@ -1,13 +1,15 @@
 # stc — Structured Text Compiler
 
+[![CI](https://github.com/r2k-in-the-vortex/stc/actions/workflows/ci.yml/badge.svg)](https://github.com/r2k-in-the-vortex/stc/actions/workflows/ci.yml)
+
 `stc` compiles IEC 61131-3 Structured Text to textual LLVM IR. `clang` takes the IR from there to
 x86-64 or any other target clang supports.
 
 ## Status
 
 **Specification phase.** No compiler code has been written yet. The repository currently holds
-the project plan, the specification baseline, the decision log, and the local IEC reference. The
-specification is written before implementation, as required below.
+the project plan, the specification baseline, the decision log, the local IEC reference, and the
+M0 CI skeleton. The specification is written before implementation, as required below.
 
 | Document | Purpose |
 | --- | --- |
@@ -63,7 +65,7 @@ does not reproduce the standard. The 2013 text is consulted for clause-level beh
 
 ## Compilation model
 
-```
+```text
 ST source (UTF-8)
   -> lexer -> lossless CST -> typed AST -> name resolution/type checking -> HIR
   -> textual LLVM IR (.ll)
@@ -169,10 +171,13 @@ and [I/O and Devices](Specification/Architecture/IO-and-Devices.md).
 
 ## Repository layout
 
-```
+```text
 stc/
+  .github/workflows/         GitHub Actions CI
+  .markdownlint-cli2.jsonc   Markdown lint configuration
+  tools/ci/check_docs.py     specification, link, and profile checks
   Cargo.toml                 workspace manifest (created at M1, after spec review)
-  rust-toolchain.toml        pinned Rust toolchain (created with the workspace)
+  rust-toolchain.toml        pinned Rust toolchain
   crates/
     stc-span/                FileId, Span, SourceMap, locations
     stc-diag/                diagnostics, codes, human/JSON rendering
@@ -198,6 +203,23 @@ stc/
 The specification is being written before any compiler code; the workspace is created only after
 M0–M2 documents are reviewed. The stray zero-byte `src` file has been removed; the real source
 tree will be `crates/`.
+
+## Continuous integration
+
+GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on pushes to `main` and
+on pull requests.
+
+- `docs` runs from M0: required-document checks, relative-link validation, profile consistency,
+  reference-PDF exclusion (`tools/ci/check_docs.py`), and Markdown lint.
+- `fmt`, `clippy`, `test`, `ui`, `conformance`, `execution`, `lean`, `fuzz-smoke`, and
+  `cross-target` activate when their inputs exist. `test`, `ui`, `conformance`, and `execution`
+  run on both Windows x64 and Ubuntu x64; the host-independent jobs (`fmt`, `clippy`, `lean`,
+  `fuzz-smoke`, `cross-target`) run on Ubuntu.
+- Suite jobs call `cargo xtask test --suite <name> --locked`; the UI, conformance, and execution
+  jobs activate with both the suite directory and `xtask`.
+- Every job prints the clang version; builds use `--locked`; warnings are denied.
+
+The job definitions and matrix follow [Testing and Verification](Specification/Architecture/Testing-and-Verification.md) §6.
 
 ## Confirmed decisions
 
@@ -229,16 +251,16 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-029 | `AT` takes one `{stc:io <json-object>}` hint; project bindings and runtime overrides take precedence. |
 | D-030 | Unbound inputs use type defaults or declared initializers; unbound outputs are discarded; `%M` persists. |
 | D-031 | Pragmas are non-nested but may carry balanced JSON payloads. |
-| D-032 | v1 persists `RETAIN` variables to a versioned, layout-hashed, CRC-checked state file with atomic writes. | Warm/cold restart behavior without a database or host dependency. |
-| D-033 | Identifiers are ASCII-only; UTF-8 is limited to comments and strings. | Avoids Unicode normalization/case-folding complexity. |
-| D-034 | Comparison precedence follows Annex A: relational binds tighter than equality. | Resolves the operator-table/Annex A disagreement. |
-| D-035 | Strict 2013 semicolon rules by default; relaxed syntax is opt-in. | Conformance by default with a compatibility mode. |
-| D-036 | v1 includes minimal `stc fmt` with one fixed style and `--check`. | Useful tooling without a configuration subsystem. |
-| D-037 | v1 runs a single task per scan; the full task model is parsed/analysed. | Bounded runtime scope. |
-| D-038 | `stc test` runs test processes sequentially. | Deterministic output and resource use. |
-| D-039 | Lint levels live in `[lints]`; CLI flags override; errors cannot be downgraded. | Shared policy with CI control. |
-| D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use is an error. | Clean release artifacts. |
-| D-041 | `SyntaxKind` is a stable, append-only API; full CST/IDE API is planned for v2/v3. | Future tooling without freezing internals now. |
+| D-032 | v1 persists `RETAIN` variables to a versioned, layout-hashed, CRC-checked state file with atomic writes. |
+| D-033 | Identifiers are ASCII-only; UTF-8 is limited to comments and strings. |
+| D-034 | Comparison precedence follows Annex A: relational binds tighter than equality. |
+| D-035 | Strict 2013 semicolon rules by default; relaxed syntax is opt-in. |
+| D-036 | v1 includes minimal `stc fmt` with one fixed style and `--check`. |
+| D-037 | v1 runs a single task per scan; the full task model is parsed/analysed. |
+| D-038 | `stc test` runs test processes sequentially. |
+| D-039 | Lint levels live in `[lints]`; CLI flags override; errors cannot be downgraded. |
+| D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use is an error. |
+| D-041 | `SyntaxKind` is a stable, append-only API; full CST/IDE API is planned for v2/v3. |
 | D-042 | After basic development, `stc` and its runtime also run natively on Linux x86-64 and Linux AArch64 (ARM64); Windows remains the primary development host. |
 
 ## Question log

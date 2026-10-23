@@ -126,7 +126,7 @@ portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 por
 
 ## 6. Architecture at a glance
 
-```
+```text
 ST source (UTF-8)
    |
    v
@@ -183,6 +183,7 @@ Deliverables: this plan, conformance profile, tokenization, grammar, AST, archit
 CLI/manifest, testing/verification, decision log; README updated; toolchain pins; CI skeleton.
 
 Exit criteria:
+
 - Documents reviewed and no unresolved blocking questions for M1–M2.
 - Terminology and profile are consistent across documents.
 - The repository has no stray placeholders and the reference PDF is excluded from version
@@ -194,6 +195,7 @@ Deliverables: complete token set for the profile; source map and spans; comments
 UTF-8 string literals; diagnostics; fuzz target; lexer snapshots and property tests.
 
 Exit criteria:
+
 - Every lexical rule has a rule ID and tests.
 - Valid/invalid UTF-8, CRLF/LF, BOM, nested comments, based/typed/time/date literals, and
   string escapes are covered.
@@ -206,6 +208,7 @@ configurations); error recovery; CST and typed AST; `stc parse`/`stc check` skel
 snapshots and negative tests.
 
 Exit criteria:
+
 - All grammar productions have positive and negative tests.
 - Error recovery produces multiple useful diagnostics and never panics.
 - CST can round-trip source text exactly (including trivia).
@@ -217,6 +220,7 @@ resolution, overloads, implicit/explicit conversions, constant expressions, init
 control, reference/interface rules, assignment attempt, diagnostic codes; `stc check`.
 
 Exit criteria:
+
 - Positive and negative conformance cases for every rule category.
 - No codegen yet; diagnostics are stable and snapshot-tested.
 - Type errors include actionable spans and notes.
@@ -228,6 +232,7 @@ programs; globals and initialization; process-image metadata for `AT`; runtime A
 invocation; `--emit=ir,obj,exe`; execution tests; deterministic IR snapshots.
 
 Exit criteria:
+
 - A set of small ST programs produces IR accepted by `clang` and runs correctly.
 - Both executable and library mode link and execute a no-op cycle.
 - IR is deterministic and free of target-specific offsets.
@@ -240,6 +245,7 @@ subranges; `STRING`/`WSTRING`/`USTRING`; standard functions; standard FB stdlib;
 clock; single-task cyclic runtime; test runner MVP.
 
 Exit criteria:
+
 - OOP conformance cases (inheritance, overriding, interface dispatch, assignment attempt) pass.
 - Static arrays and conformant `ARRAY [*]` parameters pass bounds/aliasing tests; dynamic
   locals/globals/returns are rejected with explicit diagnostics.
@@ -256,6 +262,7 @@ retained state, build artifacts, JSON diagnostics, verbose output, `stc test`, m
 Lean vector integration, conformance corpus, fuzzing, CI matrix, docs.
 
 Exit criteria:
+
 - `stc new/build/check/run/test/clean` work end-to-end on Windows.
 - CI runs unit, snapshot, conformance, execution, fuzz-smoke, and Lean proof jobs.
 - Traceability report shows every implemented rule has a test.
@@ -266,6 +273,7 @@ Deliverables: performance pass, cross-target smoke tests via `clang --target`, p
 examples, release notes, known-limitations list.
 
 Exit criteria:
+
 - No silent acceptance of unsupported features.
 - Documented artifacts and ABI; reproducible IR; clean build from a fresh checkout.
 - Release checklist signed off.
@@ -277,6 +285,7 @@ and Linux AArch64; clang/linker discovery and artifact naming on Linux; state-fi
 Linux; CI jobs on both hosts; host-support documentation.
 
 Exit criteria:
+
 - `cargo test --workspace` passes natively on Linux x86-64 and Linux AArch64.
 - `stc new/build/check/run/test/clean` work end-to-end on both hosts.
 - The execution suite and conformance corpus pass on both hosts; retained state round-trips.

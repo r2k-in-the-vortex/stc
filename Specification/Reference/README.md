@@ -7,7 +7,7 @@ This directory is for local reference documents used while writing the specifica
 Place the locally obtained IEC 61131-3:2013 PDF here. It is **not** redistributed and is excluded
 from version control by the top-level `.gitignore`:
 
-```
+```text
 /Specification/Reference/*.pdf
 ```
 

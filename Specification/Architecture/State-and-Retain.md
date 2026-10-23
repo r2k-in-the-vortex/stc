@@ -88,7 +88,7 @@ Little-endian binary:
 
 The layout hash covers:
 
-```
+```text
 profile=stc-2013-oop-utf8-v1
 abi=1
 size=<payload length>
@@ -138,7 +138,7 @@ on-mismatch = "error"       # error | reset
 
 CLI overrides:
 
-```
+```text
 --state-file <path>   use a specific state file
 --reset-retain        cold start: ignore existing state, overwrite on shutdown
 --no-retain           disable load and save for this run
