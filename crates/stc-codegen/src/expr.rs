@@ -14,8 +14,8 @@ use stc_span::Span;
 use crate::CodegenError;
 use crate::abi::{self, trap};
 use crate::codes;
+use crate::ir::{Function, IrType, Module, SymbolAttrs, Value};
 use crate::layout::{self, ScalarKind};
-use crate::module::{Function, IrType, Module, Value};
 use crate::unit::Lowerer;
 
 /// Result alias for lowering.
@@ -1427,7 +1427,7 @@ impl Lowerer<'_> {
         let ty = IrType::Int(bits);
         let mut helper = Function::new(
             name.clone(),
-            "internal ",
+            SymbolAttrs::internal(),
             ty,
             vec![
                 (ty, "%a0".into()),

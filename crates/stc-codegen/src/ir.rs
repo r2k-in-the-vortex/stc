@@ -3,8 +3,16 @@
 //! The builder validates operand widths where it can and guarantees that every
 //! emitted block ends in exactly one terminator. Names are allocated from
 //! monotonic counters so identical HIR produces byte-identical IR (D-081).
+//!
+//! Module-shaped IR additionally uses GOT slot-table access
+//! ([`Function::slot_cell`], [`Function::cell_value`], [`Function::slot_value`]),
+//! indirect calls ([`Function::call_ptr`]), module entry points with
+//! [`SymbolAttrs::module_export`], and descriptor/function-table globals
+//! ([`Module::add_descriptor`], [`Module::add_function_table`]). The builder
+//! records structural facts while emitting; [`crate::verify`] checks them
+//! before an artifact is rendered.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 /// An M4 LLVM type.
@@ -37,6 +45,145 @@ impl IrType {
             Self::Overflow(bits) => format!("{{ i{bits}, i1 }}"),
         }
     }
+}
+
+/// LLVM linkage classes emitted by the builder.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Linkage {
+    /// Externally visible symbol.
+    #[default]
+    External,
+    /// Module-local symbol with a stable name.
+    Internal,
+    /// Module-private symbol.
+    Private,
+}
+
+impl Linkage {
+    /// Renders the textual prefix, including the trailing space.
+    #[must_use]
+    pub const fn render(self) -> &'static str {
+        match self {
+            Self::External => "",
+            Self::Internal => "internal ",
+            Self::Private => "private ",
+        }
+    }
+}
+
+/// LLVM visibility for externally linked symbols.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Visibility {
+    /// Default visibility.
+    #[default]
+    Default,
+    /// Hidden visibility.
+    Hidden,
+    /// Protected visibility.
+    Protected,
+}
+
+impl Visibility {
+    const fn render(self) -> &'static str {
+        match self {
+            Self::Default => "",
+            Self::Hidden => "hidden ",
+            Self::Protected => "protected ",
+        }
+    }
+}
+
+/// Linkage and visibility attributes for one function or global.
+///
+/// Visibility and `dllexport` are rendered only for external linkage; LLVM
+/// rejects both on internal or private symbols.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SymbolAttrs {
+    /// Linkage class.
+    pub linkage: Linkage,
+    /// Symbol visibility.
+    pub visibility: Visibility,
+    /// Emit `dllexport` (module entry points).
+    pub export: bool,
+    /// Emit `dso_local` (non-preemptable on ELF targets).
+    pub dso_local: bool,
+}
+
+impl SymbolAttrs {
+    /// External linkage with default visibility.
+    #[must_use]
+    pub const fn external() -> Self {
+        Self {
+            linkage: Linkage::External,
+            visibility: Visibility::Default,
+            export: false,
+            dso_local: false,
+        }
+    }
+
+    /// Module-local symbol.
+    #[must_use]
+    pub const fn internal() -> Self {
+        Self {
+            linkage: Linkage::Internal,
+            ..Self::external()
+        }
+    }
+
+    /// Module-private symbol.
+    #[must_use]
+    pub const fn private() -> Self {
+        Self {
+            linkage: Linkage::Private,
+            ..Self::external()
+        }
+    }
+
+    /// Exported, non-preemptable module entry point (`dso_local dllexport`).
+    ///
+    /// `dso_local` makes the definition non-preemptable on ELF, and
+    /// `dllexport` places the symbol in the export table on COFF; each target
+    /// ignores the other's attribute.
+    #[must_use]
+    pub const fn module_export() -> Self {
+        Self {
+            linkage: Linkage::External,
+            visibility: Visibility::Default,
+            export: true,
+            dso_local: true,
+        }
+    }
+
+    /// Renders the attribute prefix including a trailing space.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut text = String::from(self.linkage.render());
+        if self.linkage == Linkage::External {
+            if self.dso_local {
+                text.push_str("dso_local ");
+            }
+            text.push_str(self.visibility.render());
+            if self.export {
+                text.push_str("dllexport ");
+            }
+        }
+        text
+    }
+}
+
+/// One GOT cell kind (GOT Artifacts §7.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CellKind {
+    /// Pointer to persistent host-owned root storage.
+    Data,
+    /// Address of a function implementation in the active module.
+    Function,
+    /// Address of a runtime-owned descriptor or vtable.
+    Descriptor,
+    /// Pointer to a process-image direct-variable location.
+    Direct,
+    /// Address of a host service entry point.
+    Import,
 }
 
 /// A typed SSA value or literal.
@@ -150,13 +297,59 @@ struct Block {
     terminator: Option<String>,
 }
 
+/// The stage of a tracked slot access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CellStage {
+    /// The value is the address of a host cell (`slots[slot]`).
+    Address,
+    /// The value is the pointer-sized value stored in a host cell.
+    Value,
+}
+
+/// One tracked slot access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CellAccess {
+    /// Slot number.
+    pub(crate) slot: u32,
+    /// Access stage.
+    pub(crate) stage: CellStage,
+}
+
+/// Where an SSA pointer value comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PointerOrigin {
+    /// A host cell address or cell value.
+    Cell(CellAccess),
+    /// A module-level symbol.
+    Global(String),
+}
+
+/// Structural facts recorded while an instruction is emitted.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FunctionFacts {
+    /// Direct calls by callee symbol.
+    pub(crate) direct_calls: Vec<String>,
+    /// Indirect calls by callee SSA value.
+    pub(crate) indirect_calls: Vec<String>,
+    /// Origin of each SSA pointer value that carries one.
+    pub(crate) origins: BTreeMap<String, PointerOrigin>,
+    /// Loads and stores through a cell value as `(slot, is_store)`.
+    pub(crate) memory_accesses: Vec<(u32, bool)>,
+    /// Stores through a cell address, which would write a host cell.
+    pub(crate) cell_writes: Vec<u32>,
+    /// Loads and stores through a module global as `(symbol, is_store)`.
+    pub(crate) memory_globals: Vec<(String, bool)>,
+    /// `@symbol` references in emitted instructions and terminators.
+    pub(crate) symbol_refs: BTreeSet<String>,
+}
+
 /// One function being built.
 #[derive(Clone, Debug)]
 pub struct Function {
     /// Symbol name without `@`.
     pub name: String,
-    /// Linkage prefix (`internal ` or empty).
-    pub linkage: String,
+    /// Linkage and visibility attributes.
+    pub attrs: SymbolAttrs,
     /// Return type.
     pub ret: IrType,
     /// Parameters as `(type, %name)`.
@@ -165,6 +358,7 @@ pub struct Function {
     current: usize,
     temp_counter: u32,
     block_counter: u32,
+    pub(crate) facts: FunctionFacts,
 }
 
 impl Function {
@@ -172,19 +366,20 @@ impl Function {
     #[must_use]
     pub fn new(
         name: impl Into<String>,
-        linkage: impl Into<String>,
+        attrs: SymbolAttrs,
         ret: IrType,
         params: Vec<(IrType, String)>,
     ) -> Self {
         Self {
             name: name.into(),
-            linkage: linkage.into(),
+            attrs,
             ret,
             params,
             blocks: Vec::new(),
             current: 0,
             temp_counter: 0,
             block_counter: 0,
+            facts: FunctionFacts::default(),
         }
     }
 
@@ -263,6 +458,7 @@ impl Function {
     /// Appends a terminator.
     pub fn terminate(&mut self, instruction: impl Into<String>) {
         let instruction = instruction.into();
+        collect_symbols(&instruction, &mut self.facts.symbol_refs);
         let block = &mut self.blocks[self.current];
         assert!(
             block.terminator.is_none(),
@@ -273,6 +469,7 @@ impl Function {
     }
 
     fn push(&mut self, instruction: String) {
+        collect_symbols(&instruction, &mut self.facts.symbol_refs);
         let block = &mut self.blocks[self.current];
         assert!(
             block.terminator.is_none(),
@@ -327,6 +524,7 @@ impl Function {
     /// Emits a typed load. `align` is emitted only when explicitly known.
     pub fn load(&mut self, ty: IrType, pointer: &Value, align: Option<u32>) -> Value {
         debug_assert_eq!(pointer.ty, IrType::Ptr);
+        self.note_memory_access(pointer, false);
         let value = self.temp(ty);
         let mut instruction = format!("load {}, ptr {}", ty.render(), pointer.repr);
         if let Some(align) = align {
@@ -339,11 +537,33 @@ impl Function {
     /// Emits a typed store.
     pub fn store(&mut self, value: &Value, pointer: &Value, align: Option<u32>) {
         debug_assert_eq!(pointer.ty, IrType::Ptr);
+        self.note_memory_access(pointer, true);
         let mut instruction = format!("store {}, ptr {}", value.render(), pointer.repr);
         if let Some(align) = align {
             let _ = write!(instruction, ", align {align}");
         }
         self.emit(instruction);
+    }
+
+    /// Records a load or store that goes through a slot-table cell value or a
+    /// module global.
+    fn note_memory_access(&mut self, pointer: &Value, store: bool) {
+        if let Some(symbol) = pointer.repr.strip_prefix('@') {
+            self.facts.memory_globals.push((symbol.to_owned(), store));
+            return;
+        }
+        match self.facts.origins.get(&pointer.repr) {
+            Some(PointerOrigin::Cell(access)) if access.stage == CellStage::Value => {
+                self.facts.memory_accesses.push((access.slot, store));
+            }
+            Some(PointerOrigin::Cell(access)) if store => {
+                self.facts.cell_writes.push(access.slot);
+            }
+            Some(PointerOrigin::Global(symbol)) => {
+                self.facts.memory_globals.push((symbol.clone(), store));
+            }
+            _ => {}
+        }
     }
 
     /// Emits an integer or floating-point binary operation.
@@ -439,6 +659,13 @@ impl Function {
                 indices.join(", ")
             ),
         );
+        if let Some(symbol) = base.repr.strip_prefix('@') {
+            self.facts
+                .origins
+                .insert(value.repr.clone(), PointerOrigin::Global(symbol.to_owned()));
+        } else if let Some(origin) = self.facts.origins.get(&base.repr).cloned() {
+            self.facts.origins.insert(value.repr.clone(), origin);
+        }
         value
     }
 
@@ -447,8 +674,9 @@ impl Function {
         self.gep("i8", base, &[format!("i64 {offset}")], false)
     }
 
-    /// Emits a call. Returns `None` for `void` calls.
+    /// Emits a direct call. Returns `None` for `void` calls.
     pub fn call(&mut self, ret: IrType, callee: &str, args: &[Value]) -> Option<Value> {
+        self.facts.direct_calls.push(callee.to_owned());
         let arguments = args
             .iter()
             .map(Value::render)
@@ -463,6 +691,86 @@ impl Function {
             self.emit_value(&value, instruction);
             Some(value)
         }
+    }
+
+    /// Emits an indirect call through a function or import cell value.
+    ///
+    /// The LLVM function type is inferred from the result and argument types,
+    /// which is sufficient for the M4.5 scalar surface. Returns `None` for
+    /// `void` calls.
+    pub fn call_ptr(&mut self, ret: IrType, callee: &Value, args: &[Value]) -> Option<Value> {
+        debug_assert_eq!(callee.ty, IrType::Ptr);
+        self.facts.indirect_calls.push(callee.repr.clone());
+        let arguments = args
+            .iter()
+            .map(Value::render)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let instruction = format!("call {} {}({arguments})", ret.render(), callee.repr);
+        if ret == IrType::Void {
+            self.emit(instruction);
+            None
+        } else {
+            let value = self.temp(ret);
+            self.emit_value(&value, instruction);
+            Some(value)
+        }
+    }
+
+    /// Emits a slot-table entry address: `getelementptr ptr, ptr %slots, i64 slot`.
+    ///
+    /// `slots` is the host-provided array of cell pointers (`void* const*`).
+    /// The result is the address of the host cell, not the cell value.
+    pub fn slot_cell(&mut self, slots: &Value, slot: u32) -> Value {
+        debug_assert_eq!(slots.ty, IrType::Ptr);
+        let cell = self.gep("ptr", slots, &[format!("i64 {slot}")], false);
+        self.facts.origins.insert(
+            cell.repr.clone(),
+            PointerOrigin::Cell(CellAccess {
+                slot,
+                stage: CellStage::Address,
+            }),
+        );
+        cell
+    }
+
+    /// Loads the pointer-sized value of a cell produced by [`Self::slot_cell`].
+    ///
+    /// A cell value is a storage pointer for data/direct/descriptor cells, a
+    /// code address for function cells, and a host service address for import
+    /// cells.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds when `cell` is not a [`Self::slot_cell`] result.
+    #[must_use]
+    pub fn cell_value(&mut self, cell: &Value) -> Value {
+        debug_assert_eq!(cell.ty, IrType::Ptr);
+        let access = match self.facts.origins.get(&cell.repr) {
+            Some(PointerOrigin::Cell(access)) => Some(*access),
+            _ => None,
+        };
+        debug_assert!(
+            access.is_some_and(|access| access.stage == CellStage::Address),
+            "cell_value requires a slot_cell result"
+        );
+        let value = self.load(IrType::Ptr, cell, Some(8));
+        if let Some(access) = access {
+            self.facts.origins.insert(
+                value.repr.clone(),
+                PointerOrigin::Cell(CellAccess {
+                    slot: access.slot,
+                    stage: CellStage::Value,
+                }),
+            );
+        }
+        value
+    }
+
+    /// Emits both loads for one slot and returns the cell value.
+    pub fn slot_value(&mut self, slots: &Value, slot: u32) -> Value {
+        let cell = self.slot_cell(slots, slot);
+        self.cell_value(&cell)
     }
 
     /// Emits `extractvalue`.
@@ -500,7 +808,7 @@ impl Function {
         let _ = writeln!(
             out,
             "define {}{} @{}({params}) {{",
-            self.linkage,
+            self.attrs.render(),
             self.ret.render(),
             self.name
         );
@@ -550,8 +858,8 @@ impl Function {
 pub struct GlobalDef {
     /// Global name without `@`.
     pub name: String,
-    /// Linkage prefix (`internal `, `private `, or empty).
-    pub linkage: String,
+    /// Linkage and visibility attributes.
+    pub attrs: SymbolAttrs,
     /// Rendered pointee/global type, for example `i32` or `[4 x i8]`.
     pub ty: String,
     /// Initializer text.
@@ -607,6 +915,49 @@ impl Module {
         self.globals.insert(global.name.clone(), global);
     }
 
+    /// Adds an exact byte-array constant global (module read-only data).
+    pub fn add_constant_bytes(
+        &mut self,
+        name: &str,
+        attrs: SymbolAttrs,
+        bytes: &[u8],
+        align: Option<u32>,
+    ) {
+        self.add_global(GlobalDef {
+            name: name.into(),
+            attrs,
+            ty: format!("[{} x i8]", bytes.len()),
+            init: byte_string(bytes),
+            constant: true,
+            align,
+        });
+    }
+
+    /// Adds a private, eight-byte-aligned module descriptor blob.
+    pub fn add_descriptor(&mut self, name: &str, bytes: &[u8]) {
+        self.add_constant_bytes(name, SymbolAttrs::private(), bytes, Some(8));
+    }
+
+    /// Adds a module-local constant table of function code addresses.
+    ///
+    /// This is the array returned by `stc_module_functions`; entries are
+    /// module code addresses, never GOT cells.
+    pub fn add_function_table(&mut self, name: &str, functions: &[&str]) {
+        let entries = functions
+            .iter()
+            .map(|function| format!("ptr @{function}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.add_global(GlobalDef {
+            name: name.into(),
+            attrs: SymbolAttrs::internal(),
+            ty: format!("[{} x ptr]", functions.len()),
+            init: format!("[{entries}]"),
+            constant: true,
+            align: Some(8),
+        });
+    }
+
     /// Adds a declaration when it is not already present.
     pub fn declare(&mut self, name: &str, signature: &str) {
         self.declarations
@@ -646,7 +997,10 @@ impl Module {
                 let _ = write!(
                     out,
                     "@{} = {}{keyword} {} {}",
-                    global.name, global.linkage, global.ty, global.init
+                    global.name,
+                    global.attrs.render(),
+                    global.ty,
+                    global.init
                 );
                 if let Some(align) = global.align {
                     let _ = write!(out, ", align {align}");
@@ -696,9 +1050,12 @@ pub fn quote(text: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-/// Renders an LLVM `c"..."` string constant with a terminating NUL.
+/// Renders an exact LLVM `c"..."` byte-string constant.
+///
+/// No terminator is appended, so the rendered element count equals
+/// `bytes.len()`; use [`c_string`] for NUL-terminated strings.
 #[must_use]
-pub fn c_string(bytes: &[u8]) -> String {
+pub fn byte_string(bytes: &[u8]) -> String {
     let mut out = String::from("c\"");
     for byte in bytes {
         match byte {
@@ -710,6 +1067,63 @@ pub fn c_string(bytes: &[u8]) -> String {
             }
         }
     }
-    out.push_str("\\00\"");
+    out.push('"');
     out
+}
+
+/// Renders an LLVM `c"..."` string constant with a terminating NUL.
+#[must_use]
+pub fn c_string(bytes: &[u8]) -> String {
+    let mut terminated = Vec::with_capacity(bytes.len() + 1);
+    terminated.extend_from_slice(bytes);
+    terminated.push(0);
+    byte_string(&terminated)
+}
+
+/// Collects `@symbol` references from one instruction, terminator, or
+/// initializer.
+///
+/// Quoted string bodies are skipped so descriptor, metadata, and export-name
+/// constants never look like symbols. LLVM accepts quoted symbol names, but
+/// the builder only emits unquoted C-identifier-style names.
+pub(crate) fn collect_symbols(text: &str, out: &mut BTreeSet<String>) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let mut in_string = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            match byte {
+                b'\\' => index += 2,
+                b'"' => {
+                    in_string = false;
+                    index += 1;
+                }
+                _ => index += 1,
+            }
+            continue;
+        }
+        match byte {
+            b'"' => {
+                in_string = true;
+                index += 1;
+            }
+            b'@' => {
+                let start = index + 1;
+                let mut end = start;
+                while end < bytes.len() && symbol_char(bytes[end]) {
+                    end += 1;
+                }
+                if end > start {
+                    out.insert(text[start..end].to_owned());
+                }
+                index = end.max(start);
+            }
+            _ => index += 1,
+        }
+    }
+}
+
+fn symbol_char(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$' | b'-')
 }

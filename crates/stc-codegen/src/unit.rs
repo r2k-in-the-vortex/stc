@@ -11,13 +11,13 @@ use crate::config::{
     self, ImageLayout, Plan, PlanInstance, ProgramLayout, RetainLayout, RetainPlace,
 };
 use crate::expr::BodyInfo;
+use crate::ir::{Function, GlobalDef, IrType, Module, SymbolAttrs, Value, c_string};
 use crate::layout::{self, ScalarKind};
 use crate::mangle;
 use crate::metadata::{
     ExportMetadata, HintMetadata, IoBindingMetadata, Metadata as MetadataModel, ProgramMetadata,
     RetainLeafMetadata as MetaRetainLeaf, SpanMetadata, SpanMetadataEntry, TaskMetadata,
 };
-use crate::module::{Function, GlobalDef, IrType, Module, Value, c_string};
 use crate::stmt::LoopTarget;
 use crate::{CodegenError, Metadata, Mode, Options, Output, SpanEntry};
 
@@ -307,7 +307,7 @@ impl Lowerer<'_> {
             };
             self.module.add_global(GlobalDef {
                 name: symbol,
-                linkage: "internal ".into(),
+                attrs: SymbolAttrs::internal(),
                 ty: kind.storage().render(),
                 init: "zeroinitializer".into(),
                 constant: false,
@@ -320,7 +320,7 @@ impl Lowerer<'_> {
             };
             self.module.add_global(GlobalDef {
                 name: instance.global.clone(),
-                linkage: "internal ".into(),
+                attrs: SymbolAttrs::internal(),
                 ty: format!("%{}", layout.name),
                 init: "zeroinitializer".into(),
                 constant: false,
@@ -329,7 +329,7 @@ impl Lowerer<'_> {
         }
         self.module.add_global(GlobalDef {
             name: symbols::IO_BASE.into(),
-            linkage: "internal ".into(),
+            attrs: SymbolAttrs::internal(),
             ty: "ptr".into(),
             init: "null".into(),
             constant: false,
@@ -337,7 +337,7 @@ impl Lowerer<'_> {
         });
         self.module.add_global(GlobalDef {
             name: symbols::IO_LEN.into(),
-            linkage: "internal ".into(),
+            attrs: SymbolAttrs::internal(),
             ty: "i64".into(),
             init: "0".into(),
             constant: false,
@@ -346,7 +346,7 @@ impl Lowerer<'_> {
         let buffer_len = self.retain.size.max(1);
         self.module.add_global(GlobalDef {
             name: symbols::RETAIN_BUFFER.into(),
-            linkage: "internal ".into(),
+            attrs: SymbolAttrs::internal(),
             ty: format!("[{buffer_len} x i8]"),
             init: "zeroinitializer".into(),
             constant: false,
@@ -359,7 +359,7 @@ impl Lowerer<'_> {
             let guard = mangle::task_guard_symbol(&task.resource, task.name, self.hir);
             self.module.add_global(GlobalDef {
                 name: guard,
-                linkage: "internal ".into(),
+                attrs: SymbolAttrs::internal(),
                 ty: "i1".into(),
                 init: "true".into(),
                 constant: false,
@@ -446,7 +446,7 @@ impl Lowerer<'_> {
             .enumerate()
             .map(|(index, (_, kind))| (kind.storage(), format!("%a{index}")))
             .collect();
-        let mut f = Function::new(symbol, "internal ", ret_ty, fn_params);
+        let mut f = Function::new(symbol, SymbolAttrs::internal(), ret_ty, fn_params);
         f.start_fresh_block();
         let mut info = BodyInfo {
             params: BTreeMap::new(),
@@ -526,7 +526,7 @@ impl Lowerer<'_> {
         let symbol = mangle::program_body_symbol(self.hir, program);
         let mut f = Function::new(
             symbol,
-            "internal ",
+            SymbolAttrs::internal(),
             IrType::Void,
             vec![(IrType::Ptr, "%this".into())],
         );
@@ -566,15 +566,15 @@ impl Lowerer<'_> {
         }
     }
 
-    fn linkage(&self) -> &'static str {
+    fn linkage(&self) -> SymbolAttrs {
         match self.options.mode {
-            Mode::Executable => "internal ",
-            Mode::Library => "",
+            Mode::Executable => SymbolAttrs::internal(),
+            Mode::Library => SymbolAttrs::external(),
         }
     }
 
     fn emit_init(&mut self) {
-        let linkage = self.linkage().to_string();
+        let linkage = self.linkage();
         let mut f = Function::new(symbols::INIT, linkage, IrType::Void, Vec::new());
         f.start_fresh_block();
         let info = Self::unit_info(&mut f);
@@ -884,13 +884,23 @@ impl Lowerer<'_> {
     }
 
     fn emit_retain_functions_inner(&mut self) -> Result<(), CodegenError> {
-        let mut size_fn = Function::new(symbols::RETAIN_SIZE, "", IrType::Int(64), Vec::new());
+        let mut size_fn = Function::new(
+            symbols::RETAIN_SIZE,
+            SymbolAttrs::external(),
+            IrType::Int(64),
+            Vec::new(),
+        );
         size_fn.start_fresh_block();
         size_fn.ret(Some(&Value::int(64, i128::from(self.retain.size))));
         size_fn.check().map_err(CodegenError::internal)?;
         self.module.add_function(size_fn);
 
-        let mut hash_fn = Function::new(symbols::RETAIN_HASH, "", IrType::Int(64), Vec::new());
+        let mut hash_fn = Function::new(
+            symbols::RETAIN_HASH,
+            SymbolAttrs::external(),
+            IrType::Int(64),
+            Vec::new(),
+        );
         hash_fn.start_fresh_block();
         hash_fn.ret(Some(&Value::int(64, i128::from(self.retain.hash as i64))));
         hash_fn.check().map_err(CodegenError::internal)?;
@@ -905,7 +915,12 @@ impl Lowerer<'_> {
             } else {
                 symbols::RETAIN_LOAD
             };
-            let mut f = Function::new(name, "", IrType::Int(32), vec![(IrType::Ptr, "%a0".into())]);
+            let mut f = Function::new(
+                name,
+                SymbolAttrs::external(),
+                IrType::Int(32),
+                vec![(IrType::Ptr, "%a0".into())],
+            );
             f.start_fresh_block();
             let buffer = f.param_value(0);
             for leaf in &leaves {
@@ -1006,7 +1021,7 @@ impl Lowerer<'_> {
             .enumerate()
             .map(|(index, kind)| (kind.storage(), format!("%a{index}")))
             .collect();
-        let mut f = Function::new(symbol, "", ret_ty, fn_params);
+        let mut f = Function::new(symbol, SymbolAttrs::external(), ret_ty, fn_params);
         f.start_fresh_block();
         let args = (0..param_data.len())
             .map(|index| f.param_value(index))
@@ -1029,7 +1044,7 @@ impl Lowerer<'_> {
     fn emit_main(&mut self) {
         let mut f = Function::new(
             "main",
-            "",
+            SymbolAttrs::external(),
             IrType::Int(32),
             vec![
                 (IrType::Int(32), "%argc".into()),
@@ -1067,13 +1082,18 @@ impl Lowerer<'_> {
         let length = bytes.len() + 1;
         self.module.add_global(GlobalDef {
             name: symbols::METADATA_DATA.into(),
-            linkage: "private ".into(),
+            attrs: SymbolAttrs::private(),
             ty: format!("[{length} x i8]"),
             init: c_string(bytes),
             constant: true,
             align: Some(1),
         });
-        let mut f = Function::new(symbols::METADATA_JSON, "", IrType::Ptr, Vec::new());
+        let mut f = Function::new(
+            symbols::METADATA_JSON,
+            SymbolAttrs::external(),
+            IrType::Ptr,
+            Vec::new(),
+        );
         f.start_fresh_block();
         f.ret(Some(&Value::symbol(symbols::METADATA_DATA)));
         if let Err(error) = f.check() {

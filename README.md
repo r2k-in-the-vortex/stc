@@ -24,14 +24,16 @@ retained-state stubs). The driver provides `stc parse`, `stc check`, and the M4
 The online-change architecture is **resolved** (2026-10-24): the v1 runtime is a persistent host
 plus loadable whole-program modules, persistent memory is host-owned and accessed through a
 project-defined GOT, every module is paired with a persistent GOT manifest, and activation is a
-cycle-boundary module swap. M4.5 phases 0–2 are complete: the versioned `GotId`, catalog,
-descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
-[GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md), and `stc-got`
-implements stable keys, catalog records, binary/canonical-JSON manifests, baseline matching,
-tracked renames, preserve/allocate/drop/reject classification, slot assignment, and deterministic
-snapshots. The foundation milestone is M4.5 before M5; full debug/monitoring is M6.5. Codegen,
-descriptor, and runtime integration has not started, and the M4 artifact model remains the current
-implemented execution path.
+cycle-boundary module swap. M4.5 phases 0–3 are complete for review: the versioned `GotId`,
+catalog, descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
+[GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md); `stc-got` implements
+stable keys, catalog records, binary/canonical-JSON manifests, baseline matching, tracked
+renames, preserve/allocate/drop/reject classification, slot assignment, and deterministic
+snapshots; and `stc-codegen` has the module IR builder (GOT slot-table access, indirect cell
+calls, exported entry points, descriptor/function-table globals) plus a structural verifier
+checked by clang-acceptance tests. The foundation milestone is M4.5 before M5; full
+debug/monitoring is M6.5. Manifest projection, descriptor emission, and runtime integration have
+not started, and the M4 artifact model remains the current implemented execution path.
 
 M4 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
 functions, the standard FB library, the manifest, `stc run`, or `stc test`; those constructs are

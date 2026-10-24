@@ -1262,8 +1262,18 @@ and approved before phase 2. Phase 2 is implemented in the `stc-got` crate (stab
 catalog, binary/JSON manifest codecs, baseline matching, rename/move maps,
 preserve/allocate/drop classification, slot assignment, and deterministic snapshots); the
 implementation clarifications for elementary encoding tags, export wrappers, retired-identity
-reintroduction, and direct-variable address metadata are recorded under D-118. Implementation of
-the descriptor, host API, and codegen projection in later phases must follow these formats
+reintroduction, and direct-variable address metadata are recorded under D-118. Phase 2 and D-118
+were reviewed and approved on 2026-10-24.
+
+Phase 3 is implemented in `stc-codegen`: the `ir` builder emits GOT slot-table access (a
+`getelementptr` of `ptr` by slot number followed by a pointer-sized cell load), indirect calls
+through function/import cell values, exported `dso_local dllexport` entry points with the ABI 2.0
+signatures, private descriptor blobs, and function-address tables. The `verify` module checks the
+structural contract of §7 and §12.2 item 6: bodies reference no persistent root or user callable
+directly, cell uses match their kinds, generated code never writes a cell, pre-attach entry
+points do not touch the slot table, direct global access is limited to an allowlisted module-local
+set, and the function-address table is the only initializer that names a user function. D-119 records the IR-level choices. Implementation of descriptor bytes, manifest
+projection, host API bindings, and runtime loading in later phases must follow these formats
 exactly, and any further change discovered during implementation returns to this document and the
 decision log before code lands.
 

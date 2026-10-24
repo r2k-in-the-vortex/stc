@@ -27,6 +27,24 @@ pub mod trap {
     pub const UNIMPLEMENTED: i32 = 10;
 }
 
+/// Module container entry points (GOT Artifacts §7.3).
+pub mod module {
+    /// Descriptor accessor.
+    pub const DESCRIPTOR: &str = "stc_module_descriptor";
+    /// Function-address accessor.
+    pub const FUNCTIONS: &str = "stc_module_functions";
+    /// Host attach entry point.
+    pub const ATTACH: &str = "stc_module_attach";
+    /// Root preparation entry point.
+    pub const PREPARE: &str = "stc_module_prepare";
+    /// Cycle entry point.
+    pub const CYCLE: &str = "stc_module_cycle";
+    /// Shutdown entry point.
+    pub const SHUTDOWN: &str = "stc_module_shutdown";
+    /// Detach entry point.
+    pub const DETACH: &str = "stc_module_detach";
+}
+
 /// Built-in unit symbols.
 pub mod symbols {
     /// Trap entry point.

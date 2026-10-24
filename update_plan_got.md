@@ -2907,5 +2907,15 @@ rules, and artifact pairing.
 manifest codecs, digest and structural validation, baseline matching, tracked rename/move maps,
 preserve/allocate/drop/reject classification, canonical slot assignment, source fingerprint and
 build-ID derivation, and first/second-build determinism, rename, removal, rejection, and
-tamper-test coverage. Decisions D-118 records the phase-2 format clarifications. No codegen,
-descriptor, or runtime work has started; phase 3 begins after review.
+tamper-test coverage. Decisions D-118 records the phase-2 format clarifications. Phase 2 and
+D-118 were reviewed and approved on 2026-10-24.
+
+**Update 2026-10-24 (M4.5 phase 3):** the module IR builder is implemented in `stc-codegen`:
+GOT slot-table access (cell address and cell-value loads), indirect calls through function/import
+cells, exported `dso_local dllexport` `stc_module_*` entry points, private descriptor blobs,
+function-address tables, and linkage/visibility attributes. A structural verifier checks the
+build contract (no direct persistent-root/callable references, cell-kind-correct loads/stores and
+calls, allowlisted module-local globals, ABI 2.0 entry-point signatures, descriptor/table shapes).
+Builder, determinism, rejection, and clang-acceptance tests run on the host and both x64 targets;
+D-119 records the IR-level choices. Phase 4 (slot assignment, root catalog, manifest projection)
+is next; descriptor bytes and runtime work have not started.

@@ -40,8 +40,8 @@ pub enum ScalarKind {
 impl ScalarKind {
     /// Returns the in-memory LLVM type.
     #[must_use]
-    pub fn storage(self) -> crate::module::IrType {
-        use crate::module::IrType;
+    pub fn storage(self) -> crate::ir::IrType {
+        use crate::ir::IrType;
         match self {
             Self::Bool => IrType::Int(8),
             Self::Int { width, .. } | Self::Char { width } => IrType::Int(width),

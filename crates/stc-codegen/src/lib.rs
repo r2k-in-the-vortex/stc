@@ -3,7 +3,9 @@
 //! The crate consumes only [`stc_hir::HirCrate`] and emits deterministic
 //! textual LLVM IR plus build metadata (D-076, D-091). Constructs deferred to
 //! M5 return structured [`CodegenError::Unsupported`] values; the driver maps
-//! them to source diagnostics.
+//! them to source diagnostics. The textual builder ([`ir`]) and the module
+//! structural verifier ([`verify`]) are exposed for module-mode code
+//! generation and for tests that assemble known-good IR shapes.
 
 #![forbid(unsafe_code)]
 
@@ -11,12 +13,13 @@ pub mod abi;
 pub mod codes;
 mod config;
 mod expr;
+pub mod ir;
 mod layout;
 mod mangle;
 mod metadata;
-mod module;
 mod stmt;
 mod unit;
+pub mod verify;
 
 use std::fmt;
 

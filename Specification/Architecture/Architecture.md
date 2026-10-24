@@ -162,6 +162,18 @@ Design:
 - A verifier step runs `clang -x ir -c -o NUL` (or `opt -verify`) in tests and CI; in production a
   failure is reported as an internal compiler error with the IR attached.
 
+Module-shaped IR (`stc_codegen::ir`) adds the GOT primitives from
+[Online Change and GOT](Online-Change-and-GOT.md) §3. The per-generation slot table is the
+module's only view of persistent state: generated code loads a cell with
+`getelementptr ptr, ptr %slots, i64 N` followed by a pointer-sized load, and treats every cell
+value as an opaque `ptr`. User and host-service calls are indirect through `Function`/`Import`
+cell values. Entry points are defined `dso_local dllexport` with the ABI 2.0 signatures; the
+descriptor blob and function-address table are private/internal constants. `stc_codegen::verify`
+checks the build contract before rendering: no body names a persistent root or user callable
+directly, every cell use matches its kind, direct global access is limited to an allowlisted
+module-local set, and the function-address table is the only initializer that names a user
+function. Tests compile the module IR with clang for the host and both x64 targets.
+
 ### 4.2 Target model
 
 - By default, the emitted module omits `target triple` and `target datalayout`; `clang` selects

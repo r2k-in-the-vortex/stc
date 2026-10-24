@@ -6,8 +6,8 @@ use stc_span::Span;
 use crate::CodegenError;
 use crate::codes;
 use crate::expr::{BodyInfo, Res};
+use crate::ir::{Function, IrType, Value};
 use crate::layout::ScalarKind;
-use crate::module::{Function, IrType, Value};
 use crate::unit::Lowerer;
 
 #[derive(Clone, Debug)]
