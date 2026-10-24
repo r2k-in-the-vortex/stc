@@ -243,6 +243,188 @@ errors.
   be added in v2/v3 for IDE tools.
 - `stc-syntax` follows semver for the published `SyntaxKind` surface.
 
+### A-022 — Online change is a v1 requirement
+
+**Answer:** Yes. The v1 execution model is a persistent host runtime plus loadable whole-program
+modules, not per-function hot patching. `module` becomes a first-class artifact paired with a GOT
+manifest; `exe` is a thin host launcher that loads an adjacent module; `lib` remains the
+embedding artifact. Online change is delivered through the host API and local CLI, is a runtime/
+platform capability rather than an IEC language feature, and is supported on Windows MSVC x64
+and Linux GNU x64 (AArch64 with M8). The foundation is M4.5, inserted before M5; the user-facing
+workflow is M6.
+
+**Consequences:** The direct-reference, code-linked M4 artifact model is superseded. The host
+owns the cycle, persistent memory, modules, the process image, retained state, and debug
+services. No code-linked executable deployment path is maintained for online-change deployments.
+M4 artifacts are explicitly non-loadable under host ABI 2. The project is **not a safety PLC**
+and is not responsible for safety in any way; this must be stated wherever online change or debug
+behavior is described.
+
+**Questions:** Q-018–Q-025, Q-089–Q-095.
+
+### A-023 — GOT, memory ownership, and root granularity
+
+**Answer:** Every access that can outlive or cross a module version is indirected through a
+project-defined GOT: persistent roots, user/standard function calls, stored function pointers, and
+vtable/type descriptors. Stack, locals, parameters, compiler helpers, intrinsics, and module-owned
+read-only data stay direct. The host owns a shared cell table; each module has a local slot table
+mapping to host cells. Generated code never writes a cell; only the host does. The host allocates
+stable, zeroed storage for persistent roots, and storage never moves.
+
+Persistent aggregates use **recursive per-field roots**: every persistent field has its own
+`GotId`, cell, storage, type identity, and manifest record. Objects use stable opaque handles plus
+runtime object records and descriptors. Arrays of scalars/strings are one root with GEP indexing;
+arrays of aggregates use per-element handles whose fields are rooted recursively. Strings are one
+root per value; `OVERLAP` is one atomic root with aliasing typed views. Removed roots are
+quarantined until restart or explicit reset. Direct `AT` variables use one host cell per variable
+or field per generation (Q-033, non-default).
+
+**Consequences:** Field add/remove/reorder becomes preserve/drop rather than a whole-object layout
+change. Internal dynamic allocation is transient and module-version-owned; it cannot be stored in
+persistent roots or carried across swaps. User-visible `__NEW`/`__DELETE` is a v2 extension.
+Quarantine is a deliberate memory-growth tradeoff.
+
+**Questions:** Q-026–Q-044, Q-120–Q-130, Q-212.
+
+### A-024 — Persistent references and `POINTER TO`
+
+**Answer:** There are no persisted raw references or pointers. `REF_TO` values are validated
+**place descriptors**: `Null`, `Root {got_id, offset, type_key}`, `Direct {direct_id | area,
+offset, type_key}`, `Stack {frame_id, offset, type_key}`, or `Object {handle, descriptor}`.
+`REF(place)` produces the same descriptor directly. Pointer→`REF_TO` conversion is validated by
+the host resolver against active roots/process-image ranges and the manifest layout; an invalid
+cast yields `NULL`, and dereferencing `NULL` traps. `REF_TO`→interface is allowed only for
+class/FB object references with a descriptor check; interfaces are nullable and null/incompatible
+conversions yield null. Pointer→object/interface is disallowed.
+
+`POINTER TO` is a distinct transient-only v1 extension (`STC-POINTER`), not IEC `REF_TO`. It
+supports full typed arithmetic, indexing, and `SIZEOF` for contiguous values, pointer parameters
+and results, null-dereference traps, and documented dangling-pointer behavior. Persistent pointer
+fields are rejected. References and pointers are not persisted in the v1 state file; a later
+state-format revision may persist `Root`/`Direct` descriptors.
+
+**Consequences:** Reference values are host-resolvable descriptors, not raw addresses. Dereference
+costs a descriptor resolution (optionally cached with a generation check). `POINTER TO` is an
+explicit vendor profile feature; no IEC conformance claim is made for it.
+
+**Questions:** Q-131–Q-173.
+
+### A-025 — Module lifecycle and the real-time swap boundary
+
+**Answer:** A module is a whole shared library with a descriptor and attach/prepare/cycle/
+shutdown/detach entry points. The host loads the new module and prepares it on a background
+loader/prepare thread while the old generation continues to run. Activation uses double-buffered
+normal/temp GOTs: the host builds a temp GOT, switches to it at a cycle boundary, retains the
+previous generation for one successful cycle, then commits and unloads off-thread after a grace
+period. The switch is O(1); heavy validation, copying, and migration happen off-thread. The old
+version completes its outputs and publishes state before the switch; fresh inputs are latched at
+the next cycle start. Task/resource topology changes require a cold download. The clock remains
+continuous and the watchdog is paused or extended with a bound.
+
+**Consequences:** The cycle thread only checks and switches. Loader and service threads never
+execute ST and never block the cycle. A failed prepare or a trap in the rollback window restores
+the previous generation. Rollback is recoverable only within the one-successful-cycle window;
+after commit, reverting is another online change or a cold download.
+
+**Questions:** Q-054–Q-076, Q-174–Q-182.
+
+### A-026 — Persistent GOT manifest, identity, and baseline policy
+
+**Answer:** Every module is paired with a persistent GOT manifest in canonical JSON (tooling,
+download) and a compact binary projection (runtime), generated from one model. The manifest
+carries header/lineage, identity records, layout/field records, function/type/instance/task/
+export records, the online-change plan, current slot mappings/cell kinds, and integrity digests.
+`GotId`s are content-derived 128-bit identities from scope/name/kind (type/layout excluded for
+data so layout changes stay trackable; signature included for functions); collisions are checked.
+Tracked renames/moves keep the old `GotId`; new declarations get new IDs; removed entries retire;
+a reintroduced retired key gets a new ID unless explicitly reused. Per-module slot numbers stay
+local and map to `GotId`s.
+
+A minimal module descriptor remains the source of code addresses, sizes, entry points, and the
+paired digest; descriptor and manifest are two projections of one model. A valid baseline is
+required for online change. Exact currentness means the manifest parent build ID equals the
+active build ID, digests pair, and profile/target/ABI/layout identity match. Missing, invalid,
+unpaired, or non-current baselines require a **cold download**; no ancestor matching, merge, or
+rebase is attempted. V1 has no field-layout migration: field type changes, resizing, and
+array/string/`OVERLAP` layout changes reset the affected root or require cold. The compiler emits
+a pre-deployment compatibility report; the runtime stores the active manifest and can export it.
+Retained-state migration across restarts is not in v1; a later state format may key leaves by
+`GotId` plus path. Manifest size/cost is measured, the active record is cached, and an optional
+later scaffold may emit declarations (never bodies) from a downloaded manifest.
+
+**Consequences:** Losing or corrupting the active manifest costs a cold restart. The manifest is
+untrusted parsed data: validate every field/digest, access-control download, never execute its
+content. A second build from an older baseline also requires a cold download.
+
+**Questions:** Q-096–Q-119.
+
+### A-027 — Compatibility, preservation, and state
+
+**Answer:** The host owns the process image, retain buffer, task guards, clock, counters, export
+registry, and diagnostics. Online attach preserves every matching root whose `GotId`, type key,
+layout hash, and size match; new roots are initialized once; removed roots are quarantined and
+recorded as retired. Initializers apply only to new roots; changed initializers on preserved roots
+are ignored. Online attach skips the retained-state file load because in-memory state wins; the
+state file keeps its existing layout-hash policy for restarts. A cold download initializes
+non-retained state, restores only compatible `RETAIN` values, and does not preserve transient
+allocations. Per-field roots already make field add/remove/reorder preserve/drop; no field-layout
+migration is in v1. Incompatible changes reject the module by default; an explicit per-field reset
+is allowed, and baseline problems force cold.
+
+**Consequences:** Compatibility is conservative and explicit. The compatibility report lists
+preserved/allocated/dropped/renamed/migrated/rejected instances before deployment.
+
+**Questions:** Q-045–Q-055, Q-073–Q-077, Q-118–Q-119.
+
+### A-028 — OOP descriptors, host API, and standard library across swaps
+
+**Answer:** Type descriptors are runtime-owned; vtable cells contain cell pointers, not raw code.
+Object and interface values store `{handle, descriptor}`. Preserved interfaces survive compatible
+swaps because the descriptor is stable; a vtable shape change is rejected while any live instance
+or interface depends on it. The host API is a versioned struct (`abi_version` + `struct_size`,
+additive within a major). The export registry is host-owned by C name/signature cell. Standard
+library code is compiled per module under `STC_STD` with stable keys. User functions, methods, FB
+bodies, exports, and standard FBs are registered; compiler helpers are not.
+
+**Consequences:** Module-owned vtables and descriptors are forbidden. Host ABI 2 replaces M4's
+ABI 1; no M4 artifact is loadable.
+
+**Questions:** Q-056–Q-068, Q-092.
+
+### A-029 — Tooling, diagnostics, determinism, and loader security
+
+**Answer:** The CLI adds module emission, GOT manifest/cold/rename options, run/watch, online
+download/diff, and debug options. The project manifest gains `[runtime]`, `[online]`, and
+`[debug]` tables. Diagnostics get stable `MODULE`/`MANIFEST`/`ABI`/`ONLINE`/`W` families. The host
+retains per-module span/source metadata for diagnostics. Determinism requires sorted keys/slots,
+content-derived build IDs, byte-identical double builds, and no paths/timestamps. Loading trusts
+local modules but validates descriptors strictly; an optional build-ID/hash pin is available.
+Fuzzing covers `fuzz_codegen` plus descriptor/manifest parsers without executing arbitrary native
+modules. Download is local in v1 (no network deployment protocol).
+
+**Consequences:** Manifest download reveals program structure and is access-controlled. The cold
+path is a first-class, tested feature.
+
+**Questions:** Q-067–Q-069, Q-078–Q-088, Q-100–Q-116.
+
+### A-030 — Non-real-time services, full debug, and the non-safety stance
+
+**Answer:** The runtime has three thread classes: the cycle thread, the loader/prepare thread, and
+lower-priority service/monitor threads. Service readers use generation pinning/epoch refcounts;
+status uses lock-free counters, double-buffered snapshots, and bounded rings; writes and forcing
+are queued for cycle-boundary application. V1 includes full typed variable read/write/force/watch,
+codegen breakpoint checkpoints, stop-the-world stepping, call-stack unwinding, DWARF/CodeView,
+and a manifest-assisted split-object view. Every online swap ends the debug session and clears
+breakpoints/forces. Debug information is the default build output; `--release` is the optional
+stripped/optimised mode with distinct build IDs/manifests. Debug may pause the watchdog and hold
+outputs indefinitely. The project is not a safety PLC and assumes no safety responsibility.
+
+**Consequences:** Debug/release artifacts are distinct. Debug hooks are absent in release.
+Starting/stopping a session has documented effects on outputs and timing. Non-RT threads must not
+cause unbounded locks, allocator contention, or memory-bandwidth stalls in the cycle.
+
+**Questions:** Q-183–Q-211.
+
 ## 2. Confirmed decisions
 
 | ID | Decision | Rationale |
@@ -274,7 +456,7 @@ errors.
 | D-039 | Lint levels live in `[lints]` with per-code entries; CLI flags override them; errors cannot be downgraded. | Shared project policy with CI control. |
 | D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use of either is an error. | Keeps test code and assertions out of shipped artifacts. |
 | D-041 | `SyntaxKind` is a stable, append-only, `#[non_exhaustive]` API; full CST/IDE API is planned for v2/v3. | Enables future tooling without freezing CST internals now. |
-| D-013 | Runtime ABI: `stc_init`, `stc_cycle`, `stc_shutdown`, plus `stc_rt_*` helpers; ABI version 1. | Stable C boundary for exe and host embedding. |
+| D-013 | Runtime ABI: `stc_init`, `stc_cycle`, `stc_shutdown`, plus `stc_rt_*` helpers; ABI version 1. Superseded by D-094 (host ABI 2). | Stable C boundary for exe and host embedding; retained as historical rationale. |
 | D-014 | Strings are length-prefixed fixed-capacity values. `USTRING[n]` stores `n` characters as 32-bit scalars (4 bytes each, static); default 255 characters. | Bounded storage, O(1) character indexing, room for every Unicode scalar. |
 | D-015 | Signed overflow, division by zero, bounds, and invalid conversions trap. | "Strict correctness" policy; no silent wraparound. |
 | D-016 | Boolean `AND`/`&`/`OR` short-circuit left-to-right. | Deterministic and standard-permitted. |
@@ -341,6 +523,38 @@ errors.
 | D-092 | The M4 diagnostic table is `STC-E-CODEGEN-001/002`, `STC-E-BUILD-001`–`004`, `STC-E-EXPORT-001`, and the reused `STC-E-RUN-001/002`. Toolchain diagnostics carry no fake source span; codegen diagnostics carry HIR spans. | Stable error contract for build automation and tests. |
 | D-093 | Codegen runs a definition-level preflight over all non-synthetic definitions and rejects unsupported M5 constructs even when unused; synthetic prelude FBs (empty span, no body) are skipped. One definition-level feature produces one error, not a per-expression cascade. | Prevents emitting an artifact that silently omits part of the program while keeping diagnostics actionable. |
 
+### Online-change, manifest, and debug decisions
+
+| ID | Decision | Rationale |
+| --- | --- | --- |
+| D-094 | The v1 execution model is a persistent host plus loadable whole-program modules; `module` is a first-class artifact paired with a GOT manifest, `exe` is a host launcher, and `lib` embeds the host. Host ABI 2 replaces ABI 1; M4 artifacts are not loadable. | Whole-module replacement is the only tractable safe hot-swap model; no per-function patching. |
+| D-095 | All persistent roots, user/standard calls, stored function pointers, and vtable/type descriptors go through a host-owned GOT; generated code never writes cells. Stack, locals, helpers, intrinsics, and read-only module data stay direct. | A stable indirection boundary is required for unload safety; host-only writes keep cell state authoritative. |
+| D-096 | Persistent aggregates use recursive per-field roots with opaque handles and runtime object records; scalar/string arrays are one root, aggregate arrays use per-element handles, strings are one root, and `OVERLAP` is one atomic root. | Field add/remove/reorder becomes preserve/drop; handles keep object identity stable without contiguous-object assumptions. |
+| D-097 | No persisted raw references or pointers. `REF_TO` uses place descriptors (`Root`/`Direct`/`Stack`/`Object`); pointer→`REF_TO` is validated by the host resolver and yields `NULL` on failure; `REF_TO`→interface uses a descriptor check; interfaces are nullable. `POINTER TO` is a distinct transient-only `STC-POINTER` extension with full arithmetic/indexing/`SIZEOF` and no persistent fields. | Makes references remappable and type-safe across swaps while keeping a useful transient pointer surface. |
+| D-098 | A module exports attach/prepare/cycle/shutdown/detach plus a descriptor; the host owns descriptors, vtables, exports, and the export registry. Vtable shape changes are rejected while live instances/interfaces depend on them. | Module-owned descriptors would dangle after unload; host ownership makes preserved OOP values safe. |
+| D-099 | Activation uses double-buffered normal/temp GOTs, a background loader/prepare thread, an O(1) cycle-boundary switch, a one-successful-cycle rollback window, and off-thread unload. Heavy work never runs on the cycle thread. | Preserves real-time behavior and gives a bounded, recoverable rollback window. |
+| D-100 | Every module is paired with a persistent GOT manifest in canonical JSON and compact binary form; identities are content-derived 128-bit `GotId`s with tracked rename/move history and per-module slot mappings. A minimal module descriptor remains the code-address source; descriptor and manifest are two projections. | Identity must survive edits, reordering, renames, and cross-developer builds without making the runtime parse one giant format. |
+| D-101 | Online change requires an exact current baseline (parent build ID equals active build ID, digests pair, profile/target/ABI/layout match). Missing, invalid, unpaired, or stale baselines force a cold download; no merge/rebase/ancestor matching. | Turns a large class of recovery problems into one predictable, testable operation. |
+| D-102 | Preservation is per matching `GotId`/type/layout/size; new roots initialize once; removed roots quarantine and retire; no field-layout migration in v1; incompatible changes reject the module or require an explicit reset, and baseline problems force cold. Retained-state migration is not in v1. | Conservative by default; per-field roots already cover add/remove/reorder without allocating migration risk. |
+| D-103 | The runtime adds loader/prepare and lower-priority service/monitor threads; readers use generation pinning/epoch refcounts, status uses lock-free/double-buffered/bounded structures, and writes/forcing are queued for cycle boundaries. | Keeps non-RT work off the cycle while keeping preserved data alive and diagnostics lock-free. |
+| D-104 | V1 includes full typed debug/monitoring: read/write/force/watch, breakpoint checkpoints, stop-the-world stepping, call stacks, DWARF/CodeView, and a manifest-assisted split-object view. Every online swap ends the debug session and clears forces/breakpoints. | Full debug is a v1 requirement; session teardown prevents stale code/descriptor references. |
+| D-105 | Debug information is the default build output; `--release` is the optional stripped/optimised mode with distinct build IDs/manifests and sidecar symbols. Debug hooks are absent from release artifacts. | Debuggability by default without conflating debug and release artifact identities. |
+| D-106 | `stc` is not a safety PLC and is not responsible for safety in any way. Debug may pause the watchdog and hold outputs indefinitely; no automatic fail-safe is provided. | Explicit scope boundary; safety requires an independent qualified design and certification. |
+| D-107 | Online-change foundation is M4.5 before M5; full debug is M6.5 between M6 and M7; M8 covers Linux host parity including module loading, threads, and debug info. | Front-loads the architecture before M5 features depend on it, and keeps debug and portability independently testable. |
+| D-108 | The CLI and project manifest gain module emission, GOT manifest/cold/rename options, `stc online download/diff`, run/watch, `[runtime]`/`[online]`/`[debug]` tables, and stable `MODULE`/`MANIFEST`/`ABI`/`ONLINE`/debug diagnostics. Manifest data is untrusted, validated, and access-controlled. | A usable, auditable workflow and a stable automation surface without a network protocol in v1. |
+
+D-094 through D-108 affect
+[Online Change and GOT](Architecture/Online-Change-and-GOT.md),
+[Debug and Monitoring](Architecture/Debug-and-Monitoring.md),
+[Architecture](Architecture/Architecture.md),
+[Runtime and Execution](Architecture/Runtime-and-Execution.md),
+[State and RETAIN](Architecture/State-and-Retain.md),
+[I/O and Devices](Architecture/IO-and-Devices.md),
+[CLI and Manifest](Architecture/CLI-and-Manifest.md),
+[Testing and Verification](Architecture/Testing-and-Verification.md), the
+[Conformance Profile](01-Conformance-Profile.md), `README.md`, `M4.5-Plan.md`, and
+`handover_to_M5.md`.
+
 D-042 is a host-portability requirement, not a language/profile change. It does not alter the IR,
 runtime ABI, or conformance profile. It requires host-specific operations (clang/linker
 discovery, artifact naming, path semantics, monotonic clock, atomic file replace) to be confined
@@ -370,9 +584,11 @@ hints, export names, folded task values, LDATE units), and the driver's manifest
 
 ## 3. Open questions
 
-**None as of 2026-10-23.** All v1 planning questions Q-001 through Q-017 are resolved
-(A-005 through A-021). New questions will be appended here and in `README.md` one at a time, with
-a proposed default so implementation can continue without blocking.
+**None as of 2026-10-24.** All v1 planning questions Q-001 through Q-017 are resolved
+(A-005 through A-021). The online-change/GOT review Q-018 through Q-212 is resolved
+(A-022 through A-030); the full question/answer disposition is in `update_plan_got.md` §13.0.
+New questions will be appended here and in `README.md` one at a time, with a proposed default so
+implementation can continue without blocking.
 
 ## 4. Decision process
 

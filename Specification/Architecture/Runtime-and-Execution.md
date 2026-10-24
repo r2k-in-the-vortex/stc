@@ -1,11 +1,11 @@
 # Runtime and Execution Model
 
-Status: Draft  
+Status: M4 runtime implemented; online-change architecture resolved (2026-10-24)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Architecture](Architecture.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
+Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 
-This document defines how generated code executes, what the runtime library provides, and how
-executable and library artifacts differ.
+This document defines how generated code executes, what the host runtime provides, and how
+module, executable, and embedding-library artifacts differ.
 
 > **M4 status:** `crates/stc-runtime` implements the C ABI, the `--cycles N` executable loop,
 > the latched cycle clock, the process image (`stc_rt_io_configure`/`stc_rt_io_image`), trap
@@ -14,51 +14,74 @@ executable and library artifacts differ.
 > vtable/type descriptors, and file-backed state are later milestones. `stc_abi_version` is
 > runtime-owned; generated library modules export `stc_init`, `stc_cycle`, `stc_shutdown`,
 > `stc_metadata_json`, export wrappers, and the retain functions, but not `stc_abi_version`.
+>
+> **Post-M4 architecture (resolved):** the runtime becomes a persistent host that owns the GOT,
+> root allocator, module loader, manifest store, swap controller, and service threads. Host ABI 2
+> adds attach/prepare/detach, GOT/cell access, the reference resolver, and versioned host services.
+> The M4 `staticlib` remains as the embedding/host library; the direct-reference executable model
+> is superseded by a thin launcher plus loadable module.
 
 ## 1. Execution model
 
-IEC 61131-3 programs execute cyclically. The generated code has three entry points:
+IEC 61131-3 programs execute cyclically in the **persistent host**. The host owns the cycle loop,
+GOT, persistent roots, process image, retained state, module lifetime, and services. A loadable
+module exports the versioned entry points:
 
 ```text
-stc_init()      initialize runtime, globals, FB/class instances, process image
-stc_cycle()     execute one scan of the configured tasks/programs
-stc_shutdown()  flush state and release resources
+stc_attach(host_api, got_context, descriptor)   receive host services and the GOT context
+stc_prepare(mode, old_manifest, new_manifest)   validate/build candidate roots and temp GOT
+stc_cycle()                                     execute one scan of the configured tasks/programs
+stc_shutdown()                                  flush state and release module-local resources
+stc_detach()                                    release module-local resources before unload
 ```
 
-### 1.1 Executable mode
+Exact signatures and the host API table are fixed by ABI 2 in §2.3. `stc_init` remains the
+generated initialization entry used during prepare.
 
-`stc build --emit=exe` emits an executable whose generated `main` calls
-`stc_rt_execute(argc, argv, init, cycle, shutdown)`. The runtime owns the loop:
+### 1.1 Module and executable mode
 
-1. Parse runtime arguments (`--cycles`, `--cycle-time`, `--io`, `--trace`).
-2. Initialize the process image and clock.
-3. Call `stc_init`.
-4. Repeat until the cycle limit is reached or a stop signal is received:
+`stc build --emit=module` emits `<name>-<build-id>.dll`/`.so` plus its GOT manifest. The module
+has no `main` and no persistent storage of its own.
+
+`stc build --emit=exe` emits a thin host launcher whose `main` calls
+`stc_rt_execute(argc, argv, descriptor_path)`. The host:
+
+1. Parses runtime arguments (`--cycles`, `--cycle-time`, `--io`, `--trace`, `--module`).
+2. Loads and validates the active module and manifest pair.
+3. Initializes the process image, clock, GOT cells, and root allocator.
+4. Attaches the module and runs its preparation (cold start or online attach).
+5. Repeats until the cycle limit is reached or a stop signal is received:
    - latch inputs into the input image,
+   - apply queued debug writes/forces at the boundary,
+   - check for a prepared candidate and switch generations if ready,
    - call `stc_cycle`,
    - write outputs from the output image,
    - sleep until the next cycle deadline if a cycle time is configured,
-   - check the watchdog.
-5. Call `stc_shutdown`.
-6. Return exit code 0 on normal completion, non-zero on a trap or configuration error.
+   - check the watchdog and service queues.
+6. Runs shutdown, saves retained state, and unloads generations.
+7. Returns exit code 0 on normal completion, non-zero on a trap or configuration error.
 
 Default behavior without `--cycles`: run until interrupted. Tests always pass a finite cycle
 count or use library mode.
 
-### 1.2 Library mode
+### 1.2 Embedding library mode
 
-`stc build --emit=lib` emits a static or shared library with no `main`. It exports:
+`stc build --emit=lib` emits an embedding host library with no `main`. It exports the host API
+plus any `{stc:export}` wrappers:
 
 ```c
-void stc_init(void);
-void stc_cycle(void);
-void stc_shutdown(void);
 uint32_t stc_abi_version(void);
 const char* stc_metadata_json(void);
+int32_t stc_host_run(stc_host_options* options);
+int32_t stc_host_load_module(const char* path, stc_load_mode mode);
+int32_t stc_host_export_manifest(char* buffer, int64_t* len);
 ```
 
-plus any `{stc:export}` wrappers. The host owns the loop, I/O, and clock. `stc_cycle` may be
-called from a host thread; v1 is not thread-safe and requires external serialization.
+The embedding host owns the loop, I/O, clock, GOT, root allocator, manifest store, loader/
+prepare thread, and service/monitor threads. `stc_cycle` is called only by the host's cycle
+thread; external callers must serialize all host API calls. The runtime is not a general-purpose
+thread-safe library: service access goes through the typed generation-pinned API, and the cycle
+thread is the only ST executor.
 
 ### 1.3 Task model
 
@@ -70,37 +93,50 @@ called from a host thread; v1 is not thread-safe and requires external serializa
   testing only).
 - The HIR keeps the full task/program mapping, so a real scheduler can be added without changing
   the language front end.
-- `SINGLE` tasks (run once) execute on the first cycle and are marked complete.
-- `INTERVAL` tasks execute when their deadline is reached; v1 checks deadlines once per scan.
+- Task execution state (`SINGLE` completion, deadlines, per-task flags) is **host-owned and keyed
+  by task identity**. It is preserved across an online change when the task/resource topology is
+  unchanged and reset on a cold download.
+- `SINGLE` tasks (run once) execute on the first cycle and are marked complete. The completion
+  flag survives a compatible swap.
+- `INTERVAL` tasks execute when their deadline is reached; v1 checks deadlines once per scan. A
+  task/resource topology change requires a cold download; it is never introduced mid-schedule.
 
 ## 2. Runtime library
 
 ### 2.1 Implementation
 
-- `crates/stc-runtime` is a Rust crate built as `staticlib` and optionally `cdylib`.
-- It exposes a C ABI (`extern "C"`, `#[no_mangle]`, `#[repr(C)]`).
-- No Rust types cross the ABI except `u8`/`i32`/`i64`/`f32`/`f64`/pointers.
+- `crates/stc-runtime` is a Rust crate built as `staticlib` and optionally `cdylib`. It is the
+  persistent host as well as the embedding library.
+- It exposes a C ABI (`extern "C"`, `#[no_mangle]`, `#[repr(C)]`) through a versioned host API
+  table, not a flat set of mandatory exported symbols.
+- No Rust types cross the ABI except `u8`/`i32`/`i64`/`f32`/`f64`/pointers/opaque handles.
 - The runtime is built with the toolchain that matches the target C ABI: MSVC for
   `*-pc-windows-msvc`, GNU for `*-unknown-linux-gnu`. Windows x86-64 is the primary development
   host; Linux x86-64 and AArch64 follow basic development (D-042).
 - Panics are caught at the ABI boundary and converted to `stc_rt_trap` where possible; the
   compiler-generated code does not rely on unwinding.
+- The host owns the GOT cell table, root allocator, module loader, manifest store, swap
+  controller, process image, retained state, and service/monitor threads. Module code owns only
+  code and version-local read-only data.
+- Host state is protected by a control lock used only by host control paths, never held across
+  ST execution. Service readers use generation pinning/epoch refcounts.
 
 ### 2.2 ABI versioning
 
-- `STC_RUNTIME_ABI = 1` for v1.
-- The runtime exposes `stc_abi_version()`.
-- Generated modules embed the expected ABI version in metadata; the driver refuses to link
-  mismatched runtime versions.
-- Additive changes bump the minor version; breaking signature changes bump the major version.
+- `STC_HOST_ABI_MAJOR = 2`, `STC_HOST_ABI_MINOR = 0` for v1's online-change host.
+- The runtime exposes `stc_abi_version()` and a host API struct with `abi_version` and
+  `struct_size`. A module rejects a host whose struct is shorter than required.
+- Generated modules embed the expected ABI version in metadata and their descriptor; the loader
+  rejects mismatched modules before attach.
+- Additive changes bump the minor version; breaking signature/struct changes bump the major
+  version. M4 ABI 1 artifacts are not loadable.
 
 ### 2.3 Core ABI
 
 ```c
 typedef void (*stc_fn)(void);
 
-int32_t stc_rt_execute(int32_t argc, char** argv,
-                       stc_fn init, stc_fn cycle, stc_fn shutdown);
+int32_t stc_rt_execute(int32_t argc, char** argv, const char* module_descriptor_path);
 
 typedef enum {
     STC_TRAP_OVERFLOW = 1,
@@ -131,7 +167,62 @@ void stc_rt_io_image(uint8_t** base, uint64_t* len);
 void stc_rt_set_io_backend(const stc_io_backend* backend);
 ```
 
-Traps are fatal for the current run. In executable mode the runtime prints
+#### 2.3.1 Host API table
+
+The exact ABI is a versioned `stc_host_api` struct. Its entries include trap/assert, clocks,
+state, I/O, transient alloc/free, string/math helpers, GOT cell access, reference resolution,
+object handle/descriptor access, typed variable access, and generation pin/unpin. Modules receive
+the table in `stc_attach`; they do not import platform symbols from the host executable.
+
+```c
+typedef struct stc_host_api {
+    uint32_t abi_version;   /* major/minor packed */
+    uint32_t struct_size;   /* bytes; modules reject a too-small table */
+    void (*trap)(int32_t code, uint32_t span_id);
+    int64_t (*cycle_now_ns)(void);
+    uint64_t (*monotonic_now_ns)(void);
+    void (*set_cycle_time_ns)(int64_t ns);
+    void* (*alloc)(uint64_t size, uint64_t align);
+    void (*free)(void* ptr);
+    void* (*got_cell)(uint32_t slot);          /* active generation's cell */
+    int32_t (*resolve_ref)(const void* ptr, uint32_t type_key,
+                           stc_place_descriptor* out);
+    int32_t (*attempt_cast)(const stc_object_ref* src,
+                            const stc_type_descriptor* dst,
+                            stc_object_ref* out);
+    /* state/IO/string/math/typed-access entries follow */
+} stc_host_api;
+```
+
+#### 2.3.2 Module descriptor and GOT context
+
+The module descriptor records the module format version, host ABI, profile, target, build ID,
+paired manifest digest, entry-point addresses, sizes, and the slot-table count. `stc_attach`
+receives the host API and a GOT context that maps local slots to host cells. Generated code
+resolves a slot through the context or a cached storage pointer; it never writes a cell.
+
+```c
+typedef struct stc_module_descriptor {
+    uint32_t module_format;
+    uint32_t host_abi;
+    uint32_t profile_hash;
+    uint32_t target_hash;
+    uint64_t build_id[2];
+    uint64_t manifest_digest[2];
+    uint32_t slot_count;
+    stc_fn attach, prepare, cycle, shutdown, detach;
+} stc_module_descriptor;
+```
+
+#### 2.3.3 Generation pinning and services
+
+Service/monitor threads read typed variables through generation-pinned descriptors. A pin is an
+epoch/refcount that delays unload until the reader releases it. Service threads never call
+`stc_cycle`, never write GOT cells, and never take a lock held by the cycle thread. Debug writes
+and forcing are queued for cycle-boundary application.
+
+Traps are fatal for the current run or, during an online-change rollback window, cause the host
+to restore the previous generation. In executable mode the runtime prints
 `<file>:<line>:<column>: error[STC-RUN-xxx]: message` using the source map; in library mode it
 returns a non-zero status to the host and records the last trap.
 
@@ -141,7 +232,13 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
 
 - `%I` input bytes at the start, then `%Q` output bytes, then `%M` marker bytes.
 - The compiler computes offsets and sizes from the declarations; the layout is recorded in
-  `<name>.stc-meta.json`.
+  `<name>.stc-meta.json` and the manifest.
+- Each direct `AT` variable/field has a per-generation GOT cell pointing into the process image.
+  Generated code accesses the variable through the cell, not a cached raw image pointer, so an
+  online change can remap the location.
+- On an online change the host reconfigures the image, re-evaluates bindings, preserves `%M` and
+  same-address variables, and warns about remapped variables. A binding/topology change that
+  cannot be preserved requires a cold download.
 - The runtime provides default input/output image buffers and a `stc_io_backend` vtable:
 
   ```c
@@ -174,6 +271,10 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
   Generated ST code does not call it. The runtime reads it through a host abstraction
   (`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux) and converts
   to nanoseconds; the ST-visible semantics are identical on every host (D-042).
+- The clock remains continuous across an online change. The host latches the next cycle's time
+  normally; the swap does not reset or re-latch it, so timers observe elapsed wall/monotonic time.
+- The watchdog is paused or extended with a documented bound during prepare/activation and while
+  a debugger has the cycle stopped. If the bound is exceeded, the normal watchdog policy resumes.
 - In executable mode, the runtime latches the host monotonic clock at the start of each cycle.
   `--cycle-time` controls the loop deadline but does not change the value latched for the scan.
 - In library mode, the host owns the loop. By default `stc_cycle` latches the live monotonic
@@ -197,7 +298,9 @@ imported. They are resolved by the analyzer and emitted as:
 
 - inline IR for trivial exact operations (`ABS`, `MIN`, `MAX`, `SEL`, bit operations),
 - runtime calls for string operations, conversions with checks, date/time, and math,
-- `llvm.*` intrinsics where semantics match (`llvm.sqrt`, `llvm.fabs`, `llvm.fshl`).
+- `llvm.*` intrinsics where semantics match (`llvm.sqrt`, `llvm.fabs`, `llvm.fshl`),
+- calls to user/standard functions through host-owned function cells under `STC_STD` with stable
+  keys, so an online change can rebind them without rewriting code.
 
 Categories and ownership:
 
@@ -218,7 +321,9 @@ These are implemented in ST under `stdlib/` and compiled with the user project:
 
 `SR`, `RS`, `R_TRIG`, `F_TRIG`, `CTU`, `CTD`, `CTUD`, `TP`, `TON`, `TOF`.
 
-- The stdlib is injected as a prelude; its POUs live in a reserved namespace (`STC_STD`).
+- The stdlib is injected as a prelude; its POUs live in a reserved namespace (`STC_STD`) and are
+  compiled into each module with stable GOT keys. The host does not require a separately loaded
+  stdlib module in v1.
 - User code can use the standard names directly; the analyzer resolves them after local/global
   scopes, so a user-defined `TON` shadows the stdlib (with a warning).
 - The stdlib depends only on `stc_rt_cycle_now_ns()` and exact arithmetic. It must not read the
@@ -238,7 +343,9 @@ These are implemented in ST under `stdlib/` and compiled with the user project:
 
 ### 4.1 Layout
 
-See [Architecture](Architecture.md) §4.3. Strings are fixed-capacity, length-prefixed structs.
+See [Architecture](Architecture.md) §4.3. Strings are fixed-capacity, length-prefixed **host
+roots**: one root per string value, owned by the host, accessed through the GOT. String
+assignment copies the root's value; the destination root identity is preserved.
 
 ### 4.2 Operations
 
@@ -277,11 +384,17 @@ See [Architecture](Architecture.md) §4.3. Strings are fixed-capacity, length-pr
 - `RETAIN`/`NON_RETAIN` are parsed and analysed; the compiler computes an effective policy per
   storage leaf (explicit qualifier, section qualifier, instance inheritance, struct/array
   inheritance).
-- **v1 executable mode**: retained values are persisted to a versioned state file. A valid file
-  is a warm restart; a missing file or `--reset-retain` is a cold restart. Layout/profile/version
+- **Cold start**: retained values are persisted to a versioned state file. A valid file is a warm
+  restart; a missing file or `--reset-retain` is a cold restart. Layout/profile/version
   mismatches and CRC failures follow `on-mismatch = error|reset` (default `error`). Saves are
   atomic and happen at normal shutdown.
-- **v1 library mode**: the same behavior is available through `stc_retain_size/save/load` and
+- **Online attach**: the state file is not loaded; in-memory values win. Matching per-field roots
+  are preserved, new roots are initialized, and removed roots are quarantined. V1 does not migrate
+  retained leaves by `GotId` across restarts; the state file keeps its layout-hash policy. A
+  later state-format revision may key leaves by `GotId` plus path.
+- **Cold download**: non-retained state is initialized, `RETAIN` values are restored only under
+  the existing compatibility policy, and transient allocations are not preserved.
+- **Embedding host**: the same behavior is available through `stc_retain_size/save/load` and
   `stc_rt_state_*`; the host may use the file helpers or its own storage and policy.
 - The state file contains only persistable leaves; references/interfaces/pointers and vtable
   pointers are excluded (vtable/type pointers are reinitialized before load). Direct `AT`
@@ -293,7 +406,9 @@ See [Architecture](Architecture.md) §4.3. Strings are fixed-capacity, length-pr
 
 ### 6.1 Trap behavior
 
-- Traps are deterministic and fatal for the current cycle/run.
+- Traps are deterministic and fatal for the current cycle/run. If the trap occurs in a new
+  generation during the one-successful-cycle rollback window, the host restores the previous
+  generation and records the failure; after commit, a trap follows the normal fatal policy.
 - The runtime prints a diagnostic with the source span (from the embedded span table), the trap
   code, and a short message.
 - In library mode, `stc_rt_last_trap()` returns a struct with code, span, and message; the host
@@ -337,7 +452,16 @@ Detailed test discovery and pragma syntax are in [Testing](Testing-and-Verificat
 | Null dereference | Trap `STC_TRAP_NULL_REF` |
 | Watchdog timeout | Trap `STC_TRAP_WATCHDOG` |
 | Missing runtime symbol at link | Build error with the missing symbol and the IR path |
+| Module descriptor/ABI/target mismatch | Reject the candidate before attach; keep the active generation; non-fatal |
+| Missing/invalid/stale manifest baseline | Cold download; no merge or partial recovery |
+| Candidate prepare failure | Discard temp GOT/module; active generation continues |
+| Trap in the rollback window | Restore the previous generation; record the failure |
+| Debug session / forced value | Documented hold/force behavior; not a safety function |
+| Service request for a removed field/generation | Reject or retry against the active generation; never target removed storage |
 
 ## 9. Open runtime questions
 
-None currently. New runtime questions are appended here or in [Decisions](../Decisions.md).
+None as of 2026-10-24. The online-change host/GOT/manifest/debug architecture is resolved in
+[Online Change and GOT](Online-Change-and-GOT.md),
+[Debug and Monitoring](Debug-and-Monitoring.md), and `update_plan_got.md` §13.0. New runtime
+questions are appended here or in [Decisions](../Decisions.md).

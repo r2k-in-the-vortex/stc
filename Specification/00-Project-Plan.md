@@ -1,7 +1,7 @@
 # stc Project Plan
 
-Status: Draft for review  
-Date: 2026-10-23  
+Status: Online-change architecture resolved (2026-10-24)  
+Date: 2026-10-24  
 Profile: `stc-2013-oop-utf8-v1`  
 Standard reference: IEC 61131-3:2013 (Ed. 3.0), local copy under `Specification/Reference/`
 
@@ -14,12 +14,17 @@ Standard reference: IEC 61131-3:2013 (Ed. 3.0), local copy under `Specification/
   namespaces, references, and configuration/task declarations,
 - add a project-defined UTF-8 string extension (the 4th edition is not available and will not
   be purchased),
-- emit textual LLVM IR, and
-- invoke `clang` to produce objects, executables, or libraries.
+- emit textual LLVM IR,
+- invoke `clang` to produce objects, loadable modules, executables, or libraries, and
+- support PLC **online change**: replacing the executing module between scan cycles while the
+  host and persistent memory survive.
 
 The compiler is written in Rust. Specifications are written before compiler code, as required by
 the project README. Mathematical functions with exact discrete semantics are specified and
-proved in Lean before implementation.
+proved in Lean before implementation. Online-change, GOT, module, manifest, and debug behaviour
+is specified in
+[Online Change and GOT](Architecture/Online-Change-and-GOT.md) and
+[Debug and Monitoring](Architecture/Debug-and-Monitoring.md).
 
 ## 2. Goals
 
@@ -39,13 +44,32 @@ proved in Lean before implementation.
 8. A project/dependency model: packages, local path dependencies, a dependency graph, and
    package-aware namespace visibility, enough for separate test projects.
 9. A conformance corpus and traceability from specification rules to tests.
+10. PLC online change in v1: a persistent host runtime, loadable whole-program modules, a
+    project-defined global offset table (GOT), host-owned persistent memory, and an
+    O(1) cycle-boundary activation.
+11. A persistent GOT manifest emitted with every module, consumed by the next build as the
+    identity baseline, retained by the runtime, and downloadable as a build baseline for
+    another developer.
+12. Typed variable access, forcing, watch, breakpoints, stepping, and call-stack inspection in
+    v1, with debug information as the default build output and `--release` as the optional
+    stripped/optimised mode.
+13. Explicit non-safety positioning: `stc` and its runtime are not a safety PLC and are not
+    responsible for safety in any way.
 
 ## 3. Non-goals for v1
 
 - IEC 61131-3:2025 (Ed. 4.0) conformance. The project targets the 2013 language plus documented
   extensions and makes no Ed. 4 claim.
 - LD, FBD, SFC, and IL as input languages. Only ST is parsed.
-- The IEC communication model, HMI, online monitoring, and online debugging.
+- The IEC communication model and HMI. Online change, monitoring, and debugging are project
+  runtime capabilities in v1, not IEC conformance features.
+- A safety claim. `stc` is not a safety PLC and is not responsible for safety in any way; debug
+  sessions may hold outputs indefinitely.
+- Field-layout migration in v1. Per-field add/remove/rename is supported; type changes,
+  resizing, and array/string/`OVERLAP` layout changes reset the affected root or require a cold
+  download.
+- Remote/network deployment, multi-user scheduling, and a package registry. V1 online change is
+  a local host API/CLI capability.
 - Hardware I/O backends (EtherCAT, Modbus, MQTT) and their schedules in v1. They are planned for
   v2 and are noted in the I/O spec; v1 uses null/memory/file backends.
 - Vendor project import (TIA Portal, CODESYS, etc.).
@@ -54,7 +78,9 @@ proved in Lean before implementation.
 - A network package registry and version-solving resolver in v1. Local path dependencies are in
   v1; a registry/version solver is a later extension (A-009).
 - Formal verification of IEEE-754 transcendental functions. These remain test-based.
-- Multi-threaded PLC task execution in v1 (architecture must not preclude it).
+- Multi-threaded ST task execution in v1 (architecture must not preclude it). The host runtime
+  itself has a cycle thread, a loader/prepare thread, and lower-priority service/monitor
+  threads; only the cycle thread executes ST code.
 - `PERSISTENT` (not a 2013 keyword) and periodic/checkpointed state saves. v1 persists retained
   variables at normal shutdown; crash-time saves are a later extension.
 - Native Linux host support during initial development. Linux x86-64 and Linux AArch64 host
@@ -79,9 +105,17 @@ proved in Lean before implementation.
 | Standard text | Local IEC 61131-3:2013 PDF only; not committed or redistributed |
 | UTF-8 strings | Project-defined extension; `USTRING[n]` stores `n` characters as 32-bit scalars (4 bytes each), static storage, UTF-8 source/interchange |
 | Lean scope | Proofs for exact discrete functions cover the Lean model; Rust is tested against generated vectors (A-006); float/transcendental math is test-based |
+| Execution model | Persistent host runtime plus a loadable whole-program module (DLL/so); no per-function patching, no code-linked deployment path for online change |
+| Persistent memory | Host-owned GOT roots with stable storage; per-field roots and handle-based objects; generated code accesses cells through the GOT |
+| Online change | Whole-module load/prepare on a background thread; O(1) activation at a cycle boundary; one-successful-cycle rollback window; off-thread unload |
+| Identity baseline | Persistent GOT manifest (canonical JSON + compact binary) paired with every module; missing/stale/invalid baseline forces a cold download |
+| Runtime ABI | Host ABI 2; M4 code-linked artifacts are not loadable; module descriptor + manifest are versioned together |
+| Debug and monitoring | Full typed debug in v1; debug information is the default build output; `--release` is the optional stripped/optimised mode; swaps end debug sessions |
+| Safety | Not a safety PLC and not responsible for safety in any way; no automatic fail-safe; debug may hold outputs indefinitely |
 
-Assumption: the host is single-threaded for compiler execution in v1. The generated runtime is
-single-threaded; concurrency primitives added by Ed. 4 are out of scope.
+Assumption: the compiler host runs a single compilation job at a time. The generated runtime is
+single-threaded for ST execution; the host adds a loader/prepare thread and lower-priority
+service/monitor threads that never execute ST and never block the cycle.
 
 Host-specific code is confined to the driver and runtime. The front end, HIR, and IR builder are
 portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 port is additive
@@ -105,13 +139,24 @@ portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 por
 - `Specification/Architecture/CLI-and-Manifest.md` — CLI verbs, diagnostics, `stc.toml`.
 - `Specification/Architecture/Testing-and-Verification.md` — test framework, conformance,
   Lean vector bridge, fuzzing, CI.
+- `Specification/Architecture/Online-Change-and-GOT.md` — host/module model, GOT, root
+  allocation, module descriptor, manifest, identity/history, load/prepare/activate/rollback/
+  unload, compatibility, cold download.
+- `Specification/Architecture/Debug-and-Monitoring.md` — typed access, watch, forcing,
+  breakpoints, stepping, call stack, debug protocol/security, DWARF/CodeView, swap interaction.
 - `Specification/Decisions.md` — decision log and open questions.
+- `M4.5-Plan.md` — online-change foundation implementation plan.
+- `M6.5-Plan.md` — debug/monitoring implementation plan.
 - This plan.
 
 ### 5.2 Implementation
 
 - Rust workspace under `crates/`.
-- `crates/stc-runtime` — Rust `staticlib`/`cdylib` runtime with a C ABI.
+- `crates/stc-runtime` — persistent host runtime with a C ABI: cycle loop, GOT, root
+  allocator, module loader, manifest store, swap controller, state, I/O, and debug services;
+  also the `staticlib`/`cdylib` used by embedding hosts.
+- Loadable `module` artifacts (`.dll`/`.so`) generated from ST, each paired with a GOT
+  manifest; `exe` is a thin host launcher for an adjacent module.
 - `stdlib/` — standard function blocks written in ST (dogfooding the compiler).
 - `lean/` — Lake project for exact-function models, proofs, and vector generation.
 - `tests/` — compiler, conformance, codegen, execution, and end-to-end tests.
@@ -130,16 +175,25 @@ portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 por
 ST source (UTF-8)
    |
    v
-lexer  ->  lossless CST  ->  typed AST  ->  name resolution  ->  type checking / HIR
-   |                                                                        |
-   +-- diagnostics <--------------------------------------------------------+
-                                                                            |
-                                                                            v
-                                                             textual LLVM IR builder
-                                                                            |
-                                                          clang (assemble/link/optimize)
-                                                                            |
-                                              .ll / .o / executable / static or shared library
+lexer -> lossless CST -> typed AST -> name resolution -> type checking / HIR
+   |                                                              |
+   +-- diagnostics <----------------------------------------------+
+                                                                  |
+                                                                  v
+                                        textual LLVM IR builder + GOT/manifest model
+                                                                  |
+                                        clang (assemble/optimize/link module)
+                                                                  |
+                                 module (.dll/.so) + manifest (.json/.bin)
+                                                                  |
+                        +-----------------------------------------+
+                        |  persistent host runtime (stc-runtime)   |
+                        |  cycle loop | GOT cells | root allocator |
+                        |  loader/prepare | swap controller        |
+                        |  manifest store | state/IO | debug       |
+                        +-----------------------------------------+
+                                                                  |
+                                   outputs, retained state, debug/monitoring services
 ```
 
 Key choices:
@@ -150,14 +204,17 @@ Key choices:
 - A typed HIR after resolution; codegen never walks the raw AST.
 - Textual IR is emitted deterministically by a small typed IR builder; `clang` validates and
   lowers it. This avoids binding the project to a specific LLVM C++/C API version.
-- Runtime ABI is a narrow C ABI; generated modules call `stc_rt_*` functions.
-- Object-oriented lowering: class/FB instances are structs, methods are functions with an
-  explicit `this` pointer, interfaces are fat pointers `{data, vtable}`, and `OVERRIDE` calls
-  through base/interface references dispatch through vtables.
-- `VAR_IN_OUT` and `REF_TO` lower to pointers; value parameters are passed according to the C
-  ABI for the target.
-- Executable mode generates `main`; library mode exports `stc_init`, `stc_cycle`, and
-  `stc_shutdown`, with the same generated module.
+- Runtime ABI is a narrow, versioned C ABI; generated modules call host services through a
+  versioned function table and access persistent state through GOT cells.
+- Persistent roots are per-field recursively; objects use stable handles plus runtime-owned
+  descriptors; interfaces and object references are `{handle, descriptor}`. `REF_TO` values use
+  place descriptors, and `POINTER TO` is a distinct transient-only extension (`STC-POINTER`).
+- `VAR_IN_OUT` and `REF_TO` lower through host-resolvable descriptors; value parameters are
+  passed according to the C ABI for the target.
+- Executable mode generates a thin host launcher that loads an adjacent module; library mode
+  embeds the same host. The module exports attach/prepare/cycle/shutdown/detach and a descriptor.
+- Every module is paired with a persistent GOT manifest that carries identity, layout, and
+  lineage; the next build consumes the active manifest as its baseline.
 - `stc-manifest` resolves local path dependencies into an acyclic package graph, source files are
   compiled in topological order, and package boundaries participate in namespace/visibility
   checks. A separate test project is just another package that depends on the code under test.
@@ -247,12 +304,39 @@ Exit criteria:
 > `STC-E-CODEGEN-001` diagnostics. File-backed retained state, the manifest, `stc run`, and
 > `stc test` remain M6; scheduling beyond one task per resource is M5.
 
+### M4.5 — Online-change foundation
+
+Deliverables: host/module artifact model; module descriptor and host ABI 2; GOT with shared
+host-owned cells and per-module slot tables; host root allocator; per-field scalar roots;
+per-generation direct-variable cells; module attach/prepare/cycle/shutdown/detach; background
+loader/prepare thread; normal/temp GOT double buffering; O(1) cycle-boundary activation;
+one-successful-cycle rollback; off-thread unload; immutable module files, manifest sidecar, and
+current pointer; persistent GOT manifest in canonical JSON and compact binary; exact-parent
+baseline rules; tracked rename/move maps; preserve/allocate/drop; compatibility classification
+and diagnostics; the cold-download path; CLI `--emit=module`, `--got-manifest`, `--cold`,
+`--rename`, and `stc online download/diff`.
+
+Exit criteria:
+
+- Hot-swap suite passes: code-only swap, field add/remove/rename, tracked move, incompatible
+  change rejection, missing/stale manifest to cold download, load/prepare failure rollback, and
+  unload after grace.
+- Double builds produce byte-identical modules and manifests; the runtime exports the active
+  manifest and a second build consumes it as an exact baseline.
+- Generated code contains no persistent raw pointers; every persistent root/function call goes
+  through the GOT.
+- The cycle-boundary switch is O(1), heavy work is off-thread, and maintenance jitter is bounded
+  and measured.
+- M4 scalar semantics are unchanged; M4 code-linked artifacts are explicitly non-loadable.
+
 ### M5 — FBs, OOP, aggregates, and UTF-8 strings
 
 Deliverables: FB instances/state, methods, inheritance, interfaces/vtables, `THIS`/`SUPER`,
 references, `VAR_IN_OUT`; static arrays, conformant `ARRAY [*]` parameters, structs, enums,
 subranges; `STRING`/`WSTRING`/`USTRING`; standard functions; standard FB stdlib; cycle-latched
-clock; single-task cyclic runtime; test runner MVP.
+clock; single-task cyclic runtime; test runner MVP. All persistent aggregates follow the
+per-field/handle model: runtime-owned descriptors, vtable cells, place descriptors for `REF_TO`,
+nullable interfaces, and the transient-only `STC-POINTER` extension.
 
 Exit criteria:
 
@@ -263,44 +347,74 @@ Exit criteria:
   indexing, slicing, emoji/supplementary scalars) pass.
 - Standard timer/counter/edge/bistable FBs pass deterministic tests with a mock clock; all timers
   in one scan see the same latched cycle time.
+- Online-change tests cover FB/class state, aggregate roots, interfaces, and preserved
+  descriptors; `POINTER TO` tests cover arithmetic, indexing, `SIZEOF`, null traps, and the
+  rejection of persistent pointer fields.
 
 ### M6 — Project system, CLI, and verification hardening
 
 Deliverables: full `stc.toml`, local path dependency graph, `stc.lock`, package-aware namespace
 visibility, configurations/tasks, I/O device tree/bindings/defaults metadata, file-backed
 retained state, build artifacts, JSON diagnostics, verbose output, `stc test`, minimal `stc fmt`,
-Lean vector integration, conformance corpus, fuzzing, CI matrix, docs.
+Lean vector integration, conformance corpus, fuzzing, CI matrix, docs. Online-change workflow:
+`stc run --watch`, `stc online download/diff`, source-aware `stc rename`, compatibility reports,
+manifest/baseline CLI and host API, and the state-file policy for online attach/cold start.
 
 Exit criteria:
 
 - `stc new/build/check/run/test/clean` work end-to-end on Windows.
+- A user can build against the active manifest, deploy/reload online, review the compatibility
+  report, download the active manifest and build a compatible change from it, and recover from a
+  missing/stale baseline via a documented cold download.
 - CI runs unit, snapshot, conformance, execution, fuzz-smoke, and Lean proof jobs.
 - Traceability report shows every implemented rule has a test.
+
+### M6.5 — Full debug and monitoring
+
+Deliverables: typed read/write/watch of persistent and local variables, forcing applied at cycle
+boundaries, codegen breakpoint checkpoints, stop-the-world stepping, call-stack unwinding,
+DWARF/CodeView debug information with sidecar symbols for release builds, a local debug protocol
+with authentication/audit, the manifest-assisted split-object view, and debug/release build-ID
+and manifest separation.
+
+Exit criteria:
+
+- Read, write, force, watch, breakpoint, step, and call-stack tests pass on both hosts.
+- Debug information resolves variables and source locations in optimised and unoptimised builds.
+- Starting a debug session pauses the watchdog and holds outputs; stopping or disconnecting
+  clears forces/breakpoints and resumes normal execution.
+- Every online swap ends the debug session cleanly, then unloads the old generation.
+- Debug hooks are absent from `--release` artifacts; measured cycle overhead with debug disabled
+  is documented.
 
 ### M7 — Release candidate
 
 Deliverables: performance pass, cross-target smoke tests via `clang --target`, packaging,
-examples, release notes, known-limitations list.
+examples, release notes, known-limitations list, manifest/online-change hardening, debug and
+monitoring hardening, and the documented non-safety stance.
 
 Exit criteria:
 
 - No silent acceptance of unsupported features.
-- Documented artifacts and ABI; reproducible IR; clean build from a fresh checkout.
+- Documented artifacts and ABI; reproducible IR and manifests; clean build from a fresh checkout.
+- Hot-swap, cold-download, manifest-download, debug, and monitoring suites pass on both hosts.
 - Release checklist signed off.
 
 ### M8 — Linux host portability
 
 Deliverables: host abstraction audit; native builds of `stc` and the runtime for Linux x86-64
 and Linux AArch64; clang/linker discovery and artifact naming on Linux; state-file atomicity on
-Linux; CI jobs on both hosts; host-support documentation.
+Linux; module loading, thread priority/affinity, and debug-info generation on Linux; CI jobs on
+both hosts; host-support documentation.
 
 Exit criteria:
 
 - `cargo test --workspace` passes natively on Linux x86-64 and Linux AArch64.
 - `stc new/build/check/run/test/clean` work end-to-end on both hosts.
-- The execution suite and conformance corpus pass on both hosts; retained state round-trips.
-- No host-specific conditionals remain in `stc-lexer`, `stc-parser`, `stc-sema`, or
-  `stc-codegen`.
+- The execution suite, conformance corpus, hot-swap suite, manifest tests, and debug suite pass
+  on both hosts; retained state round-trips.
+- No host-specific conditionals remain in `stc-lexer`, `stc-parser`, `stc-sema`, `stc-codegen`,
+  or the module/manifest model.
 
 ## 9. Verification strategy
 
@@ -318,6 +432,10 @@ Exit criteria:
 | CLI/manifest | Integration tests for every verb, exit code, JSON shape, and error path |
 | Fuzzing | Lexer/parser/analyzer fuzz targets; no panics; bounded time/memory |
 | Cross-target | `clang --target` smoke tests on IR/object emission (execution where available) |
+| Online change | Hot-swap suite across attach/prepare/activate/commit/rollback/unload; incompatible-change rejection; cold-download recovery; double-build determinism |
+| GOT/manifest | Identity/rename/move, exact-parent, download/consume, byte-identical manifests, corrupt/malformed parser fuzzing, quarantine/reset policy |
+| Real-time boundary | O(1) switch measurement, bounded maintenance jitter, loader/prepare off-thread, service-thread contention and generation pinning |
+| Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap/session teardown, debug/release separation |
 | Host portability | Full workspace tests and end-to-end CLI on Linux x86-64 and Linux AArch64 |
 
 ## 10. Risks and mitigations
@@ -337,7 +455,14 @@ Exit criteria:
 | UTF-8 representation/indexing | Silent data corruption | Fixed 4-byte scalar storage; character/UTF-8-byte APIs kept distinct; exhaustive invalid-sequence tests |
 | Runtime ABI churn | Breaks host integration | Version the ABI; keep runtime calls narrow and documented |
 | Test runner hangs | CI instability | Per-test process isolation, timeouts, deterministic clocks |
-| Windows-only assumptions in compiler/runtime | Linux port requires rework | Confine host calls (paths, clock, linker, atomic replace) to a platform layer; run Linux CI from M1; no shell or drive-letter assumptions |
+| Windows-only assumptions in compiler/runtime | Linux port requires rework | Confine host calls (paths, clock, linker, module loading, atomic replace) to a platform layer; run Linux CI from M1; no shell or drive-letter assumptions |
+| Online-change state corruption | Lost or inconsistent production state | Host-owned stable cells; per-field preserve/drop; exact-parent baseline; one-successful-cycle rollback; atomic snapshots; reject/reset incompatible roots |
+| Manifest loss/corruption | Forced cold download or wrong baseline | Immutable versioned files plus active copy; digests and pairing checks; runtime export/download; tests treat the cold path as first-class |
+| GOT/descriptor ABI churn | Preserved values become unsafe across versions | Versioned host ABI and descriptor; M4 artifacts non-loadable; structural validation; no module-owned descriptors/vtables |
+| Loader/service thread interference | Cycle jitter or missed deadlines | Lower priority/affinity policy; bounded queues; lock-free status; O(1) switch; measure contention and maintenance jitter |
+| Debug affects real-time behavior | Unexpectedly held outputs or timing changes | Explicit non-safety stance; watchdog pause documented; outputs held indefinitely; debug hooks absent in release artifacts; session teardown on swap |
+| Migration/layout misclassification | Silent data reinterpretation | No field-layout migration in v1; exact type/layout matching; reset/reject/cold policy; compatibility report before deploy |
+| Malicious/corrupt downloaded manifest | Code or data compromise | Treat as untrusted data; validate every field/digest; access-controlled download; never execute manifest content |
 
 ## 11. Definition of done for v1
 
@@ -358,6 +483,18 @@ Exit criteria:
   devices, bindings, hints, and default values for the runtime.
 - Retained state round-trips across restart, rejects layout/profile mismatches and corruption by
   policy, and writes atomically.
+- Online change replaces a whole module at a cycle boundary without restarting the host; safe
+  changes preserve compatible persistent state; incompatible or untracked changes are rejected
+  or require a cold download.
+- Every module is paired with a persistent GOT manifest; exact-parent builds work online, the
+  runtime exports the active manifest, and a missing/stale/corrupt baseline forces a documented,
+  tested cold download.
+- Generated code contains no persistent raw pointers; all persistent roots and user/standard
+  function calls go through the GOT; objects use host descriptors and handles.
+- Full typed debug and monitoring works on both hosts, and every online swap ends the debug
+  session cleanly.
+- The project documentation states explicitly that `stc` is not a safety PLC and assumes no
+  safety responsibility; debug sessions may hold outputs indefinitely.
 - `stc fmt` is idempotent, preserves comments, emits strict semicolons, and supports `--check`.
 - Production and release artifacts contain no test-only units or `STC_ASSERT` calls; production
   use of either is an error.
@@ -367,22 +504,32 @@ Exit criteria:
 
 ## 12. Immediate next actions
 
-1. Review and approve this plan, the conformance profile, and the tokenization/grammar/AST specs.
-2. All v1 planning questions Q-001 through Q-017 are resolved (A-005 through A-021). New
-   questions are logged in `Specification/Decisions.md` and `README.md` one at a time.
-3. Create the Rust workspace skeleton and CI after the M0–M2 specs are approved.
-4. Keep host-specific operations (paths, clock, linker discovery, atomic replace) behind a
-   platform layer from M1; Linux x86-64/AArch64 host support follows basic development
+1. All planning questions Q-001 through Q-212 are resolved (A-005 through A-030); the
+   online-change architecture is recorded in
+   [Online Change and GOT](Architecture/Online-Change-and-GOT.md), and the resolved question log
+   is in `update_plan_got.md` §13.0.
+2. Apply the remaining documentation checklist from `update_plan_got.md` §12: architecture,
+   runtime, state, I/O, CLI, testing, AST/HIR, conformance, decisions, README, M4 note, and M5
+   handover.
+3. Write `M4.5-Plan.md` and `M6.5-Plan.md` before implementation.
+4. Do not implement M5 OOP/aggregates on the old direct-reference or contiguous-object model.
+   Implement the M4.5 foundation first (Q-090/Q-091/Q-095).
+5. Keep host-specific operations (paths, clock, linker discovery, module loading, atomic
+   replace) behind a platform layer; Linux x86-64/AArch64 host support follows basic development
    (M8, D-042).
-5. Implement the lexer first; do not write codegen before the parser/analyzer contracts are
-   stable.
 
 ## 13. Post-v1 outlook
 
+- Field-layout migration for approved, pointer-free cases, building on per-field `GotId`s and
+  the persistent manifest.
+- Remote/network deployment, multi-user online-change scheduling, and a deploy/rollback UI.
 - Linux x86-64 and Linux AArch64 host support (M8, D-042), then further hosts only on demand.
 - Public CST/traversal API for IDE tools (v2/v3), building on the stable `SyntaxKind`.
 - Hardware I/O backends and schedules: EtherCAT, Modbus, MQTT.
 - Multi-task scheduler (cooperative or preemptive) and task stepping.
+- User-visible `__NEW`/`__DELETE` as a separate v2 vendor extension with its own memory model.
 - Periodic/checkpointed RETAIN saves and stronger state integrity.
 - Registry/version solving for dependencies.
 - Configurable formatter and additional tooling (`stc lsp`, `stc doc`).
+- Safety certification is never claimed by this project. A separate safety-qualified product
+  would require an independent design, verification, and certification effort.

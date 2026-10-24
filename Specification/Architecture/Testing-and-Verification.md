@@ -1,8 +1,8 @@
 # Testing and Verification
 
-Status: Draft  
+Status: M4 suite implemented; online-change/debug test plan resolved (2026-10-24)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [CLI/Manifest](CLI-and-Manifest.md)
+Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
 > **M4 status:** IR snapshots, clang verification (`STC_REQUIRE_CLANG=1` in CI), execution tests,
 > C-harness library tests, process-image tests, scalar retained-state tests, determinism checks,
@@ -24,6 +24,11 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | Pragmas | JSON payload parsing, balanced braces, non-nesting, validation, precedence | `crates/stc-parser/tests`, `tests/ui` |
 | I/O metadata | Process-image layout, `AT` type checks, binding hints/overrides, unbound defaults | `tests/io` |
 | State/retain | Warm/cold restart, layout hash, CRC/corruption, atomic write, mismatch policy | `tests/state` |
+| Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `tests/online` |
+| GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, corrupt/manifest fuzzing | `tests/online`, `crates/stc-codegen/tests` |
+| Descriptors/OOP | Runtime descriptors, vtable cells, handle preservation, interface nullability, place descriptors | `tests/oop`, `tests/online` |
+| Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `tests/debug` |
+| Real-time boundary | Switch latency, maintenance jitter, service-thread contention, generation pinning | `tests/online` |
 | Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests` |
 | Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
 | Lean | Exact-function models and proofs | `lean/`, `tests/vectors` |
@@ -115,7 +120,8 @@ END_FUNCTION
 ### 2.3 Runner behavior
 
 - Each test runs in a separate process. The runner passes `--test <name>` to the test binary.
-- A fresh runtime is initialized per test; globals do not leak between tests.
+- A fresh host and module are initialized per test; globals/persistent roots do not leak between
+  tests. Tests that exercise online change explicitly opt into a shared long-lived host.
 - Default timeout: 5 s; per-test override via `[[test.case]] timeout`.
 - Mock clock starts at `0ns` by default; `mock-clock` sets it. Time is latched once at the start
   of each `stc_cycle`; two timers in the same scan see the same value. Tests schedule the next
@@ -193,8 +199,12 @@ Targets:
 - `fuzz_lexer`: arbitrary bytes -> token stream; no panic/hang.
 - `fuzz_parser`: arbitrary bytes -> CST; no panic/hang; depth limit respected.
 - `fuzz_analyzer`: valid-ish token streams -> diagnostics; no panic.
-- `fuzz_codegen`: clean parse/analysis -> IR/metadata; deterministic, bounded, no panic.
+- `fuzz_codegen`: clean parse/analysis -> IR/metadata/GOT model; deterministic, bounded, no panic.
 - `fuzz_manifest`: arbitrary TOML -> manifest errors, no panic.
+- `fuzz_got_manifest`: arbitrary JSON/binary manifest bytes -> validated records or errors, no
+  panic, bounded allocation; no module execution.
+- `fuzz_module_descriptor`: arbitrary descriptor/metadata bytes -> accepted/rejected cleanly, no
+  panic; no native loading in the fuzz target.
 
 Use `cargo-fuzz` with a bounded input size and a time limit. Run a smoke corpus in CI and a longer
 campaign locally/nightly.
@@ -234,6 +244,33 @@ Areas:
 
 Every implemented rule ID must map to at least one case. A generated traceability report lists
 missing mappings and fails CI if a rule is marked implemented without a test.
+
+### 4.1 Online-change and manifest suite
+
+`tests/online` exercises the host/module lifecycle on both hosts:
+
+- cold install, code-only online change, field add/remove/reorder, tracked rename/move;
+- untracked rename/removal diagnosis and explicit allow/cold paths;
+- incompatible type/layout/string/array/`OVERLAP` changes: reject or explicit reset;
+- missing, invalid, unpaired, and stale manifests: cold download, no merge/rebase;
+- prepare failure, trap in the rollback window, and unload after grace;
+- preserved FB/class/interface state and descriptor shape checks;
+- direct-variable preservation/remap and I/O reconfiguration;
+- O(1) switch latency, bounded maintenance jitter, service-reader pinning, and unload safety;
+- double-build byte equality for module, metadata, and manifest;
+- manifest export/download and a second build consuming the active baseline;
+- cold start, warm restart, online attach, and cold download state behavior.
+
+The suite treats a corrupt or hostile manifest as a parser test, not as a reason to execute
+arbitrary module code.
+
+### 4.2 Debug and monitoring suite
+
+`tests/debug` covers typed reads/writes/forces/watches, removed-field rejection across a swap,
+breakpoint binding/unbinding, step/continue, call-stack and optimized-out reporting, DWARF/
+CodeView inspection, watchdog pause/resume, force teardown, session authentication/audit, and
+the rule that every online swap ends the debug session. Debug/release tests assert that release
+artifacts contain no debug hooks and have distinct build IDs/manifests.
 
 ## 5. Lean verification
 
@@ -312,6 +349,8 @@ lean/
 | `ui` | diagnostic snapshots on Windows x64 and Ubuntu x64 |
 | `conformance` | conformance corpus on Windows x64 and Ubuntu x64 |
 | `execution` | compile/run tests on Windows x64 and Ubuntu x64 |
+| `online` | hot-swap/manifest/cold-download suite on Windows x64 and Ubuntu x64 |
+| `debug` | typed debug, breakpoint/step, DWARF/CodeView, swap-teardown suite |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
 | `cross-target` | `clang --target=aarch64-... -c` smoke (IR/object) |
@@ -358,10 +397,13 @@ exist, so the skeleton never reports a pass for a job that did not run.
 ## 8. Manual and exploratory testing
 
 - `examples/` projects are built and run in CI.
-- A smoke script builds each example for `exe`, `lib`, and `ir`, then runs a finite cycle count.
+- A smoke script builds each example for `module`, `exe`, `lib`, and `ir`, then runs a finite
+  cycle count and performs one online swap.
 - Release candidates get a manual pass: fresh clone, toolchain install, `stc new`, build, test,
-  run, JSON diagnostics, and cross-target object emission.
+  run, JSON diagnostics, manifest download/rebuild, debug session, and cross-target object
+  emission.
 
 ## 9. Open testing questions
 
-None currently. New testing questions are appended here or in [Decisions](../Decisions.md).
+None as of 2026-10-24. New testing questions are appended here or in
+[Decisions](../Decisions.md).

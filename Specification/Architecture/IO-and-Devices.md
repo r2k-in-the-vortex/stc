@@ -1,8 +1,8 @@
 # I/O and Device Linking
 
-Status: Draft  
+Status: M4 scalar image implemented; online-change policy resolved (2026-10-24)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [CLI/Manifest](CLI-and-Manifest.md), [Tokenization](../Syntax/Tokenization.md)
+Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Tokenization](../Syntax/Tokenization.md)
 
 ## 1. Responsibility split
 
@@ -20,7 +20,8 @@ Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [
 - reads the compiler metadata plus its own runtime configuration,
 - binds process-image ranges to device channels,
 - may override a pragma hint or a project-level binding,
-- latches inputs at cycle start and writes outputs at cycle end.
+- latches inputs at cycle start and writes outputs at cycle end,
+- owns the process image across module swaps and remaps per-generation direct-variable cells.
 
 **v1 scope**: no hardware backends. The executable/library runtime uses `null` (unbound inputs
 receive type defaults, unbound outputs are discarded), `memory` (tests), or optionally `file`.
@@ -32,6 +33,11 @@ EtherCAT, Modbus, and MQTT are planned for v2 and are noted here but not designe
 > and applies declared input defaults once. The generated cycle does not reapply defaults, so a
 > library host can drive inputs between cycles; M6 owns per-cycle backend precedence. The
 > device tree, project bindings, `VAR_ACCESS` metadata, and non-null backends are M6.
+>
+> **Online-change policy (resolved):** the host owns the process image. Each direct variable/
+> field has a per-generation GOT cell; a swap reconfigures the image, re-evaluates bindings,
+> preserves `%M` and same-address values, and warns about remapped variables. A binding/topology
+> change that cannot be preserved requires a cold download.
 
 ## 2. Process image
 
@@ -73,7 +79,9 @@ Direct variables map into a contiguous process image:
   `LREAL`/`TIME`/`LTIME`/`DATE`/`TOD`/`DT` use `L`.
 - Overlapping addresses are allowed for aliasing/`OVERLAP`; the analyzer checks that the declared
   types fit and reports conflicting writes where it can.
-- `AT` variables are not ordinary storage; they have no separate allocation.
+- `AT` variables are not ordinary storage; they have no separate allocation. Generated code
+  accesses them through a per-generation GOT cell pointing into the process image, not through a
+  raw image address cached across swaps.
 - `RETAIN` on a direct `AT` variable is accepted but has no file-backed effect
   (`STC-W-RETAIN-001`): the runtime/backend owns the process-image value. See
   [State and RETAIN](State-and-Retain.md).
@@ -190,6 +198,7 @@ A runtime override may bind a variable that has no pragma, or rebind one that do
     "bindings": [
       { "variable": "Main.MyBool", "area": "I", "address": "IX5",
         "offset_bits": 5, "type": "BOOL",
+        "direct_id": "0x…", "got_id": "0x…",
         "hint": { "device": "drive1", "channel": 5, "direction": "input" },
         "source": "pragma" }
     ]
@@ -200,6 +209,9 @@ A runtime override may bind a variable that has no pragma, or rebind one that do
 - JSON objects in metadata are canonicalized (sorted keys) for deterministic builds.
 - `source` is `pragma` or `project`; runtime bindings are not in compiler metadata.
 - `offset_bits` is relative to the start of the area.
+- `direct_id` is the stable identity of the direct variable/field recorded in the manifest;
+  `got_id` is its per-generation cell identity. The host uses them to remap or reject a direct
+  variable during an online change.
 - `input_defaults_hex` is a hex string with the same byte length as the input image; it contains
   the type-default values for every input location. The runtime applies it to unbound inputs and
   may use it as a fallback for bound inputs whose backend supplies no value.
@@ -242,6 +254,13 @@ fields are added to the language or compiler.
   share the cycle boundary.
 - A runtime backend may fail to read/write; it reports a trap/status to the host. Exact error
   codes are runtime-defined in v2.
+- Online-change boundary: the old generation completes its cycle and publishes outputs; the host
+  then switches, reconfigures the image, and latches fresh inputs for the new generation. `%M`
+  and same-address variables are preserved; remapped direct variables are remapped through their
+  new per-generation cells and reported.
+- Debug forcing is applied at the same boundary after normal writes and before output
+  publication. Forced outputs are held until released or the session ends; this is not a safety
+  function.
 
 ## 7. Diagnostics
 
@@ -254,6 +273,8 @@ fields are added to the language or compiler.
 | `STC-W-IO-001` | pragma names a device not declared in `stc.toml` |
 | `STC-W-IO-002` | `stc:io` on a declaration without `AT` |
 | `STC-W-IO-003` | project binding overrides a pragma hint (informational) |
+| `STC-E-ONLINE-IO-001` | a binding/direct-variable layout cannot be preserved across the proposed change; reject or cold |
+| `STC-W-ONLINE-IO-001` | a direct variable/field was remapped during online change |
 
 ## 8. Open questions
 
@@ -263,3 +284,5 @@ fields are added to the language or compiler.
   v1 accepts fully qualified variable paths and the analyzer resolves them.
 - Whether device channel descriptors should become normative for every backend; v1 keeps them
   optional hints.
+- Whether a later version should permit online binding/topology changes; v1 requires a cold
+  download when they cannot be preserved.

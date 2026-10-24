@@ -1,9 +1,10 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Draft (target profile; M3 front end and M4 scalar codegen implemented)  
+Status: Target profile; M3 front end and M4 scalar codegen implemented; online-change architecture resolved (2026-10-24)  
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
-Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`
+Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`, `STC-POINTER`  
+Runtime capabilities (not IEC claims): online change, GOT/manifest, debug/monitoring
 
 ## 1. What this profile claims
 
@@ -20,6 +21,12 @@ The project also does **not** claim conformance to the complete 2013 edition: on
 set below is implemented. Any unimplemented construct in the accepted surface is a bug; any
 construct outside the surface must produce an explicit diagnostic.
 
+Online change, the GOT, the persistent manifest, and debug/monitoring are **project runtime
+capabilities**, not IEC language features. They are specified in
+[Online Change and GOT](Architecture/Online-Change-and-GOT.md) and
+[Debug and Monitoring](Architecture/Debug-and-Monitoring.md). The project is **not a safety PLC
+and is not responsible for safety in any way**; debug sessions may hold outputs indefinitely.
+
 **Implementation status (M4):** the lexical surface, the full syntactic surface (CST, typed AST
 views, pragma payload validation, recovery), and the semantic surface (collection, namespaces
 and `USING`, name resolution, type checking, constant evaluation, initializers, access control,
@@ -34,6 +41,8 @@ not implemented and are rejected explicitly. `stc check <file>...` analyzes one 
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
 surface. Unsupported constructs are rejected with the diagnostics in
 [Grammar](Syntax/Grammar.md) §13 or `STC-E-CODEGEN-001` rather than silently accepted.
+The online-change/GOT/manifest/debug architecture is resolved but not yet implemented; M4.5 is
+the foundation milestone before M5.
 
 ## 2. Input languages
 
@@ -84,7 +93,8 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | ARRAY types, static bounds | Implemented |
 | ARRAY with variable bounds (`ARRAY [*]`) | Implemented for conformant parameters (`VAR_IN_OUT`, FB inputs/outputs); rejected for locals, globals, and returns |
 | STRUCT types, including `OVERLAP` | Implemented |
-| Reference types (`REF_TO`, `REF()`, `^`, `NULL`) | Implemented |
+| Reference types (`REF_TO`, `REF()`, `^`, `NULL`) | Implemented; persistent-capable values use host-resolved place descriptors |
+| `POINTER TO` (`STC-POINTER`) | Project extension: transient-only, full arithmetic/indexing/`SIZEOF`, no persistent pointer fields |
 | Class types | Implemented |
 | Interface types | Implemented |
 | Generic types (`ANY_*`) | Implemented for standard function signatures; user POUs may not declare them |
@@ -131,6 +141,8 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | `EXIT`, `CONTINUE`, empty statement | Implemented |
 | Operators: `**`, unary `+`/`-`/`NOT`, `*`/`/`/`MOD`, `+`/`-`, comparisons, `&`/`AND`, `XOR`, `OR` | Implemented |
 | Parenthesized expressions, array subscripts, struct access, partial bit access, dereference | Implemented |
+| `POINTER TO` arithmetic/indexing/`SIZEOF` | Project extension (`STC-POINTER`), transient-only |
+| Pointer conversions | Explicit `POINTER TO`↔`REF_TO` only; runtime validation; no pointer↔integer or pointer↔object/interface |
 | `A ** B` equivalent to `EXPT(A, B)` | Implemented |
 
 ## 5. UTF-8 extension (`STC-UTF8`)
@@ -226,8 +238,16 @@ same time; tests use a mock clock with the same semantics.
 - Communication model, remote variables, and `VAR_ACCESS` network binding.
 - Graphics languages and SFC.
 - Vendor pragmas and the AX preprocessor.
-- Multi-threaded task scheduling in v1.
-- Human-machine interface and online debugging.
+- Multi-threaded ST task scheduling in v1. The host may run loader and service threads, but only
+  the cycle thread executes ST.
+- Human-machine interface and the IEC communication model. Online change and debug/monitoring are
+  provided as project runtime capabilities in v1, not as IEC conformance features.
+- Safety functions, safety certification, automatic fail-safe outputs, or a safety watchdog. The
+  project is not a safety PLC and assumes no safety responsibility.
+- Field-layout migration, resizing, and pointer translation in v1. Per-field add/remove/rename
+  and tracked moves are supported; incompatible changes reset or require a cold download.
+- Remote/network deployment, multi-user scheduling, and remote debugging in v1.
+- User-visible `__NEW`/`__DELETE` in v1; a separate v2 vendor extension.
 - A network package registry and version-solving resolver in v1. Local path dependencies are in
   v1; a registry/version solver is a later extension (A-009).
 - Hardware I/O backends and schedules (EtherCAT, Modbus, MQTT) in v1. They are v2; v1 uses
@@ -275,6 +295,15 @@ The following are deliberately chosen and must be documented and tested:
 | Statement classification | `x := y` is an assignment; a dereference on the left or `REF(...)`/`NULL` on the right is a reference assignment, finalized by the analyzer (D-055) |
 | Pragma duplicates | Duplicate `stc:io` is `STC-E-IO-003`; `stc:io` without `AT` is `STC-W-IO-002` (D-049) |
 | Task scheduling | Single task in v1; multiple tasks diagnosed as unsupported |
+| Execution artifacts | `module` is a loadable shared library paired with a GOT manifest; `exe` is a thin host launcher; `lib` embeds the host; host ABI 2 |
+| Persistent memory | Host-owned GOT cells and stable roots; per-field recursive roots; handle-based objects; runtime-owned descriptors |
+| References and pointers | Persistent-capable `REF_TO` uses place descriptors; pointer→`REF_TO` is runtime-validated and yields `NULL` on failure; `POINTER TO` is transient-only (`STC-POINTER`) |
+| Online change | Whole-module load/prepare, O(1) cycle-boundary activation, one-successful-cycle rollback, off-thread unload |
+| Baseline policy | Exact parent build ID + digest pairing + profile/target/ABI/layout match; missing/stale/invalid baseline forces a cold download |
+| Preservation | Matching `GotId`/type/layout/size roots preserved; new roots initialized; removed roots quarantined; no field-layout migration in v1 |
+| Debug builds | Debug information is the default; `--release` strips/optimises and omits debug hooks; debug/release build IDs and manifests differ |
+| Debug behavior | Typed read/write/force/watch, checkpoint breakpoints, stop-the-world stepping, call stacks; swaps end sessions; outputs may be held indefinitely; not a safety PLC |
+| Runtime threads | One cycle thread; one loader/prepare thread; lower-priority service/monitor threads; generation pinning for readers |
 
 ## 9. Project model (project feature, not an IEC claim)
 
@@ -296,9 +325,12 @@ Any compliance statement produced by the project shall state:
 
 - profile ID and version,
 - the exact supported feature list (this document),
-- the project extensions (`STC-UTF8`, `STC-PRAGMA`, `STC-TEST`),
+- the project language extensions (`STC-UTF8`, `STC-PRAGMA`, `STC-TEST`, `STC-POINTER`),
+- the runtime capabilities (online change, GOT/manifest, debug/monitoring) separately from the
+  IEC language claim,
 - the implementation-defined choices in §8,
-- that Ed. 4 conformance is not claimed.
+- that Ed. 4 conformance is not claimed,
+- that the project is not a safety PLC and assumes no safety responsibility.
 
 The compiler should be able to emit this statement (or a machine-readable equivalent) from
 `stc --compliance`.

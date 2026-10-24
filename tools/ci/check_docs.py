@@ -41,6 +41,8 @@ REQUIRED_DOCUMENTS = (
     "Specification/Architecture/State-and-Retain.md",
     "Specification/Architecture/CLI-and-Manifest.md",
     "Specification/Architecture/Testing-and-Verification.md",
+    "Specification/Architecture/Online-Change-and-GOT.md",
+    "Specification/Architecture/Debug-and-Monitoring.md",
     "Specification/Decisions.md",
     "Specification/UTF8-Strings.md",
 )

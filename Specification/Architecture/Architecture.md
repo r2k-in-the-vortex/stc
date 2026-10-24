@@ -1,8 +1,8 @@
 # Architecture
 
-Status: Draft  
+Status: M4 implemented; online-change architecture resolved (2026-10-24)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
+Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
 
 ## 1. Overview
 
@@ -12,18 +12,27 @@ for the selected target. This keeps the compiler independent of the LLVM C++/C A
 version, and makes the generated IR inspectable and testable.
 
 ```text
-+--------+   +--------+   +----------+   +--------+   +-----------+   +--------+
-| source | ->| lexer  | ->| parser   | ->| sema   | ->| HIR       | ->| IR     |
-| (UTF-8)|   | tokens |   | CST/AST  |   | names/ |   | typed,    |   | text   |
-+--------+   +--------+   +----------+   | types  |   | resolved  |   +--------+
-                                          +--------+   +-----------+        |
-                                                                            v
-                                                                    +---------------+
-                                                                    | clang         |
-                                                                    | (target/link) |
-                                                                    +---------------+
-                                                                            |
-                                              .ll / .o / exe / .a / .dll / .so
++--------+   +--------+   +----------+   +--------+   +----------------------+
+| source | ->| lexer  | ->| parser   | ->| sema   | ->| HIR + identity model |
+| (UTF-8)|   | tokens |   | CST/AST  |   | names/ |   | typed, resolved      |
++--------+   +--------+   +----------+   | types  |   +----------------------+
+                                          +--------+             |
+                                                                 v
+                                              +-----------------------------------+
+                                              | textual IR builder + GOT manifest |
+                                              +-----------------------------------+
+                                                                 |
+                                                       +------------------+
+                                                       | clang (module)   |
+                                                       +------------------+
+                                                                 |
+                                    module (.dll/.so) + manifest (.json/.bin)
+                                                                 |
+                                              +-----------------------------------+
+                                              | persistent host (stc-runtime)     |
+                                              | cycle | GOT | roots | loader      |
+                                              | manifest store | state/IO | debug  |
+                                              +-----------------------------------+
 ```
 
 ## 2. Workspace layout
@@ -41,9 +50,9 @@ stc/
     stc-fmt/                 fixed-style formatter over the CST
     stc-hir/                 arenas, DefId/HirId, types, HIR nodes
     stc-sema/                name resolution, type checking, const eval, lowering
-    stc-codegen/             IR builder, ABI, mangling, module emission
+    stc-codegen/             IR builder, GOT/manifest model, ABI, mangling, module emission
     stc-manifest/            stc.toml schema, local dependency graph, source discovery
-    stc-runtime/             Rust staticlib/cdylib with C ABI
+    stc-runtime/             persistent host, loader/GOT/root allocator, staticlib/cdylib
     stc-test/                test discovery, runner, reporting
     stc-driver/              CLI binary `stc`
   stdlib/                    standard function blocks in ST
@@ -65,7 +74,10 @@ stc-test <- stc-driver
 stc-runtime is built independently and linked by the driver
 ```
 
-`stc-codegen` must not depend on `stc-parser` or `stc-syntax`; it consumes HIR only.
+`stc-codegen` must not depend on `stc-parser` or `stc-syntax`; it consumes HIR only. The GOT
+manifest model is produced by codegen from HIR identity metadata, not by the runtime. The runtime
+does not depend on any compiler crate; the manifest parser lives behind the manifest boundary and
+is fuzzed independently.
 
 ## 3. Front end
 
@@ -128,6 +140,12 @@ expressions with resolved places, callees, and explicit casts.
 > emitted and tested. OOP lowering (§4.6), aggregates, strings, references, and standard
 > functions remain M5; codegen rejects them with `STC-E-CODEGEN-001`. `stc_abi_version` is
 > supplied by the runtime, not by the generated module, to avoid a duplicate symbol.
+>
+> **Post-M4 architecture (resolved 2026-10-24):** the direct-reference, code-linked artifact
+> model is superseded by M4.5's persistent host + loadable module model. §4.3–§4.9 below are
+> revised so M5 OOP/aggregate/string/reference features are built on GOT roots, runtime
+> descriptors, handles, and place descriptors rather than module-owned contiguous objects. The
+> existing M4 implementation remains the current scalar artifact; the new model begins in M4.5.
 
 ### 4.1 IR builder
 
@@ -185,15 +203,17 @@ Design:
 | Subrange | base integer type; bounds checked at assignment |
 | Static array | `[N x T]`; multi-dimensional arrays are nested arrays |
 | Variable-length array (conformant parameters only) | `%stc.array.ref = type { ptr, i64, [rank x %stc.bound] }`; `%stc.bound = type { i64 lower, i64 upper }` |
-| Struct | named LLVM struct, fields in declaration order |
-| `OVERLAP` struct | byte buffer with typed accessors at checked offsets |
-| `REF_TO T` | `ptr` |
-| Class/FB instance | named LLVM struct |
-| Interface variable | `%stc.iface = type { ptr, ptr }` (data, vtable) |
-| Function | LLVM function |
-| Program | LLVM function plus its instance body |
+| Struct | named LLVM struct for transient values; persistent structs are per-field roots |
+| `OVERLAP` struct | one atomic host root with aliasing typed views at declared offsets |
+| `REF_TO T` | host-resolvable place descriptor (not a raw pointer) |
+| `POINTER TO T` | transient raw pointer (`ptr`), `STC-POINTER`, never persisted |
+| Class/FB instance | stable host handle plus runtime object record/descriptor |
+| Interface variable | `{handle, descriptor}`; `NULL` is a null handle/descriptor |
+| Function | LLVM function reached through a host-owned function cell |
+| Program | LLVM function plus its host-rooted instance fields |
 
-String representation is a **length-prefixed fixed-capacity buffer**:
+String representation is a **length-prefixed fixed-capacity host root** (one root per string
+value; no per-character roots):
 
 - `STRING[n]`: `{ i32 len; [n x i8] data; }`, `len` in bytes/characters, no NUL requirement.
 - `WSTRING[n]`: `{ i32 len; [n x i16] data; }`, `len` in 16-bit units.
@@ -202,7 +222,7 @@ String representation is a **length-prefixed fixed-capacity buffer**:
   O(1). `LEN` reads `len`; `LEN_MAX` returns `n`; `LEN_CODE_UNIT` encodes/scans to count UTF-8
   code units for interchange. The in-memory size is `4 + 4 * n` bytes. UTF-8 is the
   source/interchange encoding, not the storage encoding.
-- Copying a string copies the struct; `VAR_IN_OUT` passes a pointer.
+- Copying a string copies the root value; `VAR_IN_OUT` passes a descriptor/pointer to the root.
 - The runtime owns bounds checks and encoding validation.
 
 `STRING`/`WSTRING` default capacities are 255 units; `USTRING` default capacity is 255 characters
@@ -226,48 +246,57 @@ storage and must not retain the pointer beyond the call.
   process-image offsets and records them in metadata; it does not link them to hardware. Binding
   process-image ranges to devices is runtime-owned (see [I/O and Devices](IO-and-Devices.md)).
   Unbound inputs receive type defaults each cycle; unbound outputs are discarded.
-- FB/class inheritance uses a **prefix layout**: a derived struct's first field is the base
-  struct. Field access walks the prefix chain. This makes upcasting a no-op pointer adjustment.
-- Interface references are fat pointers `{ptr data, ptr vtable}`. `NULL` is `{null, null}`.
-- Reference values (`REF_TO`) are plain pointers; `NULL` is `null`.
+- Persistent aggregates do not use one contiguous parent allocation. Each persistent field is a
+  separate host root with its own cell, identity, and storage; field access lowers to a field-cell
+  lookup. A runtime object record links the fields of an object and holds its descriptor.
+- FB/class inheritance is represented by a base-chain in the object record/descriptor, not by a
+  contiguous prefix struct. Upcasting adjusts the descriptor/handle view, not a raw pointer.
+- Interface values are `{handle, descriptor}`. `NULL` is a null handle/descriptor. Preserved
+  interface values survive compatible swaps because descriptors are runtime-owned.
+- Validated reference values (`REF_TO`) are place descriptors (`Root`/`Direct`/`Stack`/`Object`);
+  `NULL` is the null descriptor. `POINTER TO` remains a transient raw pointer and cannot appear
+  in a persistent root.
 
 ### 4.5 Functions and calls
 
 - A function lowers to an LLVM function with the target's C calling convention (the default).
+  A call to a user or standard function goes through a host-owned function cell, so a swap can
+  rebind it without rewriting code. Compiler helpers/intrinsics are direct.
 - A function with a result uses the declared return type; a function without a result returns
   `void`. Assignment to the function name writes a dedicated result local; `RETURN` returns it.
-- FB instances are structs. An FB body is a function:
-  `void @stc_fb_TON(ptr %this, <inputs...>)` or, more generally, a call with the instance pointer
-  first. Inputs are assigned to instance fields before the body runs; outputs are read from the
-  instance after the call.
-- Methods are functions with an explicit `this` pointer first:
-  `void @stc_m_Class_Method(ptr %this, ...)`.
-- Class/FB constructors are not separate user-visible functions; `stc_init` zero-initializes and
-  applies declared initializers.
-- Function calls with output parameters (`=>`) pass pointers to the destination; input
+- FB instances are host-rooted per-field objects with a stable handle and runtime object record.
+  An FB body is a function called with the handle/descriptor; inputs are written to the instance
+  fields before the body runs; outputs are read after the call.
+- Methods are functions with an explicit handle/descriptor first:
+  `void @stc_m_Class_Method(ptr %handle, ptr %descriptor, ...)`.
+- Class/FB constructors are not separate user-visible functions; prepare/init allocates roots and
+  applies declared initializers for new fields only.
+- Function calls with output parameters (`=>`) pass references to the destination; input
   parameters are passed by value unless declared `VAR_IN_OUT`.
-- `VAR_IN_OUT` parameters are pointers to the actual variable's storage; aliasing is the user's
-  responsibility per the ST semantics. Conformant `ARRAY [*]` parameters use the descriptor
-  described above instead of a bare pointer.
+- `VAR_IN_OUT` parameters use place descriptors/pointers to the actual variable's storage;
+  aliasing is the user's responsibility per the ST semantics. Conformant `ARRAY [*]` parameters
+  use the descriptor described above instead of a bare pointer.
 
 ### 4.6 OOP lowering
 
-- Each class/FB type gets a named LLVM struct, a vtable global, and a type descriptor.
+- Each class/FB type gets a runtime-owned type descriptor and a vtable whose entries are
+  host-owned function cells, not raw code addresses. Descriptors are allocated/validated by the
+  host and survive module unload.
 - Vtable slots are assigned deterministically: methods sorted by `(name, signature)` across the
   type's interface set; overrides reuse the base slot.
-- Interface method calls use the interface vtable slot; class/FB calls through a base reference
-  use the class vtable slot. Direct calls on a concrete instance use a direct function call unless
-  the method is virtual and the reference is polymorphic.
-- `OVERRIDE` replaces the implementation in the derived type's vtable.
-- `SUPER.method()` emits a direct call to the base type's implementation (no vtable).
-- `THIS` is the `this` pointer; `THIS` passed to an interface variable builds a fat pointer using
-  the current type descriptor.
-- `?=` (assignment attempt) calls a runtime helper that checks the source type descriptor against
-  the destination interface/class descriptor:
-  `ptr @stc_rt_attempt_cast(ptr %data, ptr %src_desc, ptr %dst_desc)` returning `{null,null}` or
-  a valid fat pointer.
-- `FINAL`/`ABSTRACT` are enforced statically; no runtime representation is needed beyond the
-  vtable.
+- Interface method calls use the interface descriptor/vtable slot; class/FB calls through a base
+  reference use the class descriptor. Direct calls on a concrete instance still go through the
+  function cell for swap safety.
+- `OVERRIDE` rebinds the derived type's vtable cell to the new implementation.
+- `SUPER.method()` resolves the base type's implementation through the base descriptor/cell.
+- `THIS` is the stable handle/object record; passing `THIS` to an interface builds
+  `{handle, descriptor}`.
+- `?=` (assignment attempt) calls a runtime helper that checks the source descriptor against the
+  destination interface/class descriptor and returns `{null, null}` or a valid
+  `{handle, descriptor}`.
+- `FINAL`/`ABSTRACT` are enforced statically; runtime checks cover descriptor compatibility.
+- A vtable shape change is rejected during online change while any live instance or interface
+  depends on the old shape.
 
 ### 4.7 Control flow
 
@@ -303,39 +332,37 @@ storage and must not retain the pointer beyond the call.
 
 ### 4.9 Globals, initialization, and main
 
-- Globals are emitted as internal globals with deterministic mangled names:
-  `@stc_g_<ns>_<name>`.
-- Constant initializers go in the global initializer; non-constant initializers are applied by
-  `stc_init`.
-- FB/class instance state is part of the global/local struct; `stc_init` zero-initializes and
-  applies declared initial values.
-- `stc_init` initializes the runtime process image, all global/static state, and vtables/type
-  descriptors, then optionally restores retained state (see [State and RETAIN](State-and-Retain.md)).
-- `stc_cycle` executes one scan of the configured programs/tasks.
-- `stc_shutdown` saves retained state and releases resources.
-- Executable mode generates:
+- Persistent globals and program/FB/class fields are **host roots**, not ordinary module globals.
+  Codegen emits a per-generation slot table and accesses storage through the GOT; the manifest
+  records each root's `GotId`, type/layout, and current slot.
+- Version-local read-only data and compiler helpers may remain module globals with deterministic
+  mangled names (`@stc_g_<ns>_<name>` for non-persistent constants).
+- Constant and non-constant initializers are recorded for new roots; prepare/init allocates the
+  root and applies the initializer exactly once. Preserved roots are never reinitialized.
+- The module entry points are attach (receive the host API table and GOT context), prepare
+  (validate/build the candidate and new roots), cycle (execute one scan), shutdown, and detach.
+  Exact symbol names and signatures are fixed by host ABI 2 in
+  [Runtime and Execution](Runtime-and-Execution.md); `stc_init` remains the generated
+  initialization entry used by prepare.
+- `stc_cycle` executes one scan of the configured programs/tasks. The host, not the module,
+  latches inputs, publishes outputs, and decides when a swap may occur.
+- `stc_shutdown` saves retained state and releases module-local resources; the host retains GOT
+  cells and quarantined roots.
+- Executable mode generates a thin host launcher:
 
   ```llvm
   define i32 @main(i32 %argc, ptr %argv) {
   entry:
-    %rc = call i32 @stc_rt_execute(i32 %argc, ptr %argv, ptr @stc_init,
-                                  ptr @stc_cycle, ptr @stc_shutdown)
+    %rc = call i32 @stc_rt_execute(i32 %argc, ptr %argv, ptr @stc_module_descriptor)
     ret i32 %rc
   }
   ```
 
-  `stc_rt_execute` owns the cycle loop, time base, cycle limit, signal handling, and error
-  reporting. This keeps `main` tiny and the loop portable.
-- Library mode exports:
-
-  ```llvm
-  define void @stc_init()
-  define void @stc_cycle()
-  define void @stc_shutdown()
-  ```
-
-  plus any `{stc:export}` wrappers and a metadata symbol. The host owns the loop and the I/O
-  backend.
+  `stc_rt_execute` loads the adjacent module, owns the cycle loop, time base, cycle limit,
+  signal handling, error reporting, and the online-change controller.
+- Library mode exports the host embedding entry points plus `{stc:export}` wrappers and the
+  module descriptor. The embedding host owns the loop, I/O backend, manifest store, and debug
+  services.
 
 ### 4.10 Name mangling
 
@@ -360,11 +387,18 @@ signature hash is a stable 64-bit FNV-1a of the canonical type string, not a ran
 
 ### 4.11 Debug information
 
-- v1 emits source-level line locations (`!dbg`) for statements and calls when `--debug` is set.
-- Full variable/type debug info (DWARF/CodeView) is a later milestone; the IR builder keeps
-  source-span IDs so it can be added without changing HIR.
+- Debug information is the default v1 build output; `--release` selects the optional stripped,
+  optimised mode. Debug and release builds have distinct build IDs and manifests.
+- Codegen emits full DWARF/CodeView variable/type/location information through clang, plus a
+  checkpoint table and host check calls for breakpoints. It does not patch machine code.
+- The IR builder retains source-span IDs and manifest-linked field/type identities so the
+  debugger can present both standard debug info and a manifest-assisted split-object view.
+- Debug hooks and checkpoint calls are absent from `--release` artifacts; a sidecar symbol file
+  may retain symbols for post-mortem analysis without changing runtime behaviour.
 - Runtime traps report the source span ID and the runtime formats it using a source map emitted
   into the binary or a sidecar JSON file.
+- Every online swap ends the debug session and drops the retired generation's debug information
+  after unload.
 
 ### 4.12 Determinism and reproducibility
 
@@ -372,7 +406,10 @@ signature hash is a stable 64-bit FNV-1a of the canonical type string, not a ran
 - Temporary names use a monotonic counter.
 - Name hashes are deterministic.
 - The module header includes the compiler version and profile ID, but not timestamps or paths.
+- GOT slots are sorted deterministically; `GotId`s are content-derived; manifests have canonical
+  JSON and byte-identical binary projections for identical inputs.
 - IR snapshots normalize target-specific differences; execution tests run on the host triple.
+- A double-build test compares the module, manifest, and metadata byte-for-byte.
 
 ## 5. Project graph and namespaces
 
@@ -437,9 +474,10 @@ project targets IR syntax accepted by LLVM 15 and later.
 | --- | --- |
 | IR only | `stc build --emit=ir` writes `<name>.ll`; no clang call |
 | Object | `clang --target=<triple> -x ir <name>.ll -c -o <name>.o -O<level> [-g]` |
-| Executable | `clang --target=<triple> <name>.ll <runtime_staticlib> -o <name>.exe -O<level> [-g]` |
+| Module | `clang --target=<triple> -shared -fPIC <name>.ll -o <name>.dll/.so`; paired manifest written by the compiler |
+| Executable | `clang --target=<triple> <launcher>.ll <runtime_staticlib> -o <name>.exe -O<level> [-g]`; loads an adjacent module |
 | Static library | `clang ... -c` then `llvm-ar rcs <name>.a <objects>` plus the runtime object |
-| Shared library | `clang --target=<triple> -shared <name>.ll <runtime> -o <name>.dll/.so` |
+| Embedding library | `clang --target=<triple> -shared <name>.ll <runtime> -o <name>.dll/.so` with the host embedded |
 
 - The runtime staticlib is built with the toolchain that matches the target C ABI: the MSVC
   toolchain for `*-pc-windows-msvc` and the GNU toolchain for `*-unknown-linux-gnu`.
@@ -457,12 +495,16 @@ target/stc/<profile>/
   <name>.ll
   <name>.o
   <name>.exe | <name>.dll/.so | <name>.a
-  <name>.stc-meta.json     runtime descriptor, exports, source map
-  build.log                verbose log (if -v)
+  <name>.stc-meta.json       runtime descriptor, exports, source map
+  <name>.stc-got.json        canonical manifest (tooling/download)
+  <name>.stc-got.bin         compact runtime manifest projection
+  build.log                  verbose log (if -v)
 ```
 
 The `.stc-meta.json` includes the selected configuration, task list, exported symbols, string
-capacities, and source-span table for runtime diagnostics.
+capacities, and source-span table for runtime diagnostics. The module and manifest are installed
+under immutable versioned names (`<name>-<build-id>.dll/.so` and its manifest pair); the runtime
+state directory holds the active copy and a current pointer.
 
 ### 6.4 Host platforms
 
@@ -479,25 +521,30 @@ capacities, and source-span table for runtime diagnostics.
 
 ## 7. Runtime boundary
 
-The generated module calls a narrow C ABI:
+The generated module uses a versioned host API table (host ABI 2), not a fixed set of exported
+global symbols. The table includes:
 
-| Symbol | Purpose |
+| Entry | Purpose |
 | --- | --- |
-| `stc_rt_execute(argc, argv, init, cycle, shutdown)` | Run the executable loop |
-| `stc_rt_trap(code, span_id)` | Trap with a diagnostic |
-| `stc_rt_assert(cond, span_id)` | User assertion (test/development) |
-| `stc_rt_cycle_now_ns()` | Cycle time latched at `stc_cycle` entry |
-| `stc_rt_monotonic_now_ns()` | Live monotonic clock (runtime/host only) |
-| `stc_rt_set_cycle_time_ns()` | Override the next cycle's time (host/tests) |
-| `stc_retain_size/save/load/layout_hash()` | Generated retained-state functions |
-| `stc_rt_state_load/save/configure()` | State-file I/O and mismatch policy |
-| `stc_rt_io_image(ptr*, len*)` | Process-image access |
-| `stc_rt_attempt_cast(data, src_desc, dst_desc)` | Interface/reference downcast |
+| `stc_rt_execute` | Run the embedded host loop (launcher/library) |
+| `stc_rt_trap` | Trap with a diagnostic |
+| `stc_rt_assert` | User assertion (test/development) |
+| `stc_rt_cycle_now_ns` | Cycle time latched at cycle entry |
+| `stc_rt_monotonic_now_ns` | Live monotonic clock (host only) |
+| `stc_rt_set_cycle_time_ns` | Override the next cycle's time (host/tests) |
+| `stc_rt_alloc/free` | Transient module-version allocation |
+| `stc_rt_resolve_ref` | Pointer→`REF_TO` place-descriptor resolver |
+| `stc_rt_attempt_cast` | Interface/reference descriptor check |
+| `stc_rt_got_slot` | Resolve a local slot to a host cell/storage pointer |
+| `stc_rt_retain_*` | Retained-state helpers |
+| `stc_rt_io_image` | Process-image access |
 | `stc_rt_len_*`, `stc_rt_str_*` | String helpers |
 | `stc_rt_math_*` | Math helpers (where not inlined) |
-| `stc_rt_trace(...)` | Optional tracing |
+| `stc_rt_trace` | Optional tracing |
 
-The full list and signatures are in [Runtime and Execution](Runtime-and-Execution.md).
+The full list, versions, and signatures are in
+[Runtime and Execution](Runtime-and-Execution.md) and
+[Online Change and GOT](Online-Change-and-GOT.md).
 
 ## 8. Security and robustness
 
@@ -508,9 +555,19 @@ The full list and signatures are in [Runtime and Execution](Runtime-and-Executio
   process with a timeout. This is a development tool, not a security boundary.
 - Paths in `stc.toml` are resolved relative to the manifest; path traversal outside the project is
   allowed only for explicit user paths and is reported in verbose output.
-- The runtime does not load plugins or execute ST at runtime.
+- The runtime loads only local, explicitly deployed modules with strict descriptor validation.
+  Modules are trusted native code and are not sandboxed; v1 has no network deployment or
+  untrusted-module loading.
+- Downloaded GOT manifests are untrusted parsed data: validate every field and digest,
+  access-control export because layout data reveals program structure, and never execute manifest
+  content. Descriptor/manifest parsers are fuzz targets.
+- Debug/monitoring access is authenticated and audited; the standard API is typed, not raw
+  memory.
 
 ## 9. Open architecture questions
 
-None currently. Language-level open questions are tracked in
-[Decisions](../Decisions.md). New architecture questions are appended here.
+None as of 2026-10-24. The online-change/GOT/manifest/debug architecture is resolved in
+[Online Change and GOT](Online-Change-and-GOT.md),
+[Debug and Monitoring](Debug-and-Monitoring.md), and `update_plan_got.md` §13.0. Resolved
+decisions are tracked in [Decisions](../Decisions.md). New architecture questions are appended
+here.

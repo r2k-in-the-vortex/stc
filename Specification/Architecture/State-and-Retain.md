@@ -1,8 +1,8 @@
 # State and RETAIN Persistence
 
-Status: Draft (Q-007 resolved: file-backed state)  
+Status: M4 scalar layout implemented; online-change policy resolved (2026-10-24)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Runtime](Runtime-and-Execution.md), [CLI/Manifest](CLI-and-Manifest.md), [Architecture](Architecture.md), [Decisions](../Decisions.md)
+Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Architecture](Architecture.md), [Decisions](../Decisions.md)
 
 ## 1. Scope
 
@@ -14,12 +14,22 @@ A start with a valid state file is a **warm restart**; a start without one (or w
 `--reset-retain`) is a **cold restart**. Warm restart restores retained values; cold restart
 initializes declared/type defaults.
 
+An **online attach** is neither: the host is already running, so in-memory values win and the
+state file is not loaded. Matching per-field roots are preserved, new roots are initialized, and
+removed roots are quarantined. A **cold download** stops/reinitializes the program and applies
+the restart policy above. See [Online Change and GOT](Online-Change-and-GOT.md) §8.
+
 > **M4 status:** scalar-leaf `RetainLayout` is computed (retained globals and program fields,
 > `AT` excluded), emitted as metadata, and exposed through generated
 > `stc_retain_size/layout_hash/save/load`. `stc_init` calls `stc_rt_state_load` and restores on
 > success; `stc_shutdown` saves through `stc_rt_state_save`. The runtime state functions are
 > stubs returning 5 (retention disabled) until M6. Aggregate/string/FB leaves and the
 > file-backed atomic format are M5/M6.
+>
+> **Online-change policy (resolved):** v1 preserves values in host memory across an online
+> change; it does not migrate retained leaves by `GotId` across restarts. The state-file format
+> keeps its layout-hash policy. A later format revision may key leaves by `GotId` plus path, which
+> the per-field manifest already records.
 
 ## 2. Which variables are retained
 
@@ -52,7 +62,7 @@ For every storage leaf the compiler computes an effective policy:
 Retained storage is copied as raw bytes of its data fields:
 
 - elementary types, bit strings, enums, subranges, date/time types;
-- `STRING`, `WSTRING`, `USTRING` (the fixed-capacity struct is copied);
+- `STRING`, `WSTRING`, `USTRING` (the fixed-capacity root value is copied);
 - arrays and structs (recursively);
 - FB/class instance data fields.
 
@@ -63,8 +73,11 @@ Not persistable:
   `stc_init` before state is loaded; they are excluded from the payload);
 - variables containing any non-persistable field (`STC-E-RETAIN-001`).
 
-The compiler emits a **retained layout**: an ordered list of leaf fields with path, type, byte
-offset, and size. The layout is the contract between generated code and the runtime.
+The compiler emits a **retained layout**: an ordered list of leaf fields with path, `GotId`,
+type, byte offset within its root, and size. The layout is the contract between generated code
+and the runtime. Under the per-field root model, each retained leaf is copied from its host root;
+a leaf cannot contain a persisted raw reference/pointer. The `GotId` is recorded for diagnostics
+and for a possible later state-format migration; v1 still matches the whole layout hash.
 
 ## 3. State file format
 
@@ -74,7 +87,7 @@ Little-endian binary:
 | --- | --- | --- |
 | 0 | 8 | magic `STCRET01` |
 | 8 | 4 | format version (`1`) |
-| 12 | 4 | runtime ABI version (`1`) |
+| 12 | 4 | runtime ABI version (`2`) |
 | 16 | 8 | profile hash (FNV-1a of the profile ID) |
 | 24 | 8 | layout hash (FNV-1a of the canonical retained layout) |
 | 32 | 8 | payload length |
@@ -97,9 +110,9 @@ The layout hash covers:
 
 ```text
 profile=stc-2013-oop-utf8-v1
-abi=1
+abi=2
 size=<payload length>
-leaf=<path>|<type>|<offset>|<size>
+leaf=<path>|<got_id>|<type>|<offset>|<size>
 ...
 ```
 
@@ -123,6 +136,20 @@ Adding/removing/reordering a retained field changes the hash.
 6. `stc_cycle` runs normally; retained values are ordinary storage.
 7. `stc_shutdown` calls `stc_retain_save` to fill the buffer and `stc_rt_state_save` to write it
    atomically.
+
+#### 4.1.1 Online attach and cold download
+
+- **Online attach:** the host does not call `stc_rt_state_load`; running values win. It preserves
+  matching roots, initializes new roots once, and quarantines removed roots. The state file is
+  neither read nor rewritten merely because a swap occurred; the normal shutdown save still
+  applies.
+- **Cold download:** the host stops the program, applies defaults, and may load `RETAIN` values
+  only under the existing layout/profile policy. Non-retained running values and transient
+  allocations are not preserved.
+- A baseline/module mismatch does not attempt state recovery; it selects cold download
+  (see [Online Change and GOT](Online-Change-and-GOT.md) §8).
+- The online plan can reset an affected retained root only under an explicit per-field policy;
+  otherwise an incompatible layout rejects the module.
 
 ### 4.2 Atomic save
 
@@ -164,8 +191,9 @@ int32_t stc_retain_save(void* buffer);
 int32_t stc_retain_load(const void* buffer);
 ```
 
-The module also emits an internal global buffer of `stc_retain_size()` bytes. `stc_init` and
-`stc_shutdown` use the runtime helpers:
+The module also emits a retained-root descriptor of `stc_retain_size()` bytes. Under the host
+model the buffer is filled from/into host-owned roots; the generated functions are version-local
+helpers, not the owner of the storage. `stc_init` and `stc_shutdown` use the host helpers:
 
 ```c
 int32_t stc_rt_state_load(void* buffer, int64_t len, int64_t layout_hash);
@@ -210,8 +238,8 @@ storage. The host owns path/atomicity/policy in that case.
     "file": "motor.stcstate",
     "on_mismatch": "error",
     "leaves": [
-      { "path": "Main.Counter", "type": "DINT", "offset": 0, "size": 4 },
-      { "path": "Main.Timer.Elapsed", "type": "TIME", "offset": 8, "size": 8 }
+      { "path": "Main.Counter", "got_id": "0x…", "type": "DINT", "offset": 0, "size": 4 },
+      { "path": "Main.Timer.Elapsed", "got_id": "0x…", "type": "TIME", "offset": 8, "size": 8 }
     ]
   }
 }
@@ -233,6 +261,8 @@ storage. The host owns path/atomicity/policy in that case.
 | `STC-E-RUN-RETAIN-003` | state file write failure |
 | `STC-W-RUN-RETAIN-001` | cold start (state file missing) |
 | `STC-W-RUN-RETAIN-002` | state reset due to mismatch/corruption under `reset` policy |
+| `STC-E-ONLINE-STATE-001` | retained root layout is incompatible and no explicit reset policy applies; reject/cold |
+| `STC-W-ONLINE-STATE-001` | retained root reset under an explicit per-field online-change policy |
 
 ## 8. Testing
 
@@ -248,6 +278,14 @@ storage. The host owns path/atomicity/policy in that case.
 - Direct `AT` RETAIN warning.
 - Layout hash is stable across identical builds and changes when layout changes.
 - Library host snapshot/restore via `stc_retain_*` without file helpers.
+- Online attach preserves matching per-field roots, initializes new roots, quarantines removed
+  roots, and does not load the state file.
+- Cold download applies defaults and only compatible `RETAIN` values; transient allocations are
+  not preserved.
+- Incompatible retained-root layout rejects the module or resets the root only under an explicit
+  policy; baseline problems select cold download.
+- A `GotId`-keyed state format is not exercised in v1; the layout hash remains authoritative for
+  restarts.
 
 ## 9. Open questions
 
@@ -256,3 +294,5 @@ storage. The host owns path/atomicity/policy in that case.
 - Whether `RETAIN` direct variables should persist the process image in a later version.
 - Whether partial retention inside a retained FB/class instance should be exposed in metadata as
   leaf fields only (current design) or as whole-instance ranges for performance.
+- Whether a later state-format revision should migrate retained leaves by `GotId` plus path
+  across restarts. V1 does not; the manifest already records the identities needed to design it.

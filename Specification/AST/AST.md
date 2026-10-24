@@ -328,6 +328,26 @@ pub struct HirCrate {
     pub config: Option<ConfigHir>,
     pub exports: Vec<Export>,
     pub retain_layout: Option<RetainLayout>,
+    pub identity: Option<IdentityCatalog>,
+}
+
+/// Compiler/runtime identity metadata for the GOT manifest. This is not language semantics:
+/// no ST source construct can observe a `GotId`, and type checking does not depend on it.
+pub struct IdentityCatalog {
+    pub roots: Vec<RootIdentity>,      // per persistent field/leaf
+    pub functions: Vec<FunctionIdentity>,
+    pub types: Vec<TypeIdentity>,
+    pub instances: Vec<InstanceIdentity>,
+    pub tasks: Vec<TaskIdentity>,
+    pub exports: Vec<ExportIdentity>,
+}
+
+pub struct RootIdentity {
+    pub got_id: [u8; 16],              // content-derived 128-bit identity
+    pub path: String,                  // current normalized qualified path
+    pub owner: Option<DefId>,
+    pub ty: TyId,
+    pub kind: RootKind,                // field, array element/handle, string, overlap, direct AT
 }
 
 pub struct RetainLayout {
@@ -338,6 +358,7 @@ pub struct RetainLayout {
 
 pub struct RetainLeaf {
     pub path: String, // e.g. Main.Timer.State
+    pub got_id: [u8; 16],
     pub ty: TyId,
     pub offset: u64,
     pub size: u64,
@@ -400,6 +421,12 @@ Notes:
 - `ConfigHir` contains the selected configuration, resources, tasks, program instances, and
   variable bindings needed by the runtime generator.
 - `Export` records `{stc:export}` symbols and their stable C names.
+- `IdentityCatalog` is produced after semantic analysis and consumed by codegen to emit the GOT
+  manifest. `GotId`s are content-derived identities; a tracked rename/move changes the current
+  path while retaining the identity. The catalog is a compiler/runtime contract, never a source
+  feature: ST code cannot spell or compare a `GotId`, and identity does not affect typing.
+- Per-field roots mean a persistent aggregate contributes one identity record per field
+  recursively; arrays/strings/`OVERLAP` follow the resolved hybrid/one-root/atomic rules.
 
 ## 6. Type representation
 
@@ -623,3 +650,7 @@ No open AST questions currently.
 
 - **Q-016 resolved (A-021):** `SyntaxKind` is stable and append-only; the full CST/traversal API
   is planned for v2/v3 for IDE tooling.
+- **Online-change identity resolved (A-023/A-026):** HIR may carry an `IdentityCatalog` for the
+  GOT manifest; it is optional for compiler-only uses. `GotId`s, manifest history, and catalog
+  records are compiler/runtime contracts, not language semantics, and do not change the CST or
+  typed AST.

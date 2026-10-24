@@ -1,5 +1,12 @@
 # M4 Implementation Plan — LLVM IR Core Codegen
 
+> **Status: implemented and historical.** M4 remains the completed scalar codegen milestone.
+> Its direct-reference, code-linked artifact model is **superseded** by the M4.5 persistent
+> host + loadable module + GOT/manifest model. Do not extend M4's direct-global/call or
+> contiguous-object assumptions into M5. See
+> [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md),
+> `M4.5-Plan.md`, and `handover_to_M5.md`.
+
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-24
 Inputs: `handover_to_M4.md`, `Specification/00-Project-Plan.md` §8,

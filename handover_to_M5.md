@@ -10,8 +10,35 @@ Read this together with the project plan (`Specification/00-Project-Plan.md` §8
 `Specification/Architecture/IO-and-Devices.md` §2–§5,
 `Specification/Architecture/State-and-Retain.md` §2–§7,
 `Specification/Architecture/Testing-and-Verification.md` §1–§4 and §6,
-`Specification/AST/AST.md` §5–§8, `Specification/Decisions.md` D-059–D-093,
-`M4-Plan.md`, and `handover_to_M4.md` (the M3→M4 input, retained for history).
+`Specification/AST/AST.md` §5–§8, `Specification/Decisions.md` D-059–D-108,
+`Specification/Architecture/Online-Change-and-GOT.md`,
+`Specification/Architecture/Debug-and-Monitoring.md`,
+`M4-Plan.md`, `M4.5-Plan.md`, `update_plan_got.md` §13.0, and `handover_to_M4.md` (the M3→M4
+input, retained for history).
+
+## 0. Online-change addendum (2026-10-24)
+
+**M4.5 is inserted before M5.** Do not implement M5 directly on M4's artifact model. The
+resolved online-change architecture supersedes several M4-era recommendations in this document:
+
+- Persistent globals/fields are **host-owned per-field roots** accessed through GOT cells, not
+  module-owned globals or contiguous parent structs. This supersedes the struct layouts and
+  direct globals in §3.5, §4.4, and §5.3.
+- Every user/standard function call goes through a **host-owned function cell**. OOP type
+  descriptors and vtables are runtime-owned; vtable entries are cells, not raw code addresses.
+- Class/FB/interface/`REF_TO` values use **stable handles plus descriptors/place descriptors**;
+  the fat pointer `{data, vtable}` and raw `this` pointer representations in §4.4/§5.1/§5.3 are
+  superseded for persistent-capable values.
+- Retained state and the state file are host-rooted; references and pointers are never persisted.
+  Online attach does **not** load the state file; in-memory values win.
+- `stc build` gains `--emit=module` and the paired GOT manifest. M5 must emit identity records
+  for every new root/field, function/method/FB body, type/descriptor, instance, task, and export.
+- M5 exit criteria include hot-swap coverage for FB/class state, aggregates/strings, interfaces,
+  descriptors, and `POINTER TO`; see §2 and the project plan M5.
+
+Read [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md) and
+`M4.5-Plan.md` before starting M5. If a recommendation below conflicts with those documents, the
+online-change specification wins.
 
 ## 1. State at handover
 
@@ -46,7 +73,9 @@ From the project plan:
 > Deliverables: FB instances/state, methods, inheritance, interfaces/vtables, `THIS`/`SUPER`,
 > references, `VAR_IN_OUT`; static arrays, conformant `ARRAY [*]` parameters, structs, enums,
 > subranges; `STRING`/`WSTRING`/`USTRING`; standard functions; standard FB stdlib; cycle-latched
-> clock; single-task cyclic runtime; test runner MVP.
+> clock; single-task cyclic runtime; test runner MVP. All persistent aggregates follow the
+> M4.5 per-field/handle model: runtime-owned descriptors, vtable cells, place descriptors for
+> `REF_TO`, nullable interfaces, and the transient-only `STC-POINTER` extension.
 >
 > Exit criteria:
 >
@@ -57,6 +86,9 @@ From the project plan:
 >   indexing, slicing, emoji/supplementary scalars) pass.
 > - Standard timer/counter/edge/bistable FBs pass deterministic tests with a mock clock; all
 >   timers in one scan see the same latched cycle time.
+> - Online-change tests cover FB/class state, aggregate roots, interfaces, and preserved
+>   descriptors; `POINTER TO` tests cover arithmetic, indexing, `SIZEOF`, null traps, and the
+>   rejection of persistent pointer fields.
 
 M5 is the milestone where the HIR produced since M3 is fully lowered. It should not change the
 language surface or the semantic rules; M5 implements what the M3 analyzer already resolves.

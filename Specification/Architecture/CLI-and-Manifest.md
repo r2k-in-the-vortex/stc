@@ -1,8 +1,8 @@
 # CLI and Project Manifest
 
-Status: Draft  
+Status: M4 subset implemented; online-change CLI/schema resolved (2026-10-24)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Architecture](Architecture.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
+Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
 ## 1. CLI surface
 
@@ -32,6 +32,11 @@ output goes to stdout.
 | `stc clean` | Remove the project's `target/stc` directory |
 | `stc metadata` | Print the selected configuration, ABI version, exports, and artifact layout |
 | `stc compliance` | Print the profile ID and supported feature matrix |
+| `stc online download` | Export the active manifest, layout summary, and controller/deployment identifier |
+| `stc online diff` | Compare a candidate manifest with the active baseline and print compatibility |
+| `stc rename` | Source-aware tracked rename that preserves `GotId` history (M6) |
+| `stc run --watch` | Watch sources, rebuild, and deploy an online change (M6) |
+| `stc debug` | Start a local authenticated debug/monitoring session (M6.5) |
 
 Future commands (not v1): `stc lsp`, `stc doc`.
 
@@ -41,8 +46,12 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | --- | --- |
 | `--manifest-path <path>` | Use a specific `stc.toml` |
 | `--target <triple>` | Pass a target triple to clang; emit it in the IR |
-| `--release` | `opt-level = 3`, debug line info off unless overridden |
-| `--emit <list>` | Comma-separated `ir,obj,exe,lib,metadata`; overrides manifest |
+| `--release` | Optimised, stripped build; omits debug hooks and full debug info; distinct build ID/manifest. Debug is the default mode |
+| `--debug` | Force debug information and checkpoint hooks (default unless `--release`) |
+| `--emit <list>` | Comma-separated `ir,obj,module,exe,lib,metadata`; `module` emits the loadable module and manifest pair; overrides manifest |
+| `--got-manifest <path>` | Build against the given persistent GOT manifest as the identity baseline |
+| `--cold` | Explicitly build without an online-change baseline (cold-layout build) |
+| `--rename <old=new>` | Record a tracked rename/move; repeatable, including field and package paths |
 | `--clang <path>` | clang executable |
 | `--runtime <path>` | Runtime static library |
 | `--out-dir <path>` | Artifact directory; default `target/stc/<profile>` |
@@ -52,6 +61,8 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--state-file <path>` | Retained-state file for this run |
 | `--reset-retain` | Cold start: ignore existing state, overwrite on shutdown |
 | `--no-retain` | Disable retained-state load and save |
+| `--debug-protocol <kind>` | Local debug transport (`pipe` default, `socket` optional) |
+| `--allow-untracked-removal` | Permit removing/renaming a root without a tracked rename; otherwise diagnose and require `--cold` |
 | `--message-format <fmt>` | `human` (default), `json`, `short` |
 | `--color <when>` | `auto`, `always`, `never` |
 | `-v`, `-vv` | Verbose phase output; `-vv` includes clang commands and IR paths |
@@ -104,6 +115,9 @@ JSON format: one object per diagnostic on stdout, one per line:
 ```
 
 - Error codes are stable; see the conformance profile and each spec.
+- Online-change diagnostics use the `STC-E-MODULE-*`, `STC-E-MANIFEST-*`, `STC-E-ABI-*`, and
+  `STC-E-ONLINE-*` / `STC-W-ONLINE-*` families; debug diagnostics use `STC-E-DEBUG-*` and
+  `STC-W-DEBUG-*`.
 - Compiler panics are caught and reported as `STC-I-0001` with a bug-report note and the IR/source
   context. They never print a Rust backtrace by default (`RUST_BACKTRACE=1` for developers).
 
@@ -148,9 +162,9 @@ configuration = "Main"            # optional if exactly one CONFIGURATION exists
 [build]
 target = "x86_64-pc-windows-msvc" # optional; default = clang host
 opt-level = 2
-debug = true
+debug = true                      # debug is the default build mode
 syntax = "strict"                 # strict (default) | relaxed
-emit = ["exe", "ir"]              # default
+emit = ["module", "ir"]           # v1 online-change deployment; exe/ir/lib also available
 lib-type = "static"               # static | shared, used when emit includes "lib"
 out-dir = "target/stc"
 clang = "C:\\Program Files\\LLVM\\bin\\clang.exe"  # optional
@@ -181,6 +195,22 @@ direction = "input"
 enabled = true
 file = "motor.stcstate"     # relative to the project root
 on-mismatch = "error"       # error | reset
+
+[runtime]
+module-dir = "runtime/modules"
+manifest-dir = "runtime/manifests"
+max-retired-generations = 1
+
+[online]
+baseline = "active"                 # active | explicit path
+# manifest = "runtime/manifests/motor.stc-got.json"  # when baseline = explicit
+cold-policy = "require-confirmation"
+allow-untracked-removal = false
+
+[debug]
+default = true
+protocol = "pipe"                   # pipe | socket (local only)
+force-sessions-end-on-swap = true
 
 [lints]
 warnings = "warn"           # warn | deny | allow (baseline for warning diagnostics)
@@ -229,11 +259,13 @@ timeout = "2s"
   exists, it is selected. If omitted and multiple exist, the build fails with a list.
 - `[build] target` is passed to clang and emitted as the IR triple.
 - `[build] opt-level` is `0|1|2|3|"s"`; maps to clang `-O` flags.
-- `[build] debug` controls line tables / `-g`.
+- `[build] debug` controls full debug information and checkpoint hooks (default `true`).
+  `--release` overrides it with a stripped/optimised build and a distinct build ID/manifest.
 - `[build] syntax` is `strict` (default) or `relaxed`. Strict requires the 2013 statement
   terminator rules; relaxed enables the documented omitted-semicolon-after-block superset.
   `--relaxed` overrides the manifest.
-- `[build] emit` is a non-empty subset of `ir,obj,exe,lib,metadata`. `exe` and `lib` may coexist.
+- `[build] emit` is a non-empty subset of `ir,obj,module,exe,lib,metadata`. `module` emits the
+  loadable module and its GOT manifest pair. `exe` and `lib` may coexist.
 - `[build] lib-type` selects static or shared library output.
 - `[build] out-dir` is relative to the manifest and must stay inside the project unless the user
   passes `--out-dir`.
@@ -256,6 +288,15 @@ timeout = "2s"
   `on-mismatch` (`error` default, or `reset`). The file path is relative to the project root.
   `--state-file`, `--reset-retain`, and `--no-retain` override it. Details:
   [State and RETAIN](State-and-Retain.md).
+- `[runtime]` sets the runtime module/manifest directories and the number of retired generations
+  retained for rollback/grace (`max-retired-generations`, default 1).
+- `[online]` selects the build baseline (`active` or an explicit manifest path), the
+  cold-download policy (`require-confirmation` default), and whether untracked root removal is
+  allowed without a tracked rename (default false). `--got-manifest`, `--cold`,
+  `--allow-untracked-removal`, and `--rename` override it.
+- `[debug]` controls the default debug mode, local protocol transport (`pipe` default, `socket`
+  optional), and whether every online swap ends the debug session (default true). Debug remains a
+  local, authenticated capability; it is not a safety function.
 - `[lints]` sets project lint levels. `warnings` is the baseline (`warn` default, `deny`, or
   `allow`). Per-code keys are `"STC-W-*"`/`"STC-E-*"` with values `allow`, `warn`, or `deny`.
   Errors cannot be downgraded below `error`; a manifest that tries is invalid. Unknown codes are
@@ -364,7 +405,10 @@ target/stc/<profile>/
   <name>.o
   <name>.exe
   <name>.lib | <name>.a | <name>.dll | <name>.so
+  <name>-<build-id>.dll | <name>-<build-id>.so   loadable module
   <name>.stc-meta.json
+  <name>.stc-got.json                           canonical GOT manifest
+  <name>.stc-got.bin                            compact runtime manifest
   build.log
 ```
 
@@ -374,9 +418,13 @@ target/stc/<profile>/
 {
   "profile": "stc-2013-oop-utf8-v1",
   "compiler": "0.1.0",
-  "abi": 1,
+  "abi": 2,
+  "build_id": "0x…",
+  "parent_build_id": "0x…",
   "target": "x86_64-pc-windows-msvc",
   "configuration": "Main",
+  "module": { "file": "motor-control-<build-id>.dll", "format": 1 },
+  "manifest": { "file": "motor-control.stc-got.json", "digest": "0x…", "format": 1 },
   "packages": [
     { "name": "motor-control", "version": "0.1.0", "path": "." },
     { "name": "motor-lib", "version": "0.2.0", "path": "../motor-lib" }
@@ -405,7 +453,7 @@ target/stc/<profile>/
     "file": "motor.stcstate",
     "on_mismatch": "error",
     "leaves": [
-      { "path": "Main.Counter", "type": "DINT", "offset": 0, "size": 4 }
+      { "path": "Main.Counter", "got_id": "0x…", "type": "DINT", "offset": 0, "size": 4 }
     ]
   },
   "strings": [{ "type": "USTRING", "capacity": 255, "unit_bytes": 4, "length_unit": "character" }],
@@ -417,6 +465,10 @@ target/stc/<profile>/
 - The metadata is consumed by the runtime and by embedding hosts.
 - It contains no timestamps or absolute paths, so builds are reproducible.
 - The span table is optional in library mode if the host does not need diagnostics.
+- `build_id` is content-derived; `parent_build_id` is present only for an online-change build.
+  The module/manifest digest pair is validated by the host before activation.
+- The full identity/layout/history record is in the GOT manifest; metadata carries only the
+  summary needed by tooling and the host.
 
 ## 5. `stc new` scaffold
 
@@ -466,4 +518,6 @@ contains secrets; paths are printed as written by the user.
 
 ## 7. Open CLI/manifest questions
 
-None currently. New CLI/manifest questions are appended here or in [Decisions](../Decisions.md).
+None as of 2026-10-24. The online-change CLI/tables/manifest schema is resolved in
+[Online Change and GOT](Online-Change-and-GOT.md) and `update_plan_got.md` §13.0. New
+CLI/manifest questions are appended here or in [Decisions](../Decisions.md).
