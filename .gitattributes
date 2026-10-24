@@ -6,3 +6,4 @@
 *.st text eol=lf
 *.snap text eol=lf
 *.json text eol=lf
+*.txt text eol=lf

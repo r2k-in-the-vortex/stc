@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-24
-Inputs: `handover_to_M3.md`, `Specification/AST/AST.md` §5–§8,
+Inputs: the M3 handover (historical; see git history), `Specification/AST/AST.md` §5–§8,
 `Specification/Architecture/Architecture.md` §2–§5, `Specification/Decisions.md`.
 
 The handover's recommended architecture and order are used. M2 is committed (`24da2f7`),
