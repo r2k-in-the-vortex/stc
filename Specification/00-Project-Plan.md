@@ -337,10 +337,12 @@ Exit criteria:
   and measured.
 - M4 scalar semantics are unchanged; M4 code-linked artifacts are explicitly non-loadable.
 
-> **M4.5 status (2026-10-24):** phase 0 is complete and phase 1 fixes the versioned artifact
+> **M4.5 status (2026-10-24):** phases 0–2 are complete. Phase 1 fixes the versioned artifact
 > contracts in [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md): stable keys, `GotId`,
 > catalog, module descriptor, host ABI 2.0, manifest/plan formats, build IDs, and pairing.
-> Decisions D-113–D-117 record the choices. Compiler and runtime code have not started.
+> Phase 2 implements the identity/manifest layer in `stc-got`; decisions D-113–D-118 record the
+> choices and phase-2 clarifications. Codegen, descriptor, and runtime integration has not
+> started.
 
 ### M5 — FBs, OOP, aggregates, and UTF-8 strings
 

@@ -24,11 +24,14 @@ retained-state stubs). The driver provides `stc parse`, `stc check`, and the M4
 The online-change architecture is **resolved** (2026-10-24): the v1 runtime is a persistent host
 plus loadable whole-program modules, persistent memory is host-owned and accessed through a
 project-defined GOT, every module is paired with a persistent GOT manifest, and activation is a
-cycle-boundary module swap. M4.5 phases 0–1 are complete: the versioned `GotId`, catalog,
+cycle-boundary module swap. M4.5 phases 0–2 are complete: the versioned `GotId`, catalog,
 descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
-[GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md). The foundation
-milestone is M4.5 before M5; full debug/monitoring is M6.5. Implementation has not started, and
-the M4 artifact model remains the current implemented state.
+[GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md), and `stc-got`
+implements stable keys, catalog records, binary/canonical-JSON manifests, baseline matching,
+tracked renames, preserve/allocate/drop/reject classification, slot assignment, and deterministic
+snapshots. The foundation milestone is M4.5 before M5; full debug/monitoring is M6.5. Codegen,
+descriptor, and runtime integration has not started, and the M4 artifact model remains the current
+implemented execution path.
 
 M4 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
 functions, the standard FB library, the manifest, `stc run`, or `stc test`; those constructs are
@@ -276,6 +279,7 @@ stc/
     stc-hir/                 resolved/typed HIR, arenas, types
     stc-sema/                name resolution, type checking, constant eval, lowering
     stc-codegen/             textual LLVM IR builder, ABI, mangling
+    stc-got/                 stable keys, GotId, catalog, GOT manifest/plan codecs
     stc-manifest/            stc.toml schema, dependency graph, source discovery
     stc-runtime/             Rust runtime library with C ABI
     stc-test/                test discovery and runner
@@ -359,6 +363,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-059–D-075 | M3 analyzer decisions: HIR in M3, the multi-file `stc check` bridge and `_root` session namespace, the interner/session model, the stable diagnostic table, type canonicalization and conversions, overloads, the standard prelude, constant evaluation, access defaults, reference/attempt rules, parse-error suppression, test-only handling, deterministic ordering, and arena-based iterative lowering. Details in `Specification/Decisions.md` and `M3-Plan.md`. |
 | D-094–D-108 | Online change is a v1 requirement: persistent host + loadable modules, host-owned GOT and per-field roots, handle-based OOP descriptors, place-descriptor references and transient `POINTER TO`, module lifecycle and double-buffered activation, persistent GOT manifest and exact-baseline/cold-download policy, full typed debug in v1, debug-by-default/`--release`, and the explicit non-safety stance. Details in `Specification/Decisions.md`, `update_plan_got.md`, and the online-change/debug specs. |
 | D-113–D-117 | M4.5 phase 1 fixes the artifact contracts: normalized stable keys and content-derived `GotId`s, canonical binary/JSON encodings and digest chain, a pointer-free module descriptor with a separate function table, host ABI 2.0's exact service table and non-returning trap boundary, and build IDs derived from source/catalog/plan inputs. Details in `Specification/Architecture/GOT-Artifacts.md`. |
+| D-118 | M4.5 phase 2 records implementation clarifications without changing format 1: elementary layout encoding tags, export wrappers as module-local code paired with the wrapped callable's identity, rejection of reintroduced retired `GotId`s, and direct-variable address metadata remaining in the sidecar. The `stc-got` crate implements the identity, manifest, and plan layer. |
 
 ## Question log
 

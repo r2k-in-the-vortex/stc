@@ -2900,5 +2900,12 @@ only its artifact-lifetime, root-granularity, and object-representation model.
 in [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md) and records decisions
 D-113–D-117: normalized stable keys and `GotId`, canonical binary/JSON encodings and digest
 chain, pointer-free module descriptor format 1, host ABI 2.0, manifest/plan format 1, build-ID
-rules, and artifact pairing. The next step is review of that document before phase 2 (compiler
-identity layer) starts. No compiler or runtime code has changed as part of this phase 0/1 work.
+rules, and artifact pairing.
+
+**Update 2026-10-24 (M4.5 phase 2):** the compiler identity layer is implemented in the
+`stc-got` crate: stable-key and `GotId` derivation, catalog records, binary and canonical JSON
+manifest codecs, digest and structural validation, baseline matching, tracked rename/move maps,
+preserve/allocate/drop/reject classification, canonical slot assignment, source fingerprint and
+build-ID derivation, and first/second-build determinism, rename, removal, rejection, and
+tamper-test coverage. Decisions D-118 records the phase-2 format clarifications. No codegen,
+descriptor, or runtime work has started; phase 3 begins after review.

@@ -108,6 +108,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "stc-got"
+version = "0.1.0"
+
+[[package]]
 name = "stc-hir"
 version = "0.1.0"
 dependencies = [

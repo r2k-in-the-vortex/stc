@@ -267,6 +267,29 @@ layout_hash =
 | Overlap | `0x05 \|\| size:u32 \|\| align:u32 \|\| union_layout_hash:id128` |
 | Reference/pointer | `0x06 \|\| kind:u8 \|\| typekey \|\| 0x00` |
 
+The elementary `encoding:u8` tags are fixed:
+
+| Tag | Type keys |
+| --- | --- |
+| 1 | `BOOL` |
+| 2 | `SINT`, `INT`, `DINT`, `LINT` |
+| 3 | `USINT`, `UINT`, `UDINT`, `ULINT` |
+| 4 | `BYTE`, `WORD`, `DWORD`, `LWORD` |
+| 5 | `REAL` |
+| 6 | `LREAL` |
+| 7 | `TIME`, `LTIME` |
+| 8 | `DATE`, `LDATE` |
+| 9 | `TOD`, `LTOD` |
+| 10 | `DT`, `LDT` |
+| 11 | `CHAR` |
+| 12 | `WCHAR` |
+| 13 | `UCHAR` |
+
+For the M4.5-supported targets the elementary size/alignment pairs are the natural ones:
+`BOOL`/`CHAR` 1/1, `WCHAR` 2/2, `UCHAR`/`REAL`/32-bit types 4/4, `LREAL`/64-bit integer and
+time/date types 8/8, and 8-bit/16-bit integer and bit-string types at their widths. The encoding
+tag is descriptive; the type key is also hashed, so the tag is not the sole layout discriminator.
+
 For struct/FB/class and overlap shapes, `layout_hash`/`union_layout_hash` is the SHA-256 of the
 canonical field/view list: each entry is `path || 0x00 || offset:u64 || size:u64 || align:u32 ||
 typekey || 0x00 || field_layout_hash:id128`, sorted by `(offset, path)` and concatenated. This
@@ -325,8 +348,10 @@ by copying it, not by rehashing the new key.
 - A baseline manifest is invalid if two records share a `GotId` with different `(kind, key)`
   values.
 - A new declaration may reuse a baseline `GotId` only through an explicit tracked rename/move.
-  A reintroduced retired key receives a new `GotId` unless a future explicit reuse policy says
-  otherwise; v1 has no reuse option.
+  A reintroduced retired key would re-derive the same `GotId` from its content tuple; v1 has no
+  reuse/reissue policy, so the build rejects that case with `STC-E-MANIFEST-002` rather than
+  resurrecting quarantined storage (§12.1). A key with a new spelling, or a forced cold build,
+  produces a fresh layout instead.
 - A `GotId` is never derived from a slot number, source location, mangled symbol, `DefId`,
   `FieldId`, or file order.
 
@@ -1181,6 +1206,9 @@ For the M4 scalar surface, the compiler populates:
   direct slots; one `TaskGuard` root per task.
 - **Functions:** user functions, program bodies, and export wrappers, each with a function slot.
   Compiler helpers (checked arithmetic, conversions, init code) stay direct and have no identity.
+  An export wrapper does not add a second callable identity: the wrapped callable keeps its
+  function `GotId` and slot, and the kind-7 export record references it through
+  `function_got_id`. The C-ABI wrapper is module-local code bound by that export record.
 - **Types and descriptors:** both tables are empty for elementary scalar programs; named user
   types, vtables, and object/type descriptors appear in M5.
 - **Instances and tasks:** the selected or synthesized configuration, one resource, one task,
@@ -1191,6 +1219,16 @@ For the M4 scalar surface, the compiler populates:
 - **Plan:** `Preserve`, `Allocate`, `Drop`, and `Reject`; `Migrate`/`Reset` are not emitted.
 - **Host services:** trap, clocks, I/O image, and retained-state stubs. Transient `alloc`/`free`
   and `assert` are in ABI 2.0 but unused by M4.5-generated code.
+
+Direct-root records carry the identity, type, layout, and slot, but not the process-image
+area/address; that stays in the `.stc-meta.json` sidecar. Address-remap detection is therefore a
+host check against module metadata, not a manifest comparison.
+
+Because `GotId` is content-derived, re-deriving a declaration reintroduced after its identity was
+retired produces the same value. V1 has no explicit reuse mapping, so a build that would
+resurrect a `GotId` present in the baseline history is rejected with `STC-E-MANIFEST-002` rather
+than silently reusing quarantined storage; a key with a new spelling, or a forced cold build that
+starts a fresh layout and history, avoids the case.
 
 The manifest records every persistent scalar root separately. It does not record locals,
 parameters, temporaries, compiler helpers, or module-local read-only data.
@@ -1219,10 +1257,15 @@ The implementation phases that follow must add:
 ### 12.3 Phase status
 
 Phase 0 is complete: the resolved decisions D-094–D-112 are recorded and the documentation
-checklist in `update_plan_got.md` §12 is applied. This document is the phase 1 output. It is
-reviewed before phase 2 starts; implementation of the identity layer, catalog, descriptor,
-manifest, and host API must follow these formats exactly, and any change discovered during
-implementation returns to this document and the decision log before code lands.
+checklist in `update_plan_got.md` §12 is applied. This document is the phase 1 output, reviewed
+and approved before phase 2. Phase 2 is implemented in the `stc-got` crate (stable keys, `GotId`,
+catalog, binary/JSON manifest codecs, baseline matching, rename/move maps,
+preserve/allocate/drop classification, slot assignment, and deterministic snapshots); the
+implementation clarifications for elementary encoding tags, export wrappers, retired-identity
+reintroduction, and direct-variable address metadata are recorded under D-118. Implementation of
+the descriptor, host API, and codegen projection in later phases must follow these formats
+exactly, and any further change discovered during implementation returns to this document and the
+decision log before code lands.
 
 ## 13. Related documents
 
@@ -1232,4 +1275,4 @@ implementation returns to this document and the decision log before code lands.
 - [CLI and Manifest](CLI-and-Manifest.md) — commands, options, artifact layout.
 - [State and RETAIN](State-and-Retain.md) — retained-state file and cold/warm policy.
 - [Testing and Verification](Testing-and-Verification.md) — hot-swap and manifest tests.
-- [Decisions](../Decisions.md) — D-113–D-117 and the prior online-change decisions.
+- [Decisions](../Decisions.md) — D-113–D-118 and the prior online-change decisions.

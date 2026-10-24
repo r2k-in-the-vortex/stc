@@ -1,0 +1,376 @@
+{
+  "body": {
+    "descriptors": [],
+    "exports": [
+      {
+        "c_name": "stc_add",
+        "function_got_id": "0x847b1389086fd28acb13555b31dfb700",
+        "got_id": "0x82daffe66a71a484b7cc7e234bed4347",
+        "key": "_ROOT::MATH.ADD@(IN:DINT,IN:DINT)->DINT#C:stc_add",
+        "no_mangle": false,
+        "previous_keys": [],
+        "signature_key": "(IN:DINT,IN:DINT)->DINT",
+        "source": null
+      }
+    ],
+    "functions": [
+      {
+        "export_name": null,
+        "flags": 2,
+        "function_kind": "program_body",
+        "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+        "key": "_ROOT::MAIN#BODY@()->VOID",
+        "owner_type": null,
+        "previous_keys": [],
+        "signature_key": "()->VOID",
+        "slot": 5,
+        "source": null,
+        "vtable_slot": null
+      },
+      {
+        "export_name": null,
+        "flags": 1,
+        "function_kind": "function",
+        "got_id": "0x847b1389086fd28acb13555b31dfb700",
+        "key": "_ROOT::MATH.ADD@(IN:DINT,IN:DINT)->DINT",
+        "owner_type": null,
+        "previous_keys": [],
+        "signature_key": "(IN:DINT,IN:DINT)->DINT",
+        "slot": 4,
+        "source": null,
+        "vtable_slot": null
+      }
+    ],
+    "header": {
+      "active_configuration": "",
+      "build_id": "0x9ac44e5698b597fe7956b64ef36b48ca",
+      "catalog_digest": "0xb1200c5cc531908f3f3edbddf530520e9a71d37ab60d9d109e19963b3ad06935",
+      "compiler_version": "stc 0.1.0",
+      "descriptor_digest": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "endianness": 0,
+      "generator_flags": 64,
+      "host_abi_major": 2,
+      "host_abi_minor": 0,
+      "module_format": 1,
+      "module_name": "phase2",
+      "parent_build_id": null,
+      "parent_manifest_digest": null,
+      "plan_digest": "0xe0e0860798f7c3824dc08ba83a78eba9ee52c1c2d25c7c4d923447b9cc7e5950",
+      "pointer_width": 8,
+      "profile": "stc-2013-oop-utf8-v1",
+      "required_features": 3,
+      "source_fingerprint": "0x255c2db1eb1ac0f020244d77d324faf78743c9ab935ebcaa08dc288930215e7d",
+      "target_triple": "x86_64-unknown-linux-gnu"
+    },
+    "history": {
+      "retired": []
+    },
+    "instances": [
+      {
+        "configuration": "MAIN",
+        "got_id": "0x649ccf3ebd80db1939bfdfda2d81c42b",
+        "instance_path": "MAIN/R1/INST",
+        "key": "_ROOT::MAIN/R1/INST",
+        "previous_keys": [],
+        "program_type": null,
+        "program_type_key": "MAIN",
+        "resource": "R1",
+        "source": null,
+        "task_key": "_ROOT::MAIN/R1#FAST"
+      }
+    ],
+    "plan": {
+      "actions": [
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0x07d630c3f4a913d2e5ea03e00b96106d",
+          "key": "_ROOT::MAIN/R1#FAST.GUARD",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new task",
+          "got_id": "0x19cb60ccd05a7d1b4f59ac9a9cc25c7a",
+          "key": "_ROOT::MAIN/R1#FAST",
+          "kind": 6,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0x207f1baf227ea39b245f33a59a4f4b77",
+          "key": "_ROOT::COUNTER",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0x495a6ee32d7a39dfd86b2d6b2f73a7a2",
+          "key": "_ROOT::MAIN.SPEED#MAIN/R1/INST",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new instance",
+          "got_id": "0x649ccf3ebd80db1939bfdfda2d81c42b",
+          "key": "_ROOT::MAIN/R1/INST",
+          "kind": 5,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "direct-variable cell is per generation",
+          "got_id": "0x7d1aff52f2261b6a602b95429a1d0bbf",
+          "key": "_ROOT::MAIN.INPUT#MAIN/R1/INST",
+          "kind": 9,
+          "old_key": null,
+          "reason_code": "allocate.direct"
+        },
+        {
+          "action": "allocate",
+          "detail": "new export",
+          "got_id": "0x82daffe66a71a484b7cc7e234bed4347",
+          "key": "_ROOT::MATH.ADD@(IN:DINT,IN:DINT)->DINT#C:stc_add",
+          "kind": 7,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new callable",
+          "got_id": "0x847b1389086fd28acb13555b31dfb700",
+          "key": "_ROOT::MATH.ADD@(IN:DINT,IN:DINT)->DINT",
+          "kind": 2,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new callable",
+          "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+          "key": "_ROOT::MAIN#BODY@()->VOID",
+          "kind": 2,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0x9a7664cc52b8e5edcbffc1746e782ad4",
+          "key": "_ROOT::LIMIT",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "STC-W-MANIFEST-001",
+          "got_id": null,
+          "message": "no baseline manifest; the build uses a cold layout",
+          "new_key": null,
+          "old_key": null,
+          "severity": "warning"
+        }
+      ],
+      "parent_build_id": null,
+      "parent_manifest_digest": null,
+      "verdict": "cold"
+    },
+    "roots": [
+      {
+        "align": 4,
+        "field_path": "",
+        "got_id": "0x207f1baf227ea39b245f33a59a4f4b77",
+        "initializer": "constant",
+        "initializer_digest": null,
+        "key": "_ROOT::COUNTER",
+        "layout_hash": "0xfd22c654deff0509ba8d236283dc7e65",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "retain",
+        "root_kind": "global",
+        "size": 4,
+        "slot": 1,
+        "source": null,
+        "type_key": "DINT"
+      },
+      {
+        "align": 2,
+        "field_path": "",
+        "got_id": "0x9a7664cc52b8e5edcbffc1746e782ad4",
+        "initializer": "zero",
+        "initializer_digest": null,
+        "key": "_ROOT::LIMIT",
+        "layout_hash": "0x94f867289930936f9eadb5f9892f03e0",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "global",
+        "size": 2,
+        "slot": 3,
+        "source": null,
+        "type_key": "INT"
+      },
+      {
+        "align": 1,
+        "field_path": "INPUT",
+        "got_id": "0x7d1aff52f2261b6a602b95429a1d0bbf",
+        "initializer": "none",
+        "initializer_digest": null,
+        "key": "_ROOT::MAIN.INPUT#MAIN/R1/INST",
+        "layout_hash": "0xdb07b81571f332a49c7dfe04de257640",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "direct",
+        "size": 1,
+        "slot": 6,
+        "source": null,
+        "type_key": "BOOL"
+      },
+      {
+        "align": 4,
+        "field_path": "SPEED",
+        "got_id": "0x495a6ee32d7a39dfd86b2d6b2f73a7a2",
+        "initializer": "zero",
+        "initializer_digest": null,
+        "key": "_ROOT::MAIN.SPEED#MAIN/R1/INST",
+        "layout_hash": "0xfd22c654deff0509ba8d236283dc7e65",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "program_field",
+        "size": 4,
+        "slot": 2,
+        "source": null,
+        "type_key": "DINT"
+      },
+      {
+        "align": 1,
+        "field_path": "",
+        "got_id": "0x07d630c3f4a913d2e5ea03e00b96106d",
+        "initializer": "zero",
+        "initializer_digest": null,
+        "key": "_ROOT::MAIN/R1#FAST.GUARD",
+        "layout_hash": "0xdb07b81571f332a49c7dfe04de257640",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "task_guard",
+        "size": 1,
+        "slot": 0,
+        "source": null,
+        "type_key": "BOOL"
+      }
+    ],
+    "slots": [
+      {
+        "got_id": "0x07d630c3f4a913d2e5ea03e00b96106d",
+        "kind": "data",
+        "service": 0,
+        "slot": 0
+      },
+      {
+        "got_id": "0x207f1baf227ea39b245f33a59a4f4b77",
+        "kind": "data",
+        "service": 0,
+        "slot": 1
+      },
+      {
+        "got_id": "0x495a6ee32d7a39dfd86b2d6b2f73a7a2",
+        "kind": "data",
+        "service": 0,
+        "slot": 2
+      },
+      {
+        "got_id": "0x9a7664cc52b8e5edcbffc1746e782ad4",
+        "kind": "data",
+        "service": 0,
+        "slot": 3
+      },
+      {
+        "got_id": "0x847b1389086fd28acb13555b31dfb700",
+        "kind": "function",
+        "service": 0,
+        "slot": 4
+      },
+      {
+        "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+        "kind": "function",
+        "service": 0,
+        "slot": 5
+      },
+      {
+        "got_id": "0x7d1aff52f2261b6a602b95429a1d0bbf",
+        "kind": "direct",
+        "service": 0,
+        "slot": 6
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 1,
+        "slot": 7
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 2,
+        "slot": 8
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 7,
+        "slot": 9
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 8,
+        "slot": 10
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 9,
+        "slot": 11
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 10,
+        "slot": 12
+      }
+    ],
+    "tasks": [
+      {
+        "configuration": "MAIN",
+        "got_id": "0x19cb60ccd05a7d1b4f59ac9a9cc25c7a",
+        "guard_got_id": "0x07d630c3f4a913d2e5ea03e00b96106d",
+        "interval_ns": null,
+        "key": "_ROOT::MAIN/R1#FAST",
+        "name": "FAST",
+        "previous_keys": [],
+        "priority": null,
+        "resource": "R1",
+        "single": true,
+        "source": null
+      }
+    ],
+    "types": []
+  },
+  "digest": "0x2a9f2ea197d88aef38bb24e426b7c4850493f1a72041fb2d2d01c3b61eccaa22",
+  "flags": 0,
+  "format": 1
+}

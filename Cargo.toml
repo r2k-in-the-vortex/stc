@@ -9,6 +9,7 @@ members = [
     "crates/stc-hir",
     "crates/stc-sema",
     "crates/stc-codegen",
+    "crates/stc-got",
     "crates/stc-runtime",
     "crates/stc-driver",
 ]
