@@ -313,14 +313,19 @@ loader/prepare thread; normal/temp GOT double buffering; O(1) cycle-boundary act
 one-successful-cycle rollback; off-thread unload; immutable module files, manifest sidecar, and
 current pointer; persistent GOT manifest in canonical JSON and compact binary; exact-parent
 baseline rules; tracked rename/move maps; preserve/allocate/drop; compatibility classification
-and diagnostics; the cold-download path; CLI `--emit=module`, `--got-manifest`, `--cold`,
-`--rename`, and `stc online download/diff`.
+and diagnostics; the cold-download path; CLI `--emit=module`, `--got-manifest`, `--cold`, and
+`--rename`; a thin `exe` launcher and an embedding `lib` host with generated code in the separate
+module (the two emit kinds may be combined); and the host API/export path for manifest
+download/diff. The user-facing `stc online download/diff` commands remain M6.
 
 Exit criteria:
 
 - Hot-swap suite passes: code-only swap, field add/remove/rename, tracked move, incompatible
   change rejection, missing/stale manifest to cold download, load/prepare failure rollback, and
   unload after grace.
+- `--emit=exe` produces a thin launcher for an adjacent module pair; `--emit=lib` produces the
+  embedding host library with the generated module kept separate; the two emit kinds may be
+  combined.
 - Double builds produce byte-identical modules and manifests; the runtime exports the active
   manifest and a second build consumes it as an exact baseline.
 - Generated code contains no persistent raw pointers; every persistent root/function call goes

@@ -69,8 +69,8 @@ Status publication uses lock-free counters, double-buffered snapshots, and bound
 | --- | --- |
 | `module` | Loadable code, module descriptor, entry points, embedded metadata, no persistent storage |
 | `manifest` | Canonical JSON (`.stc-got.json`) plus compact binary (`.stc-got.bin`), generated from one model |
-| `exe` | Thin host launcher that loads an adjacent module |
-| `lib` | Embedding library containing the same host |
+| `exe` | Thin host launcher that loads an adjacent module and manifest |
+| `lib` | Embedding host library; generated code remains in the separate module (M4.5: static host archive) |
 
 A module and its manifest are a pair. The module descriptor is a small binding structure for code
 addresses, sizes, entry points, and the paired digest. The manifest is the identity/history

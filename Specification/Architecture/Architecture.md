@@ -360,9 +360,9 @@ storage and must not retain the pointer beyond the call.
 
   `stc_rt_execute` loads the adjacent module, owns the cycle loop, time base, cycle limit,
   signal handling, error reporting, and the online-change controller.
-- Library mode exports the host embedding entry points plus `{stc:export}` wrappers and the
-  module descriptor. The embedding host owns the loop, I/O backend, manifest store, and debug
-  services.
+- Library mode exports the host embedding entry points; `{stc:export}` wrappers are served
+  through the host export registry for the active module, which remains a separate loadable
+  artifact. The embedding host owns the loop, I/O backend, manifest store, and debug services.
 
 ### 4.10 Name mangling
 

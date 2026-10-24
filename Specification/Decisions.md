@@ -542,8 +542,12 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-106 | `stc` is not a safety PLC and is not responsible for safety in any way. Debug may pause the watchdog and hold outputs indefinitely; no automatic fail-safe is provided. | Explicit scope boundary; safety requires an independent qualified design and certification. |
 | D-107 | Online-change foundation is M4.5 before M5; full debug is M6.5 between M6 and M7; M8 covers Linux host parity including module loading, threads, and debug info. | Front-loads the architecture before M5 features depend on it, and keeps debug and portability independently testable. |
 | D-108 | The CLI and project manifest gain module emission, GOT manifest/cold/rename options, `stc online download/diff`, run/watch, `[runtime]`/`[online]`/`[debug]` tables, and stable `MODULE`/`MANIFEST`/`ABI`/`ONLINE`/debug diagnostics. Manifest data is untrusted, validated, and access-controlled. | A usable, auditable workflow and a stable automation surface without a network protocol in v1. |
+| D-109 | M4.5 exposes manifest export/download and diff data through the host API and test entry points; the user-facing `stc online download`/`stc online diff` commands remain M6. | Keeps the foundation milestone focused on the host/module/manifest contract; M6 owns the user workflow. |
+| D-110 | `lib` is the embedding host library, not generated module code. In M4.5 it is a static host archive; shared host libraries are M6. The generated module and manifest remain separate artifacts. | Preserves the host/module split and online-change capability for embedding hosts; avoids linking generated code into the host. |
+| D-111 | `exe` is a thin host launcher for an adjacent module and manifest pair. The M4 code-linked executable is retired; M4 ABI-1 artifacts are not loadable. | Matches D-094's host/module model and prevents a second, non-swappable execution path. |
+| D-112 | `exe` and `lib` may be emitted together in M4.5. The M4 mutual-exclusion rule is removed because the two artifacts now have distinct roles (launcher vs embedding host library). | Matches the resolved CLI artifact model; the M4 restriction existed only because both were alternative code-linked artifacts. |
 
-D-094 through D-108 affect
+D-094 through D-112 affect
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),
 [Debug and Monitoring](Architecture/Debug-and-Monitoring.md),
 [Architecture](Architecture/Architecture.md),

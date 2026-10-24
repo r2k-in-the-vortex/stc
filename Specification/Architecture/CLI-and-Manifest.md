@@ -48,7 +48,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--target <triple>` | Pass a target triple to clang; emit it in the IR |
 | `--release` | Optimised, stripped build; omits debug hooks and full debug info; distinct build ID/manifest. Debug is the default mode |
 | `--debug` | Force debug information and checkpoint hooks (default unless `--release`) |
-| `--emit <list>` | Comma-separated `ir,obj,module,exe,lib,metadata`; `module` emits the loadable module and manifest pair; overrides manifest |
+| `--emit <list>` | Comma-separated `ir,obj,module,exe,lib,metadata`; `module` emits the loadable module and manifest pair; `exe` is a launcher and `lib` the embedding host library; the two may coexist; overrides manifest |
 | `--got-manifest <path>` | Build against the given persistent GOT manifest as the identity baseline |
 | `--cold` | Explicitly build without an online-change baseline (cold-layout build) |
 | `--rename <old=new>` | Record a tracked rename/move; repeatable, including field and package paths |
@@ -265,7 +265,8 @@ timeout = "2s"
   terminator rules; relaxed enables the documented omitted-semicolon-after-block superset.
   `--relaxed` overrides the manifest.
 - `[build] emit` is a non-empty subset of `ir,obj,module,exe,lib,metadata`. `module` emits the
-  loadable module and its GOT manifest pair. `exe` and `lib` may coexist.
+  loadable module and its GOT manifest pair. `exe` is a thin launcher and `lib` is the embedding
+  host library; generated code stays in the separate module, and `exe` and `lib` may coexist.
 - `[build] lib-type` selects static or shared library output.
 - `[build] out-dir` is relative to the manifest and must stay inside the project unless the user
   passes `--out-dir`.
@@ -462,6 +463,10 @@ target/stc/<profile>/
 }
 ```
 
+- `lib` is the embedding host library, not generated module code. In M4.5 it is a static host
+  archive; shared host libraries (`lib-type = "shared"`) are M6. `exe` is a thin launcher and
+  emits the adjacent module pair. The generated module and manifest remain separate artifacts;
+  `exe` and `lib` may be emitted together.
 - The metadata is consumed by the runtime and by embedding hosts.
 - It contains no timestamps or absolute paths, so builds are reproducible.
 - The span table is optional in library mode if the host does not need diagnostics.

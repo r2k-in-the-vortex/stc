@@ -44,7 +44,8 @@ generated initialization entry used during prepare.
 has no `main` and no persistent storage of its own.
 
 `stc build --emit=exe` emits a thin host launcher whose `main` calls
-`stc_rt_execute(argc, argv, descriptor_path)`. The host:
+`stc_rt_execute(argc, argv, descriptor_path)`, together with the adjacent module and manifest
+pair it loads. The host:
 
 1. Parses runtime arguments (`--cycles`, `--cycle-time`, `--io`, `--trace`, `--module`).
 2. Loads and validates the active module and manifest pair.
@@ -77,11 +78,12 @@ int32_t stc_host_load_module(const char* path, stc_load_mode mode);
 int32_t stc_host_export_manifest(char* buffer, int64_t* len);
 ```
 
-The embedding host owns the loop, I/O, clock, GOT, root allocator, manifest store, loader/
-prepare thread, and service/monitor threads. `stc_cycle` is called only by the host's cycle
-thread; external callers must serialize all host API calls. The runtime is not a general-purpose
-thread-safe library: service access goes through the typed generation-pinned API, and the cycle
-thread is the only ST executor.
+The generated module remains a separate loadable artifact; M4.5 emits the embedding host as a
+static library, and shared host libraries are M6. The embedding host owns the loop, I/O, clock,
+GOT, root allocator, manifest store, loader/prepare thread, and service/monitor threads.
+`stc_cycle` is called only by the host's cycle thread; external callers must serialize all host
+API calls. The runtime is not a general-purpose thread-safe library: service access goes through
+the typed generation-pinned API, and the cycle thread is the only ST executor.
 
 ### 1.3 Task model
 

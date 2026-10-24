@@ -33,6 +33,9 @@ resolved online-change architecture supersedes several M4-era recommendations in
   Online attach does **not** load the state file; in-memory values win.
 - `stc build` gains `--emit=module` and the paired GOT manifest. M5 must emit identity records
   for every new root/field, function/method/FB body, type/descriptor, instance, task, and export.
+- `exe` becomes a thin launcher and `lib` becomes the embedding host library with generated code
+  kept in the separate module; the two may be emitted together (D-109–D-112). M4-era statements
+  that `exe` and `lib` cannot coexist describe the historical M4 path.
 - M5 exit criteria include hot-swap coverage for FB/class state, aggregates/strings, interfaces,
   descriptors, and `POINTER TO`; see §2 and the project plan M5.
 

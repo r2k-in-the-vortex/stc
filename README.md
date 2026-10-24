@@ -115,16 +115,17 @@ ST source (UTF-8)
 ```sh
 stc build --emit=ir                 # <name>.ll
 stc build --emit=ir,obj             # .ll + .o
-stc build --emit=exe                # executable + retained .ll
-stc build --emit=lib                # static library
+stc build --emit=exe                # M4: code-linked exe; M4.5+: launcher + module
+stc build --emit=lib                # M4: static code archive; M4.5+: embedding host lib
 stc build --emit=metadata           # <name>.stc-meta.json
 stc build --emit=module             # loadable module + GOT manifest (M4.5+)
 ```
 
 - M4 defaults to `ir`; `stc build --emit=ir` stops after IR. The v1 target default becomes
   `module` (with its paired manifest) for online-change deployments; `exe` is a thin host
-  launcher for an adjacent module, and `lib` embeds the same host. Emitting `exe` and `lib` from
-  one module is not supported in M4; shared libraries are M6.
+  launcher for an adjacent module, and `lib` is the embedding host library with generated code
+  kept in the separate module. M4.5 allows `exe` and `lib` in one build; M4 rejects that
+  combination because both are code-linked. Shared host libraries are M6.
 - A module is paired with `<name>.stc-got.json` (canonical tooling/download) and
   `<name>.stc-got.bin` (compact runtime projection). `--got-manifest <file>` selects the build
   baseline; `--cold` explicitly requests a cold-layout build; `--rename old=new` records a
@@ -167,7 +168,7 @@ reference vectors.
 ```text
 stc new <path>          scaffold a project
 stc check               parse and analyse; no codegen
-stc build               emit IR/objects/executable/library
+stc build               emit IR/objects/module/executable/library
 stc run                 build and run an executable
 stc test                build and run the built-in test suite
 stc fmt                 format sources with the fixed style; --check for CI
@@ -185,7 +186,8 @@ M4 implements `stc parse`, `stc check`, and `stc build` (with `--name`, `--emit`
 `--target`, `--clang`, `--runtime`, `--relaxed`, `--message-format`, and `-v`). `stc new`,
 `stc run`, `stc test`, `stc fmt`, `stc clean`, `stc metadata`, and `stc compliance`, the
 manifest, verbose `-vv`, color control, and warnings-as-errors arrive in M6. M4.5 adds
-`--emit=module`, `--got-manifest`, `--cold`, `--rename`, and the online-change foundation.
+`--emit=module`, `--got-manifest`, `--cold`, `--rename`, the thin `exe` launcher, the embedding
+`lib` host, and the online-change foundation.
 `--debug`/`--release` select debug-info emission; debug is the default and `--release` is the
 optional stripped/optimised mode.
 
