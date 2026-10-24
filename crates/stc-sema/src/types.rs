@@ -272,6 +272,9 @@ impl Analyzer<'_> {
             SyntaxKind::KwLtod | SyntaxKind::KwLtimeOfDay => types.date(DateTy::LTod),
             SyntaxKind::KwDateAndTime | SyntaxKind::KwDt => types.date(DateTy::DateTime),
             SyntaxKind::KwLdt | SyntaxKind::KwLdateAndTime => types.date(DateTy::LDateTime),
+            SyntaxKind::KwChar => types.char_ty(CharTy::Char),
+            SyntaxKind::KwWchar => types.char_ty(CharTy::WChar),
+            SyntaxKind::KwUchar => types.char_ty(CharTy::UChar),
             _ => return None,
         })
     }
@@ -469,6 +472,7 @@ impl Analyzer<'_> {
                 retain: RetainPolicy::None,
                 constant: false,
                 at,
+                io: None,
                 init: None,
                 span,
             });

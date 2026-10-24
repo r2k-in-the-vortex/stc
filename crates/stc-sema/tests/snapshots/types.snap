@@ -131,52 +131,52 @@ def 14 program "P" @0:130..289 parent=0 vis=PUBLIC
   field P: Point VAR
   field Q: ARRAY [1..2] OF DINT VAR
 [fields]
-field 0 IN: BOOL owner=1 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 1 PT: TIME owner=1 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 2 Q: BOOL owner=1 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 3 ET: TIME owner=1 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 4 IN: BOOL owner=2 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 5 PT: TIME owner=2 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 6 Q: BOOL owner=2 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 7 ET: TIME owner=2 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 8 IN: BOOL owner=3 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 9 PT: TIME owner=3 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 10 Q: BOOL owner=3 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 11 ET: TIME owner=3 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 12 CU: BOOL owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 13 R: BOOL owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 14 PV: INT owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 15 Q: BOOL owner=4 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 16 CV: INT owner=4 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 17 CD: BOOL owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 18 LD: BOOL owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 19 PV: INT owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 20 Q: BOOL owner=5 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 21 CV: INT owner=5 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 22 CU: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 23 CD: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 24 R: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 25 LD: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 26 PV: INT owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 27 QU: BOOL owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 28 QD: BOOL owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 29 CV: INT owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 30 CLK: BOOL owner=7 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 31 Q: BOOL owner=7 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 32 CLK: BOOL owner=8 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 33 Q: BOOL owner=8 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 34 SET1: BOOL owner=9 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 35 RESET: BOOL owner=9 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 36 Q: BOOL owner=9 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 37 SET: BOOL owner=10 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 38 RESET1: BOOL owner=10 section=VAR_INPUT vis=PUBLIC retain=None at=-
-field 39 Q: BOOL owner=10 section=VAR_OUTPUT vis=PUBLIC retain=None at=-
-field 40 c: Color owner=14 section=VAR vis=PUBLIC retain=None at=-
-field 41 s: Small owner=14 section=VAR vis=PUBLIC retain=None at=-
-field 42 P: Point owner=14 section=VAR vis=PUBLIC retain=None at=-
-field 43 Q: ARRAY [1..2] OF DINT owner=14 section=VAR vis=PUBLIC retain=None at=-
-field 44 x: DINT owner=13 section=VAR vis=PUBLIC retain=None at=-
-field 45 y: DINT owner=13 section=VAR vis=PUBLIC retain=None at=-
+field 0 IN: BOOL owner=1 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 1 PT: TIME owner=1 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 2 Q: BOOL owner=1 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 3 ET: TIME owner=1 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 4 IN: BOOL owner=2 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 5 PT: TIME owner=2 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 6 Q: BOOL owner=2 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 7 ET: TIME owner=2 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 8 IN: BOOL owner=3 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 9 PT: TIME owner=3 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 10 Q: BOOL owner=3 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 11 ET: TIME owner=3 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 12 CU: BOOL owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 13 R: BOOL owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 14 PV: INT owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 15 Q: BOOL owner=4 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 16 CV: INT owner=4 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 17 CD: BOOL owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 18 LD: BOOL owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 19 PV: INT owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 20 Q: BOOL owner=5 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 21 CV: INT owner=5 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 22 CU: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 23 CD: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 24 R: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 25 LD: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 26 PV: INT owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 27 QU: BOOL owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 28 QD: BOOL owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 29 CV: INT owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 30 CLK: BOOL owner=7 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 31 Q: BOOL owner=7 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 32 CLK: BOOL owner=8 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 33 Q: BOOL owner=8 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 34 SET1: BOOL owner=9 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 35 RESET: BOOL owner=9 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 36 Q: BOOL owner=9 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 37 SET: BOOL owner=10 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 38 RESET1: BOOL owner=10 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 39 Q: BOOL owner=10 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 40 c: Color owner=14 section=VAR vis=PUBLIC retain=None at=- io=-
+field 41 s: Small owner=14 section=VAR vis=PUBLIC retain=None at=- io=-
+field 42 P: Point owner=14 section=VAR vis=PUBLIC retain=None at=- io=-
+field 43 Q: ARRAY [1..2] OF DINT owner=14 section=VAR vis=PUBLIC retain=None at=- io=-
+field 44 x: DINT owner=13 section=VAR vis=PUBLIC retain=None at=- io=-
+field 45 y: DINT owner=13 section=VAR vis=PUBLIC retain=None at=- io=-
 [params]
 [locals]
 [bodies]

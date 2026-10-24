@@ -7,18 +7,28 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M3 name resolution and type checking complete.** The repository contains the source-map and
-diagnostic crates, the full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST
-views, strict pragma JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery,
+**M4 LLVM IR core codegen complete.** The repository contains the source-map and diagnostic
+crates, the full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST views,
+strict pragma JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery,
 unsupported-construct diagnostics), `stc-hir` (arenas, stable IDs, interner, canonical types,
-resolved bodies), `stc-sema` (collection, namespaces/`USING`, name resolution, type checking,
-constant evaluation, initializers, access control, OOP, references, I/O and retention checks,
-HIR lowering), and the `stc parse`/`stc check` driver. `stc check <file>...` analyzes one
-in-memory package across files; `stc parse` remains single-file. Parser and semantic snapshots,
-a committed corpus, per-production and per-code traceability, deterministic property tests, a
-20k-term deep-chain test, and `fuzz_lexer`, `fuzz_parser`, and `fuzz_analyzer` targets are in
-place. No code generator exists yet; M4 consumes the HIR produced here. The specification
-continues to be written before implementation, as required below.
+resolved bodies, `{stc:io}` hints, export names, folded task values), `stc-sema` (collection,
+namespaces/`USING`, name resolution, type checking, constant evaluation, initializers, access
+control, OOP, references, I/O and retention checks, HIR lowering), `stc-codegen` (deterministic
+textual LLVM IR for the elementary scalar subset: expressions, checked arithmetic, casts,
+control flow, functions, programs, globals, process image, scalar retained leaves), and
+`stc-runtime` (Rust `staticlib` with the C ABI, cycle loop, process image, clock, traps, and
+retained-state stubs). The driver provides `stc parse`, `stc check`, and the M4
+`stc build <file>...` bridge with `--emit=ir,obj,exe,lib,metadata`; clang lowers and links
+`executable` and static-library artifacts.
+
+M4 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
+functions, the standard FB library, the manifest, `stc run`, or `stc test`; those constructs are
+rejected with explicit `STC-E-CODEGEN-001` diagnostics. Retained-state file I/O is an M6 stub
+(returns "disabled"), and task scheduling beyond one task per resource is M5. Parser and
+semantic snapshots, IR snapshots, clang verification, execution and C-harness tests, a committed
+corpus, traceability tables, deterministic property tests, a 20k-term deep-chain test, and
+`fuzz_lexer`, `fuzz_parser`, `fuzz_analyzer`, and `fuzz_codegen` targets are in place. The
+specification continues to be written before implementation, as required below.
 
 | Document | Purpose |
 | --- | --- |
@@ -90,11 +100,13 @@ ST source (UTF-8)
 stc build --emit=ir                 # <name>.ll
 stc build --emit=ir,obj             # .ll + .o
 stc build --emit=exe                # executable + retained .ll
-stc build --emit=lib                # static library (or --lib-type=shared)
-stc build --emit=exe,lib,ir         # all artifacts
+stc build --emit=lib                # static library
+stc build --emit=metadata           # <name>.stc-meta.json
 ```
 
-- Default is `exe,ir`; `stc build --emit=ir` stops after IR.
+- M4 defaults to `ir`; `stc build --emit=ir` stops after IR. The v1 target default becomes
+  `exe,ir` once the manifest exists (M6). Emitting `exe` and `lib` from one module is not
+  supported in M4; shared libraries are M6.
 - `--target <triple>` is passed to clang and emitted as the IR triple; without it, clang uses the
   host target.
 - Windows 11 x86-64 (MSVC) is the primary development host. After basic development, `stc` and
@@ -122,7 +134,7 @@ the Rust implementation is validated against the generated vectors (A-006). Floa
 transcendentals and platform libm behavior are not proved; they are tested against high-precision
 reference vectors.
 
-## CLI (planned)
+## CLI (M4 subset implemented)
 
 ```text
 stc new <path>          scaffold a project
@@ -136,8 +148,13 @@ stc metadata            print configuration, ABI, exports, layout
 stc compliance          print the profile and feature matrix
 ```
 
+M4 implements `stc parse`, `stc check`, and `stc build` (with `--name`, `--emit`, `--out-dir`,
+`--target`, `--clang`, `--runtime`, `--relaxed`, `--message-format`, and `-v`). `stc new`,
+`stc run`, `stc test`, `stc fmt`, `stc clean`, `stc metadata`, and `stc compliance`, the
+manifest, verbose `-vv`, color control, and warnings-as-errors arrive in M6.
+
 Cargo-like diagnostics (`file:line:col: error[STC-E-...]`), source snippets, notes, suggestions,
-`--message-format=json`, `-v`/`-vv`, color control, and warnings-as-errors. Details:
+and JSON output are implemented. Details:
 [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md).
 
 ## Project manifest
@@ -201,7 +218,7 @@ stc/
     stc-runtime/             Rust runtime library with C ABI
     stc-test/                test discovery and runner
     stc-driver/              CLI binary `stc`
-  fuzz/                      cargo-fuzz workspace; `fuzz_lexer` target
+  fuzz/                      cargo-fuzz workspace; lexer/parser/analyzer/codegen targets
   stdlib/                    standard function blocks in ST
   lean/                      Lake project: exact models, proofs, vector generator
   tests/                     conformance, UI, codegen, execution, projects
@@ -224,7 +241,9 @@ on pull requests.
 - `fmt`, `clippy`, `test`, `ui`, `conformance`, `execution`, `lean`, `fuzz-smoke`, and
   `cross-target` activate when their inputs exist. `test`, `ui`, `conformance`, and `execution`
   run on both Windows Server 2025 x64 and Ubuntu 24.04 x64; the host-independent jobs (`fmt`,
-  `clippy`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04.
+  `clippy`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The `test` job sets
+  `STC_REQUIRE_CLANG=1`, and the execution tests build `stc-runtime` and link C harnesses with
+  the same toolchain discovery as `stc build`.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`) so `-latest` migrations do not change
   the matrix silently.
 - Suite jobs call `cargo xtask test --suite <name> --locked`; the UI, conformance, and execution
@@ -312,21 +331,25 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 **None as of 2026-10-24.** All v1 planning questions Q-001 through Q-017 are resolved
 (A-005 through A-021). New questions will be added here one at a time.
 
-## Building and running (M3)
+## Building and running (M4)
 
 ```sh
 cargo test --workspace --locked
+cargo build -p stc-runtime
 cargo run -p stc-driver -- parse path/to/file.st
-cargo run -p stc-driver -- check path/to/file.st
-cargo run -p stc-driver -- check path/to/a.st path/to/b.st
-cargo run -p stc-driver -- check --relaxed path/to/file.st
-cargo run -p stc-driver -- parse path/to/file.st --message-format=json
+cargo run -p stc-driver -- check path/to/file.st path/to/other.st
+cargo run -p stc-driver -- build examples/hello.st --emit=ir
+cargo run -p stc-driver -- build examples/hello.st --emit=exe     --runtime target/debug/stc_runtime.lib
+cargo run -p stc-driver -- build examples/hello.st --emit=lib,metadata     --runtime target/debug/stc_runtime.lib
 ```
 
 `stc parse` prints a lossless CST dump (and the typed AST dump with `--ast`). `stc check` accepts
 one or more files, builds one in-memory package, and reports lexical, syntax, and semantic
-diagnostics. Semantic analysis is skipped when parsing has errors (D-070). Human diagnostics go
-to stderr; JSON diagnostics go to stdout.
+diagnostics. Semantic analysis is skipped when parsing has errors (D-070). `stc build` performs
+the same analysis and then emits deterministic IR and, when requested and the toolchain is
+available, objects, executables, or static libraries. Runtime artifact names differ by host:
+`stc_runtime.lib` on Windows MSVC and `libstc_runtime.a` on Linux GNU. Human diagnostics go to
+stderr; JSON diagnostics go to stdout.
 
 ## Dev environment
 

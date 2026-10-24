@@ -4,6 +4,11 @@ Status: Draft
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [CLI/Manifest](CLI-and-Manifest.md)
 
+> **M4 status:** IR snapshots, clang verification (`STC_REQUIRE_CLANG=1` in CI), execution tests,
+> C-harness library tests, process-image tests, scalar retained-state tests, determinism checks,
+> the 20k-term deep chain, and `fuzz_codegen` are implemented. The M4 execution tests build
+> `stc-runtime` once per test process and link harnesses with the driver toolchain discovery.
+
 ## 1. Layers of testing
 
 | Layer | What it proves | Location |
@@ -12,8 +17,8 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | Parser/CST | Grammar coverage, round-trip, recovery | `crates/stc-parser/tests`, `tests/ui` |
 | Analyzer | Names, types, conversions, OOP rules, diagnostics | `crates/stc-sema/tests`, `tests/ui` |
 | HIR lowering | Resolution, explicit casts, call targets | `crates/stc-sema/tests` |
-| IR generation | Deterministic IR, ABI, structure | `tests/codegen` |
-| Execution | Generated programs behave correctly | `tests/execution` |
+| IR generation | Deterministic IR, ABI, structure, clang verification, snapshots | `crates/stc-codegen/tests` |
+| Execution | Generated executables, library harnesses, traps, process image | `crates/stc-driver/tests` |
 | Conformance | Profile feature matrix and edge cases | `tests/conformance` |
 | Standard library | Functions and FBs | `tests/stdlib` |
 | Pragmas | JSON payload parsing, balanced braces, non-nesting, validation, precedence | `crates/stc-parser/tests`, `tests/ui` |
@@ -23,7 +28,7 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
 | Lean | Exact-function models and proofs | `lean/`, `tests/vectors` |
 | CLI/manifest | Verbs, exit codes, JSON, configuration, dependency graph, `stc.lock`/`--locked` | `tests/cli` |
-| Fuzzing | Robustness of lexer/parser/analyzer | `fuzz/` |
+| Fuzzing | Robustness of lexer/parser/analyzer/codegen | `fuzz/` |
 | Cross-target | IR/object emission for targets other than host | CI |
 | Host portability | Full workspace tests and end-to-end CLI on Linux x86-64 and Linux AArch64 | CI |
 
@@ -188,6 +193,7 @@ Targets:
 - `fuzz_lexer`: arbitrary bytes -> token stream; no panic/hang.
 - `fuzz_parser`: arbitrary bytes -> CST; no panic/hang; depth limit respected.
 - `fuzz_analyzer`: valid-ish token streams -> diagnostics; no panic.
+- `fuzz_codegen`: clean parse/analysis -> IR/metadata; deterministic, bounded, no panic.
 - `fuzz_manifest`: arbitrary TOML -> manifest errors, no panic.
 
 Use `cargo-fuzz` with a bounded input size and a time limit. Run a smoke corpus in CI and a longer

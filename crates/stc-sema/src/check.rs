@@ -4596,6 +4596,93 @@ impl Analyzer<'_> {
         ok
     }
 
+    // ---- exports ---------------------------------------------------------
+
+    /// Validates `{stc:export}`/`{stc:no_mangle}` and records stable C names (D-086).
+    pub(crate) fn check_exports(&mut self) {
+        let mut candidates = Vec::new();
+        for (index, def) in self.hir.defs.iter().enumerate() {
+            if (!def.export && !def.no_mangle) || def.test_only {
+                continue;
+            }
+            let id = DefId::new(u32::try_from(index).expect("definition limit"));
+            let is_function = matches!(def.kind, DefKind::Function { .. });
+            let name = def.name_text(&self.hir.interner).to_string();
+            let normalized = def.name.map_or(String::new(), |symbol| {
+                self.hir.interner.normalized(symbol).to_string()
+            });
+            candidates.push((
+                id,
+                def.span,
+                def.export,
+                def.no_mangle,
+                is_function,
+                name,
+                normalized,
+            ));
+        }
+        let mut emitted: BTreeMap<String, Span> = BTreeMap::new();
+        let mut updates = Vec::new();
+        for (def, span, export, no_mangle, is_function, name, normalized) in candidates {
+            if no_mangle && !export {
+                self.error(
+                    crate::codes::EXPORT_INVALID,
+                    "`{stc:no_mangle}` requires `{stc:export}`",
+                    span,
+                );
+                continue;
+            }
+            if !is_function {
+                self.error(
+                    crate::codes::EXPORT_INVALID,
+                    "`{stc:export}` is only supported on `FUNCTION` in M4",
+                    span,
+                );
+                continue;
+            }
+            let symbol_text = if no_mangle {
+                if !is_c_identifier(&name) {
+                    self.error(
+                        crate::codes::EXPORT_INVALID,
+                        format!("`no_mangle` name `{name}` is not a C identifier"),
+                        span,
+                    );
+                    continue;
+                }
+                let lowered = name.to_ascii_lowercase();
+                if lowered.starts_with("stc_") || lowered.starts_with("llvm.") {
+                    self.error(
+                        crate::codes::EXPORT_INVALID,
+                        format!("export name `{name}` is reserved"),
+                        span,
+                    );
+                    continue;
+                }
+                name
+            } else {
+                format!("stc_export_{normalized}")
+            };
+            if let Some(previous) = emitted.get(&symbol_text) {
+                let previous = *previous;
+                self.push_diag(
+                    Diagnostic::error(
+                        crate::codes::EXPORT_INVALID,
+                        format!("duplicate export symbol `{symbol_text}`"),
+                        span,
+                    )
+                    .with_label(previous, "the first export with this name is here"),
+                );
+                continue;
+            }
+            emitted.insert(symbol_text.clone(), span);
+            let symbol = self.hir.intern(&symbol_text);
+            updates.push((def, symbol));
+        }
+        for (def, symbol) in updates {
+            self.hir.defs[def.index()].export_name = Some(symbol);
+        }
+    }
+
     // ---- configuration ---------------------------------------------------
 
     pub(crate) fn check_configurations(&mut self) {
@@ -4637,6 +4724,39 @@ impl Analyzer<'_> {
                 ),
                 span,
             );
+        }
+    }
+
+    /// Folds a checked task attribute into a scalar HIR constant (D-088).
+    fn fold_task_const(&self, id: ExprId) -> Option<ConstValue> {
+        match &self.hir.expr(id).kind {
+            ExprKindHir::Literal(literal) => Some(literal.value.clone()),
+            ExprKindHir::Place(PlaceHir::Global(def)) => self.const_globals.get(def).cloned(),
+            ExprKindHir::Cast { operand, to, .. } => {
+                let value = self.fold_task_const(*operand)?;
+                fold_cast_const(&value, self.hir.types.get(*to))
+            }
+            ExprKindHir::Unary { op, operand } => {
+                let value = self.fold_task_const(*operand)?;
+                match (op, value) {
+                    (UnOp::Plus, value) => Some(value),
+                    (UnOp::Neg, ConstValue::Int(value)) => {
+                        Some(ConstValue::Int(value.checked_neg()?))
+                    }
+                    (UnOp::Neg, ConstValue::Real(value)) => Some(ConstValue::Real(-value)),
+                    (UnOp::Neg, ConstValue::Time(value)) => {
+                        Some(ConstValue::Time(value.checked_neg()?))
+                    }
+                    (UnOp::Not, ConstValue::Bool(value)) => Some(ConstValue::Bool(!value)),
+                    _ => None,
+                }
+            }
+            ExprKindHir::Binary { op, lhs, rhs } => {
+                let lhs = self.fold_task_const(*lhs)?;
+                let rhs = self.fold_task_const(*rhs)?;
+                fold_binary_const(*op, &lhs, &rhs)
+            }
+            _ => None,
         }
     }
 
@@ -4701,11 +4821,32 @@ impl Analyzer<'_> {
                 if let Some(value) = priority {
                     self.check_task_value(value, TaskKind::Priority, task.token_span());
                 }
+                let single_value = single.and_then(|id| match self.fold_task_const(id) {
+                    Some(ConstValue::Bool(value)) => Some(value),
+                    _ => None,
+                });
+                let interval_ns = interval.and_then(|id| match self.fold_task_const(id) {
+                    Some(ConstValue::Time(value) | ConstValue::Int(value)) => Some(value),
+                    _ => None,
+                });
+                let priority_value = priority.and_then(|id| match self.fold_task_const(id) {
+                    Some(
+                        ConstValue::Int(value)
+                        | ConstValue::Time(value)
+                        | ConstValue::Enum { value, .. },
+                    ) => Some(value),
+                    Some(ConstValue::Char(value)) => Some(i128::from(value)),
+                    Some(ConstValue::Bool(value)) => Some(i128::from(u8::from(value))),
+                    _ => None,
+                });
                 tasks.push(stc_hir::TaskHir {
                     name: task_symbol,
                     single,
                     interval,
                     priority,
+                    single_value,
+                    interval_ns,
+                    priority_value,
                     span: task.token_span(),
                 });
             }
@@ -5305,4 +5446,115 @@ fn edit_distance(a: &str, b: &str) -> usize {
         std::mem::swap(&mut previous, &mut current);
     }
     previous[b.len()]
+}
+
+fn is_c_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn fold_cast_const(value: &ConstValue, to: &Ty) -> Option<ConstValue> {
+    match (value, to) {
+        (ConstValue::Int(value), Ty::Int(_) | Ty::BitString(_)) => Some(ConstValue::Int(*value)),
+        (ConstValue::Int(value), Ty::Time(_)) => Some(ConstValue::Time(*value)),
+        (ConstValue::Int(value), Ty::Real(_)) => Some(ConstValue::Real(*value as f64)),
+        (ConstValue::Int(value), Ty::Bool) => Some(ConstValue::Bool(*value != 0)),
+        (ConstValue::Int(value), Ty::Char(_)) => {
+            Some(ConstValue::Char(u32::try_from(*value).ok()?))
+        }
+        (ConstValue::Bool(value), Ty::Bool) => Some(ConstValue::Bool(*value)),
+        (ConstValue::Bool(value), Ty::Int(_) | Ty::BitString(_)) => {
+            Some(ConstValue::Int(i128::from(*value)))
+        }
+        (ConstValue::Real(value), Ty::Real(_)) => Some(ConstValue::Real(*value)),
+        (ConstValue::Time(value), Ty::Time(_)) => Some(ConstValue::Time(*value)),
+        (ConstValue::Char(value), Ty::Char(_)) => Some(ConstValue::Char(*value)),
+        (ConstValue::Char(value), Ty::Int(_) | Ty::BitString(_)) => {
+            Some(ConstValue::Int(i128::from(*value)))
+        }
+        (ConstValue::Date { kind, value }, Ty::Date(destination)) => {
+            let value = match (date_is_days(*kind), date_is_days(*destination)) {
+                (false, true) => value.checked_mul(86_400_000_000_000)?,
+                (true, false) => value.checked_div(86_400_000_000_000)?,
+                _ => *value,
+            };
+            Some(ConstValue::Date {
+                kind: *destination,
+                value,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn date_is_days(kind: stc_hir::DateTy) -> bool {
+    matches!(kind, stc_hir::DateTy::Date)
+}
+
+fn fold_binary_const(op: BinOp, lhs: &ConstValue, rhs: &ConstValue) -> Option<ConstValue> {
+    if op.is_comparison() {
+        let ordering = compare_consts(lhs, rhs)?;
+        let value = match op {
+            BinOp::Eq => ordering == std::cmp::Ordering::Equal,
+            BinOp::Ne => ordering != std::cmp::Ordering::Equal,
+            BinOp::Lt => ordering == std::cmp::Ordering::Less,
+            BinOp::Le => ordering != std::cmp::Ordering::Greater,
+            BinOp::Gt => ordering == std::cmp::Ordering::Greater,
+            BinOp::Ge => ordering != std::cmp::Ordering::Less,
+            _ => return None,
+        };
+        return Some(ConstValue::Bool(value));
+    }
+    match (lhs, rhs) {
+        (ConstValue::Int(a), ConstValue::Int(b)) => {
+            let value = match op {
+                BinOp::Add => a.checked_add(*b)?,
+                BinOp::Sub => a.checked_sub(*b)?,
+                BinOp::Mul => a.checked_mul(*b)?,
+                BinOp::Div => a.checked_div(*b)?,
+                BinOp::Mod => a.checked_rem(*b)?,
+                BinOp::And => a & b,
+                BinOp::Or => a | b,
+                BinOp::Xor => a ^ b,
+                BinOp::Power => {
+                    let exponent = u32::try_from(*b).ok()?;
+                    a.checked_pow(exponent)?
+                }
+                _ => return None,
+            };
+            Some(ConstValue::Int(value))
+        }
+        (ConstValue::Time(a), ConstValue::Time(b)) => {
+            let value = match op {
+                BinOp::Add => a.checked_add(*b)?,
+                BinOp::Sub => a.checked_sub(*b)?,
+                _ => return None,
+            };
+            Some(ConstValue::Time(value))
+        }
+        (ConstValue::Real(a), ConstValue::Real(b)) => {
+            let value = match op {
+                BinOp::Add => a + b,
+                BinOp::Sub => a - b,
+                BinOp::Mul => a * b,
+                BinOp::Div => a / b,
+                _ => return None,
+            };
+            Some(ConstValue::Real(value))
+        }
+        (ConstValue::Bool(a), ConstValue::Bool(b)) => {
+            let value = match op {
+                BinOp::And => *a && *b,
+                BinOp::Or => *a || *b,
+                BinOp::Xor => *a ^ *b,
+                _ => return None,
+            };
+            Some(ConstValue::Bool(value))
+        }
+        _ => None,
+    }
 }

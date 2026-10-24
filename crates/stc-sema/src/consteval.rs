@@ -141,11 +141,15 @@ impl Analyzer<'_> {
                 Some((ty, ConstValue::Time(value)))
             }
             Literal::Date(date) => {
-                let value = days_from_civil(date.year, date.month, date.day)?;
-                let ty = if date.long {
-                    self.hir.types.date(DateTy::LDate)
+                let days = days_from_civil(date.year, date.month, date.day)?;
+                // D-089: DATE is days; LDATE is nanoseconds since the epoch.
+                let (ty, value) = if date.long {
+                    (
+                        self.hir.types.date(DateTy::LDate),
+                        days.checked_mul(86_400_000_000_000)?,
+                    )
                 } else {
-                    self.hir.types.date(DateTy::Date)
+                    (self.hir.types.date(DateTy::Date), days)
                 };
                 Some((
                     ty,
@@ -827,6 +831,14 @@ impl Analyzer<'_> {
             "LWORD" => SyntaxKind::KwLword,
             "REAL" => SyntaxKind::KwReal,
             "LREAL" => SyntaxKind::KwLreal,
+            "TIME" => SyntaxKind::KwTime,
+            "LTIME" => SyntaxKind::KwLtime,
+            "DATE" => SyntaxKind::KwDate,
+            "LDATE" => SyntaxKind::KwLdate,
+            "TOD" | "TIME_OF_DAY" => SyntaxKind::KwTod,
+            "LTOD" | "LTIME_OF_DAY" => SyntaxKind::KwLtod,
+            "DT" | "DATE_AND_TIME" => SyntaxKind::KwDt,
+            "LDT" | "LDATE_AND_TIME" => SyntaxKind::KwLdt,
             "CHAR" => SyntaxKind::KwChar,
             "WCHAR" => SyntaxKind::KwWchar,
             "UCHAR" => SyntaxKind::KwUchar,
@@ -857,6 +869,7 @@ impl Analyzer<'_> {
         let int_value = match &value {
             ConstValue::Int(value) | ConstValue::Enum { value, .. } => Some(*value),
             ConstValue::Char(value) => Some(i128::from(*value)),
+            ConstValue::Bool(value) => Some(i128::from(u8::from(*value))),
             _ => None,
         };
         match target {
@@ -899,6 +912,33 @@ impl Analyzer<'_> {
             Ty::Bool => match value {
                 ConstValue::Bool(value) => Some(ConstValue::Bool(value)),
                 ConstValue::Int(value) => Some(ConstValue::Bool(value != 0)),
+                other => Some(other),
+            },
+            Ty::Time(_) => match value {
+                ConstValue::Time(value) => Some(ConstValue::Time(value)),
+                ConstValue::Int(value) => Some(ConstValue::Time(value)),
+                other => Some(other),
+            },
+            Ty::Date(destination) => match value {
+                ConstValue::Date { kind, value } => {
+                    let converted = match (date_is_days(kind), date_is_days(destination)) {
+                        (false, true) => value.checked_div(86_400_000_000_000),
+                        (true, false) => value.checked_mul(86_400_000_000_000),
+                        _ => Some(value),
+                    };
+                    let Some(converted) = converted else {
+                        self.error(
+                            crate::codes::CONST_FAILURE,
+                            "date constant does not fit the target type",
+                            span,
+                        );
+                        return None;
+                    };
+                    Some(ConstValue::Date {
+                        kind: destination,
+                        value: converted,
+                    })
+                }
                 other => Some(other),
             },
             _ => Some(value),
@@ -985,13 +1025,29 @@ impl Analyzer<'_> {
             (Ty::Time(_), Ty::Time(_), ConstValue::Time(value)) => {
                 Some((expected_base, ConstValue::Time(*value)))
             }
-            (Ty::Date(_), Ty::Date(_), ConstValue::Date { value, .. }) => Some((
-                expected_base,
-                ConstValue::Date {
-                    kind: self.date_kind_of(expected_base),
-                    value: *value,
-                },
-            )),
+            (Ty::Date(_), Ty::Date(_), ConstValue::Date { kind, value }) => {
+                let destination = self.date_kind_of(expected_base);
+                let converted = match (date_is_days(*kind), date_is_days(destination)) {
+                    (false, true) => value.checked_mul(86_400_000_000_000),
+                    (true, false) => value.checked_div(86_400_000_000_000),
+                    _ => Some(*value),
+                };
+                let Some(converted) = converted else {
+                    self.error(
+                        crate::codes::CONST_FAILURE,
+                        "date constant does not fit the target type",
+                        span,
+                    );
+                    return None;
+                };
+                Some((
+                    expected_base,
+                    ConstValue::Date {
+                        kind: destination,
+                        value: converted,
+                    },
+                ))
+            }
             _ => {
                 if self.can_assign(expected, ty) != crate::types::Conv::No {
                     Some((expected, value))
@@ -1493,4 +1549,8 @@ fn days_from_civil(year: u32, month: u32, day: u32) -> Option<i128> {
     let doy = (153 * mp + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     Some(era * 146_097 + doe - 719_468)
+}
+
+fn date_is_days(kind: DateTy) -> bool {
+    matches!(kind, DateTy::Date)
 }

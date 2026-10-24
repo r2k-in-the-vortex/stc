@@ -122,6 +122,13 @@ expressions with resolved places, callees, and explicit casts.
 
 ## 4. Code generation
 
+> **M4 status:** §4.1–§4.12 are implemented for the elementary scalar subset (D-076–D-093).
+> Functions, programs, globals, scalar operators, checked arithmetic, control flow, the process
+> image, scalar retained leaves, executable/library units, and `{stc:export}` wrappers are
+> emitted and tested. OOP lowering (§4.6), aggregates, strings, references, and standard
+> functions remain M5; codegen rejects them with `STC-E-CODEGEN-001`. `stc_abi_version` is
+> supplied by the runtime, not by the generated module, to avoid a duplicate symbol.
+
 ### 4.1 IR builder
 
 `stc-codegen` contains a small typed IR builder that emits **textual LLVM IR**. It does not link

@@ -237,6 +237,16 @@ Exit criteria:
 - Both executable and library mode link and execute a no-op cycle.
 - IR is deterministic and free of target-specific offsets.
 
+> **M4 status (2026-10-24):** implemented. `stc-codegen` lowers the elementary scalar HIR
+> subset to deterministic textual IR; `stc-runtime` supplies the C ABI, cycle loop, process
+> image, clock, traps, and retained-state stubs; `stc build` emits `ir`, `obj`, `exe`, static
+> `lib`, and `metadata` with clang/runtime discovery on Windows MSVC. Codegen, clang
+> verification, execution, and C-harness tests pass, including library mode, process-image
+> access, bindings, casts, short-circuit logic, and scalar retained-state round-trips. M5
+> constructs (FBs, OOP, aggregates, strings, references, standard functions) produce explicit
+> `STC-E-CODEGEN-001` diagnostics. File-backed retained state, the manifest, `stc run`, and
+> `stc test` remain M6; scheduling beyond one task per resource is M5.
+
 ### M5 — FBs, OOP, aggregates, and UTF-8 strings
 
 Deliverables: FB instances/state, methods, inheritance, interfaces/vtables, `THIS`/`SUPER`,

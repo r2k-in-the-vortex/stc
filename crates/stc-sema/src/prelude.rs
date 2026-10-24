@@ -67,6 +67,7 @@ impl Analyzer<'_> {
                     retain: RetainPolicy::None,
                     constant: false,
                     at: None,
+                    io: None,
                     init: None,
                     span: EMPTY_SPAN,
                 });

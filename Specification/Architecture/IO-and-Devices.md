@@ -26,6 +26,13 @@ Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [
 receive type defaults, unbound outputs are discarded), `memory` (tests), or optionally `file`.
 EtherCAT, Modbus, and MQTT are planned for v2 and are noted here but not designed in v1.
 
+> **M4 status:** `AT` scalar layout, contiguous `%I`/`%Q`/`%M` image sizing, `offset_bits`,
+> `{stc:io}` hints, `<name>.stc-meta.json`, and unbound-input defaults are implemented.
+> Generated `stc_init` calls `stc_rt_io_configure`/`stc_rt_io_image`, caches the image pointer,
+> and applies declared input defaults once. The generated cycle does not reapply defaults, so a
+> library host can drive inputs between cycles; M6 owns per-cycle backend precedence. The
+> device tree, project bindings, `VAR_ACCESS` metadata, and non-null backends are M6.
+
 ## 2. Process image
 
 Direct variables map into a contiguous process image:

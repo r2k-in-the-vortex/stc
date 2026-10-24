@@ -75,6 +75,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "stc-codegen"
+version = "0.1.0"
+dependencies = [
+ "stc-diag",
+ "stc-hir",
+ "stc-lexer",
+ "stc-parser",
+ "stc-sema",
+ "stc-span",
+]
+
+[[package]]
 name = "stc-diag"
 version = "0.1.0"
 dependencies = [
@@ -85,7 +97,9 @@ dependencies = [
 name = "stc-driver"
 version = "0.1.0"
 dependencies = [
+ "stc-codegen",
  "stc-diag",
+ "stc-hir",
  "stc-lexer",
  "stc-parser",
  "stc-sema",
@@ -117,6 +131,10 @@ dependencies = [
  "stc-span",
  "stc-syntax",
 ]
+
+[[package]]
+name = "stc-runtime"
+version = "0.1.0"
 
 [[package]]
 name = "stc-sema"

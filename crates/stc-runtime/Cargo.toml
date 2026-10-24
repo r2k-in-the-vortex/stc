@@ -1,0 +1,18 @@
+[package]
+name = "stc-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+
+# The workspace forbids unsafe code. This crate is the documented exception:
+# it is the C ABI boundary and owns all FFI pointer handling (D-077). Cargo
+# cannot combine `workspace = true` with an override, so the lint is restated
+# here; the workspace currently defines only `unsafe_code`.
+[lints.rust]
+unsafe_code = "allow"

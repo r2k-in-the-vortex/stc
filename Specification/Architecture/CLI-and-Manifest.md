@@ -11,12 +11,15 @@ output goes to stdout.
 
 ### 1.1 Commands
 
-> **M3 status:** `stc parse <file>` and `stc check <file>...` are implemented. `parse` is
-> single-file and syntax-only; `check` analyzes one or more files as one in-memory package,
-> resolves names, type-checks, and lowers HIR. Semantic analysis is skipped when parsing produced
-> errors (D-070). `--message-format` supports `human` and `json` (not `short`), and `--relaxed`
-> is supported. The remaining commands and options below are the v1 target and arrive in later
-> milestones (D-051).
+> **M4 status:** `stc parse <file>`, `stc check <file>...`, and the manifest-free
+> `stc build <file>...` bridge are implemented. `parse` is single-file and syntax-only; `check`
+> analyzes one or more files as one in-memory package; `build` also emits `ir`, `obj`, `exe`,
+> static `lib`, or `metadata` and accepts `--name`, `--emit`, `--out-dir`, `--target`,
+> `--clang`, `--runtime`, and `-v`. Semantic analysis is skipped when parsing produced errors
+> (D-070). `--message-format` supports `human` and `json` (not `short`), and `--relaxed` is
+> supported. Exit codes 0/1/2/3 follow §1.3; codegen-internal failures use 3. The manifest,
+> `stc run`/`test`/`fmt`/`clean`/`metadata`/`compliance`, shared libraries, and the remaining
+> options below are the v1 target and arrive in later milestones (D-051, D-079).
 
 | Command | Purpose |
 | --- | --- |

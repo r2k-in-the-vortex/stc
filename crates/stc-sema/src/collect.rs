@@ -2,7 +2,8 @@
 //! configurations (Architecture §3.3, D-072).
 
 use stc_hir::{
-    DefId, DefKind, FieldHir, LocalHir, ParamHir, RetainPolicy, Symbol, VarSectionKind, Visibility,
+    DefId, DefKind, FieldHir, IoDirection, IoHint, LocalHir, ParamHir, RetainPolicy, Symbol,
+    VarSectionKind, Visibility,
 };
 use stc_lexer::{DirectArea, DirectSize, DirectVariable, Literal};
 use stc_span::Span;
@@ -553,6 +554,7 @@ impl Analyzer<'_> {
         let at = at_token.as_ref().and_then(direct_variable);
         let at_span = at_token.as_ref().map(SyntaxToken::span);
         let init = decl.initializer_node();
+        let io = io_hint(decl);
         for name in decl.names() {
             self.push_decl(
                 owner,
@@ -567,6 +569,7 @@ impl Analyzer<'_> {
                 ty_ref.clone(),
                 at.clone(),
                 at_span,
+                io.clone(),
                 init.clone(),
                 false,
             );
@@ -600,6 +603,7 @@ impl Analyzer<'_> {
                 None,
                 None,
                 None,
+                None,
                 true,
             );
         }
@@ -620,6 +624,7 @@ impl Analyzer<'_> {
         ty_ref: Option<stc_syntax::ast::TypeRef>,
         at: Option<DirectVariable>,
         at_span: Option<Span>,
+        io: Option<IoHint>,
         init: Option<stc_syntax::ast::Initializer>,
         edge: bool,
     ) {
@@ -641,6 +646,7 @@ impl Analyzer<'_> {
                     at: at
                         .clone()
                         .map(|address| crate::collect::direct_address(address, span)),
+                    io: io.clone(),
                     init: None,
                     span,
                 });
@@ -708,6 +714,7 @@ impl Analyzer<'_> {
                         at: at
                             .clone()
                             .map(|address| crate::collect::direct_address(address, span)),
+                        io,
                         init: None,
                     },
                     Some(symbol),
@@ -816,6 +823,50 @@ impl Analyzer<'_> {
             decl: decl.clone(),
         });
     }
+}
+
+/// Extracts the parser-validated `{stc:io}` hint from a variable declaration.
+fn io_hint(decl: &VarDecl) -> Option<IoHint> {
+    let mut hint = None;
+    for pragma in decl.pragmas() {
+        let Some(annotation) = pragma.annotation() else {
+            continue;
+        };
+        if annotation.name != "io" {
+            continue;
+        }
+        let object = annotation.object();
+        let device = object
+            .and_then(|object| object.get("device"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned);
+        let channel = object
+            .and_then(|object| object.get("channel"))
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok());
+        let direction = object
+            .and_then(|object| object.get("direction"))
+            .and_then(|value| value.as_str())
+            .and_then(|value| match value {
+                "input" => Some(IoDirection::Input),
+                "output" => Some(IoDirection::Output),
+                "inout" => Some(IoDirection::InOut),
+                _ => None,
+            });
+        let payload = annotation
+            .payload
+            .as_ref()
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        hint = Some(IoHint {
+            device,
+            channel,
+            direction,
+            payload,
+            span: annotation.span,
+        });
+    }
+    hint
 }
 
 pub(crate) fn direct_address(address: DirectVariable, span: Span) -> stc_hir::DirectAddress {

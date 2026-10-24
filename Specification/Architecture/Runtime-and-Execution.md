@@ -7,6 +7,14 @@ Related: [Architecture](Architecture.md), [Conformance](../01-Conformance-Profil
 This document defines how generated code executes, what the runtime library provides, and how
 executable and library artifacts differ.
 
+> **M4 status:** `crates/stc-runtime` implements the C ABI, the `--cycles N` executable loop,
+> the latched cycle clock, the process image (`stc_rt_io_configure`/`stc_rt_io_image`), trap
+> reporting (exit 70), and retained-state stubs that return 5 (disabled). It uses `std` and is
+> the only crate permitted unsafe code (D-077). `stc_rt_assert`, the memory/file I/O backends,
+> vtable/type descriptors, and file-backed state are later milestones. `stc_abi_version` is
+> runtime-owned; generated library modules export `stc_init`, `stc_cycle`, `stc_shutdown`,
+> `stc_metadata_json`, export wrappers, and the retain functions, but not `stc_abi_version`.
+
 ## 1. Execution model
 
 IEC 61131-3 programs execute cyclically. The generated code has three entry points:

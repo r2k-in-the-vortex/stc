@@ -16,10 +16,10 @@ pub use dump::dump_hir;
 pub use hir::{
     ArgDirection, ArgHir, BinOp, BindingHir, Body, CalleeHir, CaseArmHir, CaseLabelHir, CastKind,
     ConfigInitHir, ConfigurationHir, ConstValue, Def, DefKind, DirectAddress, DirectArea,
-    DirectSize, EnumValueHir, ExprHir, ExprKindHir, FieldHir, HirCrate, LiteralHir, LocalHir,
-    ParamHir, PlaceHir, ProgramInstanceHir, ResourceHir, RetainPolicy, StdFnKind, StdFunction,
-    StdParam, StdResult, StdRetType, StmtHir, StmtKindHir, TaskHir, UnOp, VarAccessHir,
-    VarSectionKind, Visibility,
+    DirectSize, EnumValueHir, ExprHir, ExprKindHir, FieldHir, HirCrate, IoDirection, IoHint,
+    LiteralHir, LocalHir, ParamHir, PlaceHir, ProgramInstanceHir, ResourceHir, RetainPolicy,
+    StdFnKind, StdFunction, StdParam, StdResult, StdRetType, StmtHir, StmtKindHir, TaskHir, UnOp,
+    VarAccessHir, VarSectionKind, Visibility,
 };
 pub use id::{BodyId, DefId, ExprId, FieldId, LocalId, PackageId, ParamId, StdFnId, StmtId, TyId};
 pub use interner::{Interner, Symbol};

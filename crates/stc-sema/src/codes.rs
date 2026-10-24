@@ -94,6 +94,10 @@ pub const RETAIN_INVALID_LOCATION: &str = "STC-E-RETAIN-002";
 /// RETAIN on a direct `AT` variable is ignored.
 pub const RETAIN_DIRECT: &str = "STC-W-RETAIN-001";
 
+// Exports.
+/// Invalid or duplicate `{stc:export}`/`{stc:no_mangle}` symbol.
+pub const EXPORT_INVALID: &str = "STC-E-EXPORT-001";
+
 // Test-only units.
 /// Production code references a test-only unit.
 pub const TEST_REFERENCE: &str = "STC-E-TEST-001";

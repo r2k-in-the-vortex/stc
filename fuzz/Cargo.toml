@@ -12,6 +12,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.13"
+stc-codegen = { path = "../crates/stc-codegen" }
 stc-diag = { path = "../crates/stc-diag" }
 stc-lexer = { path = "../crates/stc-lexer" }
 stc-parser = { path = "../crates/stc-parser" }
@@ -28,6 +29,13 @@ bench = false
 [[bin]]
 name = "fuzz_parser"
 path = "fuzz_targets/fuzz_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_codegen"
+path = "fuzz_targets/fuzz_codegen.rs"
 test = false
 doc = false
 bench = false

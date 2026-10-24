@@ -69,7 +69,7 @@ impl Dumper<'_> {
             let field = &self.hir.fields[index];
             let _ = writeln!(
                 self.out,
-                "field {} {}: {} owner={} section={} vis={} retain={:?} at={}",
+                "field {} {}: {} owner={} section={} vis={} retain={:?} at={} io={}",
                 index,
                 self.hir.interner.text(field.name),
                 self.hir.type_name(field.ty),
@@ -78,6 +78,7 @@ impl Dumper<'_> {
                 field.visibility.as_str(),
                 field.retain,
                 dump_direct(&field.at),
+                dump_io(&field.io),
             );
         }
         let _ = writeln!(self.out, "[params]");
@@ -139,7 +140,10 @@ impl Dumper<'_> {
             let _ = write!(self.out, " test");
         }
         if def.export {
-            let _ = write!(self.out, " export");
+            let name = def
+                .export_name
+                .map_or("", |symbol| self.hir.interner.text(symbol));
+            let _ = write!(self.out, " export={name}");
         }
         let _ = writeln!(self.out);
         match &def.kind {
@@ -302,14 +306,16 @@ impl Dumper<'_> {
                 retain,
                 constant,
                 at,
+                io,
                 init,
             } => {
                 let _ = writeln!(
                     self.out,
-                    "  ty={} section={} retain={retain:?} constant={constant} at={} init={}",
+                    "  ty={} section={} retain={retain:?} constant={constant} at={} io={} init={}",
                     self.hir.type_name(*ty),
                     section.as_str(),
                     dump_direct(at),
+                    dump_io(io),
                     init.map_or("-".to_string(), |id| id.raw().to_string()),
                 );
             }
@@ -691,6 +697,19 @@ fn dump_const(value: &ConstValue) -> String {
         ConstValue::Enum { def, value } => format!("Enum(#{}, {value})", def.raw()),
         ConstValue::Null => "Null".into(),
     }
+}
+
+fn dump_io(hint: &Option<crate::hir::IoHint>) -> String {
+    let Some(hint) = hint else {
+        return "-".into();
+    };
+    format!(
+        "device={} channel={} direction={}",
+        hint.device.as_deref().unwrap_or("-"),
+        hint.channel
+            .map_or_else(|| "-".to_string(), |channel| channel.to_string()),
+        hint.direction.map_or("-", |direction| direction.as_str()),
+    )
 }
 
 fn dump_direct(address: &Option<crate::DirectAddress>) -> String {

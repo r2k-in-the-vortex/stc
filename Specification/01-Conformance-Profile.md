@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Draft (target profile; M3 lexical, syntactic, resolution, and type-checking surface implemented)  
+Status: Draft (target profile; M3 front end and M4 scalar codegen implemented)  
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
 Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`
@@ -20,14 +20,20 @@ The project also does **not** claim conformance to the complete 2013 edition: on
 set below is implemented. Any unimplemented construct in the accepted surface is a bug; any
 construct outside the surface must produce an explicit diagnostic.
 
-**Implementation status (M3):** the lexical surface, the full syntactic surface (CST, typed AST
-views, pragma payload validation, recovery), and the M3 semantic surface (collection, namespaces
+**Implementation status (M4):** the lexical surface, the full syntactic surface (CST, typed AST
+views, pragma payload validation, recovery), and the semantic surface (collection, namespaces
 and `USING`, name resolution, type checking, constant evaluation, initializers, access control,
 OOP, references, I/O and retention diagnostics, configurations, and HIR lowering) are
-implemented. `stc check <file>...` analyzes one in-memory package; a project manifest arrives in
-M6. The statuses in §3–§4 describe the v1 target surface; code generation is M4. Unsupported
-constructs are rejected with the diagnostics in [Grammar](Syntax/Grammar.md) §13 rather than
-silently accepted.
+implemented. In addition, `stc-codegen` emits deterministic textual LLVM IR for the M4
+elementary scalar subset — scalar expressions/operators, checked arithmetic, casts, control
+flow, functions, programs, globals, `AT` process-image access, and scalar retained leaves — and
+`stc build` emits IR, objects, executables, static libraries, and metadata through clang.
+Function blocks, OOP lowering, aggregates, strings, references, standard functions, the
+standard FB library, the manifest, `stc run`, `stc test`, and file-backed retained state are
+not implemented and are rejected explicitly. `stc check <file>...` analyzes one in-memory
+package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
+surface. Unsupported constructs are rejected with the diagnostics in
+[Grammar](Syntax/Grammar.md) §13 or `STC-E-CODEGEN-001` rather than silently accepted.
 
 ## 2. Input languages
 

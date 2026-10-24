@@ -171,16 +171,15 @@ impl Parser<'_> {
     fn parse_config_inst_init(&mut self) {
         self.start_node(SyntaxKind::ConfigInstInit);
         self.parse_name();
-        self.expect_punct(Punct::Dot);
-        self.parse_name();
-        self.expect_punct(Punct::Dot);
-        // `(IDENT '.')* IDENT`: the final identifier is the configured target.
-        loop {
+        // At least one field is required after the instance name; deeper
+        // paths select nested fields (`inst.field` or `inst.fb.field`).
+        let mut segments = 1;
+        while self.eat_punct(Punct::Dot) {
             self.parse_name();
-            if self.eat_punct(Punct::Dot) {
-                continue;
-            }
-            break;
+            segments += 1;
+        }
+        if segments < 2 {
+            self.expected("`.` and a configured field name");
         }
         if self.eat_keyword(Keyword::At) {
             if self.at_kind(SyntaxKind::DirectVariable) {

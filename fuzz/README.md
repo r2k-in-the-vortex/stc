@@ -22,3 +22,11 @@ nightly's LLVM version, either on `PATH` or next to the built `fuzz_lexer.exe` i
 `fuzz/target/x86_64-pc-windows-msvc/release/`. The LLVM installation under
 `C:\Program Files\LLVM` may lack the C++ interceptor exports that rustc's sanitizer build
 expects.
+
+`fuzz_codegen` parses and analyzes arbitrary input, then runs `stc_codegen::generate` twice when
+the front end is clean. It checks HIR invariants, determinism, bounded output (128 MiB), sorted
+span IDs, and a bounded error count. It never invokes clang.
+
+```sh
+cargo +nightly fuzz run fuzz_codegen -- -max_total_time=60 -timeout=25 -rss_limit_mb=2048
+```

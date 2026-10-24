@@ -14,6 +14,13 @@ A start with a valid state file is a **warm restart**; a start without one (or w
 `--reset-retain`) is a **cold restart**. Warm restart restores retained values; cold restart
 initializes declared/type defaults.
 
+> **M4 status:** scalar-leaf `RetainLayout` is computed (retained globals and program fields,
+> `AT` excluded), emitted as metadata, and exposed through generated
+> `stc_retain_size/layout_hash/save/load`. `stc_init` calls `stc_rt_state_load` and restores on
+> success; `stc_shutdown` saves through `stc_rt_state_save`. The runtime state functions are
+> stubs returning 5 (retention disabled) until M6. Aggregate/string/FB leaves and the
+> file-backed atomic format are M5/M6.
+
 ## 2. Which variables are retained
 
 ### 2.1 Effective retain policy

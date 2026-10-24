@@ -166,6 +166,44 @@ impl DirectSize {
     }
 }
 
+/// Channel direction declared by a `{stc:io}` hint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IoDirection {
+    /// `input`.
+    Input,
+    /// `output`.
+    Output,
+    /// `inout`.
+    InOut,
+}
+
+impl IoDirection {
+    /// Returns the lowercase metadata spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Output => "output",
+            Self::InOut => "inout",
+        }
+    }
+}
+
+/// A `{stc:io}` binding hint attached to a variable or field (D-085).
+#[derive(Clone, Debug, PartialEq)]
+pub struct IoHint {
+    /// Device name, when present.
+    pub device: Option<String>,
+    /// Channel number, when present.
+    pub channel: Option<u32>,
+    /// Declared direction, when present.
+    pub direction: Option<IoDirection>,
+    /// Canonical JSON text of the validated payload.
+    pub payload: String,
+    /// Pragma span.
+    pub span: Span,
+}
+
 /// A resolved direct-variable address.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectAddress {
@@ -211,6 +249,8 @@ pub struct Def {
     pub test_only: bool,
     /// `{stc:export}` marker.
     pub export: bool,
+    /// Final C symbol recorded by the analyzer for an export (D-086).
+    pub export_name: Option<Symbol>,
     /// `{stc:no_mangle}` marker.
     pub no_mangle: bool,
     /// `USING` directives attached to this scope.
@@ -414,6 +454,8 @@ pub enum DefKind {
         constant: bool,
         /// `AT` address.
         at: Option<DirectAddress>,
+        /// `{stc:io}` binding hint.
+        io: Option<IoHint>,
         /// Initializer expression.
         init: Option<ExprId>,
     },
@@ -481,6 +523,8 @@ pub struct FieldHir {
     pub constant: bool,
     /// `AT` address.
     pub at: Option<DirectAddress>,
+    /// `{stc:io}` binding hint.
+    pub io: Option<IoHint>,
     /// Initializer expression.
     pub init: Option<ExprId>,
     /// Declaration span.
@@ -1009,6 +1053,12 @@ pub struct TaskHir {
     pub interval: Option<ExprId>,
     /// `PRIORITY :=` value.
     pub priority: Option<ExprId>,
+    /// Folded `SINGLE` value.
+    pub single_value: Option<bool>,
+    /// Folded `INTERVAL` duration in nanoseconds.
+    pub interval_ns: Option<i128>,
+    /// Folded `PRIORITY` value.
+    pub priority_value: Option<i128>,
     /// Source span.
     pub span: Span,
 }
@@ -1374,6 +1424,7 @@ impl HirCrate {
             visibility,
             test_only: false,
             export: false,
+            export_name: None,
             no_mangle: false,
             using: Vec::new(),
         });

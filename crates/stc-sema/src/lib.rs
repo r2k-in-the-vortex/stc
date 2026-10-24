@@ -262,6 +262,7 @@ impl<'a> Analyzer<'a> {
         self.resolve_aliases();
         self.resolve_type_declarations();
         self.resolve_pou_declarations();
+        self.check_exports();
         self.resolve_initializers();
         self.check_bodies();
         self.check_configurations();

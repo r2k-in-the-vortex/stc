@@ -431,6 +431,17 @@ END_PROGRAM
 ",
         ),
         (
+            codes::EXPORT_INVALID,
+            "{stc:no_mangle}
+FUNCTION F : DINT
+  F := 1;
+END_FUNCTION
+PROGRAM P
+VAR x : DINT; END_VAR
+END_PROGRAM
+",
+        ),
+        (
             codes::TEST_REFERENCE,
             "{stc:test}
 FUNCTION T : DINT
@@ -504,6 +515,7 @@ fn the_table_covers_every_exported_semantic_code() {
         codes::RETAIN_NOT_PERSISTABLE,
         codes::RETAIN_INVALID_LOCATION,
         codes::RETAIN_DIRECT,
+        codes::EXPORT_INVALID,
         codes::TEST_REFERENCE,
     ];
     for code in exported {

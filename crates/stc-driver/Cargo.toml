@@ -5,12 +5,18 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+name = "stc_driver"
+path = "src/lib.rs"
+
 [[bin]]
 name = "stc"
 path = "src/main.rs"
 
 [dependencies]
+stc-codegen = { path = "../stc-codegen" }
 stc-diag = { path = "../stc-diag" }
+stc-hir = { path = "../stc-hir" }
 stc-lexer = { path = "../stc-lexer" }
 stc-parser = { path = "../stc-parser" }
 stc-sema = { path = "../stc-sema" }
