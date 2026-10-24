@@ -247,9 +247,9 @@ fields are added to the language or compiler.
 ### 6.3 Cycle behavior
 
 - At cycle start, unbound input locations are reset to their type defaults, then bound inputs are
-  read from their backends. Inputs are latched once before `stc_cycle` runs program code.
-- Outputs are published once at cycle end (after `stc_cycle`). Unbound outputs have no sink and
-  are discarded.
+  read from their backends. Inputs are latched once before `stc_module_cycle` runs program code.
+- Outputs are published once at cycle end (after `stc_module_cycle`). Unbound outputs have no
+  sink and are discarded.
 - The cycle time is latched at the same boundary (see Runtime §2.5); I/O latches and timer time
   share the cycle boundary.
 - A runtime backend may fail to read/write; it reports a trap/status to the host. Exact error

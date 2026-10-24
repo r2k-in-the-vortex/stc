@@ -36,7 +36,8 @@ is specified in
    hosts.
 5. Both artifact modes:
    - executable: generated `main` + cyclic runtime scheduler;
-   - library: no `main`; exported `stc_init`, `stc_cycle`, `stc_shutdown`, and explicit exports.
+   - library: no `main`; exported `stc_init`, the `stc_module_*` entry points, and explicit
+     exports.
 6. A Cargo-like CLI with human and JSON diagnostics, verbose phase output, and a built-in test
    runner.
 7. Lean models and proofs for exact functions (integer, bitwise, conversion, selection, and
@@ -99,7 +100,7 @@ is specified in
 | Target selection | Host by default; `--target <triple>` passed to `clang` |
 | Source encoding | UTF-8 (optional BOM), case-insensitive language keywords/identifiers |
 | Project dependencies | Local path dependencies plus committed `stc.lock` in v1; package graph is acyclic; `--locked` enforced; registry/version solver later (A-009) |
-| Standard FBs / time | ST stdlib; Rust clock latched once at `stc_cycle` entry and shared by all timers in that scan (A-010) |
+| Standard FBs / time | ST stdlib; host clock latched once at `stc_module_cycle` entry and shared by all timers in that scan (A-010) |
 | I/O | Runtime-owned linking; compiler emits process-image/device/binding metadata; `{stc:io}` JSON hints; v1 null/memory/file; EtherCAT/Modbus/MQTT v2 (A-011) |
 | Retained state | File-backed, versioned, layout-hashed, CRC-checked, atomic save; warm/cold restart; v1 saves at shutdown (A-012) |
 | Standard text | Local IEC 61131-3:2013 PDF only; not committed or redistributed |
@@ -142,6 +143,8 @@ portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 por
 - `Specification/Architecture/Online-Change-and-GOT.md` — host/module model, GOT, root
   allocation, module descriptor, manifest, identity/history, load/prepare/activate/rollback/
   unload, compatibility, cold download.
+- `Specification/Architecture/GOT-Artifacts.md` — versioned stable keys, `GotId`, catalog,
+  module descriptor, host ABI 2.0, GOT manifest, online-change plan, and build-ID formats.
 - `Specification/Architecture/Debug-and-Monitoring.md` — typed access, watch, forcing,
   breakpoints, stepping, call stack, debug protocol/security, DWARF/CodeView, swap interaction.
 - `Specification/Decisions.md` — decision log and open questions.
@@ -334,6 +337,11 @@ Exit criteria:
   and measured.
 - M4 scalar semantics are unchanged; M4 code-linked artifacts are explicitly non-loadable.
 
+> **M4.5 status (2026-10-24):** phase 0 is complete and phase 1 fixes the versioned artifact
+> contracts in [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md): stable keys, `GotId`,
+> catalog, module descriptor, host ABI 2.0, manifest/plan formats, build IDs, and pairing.
+> Decisions D-113–D-117 record the choices. Compiler and runtime code have not started.
+
 ### M5 — FBs, OOP, aggregates, and UTF-8 strings
 
 Deliverables: FB instances/state, methods, inheritance, interfaces/vtables, `THIS`/`SUPER`,
@@ -516,7 +524,8 @@ Exit criteria:
 2. Apply the remaining documentation checklist from `update_plan_got.md` §12: architecture,
    runtime, state, I/O, CLI, testing, AST/HIR, conformance, decisions, README, M4 note, and M5
    handover.
-3. Write `M4.5-Plan.md` and `M6.5-Plan.md` before implementation.
+3. `M4.5-Plan.md` and `M6.5-Plan.md` are written; M4.5 phase 0 is complete and phase 1 fixes
+   the artifact schemas in [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md).
 4. Do not implement M5 OOP/aggregates on the old direct-reference or contiguous-object model.
    Implement the M4.5 foundation first (Q-090/Q-091/Q-095).
 5. Keep host-specific operations (paths, clock, linker discovery, module loading, atomic

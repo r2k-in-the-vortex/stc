@@ -24,9 +24,11 @@ retained-state stubs). The driver provides `stc parse`, `stc check`, and the M4
 The online-change architecture is **resolved** (2026-10-24): the v1 runtime is a persistent host
 plus loadable whole-program modules, persistent memory is host-owned and accessed through a
 project-defined GOT, every module is paired with a persistent GOT manifest, and activation is a
-cycle-boundary module swap. The foundation milestone is M4.5 before M5; full debug/monitoring is
-M6.5. The resolution is recorded in `update_plan_got.md`; implementation has not started, and the
-M4 artifact model remains the current implemented state.
+cycle-boundary module swap. M4.5 phases 0–1 are complete: the versioned `GotId`, catalog,
+descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
+[GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md). The foundation
+milestone is M4.5 before M5; full debug/monitoring is M6.5. Implementation has not started, and
+the M4 artifact model remains the current implemented state.
 
 M4 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
 functions, the standard FB library, the manifest, `stc run`, or `stc test`; those constructs are
@@ -52,6 +54,7 @@ specification continues to be written before implementation, as required below.
 | [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) | Commands, diagnostics, `stc.toml` |
 | [Testing and Verification](Specification/Architecture/Testing-and-Verification.md) | Test framework, Lean, CI |
 | [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md) | Host/module model, GOT, manifest, swap protocol |
+| [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md) | Versioned `GotId`, catalog, descriptor, manifest, plan, host ABI, build-ID formats |
 | [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md) | Typed access, forcing, breakpoints, debug info |
 | [Decisions and Open Questions](Specification/Decisions.md) | Rationale and backlog |
 
@@ -355,6 +358,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-045–D-058 | M2 syntax decisions: arena CST owning the source, stable `SyntaxKind`, parser codes `STC-E-GRAM-105`–`111`, strict pragma JSON, token-extent diagnostics, recovery/missing-token policy, and interning deferred to M3. Details in `Specification/Decisions.md`. |
 | D-059–D-075 | M3 analyzer decisions: HIR in M3, the multi-file `stc check` bridge and `_root` session namespace, the interner/session model, the stable diagnostic table, type canonicalization and conversions, overloads, the standard prelude, constant evaluation, access defaults, reference/attempt rules, parse-error suppression, test-only handling, deterministic ordering, and arena-based iterative lowering. Details in `Specification/Decisions.md` and `M3-Plan.md`. |
 | D-094–D-108 | Online change is a v1 requirement: persistent host + loadable modules, host-owned GOT and per-field roots, handle-based OOP descriptors, place-descriptor references and transient `POINTER TO`, module lifecycle and double-buffered activation, persistent GOT manifest and exact-baseline/cold-download policy, full typed debug in v1, debug-by-default/`--release`, and the explicit non-safety stance. Details in `Specification/Decisions.md`, `update_plan_got.md`, and the online-change/debug specs. |
+| D-113–D-117 | M4.5 phase 1 fixes the artifact contracts: normalized stable keys and content-derived `GotId`s, canonical binary/JSON encodings and digest chain, a pointer-free module descriptor with a separate function table, host ABI 2.0's exact service table and non-returning trap boundary, and build IDs derived from source/catalog/plan inputs. Details in `Specification/Architecture/GOT-Artifacts.md`. |
 
 ## Question log
 

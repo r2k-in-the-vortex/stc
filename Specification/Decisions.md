@@ -105,11 +105,13 @@ cycle cannot observe different times.
 
 **Consequences:**
 
-- `stc_cycle` latches `cycle_now_ns` once at entry. All `TON`/`TOF`/`TP`/counter/edge/date-time
-  operations in that cycle read the latched value via `stc_rt_cycle_now_ns()`.
-- The live monotonic clock is separate (`stc_rt_monotonic_now_ns()`) and is not visible to ST code.
-- Library hosts may set the next cycle's time (`stc_rt_set_cycle_time_ns`) for deterministic
-  stepping; tests use a mock clock with the same semantics.
+- The host latches `cycle_now_ns` once at `stc_module_cycle` entry. All
+  `TON`/`TOF`/`TP`/counter/edge/date-time operations in that cycle read the latched value through
+  the host API `cycle_now_ns` service.
+- The live monotonic clock is separate (the host API `monotonic_now_ns` service) and is not
+  visible to ST code.
+- Library hosts may set the next cycle's time for deterministic stepping; tests use a mock clock
+  with the same semantics.
 - The standard FBs are ST source compiled with the user project; the runtime supplies only the
   clock and exact helpers.
 
@@ -441,7 +443,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-010 | Rust Cargo workspace under `crates/`; spec docs under `Specification/`. | Standard Rust structure; the stray `src` file is removed. |
 | D-011 | v1 runtime is single-task; the full configuration model is parsed/analysed. | Bounded runtime scope; language surface remains complete. |
 | D-012 | Standard FBs are implemented in ST under `stdlib/`; standard functions live in the runtime. | Dogfoods the compiler; keeps FB behavior in ST. |
-| D-027 | The cycle time is latched once at `stc_cycle` entry and shared by all timers in that scan. | Determinism: same-cycle timer calls cannot disagree; tests can step a mock clock. |
+| D-027 | The cycle time is latched once at cycle entry and shared by all timers in that scan. | Determinism: same-cycle timer calls cannot disagree; tests can step a mock clock. |
 | D-028 | I/O hardware linking is runtime-owned; the compiler emits process-image and binding metadata. v1 backends are null/memory/file; EtherCAT/Modbus/MQTT are v2. | Keeps protocol/scheduling out of the compiler; enables the TwinCAT-like project model. |
 | D-029 | `AT` declarations accept one `{stc:io <json-object>}` hint; project bindings and runtime overrides take precedence over the pragma. | Local hints plus central device configuration, with runtime authority. |
 | D-030 | Unbound inputs receive type defaults (or declared initializers) each cycle; unbound outputs are discarded; `%M` markers persist. | "No linking" has defined, safe behavior rather than undefined reads/writes. |
@@ -546,9 +548,15 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-110 | `lib` is the embedding host library, not generated module code. In M4.5 it is a static host archive; shared host libraries are M6. The generated module and manifest remain separate artifacts. | Preserves the host/module split and online-change capability for embedding hosts; avoids linking generated code into the host. |
 | D-111 | `exe` is a thin host launcher for an adjacent module and manifest pair. The M4 code-linked executable is retired; M4 ABI-1 artifacts are not loadable. | Matches D-094's host/module model and prevents a second, non-swappable execution path. |
 | D-112 | `exe` and `lib` may be emitted together in M4.5. The M4 mutual-exclusion rule is removed because the two artifacts now have distinct roles (launcher vs embedding host library). | Matches the resolved CLI artifact model; the M4 restriction existed only because both were alternative code-linked artifacts. |
+| D-113 | Stable keys are normalized uppercase ASCII paths scoped by package name, with kind-specific forms for roots, functions, types, descriptors, instances, tasks, exports, fields, and direct variables. `GotId` is the first 128 bits of a domain-separated SHA-256 over `(kind, package, path, qualifier)`; data/type identities exclude layout, function identities include the signature, and tracked renames carry the old ID. No heuristic matching is used. | Gives identity a precise, collision-checked, cross-developer contract while keeping layout changes trackable and function signature changes explicit. |
+| D-114 | Binary artifacts are byte-packed little-endian records with length-prefixed strings/lists; canonical JSON uses sorted keys, fixed formatting, integer-only numbers, and the same logical fields. Manifest and descriptor digests are SHA-256 with domain separation; the descriptor digest is computed with its `manifest_digest` field zeroed so descriptor/manifest pairing is acyclic. | Deterministic byte-identical artifacts and a verifiable pairing chain without self-referential hashes. |
+| D-115 | The module descriptor (format 1) is a self-contained pointer-free blob embedded in module read-only data; code addresses come from a separate `stc_module_functions` array, and the host copies descriptor and function data before unload. Slot records and function records are canonical, sorted, and duplicated in the manifest, where the host checks equality. | Keeps the loading contract stable across platforms, avoids module-owned persistent pointers, and makes descriptor/manifest disagreement detectable. |
+| D-116 | Host ABI 2.0 fixes the table to version/size plus trap, cycle/monotonic/local clocks, alloc/free, I/O image/size, state load/save, and assert, with service IDs for import slots. Services are append-only within major 2; minor versions gate availability by `struct_size`. `trap` is non-returning to module code and the host catches it at the prepare/cycle boundary; module entry points are `stc_module_*`. | A narrow, versioned, testable boundary that supports rollback and keeps heavy services out of the cycle; the trap boundary is the only way to make a trap recoverable. |
+| D-117 | Build IDs are 128-bit domain-separated SHA-256 truncations over profile, resolved target, compiler version, active configuration, ABI/format constants, generator flags, source fingerprint, parent identity, catalog digest, and plan digest. They exclude emitted bytes, output paths, clocks, and the environment; module file names embed them. | Reproducible builds and exact-parent online change without circular dependencies between module, descriptor, and manifest. |
 
-D-094 through D-112 affect
+D-094 through D-117 affect
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),
+[GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md),
 [Debug and Monitoring](Architecture/Debug-and-Monitoring.md),
 [Architecture](Architecture/Architecture.md),
 [Runtime and Execution](Architecture/Runtime-and-Execution.md),

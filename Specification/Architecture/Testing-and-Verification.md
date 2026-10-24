@@ -124,8 +124,8 @@ END_FUNCTION
   tests. Tests that exercise online change explicitly opt into a shared long-lived host.
 - Default timeout: 5 s; per-test override via `[[test.case]] timeout`.
 - Mock clock starts at `0ns` by default; `mock-clock` sets it. Time is latched once at the start
-  of each `stc_cycle`; two timers in the same scan see the same value. Tests schedule the next
-  cycle's time through the test harness API:
+  of each `stc_module_cycle`; two timers in the same scan see the same value. Tests schedule the
+  next cycle's time through the test harness API:
 
   ```st
   STC_CLOCK_ADVANCE(T#10ms);
@@ -258,6 +258,8 @@ missing mappings and fails CI if a rule is marked implemented without a test.
 - direct-variable preservation/remap and I/O reconfiguration;
 - O(1) switch latency, bounded maintenance jitter, service-reader pinning, and unload safety;
 - double-build byte equality for module, metadata, and manifest;
+- canonical JSON/binary round-trip, digest pairing, slot/table ordering, and descriptor/manifest
+  equality per [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§12;
 - manifest export/download and a second build consuming the active baseline;
 - cold start, warm restart, online attach, and cold download state behavior.
 

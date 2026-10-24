@@ -339,15 +339,17 @@ storage and must not retain the pointer beyond the call.
   mangled names (`@stc_g_<ns>_<name>` for non-persistent constants).
 - Constant and non-constant initializers are recorded for new roots; prepare/init allocates the
   root and applies the initializer exactly once. Preserved roots are never reinitialized.
-- The module entry points are attach (receive the host API table and GOT context), prepare
-  (validate/build the candidate and new roots), cycle (execute one scan), shutdown, and detach.
-  Exact symbol names and signatures are fixed by host ABI 2 in
-  [Runtime and Execution](Runtime-and-Execution.md); `stc_init` remains the generated
+- The module entry points are `stc_module_attach` (receive the host API table and slot table),
+  `stc_module_prepare` (validate/build the candidate and new roots), `stc_module_cycle`
+  (execute one scan), `stc_module_shutdown`, and `stc_module_detach`; descriptor and function
+  table getters expose the versioned metadata without host services. Exact symbol names,
+  signatures, descriptor bytes, and slot-table rules are fixed in
+  [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8; `stc_init` remains the generated
   initialization entry used by prepare.
-- `stc_cycle` executes one scan of the configured programs/tasks. The host, not the module,
-  latches inputs, publishes outputs, and decides when a swap may occur.
-- `stc_shutdown` saves retained state and releases module-local resources; the host retains GOT
-  cells and quarantined roots.
+- `stc_module_cycle` executes one scan of the configured programs/tasks. The host, not the
+  module, latches inputs, publishes outputs, and decides when a swap may occur.
+- `stc_module_shutdown` saves retained state and releases module-local resources; the host retains
+  GOT cells and quarantined roots.
 - Executable mode generates a thin host launcher:
 
   ```llvm
@@ -522,28 +524,24 @@ state directory holds the active copy and a current pointer.
 ## 7. Runtime boundary
 
 The generated module uses a versioned host API table (host ABI 2), not a fixed set of exported
-global symbols. The table includes:
+global symbols. Host ABI 2.0 provides:
 
 | Entry | Purpose |
 | --- | --- |
-| `stc_rt_execute` | Run the embedded host loop (launcher/library) |
-| `stc_rt_trap` | Trap with a diagnostic |
-| `stc_rt_assert` | User assertion (test/development) |
-| `stc_rt_cycle_now_ns` | Cycle time latched at cycle entry |
-| `stc_rt_monotonic_now_ns` | Live monotonic clock (host only) |
-| `stc_rt_set_cycle_time_ns` | Override the next cycle's time (host/tests) |
-| `stc_rt_alloc/free` | Transient module-version allocation |
-| `stc_rt_resolve_ref` | Pointer→`REF_TO` place-descriptor resolver |
-| `stc_rt_attempt_cast` | Interface/reference descriptor check |
-| `stc_rt_got_slot` | Resolve a local slot to a host cell/storage pointer |
-| `stc_rt_retain_*` | Retained-state helpers |
-| `stc_rt_io_image` | Process-image access |
-| `stc_rt_len_*`, `stc_rt_str_*` | String helpers |
-| `stc_rt_math_*` | Math helpers (where not inlined) |
-| `stc_rt_trace` | Optional tracing |
+| `trap` | Trap with a diagnostic; non-returning to module code |
+| `assert` | User assertion (test/development) |
+| `cycle_now_ns` | Cycle time latched at cycle entry |
+| `monotonic_now_ns` | Live monotonic clock |
+| `local_date_ns` | Local date/time latched for the scan |
+| `alloc` / `free` | Transient module-version allocation |
+| `io_image` / `io_size` | Process-image access |
+| `state_load` / `state_save` | Retained-state helpers |
 
-The full list, versions, and signatures are in
-[Runtime and Execution](Runtime-and-Execution.md) and
+Reference resolution, interface/descriptor checks, typed variable access, string/math helpers,
+and tracing are later minor-version additions; they are not part of ABI 2.0 and M4.5 does not
+call them. The launch/embedding entry points (`stc_rt_execute`, `stc_host_*`) are host exports,
+not module imports. The exact table, service IDs, versions, and signatures are in
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §8; the lifecycle is in
 [Online Change and GOT](Online-Change-and-GOT.md).
 
 ## 8. Security and robustness

@@ -10,8 +10,9 @@ Read this together with the project plan (`Specification/00-Project-Plan.md` §8
 `Specification/Architecture/IO-and-Devices.md` §2–§5,
 `Specification/Architecture/State-and-Retain.md` §2–§7,
 `Specification/Architecture/Testing-and-Verification.md` §1–§4 and §6,
-`Specification/AST/AST.md` §5–§8, `Specification/Decisions.md` D-059–D-108,
+`Specification/AST/AST.md` §5–§8, `Specification/Decisions.md` D-059–D-117,
 `Specification/Architecture/Online-Change-and-GOT.md`,
+`Specification/Architecture/GOT-Artifacts.md`,
 `Specification/Architecture/Debug-and-Monitoring.md`,
 `M4-Plan.md`, `M4.5-Plan.md`, `update_plan_got.md` §13.0, and `handover_to_M4.md` (the M3→M4
 input, retained for history).
@@ -39,9 +40,10 @@ resolved online-change architecture supersedes several M4-era recommendations in
 - M5 exit criteria include hot-swap coverage for FB/class state, aggregates/strings, interfaces,
   descriptors, and `POINTER TO`; see §2 and the project plan M5.
 
-Read [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md) and
-`M4.5-Plan.md` before starting M5. If a recommendation below conflicts with those documents, the
-online-change specification wins.
+Read [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md),
+[GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md), and `M4.5-Plan.md`
+before starting M5. If a recommendation below conflicts with those documents, the online-change
+specification and the schema document win.
 
 ## 1. State at handover
 

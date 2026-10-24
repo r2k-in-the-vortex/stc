@@ -28,15 +28,17 @@ GOT, persistent roots, process image, retained state, module lifetime, and servi
 module exports the versioned entry points:
 
 ```text
-stc_attach(host_api, got_context, descriptor)   receive host services and the GOT context
-stc_prepare(mode, old_manifest, new_manifest)   validate/build candidate roots and temp GOT
-stc_cycle()                                     execute one scan of the configured tasks/programs
-stc_shutdown()                                  flush state and release module-local resources
-stc_detach()                                    release module-local resources before unload
+stc_module_attach(host_api, slots, slot_count, generation_id)  receive host services and cells
+stc_module_prepare(mode, generation_id, fresh_mask, mask_size) validate/build candidate roots
+stc_module_cycle(generation_id)                                execute one scan
+stc_module_shutdown(mode)                                      flush state/release resources
+stc_module_detach(generation_id)                               release resources before unload
 ```
 
-Exact signatures and the host API table are fixed by ABI 2 in §2.3. `stc_init` remains the
-generated initialization entry used during prepare.
+`stc_module_descriptor` and `stc_module_functions` expose the versioned descriptor and code
+address table without host services. Exact signatures, descriptor bytes, slot-table rules, and
+the host API table are fixed by [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8. `stc_init`
+remains the generated initialization entry used during prepare.
 
 ### 1.1 Module and executable mode
 
@@ -55,7 +57,7 @@ pair it loads. The host:
    - latch inputs into the input image,
    - apply queued debug writes/forces at the boundary,
    - check for a prepared candidate and switch generations if ready,
-   - call `stc_cycle`,
+   - call `stc_module_cycle`,
    - write outputs from the output image,
    - sleep until the next cycle deadline if a cycle time is configured,
    - check the watchdog and service queues.
@@ -81,14 +83,15 @@ int32_t stc_host_export_manifest(char* buffer, int64_t* len);
 The generated module remains a separate loadable artifact; M4.5 emits the embedding host as a
 static library, and shared host libraries are M6. The embedding host owns the loop, I/O, clock,
 GOT, root allocator, manifest store, loader/prepare thread, and service/monitor threads.
-`stc_cycle` is called only by the host's cycle thread; external callers must serialize all host
-API calls. The runtime is not a general-purpose thread-safe library: service access goes through
-the typed generation-pinned API, and the cycle thread is the only ST executor.
+`stc_module_cycle` is called only by the host's cycle thread; external callers must serialize
+all host API calls. The runtime is not a general-purpose thread-safe library: service access
+goes through the typed generation-pinned API, and the cycle thread is the only ST executor.
 
 ### 1.3 Task model
 
 - The configuration declares resources, tasks, and program instances.
-- `stc_cycle` executes the selected configuration's programs according to the task schedule.
+- `stc_module_cycle` executes the selected configuration's programs according to the task
+  schedule.
 - **v1 implementation**: one task, one interval, programs executed in declaration order. A
   configuration with multiple tasks or priorities is diagnosed with `STC-E-RUN-001` at build time
   unless `--allow-multi-task` is given (which runs them sequentially in priority order for
@@ -138,7 +141,9 @@ the typed generation-pinned API, and the cycle thread is the only ST executor.
 ```c
 typedef void (*stc_fn)(void);
 
-int32_t stc_rt_execute(int32_t argc, char** argv, const char* module_descriptor_path);
+/* Launcher/embedding-host exports. These are host symbols, not module imports. */
+int32_t  stc_rt_execute(int32_t argc, char** argv, const char* module_descriptor_path);
+uint32_t stc_abi_version(void);
 
 typedef enum {
     STC_TRAP_OVERFLOW = 1,
@@ -153,75 +158,50 @@ typedef enum {
     STC_TRAP_UNIMPLEMENTED = 10
 } stc_trap_code;
 
-void stc_rt_trap(int32_t code, uint32_t span_id);
-void stc_rt_assert(int32_t condition, uint32_t span_id, const char* message); /* test builds only */
-
-int64_t  stc_rt_cycle_now_ns(void);      /* latched at stc_cycle entry */
-uint64_t stc_rt_monotonic_now_ns(void);  /* live clock; runtime/host only */
-void     stc_rt_set_cycle_time_ns(int64_t ns); /* override next cycle */
-int64_t  stc_rt_local_date_ns(void);
-
-int32_t stc_rt_state_load(void* buffer, int64_t len, int64_t layout_hash);
-int32_t stc_rt_state_save(const void* buffer, int64_t len, int64_t layout_hash);
-void    stc_rt_state_configure(const char* path, int32_t policy, int32_t enabled);
-
-void stc_rt_io_image(uint8_t** base, uint64_t* len);
+/* Host-only configuration; generated modules call the host API table instead. */
+void stc_rt_set_cycle_time_ns(int64_t ns);
 void stc_rt_set_io_backend(const stc_io_backend* backend);
+void stc_rt_state_configure(const char* path, int32_t policy, int32_t enabled);
 ```
+
+Generated modules do not import `stc_rt_*` symbols. They call traps, clocks, state, I/O, and
+allocation through the host API table (ABI 2.0) defined below and in
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The flat `stc_rt_*` module ABI is M4 ABI 1 and
+is not loadable by the persistent host.
 
 #### 2.3.1 Host API table
 
-The exact ABI is a versioned `stc_host_api` struct. Its entries include trap/assert, clocks,
-state, I/O, transient alloc/free, string/math helpers, GOT cell access, reference resolution,
-object handle/descriptor access, typed variable access, and generation pin/unpin. Modules receive
-the table in `stc_attach`; they do not import platform symbols from the host executable.
+The exact ABI is a versioned `stc_host_api` struct, fixed for ABI 2.0 in
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The table is additive within major version 2:
+new services are appended and bump the minor version; a module rejects a host whose table is
+shorter than it requires. Modules receive the table in `stc_module_attach` and do not import
+platform symbols from the host executable. Reference resolution, object/descriptor access, typed
+variable access, string/math helpers, and generation pin/unpin are later minor-version
+extensions; M4.5 uses trap, clocks, state, I/O, transient alloc/free, and assert.
 
-```c
-typedef struct stc_host_api {
-    uint32_t abi_version;   /* major/minor packed */
-    uint32_t struct_size;   /* bytes; modules reject a too-small table */
-    void (*trap)(int32_t code, uint32_t span_id);
-    int64_t (*cycle_now_ns)(void);
-    uint64_t (*monotonic_now_ns)(void);
-    void (*set_cycle_time_ns)(int64_t ns);
-    void* (*alloc)(uint64_t size, uint64_t align);
-    void (*free)(void* ptr);
-    void* (*got_cell)(uint32_t slot);          /* active generation's cell */
-    int32_t (*resolve_ref)(const void* ptr, uint32_t type_key,
-                           stc_place_descriptor* out);
-    int32_t (*attempt_cast)(const stc_object_ref* src,
-                            const stc_type_descriptor* dst,
-                            stc_object_ref* out);
-    /* state/IO/string/math/typed-access entries follow */
-} stc_host_api;
-```
+The trap entry is non-returning by contract. The host calls prepare and cycle from a platform
+trap boundary and converts a module trap into a failed generation (or exit code 70 when there is
+no rollback target). Generated code never resumes after a trap.
 
 #### 2.3.2 Module descriptor and GOT context
 
-The module descriptor records the module format version, host ABI, profile, target, build ID,
-paired manifest digest, entry-point addresses, sizes, and the slot-table count. `stc_attach`
-receives the host API and a GOT context that maps local slots to host cells. Generated code
-resolves a slot through the context or a cached storage pointer; it never writes a cell.
+The descriptor is a pointer-free, versioned byte blob fixed in
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §7. It records the module format, host ABI, profile,
+resolved target, build ID, paired manifest digest, function table, and slot table. It contains no
+target addresses; `stc_module_functions` returns the code-address array separately, and the host
+copies everything it needs before the module can be unloaded.
 
-```c
-typedef struct stc_module_descriptor {
-    uint32_t module_format;
-    uint32_t host_abi;
-    uint32_t profile_hash;
-    uint32_t target_hash;
-    uint64_t build_id[2];
-    uint64_t manifest_digest[2];
-    uint32_t slot_count;
-    stc_fn attach, prepare, cycle, shutdown, detach;
-} stc_module_descriptor;
-```
+`stc_module_attach` receives the host API, a generation-specific array of pointers to host cells,
+and the generation ID. The module caches the slot array for its generation; generated code reads
+a cell value through the slot and never writes a cell. Storage pointers are loaded from data
+cells, code addresses from function cells, and process-image addresses from direct cells.
 
 #### 2.3.3 Generation pinning and services
 
 Service/monitor threads read typed variables through generation-pinned descriptors. A pin is an
 epoch/refcount that delays unload until the reader releases it. Service threads never call
-`stc_cycle`, never write GOT cells, and never take a lock held by the cycle thread. Debug writes
-and forcing are queued for cycle-boundary application.
+`stc_module_cycle`, never write GOT cells, and never take a lock held by the cycle thread.
+Debug writes and forcing are queued for cycle-boundary application.
 
 Traps are fatal for the current run or, during an online-change rollback window, cause the host
 to restore the previous generation. In executable mode the runtime prints
@@ -264,27 +244,28 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
 
 ### 2.5 Clock and cycle-latched time
 
-- `stc_cycle` reads the time source **once at entry** and stores `cycle_now_ns` for the whole
-  scan. Every ST-visible time function and standard FB uses this latched value. Two timers
-  evaluated in the same scan cannot observe different times (D-027).
-- `stc_rt_cycle_now_ns()` returns the latched time as signed 64-bit nanoseconds. This is what
-  generated ST code calls.
-- `stc_rt_monotonic_now_ns()` returns the live monotonic clock and is for the runtime/host only.
-  Generated ST code does not call it. The runtime reads it through a host abstraction
-  (`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux) and converts
-  to nanoseconds; the ST-visible semantics are identical on every host (D-042).
+- The host reads the time source **once at `stc_module_cycle` entry** and stores `cycle_now_ns`
+  for the whole scan. Every ST-visible time function and standard FB uses this latched value.
+  Two timers evaluated in the same scan cannot observe different times (D-027).
+- The `cycle_now_ns` host-API service returns the latched time as signed 64-bit nanoseconds.
+  Generated ST code reads it through its import slot.
+- The `monotonic_now_ns` host-API service returns the live monotonic clock and is for the
+  runtime/host only. Generated ST code does not call it. The runtime reads it through a host
+  abstraction (`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux)
+  and converts to nanoseconds; the ST-visible semantics are identical on every host (D-042).
 - The clock remains continuous across an online change. The host latches the next cycle's time
   normally; the swap does not reset or re-latch it, so timers observe elapsed wall/monotonic time.
 - The watchdog is paused or extended with a documented bound during prepare/activation and while
   a debugger has the cycle stopped. If the bound is exceeded, the normal watchdog policy resumes.
 - In executable mode, the runtime latches the host monotonic clock at the start of each cycle.
   `--cycle-time` controls the loop deadline but does not change the value latched for the scan.
-- In library mode, the host owns the loop. By default `stc_cycle` latches the live monotonic
-  clock; the host can call `stc_rt_set_cycle_time_ns(t)` before `stc_cycle` to supply the next
-  cycle's time. The override is consumed by the next `stc_cycle` call.
+- In library mode, the host owns the loop. By default `stc_module_cycle` latches the live
+  monotonic clock; the host can supply the next cycle's time before calling `stc_module_cycle`.
+  The override is consumed by the next cycle.
 - Tests use a mock clock with the same semantics: the harness sets the next cycle time, calls
-  `stc_cycle`, and advances the mock clock between cycles. `STC_CLOCK_ADVANCE(T#10ms)` schedules
-  the next cycle's time; it does not change the time already latched in the current scan.
+  `stc_module_cycle`, and advances the mock clock between cycles. `STC_CLOCK_ADVANCE(T#10ms)`
+  schedules the next cycle's time; it does not change the time already latched in the current
+  scan.
 - `TIME`/`LTIME` are signed 64-bit nanoseconds. `TON`/`TOF`/`TP` compute elapsed time from
   `cycle_now_ns` and their captured start time. Arithmetic overflow traps.
 - Date/time functions use `cycle_now_ns` converted to the profile's epoch. Within a scan,

@@ -133,9 +133,9 @@ Adding/removing/reordering a retained field changes the hash.
    - `error` (default): trap `STC-E-RUN-RETAIN-001` and do not run. `--reset-retain` is the
      escape hatch.
    - `reset`: emit a warning, keep defaults, and overwrite the file on shutdown.
-6. `stc_cycle` runs normally; retained values are ordinary storage.
-7. `stc_shutdown` calls `stc_retain_save` to fill the buffer and `stc_rt_state_save` to write it
-   atomically.
+6. `stc_module_cycle` runs normally; retained values are ordinary storage.
+7. `stc_module_shutdown` calls `stc_retain_save` to fill the buffer and the host's
+   `state_save` service to write it atomically.
 
 #### 4.1.1 Online attach and cold download
 
@@ -193,12 +193,13 @@ int32_t stc_retain_load(const void* buffer);
 
 The module also emits a retained-root descriptor of `stc_retain_size()` bytes. Under the host
 model the buffer is filled from/into host-owned roots; the generated functions are version-local
-helpers, not the owner of the storage. `stc_init` and `stc_shutdown` use the host helpers:
+helpers, not the owner of the storage. Generated `stc_init` and `stc_module_shutdown` use the
+host API's `state_load`/`state_save` services (host ABI 2.0; see
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §8):
 
 ```c
-int32_t stc_rt_state_load(void* buffer, int64_t len, int64_t layout_hash);
-int32_t stc_rt_state_save(const void* buffer, int64_t len, int64_t layout_hash);
-void    stc_rt_state_configure(const char* path, int32_t policy, int32_t enabled);
+int32_t state_load(uint8_t* buffer, int64_t len, int64_t layout_hash);
+int32_t state_save(const uint8_t* buffer, int64_t len, int64_t layout_hash);
 ```
 
 Return codes:
@@ -212,16 +213,16 @@ Return codes:
 | 4 | I/O error |
 | 5 | retention disabled |
 
-Generated `stc_init`:
+Generated initialization (called from `stc_module_prepare`):
 
-1. initialize defaults and vtables;
-2. if `stc_rt_state_load` returns OK, call `stc_retain_load`;
-3. otherwise leave defaults (missing) or apply runtime policy (mismatch/corrupt).
+1. initialize defaults and vtables for fresh roots;
+2. if the host's `state_load` service returns OK, call `stc_retain_load`;
+3. otherwise leave defaults (missing) or apply the runtime policy (mismatch/corrupt).
 
-Generated `stc_shutdown`:
+Generated `stc_module_shutdown`:
 
 1. call `stc_retain_save` into the buffer;
-2. call `stc_rt_state_save`.
+2. call the host's `state_save` service.
 
 Library hosts may bypass the file helpers and use `stc_retain_size/save/load` with their own
 storage. The host owns path/atomicity/policy in that case.

@@ -426,6 +426,7 @@ target/stc/<profile>/
   "configuration": "Main",
   "module": { "file": "motor-control-<build-id>.dll", "format": 1 },
   "manifest": { "file": "motor-control.stc-got.json", "digest": "0x…", "format": 1 },
+  "descriptor_digest": "0x…",
   "packages": [
     { "name": "motor-control", "version": "0.1.0", "path": "." },
     { "name": "motor-lib", "version": "0.2.0", "path": "../motor-lib" }
@@ -433,7 +434,8 @@ target/stc/<profile>/
   "artifacts": ["exe", "ir"],
   "exports": [
     { "name": "stc_init", "kind": "entry" },
-    { "name": "stc_cycle", "kind": "entry" },
+    { "name": "stc_module_cycle", "kind": "entry" },
+    { "name": "stc_module_shutdown", "kind": "entry" },
     { "name": "stc_export_Main", "kind": "pou", "source": "Main" }
   ],
   "io": {
@@ -471,7 +473,9 @@ target/stc/<profile>/
 - It contains no timestamps or absolute paths, so builds are reproducible.
 - The span table is optional in library mode if the host does not need diagnostics.
 - `build_id` is content-derived; `parent_build_id` is present only for an online-change build.
-  The module/manifest digest pair is validated by the host before activation.
+  The module/manifest digest pair is validated by the host before activation. The exact
+  build-ID, descriptor, manifest, and pairing rules are in
+  [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§11.
 - The full identity/layout/history record is in the GOT manifest; metadata carries only the
   summary needed by tooling and the host.
 

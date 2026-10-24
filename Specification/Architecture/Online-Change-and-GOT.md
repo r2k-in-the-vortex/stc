@@ -10,7 +10,9 @@ is the normative companion to
 [Runtime and Execution](Runtime-and-Execution.md),
 [State and RETAIN](State-and-Retain.md),
 [I/O and Devices](IO-and-Devices.md), and
-[Debug and Monitoring](Debug-and-Monitoring.md). The resolved planning rationale and the full
+[Debug and Monitoring](Debug-and-Monitoring.md). The byte-level keys, descriptors, manifest,
+plan, host API, and build-ID formats are fixed in
+[GOT Artifacts and Schemas](GOT-Artifacts.md). The resolved planning rationale and the full
 question disposition are in `update_plan_got.md`.
 
 ## 1. Terms
@@ -75,7 +77,8 @@ Status publication uses lock-free counters, double-buffered snapshots, and bound
 A module and its manifest are a pair. The module descriptor is a small binding structure for code
 addresses, sizes, entry points, and the paired digest. The manifest is the identity/history
 artifact. Both are projections of one compiler model; the manifest is not the sole source of code
-addresses.
+addresses. [GOT Artifacts and Schemas](GOT-Artifacts.md) §7 and §9 fix the descriptor and manifest
+formats; §11.4 defines the pairing check.
 
 ## 3. Global offset table
 
@@ -225,7 +228,9 @@ The manifest has two projections generated from one model:
 
 Both carry a format version and integrity digest. The runtime caches the parsed active record and
 does not reparse on every cycle. Artifact size and load cost are measured on a representative
-large program; there is no hard size cap in v1.
+large program; there is no hard size cap in v1. The canonical encodings, section layout, table
+ordering, and digest derivations are normative in
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §2 and §9.
 
 ### 7.2 Content
 
@@ -335,7 +340,8 @@ with no safe runtime rule.
 Host ABI 2 is a versioned struct (`abi_version` plus `struct_size`, additive within a major).
 M4 code-linked artifacts and ABI 1 are not loadable. The module descriptor, manifest format, and
 runtime state layout are versioned together. A failed compatibility check rejects the candidate
-before activation.
+before activation. The exact ABI 2.0 table, service IDs, entry-point signatures, trap boundary,
+and module descriptor layout are fixed in [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8.
 
 ## 12. Definition of done
 

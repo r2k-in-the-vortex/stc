@@ -563,7 +563,11 @@ A module exports a descriptor containing:
 
 The binary descriptor is the loading contract for code addresses and sizes. The GOT manifest is
 the identity/history contract described in §6.4.1. They are two deterministic projections of one
-catalog model and are paired by digests; neither is maintained as an independent schema. The
+catalog model and are paired by digests; neither is maintained as an independent schema. Phase 1
+finalizes the pairing as a descriptor digest (computed with the descriptor's manifest-digest field
+zeroed) plus the manifest digest, with descriptor/manifest slot and function sets required to be
+equal; the v1 pairing does not hash the complete platform image
+([GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md) §11). The
 existing `<name>.stc-meta.json` remains the human/tooling sidecar for module metadata, spans,
 I/O, and retained-state details; the GOT manifest is a separate canonical artifact with its own
 format version.
@@ -584,13 +588,13 @@ The manifest is versioned, deterministic, and self-describing:
 
 | Section | Contents |
 | --- | --- |
-| Header | Manifest format version, profile ID, target triple, endianness, pointer width, compiler version, module/host ABI version, build ID, module digest, parent manifest build ID, active configuration, source fingerprint |
+| Header | Manifest format version, profile ID, target triple, endianness, pointer width, compiler version, module/host ABI version, build ID, descriptor digest, parent manifest build ID, active configuration, source fingerprint |
 | Identity table | One record per GOT-tracked instance: `GotId`, kind (data root/function/type/descriptor/instance/task/export), current key, previous keys, owner/root path, source location (relative path and offsets), current module slot(s), runtime cell kind, status |
 | Layout table | For each data root and type: canonical type key, structural layout hash, target size/alignment, field paths/types/offsets, base/interface links, vtable method keys and slots, pointer-containing flags, retention policy, initializer fingerprint |
 | Function table | Function/method/FB-body `GotId`, signature key, current key and previous keys, owner type, vtable slot, export C name, flags |
 | Instance/task table | Configuration, resource, task, program-instance paths, task attributes, bindings, task-guard identity |
 | Online-change section | Parent build ID, per-`GotId` action (preserve/allocate/migrate/reset/drop), migration operation list or migration-function `GotId`s, compatibility verdicts, warnings, and the rationale for every rejection |
-| Integrity | Content digest of the manifest itself, digest of the paired module, optional build signature/hash pin |
+| Integrity | Content digest of the manifest itself, digest of the paired descriptor (manifest-digest field zeroed), optional build signature/hash pin |
 
 Field offsets, sizes, and vtable layouts in the manifest are target-specific. A manifest is a
 valid online-change baseline only for the same target triple, endianness, pointer width, profile,
@@ -2892,4 +2896,9 @@ online change. Do not start M5 on the M4 direct-reference/contiguous-object mode
 M4 branch remains a valid scalar codegen milestone; this plan does not invalidate its semantics,
 only its artifact-lifetime, root-granularity, and object-representation model.
 
-No compiler or runtime code has changed as part of this planning work.
+**Update 2026-10-24 (M4.5 phase 0/1):** phase 0 is complete. Phase 1 fixes the artifact contracts
+in [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md) and records decisions
+D-113–D-117: normalized stable keys and `GotId`, canonical binary/JSON encodings and digest
+chain, pointer-free module descriptor format 1, host ABI 2.0, manifest/plan format 1, build-ID
+rules, and artifact pairing. The next step is review of that document before phase 2 (compiler
+identity layer) starts. No compiler or runtime code has changed as part of this phase 0/1 work.

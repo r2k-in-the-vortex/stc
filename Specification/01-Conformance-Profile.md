@@ -23,7 +23,8 @@ construct outside the surface must produce an explicit diagnostic.
 
 Online change, the GOT, the persistent manifest, and debug/monitoring are **project runtime
 capabilities**, not IEC language features. They are specified in
-[Online Change and GOT](Architecture/Online-Change-and-GOT.md) and
+[Online Change and GOT](Architecture/Online-Change-and-GOT.md),
+[GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md), and
 [Debug and Monitoring](Architecture/Debug-and-Monitoring.md). The project is **not a safety PLC
 and is not responsible for safety in any way**; debug sessions may hold outputs indefinitely.
 
@@ -219,7 +220,7 @@ The 2013 standard function categories implemented:
 `SR`, `RS`, `R_TRIG`, `F_TRIG`, `CTU`, `CTD`, `CTUD`, `TP`, `TON`, `TOF`.
 
 These are implemented in ST under `stdlib/` and compiled with the user project. Their timing
-behavior uses a single cycle time latched at `stc_cycle` entry, so all timers in one scan see the
+behavior uses a single cycle time latched at `stc_module_cycle` entry, so all timers in one scan see the
 same time; tests use a mock clock with the same semantics.
 
 ### 6.3 Exact vs. approximate math
@@ -267,7 +268,7 @@ The following are deliberately chosen and must be documented and tested:
 | `MOD` sign | Result has the sign of the dividend (truncating division) |
 | Real behavior | IEC 60559 binary32/binary64; NaN/infinity behavior explicitly documented |
 | Date/time representation | `DATE` = days since 1970-01-01; `LDATE`/`TOD`/`LTOD`/`DT`/`LDT` = nanoseconds; `TIME`/`LTIME` = nanoseconds |
-| Time source | One cycle time latched at `stc_cycle` entry; all timers in a scan see the same value |
+| Time source | One cycle time latched at `stc_module_cycle` entry; all timers in a scan see the same value |
 | BOOL representation | `i8` in memory, `i1` in SSA; normalized on conversion |
 | STRING representation | Length-prefixed fixed-capacity buffer; see runtime spec |
 | USTRING representation | Length in characters + fixed `[n x i32]` scalar buffer; 4 bytes/character; static |
