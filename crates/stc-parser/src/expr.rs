@@ -217,6 +217,7 @@ impl Parser<'_> {
             | SyntaxKind::DateLiteral
             | SyntaxKind::TodLiteral
             | SyntaxKind::DateTimeLiteral
+            | SyntaxKind::DirectVariable
             | SyntaxKind::KwTrue
             | SyntaxKind::KwFalse => {
                 self.start_node(SyntaxKind::LiteralExpr);

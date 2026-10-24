@@ -174,3 +174,25 @@ fn cst_dump_is_stable_and_round_trips() {
     assert!(first.contains("ProgramDecl"));
     assert!(first.contains("AssignStmt"));
 }
+
+#[test]
+fn directly_represented_variables_are_primary_expressions() {
+    let source = "PROGRAM P
+VAR
+  x : WORD;
+  b : BOOL;
+END_VAR
+  x := %IW0;
+  b := %IX0.0;
+  %QW0 := x;
+END_PROGRAM
+";
+    let file = parse_clean(source);
+    let items = stc_syntax::ast::SourceFile::cast(&file.root())
+        .unwrap()
+        .items();
+    let Item::Program(program) = &items[0] else {
+        panic!("expected a program");
+    };
+    assert_eq!(program.body().unwrap().statements().len(), 3);
+}

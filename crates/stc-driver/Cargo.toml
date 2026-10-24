@@ -13,6 +13,7 @@ path = "src/main.rs"
 stc-diag = { path = "../stc-diag" }
 stc-lexer = { path = "../stc-lexer" }
 stc-parser = { path = "../stc-parser" }
+stc-sema = { path = "../stc-sema" }
 stc-span = { path = "../stc-span" }
 stc-syntax = { path = "../stc-syntax" }
 

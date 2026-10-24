@@ -11,10 +11,12 @@ output goes to stdout.
 
 ### 1.1 Commands
 
-> **M2 status:** only `stc parse <file>` and `stc check <file>` are implemented, on single files.
-> `stc check` lexes and parses only until M3. `--message-format` supports `human` and `json`
-> (not `short`), and `--relaxed` is supported. The remaining commands and options below are the
-> v1 target and arrive in later milestones (D-051).
+> **M3 status:** `stc parse <file>` and `stc check <file>...` are implemented. `parse` is
+> single-file and syntax-only; `check` analyzes one or more files as one in-memory package,
+> resolves names, type-checks, and lowers HIR. Semantic analysis is skipped when parsing produced
+> errors (D-070). `--message-format` supports `human` and `json` (not `short`), and `--relaxed`
+> is supported. The remaining commands and options below are the v1 target and arrive in later
+> milestones (D-051).
 
 | Command | Purpose |
 | --- | --- |

@@ -428,6 +428,61 @@ impl Expr {
     pub fn span(&self) -> Span {
         self.syntax().span()
     }
+
+    /// Returns the token-only extent, suitable for diagnostics.
+    #[must_use]
+    pub fn token_span(&self) -> Span {
+        self.syntax().token_span()
+    }
+}
+
+/// One initializer value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Initializer {
+    /// An expression initializer.
+    Expr(Expr),
+    /// `[a, b, ...]`.
+    Array(ArrayInit),
+    /// `(field := value, ...)`.
+    Struct(StructInit),
+    /// A recovered error.
+    Error(ErrorNode),
+}
+
+impl Initializer {
+    /// Casts a CST node to an initializer.
+    #[must_use]
+    pub fn cast(node: &SyntaxNode) -> Option<Self> {
+        Some(match node.kind() {
+            SyntaxKind::ArrayInit => Self::Array(ArrayInit::cast(node)?),
+            SyntaxKind::StructInit => Self::Struct(StructInit::cast(node)?),
+            SyntaxKind::Error => Self::Error(ErrorNode::cast(node)?),
+            _ => Self::Expr(Expr::cast(node)?),
+        })
+    }
+
+    /// Returns the underlying node.
+    #[must_use]
+    pub fn syntax(&self) -> &SyntaxNode {
+        match self {
+            Self::Expr(expr) => expr.syntax(),
+            Self::Array(array) => array.syntax(),
+            Self::Struct(structure) => structure.syntax(),
+            Self::Error(node) => node.syntax(),
+        }
+    }
+
+    /// Returns the initializer span.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        self.syntax().span()
+    }
+
+    /// Returns the token-only extent.
+    #[must_use]
+    pub fn token_span(&self) -> Span {
+        self.syntax().token_span()
+    }
 }
 
 /// One call argument.
@@ -679,6 +734,9 @@ impl StructTypeDecl {
     #[must_use]
     pub fn is_overlap(&self) -> bool {
         self.syntax().has_direct_token(SyntaxKind::KwOverlap)
+            || self
+                .type_ref()
+                .is_some_and(|type_ref| type_ref.syntax().has_direct_token(SyntaxKind::KwOverlap))
     }
 }
 
@@ -1047,6 +1105,18 @@ impl MethodDecl {
                     | SyntaxKind::KwInternal
             )
         })
+    }
+
+    /// Returns the using directives.
+    #[must_use]
+    pub fn using_directives(&self) -> Vec<UsingDirective> {
+        child_views(self.syntax(), UsingDirective::cast)
+    }
+
+    /// Returns the pragmas.
+    #[must_use]
+    pub fn pragmas(&self) -> Vec<Pragma> {
+        child_views(self.syntax(), Pragma::cast)
     }
 
     /// Returns `true` when `OVERRIDE` is present.
@@ -1589,6 +1659,544 @@ impl ErrorNode {
     pub fn new(node: SyntaxNode) -> Option<Self> {
         Self::cast(&node)
     }
+}
+
+impl VarDecl {
+    /// Returns the initializer, including aggregate forms.
+    #[must_use]
+    pub fn initializer_node(&self) -> Option<Initializer> {
+        initializer_child(self.syntax())
+    }
+
+    /// Returns the direct-variable address token after `AT`.
+    #[must_use]
+    pub fn at_token(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .child_tokens()
+            .into_iter()
+            .find(|token| token.kind() == SyntaxKind::DirectVariable)
+    }
+}
+
+impl StructElem {
+    /// Returns `true` when the element has an `AT` binding.
+    #[must_use]
+    pub fn has_at(&self) -> bool {
+        self.syntax().has_direct_token(SyntaxKind::KwAt)
+    }
+
+    /// Returns the direct-variable address token after `AT`.
+    #[must_use]
+    pub fn at_token(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .child_tokens()
+            .into_iter()
+            .find(|token| token.kind() == SyntaxKind::DirectVariable)
+    }
+
+    /// Returns the initializer, including aggregate forms.
+    #[must_use]
+    pub fn initializer_node(&self) -> Option<Initializer> {
+        initializer_child(self.syntax())
+    }
+}
+
+impl ArrayInit {
+    /// Returns the element initializers.
+    #[must_use]
+    pub fn elements(&self) -> Vec<Initializer> {
+        self.syntax()
+            .child_nodes()
+            .iter()
+            .filter_map(Initializer::cast)
+            .collect()
+    }
+}
+
+impl StructInit {
+    /// Returns the field initializers.
+    #[must_use]
+    pub fn fields(&self) -> Vec<StructFieldInit> {
+        child_views(self.syntax(), StructFieldInit::cast)
+    }
+}
+
+impl StructFieldInit {
+    /// Returns the field path segments.
+    #[must_use]
+    pub fn names(&self) -> Vec<Name> {
+        child_views(self.syntax(), Name::cast)
+    }
+
+    /// Returns the initializer value.
+    #[must_use]
+    pub fn value(&self) -> Option<Initializer> {
+        initializer_child(self.syntax())
+    }
+}
+
+impl ArrayBound {
+    /// Returns `true` for the `*` conformant bound.
+    #[must_use]
+    pub fn is_star(&self) -> bool {
+        self.syntax().has_direct_token(SyntaxKind::PunctStar)
+    }
+
+    /// Returns the bound expressions (one, or two for a range).
+    #[must_use]
+    pub fn expressions(&self) -> Vec<Expr> {
+        expr_children(self.syntax())
+    }
+}
+
+impl TypeRef {
+    /// Returns the nested type for `ARRAY ... OF` and `REF_TO`.
+    #[must_use]
+    pub fn element_type(&self) -> Option<TypeRef> {
+        self.syntax()
+            .child_nodes()
+            .iter()
+            .filter_map(TypeRef::cast)
+            .next()
+    }
+
+    /// Returns the struct elements of an inline struct type.
+    #[must_use]
+    pub fn struct_elements(&self) -> Vec<StructElem> {
+        child_views(self.syntax(), StructElem::cast)
+    }
+}
+
+impl SimpleTypeDecl {
+    /// Returns the declared name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the declared type.
+    #[must_use]
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::TypeRef)
+            .and_then(|node| TypeRef::cast(&node))
+    }
+
+    /// Returns the type's default initializer.
+    #[must_use]
+    pub fn initializer(&self) -> Option<Initializer> {
+        initializer_child(self.syntax())
+    }
+}
+
+impl ArrayTypeDecl {
+    /// Returns the declared name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the declared type.
+    #[must_use]
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::TypeRef)
+            .and_then(|node| TypeRef::cast(&node))
+    }
+
+    /// Returns the type's default initializer.
+    #[must_use]
+    pub fn initializer(&self) -> Option<Initializer> {
+        initializer_child(self.syntax())
+    }
+}
+
+impl StringTypeDecl {
+    /// Returns the declared name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the declared type.
+    #[must_use]
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::TypeRef)
+            .and_then(|node| TypeRef::cast(&node))
+    }
+
+    /// Returns the type's default initializer.
+    #[must_use]
+    pub fn initializer(&self) -> Option<Initializer> {
+        initializer_child(self.syntax())
+    }
+}
+
+impl RefTypeDecl {
+    /// Returns the declared name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the declared type.
+    #[must_use]
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::TypeRef)
+            .and_then(|node| TypeRef::cast(&node))
+    }
+
+    /// Returns the type's default initializer.
+    #[must_use]
+    pub fn initializer(&self) -> Option<Initializer> {
+        initializer_child(self.syntax())
+    }
+}
+
+impl StructTypeDecl {
+    /// Returns the declared name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the declared type.
+    #[must_use]
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::TypeRef)
+            .and_then(|node| TypeRef::cast(&node))
+    }
+
+    /// Returns the type's default initializer.
+    #[must_use]
+    pub fn initializer(&self) -> Option<Initializer> {
+        initializer_child(self.syntax())
+    }
+}
+
+impl SubrangeTypeDecl {
+    /// Returns the declared name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the integer base type token.
+    #[must_use]
+    pub fn base_token(&self) -> Option<SyntaxToken> {
+        self.syntax().child_tokens().into_iter().find(|token| {
+            matches!(
+                token.kind(),
+                SyntaxKind::KwSint
+                    | SyntaxKind::KwInt
+                    | SyntaxKind::KwDint
+                    | SyntaxKind::KwLint
+                    | SyntaxKind::KwUsint
+                    | SyntaxKind::KwUint
+                    | SyntaxKind::KwUdint
+                    | SyntaxKind::KwUlint
+                    | SyntaxKind::KwByte
+                    | SyntaxKind::KwWord
+                    | SyntaxKind::KwDword
+                    | SyntaxKind::KwLword
+            )
+        })
+    }
+
+    /// Returns the lower and upper bound expressions.
+    #[must_use]
+    pub fn bounds(&self) -> (Option<Expr>, Option<Expr>) {
+        let mut expressions = expr_children(self.syntax()).into_iter();
+        (expressions.next(), expressions.next())
+    }
+
+    /// Returns the declared default value.
+    #[must_use]
+    pub fn default_value(&self) -> Option<Expr> {
+        expr_children(self.syntax()).into_iter().nth(2)
+    }
+}
+
+impl EnumTypeDecl {
+    /// Returns the declared name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the declared default value name.
+    #[must_use]
+    pub fn default_value(&self) -> Option<Name> {
+        let names: Vec<Name> = child_views(self.syntax(), Name::cast);
+        names.into_iter().nth(1)
+    }
+}
+
+impl NamedValueTypeDecl {
+    /// Returns the declared name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the underlying elementary type keyword.
+    #[must_use]
+    pub fn base_token(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .child_tokens()
+            .into_iter()
+            .find(|token| token.kind() != SyntaxKind::PunctColon)
+    }
+
+    /// Returns the underlying elementary type path, when named.
+    #[must_use]
+    pub fn base_path(&self) -> Option<Path> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::Path)
+            .and_then(|node| Path::cast(&node))
+    }
+
+    /// Returns the declared default value name.
+    #[must_use]
+    pub fn default_value(&self) -> Option<Name> {
+        let names: Vec<Name> = child_views(self.syntax(), Name::cast);
+        names.into_iter().nth(1)
+    }
+}
+
+impl EnumValue {
+    /// Returns the value name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the explicit value expression, if any.
+    #[must_use]
+    pub fn value(&self) -> Option<Expr> {
+        expr_children(self.syntax()).into_iter().next()
+    }
+}
+
+impl NamedValue {
+    /// Returns the value name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the explicit value expression, if any.
+    #[must_use]
+    pub fn value(&self) -> Option<Expr> {
+        expr_children(self.syntax()).into_iter().next()
+    }
+}
+
+impl MethodPrototype {
+    /// Returns the access specifier token.
+    #[must_use]
+    pub fn access(&self) -> Option<SyntaxToken> {
+        self.syntax().child_tokens().into_iter().find(|token| {
+            matches!(
+                token.kind(),
+                SyntaxKind::KwPublic
+                    | SyntaxKind::KwProtected
+                    | SyntaxKind::KwPrivate
+                    | SyntaxKind::KwInternal
+            )
+        })
+    }
+}
+
+impl ConfigDecl {
+    /// Returns the variable sections owned by the configuration.
+    #[must_use]
+    pub fn var_sections(&self) -> Vec<VarSection> {
+        child_views(self.syntax(), VarSection::cast)
+    }
+}
+
+impl ResourceDecl {
+    /// Returns the `ON <processor>` name.
+    #[must_use]
+    pub fn on(&self) -> Option<Name> {
+        let names: Vec<Name> = child_views(self.syntax(), Name::cast);
+        names.into_iter().nth(1)
+    }
+
+    /// Returns the variable sections owned by the resource.
+    #[must_use]
+    pub fn var_sections(&self) -> Vec<VarSection> {
+        child_views(self.syntax(), VarSection::cast)
+    }
+}
+
+impl TaskConfig {
+    /// Returns the task name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the task attributes.
+    #[must_use]
+    pub fn attributes(&self) -> Vec<TaskAttr> {
+        child_views(self.syntax(), TaskAttr::cast)
+    }
+}
+
+impl TaskAttr {
+    /// Returns the attribute kind token (`SINGLE`, `INTERVAL`, `PRIORITY`).
+    #[must_use]
+    pub fn kind(&self) -> Option<SyntaxToken> {
+        self.syntax().child_tokens().into_iter().find(|token| {
+            matches!(
+                token.kind(),
+                SyntaxKind::KwSingle | SyntaxKind::KwInterval | SyntaxKind::KwPriority
+            )
+        })
+    }
+
+    /// Returns the attribute value expression.
+    #[must_use]
+    pub fn value(&self) -> Option<Expr> {
+        expr_children(self.syntax()).into_iter().next()
+    }
+}
+
+impl ProgramConfig {
+    /// Returns the program instance name.
+    #[must_use]
+    pub fn name(&self) -> Option<Name> {
+        declaration_name(self.syntax())
+    }
+
+    /// Returns the `WITH <task>` name, if present.
+    #[must_use]
+    pub fn with(&self) -> Option<Name> {
+        let names: Vec<Name> = child_views(self.syntax(), Name::cast);
+        names.into_iter().nth(1)
+    }
+
+    /// Returns the program type path after `:`.
+    #[must_use]
+    pub fn program_path(&self) -> Option<Path> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::Path)
+            .and_then(|node| Path::cast(&node))
+    }
+
+    /// Returns the bindings.
+    #[must_use]
+    pub fn elements(&self) -> Vec<ProgConfElem> {
+        child_views(self.syntax(), ProgConfElem::cast)
+    }
+}
+
+impl ProgConfElem {
+    /// Returns the destination/source expressions in source order.
+    #[must_use]
+    pub fn expressions(&self) -> Vec<Expr> {
+        expr_children(self.syntax())
+    }
+
+    /// Returns the `IDENT WITH IDENT` names, when this is an FB task binding.
+    #[must_use]
+    pub fn names(&self) -> Vec<Name> {
+        child_views(self.syntax(), Name::cast)
+    }
+
+    /// Returns the `:=`/`=>` operator token.
+    #[must_use]
+    pub fn operator(&self) -> Option<SyntaxToken> {
+        self.syntax().child_tokens().into_iter().find(|token| {
+            matches!(
+                token.kind(),
+                SyntaxKind::PunctAssign | SyntaxKind::PunctOutputAssign
+            )
+        })
+    }
+}
+
+impl AccessDecl {
+    /// Returns the access path names after the declared name.
+    #[must_use]
+    pub fn path_names(&self) -> Vec<Name> {
+        child_views(self.syntax(), Name::cast)
+            .into_iter()
+            .skip(1)
+            .collect()
+    }
+
+    /// Returns a direct-variable address in the access path.
+    #[must_use]
+    pub fn direct_token(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .child_tokens()
+            .into_iter()
+            .find(|token| token.kind() == SyntaxKind::DirectVariable)
+    }
+
+    /// Returns `true` for `READ_ONLY`.
+    #[must_use]
+    pub fn is_read_only(&self) -> bool {
+        self.syntax().has_direct_token(SyntaxKind::KwReadOnly)
+    }
+
+    /// Returns `true` for `READ_WRITE`.
+    #[must_use]
+    pub fn is_read_write(&self) -> bool {
+        self.syntax().has_direct_token(SyntaxKind::KwReadWrite)
+    }
+}
+
+impl ConfigInstInit {
+    /// Returns the dotted path segments.
+    #[must_use]
+    pub fn names(&self) -> Vec<Name> {
+        child_views(self.syntax(), Name::cast)
+    }
+
+    /// Returns the optional `AT` address token.
+    #[must_use]
+    pub fn at_token(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .child_tokens()
+            .into_iter()
+            .find(|token| token.kind() == SyntaxKind::DirectVariable)
+    }
+
+    /// Returns the declared type.
+    #[must_use]
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::TypeRef)
+            .and_then(|node| TypeRef::cast(&node))
+    }
+
+    /// Returns the initializer, including aggregate forms.
+    #[must_use]
+    pub fn initializer_node(&self) -> Option<Initializer> {
+        initializer_child(self.syntax())
+    }
+}
+
+impl PathExpr {
+    /// Returns the `THIS`/`SUPER` prefix token, when present.
+    #[must_use]
+    pub fn prefix(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .child_tokens()
+            .into_iter()
+            .find(|token| matches!(token.kind(), SyntaxKind::KwThis | SyntaxKind::KwSuper))
+    }
+}
+
+fn initializer_child(node: &SyntaxNode) -> Option<Initializer> {
+    node.child_nodes().iter().find_map(Initializer::cast)
 }
 
 fn child_views<T>(node: &SyntaxNode, cast: fn(&SyntaxNode) -> Option<T>) -> Vec<T> {

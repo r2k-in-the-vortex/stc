@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Draft (target profile; M2 lexical and syntactic surface implemented)  
+Status: Draft (target profile; M3 lexical, syntactic, resolution, and type-checking surface implemented)  
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
 Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`
@@ -20,11 +20,14 @@ The project also does **not** claim conformance to the complete 2013 edition: on
 set below is implemented. Any unimplemented construct in the accepted surface is a bug; any
 construct outside the surface must produce an explicit diagnostic.
 
-**Implementation status (M2):** the lexical surface and the full syntactic surface (CST, typed
-AST views, pragma payload validation, recovery) are implemented. The statuses in §3–§4 describe
-the v1 target surface; name resolution, type checking, constant evaluation, and HIR lowering are
-M3 and are not yet claimable as implemented behaviour. Unsupported constructs are rejected with
-the diagnostics in [Grammar](Syntax/Grammar.md) §13 rather than silently accepted.
+**Implementation status (M3):** the lexical surface, the full syntactic surface (CST, typed AST
+views, pragma payload validation, recovery), and the M3 semantic surface (collection, namespaces
+and `USING`, name resolution, type checking, constant evaluation, initializers, access control,
+OOP, references, I/O and retention diagnostics, configurations, and HIR lowering) are
+implemented. `stc check <file>...` analyzes one in-memory package; a project manifest arrives in
+M6. The statuses in §3–§4 describe the v1 target surface; code generation is M4. Unsupported
+constructs are rejected with the diagnostics in [Grammar](Syntax/Grammar.md) §13 rather than
+silently accepted.
 
 ## 2. Input languages
 

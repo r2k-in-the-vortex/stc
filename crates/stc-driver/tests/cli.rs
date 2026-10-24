@@ -44,9 +44,10 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-const VALID: &str = "PROGRAM P\n  x := 1;\nEND_PROGRAM\n";
+const VALID: &str = "PROGRAM P\nVAR\n  x : DINT;\nEND_VAR\n  x := 1;\nEND_PROGRAM\n";
 const INVALID: &str = "PROGRAM P\n  x := ;\nEND_PROGRAM\n";
-const RELAXED: &str = "PROGRAM P\nIF TRUE THEN x := 1; END_IF\nEND_PROGRAM\n";
+const RELAXED: &str =
+    "PROGRAM P\nVAR\n  x : DINT;\nEND_VAR\nIF TRUE THEN x := 1; END_IF\nEND_PROGRAM\n";
 
 #[test]
 fn parse_prints_a_cst_and_succeeds() {
@@ -147,6 +148,101 @@ fn missing_file_and_usage_errors_exit_two() {
         "--message-format=xml",
     ]);
     assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn check_reports_semantic_errors() {
+    let file = TempFile::new(
+        "check_semantic",
+        b"PROGRAM P
+VAR
+  x : DINT;
+END_VAR
+  x := missing;
+END_PROGRAM
+",
+    );
+    let output = run(&["check", file.path().to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("STC-E-NAME-001"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn check_semantic_json_has_a_stable_code() {
+    let file = TempFile::new(
+        "check_semantic_json",
+        b"PROGRAM P
+VAR
+  x : DINT;
+END_VAR
+  x := missing;
+END_PROGRAM
+",
+    );
+    let output = run(&[
+        "check",
+        file.path().to_str().unwrap(),
+        "--message-format=json",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stdout(&output);
+    assert!(text.contains("\"code\":\"STC-E-NAME-001\""), "{text}");
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+}
+
+#[test]
+fn check_accepts_multiple_files_in_one_session() {
+    let namespace = TempFile::new(
+        "multi_ns",
+        b"NAMESPACE ProjectDep
+FUNCTION F : DINT
+VAR_INPUT a : DINT; END_VAR
+  F := a + 1;
+END_FUNCTION
+END_NAMESPACE
+",
+    );
+    let program = TempFile::new(
+        "multi_main",
+        b"PROGRAM P
+USING ProjectDep;
+VAR
+  x : DINT;
+END_VAR
+  x := F(1);
+END_PROGRAM
+",
+    );
+    let output = run(&[
+        "check",
+        program.path().to_str().unwrap(),
+        namespace.path().to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+}
+
+#[test]
+fn parse_errors_suppress_semantic_cascades() {
+    let file = TempFile::new(
+        "check_parse_cascade",
+        b"PROGRAM P
+VAR
+  x : DINT;
+END_VAR
+  x := ;
+  y := missing;
+END_PROGRAM
+",
+    );
+    let output = run(&["check", file.path().to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(text.contains("STC-E-GRAM-105"), "{text}");
+    assert!(!text.contains("STC-E-NAME-001"), "{text}");
 }
 
 #[test]

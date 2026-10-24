@@ -7,14 +7,18 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M2 parser and CST complete.** The repository contains the source-map/diagnostics crates, the
-full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST views, strict pragma
-JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery, unsupported-construct
-diagnostics), and the `stc parse`/`stc check` driver skeleton. Parser snapshots, a committed
-corpus, per-production traceability, deterministic property tests, and both `fuzz_lexer` and
-`fuzz_parser` targets are in place. M3 (name resolution and type checking) is next; no analyzer
-or code generator exists yet. The specification continues to be written before implementation,
-as required below.
+**M3 name resolution and type checking complete.** The repository contains the source-map and
+diagnostic crates, the full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST
+views, strict pragma JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery,
+unsupported-construct diagnostics), `stc-hir` (arenas, stable IDs, interner, canonical types,
+resolved bodies), `stc-sema` (collection, namespaces/`USING`, name resolution, type checking,
+constant evaluation, initializers, access control, OOP, references, I/O and retention checks,
+HIR lowering), and the `stc parse`/`stc check` driver. `stc check <file>...` analyzes one
+in-memory package across files; `stc parse` remains single-file. Parser and semantic snapshots,
+a committed corpus, per-production and per-code traceability, deterministic property tests, a
+20k-term deep-chain test, and `fuzz_lexer`, `fuzz_parser`, and `fuzz_analyzer` targets are in
+place. No code generator exists yet; M4 consumes the HIR produced here. The specification
+continues to be written before implementation, as required below.
 
 | Document | Purpose |
 | --- | --- |
@@ -271,6 +275,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-041 | `SyntaxKind` is a stable, append-only API; full CST/IDE API is planned for v2/v3. |
 | D-042 | After basic development, `stc` and its runtime also run natively on Linux x86-64 and Linux AArch64 (ARM64); Windows remains the primary development host. |
 | D-045–D-058 | M2 syntax decisions: arena CST owning the source, stable `SyntaxKind`, parser codes `STC-E-GRAM-105`–`111`, strict pragma JSON, token-extent diagnostics, recovery/missing-token policy, and interning deferred to M3. Details in `Specification/Decisions.md`. |
+| D-059–D-075 | M3 analyzer decisions: HIR in M3, the multi-file `stc check` bridge and `_root` session namespace, the interner/session model, the stable diagnostic table, type canonicalization and conversions, overloads, the standard prelude, constant evaluation, access defaults, reference/attempt rules, parse-error suppression, test-only handling, deterministic ordering, and arena-based iterative lowering. Details in `Specification/Decisions.md` and `M3-Plan.md`. |
 
 ## Question log
 
@@ -307,18 +312,21 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 **None as of 2026-10-24.** All v1 planning questions Q-001 through Q-017 are resolved
 (A-005 through A-021). New questions will be added here one at a time.
 
-## Building and running (M2)
+## Building and running (M3)
 
 ```sh
 cargo test --workspace --locked
 cargo run -p stc-driver -- parse path/to/file.st
 cargo run -p stc-driver -- check path/to/file.st
+cargo run -p stc-driver -- check path/to/a.st path/to/b.st
 cargo run -p stc-driver -- check --relaxed path/to/file.st
 cargo run -p stc-driver -- parse path/to/file.st --message-format=json
 ```
 
-`stc parse` prints a lossless CST dump (and the typed AST dump with `--ast`); `stc check` is
-parse-only until M3. Human diagnostics go to stderr; JSON diagnostics go to stdout.
+`stc parse` prints a lossless CST dump (and the typed AST dump with `--ast`). `stc check` accepts
+one or more files, builds one in-memory package, and reports lexical, syntax, and semantic
+diagnostics. Semantic analysis is skipped when parsing has errors (D-070). Human diagnostics go
+to stderr; JSON diagnostics go to stdout.
 
 ## Dev environment
 

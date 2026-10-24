@@ -15,6 +15,7 @@ libfuzzer-sys = "0.4.13"
 stc-diag = { path = "../crates/stc-diag" }
 stc-lexer = { path = "../crates/stc-lexer" }
 stc-parser = { path = "../crates/stc-parser" }
+stc-sema = { path = "../crates/stc-sema" }
 stc-span = { path = "../crates/stc-span" }
 
 [[bin]]
@@ -27,6 +28,13 @@ bench = false
 [[bin]]
 name = "fuzz_parser"
 path = "fuzz_targets/fuzz_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_analyzer"
+path = "fuzz_targets/fuzz_analyzer.rs"
 test = false
 doc = false
 bench = false

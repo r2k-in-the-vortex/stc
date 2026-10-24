@@ -6,6 +6,8 @@ members = [
     "crates/stc-lexer",
     "crates/stc-syntax",
     "crates/stc-parser",
+    "crates/stc-hir",
+    "crates/stc-sema",
     "crates/stc-driver",
 ]
 exclude = ["fuzz"]

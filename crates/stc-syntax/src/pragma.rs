@@ -108,7 +108,12 @@ pub fn parse_pragma(
         Some(parse_json(payload_text, span, diagnostics)?)
     };
     if let Err(message) = validate_payload(&name, payload.as_ref()) {
-        diagnostics.error(codes::PRAGMA_PAYLOAD, message, span);
+        let code = if name == "io" {
+            syntax_codes::IO_PAYLOAD
+        } else {
+            codes::PRAGMA_PAYLOAD
+        };
+        diagnostics.error(code, message, span);
         // Keep the annotation: the payload is preserved for tooling even when
         // its shape is wrong.
     }

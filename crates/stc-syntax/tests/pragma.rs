@@ -113,7 +113,7 @@ fn oversized_bodies_are_rejected() {
 fn io_requires_an_object_payload() {
     for text in ["{stc:io}", "{stc:io []}", "{stc:io \"drive\"}"] {
         let (_, sink) = parse(text);
-        assert!(codes(&sink).contains(&"STC-E-PRAGMA-002"), "{text}");
+        assert!(codes(&sink).contains(&"STC-E-IO-004"), "{text}");
     }
 }
 
@@ -130,7 +130,7 @@ fn io_validates_recognized_keys() {
         "{stc:io {\"device\": 5}}",
     ] {
         let (_, sink) = parse(text);
-        assert!(codes(&sink).contains(&"STC-E-PRAGMA-002"), "{text}");
+        assert!(codes(&sink).contains(&"STC-E-IO-004"), "{text}");
     }
 }
 

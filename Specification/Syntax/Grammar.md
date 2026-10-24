@@ -533,7 +533,7 @@ ref_value          ::= 'REF' '(' ( variable | IDENT ) ')'
 variable           ::= ( 'THIS' '.' )? path postfix* ;
 
 literal            ::= INT | REAL | STRING | USTRING | CHAR_LIT
-                     | DURATION | DATE | TOD | DT
+                     | DURATION | DATE | TOD | DT | DIRECT_VAR
                      | 'TRUE' | 'FALSE' ;
 ```
 

@@ -88,8 +88,16 @@ dependencies = [
  "stc-diag",
  "stc-lexer",
  "stc-parser",
+ "stc-sema",
  "stc-span",
  "stc-syntax",
+]
+
+[[package]]
+name = "stc-hir"
+version = "0.1.0"
+dependencies = [
+ "stc-span",
 ]
 
 [[package]]
@@ -106,6 +114,18 @@ version = "0.1.0"
 dependencies = [
  "stc-diag",
  "stc-lexer",
+ "stc-span",
+ "stc-syntax",
+]
+
+[[package]]
+name = "stc-sema"
+version = "0.1.0"
+dependencies = [
+ "stc-diag",
+ "stc-hir",
+ "stc-lexer",
+ "stc-parser",
  "stc-span",
  "stc-syntax",
 ]

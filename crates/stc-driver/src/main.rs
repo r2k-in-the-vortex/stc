@@ -1,9 +1,9 @@
-//! The `stc` command-line driver (M2 skeleton).
+//! The `stc` command-line driver.
 //!
-//! M2 provides `stc parse` and `stc check`. Both lex and parse one file;
-//! `check` is parse-only until semantic analysis arrives in M3. The driver
-//! owns the exit-code contract, human/JSON diagnostics, and the panic boundary
-//! from CLI-and-Manifest §1.3–§1.4.
+//! M3 provides `stc parse <file>` (lex/parse only) and `stc check <file>...`
+//! (lex, parse, resolve, and type-check). The driver owns the exit-code
+//! contract, human/JSON diagnostics, and the panic boundary from
+//! CLI-and-Manifest §1.3–§1.4.
 
 #![forbid(unsafe_code)]
 
@@ -14,11 +14,9 @@ use std::process::ExitCode;
 use stc_diag::{DiagnosticSink, render_human, render_json};
 use stc_lexer::tokenize_bytes;
 use stc_parser::{ParseOptions, ParsedFile, parse};
-use stc_span::FileId;
-use stc_span::SourceMap;
+use stc_span::{FileId, SourceMap};
 use stc_syntax::{dump_cst, dump_typed_ast};
 
-const FILE: FileId = FileId::new(0);
 const INTERNAL_ERROR: &str = "STC-I-0001";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -35,7 +33,7 @@ enum Format {
 
 struct Invocation {
     command: Command,
-    path: String,
+    paths: Vec<String>,
     format: Format,
     relaxed: bool,
     ast: bool,
@@ -81,32 +79,47 @@ fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let bytes = match std::fs::read(&invocation.path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            eprintln!("stc: cannot read `{}`: {error}", invocation.path);
-            return ExitCode::from(2);
-        }
-    };
+    let mut paths = invocation.paths.clone();
+    if invocation.command == Command::Check {
+        // File order is not semantic (D-060).
+        paths.sort();
+    }
 
-    let mut diagnostics = DiagnosticSink::new();
-    let lexed = tokenize_bytes(FILE, &bytes, &mut diagnostics);
     let mut sources = SourceMap::new();
-    let file = sources.add_file(invocation.path.clone(), lexed.text.clone());
-    debug_assert_eq!(file, FILE);
+    let mut diagnostics = DiagnosticSink::new();
+    let mut parsed_files = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!("stc: cannot read `{path}`: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        let file = FileId::new(u32::try_from(index).expect("too many input files"));
+        let lexed = tokenize_bytes(file, &bytes, &mut diagnostics);
+        let mapped = sources.add_file(path.clone(), lexed.text.clone());
+        debug_assert_eq!(mapped, file);
+        let parsed = parse(
+            file,
+            lexed.text.as_str(),
+            &lexed.stream,
+            ParseOptions {
+                relaxed_semicolons: invocation.relaxed,
+                ..ParseOptions::default()
+            },
+            &mut diagnostics,
+        );
+        parsed_files.push(parsed);
+    }
 
-    let parsed = parse(
-        file,
-        lexed.text.as_str(),
-        &lexed.stream,
-        ParseOptions {
-            relaxed_semicolons: invocation.relaxed,
-            ..ParseOptions::default()
-        },
-        &mut diagnostics,
-    );
+    // D-070: do not analyze recovered trees when syntax errors exist.
+    let mut _analysis = None;
+    if invocation.command == Command::Check && !diagnostics.has_errors() {
+        _analysis = Some(stc_sema::analyze(&parsed_files, &mut diagnostics));
+    }
 
-    report(&invocation, &parsed, &diagnostics, &sources);
+    report(&invocation, &parsed_files, &diagnostics, &sources);
 
     if diagnostics.has_errors() {
         ExitCode::from(1)
@@ -117,7 +130,7 @@ fn run(args: &[String]) -> ExitCode {
 
 fn report(
     invocation: &Invocation,
-    parsed: &ParsedFile,
+    parsed_files: &[ParsedFile],
     diagnostics: &DiagnosticSink,
     sources: &SourceMap,
 ) {
@@ -132,7 +145,9 @@ fn report(
                     diagnostics.suppressed()
                 );
             }
-            if invocation.command == Command::Parse {
+            if invocation.command == Command::Parse
+                && let Some(parsed) = parsed_files.first()
+            {
                 print!("{}", dump_cst(parsed.tree()));
                 if invocation.ast {
                     print!("{}", dump_typed_ast(parsed.tree()));
@@ -172,7 +187,7 @@ fn parse_args(args: &[String]) -> Result<Option<Invocation>, String> {
     let mut format = Format::Human;
     let mut relaxed = false;
     let mut ast = false;
-    let mut path: Option<String> = None;
+    let mut paths = Vec::new();
     while index < args.len() {
         let argument = &args[index];
         match argument.as_str() {
@@ -199,23 +214,23 @@ fn parse_args(args: &[String]) -> Result<Option<Invocation>, String> {
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
             }
-            other => {
-                if path.is_some() {
-                    return Err(format!("unexpected argument `{other}`"));
-                }
-                path = Some(other.to_owned());
-            }
+            other => paths.push(other.to_owned()),
         }
         index += 1;
     }
 
-    let path = path.ok_or_else(|| "missing input file".to_string())?;
+    if paths.is_empty() {
+        return Err("missing input file".into());
+    }
+    if command == Command::Parse && paths.len() != 1 {
+        return Err("`stc parse` accepts exactly one input file".into());
+    }
     if command == Command::Check && ast {
         return Err("`--ast` is only valid with `stc parse`".into());
     }
     Ok(Some(Invocation {
         command,
-        path,
+        paths,
         format,
         relaxed,
         ast,
@@ -238,11 +253,12 @@ fn print_help() {
          \n\
          Usage:\n\
          \x20 stc parse <file> [--ast] [--relaxed] [--message-format human|json]\n\
-         \x20 stc check <file> [--relaxed] [--message-format human|json]\n\
+         \x20 stc check <file>... [--relaxed] [--message-format human|json]\n\
          \x20 stc --version\n\
          \x20 stc --help\n\
          \n\
-         M2 commands lex and parse one file. `check` is parse-only until M3.\n\
+         `parse` lexes and parses one file. `check` lexes, parses, resolves, and\n\
+         type-checks one or more files in one in-memory package.\n\
          Exit codes: 0 success, 1 compile error, 2 usage error, 3 internal error.",
         env!("CARGO_PKG_VERSION")
     );
