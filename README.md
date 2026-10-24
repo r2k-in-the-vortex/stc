@@ -366,6 +366,10 @@ Lake version 5.0.0-src+eb6cafb (Lean version 4.35.0)
 
 PS C:\repos\stc> cargo -V
 cargo 1.99.1 (5f94df478 2026-08-27)
+
+PS C:\Users\rkord> gh --version
+gh version 2.103.2 (2026-10-23)
+https://github.com/cli/cli/releases/tag/v2.103.2
 ```
 
 Windows 11 x86-64 is the primary development host. Native Linux x86-64 and Linux AArch64 host

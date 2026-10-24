@@ -1,6 +1,8 @@
 //! Host toolchain discovery for linking on Windows MSVC (D-078).
 
+#[cfg(windows)]
 use std::path::PathBuf;
+#[cfg(windows)]
 use std::process::Command;
 
 /// Returns the linker arguments needed to link a Rust staticlib and generated
