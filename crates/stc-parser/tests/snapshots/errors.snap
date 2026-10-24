@@ -1,0 +1,112 @@
+# errors (103 bytes, 5 diagnostics)
+## cst
+# cst nodes=24 tokens=28 trivia=27 bytes=103
+SourceFile 0..103
+  ProgramDecl 0..102
+    KwProgram@0..7 "PROGRAM"
+    Trivia(Whitespace)@7..8 " "
+    Name 8..14
+      Ident@8..14 "Broken"
+    VarSection 14..44
+      Trivia(Whitespace)@14..15 "\n"
+      KwVar@15..18 "VAR"
+      VarDecl 18..28
+        Name 18..23
+          Trivia(Whitespace)@18..19 "\n"
+          Trivia(Whitespace)@19..21 "  "
+          Ident@21..22 "x"
+          Trivia(Whitespace)@22..23 " "
+        PunctColon@23..24 ":"
+        Trivia(Whitespace)@24..25 " "
+        TypeRef 25..28
+          KwInt@25..28 "INT"
+        Missing(PunctSemicolon)@28..28
+      VarDecl 28..36
+        Name 28..33
+          Trivia(Whitespace)@28..29 "\n"
+          Trivia(Whitespace)@29..31 "  "
+          Ident@31..32 "y"
+          Trivia(Whitespace)@32..33 " "
+        PunctColon@33..34 ":"
+        Trivia(Whitespace)@34..35 " "
+        TypeRef 35..35
+          Missing(Ident)@35..35
+        PunctSemicolon@35..36 ";"
+      Trivia(Whitespace)@36..37 "\n"
+      KwEndVar@37..44 "END_VAR"
+    StmtList 44..90
+      AssignStmt 44..53
+        PathExpr 44..49
+          Name 44..49
+            Trivia(Whitespace)@44..45 "\n"
+            Trivia(Whitespace)@45..47 "  "
+            Ident@47..48 "a"
+            Trivia(Whitespace)@48..49 " "
+        PunctAssign@49..51 ":="
+        Trivia(Whitespace)@51..52 " "
+        Error 52..52
+        PunctSemicolon@52..53 ";"
+      IfStmt 53..77
+        Trivia(Whitespace)@53..54 "\n"
+        Trivia(Whitespace)@54..56 "  "
+        KwIf@56..58 "IF"
+        Trivia(Whitespace)@58..59 " "
+        PathExpr 59..61
+          Name 59..61
+            Ident@59..60 "x"
+            Trivia(Whitespace)@60..61 " "
+        KwThen@61..65 "THEN"
+        StmtList 65..77
+          AssignStmt 65..77
+            PathExpr 65..72
+              Name 65..72
+                Trivia(Whitespace)@65..66 "\n"
+                Trivia(Whitespace)@66..70 "    "
+                Ident@70..71 "b"
+                Trivia(Whitespace)@71..72 " "
+            PunctAssign@72..74 ":="
+            Trivia(Whitespace)@74..75 " "
+            LiteralExpr 75..76
+              IntLiteral@75..76 "1"
+            PunctSemicolon@76..77 ";"
+        Missing(KwEndIf)@77..77
+        Missing(PunctSemicolon)@77..77
+      Error 77..90
+        Trivia(Whitespace)@77..78 "\n"
+        Trivia(Whitespace)@78..80 "  "
+        KwEndWhile@80..89 "END_WHILE"
+        PunctSemicolon@89..90 ";"
+    Trivia(Whitespace)@90..91 "\n"
+    KwEndProgram@91..102 "END_PROGRAM"
+  Trivia(Whitespace)@102..103 "\n"
+  Eof@103..103 ""
+## ast
+# ast bytes=103
+  ProgramDecl@0..102 Broken
+    Name@8..14 Broken
+    VarSection@14..44 VAR   x : INT   y : ; END_VAR
+      VarDecl@18..28 x
+        Name@18..23 x
+        TypeRef@25..28 INT
+      VarDecl@28..36 y
+        Name@28..33 y
+        TypeRef@35..35
+      AssignStmt@44..53 a := ;
+        PathExpr@44..49 a
+          Name@44..49 a
+        Error@52..52
+      IfStmt@53..77 IF x THEN     b := 1;
+        PathExpr@59..61 x
+          Name@59..61 x
+          AssignStmt@65..77 b := 1;
+            PathExpr@65..72 b
+              Name@65..72 b
+            LiteralExpr@75..76 1
+      Error@77..90 END_WHILE;
+## diagnostics
+error STC-E-GRAM-107 31..32 expected `;` after variable declaration
+error STC-E-GRAM-106 35..36 expected a type, found `;`
+error STC-E-GRAM-105 52..53 expected an expression
+error STC-E-GRAM-108 80..89 mismatched terminator: expected `END_IF`, found `END_WHILE`
+  label 56..58 `END_IF` starts here
+error STC-E-GRAM-107 80..89 expected `;` after statement

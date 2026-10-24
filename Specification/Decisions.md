@@ -291,6 +291,20 @@ errors.
 | D-042 | After basic development, `stc` and its runtime also build and run natively on Linux x86-64 and Linux AArch64 (ARM64). Windows remains the primary development host; target selection stays with clang. | User requirement. Rust plus the narrow C ABI make the port additive if host-specific code stays behind a small platform layer. |
 | D-043 | M1 lexical implementation limits: identifiers up to 1024 bytes; invalid UTF-8 replaced by U+FFFD for recovery; initial BOM as trivia; same-line trailing trivia; unterminated block comments as trivia plus a zero-width `Error` token; duration fractions contain digits only; date/time fractions have 1–9 digits; direct-variable indices are 32-bit. | Implements the implementation-defined latitude in STC-LEX-002, -016, -038, -041, -043, and -049 without changing the profile. |
 | D-044 | Typed string and character prefixes determine the encoding and accept either quote delimiter; `$'` and `$"` are accepted in any quoted literal; an unquoted `UCHAR#` accepts one named, `$HH`, `$HHHH`, or `${HEX}` escape; `$L`/`$N` both denote U+000A. | Makes the STC-LEX-027, -030, and -035 examples explicit and removes delimiter/encoding coupling; each choice has a lexer test. |
+| D-045 | The M2 CST is a hand-rolled immutable arena that owns `Arc<str>`; node spans include attached trivia and typed diagnostics use token-only extents. | Keeps the workspace's CST dependency-free and lossless; `rowan` remains an allowed alternative. |
+| D-046 | `SyntaxKind` places token kinds in `1..=0x0FF` and node kinds from `0x100`, with explicit discriminants and a checked-in name/discriminant table. | Stable append-only surface for formatter/IDE tooling (A-021). |
+| D-047 | Ordinary parser diagnostics use `STC-E-GRAM-105`–`111` (unexpected token, expected token, missing semicolon, mismatched terminator, depth limit, invalid pragma placement, missing terminator). | Gives every recovery path a stable code; Grammar §13.1 documents the table. |
+| D-048 | Unsupported constructs are recognized by shape: SFC keywords, a leading `#`, Ed. 4 declaration names (`PROPERTY`/`MUTEX`/`SEMA`), an `ASSERT(...)` call statement, and IL mnemonics followed by an operand. The same spellings remain usable as ordinary identifiers elsewhere. | A deliberate lookahead policy that rejects the out-of-profile constructs without rejecting valid identifiers. |
+| D-049 | Duplicate `stc:io` on one declaration is `STC-E-IO-003`; `stc:io` without `AT` is `STC-W-IO-002`. Other duplicate `stc:` names are preserved without a new error code. | IO §4 already assigns these codes; a parallel pragma code would duplicate the contract. |
+| D-050 | Pragma payloads use `serde_json` with a custom `DeserializeSeed` that rejects duplicate keys and nesting deeper than 32; bodies over 64 KiB are rejected before parsing; unknown keys are preserved. The `stc:` prefix and known names are matched ASCII case-insensitively and normalized to lowercase. | Strict JSON without losing unknown metadata; matches the language's case-insensitive convention. |
+| D-051 | The M2 CLI parses arguments manually and supports only `stc parse <file>` and `stc check <file>` on single files. `parse` prints the CST/AST dump in human mode and suppresses it in JSON mode so stdout stays one JSON object per line. | Keeps the M2 skeleton small; `clap`, directories, and project manifests are deferred to M6. |
+| D-052 | Simple dotted access (`a.b`) is a `PathExpr` with multiple `Name` segments; `MemberExpr` is reserved for access on a computed base (`f().x`, `arr[0].x`). Typed AST text accessors and diagnostics use token extents, not trivia-inclusive node spans. | One uniform representation for qualified names, and diagnostics that point at code rather than comments. |
+| D-053 | Missing tokens are zero-width token leaves with a diagnostic. A mismatched `END_*` reports both spans and is left for the enclosing construct; a stray statement terminator at POU-body level is consumed and parsing continues. | Preserves losslessness, keeps the enclosing terminator available, and avoids recovery cascades. |
+| D-054 | Empty `StmtList` nodes are valid; the AST §3.4 "at least one child" invariant is relaxed for them. | `(stmt? ';')*` permits an empty body, so an empty list is a real node. |
+| D-055 | `AssignStmt` versus `RefAssignStmt` is classified syntactically: a dereference on the left or a `REF(...)`/`NULL` on the right selects the reference form; the analyzer finalizes the meaning. | Preserves both shapes for M3 without speculative typing; a bare `x := y` stays an assignment. |
+| D-056 | Grammar §4 now defines `initializer`, `array_init`, `struct_init`, `struct_field_init`, and `char_str`. | The draft referenced these productions without defining them. |
+| D-057 | The grammar's duplicated construct wrappers are represented by one CST node each: `Path` for qualified names, `TypeRef` for type specs, `ParamList`/`Param` for call arguments, and `ElseBranch` only for `ELSIF`. | Avoids redundant node kinds while keeping every production reachable from the typed AST. |
+| D-058 | Identifier interning is deferred to M3. M2 preserves each identifier's original spelling and the lexer's normalized uppercase key in `Name` nodes; the session `Interner` is built during name resolution. | The lexer already provides the normalized key; a second symbol table in M2 would be unused until M3. |
 
 D-042 is a host-portability requirement, not a language/profile change. It does not alter the IR,
 runtime ABI, or conformance profile. It requires host-specific operations (clang/linker
@@ -299,6 +313,12 @@ to the driver and runtime. Affected documents: [Architecture](Architecture/Archi
 [Runtime](Architecture/Runtime-and-Execution.md) §2, [State](Architecture/State-and-Retain.md) §4.2,
 [Testing](Architecture/Testing-and-Verification.md) §6, and the [Project Plan](00-Project-Plan.md)
 M8.
+
+D-045 through D-058 resolve the M2 handover's open items. The syntax surface is implemented in
+`crates/stc-syntax` (stable kinds, lossless CST, typed AST views, pragma JSON),
+`crates/stc-parser` (recursive descent, Annex A precedence, recovery, unsupported-construct
+diagnostics), and the `stc` driver skeleton. Name resolution, type checking, and interning remain
+M3.
 
 ## 3. Open questions
 

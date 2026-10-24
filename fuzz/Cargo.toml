@@ -14,11 +14,19 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4.13"
 stc-diag = { path = "../crates/stc-diag" }
 stc-lexer = { path = "../crates/stc-lexer" }
+stc-parser = { path = "../crates/stc-parser" }
 stc-span = { path = "../crates/stc-span" }
 
 [[bin]]
 name = "fuzz_lexer"
 path = "fuzz_targets/fuzz_lexer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_parser"
+path = "fuzz_targets/fuzz_parser.rs"
 test = false
 doc = false
 bench = false

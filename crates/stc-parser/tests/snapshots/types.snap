@@ -1,0 +1,266 @@
+# types (303 bytes, 0 diagnostics)
+## cst
+# cst nodes=58 tokens=89 trivia=64 bytes=303
+SourceFile 0..303
+  DataTypeDecl 0..302
+    KwType@0..4 "TYPE"
+    SubrangeTypeDecl 4..28
+      Name 4..13
+        Trivia(Whitespace)@4..5 "\n"
+        Trivia(Whitespace)@5..7 "  "
+        Ident@7..12 "Speed"
+        Trivia(Whitespace)@12..13 " "
+      PunctColon@13..14 ":"
+      Trivia(Whitespace)@14..15 " "
+      KwInt@15..18 "INT"
+      Trivia(Whitespace)@18..19 " "
+      PunctLParen@19..20 "("
+      LiteralExpr 20..21
+        IntLiteral@20..21 "0"
+      PunctRange@21..23 ".."
+      LiteralExpr 23..26
+        IntLiteral@23..26 "100"
+      PunctRParen@26..27 ")"
+      PunctSemicolon@27..28 ";"
+    EnumTypeDecl 28..63
+      Name 28..37
+        Trivia(Whitespace)@28..29 "\n"
+        Trivia(Whitespace)@29..31 "  "
+        Ident@31..36 "Color"
+        Trivia(Whitespace)@36..37 " "
+      PunctColon@37..38 ":"
+      Trivia(Whitespace)@38..39 " "
+      PunctLParen@39..40 "("
+      EnumValue 40..43
+        Name 40..43
+          Ident@40..43 "Red"
+      PunctComma@43..44 ","
+      Trivia(Whitespace)@44..45 " "
+      EnumValue 45..55
+        Name 45..51
+          Ident@45..50 "Green"
+          Trivia(Whitespace)@50..51 " "
+        PunctAssign@51..53 ":="
+        Trivia(Whitespace)@53..54 " "
+        LiteralExpr 54..55
+          IntLiteral@54..55 "2"
+      PunctComma@55..56 ","
+      Trivia(Whitespace)@56..57 " "
+      EnumValue 57..61
+        Name 57..61
+          Ident@57..61 "Blue"
+      PunctRParen@61..62 ")"
+      PunctSemicolon@62..63 ";"
+    NamedValueTypeDecl 63..112
+      Name 63..72
+        Trivia(Whitespace)@63..64 "\n"
+        Trivia(Whitespace)@64..66 "  "
+        Ident@66..71 "Flags"
+        Trivia(Whitespace)@71..72 " "
+      PunctColon@72..73 ":"
+      Trivia(Whitespace)@73..74 " "
+      KwDword@74..79 "DWORD"
+      Trivia(Whitespace)@79..80 " "
+      PunctLParen@80..81 "("
+      NamedValue 81..94
+        Name 81..86
+          Ident@81..85 "Read"
+          Trivia(Whitespace)@85..86 " "
+        PunctAssign@86..88 ":="
+        Trivia(Whitespace)@88..89 " "
+        LiteralExpr 89..94
+          BasedLiteral@89..94 "16#01"
+      PunctComma@94..95 ","
+      Trivia(Whitespace)@95..96 " "
+      NamedValue 96..110
+        Name 96..102
+          Ident@96..101 "Write"
+          Trivia(Whitespace)@101..102 " "
+        PunctAssign@102..104 ":="
+        Trivia(Whitespace)@104..105 " "
+        LiteralExpr 105..110
+          BasedLiteral@105..110 "16#02"
+      PunctRParen@110..111 ")"
+      PunctSemicolon@111..112 ";"
+    ArrayTypeDecl 112..145
+      Name 112..122
+        Trivia(Whitespace)@112..113 "\n"
+        Trivia(Whitespace)@113..115 "  "
+        Ident@115..121 "Vector"
+        Trivia(Whitespace)@121..122 " "
+      PunctColon@122..123 ":"
+      Trivia(Whitespace)@123..124 " "
+      TypeRef 124..144
+        KwArray@124..129 "ARRAY"
+        Trivia(Whitespace)@129..130 " "
+        PunctLBracket@130..131 "["
+        ArrayBound 131..135
+          LiteralExpr 131..132
+            IntLiteral@131..132 "1"
+          PunctRange@132..134 ".."
+          LiteralExpr 134..135
+            IntLiteral@134..135 "3"
+        PunctRBracket@135..136 "]"
+        Trivia(Whitespace)@136..137 " "
+        KwOf@137..139 "OF"
+        Trivia(Whitespace)@139..140 " "
+        TypeRef 140..144
+          KwReal@140..144 "REAL"
+      PunctSemicolon@144..145 ";"
+    ArrayTypeDecl 145..183
+      Name 145..155
+        Trivia(Whitespace)@145..146 "\n"
+        Trivia(Whitespace)@146..148 "  "
+        Ident@148..154 "Matrix"
+        Trivia(Whitespace)@154..155 " "
+      PunctColon@155..156 ":"
+      Trivia(Whitespace)@156..157 " "
+      TypeRef 157..182
+        KwArray@157..162 "ARRAY"
+        Trivia(Whitespace)@162..163 " "
+        PunctLBracket@163..164 "["
+        ArrayBound 164..168
+          LiteralExpr 164..165
+            IntLiteral@164..165 "0"
+          PunctRange@165..167 ".."
+          LiteralExpr 167..168
+            IntLiteral@167..168 "1"
+        PunctComma@168..169 ","
+        Trivia(Whitespace)@169..170 " "
+        ArrayBound 170..174
+          LiteralExpr 170..171
+            IntLiteral@170..171 "0"
+          PunctRange@171..173 ".."
+          LiteralExpr 173..174
+            IntLiteral@173..174 "1"
+        PunctRBracket@174..175 "]"
+        Trivia(Whitespace)@175..176 " "
+        KwOf@176..178 "OF"
+        Trivia(Whitespace)@178..179 " "
+        TypeRef 179..182
+          KwInt@179..182 "INT"
+      PunctSemicolon@182..183 ";"
+    StructTypeDecl 183..250
+      Name 183..192
+        Trivia(Whitespace)@183..184 "\n"
+        Trivia(Whitespace)@184..186 "  "
+        Ident@186..191 "Point"
+        Trivia(Whitespace)@191..192 " "
+      PunctColon@192..193 ":"
+      Trivia(Whitespace)@193..194 " "
+      TypeRef 194..249
+        KwStruct@194..200 "STRUCT"
+        Trivia(Whitespace)@200..201 " "
+        KwOverlap@201..208 "OVERLAP"
+        StructElem 208..221
+          Name 208..215
+            Trivia(Whitespace)@208..209 "\n"
+            Trivia(Whitespace)@209..213 "    "
+            Ident@213..214 "x"
+            Trivia(Whitespace)@214..215 " "
+          PunctColon@215..216 ":"
+          Trivia(Whitespace)@216..217 " "
+          TypeRef 217..221
+            KwReal@217..221 "REAL"
+        PunctSemicolon@221..222 ";"
+        StructElem 222..235
+          Name 222..229
+            Trivia(Whitespace)@222..223 "\n"
+            Trivia(Whitespace)@223..227 "    "
+            Ident@227..228 "y"
+            Trivia(Whitespace)@228..229 " "
+          PunctColon@229..230 ":"
+          Trivia(Whitespace)@230..231 " "
+          TypeRef 231..235
+            KwReal@231..235 "REAL"
+        PunctSemicolon@235..236 ";"
+        Trivia(Whitespace)@236..237 "\n"
+        Trivia(Whitespace)@237..239 "  "
+        KwEndStruct@239..249 "END_STRUCT"
+      PunctSemicolon@249..250 ";"
+    StringTypeDecl 250..271
+      Name 250..258
+        Trivia(Whitespace)@250..251 "\n"
+        Trivia(Whitespace)@251..253 "  "
+        Ident@253..257 "Name"
+        Trivia(Whitespace)@257..258 " "
+      PunctColon@258..259 ":"
+      Trivia(Whitespace)@259..260 " "
+      TypeRef 260..270
+        KwString@260..266 "STRING"
+        PunctLBracket@266..267 "["
+        IntLiteral@267..269 "32"
+        PunctRBracket@269..270 "]"
+      PunctSemicolon@270..271 ";"
+    RefTypeDecl 271..293
+      Name 271..278
+        Trivia(Whitespace)@271..272 "\n"
+        Trivia(Whitespace)@272..274 "  "
+        Ident@274..277 "Ptr"
+        Trivia(Whitespace)@277..278 " "
+      PunctColon@278..279 ":"
+      Trivia(Whitespace)@279..280 " "
+      TypeRef 280..292
+        KwRefTo@280..286 "REF_TO"
+        Trivia(Whitespace)@286..287 " "
+        TypeRef 287..292
+          Path 287..292
+            Name 287..292
+              Ident@287..292 "Point"
+      PunctSemicolon@292..293 ";"
+    Trivia(Whitespace)@293..294 "\n"
+    KwEndType@294..302 "END_TYPE"
+  Trivia(Whitespace)@302..303 "\n"
+  Eof@303..303 ""
+## ast
+# ast bytes=303
+  DataTypeDecl@0..302 TYPE   Speed : INT (0..100);   Color : (Red, Green := 2, Blue);   Flags : DWO...
+    SubrangeTypeDecl@4..28 Speed
+      Name@4..13 Speed
+      LiteralExpr@20..21 0
+      LiteralExpr@23..26 100
+    EnumTypeDecl@28..63 Color
+      Name@28..37 Color
+        Name@40..43 Red
+        Name@45..51 Green
+        LiteralExpr@54..55 2
+        Name@57..61 Blue
+    NamedValueTypeDecl@63..112 Flags
+      Name@63..72 Flags
+        Name@81..86 Read
+        LiteralExpr@89..94 16#01
+        Name@96..102 Write
+        LiteralExpr@105..110 16#02
+    ArrayTypeDecl@112..145 Vector
+      Name@112..122 Vector
+      TypeRef@124..144 ARRAY [1..3] OF REAL
+          LiteralExpr@131..132 1
+          LiteralExpr@134..135 3
+        TypeRef@140..144 REAL
+    ArrayTypeDecl@145..183 Matrix
+      Name@145..155 Matrix
+      TypeRef@157..182 ARRAY [0..1, 0..1] OF INT
+          LiteralExpr@164..165 0
+          LiteralExpr@167..168 1
+          LiteralExpr@170..171 0
+          LiteralExpr@173..174 1
+        TypeRef@179..182 INT
+    StructTypeDecl@183..250 Point
+      Name@183..192 Point
+      TypeRef@194..249 STRUCT OVERLAP     x : REAL;     y : REAL;   END_STRUCT
+        StructElem@208..221 x
+          Name@208..215 x
+          TypeRef@217..221 REAL
+        StructElem@222..235 y
+          Name@222..229 y
+          TypeRef@231..235 REAL
+    StringTypeDecl@250..271 Name
+      Name@250..258 Name
+      TypeRef@260..270 STRING[32]
+    RefTypeDecl@271..293 Ptr
+      Name@271..278 Ptr
+      TypeRef@280..292 REF_TO Point
+        TypeRef@287..292 Point
+          Path@287..292 Point
+            Name@287..292 Point
+## diagnostics

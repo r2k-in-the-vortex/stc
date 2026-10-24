@@ -1,0 +1,122 @@
+# comments (301 bytes, 0 diagnostics)
+## cst
+# cst nodes=25 tokens=27 trivia=42 bytes=301
+SourceFile 0..301
+  FunctionDecl 0..265
+    Pragma 0..62
+      Trivia(LineComment)@0..23 "// Leading line comment"
+      Trivia(Whitespace)@23..24 "\n"
+      Trivia(BlockComment)@24..51 "(* leading block comment *)"
+      Trivia(Whitespace)@51..52 "\n"
+      PragmaToken@52..62 "{stc:test}"
+    Trivia(Whitespace)@62..63 "\n"
+    KwFunction@63..71 "FUNCTION"
+    Trivia(Whitespace)@71..72 " "
+    Name 72..82
+      Ident@72..81 "Commented"
+      Trivia(Whitespace)@81..82 " "
+    PunctColon@82..83 ":"
+    Trivia(Whitespace)@83..84 " "
+    TypeRef 84..87
+      KwInt@84..87 "INT"
+    VarSection 87..175
+      Trivia(Whitespace)@87..88 "\n"
+      KwVar@88..91 "VAR"
+      VarDecl 91..127
+        Name 91..96
+          Trivia(Whitespace)@91..92 "\n"
+          Trivia(Whitespace)@92..94 "  "
+          Ident@94..95 "x"
+          Trivia(Whitespace)@95..96 " "
+        PunctColon@96..97 ":"
+        Trivia(Whitespace)@97..98 " "
+        TypeRef 98..101
+          KwInt@98..101 "INT"
+        PunctSemicolon@101..102 ";"
+        Trivia(Whitespace)@102..103 " "
+        Trivia(LineComment)@103..127 "// trailing line comment"
+      VarDecl 127..167
+        Name 127..161
+          Trivia(Whitespace)@127..128 "\n"
+          Trivia(Whitespace)@128..130 "  "
+          Trivia(BlockComment)@130..156 "(* between declarations *)"
+          Trivia(Whitespace)@156..157 "\n"
+          Trivia(Whitespace)@157..159 "  "
+          Ident@159..160 "y"
+          Trivia(Whitespace)@160..161 " "
+        PunctColon@161..162 ":"
+        Trivia(Whitespace)@162..163 " "
+        TypeRef 163..166
+          KwInt@163..166 "INT"
+        PunctSemicolon@166..167 ";"
+      Trivia(Whitespace)@167..168 "\n"
+      KwEndVar@168..175 "END_VAR"
+    StmtList 175..252
+      AssignStmt 175..234
+        PathExpr 175..204
+          Name 175..204
+            Trivia(Whitespace)@175..176 "\n"
+            Trivia(Whitespace)@176..178 "  "
+            Trivia(LineComment)@178..199 "// before a statement"
+            Trivia(Whitespace)@199..200 "\n"
+            Trivia(Whitespace)@200..202 "  "
+            Ident@202..203 "x"
+            Trivia(Whitespace)@203..204 " "
+        PunctAssign@204..206 ":="
+        Trivia(Whitespace)@206..207 " "
+        BinaryExpr 207..212
+          PathExpr 207..209
+            Name 207..209
+              Ident@207..208 "y"
+              Trivia(Whitespace)@208..209 " "
+          PunctPlus@209..210 "+"
+          Trivia(Whitespace)@210..211 " "
+          LiteralExpr 211..212
+            IntLiteral@211..212 "1"
+        PunctSemicolon@212..213 ";"
+        Trivia(Whitespace)@213..214 " "
+        Trivia(BlockComment)@214..234 "(* trailing block *)"
+      AssignStmt 234..252
+        PathExpr 234..247
+          Name 234..247
+            Trivia(Whitespace)@234..235 "\n"
+            Trivia(Whitespace)@235..237 "  "
+            Ident@237..246 "Commented"
+            Trivia(Whitespace)@246..247 " "
+        PunctAssign@247..249 ":="
+        Trivia(Whitespace)@249..250 " "
+        PathExpr 250..251
+          Name 250..251
+            Ident@250..251 "x"
+        PunctSemicolon@251..252 ";"
+    Trivia(Whitespace)@252..253 "\n"
+    KwEndFunction@253..265 "END_FUNCTION"
+  Trivia(Whitespace)@265..266 "\n"
+  Trivia(LineComment)@266..300 "// trailing comment at end of file"
+  Trivia(Whitespace)@300..301 "\n"
+  Eof@301..301 ""
+## ast
+# ast bytes=301
+  FunctionDecl@0..265 Commented
+    Name@72..82 Commented
+    TypeRef@84..87 INT
+    VarSection@87..175 VAR   x : INT; // trailing line comment   (* between declarations *)   y : IN...
+      VarDecl@91..127 x
+        Name@91..96 x
+        TypeRef@98..101 INT
+      VarDecl@127..167 y
+        Name@127..161 y
+        TypeRef@163..166 INT
+      AssignStmt@175..234 x := y + 1;
+        PathExpr@175..204 x
+          Name@175..204 x
+        BinaryExpr@207..212 y + 1
+          PathExpr@207..209 y
+            Name@207..209 y
+          LiteralExpr@211..212 1
+      AssignStmt@234..252 Commented := x;
+        PathExpr@234..247 Commented
+          Name@234..247 Commented
+        PathExpr@250..251 x
+          Name@250..251 x
+## diagnostics

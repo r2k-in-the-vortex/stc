@@ -1,0 +1,8 @@
+# empty (0 bytes, 0 diagnostics)
+## cst
+# cst nodes=1 tokens=1 trivia=0 bytes=0
+SourceFile 0..0
+  Eof@0..0 ""
+## ast
+# ast bytes=0
+## diagnostics

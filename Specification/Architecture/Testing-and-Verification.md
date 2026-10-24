@@ -155,6 +155,13 @@ Use `insta` (or an equivalent snapshot tool) with `cargo insta review`. Snapshot
 Normalization removes absolute paths, temporary names beyond the documented numbering, and
 target-specific datalayout lines.
 
+M1 and M2 use an equivalent hand-rolled harness: `STC_UPDATE_SNAPSHOTS=1` regenerates committed
+snapshots, matching the lexer's workflow. The parser corpus is `crates/stc-parser/tests/corpus`
+and its snapshots are `crates/stc-parser/tests/snapshots`; a traceability test maps every
+Grammar §2–§10 production and every `STC-GRAM-*`/`STC-E-GRAM-*` code to named positive and
+negative tests. `tests/ui` plus `xtask` remains deferred to M6 (see Architecture §3.2), so M2
+parser diagnostics live in `crates/stc-parser/tests` and `crates/stc-driver/tests`.
+
 ### 3.2 UI tests
 
 `tests/ui/*.st` with expected `.stderr` files:

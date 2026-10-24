@@ -7,11 +7,14 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M1 lexer complete.** The repository now contains the Rust workspace, the source-map and
-diagnostics crates, the full tokenizer, committed lexer snapshots, deterministic property tests,
-and the `fuzz_lexer` target. M2 (parser and CST/AST) is next; no parser, analyzer, or code
-generator exists yet. The specification continues to be written before implementation, as
-required below.
+**M2 parser and CST complete.** The repository contains the source-map/diagnostics crates, the
+full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST views, strict pragma
+JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery, unsupported-construct
+diagnostics), and the `stc parse`/`stc check` driver skeleton. Parser snapshots, a committed
+corpus, per-production traceability, deterministic property tests, and both `fuzz_lexer` and
+`fuzz_parser` targets are in place. M3 (name resolution and type checking) is next; no analyzer
+or code generator exists yet. The specification continues to be written before implementation,
+as required below.
 
 | Document | Purpose |
 | --- | --- |
@@ -267,6 +270,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use is an error. |
 | D-041 | `SyntaxKind` is a stable, append-only API; full CST/IDE API is planned for v2/v3. |
 | D-042 | After basic development, `stc` and its runtime also run natively on Linux x86-64 and Linux AArch64 (ARM64); Windows remains the primary development host. |
+| D-045–D-058 | M2 syntax decisions: arena CST owning the source, stable `SyntaxKind`, parser codes `STC-E-GRAM-105`–`111`, strict pragma JSON, token-extent diagnostics, recovery/missing-token policy, and interning deferred to M3. Details in `Specification/Decisions.md`. |
 
 ## Question log
 
@@ -300,8 +304,21 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 
 ### Open
 
-**None as of 2026-10-23.** All v1 planning questions Q-001 through Q-017 are resolved
+**None as of 2026-10-24.** All v1 planning questions Q-001 through Q-017 are resolved
 (A-005 through A-021). New questions will be added here one at a time.
+
+## Building and running (M2)
+
+```sh
+cargo test --workspace --locked
+cargo run -p stc-driver -- parse path/to/file.st
+cargo run -p stc-driver -- check path/to/file.st
+cargo run -p stc-driver -- check --relaxed path/to/file.st
+cargo run -p stc-driver -- parse path/to/file.st --message-format=json
+```
+
+`stc parse` prints a lossless CST dump (and the typed AST dump with `--ast`); `stc check` is
+parse-only until M3. Human diagnostics go to stderr; JSON diagnostics go to stdout.
 
 ## Dev environment
 

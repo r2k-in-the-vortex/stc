@@ -11,6 +11,11 @@ output goes to stdout.
 
 ### 1.1 Commands
 
+> **M2 status:** only `stc parse <file>` and `stc check <file>` are implemented, on single files.
+> `stc check` lexes and parses only until M3. `--message-format` supports `human` and `json`
+> (not `short`), and `--relaxed` is supported. The remaining commands and options below are the
+> v1 target and arrive in later milestones (D-051).
+
 | Command | Purpose |
 | --- | --- |
 | `stc new <path>` | Scaffold a project (`stc.toml`, `src/main.st`, `.gitignore`) |

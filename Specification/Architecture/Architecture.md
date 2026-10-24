@@ -86,11 +86,17 @@ stc-runtime is built independently and linked by the driver
   - statement-level sync at `;`, `END_IF`, `END_CASE`, `END_FOR`, `END_WHILE`, `END_REPEAT`,
     `ELSE`, `ELSIF`;
   - expression recovery at `)`, `]`, `,`, `;`, and block delimiters.
-- The parser never panics on arbitrary input; fuzzed.
+- The parser never panics on arbitrary input; fuzzed. Expression, statement, and type nesting is
+  limited to 256 levels (`STC-E-GRAM-109`), and the ordinary recovery codes are
+  `STC-E-GRAM-105`–`111` (Grammar §13.1, D-047).
+- Missing tokens are zero-width leaves with a diagnostic. A mismatched `END_*` reports the
+  unexpected terminator and a label at the opening keyword; the unexpected terminator is left for
+  the enclosing construct (D-053).
 - It records pragmas and attaches leading pragmas to the following item and a trailing pragma to
   the preceding variable declaration. `{stc:test}` and `{stc:export}` become typed annotations;
-  `stc:` payloads are parsed as strict JSON by `stc-syntax` (serde_json), with unknown keys
-  preserved where the schema permits.
+  `stc:` payloads are parsed as strict JSON by `stc-syntax` (serde_json), with duplicate keys,
+  nesting deeper than 32, and bodies over 64 KiB rejected, and unknown keys preserved where the
+  schema permits (D-050).
 
 ### 3.3 Semantic analysis
 

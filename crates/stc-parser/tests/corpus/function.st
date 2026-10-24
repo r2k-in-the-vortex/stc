@@ -1,0 +1,7 @@
+FUNCTION Add : DINT
+VAR_INPUT
+  a : DINT;
+  b : DINT;
+END_VAR
+  Add := a + b;
+END_FUNCTION

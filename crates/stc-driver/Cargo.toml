@@ -1,0 +1,20 @@
+[package]
+name = "stc-driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "stc"
+path = "src/main.rs"
+
+[dependencies]
+stc-diag = { path = "../stc-diag" }
+stc-lexer = { path = "../stc-lexer" }
+stc-parser = { path = "../stc-parser" }
+stc-span = { path = "../stc-span" }
+stc-syntax = { path = "../stc-syntax" }
+
+[lints]
+workspace = true

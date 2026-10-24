@@ -1,0 +1,287 @@
+# oop (528 bytes, 0 diagnostics)
+## cst
+# cst nodes=59 tokens=81 trivia=85 bytes=528
+SourceFile 0..528
+  InterfaceDecl 0..113
+    KwInterface@0..9 "INTERFACE"
+    Trivia(Whitespace)@9..10 " "
+    Name 10..18
+      Ident@10..18 "Drivable"
+    MethodPrototype 18..99
+      Trivia(Whitespace)@18..19 "\n"
+      Trivia(Whitespace)@19..21 "  "
+      KwMethod@21..27 "METHOD"
+      Trivia(Whitespace)@27..28 " "
+      Name 28..34
+        Ident@28..33 "Drive"
+        Trivia(Whitespace)@33..34 " "
+      PunctColon@34..35 ":"
+      Trivia(Whitespace)@35..36 " "
+      TypeRef 36..40
+        KwBool@36..40 "BOOL"
+      VarSection 40..86
+        Trivia(Whitespace)@40..41 "\n"
+        Trivia(Whitespace)@41..45 "    "
+        KwVarInput@45..54 "VAR_INPUT"
+        VarDecl 54..74
+          Name 54..67
+            Trivia(Whitespace)@54..55 "\n"
+            Trivia(Whitespace)@55..61 "      "
+            Ident@61..66 "speed"
+            Trivia(Whitespace)@66..67 " "
+          PunctColon@67..68 ":"
+          Trivia(Whitespace)@68..69 " "
+          TypeRef 69..73
+            KwDint@69..73 "DINT"
+          PunctSemicolon@73..74 ";"
+        Trivia(Whitespace)@74..75 "\n"
+        Trivia(Whitespace)@75..79 "    "
+        KwEndVar@79..86 "END_VAR"
+      Trivia(Whitespace)@86..87 "\n"
+      Trivia(Whitespace)@87..89 "  "
+      KwEndMethod@89..99 "END_METHOD"
+    Trivia(Whitespace)@99..100 "\n"
+    KwEndInterface@100..113 "END_INTERFACE"
+  FunctionBlockDecl 113..314
+    Trivia(Whitespace)@113..114 "\n"
+    Trivia(Whitespace)@114..115 "\n"
+    KwFunctionBlock@115..129 "FUNCTION_BLOCK"
+    Trivia(Whitespace)@129..130 " "
+    Name 130..136
+      Ident@130..135 "Motor"
+      Trivia(Whitespace)@135..136 " "
+    KwImplements@136..146 "IMPLEMENTS"
+    Trivia(Whitespace)@146..147 " "
+    Path 147..155
+      Name 147..155
+        Ident@147..155 "Drivable"
+    VarSection 155..183
+      Trivia(Whitespace)@155..156 "\n"
+      KwVar@156..159 "VAR"
+      VarDecl 159..175
+        Name 159..168
+          Trivia(Whitespace)@159..160 "\n"
+          Trivia(Whitespace)@160..162 "  "
+          Ident@162..167 "speed"
+          Trivia(Whitespace)@167..168 " "
+        PunctColon@168..169 ":"
+        Trivia(Whitespace)@169..170 " "
+        TypeRef 170..174
+          KwDint@170..174 "DINT"
+        PunctSemicolon@174..175 ";"
+      Trivia(Whitespace)@175..176 "\n"
+      KwEndVar@176..183 "END_VAR"
+    MethodDecl 183..295
+      Trivia(Whitespace)@183..184 "\n"
+      KwMethod@184..190 "METHOD"
+      Trivia(Whitespace)@190..191 " "
+      KwPublic@191..197 "PUBLIC"
+      Trivia(Whitespace)@197..198 " "
+      Name 198..204
+        Ident@198..203 "Drive"
+        Trivia(Whitespace)@203..204 " "
+      PunctColon@204..205 ":"
+      Trivia(Whitespace)@205..206 " "
+      TypeRef 206..210
+        KwBool@206..210 "BOOL"
+      VarSection 210..244
+        Trivia(Whitespace)@210..211 "\n"
+        KwVarInput@211..220 "VAR_INPUT"
+        VarDecl 220..236
+          Name 220..229
+            Trivia(Whitespace)@220..221 "\n"
+            Trivia(Whitespace)@221..223 "  "
+            Ident@223..228 "speed"
+            Trivia(Whitespace)@228..229 " "
+          PunctColon@229..230 ":"
+          Trivia(Whitespace)@230..231 " "
+          TypeRef 231..235
+            KwDint@231..235 "DINT"
+          PunctSemicolon@235..236 ";"
+        Trivia(Whitespace)@236..237 "\n"
+        KwEndVar@237..244 "END_VAR"
+      StmtList 244..284
+        AssignStmt 244..267
+          PathExpr 244..258
+            Trivia(Whitespace)@244..245 "\n"
+            Trivia(Whitespace)@245..247 "  "
+            KwThis@247..251 "THIS"
+            PunctDot@251..252 "."
+            Name 252..258
+              Ident@252..257 "speed"
+              Trivia(Whitespace)@257..258 " "
+          PunctAssign@258..260 ":="
+          Trivia(Whitespace)@260..261 " "
+          PathExpr 261..266
+            Name 261..266
+              Ident@261..266 "speed"
+          PunctSemicolon@266..267 ";"
+        AssignStmt 267..284
+          PathExpr 267..276
+            Name 267..276
+              Trivia(Whitespace)@267..268 "\n"
+              Trivia(Whitespace)@268..270 "  "
+              Ident@270..275 "Drive"
+              Trivia(Whitespace)@275..276 " "
+          PunctAssign@276..278 ":="
+          Trivia(Whitespace)@278..279 " "
+          LiteralExpr 279..283
+            KwTrue@279..283 "TRUE"
+          PunctSemicolon@283..284 ";"
+      Trivia(Whitespace)@284..285 "\n"
+      KwEndMethod@285..295 "END_METHOD"
+    Trivia(Whitespace)@295..296 "\n"
+    KwEndFunctionBlock@296..314 "END_FUNCTION_BLOCK"
+  ClassDecl 314..433
+    Trivia(Whitespace)@314..315 "\n"
+    Trivia(Whitespace)@315..316 "\n"
+    KwClass@316..321 "CLASS"
+    Trivia(Whitespace)@321..322 " "
+    KwAbstract@322..330 "ABSTRACT"
+    Trivia(Whitespace)@330..331 " "
+    Name 331..339
+      Ident@331..338 "Vehicle"
+      Trivia(Whitespace)@338..339 " "
+    KwImplements@339..349 "IMPLEMENTS"
+    Trivia(Whitespace)@349..350 " "
+    Path 350..358
+      Name 350..358
+        Ident@350..358 "Drivable"
+    VarSection 358..383
+      Trivia(Whitespace)@358..359 "\n"
+      KwVar@359..362 "VAR"
+      VarDecl 362..375
+        Name 362..368
+          Trivia(Whitespace)@362..363 "\n"
+          Trivia(Whitespace)@363..365 "  "
+          Ident@365..367 "id"
+          Trivia(Whitespace)@367..368 " "
+        PunctColon@368..369 ":"
+        Trivia(Whitespace)@369..370 " "
+        TypeRef 370..374
+          KwDint@370..374 "DINT"
+        PunctSemicolon@374..375 ";"
+      Trivia(Whitespace)@375..376 "\n"
+      KwEndVar@376..383 "END_VAR"
+    MethodDecl 383..423
+      Trivia(Whitespace)@383..384 "\n"
+      KwMethod@384..390 "METHOD"
+      Trivia(Whitespace)@390..391 " "
+      KwAbstract@391..399 "ABSTRACT"
+      Trivia(Whitespace)@399..400 " "
+      Name 400..406
+        Ident@400..405 "Drive"
+        Trivia(Whitespace)@405..406 " "
+      PunctColon@406..407 ":"
+      Trivia(Whitespace)@407..408 " "
+      TypeRef 408..412
+        KwBool@408..412 "BOOL"
+      Trivia(Whitespace)@412..413 "\n"
+      KwEndMethod@413..423 "END_METHOD"
+    Trivia(Whitespace)@423..424 "\n"
+    KwEndClass@424..433 "END_CLASS"
+  ClassDecl 433..527
+    Trivia(Whitespace)@433..434 "\n"
+    Trivia(Whitespace)@434..435 "\n"
+    KwClass@435..440 "CLASS"
+    Trivia(Whitespace)@440..441 " "
+    Name 441..445
+      Ident@441..444 "Car"
+      Trivia(Whitespace)@444..445 " "
+    KwExtends@445..452 "EXTENDS"
+    Trivia(Whitespace)@452..453 " "
+    TypeRef 453..460
+      Path 453..460
+        Name 453..460
+          Ident@453..460 "Vehicle"
+    MethodDecl 460..517
+      Trivia(Whitespace)@460..461 "\n"
+      KwMethod@461..467 "METHOD"
+      Trivia(Whitespace)@467..468 " "
+      KwOverride@468..476 "OVERRIDE"
+      Trivia(Whitespace)@476..477 " "
+      Name 477..483
+        Ident@477..482 "Drive"
+        Trivia(Whitespace)@482..483 " "
+      PunctColon@483..484 ":"
+      Trivia(Whitespace)@484..485 " "
+      TypeRef 485..489
+        KwBool@485..489 "BOOL"
+      StmtList 489..506
+        AssignStmt 489..506
+          PathExpr 489..498
+            Name 489..498
+              Trivia(Whitespace)@489..490 "\n"
+              Trivia(Whitespace)@490..492 "  "
+              Ident@492..497 "Drive"
+              Trivia(Whitespace)@497..498 " "
+          PunctAssign@498..500 ":="
+          Trivia(Whitespace)@500..501 " "
+          LiteralExpr 501..505
+            KwTrue@501..505 "TRUE"
+          PunctSemicolon@505..506 ";"
+      Trivia(Whitespace)@506..507 "\n"
+      KwEndMethod@507..517 "END_METHOD"
+    Trivia(Whitespace)@517..518 "\n"
+    KwEndClass@518..527 "END_CLASS"
+  Trivia(Whitespace)@527..528 "\n"
+  Eof@528..528 ""
+## ast
+# ast bytes=528
+  InterfaceDecl@0..113 Drivable
+    Name@10..18 Drivable
+    MethodPrototype@18..99 Drive
+      Name@28..34 Drive
+      TypeRef@36..40 BOOL
+      VarSection@40..86 VAR_INPUT       speed : DINT;     END_VAR
+        VarDecl@54..74 speed
+          Name@54..67 speed
+          TypeRef@69..73 DINT
+  FunctionBlockDecl@113..314 Motor
+    Name@130..136 Motor
+    Path@147..155 Drivable
+      Name@147..155 Drivable
+    VarSection@155..183 VAR   speed : DINT; END_VAR
+      VarDecl@159..175 speed
+        Name@159..168 speed
+        TypeRef@170..174 DINT
+    MethodDecl@183..295 Drive
+      Name@198..204 Drive
+      TypeRef@206..210 BOOL
+      VarSection@210..244 VAR_INPUT   speed : DINT; END_VAR
+        VarDecl@220..236 speed
+          Name@220..229 speed
+          TypeRef@231..235 DINT
+        AssignStmt@244..267 THIS.speed := speed;
+          PathExpr@244..258 speed
+            Name@252..258 speed
+          PathExpr@261..266 speed
+            Name@261..266 speed
+        AssignStmt@267..284 Drive := TRUE;
+          PathExpr@267..276 Drive
+            Name@267..276 Drive
+          LiteralExpr@279..283 TRUE
+  ClassDecl@314..433 Vehicle
+    Name@331..339 Vehicle
+    Path@350..358 Drivable
+      Name@350..358 Drivable
+    VarSection@358..383 VAR   id : DINT; END_VAR
+      VarDecl@362..375 id
+        Name@362..368 id
+        TypeRef@370..374 DINT
+    MethodDecl@383..423 Drive
+      Name@400..406 Drive
+      TypeRef@408..412 BOOL
+  ClassDecl@433..527 Car
+    Name@441..445 Car
+    TypeRef@453..460 Vehicle
+      Path@453..460 Vehicle
+        Name@453..460 Vehicle
+    MethodDecl@460..517 Drive
+      Name@477..483 Drive
+      TypeRef@485..489 BOOL
+        AssignStmt@489..506 Drive := TRUE;
+          PathExpr@489..498 Drive
+            Name@489..498 Drive
+          LiteralExpr@501..505 TRUE
+## diagnostics

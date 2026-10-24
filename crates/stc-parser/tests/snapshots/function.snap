@@ -1,0 +1,87 @@
+# function (91 bytes, 0 diagnostics)
+## cst
+# cst nodes=20 tokens=22 trivia=21 bytes=91
+SourceFile 0..91
+  FunctionDecl 0..90
+    KwFunction@0..8 "FUNCTION"
+    Trivia(Whitespace)@8..9 " "
+    Name 9..13
+      Ident@9..12 "Add"
+      Trivia(Whitespace)@12..13 " "
+    PunctColon@13..14 ":"
+    Trivia(Whitespace)@14..15 " "
+    TypeRef 15..19
+      KwDint@15..19 "DINT"
+    VarSection 19..61
+      Trivia(Whitespace)@19..20 "\n"
+      KwVarInput@20..29 "VAR_INPUT"
+      VarDecl 29..41
+        Name 29..34
+          Trivia(Whitespace)@29..30 "\n"
+          Trivia(Whitespace)@30..32 "  "
+          Ident@32..33 "a"
+          Trivia(Whitespace)@33..34 " "
+        PunctColon@34..35 ":"
+        Trivia(Whitespace)@35..36 " "
+        TypeRef 36..40
+          KwDint@36..40 "DINT"
+        PunctSemicolon@40..41 ";"
+      VarDecl 41..53
+        Name 41..46
+          Trivia(Whitespace)@41..42 "\n"
+          Trivia(Whitespace)@42..44 "  "
+          Ident@44..45 "b"
+          Trivia(Whitespace)@45..46 " "
+        PunctColon@46..47 ":"
+        Trivia(Whitespace)@47..48 " "
+        TypeRef 48..52
+          KwDint@48..52 "DINT"
+        PunctSemicolon@52..53 ";"
+      Trivia(Whitespace)@53..54 "\n"
+      KwEndVar@54..61 "END_VAR"
+    StmtList 61..77
+      AssignStmt 61..77
+        PathExpr 61..68
+          Name 61..68
+            Trivia(Whitespace)@61..62 "\n"
+            Trivia(Whitespace)@62..64 "  "
+            Ident@64..67 "Add"
+            Trivia(Whitespace)@67..68 " "
+        PunctAssign@68..70 ":="
+        Trivia(Whitespace)@70..71 " "
+        BinaryExpr 71..76
+          PathExpr 71..73
+            Name 71..73
+              Ident@71..72 "a"
+              Trivia(Whitespace)@72..73 " "
+          PunctPlus@73..74 "+"
+          Trivia(Whitespace)@74..75 " "
+          PathExpr 75..76
+            Name 75..76
+              Ident@75..76 "b"
+        PunctSemicolon@76..77 ";"
+    Trivia(Whitespace)@77..78 "\n"
+    KwEndFunction@78..90 "END_FUNCTION"
+  Trivia(Whitespace)@90..91 "\n"
+  Eof@91..91 ""
+## ast
+# ast bytes=91
+  FunctionDecl@0..90 Add
+    Name@9..13 Add
+    TypeRef@15..19 DINT
+    VarSection@19..61 VAR_INPUT   a : DINT;   b : DINT; END_VAR
+      VarDecl@29..41 a
+        Name@29..34 a
+        TypeRef@36..40 DINT
+      VarDecl@41..53 b
+        Name@41..46 b
+        TypeRef@48..52 DINT
+      AssignStmt@61..77 Add := a + b;
+        PathExpr@61..68 Add
+          Name@61..68 Add
+        BinaryExpr@71..76 a + b
+          PathExpr@71..73 a
+            Name@71..73 a
+          PathExpr@75..76 b
+            Name@75..76 b
+## diagnostics

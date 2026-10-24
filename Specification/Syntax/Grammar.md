@@ -139,9 +139,23 @@ array_type         ::= 'ARRAY' '[' array_bound ( ',' array_bound )* ']' 'OF' typ
 array_bound        ::= constant_expr
                      | constant_expr '..' constant_expr
                      | '*' ;
+
+(* STC-GRAM-003, D-056: initializer productions referenced below. *)
+initializer        ::= array_init | struct_init | expression ;
+
+array_init         ::= '[' ( initializer ( ',' initializer )* )? ']' ;
+
+struct_init        ::= '(' ( struct_field_init ( ',' struct_field_init )* )? ')' ;
+
+struct_field_init  ::= IDENT ( '.' IDENT )* ':=' initializer ;
+
+char_str           ::= STRING | USTRING ;
 ```
 
-Notes:
+The `initializer` productions complete the reference grammar: the draft referenced
+`initializer`, `array_init`, `struct_init`, and `char_str` without defining them (D-056).
+`array_init` may nest for arrays of arrays; `struct_init` uses named field assignments and may
+name nested fields with dots.
 
 - `STRUCT ... END_STRUCT` may be used inline in a variable declaration or named in `TYPE`.
 - `OVERLAP` requests overlapping storage for `AT`-addressed struct elements. The analyzer checks
@@ -677,6 +691,25 @@ This is a syntax-only difference; semantics are unchanged. See A-015.
 | `MUTEX`, `SEMA`, `ASSERT` (Ed. 4 additions) | `STC-E-GRAM-104` not in profile |
 | Vendor pragmas with unknown meaning | warning `STC-W-PRAGMA-001` |
 | `8#` octal | accepted + warning `STC-W-LEX-008` |
+
+### 13.1 Parser recovery codes
+
+The parser uses the construct-specific codes above plus this stable set for ordinary syntax
+errors (D-047). Tests map each code to a negative test (see the parser traceability test).
+
+| Code | Condition |
+| --- | --- |
+| `STC-E-GRAM-105` | A token does not fit any grammar position |
+| `STC-E-GRAM-106` | A specific token or construct was expected |
+| `STC-E-GRAM-107` | A statement or declaration is missing its `;` |
+| `STC-E-GRAM-108` | A block ended with a terminator belonging to another construct |
+| `STC-E-GRAM-109` | Expression, statement, or type nesting exceeded the parser depth limit (256 by default) |
+| `STC-E-GRAM-110` | A pragma appeared where the grammar does not allow it |
+| `STC-E-GRAM-111` | A block terminator is missing (including at end of file) |
+
+On `STC-E-GRAM-108` the primary span is the unexpected terminator and a label points at the
+opening keyword (Grammar §11.9). Recovery inserts a zero-width missing token and leaves the
+unexpected terminator for the enclosing construct (D-053).
 
 ## 14. Grammar-level rule IDs (initial set)
 

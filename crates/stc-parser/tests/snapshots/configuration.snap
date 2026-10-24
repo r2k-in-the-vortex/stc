@@ -1,0 +1,271 @@
+# configuration (462 bytes, 0 diagnostics)
+## cst
+# cst nodes=55 tokens=89 trivia=72 bytes=462
+SourceFile 0..462
+  ConfigDecl 0..461
+    KwConfiguration@0..13 "CONFIGURATION"
+    Trivia(Whitespace)@13..14 " "
+    Name 14..19
+      Ident@14..19 "Plant"
+    VarSection 19..56
+      Trivia(Whitespace)@19..20 "\n"
+      KwVarGlobal@20..30 "VAR_GLOBAL"
+      VarDecl 30..48
+        Name 30..41
+          Trivia(Whitespace)@30..31 "\n"
+          Trivia(Whitespace)@31..33 "  "
+          Ident@33..40 "running"
+          Trivia(Whitespace)@40..41 " "
+        PunctColon@41..42 ":"
+        Trivia(Whitespace)@42..43 " "
+        TypeRef 43..47
+          KwBool@43..47 "BOOL"
+        PunctSemicolon@47..48 ";"
+      Trivia(Whitespace)@48..49 "\n"
+      KwEndVar@49..56 "END_VAR"
+    ResourceDecl 56..314
+      Trivia(Whitespace)@56..57 "\n"
+      KwResource@57..65 "RESOURCE"
+      Trivia(Whitespace)@65..66 " "
+      Name 66..71
+        Ident@66..70 "Line"
+        Trivia(Whitespace)@70..71 " "
+      KwOn@71..73 "ON"
+      Trivia(Whitespace)@73..74 " "
+      Name 74..77
+        Ident@74..77 "PLC"
+      VarSection 77..111
+        Trivia(Whitespace)@77..78 "\n"
+        KwVarGlobal@78..88 "VAR_GLOBAL"
+        VarDecl 88..103
+          Name 88..97
+            Trivia(Whitespace)@88..89 "\n"
+            Trivia(Whitespace)@89..91 "  "
+            Ident@91..96 "local"
+            Trivia(Whitespace)@96..97 " "
+          PunctColon@97..98 ":"
+          Trivia(Whitespace)@98..99 " "
+          TypeRef 99..102
+            KwInt@99..102 "INT"
+          PunctSemicolon@102..103 ";"
+        Trivia(Whitespace)@103..104 "\n"
+        KwEndVar@104..111 "END_VAR"
+      TaskConfig 111..158
+        Trivia(Whitespace)@111..112 "\n"
+        Trivia(Whitespace)@112..114 "  "
+        KwTask@114..118 "TASK"
+        Trivia(Whitespace)@118..119 " "
+        Name 119..123
+          Ident@119..123 "Fast"
+        PunctLParen@123..124 "("
+        TaskAttr 124..142
+          KwInterval@124..132 "INTERVAL"
+          Trivia(Whitespace)@132..133 " "
+          PunctAssign@133..135 ":="
+          Trivia(Whitespace)@135..136 " "
+          LiteralExpr 136..142
+            DurationLiteral@136..142 "T#10ms"
+        PunctComma@142..143 ","
+        Trivia(Whitespace)@143..144 " "
+        TaskAttr 144..157
+          KwPriority@144..152 "PRIORITY"
+          Trivia(Whitespace)@152..153 " "
+          PunctAssign@153..155 ":="
+          Trivia(Whitespace)@155..156 " "
+          LiteralExpr 156..157
+            IntLiteral@156..157 "1"
+        PunctRParen@157..158 ")"
+      PunctSemicolon@158..159 ";"
+      TaskConfig 159..190
+        Trivia(Whitespace)@159..160 "\n"
+        Trivia(Whitespace)@160..162 "  "
+        KwTask@162..166 "TASK"
+        Trivia(Whitespace)@166..167 " "
+        Name 167..171
+          Ident@167..171 "Slow"
+        PunctLParen@171..172 "("
+        TaskAttr 172..189
+          KwSingle@172..178 "SINGLE"
+          Trivia(Whitespace)@178..179 " "
+          PunctAssign@179..181 ":="
+          Trivia(Whitespace)@181..182 " "
+          LiteralExpr 182..189
+            DurationLiteral@182..189 "T#100ms"
+        PunctRParen@189..190 ")"
+      PunctSemicolon@190..191 ";"
+      ProgramConfig 191..256
+        Trivia(Whitespace)@191..192 "\n"
+        Trivia(Whitespace)@192..194 "  "
+        KwProgram@194..201 "PROGRAM"
+        Trivia(Whitespace)@201..202 " "
+        Name 202..207
+          Ident@202..206 "Main"
+          Trivia(Whitespace)@206..207 " "
+        KwWith@207..211 "WITH"
+        Trivia(Whitespace)@211..212 " "
+        Name 212..217
+          Ident@212..216 "Fast"
+          Trivia(Whitespace)@216..217 " "
+        PunctColon@217..218 ":"
+        Trivia(Whitespace)@218..219 " "
+        Path 219..231
+          Name 219..231
+            Ident@219..230 "MainProgram"
+            Trivia(Whitespace)@230..231 " "
+        PunctLParen@231..232 "("
+        ProgConfElem 232..242
+          PathExpr 232..238
+            Name 232..238
+              Ident@232..237 "cycle"
+              Trivia(Whitespace)@237..238 " "
+          PunctAssign@238..240 ":="
+          Trivia(Whitespace)@240..241 " "
+          LiteralExpr 241..242
+            IntLiteral@241..242 "1"
+        PunctComma@242..243 ","
+        Trivia(Whitespace)@243..244 " "
+        ProgConfElem 244..255
+          PathExpr 244..248
+            Name 244..248
+              Ident@244..247 "out"
+              Trivia(Whitespace)@247..248 " "
+          PunctOutputAssign@248..250 "=>"
+          Trivia(Whitespace)@250..251 " "
+          LiteralExpr 251..255
+            DirectVariable@251..255 "%QW0"
+        PunctRParen@255..256 ")"
+      PunctSemicolon@256..257 ";"
+      ProgramConfig 257..300
+        Trivia(Whitespace)@257..258 "\n"
+        Trivia(Whitespace)@258..260 "  "
+        KwProgram@260..267 "PROGRAM"
+        Trivia(Whitespace)@267..268 " "
+        Name 268..275
+          Ident@268..274 "Backup"
+          Trivia(Whitespace)@274..275 " "
+        KwWith@275..279 "WITH"
+        Trivia(Whitespace)@279..280 " "
+        Name 280..285
+          Ident@280..284 "Slow"
+          Trivia(Whitespace)@284..285 " "
+        PunctColon@285..286 ":"
+        Trivia(Whitespace)@286..287 " "
+        Path 287..300
+          Name 287..300
+            Ident@287..300 "BackupProgram"
+      PunctSemicolon@300..301 ";"
+      Trivia(Whitespace)@301..302 "\n"
+      KwEndResource@302..314 "END_RESOURCE"
+    VarAccessSection 314..383
+      Trivia(Whitespace)@314..315 "\n"
+      KwVarAccess@315..325 "VAR_ACCESS"
+      AccessDecl 325..375
+        Name 325..341
+          Trivia(Whitespace)@325..326 "\n"
+          Trivia(Whitespace)@326..328 "  "
+          Ident@328..340 "running_path"
+          Trivia(Whitespace)@340..341 " "
+        PunctColon@341..342 ":"
+        Trivia(Whitespace)@342..343 " "
+        Name 343..348
+          Ident@343..348 "Plant"
+        PunctDot@348..349 "."
+        Name 349..357
+          Ident@349..356 "running"
+          Trivia(Whitespace)@356..357 " "
+        PunctColon@357..358 ":"
+        Trivia(Whitespace)@358..359 " "
+        TypeRef 359..364
+          KwBool@359..363 "BOOL"
+          Trivia(Whitespace)@363..364 " "
+        KwReadWrite@364..374 "READ_WRITE"
+        PunctSemicolon@374..375 ";"
+      Trivia(Whitespace)@375..376 "\n"
+      KwEndVar@376..383 "END_VAR"
+    ConfigInit 383..443
+      Trivia(Whitespace)@383..384 "\n"
+      KwVarConfig@384..394 "VAR_CONFIG"
+      ConfigInstInit 394..434
+        Name 394..401
+          Trivia(Whitespace)@394..395 "\n"
+          Trivia(Whitespace)@395..397 "  "
+          Ident@397..401 "Main"
+        PunctDot@401..402 "."
+        Name 402..407
+          Ident@402..407 "Timer"
+        PunctDot@407..408 "."
+        Name 408..415
+          Ident@408..414 "Preset"
+          Trivia(Whitespace)@414..415 " "
+        KwAt@415..417 "AT"
+        Trivia(Whitespace)@417..418 " "
+        DirectVariable@418..423 "%MW10"
+        Trivia(Whitespace)@423..424 " "
+        PunctColon@424..425 ":"
+        Trivia(Whitespace)@425..426 " "
+        TypeRef 426..430
+          KwInt@426..429 "INT"
+          Trivia(Whitespace)@429..430 " "
+        PunctAssign@430..432 ":="
+        Trivia(Whitespace)@432..433 " "
+        LiteralExpr 433..434
+          IntLiteral@433..434 "5"
+      PunctSemicolon@434..435 ";"
+      Trivia(Whitespace)@435..436 "\n"
+      KwEndVar@436..443 "END_VAR"
+    Trivia(Whitespace)@443..444 "\n"
+    KwEndConfiguration@444..461 "END_CONFIGURATION"
+  Trivia(Whitespace)@461..462 "\n"
+  Eof@462..462 ""
+## ast
+# ast bytes=462
+  ConfigDecl@0..461 Plant
+    Name@14..19 Plant
+    VarSection@19..56 VAR_GLOBAL   running : BOOL; END_VAR
+      VarDecl@30..48 running
+        Name@30..41 running
+        TypeRef@43..47 BOOL
+    ResourceDecl@56..314 Line
+      Name@66..71 Line
+      Name@74..77 PLC
+      VarSection@77..111 VAR_GLOBAL   local : INT; END_VAR
+        VarDecl@88..103 local
+          Name@88..97 local
+          TypeRef@99..102 INT
+      TaskConfig@111..158 Fast
+        Name@119..123 Fast
+          LiteralExpr@136..142 T#10ms
+          LiteralExpr@156..157 1
+      TaskConfig@159..190 Slow
+        Name@167..171 Slow
+          LiteralExpr@182..189 T#100ms
+      ProgramConfig@191..256 Main
+        Name@202..207 Main
+        Name@212..217 Fast
+        Path@219..231 MainProgram
+          Name@219..231 MainProgram
+          PathExpr@232..238 cycle
+            Name@232..238 cycle
+          LiteralExpr@241..242 1
+          PathExpr@244..248 out
+            Name@244..248 out
+          LiteralExpr@251..255 %QW0
+      ProgramConfig@257..300 Backup
+        Name@268..275 Backup
+        Name@280..285 Slow
+        Path@287..300 BackupProgram
+          Name@287..300 BackupProgram
+    VarAccessSection@314..383 VAR_ACCESS   running_path : Plant.running : BOOL READ_WRITE; END_VAR
+      AccessDecl@325..375 running_path
+        Name@325..341 running_path
+        Name@343..348 Plant
+        Name@349..357 running
+        TypeRef@359..364 BOOL
+    ConfigInit@383..443 VAR_CONFIG   Main.Timer.Preset AT %MW10 : INT := 5; END_VAR
+      ConfigInstInit@394..434 Main
+        Name@394..401 Main
+        Name@402..407 Timer
+        Name@408..415 Preset
+        TypeRef@426..430 INT
+        LiteralExpr@433..434 5
+## diagnostics

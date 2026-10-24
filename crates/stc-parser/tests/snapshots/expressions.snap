@@ -1,0 +1,572 @@
+# expressions (401 bytes, 0 diagnostics)
+## cst
+# cst nodes=153 tokens=153 trivia=112 bytes=401
+SourceFile 0..401
+  ProgramDecl 0..400
+    KwProgram@0..7 "PROGRAM"
+    Trivia(Whitespace)@7..8 " "
+    Name 8..19
+      Ident@8..19 "Expressions"
+    VarSection 19..135
+      Trivia(Whitespace)@19..20 "\n"
+      KwVar@20..23 "VAR"
+      VarDecl 23..41
+        Name 23..27
+          Trivia(Whitespace)@23..24 "\n"
+          Trivia(Whitespace)@24..26 "  "
+          Ident@26..27 "a"
+        PunctComma@27..28 ","
+        Trivia(Whitespace)@28..29 " "
+        Name 29..30
+          Ident@29..30 "b"
+        PunctComma@30..31 ","
+        Trivia(Whitespace)@31..32 " "
+        Name 32..34
+          Ident@32..33 "c"
+          Trivia(Whitespace)@33..34 " "
+        PunctColon@34..35 ":"
+        Trivia(Whitespace)@35..36 " "
+        TypeRef 36..40
+          KwDint@36..40 "DINT"
+        PunctSemicolon@40..41 ";"
+      VarDecl 41..56
+        Name 41..49
+          Trivia(Whitespace)@41..42 "\n"
+          Trivia(Whitespace)@42..44 "  "
+          Ident@44..48 "flag"
+          Trivia(Whitespace)@48..49 " "
+        PunctColon@49..50 ":"
+        Trivia(Whitespace)@50..51 " "
+        TypeRef 51..55
+          KwBool@51..55 "BOOL"
+        PunctSemicolon@55..56 ";"
+      VarDecl 56..92
+        Name 56..63
+          Trivia(Whitespace)@56..57 "\n"
+          Trivia(Whitespace)@57..59 "  "
+          Ident@59..62 "arr"
+          Trivia(Whitespace)@62..63 " "
+        PunctColon@63..64 ":"
+        Trivia(Whitespace)@64..65 " "
+        TypeRef 65..91
+          KwArray@65..70 "ARRAY"
+          Trivia(Whitespace)@70..71 " "
+          PunctLBracket@71..72 "["
+          ArrayBound 72..76
+            LiteralExpr 72..73
+              IntLiteral@72..73 "0"
+            PunctRange@73..75 ".."
+            LiteralExpr 75..76
+              IntLiteral@75..76 "9"
+          PunctComma@76..77 ","
+          Trivia(Whitespace)@77..78 " "
+          ArrayBound 78..82
+            LiteralExpr 78..79
+              IntLiteral@78..79 "0"
+            PunctRange@79..81 ".."
+            LiteralExpr 81..82
+              IntLiteral@81..82 "9"
+          PunctRBracket@82..83 "]"
+          Trivia(Whitespace)@83..84 " "
+          KwOf@84..86 "OF"
+          Trivia(Whitespace)@86..87 " "
+          TypeRef 87..91
+            KwDint@87..91 "DINT"
+        PunctSemicolon@91..92 ";"
+      VarDecl 92..111
+        Name 92..97
+          Trivia(Whitespace)@92..93 "\n"
+          Trivia(Whitespace)@93..95 "  "
+          Ident@95..96 "p"
+          Trivia(Whitespace)@96..97 " "
+        PunctColon@97..98 ":"
+        Trivia(Whitespace)@98..99 " "
+        TypeRef 99..110
+          KwRefTo@99..105 "REF_TO"
+          Trivia(Whitespace)@105..106 " "
+          TypeRef 106..110
+            KwDint@106..110 "DINT"
+        PunctSemicolon@110..111 ";"
+      VarDecl 111..127
+        Name 111..118
+          Trivia(Whitespace)@111..112 "\n"
+          Trivia(Whitespace)@112..114 "  "
+          Ident@114..117 "obj"
+          Trivia(Whitespace)@117..118 " "
+        PunctColon@118..119 ":"
+        Trivia(Whitespace)@119..120 " "
+        TypeRef 120..126
+          Path 120..126
+            Name 120..126
+              Ident@120..126 "Object"
+        PunctSemicolon@126..127 ";"
+      Trivia(Whitespace)@127..128 "\n"
+      KwEndVar@128..135 "END_VAR"
+    StmtList 135..388
+      AssignStmt 135..153
+        PathExpr 135..140
+          Name 135..140
+            Trivia(Whitespace)@135..136 "\n"
+            Trivia(Whitespace)@136..138 "  "
+            Ident@138..139 "a"
+            Trivia(Whitespace)@139..140 " "
+        PunctAssign@140..142 ":="
+        Trivia(Whitespace)@142..143 " "
+        BinaryExpr 143..152
+          PathExpr 143..145
+            Name 143..145
+              Ident@143..144 "A"
+              Trivia(Whitespace)@144..145 " "
+          PunctEqual@145..146 "="
+          Trivia(Whitespace)@146..147 " "
+          BinaryExpr 147..152
+            PathExpr 147..149
+              Name 147..149
+                Ident@147..148 "B"
+                Trivia(Whitespace)@148..149 " "
+            PunctLess@149..150 "<"
+            Trivia(Whitespace)@150..151 " "
+            PathExpr 151..152
+              Name 151..152
+                Ident@151..152 "C"
+        PunctSemicolon@152..153 ";"
+      AssignStmt 153..183
+        PathExpr 153..158
+          Name 153..158
+            Trivia(Whitespace)@153..154 "\n"
+            Trivia(Whitespace)@154..156 "  "
+            Ident@156..157 "b"
+            Trivia(Whitespace)@157..158 " "
+        PunctAssign@158..160 ":="
+        Trivia(Whitespace)@160..161 " "
+        BinaryExpr 161..182
+          BinaryExpr 161..169
+            UnaryExpr 161..164
+              PunctMinus@161..162 "-"
+              LiteralExpr 162..164
+                IntLiteral@162..163 "2"
+                Trivia(Whitespace)@163..164 " "
+            PunctPower@164..166 "**"
+            Trivia(Whitespace)@166..167 " "
+            LiteralExpr 167..169
+              IntLiteral@167..168 "2"
+              Trivia(Whitespace)@168..169 " "
+          PunctPlus@169..170 "+"
+          Trivia(Whitespace)@170..171 " "
+          BinaryExpr 171..182
+            BinaryExpr 171..178
+              LiteralExpr 171..173
+                IntLiteral@171..172 "2"
+                Trivia(Whitespace)@172..173 " "
+              PunctPower@173..175 "**"
+              Trivia(Whitespace)@175..176 " "
+              LiteralExpr 176..178
+                IntLiteral@176..177 "3"
+                Trivia(Whitespace)@177..178 " "
+            PunctPower@178..180 "**"
+            Trivia(Whitespace)@180..181 " "
+            LiteralExpr 181..182
+              IntLiteral@181..182 "4"
+        PunctSemicolon@182..183 ";"
+      AssignStmt 183..213
+        PathExpr 183..188
+          Name 183..188
+            Trivia(Whitespace)@183..184 "\n"
+            Trivia(Whitespace)@184..186 "  "
+            Ident@186..187 "c"
+            Trivia(Whitespace)@187..188 " "
+        PunctAssign@188..190 ":="
+        Trivia(Whitespace)@190..191 " "
+        BinaryExpr 191..212
+          BinaryExpr 191..207
+            BinaryExpr 191..203
+              ParenExpr 191..199
+                PunctLParen@191..192 "("
+                BinaryExpr 192..197
+                  PathExpr 192..194
+                    Name 192..194
+                      Ident@192..193 "a"
+                      Trivia(Whitespace)@193..194 " "
+                  PunctPlus@194..195 "+"
+                  Trivia(Whitespace)@195..196 " "
+                  PathExpr 196..197
+                    Name 196..197
+                      Ident@196..197 "b"
+                PunctRParen@197..198 ")"
+                Trivia(Whitespace)@198..199 " "
+              PunctStar@199..200 "*"
+              Trivia(Whitespace)@200..201 " "
+              PathExpr 201..203
+                Name 201..203
+                  Ident@201..202 "c"
+                  Trivia(Whitespace)@202..203 " "
+            PunctSlash@203..204 "/"
+            Trivia(Whitespace)@204..205 " "
+            LiteralExpr 205..207
+              IntLiteral@205..206 "2"
+              Trivia(Whitespace)@206..207 " "
+          KwMod@207..210 "MOD"
+          Trivia(Whitespace)@210..211 " "
+          LiteralExpr 211..212
+            IntLiteral@211..212 "3"
+        PunctSemicolon@212..213 ";"
+      AssignStmt 213..251
+        PathExpr 213..221
+          Name 213..221
+            Trivia(Whitespace)@213..214 "\n"
+            Trivia(Whitespace)@214..216 "  "
+            Ident@216..220 "flag"
+            Trivia(Whitespace)@220..221 " "
+        PunctAssign@221..223 ":="
+        Trivia(Whitespace)@223..224 " "
+        BinaryExpr 224..250
+          BinaryExpr 224..240
+            BinaryExpr 224..234
+              UnaryExpr 224..230
+                KwNot@224..227 "NOT"
+                Trivia(Whitespace)@227..228 " "
+                PathExpr 228..230
+                  Name 228..230
+                    Ident@228..229 "A"
+                    Trivia(Whitespace)@229..230 " "
+              PunctEqual@230..231 "="
+              Trivia(Whitespace)@231..232 " "
+              PathExpr 232..234
+                Name 232..234
+                  Ident@232..233 "B"
+                  Trivia(Whitespace)@233..234 " "
+            KwAnd@234..237 "AND"
+            Trivia(Whitespace)@237..238 " "
+            PathExpr 238..240
+              Name 238..240
+                Ident@238..239 "C"
+                Trivia(Whitespace)@239..240 " "
+          KwOr@240..242 "OR"
+          Trivia(Whitespace)@242..243 " "
+          BinaryExpr 243..250
+            PathExpr 243..245
+              Name 243..245
+                Ident@243..244 "D"
+                Trivia(Whitespace)@244..245 " "
+            KwXor@245..248 "XOR"
+            Trivia(Whitespace)@248..249 " "
+            PathExpr 249..250
+              Name 249..250
+                Ident@249..250 "E"
+        PunctSemicolon@250..251 ";"
+      AssignStmt 251..322
+        PathExpr 251..256
+          Name 251..256
+            Trivia(Whitespace)@251..252 "\n"
+            Trivia(Whitespace)@252..254 "  "
+            Ident@254..255 "a"
+            Trivia(Whitespace)@255..256 " "
+        PunctAssign@256..258 ":="
+        Trivia(Whitespace)@258..259 " "
+        BinaryExpr 259..321
+          BinaryExpr 259..314
+            BinaryExpr 259..308
+              BinaryExpr 259..295
+                BinaryExpr 259..286
+                  BinaryExpr 259..281
+                    IndexExpr 259..269
+                      PathExpr 259..262
+                        Name 259..262
+                          Ident@259..262 "arr"
+                      PunctLBracket@262..263 "["
+                      LiteralExpr 263..264
+                        IntLiteral@263..264 "1"
+                      PunctComma@264..265 ","
+                      Trivia(Whitespace)@265..266 " "
+                      LiteralExpr 266..267
+                        IntLiteral@266..267 "2"
+                      PunctRBracket@267..268 "]"
+                      Trivia(Whitespace)@268..269 " "
+                    PunctPlus@269..270 "+"
+                    Trivia(Whitespace)@270..271 " "
+                    IndexExpr 271..281
+                      IndexExpr 271..277
+                        PathExpr 271..274
+                          Name 271..274
+                            Ident@271..274 "arr"
+                        PunctLBracket@274..275 "["
+                        LiteralExpr 275..276
+                          IntLiteral@275..276 "1"
+                        PunctRBracket@276..277 "]"
+                      PunctLBracket@277..278 "["
+                      LiteralExpr 278..279
+                        IntLiteral@278..279 "2"
+                      PunctRBracket@279..280 "]"
+                      Trivia(Whitespace)@280..281 " "
+                  PunctPlus@281..282 "+"
+                  Trivia(Whitespace)@282..283 " "
+                  DerefExpr 283..286
+                    PathExpr 283..284
+                      Name 283..284
+                        Ident@283..284 "p"
+                    PunctCaret@284..285 "^"
+                    Trivia(Whitespace)@285..286 " "
+                PunctPlus@286..287 "+"
+                Trivia(Whitespace)@287..288 " "
+                PathExpr 288..295
+                  KwThis@288..292 "THIS"
+                  PunctDot@292..293 "."
+                  Name 293..295
+                    Ident@293..294 "b"
+                    Trivia(Whitespace)@294..295 " "
+              PunctPlus@295..296 "+"
+              Trivia(Whitespace)@296..297 " "
+              PathExpr 297..308
+                Name 297..300
+                  Ident@297..300 "obj"
+                PunctDot@300..301 "."
+                Name 301..308
+                  Ident@301..307 "member"
+                  Trivia(Whitespace)@307..308 " "
+            PunctPlus@308..309 "+"
+            Trivia(Whitespace)@309..310 " "
+            MemberExpr 310..314
+              PathExpr 310..311
+                Name 310..311
+                  Ident@310..311 "a"
+              PunctDot@311..312 "."
+              IntLiteral@312..313 "0"
+              Trivia(Whitespace)@313..314 " "
+          PunctPlus@314..315 "+"
+          Trivia(Whitespace)@315..316 " "
+          MemberExpr 316..321
+            PathExpr 316..317
+              Name 316..317
+                Ident@316..317 "a"
+            PunctDot@317..318 "."
+            DirectVariable@318..321 "%X0"
+        PunctSemicolon@321..322 ";"
+      AssignStmt 322..388
+        PathExpr 322..327
+          Name 322..327
+            Trivia(Whitespace)@322..323 "\n"
+            Trivia(Whitespace)@323..325 "  "
+            Ident@325..326 "b"
+            Trivia(Whitespace)@326..327 " "
+        PunctAssign@327..329 ":="
+        Trivia(Whitespace)@329..330 " "
+        BinaryExpr 330..387
+          BinaryExpr 330..381
+            CallExpr 330..372
+              PathExpr 330..331
+                Name 330..331
+                  Ident@330..331 "f"
+              ParamList 331..372
+                PunctLParen@331..332 "("
+                Param 332..333
+                  LiteralExpr 332..333
+                    IntLiteral@332..333 "1"
+                PunctComma@333..334 ","
+                Trivia(Whitespace)@334..335 " "
+                Param 335..345
+                  Name 335..341
+                    Ident@335..340 "named"
+                    Trivia(Whitespace)@340..341 " "
+                  PunctAssign@341..343 ":="
+                  Trivia(Whitespace)@343..344 " "
+                  LiteralExpr 344..345
+                    IntLiteral@344..345 "2"
+                PunctComma@345..346 ","
+                Trivia(Whitespace)@346..347 " "
+                Param 347..355
+                  PathExpr 347..351
+                    Name 347..351
+                      Ident@347..350 "out"
+                      Trivia(Whitespace)@350..351 " "
+                  PunctOutputAssign@351..353 "=>"
+                  Trivia(Whitespace)@353..354 " "
+                  PathExpr 354..355
+                    Name 354..355
+                      Ident@354..355 "a"
+                PunctComma@355..356 ","
+                Trivia(Whitespace)@356..357 " "
+                Param 357..370
+                  UnaryExpr 357..366
+                    KwNot@357..360 "NOT"
+                    Trivia(Whitespace)@360..361 " "
+                    PathExpr 361..366
+                      Name 361..366
+                        Ident@361..365 "flag"
+                        Trivia(Whitespace)@365..366 " "
+                  PunctOutputAssign@366..368 "=>"
+                  Trivia(Whitespace)@368..369 " "
+                  PathExpr 369..370
+                    Name 369..370
+                      Ident@369..370 "b"
+                PunctRParen@370..371 ")"
+                Trivia(Whitespace)@371..372 " "
+            PunctPlus@372..373 "+"
+            Trivia(Whitespace)@373..374 " "
+            RefValueExpr 374..381
+              KwRef@374..377 "REF"
+              PunctLParen@377..378 "("
+              PathExpr 378..379
+                Name 378..379
+                  Ident@378..379 "a"
+              PunctRParen@379..380 ")"
+              Trivia(Whitespace)@380..381 " "
+          PunctPlus@381..382 "+"
+          Trivia(Whitespace)@382..383 " "
+          RefValueExpr 383..387
+            KwNull@383..387 "NULL"
+        PunctSemicolon@387..388 ";"
+    Trivia(Whitespace)@388..389 "\n"
+    KwEndProgram@389..400 "END_PROGRAM"
+  Trivia(Whitespace)@400..401 "\n"
+  Eof@401..401 ""
+## ast
+# ast bytes=401
+  ProgramDecl@0..400 Expressions
+    Name@8..19 Expressions
+    VarSection@19..135 VAR   a, b, c : DINT;   flag : BOOL;   arr : ARRAY [0..9, 0..9] OF DINT;   p ...
+      VarDecl@23..41 a
+        Name@23..27 a
+        Name@29..30 b
+        Name@32..34 c
+        TypeRef@36..40 DINT
+      VarDecl@41..56 flag
+        Name@41..49 flag
+        TypeRef@51..55 BOOL
+      VarDecl@56..92 arr
+        Name@56..63 arr
+        TypeRef@65..91 ARRAY [0..9, 0..9] OF DINT
+            LiteralExpr@72..73 0
+            LiteralExpr@75..76 9
+            LiteralExpr@78..79 0
+            LiteralExpr@81..82 9
+          TypeRef@87..91 DINT
+      VarDecl@92..111 p
+        Name@92..97 p
+        TypeRef@99..110 REF_TO DINT
+          TypeRef@106..110 DINT
+      VarDecl@111..127 obj
+        Name@111..118 obj
+        TypeRef@120..126 Object
+          Path@120..126 Object
+            Name@120..126 Object
+      AssignStmt@135..153 a := A = B < C;
+        PathExpr@135..140 a
+          Name@135..140 a
+        BinaryExpr@143..152 A = B < C
+          PathExpr@143..145 A
+            Name@143..145 A
+          BinaryExpr@147..152 B < C
+            PathExpr@147..149 B
+              Name@147..149 B
+            PathExpr@151..152 C
+              Name@151..152 C
+      AssignStmt@153..183 b := -2 ** 2 + 2 ** 3 ** 4;
+        PathExpr@153..158 b
+          Name@153..158 b
+        BinaryExpr@161..182 -2 ** 2 + 2 ** 3 ** 4
+          BinaryExpr@161..169 -2 ** 2
+            UnaryExpr@161..164 -2
+              LiteralExpr@162..164 2
+            LiteralExpr@167..169 2
+          BinaryExpr@171..182 2 ** 3 ** 4
+            BinaryExpr@171..178 2 ** 3
+              LiteralExpr@171..173 2
+              LiteralExpr@176..178 3
+            LiteralExpr@181..182 4
+      AssignStmt@183..213 c := (a + b) * c / 2 MOD 3;
+        PathExpr@183..188 c
+          Name@183..188 c
+        BinaryExpr@191..212 (a + b) * c / 2 MOD 3
+          BinaryExpr@191..207 (a + b) * c / 2
+            BinaryExpr@191..203 (a + b) * c
+              ParenExpr@191..199 (a + b)
+                BinaryExpr@192..197 a + b
+                  PathExpr@192..194 a
+                    Name@192..194 a
+                  PathExpr@196..197 b
+                    Name@196..197 b
+              PathExpr@201..203 c
+                Name@201..203 c
+            LiteralExpr@205..207 2
+          LiteralExpr@211..212 3
+      AssignStmt@213..251 flag := NOT A = B AND C OR D XOR E;
+        PathExpr@213..221 flag
+          Name@213..221 flag
+        BinaryExpr@224..250 NOT A = B AND C OR D XOR E
+          BinaryExpr@224..240 NOT A = B AND C
+            BinaryExpr@224..234 NOT A = B
+              UnaryExpr@224..230 NOT A
+                PathExpr@228..230 A
+                  Name@228..230 A
+              PathExpr@232..234 B
+                Name@232..234 B
+            PathExpr@238..240 C
+              Name@238..240 C
+          BinaryExpr@243..250 D XOR E
+            PathExpr@243..245 D
+              Name@243..245 D
+            PathExpr@249..250 E
+              Name@249..250 E
+      AssignStmt@251..322 a := arr[1, 2] + arr[1][2] + p^ + THIS.b + obj.member + a.0 + a.%X0;
+        PathExpr@251..256 a
+          Name@251..256 a
+        BinaryExpr@259..321 arr[1, 2] + arr[1][2] + p^ + THIS.b + obj.member + a.0 + a.%X0
+          BinaryExpr@259..314 arr[1, 2] + arr[1][2] + p^ + THIS.b + obj.member + a.0
+            BinaryExpr@259..308 arr[1, 2] + arr[1][2] + p^ + THIS.b + obj.member
+              BinaryExpr@259..295 arr[1, 2] + arr[1][2] + p^ + THIS.b
+                BinaryExpr@259..286 arr[1, 2] + arr[1][2] + p^
+                  BinaryExpr@259..281 arr[1, 2] + arr[1][2]
+                    IndexExpr@259..269 arr[1, 2]
+                      PathExpr@259..262 arr
+                        Name@259..262 arr
+                      LiteralExpr@263..264 1
+                      LiteralExpr@266..267 2
+                    IndexExpr@271..281 arr[1][2]
+                      IndexExpr@271..277 arr[1]
+                        PathExpr@271..274 arr
+                          Name@271..274 arr
+                        LiteralExpr@275..276 1
+                      LiteralExpr@278..279 2
+                  DerefExpr@283..286 p^
+                    PathExpr@283..284 p
+                      Name@283..284 p
+                PathExpr@288..295 b
+                  Name@293..295 b
+              PathExpr@297..308 obj
+                Name@297..300 obj
+                Name@301..308 member
+            MemberExpr@310..314 a.0
+              PathExpr@310..311 a
+                Name@310..311 a
+          MemberExpr@316..321 a.%X0
+            PathExpr@316..317 a
+              Name@316..317 a
+      AssignStmt@322..388 b := f(1, named := 2, out => a, NOT flag => b) + REF(a) + NULL;
+        PathExpr@322..327 b
+          Name@322..327 b
+        BinaryExpr@330..387 f(1, named := 2, out => a, NOT flag => b) + REF(a) + NULL
+          BinaryExpr@330..381 f(1, named := 2, out => a, NOT flag => b) + REF(a)
+            CallExpr@330..372 f(1, named := 2, out => a, NOT flag => b)
+              PathExpr@330..331 f
+                Name@330..331 f
+                Param@332..333 1
+                  LiteralExpr@332..333 1
+                Param@335..345 named
+                  Name@335..341 named
+                  LiteralExpr@344..345 2
+                Param@347..355 out => a
+                  PathExpr@347..351 out
+                    Name@347..351 out
+                  PathExpr@354..355 a
+                    Name@354..355 a
+                Param@357..370 NOT flag => b
+                  UnaryExpr@357..366 NOT flag
+                    PathExpr@361..366 flag
+                      Name@361..366 flag
+                  PathExpr@369..370 b
+                    Name@369..370 b
+            RefValueExpr@374..381 REF(a)
+              PathExpr@378..379 a
+                Name@378..379 a
+          RefValueExpr@383..387 NULL
+## diagnostics

@@ -1,0 +1,154 @@
+# pragmas (295 bytes, 0 diagnostics)
+## cst
+# cst nodes=37 tokens=42 trivia=38 bytes=295
+SourceFile 0..295
+  FunctionDecl 0..124
+    Pragma 0..25
+      PragmaToken@0..25 "{stc:test {\"cycles\": 25}}"
+    Trivia(Whitespace)@25..26 "\n"
+    KwFunction@26..34 "FUNCTION"
+    Trivia(Whitespace)@34..35 " "
+    Name 35..43
+      Ident@35..42 "TestAdd"
+      Trivia(Whitespace)@42..43 " "
+    PunctColon@43..44 ":"
+    Trivia(Whitespace)@44..45 " "
+    TypeRef 45..49
+      KwBool@45..49 "BOOL"
+    VarSection 49..73
+      Trivia(Whitespace)@49..50 "\n"
+      KwVar@50..53 "VAR"
+      VarDecl 53..65
+        Name 53..58
+          Trivia(Whitespace)@53..54 "\n"
+          Trivia(Whitespace)@54..56 "  "
+          Ident@56..57 "r"
+          Trivia(Whitespace)@57..58 " "
+        PunctColon@58..59 ":"
+        Trivia(Whitespace)@59..60 " "
+        TypeRef 60..64
+          KwDint@60..64 "DINT"
+        PunctSemicolon@64..65 ";"
+      Trivia(Whitespace)@65..66 "\n"
+      KwEndVar@66..73 "END_VAR"
+    StmtList 73..111
+      AssignStmt 73..91
+        PathExpr 73..78
+          Name 73..78
+            Trivia(Whitespace)@73..74 "\n"
+            Trivia(Whitespace)@74..76 "  "
+            Ident@76..77 "r"
+            Trivia(Whitespace)@77..78 " "
+        PunctAssign@78..80 ":="
+        Trivia(Whitespace)@80..81 " "
+        CallExpr 81..90
+          PathExpr 81..84
+            Name 81..84
+              Ident@81..84 "Add"
+          ParamList 84..90
+            PunctLParen@84..85 "("
+            Param 85..86
+              LiteralExpr 85..86
+                IntLiteral@85..86 "2"
+            PunctComma@86..87 ","
+            Trivia(Whitespace)@87..88 " "
+            Param 88..89
+              LiteralExpr 88..89
+                IntLiteral@88..89 "3"
+            PunctRParen@89..90 ")"
+        PunctSemicolon@90..91 ";"
+      AssignStmt 91..111
+        PathExpr 91..102
+          Name 91..102
+            Trivia(Whitespace)@91..92 "\n"
+            Trivia(Whitespace)@92..94 "  "
+            Ident@94..101 "TestAdd"
+            Trivia(Whitespace)@101..102 " "
+        PunctAssign@102..104 ":="
+        Trivia(Whitespace)@104..105 " "
+        BinaryExpr 105..110
+          PathExpr 105..107
+            Name 105..107
+              Ident@105..106 "r"
+              Trivia(Whitespace)@106..107 " "
+          PunctEqual@107..108 "="
+          Trivia(Whitespace)@108..109 " "
+          LiteralExpr 109..110
+            IntLiteral@109..110 "5"
+        PunctSemicolon@110..111 ";"
+    Trivia(Whitespace)@111..112 "\n"
+    KwEndFunction@112..124 "END_FUNCTION"
+  VarSection 124..294
+    Trivia(Whitespace)@124..125 "\n"
+    Trivia(Whitespace)@125..126 "\n"
+    KwVarGlobal@126..136 "VAR_GLOBAL"
+    VarDecl 136..227
+      Name 136..146
+        Trivia(Whitespace)@136..137 "\n"
+        Trivia(Whitespace)@137..139 "  "
+        Ident@139..145 "MyBool"
+        Trivia(Whitespace)@145..146 " "
+      KwAt@146..148 "AT"
+      Trivia(Whitespace)@148..149 " "
+      DirectVariable@149..153 "%IX5"
+      Trivia(Whitespace)@153..154 " "
+      PunctColon@154..155 ":"
+      Trivia(Whitespace)@155..156 " "
+      TypeRef 156..161
+        KwBool@156..160 "BOOL"
+        Trivia(Whitespace)@160..161 " "
+      Pragma 161..226
+        PragmaToken@161..226 "{stc:io {\"device\": \"drive1\", \"channel\": 5, \"direction\": \"input\"}}"
+      PunctSemicolon@226..227 ";"
+    VarDecl 227..286
+      Name 227..237
+        Trivia(Whitespace)@227..228 "\n"
+        Trivia(Whitespace)@228..230 "  "
+        Ident@230..236 "Hidden"
+        Trivia(Whitespace)@236..237 " "
+      PunctColon@237..238 ":"
+      Trivia(Whitespace)@238..239 " "
+      TypeRef 239..243
+        KwInt@239..242 "INT"
+        Trivia(Whitespace)@242..243 " "
+      Pragma 243..285
+        PragmaToken@243..285 "{stc:deprecated {\"message\": \"use MyBool\"}}"
+      PunctSemicolon@285..286 ";"
+    Trivia(Whitespace)@286..287 "\n"
+    KwEndVar@287..294 "END_VAR"
+  Trivia(Whitespace)@294..295 "\n"
+  Eof@295..295 ""
+## ast
+# ast bytes=295
+  FunctionDecl@0..124 TestAdd
+    Name@35..43 TestAdd
+    TypeRef@45..49 BOOL
+    VarSection@49..73 VAR   r : DINT; END_VAR
+      VarDecl@53..65 r
+        Name@53..58 r
+        TypeRef@60..64 DINT
+      AssignStmt@73..91 r := Add(2, 3);
+        PathExpr@73..78 r
+          Name@73..78 r
+        CallExpr@81..90 Add(2, 3)
+          PathExpr@81..84 Add
+            Name@81..84 Add
+            Param@85..86 2
+              LiteralExpr@85..86 2
+            Param@88..89 3
+              LiteralExpr@88..89 3
+      AssignStmt@91..111 TestAdd := r = 5;
+        PathExpr@91..102 TestAdd
+          Name@91..102 TestAdd
+        BinaryExpr@105..110 r = 5
+          PathExpr@105..107 r
+            Name@105..107 r
+          LiteralExpr@109..110 5
+  VarSection@124..294 VAR_GLOBAL   MyBool AT %IX5 : BOOL {stc:io {"device": "drive1", "channel": 5,...
+    VarDecl@136..227 MyBool
+      Name@136..146 MyBool
+      TypeRef@156..161 BOOL
+    VarDecl@227..286 Hidden
+      Name@227..237 Hidden
+      TypeRef@239..243 INT
+## diagnostics

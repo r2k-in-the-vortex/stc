@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Draft (target profile; M1 lexical surface implemented)  
+Status: Draft (target profile; M2 lexical and syntactic surface implemented)  
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
 Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`
@@ -19,6 +19,12 @@ extension; the extension's semantics are defined by this project, not copied fro
 The project also does **not** claim conformance to the complete 2013 edition: only the feature
 set below is implemented. Any unimplemented construct in the accepted surface is a bug; any
 construct outside the surface must produce an explicit diagnostic.
+
+**Implementation status (M2):** the lexical surface and the full syntactic surface (CST, typed
+AST views, pragma payload validation, recovery) are implemented. The statuses in §3–§4 describe
+the v1 target surface; name resolution, type checking, constant evaluation, and HIR lowering are
+M3 and are not yet claimable as implemented behaviour. Unsupported constructs are rejected with
+the diagnostics in [Grammar](Syntax/Grammar.md) §13 rather than silently accepted.
 
 ## 2. Input languages
 
@@ -44,7 +50,7 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | `//` line comments | Implemented | |
 | `(* ... *)` nested block comments | Implemented | |
 | `/* ... */` nested block comments | Implemented | |
-| Pragmas `{ ... }` | Lexed as opaque trivia/tokens | `stc:` pragmas interpreted; others ignored with a warning |
+| Pragmas `{ ... }` | Parsed and attached | `stc:` payloads are strict JSON with duplicate-key/depth/size checks (D-050); others ignored with a warning |
 | Numeric literals (decimal, real, exponent, based 2/8/16, underscores) | Implemented | `8#` is accepted from 2013 but flagged deprecated |
 | Typed numeric literals (`INT#`, `REAL#`, `WORD#`, ...) | Implemented | Elementary type names only |
 | Boolean literals (`TRUE`, `FALSE`, `0`, `1`, `BOOL#...`) | Implemented | |
@@ -255,6 +261,10 @@ The following are deliberately chosen and must be documented and tested:
 | Case normalization | Uppercase ASCII for symbol keys; original spelling retained |
 | Comparison precedence | Annex A split: relational (`< > <= >=`) binds tighter than equality (`= <>`); both left-associative |
 | Semicolon handling | Strict by default: every statement terminates with `;`; `--relaxed` allows omitted semicolons after block statements |
+| Parser nesting limit | 256 nested expression, statement, and type levels; exceeding it is `STC-E-GRAM-109` (D-047) |
+| Parser recovery | Missing tokens are zero-width leaves with a diagnostic; a mismatched `END_*` reports both spans and is left for the enclosing construct (D-053) |
+| Statement classification | `x := y` is an assignment; a dereference on the left or `REF(...)`/`NULL` on the right is a reference assignment, finalized by the analyzer (D-055) |
+| Pragma duplicates | Duplicate `stc:io` is `STC-E-IO-003`; `stc:io` without `AT` is `STC-W-IO-002` (D-049) |
 | Task scheduling | Single task in v1; multiple tasks diagnosed as unsupported |
 
 ## 9. Project model (project feature, not an IEC claim)

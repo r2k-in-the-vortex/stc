@@ -37,6 +37,38 @@ pub enum Punct {
 }
 
 impl Punct {
+    /// Every punctuation kind in declaration order.
+    pub const ALL: &'static [Punct] = &[
+        Self::LParen,
+        Self::RParen,
+        Self::LBracket,
+        Self::RBracket,
+        Self::Semicolon,
+        Self::Comma,
+        Self::Colon,
+        Self::Dot,
+        Self::Hash,
+        Self::At,
+        Self::Assign,
+        Self::OutputAssign,
+        Self::AttemptAssign,
+        Self::Power,
+        Self::Range,
+        Self::NotEqual,
+        Self::LessEqual,
+        Self::GreaterEqual,
+        Self::Caret,
+        Self::Plus,
+        Self::Minus,
+        Self::Star,
+        Self::Slash,
+        Self::Equal,
+        Self::Less,
+        Self::Greater,
+        Self::Ampersand,
+        Self::Percent,
+    ];
+
     /// Returns the canonical source spelling.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

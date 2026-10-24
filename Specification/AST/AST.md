@@ -84,7 +84,9 @@ pub struct Name {
 }
 ```
 
-- The lexer interns every identifier and keyword spelling it sees.
+- The lexer stores each identifier's normalized uppercase key; M2 preserves the original spelling
+  and the key in `Name` nodes (D-058). The session `Interner` is built during M3 name resolution;
+  M2 does not intern identifiers.
 - `Name` equality uses `Symbol` (case-insensitive). Diagnostics print `interner.text(symbol)`.
 - Namespace-qualified paths are represented as `Vec<Name>` (segments) plus a span covering the
   whole path.
@@ -194,7 +196,8 @@ This list is illustrative; the implementation may split nodes further (for examp
 
 ### 3.4 CST invariants
 
-- Every non-terminal node has at least one child unless it is an `Error` node.
+- Every non-terminal node has at least one child unless it is an `Error` node or an empty
+  `StmtList` (the grammar's `(stmt? ';')*` permits an empty body; D-054).
 - `Error` nodes may contain tokens and nested nodes; they never contain unreachable siblings.
 - A node's span is the union of its children's spans. Nodes with zero-width content (for example
   a missing `;`) use an empty span at the insertion point.
@@ -266,6 +269,11 @@ pub enum ExprKind {
 
 Typed accessors return `Option` for optional children and `Result` only when a structural
 invariant is broken. The parser guarantees the shape; AST accessors do not re-validate grammar.
+
+Node spans include attached trivia (rowan-style), so diagnostics that point into a typed AST node
+use `token_span()`, the first-to-last non-trivia token extent (D-052). Simple dotted access such
+as `a.b` is a `PathExpr` with multiple `Name` segments; `MemberExpr` represents access on a
+computed base such as `f().x` or `arr[0].x` (D-052).
 
 ### 4.0 Pragmas
 
