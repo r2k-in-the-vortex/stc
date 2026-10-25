@@ -237,14 +237,27 @@ END_CONFIGURATION
 }
 
 #[test]
-fn unsupported_standard_call_reports_at_the_call_site() {
+fn unsupported_interface_dispatch_reports_at_the_call_site() {
     let source = r#"
+INTERFACE IShape
+METHOD Area : DINT
+END_METHOD
+END_INTERFACE
+
+FUNCTION_BLOCK Use
+VAR_INPUT
+  i : IShape;
+END_VAR
+VAR
+  x : DINT;
+END_VAR
+  x := i.Area();
+END_FUNCTION_BLOCK
+
 PROGRAM Main
 VAR
-  s : STRING[10];
-  t : STRING[10];
+  u : Use;
 END_VAR
-  t := LEFT(s, 2);
 END_PROGRAM
 CONFIGURATION Cfg
 RESOURCE R ON Cpu
@@ -255,10 +268,15 @@ END_CONFIGURATION
     let hir = clean_hir(source);
     let sources = vec!["<test>".to_string()];
     let errors = stc_codegen::generate(&hir, &options("test", Mode::Executable, &sources))
-        .expect_err("math standard functions are M5 phase 5");
-    assert_eq!(errors.len(), 1, "{errors:#?}");
-    assert_eq!(errors[0].code(), "STC-E-CODEGEN-001");
-    assert!(errors[0].message().contains("LEFT"), "{errors:#?}");
+        .expect_err("interface dispatch is M5 phase 4b");
+    assert!(
+        errors.iter().any(|error| {
+            error.code() == "STC-E-CODEGEN-001"
+                && error.message().contains("interface dispatch")
+                && error.span().is_some_and(|span| span.start != span.end)
+        }),
+        "{errors:#?}"
+    );
 }
 
 #[test]

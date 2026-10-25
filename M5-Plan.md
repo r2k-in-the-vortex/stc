@@ -161,7 +161,7 @@ materialized into a transient alloca on read and split back into roots on write.
 | 2 | Structs, enums, subranges, arrays, strings: values, roots, initializers, traps | Complete for values, roots, initializers, and traps; string search functions are phase 5 |
 | 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, and conformant `ARRAY[*]` complete; `?=` needs phase 4 and `STC-POINTER` remains |
 | 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; interfaces, `?=`, and runtime descriptors remain |
-| 5 | Standard functions, standard FB bodies, cycle-latched timers | Standard FB bodies and deterministic timer tests complete; string search and date/time functions remain |
+| 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Planned |
 | 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate codegen/clang/execution coverage in place; OOP/stdlib/fuzz/docs remain |
 
@@ -208,13 +208,15 @@ materialized into a transient alloca on read and split back into roots on write.
 
 ### Phase 5 — standard library
 
-- Lower every `StdFnKind`; inline exact operations and call host helpers otherwise. Inline
-  arithmetic, bit, selection, math, and basic string operations are complete; `LEFT`, `RIGHT`,
-  `MID`, `INSERT`, `DELETE`, `REPLACE`, `FIND`, and date/time functions remain.
+- Lower every `StdFnKind`; inline exact operations and call host helpers otherwise. Complete,
+  including `LEFT`, `RIGHT`, `MID`, `INSERT`, `DELETE`, `REPLACE`, and `FIND` over fixed-capacity
+  `STRING`/`WSTRING`/`USTRING` values. The current HIR surface has no date/time function kinds;
+  date/time literals and conversions are covered by the scalar layer.
 - Synthesize standard FB bodies (`SR`, `RS`, `R_TRIG`, `F_TRIG`, `CTU`, `CTD`, `CTUD`, `TP`,
   `TON`, `TOF`) with hidden state fields and latched-clock reads. Complete in `stdlib.rs`.
 - Deterministic timer/counter/edge tests with `stc_rt_set_cycle_time_ns`. Complete in the
-  `standard_function_blocks_run_under_a_c_harness` driver test.
+  `standard_function_blocks_run_under_a_c_harness` driver test; string functions are covered by
+  `StringOps`/`WideOps`/`UnicodeOps` and a capacity-range trap case.
 
 ### Phase 6 — retained state
 

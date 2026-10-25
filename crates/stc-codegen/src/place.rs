@@ -1611,17 +1611,25 @@ impl Lowerer<'_> {
                 let value = supplied[0].clone();
                 self.lower_trunc(f, &facts, value, span)
             }
-            StdFnKind::Left
-            | StdFnKind::Right
-            | StdFnKind::Mid
-            | StdFnKind::Insert
-            | StdFnKind::Delete
-            | StdFnKind::Replace
-            | StdFnKind::Find => Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                format!("standard function `{}` is M5 phase 5", std.kind.as_str()),
+            StdFnKind::Left | StdFnKind::Right => self.lower_string_extract(
+                f,
+                args,
+                supplied,
+                result_ty,
                 span,
-            )),
+                std.kind == StdFnKind::Right,
+            ),
+            StdFnKind::Mid => self.lower_string_mid(f, args, supplied, result_ty, span),
+            StdFnKind::Insert | StdFnKind::Replace => self.lower_string_edit(
+                f,
+                args,
+                supplied,
+                result_ty,
+                span,
+                std.kind == StdFnKind::Replace,
+            ),
+            StdFnKind::Delete => self.lower_string_delete(f, args, supplied, result_ty, span),
+            StdFnKind::Find => self.lower_string_find(f, args, supplied, span),
         }
     }
 
@@ -1805,6 +1813,406 @@ impl Lowerer<'_> {
         );
         f.store(&total, &len_ptr, None);
         Ok(f.load(storage, &destination, None))
+    }
+}
+
+struct StringArgument {
+    length: Value,
+    data: Value,
+    unit_bytes: u8,
+}
+
+struct StringBuffer {
+    storage: IrType,
+    pointee: String,
+    length: Value,
+    data: Value,
+    capacity: u32,
+    unit_bytes: u8,
+    destination: Value,
+}
+
+impl Lowerer<'_> {
+    fn std_arg_type(&self, args: &[stc_hir::ArgHir], index: usize) -> Res<TyId> {
+        args.iter()
+            .filter_map(|arg| arg.value)
+            .nth(index)
+            .map(|expr| self.hir.expr(expr).ty)
+            .ok_or_else(|| CodegenError::internal("standard-function argument type missing"))
+    }
+
+    fn string_argument(
+        &mut self,
+        f: &mut Function,
+        value: &Value,
+        ty: TyId,
+    ) -> Res<StringArgument> {
+        let facts = self.types.facts(ty)?.clone();
+        let TypeCategory::String { unit_bytes, .. } = facts.category else {
+            return Err(CodegenError::internal(
+                "standard function argument is not a string",
+            ));
+        };
+        let storage = facts.llvm_storage.clone();
+        let pointee = storage.render();
+        let temp = f.alloca(storage.clone());
+        f.store(value, &temp, None);
+        let length_ptr = f.gep(&pointee, &temp, &["i64 0".into(), "i32 0".into()], true);
+        let length = f.load(IrType::Int(32), &length_ptr, None);
+        let data = f.gep(
+            &pointee,
+            &temp,
+            &["i64 0".into(), "i32 1".into(), "i64 0".into()],
+            true,
+        );
+        Ok(StringArgument {
+            length,
+            data,
+            unit_bytes,
+        })
+    }
+
+    fn new_string_buffer(&mut self, f: &mut Function, result_ty: TyId) -> Res<StringBuffer> {
+        let facts = self.types.facts(result_ty)?.clone();
+        let TypeCategory::String {
+            capacity,
+            unit_bytes,
+            ..
+        } = facts.category
+        else {
+            return Err(CodegenError::internal(
+                "standard function result is not a string",
+            ));
+        };
+        let storage = facts.llvm_storage.clone();
+        let pointee = storage.render();
+        let destination = f.alloca(storage.clone());
+        f.store(&Value::zero(storage.clone()), &destination, None);
+        let length = f.gep(
+            &pointee,
+            &destination,
+            &["i64 0".into(), "i32 0".into()],
+            true,
+        );
+        let data = f.gep(
+            &pointee,
+            &destination,
+            &["i64 0".into(), "i32 1".into(), "i64 0".into()],
+            true,
+        );
+        Ok(StringBuffer {
+            storage,
+            pointee,
+            length,
+            data,
+            capacity,
+            unit_bytes,
+            destination,
+        })
+    }
+
+    fn finish_string_buffer(f: &mut Function, buffer: StringBuffer, length: Value) -> Value {
+        f.store(&length, &buffer.length, None);
+        f.load(buffer.storage, &buffer.destination, None)
+    }
+
+    fn require_string_unit(&self, actual: u8, expected: u8, span: Span) -> Res<()> {
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "standard string functions cannot mix STRING, WSTRING, and USTRING".into(),
+                span,
+            ))
+        }
+    }
+
+    fn integer_to_i32(f: &mut Function, value: &Value, kind: crate::layout::ScalarKind) -> Value {
+        let width = crate::expr::value_bits(kind);
+        if width < 32 {
+            let op = if kind.is_signed() { "sext" } else { "zext" };
+            f.emit_value_cast(op, value, IrType::Int(32))
+        } else if width > 32 {
+            f.emit_value_cast("trunc", value, IrType::Int(32))
+        } else {
+            value.clone()
+        }
+    }
+
+    fn clamp_nonnegative(f: &mut Function, value: Value, upper: &Value) -> Value {
+        let positive = f.icmp("sgt", &value, &Value::int(32, 0));
+        let bounded = f.select(&positive, &value, &Value::int(32, 0));
+        let above = f.icmp("sgt", &bounded, upper);
+        f.select(&above, upper, &bounded)
+    }
+
+    fn clamp_position(f: &mut Function, position: &Value, length: &Value) -> Value {
+        let start = f.binop("sub", position, &Value::int(32, 1));
+        let positive = f.icmp("sgt", &start, &Value::int(32, 0));
+        let bounded = f.select(&positive, &start, &Value::int(32, 0));
+        let beyond = f.icmp("sgt", &bounded, length);
+        f.select(&beyond, length, &bounded)
+    }
+
+    fn string_byte_pointer(f: &mut Function, data: &Value, index: &Value, unit_bytes: u8) -> Value {
+        let offset = f.emit_value_cast("sext", index, IrType::Int(64));
+        let offset = f.binop("mul", &offset, &Value::int(64, i128::from(unit_bytes)));
+        f.gep("i8", data, &[format!("i64 {}", offset.repr)], false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn string_copy(
+        &mut self,
+        f: &mut Function,
+        destination: &Value,
+        destination_index: &Value,
+        source: &Value,
+        source_index: &Value,
+        count: &Value,
+        unit_bytes: u8,
+    ) {
+        let source_pointer = Self::string_byte_pointer(f, source, source_index, unit_bytes);
+        let destination_pointer =
+            Self::string_byte_pointer(f, destination, destination_index, unit_bytes);
+        let bytes = f.emit_value_cast("sext", count, IrType::Int(64));
+        let bytes = f.binop("mul", &bytes, &Value::int(64, i128::from(unit_bytes)));
+        self.ensure_memcpy();
+        f.memcpy(&destination_pointer, &source_pointer, &bytes);
+    }
+
+    fn lower_string_extract(
+        &mut self,
+        f: &mut Function,
+        args: &[stc_hir::ArgHir],
+        supplied: &[Value],
+        result_ty: TyId,
+        span: Span,
+        right: bool,
+    ) -> Res<Value> {
+        let input_ty = self.std_arg_type(args, 0)?;
+        let count_ty = self.std_arg_type(args, 1)?;
+        let input = self.string_argument(f, &supplied[0], input_ty)?;
+        let buffer = self.new_string_buffer(f, result_ty)?;
+        self.require_string_unit(input.unit_bytes, buffer.unit_bytes, span)?;
+        let count_kind = self.types.scalar_kind(count_ty, span)?;
+        let count = Self::integer_to_i32(f, &supplied[1], count_kind);
+        let count = Self::clamp_nonnegative(f, count, &input.length);
+        let start = if right {
+            f.binop("sub", &input.length, &count)
+        } else {
+            Value::int(32, 0)
+        };
+        self.string_copy(
+            f,
+            &buffer.data,
+            &Value::int(32, 0),
+            &input.data,
+            &start,
+            &count,
+            buffer.unit_bytes,
+        );
+        Ok(Self::finish_string_buffer(f, buffer, count))
+    }
+
+    fn lower_string_mid(
+        &mut self,
+        f: &mut Function,
+        args: &[stc_hir::ArgHir],
+        supplied: &[Value],
+        result_ty: TyId,
+        span: Span,
+    ) -> Res<Value> {
+        let input_ty = self.std_arg_type(args, 0)?;
+        let count_ty = self.std_arg_type(args, 1)?;
+        let position_ty = self.std_arg_type(args, 2)?;
+        let input = self.string_argument(f, &supplied[0], input_ty)?;
+        let buffer = self.new_string_buffer(f, result_ty)?;
+        self.require_string_unit(input.unit_bytes, buffer.unit_bytes, span)?;
+        let count_kind = self.types.scalar_kind(count_ty, span)?;
+        let position_kind = self.types.scalar_kind(position_ty, span)?;
+        let position = Self::integer_to_i32(f, &supplied[2], position_kind);
+        let start = Self::clamp_position(f, &position, &input.length);
+        let available = f.binop("sub", &input.length, &start);
+        let count = Self::integer_to_i32(f, &supplied[1], count_kind);
+        let count = Self::clamp_nonnegative(f, count, &available);
+        self.string_copy(
+            f,
+            &buffer.data,
+            &Value::int(32, 0),
+            &input.data,
+            &start,
+            &count,
+            buffer.unit_bytes,
+        );
+        Ok(Self::finish_string_buffer(f, buffer, count))
+    }
+
+    fn lower_string_delete(
+        &mut self,
+        f: &mut Function,
+        args: &[stc_hir::ArgHir],
+        supplied: &[Value],
+        result_ty: TyId,
+        span: Span,
+    ) -> Res<Value> {
+        let input_ty = self.std_arg_type(args, 0)?;
+        let count_ty = self.std_arg_type(args, 1)?;
+        let position_ty = self.std_arg_type(args, 2)?;
+        let input = self.string_argument(f, &supplied[0], input_ty)?;
+        let buffer = self.new_string_buffer(f, result_ty)?;
+        self.require_string_unit(input.unit_bytes, buffer.unit_bytes, span)?;
+        let count_kind = self.types.scalar_kind(count_ty, span)?;
+        let position_kind = self.types.scalar_kind(position_ty, span)?;
+        let position = Self::integer_to_i32(f, &supplied[2], position_kind);
+        let start = Self::clamp_position(f, &position, &input.length);
+        let available = f.binop("sub", &input.length, &start);
+        let count = Self::integer_to_i32(f, &supplied[1], count_kind);
+        let removed = Self::clamp_nonnegative(f, count, &available);
+        let new_length = f.binop("sub", &input.length, &removed);
+        self.string_copy(
+            f,
+            &buffer.data,
+            &Value::int(32, 0),
+            &input.data,
+            &Value::int(32, 0),
+            &start,
+            buffer.unit_bytes,
+        );
+        let suffix_start = f.binop("add", &start, &removed);
+        let suffix_count = f.binop("sub", &available, &removed);
+        self.string_copy(
+            f,
+            &buffer.data,
+            &start,
+            &input.data,
+            &suffix_start,
+            &suffix_count,
+            buffer.unit_bytes,
+        );
+        Ok(Self::finish_string_buffer(f, buffer, new_length))
+    }
+
+    fn lower_string_edit(
+        &mut self,
+        f: &mut Function,
+        args: &[stc_hir::ArgHir],
+        supplied: &[Value],
+        result_ty: TyId,
+        span: Span,
+        replace: bool,
+    ) -> Res<Value> {
+        let first_ty = self.std_arg_type(args, 0)?;
+        let second_ty = self.std_arg_type(args, 1)?;
+        let first = self.string_argument(f, &supplied[0], first_ty)?;
+        let second = self.string_argument(f, &supplied[1], second_ty)?;
+        let buffer = self.new_string_buffer(f, result_ty)?;
+        self.require_string_unit(first.unit_bytes, buffer.unit_bytes, span)?;
+        self.require_string_unit(second.unit_bytes, buffer.unit_bytes, span)?;
+        let position_index = if replace { 3 } else { 2 };
+        let position_ty = self.std_arg_type(args, position_index)?;
+        let position_kind = self.types.scalar_kind(position_ty, span)?;
+        let position = Self::integer_to_i32(f, &supplied[position_index], position_kind);
+        let start = Self::clamp_position(f, &position, &first.length);
+        let available = f.binop("sub", &first.length, &start);
+        let removed = if replace {
+            let count_ty = self.std_arg_type(args, 2)?;
+            let count_kind = self.types.scalar_kind(count_ty, span)?;
+            let count = Self::integer_to_i32(f, &supplied[2], count_kind);
+            Self::clamp_nonnegative(f, count, &available)
+        } else {
+            Value::int(32, 0)
+        };
+        let kept = f.binop("sub", &available, &removed);
+        let base_length = f.binop("sub", &first.length, &removed);
+        let new_length = f.binop("add", &base_length, &second.length);
+        let too_long = f.icmp(
+            "sgt",
+            &new_length,
+            &Value::int(32, i128::from(buffer.capacity)),
+        );
+        self.trap_if(f, &too_long, trap::RANGE, span)?;
+        self.string_copy(
+            f,
+            &buffer.data,
+            &Value::int(32, 0),
+            &first.data,
+            &Value::int(32, 0),
+            &start,
+            buffer.unit_bytes,
+        );
+        self.string_copy(
+            f,
+            &buffer.data,
+            &start,
+            &second.data,
+            &Value::int(32, 0),
+            &second.length,
+            buffer.unit_bytes,
+        );
+        let destination_suffix = f.binop("add", &start, &second.length);
+        let source_suffix = f.binop("add", &start, &removed);
+        self.string_copy(
+            f,
+            &buffer.data,
+            &destination_suffix,
+            &first.data,
+            &source_suffix,
+            &kept,
+            buffer.unit_bytes,
+        );
+        Ok(Self::finish_string_buffer(f, buffer, new_length))
+    }
+
+    fn lower_string_find(
+        &mut self,
+        f: &mut Function,
+        args: &[stc_hir::ArgHir],
+        supplied: &[Value],
+        span: Span,
+    ) -> Res<Value> {
+        let haystack_ty = self.std_arg_type(args, 0)?;
+        let needle_ty = self.std_arg_type(args, 1)?;
+        let haystack = self.string_argument(f, &supplied[0], haystack_ty)?;
+        let needle = self.string_argument(f, &supplied[1], needle_ty)?;
+        self.require_string_unit(haystack.unit_bytes, needle.unit_bytes, span)?;
+        let result_ptr = f.alloca(IrType::Int(32));
+        f.store(&Value::int(32, 0), &result_ptr, None);
+        let index_ptr = f.alloca(IrType::Int(32));
+        f.store(&Value::int(32, 0), &index_ptr, None);
+        let limit = f.binop("sub", &haystack.length, &needle.length);
+        let header = f.next_block_label();
+        let body = f.next_block_label();
+        let done = f.next_block_label();
+        f.branch(&header);
+        f.start_block(&header);
+        let index = f.load(IrType::Int(32), &index_ptr, None);
+        let result = f.load(IrType::Int(32), &result_ptr, None);
+        let in_range = f.icmp("sle", &index, &limit);
+        let searching = f.icmp("eq", &result, &Value::int(32, 0));
+        let active = f.binop("and", &in_range, &searching);
+        f.cond_branch(&active, &body, &done);
+        f.start_block(&body);
+        let candidate = Self::string_byte_pointer(f, &haystack.data, &index, haystack.unit_bytes);
+        let bytes = f.emit_value_cast("sext", &needle.length, IrType::Int(64));
+        let bytes = f.binop(
+            "mul",
+            &bytes,
+            &Value::int(64, i128::from(needle.unit_bytes)),
+        );
+        self.ensure_memcmp();
+        let comparison = f
+            .call(IrType::Int(32), "memcmp", &[candidate, needle.data, bytes])
+            .ok_or_else(|| CodegenError::internal("memcmp returned void"))?;
+        let found = f.icmp("eq", &comparison, &Value::int(32, 0));
+        let one_based = f.binop("add", &index, &Value::int(32, 1));
+        let next_result = f.select(&found, &one_based, &result);
+        f.store(&next_result, &result_ptr, None);
+        let next_index = f.binop("add", &index, &Value::int(32, 1));
+        f.store(&next_index, &index_ptr, None);
+        f.branch(&header);
+        f.start_block(&done);
+        Ok(f.load(IrType::Int(32), &result_ptr, None))
     }
 
     fn lower_abs(

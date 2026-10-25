@@ -191,6 +191,7 @@ fn source_name_source(name: &str) -> &'static str {
         "powoverflow" => POW_OVERFLOW,
         "subrange" => SUBRANGE,
         "bounds" => BOUNDS,
+        "strrange" => STRRANGE,
         other => panic!("unknown source {other}"),
     }
 }
@@ -323,6 +324,21 @@ END_RESOURCE
 END_CONFIGURATION
 "#;
 
+const STRRANGE: &str = r#"
+PROGRAM Main
+VAR
+  s : STRING[4];
+END_VAR
+  s := 'abcd';
+  s := INSERT(s, 'x', 1);
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
 const NARROW: &str = r#"
 PROGRAM Main
 VAR
@@ -374,6 +390,7 @@ fn traps_are_fatal_and_reported() {
         ("powoverflow", "OVERFLOW"),
         ("subrange", "RANGE"),
         ("bounds", "BOUNDS"),
+        ("strrange", "RANGE"),
     ] {
         let directory = TestDir::new(source);
         build_executable(&directory, source, source);
@@ -1300,6 +1317,58 @@ END_VAR
   p := gp;
   p.x := p.x + 1;
   CopyTest := p.x * 10 + p.y;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION StringOps : DINT
+VAR
+  s : STRING[20];
+  r : DINT;
+END_VAR
+  s := 'abcdef';
+  r := 0;
+  IF LEFT(s, 3) = 'abc' THEN r := r + 1; END_IF;
+  IF RIGHT(s, 2) = 'ef' THEN r := r + 10; END_IF;
+  IF MID(s, 3, 2) = 'bcd' THEN r := r + 100; END_IF;
+  IF INSERT(s, 'XY', 3) = 'abXYcdef' THEN r := r + 1000; END_IF;
+  IF DELETE(s, 2, 3) = 'abef' THEN r := r + 10000; END_IF;
+  IF REPLACE(s, 'XY', 2, 3) = 'abXYef' THEN r := r + 100000; END_IF;
+  IF FIND(s, 'cd') = 3 THEN r := r + 1000000; END_IF;
+  IF FIND(s, 'zz') = 0 THEN r := r + 10000000; END_IF;
+  IF FIND(s, '') = 1 THEN r := r + 100000000; END_IF;
+  IF LEFT(s, 0) = '' THEN r := r + 1000000000; END_IF;
+  StringOps := r;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION WideOps : DINT
+VAR
+  w : WSTRING[10];
+  r : DINT;
+END_VAR
+  w := WSTRING#'wide';
+  r := 0;
+  IF LEFT(w, 2) = WSTRING#'wi' THEN r := r + 1; END_IF;
+  IF MID(w, 2, 3) = WSTRING#'de' THEN r := r + 10; END_IF;
+  IF FIND(w, WSTRING#'de') = 3 THEN r := r + 100; END_IF;
+  WideOps := r;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION UnicodeOps : DINT
+VAR
+  u : USTRING[20];
+  r : DINT;
+END_VAR
+  u := USTRING#'aé😀z';
+  r := 0;
+  IF LEN(u) = 4 THEN r := r + 1; END_IF;
+  IF LEN_CODE_UNIT(u) = 8 THEN r := r + 10; END_IF;
+  IF LEFT(u, 2) = USTRING#'aé' THEN r := r + 100; END_IF;
+  IF MID(u, 1, 3) = USTRING#'😀' THEN r := r + 1000; END_IF;
+  IF RIGHT(u, 2) = USTRING#'😀z' THEN r := r + 10000; END_IF;
+  IF FIND(u, USTRING#'😀') = 3 THEN r := r + 100000; END_IF;
+  UnicodeOps := r;
 END_FUNCTION
 
 PROGRAM Main
