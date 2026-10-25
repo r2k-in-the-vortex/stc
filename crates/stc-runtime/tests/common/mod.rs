@@ -5,6 +5,10 @@
 //! points; its prepare/cycle bodies are no-ops (or fail on request) so the host
 //! state machine can be exercised without execution lowering.
 
+// The helper module is shared by several integration-test binaries; not every
+// binary uses every helper.
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

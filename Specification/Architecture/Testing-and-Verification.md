@@ -4,10 +4,15 @@ Status: M4 suite implemented; online-change/debug test plan resolved (2026-10-24
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
-> **M4 status:** IR snapshots, clang verification (`STC_REQUIRE_CLANG=1` in CI), execution tests,
-> C-harness library tests, process-image tests, scalar retained-state tests, determinism checks,
-> the 20k-term deep chain, and `fuzz_codegen` are implemented. The M4 execution tests build
-> `stc-runtime` once per test process and link harnesses with the driver toolchain discovery.
+> **M4/M4.5 status:** IR snapshots, clang verification (`STC_REQUIRE_CLANG=1` in CI), execution
+> tests, C-harness library tests, process-image tests, scalar retained-state tests, determinism
+> checks, the 20k-term deep chain, and the six fuzz targets are implemented. The M4 execution
+> tests build `stc-runtime` once per test process and link harnesses with the driver toolchain
+> discovery. M4.5 phase 9 adds `fuzz_got_manifest` and `fuzz_module_descriptor`, byte-identical
+> end-to-end double builds across output directories, combined launcher/embedding artifact
+> loading, malformed-baseline/metadata negatives, concurrent generation pinning, and a recorded
+> switch-latency measurement. CI runs an explicit `online` job on Windows x64 and Ubuntu x64 and
+> caps fuzz inputs at one MiB.
 
 ## 1. Layers of testing
 
@@ -24,11 +29,11 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | Pragmas | JSON payload parsing, balanced braces, non-nesting, validation, precedence | `crates/stc-parser/tests`, `tests/ui` |
 | I/O metadata | Process-image layout, `AT` type checks, binding hints/overrides, unbound defaults | `tests/io` |
 | State/retain | Warm/cold restart, layout hash, CRC/corruption, atomic write, mismatch policy | `tests/state` |
-| Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `tests/online` |
-| GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, corrupt/manifest fuzzing | `tests/online`, `crates/stc-codegen/tests` |
+| Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `crates/stc-runtime/tests`, `crates/stc-driver/tests` |
+| GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, corrupt/manifest fuzzing | `crates/stc-got/tests`, `crates/stc-codegen/tests`, `crates/stc-driver/tests` |
 | Descriptors/OOP | Runtime descriptors, vtable cells, handle preservation, interface nullability, place descriptors | `tests/oop`, `tests/online` |
 | Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `tests/debug` |
-| Real-time boundary | Switch latency, maintenance jitter, service-thread contention, generation pinning | `tests/online` |
+| Real-time boundary | Switch latency, maintenance jitter, service-thread contention, generation pinning | `crates/stc-runtime/tests` |
 | Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests` |
 | Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
 | Lean | Exact-function models and proofs | `lean/`, `tests/vectors` |
@@ -206,8 +211,11 @@ Targets:
 - `fuzz_module_descriptor`: arbitrary descriptor/metadata bytes -> accepted/rejected cleanly, no
   panic; no native loading in the fuzz target.
 
-Use `cargo-fuzz` with a bounded input size and a time limit. Run a smoke corpus in CI and a longer
-campaign locally/nightly.
+`fuzz_manifest` follows the project `stc.toml` parser in M6. The other six targets are
+implemented. `fuzz_got_manifest` and `fuzz_module_descriptor` validate artifact bytes only; they
+never map, load, or execute native module code. Use `cargo-fuzz` with a bounded input size and a
+time limit. CI runs each target for 60 s with `-max_len=1048576`; run a longer campaign
+locally/nightly.
 
 ## 4. Conformance corpus
 
@@ -247,7 +255,8 @@ missing mappings and fails CI if a rule is marked implemented without a test.
 
 ### 4.1 Online-change and manifest suite
 
-`tests/online` exercises the host/module lifecycle on both hosts:
+`crates/stc-runtime/tests` and `crates/stc-driver/tests` exercise the host/module lifecycle on
+both hosts:
 
 - cold install, code-only online change, field add/remove/reorder, tracked rename/move;
 - untracked rename/removal diagnosis and explicit allow/cold paths;
@@ -256,7 +265,8 @@ missing mappings and fails CI if a rule is marked implemented without a test.
 - prepare failure, trap in the rollback window, and unload after grace;
 - preserved FB/class/interface state and descriptor shape checks;
 - direct-variable preservation/remap and I/O reconfiguration;
-- O(1) switch latency, bounded maintenance jitter, service-reader pinning, and unload safety;
+- O(1) switch latency (measured by the ignored `switch_latency` test), bounded maintenance
+  jitter, service-reader pinning, and unload safety;
 - double-build byte equality for module, metadata, and manifest;
 - canonical JSON/binary round-trip, digest pairing, slot/table ordering, and descriptor/manifest
   equality per [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§12;
@@ -361,7 +371,9 @@ lean/
 The workflow is `.github/workflows/ci.yml`; the documentation checks are implemented in
 `tools/ci/check_docs.py`. The `docs` job runs from M0. Jobs that need the Rust workspace, suite
 harnesses, Lean project, fuzz targets, or cross-target IR fixtures stay skipped until those inputs
-exist, so the skeleton never reports a pass for a job that did not run.
+exist, so the skeleton never reports a pass for a job that did not run. The M4.5 `online` job runs
+the GOT identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
+launcher/embedding artifact suites on both Windows x64 and Ubuntu x64.
 
 ### 6.2 Matrix
 

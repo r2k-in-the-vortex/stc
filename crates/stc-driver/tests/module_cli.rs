@@ -325,6 +325,156 @@ fn module_build_emits_a_complete_artifact_pair() {
     assert!(!manifest.roots.is_empty());
 }
 
+fn artifact_bytes(directory: &TestDir, file: &str) -> Vec<u8> {
+    std::fs::read(directory.path.join(file))
+        .unwrap_or_else(|error| panic!("cannot read artifact `{file}`: {error}"))
+}
+
+fn emitted_module(directory: &TestDir, name: &str) -> bool {
+    let prefix = format!("{name}-");
+    std::fs::read_dir(&directory.path)
+        .expect("artifact directory")
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .any(|file| file.starts_with(&prefix) && (file.ends_with(".dll") || file.ends_with(".so")))
+}
+
+#[test]
+fn double_builds_from_the_same_source_and_baseline_are_byte_identical() {
+    let Some(_) = clang() else {
+        return;
+    };
+    let first = TestDir::new("determinism-a");
+    let second = TestDir::new("determinism-b");
+    for directory in [&first, &second] {
+        let source = directory.source("app", V1);
+        build_ok(directory, &source, "app", &[]);
+        let baseline = directory.path.join("app.stc-got.bin");
+        let source = directory.source("app_v2", V2_CODE_ONLY);
+        build_ok(
+            directory,
+            &source,
+            "app_v2",
+            &["--got-manifest", baseline.to_str().unwrap()],
+        );
+    }
+
+    for name in ["app", "app_v2"] {
+        let module = module_file(&first, name);
+        assert_eq!(
+            module,
+            module_file(&second, name),
+            "module name for `{name}`"
+        );
+        for file in [
+            module,
+            format!("{name}.stc-got.bin"),
+            format!("{name}.stc-got.json"),
+            format!("{name}.stc-meta.json"),
+            format!("{name}.ll"),
+        ] {
+            assert_eq!(
+                artifact_bytes(&first, &file),
+                artifact_bytes(&second, &file),
+                "artifact `{file}` differs between build directories"
+            );
+        }
+
+        let left = first.manifest(name);
+        let right = second.manifest(name);
+        assert_eq!(left.header.build_id, right.header.build_id);
+        assert_eq!(left.plan, right.plan);
+        assert_eq!(
+            left.digest().expect("digest"),
+            right.digest().expect("digest")
+        );
+        assert_eq!(left, right);
+    }
+    assert_eq!(
+        first.manifest("app_v2").plan.verdict,
+        PlanVerdict::OnlineCandidate
+    );
+}
+
+#[test]
+fn malformed_baselines_and_options_are_rejected_by_the_build() {
+    let Some(_) = clang() else {
+        return;
+    };
+    let directory = TestDir::new("bad-baseline");
+    let source = directory.source("app", V1);
+    build_ok(&directory, &source, "app", &[]);
+
+    let refused = build(
+        &directory,
+        &source,
+        "app_missing",
+        &[
+            "--got-manifest",
+            directory.path.join("missing.stc-got.bin").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(text.contains("STC-E-BUILD-002"), "{text}");
+    assert!(text.contains("cannot read baseline"), "{text}");
+
+    let baseline = std::fs::read(directory.path.join("app.stc-got.bin")).expect("baseline");
+    let truncated = directory.path.join("truncated.stc-got.bin");
+    std::fs::write(&truncated, &baseline[..baseline.len() - 8]).expect("write truncated baseline");
+    let refused = build(
+        &directory,
+        &source,
+        "app_truncated",
+        &["--got-manifest", truncated.to_str().unwrap()],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(text.contains("not a valid GOT manifest"), "{text}");
+
+    let truncated_json = directory.path.join("truncated.stc-got.json");
+    std::fs::write(&truncated_json, "{}").expect("write malformed JSON baseline");
+    let refused = build(
+        &directory,
+        &source,
+        "app_badjson",
+        &["--got-manifest", truncated_json.to_str().unwrap()],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(text.contains("not a valid GOT manifest"), "{text}");
+
+    assert!(!directory.path.join("app_missing.stc-got.bin").exists());
+    for name in ["app_missing", "app_truncated", "app_badjson"] {
+        assert!(
+            !emitted_module(&directory, name),
+            "a refused build emitted a module for `{name}`"
+        );
+    }
+
+    let refused = build(
+        &directory,
+        &source,
+        "app_badrename",
+        &["--rename", "broken"],
+    );
+    assert_eq!(refused.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&refused.stderr);
+    assert!(text.contains("`--rename` expects `old=new`"), "{text}");
+}
+
 #[test]
 fn a_baseline_build_reuses_unchanged_identities() {
     let Some(_) = clang() else {

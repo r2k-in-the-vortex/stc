@@ -24,7 +24,7 @@ retained-state stubs). The driver provides `stc parse`, `stc check`, and the M4
 The online-change architecture is **resolved** (2026-10-24): the v1 runtime is a persistent host
 plus loadable whole-program modules, persistent memory is host-owned and accessed through a
 project-defined GOT, every module is paired with a persistent GOT manifest, and activation is a
-cycle-boundary module swap. M4.5 phases 0–8 are complete for review (2026-10-25): the versioned
+cycle-boundary module swap. M4.5 phases 0–9 are complete for review (2026-10-25): the versioned
 `GotId`,
 catalog, descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md); `stc-got` implements
@@ -47,8 +47,15 @@ cells at activation, preserve values by `GotId`, warn about moved variables and 
 and restore the image with a rollback; cold installs reinitialize roots and the image;
 incompatible type/layout changes remain rejected until an explicit cold rebuild; and
 compiler-produced modules exercise state preservation, new-root initialization, tracked rename,
-untracked-removal policy, reject/cold, and direct remap. The foundation milestone is M4.5 before
-M5; full debug/monitoring is M6.5. Phase 9 (full test/CI coverage) remains.
+untracked-removal policy, reject/cold, and direct remap. Phase 9 completes test and CI coverage:
+`fuzz_got_manifest` and `fuzz_module_descriptor` validate untrusted artifacts without loading
+native code; end-to-end double builds are byte-identical across output directories (including
+deterministic Windows PE timestamps); a combined `exe,lib` build is loaded by both the launcher
+and the embedding C harness; malformed baselines and options are negative-tested; concurrent
+generation pins and metadata parsing have focused tests; and a recorded switch measurement (1 µs
+at 1024 roots versus 86 ms prepare) supports the O(1) activation claim. CI runs an explicit
+online-change job on Windows and Ubuntu. The foundation milestone is M4.5 before M5; full
+debug/monitoring is M6.5. Phase 10 (final documentation and M5 handover) remains.
 
 M4 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
 functions, the standard FB library, the manifest, `stc run`, or `stc test`; those constructs are
@@ -56,7 +63,8 @@ rejected with explicit `STC-E-CODEGEN-001` diagnostics. Retained-state file I/O 
 (returns "disabled"), and task scheduling beyond one task per resource is M5. Parser and
 semantic snapshots, IR snapshots, clang verification, execution and C-harness tests, a committed
 corpus, traceability tables, deterministic property tests, a 20k-term deep-chain test, and
-`fuzz_lexer`, `fuzz_parser`, `fuzz_analyzer`, and `fuzz_codegen` targets are in place. The
+`fuzz_lexer`, `fuzz_parser`, `fuzz_analyzer`, `fuzz_codegen`, `fuzz_got_manifest`, and
+`fuzz_module_descriptor` targets are in place. The
 specification continues to be written before implementation, as required below.
 
 | Document | Purpose |
@@ -321,12 +329,14 @@ on pull requests.
 
 - `docs` runs from M0: required-document checks, relative-link validation, profile consistency,
   reference-PDF exclusion (`tools/ci/check_docs.py`), and Markdown lint.
-- `fmt`, `clippy`, `test`, `ui`, `conformance`, `execution`, `lean`, `fuzz-smoke`, and
-  `cross-target` activate when their inputs exist. `test`, `ui`, `conformance`, and `execution`
-  run on both Windows Server 2025 x64 and Ubuntu 24.04 x64; the host-independent jobs (`fmt`,
-  `clippy`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The `test` job sets
-  `STC_REQUIRE_CLANG=1`, and the execution tests build `stc-runtime` and link C harnesses with
-  the same toolchain discovery as `stc build`.
+- `fmt`, `clippy`, `test`, `online`, `ui`, `conformance`, `execution`, `lean`, `fuzz-smoke`, and
+  `cross-target` activate when their inputs exist. `test`, `online`, `ui`, `conformance`, and
+  `execution` run on both Windows Server 2025 x64 and Ubuntu 24.04 x64; the host-independent
+  jobs (`fmt`, `clippy`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The `test`
+  and `online` jobs set `STC_REQUIRE_CLANG=1`; the execution tests build `stc-runtime` and link
+  C harnesses with the same toolchain discovery as `stc build`. The `online` job runs the GOT
+  identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
+  launcher/embedding artifact suites. `fuzz-smoke` caps each input at one MiB.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`) so `-latest` migrations do not change
   the matrix silently.
 - Suite jobs call `cargo xtask test --suite <name> --locked`; the UI, conformance, and execution
@@ -385,6 +395,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-122–D-123 | M4.5 phases 5–6 implement the host substrate and swap controller: stable root/GOT storage, quarantine and transient lifetimes, descriptor/manifest/plan validation, the platform module loader, the ABI 2.0 host service table, atomic active-manifest storage and download, and load/prepare/activate/commit/rollback/unload with exact-currentness and cold paths. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
 | D-124 | M4.5 phase 7 converts generated execution to the GOT/module model: persistent state, direct variables, retain leaves, and task guards use GOT cells; calls are indirect through function cells; host services use import cells; slot access is the two-load sequence; generated modules export the ABI 2 entry-point set; the host configures the process image and direct bindings from the metadata sidecar; `--emit=module`, the thin launcher, and the embedding host archive are driver artifacts; and a non-local trap boundary enables rollback-window recovery. Existing execution tests run through compiler-produced module pairs, completing the execution conversion before M5 and giving phase 8 a working preservation/rollback substrate. |
 | D-125 | M4.5 phase 8 completes the scalar compatibility/preservation policy: online activation reconfigures the process image or remaps direct cells in place, preserves values by `GotId`, and snapshots the image for rollback; moved variables and quarantined roots are exposed as runtime warnings; `reset_quarantine` is the explicit reset primitive while `Reset`/`Migrate` plans remain rejected; cold installs reinitialize roots and the image, and online prepare initializes only fresh roots; and compiler-produced modules cover initializer/state preservation, tracked rename, untracked-removal policy, type-change rejection with a cold reset, and direct-variable remap. |
+| D-126 | M4.5 phase 9 completes test and CI coverage: `fuzz_got_manifest` and `fuzz_module_descriptor` decode untrusted artifacts without loading native code; end-to-end double builds are byte-identical after adding content-derived Windows PE timestamps (`/Brepro`); combined `exe,lib` output is loaded by both the launcher and an embedding C harness; malformed baselines, invalid options, metadata sidecars, and concurrent generation pins are covered; an ignored measurement records 500 ns/1 µs activation at 16/1024 roots against 1.7 ms/86 ms prepare; and CI adds an explicit Windows/Linux online-change job plus one-MiB fuzz input caps; this closes the M4.5 verification gap on both hosts and records the O(1) switch evidence. |
 
 ## Question log
 

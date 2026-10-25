@@ -4,7 +4,6 @@
 //! descriptor/manifest pairs. Explicit metadata supplies the process-image
 //! bindings so each test can vary addresses without rebuilding generated code.
 
-#[allow(dead_code)]
 mod common;
 
 use stc_got::{GotId, PlanVerdict, RootKind};

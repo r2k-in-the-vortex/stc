@@ -276,3 +276,104 @@ fn strip_build_id(stem: &str) -> String {
     }
     stem.to_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID: &str = r#"{
+        "io": {
+            "image": {
+                "inputs_bytes": 4,
+                "outputs_bytes": 8,
+                "markers_bytes": 2
+            },
+            "bindings": [
+                {
+                    "got_id": "0x82daffe66a71a484b7cc7e234bed4347",
+                    "area": "I",
+                    "offset_bits": 3,
+                    "width_bits": 8
+                },
+                {
+                    "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+                    "area": "M",
+                    "offset_bits": 0
+                }
+            ]
+        }
+    }"#;
+
+    #[test]
+    fn parses_the_image_layout_and_direct_bindings() {
+        let info = ModuleInfo::parse(VALID).expect("valid metadata");
+        assert_eq!(info.inputs_bytes, 4);
+        assert_eq!(info.outputs_bytes, 8);
+        assert_eq!(info.markers_bytes, 2);
+        assert_eq!(info.image_layout().total_bytes(), Some(14));
+        assert_eq!(info.bindings.len(), 2);
+
+        let first = GotId::parse("0x82daffe66a71a484b7cc7e234bed4347").expect("identity");
+        let binding = info.binding(first).expect("binding");
+        assert_eq!(binding.area, 1);
+        assert_eq!(binding.offset_bits, 3);
+        assert_eq!(binding.width_bits, 8);
+
+        let marker = GotId::parse("0x987a8ef0813b2598ec043ebdd6744b08").expect("identity");
+        let binding = info.binding(marker).expect("binding");
+        assert_eq!(binding.area, 3);
+        assert_eq!(binding.offset_bits, 0);
+        assert_eq!(
+            binding.width_bits, 8,
+            "a missing width defaults to one byte"
+        );
+    }
+
+    #[test]
+    fn ignores_ad_hoc_direct_expressions_without_an_identity() {
+        let info = ModuleInfo::parse(
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "bindings":[{"area":"Q","offset_bits":0,"width_bits":1}]}}"#,
+        )
+        .expect("metadata without a persistent binding");
+        assert!(info.bindings.is_empty());
+    }
+
+    #[test]
+    fn rejects_malformed_metadata() {
+        let cases = [
+            "not json",
+            "{}",
+            r#"{"io":{}}"#,
+            r#"{"io":{"image":{}}}"#,
+            r#"{"io":{"image":{"inputs_bytes":"four","outputs_bytes":0,"markers_bytes":0}}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "bindings":[{"got_id":"0x82daffe66a71a484b7cc7e234bed4347","area":"X"}]}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "bindings":[{"got_id":"not-an-identity","area":"I"}]}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "bindings":[42]}}"#,
+        ];
+        for text in cases {
+            assert!(
+                ModuleInfo::parse(text).is_err(),
+                "accepted malformed metadata: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn layout_equality_covers_sizes_and_bindings() {
+        let info = ModuleInfo::parse(VALID).expect("valid metadata");
+        assert!(info.layout_eq(&info.clone()));
+
+        let mut resized = info.clone();
+        resized.outputs_bytes += 1;
+        assert!(!info.layout_eq(&resized));
+
+        let mut rebound = info;
+        let before = rebound.clone();
+        rebound.bindings[0].offset_bits += 8;
+        assert!(!before.layout_eq(&rebound));
+    }
+}

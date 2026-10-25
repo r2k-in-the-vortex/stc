@@ -138,6 +138,42 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace --locked
 
+  # The online-change suite gets an explicit job so a hot-swap or manifest
+  # regression is visible even when the workspace job reports an unrelated
+  # failure. It runs the GOT, descriptor/manifest projection, host lifecycle,
+  # online-change CLI, and launcher/embedding suites on both hosts.
+  online:
+    name: Online change (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run GOT identity and manifest tests
+        run: cargo test -p stc-got --tests --locked
+      - name: Run descriptor/manifest projection tests
+        run: cargo test -p stc-codegen --test module_artifacts --locked
+      - name: Run host lifecycle and image remap tests
+        run: cargo test -p stc-runtime --tests --locked
+      - name: Run online-change CLI tests
+        run: cargo test -p stc-driver --test module_cli --locked
+      - name: Run launcher and embedding-host artifact tests
+        run: cargo test -p stc-driver --test execution --locked
+
   # Suite jobs use the planned automation entry point:
   #   cargo xtask test --suite <name> --locked
   # xtask forwards --locked to the cargo commands it runs. The jobs stay
@@ -272,6 +308,29 @@ jobs:
         run: |
           rustup toolchain install nightly --profile minimal
           cargo install cargo-fuzz --locked
+      # The checked-in corpus is gitignored. Seed the artifact targets from the
+      # committed codec snapshots so the binary and JSON paths are exercised.
+      - name: Seed artifact corpora
+        working-directory: fuzz
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p corpus/fuzz_got_manifest corpus/fuzz_module_descriptor
+          cp ../crates/stc-got/tests/snapshots/cold.stc-got.json \
+            corpus/fuzz_got_manifest/
+          python3 - <<'PY'
+          from pathlib import Path
+          for source, target in [
+              ("../crates/stc-codegen/tests/snapshots/module.stc-got.hex",
+               "corpus/fuzz_got_manifest/module-binary"),
+              ("../crates/stc-codegen/tests/snapshots/module.stc-desc.hex",
+               "corpus/fuzz_module_descriptor/module-descriptor"),
+          ]:
+              Path(target).write_bytes(bytes.fromhex(Path(source).read_text()))
+          PY
+          printf '%s\n' \
+            '{"io":{"image":{"inputs_bytes":4,"outputs_bytes":4,"markers_bytes":2},"bindings":[]}}' \
+            > corpus/fuzz_module_descriptor/metadata
       - name: Smoke each target for 60 seconds
         working-directory: fuzz
         shell: bash
@@ -280,7 +339,7 @@ jobs:
           for target in fuzz_targets/*.rs; do
             name="$(basename "$target" .rs)"
             echo "::group::fuzz $name"
-            cargo +nightly fuzz run "$name" -- -max_total_time=60 -rss_limit_mb=2048 -timeout=25
+            cargo +nightly fuzz run "$name" -- -max_total_time=60 -rss_limit_mb=2048 -timeout=25 -max_len=1048576
             echo "::endgroup::"
           done
 

@@ -30,3 +30,23 @@ span IDs, and a bounded error count. It never invokes clang.
 ```sh
 cargo +nightly fuzz run fuzz_codegen -- -max_total_time=60 -timeout=25 -rss_limit_mb=2048
 ```
+
+`fuzz_got_manifest` decodes arbitrary binary or canonical JSON GOT manifests, validates them, and
+checks that the digest chain and both projections round-trip. Non-binary inputs are also wrapped
+in a valid binary header with a recomputed length and digest so arbitrary bytes reach the section
+and record decoders. Binary inputs that decode must re-encode byte-for-byte. The target never
+loads a module or executes generated code.
+
+`fuzz_module_descriptor` decodes arbitrary descriptor blobs and parses arbitrary UTF-8 module
+metadata sidecars. Other inputs are wrapped in a valid descriptor header with a recomputed
+declared size so arbitrary bytes reach the record decoders. Accepted descriptors must re-encode
+and round-trip with a stable digest. The target never maps, loads, or executes native module code.
+
+```sh
+cargo +nightly fuzz run fuzz_got_manifest -- -max_total_time=60 -timeout=25 -rss_limit_mb=2048
+cargo +nightly fuzz run fuzz_module_descriptor -- -max_total_time=60 -timeout=25 -rss_limit_mb=2048
+```
+
+The seed corpus under `corpus/` is ignored by git, like the other targets. CI rebuilds seeds for
+both artifact targets from the committed codec snapshots and adds `-max_len=1048576` so an input
+cannot exceed one MiB.

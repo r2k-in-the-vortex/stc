@@ -522,6 +522,49 @@ fn library_mode_exports_run_under_a_c_harness() {
 }
 
 #[test]
+fn launcher_and_embedding_host_load_the_same_module() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("both-hosts");
+    let source = directory.write_source("library", LIBRARY);
+    let runtime = runtime_artifact();
+    let output = run_stc(&[
+        "build",
+        source.to_str().unwrap(),
+        "--emit=exe,lib",
+        "--name",
+        "both",
+        "--out-dir",
+        directory.path.to_str().unwrap(),
+        "--runtime",
+        runtime.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "combined build failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let module = built_module(&directory, "both");
+
+    let launcher = Command::new(exe_path(&directory.path, "both"))
+        .args(["--cycles", "2"])
+        .output()
+        .expect("run the launcher");
+    assert_eq!(
+        launcher.status.code(),
+        Some(0),
+        "launcher failed: {}",
+        String::from_utf8_lossy(&launcher.stderr)
+    );
+
+    let library = lib_path(&directory.path, "both");
+    assert!(library.is_file(), "{}", library.display());
+    compile_harness(&directory, "library.c", &library, &module, "both_harness");
+}
+
+#[test]
 fn process_image_is_observable_through_a_c_harness() {
     if clang().is_none() {
         return;

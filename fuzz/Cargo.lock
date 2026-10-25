@@ -176,8 +176,10 @@ dependencies = [
  "libfuzzer-sys",
  "stc-codegen",
  "stc-diag",
+ "stc-got",
  "stc-lexer",
  "stc-parser",
+ "stc-runtime",
  "stc-sema",
  "stc-span",
 ]
@@ -209,6 +211,13 @@ dependencies = [
  "stc-lexer",
  "stc-span",
  "stc-syntax",
+]
+
+[[package]]
+name = "stc-runtime"
+version = "0.1.0"
+dependencies = [
+ "stc-got",
 ]
 
 [[package]]

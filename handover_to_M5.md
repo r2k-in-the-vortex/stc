@@ -40,7 +40,7 @@ resolved online-change architecture supersedes several M4-era recommendations in
 - M5 exit criteria include hot-swap coverage for FB/class state, aggregates/strings, interfaces,
   descriptors, and `POINTER TO`; see §2 and the project plan M5.
 
-M4.5 phases 0–8 are complete: the compiler already projects the M4 scalar surface to the catalog,
+M4.5 phases 0–9 are complete: the compiler already projects the M4 scalar surface to the catalog,
 canonical slot bindings, descriptor, manifest, and online-change plan through
 `stc_codegen::module::project` and validates descriptor/manifest pairs in `stc-got`. M5 code must
 extend that catalog (types, descriptors, FB bodies, methods, aggregates) rather than derive
@@ -51,8 +51,10 @@ variables and dropped roots through `Host::warnings`, and restores the image wit
 cold installs reinitialize roots and the image; tracked rename executes; untracked removal needs
 an explicit policy; and incompatible layout/type changes are rejected until a cold rebuild. M5
 must extend the same catalog and plan for aggregate/FB roots, use the `image` remap snapshot for
-any additional host-owned state, and keep `Reset`/`Migrate` reserved. Phases 9–10 add full
-test/CI coverage and the final M5 handover documentation.
+any additional host-owned state, and keep `Reset`/`Migrate` reserved. Phase 9 adds full test/CI
+coverage (artifact/metadata fuzzers, double-build determinism, launcher/embedding artifact
+loading, concurrent pins, and the explicit online-change CI job); phase 10 completes the final M5
+handover documentation.
 
 Read [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md),
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md), and `M4.5-Plan.md`

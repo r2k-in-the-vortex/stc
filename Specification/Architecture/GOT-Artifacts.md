@@ -1366,6 +1366,17 @@ cold reset, and direct-variable remap through generated code; runtime tests cove
 reconfiguration, same-layout remap, rollback, cold image reset, quarantine reset, and the warning
 surface. D-125 records the phase choices.
 
+Phase 9 is implemented (2026-10-25) in `fuzz/`, `.github/workflows/ci.yml`, and the driver and
+runtime test suites. `fuzz_got_manifest` decodes binary and canonical-JSON manifests and checks
+the §9 digest chain and projections; `fuzz_module_descriptor` decodes §7 descriptors and parses
+the §12.1 metadata sidecar. Neither target loads native code, and CI caps inputs at one MiB.
+End-to-end double builds are byte-identical for the module, IR, metadata, manifest, plan, and
+build ID; Windows module and launcher links use `/Brepro` so PE timestamps are content-derived.
+The build rejects missing, truncated, and malformed baselines with `STC-E-BUILD-002`, the combined
+`exe,lib` artifacts are exercised against one adjacent module, and runtime tests cover concurrent
+generation pinning and malformed metadata. The recorded switch measurement supports the O(1)
+activation contract in §8. D-126 records the phase choices.
+
 ## 13. Related documents
 
 - [Online Change and GOT](Online-Change-and-GOT.md) — host/module model, lifecycle, policy.

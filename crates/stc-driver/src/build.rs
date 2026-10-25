@@ -547,6 +547,9 @@ fn link_module(
     }
     if target_triple.contains("windows") {
         command.args(["-Xlinker", "/NOIMPLIB"]);
+        // A PE timestamp would make two builds of the same module differ by
+        // wall-clock time. /Brepro turns it into a content-derived value.
+        command.args(["-Xlinker", "/Brepro"]);
     }
     run_tool(&mut command, verbose)
 }
@@ -566,6 +569,10 @@ fn link_exe(
     command.arg(object).arg(runtime);
     for argument in system_link_args() {
         command.arg(argument);
+    }
+    let target_triple = target.map_or_else(stc_codegen::host_triple, str::to_owned);
+    if target_triple.contains("windows") {
+        command.args(["-Xlinker", "/Brepro"]);
     }
     command.args(["-o"]).arg(output);
     run_tool(&mut command, verbose)

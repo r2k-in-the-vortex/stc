@@ -337,7 +337,7 @@ Exit criteria:
   and measured.
 - M4 scalar semantics are unchanged; M4 code-linked artifacts are explicitly non-loadable.
 
-> **M4.5 status (2026-10-25):** phases 0–8 are complete for review; phase 9 is next. Phase 1
+> **M4.5 status (2026-10-25):** phases 0–9 are complete for review; phase 10 is next. Phase 1
 > fixes the versioned artifact contracts in [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md):
 > stable keys, `GotId`, catalog, module descriptor, host ABI 2.0, manifest/plan formats, build IDs,
 > and pairing. Phase 2 implements the identity/manifest layer in `stc-got`; decisions
@@ -356,7 +356,10 @@ Exit criteria:
 > reported as runtime warnings, rollback restores the image with the generation, cold installs
 > reinitialize roots and the image, incompatible layout/type changes require a cold rebuild, and
 > real compiler-produced modules cover hot-swap, rename, reject/cold, and direct-remap paths
-> (D-125).
+> (D-125). Phase 9 adds artifact/metadata fuzz targets, end-to-end byte-identical double builds
+> with deterministic Windows PE timestamps, a combined launcher/embedding artifact test,
+> malformed-baseline and metadata negatives, concurrent generation-pin coverage, a recorded
+> O(1) switch measurement, and an explicit Windows/Linux `online` CI job (D-126).
 
 ### M5 — FBs, OOP, aggregates, and UTF-8 strings
 

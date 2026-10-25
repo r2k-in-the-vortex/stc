@@ -615,6 +615,54 @@ fn generation_pins_delay_retired_module_unload() {
 }
 
 #[test]
+fn generation_pins_protect_a_concurrent_reader() {
+    let v1 = common::artifacts(common::SIMPLE, "pins");
+    let Some(v1_fixture) = fixture("pins-v1", v1.clone()) else {
+        return;
+    };
+    let mut host = in_memory_host();
+    let v1_generation = cold_install(&mut host, &v1_fixture);
+
+    let v2 = common::artifacts_with(common::SIMPLE_ALTERNATE, "pins", v1.manifest.clone(), false);
+    let Some(v2_fixture) = fixture("pins-v2", v2) else {
+        return;
+    };
+    host.load(open(&v2_fixture), LoadMode::Auto)
+        .expect("prepare");
+    host.activate().expect("activate");
+
+    // Pin the previous generation while it is in the rollback window; commit
+    // retires it but must not unload it while the reader still holds the pin.
+    let pin = host.pin(v1_generation).expect("previous generation pin");
+    assert_eq!(pin.generation(), v1_generation);
+    host.cycle().expect("commit");
+    assert_eq!(host.retired_generations(), 1);
+
+    let (pinned_tx, pinned_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        pinned_tx.send(()).expect("announce the pin");
+        release_rx.recv().expect("wait for release");
+        // A service reader observes its pinned generation through the pin.
+        assert_eq!(pin.generation(), v1_generation);
+        drop(pin);
+    });
+    pinned_rx.recv().expect("reader pin");
+
+    assert_eq!(host.retired_generations(), 1);
+    assert_eq!(
+        host.unload_retired(),
+        0,
+        "a pinned generation must stay loaded"
+    );
+    release_tx.send(()).expect("release the reader");
+    reader.join().expect("reader thread");
+
+    assert_eq!(host.unload_retired(), 1);
+    assert_eq!(host.retired_generations(), 0);
+}
+
+#[test]
 fn direct_cells_require_process_image_bindings() {
     let artifacts = common::artifacts(common::DIRECT, "direct");
     let Some(fixture) = fixture("direct", artifacts.clone()) else {
