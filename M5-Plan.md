@@ -3,7 +3,8 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-25  
 Status: Phase 0 written. Phases 1–7 and the `STC-POINTER` surface are implemented; phase 4b
-(interfaces, runtime descriptors, `?=`) is planned in D-147–D-152 and §4b.
+(interfaces, runtime descriptors, `?=`) is planned in D-147–D-152 and §4b. Step 4b.0 (contracts
+and documentation) is complete.
 
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8, [Architecture](Specification/Architecture/Architecture.md)
 §4, [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §1–§4,
@@ -163,7 +164,7 @@ materialized into a transient alloca on read and split back into roots on write.
 | 1 | Type/layout substrate, aggregate IR builder, type/descriptor catalog records | Complete |
 | 2 | Structs, enums, subranges, arrays, strings: values, roots, initializers, traps | Complete for values, roots, initializers, and traps; string search functions are phase 5 |
 | 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, conformant `ARRAY[*]`, and `STC-POINTER` complete; `?=` needs phase 4 |
-| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; phase 4b (interfaces, descriptors, `?=`) is planned in D-147–D-152 and §4b |
+| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; phase 4b (interfaces, descriptors, `?=`) is planned in D-147–D-152 and §4b, with step 4b.0 complete |
 | 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Complete: per-leaf flattening, packed offsets, GOT-root save/load, and metadata paths |
 | 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state/pointer harnesses, M5 hot-swap coverage, M5 fuzz seeds, and status documentation are in place; interfaces/descriptors remain (phase 4b) |
@@ -216,10 +217,17 @@ materialized into a transient alloca on read and split back into roots on write.
 
 ### Phase 4b — interfaces, descriptors, and `?=`
 
-Status: planned (2026-10-25); decisions D-147–D-152. Land the steps in order; each step keeps the
-manifest and descriptor formats at version 1 and adds its tests with the code.
+Status: step 4b.0 complete (2026-10-25); steps 4b.1–4b.6 planned. Decisions D-147–D-152. Land the
+steps in order; each step keeps the manifest and descriptor formats at version 1 and adds its
+tests with the code.
 
 #### 4b.0 — Contracts and documentation
+
+Complete (2026-10-25). Host ABI 2.1 is recorded in the constants and in GOT Artifacts §1/§7/§8,
+Runtime and Execution §2, Architecture §4.6/§7, and Online Change and GOT §4.2/§8.3/§9; D-133
+and D-131 are amended. The layouts, key convention, prototype/stub rules, and inline access
+rules are fixed in GOT Artifacts §8.5 and Runtime and Execution §2.6. The conformance-profile
+status for interfaces and `?=` stays deferred to 4b.6, when the code lands.
 
 - Document the TYPEINFO, VTABLE, and object-record byte layouts, the hidden record-root key
   convention, interface-prototype function records, trap-stub cells, and inline access rules in
@@ -398,11 +406,12 @@ no heap allocation or raw persistent object pointer.
 
 ### Remaining M5 work
 
-- **Phase 4b — interfaces, descriptors, `?=`.** No descriptor or vtable records are projected
-  yet, `Descriptor` GOT cells are still rejected by the runtime, and object values are root-table
-  pointers rather than D-133 host object records. Interface assignment and method dispatch are
-  rejected explicitly at their call sites. The implementation sequence is in §4, Phase 4b; the
-  resolved decisions are D-147–D-152.
+- **Phase 4b — interfaces, descriptors, `?=`.** Step 4b.0 records host ABI 2.1 and the inline
+  record contracts (GOT Artifacts §8.5, Runtime and Execution §2.6). No descriptor or vtable
+  records are projected yet, `Descriptor` GOT cells are still rejected by the runtime, and object
+  values are root-table pointers rather than D-133 host object records. Interface assignment and
+  method dispatch are rejected explicitly at their call sites. The implementation sequence is in
+  §4, Phase 4b; the resolved decisions are D-147–D-152.
 - **References to split persistent aggregates** remain rejected because they have no single
   stable storage location; contiguous transient aggregates and single-root persistent values are
   supported (D-144). A multi-root descriptor with host-side resolution is recorded as a possible

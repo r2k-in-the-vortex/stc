@@ -1,6 +1,6 @@
 //! Runtime ABI names and trap codes (Runtime-and-Execution §2.3).
 
-/// Runtime ABI version embedded in metadata.
+/// Runtime ABI major version embedded in metadata.
 pub const ABI_VERSION: i32 = 2;
 
 /// Trap codes passed to `stc_rt_trap`.
@@ -55,9 +55,14 @@ pub mod module {
 }
 
 /// ABI 2 host API table layout constants used by generated entry points.
+///
+/// Minor 1 (host ABI 2.1) adds no service: it records the inline TYPEINFO,
+/// VTABLE, and object-record layout that generated code reads directly
+/// (GOT Artifacts §8.5, Runtime and Execution §2.6). The table shape,
+/// `REQUIRED_SIZE`, and service IDs are unchanged from 2.0.
 pub mod host_api {
-    /// `(major << 16) | minor` for ABI 2.0.
-    pub const ABI_VERSION: u32 = 2 << 16;
+    /// `(major << 16) | minor` for ABI 2.1.
+    pub const ABI_VERSION: u32 = (2 << 16) | 1;
     /// Offset of `abi_version` in `stc_host_api`.
     pub const ABI_VERSION_OFFSET: u64 = 0;
     /// Offset of `struct_size` in `stc_host_api`.
@@ -110,4 +115,26 @@ pub mod symbols {
     pub const RETAIN_BUFFER: &str = "stc_retain_buffer";
     /// Embedded metadata JSON global.
     pub const METADATA_DATA: &str = "stc_metadata_json_data";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_abi_is_2_1_with_an_unchanged_service_table() {
+        assert_eq!(host_api::ABI_VERSION, 0x0002_0001);
+        assert_eq!(
+            host_api::ABI_VERSION >> 16,
+            u32::from(stc_got::HOST_ABI_MAJOR)
+        );
+        assert_eq!(
+            host_api::ABI_VERSION & 0xFFFF,
+            u32::from(stc_got::HOST_ABI_MINOR)
+        );
+        // 2.1 appends no service: version word plus eleven pointers.
+        assert_eq!(host_api::REQUIRED_SIZE, 8 + 11 * 8);
+        // Metadata records the ABI major version.
+        assert_eq!(ABI_VERSION, i32::from(stc_got::HOST_ABI_MAJOR));
+    }
 }

@@ -2,7 +2,7 @@
 //!
 //! The fixture assembles the IR shape a generated M4.5 module will have:
 //! a private descriptor blob, a function-address table, cached slot-table and
-//! host-API pointers, the ABI 2.0 entry points, a data-root cell, a function
+//! host-API pointers, the ABI 2 entry points, a data-root cell, a function
 //! cell, and an import cell. Generated code never names the root or the user
 //! callable; both are reached through cell values.
 

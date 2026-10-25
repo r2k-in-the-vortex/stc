@@ -27,7 +27,7 @@ pub const CATALOG_DOMAIN: &str = "stc:catalog:v1";
 /// The plan digest domain.
 pub const PLAN_DOMAIN: &str = "stc:plan:v1";
 
-/// Feature bit: host ABI 2.0 base services.
+/// Feature bit: host ABI 2 base services.
 pub const FEATURE_HOST_ABI: u64 = 1 << 0;
 /// Feature bit: an online-change plan is present.
 pub const FEATURE_ONLINE_PLAN: u64 = 1 << 1;
@@ -910,7 +910,7 @@ impl Manifest {
                 SlotKind::Import => {
                     if slot.service == 0 || slot.service > 11 {
                         return Err(Error::manifest(format!(
-                            "import slot service ID {} is outside ABI 2.0",
+                            "import slot service ID {} is outside the ABI 2 service table",
                             slot.service
                         )));
                     }

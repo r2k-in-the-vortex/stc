@@ -36,7 +36,7 @@ descriptor/function-table globals) plus a structural verifier checked by clang-a
 `stc-codegen::module` projects the M4 scalar surface to the root catalog, canonical slot
 bindings, descriptor bytes, manifest pair, and online-change plan with golden snapshots and
 second-build baseline tests; and `stc-runtime` provides the host GOT, root registry, quarantine,
-transient allocator, artifact validation, platform module loader, ABI 2.0 host services,
+transient allocator, artifact validation, platform module loader, ABI 2.1 host services,
 active-manifest store/download, the load/prepare/activate/commit/rollback/unload state machine,
 and a non-local trap boundary. Phase 7 converts generated execution to that model: globals,
 program fields, direct variables, retain leaves, and task guards use GOT cells; user calls are
@@ -69,7 +69,10 @@ covered by clang acceptance, C-harness execution, and an online change that pres
 aggregate roots across a code-only swap. The transient `STC-POINTER` extension (`POINTER TO`,
 `ADR`, `SIZEOF`, pointer arithmetic/indexing, and `REF_TO`↔pointer conversions) is implemented.
 Interfaces, runtime-owned descriptors/vtables, assignment attempts (`?=`), and references to
-split aggregate values remain explicit diagnostics. The project
+split aggregate values remain explicit diagnostics; phase 4b implements them, and its first step
+records host ABI 2.1 with the inline TYPEINFO, VTABLE, and object-record layout in
+[GOT Artifacts](Specification/Architecture/GOT-Artifacts.md) §8.5 and
+[Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §2.6. The project
 manifest, `stc run`, `stc test`, and file-backed retained state are M6, and full task scheduling
 is M6 (M5 keeps one task per resource). The persistent host, loadable modules, GOT roots,
 manifests, swap protocol, and process-image remap are implemented and shared by the M5 lowering.

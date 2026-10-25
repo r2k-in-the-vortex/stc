@@ -23,8 +23,13 @@ pub const DESCRIPTOR_FORMAT: u16 = 1;
 pub const MODULE_FORMAT: u16 = 1;
 /// Descriptor format 1 is defined for host ABI major version 2.
 pub const HOST_ABI_MAJOR: u16 = 2;
-/// Host ABI minor version emitted by the M4.5 compiler.
-pub const HOST_ABI_MINOR: u16 = 0;
+/// Host ABI minor version emitted by the compiler.
+///
+/// Minor 1 (host ABI 2.1) records the inline TYPEINFO, VTABLE, and
+/// object-record layout generated code reads directly. No host service is
+/// appended; the module's required minor rises so a 2.0-only host rejects a
+/// generation that depends on the layout.
+pub const HOST_ABI_MINOR: u16 = 1;
 /// Descriptor digest domain string.
 pub const DESCRIPTOR_DOMAIN: &str = "stc:descriptor:v1";
 /// Byte offset of `descriptor_size` in the encoded header.
@@ -52,7 +57,7 @@ pub mod entry_flag {
 
 /// `required_features` bits (GOT Artifacts §7.1).
 pub mod feature {
-    /// Host ABI 2.0 base services.
+    /// Host ABI 2 base services.
     pub const HOST_ABI: u64 = 1 << 0;
     /// The paired manifest carries an online-change plan.
     pub const ONLINE_PLAN: u64 = 1 << 1;
@@ -510,7 +515,7 @@ impl Descriptor {
                         return Err(Error::new(
                             codes::MODULE_INVALID,
                             format!(
-                                "import slot {} service ID {} is outside ABI 2.0",
+                                "import slot {} service ID {} is outside the ABI 2 service table",
                                 slot.slot, slot.service
                             ),
                         ));
@@ -706,5 +711,19 @@ impl Descriptor {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_abi_minor_records_the_inline_oop_layout() {
+        assert_eq!(HOST_ABI_MAJOR, 2);
+        assert_eq!(HOST_ABI_MINOR, 1);
+        let descriptor = Descriptor::new(GotId::from_bytes([0x11; 16]));
+        assert_eq!(descriptor.host_abi_major, 2);
+        assert_eq!(descriptor.host_abi_minor, 1);
     }
 }

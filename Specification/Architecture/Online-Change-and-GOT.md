@@ -144,19 +144,31 @@ any preserved value may refer to it.
 ### 4.2 Per-field roots and objects
 
 Persistent aggregates are rooted recursively per field. Every persistent field has its own
-`GotId`, cell, storage, type identity, and manifest record. A persistent object (program, FB, or
-class instance) is represented by a stable opaque handle plus a runtime object record and
-descriptor. `THIS`, `SUPER`, interfaces, and object references carry the handle, not a contiguous
-struct pointer.
+`GotId`, cell, storage, type identity, and manifest record. A persistent object is a host-owned
+record `{ptr typeinfo, [N x ptr] leaf storage addresses}` whose layout is fixed in
+[GOT Artifacts](GOT-Artifacts.md) §8.5; its leaf entries are resolved root addresses, never GOT
+cell addresses, so a preserved record needs no rebinding. `THIS`, `SUPER`, interfaces, and object
+references carry the record handle, not a contiguous struct pointer.
 
-- **Arrays:** arrays of scalars/strings are one root with GEP indexing; arrays of aggregates use
-  per-element handles whose fields are rooted recursively.
+- **Objects:** every persistent object — a global object, a program-instance object field, a
+  nested FB/class instance, or an array element object — gets one hidden non-retained `OBJREC`
+  root carrying its record. Each class-typed declaration also gets a non-retained `HANDLE` root
+  holding the pointer-sized class value; fresh prepare points it at the declaration's owned
+  instance record. FB-typed declarations get no handle root and keep their instance state
+  inline. The owned instance's field roots keep their declared retention even when the handle is
+  later reassigned, so a cold start restores them while prepare re-points the fresh handle.
+- **Arrays:** arrays of scalars, strings, or class handles are one root with GEP indexing; arrays
+  of aggregates recurse per element. An array of classes is an array of handles with one owned
+  instance, one record, and one set of field roots per element.
 - **Strings:** one root per string value, with length and data internal to the root; no
   per-character roots.
 - **`OVERLAP`:** one atomic root with aliasing typed views; per-field online change of overlap
   internals requires reset or cold.
-- **Value assignment:** per-field recursive copy into destination roots, preserving destination
-  object identity; handles are never copied as storage pointers.
+- **Value assignment:** FB values copy per field into destination roots and preserve destination
+  object identity. Class `:=` copies the handle (sema's reference assignment) and can orphan the
+  destination's owned instance, which static memory keeps rooted. Assignment through a
+  dereferenced `Object` reference copies state into the referenced object. A record leaf is a
+  resolved storage address and is never copied as a storage pointer into another root.
 
 ### 4.3 Identity and keys
 
@@ -298,10 +310,24 @@ on preserved roots are ignored.
 
 ### 8.3 OOP and interfaces
 
-Type descriptors and vtables are runtime-owned. Vtable cells contain cell pointers, not raw code.
-Preserved interfaces survive a compatible swap because the descriptor is stable. A vtable shape
-change is rejected while any live instance or interface depends on it. `REF_TO` values use place
-descriptors and are remapped by identity/offset; `Stack` descriptors never outlive the call.
+Class/FB TYPEINFO and class VTABLE records are runtime-owned and keep stable addresses across
+compatible swaps. VTABLE entries are host function cells, not raw code, so activation rebinds a
+new generation's cells without rewriting a table. A class/FB TYPEINFO's interface map holds the
+per-(object type, interface) vtables; inherited interface-map indices stay fixed, so a preserved
+interface value or class handle remains valid and an upcast index computed from a static type
+still resolves on a derived runtime object. Prepare builds shadow descriptor contents, and
+activation patches method cells and interface maps under the cycle boundary (D-151).
+
+Preserved interfaces and class handles survive a compatible swap because the records they refer
+to are stable. A descriptor shape change (kind, owner, type key, layout hash, size, align,
+vtable shape) rejects while any live instance or interface depends on it, and removing a target
+type while a live handle or interface depends on it also rejects, so dispatch can never reach
+retired code. A live handle to a removed instance is quarantined rather than freed; rollback
+releases fresh records and handles. Hidden `HANDLE`/`OBJREC` roots and descriptor records are
+non-retained, so the retained-state payload never contains a record or handle pointer; the owned
+instance's field roots are ordinary retained leaves. `REF_TO` values use place descriptors and
+are remapped by identity/offset; an `Object` descriptor carries the record handle and TYPEINFO
+pointer, and `Stack` descriptors never outlive the call.
 
 ### 8.4 State and cold download
 
@@ -323,10 +349,12 @@ Stack  { frame_id, offset, type_key }
 Object { handle, descriptor }
 ```
 
-`REF(place)` produces the same descriptor directly. Pointer→`REF_TO` conversion is validated by
-the host resolver against active roots/process-image ranges and manifest layout descriptors; an
-invalid conversion yields `NULL`, and dereferencing `NULL` traps. `REF_TO`→interface is allowed
-only for class/FB object references with a descriptor check. Interfaces are nullable.
+`REF(place)` produces the same descriptor directly. An `Object` descriptor's `descriptor` field
+is the object's TYPEINFO pointer, so dereference, assignment, and attempts use object semantics
+rather than the variable's handle storage. Pointer→`REF_TO` conversion is validated by the host
+resolver against active roots/process-image ranges and manifest layout descriptors; an invalid
+conversion yields `NULL`, and dereferencing `NULL` traps. `REF_TO`→interface is allowed only for
+class/FB object references with a descriptor check. Interfaces are nullable.
 
 `POINTER TO` is a distinct transient-only `STC-POINTER` extension: full typed arithmetic,
 indexing, `SIZEOF` for contiguous values, pointer parameters/results, null-dereference traps, and
@@ -352,7 +380,7 @@ with no safe runtime rule.
 Host ABI 2 is a versioned struct (`abi_version` plus `struct_size`, additive within a major).
 M4 code-linked artifacts and ABI 1 are not loadable. The module descriptor, manifest format, and
 runtime state layout are versioned together. A failed compatibility check rejects the candidate
-before activation. The exact ABI 2.0 table, service IDs, entry-point signatures, trap boundary,
+before activation. The exact ABI 2.1 table, service IDs, entry-point signatures, trap boundary,
 and module descriptor layout are fixed in [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8.
 
 ## 12. Definition of done

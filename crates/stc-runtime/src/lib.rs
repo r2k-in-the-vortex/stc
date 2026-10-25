@@ -15,7 +15,7 @@
 //! - [`migration`] validates an online-change plan against the active baseline;
 //! - [`loader`] maps a native module and copies its descriptor and function
 //!   table;
-//! - [`host_api`] provides the ABI 2.0 service table;
+//! - [`host_api`] provides the ABI 2.1 service table;
 //! - [`store`] persists the committed manifest baseline and builds downloads;
 //! - [`host`] owns the load/prepare/activate/commit/rollback/unload state
 //!   machine and the generation-bound root and GOT state;

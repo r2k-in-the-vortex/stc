@@ -3,7 +3,7 @@
 Status: Format 1 implemented for the M4 scalar surface (2026-10-25); M5 extends record contents  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: Normative formats for stable keys, `GotId`, the compiler catalog, the module descriptor,
-the persistent GOT manifest, the online-change plan, host ABI 2.0, and build IDs.
+the persistent GOT manifest, the online-change plan, host ABI 2.1, and build IDs.
 
 This document is the machine-readable companion to
 [Online Change and GOT](Online-Change-and-GOT.md). It fixes the bytes and identifiers that the
@@ -27,7 +27,7 @@ v1 layouts, and M4.5 simply leaves later record kinds empty.
 | Type-key/layout derivation | 1 | `STC_LAYOUT_V1` |
 | Module descriptor | 1 | `STC_DESCRIPTOR_V1` |
 | Loadable module (container contract) | 1 | `STC_MODULE_V1` |
-| Host API | 2.0 | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=0` |
+| Host API | 2.1 | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=1` |
 | GOT manifest | 1 | `STC_MANIFEST_V1` |
 | Online-change plan | 1 | `STC_PLAN_V1` |
 | Build ID derivation | 1 | `STC_BUILD_V1` |
@@ -156,6 +156,8 @@ with exactly one form per identity kind:
 | Global data root | `PKG::PATH` | `MOTOR_CONTROL::GLOBALS.SPEED` |
 | Program/instance field root | `PKG::PATH#CONFIG/RESOURCE/INSTANCE` | `MOTOR_CONTROL::MAIN.SPEED#MAIN/R1/INST` |
 | Nested field root | `PKG::PATH.SUBPATH#CONFIG/RESOURCE/INSTANCE[/NESTED]` | `MOTOR_CONTROL::MAIN.STATE.SUB#MAIN/R1/INST/FB1` |
+| Hidden object-record root | `PKG::PATH#OBJREC` or `PKG::PATH#INSTANCE/OBJREC` | `MOTOR_CONTROL::MAIN.TIMER#MAIN/R1/INST/OBJREC` |
+| Hidden class-handle root | `PKG::PATH#HANDLE` or `PKG::PATH#INSTANCE/HANDLE` | `MOTOR_CONTROL::MAIN.MOTOR#MAIN/R1/INST/HANDLE` |
 | Task guard root | `PKG::CONFIG/RESOURCE#TASK.GUARD` | `MOTOR_CONTROL::MAIN/R1#FAST.GUARD` |
 | Function | `PKG::PATH@SIGNATURE` | `MOTOR_CONTROL::MATH.ADD@(IN:DINT,IN:DINT)->DINT` |
 | Program body | `PKG::TYPE#BODY@()->VOID` | `MOTOR_CONTROL::MAIN#BODY@()->VOID` |
@@ -167,9 +169,11 @@ with exactly one form per identity kind:
 | Export | `PKG::PATH@SIGNATURE#C:<C_NAME>` | `MOTOR_CONTROL::API.READ@()->DINT#C:stc_read` |
 
 `<C_NAME>` preserves the case-sensitive C identifier after the fixed `C:` marker. The `#BODY`,
-`#DESC:`, and `.GUARD` markers use uppercase spellings. A renamed declaration keeps its `GotId`
-through a tracked rename or move even though its key changes; the old key is retained in
-`previous_keys`.
+`#DESC:`, `.GUARD`, `#HANDLE`, and `#OBJREC` markers use uppercase spellings. `HANDLE` and
+`OBJREC` are reserved final detail segments for compiler-generated hidden roots (§8.5.6); they
+follow the `#`, never a `.`, so no source identifier can produce one. A renamed declaration keeps
+its `GotId` through a tracked rename or move even though its key changes; the old key is retained
+in `previous_keys`.
 
 A key is unique per identity kind. Two declarations may not share a key and kind. Functions with
 different signatures have different keys because the signature is part of the key; overloads
@@ -228,7 +232,9 @@ typekey :=
   `T:<ID_HEX>` stable because the type `GotId` is carried forward.
 - `UCHAR` is one 32-bit Unicode scalar value; `USTRING[n]` is `n` 32-bit scalars (A-005).
 - `PTR_TO` is the transient-only `STC-POINTER` extension. A persistent root may never have a
-  `PTR_TO` type key.
+  `PTR_TO` type key, with one exception: a hidden class-handle or object-record root (§8.5.6)
+  carries the compiler-internal pointer/record key, is never retained, and is not declared by
+  source.
 
 ### 4.2 Signature keys
 
@@ -373,8 +379,10 @@ The catalog contains:
   do not get identities.
 - **Types:** one record per named user-defined type that owns persistent layout or descriptors.
   Elementary types are implicit and are not listed.
-- **Descriptors:** one record per runtime-owned type descriptor, vtable, or object descriptor.
-  M4.5 emits none; M5 populates them.
+- **Descriptors:** one record per runtime-owned type descriptor or vtable. M4.5 emits none;
+  M5 phase 4b projects one TYPEINFO per class/FB type and one VTABLE when the type has class
+  method slots. Object records are host storage reached through hidden roots and are not
+  catalog descriptors (§8.5).
 - **Instances:** one record per configured program instance.
 - **Tasks:** one record per task plus its guard root.
 - **Exports:** one record per `{stc:export}` wrapper.
@@ -428,7 +436,7 @@ descriptor_flags     u16   = 0
 descriptor_size      u32          total blob bytes, including this field
 required_features    u64          feature bit set the host must implement
 host_abi_major       u16   = 2
-host_abi_minor       u16   = 0
+host_abi_minor       u16   = 1
 module_format        u16   = 1
 endianness           u8    = 0   (0 = little, 1 = big)
 pointer_width        u8    = 8
@@ -502,10 +510,10 @@ every `Descriptor` slot's `GotId` appears in the manifest descriptor table.
 
 | Bit | Meaning |
 | --- | --- |
-| 0 | Host ABI 2.0 base services |
+| 0 | Host ABI 2 base services |
 | 1 | Online-change plan present in the paired manifest |
-| 2 | OOP descriptors/vtables in use (M5) |
-| 3 | Place-descriptor references in use (M5) |
+| 2 | OOP descriptors/vtables in use (M5 phase 4b) |
+| 3 | Place-descriptor references in use (M5 phase 4b) |
 | 4 | Debug checkpoint hooks in use (M6.5; not set by M4.5) |
 | 5–63 | Reserved; a host that does not implement a set bit rejects the module |
 
@@ -576,13 +584,13 @@ void stc_module_detach(uint64_t generation_id);
   generation switch; the host only switches at a cycle boundary, so values cached within one
   cycle are valid.
 
-## 8. Host API 2.0
+## 8. Host API 2.1
 
 ### 8.1 Table
 
 ```c
 typedef struct stc_host_api {
-    uint32_t abi_version;   /* (major << 16) | minor; 2.0 is 0x00020000 */
+    uint32_t abi_version;   /* (major << 16) | minor; 2.1 is 0x00020001 */
     uint32_t struct_size;   /* bytes; modules reject a too-small table */
 
     void     (*trap)(int32_t code, uint32_t span_id);
@@ -612,7 +620,7 @@ code uses import slots for every service it calls.
 
 ### 8.2 Services
 
-Service IDs are used by import slot records and are fixed for ABI 2.0:
+Service IDs are used by import slot records and are fixed for host ABI 2 (2.0 and 2.1):
 
 | ID | Field | Contract |
 | --- | --- | --- |
@@ -642,14 +650,18 @@ assertions in production artifacts.
 
 ### 8.3 Compatibility
 
-`abi_version` is `(major << 16) | minor`, with major 2 and minor 0 for M4.5. A module's
-descriptor carries the required major/minor. The host accepts a module when:
+`abi_version` is `(major << 16) | minor`, with major 2 and minor 1 for the M5 compiler. A
+module's descriptor carries the required major/minor. The host accepts a module when:
 
 1. majors are equal, and
 2. host minor is greater than or equal to the module's required minor, and
 3. host `struct_size` covers every service the module uses.
 
-A module built for 2.0 runs on a 2.1 host. A 2.1 module is rejected by a 2.0 host. A breaking
+Minor 1 appends no service and changes no signature or struct prefix: it records the inline
+TYPEINFO, VTABLE, and object-record layout fixed in §8.5, which generated code reads without a
+host call. The table shape, `struct_size` requirement, and service IDs are identical to 2.0, so
+the minor gate is what keeps a 2.0-only host from running OOP code built against the layout. A
+module built for 2.0 runs on a 2.1 host. A 2.1 module is rejected by a 2.0 host. A breaking
 change to a service signature or the struct prefix increments the major version. M4 ABI 1
 artifacts are not loadable.
 
@@ -673,6 +685,215 @@ the run with exit code 70 in executable mode and a recorded status in embedding 
 
 Trap codes are the existing `STC_TRAP_*` values 1–10 from
 [Runtime and Execution](Runtime-and-Execution.md).
+
+### 8.5 OOP runtime records
+
+Host ABI 2.1 fixes the byte layouts that generated code reads directly for class, function-block,
+and interface values (D-147–D-151). The records are host-owned: a module allocates none of them,
+stores only through the storage pointers they contain, and never writes a record header, a
+TYPEINFO field, or a VTABLE entry. They are versioned separately from the descriptor format and
+from the catalog descriptor records.
+
+A catalog `DescriptorRecord`/`DescriptorDecl` for a TYPEINFO or VTABLE keeps the **owning type's**
+canonical type key, layout hash, size, and alignment, so artifact validation, engine
+classification, preservation, and migration compare descriptor records exactly as type records.
+The record layout below is a different thing: its byte size includes the record header and its
+variable-length arrays and is not the owning type's size. The compiler emits one TYPEINFO
+descriptor per class or FB type and one VTABLE descriptor when the type has class method slots;
+interface types have no descriptor of their own. `DescriptorKind::Object` stays defined but is
+unprojected in M5 because object records are host storage reached through hidden roots (§8.5.6),
+not catalog identities.
+
+All offsets are bytes; `ptr` is pointer-sized (8 bytes for format 1), `id128` is the 16-byte
+`GotId` digest order used by every artifact, and every field is naturally aligned. Generated code
+computes a variable field's address with pointer-sized GEP steps from the fixed header and never
+embeds a target size or a record byte length.
+
+#### 8.5.1 Object record
+
+```c
+struct stc_object_record {
+    const stc_typeinfo* typeinfo;   /* offset 0 */
+    void*               leaf[N];    /* offsets 8, 16, ...; resolved storage addresses */
+};
+```
+
+`N` is the owning type's leaf count in the same base-first ordinal order as the `[N x ptr]` body
+root table. The record occupies `8 * (N + 1)` bytes with alignment 8 and stores no length or
+format word: its shape is given by the TYPEINFO's `record_format` and `leaf_count`, and the
+record root's size (§8.5.6) must equal `8 * (N + 1)`.
+Entry `i` is the resolved storage address of leaf `i` — a host root address for a persistent
+object or an activation address for a local object — never a GOT cell address. `typeinfo` is
+non-null in a valid record.
+
+The record pointer is the object handle: it is `THIS`, a class value, a method/FB body's first
+argument, and the `handle` field of an `Object` place descriptor. A null handle or record traps
+`STC-TRAP_NULL_REF` when it is dereferenced or dispatched. Interface values are nullable
+(§8.5.4); FB values are never null; a valid record is fully initialized once prepare completes.
+
+#### 8.5.2 TYPEINFO
+
+```text
+offset  field               type
+0       record_format       u32   = 1
+4       kind                u32   1 = class, 2 = function block
+8       flags               u32   bit 0 = abstract (informational); bits 1..31 reserved, zero
+12      leaf_count          u32   N; object record leaf entries
+16      base_count          u32   base-chain length
+20      interface_count     u32   interface-map length
+24      vtable_slot_count   u32   class VTABLE entries; 0 = no VTABLE
+28      reserved            u32   = 0
+32      type_id             id128 owning type GotId
+48      layout_hash         id128 owning type's target layout hash
+64      class_vtable        ptr   class VTABLE record, or null
+72      base_chain          id128[base_count]
+                                nearest base first; the type itself is excluded
+...     interfaces          interface[interface_count]
+                                { id128 interface_id; ptr vtable; }
+```
+
+A base-chain entry is compared by identity, never by name. The interface map is **base-first**:
+entries inherited from the base type keep their indices, and interfaces newly satisfied by this
+type (including interfaces reached through an interface's `EXTENDS` closure) are appended sorted
+by `GotId` ascending. Each entry's `vtable` points at the per-(object type, interface) VTABLE
+built for **this** type, so an inherited index remains valid for a derived runtime object while
+overrides still take effect. The map contains every interface the object satisfies, including
+transitively extended ones.
+
+#### 8.5.3 VTABLE
+
+```text
+offset  field           type
+0       record_format   u32   = 1
+4       kind            u32   1 = class method table, 2 = interface method table
+8       entry_count     u32
+12      reserved        u32   = 0
+16      owner_id        id128 implementing class/FB type GotId
+32      interface_id    id128 interface type GotId; zero for a class table
+48      entries          ptr[entry_count]
+```
+
+Every entry is a pointer to a **host function cell**, not a code address. Dispatch loads the
+entry to get a cell address and then loads the cell to get the code address, so an online change
+patches cells at activation without rewriting any vtable. A class table has one entry per class
+method slot (`entry_count == typeinfo.vtable_slot_count`); each method function record carries
+its sema-assigned `vtable_slot`, an override already carries the base slot, and the host places
+the record at that slot without recomputing the order.
+
+An interface table has one entry per prototype in the interface's `EXTENDS` closure, ordered
+base-first: each interface in the closure contributes its own prototypes sorted by (name,
+signature), with a duplicate (name, signature) kept only at its earliest occurrence. A
+prototype's slot is therefore its index in its declaring interface's table, and a derived
+interface's table is a prefix extension of its base interface's table, so one `vtable_slot` per
+prototype record is sufficient. The host places each entry at the prototype record's
+sema-assigned `vtable_slot` and supplies the most-derived implementation found by matching the
+prototype's method name (the final key segment) and signature against the object type's base
+chain.
+
+#### 8.5.4 Interface values
+
+An interface value is a 16-byte `{ ptr record; ptr vtable; }` pair: the object record pointer and
+the per-(object type, interface) VTABLE pointer. `NULL` is both fields zero. The pair is passed,
+stored, and compared as one value; dispatch indexes the pair's vtable directly and does not
+consult TYPEINFO. A valid non-null interface has both fields non-null. A null-interface test reads
+the record pointer.
+
+#### 8.5.5 Class and FB storage projection
+
+A class value is a pointer-sized **handle**; an FB value is an inline instance. The class
+**instance** layout (the field struct) is not the class **value** layout. Consequences:
+
+- A class-typed field, array element, local, parameter, or result occupies one pointer in its
+  containing layout. `FieldRecord`/root type keys project it as `PTR_TO(T:<class GotId>)`, or
+  `ARRAY[...]OF(PTR_TO(T:<class GotId>))` for an array, while the class `TypeRecord` keeps the
+  instance size, alignment, and layout hash.
+- The owned instance of a class-typed persistent declaration is separate storage: its fields are
+  ordinary roots under the declaration path (for example `PKG::T.C.F#I`), and it has its own
+  record root. A class-typed local owns a stack instance and a stack handle slot.
+- Arrays of classes are arrays of handles; each element gets its own owned instance, record
+  root, and field roots. A persistent array of handles is one `HANDLE` root with the array type
+  key; its record and owned-instance roots are per element.
+- FB-typed declarations stay inline for their value layout and still get a record root for the
+  body ABI.
+- Class handle roots and object record roots are non-retained. The owned instance's field roots
+  keep their declared retention policy, so a cold start restores the instance's retained fields
+  while prepare re-points the fresh handle at its owned instance.
+- `:=` between class values copies the handle (sema's reference assignment); `:=` between FB
+  values copies fields. Assignment through a dereferenced `Object` reference copies state into
+  the referenced object and never rebinds the original handle.
+
+#### 8.5.6 Hidden root keys
+
+Hidden roots are data roots with the reserved detail markers `HANDLE` and `OBJREC`. They use the
+existing `<PACKAGE>::<PATH>[#<INSTANCE>]` forms with the marker appended as the final segment of
+the detail suffix (or as the whole suffix for a global), and are the only data roots allowed to
+carry a pointer-typed type key.
+
+| Hidden root | Key | Type key | Size / align |
+| --- | --- | --- | --- |
+| Object record | `PKG::PATH#OBJREC` or `PKG::PATH#INSTANCE/OBJREC` | `ARRAY[0..N]OF(PTR_TO(T:<owner GotId>))` | `8 * (N + 1)` / 8 |
+| Class handle | `PKG::PATH#HANDLE` or `PKG::PATH#INSTANCE/HANDLE` | `PTR_TO(T:<class GotId>)`, or `ARRAY[l..u]OF(PTR_TO(T:<class GotId>))` for a handle array | 8, or the array size / 8 |
+
+`PATH` is the declaration path, including the synthetic `.E<index>` element segment for array
+elements; `INSTANCE` is the declaration's instance path (`CONFIG/RESOURCE/INSTANCE[/NESTED...]`)
+and is absent for a global. Both roots use root kind `nested_field`, retention `none`, initializer
+`none`, and the declaration's own `owner_type`/`field_path` convention (`owner_type` is the type
+owning the first field segment, absent for a global or program field; `field_path` is the
+declaration's segment path, empty for a global). The identity tuple is `DataRoot` with the
+declaration `path` and the full detail suffix as `qualifier` (`HANDLE`, `INSTANCE/HANDLE`,
+`OBJREC`, or `INSTANCE/OBJREC`), so the handle and record roots of one declaration derive
+distinct `GotId`s and `require_identity` sees the same path/qualifier split as the key. The
+object record's `[0..N]` array has `N + 1` pointer elements: element 0 is the TYPEINFO pointer
+and elements `1..N` are the leaf storage pointers, so the type key describes the record's exact
+byte layout and its bound carries the leaf count into the layout hash.
+
+The `HANDLE` and `OBJREC` markers never occur in a source identifier position: they follow the
+`#` marker, so a user field named `HANDLE` or `OBJREC` keeps its ordinary path key. A generated
+key never uses `HANDLE` or `OBJREC` as a nested instance name, and a source declaration whose
+derived key would collide with a hidden root is rejected rather than merged.
+
+The host allocates hidden roots like any data root and zeroes fresh storage. Generated
+`stc_module_prepare` then fills every fresh object record (TYPEINFO pointer plus leaf storage
+addresses) and every fresh class handle (the owned instance's record address); preserved records
+and handles are not rewritten. Hidden roots are excluded from retained-state leaves and metadata
+payloads. `stc-got`'s catalog and engine validation accept the two markers, reject a marker on
+any other root kind, and require the pointer type key only on marked roots; no manifest or
+descriptor format number changes.
+
+#### 8.5.7 Interface-prototype function records and trap stubs
+
+Every interface method prototype is projected as an ordinary function record: identity kind
+`function`, key `PKG::INTERFACE.METHOD@SIGNATURE`, `FunctionKind::Method`, `owner_type` = the
+interface type, the sema-assigned `vtable_slot`, and a `Function` slot like any callable. The
+module emits a **trap-stub body** for it, which traps `STC-TRAP_UNIMPLEMENTED` with the
+prototype's span. The host binds the prototype's function cell to that stub exactly like other
+function cells. Dispatched interface calls never use the prototype's own cell: they load the
+implementation from the interface value's per-pair vtable, so reaching the stub means dispatch
+was bypassed or an implementation is missing. The per-pair table is built from the prototype
+records in the interface's `EXTENDS` closure (`owner_type` is the declaring interface and
+`vtable_slot` is the prototype's slot in that declaration) and the object type's matching
+implementation, so no manifest field and no format number change.
+
+#### 8.5.8 Inline access rules
+
+Generated code may read, but never write, a record. The permitted reads are:
+
+1. `record->typeinfo` and `record->leaf[i]`; field storage is reached through `leaf[i]`.
+2. `typeinfo->record_format`, `kind`, `leaf_count`, `base_count`, `interface_count`,
+   `vtable_slot_count`, `type_id`, `layout_hash`, `class_vtable`,
+   `base_chain[0..base_count]`, and `interfaces[0..interface_count]` (`interface_id` and
+   `vtable`).
+3. `vtable->entries[slot]` to obtain a host function cell, then the cell value to obtain code.
+4. An interface value's two pointers.
+
+Every null handle, record, TYPEINFO, VTABLE, or interface field that a read depends on is checked
+before use and traps `STC-TRAP_NULL_REF`. `?=` and interface upcasts read only TYPEINFO and the
+map and never call the host; a failed `?=` yields the all-zero value and never traps. Local
+records are per-activation allocas filled with the owning type's TYPEINFO cell value and
+activation leaf addresses; VTABLE and TYPEINFO records and descriptor cells are never allocated
+or modified by generated code. A hidden record whose TYPEINFO `leaf_count` does not match its
+root size is invalid, and a live record or interface value makes a descriptor shape change
+reject the swap (D-151).
 
 ## 9. GOT manifest format 1
 
@@ -793,13 +1014,15 @@ slot                u32
 ```
 
 `Direct` roots use a direct cell and are never preserved. `TaskGuard` roots are host-owned
-one-byte or one-word completion flags keyed by task identity. `size` is the root's storage size
-in bytes; `align` is a power of two. `field_path` is relative to the owner type and is empty for
-globals and direct variables that are not fields. A retained root has `retention = Retain`;
-other roots use `None`. `initializer_digest` hashes the canonical initializer description
-(`"stc:init:v1\0" || type_key || 0x00 || canonical value bytes` for constants, or the
-deterministic init-expression fingerprint for expressions); the value itself is not stored in
-the manifest.
+one-byte or one-word completion flags keyed by task identity. A hidden `HANDLE`/`OBJREC` root
+uses `root_kind = NestedField`, `retention = None`, `initializer = None`, and a pointer or
+record type key (§8.5.6); its `owner_type`/`field_path` follow the declaration's ordinary root
+convention. `size` is the root's storage size in bytes; `align` is a power of two. `field_path`
+is relative to the owner type and is empty for globals and direct variables that are not fields.
+A retained root has `retention = Retain`; other roots use `None`. `initializer_digest` hashes the
+canonical initializer description (`"stc:init:v1\0" || type_key || 0x00 || canonical value bytes`
+for constants, or the deterministic init-expression fingerprint for expressions); the value
+itself is not stored in the manifest.
 
 `FunctionRecord`:
 
@@ -818,8 +1041,10 @@ vtable_slot     option<u32>
 source          option<SourceLocation>
 ```
 
-Function flags reuse the descriptor bits in §7.1. `vtable_slot` is reserved for M5 method
-records. `export_name` is the C symbol for wrapper and no-mangle records.
+Function flags reuse the descriptor bits in §7.1. `vtable_slot` is the sema-assigned class or
+interface method slot for `Method` records (including interface prototypes) and is absent for
+other kinds; the host places vtable entries by it and never recomputes the order. `export_name`
+is the C symbol for wrapper and no-mangle records.
 
 `FieldRecord`:
 
@@ -1310,7 +1535,7 @@ code lands.
 Phase 6 is implemented (2026-10-25) in `stc-runtime`. `loader` is the platform layer over
 `LoadLibraryW`/`GetProcAddress`/`FreeLibrary` and `dlopen`/`dlsym`/`dlclose`; it resolves the seven
 §7.3 entry points, copies the descriptor blob and function table, and treats load failures as
-non-fatal module errors. `host_api` is the static ABI 2.0 table described in §8.1: import cells
+non-fatal module errors. `host_api` is the static ABI 2.1 table described in §8.1: import cells
 are bound to the addresses of its fields, transient allocation and free route to the generation
 whose entry point is executing, process-image areas map to the configured image, and traps are
 recorded before the non-returning trap path. `store` keeps the committed baseline as an immutable
@@ -1388,6 +1613,14 @@ and the M4.5 implementation follows these formats exactly. The phase clarifies t
 information or checkpoint hooks, and the debug-checkpoint required-feature bit stays clear until
 M6.5. D-127 records the pass; the M6.5 boundary is in
 [Debug and Monitoring](Debug-and-Monitoring.md) §12.
+
+M5 phase 4b.0 (2026-10-25) records host ABI 2.1 and §8.5. Minor 1 appends no service; it fixes
+the TYPEINFO, VTABLE, object-record, and interface-value layouts that generated OOP code reads
+inline, the hidden `HANDLE`/`OBJREC` root-key convention, interface-prototype function records
+with trap-stub cells, and the inline access rules. Descriptor records keep the owning type's
+type key, layout hash, size, and alignment; the record layout is separate and versioned. The
+module and manifest formats remain 1. D-147–D-152 record the phase decisions; the catalog
+projection, host registry, dispatch, and attempt code land in phases 4b.1–4b.5.
 
 ## 13. Related documents
 

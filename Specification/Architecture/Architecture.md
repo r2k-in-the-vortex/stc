@@ -171,7 +171,7 @@ Module-shaped IR (`stc_codegen::ir`) adds the GOT primitives from
 module's only view of persistent state: generated code loads a cell with
 `getelementptr ptr, ptr %slots, i64 N` followed by a pointer-sized load, and treats every cell
 value as an opaque `ptr`. User and host-service calls are indirect through `Function`/`Import`
-cell values. Entry points are defined `dso_local dllexport` with the ABI 2.0 signatures; the
+cell values. Entry points are defined `dso_local dllexport` with the host ABI 2 signatures; the
 descriptor blob and function-address table are private/internal constants. `stc_codegen::verify`
 checks the build contract before rendering: no body names a persistent root or user callable
 directly, every cell use matches its kind, direct global access is limited to an allowlisted
@@ -295,24 +295,45 @@ storage and must not retain the pointer beyond the call.
 
 ### 4.6 OOP lowering
 
-- Each class/FB type gets a runtime-owned type descriptor and a vtable whose entries are
-  host-owned function cells, not raw code addresses. Descriptors are allocated/validated by the
-  host and survive module unload.
-- Vtable slots are assigned deterministically: methods sorted by `(name, signature)` across the
-  type's interface set; overrides reuse the base slot.
-- Interface method calls use the interface descriptor/vtable slot; class/FB calls through a base
-  reference use the class descriptor. Direct calls on a concrete instance still go through the
-  function cell for swap safety.
-- `OVERRIDE` rebinds the derived type's vtable cell to the new implementation.
-- `SUPER.method()` resolves the base type's implementation through the base descriptor/cell.
-- `THIS` is the stable handle/object record; passing `THIS` to an interface builds
-  `{handle, descriptor}`.
-- `?=` (assignment attempt) calls a runtime helper that checks the source descriptor against the
-  destination interface/class descriptor and returns `{null, null}` or a valid
-  `{handle, descriptor}`.
-- `FINAL`/`ABSTRACT` are enforced statically; runtime checks cover descriptor compatibility.
+- Each class/FB type gets one runtime-owned TYPEINFO record and, when it has class method slots,
+  one class VTABLE whose entries are host-owned function cells, not raw code addresses.
+  Interface types get no descriptor of their own: their methods are sema-ordered prototypes, and
+  each (object type, interface) pair gets a VTABLE embedded in the object type's TYPEINFO
+  interface map. Descriptors are allocated/validated by the host and survive module unload; the
+  record layouts are fixed in [GOT Artifacts](GOT-Artifacts.md) §8.5.
+- An object value is a pointer to a host object record `{typeinfo, leaf storage addresses}`.
+  Persistent objects reach their record through a hidden non-retained `OBJREC` root whose leaf
+  entries are resolved root addresses, never GOT cell addresses, so a preserved record needs no
+  rebinding. Locals use per-activation stack records. Generated code performs no heap allocation.
+- A class value is a pointer-sized handle; a class-typed field, array element, parameter, local,
+  or result occupies `PTR_TO(T:<class GotId>)` storage while the owned instance keeps the class
+  instance layout and its own field roots. The handle is a non-retained `HANDLE` root whose
+  fresh-prepare value points at the owned instance's record; the owned instance's field leaves
+  keep their declared retention. FB values stay inline and `:=` copies their fields, while class
+  `:=` copies the handle and only orphans the destination's owned instance. Assignment through a
+  dereferenced `Object` reference copies state and never rebinds the original handle.
+- Vtable slots are assigned by sema and carried on the method function records (`vtable_slot`);
+  overrides reuse the base slot and codegen never recomputes the order. All class/FB method
+  calls dispatch virtually by loading the record's TYPEINFO, the class VTABLE, and the slot cell.
+  A direct call on a concrete instance still goes through the function cell for swap safety.
+- `SUPER.method()` resolves the base type's implementation and calls it directly with the same
+  handle; `SUPER()` invokes the base FB body on the same record.
+- `THIS` is the object record handle. Passing `THIS` to an interface builds the
+  `{record, per-pair vtable}` pair; class/FB-to-interface upcasts use the compile-time index into
+  the source type's base-first interface map, and interface-to-interface upcasts search the map
+  by interface `GotId`.
+- `?=` is inline: a class destination checks the object TYPEINFO's base chain, an interface
+  destination checks interface membership (including `EXTENDS`), and an object reference uses
+  its descriptor check. Failure yields the all-zero value; attempts never trap and never call a
+  host helper.
+- A null handle, record, TYPEINFO, VTABLE, or interface pointer traps `STC-TRAP_NULL_REF` before
+  a load or dispatch. `FINAL`/`ABSTRACT` are enforced statically.
+- A handle or interface that refers to a stack record must not escape its activation: returning
+  it, storing it persistently, or writing it through an `OUT`/`VAR_IN_OUT` parameter is
+  rejected, analogous to the pointer-escape rule. Recursion is allowed.
 - A vtable shape change is rejected during online change while any live instance or interface
-  depends on the old shape.
+  depends on the old shape; `DescriptorKind::Object` stays defined but unprojected because
+  object records are host storage, not catalog descriptors.
 
 ### 4.7 Control flow
 
@@ -548,7 +569,7 @@ state directory holds the active copy and a current pointer.
 ## 7. Runtime boundary
 
 The generated module uses a versioned host API table (host ABI 2), not a fixed set of exported
-global symbols. Host ABI 2.0 provides:
+global symbols. Host ABI 2.1 provides:
 
 | Entry | Purpose |
 | --- | --- |
@@ -561,10 +582,12 @@ global symbols. Host ABI 2.0 provides:
 | `io_image` / `io_size` | Process-image access |
 | `state_load` / `state_save` | Retained-state helpers |
 
-Reference resolution, interface/descriptor checks, typed variable access, string/math helpers,
-and tracing are later minor-version additions; they are not part of ABI 2.0 and M4.5 does not
-call them. The launch/embedding entry points (`stc_rt_execute`, `stc_host_*`) are host exports,
-not module imports. The exact table, service IDs, versions, and signatures are in
+Reference resolution, typed variable access, string/math helpers, and tracing are later
+minor-version additions; they are not part of ABI 2.1 and M5 does not call them. Minor 1 appends
+no service: it fixes the inline TYPEINFO, VTABLE, and object-record layout that generated OOP code
+reads directly, so `?=`, interface upcasts, and virtual dispatch need no host call. The
+launch/embedding entry points (`stc_rt_execute`, `stc_host_*`) are host exports, not module
+imports. The exact table, service IDs, versions, and signatures are in
 [GOT Artifacts and Schemas](GOT-Artifacts.md) §8; the lifecycle is in
 [Online Change and GOT](Online-Change-and-GOT.md).
 

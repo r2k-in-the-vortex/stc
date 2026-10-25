@@ -11,7 +11,7 @@
 //! - an indirect call targets a `Function` or `Import` cell value;
 //! - a load or store through a cell value targets a `Data` or `Direct` cell;
 //! - direct global access is limited to allowlisted module-local globals;
-//! - every required module entry point exists with the ABI 2.0 signature and
+//! - every required module entry point exists with the host ABI 2 signature and
 //!   external linkage;
 //! - the descriptor blob and the function-address table have the shape the
 //!   host expects.
@@ -79,7 +79,7 @@ pub struct Contract {
 }
 
 impl Contract {
-    /// Creates the ABI 2.0 module contract for the given slot kinds.
+    /// Creates the ABI 2 module contract for the given slot kinds.
     #[must_use]
     pub fn for_module(slots: Vec<CellKind>) -> Self {
         Self {
@@ -90,7 +90,7 @@ impl Contract {
     }
 }
 
-/// Returns the ABI 2.0 module entry points and signatures (GOT Artifacts §7.3).
+/// Returns the ABI 2 module entry points and signatures (GOT Artifacts §7.3).
 #[must_use]
 pub fn module_entry_points() -> Vec<EntryPoint> {
     let entry = |symbol: &str, ret: IrType, params: Vec<IrType>| EntryPoint {

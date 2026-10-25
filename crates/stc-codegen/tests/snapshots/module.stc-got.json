@@ -24,14 +24,14 @@
     ],
     "header": {
       "active_configuration": "",
-      "build_id": "0xd780af4ebcce4516395e7d9c02d22b78",
+      "build_id": "0x3a2b33b578be275fce19dc8b2b257642",
       "catalog_digest": "0xda906c55f4f7bfcdffb1da1e288ba02b5faa5bc5965be0436ac619ee3b5f198f",
       "compiler_version": "stc 0.1.0",
-      "descriptor_digest": "0xd15206672209e59fceadba4724f4159384ae8ebfac9efb2c1cf5376a8e3ce8a6",
+      "descriptor_digest": "0x7baaccba011d5a11fd13429d98cf150e3dcc1e8c2a596f759e412b564f5b3dce",
       "endianness": 0,
       "generator_flags": 65,
       "host_abi_major": 2,
-      "host_abi_minor": 0,
+      "host_abi_minor": 1,
       "module_format": 1,
       "module_name": "golden",
       "parent_build_id": null,
@@ -272,7 +272,7 @@
     ],
     "types": []
   },
-  "digest": "0x95439490ab99f9e2d2c0b46dc8110a93abf94392d4c7b9619d21fdcea37c256a",
+  "digest": "0x410b671755a5a03c87b3d280e1bb09902b61472f46362c57ff07ec3f28711820",
   "flags": 0,
   "format": 1
 }

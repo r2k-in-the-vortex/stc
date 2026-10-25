@@ -241,7 +241,7 @@ impl Got {
 
     /// Binds every import cell from the host service table.
     ///
-    /// `resolve` returns the address of the ABI 2.0 service entry for a service
+    /// `resolve` returns the address of the ABI 2 service entry for a service
     /// ID, or `None` when the host does not provide it.
     ///
     /// # Errors
@@ -361,7 +361,7 @@ fn validate_slot_table(slots: &[SlotRecord]) -> Result<()> {
                     return Err(Error::new(
                         codes::MODULE_INVALID,
                         format!(
-                            "import slot {} service ID {} is outside ABI 2.0",
+                            "import slot {} service ID {} is outside the ABI 2 service table",
                             slot.slot, slot.service
                         ),
                     ));

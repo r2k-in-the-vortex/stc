@@ -66,11 +66,14 @@ Retained storage is copied as raw bytes of its data fields:
 - elementary types, bit strings, enums, subranges, date/time types;
 - `STRING`, `WSTRING`, `USTRING` (the fixed-capacity root value is copied);
 - arrays and structs (recursively);
-- FB/class instance data fields.
+- FB instance data fields and class owned-instance data fields (recursively).
 
 Not persistable:
 
 - `REF_TO` values, interface references, `VAR_IN_OUT` parameters;
+- class handle roots and object-record roots (hidden `HANDLE`/`OBJREC` roots; fresh ones are
+  initialized by prepare and none are saved, while an owned instance's field roots are ordinary
+  retained leaves);
 - vtable/type-descriptor pointers and other runtime pointers (these are reinitialized by
   `stc_init` before state is loaded; they are excluded from the payload);
 - variables containing any non-persistable field (`STC-E-RETAIN-001`).
@@ -197,7 +200,7 @@ int32_t stc_retain_load(const void* buffer);
 The module also emits a retained-root descriptor of `stc_retain_size()` bytes. Under the host
 model the buffer is filled from/into host-owned roots; the generated functions are version-local
 helpers, not the owner of the storage. Generated `stc_init` and `stc_module_shutdown` use the
-host API's `state_load`/`state_save` services (host ABI 2.0; see
+host API's `state_load`/`state_save` services (host ABI 2.1; see
 [GOT Artifacts and Schemas](GOT-Artifacts.md) §8):
 
 ```c

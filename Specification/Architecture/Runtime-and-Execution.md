@@ -151,7 +151,9 @@ goes through the typed generation-pinned API, and the cycle thread is the only S
 
 ### 2.2 ABI versioning
 
-- `STC_HOST_ABI_MAJOR = 2`, `STC_HOST_ABI_MINOR = 0` for v1's online-change host.
+- `STC_HOST_ABI_MAJOR = 2`, `STC_HOST_ABI_MINOR = 1` for v1's persistent host. Minor 1 appends
+  no service and changes no signature; it records the inline TYPEINFO, VTABLE, and object-record
+  layout of §2.6 that generated OOP code reads without a host call (D-151).
 - The runtime exposes `stc_abi_version()` and a host API struct with `abi_version` and
   `struct_size`. A module rejects a host whose struct is shorter than required.
 - Generated modules embed the expected ABI version in metadata and their descriptor; the loader
@@ -188,21 +190,23 @@ void stc_rt_state_configure(const char* path, int32_t policy, int32_t enabled);
 ```
 
 Generated modules do not import `stc_rt_*` symbols. They call traps, clocks, state, I/O, and
-allocation through the host API table (ABI 2.0) defined below and in
+allocation through the host API table (ABI 2.1) defined below and in
 [GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The flat `stc_rt_*` module ABI is M4 ABI 1 and
 is not loadable by the persistent host.
 
 #### 2.3.1 Host API table
 
-The exact ABI is a versioned `stc_host_api` struct, fixed for ABI 2.0 in
+The exact ABI is a versioned `stc_host_api` struct, fixed for ABI 2.1 in
 [GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The table is additive within major version 2:
 new services are appended and bump the minor version; a module rejects a host whose table is
 shorter than it requires. Modules receive the table in `stc_module_attach` and do not import
-platform symbols from the host executable. Reference resolution, object/descriptor access, typed
-variable access, string/math helpers, and generation pin/unpin are later minor-version
-extensions; M4.5-generated code imports trap, I/O image/size, and the retained-state stubs.
-Clocks, transient alloc/free, and assert are in ABI 2.0 but unused by M4.5-generated code;
-M5/M6 consumers add the corresponding import slots when they first emit those calls.
+platform symbols from the host executable. Minor 1 appends no service and adds no field: it
+records the inline OOP record layout of §2.6, so the minor gate rejects a 2.1 module on a 2.0
+host before generated code can read a record. Reference resolution, typed variable access,
+string/math helpers, and generation pin/unpin remain later minor-version extensions.
+M4.5-generated code imports trap, I/O image/size, and the retained-state stubs. Clocks,
+transient alloc/free, and assert are in ABI 2.0 but unused by M4.5-generated code; M5/M6
+consumers add the corresponding import slots when they first emit those calls.
 
 The trap entry is non-returning by contract. The host calls prepare and cycle from a platform
 trap boundary and converts a module trap into a failed generation (or exit code 70 when there is
@@ -296,6 +300,77 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
 - Date/time functions use `cycle_now_ns` converted to the profile's epoch. Within a scan,
   `NOW()`/`TIME()` are constant.
 - Time-zone handling is profile-defined; v1 uses local time only and records the choice.
+
+### 2.6 Objects, descriptors, and dispatch
+
+The byte layouts that generated OOP code reads inline are fixed in
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §8.5. This section fixes the host behavior around
+them.
+
+**Ownership and lifetime.** TYPEINFO and VTABLE records are host-owned and allocated once per
+type when a generation is prepared; they keep stable addresses across compatible swaps so
+preserved class handles and interface values stay valid. An object record is host-owned storage
+too, but per declaration rather than per type: a persistent object's record lives in its hidden
+`OBJREC` root, and a local object's record is a per-activation stack alloca. A class handle lives
+in its hidden `HANDLE` root (persistent) or in a stack slot (local). The host allocates hidden
+roots like any data root and zeroes fresh storage; it applies no generic initializer to them.
+Generated code never allocates, frees, or writes a TYPEINFO, VTABLE, or record header.
+
+**Prepare and activation.** Prepare builds the shadow descriptor registry from the manifest's
+type and function records, binds the generation's descriptor, function, root, direct, and import
+cells, and then calls `stc_module_prepare`. Generated prepare walks the fresh-root mask: for each
+fresh object record it stores the type's TYPEINFO pointer and the resolved storage addresses of
+the record's leaves, and for each fresh class handle it stores the owned instance's record
+address. Preserved records and handles are not rewritten. `stc_module_cycle` cannot run until
+the host activates the generation, at which point it patches descriptor entries and interface
+maps under the cycle boundary. A failed prepare or first cycle releases fresh records and
+handles with the candidate's roots; a preserved handle to a removed instance is quarantined, not
+freed.
+
+**Class values and FB values.** A class value is a non-retained handle to an object record; the
+declaration owns an embedded instance whose field roots keep their retention policy, and a
+reassigned handle only orphans the instance (which stays rooted for a cold start to re-point).
+An FB value is an inline instance: its fields are its own roots and `:=` copies them. A
+persistent record comes from its hidden `OBJREC` root and a persistent class handle from its
+hidden `HANDLE` root; a local class owns a stack instance, a stack handle slot, and a stack
+record, and a local FB owns a stack instance and stack record. Class field and array-element
+access loads the handle and then uses the referenced record and root table; FB fields stay
+inline. Method and FB bodies receive `(handle, root table, ...)`. For an object body the root
+table is the record's tail (`record + 8`); `THIS` is the handle, `SUPER.method()` calls the base
+implementation directly with the same handle, and `SUPER()` invokes the base FB body on the same
+record. Class `IN` parameters are handles, so assigning the parameter only rebinds the callee's
+copy; FB `IN` parameters are copied by the caller for IN isolation. `OUT` and `VAR_IN_OUT`
+object parameters receive a pointer to the caller's handle slot (class) or to the instance
+record/state (FB). Generated code performs no heap allocation.
+
+**Dispatch.** Every class and FB method call is virtual: load the record's TYPEINFO, load the
+class VTABLE through it, index the method's slot, load the host function cell, and call the cell
+value. Interface calls index the interface value's per-pair VTABLE in the same way. A class/FB
+value converts to an interface at a compile-time index into the source type's base-first
+interface map; the inherited-index rule keeps that index valid for a derived runtime object, and
+the entry's table reflects the object's own overrides. Interface-to-interface upcasts and dynamic
+`?=` checks search the map by interface `GotId`. `?=` never traps: a null or incompatible source
+yields the all-zero `NULL` value, successful class attempts copy the handle, successful interface
+attempts copy the pair, and no attempt calls a host service. `= NULL`/`<> NULL` compare the
+handle or the interface's record pointer; identity comparison is not part of M5.
+
+**Traps and escape.** A null handle, object record, TYPEINFO, VTABLE, or interface pointer that a
+load or dispatch depends on traps `STC-TRAP_NULL_REF`. `REF(object)` produces an `Object` place
+descriptor (`{handle, descriptor}`) whose descriptor is the object's TYPEINFO pointer;
+dereference, assignment, and object-reference `?=` use the record and TYPEINFO, never a raw
+storage address, and `REF_TO`-to-interface yields null for null or incompatible input. A handle
+or interface that refers to a stack record must not outlive its activation: returning one,
+storing one persistently, or writing one through an `OUT`/`VAR_IN_OUT` parameter is rejected by
+the analyzer, exactly like the pointer-escape rule. Recursion is allowed because each activation
+has its own stack records.
+
+**Online change.** Descriptor shape (kind, owner, type key, layout hash, size, align, vtable
+shape) is part of compatibility. A shape change rejects while a live object or interface value
+depends on it, and removing a type that a live handle or interface depends on rejects the swap,
+so dispatch can never reach retired code. Removed descriptors retire and quarantine with their
+roots. Hidden `HANDLE`/`OBJREC` roots are non-retained and are excluded from retained-state
+leaves and metadata payloads; the owned instance's field roots are their own retained leaves
+(see [State and RETAIN](State-and-Retain.md) §2.3).
 
 ## 3. Standard library
 

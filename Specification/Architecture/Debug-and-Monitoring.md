@@ -206,7 +206,7 @@ debug-info errors. Online-change diagnostics use their own `MODULE`/`MANIFEST`/`
 
 M4.5 does not implement the debugger. It fixes the host/module substrate and leaves the debug
 surface to M6.5. This section records the boundary so M6.5 can build on it without changing
-format 1 or the ABI 2.0 service signatures.
+format 1 or the ABI 2 service signatures.
 
 ### 12.1 Available now
 
@@ -227,7 +227,7 @@ format 1 or the ABI 2.0 service signatures.
   sets the debug-build form bit but neither debug-hook bit, and it requires no host debug
   support, so M6.5 can introduce checkpoints behind the feature bit without a descriptor format
   change.
-- **Append-only host API.** ABI 2.0 services are appended within major 2 and gated by
+- **Append-only host API.** ABI 2 services are appended within major 2 and gated by
   `struct_size`/minor version. Debug services can be added without breaking M4.5 modules; a
   module only requires the services it uses.
 - **Trap records and boundary.** `TrapRecord { code, span_id, generation }` records the last

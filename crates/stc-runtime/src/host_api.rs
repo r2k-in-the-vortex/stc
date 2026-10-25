@@ -1,9 +1,14 @@
-//! Host ABI 2.0 service table.
+//! Host ABI 2.1 service table.
 //!
 //! GOT Artifacts §8 fixes the table layout: version and size followed by trap,
 //! clocks, transient allocation, process-image access, retained-state stubs,
 //! and assert. Import cells hold the service entry point itself, so generated
 //! code reads and calls a service exactly like a function cell.
+//!
+//! Minor 1 adds no service. It records the inline TYPEINFO, VTABLE, and
+//! object-record layout of §8.5 that generated code reads directly; the table
+//! shape is unchanged, so a 2.0 host rejects a 2.1 module by minor version
+//! before the layout can be used.
 //!
 //! The table is a read-only static. Service implementations route transient
 //! allocation and free to the generation whose entry point is currently
@@ -20,7 +25,7 @@ use stc_got::error::{Error, Result, codes};
 use crate::memory::TransientAllocator;
 
 /// Host ABI version word: `(major << 16) | minor` (GOT Artifacts §8.1).
-pub const ABI_VERSION: u32 = 2 << 16;
+pub const ABI_VERSION: u32 = (2 << 16) | 1;
 
 /// Service IDs used by import slots (GOT Artifacts §8.2).
 pub mod service {
@@ -71,11 +76,11 @@ pub type StateSaveFn = unsafe extern "C" fn(*const u8, i64, i64) -> i32;
 /// Assert signature.
 pub type AssertFn = unsafe extern "C" fn(i32, i32, u32);
 
-/// The host API 2.0 table (GOT Artifacts §8.1).
+/// The host API 2.1 table (GOT Artifacts §8.1).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct HostApi {
-    /// `(major << 16) | minor`; 2.0 is `0x0002_0000`.
+    /// `(major << 16) | minor`; 2.1 is `0x0002_0001`.
     pub abi_version: u32,
     /// Size of this table in bytes.
     pub struct_size: u32,
@@ -432,8 +437,12 @@ mod tests {
     }
 
     #[test]
-    fn table_has_the_abi_2_0_shape() {
-        assert_eq!(HOST_API.abi_version, 0x0002_0000);
+    fn table_has_the_abi_2_1_shape() {
+        assert_eq!(HOST_API.abi_version, 0x0002_0001);
+        assert_eq!(
+            ABI_VERSION,
+            (u32::from(stc_got::HOST_ABI_MAJOR) << 16) | u32::from(stc_got::HOST_ABI_MINOR)
+        );
         assert_eq!(
             HOST_API.struct_size as usize,
             std::mem::size_of::<HostApi>()

@@ -43,14 +43,14 @@
     ],
     "header": {
       "active_configuration": "",
-      "build_id": "0x9ac44e5698b597fe7956b64ef36b48ca",
+      "build_id": "0x7fa6954be0c5a10e43e2ad79adc99260",
       "catalog_digest": "0xb1200c5cc531908f3f3edbddf530520e9a71d37ab60d9d109e19963b3ad06935",
       "compiler_version": "stc 0.1.0",
       "descriptor_digest": "0x1111111111111111111111111111111111111111111111111111111111111111",
       "endianness": 0,
       "generator_flags": 64,
       "host_abi_major": 2,
-      "host_abi_minor": 0,
+      "host_abi_minor": 1,
       "module_format": 1,
       "module_name": "phase2",
       "parent_build_id": null,
@@ -370,7 +370,7 @@
     ],
     "types": []
   },
-  "digest": "0x2a9f2ea197d88aef38bb24e426b7c4850493f1a72041fb2d2d01c3b61eccaa22",
+  "digest": "0x250defd642146aec8624b291219c6221ffe22e674f5c3e9186f8eb4fca20a614",
   "flags": 0,
   "format": 1
 }
