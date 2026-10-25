@@ -567,6 +567,16 @@ Exit criteria:
 - Hardware I/O backends and schedules: EtherCAT, Modbus, MQTT.
 - Multi-task scheduler (cooperative or preemptive) and task stepping.
 - User-visible `__NEW`/`__DELETE` as a separate v2 vendor extension with its own memory model.
+- Multi-root references to split persistent aggregates (v2): a place-descriptor form that names an
+  aggregate's constituent per-field roots instead of one storage pointer, with host-side
+  resolution that validates each root's identity, layout, and generation and a language-defined
+  copy-back window for writes made through the reference. The per-field root model enables
+  per-leaf preservation, quarantine, and retained-state flattening, but it leaves persistent
+  structs and arrays of aggregates without a single stable address, so `REF`, `ADR`, and `SIZEOF`
+  reject them and passing them falls back to whole-value copy-in/copy-out. The extension would let
+  `REF_TO` values address those aggregates in place without reintroducing contiguous persistent
+  parents; it requires an append-only descriptor/ABI addition plus explicit aliasing, lifetime,
+  and validation rules. Raw `ADR` arithmetic would remain contiguous-only.
 - Periodic/checkpointed RETAIN saves and stronger state integrity.
 - Registry/version solving for dependencies.
 - Configurable formatter and additional tooling (`stc lsp`, `stc doc`).

@@ -262,8 +262,10 @@ materialized into a transient alloca on read and split back into roots on write.
   lowering/dispatch.
 - **References to split persistent aggregates** remain rejected because they have no single
   stable storage location; contiguous transient aggregates and single-root persistent values are
-  supported (D-144). Pointer targets obey the same rule: `ADR` of a split persistent aggregate
-  is rejected, while leaves, single-root values, and transient aggregates are supported.
+  supported (D-144). A multi-root descriptor with host-side resolution is recorded as a possible
+  v2 extension in the [project plan](Specification/00-Project-Plan.md) §13. Pointer targets obey
+  the same rule: `ADR` of a split persistent aggregate is rejected, while leaves, single-root
+  values, and transient aggregates are supported.
 
 ## 5. Diagnostics
 
