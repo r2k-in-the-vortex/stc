@@ -500,6 +500,44 @@ impl RootRegistry {
         Ok(())
     }
 
+    /// Restores a quarantined root to the active set without moving storage.
+    ///
+    /// The host uses this to undo a candidate drop when a prepared change is
+    /// rolled back. The storage address stays valid because quarantine never
+    /// frees it.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an identity that is already active or is not quarantined.
+    pub fn unquarantine(&mut self, got_id: GotId) -> Result<()> {
+        if self.active.contains_key(&got_id) {
+            return Err(Error::new(
+                codes::ONLINE_PREPARE,
+                format!("root {got_id} is already active and cannot be restored"),
+            ));
+        }
+        let Some(index) = self
+            .quarantined
+            .iter()
+            .position(|root| root.record.got_id == got_id)
+        else {
+            return Err(Error::new(
+                codes::ONLINE_PREPARE,
+                format!("root {got_id} is not quarantined and cannot be restored"),
+            ));
+        };
+        let root = self.quarantined.remove(index);
+        self.active.insert(
+            got_id,
+            ActiveRoot {
+                record: root.record,
+                generation: root.generation,
+                storage: root.storage,
+            },
+        );
+        Ok(())
+    }
+
     /// Moves an active root into quarantine without freeing its storage.
     ///
     /// # Errors
@@ -902,6 +940,43 @@ mod tests {
         assert_eq!(registry.clear_quarantine(), 1);
         assert!(registry.quarantined().is_empty());
         assert_eq!(registry.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn unquarantine_restores_storage_in_place() {
+        let mut registry = RootRegistry::new();
+        let record = root("_ROOT::COUNTER", 1, 4, 4);
+        registry.allocate(&record, 1).unwrap();
+        let address = registry.address(record.got_id).unwrap();
+        registry
+            .get_mut(record.got_id)
+            .unwrap()
+            .storage_mut()
+            .copy_from_slice(&13_u32.to_le_bytes());
+        registry
+            .quarantine(record.got_id, RetiredCause::Dropped)
+            .unwrap();
+        assert!(registry.quarantined()[0].record.key == "_ROOT::COUNTER");
+
+        registry.unquarantine(record.got_id).expect("unquarantine");
+
+        assert!(registry.quarantined().is_empty());
+        assert_eq!(registry.address(record.got_id), Some(address));
+        assert_eq!(
+            registry.storage(record.got_id).unwrap(),
+            &13_u32.to_le_bytes()
+        );
+        assert_eq!(
+            registry.unquarantine(record.got_id).unwrap_err().code,
+            codes::ONLINE_PREPARE
+        );
+        assert_eq!(
+            registry
+                .unquarantine(GotId::from_bytes([9; 16]))
+                .unwrap_err()
+                .code,
+            codes::ONLINE_PREPARE
+        );
     }
 
     #[test]

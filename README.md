@@ -24,7 +24,7 @@ retained-state stubs). The driver provides `stc parse`, `stc check`, and the M4
 The online-change architecture is **resolved** (2026-10-24): the v1 runtime is a persistent host
 plus loadable whole-program modules, persistent memory is host-owned and accessed through a
 project-defined GOT, every module is paired with a persistent GOT manifest, and activation is a
-cycle-boundary module swap. M4.5 phases 0–4 are complete for review (2026-10-25): the versioned
+cycle-boundary module swap. M4.5 phases 0–6 are complete for review (2026-10-25): the versioned
 `GotId`,
 catalog, descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md); `stc-got` implements
@@ -33,11 +33,14 @@ renames, preserve/allocate/drop/reject classification, slot assignment, descript
 encoding/decoding and descriptor/manifest pairing, and deterministic snapshots; `stc-codegen`
 has the module IR builder (GOT slot-table access, indirect cell calls, exported entry points,
 descriptor/function-table globals) plus a structural verifier checked by clang-acceptance tests;
-and `stc-codegen::module` projects the M4 scalar surface to the root catalog, canonical slot
+`stc-codegen::module` projects the M4 scalar surface to the root catalog, canonical slot
 bindings, descriptor bytes, manifest pair, and online-change plan with golden snapshots and
-second-build baseline tests. The foundation milestone is M4.5 before M5; full debug/monitoring is
-M6.5. IR execution lowering, host API bindings, and runtime integration have not started, and the
-M4 artifact model remains the current implemented execution path.
+second-build baseline tests; and `stc-runtime` provides the host GOT, root registry, quarantine,
+transient allocator, artifact validation, platform module loader, ABI 2.0 host services,
+active-manifest store/download, and the load/prepare/activate/commit/rollback/unload state
+machine, exercised by a real no-op module fixture. The foundation milestone is M4.5 before M5;
+full debug/monitoring is M6.5. IR execution lowering and the process-image/global conversion have
+not started, and the M4 artifact model remains the current implemented execution path.
 
 M4 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
 functions, the standard FB library, the manifest, `stc run`, or `stc test`; those constructs are
@@ -371,6 +374,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-113–D-117 | M4.5 phase 1 fixes the artifact contracts: normalized stable keys and content-derived `GotId`s, canonical binary/JSON encodings and digest chain, a pointer-free module descriptor with a separate function table, host ABI 2.0's exact service table and non-returning trap boundary, and build IDs derived from source/catalog/plan inputs. Details in `Specification/Architecture/GOT-Artifacts.md`. |
 | D-118 | M4.5 phase 2 records implementation clarifications without changing format 1: elementary layout encoding tags, export wrappers as module-local code paired with the wrapped callable's identity, rejection of reintroduced retired `GotId`s, and direct-variable address metadata remaining in the sidecar. The `stc-got` crate implements the identity, manifest, and plan layer. |
 | D-119–D-121 | M4.5 phases 3–4 fix the module IR shape (slot-table cell loads, indirect cell calls, ABI 2.0 entry points, structural verification), the M4 catalog projection (global/program-field/direct/task-guard roots, synthesized `_DEFAULT` topology, canonical imports, declaration-to-slot bindings), and the shared descriptor format-1 codec with digest/pairing validation and the acyclic descriptor/manifest sealing order. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
+| D-122–D-123 | M4.5 phases 5–6 implement the host substrate and swap controller: stable root/GOT storage, quarantine and transient lifetimes, descriptor/manifest/plan validation, the platform module loader, the ABI 2.0 host service table, atomic active-manifest storage and download, and load/prepare/activate/commit/rollback/unload with exact-currentness and cold paths. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
 
 ## Question log
 

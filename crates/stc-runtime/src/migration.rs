@@ -25,18 +25,16 @@ pub enum PlanDecision {
     Online,
 }
 
-/// Validates a manifest's online-change plan against an optional baseline.
+/// Validates a manifest as a deployable candidate.
 ///
-/// A cold plan never requires a baseline. An online-candidate plan requires the
-/// exact baseline named by its parent fields, compatible preserved shapes, and
-/// full retirement coverage. A rejected plan is terminal and never applied.
+/// The host runs this before either a cold or an online load. A rejected
+/// verdict or an error diagnostic makes the artifacts undeployable regardless
+/// of the active baseline.
 ///
 /// # Errors
 ///
-/// Rejects a malformed plan, a rejected plan, a missing or stale baseline, a
-/// preserve action whose shape changed, an allocate action that reuses a
-/// baseline identity, and a removed identity without a retirement action.
-pub fn validate_plan(manifest: &Manifest, baseline: Option<&Manifest>) -> Result<PlanDecision> {
+/// Rejects a malformed manifest, a rejected plan, or an error diagnostic.
+pub fn validate_deployable(manifest: &Manifest) -> Result<()> {
     manifest.validate()?;
     if manifest.plan.verdict == PlanVerdict::Rejected {
         return Err(Error::plan(
@@ -50,9 +48,25 @@ pub fn validate_plan(manifest: &Manifest, baseline: Option<&Manifest>) -> Result
         .any(|diagnostic| diagnostic.severity == Severity::Error.tag())
     {
         return Err(Error::plan(
-            "the plan carries an error diagnostic and must not be applied",
+            "the candidate carries an error diagnostic and must not be applied",
         ));
     }
+    Ok(())
+}
+
+/// Validates a manifest's online-change plan against an optional baseline.
+///
+/// A cold plan never requires a baseline. An online-candidate plan requires the
+/// exact baseline named by its parent fields, compatible preserved shapes, and
+/// full retirement coverage. A rejected plan is terminal and never applied.
+///
+/// # Errors
+///
+/// Rejects a malformed plan, a rejected plan, a missing or stale baseline, a
+/// preserve action whose shape changed, an allocate action that reuses a
+/// baseline identity, and a removed identity without a retirement action.
+pub fn validate_plan(manifest: &Manifest, baseline: Option<&Manifest>) -> Result<PlanDecision> {
+    validate_deployable(manifest)?;
     if manifest.plan.verdict == PlanVerdict::Cold {
         return Ok(PlanDecision::Cold);
     }

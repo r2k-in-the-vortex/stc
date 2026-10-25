@@ -1302,6 +1302,27 @@ records the choices. Implementation of host API bindings and runtime loading in 
 follow these formats exactly, and any further change discovered during implementation returns to
 this document and the decision log before code lands.
 
+Phase 6 is implemented (2026-10-25) in `stc-runtime`. `loader` is the platform layer over
+`LoadLibraryW`/`GetProcAddress`/`FreeLibrary` and `dlopen`/`dlsym`/`dlclose`; it resolves the seven
+§7.3 entry points, copies the descriptor blob and function table, and treats load failures as
+non-fatal module errors. `host_api` is the static ABI 2.0 table described in §8.1: import cells
+are bound to the addresses of its fields, transient allocation and free route to the generation
+whose entry point is executing, process-image areas map to the configured image, and traps are
+recorded before the non-returning trap path. `store` keeps the committed baseline as an immutable
+versioned binary/JSON pair plus an atomically replaced `current` pointer; it reports a missing or
+corrupt baseline instead of synthesizing one, and builds the §7.4 download envelope from the
+manifest projections, deployment identifiers, and a value-free runtime layout. `host` validates
+candidates (pairing, function-table count, entry flags), applies `Auto`/`Cold`/`Online` load
+modes, gates online changes on the exact committed store and active generation, cold-installs
+into a fresh root registry, prepares online changes through a root-transaction journal, switches
+at an explicit cycle boundary, commits after one successful cycle, rolls back a failed first cycle
+(restoring preserved records, dropped roots, and allocated roots), and delays retired-module
+unload behind generation pins. Generation pins and IDs, the active-manifest store, and the
+download artifact are covered by runtime tests; a real native no-op module exercises load,
+attach, prepare, cycle, commit, rollback, and unload on Windows and Linux. The non-local
+trap-boundary rollback and the C-facing launcher/embedding exports remain with phase 7 execution
+conversion. D-123 records the phase choices.
+
 ## 13. Related documents
 
 - [Online Change and GOT](Online-Change-and-GOT.md) — host/module model, lifecycle, policy.

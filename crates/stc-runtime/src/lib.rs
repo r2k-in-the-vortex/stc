@@ -12,13 +12,19 @@
 //!   descriptor, direct, and import cells;
 //! - [`memory`] owns persistent roots, quarantine, and transient module blocks;
 //! - [`catalog`] validates descriptor/manifest pairs against host policy;
-//! - [`migration`] validates an online-change plan against the active baseline.
+//! - [`migration`] validates an online-change plan against the active baseline;
+//! - [`loader`] maps a native module and copies its descriptor and function
+//!   table;
+//! - [`host_api`] provides the ABI 2.0 service table;
+//! - [`store`] persists the committed manifest baseline and builds downloads;
+//! - [`host`] owns the load/prepare/activate/commit/rollback/unload state
+//!   machine and the generation-bound root and GOT state.
 //!
-//! Module loading and generation switching build on these primitives in later
-//! phases; the M4 ABI 1 entry points below remain the executable path for now.
+//! The M4 ABI 1 entry points below remain the executable path until phase 7
+//! converts generated code to the module execution model.
 //!
 //! This is the only workspace crate that permits unsafe code; every unsafe
-//! operation is an FFI pointer access confined to the functions below.
+//! operation is an FFI pointer access confined to this crate.
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -27,16 +33,27 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod catalog;
 pub mod got;
+pub mod host;
+pub mod host_api;
+pub mod loader;
 pub mod memory;
 pub mod migration;
+pub mod store;
 
 #[cfg(test)]
 mod test_support;
 
 pub use catalog::{HostPlatform, PROFILE, SUPPORTED_FEATURES, ValidatedPair};
 pub use got::Got;
+pub use host::{Candidate, CycleOutcome, GenerationPin, Host, LoadMode, LoadOutcome, ManifestDiff};
+pub use host_api::{ABI_VERSION, HOST_API, HostApi, TrapRecord};
+pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
-pub use migration::{PlanDecision, validate_plan};
+pub use migration::{PlanDecision, validate_deployable, validate_plan};
+pub use store::{
+    Deployment, Download, LayoutState, ManifestStore, RuntimeLayout, RuntimeLayoutEntry,
+    StoredManifest,
+};
 
 /// Runtime ABI version (Runtime-and-Execution §2.2).
 pub const STC_RUNTIME_ABI: i32 = 1;
