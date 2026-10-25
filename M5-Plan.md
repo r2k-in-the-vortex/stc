@@ -2,8 +2,8 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-25  
-Status: Phase 0 written. Phases 1–7 and the `STC-POINTER` surface are implemented; interfaces,
-runtime descriptors, and `?=` remain phase 4b.
+Status: Phase 0 written. Phases 1–7 and the `STC-POINTER` surface are implemented; phase 4b
+(interfaces, runtime descriptors, `?=`) is planned in D-147–D-152 and §4b.
 
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8, [Architecture](Specification/Architecture/Architecture.md)
 §4, [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §1–§4,
@@ -163,7 +163,7 @@ materialized into a transient alloca on read and split back into roots on write.
 | 1 | Type/layout substrate, aggregate IR builder, type/descriptor catalog records | Complete |
 | 2 | Structs, enums, subranges, arrays, strings: values, roots, initializers, traps | Complete for values, roots, initializers, and traps; string search functions are phase 5 |
 | 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, conformant `ARRAY[*]`, and `STC-POINTER` complete; `?=` needs phase 4 |
-| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; interfaces, `?=`, and runtime descriptors remain |
+| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; phase 4b (interfaces, descriptors, `?=`) is planned in D-147–D-152 and §4b |
 | 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Complete: per-leaf flattening, packed offsets, GOT-root save/load, and metadata paths |
 | 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state/pointer harnesses, M5 hot-swap coverage, M5 fuzz seeds, and status documentation are in place; interfaces/descriptors remain (phase 4b) |
@@ -214,6 +214,150 @@ materialized into a transient alloca on read and split back into roots on write.
 - Extend the host to construct/validate descriptors, vtables, and object records and to enforce
   vtable-shape compatibility.
 
+### Phase 4b — interfaces, descriptors, and `?=`
+
+Status: planned (2026-10-25); decisions D-147–D-152. Land the steps in order; each step keeps the
+manifest and descriptor formats at version 1 and adds its tests with the code.
+
+#### 4b.0 — Contracts and documentation
+
+- Document the TYPEINFO, VTABLE, and object-record byte layouts, the hidden record-root key
+  convention, interface-prototype function records, trap-stub cells, and inline access rules in
+  GOT Artifacts §8 and Runtime and Execution §2. Descriptor metadata keeps the owning type's type
+  key, layout hash, size, and alignment; the runtime record layout is separate and versioned.
+- Record host ABI 2.1 (`HOST_ABI_MINOR = 1`) and update the ABI table constants and C-facing
+  documentation. No new services are appended.
+- Amend D-133, Architecture §4.6, and Online Change and GOT §4.2/§8.3 for resolved storage
+  pointers, class handle assignment versus FB value copy, the class value/instance layout split
+  and `PTR_TO(T:<class>)` field projection, non-retained class handle roots with retained
+  owned-instance fields, unprojected `Object` descriptors, per-pair interface vtables, virtual
+  class/FB dispatch, and the stack-record escape rule.
+- Update the conformance profile's interface and `?=` status when the code lands.
+
+#### 4b.1 — Catalog, descriptors, and hidden roots
+
+- `stc-codegen::types`: compute the object-record layout (`ptr typeinfo` plus N leaf storage
+  pointers), the base-first interface-map order (inherited indices fixed, new interfaces appended
+  sorted by `GotId`), per-interface vtable slot order, class vtable cell order, and trap-stub
+  signatures for interface prototypes.
+- `stc-codegen::module`: project interface prototypes as `FunctionKind::Method` records with
+  trap-stub symbols; project one TYPEINFO `DescriptorDecl` per class/FB and one VTABLE when the
+  type has vtable entries (interface types need no descriptor); emit one hidden non-retained
+  record root per persistent object
+  (program fields, globals, nested instances, array elements) with a deterministic `#OBJREC`-style
+  key and the declaration's source span. For class-typed persistent declarations also emit a
+  non-retained handle root (internal `PTR_TO(T:<id>)` key) holding the reference value; FB
+  declarations get no handle root. Set required-feature bits 2 and 3.
+- Class reference layout: distinguish the class **value** layout (pointer-sized handle) from the
+  class **instance** layout (field struct) in `TypeFacts`/`NamedType`/`llvm_storage`. Class-typed
+  fields, array elements, locals, parameters, and results use the handle layout; the owned instance
+  uses the instance layout and its own record/roots. Project class-typed `FieldRecord`s with
+  `PTR_TO(T:<class id>)` keys while the source type stays the class, and keep `TypeRecord`
+  size/align/layout hash as the instance layout. Emit the owned instance's field roots, hidden
+  record root, and handle root separately, with arrays of classes getting one owned instance per
+  element. FB-typed declarations stay inline. Exclude class handle roots from retained-state
+  leaves and metadata payloads. Document the projection.
+- Define the hidden record-root and class-handle key/root-kind convention for global objects,
+  program-instance objects, nested instances, and array elements so it passes existing
+  catalog/engine key validation without a schema change; add collision and validation tests.
+- Expose descriptor slot bindings (`TYPEINFO`/`VTABLE` per type) alongside root and function
+  targets so codegen can load typeinfo cells when constructing records, initializing handles, and
+  upcasting; keep the descriptor metadata's type key/layout hash/size/align equal to the owning
+  type's so engine classification is unchanged.
+- `stc-codegen::unit`: emit trap-stub bodies for prototypes and extend the prepare entry to fill
+  fresh record roots (typeinfo pointer plus leaf storage pointers) and fresh class handle roots
+  (pointing at their owned instance record) from the active slot table.
+- `stc-got`: verify engine classification and slot assignment cover the new records with no format
+  change; add catalog, descriptor, and hidden-root tests and double-build determinism.
+
+#### 4b.2 — Host registry and ABI 2.1
+
+- `stc-got::descriptor`, `stc-codegen::abi`, and `stc-runtime::host_api`: bump the minor to 2.1 and
+  update the version constants; the service table and `REQUIRED_SIZE` stay unchanged because no
+  services are appended.
+- `stc-runtime::host` and `got`: allocate a descriptor registry keyed by `GotId`; build TYPEINFO,
+  VTABLE, and per-(type, interface) vtable records from manifest function and type records at
+  prepare; bind `SlotKind::Descriptor` cells through `Got::bind_descriptors`; validate descriptor
+  size, alignment, type/layout identity, slot counts, base-first interface maps, and trap-stub
+  cells.
+- Order the candidate lifecycle so generated prepare can read descriptor cells: build the
+  descriptor registry, bind GOT descriptor/function/root cells, then call `stc_module_prepare`
+  (which fills fresh records and class handles), then activate and patch descriptor entries.
+- Preserve stable descriptor addresses for compatible shapes; build shadow contents during
+  prepare and patch entries and maps at activation; reject shape changes while a live object or
+  interface depends on them; release fresh records on rollback.
+- Runtime tests: descriptor-cell binding, malformed or missing descriptors, preserved interface
+  values across a warm swap, vtable-shape rejection, feature-bit rejection by older hosts, and
+  object-record preserve/allocate/rollback.
+
+#### 4b.3 — Object records and virtual dispatch
+
+- `stc-codegen::unit` and `place`: object values become record pointers; local class instances
+  (owned instance, handle slot, record) and local FB instances and records are stack allocas;
+  persistent records and class handles come from hidden roots; class field/array-element access
+  loads the handle and then uses the referenced record and root table; FB fields stay inline.
+  `THIS` is the record handle; class `OUT`/`VAR_IN_OUT` parameters receive a pointer to the
+  caller's handle slot; FB `OUT`/`VAR_IN_OUT` parameters receive the instance record/state and use
+  its tail table.
+- Assignment: class `:=` copies the handle, orphaning the destination's owned instance but
+  leaving it rooted; FB `:=` copies fields. Class `IN` parameters are handles, so assigning the
+  parameter only rebinds the callee handle; FB `IN` parameters use caller copies. Assignment
+  through a dereferenced `Object` reference copies state into the referenced object.
+- `stc-codegen::oop`, `call`, and `expr`: method and FB body ABI `(handle, root table, ...)`;
+  virtual class/FB method calls use TYPEINFO, VTABLE, and the slot cell; `SUPER` calls the direct
+  base cell; interface calls use the per-pair vtable.
+- `stc-sema`: extend the pointer-escape rule to class handles and interfaces that refer to stack
+  records: reject returning them, storing them persistently, or writing them through `OUT`/
+  `VAR_IN_OUT` parameters; keep the `THIS` type and assignability rules consistent.
+- Tests: virtual override through base-typed values, class reference assignment/aliasing and
+  downcasts through handles, class handle layout/arrays with per-element owned instances,
+  retention of owned-instance fields after handle reassignment, local/persistent/nested objects,
+  recursion, `THIS`/`SUPER`, class and FB parameters and copy isolation, arrays of objects, and
+  null-receiver dispatch traps.
+
+#### 4b.4 — Interface values and upcasts
+
+- `stc-codegen::types` and `call`: interface ABI by value `{ ptr, ptr }`; stop classifying
+  interfaces as contiguous aggregates for parameter passing.
+- `stc-codegen::place` and `expr`: class/FB-to-interface upcasts use the compile-time base-first
+  map index (valid for derived runtime objects because inherited entries keep their indices);
+  interface-to-interface upcasts use a bounded search; implement `= NULL` and `<> NULL`.
+- Cover interface parameters, results, fields, globals, and arrays, plus FB-implemented
+  interfaces.
+- Tests: dispatch across implementors, `EXTENDS`, interface parameters/results/arrays, NULL
+  behavior, clang acceptance, and snapshots.
+
+#### 4b.5 — `?=`, object references, and `REF_TO`-to-interface
+
+- `stc-codegen::stmt` and `expr`: lower `Attempt` with base-chain and interface-membership checks;
+  assign all-zero on failure; never trap.
+- `stc-codegen::reference`: `REF(object)` builds `Object {handle, descriptor}`; dereference and
+  assignment through it use object semantics; object-reference attempts use descriptor
+  compatibility; `REF_TO`-to-interface yields null for null or incompatible sources; keep
+  pointer-to-object/interface conversions and `ADR` of objects rejected.
+- Tests: upcast and downcast attempts, failed attempts, null sources/destinations (attempt fails
+  without trapping), `REF(object)` dereference, whole-object assignment through a dereferenced
+  reference (state copy, no handle rebind), `REF_TO`-to-interface success and failure, and
+  rejected pointer conversions.
+
+#### 4b.6 — Verification, online change, and documentation
+
+- Update the phase-4 rejection tests in `stc-codegen/tests/codegen.rs` (assignment attempt and
+  interface dispatch) and `stc-driver/tests/execution.rs` (unsupported constructs) to success
+  coverage; keep explicit diagnostics for genuinely unsupported combinations.
+- Add C-harness coverage for the full surface, hot-swap tests for preserved interfaces, descriptor
+  identity, vtable-shape rejection, fresh-record initialization, and rollback, and fuzz seeds for
+  malformed TYPEINFO/VTABLE/interface-map inputs.
+- Update README, Decisions, project plan/conformance status, Architecture/GOT/Runtime docs, and
+  this plan; run `cargo test --workspace --locked`, clippy, fmt, docs, markdown lint, and the
+  clang-required CI job; double builds remain byte-identical.
+
+Exit criteria: interface dispatch, virtual overrides, class reference assignment/aliasing and
+downcasts through handles, `?=` success and failure, `REF(object)` and `REF_TO`-to-interface,
+arrays of objects, preserved interface values and class handles across a warm swap, and
+vtable-shape rejection all pass; no descriptor or vtable is module-owned; generated code contains
+no heap allocation or raw persistent object pointer.
+
 ### Phase 5 — standard library
 
 - Lower every `StdFnKind`; inline exact operations and call host helpers otherwise. Complete,
@@ -257,15 +401,116 @@ materialized into a transient alloca on read and split back into roots on write.
 - **Phase 4b — interfaces, descriptors, `?=`.** No descriptor or vtable records are projected
   yet, `Descriptor` GOT cells are still rejected by the runtime, and object values are root-table
   pointers rather than D-133 host object records. Interface assignment and method dispatch are
-  rejected explicitly at their call sites. Completing this requires the runtime type-info/vtable/
-  object registry, stable object records across swaps, descriptor projection, and interface
-  lowering/dispatch.
+  rejected explicitly at their call sites. The implementation sequence is in §4, Phase 4b; the
+  resolved decisions are D-147–D-152.
 - **References to split persistent aggregates** remain rejected because they have no single
   stable storage location; contiguous transient aggregates and single-root persistent values are
   supported (D-144). A multi-root descriptor with host-side resolution is recorded as a possible
   v2 extension in the [project plan](Specification/00-Project-Plan.md) §13. Pointer targets obey
   the same rule: `ADR` of a split persistent aggregate is rejected, while leaves, single-root
   values, and transient aggregates are supported.
+
+#### Phase 4b decision questions
+
+All questions below were resolved on 2026-10-25. Record the resolutions as decision entries
+(D-147 onward) before implementing the affected part. Q4B-1–Q4B-4 were the blocking set; the
+remaining questions follow in the listed order.
+
+**Object representation (blocking)**
+
+- **Q4B-1 — What is an object value at runtime?** (a) Full D-133 record
+  `{typeinfo, leaf storage pointers…}` with record-pointer values; (b) a record whose tail is the
+  existing `[N x ptr]` root table, keeping the body ABI; (c) transient root-table pointers with no
+  dynamic type checks. Also decide whether records hold storage pointers (swap-stable) or GOT cell
+  pointers (literal D-133 wording). **Resolved:** full D-133 record with resolved storage
+  pointers; D-133's "field-root cell pointers" wording is clarified accordingly.
+- **Q4B-2 — Is dynamic type identity required on every object value?** Full `?=` semantics
+  (class downcasts, interface-to-interface attempts) need typeinfo on locals and parameters too;
+  otherwise only statically safe attempts are implemented and dynamic cases are rejected.
+  **Resolved:** full dynamic checks; every class/FB value carries typeinfo.
+- **Q4B-3 — Object-record ownership and escape policy.** Persistent instances are host-owned and
+  stable across swaps; locals/parameters need stack or transient records. Decide how interface or
+  handle values referencing a local record are prevented from escaping into persistent storage,
+  and define rollback/removal behavior. **Resolved:** persistent instances use host-owned records
+  allocated once at prepare; locals use per-activation stack records and object parameters are
+  caller handles; generated code performs no heap allocation; handles or interfaces to stack
+  records are rejected from escaping; recursion is allowed.
+- **Q4B-4 — Method/FB body ABI, `THIS`, `SUPER`, object parameters.** Pass record + root table,
+  record only (table at a fixed offset), or keep table-only; make `THIS` handle-valued and
+  `SUPER` use the base view. Resolve object input parameters (they pass as `ptr` but cannot be
+  read today) and the by-value/by-pointer rule for object, reference, and interface values.
+  **Resolved:** handle + root-table arguments; `THIS` is the handle; object `IN` parameters are
+  handles, with the caller copying when IN isolation is required.
+
+**Descriptor model (blocking before catalog/host work)**
+
+- **Q4B-5 — Descriptor kinds and runtime layouts.** Define TYPEINFO, VTABLE, and OBJECT record
+  layouts, versioning, and whether OBJECT is per type (record shape) or per instance; catalog
+  descriptor records carry metadata only today. **Resolved:** hidden non-retained record roots for
+  persistent objects; the host allocates their storage and generated prepare fills typeinfo and
+  leaf storage pointers for fresh objects.
+- **Q4B-6 — How do vtable entries and interface maps reach the host?** Extend
+  `DescriptorRecord`/`DescriptorDecl` with entries (manifest format impact), reconstruct in the
+  host from function/type records, add a prototype/method-map record, or use method-key lookup.
+  **Resolved:** interface prototypes are projected as function records with trap-stub cells; the
+  host matches prototype name+signature to implementors and embeds per-(object type, interface)
+  vtables in the type's TYPEINFO. No manifest format change.
+- **Q4B-7 — Interface slot model.** Sema assigns interface-prototype and class/FB slots in
+  separate spaces. Choose per-(object type, interface) vtables in interface slot order, a unified
+  sema slot space, host-built interface vtables, or runtime key lookup; define `vtable_shape`.
+  **Resolved:** per-(object type, interface) vtables in interface slot order; sema slot assignment
+  and `vtable_shape` remain per type.
+- **Q4B-8 — Descriptor identity.** The key grammar names one descriptor per owner type path and
+  kind, so per-interface vtables and per-instance object descriptors cannot be named. Choose an
+  embedded map, a grammar/format extension, or host-internal records without catalog identities.
+  **Resolved:** TYPEINFO and VTABLE are projected per owner type only; no per-pair or per-instance
+  descriptor identities. `DescriptorKind::Object` stays defined but unprojected in M5: object
+  records are host storage, not catalog descriptors.
+- **Q4B-9 — Descriptor lifecycle across online change.** Preserved interface values need stable
+  descriptor addresses while vtable entries must reach the new generation's cells. Choose in-place
+  entry patching at activation, per-generation descriptors plus preserved-root rewriting, or
+  stable dispatch cells; define shape-change rejection and live-dependency tracking.
+  **Resolved:** descriptors keep stable addresses; prepare builds shadow contents and activation
+  patches method cells/interface maps under the cycle boundary.
+- **Q4B-10 — Descriptor registry and ABI.** Define host registry/validation, descriptor GOT cell
+  binding, required-feature bits 2/3, and whether `?=` uses an appended ABI 2.1 service or inline
+  descriptor reads. **Resolved:** generated code reads the TYPEINFO/vtable/record layout inline;
+  the host ABI minor is bumped to 2.1 for that layout and for the required-feature bits.
+
+**Interface semantics and codegen**
+
+- **Q4B-11 — Interface ABI and comparisons.** Pass `{ptr, ptr}` by value or by pointer; define
+  results, `VAR_IN_OUT`/`OUT`, fields, roots; define null tests and whether identity comparison is
+  supported (codegen currently rejects interface comparisons). **Resolved:** pass by value
+  `{ptr, ptr}`; support NULL tests only for interfaces and class/FB handles; no identity
+  comparison in M5.
+- **Q4B-12 — Upcast mechanics.** Precompute the interface entry index in the static source type's
+  map or look it up at runtime; define interface-to-interface upcasts and any explicit conversions.
+  **Resolved:** class/FB-to-interface upcasts use a compile-time map index; interface-to-interface
+  upcasts and dynamic attempts use a bounded search over the object type's base-first interface
+  map. Inherited interface-map entries keep their indices so the static index stays valid for
+  derived runtime objects; newly implemented interfaces are appended sorted by `GotId`.
+- **Q4B-13 — `REF` of object places and the `Object` descriptor kind.** Implement
+  `Object {handle, descriptor}` and `REF_TO`→interface now, or reject `REF` of object-typed places
+  in M5 and record the deviation. **Resolved:** implement `Object {handle, descriptor}`;
+  `REF(object)` yields it, dereference yields the object, object attempts use the descriptor, and
+  `REF_TO`→interface follows Q-152/Q-171.
+- **Q4B-14 — Virtual dispatch for class/FB methods.** Implement vtable dispatch (all methods or
+  virtual/abstract only) or keep static resolution for M5 and document that dynamic dispatch is
+  interface-only. **Resolved:** virtual dispatch for all class/FB methods via VTABLE; `SUPER`
+  stays a direct base call.
+- **Q4B-15 — Scope matrix and verification.** Confirm which combinations are in scope (interface
+  parameters/results/globals/arrays, FB interfaces, interface `EXTENDS`, attempts in both
+  directions, `THIS` as interface, arrays of objects) and the harness, hot-swap, fuzz, and doc
+  updates that close the phase. **Resolved:** full documented surface, including interface
+  parameters/results/fields/globals/arrays, FB interfaces, interface `EXTENDS`, both attempt
+  directions, `THIS` as interface, arrays of objects, and `REF_TO` objects/interfaces.
+- **Q4B-16 — How should `:=` between class-typed values behave?** The analyzer classifies class
+  assignment as a reference assignment (`RefAssign`, D-069), while phase 4a codegen copies fields.
+  **Resolved:** class values are references (handle copy); each class-typed variable or field owns
+  an embedded instance whose field roots remain retained; FB values remain embedded and `:=`
+  copies state. Assignment through a dereferenced `Object` reference copies state into the
+  referenced object.
 
 ## 5. Diagnostics
 
@@ -293,8 +538,9 @@ diagnostic expansion. New compiler codes require a decision entry.
 The project-plan M5 exit criteria plus:
 
 - Every new root/callable/type/descriptor/instance/export has a deterministic identity and slot.
-- Generated IR contains no persistent raw pointer, no module-owned persistent storage, and no
-  target-specific offsets.
+- Generated IR contains no persistent raw object-storage or code pointer, no module-owned
+  persistent storage, and no target-specific offsets. Class handles are pointers to host-owned
+  records and are the only persistent object references.
 - Unsupported M6 constructs remain explicit diagnostics, not silent wrong IR.
 - README, Decisions, project plan, conformance profile, and architecture/runtime/state/testing
   specs describe the implemented M5 surface truthfully.
