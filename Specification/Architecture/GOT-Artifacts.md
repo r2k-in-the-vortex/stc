@@ -1636,10 +1636,21 @@ function records with trap-stub symbols, one hidden `OBJREC` root per persistent
 hidden `HANDLE` root per class value, and sets required-feature bits 2 and 3. `unit` emits the
 trap stubs and fills fresh records and handles in `stc_module_prepare`; `stc-got` accepts the
 markers while keeping format 1 and rejects a marker on a non-hidden root or a pointer type on an
-ordinary root. The runtime binds descriptor cells during the 4b.1 window with zeroed placeholder
-storage until the 4b.2 registry replaces it. Class-owned instance fields remain ordinary retained
-leaves; handle and record roots are non-retained. Recursive class ownership has no finite
-persistent storage and is rejected at the declaration.
+ordinary root. Class-owned instance fields remain ordinary retained leaves; handle and record
+roots are non-retained. Recursive class ownership has no finite persistent storage and is
+rejected at the declaration.
+
+M5 phase 4b.2 is implemented (2026-10-25) in `stc-runtime`. The host owns a descriptor registry:
+TYPEINFO and class VTABLE records are keyed by the catalog descriptor `GotId`, and
+per-(object type, interface) VTABLEs are keyed by the two type identities because §8.5 gives them
+no catalog identity. Prepare validates descriptor size/alignment/type-layout identity, object
+leaf counts against hidden `OBJREC` roots, class slot counts, contiguous interface prototype
+slots, base-first interface maps, and prototype trap-stub cells; it binds the generation's
+descriptor cells before `stc_module_prepare`. A compatible shape reuses its stable record
+address, shadow contents are patched at activation, shape changes and removals that a preserved
+object or interface value can depend on are rejected with `STC-E-ONLINE-003`, and removed
+descriptors quarantine with their roots. The service table, `REQUIRED_SIZE`, and both artifact
+formats remain unchanged.
 
 ## 13. Related documents
 

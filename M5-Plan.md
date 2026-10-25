@@ -4,7 +4,8 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-25  
 Status: Phase 0 written. Phases 1–7 and the `STC-POINTER` surface are implemented; phase 4b
 (interfaces, runtime descriptors, `?=`) is planned in D-147–D-152 and §4b. Steps 4b.0 (contracts
-and documentation) and 4b.1 (catalog, descriptors, and hidden roots) are complete.
+and documentation), 4b.1 (catalog, descriptors, and hidden roots), and 4b.2 (host registry and
+ABI 2.1) are complete.
 
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8, [Architecture](Specification/Architecture/Architecture.md)
 §4, [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §1–§4,
@@ -164,7 +165,7 @@ materialized into a transient alloca on read and split back into roots on write.
 | 1 | Type/layout substrate, aggregate IR builder, type/descriptor catalog records | Complete |
 | 2 | Structs, enums, subranges, arrays, strings: values, roots, initializers, traps | Complete for values, roots, initializers, and traps; string search functions are phase 5 |
 | 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, conformant `ARRAY[*]`, and `STC-POINTER` complete; `?=` needs phase 4 |
-| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; phase 4b (interfaces, descriptors, `?=`) is planned in D-147–D-152 and §4b, with steps 4b.0 and 4b.1 complete |
+| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; phase 4b (interfaces, descriptors, `?=`) is planned in D-147–D-152 and §4b, with steps 4b.0–4b.2 complete |
 | 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Complete: per-leaf flattening, packed offsets, GOT-root save/load, and metadata paths |
 | 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state/pointer harnesses, M5 hot-swap coverage, M5 fuzz seeds, and status documentation are in place; interfaces/descriptors remain (phase 4b) |
@@ -217,7 +218,7 @@ materialized into a transient alloca on read and split back into roots on write.
 
 ### Phase 4b — interfaces, descriptors, and `?=`
 
-Status: steps 4b.0 and 4b.1 complete (2026-10-25); steps 4b.2–4b.6 planned. Decisions
+Status: steps 4b.0–4b.2 complete (2026-10-25); steps 4b.3–4b.6 planned. Decisions
 D-147–D-152. Land the steps in order; each step keeps the manifest and descriptor formats at
 version 1 and adds its tests with the code.
 
@@ -290,6 +291,17 @@ registry lands.
   change; add catalog, descriptor, and hidden-root tests and double-build determinism.
 
 #### 4b.2 — Host registry and ABI 2.1
+
+Complete (2026-10-25). ABI 2.1 was already recorded by 4b.0; this step implements the
+`stc-runtime::descriptors` registry. TYPEINFO and class VTABLE records are keyed by their catalog
+descriptor `GotId`; per-(object type, interface) tables are keyed by the two type identities
+because they have no catalog identity (D-148). Prepare validates descriptor metadata, object
+leaf counts against the hidden `OBJREC` roots, class slot counts, contiguous interface prototype
+slots, base-first interface maps, and prototype trap-stub cells; it reuses a record's stable
+address while its shape is compatible and quarantines removed or reshaped records. Shadow words
+are built during prepare and patched at activation, and rollback restores previous words and
+releases fresh records. `stc_module_prepare` now runs after descriptor cells are bound, so fresh
+object records store real TYPEINFO addresses. Interface dispatch and `?=` remain 4b.3–4b.5 work.
 
 - `stc-got::descriptor`, `stc-codegen::abi`, and `stc-runtime::host_api`: bump the minor to 2.1 and
   update the version constants; the service table and `REQUIRED_SIZE` stay unchanged because no
@@ -420,11 +432,12 @@ no heap allocation or raw persistent object pointer.
 - **Phase 4b — interfaces, descriptors, `?=`.** Step 4b.0 records host ABI 2.1 and the inline
   record contracts (GOT Artifacts §8.5, Runtime and Execution §2.6). Step 4b.1 projects the
   catalog: one TYPEINFO per class/FB, class VTABLES, interface prototype records with trap stubs,
-  and hidden `HANDLE`/`OBJREC` roots; prepare fills fresh records and handles. Descriptor GOT
-  cells are bound to zeroed host placeholder storage until the 4b.2 registry replaces them.
-  Object values are still root-table pointers outside the new roots, so interface assignment and
-  method dispatch remain rejected explicitly until 4b.2–4b.5. The resolved decisions are
-  D-147–D-152.
+  and hidden `HANDLE`/`OBJREC` roots; prepare fills fresh records and handles. Step 4b.2 builds
+  and validates the host-owned descriptor registry before prepare, keeps compatible record
+  addresses stable across a warm swap, patches entries at activation, quarantines removed
+  descriptors, and releases fresh records on rollback. Object values are still root-table
+  pointers outside the new roots, so interface assignment and method dispatch remain rejected
+  explicitly until 4b.3–4b.5. The resolved decisions are D-147–D-152.
 - **References to split persistent aggregates** remain rejected because they have no single
   stable storage location; contiguous transient aggregates and single-root persistent values are
   supported (D-144). A multi-root descriptor with host-side resolution is recorded as a possible

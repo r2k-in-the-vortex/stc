@@ -1,9 +1,10 @@
 //! Host-side module lifecycle: load, validate, prepare, activate, commit,
 //! roll back, and unload whole-program module generations.
 //!
-//! The host owns persistent roots, the GOT, the committed manifest baseline,
-//! the process image, and the mapping from stable identity to storage. A
-//! candidate is loaded and validated without touching the active generation;
+//! The host owns persistent roots, the GOT, the descriptor registry, the
+//! committed manifest baseline, the process image, and the mapping from stable
+//! identity to storage. A candidate is loaded and validated without touching
+//! the active generation;
 //! an online candidate is prepared into a temporary GOT and swapped in at an
 //! explicit cycle boundary. The previous generation stays resident for one
 //! successful cycle and is restored if that cycle fails.
@@ -28,10 +29,11 @@ use stc_got::error::{Error, Result, codes};
 use stc_got::model::PlanAction;
 use stc_got::{
     Descriptor, Digest32, GotId, IdentityKind, Manifest, PlanDiagnostic, PlanVerdict, RetiredCause,
-    RootKind, RootRecord, Severity, SlotKind,
+    RootKind, RootRecord, Severity, SlotKind, TypeKey,
 };
 
 use crate::catalog::{HostPlatform, ValidatedPair};
+use crate::descriptors::{DescriptorActivation, DescriptorRegistry, PreparedDescriptors};
 use crate::got::Got;
 use crate::host_api;
 use crate::image::{self, ImageSnapshot};
@@ -259,41 +261,6 @@ impl Candidate {
     }
 }
 
-/// One active or prepared module generation.
-/// Zero-filled host storage bound to descriptor cells until the ABI 2.1
-/// descriptor registry replaces it (phase 4b.2).
-///
-/// Generated prepare reads the TYPEINFO cell value when it fills a fresh
-/// object record. The placeholder keeps the cell bound and non-null; no
-/// generated code dereferences the record header before the registry lands.
-#[derive(Default)]
-struct DescriptorPlaceholders {
-    storage: Vec<Box<[u8; DESCRIPTOR_PLACEHOLDER_SIZE]>>,
-}
-
-/// Size of one placeholder descriptor cell.
-const DESCRIPTOR_PLACEHOLDER_SIZE: usize = 4096;
-
-impl DescriptorPlaceholders {
-    fn new(manifest: &Manifest) -> Self {
-        let storage = manifest
-            .descriptors
-            .iter()
-            .map(|_| Box::new([0_u8; DESCRIPTOR_PLACEHOLDER_SIZE]))
-            .collect();
-        Self { storage }
-    }
-
-    fn addresses(&self, manifest: &Manifest) -> BTreeMap<GotId, usize> {
-        manifest
-            .descriptors
-            .iter()
-            .zip(&self.storage)
-            .map(|(descriptor, storage)| (descriptor.got_id, storage.as_ptr() as usize))
-            .collect()
-    }
-}
-
 struct Generation {
     id: u64,
     module: LoadedModule,
@@ -305,10 +272,6 @@ struct Generation {
     attached: bool,
     shutdown_done: bool,
     cycles: u64,
-    /// Placeholder descriptor storage owned by this generation. The field is
-    /// never read directly; it keeps the addresses bound in the GOT alive.
-    #[allow(dead_code)]
-    descriptors: DescriptorPlaceholders,
 }
 
 impl Generation {
@@ -319,7 +282,6 @@ impl Generation {
         manifest: Manifest,
         manifest_digest: Digest32,
         info: Option<ModuleInfo>,
-        descriptors: DescriptorPlaceholders,
     ) -> Self {
         Self {
             id,
@@ -332,7 +294,6 @@ impl Generation {
             attached: false,
             shutdown_done: false,
             cycles: 0,
-            descriptors,
         }
     }
 
@@ -450,6 +411,7 @@ struct ImageRollback {
 struct Pending {
     generation: Generation,
     undo: RootUndo,
+    descriptors: PreparedDescriptors,
     image: Option<PendingImage>,
     warnings: Vec<HostWarning>,
 }
@@ -457,6 +419,7 @@ struct Pending {
 struct Rollback {
     generation: Generation,
     undo: RootUndo,
+    descriptors: DescriptorActivation,
     successful_cycles: u64,
     image: Option<ImageRollback>,
 }
@@ -484,6 +447,7 @@ pub struct ManifestDiff {
 pub struct Host {
     platform: HostPlatform,
     roots: RootRegistry,
+    descriptors: DescriptorRegistry,
     store: ManifestStore,
     active: Option<Generation>,
     pending: Option<Pending>,
@@ -508,6 +472,7 @@ impl Host {
         Self {
             platform,
             roots: RootRegistry::with_limits(limits),
+            descriptors: DescriptorRegistry::new(),
             store,
             active: None,
             pending: None,
@@ -594,6 +559,7 @@ impl Host {
                 "cannot reset quarantine while an online change is in progress",
             ));
         }
+        let _ = self.descriptors.clear_quarantine();
         Ok(self.roots.clear_quarantine())
     }
 
@@ -664,6 +630,59 @@ impl Host {
     /// code reaches the same storage through a data cell.
     pub fn root_storage_mut(&mut self, got_id: GotId) -> Option<&mut [u8]> {
         self.roots.get_mut(got_id).map(|root| root.storage_mut())
+    }
+
+    /// Returns one TYPEINFO or class VTABLE record's stable address.
+    ///
+    /// Descriptor records are host-owned and keep their address while their
+    /// shape stays compatible across an online change.
+    #[must_use]
+    pub fn descriptor_address(&self, got_id: GotId) -> Option<usize> {
+        self.descriptors.address(got_id)
+    }
+
+    /// Returns one TYPEINFO or class VTABLE record's words.
+    ///
+    /// The words are the ABI 2.1 runtime layout fixed in GOT Artifacts §8.5;
+    /// callers must not write them.
+    #[must_use]
+    pub fn descriptor_words(&self, got_id: GotId) -> Option<&[u64]> {
+        self.descriptors.words(got_id)
+    }
+
+    /// Returns one per-(object type, interface) VTABLE's stable address.
+    #[must_use]
+    pub fn interface_vtable_address(&self, owner: GotId, interface: GotId) -> Option<usize> {
+        self.descriptors.interface_address(owner, interface)
+    }
+
+    /// Returns one per-(object type, interface) VTABLE's words.
+    #[must_use]
+    pub fn interface_vtable_words(&self, owner: GotId, interface: GotId) -> Option<&[u64]> {
+        self.descriptors.interface_words(owner, interface)
+    }
+
+    /// Returns the number of quarantined descriptor records.
+    #[must_use]
+    pub fn quarantined_descriptors(&self) -> usize {
+        self.descriptors.quarantined_len()
+    }
+
+    /// Returns the active generation's value for one GOT cell.
+    #[must_use]
+    pub fn active_cell_value(&self, slot: u32) -> Option<usize> {
+        self.active
+            .as_ref()
+            .and_then(|generation| generation.got.cell_value(slot).ok())
+    }
+
+    /// Returns the active generation's address for one GOT cell.
+    #[must_use]
+    pub fn active_cell_address(&self, slot: u32) -> Option<usize> {
+        self.active
+            .as_ref()
+            .and_then(|generation| generation.got.cell_address(slot).ok())
+            .map(|address| address as usize)
     }
 
     /// Registers a direct-variable cell address.
@@ -1044,6 +1063,7 @@ impl Host {
             None => self.direct_bindings.clone(),
         };
         let manifest = candidate.manifest().clone();
+        let live = live_descriptor_types(&manifest)?;
         let generation_id = allocate_generation();
         self.last_candidate = Some(generation_id);
         let mut undo = RootUndo::default();
@@ -1145,11 +1165,21 @@ impl Host {
             return Err(error);
         }
 
-        match self.build_generation(candidate, &self.roots, generation_id, &fresh, 1, &direct) {
-            Ok(generation) => {
+        match Self::build_generation(
+            candidate,
+            &self.roots,
+            generation_id,
+            &fresh,
+            1,
+            &direct,
+            &mut self.descriptors,
+            &live,
+        ) {
+            Ok((generation, descriptors)) => {
                 self.pending = Some(Pending {
                     generation,
                     undo,
+                    descriptors,
                     image: image_plan,
                     warnings,
                 });
@@ -1175,7 +1205,7 @@ impl Host {
         let image = candidate.info().map(|_| crate::image_snapshot());
         let generation_id = allocate_generation();
         self.last_candidate = Some(generation_id);
-        let prepared = (|| -> Result<(Generation, RootRegistry)> {
+        let prepared = (|| -> Result<(Generation, RootRegistry, DescriptorRegistry, PreparedDescriptors)> {
             if let Some(info) = candidate.info() {
                 self.apply_info(info)?;
             }
@@ -1189,13 +1219,22 @@ impl Host {
             }
             let fresh = BTreeSet::new();
             let direct = self.direct_bindings.clone();
-            let generation =
-                self.build_generation(candidate, &roots, generation_id, &fresh, 0, &direct)?;
+            let mut descriptors = DescriptorRegistry::new();
+            let (generation, prepared) = Self::build_generation(
+                candidate,
+                &roots,
+                generation_id,
+                &fresh,
+                0,
+                &direct,
+                &mut descriptors,
+                &BTreeSet::new(),
+            )?;
             let stored = StoredManifest::new(generation.manifest.clone())?;
             self.store.install(stored)?;
-            Ok((generation, roots))
+            Ok((generation, roots, descriptors, prepared))
         })();
-        let (generation, roots) = match prepared {
+        let (generation, roots, mut descriptors, prepared) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 if let Some(image) = image {
@@ -1207,6 +1246,8 @@ impl Host {
                 return Err(error);
             }
         };
+        let activation = descriptors.activate(prepared);
+        descriptors.commit(activation);
 
         // No fallible operation follows; the swap is atomic from here.
         if let Some(pending) = self.pending.take() {
@@ -1225,21 +1266,32 @@ impl Host {
         self.active = Some(generation);
         self.last_rollback = None;
         self.last_warnings.clear();
+        // Retired generations still hold descriptor cell addresses from the
+        // old registry; unload them before dropping its records.
         self.unload_retired();
+        self.descriptors = descriptors;
         Ok(LoadOutcome::ColdInstalled {
             generation: generation_id,
         })
     }
 
+    /// Builds a generation's GOT and descriptor records and runs prepare.
+    ///
+    /// Descriptor records are prepared before `stc_module_prepare` so fresh
+    /// object records can store their TYPEINFO addresses. Activation patches
+    /// the shared records afterwards; a prepare failure reverts the registry
+    /// changes before returning.
+    #[allow(clippy::too_many_arguments)]
     fn build_generation(
-        &self,
         candidate: Candidate,
         roots: &RootRegistry,
         generation_id: u64,
         fresh: &BTreeSet<GotId>,
         mode: u32,
         direct: &BTreeMap<GotId, usize>,
-    ) -> Result<Generation> {
+        descriptors: &mut DescriptorRegistry,
+        live: &BTreeSet<GotId>,
+    ) -> Result<(Generation, PreparedDescriptors)> {
         let Candidate { module, pair, info } = candidate;
         let manifest = pair.manifest;
         let manifest_digest = pair.manifest_digest;
@@ -1247,7 +1299,7 @@ impl Host {
             .map_err(|_| Error::new(codes::ONLINE_BINDING, "slot count exceeds u32"))?;
 
         host_api::register_generation(generation_id)?;
-        let result = (|| -> Result<Generation> {
+        let result = (|| -> Result<(Generation, PreparedDescriptors)> {
             let mut got = Got::new(&manifest.slots)?;
             got.bind_data_roots(roots)?;
             let mut functions = BTreeMap::new();
@@ -1260,85 +1312,90 @@ impl Host {
                 functions.insert(function.got_id, *address as usize);
             }
             got.bind_functions(&functions)?;
-            let descriptors = DescriptorPlaceholders::new(&manifest);
-            got.bind_descriptors(&descriptors.addresses(&manifest))?;
-            got.bind_direct(direct)?;
-            got.bind_imports(host_api::service_address)?;
-            if !got.unbound_slots().is_empty() {
-                return Err(Error::new(
-                    codes::ONLINE_BINDING,
-                    format!("GOT has unbound slots {:?}", got.unbound_slots()),
-                ));
-            }
+            let function_cells = function_cell_addresses(&manifest, &got)?;
+            let prepared = descriptors.prepare(&manifest, live, &function_cells)?;
 
-            let mut generation = Generation::new(
-                generation_id,
-                module,
-                got,
-                manifest,
-                manifest_digest,
-                info,
-                descriptors,
-            );
-            let mask = if mode == 0 {
-                Vec::new()
-            } else {
-                generation.got.fresh_root_mask(fresh)
-            };
-            let mask_size = u32::try_from(mask.len())
-                .map_err(|_| Error::new(codes::ONLINE_BINDING, "fresh-root mask exceeds u32"))?;
-            let mask_pointer = if mask.is_empty() {
-                std::ptr::null()
-            } else {
-                mask.as_ptr()
-            };
-            let attached = {
-                let _guard = host_api::enter_generation(generation_id);
-                crate::trap_boundary::with_boundary(|| -> Result<()> {
-                    // SAFETY: the host API table is a live static and the GOT
-                    // exposes a stable slot array for this generation.
-                    let attach = unsafe {
-                        generation.module.attach(
-                            host_api::api_pointer(),
-                            generation.got.slot_table_pointer(),
-                            slot_count,
-                            generation_id,
-                        )
-                    };
-                    check_attach(attach)?;
-                    generation.attached = true;
-                    // SAFETY: `mask` is alive across the call and its length
-                    // is passed with it; null is used only for an empty mask.
-                    let prepare = unsafe {
-                        generation
-                            .module
-                            .prepare(mode, generation_id, mask_pointer, mask_size)
-                    };
-                    check_prepare(prepare)?;
-                    Ok(())
-                })
-            };
-            let faults = host_api::drain_faults(generation_id);
-            match attached {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => return Err(error),
-                Err(trap) => {
+            let run = (|| -> Result<Generation> {
+                got.bind_descriptors(prepared.bindings())?;
+                got.bind_direct(direct)?;
+                got.bind_imports(host_api::service_address)?;
+                if !got.unbound_slots().is_empty() {
                     return Err(Error::new(
-                        codes::ONLINE_PREPARE,
-                        format!(
-                            "module trapped during attach or prepare (code {} at span {})",
-                            trap.code, trap.span_id
-                        ),
+                        codes::ONLINE_BINDING,
+                        format!("GOT has unbound slots {:?}", got.unbound_slots()),
                     ));
                 }
+
+                let mut generation =
+                    Generation::new(generation_id, module, got, manifest, manifest_digest, info);
+                let mask = if mode == 0 {
+                    Vec::new()
+                } else {
+                    generation.got.fresh_root_mask(fresh)
+                };
+                let mask_size = u32::try_from(mask.len()).map_err(|_| {
+                    Error::new(codes::ONLINE_BINDING, "fresh-root mask exceeds u32")
+                })?;
+                let mask_pointer = if mask.is_empty() {
+                    std::ptr::null()
+                } else {
+                    mask.as_ptr()
+                };
+                let attached = {
+                    let _guard = host_api::enter_generation(generation_id);
+                    crate::trap_boundary::with_boundary(|| -> Result<()> {
+                        // SAFETY: the host API table is a live static and the GOT
+                        // exposes a stable slot array for this generation.
+                        let attach = unsafe {
+                            generation.module.attach(
+                                host_api::api_pointer(),
+                                generation.got.slot_table_pointer(),
+                                slot_count,
+                                generation_id,
+                            )
+                        };
+                        check_attach(attach)?;
+                        generation.attached = true;
+                        // SAFETY: `mask` is alive across the call and its length
+                        // is passed with it; null is used only for an empty mask.
+                        let prepare = unsafe {
+                            generation
+                                .module
+                                .prepare(mode, generation_id, mask_pointer, mask_size)
+                        };
+                        check_prepare(prepare)?;
+                        Ok(())
+                    })
+                };
+                let faults = host_api::drain_faults(generation_id);
+                match attached {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => return Err(error),
+                    Err(trap) => {
+                        return Err(Error::new(
+                            codes::ONLINE_PREPARE,
+                            format!(
+                                "module trapped during attach or prepare (code {} at span {})",
+                                trap.code, trap.span_id
+                            ),
+                        ));
+                    }
+                }
+                if !faults.is_empty() {
+                    return Err(Error::new(
+                        codes::ONLINE_PREPARE,
+                        format!("module reported prepare faults: {}", faults.join("; ")),
+                    ));
+                }
+                Ok(generation)
+            })();
+            match run {
+                Ok(generation) => Ok((generation, prepared)),
+                Err(error) => {
+                    descriptors.revert_prepare(prepared);
+                    Err(error)
+                }
             }
-            if !faults.is_empty() {
-                return Err(Error::new(
-                    codes::ONLINE_PREPARE,
-                    format!("module reported prepare faults: {}", faults.join("; ")),
-                ));
-            }
-            Ok(generation)
         })();
         if result.is_err() {
             host_api::withdraw_generation(generation_id);
@@ -1401,15 +1458,24 @@ impl Host {
             self.pending = Some(pending);
             return Err(prepare_error("no active generation to replace"));
         };
-        let generation = pending.generation.id;
+        let Pending {
+            generation: new_generation,
+            undo,
+            descriptors,
+            image: _,
+            warnings,
+        } = pending;
+        let generation = new_generation.id;
+        let descriptor_activation = self.descriptors.activate(descriptors);
         self.rollback = Some(Rollback {
             generation: previous,
-            undo: pending.undo,
+            undo,
+            descriptors: descriptor_activation,
             successful_cycles: 0,
             image: image_rollback,
         });
-        self.active = Some(pending.generation);
-        self.last_warnings = pending.warnings;
+        self.active = Some(new_generation);
+        self.last_warnings = warnings;
         Ok(generation)
     }
 
@@ -1534,6 +1600,7 @@ impl Host {
         let Some(mut rollback) = self.rollback.take() else {
             return Err(prepare_error("no rollback window is open"));
         };
+        self.descriptors.commit(rollback.descriptors);
         rollback.generation.shutdown();
         self.retired.push(rollback.generation);
         self.unload_retired();
@@ -1565,14 +1632,21 @@ impl Host {
         };
         candidate.detach();
         drop(candidate);
-        let restored = rollback.generation.id;
-        let undo = rollback.undo;
-        self.active = Some(rollback.generation);
-        if let Some(image) = rollback.image {
+        let Rollback {
+            generation: restored_generation,
+            undo,
+            descriptors,
+            image,
+            ..
+        } = rollback;
+        let restored = restored_generation.id;
+        self.active = Some(restored_generation);
+        if let Some(image) = image {
             image::restore(&image.snapshot);
             self.direct_bindings = image.bindings;
             self.rebind_active_direct();
         }
+        self.descriptors.rollback(descriptors);
         self.last_rollback = Some(reason.to_owned());
         undo.undo(&mut self.roots)?;
         Ok(restored)
@@ -1587,8 +1661,15 @@ impl Host {
         let Some(pending) = self.pending.take() else {
             return Ok(());
         };
-        drop(pending.generation);
-        pending.undo.undo(&mut self.roots)
+        let Pending {
+            generation,
+            undo,
+            descriptors,
+            ..
+        } = pending;
+        drop(generation);
+        self.descriptors.revert_prepare(descriptors);
+        undo.undo(&mut self.roots)
     }
 
     /// Unloads retired generations that no pin references.
@@ -1733,6 +1814,61 @@ fn direct_bindings_for(info: &ModuleInfo) -> Result<BTreeMap<GotId, usize>> {
         bindings.insert(binding.got_id, address);
     }
     Ok(bindings)
+}
+
+/// Returns the named type identities that preserved roots can depend on.
+///
+/// A preserved class handle or object record names its class type; a preserved
+/// interface value names its interface type. The registry expands interface
+/// dependencies to the object types that implement them and class
+/// dependencies to their derived types.
+fn live_descriptor_types(manifest: &Manifest) -> Result<BTreeSet<GotId>> {
+    let preserved: BTreeSet<GotId> = manifest
+        .plan
+        .actions
+        .iter()
+        .filter(|action| {
+            action.kind == IdentityKind::DataRoot.as_u8() && action.action == PlanAction::Preserve
+        })
+        .map(|action| action.got_id)
+        .collect();
+    let mut live = BTreeSet::new();
+    for root in &manifest.roots {
+        if !preserved.contains(&root.got_id) {
+            continue;
+        }
+        let key = TypeKey::parse(&root.type_key).map_err(|error| {
+            Error::new(
+                codes::ONLINE_VTABLE,
+                format!("preserved root `{}` type key: {}", root.key, error.message),
+            )
+        })?;
+        collect_named_types(&key, &mut live);
+    }
+    Ok(live)
+}
+
+fn collect_named_types(key: &TypeKey, out: &mut BTreeSet<GotId>) {
+    match key {
+        TypeKey::Named(got_id) => {
+            out.insert(*got_id);
+        }
+        TypeKey::Array { element, .. } | TypeKey::RefTo(element) | TypeKey::PtrTo(element) => {
+            collect_named_types(element, out);
+        }
+        _ => {}
+    }
+}
+
+fn function_cell_addresses(manifest: &Manifest, got: &Got) -> Result<BTreeMap<GotId, usize>> {
+    let mut cells = BTreeMap::new();
+    for slot in &manifest.slots {
+        if slot.kind != SlotKind::Function {
+            continue;
+        }
+        cells.insert(slot.got_id, got.cell_address(slot.slot)? as usize);
+    }
+    Ok(cells)
 }
 
 fn slot_for(manifest: &Manifest, got_id: GotId) -> Option<u32> {

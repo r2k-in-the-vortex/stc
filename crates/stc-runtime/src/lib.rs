@@ -10,6 +10,9 @@
 //!
 //! - [`got`] owns the per-generation cell table and binds data, function,
 //!   descriptor, direct, and import cells;
+//! - [`descriptors`] owns the host's TYPEINFO, class VTABLE, and
+//!   per-(object type, interface) VTABLE records, their stable addresses, and
+//!   their quarantine;
 //! - [`memory`] owns persistent roots, quarantine, and transient module blocks;
 //! - [`catalog`] validates descriptor/manifest pairs against host policy;
 //! - [`migration`] validates an online-change plan against the active baseline;
@@ -40,6 +43,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod catalog;
+pub mod descriptors;
 pub mod got;
 pub mod host;
 pub mod host_api;

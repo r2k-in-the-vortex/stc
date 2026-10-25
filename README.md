@@ -68,7 +68,7 @@ aggregate/string/FB retained-state leaves. These constructs are
 covered by clang acceptance, C-harness execution, and an online change that preserves FB and
 aggregate roots across a code-only swap. The transient `STC-POINTER` extension (`POINTER TO`,
 `ADR`, `SIZEOF`, pointer arithmetic/indexing, and `REF_TO`↔pointer conversions) is implemented.
-Interfaces, runtime-owned descriptors/vtables, assignment attempts (`?=`), and references to
+Interface source constructs and dispatch, assignment attempts (`?=`), and references to
 split aggregate values remain explicit diagnostics; phase 4b implements them. Step 4b.0 records
 host ABI 2.1 with the inline TYPEINFO, VTABLE, and object-record layout in
 [GOT Artifacts](Specification/Architecture/GOT-Artifacts.md) §8.5 and
@@ -76,12 +76,15 @@ host ABI 2.1 with the inline TYPEINFO, VTABLE, and object-record layout in
 projects TYPEINFO/class VTABLE descriptors, interface-prototype function records with trap stubs,
 the class value/instance layout split (`PTR_TO` handle keys), and hidden non-retained
 `HANDLE`/`OBJREC` roots; generated prepare fills fresh records and handles, and the catalog
-formats remain version 1. Interface dispatch and `?=` remain diagnostics until 4b.3–4b.5. The
-project manifest, `stc run`, `stc test`, and file-backed retained state are M6, and full task
-scheduling is M6 (M5 keeps one task per resource). The persistent host, loadable modules, GOT
-roots, manifests, swap protocol, and process-image remap are implemented and shared by the M5
-lowering. Parser and
-semantic snapshots, IR snapshots, clang verification, execution and C-harness tests, a committed
+formats remain version 1. Step 4b.2 builds the host-owned TYPEINFO/VTABLE registry before
+prepare, keeps compatible record addresses stable across a warm swap, patches entries at
+activation, rejects shape changes that a preserved object or interface depends on, and
+quarantines removed descriptors. Interface dispatch and `?=` remain diagnostics until
+4b.3–4b.5. The project manifest, `stc run`, `stc test`, and file-backed retained state are M6,
+and full task scheduling is M6 (M5 keeps one task per resource). The persistent host, loadable
+modules, GOT roots, manifests, swap protocol, and process-image remap are implemented and shared
+by the M5 lowering. Parser and semantic snapshots, IR snapshots, clang verification, execution
+and C-harness tests, a committed
 corpus, traceability tables, deterministic property tests, a 20k-term deep-chain test, and
 `fuzz_lexer`, `fuzz_parser`, `fuzz_analyzer`, `fuzz_codegen`, `fuzz_got_manifest`, and
 `fuzz_module_descriptor` targets are in place. The
