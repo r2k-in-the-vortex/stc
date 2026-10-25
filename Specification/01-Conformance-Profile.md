@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b.3 object records/virtual dispatch implemented (2026-10-25); interface dispatch and `?=` remain
+Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b.4 interface values/upcasts/dispatch implemented (2026-10-25); `?=` remains
 
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
@@ -46,8 +46,14 @@ values as record handles, allocates local class/FB instances and records on the 
 writes persistent objects through their hidden roots, passes `(handle, table, ...)` to object
 bodies, copies class handles versus FB state on assignment, and dispatches every class/FB method
 through TYPEINFO and the class VTABLE (`SUPER` calls the base function cell directly). Class
-handles that refer to activation-owned records are rejected from escaping. Interface dispatch,
-assignment attempts (`?=`), object references, and references to split aggregate values remain
+handles that refer to activation-owned records are rejected from escaping. Phase 4b.4 lowers
+interface values as 16-byte `{record, per-(object type, interface) vtable}` pairs passed and
+returned by value and stored as single roots in fields, globals, program fields, and arrays;
+class/FB-to-interface upcasts use the compile-time base-first interface-map index,
+interface-to-interface upcasts search the runtime TYPEINFO map, `= NULL`/`<> NULL` compare the
+record pointer, and interface calls dispatch through the pair's vtable. Interfaces that refer to
+activation-owned records are rejected from escaping. Assignment attempts (`?=`), object
+references, interface identity comparison, and references to split aggregate values remain
 explicit `STC-E-CODEGEN-001` diagnostics; the transient `STC-POINTER` extension is implemented. The
 manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; full task
 scheduling is M6 (M5 keeps one task per resource). `stc check <file>...` analyzes one in-memory
@@ -66,8 +72,8 @@ artifacts on both hosts. Phase 10 closes the documentation and handover pass: th
 set and M5 handover describe the implemented host/module model, and the M6.5 interface boundary
 is recorded. M5 phases 1–6 extend that foundation to aggregates, references, OOP, the standard
 library, and aggregate retained state, including an online change preserving FB and aggregate
-roots; phase 4b.3 implements object records and virtual dispatch, while interface dispatch and
-`?=` remain. Full debug/monitoring is M6.5.
+roots; phase 4b.4 implements interface values, upcasts, and dispatch, while `?=` remains. Full
+debug/monitoring is M6.5.
 
 ## 2. Input languages
 

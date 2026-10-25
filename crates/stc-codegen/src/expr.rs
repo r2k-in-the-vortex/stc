@@ -346,7 +346,15 @@ impl Lowerer<'_> {
                     (Some(from), Some(target)) => {
                         self.cast_value(f, operand_value, from, target, expr.span)?
                     }
-                    _ => self.lower_aggregate_cast(f, operand_value, from_ty, to, expr.span)?,
+                    _ => self.lower_aggregate_cast(
+                        f,
+                        info,
+                        operand_value,
+                        from_ty,
+                        to,
+                        Some(operand),
+                        expr.span,
+                    )?,
                 };
                 self.check_subrange(f, to, &value, expr.span)?;
                 values.push(value);
@@ -793,7 +801,15 @@ impl Lowerer<'_> {
                     (Some(from_kind), Some(to_kind)) => {
                         self.cast_value(f, supplied[0].clone(), from_kind, to_kind, span)
                     }
-                    _ => self.lower_aggregate_cast(f, supplied[0].clone(), *from, *to, span),
+                    _ => self.lower_aggregate_cast(
+                        f,
+                        info,
+                        supplied[0].clone(),
+                        *from,
+                        *to,
+                        None,
+                        span,
+                    ),
                 }
             }
             CalleeHir::StdFunction(id) => {
@@ -1007,6 +1023,34 @@ impl Lowerer<'_> {
         let reference_like = |facts: &crate::types::TypeFacts| {
             facts.is_reference() || matches!(facts.category, crate::types::TypeCategory::Null)
         };
+        if lhs_facts.is_interface() || rhs_facts.is_interface() {
+            let lhs_null = self.is_null_value(lhs);
+            let rhs_null = self.is_null_value(rhs);
+            let nullable =
+                (lhs_facts.is_interface() && rhs_null) || (rhs_facts.is_interface() && lhs_null);
+            if nullable && matches!(op, BinOp::Eq | BinOp::Ne) {
+                let pair = if lhs_facts.is_interface() {
+                    lhs_value
+                } else {
+                    rhs_value
+                };
+                let record = f.extract_value_at(&pair, &[0], IrType::Ptr);
+                let is_null = f.icmp("eq", &record, &Value::null_ptr());
+                return Ok(if op == BinOp::Eq {
+                    is_null
+                } else {
+                    f.binop("xor", &is_null, &Value::bool(true))
+                });
+            }
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!(
+                    "operator `{}` is not supported for interface values (only NULL tests)",
+                    op.as_str()
+                ),
+                span,
+            ));
+        }
         if reference_like(&lhs_facts) || reference_like(&rhs_facts) {
             return match op {
                 BinOp::Eq => {

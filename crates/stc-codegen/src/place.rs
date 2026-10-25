@@ -3291,14 +3291,21 @@ impl Lowerer<'_> {
         Ok(())
     }
 
-    /// Lowers an aggregate-to-aggregate cast. Only string capacity changes are
-    /// supported in M5 phase 2.
+    /// Lowers an aggregate-to-aggregate cast.
+    ///
+    /// String capacity changes, class-handle rebinding, and interface upcasts
+    /// are supported. `operand` is the cast's source expression when one is
+    /// available; an FB-to-interface upcast needs it to find the instance
+    /// record (D-149).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn lower_aggregate_cast(
         &mut self,
         f: &mut Function,
+        info: &BodyInfo,
         value: Value,
         from: TyId,
         to: TyId,
+        operand: Option<ExprId>,
         span: Span,
     ) -> Res<Value> {
         let from_facts = self.types.facts(from)?.clone();
@@ -3310,6 +3317,32 @@ impl Lowerer<'_> {
             // Every class value is a record handle; upcasts and downcasts at
             // the static-type level do not change the representation.
             return Ok(value);
+        }
+        if let (TypeCategory::Object { def }, TypeCategory::Interface { def: target }) =
+            (&from_facts.category, &to_facts.category)
+        {
+            return self.upcast_object_to_interface(
+                f,
+                info,
+                value,
+                *def,
+                *target,
+                &to_facts.llvm_storage,
+                from_facts.is_class(),
+                operand,
+                span,
+            );
+        }
+        if let (TypeCategory::Interface { .. }, TypeCategory::Interface { def: target }) =
+            (&from_facts.category, &to_facts.category)
+        {
+            return self.upcast_interface_to_interface(
+                f,
+                value,
+                *target,
+                &to_facts.llvm_storage,
+                span,
+            );
         }
         if matches!(from_facts.category, TypeCategory::Null) && to_facts.is_class() {
             return Ok(Value::zero(IrType::Ptr));

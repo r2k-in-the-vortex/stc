@@ -2088,6 +2088,53 @@ impl Analyzer<'_> {
         false
     }
 
+    /// Returns `true` when `ty` contains an interface value (directly or
+    /// inside an inline aggregate/function-block value).
+    ///
+    /// References and pointers are not followed: a reference value is a
+    /// descriptor and a pointer target is not part of the value.
+    pub(crate) fn contains_interface(&self, ty: TyId) -> bool {
+        let mut stack = vec![ty];
+        let mut visited = BTreeSet::new();
+        while let Some(next) = stack.pop() {
+            if !visited.insert(next) {
+                continue;
+            }
+            match self.hir.types.get(next) {
+                Ty::Array(array) => stack.push(array.element),
+                Ty::Named(def) => match &self.hir.defs[def.index()].kind {
+                    DefKind::Alias { target } => stack.push(*target),
+                    DefKind::Interface { .. } => return true,
+                    DefKind::Struct { fields, .. } => {
+                        for field in fields {
+                            stack.push(self.hir.fields[field.index()].ty);
+                        }
+                    }
+                    DefKind::FunctionBlock { base, fields, .. } => {
+                        for field in fields {
+                            stack.push(self.hir.fields[field.index()].ty);
+                        }
+                        if let Some(base) = base {
+                            match &self.hir.defs[base.index()].kind {
+                                DefKind::Struct { fields, .. }
+                                | DefKind::FunctionBlock { fields, .. }
+                                | DefKind::Class { fields, .. } => {
+                                    for field in fields {
+                                        stack.push(self.hir.fields[field.index()].ty);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Returns `true` for a raw pointer type.
     pub(crate) fn is_pointer_ty(&self, ty: TyId) -> bool {
         matches!(self.hir.types.get(ty), Ty::Ptr(_))

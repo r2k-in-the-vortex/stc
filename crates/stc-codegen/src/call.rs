@@ -21,11 +21,13 @@ struct DeferredCopy {
 }
 
 /// How a callable is reached.
-enum CallTarget {
+pub(crate) enum CallTarget {
     /// A GOT function cell.
     Cell(FunctionTarget),
     /// A class/FB vtable slot (all class and FB method calls are virtual).
     Virtual { slot: u32 },
+    /// An interface value's per-pair vtable slot (D-148, D-149).
+    Interface { vtable: Value, slot: u32 },
 }
 
 impl Lowerer<'_> {
@@ -138,7 +140,7 @@ impl Lowerer<'_> {
 
     /// Shared callable lowering for functions and methods.
     #[allow(clippy::too_many_arguments)]
-    fn lower_callable(
+    pub(crate) fn lower_callable(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,
@@ -215,7 +217,7 @@ impl Lowerer<'_> {
                         let temp = f.alloca(facts.llvm_storage.clone());
                         f.store(&descriptor, &temp, None);
                         call_args.push(temp);
-                    } else if facts.is_class() {
+                    } else if facts.is_class() || facts.is_interface() {
                         call_args.push(value);
                     } else if facts.is_object() {
                         let storage = facts.llvm_storage.clone();
@@ -378,6 +380,20 @@ impl Lowerer<'_> {
                 })?;
                 self.call_virtual_method(f, &handle, slot, ret_storage.clone(), &call_args, span)?
             }
+            CallTarget::Interface { vtable, slot } => {
+                let record = call_args.first().cloned().ok_or_else(|| {
+                    CodegenError::internal("an interface call has no record argument")
+                })?;
+                self.call_interface_method(
+                    f,
+                    &record,
+                    &vtable,
+                    slot,
+                    ret_storage.clone(),
+                    &call_args,
+                    span,
+                )?
+            }
         };
 
         for copy in deferred {
@@ -407,7 +423,9 @@ impl Lowerer<'_> {
                     .ok_or_else(|| CodegenError::internal("aggregate result temp missing"))?;
                 Ok(Some(f.load(storage, &temp, None)))
             }
-            Some(facts) if facts.is_object() || facts.is_pointer() => Ok(returned),
+            Some(facts) if facts.is_object() || facts.is_pointer() || facts.is_interface() => {
+                Ok(returned)
+            }
             Some(facts) => {
                 let value = returned
                     .ok_or_else(|| CodegenError::internal("scalar function call returned void"))?;

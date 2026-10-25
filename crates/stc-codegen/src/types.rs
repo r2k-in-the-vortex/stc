@@ -236,6 +236,9 @@ impl TypeFacts {
     }
 
     /// Returns `true` when the type is a contiguous aggregate value.
+    ///
+    /// Interface values are 16-byte aggregates but follow the by-value
+    /// parameter/result ABI (D-149), so they are not classified here.
     #[must_use]
     pub fn is_contiguous_aggregate(&self) -> bool {
         matches!(
@@ -243,7 +246,6 @@ impl TypeFacts {
             TypeCategory::Struct { .. }
                 | TypeCategory::Array { .. }
                 | TypeCategory::String { .. }
-                | TypeCategory::Interface { .. }
                 | TypeCategory::Reference { .. }
         )
     }

@@ -304,6 +304,42 @@ fn reseal(artifacts: &mut ModuleArtifacts) {
     artifacts.manifest_binary = artifacts.manifest.encode_binary().expect("manifest bytes");
 }
 
+const ARRAY_LEAF_OBJECTS: &str = r#"
+INTERFACE IItem
+METHOD Value : DINT
+END_METHOD
+END_INTERFACE
+
+CLASS Item IMPLEMENTS IItem
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Value : DINT
+  Value := id;
+END_METHOD
+END_CLASS
+
+CLASS Bucket
+VAR PUBLIC
+  one : IItem;
+  many : ARRAY[1..2] OF IItem;
+  handles : ARRAY[1..2] OF Item;
+  count : DINT;
+END_VAR
+END_CLASS
+
+VAR_GLOBAL
+  b : Bucket;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+END_PROGRAM
+"#;
+
 #[test]
 fn cold_install_binds_descriptor_cells_and_builds_records() {
     let artifacts = common::artifacts(OOP_V1, "oop");
@@ -401,6 +437,30 @@ fn cold_install_binds_descriptor_cells_and_builds_records() {
         host.active_cell_address(slot_of(&artifacts, perimeter.got_id))
             .expect("Perimeter cell")
     );
+}
+
+#[test]
+fn object_records_count_single_root_array_fields_once() {
+    let artifacts = common::artifacts(ARRAY_LEAF_OBJECTS, "array-leaves");
+    let Some(fixture) = fixture("array-leaves", artifacts.clone()) else {
+        return;
+    };
+    let mut host = in_memory_host();
+    cold_install(&mut host, &fixture);
+
+    // Interface values and arrays whose element chain ends in a single-root
+    // type are one leaf each, matching the compiler's storage plan (D-131).
+    let bucket = type_record(&artifacts, "_ROOT::BUCKET");
+    let typeinfo = descriptor(&artifacts, bucket.got_id, DescriptorKind::TypeInfo);
+    let words = host.descriptor_words(typeinfo.got_id).expect("typeinfo");
+    assert_eq!(
+        word(words, 12),
+        4,
+        "one interface, one interface array, one handle array, one scalar"
+    );
+    let record_root = root_id(&artifacts, "_ROOT::B#OBJREC");
+    let storage = host.root_storage(record_root).expect("object record");
+    assert_eq!(storage.len(), (4 + 1) * 8, "TYPEINFO plus four leaves");
 }
 
 #[test]

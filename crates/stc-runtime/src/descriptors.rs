@@ -993,8 +993,13 @@ impl<'a> TypeIndex<'a> {
                 match ty.type_kind {
                     // A class value is a pointer-sized handle.
                     TypeKind::Class => Ok(1),
-                    TypeKind::FunctionBlock | TypeKind::Struct => {
-                        self.instance_leaf_count(*got_id, active)
+                    TypeKind::FunctionBlock => self.instance_leaf_count(*got_id, active),
+                    TypeKind::Struct => {
+                        if overlap_struct(ty) {
+                            Ok(1)
+                        } else {
+                            self.instance_leaf_count(*got_id, active)
+                        }
                     }
                     _ => Ok(1),
                 }
@@ -1004,10 +1009,42 @@ impl<'a> TypeIndex<'a> {
                 upper,
                 element,
             } => {
-                let count = array_length(*lower, *upper)?;
-                Ok(count.saturating_mul(self.key_leaf_count(element, active)?))
+                // Arrays whose element chain ends in a single-root type (a
+                // scalar, string, interface, class handle, or OVERLAP struct)
+                // are one contiguous root; only arrays of recursing elements
+                // contribute one leaf per element (GOT Artifacts §8.5.1).
+                if self.key_is_single_root(element)? {
+                    Ok(1)
+                } else {
+                    let count = array_length(*lower, *upper)?;
+                    Ok(count.saturating_mul(self.key_leaf_count(element, active)?))
+                }
             }
             _ => Ok(1),
+        }
+    }
+
+    /// Returns `true` when a field type key names one contiguous leaf root.
+    ///
+    /// This mirrors the compiler's single-root classification (D-131): class
+    /// handles are single roots while function blocks and non-`OVERLAP`
+    /// structs recurse into their fields.
+    fn key_is_single_root(&self, key: &TypeKey) -> Result<bool> {
+        match key {
+            TypeKey::Named(got_id) => {
+                let ty = self.types.get(got_id).copied().ok_or_else(|| {
+                    invalid(format!(
+                        "type {got_id} referenced by a field is not in the manifest"
+                    ))
+                })?;
+                Ok(match ty.type_kind {
+                    TypeKind::Struct => overlap_struct(ty),
+                    TypeKind::FunctionBlock => false,
+                    _ => true,
+                })
+            }
+            TypeKey::Array { element, .. } => self.key_is_single_root(element),
+            _ => Ok(true),
         }
     }
 }

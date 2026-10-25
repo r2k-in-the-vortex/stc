@@ -1734,3 +1734,51 @@ fn class_handles_to_callee_storage_cannot_escape() {
         "FUNCTION_BLOCK Plain\nVAR PUBLIC\n  n : DINT;\nEND_VAR\nEND_FUNCTION_BLOCK\nVAR_GLOBAL\n  gFb : Plain;\nEND_VAR\nFUNCTION F : DINT\nVAR\n  p : Plain;\nEND_VAR\n  gFb := p;\n  F := 0;\nEND_FUNCTION\n",
     ));
 }
+
+#[test]
+fn interfaces_to_callee_storage_cannot_escape() {
+    let shell = |body: &str| {
+        format!(
+            "INTERFACE I\nMETHOD M : DINT\nEND_METHOD\nEND_INTERFACE\n\
+             CLASS C IMPLEMENTS I\nVAR PUBLIC\n  x : DINT;\nEND_VAR\n\
+             METHOD PUBLIC M : DINT\n  M := x;\nEND_METHOD\nEND_CLASS\n\
+             FUNCTION_BLOCK FB IMPLEMENTS I\nVAR PUBLIC\n  x : DINT;\nEND_VAR\n\
+             METHOD PUBLIC M : DINT\n  M := x;\nEND_METHOD\nEND_FUNCTION_BLOCK\n{body}"
+        )
+    };
+    // A local class upcast to an interface cannot be returned.
+    assert_error(
+        &shell("FUNCTION F : I\nVAR\n  c : C;\nEND_VAR\n  F := c;\nEND_FUNCTION\n"),
+        stc_sema::codes::REF_RULE,
+    );
+    // The same applies to a local FB implemented interface.
+    assert_error(
+        &shell("FUNCTION F : I\nVAR\n  piece : FB;\nEND_VAR\n  F := piece;\nEND_FUNCTION\n"),
+        stc_sema::codes::REF_RULE,
+    );
+    // A local interface value cannot be stored persistently.
+    assert_error(
+        &shell(
+            "VAR_GLOBAL\n  g : I;\nEND_VAR\nFUNCTION F : DINT\nVAR\n  i : I;\nEND_VAR\n  g := i;\n  F := 0;\nEND_FUNCTION\n",
+        ),
+        stc_sema::codes::REF_RULE,
+    );
+    // A local interface cannot be written through an OUT parameter.
+    assert_error(
+        &shell(
+            "FUNCTION F : DINT\nVAR_OUTPUT\n  o : I;\nEND_VAR\nVAR\n  i : I;\nEND_VAR\n  o := i;\n  F := 0;\nEND_FUNCTION\n",
+        ),
+        stc_sema::codes::REF_RULE,
+    );
+    // Upcasting persistent values, parameters, or THIS is allowed.
+    assert_clean(&shell(
+        "VAR_GLOBAL\n  g : I;\n  gc : C;\nEND_VAR\nFUNCTION F : I\n  F := gc;\nEND_FUNCTION\n",
+    ));
+    assert_clean(&shell(
+        "FUNCTION F : DINT\nVAR_INPUT\n  i : I;\nEND_VAR\nVAR\n  x : DINT;\nEND_VAR\n  x := i.M();\n  F := x;\nEND_FUNCTION\n",
+    ));
+    assert_clean(&shell(
+        "CLASS Src IMPLEMENTS I\nMETHOD PUBLIC M : DINT\n  M := 0;\nEND_METHOD\n\
+         METHOD PUBLIC AsI : I\n  AsI := THIS;\nEND_METHOD\nEND_CLASS\n",
+    ));
+}

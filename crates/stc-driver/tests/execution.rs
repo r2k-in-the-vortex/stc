@@ -2578,3 +2578,366 @@ fn object_records_and_virtual_dispatch_run_under_a_c_harness() {
         "oop_harness",
     );
 }
+
+const INTERFACE_OBJECTS: &str = r#"
+INTERFACE IBase
+METHOD PUBLIC Base : DINT
+END_METHOD
+METHOD PUBLIC Scale : DINT
+VAR_INPUT
+  factor : DINT;
+END_VAR
+END_METHOD
+METHOD PUBLIC Fill : DINT
+VAR_OUTPUT
+  o : DINT;
+END_VAR
+END_METHOD
+END_INTERFACE
+
+INTERFACE IDerived EXTENDS IBase
+METHOD PUBLIC More : DINT
+END_METHOD
+END_INTERFACE
+
+CLASS BaseImpl IMPLEMENTS IBase
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Base : DINT
+  Base := id;
+END_METHOD
+METHOD PUBLIC Scale : DINT
+VAR_INPUT
+  factor : DINT;
+END_VAR
+  Scale := id * factor;
+END_METHOD
+METHOD PUBLIC Fill : DINT
+VAR_OUTPUT
+  o : DINT;
+END_VAR
+  o := id + 1;
+  Fill := id;
+END_METHOD
+METHOD PUBLIC AsInterface : IBase
+  AsInterface := THIS;
+END_METHOD
+END_CLASS
+
+CLASS DerivedImpl EXTENDS BaseImpl IMPLEMENTS IDerived
+VAR PUBLIC
+  extra : DINT;
+END_VAR
+METHOD PUBLIC OVERRIDE Base : DINT
+  Base := SUPER.Base() * 10;
+END_METHOD
+METHOD PUBLIC More : DINT
+  More := extra;
+END_METHOD
+END_CLASS
+
+FUNCTION_BLOCK FbImpl IMPLEMENTS IBase
+VAR PUBLIC
+  cv : DINT;
+END_VAR
+METHOD PUBLIC Base : DINT
+  Base := cv;
+END_METHOD
+METHOD PUBLIC Scale : DINT
+VAR_INPUT
+  factor : DINT;
+END_VAR
+  Scale := cv * factor;
+END_METHOD
+METHOD PUBLIC Fill : DINT
+VAR_OUTPUT
+  o : DINT;
+END_VAR
+  o := cv + 1;
+  Fill := cv;
+END_METHOD
+END_FUNCTION_BLOCK
+
+CLASS Registry
+VAR PUBLIC
+  slot : IBase;
+  slots : ARRAY[1..2] OF IBase;
+END_VAR
+METHOD PUBLIC Sum : DINT
+  Sum := slot.Base() + slots[1].Base() + slots[2].Base();
+END_METHOD
+METHOD PUBLIC SumIndexed : DINT
+VAR
+  i : DINT;
+  acc : DINT;
+END_VAR
+  FOR i := 1 TO 2 DO
+    acc := acc + slots[i].Base();
+  END_FOR;
+  SumIndexed := acc;
+END_METHOD
+END_CLASS
+
+TYPE
+  Holder : STRUCT
+    a : IBase;
+    b : IBase;
+  END_STRUCT;
+END_TYPE
+
+VAR_GLOBAL
+  gD : DerivedImpl;
+  gB : BaseImpl;
+  gI : IBase;
+  gReg : Registry;
+  gH : Holder;
+  gArr : ARRAY[1..2] OF IBase;
+  gRun : DINT;
+END_VAR
+
+FUNCTION UseBase : DINT
+VAR_INPUT
+  i : IBase;
+END_VAR
+  UseBase := i.Base();
+END_FUNCTION
+
+FUNCTION SumAll : DINT
+VAR_INPUT
+  items : ARRAY[1..2] OF IBase;
+END_VAR
+  SumAll := items[1].Base() + items[2].Base();
+END_FUNCTION
+
+FUNCTION Pick : IBase
+VAR_INPUT
+  useDerived : BOOL;
+END_VAR
+  IF useDerived THEN
+    Pick := gD;
+  ELSE
+    Pick := gB;
+  END_IF;
+END_FUNCTION
+
+FUNCTION Identity : IBase
+VAR_INPUT
+  i : IBase;
+END_VAR
+  Identity := i;
+END_FUNCTION
+
+FUNCTION Promote : IBase
+VAR_INPUT
+  b : BaseImpl;
+END_VAR
+  Promote := b;
+END_FUNCTION
+
+FUNCTION IsNull : BOOL
+VAR_INPUT
+  i : IBase;
+END_VAR
+  IsNull := i = NULL;
+END_FUNCTION
+
+FUNCTION Swap : DINT
+VAR_IN_OUT
+  i : IBase;
+END_VAR
+  i := gB;
+  Swap := i.Base();
+END_FUNCTION
+
+FUNCTION Clear : DINT
+VAR_OUTPUT
+  o : IBase;
+END_VAR
+  o := gD;
+  Clear := 1;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunDispatch : DINT
+VAR
+  d : DerivedImpl;
+  b : BaseImpl;
+  i : IBase;
+  base : IBase;
+  derived : IDerived;
+  x : DINT;
+  v : DINT;
+END_VAR
+  d.id := 1;
+  d.extra := 2;
+  b.id := 5;
+  i := d;
+  v := i.Base();
+  i := b;
+  v := v + i.Base();
+  v := v + UseBase(d);
+  v := v + UseBase(b);
+  gD.id := 2;
+  gB.id := 4;
+  v := v + Pick(TRUE).Base();
+  v := v + Pick(FALSE).Base();
+  derived := d;
+  base := derived;
+  v := v + base.Base();
+  v := v + derived.More();
+  v := v + derived.Scale(2);
+  v := v + Identity(d).Base();
+  v := v + b.AsInterface().Base();
+  v := v + Promote(b).Base();
+  v := v + Swap(i);
+  v := v + Clear(o => i);
+  v := v + i.Base();
+  v := v + i.Scale(3);
+  v := v + i.Fill(o => x);
+  v := v + x;
+  RunDispatch := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunNull : DINT
+VAR
+  i : IBase;
+  b : BaseImpl;
+  n : DINT;
+END_VAR
+  i := NULL;
+  n := 0;
+  IF i = NULL THEN
+    n := n + 1;
+  END_IF;
+  IF i <> NULL THEN
+    n := n + 10;
+  END_IF;
+  b := NULL;
+  i := b;
+  IF i = NULL THEN
+    n := n + 100;
+  END_IF;
+  IF IsNull(NULL) THEN
+    n := n + 1000;
+  END_IF;
+  IF IsNull(gD) THEN
+    n := n + 10;
+  END_IF;
+  RunNull := n;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunArrays : DINT
+VAR
+  arr : ARRAY[1..2] OF IBase;
+  d : DerivedImpl;
+  b : BaseImpl;
+  h : Holder;
+  v : DINT;
+END_VAR
+  d.id := 3;
+  d.extra := 1;
+  b.id := 7;
+  arr[1] := d;
+  arr[2] := b;
+  v := arr[1].Base() + arr[2].Base();
+  v := v + SumAll(arr);
+  h.a := d;
+  h.b := b;
+  v := v + h.a.Base() + h.b.Base();
+  gD.id := 2;
+  gI := gD;
+  v := v + gI.Base();
+  RunArrays := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunFields : DINT
+VAR
+  r : Registry;
+  d : DerivedImpl;
+  b : BaseImpl;
+END_VAR
+  d.id := 8;
+  d.extra := 1;
+  b.id := 9;
+  r.slot := d;
+  r.slots[1] := d;
+  r.slots[2] := b;
+  RunFields := r.Sum() + r.SumIndexed();
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunIndex : DINT
+VAR
+  i : DINT;
+  v : DINT;
+END_VAR
+  gD.id := 3;
+  FOR i := 1 TO 2 DO
+    gArr[i] := gD;
+  END_FOR;
+  FOR i := 1 TO 2 DO
+    v := v + gArr[i].Base();
+  END_FOR;
+  RunIndex := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunFb : DINT
+VAR
+  f : FbImpl;
+  i : IBase;
+  v : DINT;
+END_VAR
+  f.cv := 9;
+  i := f;
+  RunFb := i.Base() + UseBase(f) + i.Scale(2) + i.Fill(o => v);
+  RunFb := RunFb + v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION CheckMain : DINT
+  CheckMain := gRun;
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  v : DINT;
+  held : IBase;
+END_VAR
+  gD.id := 6;
+  held := gD;
+  gReg.slot := gD;
+  gH.a := gD;
+  gArr[1] := gD;
+  gI := gD;
+  v := held.Base() + gI.Base() + gReg.slot.Base() + gH.a.Base() + gArr[1].Base();
+  gRun := v;
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn interface_values_and_dispatch_run_under_a_c_harness() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("interfaces");
+    build_library(&directory, INTERFACE_OBJECTS, "interfaces");
+    let library = lib_path(&directory.path, "interfaces");
+    assert!(library.is_file(), "{}", library.display());
+    compile_harness(
+        &directory,
+        "interfaces.c",
+        &library,
+        &built_module(&directory, "interfaces"),
+        "interfaces_harness",
+    );
+}

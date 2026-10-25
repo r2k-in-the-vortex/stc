@@ -553,22 +553,31 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Rejects class handles that refer to activation-owned records escaping
-    /// into a result, persistent storage, or an `OUT`/`VAR_IN_OUT` parameter.
+    /// Rejects class handles and interface values that refer to
+    /// activation-owned records escaping into a result, persistent storage, or
+    /// an `OUT`/`VAR_IN_OUT` parameter.
     ///
-    /// A class local owns its record on the activation stack; a handle to it
-    /// cannot outlive the call. Handles read from an `IN` parameter, `THIS`,
-    /// or persistent storage refer to caller- or host-owned records and are
-    /// therefore allowed (Runtime and Execution §2.6).
+    /// A class/FB local owns its record on the activation stack; a handle or
+    /// interface to it cannot outlive the call. Values read from an `IN`
+    /// parameter, `THIS`, or persistent storage refer to caller- or
+    /// host-owned records and are therefore allowed (Runtime and Execution
+    /// §2.6).
     fn check_class_handle_escape(&mut self, place: ExprId, value: ExprId, span: Span) {
         let value_ty = self.hir.expr(value).ty;
-        if !self.contains_class_handle(value_ty) || !self.destination_allows_escape(place) {
+        let place_ty = self.hir.expr(place).ty;
+        // An interface destination can be reached by an implicit class/FB
+        // upcast, so the escape also depends on the destination type.
+        if !(self.contains_class_handle(value_ty)
+            || self.contains_interface(value_ty)
+            || self.contains_interface(place_ty))
+            || !self.destination_allows_escape(place)
+        {
             return;
         }
-        if self.class_handle_is_callee_owned(value) {
+        if self.handle_value_is_callee_owned(value) {
             self.error(
                 crate::codes::REF_RULE,
-                "a class handle to activation-owned storage cannot escape this call",
+                "a class handle or interface to activation-owned storage cannot escape this call",
                 span,
             );
         }
@@ -591,9 +600,15 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Returns `true` when a class-typed expression reads a handle from
+    /// Returns `true` when a handle- or interface-typed expression reads from
     /// activation-owned storage.
-    fn class_handle_is_callee_owned(&self, value: ExprId) -> bool {
+    ///
+    /// Upcast casts are transparent: assigning a local class/FB value to an
+    /// interface keeps the same activation-owned record.
+    fn handle_value_is_callee_owned(&self, value: ExprId) -> bool {
+        if let ExprKindHir::Cast { operand, .. } = &self.hir.expr(value).kind {
+            return self.handle_value_is_callee_owned(*operand);
+        }
         let root = self.place_root(value).unwrap_or(value);
         matches!(
             &self.hir.expr(root).kind,

@@ -578,27 +578,142 @@ END_CONFIGURATION
 }
 
 #[test]
-fn unsupported_interface_dispatch_reports_at_the_call_site() {
+fn interface_dispatch_and_upcasts_emit_and_verify_with_clang() {
+    let source = r#"
+INTERFACE IBase
+METHOD Base : DINT
+END_METHOD
+END_INTERFACE
+
+INTERFACE IDerived EXTENDS IBase
+METHOD More : DINT
+END_METHOD
+END_INTERFACE
+
+CLASS BaseImpl IMPLEMENTS IBase
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Base : DINT
+  Base := id;
+END_METHOD
+END_CLASS
+
+CLASS DerivedImpl EXTENDS BaseImpl IMPLEMENTS IDerived
+VAR PUBLIC
+  extra : DINT;
+END_VAR
+METHOD PUBLIC OVERRIDE Base : DINT
+  Base := SUPER.Base() + extra;
+END_METHOD
+METHOD PUBLIC More : DINT
+  More := extra;
+END_METHOD
+END_CLASS
+
+FUNCTION_BLOCK FbImpl IMPLEMENTS IBase
+VAR PUBLIC
+  cv : DINT;
+END_VAR
+METHOD PUBLIC Base : DINT
+  Base := cv;
+END_METHOD
+END_FUNCTION_BLOCK
+
+FUNCTION Use : DINT
+VAR_INPUT
+  i : IBase;
+END_VAR
+  Use := i.Base();
+END_FUNCTION
+
+FUNCTION Choose : IBase
+  Choose := gD;
+END_FUNCTION
+
+VAR_GLOBAL
+  gD : DerivedImpl;
+  gArr : ARRAY[1..2] OF IBase;
+END_VAR
+
+PROGRAM Main
+VAR
+  d : DerivedImpl;
+  f : FbImpl;
+  i : IBase;
+  base : IBase;
+  derived : IDerived;
+  x : DINT;
+END_VAR
+  d.id := 1;
+  d.extra := 2;
+  i := d;
+  derived := d;
+  base := derived;
+  x := i.Base() + base.Base() + Use(d) + Choose().Base();
+  i := f;
+  i := NULL;
+  IF i = NULL THEN
+    x := x + 1;
+  END_IF;
+  gArr[1] := d;
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+    let output = generate(source, Mode::Executable);
+    let module = &output.module;
+    // Interface values pass and return by value as `{ ptr, ptr }`.
+    let use_fn = module
+        .lines()
+        .find(|line| line.starts_with("define internal i32 @stc_fn_USE_"))
+        .unwrap_or_else(|| panic!("interface parameter ABI is missing:\n{module}"));
+    assert!(use_fn.contains("({ ptr, ptr } %a0"), "{use_fn}");
+    assert!(
+        module.contains("define internal { ptr, ptr } @stc_fn_CHOOSE_"),
+        "interface result ABI is missing:\n{module}"
+    );
+    // Dispatch indexes the interface value's VTABLE and calls the cell code.
+    assert!(
+        module.contains("getelementptr i64, ptr %t") && module.contains(", i64 6"),
+        "interface dispatch is missing:\n{module}"
+    );
+    // A class/FB-to-interface upcast reads the map base count and the entry.
+    assert!(
+        module.contains("getelementptr i8, ptr %t") && module.contains("i64 16"),
+        "the interface map offset is missing:\n{module}"
+    );
+    assert!(
+        module.contains(", i64 72") || module.contains("i64 %t"),
+        "the interface map base is missing:\n{module}"
+    );
+    assert!(
+        module.contains("load { ptr, ptr }, ptr"),
+        "interface values are not stored as two-pointer pairs:\n{module}"
+    );
+    let second = generate(source, Mode::Executable);
+    assert_eq!(output.module, second.module, "double builds must match");
+    assert_eq!(output.got.manifest_json, second.got.manifest_json);
+    verify_with_clang("interface_dispatch", module);
+}
+
+#[test]
+fn interface_identity_comparison_is_rejected() {
     let source = r#"
 INTERFACE IShape
 METHOD Area : DINT
 END_METHOD
 END_INTERFACE
-
-FUNCTION_BLOCK Use
-VAR_INPUT
-  i : IShape;
-END_VAR
-VAR
-  x : DINT;
-END_VAR
-  x := i.Area();
-END_FUNCTION_BLOCK
-
 PROGRAM Main
 VAR
-  u : Use;
+  a : IShape;
+  b : IShape;
+  x : BOOL;
 END_VAR
+  x := a = b;
 END_PROGRAM
 CONFIGURATION Cfg
 RESOURCE R ON Cpu
@@ -609,11 +724,11 @@ END_CONFIGURATION
     let hir = clean_hir(source);
     let sources = vec!["<test>".to_string()];
     let errors = stc_codegen::generate(&hir, &options("test", Mode::Executable, &sources))
-        .expect_err("interface dispatch is M5 phase 4b");
+        .expect_err("interface identity comparison is not part of M5");
     assert!(
         errors.iter().any(|error| {
             error.code() == "STC-E-CODEGEN-001"
-                && error.message().contains("interface dispatch")
+                && error.message().contains("interface values")
                 && error.span().is_some_and(|span| span.start != span.end)
         }),
         "{errors:#?}"

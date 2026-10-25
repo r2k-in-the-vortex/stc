@@ -84,9 +84,15 @@ locals own stack records, persistent objects use the hidden `HANDLE`/`OBJREC` ro
 the record handle, method and FB bodies receive `(handle, table, ...)`, class `:=` copies the
 handle while FB `:=` copies fields, class/FB parameters follow handle/record isolation rules,
 and every class/FB method call dispatches through TYPEINFO and the class VTABLE (`SUPER` calls
-the base cell directly). Handles to activation-owned records are rejected from escaping.
-Interface dispatch, `?=`, and object references remain diagnostics until 4b.4–4b.5. The
-project manifest, `stc run`, `stc test`, and file-backed retained state are M6,
+the base cell directly). Handles to activation-owned records are rejected from escaping. Step
+4b.4 makes interface values 16-byte `{record, per-pair vtable}` pairs passed and returned by
+value and stored as single roots in fields, globals, program fields, and arrays;
+class/FB-to-interface upcasts use the compile-time base-first map index, interface-to-interface
+upcasts search the TYPEINFO interface map, `= NULL`/`<> NULL` compare the record pointer, and
+interface calls dispatch through the pair's vtable with `(record, table, ...)`. Interfaces to
+activation-owned records are also rejected from escaping. Assignment attempts (`?=`), object
+references, and interface identity comparison remain diagnostics until 4b.5. The project
+manifest, `stc run`, `stc test`, and file-backed retained state are M6,
 and full task scheduling is M6 (M5 keeps one task per resource). The persistent host, loadable
 modules, GOT roots, manifests, swap protocol, and process-image remap are implemented and shared
 by the M5 lowering. Parser and semantic snapshots, IR snapshots, clang verification, execution
