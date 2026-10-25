@@ -2087,6 +2087,20 @@ impl Analyzer<'_> {
                     Conv::Implicit
                 }
             }
+            (Ty::Array(dst), Ty::Array(src)) if dst.conformant => {
+                if self.assignability(dst.element, src.element) == Conv::No {
+                    Conv::No
+                } else {
+                    Conv::Implicit
+                }
+            }
+            (Ty::Array(dst), Ty::Array(src)) => {
+                if dst == src {
+                    Conv::Exact
+                } else {
+                    Conv::No
+                }
+            }
             _ => Conv::No,
         }
     }

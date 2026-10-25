@@ -3,7 +3,8 @@
 use stc_hir::{ArgDirection, DefId, DefKind, HirCrate};
 
 use crate::CodegenError;
-use crate::layout::{canonical_type_name, fnv1a};
+use crate::layout::fnv1a;
+use crate::types::TypeSystem;
 
 /// Normalizes an identifier to uppercase and escapes non-C characters.
 #[must_use]
@@ -53,9 +54,13 @@ fn prefix(prefix: &str, hir: &HirCrate, def: DefId, name: &str) -> String {
 /// # Errors
 ///
 /// Returns `STC-E-CODEGEN-001` for non-scalar signatures.
-pub fn function_symbol(hir: &HirCrate, def: DefId) -> Result<String, CodegenError> {
+pub fn function_symbol(
+    hir: &HirCrate,
+    types: &TypeSystem<'_>,
+    def: DefId,
+) -> Result<String, CodegenError> {
     let name = normalize_ident(hir.def_name(def));
-    let signature = signature_text(hir, def)?;
+    let signature = signature_text(hir, types, def)?;
     let hash = fnv1a(signature.as_bytes());
     Ok(format!(
         "{}_{hash:016x}",
@@ -68,7 +73,11 @@ pub fn function_symbol(hir: &HirCrate, def: DefId) -> Result<String, CodegenErro
 /// # Errors
 ///
 /// Returns `STC-E-CODEGEN-001` for non-scalar parameter/result types.
-pub fn signature_text(hir: &HirCrate, def: DefId) -> Result<String, CodegenError> {
+pub fn signature_text(
+    hir: &HirCrate,
+    types: &TypeSystem<'_>,
+    def: DefId,
+) -> Result<String, CodegenError> {
     let (result, params) = match &hir.defs[def.index()].kind {
         DefKind::Function {
             result,
@@ -89,11 +98,11 @@ pub fn signature_text(hir: &HirCrate, def: DefId) -> Result<String, CodegenError
             ArgDirection::Output => "OUT:",
             ArgDirection::InOut => "INOUT:",
         });
-        out.push_str(&canonical_type_name(hir, param.ty)?);
+        out.push_str(types.key(param.ty)?);
     }
     out.push_str(")->");
     match result {
-        Some(result) => out.push_str(&canonical_type_name(hir, result)?),
+        Some(result) => out.push_str(types.key(result)?),
         None => out.push_str("void"),
     }
     Ok(out)
@@ -103,18 +112,6 @@ pub fn signature_text(hir: &HirCrate, def: DefId) -> Result<String, CodegenError
 #[must_use]
 pub fn global_symbol(hir: &HirCrate, def: DefId) -> String {
     prefix("stc_g_", hir, def, &normalize_ident(hir.def_name(def)))
-}
-
-/// Returns the LLVM struct name (without `%`) for a program type.
-#[must_use]
-pub fn program_type_name(hir: &HirCrate, def: DefId) -> String {
-    let mut out = String::from("stc.prog.");
-    for segment in namespace_segments(hir, def) {
-        out.push_str(&segment);
-        out.push_str("_n_");
-    }
-    out.push_str(&normalize_ident(hir.def_name(def)));
-    out
 }
 
 /// Returns the program instance global name (without `@`).

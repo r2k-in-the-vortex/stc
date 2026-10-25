@@ -193,15 +193,6 @@ pub fn scalar_kind_at(hir: &HirCrate, ty: TyId, span: Span) -> Result<ScalarKind
     scalar_kind(hir, ty).map_err(|error| error.with_span(span))
 }
 
-/// Returns the canonical type name used in signatures and hashes.
-///
-/// # Errors
-///
-/// Returns `STC-E-CODEGEN-001` for non-scalar types.
-pub fn canonical_type_name(hir: &HirCrate, ty: TyId) -> Result<String, CodegenError> {
-    Ok(scalar_kind(hir, ty)?.canonical_name())
-}
-
 fn describe_type(hir: &HirCrate, ty: &Ty) -> String {
     match ty {
         Ty::String(string) => format!("{:?}[{}]", string.kind, string.capacity),

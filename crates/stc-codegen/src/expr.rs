@@ -3,11 +3,11 @@
 //! Expressions are evaluated with an explicit work stack so a 20k-term
 //! left-associative binary chain never recurses (D-073, handover §6.18).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use stc_hir::{
     BinOp, CalleeHir, ConstValue, DefId, DefKind, DirectAddress, DirectArea, ExprId, ExprKindHir,
-    FieldId, HirCrate, LocalId, ParamId, PlaceHir, Symbol, TyId, UnOp,
+    HirCrate, LocalId, ParamId, PlaceHir, TyId, UnOp,
 };
 use stc_span::Span;
 
@@ -29,12 +29,12 @@ pub(crate) type Res<T> = Result<T, CodegenError>;
 /// ordinal. Direct (`AT`) field pointers address the process image directly.
 #[derive(Clone, Debug)]
 pub(crate) struct FieldAccess {
-    /// Pointer to an `[N x ptr]` array of field storage pointers.
+    /// Pointer to an `[N x ptr]` array of leaf storage pointers.
     pub pointer: Value,
-    /// Field declaration to array ordinal.
-    pub ordinals: BTreeMap<FieldId, u32>,
-    /// Fields that are direct `AT` variables.
-    pub direct: BTreeSet<FieldId>,
+    /// Root segment path to leaf ordinal.
+    pub ordinals: BTreeMap<Vec<crate::types::RootSegment>, u32>,
+    /// Direct (`AT`) leaves and their process-image addresses.
+    pub direct: BTreeMap<Vec<crate::types::RootSegment>, stc_hir::DirectAddress>,
 }
 
 /// Per-function lowering context.
@@ -70,7 +70,7 @@ enum Task {
 
 impl Lowerer<'_> {
     pub(crate) fn scalar_at(&self, ty: TyId, span: Span) -> Res<ScalarKind> {
-        layout::scalar_kind_at(self.hir, ty, span)
+        self.types.scalar_kind(ty, span)
     }
 
     /// Lowers one expression to an SSA value.
@@ -129,7 +129,7 @@ impl Lowerer<'_> {
         let expr = self.hir.expr(id).clone();
         match expr.kind {
             ExprKindHir::Literal(literal) => {
-                let value = self.lower_literal(expr.ty, &literal.value, expr.span)?;
+                let value = self.lower_literal(f, expr.ty, &literal.value, expr.span)?;
                 values.push(value);
             }
             ExprKindHir::Place(_) => {
@@ -158,7 +158,9 @@ impl Lowerer<'_> {
             }
             ExprKindHir::Call { callee, args } => {
                 match &callee {
-                    CalleeHir::Function(_) | CalleeHir::Conversion { .. } => {}
+                    CalleeHir::Function(_)
+                    | CalleeHir::Conversion { .. }
+                    | CalleeHir::StdFunction(_) => {}
                     other => {
                         return Err(CodegenError::unsupported(
                             codes::CODEGEN_UNSUPPORTED,
@@ -170,49 +172,34 @@ impl Lowerer<'_> {
                         ));
                     }
                 }
-                for arg in &args {
-                    if arg.direction != stc_hir::ArgDirection::Input || arg.target.is_some() {
-                        return Err(CodegenError::unsupported(
-                            codes::CODEGEN_UNSUPPORTED,
-                            "output and VAR_IN_OUT arguments are not supported in M4".into(),
-                            arg.span,
-                        ));
-                    }
-                }
                 tasks.push(Task::Apply(id));
                 for arg in args.iter().rev() {
-                    if let Some(value) = arg.value {
+                    if arg.direction == stc_hir::ArgDirection::Input
+                        && let Some(value) = arg.value
+                    {
                         tasks.push(Task::Eval(value));
                     }
                 }
             }
-            ExprKindHir::Ref { .. } => {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "references are M5".into(),
-                    expr.span,
-                ));
+            ExprKindHir::Ref { target } => {
+                let value = self.lower_ref(f, info, target, expr.span)?;
+                values.push(value);
             }
             ExprKindHir::Null => {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "NULL is M5".into(),
-                    expr.span,
-                ));
+                let ty = self.types.llvm_value(expr.ty)?;
+                values.push(Value::zero(ty));
             }
-            ExprKindHir::ArrayInit { .. } => {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "array initializers are M5".into(),
-                    expr.span,
-                ));
+            ExprKindHir::ArrayInit { elements } => {
+                tasks.push(Task::Apply(id));
+                for element in elements.iter().rev() {
+                    tasks.push(Task::Eval(*element));
+                }
             }
-            ExprKindHir::StructInit { .. } => {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "struct initializers are M5".into(),
-                    expr.span,
-                ));
+            ExprKindHir::StructInit { fields } => {
+                tasks.push(Task::Apply(id));
+                for (_, field) in fields.iter().rev() {
+                    tasks.push(Task::Eval(*field));
+                }
             }
             ExprKindHir::Error => {
                 return Err(CodegenError::internal(
@@ -291,13 +278,35 @@ impl Lowerer<'_> {
                 let operand_value = values
                     .pop()
                     .ok_or_else(|| CodegenError::internal("missing cast operand"))?;
-                let from = self.scalar_at(self.hir.expr(operand).ty, expr.span)?;
-                let target = self.scalar_at(to, expr.span)?;
-                let value = self.cast_value(f, operand_value, from, target, expr.span)?;
+                let from_ty = self.hir.expr(operand).ty;
+                let from = self.types.facts(from_ty)?.scalar();
+                let target = self.types.facts(to)?.scalar();
+                let value = match (from, target) {
+                    (Some(from), Some(target)) => {
+                        self.cast_value(f, operand_value, from, target, expr.span)?
+                    }
+                    _ => self.lower_aggregate_cast(f, operand_value, from_ty, to, expr.span)?,
+                };
+                self.check_subrange(f, to, &value, expr.span)?;
+                values.push(value);
+            }
+            ExprKindHir::ArrayInit { elements } => {
+                let supplied = values.split_off(values.len() - elements.len());
+                let value = self.build_array_init(f, expr.ty, &elements, &supplied, expr.span)?;
+                values.push(value);
+            }
+            ExprKindHir::StructInit { fields } => {
+                let supplied = values.split_off(values.len() - fields.len());
+                let value = self.build_struct_init(f, expr.ty, &fields, &supplied, expr.span)?;
                 values.push(value);
             }
             ExprKindHir::Call { callee, args } => {
-                let provided = args.iter().filter(|arg| arg.value.is_some()).count();
+                let provided = args
+                    .iter()
+                    .filter(|arg| {
+                        arg.direction == stc_hir::ArgDirection::Input && arg.value.is_some()
+                    })
+                    .count();
                 if values.len() < provided {
                     return Err(CodegenError::internal("missing call argument value"));
                 }
@@ -315,7 +324,20 @@ impl Lowerer<'_> {
         Ok(())
     }
 
-    fn lower_literal(&self, ty: TyId, value: &ConstValue, span: Span) -> Res<Value> {
+    fn lower_literal(
+        &mut self,
+        f: &mut Function,
+        ty: TyId,
+        value: &ConstValue,
+        span: Span,
+    ) -> Res<Value> {
+        if let ConstValue::String(units) = value {
+            return self.lower_string_literal(f, ty, units, span);
+        }
+        if let ConstValue::Null = value {
+            let llvm = self.types.llvm_value(ty)?;
+            return Ok(Value::zero(llvm));
+        }
         let kind = self.scalar_at(ty, span)?;
         let integer = match value {
             ConstValue::Int(value) | ConstValue::Time(value) | ConstValue::Date { value, .. } => {
@@ -323,27 +345,8 @@ impl Lowerer<'_> {
             }
             ConstValue::Char(value) => Some(i128::from(*value)),
             ConstValue::Bool(value) => Some(i128::from(u8::from(*value))),
-            ConstValue::Enum { .. } => {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "enumeration constants are M5".into(),
-                    span,
-                ));
-            }
-            ConstValue::String(_) => {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "string constants are M5".into(),
-                    span,
-                ));
-            }
-            ConstValue::Null => {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "NULL is M5".into(),
-                    span,
-                ));
-            }
+            ConstValue::Enum { value, .. } => Some(*value),
+            ConstValue::String(_) | ConstValue::Null => None,
             ConstValue::Real(_) => None,
         };
         match kind {
@@ -396,49 +399,6 @@ impl Lowerer<'_> {
         })
     }
 
-    pub(crate) fn global_pointer(
-        &mut self,
-        f: &mut Function,
-        info: &BodyInfo,
-        def: DefId,
-    ) -> Res<Value> {
-        let slot = self.root_slot(&RootTarget::Global(def))?;
-        Ok(Self::slot_storage(f, info, slot))
-    }
-
-    pub(crate) fn instance_field_pointer(
-        &mut self,
-        f: &mut Function,
-        info: &BodyInfo,
-        instance: Symbol,
-        field: FieldId,
-    ) -> Res<Value> {
-        let slot = self.root_slot(&RootTarget::InstanceField { instance, field })?;
-        Ok(Self::slot_storage(f, info, slot))
-    }
-
-    fn field_array_pointer(
-        f: &mut Function,
-        fields: &FieldAccess,
-        field: FieldId,
-        span: Span,
-    ) -> Res<Value> {
-        let Some(index) = fields.ordinals.get(&field).copied() else {
-            return Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "a direct-variable field has no ordinary storage".into(),
-                span,
-            ));
-        };
-        let entry = f.gep(
-            &format!("[{} x ptr]", fields.ordinals.len()),
-            &fields.pointer,
-            &["i64 0".into(), format!("i64 {index}")],
-            true,
-        );
-        Ok(f.load(IrType::Ptr, &entry, Some(8)))
-    }
-
     fn direct_bit(address: &DirectAddress, kind: ScalarKind) -> Res<Option<u8>> {
         let span = layout::image_span(address, kind)?;
         Ok((kind == ScalarKind::Bool).then(|| u8::try_from(span.start_bit % 8).unwrap_or(0)))
@@ -456,67 +416,39 @@ impl Lowerer<'_> {
                 "read_place on a non-place expression",
             ));
         };
-        let kind = self.scalar_at(expr.ty, expr.span)?;
-        match place {
-            PlaceHir::BitField { base, bit } => self.read_bitfield(f, info, base, bit, expr.span),
-            PlaceHir::Direct(address) => {
-                let pointer = self.image_service_pointer(f, info, &address, kind)?;
-                let bit = Self::direct_bit(&address, kind)?;
-                self.read_direct_pointer(f, &pointer, kind, bit)
-            }
-            PlaceHir::Global(def) => {
-                let pointer = self.global_pointer(f, info, def)?;
-                if let Some(address) = self.global_address(def) {
-                    let bit = Self::direct_bit(&address, kind)?;
-                    self.read_direct_pointer(f, &pointer, kind, bit)
-                } else {
-                    Self::read_scalar(f, &pointer, kind)
-                }
-            }
-            PlaceHir::Field { field, .. } => {
-                if let Some(fields) = &info.fields
-                    && fields.ordinals.contains_key(&field)
-                {
-                    let pointer = Self::field_array_pointer(f, fields, field, expr.span)?;
-                    if fields.direct.contains(&field) {
-                        let address = self
-                            .field_address(field)
-                            .ok_or_else(|| CodegenError::internal("direct field has no address"))?;
-                        let bit = Self::direct_bit(&address, kind)?;
-                        return self.read_direct_pointer(f, &pointer, kind, bit);
-                    }
-                    return Self::read_scalar(f, &pointer, kind);
-                }
-                if self.field_address(field).is_some() {
-                    return Err(CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        "a direct-variable field has no ordinary storage".into(),
-                        expr.span,
-                    ));
-                }
-                let pointer = self.place_ptr(f, info, id)?;
-                Self::read_scalar(f, &pointer, kind)
-            }
-            PlaceHir::InstanceField {
-                instance, fields, ..
-            } => {
-                let field = fields
-                    .last()
-                    .copied()
-                    .ok_or_else(|| CodegenError::internal("an instance field path is empty"))?;
-                let pointer = self.instance_field_pointer(f, info, instance, field)?;
-                if let Some(address) = self.field_address(field) {
-                    let bit = Self::direct_bit(&address, kind)?;
-                    self.read_direct_pointer(f, &pointer, kind, bit)
-                } else {
-                    Self::read_scalar(f, &pointer, kind)
-                }
-            }
-            _ => {
-                let pointer = self.place_ptr(f, info, id)?;
-                Self::read_scalar(f, &pointer, kind)
-            }
+        if let PlaceHir::BitField { base, bit } = place {
+            return self.read_bitfield(f, info, base, bit, expr.span);
         }
+        if let PlaceHir::Direct(address) = place {
+            let kind = self.types.scalar_kind(expr.ty, expr.span)?;
+            let pointer = self.image_service_pointer(f, info, &address, kind)?;
+            let bit = Self::direct_bit(&address, kind)?;
+            return self.read_direct_pointer(f, &pointer, kind, bit);
+        }
+        if let PlaceHir::Deref(reference) = place {
+            return self.read_deref(f, info, reference, expr.ty, expr.span);
+        }
+        if let Some(path) = self.collect_place(id) {
+            let facts = self.types.facts(path.ty)?.clone();
+            if let Some(kind) = facts.scalar() {
+                if let Some(resolved) = self.resolve_place_pointer(f, info, &path)? {
+                    if let Some(address) = &resolved.direct {
+                        let bit = Self::direct_bit(address, kind)?;
+                        return self.read_direct_pointer(f, &resolved.pointer, kind, bit);
+                    }
+                    return Self::read_scalar(f, &resolved.pointer, kind);
+                }
+                return Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    format!("place of type `{}` has no storage", facts.key),
+                    expr.span,
+                ));
+            }
+            return self.read_aggregate_place(f, info, &path);
+        }
+        let kind = self.types.scalar_kind(expr.ty, expr.span)?;
+        let pointer = self.place_ptr(f, info, id)?;
+        Self::read_scalar(f, &pointer, kind)
     }
 
     pub(crate) fn write_place(
@@ -532,78 +464,44 @@ impl Lowerer<'_> {
                 "write_place on a non-place expression",
             ));
         };
-        let kind = self.scalar_at(expr.ty, expr.span)?;
-        match place {
-            PlaceHir::BitField { base, bit } => {
-                self.write_bitfield(f, info, base, bit, value, expr.span)
-            }
-            PlaceHir::Direct(address) => {
-                Self::reject_input_write(&address, expr.span)?;
-                let pointer = self.image_service_pointer(f, info, &address, kind)?;
-                let bit = Self::direct_bit(&address, kind)?;
-                self.write_direct_pointer(f, &pointer, kind, value, bit)
-            }
-            PlaceHir::Global(def) => {
-                let pointer = self.global_pointer(f, info, def)?;
-                if let Some(address) = self.global_address(def) {
-                    Self::reject_input_write(&address, expr.span)?;
-                    let bit = Self::direct_bit(&address, kind)?;
-                    self.write_direct_pointer(f, &pointer, kind, value, bit)
-                } else {
-                    Self::write_scalar(f, &pointer, kind, &value);
-                    Ok(())
-                }
-            }
-            PlaceHir::Field { field, .. } => {
-                if let Some(fields) = &info.fields
-                    && fields.ordinals.contains_key(&field)
-                {
-                    let pointer = Self::field_array_pointer(f, fields, field, expr.span)?;
-                    if fields.direct.contains(&field) {
-                        let address = self
-                            .field_address(field)
-                            .ok_or_else(|| CodegenError::internal("direct field has no address"))?;
-                        Self::reject_input_write(&address, expr.span)?;
-                        let bit = Self::direct_bit(&address, kind)?;
-                        return self.write_direct_pointer(f, &pointer, kind, value, bit);
+        if let PlaceHir::BitField { base, bit } = place {
+            return self.write_bitfield(f, info, base, bit, value, expr.span);
+        }
+        if let PlaceHir::Direct(address) = place {
+            Self::reject_input_write(&address, expr.span)?;
+            let kind = self.types.scalar_kind(expr.ty, expr.span)?;
+            let pointer = self.image_service_pointer(f, info, &address, kind)?;
+            let bit = Self::direct_bit(&address, kind)?;
+            return self.write_direct_pointer(f, &pointer, kind, value, bit);
+        }
+        if let PlaceHir::Deref(reference) = place {
+            return self.write_deref(f, info, reference, expr.ty, value, expr.span);
+        }
+        if let Some(path) = self.collect_place(id) {
+            let facts = self.types.facts(path.ty)?.clone();
+            if let Some(kind) = facts.scalar() {
+                if let Some(resolved) = self.resolve_place_pointer(f, info, &path)? {
+                    if let Some(address) = &resolved.direct {
+                        Self::reject_input_write(address, expr.span)?;
+                        let bit = Self::direct_bit(address, kind)?;
+                        return self.write_direct_pointer(f, &resolved.pointer, kind, value, bit);
                     }
-                    Self::write_scalar(f, &pointer, kind, &value);
+                    self.check_subrange(f, path.ty, &value, expr.span)?;
+                    Self::write_scalar(f, &resolved.pointer, kind, &value);
                     return Ok(());
                 }
-                if self.field_address(field).is_some() {
-                    return Err(CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        "a direct-variable field has no ordinary storage".into(),
-                        expr.span,
-                    ));
-                }
-                let pointer = self.place_ptr(f, info, id)?;
-                Self::write_scalar(f, &pointer, kind, &value);
-                Ok(())
+                return Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    format!("place of type `{}` has no storage", facts.key),
+                    expr.span,
+                ));
             }
-            PlaceHir::InstanceField {
-                instance, fields, ..
-            } => {
-                let field = fields
-                    .last()
-                    .copied()
-                    .ok_or_else(|| CodegenError::internal("an instance field path is empty"))?;
-                let pointer = self.instance_field_pointer(f, info, instance, field)?;
-                if let Some(address) = self.field_address(field) {
-                    Self::reject_input_write(&address, expr.span)?;
-                    let bit = Self::direct_bit(&address, kind)?;
-                    self.write_direct_pointer(f, &pointer, kind, value, bit)
-                } else {
-                    Self::write_scalar(f, &pointer, kind, &value);
-                    Ok(())
-                }
-            }
-            _ => {
-                let pointer = self.place_ptr(f, info, id)?;
-                Self::write_scalar(f, &pointer, kind, &value);
-                Ok(())
-            }
+            return self.write_aggregate_place(f, info, &path, value);
         }
+        let kind = self.types.scalar_kind(expr.ty, expr.span)?;
+        let pointer = self.place_ptr(f, info, id)?;
+        Self::write_scalar(f, &pointer, kind, &value);
+        Ok(())
     }
 
     fn place_ptr(&mut self, f: &mut Function, info: &BodyInfo, id: ExprId) -> Res<Value> {
@@ -613,28 +511,15 @@ impl Lowerer<'_> {
                 "place_ptr on a non-place expression",
             ));
         };
+        if let PlaceHir::Deref(reference) = place {
+            return self.deref_pointer(f, info, reference, expr.span);
+        }
+        if let Some(path) = self.collect_place(id)
+            && let Some(resolved) = self.resolve_place_pointer(f, info, &path)?
+        {
+            return Ok(resolved.pointer);
+        }
         match place {
-            PlaceHir::Local(local) => info
-                .locals
-                .get(&local)
-                .cloned()
-                .ok_or_else(|| CodegenError::internal("unknown local in codegen")),
-            PlaceHir::Param(param) => info
-                .params
-                .get(&param)
-                .cloned()
-                .ok_or_else(|| CodegenError::internal("unknown parameter in codegen")),
-            PlaceHir::Global(def) => {
-                if self.global_address(def).is_some() {
-                    Err(CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        "a direct-variable place has no ordinary storage".into(),
-                        expr.span,
-                    ))
-                } else {
-                    self.global_pointer(f, info, def)
-                }
-            }
             PlaceHir::Result(_) => info.result_ptr.clone().ok_or_else(|| {
                 CodegenError::unsupported(
                     codes::CODEGEN_UNSUPPORTED,
@@ -644,97 +529,29 @@ impl Lowerer<'_> {
             }),
             PlaceHir::This(_) => Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
-                "`THIS` has no whole-program value in M4".into(),
+                "`THIS` has no whole-object storage pointer".into(),
                 expr.span,
             )),
-            PlaceHir::Field { base, field } => {
-                if let Some(fields) = &info.fields
-                    && fields.ordinals.contains_key(&field)
-                {
-                    if fields.direct.contains(&field) {
-                        return Err(CodegenError::unsupported(
-                            codes::CODEGEN_UNSUPPORTED,
-                            "a direct-variable field has no ordinary storage".into(),
-                            expr.span,
-                        ));
-                    }
-                    return Self::field_array_pointer(f, fields, field, expr.span);
-                }
-                if self.field_address(field).is_some() {
-                    return Err(CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        "a direct-variable field has no ordinary storage".into(),
-                        expr.span,
-                    ));
-                }
-                let base_ptr = self.place_ptr(f, info, base)?;
-                self.field_ptr(f, &base_ptr, field, expr.span)
-            }
-            PlaceHir::InstanceField {
-                instance, fields, ..
-            } => {
-                let field = fields
-                    .last()
-                    .copied()
-                    .ok_or_else(|| CodegenError::internal("an instance field path is empty"))?;
-                if self.field_address(field).is_some() {
-                    return Err(CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        "a direct-variable field has no ordinary storage".into(),
-                        expr.span,
-                    ));
-                }
-                self.instance_field_pointer(f, info, instance, field)
-            }
             PlaceHir::Index { .. } => Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
-                "array indexing is M5".into(),
+                "array indexing has no contiguous storage here".into(),
                 expr.span,
             )),
-            PlaceHir::Deref(_) => Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "dereferences are M5".into(),
-                expr.span,
-            )),
-            PlaceHir::Direct(_) => Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "a direct-variable place has no ordinary storage".into(),
-                expr.span,
-            )),
+            PlaceHir::Deref(_) => Err(CodegenError::internal("dereference was not resolved")),
+            PlaceHir::Direct(_) | PlaceHir::InstanceField { .. } | PlaceHir::Field { .. } => {
+                Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "a direct-variable place has no ordinary storage".into(),
+                    expr.span,
+                ))
+            }
+            PlaceHir::Local(_) | PlaceHir::Param(_) | PlaceHir::Global(_) => {
+                Err(CodegenError::internal("place pointer was not resolved"))
+            }
             PlaceHir::BitField { .. } => Err(CodegenError::internal(
                 "bit fields are handled by read/write_place",
             )),
         }
-    }
-
-    fn field_ptr(
-        &mut self,
-        f: &mut Function,
-        base: &Value,
-        field: FieldId,
-        span: Span,
-    ) -> Res<Value> {
-        let data = self.hir.field(field).clone();
-        let Some(layout) = self.layouts.get(&data.owner) else {
-            return Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "struct and class fields are M5".into(),
-                span,
-            ));
-        };
-        let Some(index) = layout.field_indices.get(&field) else {
-            return Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "a direct-variable field has no ordinary storage".into(),
-                span,
-            ));
-        };
-        Ok(f.gep(
-            &format!("%{}", layout.name),
-            base,
-            &["i32 0".into(), format!("i32 {index}")],
-            true,
-        ))
     }
 
     pub(crate) fn read_scalar(f: &mut Function, pointer: &Value, kind: ScalarKind) -> Res<Value> {
@@ -799,15 +616,11 @@ impl Lowerer<'_> {
         self.write_place(f, info, base, combined)
     }
 
-    fn global_address(&self, def: DefId) -> Option<DirectAddress> {
+    pub(crate) fn global_address(&self, def: DefId) -> Option<DirectAddress> {
         match &self.hir.defs[def.index()].kind {
             DefKind::Global { at, .. } => at.clone(),
             _ => None,
         }
-    }
-
-    fn field_address(&self, field: FieldId) -> Option<DirectAddress> {
-        self.hir.field(field).at.clone()
     }
 
     fn area_service(area: DirectArea) -> i128 {
@@ -903,22 +716,6 @@ impl Lowerer<'_> {
     }
 
     /// Writes a declared `AT` root's initial value during cold preparation.
-    pub(crate) fn write_direct_initial(
-        &mut self,
-        f: &mut Function,
-        info: &BodyInfo,
-        slot: u32,
-        address: &DirectAddress,
-        kind: ScalarKind,
-        value: Value,
-    ) -> Res<()> {
-        let pointer = Self::slot_storage(f, info, slot);
-        let bit = Self::direct_bit(address, kind)?;
-        self.write_direct_pointer(f, &pointer, kind, value, bit)
-    }
-
-    // ---- calls ------------------------------------------------------------
-
     #[allow(clippy::too_many_arguments)]
     fn lower_call(
         &mut self,
@@ -935,70 +732,28 @@ impl Lowerer<'_> {
                 if supplied.len() != 1 {
                     return Err(CodegenError::internal("conversion arity mismatch"));
                 }
-                let from_kind = self.scalar_at(*from, span)?;
-                let to_kind = self.scalar_at(*to, span)?;
-                self.cast_value(f, supplied[0].clone(), from_kind, to_kind, span)
+                let from_facts = self.types.facts(*from)?.clone();
+                let to_facts = self.types.facts(*to)?.clone();
+                match (from_facts.scalar(), to_facts.scalar()) {
+                    (Some(from_kind), Some(to_kind)) => {
+                        self.cast_value(f, supplied[0].clone(), from_kind, to_kind, span)
+                    }
+                    _ => self.lower_aggregate_cast(f, supplied[0].clone(), *from, *to, span),
+                }
+            }
+            CalleeHir::StdFunction(id) => {
+                self.lower_std_function(f, info, *id, args, supplied, result_ty, span)
             }
             CalleeHir::Function(def) => {
-                if args.iter().any(|arg| arg.value.is_none()) {
-                    return Err(CodegenError::unsupported(
+                let value = self
+                    .lower_function_call(f, info, *def, args, supplied, result_ty, span, false)?;
+                value.ok_or_else(|| {
+                    CodegenError::unsupported(
                         codes::CODEGEN_UNSUPPORTED,
-                        "output arguments are M5".into(),
+                        "a function without a result cannot be used as an expression".into(),
                         span,
-                    ));
-                }
-                let mut by_formal: BTreeMap<ParamId, Value> = BTreeMap::new();
-                let mut supplied_index = 0;
-                for arg in args {
-                    if let (Some(formal), Some(_)) = (arg.formal, arg.value) {
-                        let value = supplied
-                            .get(supplied_index)
-                            .cloned()
-                            .ok_or_else(|| CodegenError::internal("missing supplied argument"))?;
-                        supplied_index += 1;
-                        by_formal.insert(formal, value);
-                    }
-                }
-                let DefKind::Function { params, result, .. } = &self.hir.defs[def.index()].kind
-                else {
-                    return Err(CodegenError::internal("callee is not a function"));
-                };
-                let params = params.clone();
-                let result = *result;
-                let slot = self.function_slot(FunctionTarget::Function(*def))?;
-                let callee = Self::slot_storage(f, info, slot);
-                let mut call_args = Vec::new();
-                for param in &params {
-                    let data = self.hir.param(*param).clone();
-                    let value = if let Some(value) = by_formal.get(param) {
-                        value.clone()
-                    } else if let Some(default) = data.default {
-                        self.lower_expr(f, info, default)?
-                    } else {
-                        return Err(CodegenError::internal(format!(
-                            "missing required argument `{}`",
-                            self.hir.interner.text(data.name)
-                        )));
-                    };
-                    let kind = self.scalar_at(data.ty, data.span)?;
-                    call_args.push(to_storage(f, &value, kind));
-                }
-                let ret_storage = match result {
-                    Some(ty) => self.scalar_at(ty, span)?.storage(),
-                    None => IrType::Void,
-                };
-                call_args.push(info.slots.clone());
-                let value = f
-                    .call_ptr(ret_storage, &callee, &call_args)
-                    .ok_or_else(|| {
-                        CodegenError::unsupported(
-                            codes::CODEGEN_UNSUPPORTED,
-                            "a function without a result cannot be used as an expression".into(),
-                            span,
-                        )
-                    })?;
-                let kind = self.scalar_at(result_ty, span)?;
-                Ok(storage_to_value(f, &value, kind))
+                    )
+                })
             }
             other => Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
@@ -1024,47 +779,20 @@ impl Lowerer<'_> {
         };
         match &callee {
             CalleeHir::Function(def) => {
-                if args.iter().any(|arg| arg.value.is_none()) {
-                    return Err(CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        "output arguments are M5".into(),
-                        expr.span,
-                    ));
-                }
-                let DefKind::Function { params, .. } = &self.hir.defs[def.index()].kind else {
-                    return Err(CodegenError::internal("callee is not a function"));
-                };
-                let params = params.clone();
-                let slot = self.function_slot(FunctionTarget::Function(*def))?;
-                let callee = Self::slot_storage(f, info, slot);
-                let mut by_formal: BTreeMap<ParamId, Value> = BTreeMap::new();
+                let mut supplied = Vec::new();
                 for arg in &args {
-                    let Some(value) = arg.value else {
-                        continue;
-                    };
-                    if let Some(formal) = arg.formal {
-                        let lowered = self.lower_expr(f, info, value)?;
-                        by_formal.insert(formal, lowered);
+                    if arg.direction == stc_hir::ArgDirection::Input
+                        && let Some(value) = arg.value
+                    {
+                        supplied.push(self.lower_expr(f, info, value)?);
                     }
                 }
-                let mut call_args = Vec::new();
-                for param in &params {
-                    let data = self.hir.param(*param).clone();
-                    let value = if let Some(value) = by_formal.get(param) {
-                        value.clone()
-                    } else if let Some(default) = data.default {
-                        self.lower_expr(f, info, default)?
-                    } else {
-                        return Err(CodegenError::internal("missing required argument"));
-                    };
-                    let kind = self.scalar_at(data.ty, data.span)?;
-                    call_args.push(to_storage(f, &value, kind));
-                }
-                call_args.push(info.slots.clone());
-                f.call_ptr(IrType::Void, &callee, &call_args);
+                let _ = self.lower_function_call(
+                    f, info, *def, &args, &supplied, expr.ty, expr.span, true,
+                )?;
                 Ok(())
             }
-            CalleeHir::Conversion { .. } => {
+            CalleeHir::Conversion { .. } | CalleeHir::StdFunction(_) => {
                 let _ = self.lower_expr(f, info, id)?;
                 Ok(())
             }
@@ -1093,8 +821,60 @@ impl Lowerer<'_> {
         rhs_value: Value,
         span: Span,
     ) -> Res<Value> {
-        let lhs_kind = self.scalar_at(self.hir.expr(lhs).ty, span)?;
-        let rhs_kind = self.scalar_at(self.hir.expr(rhs).ty, span)?;
+        let lhs_ty = self.hir.expr(lhs).ty;
+        let rhs_ty = self.hir.expr(rhs).ty;
+        let lhs_facts = self.types.facts(lhs_ty)?.clone();
+        let rhs_facts = self.types.facts(rhs_ty)?.clone();
+        let reference_like = |facts: &crate::types::TypeFacts| {
+            facts.is_reference() || matches!(facts.category, crate::types::TypeCategory::Null)
+        };
+        if reference_like(&lhs_facts) || reference_like(&rhs_facts) {
+            return match op {
+                BinOp::Eq => {
+                    self.lower_reference_comparison(f, lhs_ty, &lhs_value, rhs_ty, &rhs_value, true)
+                }
+                BinOp::Ne => self
+                    .lower_reference_comparison(f, lhs_ty, &lhs_value, rhs_ty, &rhs_value, false),
+                other => Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    format!(
+                        "operator `{}` is not supported for references",
+                        other.as_str()
+                    ),
+                    span,
+                )),
+            };
+        }
+        if lhs_facts.is_string() || rhs_facts.is_string() {
+            if lhs_facts.key != rhs_facts.key || !lhs_facts.is_string() || !rhs_facts.is_string() {
+                return Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "string comparison requires equal string types".into(),
+                    span,
+                ));
+            }
+            return match op {
+                BinOp::Eq => self.lower_string_comparison(f, &lhs_value, &rhs_value, lhs_ty, true),
+                BinOp::Ne => self.lower_string_comparison(f, &lhs_value, &rhs_value, lhs_ty, false),
+                other => Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    format!("operator `{}` is not supported for strings", other.as_str()),
+                    span,
+                )),
+            };
+        }
+        if !lhs_facts.is_scalar_shaped() || !rhs_facts.is_scalar_shaped() {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!(
+                    "operator `{}` is not supported for aggregate values",
+                    op.as_str()
+                ),
+                span,
+            ));
+        }
+        let lhs_kind = lhs_facts.scalar().expect("scalar-shaped");
+        let rhs_kind = rhs_facts.scalar().expect("scalar-shaped");
         if op.is_comparison() {
             return self.lower_comparison(f, op, lhs_kind, &lhs_value, &rhs_value, span);
         }
@@ -1118,7 +898,7 @@ impl Lowerer<'_> {
         }
     }
 
-    fn lower_comparison(
+    pub(crate) fn lower_comparison(
         &mut self,
         f: &mut Function,
         op: BinOp,
@@ -1168,7 +948,7 @@ impl Lowerer<'_> {
         }
     }
 
-    fn bit_op(
+    pub(crate) fn bit_op(
         &mut self,
         f: &mut Function,
         op: &str,
@@ -1188,7 +968,7 @@ impl Lowerer<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn lower_arithmetic(
+    pub(crate) fn lower_arithmetic(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,
@@ -1605,18 +1385,18 @@ impl Lowerer<'_> {
         let mut helper = Function::new(
             name.clone(),
             SymbolAttrs::internal(),
-            ty,
+            ty.clone(),
             vec![
-                (ty, "%a0".into()),
-                (ty, "%a1".into()),
+                (ty.clone(), "%a0".into()),
+                (ty.clone(), "%a1".into()),
                 (IrType::Int(32), "%a2".into()),
                 (IrType::Ptr, "%slots".into()),
             ],
         );
         helper.start_fresh_block();
-        let base_ptr = helper.alloca(ty);
-        let exponent_ptr = helper.alloca(ty);
-        let result_ptr = helper.alloca(ty);
+        let base_ptr = helper.alloca(ty.clone());
+        let exponent_ptr = helper.alloca(ty.clone());
+        let result_ptr = helper.alloca(ty.clone());
         let base = helper.param_value(0);
         let exponent = helper.param_value(1);
         let span_value = helper.param_value(2);
@@ -1627,7 +1407,7 @@ impl Lowerer<'_> {
         helper.store(&Value::int(bits, 1), &result_ptr, None);
 
         if signed {
-            let exponent_value = helper.load(ty, &exponent_ptr, None);
+            let exponent_value = helper.load(ty.clone(), &exponent_ptr, None);
             let negative = helper.icmp("slt", &exponent_value, &Value::int(bits, 0));
             emit_trap_block(
                 &mut helper,
@@ -1644,7 +1424,7 @@ impl Lowerer<'_> {
         let exit_label = helper.next_block_label();
         helper.branch(&loop_label);
         helper.start_block(&loop_label);
-        let exponent_value = helper.load(ty, &exponent_ptr, None);
+        let exponent_value = helper.load(ty.clone(), &exponent_ptr, None);
         let done = if signed {
             helper.icmp("sle", &exponent_value, &Value::int(bits, 0))
         } else {
@@ -1653,7 +1433,7 @@ impl Lowerer<'_> {
         helper.cond_branch(&done, &exit_label, &body_label);
         helper.start_block(&body_label);
 
-        let exponent_value = helper.load(ty, &exponent_ptr, None);
+        let exponent_value = helper.load(ty.clone(), &exponent_ptr, None);
         let odd_bits = helper.binop("and", &exponent_value, &Value::int(bits, 1));
         let is_odd = helper.icmp("ne", &odd_bits, &Value::int(bits, 0));
         let multiply_label = helper.next_block_label();
@@ -1661,8 +1441,8 @@ impl Lowerer<'_> {
         helper.cond_branch(&is_odd, &multiply_label, &after_multiply);
 
         helper.start_block(&multiply_label);
-        let result = helper.load(ty, &result_ptr, None);
-        let base_value = helper.load(ty, &base_ptr, None);
+        let result = helper.load(ty.clone(), &result_ptr, None);
+        let base_value = helper.load(ty.clone(), &base_ptr, None);
         let product = checked_mul_in_helper(
             &mut helper,
             &mut self.module,
@@ -1678,7 +1458,7 @@ impl Lowerer<'_> {
         helper.branch(&after_multiply);
 
         helper.start_block(&after_multiply);
-        let exponent_value = helper.load(ty, &exponent_ptr, None);
+        let exponent_value = helper.load(ty.clone(), &exponent_ptr, None);
         let shifted = helper.binop(
             if signed { "ashr" } else { "lshr" },
             &exponent_value,
@@ -1690,7 +1470,7 @@ impl Lowerer<'_> {
         helper.cond_branch(&still_going, &square_label, &loop_label);
 
         helper.start_block(&square_label);
-        let base_value = helper.load(ty, &base_ptr, None);
+        let base_value = helper.load(ty.clone(), &base_ptr, None);
         let squared = checked_mul_in_helper(
             &mut helper,
             &mut self.module,
@@ -1706,7 +1486,7 @@ impl Lowerer<'_> {
         helper.branch(&loop_label);
 
         helper.start_block(&exit_label);
-        let result = helper.load(ty, &result_ptr, None);
+        let result = helper.load(ty.clone(), &result_ptr, None);
         helper.ret(Some(&result));
         helper.check().map_err(CodegenError::internal)?;
         self.module.add_function(helper);
@@ -1808,8 +1588,8 @@ fn real_type(width: u16) -> IrType {
     }
 }
 
-fn real_constant(value: f64, ty: IrType) -> Value {
-    if ty == IrType::Float {
+fn real_constant(value: f64, ty: &IrType) -> Value {
+    if *ty == IrType::Float {
         Value::float32(value as f32)
     } else {
         Value::double(value)
@@ -1817,8 +1597,9 @@ fn real_constant(value: f64, ty: IrType) -> Value {
 }
 
 fn cast_raw(f: &mut Function, op: &str, value: &Value, to: IrType) -> Value {
+    let rendered = to.render();
     let cast = f.temp(to);
-    f.emit_value(&cast, format!("{op} {} to {}", value.render(), to.render()));
+    f.emit_value(&cast, format!("{op} {} to {rendered}", value.render()));
     cast
 }
 
@@ -1883,20 +1664,20 @@ fn range_check(
 }
 
 fn float_range_check(f: &mut Function, value: &Value, to_width: u16, to_signed: bool) -> Value {
-    let ty = value.ty;
+    let ty = value.ty.clone();
     let exponent = if to_signed {
         to_width.saturating_sub(1)
     } else {
         to_width
     };
-    let high = real_constant((2.0_f64).powi(i32::from(exponent)), ty);
+    let high = real_constant((2.0_f64).powi(i32::from(exponent)), &ty);
     let high_ok = f.fcmp("olt", value, &high);
     if to_signed {
-        let low = real_constant(-(2.0_f64).powi(i32::from(exponent)), ty);
+        let low = real_constant(-(2.0_f64).powi(i32::from(exponent)), &ty);
         let low_ok = f.fcmp("oge", value, &low);
         f.binop("and", &low_ok, &high_ok)
     } else {
-        let zero = real_constant(0.0, ty);
+        let zero = real_constant(0.0, &ty);
         let low_ok = f.fcmp("oge", value, &zero);
         f.binop("and", &low_ok, &high_ok)
     }

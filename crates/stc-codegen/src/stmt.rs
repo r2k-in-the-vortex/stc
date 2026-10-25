@@ -79,11 +79,10 @@ impl Lowerer<'_> {
                 Ok(())
             }
             StmtKindHir::Empty => Ok(()),
-            StmtKindHir::RefAssign { .. } => Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "reference assignments are M5".into(),
-                stmt.span,
-            )),
+            StmtKindHir::RefAssign { place, value } => {
+                let value = self.lower_expr(f, info, value)?;
+                self.write_place(f, info, place, value)
+            }
             StmtKindHir::Attempt { .. } => Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
                 "assignment attempts are M5".into(),
@@ -422,13 +421,7 @@ impl Lowerer<'_> {
             }
             ConstValue::Char(value) => i128::from(*value),
             ConstValue::Bool(value) => i128::from(u8::from(*value)),
-            ConstValue::Enum { .. } => {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "enumeration CASE labels are M5".into(),
-                    span,
-                ));
-            }
+            ConstValue::Enum { value, .. } => *value,
             ConstValue::String(_) => {
                 return Err(CodegenError::unsupported(
                     codes::CODEGEN_UNSUPPORTED,

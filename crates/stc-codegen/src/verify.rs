@@ -374,7 +374,11 @@ fn verify_entry_points(module: &Module, contract: &Contract, errors: &mut Vec<Ve
                 ),
             ));
         }
-        let params: Vec<IrType> = function.params.iter().map(|(ty, _name)| *ty).collect();
+        let params: Vec<IrType> = function
+            .params
+            .iter()
+            .map(|(ty, _name)| ty.clone())
+            .collect();
         if function.ret != entry.ret || params != entry.params {
             errors.push(VerifyError::new(
                 "entry-point",

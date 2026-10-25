@@ -157,13 +157,13 @@ materialized into a transient alloca on read and split back into roots on write.
 | Phase | Deliverable | Status |
 | --- | --- | --- |
 | 0 | Decisions D-128–D-136 and this plan | Complete |
-| 1 | Type/layout substrate, aggregate IR builder, type/descriptor catalog records | Planned |
-| 2 | Structs, enums, subranges, arrays, strings: values, roots, initializers, traps | Planned |
-| 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | Planned |
+| 1 | Type/layout substrate, aggregate IR builder, type/descriptor catalog records | Complete |
+| 2 | Structs, enums, subranges, arrays, strings: values, roots, initializers, traps | Complete for values, roots, initializers, and traps; string search functions are phase 5 |
+| 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, and conformant `ARRAY[*]` complete; `?=` needs phase 4 and `STC-POINTER` remains |
 | 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Planned |
-| 5 | Standard functions, standard FB bodies, cycle-latched timers | Planned |
+| 5 | Standard functions, standard FB bodies, cycle-latched timers | Inline arithmetic/bit/selection/string basics implemented; math/date strings remain |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Planned |
-| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Planned |
+| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate codegen/clang/execution coverage in place; OOP/stdlib/fuzz/docs remain |
 
 ### Phase 1 — type and layout substrate
 

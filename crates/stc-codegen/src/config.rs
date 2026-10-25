@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use stc_hir::{
     BindingHir, ConstValue, DefId, DefKind, DirectArea, ExprId, ExprKindHir, FieldId, HirCrate,
-    IoHint, PlaceHir, RetainPolicy, Symbol, TaskHir,
+    IoHint, PlaceHir, RetainPolicy, Symbol, TaskHir, TyId,
 };
 use stc_span::Span;
 
@@ -13,6 +13,7 @@ use crate::CodegenError;
 use crate::codes;
 use crate::layout::{self, ScalarKind};
 use crate::mangle;
+use crate::types::{RootSegment, StorageLayout, TypeSystem};
 
 /// One task selected for execution/metadata.
 #[derive(Clone, Debug)]
@@ -69,15 +70,33 @@ pub(crate) struct Plan {
     pub config_inits: Vec<stc_hir::ConfigInitHir>,
 }
 
+/// One persistent leaf of a program type.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct ProgramLeaf {
+    /// Path segments relative to the program type.
+    pub segments: Vec<RootSegment>,
+    /// Leaf type.
+    pub ty: TyId,
+    /// Canonical type key.
+    pub key: String,
+    /// Leaf size/alignment.
+    pub layout: StorageLayout,
+    /// Leaf layout hash.
+    pub layout_hash: stc_got::GotId,
+    /// Effective retention policy.
+    pub retain: RetainPolicy,
+    /// Direct `AT` address for a top-level direct field.
+    pub at: Option<stc_hir::DirectAddress>,
+}
+
 /// An LLVM struct layout for one program type.
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramLayout {
-    /// LLVM struct name (without `%`).
-    pub name: String,
-    /// Non-`AT` scalar fields in declaration order.
+    /// Non-`AT` fields in declaration order.
     pub fields: Vec<FieldId>,
-    /// Field index within the struct.
-    pub field_indices: BTreeMap<FieldId, u32>,
+    /// Persistent leaves in canonical order.
+    pub leaves: Vec<ProgramLeaf>,
 }
 
 /// Which declaration owns a process-image binding.
@@ -373,6 +392,7 @@ fn plan_task(hir: &HirCrate, resource: &str, task: &TaskHir) -> PlanTask {
 pub(crate) fn program_layouts(
     hir: &HirCrate,
     plan: &Plan,
+    types: &TypeSystem<'_>,
 ) -> Result<BTreeMap<DefId, ProgramLayout>, Vec<CodegenError>> {
     let mut layouts = BTreeMap::new();
     let mut errors = Vec::new();
@@ -381,26 +401,47 @@ pub(crate) fn program_layouts(
             continue;
         };
         let mut kept = Vec::new();
-        let mut indices = BTreeMap::new();
+        let mut leaves = Vec::new();
         for field in fields {
             let data = hir.field(*field);
-            match layout::scalar_kind_at(hir, data.ty, data.span) {
-                Ok(_) => {
+            let leaf_prefix = match normalize_field_name(hir, *field) {
+                Ok(name) => name,
+                Err(error) => {
+                    errors.push(error);
+                    continue;
+                }
+            };
+            match types.root_leaves(data.ty, &leaf_prefix, data.retain) {
+                Ok(declared) => {
                     if data.at.is_none() {
-                        let index = u32::try_from(kept.len()).unwrap_or(u32::MAX);
-                        indices.insert(*field, index);
                         kept.push(*field);
                     }
+                    for mut leaf in declared {
+                        leaf.segments.insert(0, RootSegment::Field(*field));
+                        let at = if data.at.is_some() && leaf.segments.len() == 1 {
+                            data.at.clone()
+                        } else {
+                            None
+                        };
+                        leaves.push(ProgramLeaf {
+                            segments: leaf.segments,
+                            ty: leaf.ty,
+                            key: leaf.key,
+                            layout: leaf.layout,
+                            layout_hash: leaf.layout_hash,
+                            retain: leaf.retain,
+                            at,
+                        });
+                    }
                 }
-                Err(error) => errors.push(error),
+                Err(error) => errors.push(error.with_span(data.span)),
             }
         }
         layouts.insert(
             *program,
             ProgramLayout {
-                name: mangle::program_type_name(hir, *program),
                 fields: kept,
-                field_indices: indices,
+                leaves,
             },
         );
     }
@@ -420,6 +461,20 @@ pub(crate) fn program_layouts(
         errors.dedup();
         Err(errors)
     }
+}
+
+fn normalize_field_name(hir: &HirCrate, field: FieldId) -> Result<String, CodegenError> {
+    let data = hir.field(field);
+    stc_got::normalize_ident(hir.interner.text(data.name)).map_err(|_| {
+        CodegenError::unsupported(
+            codes::CODEGEN_UNSUPPORTED,
+            format!(
+                "field `{}` is not a valid identifier",
+                hir.interner.text(data.name)
+            ),
+            data.span,
+        )
+    })
 }
 
 /// Builds the process-image layout and defaults.

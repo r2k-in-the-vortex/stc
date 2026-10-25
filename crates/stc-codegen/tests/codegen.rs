@@ -204,14 +204,18 @@ fn metadata_is_deterministic() {
 }
 
 #[test]
-fn unsupported_declarations_report_once_with_a_span() {
+fn assignment_attempts_are_rejected_once_with_a_span() {
     let source = r#"
-TYPE Color : (Red, Green);
-END_TYPE
-CLASS C
+CLASS A
+END_CLASS
+CLASS B EXTENDS A
 END_CLASS
 PROGRAM Main
-VAR x : DINT; END_VAR
+VAR
+  a : A;
+  b : B;
+END_VAR
+  a ?= b;
 END_PROGRAM
 CONFIGURATION Cfg
 RESOURCE R ON Cpu
@@ -222,30 +226,14 @@ END_CONFIGURATION
     let hir = clean_hir(source);
     let sources = vec!["<test>".to_string()];
     let errors = stc_codegen::generate(&hir, &options("test", Mode::Executable, &sources))
-        .expect_err("M5 declarations must be rejected");
+        .expect_err("assignment attempts are deferred to phase 4");
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert_eq!(errors[0].code(), "STC-E-CODEGEN-001");
     assert!(
-        errors
-            .iter()
-            .all(|error| error.code() == "STC-E-CODEGEN-001"),
+        errors[0].message().contains("assignment attempts"),
         "{errors:#?}"
     );
-    let messages = errors
-        .iter()
-        .map(|error| error.message().to_string())
-        .collect::<Vec<_>>();
-    assert!(
-        messages.iter().any(|message| message.contains("ENUM")),
-        "{messages:?}"
-    );
-    assert!(
-        messages.iter().any(|message| message.contains("CLASS")),
-        "{messages:?}"
-    );
-    assert!(errors.iter().all(|error| {
-        error
-            .span()
-            .is_some_and(|span| span.start != 0 || span.end != 0)
-    }));
+    assert!(errors[0].span().is_some_and(|span| span.start != span.end));
 }
 
 #[test]
@@ -253,10 +241,9 @@ fn unsupported_standard_call_reports_at_the_call_site() {
     let source = r#"
 PROGRAM Main
 VAR
-  x : DINT;
-  y : DINT;
+  x : REAL;
 END_VAR
-  y := ABS(x);
+  x := SQRT(4.0);
 END_PROGRAM
 CONFIGURATION Cfg
 RESOURCE R ON Cpu
@@ -267,10 +254,10 @@ END_CONFIGURATION
     let hir = clean_hir(source);
     let sources = vec!["<test>".to_string()];
     let errors = stc_codegen::generate(&hir, &options("test", Mode::Executable, &sources))
-        .expect_err("standard functions are M5");
+        .expect_err("math standard functions are M5 phase 5");
     assert_eq!(errors.len(), 1, "{errors:#?}");
     assert_eq!(errors[0].code(), "STC-E-CODEGEN-001");
-    assert!(errors[0].message().contains("ABS"), "{errors:#?}");
+    assert!(errors[0].message().contains("SQRT"), "{errors:#?}");
 }
 
 #[test]
@@ -758,4 +745,87 @@ fn generated_module_has_no_direct_persistent_or_user_references() {
         );
     }
     verify_with_clang("got_surface", module);
+}
+
+const AGGREGATES: &str = r#"
+TYPE
+  Color : (Red, Green := 5, Blue);
+  Small : INT(0..10);
+  Point : STRUCT
+    x : DINT;
+    y : DINT;
+  END_STRUCT;
+END_TYPE
+PROGRAM Main
+VAR
+  c : Color;
+  s : Small;
+  p : Point;
+  q : Point;
+  arr : ARRAY[1..3] OF DINT;
+  ps : ARRAY[1..2] OF Point;
+  str : STRING[10];
+  i : DINT;
+  v : DINT;
+END_VAR
+  c := Green;
+  s := 5;
+  p.x := 3;
+  p.y := 4;
+  q := p;
+  arr[1] := q.x + q.y;
+  FOR i := 1 TO 2 DO
+    ps[i].x := i * 10;
+    ps[i].y := i * 20;
+  END_FOR;
+  str := CONCAT('ab', 'cd');
+  v := LEN(str);
+  v := v + arr[1] + ps[2].y + s;
+END_PROGRAM
+CONFIGURATION Cfg
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn aggregate_program_emits_and_verifies_with_clang() {
+    let output = generate(AGGREGATES, Mode::Executable);
+    let module = &output.module;
+    assert!(module.contains("load { i32, i32 }"), "{module}");
+    assert!(module.contains("store { i32, i32 }"), "{module}");
+    assert!(module.contains("llvm.memcpy.p0.p0.i64"), "{module}");
+    assert!(module.contains("icmp sgt i64"), "{module}");
+    assert!(
+        output
+            .got
+            .manifest
+            .types
+            .iter()
+            .any(|ty| ty.key.ends_with("::POINT")),
+        "{:#?}",
+        output.got.manifest.types
+    );
+    assert!(
+        output
+            .got
+            .manifest
+            .roots
+            .iter()
+            .any(|root| root.key.contains(".P.X")),
+        "{:#?}",
+        output.got.manifest.roots
+    );
+    assert!(
+        output
+            .got
+            .manifest
+            .roots
+            .iter()
+            .any(|root| root.key.contains(".PS.E1.Y")),
+        "{:#?}",
+        output.got.manifest.roots
+    );
+    verify_with_clang("aggregates", module);
 }

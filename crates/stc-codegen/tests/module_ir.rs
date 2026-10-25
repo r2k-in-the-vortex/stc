@@ -39,7 +39,7 @@ fn local_global(name: &str) -> GlobalDef {
 fn function(name: &str, attrs: SymbolAttrs, ret: IrType, params: &[(&str, IrType)]) -> Function {
     let params = params
         .iter()
-        .map(|(name, ty)| (*ty, (*name).to_owned()))
+        .map(|(name, ty)| (ty.clone(), (*name).to_owned()))
         .collect();
     Function::new(name, attrs, ret, params)
 }

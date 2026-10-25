@@ -18,12 +18,12 @@ use stc_got::descriptor::{Descriptor, DescriptorFunction, entry_flag, function_f
 use stc_got::manifest::{FEATURE_HOST_ABI, FEATURE_ONLINE_PLAN};
 use stc_got::model::{Retention, RootKind, SourceLocation};
 use stc_got::{
-    BuildInput, BuildOptions, Catalog, Digest32, ExportDecl, FunctionDecl, FunctionKind, GotId,
-    Identity, IdentityKind, InitializerKind, InstanceDecl, Manifest, Rename, RootDecl, Signature,
-    Target, TaskDecl, TypeKey, direct_root_key, elementary_layout, elementary_layout_hash,
-    export_identity_key, expression_initializer_digest, field_root_key, function_key,
+    BuildInput, BuildOptions, Catalog, Digest32, ExportDecl, FieldDecl, FunctionDecl, FunctionKind,
+    GotId, Identity, IdentityKind, InitializerKind, InstanceDecl, Manifest, Rename, RootDecl,
+    Signature, Target, TaskDecl, TypeDecl, TypeKey, direct_root_key, export_identity_key,
+    expression_initializer_digest, field_identity_key, field_root_key, function_key,
     global_root_key, initializer_digest, instance_identity_key, normalize_ident, normalize_package,
-    program_body_key, task_guard_root_key, task_identity_key,
+    program_body_key, task_guard_root_key, task_identity_key, type_identity_key,
 };
 use stc_hir::{
     ArgDirection, CalleeHir, ConstValue, DefId, DefKind, ExprId, ExprKindHir, FieldId, HirCrate,
@@ -37,6 +37,7 @@ use crate::config::{self, Plan, PlanTask, RetainLayout};
 use crate::ir::CellKind;
 use crate::layout;
 use crate::mangle;
+use crate::types::{RootSegment, TypeSystem};
 
 /// The conformance profile embedded in module artifacts.
 pub const PROFILE: &str = "stc-2013-oop-utf8-v1";
@@ -146,13 +147,27 @@ impl From<stc_got::Diagnostic> for ModuleError {
 pub enum RootTarget {
     /// A scalar global.
     Global(DefId),
-    /// A program-instance scalar field.
+    /// One nested leaf of an aggregate global.
+    GlobalLeaf {
+        /// Global declaration.
+        def: DefId,
+        /// Path below the global.
+        segments: Vec<RootSegment>,
+    },
+    /// A program-instance root whose declaration is the field itself.
     InstanceField {
         /// Configured instance name. A configuration-less build uses the
         /// reserved `Symbol::new(u32::MAX)` carried by the synthesized plan.
         instance: Symbol,
         /// Field declaration.
         field: FieldId,
+    },
+    /// One nested leaf of a program-instance field.
+    InstanceLeaf {
+        /// Configured instance name.
+        instance: Symbol,
+        /// Path below the program type.
+        segments: Vec<RootSegment>,
     },
     /// A task guard flag.
     TaskGuard {
@@ -393,7 +408,8 @@ pub fn project(
         )]);
     }
     let plan = config::select_plan(hir).map_err(map_codegen_errors)?;
-    let layouts = config::program_layouts(hir, &plan).map_err(map_codegen_errors)?;
+    let types = TypeSystem::new(hir, &options.target).map_err(map_codegen_errors)?;
+    let layouts = config::program_layouts(hir, &plan, &types).map_err(map_codegen_errors)?;
     let _image = config::image_layout(hir, &plan, &layouts).map_err(map_codegen_errors)?;
     let retain = config::retain_layout(hir, &plan, &layouts).map_err(map_codegen_errors)?;
     let source_paths = package_relative_paths(sources);
@@ -403,7 +419,7 @@ pub fn project(
         plan: &plan,
         retain: &retain,
         source_paths: &source_paths,
-        target: &options.target,
+        types: &types,
     };
     let built = context.build_catalog().map_err(|error| vec![error])?;
 
@@ -629,7 +645,7 @@ struct Context<'a> {
     plan: &'a Plan,
     retain: &'a RetainLayout,
     source_paths: &'a [String],
-    target: &'a Target,
+    types: &'a TypeSystem<'a>,
 }
 
 impl Context<'_> {
@@ -639,6 +655,7 @@ impl Context<'_> {
         let mut function_targets = BTreeMap::new();
         let package = self.default_package()?;
 
+        self.add_types(&mut catalog)?;
         self.add_global_roots(&mut catalog, &mut root_targets)?;
         self.add_instance_roots(&mut catalog, &mut root_targets)?;
         self.add_task_guards(&package, &mut catalog, &mut root_targets)?;
@@ -705,60 +722,78 @@ impl Context<'_> {
             };
             let def_package = self.def_package(id)?;
             let path = self.qualified_path(id)?;
-            let type_key = self.got_type_key(*ty, def.span)?;
-            let (layout_hash, size, align) = self.layout(&type_key, def.span)?;
             let source = self.source_location(&def_package, def.span);
-            let (root_kind, identity_kind, key, field_path, qualifier) = match at {
-                None => (
-                    RootKind::Global,
-                    IdentityKind::DataRoot,
-                    global_root_key(&def_package, &path)
-                        .map_err(|error| map_error(error, Some(def.span)))?,
-                    String::new(),
-                    String::new(),
-                ),
-                Some(_) => (
-                    RootKind::Direct,
-                    IdentityKind::Direct,
-                    direct_root_key(&def_package, &path, None)
-                        .map_err(|error| map_error(error, Some(def.span)))?,
-                    String::new(),
-                    String::new(),
-                ),
-            };
-            let (initializer, init_digest, retention) = match at {
-                None => {
-                    let (initializer, digest) = self.initializer(*ty, *init, def.span)?;
-                    (
-                        initializer,
-                        digest,
-                        match retain {
-                            RetainPolicy::Retain => Retention::Retain,
-                            RetainPolicy::None | RetainPolicy::NonRetain => Retention::None,
-                        },
-                    )
-                }
-                Some(_) => (InitializerKind::None, None, Retention::None),
-            };
-            let symbol =
-                (root_kind != RootKind::Direct).then(|| mangle::global_symbol(self.hir, id));
-            let key_for_target = key.clone();
-            catalog.roots.push(RootDecl {
-                identity: Identity::new(identity_kind, &def_package, &path, qualifier),
-                key,
-                root_kind,
-                owner_type: None,
-                field_path,
-                type_key,
-                layout_hash,
-                size,
-                align,
-                retention,
-                initializer,
-                initializer_digest: init_digest,
-                source,
-            });
-            root_targets.insert(key_for_target, (RootTarget::Global(id), symbol));
+            if let Some(_address) = at {
+                let type_key = self.got_type_key(*ty, def.span)?;
+                let (layout_hash, size, align) = self.layout(*ty, def.span)?;
+                let key = direct_root_key(&def_package, &path, None)
+                    .map_err(|error| map_error(error, Some(def.span)))?;
+                catalog.roots.push(RootDecl {
+                    identity: Identity::new(IdentityKind::Direct, &def_package, &path, ""),
+                    key: key.clone(),
+                    root_kind: RootKind::Direct,
+                    owner_type: None,
+                    field_path: String::new(),
+                    type_key,
+                    layout_hash,
+                    size,
+                    align,
+                    retention: Retention::None,
+                    initializer: InitializerKind::None,
+                    initializer_digest: None,
+                    source,
+                });
+                root_targets.insert(key, (RootTarget::Global(id), None));
+                continue;
+            }
+            let leaves = self
+                .types
+                .root_leaves(*ty, &path, *retain)
+                .map_err(|error| ModuleError::from(error.with_span(def.span)))?;
+            for leaf in leaves {
+                let leaf_path = if leaf.segments.is_empty() {
+                    path.clone()
+                } else {
+                    format!("{path}.{}", self.segment_text(&leaf.segments)?)
+                };
+                let key = global_root_key(&def_package, &leaf_path)
+                    .map_err(|error| map_error(error, Some(def.span)))?;
+                let (initializer, init_digest) = self.leaf_initializer(
+                    leaf.ty,
+                    *init,
+                    def.span,
+                    leaf.segments.is_empty(),
+                    &leaf_path,
+                )?;
+                let symbol = leaf
+                    .segments
+                    .is_empty()
+                    .then(|| mangle::global_symbol(self.hir, id));
+                catalog.roots.push(RootDecl {
+                    identity: Identity::new(IdentityKind::DataRoot, &def_package, &leaf_path, ""),
+                    key: key.clone(),
+                    root_kind: RootKind::Global,
+                    owner_type: self.leaf_owner_type(&leaf.segments),
+                    field_path: self.segment_text(&leaf.segments)?,
+                    type_key: leaf.key,
+                    layout_hash: leaf.layout_hash,
+                    size: leaf.layout.size,
+                    align: leaf.layout.align,
+                    retention: retention(leaf.retain),
+                    initializer,
+                    initializer_digest: init_digest,
+                    source: source.clone(),
+                });
+                let target = if leaf.segments.is_empty() {
+                    RootTarget::Global(id)
+                } else {
+                    RootTarget::GlobalLeaf {
+                        def: id,
+                        segments: leaf.segments,
+                    }
+                };
+                root_targets.insert(key, (target, symbol));
+            }
         }
         Ok(())
     }
@@ -779,8 +814,9 @@ impl Context<'_> {
             let program_path = self.qualified_path(instance.program)?;
             let instance_path =
                 instance_path(&configuration, &instance.resource, &instance.name_text);
+            let fields = fields.clone();
             for field in fields {
-                let data = self.hir.field(*field);
+                let data = self.hir.field(field).clone();
                 if matches!(
                     data.section,
                     stc_hir::VarSectionKind::InOut
@@ -790,7 +826,7 @@ impl Context<'_> {
                     return Err(ModuleError::from(CodegenError::unsupported(
                         codes::CODEGEN_UNSUPPORTED,
                         format!(
-                            "program field section `{}` is not supported in M4",
+                            "program field section `{}` is not supported in M5",
                             data.section.as_str()
                         ),
                         data.span,
@@ -798,70 +834,174 @@ impl Context<'_> {
                 }
                 let field_name = normalize_ident(self.hir.interner.text(data.name))
                     .map_err(|error| map_error(error, Some(data.span)))?;
-                let path = format!("{program_path}.{field_name}");
-                let type_key = self.got_type_key(data.ty, data.span)?;
-                let (layout_hash, size, align) = self.layout(&type_key, data.span)?;
+                let root_path = format!("{program_path}.{field_name}");
                 let source = self.source_location(&package, data.span);
-                let init = overrides
-                    .get(&(instance.name, *field))
+                let override_init = overrides
+                    .get(&(instance.name, field))
                     .copied()
                     .or(data.init);
-                let (root_kind, identity_kind, key, initializer, init_digest, retention) =
-                    match data.at {
-                        None => {
-                            let (initializer, digest) =
-                                self.initializer(data.ty, init, data.span)?;
-                            (
-                                RootKind::ProgramField,
-                                IdentityKind::DataRoot,
-                                field_root_key(&package, &path, &instance_path)
-                                    .map_err(|error| map_error(error, Some(data.span)))?,
-                                initializer,
-                                digest,
-                                match data.retain {
-                                    RetainPolicy::Retain => Retention::Retain,
-                                    RetainPolicy::None | RetainPolicy::NonRetain => Retention::None,
-                                },
-                            )
-                        }
-                        Some(_) => (
-                            RootKind::Direct,
+                if let Some(_address) = &data.at {
+                    let type_key = self.got_type_key(data.ty, data.span)?;
+                    let (layout_hash, size, align) = self.layout(data.ty, data.span)?;
+                    let key = direct_root_key(&package, &root_path, Some(&instance_path))
+                        .map_err(|error| map_error(error, Some(data.span)))?;
+                    catalog.roots.push(RootDecl {
+                        identity: Identity::new(
                             IdentityKind::Direct,
-                            direct_root_key(&package, &path, Some(&instance_path))
-                                .map_err(|error| map_error(error, Some(data.span)))?,
-                            InitializerKind::None,
-                            None,
-                            Retention::None,
+                            &package,
+                            &root_path,
+                            &instance_path,
                         ),
+                        key: key.clone(),
+                        root_kind: RootKind::Direct,
+                        owner_type: None,
+                        field_path: field_name,
+                        type_key,
+                        layout_hash,
+                        size,
+                        align,
+                        retention: Retention::None,
+                        initializer: InitializerKind::None,
+                        initializer_digest: None,
+                        source,
+                    });
+                    root_targets.insert(
+                        key,
+                        (
+                            RootTarget::InstanceField {
+                                instance: instance.name,
+                                field,
+                            },
+                            None,
+                        ),
+                    );
+                    continue;
+                }
+                let leaves = self
+                    .types
+                    .root_leaves(data.ty, &field_name, data.retain)
+                    .map_err(|error| ModuleError::from(error.with_span(data.span)))?;
+                for mut leaf in leaves {
+                    let top_level = leaf.segments.is_empty();
+                    leaf.segments.insert(0, RootSegment::Field(field));
+                    let leaf_path = if top_level {
+                        root_path.clone()
+                    } else {
+                        format!("{root_path}.{}", self.segment_text(&leaf.segments[1..])?)
                     };
-                catalog.roots.push(RootDecl {
-                    identity: Identity::new(identity_kind, &package, &path, &instance_path),
-                    key: key.clone(),
-                    root_kind,
-                    owner_type: None,
-                    field_path: field_name,
-                    type_key,
-                    layout_hash,
-                    size,
-                    align,
-                    retention,
-                    initializer,
-                    initializer_digest: init_digest,
-                    source,
-                });
-                root_targets.insert(
-                    key,
-                    (
+                    let key = field_root_key(&package, &leaf_path, &instance_path)
+                        .map_err(|error| map_error(error, Some(data.span)))?;
+                    let (initializer, init_digest) = self.leaf_initializer(
+                        leaf.ty,
+                        override_init,
+                        data.span,
+                        top_level,
+                        &leaf_path,
+                    )?;
+                    catalog.roots.push(RootDecl {
+                        identity: Identity::new(
+                            IdentityKind::DataRoot,
+                            &package,
+                            &leaf_path,
+                            &instance_path,
+                        ),
+                        key: key.clone(),
+                        root_kind: if top_level {
+                            RootKind::ProgramField
+                        } else {
+                            RootKind::NestedField
+                        },
+                        owner_type: None,
+                        field_path: self.segment_text(&leaf.segments)?,
+                        type_key: leaf.key,
+                        layout_hash: leaf.layout_hash,
+                        size: leaf.layout.size,
+                        align: leaf.layout.align,
+                        retention: retention(leaf.retain),
+                        initializer,
+                        initializer_digest: init_digest,
+                        source: source.clone(),
+                    });
+                    let target = if top_level {
                         RootTarget::InstanceField {
                             instance: instance.name,
-                            field: *field,
-                        },
-                        None,
-                    ),
-                );
+                            field,
+                        }
+                    } else {
+                        RootTarget::InstanceLeaf {
+                            instance: instance.name,
+                            segments: leaf.segments,
+                        }
+                    };
+                    root_targets.insert(key, (target, None));
+                }
             }
         }
         Ok(())
+    }
+
+    fn segment_text(&self, segments: &[RootSegment]) -> Result<String, ModuleError> {
+        let mut out = String::new();
+        for (index, segment) in segments.iter().enumerate() {
+            if index > 0 {
+                out.push('.');
+            }
+            match segment {
+                RootSegment::Field(field) => {
+                    let data = self.hir.field(*field);
+                    out.push_str(
+                        &normalize_ident(self.hir.interner.text(data.name))
+                            .map_err(|error| map_error(error, Some(data.span)))?,
+                    );
+                }
+                RootSegment::Element { index, .. } => {
+                    out.push('E');
+                    out.push_str(&index.to_string());
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn leaf_owner_type(&self, segments: &[RootSegment]) -> Option<String> {
+        segments.iter().find_map(|segment| {
+            let RootSegment::Field(field) = segment else {
+                return None;
+            };
+            let owner = self.hir.field(*field).owner;
+            self.types
+                .type_id(owner)
+                .map(|_| ())
+                .and_then(|()| self.catalog_type_key(owner).ok())
+        })
+    }
+
+    fn catalog_type_key(&self, def: DefId) -> Result<String, ModuleError> {
+        let named = self.types.named(def).map_err(ModuleError::from)?;
+        type_identity_key(&named.package, &named.path).map_err(|error| map_error(error, None))
+    }
+
+    fn leaf_initializer(
+        &self,
+        ty: TyId,
+        init: Option<ExprId>,
+        span: Span,
+        top_level: bool,
+        path: &str,
+    ) -> Result<(InitializerKind, Option<Digest32>), ModuleError> {
+        let Some(init) = init else {
+            return Ok((InitializerKind::Zero, None));
+        };
+        if top_level {
+            return self.initializer(ty, Some(init), span);
+        }
+        let mut fingerprint = expression_fingerprint(self.hir, init)?;
+        fingerprint.push(0);
+        fingerprint.extend_from_slice(path.as_bytes());
+        Ok((
+            InitializerKind::Expression,
+            Some(expression_initializer_digest(&fingerprint)),
+        ))
     }
 
     fn add_task_guards(
@@ -881,7 +1021,7 @@ impl Context<'_> {
             let key = task_guard_root_key(package, &configuration, &resource, &name)
                 .map_err(|error| map_error(error, Some(task.span)))?;
             let type_key = "BOOL".to_owned();
-            let (layout_hash, size, align) = self.layout(&type_key, task.span)?;
+            let (layout_hash, size, align) = self.layout(self.hir.types.bool(), task.span)?;
             let identity_path = format!("{configuration}/{resource}#{name}.GUARD");
             let initializer_digest = initializer_digest(&type_key, &[1]);
             let symbol = mangle::task_guard_symbol_text(&resource, &name);
@@ -952,7 +1092,8 @@ impl Context<'_> {
                 vtable_slot: None,
                 source: self.source_location(&package, def.span),
             });
-            let symbol = mangle::function_symbol(self.hir, id).map_err(ModuleError::from)?;
+            let symbol =
+                mangle::function_symbol(self.hir, self.types, id).map_err(ModuleError::from)?;
             function_targets.insert(key, (FunctionTarget::Function(id), Some(symbol)));
         }
         Ok(())
@@ -1201,20 +1342,8 @@ impl Context<'_> {
             let data = self.hir.param(*param);
             let mode = match data.direction {
                 ArgDirection::Input => stc_got::ParamMode::In,
-                ArgDirection::Output | ArgDirection::InOut => {
-                    return Err(ModuleError::from(CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        format!(
-                            "`{}` parameters are M5",
-                            match data.direction {
-                                ArgDirection::Output => "VAR_OUTPUT",
-                                ArgDirection::InOut => "VAR_IN_OUT",
-                                ArgDirection::Input => "VAR_INPUT",
-                            }
-                        ),
-                        data.span,
-                    )));
-                }
+                ArgDirection::Output => stc_got::ParamMode::Out,
+                ArgDirection::InOut => stc_got::ParamMode::InOut,
             };
             let type_key = self.got_type_key(data.ty, data.span)?;
             parameters.push(stc_got::Parameter {
@@ -1234,89 +1363,89 @@ impl Context<'_> {
     }
 
     fn got_type_key(&self, ty: TyId, span: Span) -> Result<String, ModuleError> {
-        let value = match self.hir.types.get(ty) {
-            Ty::Bool => "BOOL".to_owned(),
-            Ty::Int(int) => match (int.signed, int.width) {
-                (true, 8) => "SINT".to_owned(),
-                (true, 16) => "INT".to_owned(),
-                (true, 32) => "DINT".to_owned(),
-                (true, 64) => "LINT".to_owned(),
-                (false, 8) => "USINT".to_owned(),
-                (false, 16) => "UINT".to_owned(),
-                (false, 32) => "UDINT".to_owned(),
-                (false, 64) => "ULINT".to_owned(),
-                _ => {
-                    return Err(ModuleError::from(CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        format!("integer width {} is not supported in M4", int.width),
-                        span,
-                    )));
-                }
-            },
-            Ty::BitString(width) => match width {
-                8 => "BYTE".to_owned(),
-                16 => "WORD".to_owned(),
-                32 => "DWORD".to_owned(),
-                64 => "LWORD".to_owned(),
-                _ => {
-                    return Err(ModuleError::from(CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        format!("bit-string width {width} is not supported in M4"),
-                        span,
-                    )));
-                }
-            },
-            Ty::Real(stc_hir::RealTy::Real) => "REAL".to_owned(),
-            Ty::Real(stc_hir::RealTy::LReal) => "LREAL".to_owned(),
-            Ty::Time(stc_hir::TimeTy::Time) => "TIME".to_owned(),
-            Ty::Time(stc_hir::TimeTy::LTime) => "LTIME".to_owned(),
-            Ty::Date(kind) => match kind {
-                stc_hir::DateTy::Date => "DATE",
-                stc_hir::DateTy::LDate => "LDATE",
-                stc_hir::DateTy::Tod => "TOD",
-                stc_hir::DateTy::LTod => "LTOD",
-                stc_hir::DateTy::DateTime => "DT",
-                stc_hir::DateTy::LDateTime => "LDT",
-            }
-            .to_owned(),
-            Ty::Char(kind) => match kind {
-                stc_hir::CharTy::Char => "CHAR",
-                stc_hir::CharTy::WChar => "WCHAR",
-                stc_hir::CharTy::UChar => "UCHAR",
-            }
-            .to_owned(),
-            other => {
-                layout::scalar_kind_at(self.hir, ty, span).map_err(|_| {
-                    CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        format!("type `{other:?}` is not supported in M4"),
-                        span,
-                    )
-                })?;
-                return Err(ModuleError::error(
-                    codes::CODEGEN_INTERNAL,
-                    format!("type `{other:?}` has no module type key"),
-                ));
-            }
-        };
-        Ok(value)
+        self.types
+            .key(ty)
+            .map(str::to_owned)
+            .map_err(|error| ModuleError::from(error.with_span(span)))
     }
 
-    fn layout(&self, type_key: &str, span: Span) -> Result<(GotId, u64, u32), ModuleError> {
-        let ty = TypeKey::parse(type_key).map_err(|error| map_error(error, Some(span)))?;
-        let layout = elementary_layout(&ty).ok_or_else(|| {
-            ModuleError::error(
-                codes::CODEGEN_INTERNAL,
-                format!("no elementary layout for `{type_key}`"),
-            )
-        })?;
-        let hash = elementary_layout_hash(self.target, &ty).ok_or_else(|| {
-            ModuleError::error(
-                codes::CODEGEN_INTERNAL,
-                format!("no layout hash for `{type_key}`"),
-            )
-        })?;
+    fn layout(&self, ty: TyId, span: Span) -> Result<(GotId, u64, u32), ModuleError> {
+        let layout = self
+            .types
+            .layout(ty)
+            .map_err(|error| ModuleError::from(error.with_span(span)))?;
+        let hash = self
+            .types
+            .layout_hash(ty)
+            .map_err(|error| ModuleError::from(error.with_span(span)))?;
         Ok((hash, layout.size, layout.align))
+    }
+
+    fn add_types(&self, catalog: &mut Catalog) -> Result<(), ModuleError> {
+        for named in self.types.named_types() {
+            // Synthetic prelude FBs are projected only when a build actually
+            // references them (D-134); user declarations are always included.
+            if named.def.index() < self.hir.defs.len()
+                && synthetic(self.hir, named.def)
+                && named.kind.is_object()
+            {
+                continue;
+            }
+            if named.layout.size == 0 {
+                // Format 1 requires a non-zero type size; an empty struct owns
+                // no persistent layout or descriptor.
+                continue;
+            }
+            let base = match named.base {
+                Some(base) => Some(self.catalog_type_key(base)?),
+                None => None,
+            };
+            let mut interfaces = Vec::new();
+            for interface in &named.interfaces {
+                interfaces.push(self.catalog_type_key(*interface)?);
+            }
+            let mut fields = Vec::new();
+            for field in &named.fields {
+                let identity = Identity::new(
+                    IdentityKind::Field,
+                    &named.package,
+                    format!("{}.{}", named.path, field.path),
+                    "",
+                );
+                let key = field_identity_key(&named.package, &named.path, &field.path)
+                    .map_err(|error| map_error(error, Some(field.span)))?;
+                let _ = key;
+                fields.push(FieldDecl {
+                    identity,
+                    path: field.path.clone(),
+                    type_key: field.key.clone(),
+                    layout_hash: field.layout_hash,
+                    offset: field.offset,
+                    size: field.layout.size,
+                    align: field.layout.align,
+                    retention: retention(field.retain),
+                    source: self.source_location(&named.package, field.span),
+                });
+            }
+            let identity =
+                Identity::new(IdentityKind::Type, &named.package, named.path.clone(), "");
+            catalog.types.push(TypeDecl {
+                identity,
+                key: type_identity_key(&named.package, &named.path)
+                    .map_err(|error| map_error(error, None))?,
+                type_key: named.key.clone(),
+                layout_hash: named.layout_hash,
+                size: named.layout.size,
+                align: named.layout.align,
+                type_kind: named.kind.got_kind(),
+                base,
+                interfaces,
+                vtable_shape: named.vtable_shape,
+                fields,
+                source: self.source_location(&named.package, self.hir.defs[named.def.index()].span),
+            });
+        }
+        Ok(())
     }
 
     fn initializer(
@@ -1329,8 +1458,14 @@ impl Context<'_> {
             return Ok((InitializerKind::Zero, None));
         };
         let type_key = self.got_type_key(ty, span)?;
-        if let ExprKindHir::Literal(literal) = &self.hir.expr(init).kind {
-            let bytes = encode_value(self.hir, ty, &literal.value, span)?;
+        if self
+            .types
+            .facts(ty)
+            .map(|facts| facts.is_scalar_shaped())
+            .unwrap_or(false)
+            && let ExprKindHir::Literal(literal) = &self.hir.expr(init).kind
+            && let Ok(bytes) = encode_value(self.hir, ty, &literal.value, span)
+        {
             return Ok((
                 InitializerKind::Constant,
                 Some(initializer_digest(&type_key, &bytes)),
@@ -1354,6 +1489,13 @@ impl Context<'_> {
             start: span.start,
             end: span.end,
         })
+    }
+}
+
+fn retention(policy: RetainPolicy) -> Retention {
+    match policy {
+        RetainPolicy::Retain => Retention::Retain,
+        RetainPolicy::None | RetainPolicy::NonRetain => Retention::None,
     }
 }
 

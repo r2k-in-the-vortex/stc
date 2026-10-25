@@ -189,6 +189,8 @@ fn source_name_source(name: &str) -> &'static str {
         "narrow" => NARROW,
         "powneg" => POW_NEGATIVE,
         "powoverflow" => POW_OVERFLOW,
+        "subrange" => SUBRANGE,
+        "bounds" => BOUNDS,
         other => panic!("unknown source {other}"),
     }
 }
@@ -286,6 +288,41 @@ END_RESOURCE
 END_CONFIGURATION
 "#;
 
+const SUBRANGE: &str = r#"
+TYPE
+  Small : INT(0..10);
+END_TYPE
+PROGRAM Main
+VAR
+  s : Small;
+  x : DINT;
+END_VAR
+  x := 11;
+  s := x;
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+const BOUNDS: &str = r#"
+PROGRAM Main
+VAR
+  a : ARRAY[1..2] OF DINT;
+  i : DINT;
+END_VAR
+  i := 3;
+  a[i] := 1;
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
 const NARROW: &str = r#"
 PROGRAM Main
 VAR
@@ -335,6 +372,8 @@ fn traps_are_fatal_and_reported() {
         ("narrow", "RANGE"),
         ("powneg", "RANGE"),
         ("powoverflow", "OVERFLOW"),
+        ("subrange", "RANGE"),
+        ("bounds", "BOUNDS"),
     ] {
         let directory = TestDir::new(source);
         build_executable(&directory, source, source);
@@ -623,7 +662,7 @@ fn unsupported_constructs_are_compiler_errors() {
     let directory = TestDir::new("unsupported");
     let source = directory.write_source(
         "unsupported",
-        "CLASS C\nEND_CLASS\nPROGRAM Main\nVAR x : DINT; END_VAR\nEND_PROGRAM\n\
+        "CLASS A\nEND_CLASS\nCLASS B EXTENDS A\nEND_CLASS\nPROGRAM Main\nVAR a : A; b : B; END_VAR\n  a ?= b;\nEND_PROGRAM\n\
          CONFIGURATION Cfg\nRESOURCE R ON Cpu\n  PROGRAM inst : Main;\nEND_RESOURCE\nEND_CONFIGURATION\n",
     );
     let output = run_stc(&[
@@ -873,7 +912,7 @@ fn build_json_emits_codegen_errors_on_stdout() {
     let directory = TestDir::new("json");
     let source = directory.write_source(
         "unsupported",
-        "CLASS C\nEND_CLASS\nPROGRAM Main\nVAR x : DINT; END_VAR\nEND_PROGRAM\n\
+        "CLASS A\nEND_CLASS\nCLASS B EXTENDS A\nEND_CLASS\nPROGRAM Main\nVAR a : A; b : B; END_VAR\n  a ?= b;\nEND_PROGRAM\n\
          CONFIGURATION Cfg\nRESOURCE R ON Cpu\n  PROGRAM inst : Main;\nEND_RESOURCE\nEND_CONFIGURATION\n",
     );
     let output = run_stc(&[
@@ -967,5 +1006,264 @@ fn runtime_is_discovered_beside_the_driver() {
         output.status.success(),
         "discovery build failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+const AGGREGATES: &str = r#"
+TYPE
+  Point : STRUCT
+    x : DINT;
+    y : DINT;
+  END_STRUCT;
+END_TYPE
+
+FUNCTION Make : Point
+VAR_INPUT
+  x : DINT;
+  y : DINT;
+END_VAR
+  Make.x := x;
+  Make.y := y;
+END_FUNCTION
+
+FUNCTION SumPoint : DINT
+VAR_INPUT
+  p : Point;
+END_VAR
+  SumPoint := p.x + p.y;
+END_FUNCTION
+
+FUNCTION Update : DINT
+VAR_INPUT
+  a : DINT;
+END_VAR
+VAR_OUTPUT
+  o : DINT;
+END_VAR
+VAR_IN_OUT
+  io : DINT;
+END_VAR
+  o := a + io;
+  io := io + 1;
+  Update := o;
+END_FUNCTION
+
+FUNCTION Mutate : DINT
+VAR_INPUT
+  p : Point;
+END_VAR
+  p.x := 99;
+  Mutate := p.x;
+END_FUNCTION
+
+FUNCTION Bump : DINT
+VAR_IN_OUT
+  p : Point;
+END_VAR
+  p.x := p.x + 1;
+  p.y := p.y + 1;
+  Bump := p.x * 10 + p.y;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION Run : DINT
+VAR
+  p : Point;
+  q : Point;
+  x : DINT;
+  y : DINT;
+  v : DINT;
+END_VAR
+  p := Make(1, 2);
+  q := Make(x := 3, y := 4);
+  v := SumPoint(p) + SumPoint(q);
+  Update(a := 10, o => x, io := y);
+  IF Mutate(p) <> 99 THEN v := v + 1000; END_IF;
+  IF p.x <> 1 THEN v := v + 2000; END_IF;
+  Run := v + x + y;
+END_FUNCTION
+
+VAR_GLOBAL
+  gp : Point;
+  gps : ARRAY[1..2] OF Point;
+  gstr : STRING[10];
+  bp : Point := (x := 1, y := 2);
+  ip : Point := (x := 3, y := 4);
+  ia : ARRAY[1..2] OF DINT := [5, 6];
+  istr : STRING[8] := 'hi';
+  im : ARRAY[1..2, 1..3] OF DINT;
+  ic : Color;
+  iss : Small;
+  istr2 : STRING[10];
+END_VAR
+
+TYPE
+  Color : (Red, Green := 5, Blue);
+  Small : INT(0..10);
+END_TYPE
+
+{stc:export}{stc:no_mangle}
+FUNCTION Multi : DINT
+VAR
+  v : DINT;
+END_VAR
+  im[2, 3] := 7;
+  v := im[2, 3];
+  ic := Green;
+  CASE ic OF
+    Red: v := v + 1;
+    Green: v := v + 2;
+  ELSE
+    v := v + 100;
+  END_CASE;
+  iss := 5;
+  v := v + iss;
+  istr2 := 'hello';
+  IF istr2 = 'hello' THEN v := v + 10; END_IF;
+  IF istr2 <> 'hell' THEN v := v + 20; END_IF;
+  Multi := v;
+END_FUNCTION
+
+VAR_GLOBAL
+  rx : DINT;
+END_VAR
+
+FUNCTION SumC : DINT
+VAR_IN_OUT
+  a : ARRAY[*] OF DINT;
+END_VAR
+  SumC := a[1] + a[2] + a[3];
+END_FUNCTION
+
+FUNCTION BumpC : DINT
+VAR_IN_OUT
+  a : ARRAY[*] OF DINT;
+END_VAR
+  a[1] := a[1] + 10;
+  BumpC := a[1];
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunConf : DINT
+VAR
+  arr : ARRAY[1..3] OF DINT;
+  v : DINT;
+END_VAR
+  arr[1] := 1;
+  arr[2] := 2;
+  arr[3] := 3;
+  v := SumC(arr);
+  v := v + BumpC(arr);
+  RunConf := v + arr[1];
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RefTest : DINT
+VAR
+  p : REF_TO DINT;
+  q : REF_TO DINT;
+  n : REF_TO DINT;
+  x : DINT;
+END_VAR
+  rx := 5;
+  p := REF(rx);
+  q := p;
+  x := q^;
+  q^ := 9;
+  n := NULL;
+  IF n = NULL THEN x := x + 1; END_IF;
+  IF p = NULL THEN x := x + 100; END_IF;
+  RefTest := x + rx;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION BumpInit : DINT
+  BumpInit := Bump(bp);
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION SumBp : DINT
+  SumBp := bp.x + bp.y;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION InitSum : DINT
+  InitSum := ip.x * 1000 + ip.y * 100 + ia[1] * 10 + ia[2] + LEN(istr);
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION SetPoint : DINT
+VAR_INPUT
+  x : DINT;
+  y : DINT;
+END_VAR
+  gp.x := x;
+  gp.y := y;
+  SetPoint := gp.x * 10 + gp.y;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION GetSum : DINT
+  GetSum := gp.x + gp.y;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION SetElem : DINT
+VAR_INPUT
+  i : DINT;
+  v : DINT;
+END_VAR
+  gps[i].x := v;
+  gps[i].y := v + 1;
+  SetElem := gps[i].x * 100 + gps[i].y;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION SetText : DINT
+VAR
+  n : DINT;
+END_VAR
+  gstr := 'hello';
+  n := LEN(gstr);
+  SetText := n * 10 + LEN_CODE_UNIT(gstr);
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION CopyTest : DINT
+VAR
+  p : Point;
+END_VAR
+  p := gp;
+  p.x := p.x + 1;
+  CopyTest := p.x * 10 + p.y;
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn aggregate_library_runs_under_a_c_harness() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("aggregates");
+    build_library(&directory, AGGREGATES, "aggregates");
+    let library = lib_path(&directory.path, "aggregates");
+    assert!(library.is_file(), "{}", library.display());
+    compile_harness(
+        &directory,
+        "aggregates.c",
+        &library,
+        &built_module(&directory, "aggregates"),
+        "aggregates_harness",
     );
 }

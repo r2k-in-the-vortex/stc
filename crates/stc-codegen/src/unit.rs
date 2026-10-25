@@ -39,6 +39,7 @@ pub(crate) struct Lowerer<'a> {
     pub module: Module,
     pub target: Target,
     pub got: ModuleArtifacts,
+    pub types: crate::types::TypeSystem<'a>,
     pub layouts: BTreeMap<DefId, ProgramLayout>,
     pub plan: Plan,
     pub image: ImageLayout,
@@ -64,7 +65,9 @@ pub(crate) fn generate(
     got: ModuleArtifacts,
 ) -> Result<Output, Vec<CodegenError>> {
     let plan = config::select_plan(hir)?;
-    let layouts = config::program_layouts(hir, &plan)?;
+    let types = crate::types::TypeSystem::new(hir, target)
+        .map_err(|errors| errors.into_iter().collect::<Vec<_>>())?;
+    let layouts = config::program_layouts(hir, &plan, &types)?;
     let image = config::image_layout(hir, &plan, &layouts)?;
     let retain = config::retain_layout(hir, &plan, &layouts)?;
     let (span_ids, span_entries) = build_span_table(hir);
@@ -75,6 +78,7 @@ pub(crate) fn generate(
         target: target.clone(),
         got,
         layouts,
+        types,
         plan,
         image,
         retain,
@@ -90,6 +94,9 @@ pub(crate) fn generate(
     };
     lowerer.build_symbols();
     lowerer.preflight();
+    if !lowerer.errors.is_empty() {
+        return Err(lowerer.errors);
+    }
     lowerer.emit();
     if !lowerer.errors.is_empty() {
         return Err(lowerer.errors);
@@ -138,7 +145,7 @@ impl Lowerer<'_> {
             }
             match &def.kind {
                 DefKind::Function { body: Some(_), .. } => {
-                    match mangle::function_symbol(self.hir, id) {
+                    match mangle::function_symbol(self.hir, &self.types, id) {
                         Ok(symbol) => {
                             if self
                                 .function_symbols
@@ -202,38 +209,24 @@ impl Lowerer<'_> {
                     if body.is_none() {
                         self.push_error(CodegenError::unsupported(
                             codes::CODEGEN_UNSUPPORTED,
-                            "a FUNCTION without a body is not supported in M4".into(),
+                            "a FUNCTION without a body is not supported".into(),
                             def.span,
                         ));
                     }
                     if let Some(result) = result
-                        && let Err(error) = layout::scalar_kind_at(self.hir, *result, def.span)
+                        && let Err(error) = self.types.facts(*result)
                     {
                         self.push_error(error);
                     }
                     for param in params {
                         let data = self.hir.param(*param);
-                        if data.direction != ArgDirection::Input {
-                            self.push_error(CodegenError::unsupported(
-                                codes::CODEGEN_UNSUPPORTED,
-                                format!(
-                                    "`{}` parameters are M5",
-                                    match data.direction {
-                                        ArgDirection::Output => "VAR_OUTPUT",
-                                        ArgDirection::InOut => "VAR_IN_OUT",
-                                        ArgDirection::Input => "VAR_INPUT",
-                                    }
-                                ),
-                                data.span,
-                            ));
-                        }
-                        if let Err(error) = layout::scalar_kind_at(self.hir, data.ty, data.span) {
+                        if let Err(error) = self.types.facts(data.ty) {
                             self.push_error(error);
                         }
                     }
                 }
                 DefKind::Global { ty, .. } => {
-                    if let Err(error) = layout::scalar_kind_at(self.hir, *ty, def.span) {
+                    if let Err(error) = self.types.facts(*ty) {
                         self.push_error(error);
                     }
                 }
@@ -247,54 +240,26 @@ impl Lowerer<'_> {
                             self.push_error(CodegenError::unsupported(
                                 codes::CODEGEN_UNSUPPORTED,
                                 format!(
-                                    "program field section `{}` is not supported in M4",
+                                    "program field section `{}` is not supported in M5",
                                     data.section.as_str()
                                 ),
                                 data.span,
                             ));
                         }
-                        if let Err(error) = layout::scalar_kind_at(self.hir, data.ty, data.span) {
+                        if let Err(error) = self.types.facts(data.ty) {
                             self.push_error(error);
                         }
                     }
                 }
-                DefKind::Struct { .. } => self.push_error(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "STRUCT declarations are M5".into(),
-                    def.span,
-                )),
-                DefKind::Enum { .. } => self.push_error(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "ENUM declarations are M5".into(),
-                    def.span,
-                )),
-                DefKind::NamedValue { .. } => self.push_error(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "named-value type declarations are M5".into(),
-                    def.span,
-                )),
-                DefKind::Subrange { .. } => self.push_error(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "subrange type declarations are M5".into(),
-                    def.span,
-                )),
-                DefKind::Class { .. } => self.push_error(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "CLASS declarations are M5".into(),
-                    def.span,
-                )),
-                DefKind::FunctionBlock { .. } => self.push_error(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "FUNCTION_BLOCK declarations are M5".into(),
-                    def.span,
-                )),
-                DefKind::Interface { .. } => self.push_error(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "INTERFACE declarations are M5".into(),
-                    def.span,
-                )),
                 DefKind::Namespace { .. }
                 | DefKind::Alias { .. }
+                | DefKind::Struct { .. }
+                | DefKind::Enum { .. }
+                | DefKind::NamedValue { .. }
+                | DefKind::Subrange { .. }
+                | DefKind::Class { .. }
+                | DefKind::FunctionBlock { .. }
+                | DefKind::Interface { .. }
                 | DefKind::Method { .. }
                 | DefKind::Configuration { .. } => {}
             }
@@ -403,25 +368,66 @@ impl Lowerer<'_> {
             .cloned()
             .ok_or_else(|| CodegenError::internal("function has no symbol"))?;
         let body = self.hir.bodies[body_id.index()].clone();
-        let result_kind = result
-            .map(|ty| layout::scalar_kind_at(self.hir, ty, self.hir.defs[def.index()].span))
-            .transpose()?;
+
+        let result_facts = result.map(|ty| self.types.facts(ty).cloned()).transpose()?;
+        let aggregate_result = result_facts
+            .as_ref()
+            .is_some_and(|facts| facts.is_contiguous_aggregate());
+        let result_abi = result_facts.as_ref().map(|facts| {
+            if aggregate_result {
+                IrType::Void
+            } else if facts.is_object() {
+                facts.llvm_value.clone()
+            } else {
+                facts.llvm_storage.clone()
+            }
+        });
+
+        struct ParamAbi {
+            id: stc_hir::ParamId,
+            by_pointer: bool,
+            llvm: IrType,
+            storage: IrType,
+        }
         let mut param_data = Vec::new();
         for param in &params {
             let data = self.hir.param(*param).clone();
-            let kind = layout::scalar_kind_at(self.hir, data.ty, data.span)?;
-            param_data.push((*param, kind));
+            let facts = self.types.facts(data.ty)?.clone();
+            let by_pointer =
+                data.direction != ArgDirection::Input || facts.is_contiguous_aggregate();
+            let storage = if facts.is_object() {
+                facts.llvm_value.clone()
+            } else {
+                facts.llvm_storage.clone()
+            };
+            let llvm = if by_pointer {
+                IrType::Ptr
+            } else {
+                storage.clone()
+            };
+            param_data.push(ParamAbi {
+                id: *param,
+                by_pointer,
+                llvm,
+                storage,
+            });
         }
-        let ret_ty = result_kind.map_or(IrType::Void, ScalarKind::storage);
+
         let mut fn_params = param_data
             .iter()
             .enumerate()
-            .map(|(index, (_, kind))| (kind.storage(), format!("%a{index}")))
+            .map(|(index, param)| (param.llvm.clone(), format!("%a{index}")))
             .collect::<Vec<_>>();
+        let sret_index = aggregate_result.then_some(param_data.len());
+        if aggregate_result {
+            fn_params.push((IrType::Ptr, "%sret".into()));
+        }
+        let slots_index = fn_params.len();
         fn_params.push((IrType::Ptr, "%slots".into()));
+        let ret_ty = result_abi.clone().unwrap_or(IrType::Void);
         let mut f = Function::new(symbol, SymbolAttrs::internal(), ret_ty, fn_params);
         f.start_fresh_block();
-        let slots = f.param_value(param_data.len());
+        let slots = f.param_value(slots_index);
         let mut info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
@@ -431,17 +437,34 @@ impl Lowerer<'_> {
             fields: None,
             return_label: f.next_block_label(),
         };
-        for (index, (param, kind)) in param_data.iter().enumerate() {
-            let slot = f.alloca(kind.storage());
+        for (index, param) in param_data.iter().enumerate() {
             let incoming = f.param_value(index);
-            f.store(&incoming, &slot, None);
-            info.params.insert(*param, slot);
+            if param.by_pointer {
+                // Output, in-out, and aggregate inputs receive caller-owned
+                // storage directly (D-130).
+                info.params.insert(param.id, incoming);
+            } else {
+                let slot = f.alloca(param.storage.clone());
+                f.store(&incoming, &slot, None);
+                info.params.insert(param.id, slot);
+            }
         }
-        if let Some(kind) = result_kind {
-            let slot = f.alloca(kind.storage());
-            f.store(&Value::zero(kind.storage()), &slot, None);
+        if aggregate_result {
+            let pointer = f.param_value(sret_index.expect("aggregate result has sret"));
+            let storage = self
+                .types
+                .llvm_storage(result.expect("aggregate result has a type"))?;
+            f.store(&Value::zero(storage.clone()), &pointer, None);
+            info.result_ptr = Some(pointer);
+            info.result_ty = result_abi.clone();
+        } else if let Some(facts) = &result_facts {
+            let ty = result_abi
+                .clone()
+                .unwrap_or_else(|| facts.llvm_storage.clone());
+            let slot = f.alloca(ty.clone());
+            f.store(&Value::zero(ty), &slot, None);
             info.result_ptr = Some(slot);
-            info.result_ty = Some(kind.storage());
+            info.result_ty = result_abi.clone();
         }
         let previous = self.current_slots.replace(slots);
         let result = (|| -> Result<(), CodegenError> {
@@ -452,7 +475,9 @@ impl Lowerer<'_> {
                 f.branch(&info.return_label);
             }
             f.start_block(&info.return_label);
-            if let (Some(pointer), Some(ty)) = (&info.result_ptr, info.result_ty) {
+            if aggregate_result {
+                f.ret(None);
+            } else if let (Some(pointer), Some(ty)) = (&info.result_ptr, info.result_ty.clone()) {
                 let value = f.load(ty, pointer, None);
                 f.ret(Some(&value));
             } else {
@@ -477,14 +502,14 @@ impl Lowerer<'_> {
             if data.external_target.is_some() {
                 continue;
             }
-            let kind = layout::scalar_kind_at(self.hir, data.ty, data.span)?;
-            let slot = f.alloca(kind.storage());
+            let storage = self.types.llvm_storage(data.ty)?;
+            let slot = f.alloca(storage.clone());
             info.locals.insert(*local, slot.clone());
             if let Some(init) = data.init {
                 let value = self.lower_expr(f, info, init)?;
-                Self::write_scalar(f, &slot, kind, &value);
+                self.store_value_as_storage(f, &slot, data.ty, value)?;
             } else {
-                f.store(&Value::zero(kind.storage()), &slot, None);
+                f.store(&Value::zero(storage), &slot, None);
             }
         }
         Ok(())
@@ -500,8 +525,7 @@ impl Lowerer<'_> {
     }
 
     fn emit_program_body(&mut self, program: DefId) -> Result<(), CodegenError> {
-        let DefKind::Program { body, fields, .. } = self.hir.defs[program.index()].kind.clone()
-        else {
+        let DefKind::Program { body, .. } = self.hir.defs[program.index()].kind.clone() else {
             return Ok(());
         };
         let symbol = mangle::program_body_symbol(self.hir, program);
@@ -515,14 +539,17 @@ impl Lowerer<'_> {
             ],
         );
         f.start_fresh_block();
-        let mut ordinals = BTreeMap::new();
-        let mut direct = BTreeSet::new();
-        for (index, field) in fields.iter().enumerate() {
-            ordinals.insert(*field, u32::try_from(index).unwrap_or(u32::MAX));
-            if self.hir.field(*field).at.is_some() {
-                direct.insert(*field);
-            }
-        }
+        let layout = self
+            .layouts
+            .get(&program)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("program has no leaf layout"))?;
+        let ordinals = self.leaf_ordinals(&layout);
+        let direct = layout
+            .leaves
+            .iter()
+            .filter_map(|leaf| leaf.at.clone().map(|at| (leaf.segments.clone(), at)))
+            .collect();
         let slots = f.param_value(1);
         let mut info = BodyInfo {
             params: BTreeMap::new(),
@@ -706,6 +733,8 @@ impl Lowerer<'_> {
             TyId,
             Option<ExprId>,
             Option<stc_hir::DirectAddress>,
+            stc_hir::RetainPolicy,
+            String,
             Span,
         );
         let globals: Vec<GlobalInit> = self
@@ -718,29 +747,53 @@ impl Lowerer<'_> {
                 if synthetic(self.hir, id) || def.test_only {
                     return None;
                 }
-                let DefKind::Global { ty, init, at, .. } = &def.kind else {
+                let DefKind::Global {
+                    ty,
+                    init,
+                    at,
+                    retain,
+                    ..
+                } = &def.kind
+                else {
                     return None;
                 };
-                Some((id, *ty, *init, at.clone(), def.span))
+                let name = self.hir.def_name(id).to_string();
+                Some((id, *ty, *init, at.clone(), *retain, name, def.span))
             })
             .collect();
-        for (def, ty, init, at, span) in globals {
+        for (def, ty, init, at, retain, name, span) in globals {
             let Some(init) = init else {
                 continue;
             };
-            let kind = layout::scalar_kind_at(self.hir, ty, span)?;
-            let target = RootTarget::Global(def);
-            let slot = self.root_slot(&target)?;
-            if let Some(address) = at {
-                let (_, next) = Self::begin_init(f, cold, mask, None)?;
-                let value = self.lower_expr(f, info, init)?;
-                self.write_direct_initial(f, info, slot, &address, kind, value)?;
-                Self::close_init(f, &next);
-            } else {
-                let (_, next) = Self::begin_init(f, cold, mask, Some(slot))?;
-                let value = self.lower_expr(f, info, init)?;
-                let pointer = Self::slot_storage(f, info, slot);
-                Self::write_scalar(f, &pointer, kind, &value);
+            let storage = self.types.llvm_storage(ty)?;
+            let value = self.lower_expr(f, info, init)?;
+            let temp = f.alloca(storage.clone());
+            f.store(&value, &temp, None);
+            let leaves = self
+                .types
+                .root_leaves(ty, &name, retain)
+                .map_err(|error| error.with_span(span))?;
+            for leaf in leaves {
+                let target = Self::global_leaf_target(def, &leaf.segments);
+                let slot = self.root_slot(&target)?;
+                let direct = at.clone();
+                let (_, next) = Self::begin_init(
+                    f,
+                    cold,
+                    mask,
+                    if direct.is_some() { None } else { Some(slot) },
+                )?;
+                let source = if leaf.segments.is_empty() {
+                    temp.clone()
+                } else {
+                    self.aggregate_pointer(f, ty, &temp, &leaf.segments)?
+                };
+                let leaf_value = f.load(self.types.llvm_storage(leaf.ty)?, &source, None);
+                let destination = crate::place::ResolvedPointer {
+                    pointer: Self::slot_storage(f, info, slot),
+                    direct,
+                };
+                self.write_leaf(f, &destination, leaf.ty, leaf_value)?;
                 Self::close_init(f, &next);
             }
         }
@@ -771,22 +824,40 @@ impl Lowerer<'_> {
                 let Some(init) = init else {
                     continue;
                 };
-                let kind = layout::scalar_kind_at(self.hir, data.ty, data.span)?;
-                let target = RootTarget::InstanceField {
-                    instance: instance.name,
-                    field,
-                };
-                let slot = self.root_slot(&target)?;
-                if let Some(address) = data.at {
-                    let (_, next) = Self::begin_init(f, cold, mask, None)?;
-                    let value = self.lower_expr(f, info, init)?;
-                    self.write_direct_initial(f, info, slot, &address, kind, value)?;
-                    Self::close_init(f, &next);
-                } else {
-                    let (_, next) = Self::begin_init(f, cold, mask, Some(slot))?;
-                    let value = self.lower_expr(f, info, init)?;
-                    let pointer = Self::slot_storage(f, info, slot);
-                    Self::write_scalar(f, &pointer, kind, &value);
+                let field_name = mangle::normalize_ident(self.hir.interner.text(data.name));
+                let storage = self.types.llvm_storage(data.ty)?;
+                let value = self.lower_expr(f, info, init)?;
+                let temp = f.alloca(storage.clone());
+                f.store(&value, &temp, None);
+                let leaves = self
+                    .types
+                    .root_leaves(data.ty, &field_name, data.retain)
+                    .map_err(|error| error.with_span(data.span))?;
+                for mut leaf in leaves {
+                    let top_level = leaf.segments.is_empty();
+                    leaf.segments
+                        .insert(0, crate::types::RootSegment::Field(field));
+                    let target = self.program_leaf_target(instance.name, &leaf.segments);
+                    let slot = self.root_slot(&target)?;
+                    let direct = if top_level { data.at.clone() } else { None };
+                    let (_, next) = Self::begin_init(
+                        f,
+                        cold,
+                        mask,
+                        if direct.is_some() { None } else { Some(slot) },
+                    )?;
+                    let relative = &leaf.segments[1..];
+                    let source = if relative.is_empty() {
+                        temp.clone()
+                    } else {
+                        self.aggregate_pointer(f, data.ty, &temp, relative)?
+                    };
+                    let leaf_value = f.load(self.types.llvm_storage(leaf.ty)?, &source, None);
+                    let destination = crate::place::ResolvedPointer {
+                        pointer: Self::slot_storage(f, info, slot),
+                        direct,
+                    };
+                    self.write_leaf(f, &destination, leaf.ty, leaf_value)?;
                     Self::close_init(f, &next);
                 }
             }
@@ -948,22 +1019,20 @@ impl Lowerer<'_> {
         info: &BodyInfo,
         instance: &PlanInstance,
     ) -> Result<(), CodegenError> {
-        let DefKind::Program { fields, .. } = &self.hir.defs[instance.program.index()].kind else {
-            return Ok(());
-        };
-        let fields = fields.clone();
-        let mut ordinals = BTreeMap::new();
-        let mut direct = BTreeSet::new();
+        let layout = self
+            .layouts
+            .get(&instance.program)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("program has no leaf layout"))?;
+        let ordinals = self.leaf_ordinals(&layout);
+        let direct = layout
+            .leaves
+            .iter()
+            .filter_map(|leaf| leaf.at.clone().map(|at| (leaf.segments.clone(), at)))
+            .collect();
         let mut pointers = Vec::new();
-        for (index, field) in fields.iter().enumerate() {
-            ordinals.insert(*field, u32::try_from(index).unwrap_or(u32::MAX));
-            if self.hir.field(*field).at.is_some() {
-                direct.insert(*field);
-            }
-            let target = RootTarget::InstanceField {
-                instance: instance.name,
-                field: *field,
-            };
+        for leaf in &layout.leaves {
+            let target = self.program_leaf_target(instance.name, &leaf.segments);
             let slot = self.root_slot(&target)?;
             pointers.push(Self::slot_storage(f, info, slot));
         }
@@ -1207,7 +1276,12 @@ impl Lowerer<'_> {
             .enumerate()
             .map(|(index, kind)| (kind.storage(), format!("%a{index}")))
             .collect();
-        let mut f = Function::new(symbol, SymbolAttrs::module_export(), ret_ty, fn_params);
+        let mut f = Function::new(
+            symbol,
+            SymbolAttrs::module_export(),
+            ret_ty.clone(),
+            fn_params,
+        );
         f.start_fresh_block();
         let slots = self.slots_global(&mut f);
         let info = Self::unit_info(&mut f, slots.clone());
@@ -1240,9 +1314,9 @@ impl Lowerer<'_> {
         let missing = f.next_block_label();
         f.cond_branch(&slots_null, &missing, &call);
         f.start_block(&missing);
-        match ret_ty {
+        match &ret_ty {
             IrType::Void => f.ret(None),
-            _ => f.ret(Some(&Value::zero(ret_ty))),
+            _ => f.ret(Some(&Value::zero(ret_ty.clone()))),
         }
         f.start_block(&call);
         let slot = self.function_slot(FunctionTarget::Function(def))?;
@@ -1251,8 +1325,8 @@ impl Lowerer<'_> {
             .map(|index| f.param_value(index))
             .collect::<Vec<_>>();
         args.push(info.slots.clone());
-        let value = f.call_ptr(ret_ty, &callee, &args);
-        match (ret_ty, value) {
+        let value = f.call_ptr(ret_ty.clone(), &callee, &args);
+        match (&ret_ty, value) {
             (IrType::Void, _) => f.ret(None),
             (_, Some(value)) => f.ret(Some(&value)),
             (_, None) => {

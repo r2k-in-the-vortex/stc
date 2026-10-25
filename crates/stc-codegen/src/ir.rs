@@ -14,9 +14,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::rc::Rc;
 
-/// An M4 LLVM type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An LLVM type used by the textual builder.
+///
+/// Scalars keep their M4 variants. Aggregate values (structs, arrays, and
+/// length-prefixed strings) carry their rendered LLVM spelling so the builder
+/// can check operand types and emit aggregate loads, stores, and extraction
+/// without a second type arena (D-129).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IrType {
     /// `void`.
     Void,
@@ -30,12 +36,14 @@ pub enum IrType {
     Ptr,
     /// The `{ iN, i1 }` result of an integer overflow intrinsic.
     Overflow(u16),
+    /// A rendered aggregate type such as `[4 x i32]` or `{ i32, [8 x i8] }`.
+    Agg(Rc<str>),
 }
 
 impl IrType {
     /// Renders the LLVM spelling.
     #[must_use]
-    pub fn render(self) -> String {
+    pub fn render(&self) -> String {
         match self {
             Self::Void => "void".into(),
             Self::Int(bits) => format!("i{bits}"),
@@ -43,7 +51,26 @@ impl IrType {
             Self::Double => "double".into(),
             Self::Ptr => "ptr".into(),
             Self::Overflow(bits) => format!("{{ i{bits}, i1 }}"),
+            Self::Agg(text) => text.to_string(),
         }
+    }
+
+    /// Creates a rendered aggregate type.
+    #[must_use]
+    pub fn aggregate(text: impl Into<Rc<str>>) -> Self {
+        Self::Agg(text.into())
+    }
+
+    /// Returns `true` for aggregate values.
+    #[must_use]
+    pub const fn is_aggregate(&self) -> bool {
+        matches!(self, Self::Agg(_))
+    }
+
+    /// Returns `true` for `void`.
+    #[must_use]
+    pub const fn is_void(&self) -> bool {
+        matches!(self, Self::Void)
     }
 }
 
@@ -256,20 +283,20 @@ impl Value {
         }
     }
 
-    /// Returns the zero value of a scalar type.
+    /// Returns the zero value of a type.
     #[must_use]
     pub fn zero(ty: IrType) -> Self {
-        match ty {
+        match &ty {
             IrType::Void => Self {
                 ty,
                 repr: String::new(),
             },
-            IrType::Int(bits) => Self::int(bits, 0),
+            IrType::Int(bits) => Self::int(*bits, 0),
             IrType::Float => Self::float32(0.0),
             IrType::Double => Self::double(0.0),
             IrType::Ptr => Self::null_ptr(),
-            IrType::Overflow(bits) => Self {
-                ty: IrType::Overflow(bits),
+            IrType::Overflow(_) | IrType::Agg(_) => Self {
+                ty,
                 repr: "zeroinitializer".into(),
             },
         }
@@ -533,8 +560,9 @@ impl Function {
     pub fn load(&mut self, ty: IrType, pointer: &Value, align: Option<u32>) -> Value {
         debug_assert_eq!(pointer.ty, IrType::Ptr);
         self.note_memory_access(pointer, false);
+        let rendered = ty.render();
         let value = self.temp(ty);
-        let mut instruction = format!("load {}, ptr {}", ty.render(), pointer.repr);
+        let mut instruction = format!("load {rendered}, ptr {}", pointer.repr);
         if let Some(align) = align {
             let _ = write!(instruction, ", align {align}");
         }
@@ -577,7 +605,7 @@ impl Function {
     /// Emits an integer or floating-point binary operation.
     pub fn binop(&mut self, op: &str, lhs: &Value, rhs: &Value) -> Value {
         debug_assert_eq!(lhs.ty, rhs.ty);
-        let value = self.temp(lhs.ty);
+        let value = self.temp(lhs.ty.clone());
         self.emit_value(
             &value,
             format!("{op} {} {}, {}", lhs.ty.render(), lhs.repr, rhs.repr),
@@ -587,7 +615,7 @@ impl Function {
 
     /// Emits an integer or floating-point unary operation.
     pub fn unop(&mut self, op: &str, operand: &Value) -> Value {
-        let value = self.temp(operand.ty);
+        let value = self.temp(operand.ty.clone());
         self.emit_value(
             &value,
             format!("{op} {} {}", operand.ty.render(), operand.repr),
@@ -631,7 +659,7 @@ impl Function {
     pub fn select(&mut self, condition: &Value, then: &Value, otherwise: &Value) -> Value {
         debug_assert_eq!(condition.ty, IrType::Int(1));
         debug_assert_eq!(then.ty, otherwise.ty);
-        let value = self.temp(then.ty);
+        let value = self.temp(then.ty.clone());
         self.emit_value(
             &value,
             format!(
@@ -642,6 +670,14 @@ impl Function {
             ),
         );
         value
+    }
+
+    /// Emits an integer conversion (`sext`, `zext`, `trunc`, ...).
+    pub fn emit_value_cast(&mut self, op: &str, value: &Value, to: IrType) -> Value {
+        let rendered = to.render();
+        let cast = self.temp(to);
+        self.emit_value(&cast, format!("{op} {} to {rendered}", value.render()));
+        cast
     }
 
     /// Emits a `getelementptr` with rendered indices.
@@ -785,23 +821,102 @@ impl Function {
 
     /// Emits `extractvalue`.
     pub fn extract_value(&mut self, aggregate: &Value, index: u32, ty: IrType) -> Value {
+        self.extract_value_at(aggregate, &[index], ty)
+    }
+
+    /// Emits `extractvalue` with a multi-index path.
+    pub fn extract_value_at(&mut self, aggregate: &Value, indices: &[u32], ty: IrType) -> Value {
         let value = self.temp(ty);
+        let path = indices
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
         self.emit_value(
             &value,
-            format!("extractvalue {}, {index}", aggregate.render()),
+            format!("extractvalue {}, {path}", aggregate.render()),
         );
         value
     }
 
+    /// Emits `insertvalue` with a multi-index path.
+    pub fn insert_value_at(
+        &mut self,
+        aggregate: &Value,
+        element: &Value,
+        indices: &[u32],
+        ty: IrType,
+    ) -> Value {
+        debug_assert!(aggregate.ty.is_aggregate());
+        let value = self.temp(ty);
+        let path = indices
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.emit_value(
+            &value,
+            format!(
+                "insertvalue {}, {}, {path}",
+                aggregate.render(),
+                element.render()
+            ),
+        );
+        value
+    }
+
+    /// Emits a `llvm.memcpy` call between opaque pointers.
+    ///
+    /// The intrinsic declaration is emitted by the caller through
+    /// [`Module::declare`]; LLVM also accepts the intrinsic without one.
+    pub fn memcpy(&mut self, destination: &Value, source: &Value, length: &Value) {
+        debug_assert_eq!(destination.ty, IrType::Ptr);
+        debug_assert_eq!(source.ty, IrType::Ptr);
+        debug_assert_eq!(length.ty, IrType::Int(64));
+        self.facts.direct_calls.push("llvm.memcpy.p0.p0.i64".into());
+        self.emit(format!(
+            "call void @llvm.memcpy.p0.p0.i64(ptr {}, ptr {}, i64 {}, i1 false)",
+            destination.repr, source.repr, length.repr
+        ));
+    }
+
+    /// Emits a dense `switch` terminator.
+    ///
+    /// `cases` pairs an integer literal with a target label; the selector must
+    /// be an integer value.
+    pub fn switch(&mut self, selector: &Value, default: &str, cases: &[(i128, String)]) {
+        let bits = match &selector.ty {
+            IrType::Int(bits) => *bits,
+            _ => panic!("switch selector is not an integer"),
+        };
+        let arms = cases
+            .iter()
+            .map(|(value, label)| {
+                format!(
+                    "{} {}, label %{label}",
+                    selector.ty.render(),
+                    int_literal(*value, bits)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.terminate(format!(
+            "switch {} {}, label %{default} [ {arms} ]",
+            selector.ty.render(),
+            selector.repr
+        ));
+    }
+
     /// Emits a `phi` with `(value, predecessor label)` inputs.
     pub fn phi(&mut self, ty: IrType, incoming: &[(Value, String)]) -> Value {
+        let rendered = ty.render();
         let value = self.temp(ty);
         let parts = incoming
             .iter()
             .map(|(value, label)| format!("[ {}, %{label} ]", value.repr))
             .collect::<Vec<_>>()
             .join(", ");
-        self.emit_value(&value, format!("phi {} {parts}", ty.render()));
+        self.emit_value(&value, format!("phi {rendered} {parts}"));
         value
     }
 

@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 pub mod abi;
+mod call;
 pub mod codes;
 mod config;
 mod expr;
@@ -19,7 +20,10 @@ mod layout;
 mod mangle;
 mod metadata;
 pub mod module;
+mod place;
+mod reference;
 mod stmt;
+mod types;
 mod unit;
 pub mod verify;
 
