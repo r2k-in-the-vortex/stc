@@ -231,12 +231,34 @@ materialized into a transient alloca on read and split back into roots on write.
 
 ### Phase 7 — verification and documentation
 
-- Codegen snapshots and clang verification for every new construct.
+- Codegen snapshots and clang verification for every new construct. Clang acceptance and
+  execution coverage are in place for the implemented surface, including an M5 determinism test.
 - Driver execution harnesses for OOP, arrays/strings, conformant arrays, timers, and retained
-  state; online-change coverage for FB/class state, aggregate roots, and descriptors.
-- Extend `fuzz_codegen` with M5 HIR; keep bounded output/time and determinism.
+  state; online-change coverage for FB/class state, aggregate roots, and descriptors. FB and
+  aggregate state preservation is covered; interface/descriptor preservation waits on phase 4b.
+- Extend `fuzz_codegen` with M5 HIR; keep bounded output/time and determinism. The target already
+  generates arbitrary analyzed HIR; local M5 seeds were used during development but the corpus
+  directory is gitignored.
 - Update README, Decisions, project plan/conformance status, architecture/runtime/IO/state/
-  testing docs, and this plan; run all checks and commit.
+  testing docs, and this plan; run all checks and commit. The status docs now distinguish the
+  implemented M5 surface from the deferred items below.
+
+### Remaining M5 work
+
+- **Phase 4b — interfaces, descriptors, `?=`.** No descriptor or vtable records are projected
+  yet, `Descriptor` GOT cells are still rejected by the runtime, and object values are root-table
+  pointers rather than D-133 host object records. Interface assignment and method dispatch are
+  rejected explicitly at their call sites. Completing this requires the runtime type-info/vtable/
+  object registry, stable object records across swaps, descriptor projection, and interface
+  lowering/dispatch.
+- **`STC-POINTER`.** D-128/D-132 describe the extension as fully fixed by Q-131–Q-150, but the
+  lexer, parser, AST, HIR, and sema contain no pointer type, address-of expression, or
+  `SIZEOF` surface, and the repository's grammar does not define one. Implementing it requires
+  recording the missing language-surface decisions first rather than inventing syntax in
+  codegen.
+- **References to split persistent aggregates** remain rejected because they have no single
+  stable storage location; contiguous transient aggregates and single-root persistent values are
+  supported (D-144).
 
 ## 5. Diagnostics
 

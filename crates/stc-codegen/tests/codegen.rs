@@ -204,6 +204,20 @@ fn metadata_is_deterministic() {
 }
 
 #[test]
+fn m5_metadata_is_deterministic() {
+    let first = generate(AGGREGATES, Mode::Executable);
+    let second = generate(AGGREGATES, Mode::Executable);
+    assert_eq!(first.module, second.module);
+    assert_eq!(
+        first.metadata.to_json().render(),
+        second.metadata.to_json().render()
+    );
+    assert_eq!(first.got.manifest_json, second.got.manifest_json);
+    assert_eq!(first.got.manifest_binary, second.got.manifest_binary);
+    assert_eq!(first.got.slots, second.got.slots);
+}
+
+#[test]
 fn assignment_attempts_are_rejected_once_with_a_span() {
     let source = r#"
 CLASS A
