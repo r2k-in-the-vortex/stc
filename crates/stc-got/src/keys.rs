@@ -1,7 +1,7 @@
 //! Normalized stable keys and identity kinds (GOT Artifacts §3).
 
 use crate::error::{Error, Result};
-use crate::layout::{Signature, TypeKey};
+use crate::layout::Signature;
 
 /// The persistent identity kind tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -520,17 +520,14 @@ fn validate_function_key(rest: &str) -> Result<()> {
     if signature.contains('@') {
         return Err(Error::manifest("more than one `@` marker"));
     }
-    let signature = Signature::parse(signature)?;
+    let _signature = Signature::parse(signature)?;
     if let Some((type_path, marker)) = left.split_once('#') {
         if marker != "BODY" {
             return Err(Error::manifest("the only function-path marker is `#BODY`"));
         }
         validate_name_path(type_path)?;
-        if signature != Signature::new(TypeKey::Void) {
-            return Err(Error::manifest(
-                "a program body has the fixed signature `()->VOID`",
-            ));
-        }
+        // Program bodies use the fixed `()->VOID` signature; function-block
+        // bodies use the FB input/output parameter list (GOT Artifacts §4.2).
         Ok(())
     } else {
         validate_name_path(left)
@@ -626,7 +623,7 @@ fn validate_c_name(c_name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{ParamMode, Parameter};
+    use crate::layout::{ParamMode, Parameter, TypeKey};
 
     fn signature() -> Signature {
         Signature {
@@ -732,7 +729,10 @@ mod tests {
     fn rejects_cross_kind_and_malformed_keys() {
         assert!(validate_key(IdentityKind::Function, "_ROOT::MAIN.SPEED").is_err());
         assert!(validate_key(IdentityKind::Type, "_ROOT::MAIN#BODY@()->VOID").is_err());
-        assert!(validate_key(IdentityKind::Function, "_ROOT::MAIN#BODY@(IN:DINT)->DINT").is_err());
+        // Function-block bodies carry the FB parameter signature; program
+        // bodies use `()->VOID`. Both are valid `#BODY` keys.
+        validate_key(IdentityKind::Function, "_ROOT::MAIN#BODY@(IN:DINT)->DINT")
+            .expect("FB body key");
         assert!(validate_key(IdentityKind::DataRoot, "_ROOT::A#B").is_err());
         assert!(validate_key(IdentityKind::Instance, "_ROOT::MAIN/R1").is_err());
         assert!(validate_key(IdentityKind::Task, "_ROOT::MAIN#FAST").is_err());

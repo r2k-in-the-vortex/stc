@@ -732,7 +732,7 @@ impl Lowerer<'_> {
         Ok(())
     }
 
-    fn split_place_from_temp(
+    pub(crate) fn split_place_from_temp(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,
@@ -954,7 +954,10 @@ pub(crate) fn field_table_pointer(f: &mut Function, fields: &FieldAccess, index:
     f.load(IrType::Ptr, &entry, Some(8))
 }
 
-fn direct_bit(address: &DirectAddress, kind: crate::layout::ScalarKind) -> Res<Option<u8>> {
+pub(crate) fn direct_bit(
+    address: &DirectAddress,
+    kind: crate::layout::ScalarKind,
+) -> Res<Option<u8>> {
     let span = crate::layout::image_span(address, kind)?;
     Ok((kind == crate::layout::ScalarKind::Bool)
         .then(|| u8::try_from(span.start_bit % 8).unwrap_or(0)))
@@ -990,6 +993,24 @@ impl Lowerer<'_> {
                 segments: segments.to_vec(),
             }
         }
+    }
+
+    /// Indexes an object leaf layout by root path.
+    pub(crate) fn object_ordinals(
+        &self,
+        layout: &crate::config::ObjectLayout,
+    ) -> BTreeMap<Vec<RootSegment>, u32> {
+        layout
+            .leaves
+            .iter()
+            .enumerate()
+            .map(|(index, leaf)| {
+                (
+                    leaf.segments.clone(),
+                    u32::try_from(index).unwrap_or(u32::MAX),
+                )
+            })
+            .collect()
     }
 
     /// Indexes the program leaf table by root path.
@@ -1574,11 +1595,23 @@ impl Lowerer<'_> {
             | StdFnKind::Tan
             | StdFnKind::Asin
             | StdFnKind::Acos
-            | StdFnKind::Atan
-            | StdFnKind::Atan2
-            | StdFnKind::Expt
-            | StdFnKind::Trunc
-            | StdFnKind::Left
+            | StdFnKind::Atan => {
+                let facts = facts_of(self, 0)?;
+                let value = supplied[0].clone();
+                self.lower_float_unary(f, std.kind, &facts, value)
+            }
+            StdFnKind::Atan2 | StdFnKind::Expt => {
+                let facts = facts_of(self, 0)?;
+                let lhs = supplied[0].clone();
+                let rhs = supplied[1].clone();
+                self.lower_float_binary(f, std.kind, &facts, lhs, rhs)
+            }
+            StdFnKind::Trunc => {
+                let facts = facts_of(self, 0)?;
+                let value = supplied[0].clone();
+                self.lower_trunc(f, &facts, value, span)
+            }
+            StdFnKind::Left
             | StdFnKind::Right
             | StdFnKind::Mid
             | StdFnKind::Insert
@@ -2031,5 +2064,154 @@ impl Lowerer<'_> {
         let above = f.icmp("sgt", value, &Value::int(bits, upper));
         let bad = f.binop("or", &below, &above);
         self.trap_if(f, &bad, trap::RANGE, span)
+    }
+}
+
+impl Lowerer<'_> {
+    /// Copies an object's state per field, preserving the destination object.
+    pub(crate) fn copy_object_place(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        destination: &crate::place::PlacePath,
+        source: &crate::place::PlacePath,
+    ) -> Res<()> {
+        let storage = self.types.llvm_storage(destination.ty)?;
+        let destination_pointer = self.resolve_place_pointer(f, info, destination)?;
+        let source_pointer = self.resolve_place_pointer(f, info, source)?;
+        if let (Some(destination_pointer), Some(source_pointer)) =
+            (&destination_pointer, &source_pointer)
+        {
+            let value = f.load(storage, &source_pointer.pointer, None);
+            f.store(&value, &destination_pointer.pointer, None);
+            return Ok(());
+        }
+        let temp = f.alloca(storage.clone());
+        f.store(&Value::zero(storage.clone()), &temp, None);
+        if let Some(source_pointer) = &source_pointer {
+            let value = f.load(storage.clone(), &source_pointer.pointer, None);
+            f.store(&value, &temp, None);
+        } else {
+            self.gather_place_into_temp(f, info, source, &temp)?;
+        }
+        if let Some(destination_pointer) = &destination_pointer {
+            let value = f.load(storage, &temp, None);
+            f.store(&value, &destination_pointer.pointer, None);
+        } else {
+            self.split_place_from_temp(f, info, destination, &temp)?;
+        }
+        Ok(())
+    }
+}
+
+impl Lowerer<'_> {
+    fn float_intrinsic_name(&self, kind: stc_hir::StdFnKind, width: u16) -> &'static str {
+        use stc_hir::StdFnKind;
+        match (kind, width == 32) {
+            (StdFnKind::Sqrt, true) => "llvm.sqrt.f32",
+            (StdFnKind::Sqrt, false) => "llvm.sqrt.f64",
+            (StdFnKind::Ln, true) => "llvm.log.f32",
+            (StdFnKind::Ln, false) => "llvm.log.f64",
+            (StdFnKind::Log, true) => "llvm.log10.f32",
+            (StdFnKind::Log, false) => "llvm.log10.f64",
+            (StdFnKind::Exp, true) => "llvm.exp.f32",
+            (StdFnKind::Exp, false) => "llvm.exp.f64",
+            (StdFnKind::Sin, true) => "llvm.sin.f32",
+            (StdFnKind::Sin, false) => "llvm.sin.f64",
+            (StdFnKind::Cos, true) => "llvm.cos.f32",
+            (StdFnKind::Cos, false) => "llvm.cos.f64",
+            (StdFnKind::Tan, true) => "llvm.tan.f32",
+            (StdFnKind::Tan, false) => "llvm.tan.f64",
+            (StdFnKind::Asin, true) => "llvm.asin.f32",
+            (StdFnKind::Asin, false) => "llvm.asin.f64",
+            (StdFnKind::Acos, true) => "llvm.acos.f32",
+            (StdFnKind::Acos, false) => "llvm.acos.f64",
+            (StdFnKind::Atan, true) => "llvm.atan.f32",
+            (StdFnKind::Atan, false) => "llvm.atan.f64",
+            (StdFnKind::Atan2, true) => "llvm.atan2.f32",
+            (StdFnKind::Atan2, false) => "llvm.atan2.f64",
+            (StdFnKind::Expt, true) => "llvm.pow.f32",
+            (StdFnKind::Expt, false) => "llvm.pow.f64",
+            _ => "llvm.sqrt.f64",
+        }
+    }
+
+    fn lower_float_unary(
+        &mut self,
+        f: &mut Function,
+        kind: stc_hir::StdFnKind,
+        facts: &crate::types::TypeFacts,
+        value: Value,
+    ) -> Res<Value> {
+        let crate::layout::ScalarKind::Real { width } = facts
+            .scalar()
+            .ok_or_else(|| CodegenError::internal("math argument is not REAL"))?
+        else {
+            return Err(CodegenError::internal("math argument is not REAL"));
+        };
+        let name = self.float_intrinsic_name(kind, width);
+        let ty = facts.llvm_value.clone();
+        self.module
+            .declare(name, &format!("{} @{name}({})", ty.render(), ty.render()));
+        f.call(ty, name, std::slice::from_ref(&value))
+            .ok_or_else(|| CodegenError::internal("math intrinsic returned void"))
+    }
+
+    fn lower_float_binary(
+        &mut self,
+        f: &mut Function,
+        kind: stc_hir::StdFnKind,
+        facts: &crate::types::TypeFacts,
+        lhs: Value,
+        rhs: Value,
+    ) -> Res<Value> {
+        let crate::layout::ScalarKind::Real { width } = facts
+            .scalar()
+            .ok_or_else(|| CodegenError::internal("math argument is not REAL"))?
+        else {
+            return Err(CodegenError::internal("math argument is not REAL"));
+        };
+        let name = self.float_intrinsic_name(kind, width);
+        let ty = facts.llvm_value.clone();
+        self.module.declare(
+            name,
+            &format!("{} @{name}({}, {})", ty.render(), ty.render(), ty.render()),
+        );
+        f.call(ty, name, &[lhs, rhs])
+            .ok_or_else(|| CodegenError::internal("math intrinsic returned void"))
+    }
+
+    fn lower_trunc(
+        &mut self,
+        f: &mut Function,
+        facts: &crate::types::TypeFacts,
+        value: Value,
+        span: Span,
+    ) -> Res<Value> {
+        let crate::layout::ScalarKind::Real { .. } = facts
+            .scalar()
+            .ok_or_else(|| CodegenError::internal("TRUNC argument is not REAL"))?
+        else {
+            return Err(CodegenError::internal("TRUNC argument is not REAL"));
+        };
+        let (neg_limit, pos_limit) = if facts.llvm_value == IrType::Float {
+            (
+                Value::float32(-2_147_483_649.0),
+                Value::float32(2_147_483_648.0),
+            )
+        } else {
+            (
+                Value::double(-2_147_483_649.0),
+                Value::double(2_147_483_648.0),
+            )
+        };
+        let above = f.fcmp("ogt", &value, &neg_limit);
+        let below = f.fcmp("olt", &value, &pos_limit);
+        let ordered = f.fcmp("ord", &value, &value);
+        let in_range = f.binop("and", &above, &below);
+        let valid = f.binop("and", &in_range, &ordered);
+        let bad = f.binop("xor", &valid, &Value::bool(true));
+        self.trap_if(f, &bad, trap::CONVERSION, span)?;
+        Ok(f.emit_value_cast("fptosi", &value, IrType::Int(32)))
     }
 }

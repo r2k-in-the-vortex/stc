@@ -248,11 +248,15 @@ impl Value {
     }
 
     /// Creates an exact floating-point literal.
+    ///
+    /// LLVM hexadecimal floating constants are written in double form even
+    /// for `float` operands, so the exact `f32` bits are widened and rendered
+    /// as a 64-bit constant.
     #[must_use]
     pub fn float32(value: f32) -> Self {
         Self {
             ty: IrType::Float,
-            repr: format!("0x{:08X}", value.to_bits()),
+            repr: format!("0x{:016X}", f64::from(value).to_bits()),
         }
     }
 

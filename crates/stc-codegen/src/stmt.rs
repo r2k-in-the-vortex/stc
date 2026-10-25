@@ -41,6 +41,19 @@ impl Lowerer<'_> {
         let stmt = self.hir.stmt(id).clone();
         match stmt.kind {
             StmtKindHir::Assign { place, value } => {
+                let destination_ty = self.hir.expr(place).ty;
+                let value_ty = self.hir.expr(value).ty;
+                let destination = self.types.facts(destination_ty)?.clone();
+                let source = self.types.facts(value_ty)?.clone();
+                if destination.is_object() && source.is_object() {
+                    let destination_path = self.collect_place(place).ok_or_else(|| {
+                        CodegenError::internal("object assignment destination is not a place")
+                    })?;
+                    let source_path = self.collect_place(value).ok_or_else(|| {
+                        CodegenError::internal("object assignment source is not a place")
+                    })?;
+                    return self.copy_object_place(f, info, &destination_path, &source_path);
+                }
                 let value = self.lower_expr(f, info, value)?;
                 self.write_place(f, info, place, value)
             }
@@ -80,6 +93,19 @@ impl Lowerer<'_> {
             }
             StmtKindHir::Empty => Ok(()),
             StmtKindHir::RefAssign { place, value } => {
+                let destination_ty = self.hir.expr(place).ty;
+                let value_ty = self.hir.expr(value).ty;
+                let destination = self.types.facts(destination_ty)?.clone();
+                let source = self.types.facts(value_ty)?.clone();
+                if destination.is_object() && source.is_object() {
+                    let destination_path = self.collect_place(place).ok_or_else(|| {
+                        CodegenError::internal("object assignment destination is not a place")
+                    })?;
+                    let source_path = self.collect_place(value).ok_or_else(|| {
+                        CodegenError::internal("object assignment source is not a place")
+                    })?;
+                    return self.copy_object_place(f, info, &destination_path, &source_path);
+                }
                 let value = self.lower_expr(f, info, value)?;
                 self.write_place(f, info, place, value)
             }

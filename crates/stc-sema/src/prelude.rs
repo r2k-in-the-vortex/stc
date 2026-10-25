@@ -24,7 +24,7 @@ impl Analyzer<'_> {
                 .or_default()
                 .push(stc_hir::StdFnId::new(raw));
         }
-        for (name, inputs, outputs) in STANDARD_FBS.iter().copied() {
+        for (name, inputs, outputs, state) in STANDARD_FBS.iter().copied() {
             let symbol = self.hir.intern(name);
             let def = self.hir.alloc_def(
                 DefKind::FunctionBlock {
@@ -46,7 +46,12 @@ impl Analyzer<'_> {
             let time_ty = self.hir.types.time(TimeTy::Time);
             let int_ty = self.hir.types.int(true, 16);
             let mut fields = Vec::new();
-            for (field_name, kind) in inputs.iter().chain(outputs.iter()).copied() {
+            for (field_name, kind) in inputs
+                .iter()
+                .chain(outputs.iter())
+                .chain(state.iter())
+                .copied()
+            {
                 let ty = match kind {
                     StdFbType::Bool => bool_ty,
                     StdFbType::Time => time_ty,
@@ -54,15 +59,21 @@ impl Analyzer<'_> {
                 };
                 let section = if inputs.iter().any(|(name, _)| *name == field_name) {
                     VarSectionKind::Input
-                } else {
+                } else if outputs.iter().any(|(name, _)| *name == field_name) {
                     VarSectionKind::Output
+                } else {
+                    VarSectionKind::Var
                 };
                 let field_name = self.hir.intern(field_name);
                 let field = self.hir.alloc_field(FieldHir {
                     name: field_name,
                     ty,
                     owner: def,
-                    visibility: Visibility::Public,
+                    visibility: if section == VarSectionKind::Var {
+                        Visibility::Private
+                    } else {
+                        Visibility::Public
+                    },
                     section,
                     retain: RetainPolicy::None,
                     constant: false,
@@ -94,6 +105,7 @@ type StdFbSpec<'a> = (
     &'a str,
     &'a [(&'a str, StdFbType)],
     &'a [(&'a str, StdFbType)],
+    &'a [(&'a str, StdFbType)],
 );
 
 const STANDARD_FBS: &[StdFbSpec<'static>] = &[
@@ -101,16 +113,19 @@ const STANDARD_FBS: &[StdFbSpec<'static>] = &[
         "TON",
         &[("IN", StdFbType::Bool), ("PT", StdFbType::Time)],
         &[("Q", StdFbType::Bool), ("ET", StdFbType::Time)],
+        &[("__START", StdFbType::Time), ("__RUN", StdFbType::Bool)],
     ),
     (
         "TOF",
         &[("IN", StdFbType::Bool), ("PT", StdFbType::Time)],
         &[("Q", StdFbType::Bool), ("ET", StdFbType::Time)],
+        &[("__START", StdFbType::Time), ("__RUN", StdFbType::Bool)],
     ),
     (
         "TP",
         &[("IN", StdFbType::Bool), ("PT", StdFbType::Time)],
         &[("Q", StdFbType::Bool), ("ET", StdFbType::Time)],
+        &[("__START", StdFbType::Time), ("__RUN", StdFbType::Bool)],
     ),
     (
         "CTU",
@@ -120,6 +135,7 @@ const STANDARD_FBS: &[StdFbSpec<'static>] = &[
             ("PV", StdFbType::Int),
         ],
         &[("Q", StdFbType::Bool), ("CV", StdFbType::Int)],
+        &[("__PREV", StdFbType::Bool)],
     ),
     (
         "CTD",
@@ -129,6 +145,7 @@ const STANDARD_FBS: &[StdFbSpec<'static>] = &[
             ("PV", StdFbType::Int),
         ],
         &[("Q", StdFbType::Bool), ("CV", StdFbType::Int)],
+        &[("__PREV", StdFbType::Bool)],
     ),
     (
         "CTUD",
@@ -144,26 +161,31 @@ const STANDARD_FBS: &[StdFbSpec<'static>] = &[
             ("QD", StdFbType::Bool),
             ("CV", StdFbType::Int),
         ],
+        &[("__PREVU", StdFbType::Bool), ("__PREVD", StdFbType::Bool)],
     ),
     (
         "R_TRIG",
         &[("CLK", StdFbType::Bool)],
         &[("Q", StdFbType::Bool)],
+        &[("__PREV", StdFbType::Bool)],
     ),
     (
         "F_TRIG",
         &[("CLK", StdFbType::Bool)],
         &[("Q", StdFbType::Bool)],
+        &[("__PREV", StdFbType::Bool)],
     ),
     (
         "SR",
         &[("SET1", StdFbType::Bool), ("RESET", StdFbType::Bool)],
         &[("Q", StdFbType::Bool)],
+        &[],
     ),
     (
         "RS",
         &[("SET", StdFbType::Bool), ("RESET1", StdFbType::Bool)],
         &[("Q", StdFbType::Bool)],
+        &[],
     ),
 ];
 
@@ -365,7 +387,7 @@ fn std_signature(kind: StdFnKind) -> (Vec<StdParam>, StdResult) {
 pub fn is_standard_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     ALL_STD_FNS.iter().any(|kind| kind.as_str() == upper)
-        || STANDARD_FBS.iter().any(|(fb, _, _)| *fb == upper.as_str())
+        || STANDARD_FBS.iter().any(|(fb, _, _, _)| *fb == upper.as_str())
 }
 
 /// Returns the concrete type category check used by the prelude.

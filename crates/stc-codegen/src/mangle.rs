@@ -142,3 +142,43 @@ pub fn task_guard_symbol_text(resource: &str, name: &str) -> String {
         normalize_ident(name)
     )
 }
+
+/// Returns the mangled symbol of a function-block body.
+///
+/// # Errors
+///
+/// Returns `STC-E-CODEGEN-001` for malformed names.
+pub fn fb_body_symbol(hir: &HirCrate, def: DefId) -> Result<String, CodegenError> {
+    let name = normalize_ident(hir.def_name(def));
+    Ok(prefix("stc_fb_body_", hir, def, &name))
+}
+
+/// Returns the mangled symbol of a method.
+///
+/// # Errors
+///
+/// Returns `STC-E-CODEGEN-001` for malformed signatures.
+pub fn method_symbol(
+    hir: &HirCrate,
+    types: &TypeSystem<'_>,
+    def: DefId,
+) -> Result<String, CodegenError> {
+    let DefKind::Method { owner, .. } = &hir.defs[def.index()].kind else {
+        return Err(CodegenError::internal(
+            "method symbol requested for a non-method",
+        ));
+    };
+    let owner_name = normalize_ident(hir.def_name(*owner));
+    let name = normalize_ident(hir.def_name(def));
+    let signature = signature_text(hir, types, def)?;
+    let hash = fnv1a(signature.as_bytes());
+    let mut out = String::from("stc_m_");
+    for segment in namespace_segments(hir, *owner) {
+        out.push_str(&segment);
+        out.push_str("_n_");
+    }
+    out.push_str(&owner_name);
+    out.push('_');
+    out.push_str(&name);
+    Ok(format!("{out}_{hash:016x}"))
+}

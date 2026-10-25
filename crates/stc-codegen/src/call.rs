@@ -40,6 +40,73 @@ impl Lowerer<'_> {
         else {
             return Err(CodegenError::internal("callee is not a function"));
         };
+        self.lower_callable(
+            f,
+            info,
+            &params,
+            result,
+            args,
+            supplied,
+            Vec::new(),
+            FunctionTarget::Function(def),
+            span,
+            discard,
+        )
+    }
+
+    /// Lowers a method call with the receiver object table first.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn lower_method_call(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        receiver: ExprId,
+        def: DefId,
+        args: &[ArgHir],
+        supplied: &[Value],
+        _result_ty: TyId,
+        span: Span,
+        discard: bool,
+    ) -> Res<Option<Value>> {
+        let DefKind::Method {
+            owner,
+            params,
+            result,
+            ..
+        } = self.hir.defs[def.index()].kind.clone()
+        else {
+            return Err(CodegenError::internal("callee is not a method"));
+        };
+        let table = self.object_table(f, info, receiver, owner, span)?;
+        self.lower_callable(
+            f,
+            info,
+            &params,
+            result,
+            args,
+            supplied,
+            vec![table],
+            FunctionTarget::Method(def),
+            span,
+            discard,
+        )
+    }
+
+    /// Shared callable lowering for functions and methods.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_callable(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        params: &[ParamId],
+        result: Option<TyId>,
+        args: &[ArgHir],
+        supplied: &[Value],
+        mut call_args: Vec<Value>,
+        target: FunctionTarget,
+        span: Span,
+        discard: bool,
+    ) -> Res<Option<Value>> {
         let result_facts = result.map(|ty| self.types.facts(ty).cloned()).transpose()?;
         let aggregate_result = result_facts
             .as_ref()
@@ -69,10 +136,9 @@ impl Lowerer<'_> {
             }
         }
 
-        let mut call_args = Vec::new();
         let mut deferred: Vec<DeferredCopy> = Vec::new();
         let mut negated_targets: Vec<ExprId> = Vec::new();
-        for param in &params {
+        for param in params {
             let data = self.hir.param(*param).clone();
             let facts = self.types.facts(data.ty)?.clone();
             match data.direction {
@@ -193,7 +259,7 @@ impl Lowerer<'_> {
         }
         call_args.push(info.slots.clone());
 
-        let slot = self.function_slot(FunctionTarget::Function(def))?;
+        let slot = self.function_slot(target)?;
         let callee = Self::slot_storage(f, info, slot);
         let ret_storage = if aggregate_result {
             IrType::Void
@@ -228,7 +294,7 @@ impl Lowerer<'_> {
         }
         match &result_facts {
             None => Ok(None),
-            Some(facts) if aggregate_result => {
+            Some(_) if aggregate_result => {
                 let (temp, storage) = result_temp
                     .ok_or_else(|| CodegenError::internal("aggregate result temp missing"))?;
                 Ok(Some(f.load(storage, &temp, None)))
@@ -300,7 +366,7 @@ impl Lowerer<'_> {
         Ok((temp.clone(), Some(DeferredCopy { target, temp, ty })))
     }
 
-    fn apply_output_negation(
+    pub(crate) fn apply_output_negation(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,

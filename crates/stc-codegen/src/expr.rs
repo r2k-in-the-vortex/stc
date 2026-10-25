@@ -160,7 +160,10 @@ impl Lowerer<'_> {
                 match &callee {
                     CalleeHir::Function(_)
                     | CalleeHir::Conversion { .. }
-                    | CalleeHir::StdFunction(_) => {}
+                    | CalleeHir::StdFunction(_)
+                    | CalleeHir::Method { .. }
+                    | CalleeHir::SuperMethod { .. }
+                    | CalleeHir::InterfaceMethod { .. } => {}
                     other => {
                         return Err(CodegenError::unsupported(
                             codes::CODEGEN_UNSUPPORTED,
@@ -661,7 +664,7 @@ impl Lowerer<'_> {
         Ok(f.gep_bytes(&base, offset))
     }
 
-    fn read_direct_pointer(
+    pub(crate) fn read_direct_pointer(
         &mut self,
         f: &mut Function,
         pointer: &Value,
@@ -677,7 +680,7 @@ impl Lowerer<'_> {
         Ok(f.load(kind.storage(), pointer, Some(1)))
     }
 
-    fn write_direct_pointer(
+    pub(crate) fn write_direct_pointer(
         &mut self,
         f: &mut Function,
         pointer: &Value,
@@ -755,12 +758,37 @@ impl Lowerer<'_> {
                     )
                 })
             }
-            other => Err(CodegenError::unsupported(
+            CalleeHir::Method { receiver, def } | CalleeHir::SuperMethod { receiver, def } => {
+                let value = self.lower_method_call(
+                    f, info, *receiver, *def, args, supplied, result_ty, span, false,
+                )?;
+                value.ok_or_else(|| {
+                    CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "a method without a result cannot be used as an expression".into(),
+                        span,
+                    )
+                })
+            }
+            CalleeHir::InterfaceMethod {
+                receiver,
+                interface,
+                method,
+            } => {
+                let value = self.lower_interface_method(
+                    f, info, *receiver, *interface, *method, args, supplied, result_ty, span, false,
+                )?;
+                value.ok_or_else(|| {
+                    CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "a method without a result cannot be used as an expression".into(),
+                        span,
+                    )
+                })
+            }
+            CalleeHir::Fb { .. } | CalleeHir::SuperBody { .. } => Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
-                format!(
-                    "callee `{}` is not supported in M4",
-                    callee_name(self.hir, other)
-                ),
+                "an FB invocation is a statement".into(),
                 span,
             )),
         }
@@ -792,18 +820,51 @@ impl Lowerer<'_> {
                 )?;
                 Ok(())
             }
+            CalleeHir::Method { receiver, def } | CalleeHir::SuperMethod { receiver, def } => {
+                let mut supplied = Vec::new();
+                for arg in &args {
+                    if arg.direction == stc_hir::ArgDirection::Input
+                        && let Some(value) = arg.value
+                    {
+                        supplied.push(self.lower_expr(f, info, value)?);
+                    }
+                }
+                let _ = self.lower_method_call(
+                    f, info, *receiver, *def, &args, &supplied, expr.ty, expr.span, true,
+                )?;
+                Ok(())
+            }
+            CalleeHir::InterfaceMethod {
+                receiver,
+                interface,
+                method,
+            } => {
+                let mut supplied = Vec::new();
+                for arg in &args {
+                    if arg.direction == stc_hir::ArgDirection::Input
+                        && let Some(value) = arg.value
+                    {
+                        supplied.push(self.lower_expr(f, info, value)?);
+                    }
+                }
+                let _ = self.lower_interface_method(
+                    f, info, *receiver, *interface, *method, &args, &supplied, expr.ty, expr.span,
+                    true,
+                )?;
+                Ok(())
+            }
+            CalleeHir::Fb { instance, def } => {
+                let _ = self.lower_fb_call(f, info, *instance, *def, None, &args, expr.span)?;
+                Ok(())
+            }
+            CalleeHir::SuperBody { instance, base } => {
+                let _ = self.lower_super_body(f, info, *instance, *base, &args, expr.span)?;
+                Ok(())
+            }
             CalleeHir::Conversion { .. } | CalleeHir::StdFunction(_) => {
                 let _ = self.lower_expr(f, info, id)?;
                 Ok(())
             }
-            other => Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                format!(
-                    "callee `{}` is not supported in M4",
-                    callee_name(self.hir, other)
-                ),
-                expr.span,
-            )),
         }
     }
 

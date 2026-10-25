@@ -90,6 +90,29 @@ pub(crate) struct ProgramLeaf {
     pub at: Option<stc_hir::DirectAddress>,
 }
 
+/// One persistent leaf of a class/FB object type.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct ObjectLeaf {
+    /// Path segments relative to the object type.
+    pub segments: Vec<RootSegment>,
+    /// Leaf type.
+    pub ty: TyId,
+    /// Canonical type key.
+    pub key: String,
+    /// Leaf size/alignment.
+    pub layout: StorageLayout,
+    /// Leaf layout hash.
+    pub layout_hash: stc_got::GotId,
+}
+
+/// Persistent leaf layout for one class/FB type.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ObjectLayout {
+    /// Leaves in canonical order (base fields first).
+    pub leaves: Vec<ObjectLeaf>,
+}
+
 /// An LLVM struct layout for one program type.
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramLayout {
@@ -452,6 +475,63 @@ pub(crate) fn program_layouts(
                 "`VAR_CONFIG` AT overrides are not supported in M4".into(),
                 address.span,
             ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(layouts)
+    } else {
+        errors.sort_by_key(|error| error.span());
+        errors.dedup();
+        Err(errors)
+    }
+}
+
+/// Builds the persistent leaf layout of every class/FB type.
+///
+/// # Errors
+///
+/// Returns unsupported-construct errors for malformed object layouts.
+pub(crate) fn object_layouts(
+    hir: &HirCrate,
+    types: &TypeSystem<'_>,
+) -> Result<BTreeMap<DefId, ObjectLayout>, Vec<CodegenError>> {
+    let mut layouts = BTreeMap::new();
+    let mut errors = Vec::new();
+    for (index, def) in hir.defs.iter().enumerate() {
+        let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
+        if def.test_only {
+            continue;
+        }
+        if !matches!(
+            def.kind,
+            DefKind::FunctionBlock { .. } | DefKind::Class { .. }
+        ) {
+            continue;
+        }
+        if types.named_ty(id).is_err() {
+            // Synthetic prelude types that no source references have no
+            // interned value type and therefore no object layout.
+            continue;
+        }
+        match types.root_leaves_for_def(id, "", RetainPolicy::None) {
+            Ok(leaves) => {
+                layouts.insert(
+                    id,
+                    ObjectLayout {
+                        leaves: leaves
+                            .into_iter()
+                            .map(|leaf| ObjectLeaf {
+                                segments: leaf.segments,
+                                ty: leaf.ty,
+                                key: leaf.key,
+                                layout: leaf.layout,
+                                layout_hash: leaf.layout_hash,
+                            })
+                            .collect(),
+                    },
+                );
+            }
+            Err(error) => errors.push(error.with_span(def.span)),
         }
     }
     if errors.is_empty() {

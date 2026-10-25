@@ -20,6 +20,7 @@ mod layout;
 mod mangle;
 mod metadata;
 pub mod module;
+mod oop;
 mod place;
 mod reference;
 mod stmt;

@@ -1017,6 +1017,69 @@ TYPE
   END_STRUCT;
 END_TYPE
 
+CLASS Base
+VAR PUBLIC
+  x : DINT;
+END_VAR
+METHOD PUBLIC M : DINT
+  M := x + 1;
+END_METHOD
+END_CLASS
+
+CLASS Derived EXTENDS Base
+METHOD PUBLIC OVERRIDE M : DINT
+  M := SUPER.M() + 10;
+END_METHOD
+METHOD PUBLIC N : DINT
+  N := M() + THIS.x;
+END_METHOD
+END_CLASS
+
+FUNCTION_BLOCK Counter
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR_OUTPUT
+  q : DINT;
+END_VAR
+VAR
+  cv : DINT;
+END_VAR
+  cv := cv + inc;
+  q := cv;
+END_FUNCTION_BLOCK
+
+{stc:export}{stc:no_mangle}
+FUNCTION MathTest : DINT
+  MathTest := ABS(-5) + TRUNC(SQRT(9.0)) + TRUNC(EXPT(2.0, 3.0));
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION Tick : DINT
+VAR
+  q : DINT;
+END_VAR
+  gc(inc := 1, q => q);
+  Tick := q;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunOop : DINT
+VAR
+  c : Counter;
+  d : Derived;
+  d2 : Derived;
+  v : DINT;
+END_VAR
+  c(inc := 2, q => v);
+  c(inc := 3, q => v);
+  d.x := 4;
+  v := v + d.M() + d.N();
+  d2 := d;
+  v := v + d2.M();
+  RunOop := v;
+END_FUNCTION
+
 FUNCTION Make : Point
 VAR_INPUT
   x : DINT;
@@ -1084,6 +1147,7 @@ END_VAR
 END_FUNCTION
 
 VAR_GLOBAL
+  gc : Counter;
   gp : Point;
   gps : ARRAY[1..2] OF Point;
   gstr : STRING[10];

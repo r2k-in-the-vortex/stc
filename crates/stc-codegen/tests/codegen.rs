@@ -241,9 +241,10 @@ fn unsupported_standard_call_reports_at_the_call_site() {
     let source = r#"
 PROGRAM Main
 VAR
-  x : REAL;
+  s : STRING[10];
+  t : STRING[10];
 END_VAR
-  x := SQRT(4.0);
+  t := LEFT(s, 2);
 END_PROGRAM
 CONFIGURATION Cfg
 RESOURCE R ON Cpu
@@ -257,7 +258,7 @@ END_CONFIGURATION
         .expect_err("math standard functions are M5 phase 5");
     assert_eq!(errors.len(), 1, "{errors:#?}");
     assert_eq!(errors[0].code(), "STC-E-CODEGEN-001");
-    assert!(errors[0].message().contains("SQRT"), "{errors:#?}");
+    assert!(errors[0].message().contains("LEFT"), "{errors:#?}");
 }
 
 #[test]

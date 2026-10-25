@@ -24,10 +24,24 @@ int main(int argc, char** argv) {
   int_fn sum_bp = (int_fn)stc_host_symbol("SumBp");
   int_fn ref_test = (int_fn)stc_host_symbol("RefTest");
   int_fn run_conf = (int_fn)stc_host_symbol("RunConf");
-  if (!set_point || !get_sum || !set_elem || !set_text || !copy_test || !init_sum ||
-      !multi || !run || !bump_init || !sum_bp || !ref_test || !run_conf) {
-    return 32;
-  }
+  int_fn tick = (int_fn)stc_host_symbol("Tick");
+  int_fn run_oop = (int_fn)stc_host_symbol("RunOop");
+  int_fn math_test = (int_fn)stc_host_symbol("MathTest");
+  if (!set_point) return 40;
+  if (!get_sum) return 41;
+  if (!set_elem) return 42;
+  if (!set_text) return 43;
+  if (!copy_test) return 44;
+  if (!init_sum) return 45;
+  if (!multi) return 46;
+  if (!run) return 47;
+  if (!bump_init) return 48;
+  if (!sum_bp) return 49;
+  if (!ref_test) return 50;
+  if (!run_conf) return 51;
+  if (!tick) return 52;
+  if (!run_oop) return 53;
+  if (!math_test) return 54;
 
   if (set_point(3, 4) != 34) return 1;
   if (get_sum() != 7) return 2;
@@ -41,9 +55,14 @@ int main(int argc, char** argv) {
   if (sum_bp() != 5) return 13;
   if (ref_test() != 15) return 14;
   if (run_conf() != 28) return 15;
+  if (run_oop() != 54) return 16;
+  if (math_test() != 16) return 20;
+  if (tick() != 1) return 17;
+  if (tick() != 2) return 18;
 
   if (stc_host_cycle() != 0) return 6;
   if (get_sum() != 7) return 7;
+  if (tick() != 3) return 19;
   if (stc_host_shutdown() != 0) return 8;
   return 0;
 }

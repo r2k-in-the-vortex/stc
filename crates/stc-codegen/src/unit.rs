@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use stc_got::Target;
 use stc_got::catalog::ImportService;
-use stc_hir::{ArgDirection, DefId, DefKind, ExprId, HirCrate, Symbol, TyId, VarSectionKind};
+use stc_hir::{
+    ArgDirection, DefId, DefKind, ExprId, HirCrate, ParamId, Symbol, TyId, VarSectionKind,
+};
 use stc_span::Span;
 
 use crate::CodegenError;
@@ -41,6 +43,7 @@ pub(crate) struct Lowerer<'a> {
     pub got: ModuleArtifacts,
     pub types: crate::types::TypeSystem<'a>,
     pub layouts: BTreeMap<DefId, ProgramLayout>,
+    pub objects: BTreeMap<DefId, config::ObjectLayout>,
     pub plan: Plan,
     pub image: ImageLayout,
     pub retain: RetainLayout,
@@ -57,6 +60,14 @@ pub(crate) struct Lowerer<'a> {
     seen_errors: BTreeSet<String>,
 }
 
+/// One callable parameter's implementation ABI.
+struct AbiParam {
+    id: ParamId,
+    by_pointer: bool,
+    llvm: IrType,
+    storage: IrType,
+}
+
 /// Generates IR and metadata for a checked HIR crate.
 pub(crate) fn generate(
     hir: &HirCrate,
@@ -68,6 +79,7 @@ pub(crate) fn generate(
     let types = crate::types::TypeSystem::new(hir, target)
         .map_err(|errors| errors.into_iter().collect::<Vec<_>>())?;
     let layouts = config::program_layouts(hir, &plan, &types)?;
+    let objects = config::object_layouts(hir, &types)?;
     let image = config::image_layout(hir, &plan, &layouts)?;
     let retain = config::retain_layout(hir, &plan, &layouts)?;
     let (span_ids, span_entries) = build_span_table(hir);
@@ -78,6 +90,7 @@ pub(crate) fn generate(
         target: target.clone(),
         got,
         layouts,
+        objects,
         types,
         plan,
         image,
@@ -162,6 +175,22 @@ impl Lowerer<'_> {
                             } else {
                                 self.function_symbols.insert(id, symbol);
                             }
+                        }
+                        Err(error) => self.push_error(error.with_span(def.span)),
+                    }
+                }
+                DefKind::FunctionBlock { body: Some(_), .. } => {
+                    match mangle::fb_body_symbol(self.hir, id) {
+                        Ok(symbol) => {
+                            self.function_symbols.insert(id, symbol);
+                        }
+                        Err(error) => self.push_error(error.with_span(def.span)),
+                    }
+                }
+                DefKind::Method { body: Some(_), .. } => {
+                    match mangle::method_symbol(self.hir, &self.types, id) {
+                        Ok(symbol) => {
+                            self.function_symbols.insert(id, symbol);
                         }
                         Err(error) => self.push_error(error.with_span(def.span)),
                     }
@@ -269,6 +298,8 @@ impl Lowerer<'_> {
     fn emit(&mut self) {
         self.emit_module_data();
         self.emit_user_functions();
+        self.emit_fb_bodies();
+        self.emit_methods();
         self.emit_program_bodies();
         self.emit_prepare();
         self.emit_cycle();
@@ -332,6 +363,54 @@ impl Lowerer<'_> {
 
     // ---- functions --------------------------------------------------------
 
+    fn abi_params(&self, params: &[ParamId]) -> Result<Vec<AbiParam>, CodegenError> {
+        params
+            .iter()
+            .map(|param| self.abi_param(*param))
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    fn abi_param(&self, param: ParamId) -> Result<AbiParam, CodegenError> {
+        let data = self.hir.param(param).clone();
+        let facts = self.types.facts(data.ty)?.clone();
+        let by_pointer = data.direction != ArgDirection::Input || facts.is_contiguous_aggregate();
+        let storage = if facts.is_object() {
+            facts.llvm_value.clone()
+        } else {
+            facts.llvm_storage.clone()
+        };
+        let llvm = if by_pointer {
+            IrType::Ptr
+        } else {
+            storage.clone()
+        };
+        Ok(AbiParam {
+            id: param,
+            by_pointer,
+            llvm,
+            storage,
+        })
+    }
+
+    fn bind_abi_params(
+        &self,
+        f: &mut Function,
+        info: &mut BodyInfo,
+        params: &[AbiParam],
+        offset: usize,
+    ) {
+        for (index, param) in params.iter().enumerate() {
+            let incoming = f.param_value(offset + index);
+            if param.by_pointer {
+                info.params.insert(param.id, incoming);
+            } else {
+                let slot = f.alloca(param.storage.clone());
+                f.store(&incoming, &slot, None);
+                info.params.insert(param.id, slot);
+            }
+        }
+    }
+
     fn emit_user_functions(&mut self) {
         let functions: Vec<DefId> = self
             .hir
@@ -383,35 +462,7 @@ impl Lowerer<'_> {
             }
         });
 
-        struct ParamAbi {
-            id: stc_hir::ParamId,
-            by_pointer: bool,
-            llvm: IrType,
-            storage: IrType,
-        }
-        let mut param_data = Vec::new();
-        for param in &params {
-            let data = self.hir.param(*param).clone();
-            let facts = self.types.facts(data.ty)?.clone();
-            let by_pointer =
-                data.direction != ArgDirection::Input || facts.is_contiguous_aggregate();
-            let storage = if facts.is_object() {
-                facts.llvm_value.clone()
-            } else {
-                facts.llvm_storage.clone()
-            };
-            let llvm = if by_pointer {
-                IrType::Ptr
-            } else {
-                storage.clone()
-            };
-            param_data.push(ParamAbi {
-                id: *param,
-                by_pointer,
-                llvm,
-                storage,
-            });
-        }
+        let param_data = self.abi_params(&params)?;
 
         let mut fn_params = param_data
             .iter()
@@ -437,18 +488,7 @@ impl Lowerer<'_> {
             fields: None,
             return_label: f.next_block_label(),
         };
-        for (index, param) in param_data.iter().enumerate() {
-            let incoming = f.param_value(index);
-            if param.by_pointer {
-                // Output, in-out, and aggregate inputs receive caller-owned
-                // storage directly (D-130).
-                info.params.insert(param.id, incoming);
-            } else {
-                let slot = f.alloca(param.storage.clone());
-                f.store(&incoming, &slot, None);
-                info.params.insert(param.id, slot);
-            }
-        }
+        self.bind_abi_params(&mut f, &mut info, &param_data, 0);
         if aggregate_result {
             let pointer = f.param_value(sret_index.expect("aggregate result has sret"));
             let storage = self
@@ -513,6 +553,223 @@ impl Lowerer<'_> {
             }
         }
         Ok(())
+    }
+
+    fn emit_fb_bodies(&mut self) {
+        let defs: Vec<DefId> = self
+            .hir
+            .defs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, def)| {
+                let id = DefId::new(u32::try_from(index).ok()?);
+                if def.test_only || synthetic(self.hir, id) {
+                    return None;
+                }
+                matches!(def.kind, DefKind::FunctionBlock { body: Some(_), .. }).then_some(id)
+            })
+            .collect();
+        for def in defs {
+            if let Err(error) = self.emit_fb_body(def) {
+                self.push_error(error);
+            }
+        }
+    }
+
+    fn emit_fb_body(&mut self, def: DefId) -> Result<(), CodegenError> {
+        let DefKind::FunctionBlock {
+            body: Some(body_id),
+            ..
+        } = self.hir.defs[def.index()].kind.clone()
+        else {
+            return Ok(());
+        };
+        let symbol = self
+            .function_symbols
+            .get(&def)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("FB body has no symbol"))?;
+        let layout = self
+            .objects
+            .get(&def)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("FB type has no object layout"))?;
+        let mut f = Function::new(
+            symbol,
+            SymbolAttrs::internal(),
+            IrType::Void,
+            vec![
+                (IrType::Ptr, "%fields".into()),
+                (IrType::Ptr, "%slots".into()),
+            ],
+        );
+        f.start_fresh_block();
+        let ordinals = self.object_ordinals(&layout);
+        let slots = f.param_value(1);
+        let mut info = BodyInfo {
+            params: BTreeMap::new(),
+            locals: BTreeMap::new(),
+            result_ptr: None,
+            result_ty: None,
+            slots: slots.clone(),
+            fields: Some(FieldAccess {
+                pointer: f.param_value(0),
+                ordinals,
+                direct: BTreeMap::new(),
+            }),
+            return_label: f.next_block_label(),
+        };
+        let previous = self.current_slots.replace(slots);
+        let result = (|| -> Result<(), CodegenError> {
+            let body = self.hir.bodies[body_id.index()].clone();
+            self.lower_locals(&mut f, &mut info, &body.locals)?;
+            let mut loops: Vec<LoopTarget> = Vec::new();
+            self.lower_stmts(&mut f, &info, &body.stmts, &mut loops)?;
+            if !f.is_terminated() {
+                f.branch(&info.return_label);
+            }
+            f.start_block(&info.return_label);
+            f.ret(None);
+            f.check().map_err(CodegenError::internal)?;
+            self.module.add_function(f);
+            Ok(())
+        })();
+        self.current_slots = previous;
+        result
+    }
+
+    fn emit_methods(&mut self) {
+        let methods: Vec<DefId> = self
+            .hir
+            .defs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, def)| {
+                if def.test_only {
+                    return None;
+                }
+                matches!(def.kind, DefKind::Method { body: Some(_), .. })
+                    .then_some(DefId::new(u32::try_from(index).ok()?))
+            })
+            .collect();
+        for def in methods {
+            if let Err(error) = self.emit_method(def) {
+                self.push_error(error);
+            }
+        }
+    }
+
+    fn emit_method(&mut self, def: DefId) -> Result<(), CodegenError> {
+        let DefKind::Method {
+            owner,
+            result,
+            params,
+            body: Some(body_id),
+            ..
+        } = self.hir.defs[def.index()].kind.clone()
+        else {
+            return Ok(());
+        };
+        let symbol = self
+            .function_symbols
+            .get(&def)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("method has no symbol"))?;
+        let layout = self
+            .objects
+            .get(&owner)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("method owner has no object layout"))?;
+        let result_facts = result.map(|ty| self.types.facts(ty).cloned()).transpose()?;
+        let aggregate_result = result_facts
+            .as_ref()
+            .is_some_and(|facts| facts.is_contiguous_aggregate());
+        let result_abi = result_facts.as_ref().map(|facts| {
+            if aggregate_result {
+                IrType::Void
+            } else if facts.is_object() {
+                facts.llvm_value.clone()
+            } else {
+                facts.llvm_storage.clone()
+            }
+        });
+        let param_data = self.abi_params(&params)?;
+        let mut fn_params = vec![(IrType::Ptr, "%this".into())];
+        fn_params.extend(
+            param_data
+                .iter()
+                .enumerate()
+                .map(|(index, param)| (param.llvm.clone(), format!("%a{index}"))),
+        );
+        let sret_index = if aggregate_result {
+            let index = fn_params.len();
+            fn_params.push((IrType::Ptr, "%sret".into()));
+            Some(index)
+        } else {
+            None
+        };
+        let slots_index = fn_params.len();
+        fn_params.push((IrType::Ptr, "%slots".into()));
+        let ret_ty = result_abi.clone().unwrap_or(IrType::Void);
+        let mut f = Function::new(symbol, SymbolAttrs::internal(), ret_ty, fn_params);
+        f.start_fresh_block();
+        let ordinals = self.object_ordinals(&layout);
+        let slots = f.param_value(slots_index);
+        let mut info = BodyInfo {
+            params: BTreeMap::new(),
+            locals: BTreeMap::new(),
+            result_ptr: None,
+            result_ty: None,
+            slots: slots.clone(),
+            fields: Some(FieldAccess {
+                pointer: f.param_value(0),
+                ordinals,
+                direct: BTreeMap::new(),
+            }),
+            return_label: f.next_block_label(),
+        };
+        self.bind_abi_params(&mut f, &mut info, &param_data, 1);
+        if aggregate_result {
+            let pointer = f.param_value(sret_index.expect("aggregate result has sret"));
+            let storage = self
+                .types
+                .llvm_storage(result.expect("aggregate result has a type"))?;
+            f.store(&Value::zero(storage.clone()), &pointer, None);
+            info.result_ptr = Some(pointer);
+            info.result_ty = result_abi.clone();
+        } else if let Some(facts) = &result_facts {
+            let ty = result_abi
+                .clone()
+                .unwrap_or_else(|| facts.llvm_storage.clone());
+            let slot = f.alloca(ty.clone());
+            f.store(&Value::zero(ty), &slot, None);
+            info.result_ptr = Some(slot);
+            info.result_ty = result_abi.clone();
+        }
+        let previous = self.current_slots.replace(slots);
+        let result = (|| -> Result<(), CodegenError> {
+            let body = self.hir.bodies[body_id.index()].clone();
+            self.lower_locals(&mut f, &mut info, &body.locals)?;
+            let mut loops: Vec<LoopTarget> = Vec::new();
+            self.lower_stmts(&mut f, &info, &body.stmts, &mut loops)?;
+            if !f.is_terminated() {
+                f.branch(&info.return_label);
+            }
+            f.start_block(&info.return_label);
+            if aggregate_result {
+                f.ret(None);
+            } else if let (Some(pointer), Some(ty)) = (&info.result_ptr, info.result_ty.clone()) {
+                let value = f.load(ty, pointer, None);
+                f.ret(Some(&value));
+            } else {
+                f.ret(None);
+            }
+            f.check().map_err(CodegenError::internal)?;
+            self.module.add_function(f);
+            Ok(())
+        })();
+        self.current_slots = previous;
+        result
     }
 
     fn emit_program_bodies(&mut self) {

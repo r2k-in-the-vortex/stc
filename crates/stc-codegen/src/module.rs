@@ -187,6 +187,10 @@ pub enum FunctionTarget {
     Function(DefId),
     /// A program body.
     ProgramBody(DefId),
+    /// A function-block body.
+    FbBody(DefId),
+    /// A method body.
+    Method(DefId),
 }
 
 /// One canonical GOT slot binding.
@@ -660,6 +664,8 @@ impl Context<'_> {
         self.add_instance_roots(&mut catalog, &mut root_targets)?;
         self.add_task_guards(&package, &mut catalog, &mut root_targets)?;
         self.add_functions(&mut catalog, &mut function_targets)?;
+        self.add_fb_bodies(&mut catalog, &mut function_targets)?;
+        self.add_methods(&mut catalog, &mut function_targets)?;
         self.add_program_bodies(&mut catalog, &mut function_targets)?;
         self.add_instances(&package, &mut catalog)?;
         self.add_tasks(&package, &mut catalog)?;
@@ -1099,6 +1105,126 @@ impl Context<'_> {
         Ok(())
     }
 
+    fn add_fb_bodies(
+        &self,
+        catalog: &mut Catalog,
+        function_targets: &mut BTreeMap<String, (FunctionTarget, Option<String>)>,
+    ) -> Result<(), ModuleError> {
+        for (index, def) in self.hir.defs.iter().enumerate() {
+            let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
+            if synthetic(self.hir, id) || def.test_only {
+                continue;
+            }
+            let DefKind::FunctionBlock {
+                body: Some(_),
+                fields,
+                ..
+            } = &def.kind
+            else {
+                continue;
+            };
+            let package = self.def_package(id)?;
+            let type_path = self.qualified_path(id)?;
+            let mut parameters = Vec::new();
+            for field in fields {
+                let data = self.hir.field(*field);
+                let Some(direction) = data.section.direction() else {
+                    continue;
+                };
+                let mode = match direction {
+                    ArgDirection::Input => stc_got::ParamMode::In,
+                    ArgDirection::Output => stc_got::ParamMode::Out,
+                    ArgDirection::InOut => stc_got::ParamMode::InOut,
+                };
+                let type_key = self.got_type_key(data.ty, data.span)?;
+                parameters.push(stc_got::Parameter {
+                    mode,
+                    ty: TypeKey::parse(&type_key)
+                        .map_err(|error| map_error(error, Some(data.span)))?,
+                });
+            }
+            let signature = Signature {
+                parameters,
+                result: TypeKey::Void,
+            };
+            let signature_key = signature.to_string();
+            let key = format!(
+                "{}::{}#BODY@{}",
+                normalize_package(&package).map_err(|error| map_error(error, None))?,
+                stc_got::normalize_name_path(&type_path)
+                    .map_err(|error| map_error(error, Some(def.span)))?,
+                signature_key
+            );
+            let path = format!("{type_path}#BODY");
+            let owner_type = Some(self.catalog_type_key(id)?);
+            catalog.functions.push(FunctionDecl {
+                identity: Identity::new(IdentityKind::Function, &package, &path, &signature_key),
+                key: key.clone(),
+                signature_key,
+                function_kind: FunctionKind::FbBody,
+                owner_type,
+                flags: function_flag::FB_BODY
+                    | function_flag::USER
+                    | function_flag::INDIRECT_CALLABLE,
+                export_name: None,
+                vtable_slot: None,
+                source: self.source_location(&package, def.span),
+            });
+            let symbol = mangle::fb_body_symbol(self.hir, id).map_err(ModuleError::from)?;
+            function_targets.insert(key, (FunctionTarget::FbBody(id), Some(symbol)));
+        }
+        Ok(())
+    }
+
+    fn add_methods(
+        &self,
+        catalog: &mut Catalog,
+        function_targets: &mut BTreeMap<String, (FunctionTarget, Option<String>)>,
+    ) -> Result<(), ModuleError> {
+        for (index, def) in self.hir.defs.iter().enumerate() {
+            let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
+            if synthetic(self.hir, id) || def.test_only {
+                continue;
+            }
+            let DefKind::Method {
+                owner,
+                body: Some(_),
+                slot,
+                ..
+            } = &def.kind
+            else {
+                continue;
+            };
+            let package = self.def_package(*owner)?;
+            let owner_path = self.qualified_path(*owner)?;
+            let method_name = normalize_ident(self.hir.def_name(id))
+                .map_err(|error| map_error(error, Some(def.span)))?;
+            let path = format!("{owner_path}.{method_name}");
+            let signature = self.signature(id)?;
+            let signature_key = signature.to_string();
+            let key = function_key(&package, &path, &signature)
+                .map_err(|error| map_error(error, Some(def.span)))?;
+            let owner_type = Some(self.catalog_type_key(*owner)?);
+            catalog.functions.push(FunctionDecl {
+                identity: Identity::new(IdentityKind::Function, &package, &path, &signature_key),
+                key: key.clone(),
+                signature_key,
+                function_kind: FunctionKind::Method,
+                owner_type,
+                flags: function_flag::METHOD
+                    | function_flag::USER
+                    | function_flag::INDIRECT_CALLABLE,
+                export_name: None,
+                vtable_slot: *slot,
+                source: self.source_location(&package, def.span),
+            });
+            let symbol =
+                mangle::method_symbol(self.hir, self.types, id).map_err(ModuleError::from)?;
+            function_targets.insert(key, (FunctionTarget::Method(id), Some(symbol)));
+        }
+        Ok(())
+    }
+
     fn add_program_bodies(
         &self,
         catalog: &mut Catalog,
@@ -1331,14 +1457,19 @@ impl Context<'_> {
     }
 
     fn signature(&self, def: DefId) -> Result<Signature, ModuleError> {
-        let DefKind::Function { result, params, .. } = &self.hir.defs[def.index()].kind else {
-            return Err(ModuleError::error(
-                codes::CODEGEN_INTERNAL,
-                "signature requested for a non-function",
-            ));
+        let (result, params) = match &self.hir.defs[def.index()].kind {
+            DefKind::Function { result, params, .. } | DefKind::Method { result, params, .. } => {
+                (*result, params.clone())
+            }
+            _ => {
+                return Err(ModuleError::error(
+                    codes::CODEGEN_INTERNAL,
+                    "signature requested for a non-callable",
+                ));
+            }
         };
         let mut parameters = Vec::new();
-        for param in params {
+        for param in &params {
             let data = self.hir.param(*param);
             let mode = match data.direction {
                 ArgDirection::Input => stc_got::ParamMode::In,
@@ -1353,7 +1484,7 @@ impl Context<'_> {
         }
         let result = match result {
             Some(ty) => {
-                let type_key = self.got_type_key(*ty, self.hir.defs[def.index()].span)?;
+                let type_key = self.got_type_key(ty, self.hir.defs[def.index()].span)?;
                 TypeKey::parse(&type_key)
                     .map_err(|error| map_error(error, Some(self.hir.defs[def.index()].span)))?
             }

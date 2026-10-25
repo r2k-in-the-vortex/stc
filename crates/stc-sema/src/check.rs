@@ -4319,27 +4319,43 @@ impl Analyzer<'_> {
         Some((from, to))
     }
     fn methods_named(&self, ty: TyId, symbol: Symbol) -> Vec<DefId> {
+        self.methods_named_from(ty, symbol, true)
+    }
+
+    /// Returns same-named methods, preferring the most-derived declaration for
+    /// an identical parameter/result signature.
+    fn methods_named_from(&self, ty: TyId, symbol: Symbol, include_self: bool) -> Vec<DefId> {
         let Ty::Named(def) = self.hir.types.get(ty) else {
             return Vec::new();
         };
         let mut out = Vec::new();
+        let mut signatures = BTreeSet::new();
         let mut stack = vec![*def];
         let mut visited = BTreeSet::new();
+        let mut first = true;
         while let Some(next) = stack.pop() {
             if !visited.insert(next) {
                 continue;
             }
-            match &self.hir.defs[next.index()].kind {
-                DefKind::Class { methods, .. }
-                | DefKind::FunctionBlock { methods, .. }
-                | DefKind::Interface { methods, .. } => {
-                    for method in methods {
-                        if self.hir.defs[method.index()].name == Some(symbol) {
-                            out.push(*method);
+            let skip = first && !include_self;
+            first = false;
+            if !skip {
+                match &self.hir.defs[next.index()].kind {
+                    DefKind::Class { methods, .. }
+                    | DefKind::FunctionBlock { methods, .. }
+                    | DefKind::Interface { methods, .. } => {
+                        for method in methods {
+                            if self.hir.defs[method.index()].name != Some(symbol) {
+                                continue;
+                            }
+                            let signature = self.method_signature_types(*method);
+                            if signatures.insert(signature) {
+                                out.push(*method);
+                            }
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
             if let Some(base) = self.hir.defs[next.index()].base() {
                 stack.push(base);
@@ -4351,6 +4367,18 @@ impl Analyzer<'_> {
             }
         }
         out
+    }
+
+    fn method_signature_types(&self, def: DefId) -> Vec<TyId> {
+        let DefKind::Method { params, result, .. } = &self.hir.defs[def.index()].kind else {
+            return Vec::new();
+        };
+        let mut signature: Vec<TyId> = params
+            .iter()
+            .map(|param| self.hir.param(*param).ty)
+            .collect();
+        signature.push(result.unwrap_or_else(|| self.hir.types.error()));
+        signature
     }
 
     // ---- coercion and type helpers --------------------------------------

@@ -562,6 +562,33 @@ impl<'a> TypeSystem<'a> {
         self.named.values()
     }
 
+    /// Returns the interned `Ty::Named` type for a named definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the arena has no such type.
+    pub fn named_ty(&self, def: DefId) -> Result<TyId, CodegenError> {
+        self.hir
+            .types
+            .iter()
+            .find_map(|(ty, kind)| matches!(kind, Ty::Named(found) if *found == def).then_some(ty))
+            .ok_or_else(|| CodegenError::internal("named type is not in the type arena"))
+    }
+
+    /// Enumerates persistent leaves for a named definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed layouts.
+    pub fn root_leaves_for_def(
+        &self,
+        def: DefId,
+        prefix: &str,
+        retain: RetainPolicy,
+    ) -> Result<Vec<RootLeaf>, CodegenError> {
+        self.root_leaves(self.named_ty(def)?, prefix, retain)
+    }
+
     fn resolve_alias(&self, def: DefId) -> Result<DefId, CodegenError> {
         let mut def = def;
         let mut seen = BTreeSet::new();
@@ -2015,4 +2042,94 @@ END_PROGRAM
             TypeKey::parse(key).expect(key);
         }
     }
+}
+
+/// Names of the standard function blocks delivered by the prelude.
+pub const STANDARD_FB_NAMES: [&str; 10] = [
+    "TON", "TOF", "TP", "CTU", "CTD", "CTUD", "R_TRIG", "F_TRIG", "SR", "RS",
+];
+
+/// Returns the standard FB name for a synthetic prelude definition.
+#[must_use]
+pub fn standard_fb_name(hir: &HirCrate, def: DefId) -> Option<&'static str> {
+    let data = &hir.defs[def.index()];
+    if data.span.start != 0 || data.span.end != 0 {
+        return None;
+    }
+    if !matches!(data.kind, DefKind::FunctionBlock { .. }) {
+        return None;
+    }
+    let name = data.name_text(&hir.interner).to_ascii_uppercase();
+    STANDARD_FB_NAMES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == name)
+}
+
+/// Collects the standard FB types instantiated anywhere in the crate.
+#[must_use]
+pub fn used_standard_fbs(hir: &HirCrate) -> BTreeSet<DefId> {
+    fn scan(
+        hir: &HirCrate,
+        ty: TyId,
+        out: &mut BTreeSet<DefId>,
+        visited: &mut BTreeSet<DefId>,
+    ) {
+        match hir.types.get(ty) {
+            Ty::Array(array) => scan(hir, array.element, out, visited),
+            Ty::Ref(reference) => scan(hir, reference.target, out, visited),
+            Ty::Named(def) => {
+                if standard_fb_name(hir, *def).is_some() {
+                    out.insert(*def);
+                    return;
+                }
+                if !visited.insert(*def) {
+                    return;
+                }
+                match &hir.defs[def.index()].kind {
+                    DefKind::Alias { target } => scan(hir, *target, out, visited),
+                    kind => {
+                        for field in kind_fields(kind) {
+                            scan(hir, hir.field(*field).ty, out, visited);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn kind_fields(kind: &DefKind) -> &[FieldId] {
+        match kind {
+            DefKind::Struct { fields, .. }
+            | DefKind::FunctionBlock { fields, .. }
+            | DefKind::Class { fields, .. }
+            | DefKind::Program { fields, .. } => fields,
+            _ => &[],
+        }
+    }
+
+    let mut out = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    for field in &hir.fields {
+        scan(hir, field.ty, &mut out, &mut visited);
+    }
+    for local in &hir.locals {
+        scan(hir, local.ty, &mut out, &mut visited);
+    }
+    for param in &hir.params {
+        scan(hir, param.ty, &mut out, &mut visited);
+    }
+    for def in &hir.defs {
+        match &def.kind {
+            DefKind::Global { ty, .. } => scan(hir, *ty, &mut out, &mut visited),
+            DefKind::Function { result, .. } | DefKind::Method { result, .. } => {
+                if let Some(result) = result {
+                    scan(hir, *result, &mut out, &mut visited);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
