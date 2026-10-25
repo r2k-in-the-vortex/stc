@@ -51,13 +51,6 @@ impl Lowerer<'_> {
                 span,
             ));
         };
-        if !self.types.is_single_root(path.ty)? {
-            return Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "references to split aggregate values are M5 phase 4".into(),
-                span,
-            ));
-        }
         let Some(resolved) = self.resolve_place_pointer(f, info, &path)? else {
             return Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,

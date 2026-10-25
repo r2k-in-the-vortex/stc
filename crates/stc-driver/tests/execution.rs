@@ -1502,6 +1502,20 @@ END_VAR
 END_FUNCTION
 
 {stc:export}{stc:no_mangle}
+FUNCTION RefAgg : DINT
+VAR
+  p : Point;
+  q : Point;
+  r : REF_TO Point;
+END_VAR
+  p := Make(1, 2);
+  r := REF(p);
+  r^ := Make(3, 4);
+  q := r^;
+  RefAgg := p.x * 1000 + q.y;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
 FUNCTION WideOps : DINT
 VAR
   w : WSTRING[10];
