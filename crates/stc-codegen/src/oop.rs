@@ -16,7 +16,20 @@ use crate::expr::{BodyInfo, Res};
 use crate::ir::{Function, IrType, Value};
 use crate::module::FunctionTarget;
 use crate::place::{PlacePath, PlaceValue};
+use crate::types::TypeCategory;
 use crate::unit::Lowerer;
+
+/// One assignment-attempt source resolved to the object record it names.
+///
+/// A class handle may be null (the attempt fails without trapping). The
+/// TYPEINFO pointer is known only for `REF_TO` sources, whose `Object`
+/// descriptor carries it.
+struct AttemptSource {
+    /// Object record handle; null for a null class value.
+    handle: Value,
+    /// TYPEINFO pointer from an `Object` place descriptor.
+    typeinfo: Option<Value>,
+}
 
 impl Lowerer<'_> {
     /// Resolves an object receiver to its record pointer.
@@ -407,27 +420,51 @@ impl Lowerer<'_> {
         result: &Value,
         span: Span,
     ) -> Res<()> {
+        let typeinfo = f.load(IrType::Ptr, record, Some(8));
+        self.check_pointer(f, &typeinfo, span)?;
+        let (vtable, found) = self.interface_vtable_lookup(f, &typeinfo, target)?;
+        let found_block = f.next_block_label();
+        let done = f.next_block_label();
+        f.cond_branch(&found, &found_block, &done);
+        f.start_block(&found_block);
+        let pair = f.insert_value_at(&Value::zero(pair_ty.clone()), record, &[0], pair_ty.clone());
+        let pair = f.insert_value_at(&pair, &vtable, &[1], pair_ty.clone());
+        f.store(&pair, result, None);
+        f.branch(&done);
+        f.start_block(&done);
+        Ok(())
+    }
+
+    /// Searches a TYPEINFO's base-first interface map for an interface
+    /// `GotId` and returns its `(vtable, found)` pair.
+    ///
+    /// The caller guarantees `typeinfo` is non-null; a missing entry is not an
+    /// error (a dynamic attempt or upcast yields the null interface).
+    pub(crate) fn interface_vtable_lookup(
+        &mut self,
+        f: &mut Function,
+        typeinfo: &Value,
+        target: DefId,
+    ) -> Res<(Value, Value)> {
         let id = self.types.named(target)?.id.as_bytes();
         let low = u64::from_le_bytes(id[..8].try_into().expect("eight id bytes"));
         let high = u64::from_le_bytes(id[8..].try_into().expect("eight id bytes"));
-        let typeinfo = f.load(IrType::Ptr, record, Some(8));
-        self.check_pointer(f, &typeinfo, span)?;
-        let base_count_ptr = f.gep_bytes(&typeinfo, 16);
+        let base_count_ptr = f.gep_bytes(typeinfo, 16);
         let base_count = f.load(IrType::Int(32), &base_count_ptr, None);
-        let interface_count_ptr = f.gep_bytes(&typeinfo, 20);
+        let interface_count_ptr = f.gep_bytes(typeinfo, 20);
         let interface_count = f.load(IrType::Int(32), &interface_count_ptr, None);
         let base_bytes = f.emit_value_cast("zext", &base_count, IrType::Int(64));
         let base_offset = f.binop("mul", &base_bytes, &Value::int(64, 16));
         let map_offset = f.binop("add", &base_offset, &Value::int(64, 72));
-        let map = f.gep(
-            "i8",
-            &typeinfo,
-            &[format!("i64 {}", map_offset.repr)],
-            false,
-        );
+        let map = f.gep("i8", typeinfo, &[format!("i64 {}", map_offset.repr)], false);
 
+        let result_slot = f.alloca(IrType::Ptr);
+        f.store(&Value::null_ptr(), &result_slot, None);
+        let found_slot = f.alloca(IrType::Int(1));
+        f.store(&Value::bool(false), &found_slot, None);
         let index_slot = f.alloca(IrType::Int(32));
         f.store(&Value::int(32, 0), &index_slot, None);
+
         let header = f.next_block_label();
         let body = f.next_block_label();
         let found = f.next_block_label();
@@ -455,10 +492,9 @@ impl Lowerer<'_> {
         f.start_block(&found);
         let vtable_ptr = f.gep_bytes(&entry, 16);
         let vtable = f.load(IrType::Ptr, &vtable_ptr, Some(8));
-        let pair = f.insert_value_at(&Value::zero(pair_ty.clone()), record, &[0], pair_ty.clone());
-        let pair = f.insert_value_at(&pair, &vtable, &[1], pair_ty.clone());
-        f.store(&pair, result, None);
-        f.branch(&search_done);
+        f.store(&vtable, &result_slot, None);
+        f.store(&Value::bool(true), &found_slot, None);
+        f.branch(&next);
 
         f.start_block(&next);
         let next_index = f.binop("add", &index, &Value::int(32, 1));
@@ -466,7 +502,71 @@ impl Lowerer<'_> {
         f.branch(&header);
 
         f.start_block(&search_done);
-        Ok(())
+        let vtable = f.load(IrType::Ptr, &result_slot, None);
+        let found = f.load(IrType::Int(1), &found_slot, None);
+        Ok((vtable, found))
+    }
+
+    /// Returns `true` when a (non-null) TYPEINFO names `def` itself or one of
+    /// its bases (GOT Artifacts §8.5.2).
+    fn typeinfo_is_or_derives(
+        &mut self,
+        f: &mut Function,
+        typeinfo: &Value,
+        def: DefId,
+    ) -> Res<Value> {
+        let id = self.types.named(def)?.id.as_bytes();
+        let low = u64::from_le_bytes(id[..8].try_into().expect("eight id bytes"));
+        let high = u64::from_le_bytes(id[8..].try_into().expect("eight id bytes"));
+        let type_low_ptr = f.gep_bytes(typeinfo, 32);
+        let type_high_ptr = f.gep_bytes(typeinfo, 40);
+        let type_low = f.load(IrType::Int(64), &type_low_ptr, Some(8));
+        let type_high = f.load(IrType::Int(64), &type_high_ptr, Some(8));
+        let low_matches = f.icmp("eq", &type_low, &Value::int(64, i128::from(low)));
+        let high_matches = f.icmp("eq", &type_high, &Value::int(64, i128::from(high)));
+        let matches = f.binop("and", &low_matches, &high_matches);
+
+        let result = f.alloca(IrType::Int(1));
+        f.store(&matches, &result, None);
+        let base_count_ptr = f.gep_bytes(typeinfo, 16);
+        let base_count = f.load(IrType::Int(32), &base_count_ptr, None);
+        let index_slot = f.alloca(IrType::Int(32));
+        f.store(&Value::int(32, 0), &index_slot, None);
+
+        let header = f.next_block_label();
+        let body = f.next_block_label();
+        let next = f.next_block_label();
+        let done = f.next_block_label();
+        f.branch(&header);
+
+        f.start_block(&header);
+        let index = f.load(IrType::Int(32), &index_slot, None);
+        let in_range = f.icmp("ult", &index, &base_count);
+        f.cond_branch(&in_range, &body, &done);
+
+        f.start_block(&body);
+        let index64 = f.emit_value_cast("zext", &index, IrType::Int(64));
+        let stride = f.binop("mul", &index64, &Value::int(64, 16));
+        let offset = f.binop("add", &stride, &Value::int(64, 72));
+        let entry = f.gep("i8", typeinfo, &[format!("i64 {}", offset.repr)], false);
+        let low_word = f.load(IrType::Int(64), &entry, Some(8));
+        let high_word_ptr = f.gep_bytes(&entry, 8);
+        let high_word = f.load(IrType::Int(64), &high_word_ptr, Some(8));
+        let low_matches = f.icmp("eq", &low_word, &Value::int(64, i128::from(low)));
+        let high_matches = f.icmp("eq", &high_word, &Value::int(64, i128::from(high)));
+        let entry_matches = f.binop("and", &low_matches, &high_matches);
+        let previous = f.load(IrType::Int(1), &result, None);
+        let combined = f.binop("or", &previous, &entry_matches);
+        f.store(&combined, &result, None);
+        f.branch(&next);
+
+        f.start_block(&next);
+        let next_index = f.binop("add", &index, &Value::int(32, 1));
+        f.store(&next_index, &index_slot, None);
+        f.branch(&header);
+
+        f.start_block(&done);
+        Ok(f.load(IrType::Int(1), &result, None))
     }
 
     /// Lowers an interface-method call.
@@ -516,5 +616,381 @@ impl Lowerer<'_> {
             span,
             discard,
         )
+    }
+}
+
+impl Lowerer<'_> {
+    /// Lowers `destination ?= source` (D-149, D-150).
+    ///
+    /// Each supported combination performs its check inline from TYPEINFO and
+    /// the interface map. A failed attempt stores the all-zero `NULL` value;
+    /// a null source or null referenced object fails the attempt, and no
+    /// attempt path traps or calls a host service.
+    pub(crate) fn lower_attempt_stmt(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        place: ExprId,
+        value: ExprId,
+        span: Span,
+    ) -> Res<()> {
+        let dst_ty = self.hir.expr(place).ty;
+        let src_ty = self.hir.expr(value).ty;
+        let dst_facts = self.types.facts(dst_ty)?.clone();
+        let src_facts = self.types.facts(src_ty)?.clone();
+        let result = match (&dst_facts.category, &src_facts.category) {
+            (TypeCategory::Object { def }, _) if dst_facts.is_class() => {
+                if matches!(src_facts.category, TypeCategory::Null) {
+                    Value::null_ptr()
+                } else {
+                    let source = self.attempt_source(f, info, value, &src_facts, span)?;
+                    let ok = self.attempt_is_a(f, &source, *def)?;
+                    f.select(&ok, &source.handle, &Value::null_ptr())
+                }
+            }
+            (TypeCategory::Interface { def }, _) => {
+                let pair_ty = dst_facts.llvm_storage.clone();
+                if matches!(src_facts.category, TypeCategory::Null) {
+                    Value::zero(pair_ty)
+                } else {
+                    let source = self.attempt_source(f, info, value, &src_facts, span)?;
+                    self.attempt_interface_value(f, &source, *def, &pair_ty)?
+                }
+            }
+            (TypeCategory::Reference { target }, _) => {
+                let desc_ty = dst_facts.llvm_storage.clone();
+                if matches!(src_facts.category, TypeCategory::Null) {
+                    Value::zero(desc_ty)
+                } else if let TypeCategory::Reference { target: src_target } = &src_facts.category {
+                    self.attempt_reference_from_reference(
+                        f,
+                        info,
+                        value,
+                        *target,
+                        *src_target,
+                        &desc_ty,
+                        span,
+                    )?
+                } else if src_facts.is_object() {
+                    self.attempt_reference_from_object(
+                        f, info, value, &src_facts, *target, &desc_ty, span,
+                    )?
+                } else {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        format!("`?=` cannot assign `{}` to a reference", src_facts.key),
+                        span,
+                    ));
+                }
+            }
+            _ => {
+                return Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "`?=` requires a class, interface, or reference destination".into(),
+                    span,
+                ));
+            }
+        };
+        self.write_place(f, info, place, result)
+    }
+
+    /// Resolves an attempt source to the object record it names.
+    ///
+    /// Class values yield the loaded handle (which may be null), interfaces
+    /// yield the pair's record pointer, FB values must be places with a
+    /// record, and `REF_TO` values yield the `Object` descriptor's handle and
+    /// TYPEINFO pointer.
+    fn attempt_source(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        id: ExprId,
+        facts: &crate::types::TypeFacts,
+        span: Span,
+    ) -> Res<AttemptSource> {
+        match &facts.category {
+            TypeCategory::Object { .. } if facts.is_class() => Ok(AttemptSource {
+                handle: self.lower_expr(f, info, id)?,
+                typeinfo: None,
+            }),
+            TypeCategory::Object { .. } => {
+                let Some(path) = self.collect_place(id) else {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "an FB assignment-attempt source must be a place".into(),
+                        span,
+                    ));
+                };
+                match self.resolve_place_value(f, info, &path)? {
+                    Some(PlaceValue::FbRecord(record)) => Ok(AttemptSource {
+                        handle: record,
+                        typeinfo: None,
+                    }),
+                    _ => Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "an FB assignment-attempt source must be a place".into(),
+                        span,
+                    )),
+                }
+            }
+            TypeCategory::Interface { .. } => {
+                let pair = self.lower_expr(f, info, id)?;
+                let handle = f.extract_value_at(&pair, &[0], IrType::Ptr);
+                Ok(AttemptSource {
+                    handle,
+                    typeinfo: None,
+                })
+            }
+            TypeCategory::Reference { .. } => {
+                let value = self.lower_expr(f, info, id)?;
+                let (_, handle, typeinfo) = self.descriptor_parts(f, &value)?;
+                Ok(AttemptSource {
+                    handle,
+                    typeinfo: Some(typeinfo),
+                })
+            }
+            _ => Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!("`?=` cannot assign from `{}`", facts.key),
+                span,
+            )),
+        }
+    }
+
+    /// Loads the source object's TYPEINFO, or returns the descriptor's copy.
+    fn attempt_typeinfo(f: &mut Function, source: &AttemptSource) -> Value {
+        match &source.typeinfo {
+            Some(typeinfo) => typeinfo.clone(),
+            None => f.load(IrType::Ptr, &source.handle, Some(8)),
+        }
+    }
+
+    /// Returns whether the source object is `def` or derives from it.
+    ///
+    /// A null handle or TYPEINFO simply yields `false`; the attempt never
+    /// dereferences a null record.
+    fn attempt_is_a(&mut self, f: &mut Function, source: &AttemptSource, def: DefId) -> Res<Value> {
+        let result = f.alloca(IrType::Int(1));
+        f.store(&Value::bool(false), &result, None);
+        let check = f.next_block_label();
+        let done = f.next_block_label();
+        let is_null = f.icmp("eq", &source.handle, &Value::null_ptr());
+        f.cond_branch(&is_null, &done, &check);
+        f.start_block(&check);
+        let typeinfo = Self::attempt_typeinfo(f, source);
+        let info_null = f.icmp("eq", &typeinfo, &Value::null_ptr());
+        let matches = f.next_block_label();
+        f.cond_branch(&info_null, &done, &matches);
+        f.start_block(&matches);
+        let ok = self.typeinfo_is_or_derives(f, &typeinfo, def)?;
+        f.store(&ok, &result, None);
+        f.branch(&done);
+        f.start_block(&done);
+        Ok(f.load(IrType::Int(1), &result, None))
+    }
+
+    /// Builds the `{ record, vtable }` interface value for a successful
+    /// interface attempt; a null or incompatible object yields the all-zero
+    /// pair.
+    fn attempt_interface_value(
+        &mut self,
+        f: &mut Function,
+        source: &AttemptSource,
+        interface: DefId,
+        pair_ty: &IrType,
+    ) -> Res<Value> {
+        let result = f.alloca(pair_ty.clone());
+        f.store(&Value::zero(pair_ty.clone()), &result, None);
+        let check = f.next_block_label();
+        let check_typeinfo = f.next_block_label();
+        let search = f.next_block_label();
+        let found = f.next_block_label();
+        let done = f.next_block_label();
+        let is_null = f.icmp("eq", &source.handle, &Value::null_ptr());
+        f.cond_branch(&is_null, &done, &check);
+        f.start_block(&check);
+        let typeinfo = Self::attempt_typeinfo(f, source);
+        let info_null = f.icmp("eq", &typeinfo, &Value::null_ptr());
+        f.cond_branch(&info_null, &done, &check_typeinfo);
+        f.start_block(&check_typeinfo);
+        let (vtable, matched) = self.interface_vtable_lookup(f, &typeinfo, interface)?;
+        f.cond_branch(&matched, &search, &done);
+        f.start_block(&search);
+        let pair = f.insert_value_at(
+            &Value::zero(pair_ty.clone()),
+            &source.handle,
+            &[0],
+            pair_ty.clone(),
+        );
+        let pair = f.insert_value_at(&pair, &vtable, &[1], pair_ty.clone());
+        f.store(&pair, &result, None);
+        f.branch(&found);
+        f.start_block(&found);
+        f.branch(&done);
+        f.start_block(&done);
+        Ok(f.load(pair_ty.clone(), &result, None))
+    }
+
+    /// Lowers a reference-to-reference assignment attempt.
+    ///
+    /// Object references compare the referenced object's TYPEINFO against the
+    /// destination target type or interface map; a null or malformed source
+    /// descriptor fails without trapping. A reference to a non-object value
+    /// (an interface value) is compatible when it is non-null.
+    #[allow(clippy::too_many_arguments)]
+    fn attempt_reference_from_reference(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        value: ExprId,
+        dst_target: TyId,
+        src_target: TyId,
+        desc_ty: &IrType,
+        span: Span,
+    ) -> Res<Value> {
+        let source = self.lower_expr(f, info, value)?;
+        let (kind, record, typeinfo) = self.descriptor_parts(f, &source)?;
+        let nul = Value::zero(desc_ty.clone());
+        let dst_facts = self.types.facts(dst_target)?.clone();
+        let src_facts = self.types.facts(src_target)?.clone();
+        let dst_is_object = dst_facts.is_object();
+        let src_is_object = src_facts.is_object();
+        if !dst_is_object && !matches!(dst_facts.category, TypeCategory::Interface { .. }) {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "an object reference can only be attempted into a class or interface reference"
+                    .into(),
+                span,
+            ));
+        }
+        if dst_is_object && !src_is_object {
+            // A reference to an interface value is not an object reference;
+            // its descriptor cannot satisfy a class target.
+            return Ok(nul);
+        }
+        let result = f.alloca(desc_ty.clone());
+        f.store(&nul, &result, None);
+        if dst_is_object {
+            // Both targets are object references: the source must be an
+            // `Object` descriptor whose TYPEINFO names or derives from the
+            // destination class.
+            let TypeCategory::Object { def } = dst_facts.category else {
+                return Err(CodegenError::internal(
+                    "an object reference target is not a class",
+                ));
+            };
+            let check = f.next_block_label();
+            let done = f.next_block_label();
+            let is_object = f.icmp(
+                "eq",
+                &kind,
+                &Value::int(32, i128::from(crate::types::place_kind::OBJECT)),
+            );
+            let record_null = f.icmp("eq", &record, &Value::null_ptr());
+            let typeinfo_null = f.icmp("eq", &typeinfo, &Value::null_ptr());
+            let bad_record = f.binop("or", &record_null, &typeinfo_null);
+            let record_ok = f.binop("xor", &bad_record, &Value::bool(true));
+            let usable = f.binop("and", &is_object, &record_ok);
+            f.cond_branch(&usable, &check, &done);
+            f.start_block(&check);
+            let ok = self.typeinfo_is_or_derives(f, &typeinfo, def)?;
+            let chosen = f.select(&ok, &source, &nul);
+            f.store(&chosen, &result, None);
+            f.branch(&done);
+            f.start_block(&done);
+        } else if src_is_object {
+            // Object reference → interface reference: check the referenced
+            // object's interface map.
+            let TypeCategory::Interface { def } = dst_facts.category else {
+                return Err(CodegenError::internal(
+                    "a reference attempt target is neither an object nor an interface",
+                ));
+            };
+            let check = f.next_block_label();
+            let done = f.next_block_label();
+            let is_object = f.icmp(
+                "eq",
+                &kind,
+                &Value::int(32, i128::from(crate::types::place_kind::OBJECT)),
+            );
+            let record_null = f.icmp("eq", &record, &Value::null_ptr());
+            let typeinfo_null = f.icmp("eq", &typeinfo, &Value::null_ptr());
+            let bad_record = f.binop("or", &record_null, &typeinfo_null);
+            let record_ok = f.binop("xor", &bad_record, &Value::bool(true));
+            let usable = f.binop("and", &is_object, &record_ok);
+            f.cond_branch(&usable, &check, &done);
+            f.start_block(&check);
+            let (_, matched) = self.interface_vtable_lookup(f, &typeinfo, def)?;
+            let chosen = f.select(&matched, &source, &nul);
+            f.store(&chosen, &result, None);
+            f.branch(&done);
+            f.start_block(&done);
+        } else {
+            // Interface reference → interface reference: static compatibility
+            // is all a pair-storage descriptor can offer; a non-null source is
+            // copied and a null source fails.
+            let is_null = f.icmp(
+                "eq",
+                &kind,
+                &Value::int(32, i128::from(crate::types::place_kind::NULL)),
+            );
+            let compatible = f.binop("xor", &is_null, &Value::bool(true));
+            let chosen = f.select(&compatible, &source, &nul);
+            f.store(&chosen, &result, None);
+        }
+        Ok(f.load(desc_ty.clone(), &result, None))
+    }
+
+    /// Lowers `reference ?= object`: builds an `Object` descriptor for the
+    /// source when its dynamic type satisfies the reference target.
+    #[allow(clippy::too_many_arguments)]
+    fn attempt_reference_from_object(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        value: ExprId,
+        src_facts: &crate::types::TypeFacts,
+        dst_target: TyId,
+        desc_ty: &IrType,
+        span: Span,
+    ) -> Res<Value> {
+        let dst_facts = self.types.facts(dst_target)?.clone();
+        let TypeCategory::Object { def } = dst_facts.category else {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "an object can only be attempted into a class reference".into(),
+                span,
+            ));
+        };
+        if !dst_facts.is_class() {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "an object can only be attempted into a class reference".into(),
+                span,
+            ));
+        }
+        let source = self.attempt_source(f, info, value, src_facts, span)?;
+        let nul = Value::zero(desc_ty.clone());
+        let result = f.alloca(desc_ty.clone());
+        f.store(&nul, &result, None);
+        let check = f.next_block_label();
+        let check_typeinfo = f.next_block_label();
+        let build = f.next_block_label();
+        let done = f.next_block_label();
+        let is_null = f.icmp("eq", &source.handle, &Value::null_ptr());
+        f.cond_branch(&is_null, &done, &check);
+        f.start_block(&check);
+        let typeinfo = Self::attempt_typeinfo(f, &source);
+        let info_null = f.icmp("eq", &typeinfo, &Value::null_ptr());
+        f.cond_branch(&info_null, &done, &check_typeinfo);
+        f.start_block(&check_typeinfo);
+        let ok = self.typeinfo_is_or_derives(f, &typeinfo, def)?;
+        f.cond_branch(&ok, &build, &done);
+        f.start_block(&build);
+        let descriptor = self.build_object_descriptor(f, &source.handle, &typeinfo)?;
+        f.store(&descriptor, &result, None);
+        f.branch(&done);
+        f.start_block(&done);
+        Ok(f.load(desc_ty.clone(), &result, None))
     }
 }

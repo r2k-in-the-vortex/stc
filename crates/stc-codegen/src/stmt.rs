@@ -83,11 +83,9 @@ impl Lowerer<'_> {
                 let value = self.lower_expr(f, info, value)?;
                 self.write_place(f, info, place, value)
             }
-            StmtKindHir::Attempt { .. } => Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "assignment attempts are M5".into(),
-                stmt.span,
-            )),
+            StmtKindHir::Attempt { place, value } => {
+                self.lower_attempt_stmt(f, info, place, value, stmt.span)
+            }
         }
     }
 

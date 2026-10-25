@@ -3,10 +3,11 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-25  
 Status: Phase 0 written. Phases 1–7 and the `STC-POINTER` surface are implemented; phase 4b
-(interfaces, runtime descriptors, `?=`) is planned in D-147–D-152 and §4b. Steps 4b.0 (contracts
-and documentation), 4b.1 (catalog, descriptors, and hidden roots), 4b.2 (host registry and
-ABI 2.1), 4b.3 (object records and virtual dispatch), and 4b.4 (interface values and upcasts) are
-complete.
+(interfaces, runtime descriptors, `?=`) is specified in D-147–D-152 and §4b. Steps 4b.0
+(contracts and documentation), 4b.1 (catalog, descriptors, and hidden roots), 4b.2 (host
+registry and ABI 2.1), 4b.3 (object records and virtual dispatch), 4b.4 (interface values and
+upcasts), and 4b.5 (`?=`, object references, and `REF_TO`-to-interface) are complete; 4b.6
+(verification, online-change coverage, and documentation) remains.
 
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8, [Architecture](Specification/Architecture/Architecture.md)
 §4, [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §1–§4,
@@ -165,11 +166,11 @@ materialized into a transient alloca on read and split back into roots on write.
 | 0 | Decisions D-128–D-136 and this plan | Complete |
 | 1 | Type/layout substrate, aggregate IR builder, type/descriptor catalog records | Complete |
 | 2 | Structs, enums, subranges, arrays, strings: values, roots, initializers, traps | Complete for values, roots, initializers, and traps; string search functions are phase 5 |
-| 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, conformant `ARRAY[*]`, and `STC-POINTER` complete; `?=` needs phase 4 |
-| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object records, class handle/FB state assignment, FB bodies/invocation, methods, virtual dispatch, inheritance, `THIS`/`SUPER`, the object-table ABI, interface values/upcasts/dispatch, and NULL tests are complete; `?=` remains in 4b.5 |
+| 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, conformant `ARRAY[*]`, `STC-POINTER`, and the phase-4b reference extensions (`REF(object)`, object-reference attempts, `REF_TO`-to-interface) are complete |
+| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object records, class handle/FB state assignment, FB bodies/invocation, methods, virtual dispatch, inheritance, `THIS`/`SUPER`, the object-table ABI, interface values/upcasts/dispatch, `?=`, object references, and NULL tests are complete |
 | 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Complete: per-leaf flattening, packed offsets, GOT-root save/load, and metadata paths |
-| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state/pointer/interface harnesses, M5 hot-swap coverage, M5 fuzz seeds, and status documentation are in place; `?=`, object references, and the final phase-4b verification pass remain |
+| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state/pointer/interface/attempt-reference harnesses, M5 hot-swap coverage, M5 fuzz seeds, and status documentation are in place; the final phase-4b verification pass (4b.6) remains |
 
 ### Phase 1 — type and layout substrate
 
@@ -219,7 +220,7 @@ materialized into a transient alloca on read and split back into roots on write.
 
 ### Phase 4b — interfaces, descriptors, and `?=`
 
-Status: steps 4b.0–4b.4 complete (2026-10-25); steps 4b.5–4b.6 planned. Decisions
+Status: steps 4b.0–4b.5 complete (2026-10-25); step 4b.6 planned. Decisions
 D-147–D-152. Land the steps in order; each step keeps the manifest and descriptor formats at
 version 1 and adds its tests with the code.
 
@@ -387,6 +388,24 @@ behavior; clang accepts the generated interface IR.
 
 #### 4b.5 — `?=`, object references, and `REF_TO`-to-interface
 
+Complete (2026-10-25). `stmt`/`oop` lower `?=` inline for class, interface, and reference
+destinations: class destinations compare the source object TYPEINFO's identity and base chain,
+interface destinations search the base-first interface map (including `EXTENDS`), class
+destinations from interface values compare the record TYPEINFO, and reference destinations
+compare the referenced object's descriptor; a null source or referenced object fails without
+trapping and every failure stores the all-zero `NULL` value. `REF(object place)` builds an
+`Object` descriptor whose data field is the record handle and whose descriptor field is the
+TYPEINFO pointer; `^` yields the class handle or FB state, field and array access through it walk
+the record's leaf table, whole-object assignment copies state through the record and never
+rebinds the source variable's handle, and a null class value yields the null descriptor.
+`REF_TO` class/FB values convert to interfaces by searching the referenced object's interface
+map, yielding the null interface for null or incompatible objects; the same descriptor check
+backs reference-to-reference attempts. Sema allows `REF_TO` class/FB-to-interface assignment and
+interface attempts, and pointer-to-object/interface conversions and `ADR` of objects stay
+rejected. The C harness covers attempt success/failure in both directions, null sources,
+`REF(object)` dereference/field writes/state copy, and `REF_TO`-to-interface success and
+failure; clang accepts the generated attempt/reference IR.
+
 - `stc-codegen::stmt` and `expr`: lower `Attempt` with base-chain and interface-membership checks;
   assign all-zero on failure; never trap.
 - `stc-codegen::reference`: `REF(object)` builds `Object {handle, descriptor}`; dereference and
@@ -470,8 +489,11 @@ no heap allocation or raw persistent object pointer.
   addresses stable across a warm swap, patches entries at activation, quarantines removed
   descriptors, and releases fresh records on rollback. Step 4b.3 makes object values record
   handles and dispatches class/FB methods virtually through TYPEINFO and the class VTABLE.
-  Interface identity comparison, `?=`, and object references remain explicit diagnostics until
-  4b.5. The resolved decisions are D-147–D-152.
+  Step 4b.5 lowers `?=` inline for class/interface/reference destinations, implements
+  `REF(object)` descriptors with record/state dereference and state-copy assignment, and converts
+  `REF_TO` class/FB references to interfaces with null on null or incompatible input. Interface
+  identity comparison remains an explicit diagnostic; step 4b.6 updates the remaining rejection
+  tests and documentation. The resolved decisions are D-147–D-152.
 - **References to split persistent aggregates** remain rejected because they have no single
   stable storage location; contiguous transient aggregates and single-root persistent values are
   supported (D-144). A multi-root descriptor with host-side resolution is recorded as a possible

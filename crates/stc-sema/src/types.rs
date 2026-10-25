@@ -2360,6 +2360,19 @@ impl Analyzer<'_> {
                 Conv::No
             };
         }
+        // A reference to a class/FB object converts to an interface at run
+        // time: the referenced object's descriptor is checked for interface
+        // membership, and a null or incompatible object yields the null
+        // interface (D-150, Q-152, Q-171).
+        if let (Ty::Named(dst_def), Ty::Ref(reference)) = (dst_ty, src_ty)
+            && matches!(
+                self.hir.defs[dst_def.index()].kind,
+                DefKind::Interface { .. }
+            )
+            && self.is_object_type(reference.target)
+        {
+            return Conv::Implicit;
+        }
         if let Ty::Named(def) = src_ty {
             if let DefKind::Subrange {
                 base, lower, upper, ..
@@ -2617,6 +2630,26 @@ impl Analyzer<'_> {
                 self.hir.defs[def.index()].kind,
                 DefKind::Class { .. } | DefKind::Interface { .. } | DefKind::FunctionBlock { .. }
             ),
+            _ => false,
+        }
+    }
+
+    /// Returns `true` for class and function-block object types.
+    pub(crate) fn is_object_type(&self, ty: TyId) -> bool {
+        matches!(
+            self.hir.types.get(ty),
+            Ty::Named(def)
+                if matches!(
+                    self.hir.defs[def.index()].kind,
+                    DefKind::Class { .. } | DefKind::FunctionBlock { .. }
+                )
+        )
+    }
+
+    /// Returns `true` for a `REF_TO` value whose target is a class or FB.
+    pub(crate) fn is_object_reference(&self, ty: TyId) -> bool {
+        match self.hir.types.get(ty) {
+            Ty::Ref(reference) => self.is_object_type(reference.target),
             _ => false,
         }
     }

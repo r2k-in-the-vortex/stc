@@ -53,6 +53,16 @@ pub(crate) enum PlaceBase {
         /// Resolved field chain.
         fields: Vec<FieldId>,
     },
+    /// An object reached by dereferencing a `REF_TO` class/FB reference.
+    ///
+    /// The descriptor's handle names the object record; further steps use the
+    /// record's leaf table (D-150).
+    ObjectDeref {
+        /// Reference expression holding the place descriptor.
+        reference: ExprId,
+        /// Dereferenced class/FB value type.
+        ty: TyId,
+    },
 }
 
 /// One step of a resolved place.
@@ -235,7 +245,7 @@ impl Lowerer<'_> {
     }
 
     /// Returns the leaf ordinals of one class/FB type.
-    fn object_ordinals_for(&self, def: DefId) -> Res<BTreeMap<Vec<RootSegment>, u32>> {
+    pub(crate) fn object_ordinals_for(&self, def: DefId) -> Res<BTreeMap<Vec<RootSegment>, u32>> {
         self.object_ordinal_map
             .get(&def)
             .cloned()
@@ -278,12 +288,14 @@ impl Lowerer<'_> {
                 DefKind::Function { result, .. } | DefKind::Method { result, .. } => *result,
                 _ => None,
             }),
+            PlaceBase::ObjectDeref { ty, .. } => Ok(Some(*ty)),
         }
     }
 
     /// Returns `true` when a place's base type is or contains an object.
     fn path_has_class(&self, path: &PlacePath) -> bool {
         match &path.base {
+            PlaceBase::ObjectDeref { .. } => true,
             PlaceBase::This(owner) => match &self.hir.defs[owner.index()].kind {
                 DefKind::Program { fields, .. } => fields
                     .iter()
@@ -491,6 +503,27 @@ impl Lowerer<'_> {
                     .map(|field| RootSegment::Field(*field))
                     .collect();
                 self.start_persistent(f, info, ty, PersistentBase::Instance(*instance), segments)?
+            }
+            PlaceBase::ObjectDeref { reference, ty } => {
+                if base_ty.is_none() {
+                    return Ok(None);
+                }
+                let value = self.lower_expr(f, info, *reference)?;
+                let (_, handle, _) = self.descriptor_parts(f, &value)?;
+                self.check_pointer(f, &handle, path.span)?;
+                let def = self.object_def(*ty)?;
+                let table = Self::object_table_pointer(f, &handle);
+                Cursor::Object {
+                    object: ObjectRef {
+                        def,
+                        ty: *ty,
+                        handle,
+                        table,
+                    },
+                    ty: *ty,
+                    segments: Vec::new(),
+                    dim: 0,
+                }
             }
         };
         Ok(Some(cursor))
@@ -713,6 +746,14 @@ impl Lowerer<'_> {
                 } => Self::table_value_pointer(f, table, ordinals, segments)?,
                 Cursor::Object {
                     object, segments, ..
+                } if segments.is_empty() => {
+                    // The object reached through a dereferenced `Object`
+                    // reference is the class value itself; the record handle
+                    // is the value (D-150).
+                    return Ok(Some(PlaceValue::ClassValue(object.handle.clone())));
+                }
+                Cursor::Object {
+                    object, segments, ..
                 } => {
                     let ordinals = self.object_ordinals_for(object.def)?;
                     Self::table_value_pointer(f, &object.table, &ordinals, segments)?
@@ -829,7 +870,7 @@ impl Lowerer<'_> {
     }
 
     /// Loads one leaf pointer from a `[N x ptr]` table.
-    fn table_entry(
+    pub(crate) fn table_entry(
         f: &mut Function,
         table: &Value,
         ordinals: &BTreeMap<Vec<RootSegment>, u32>,
@@ -1930,7 +1971,25 @@ impl Lowerer<'_> {
                 }
                 Some((base, steps))
             }
-            PlaceHir::Direct(_) | PlaceHir::Deref(_) | PlaceHir::BitField { .. } => None,
+            PlaceHir::Deref(reference) => {
+                // Dereferencing a class/FB reference yields the object, whose
+                // fields and elements follow the record's leaf table (D-150).
+                let Ty::Ref(reference_ty) = self.hir.types.get(self.hir.expr(*reference).ty) else {
+                    return None;
+                };
+                let target = reference_ty.target;
+                if !self.types.facts(target).ok()?.is_object() {
+                    return None;
+                }
+                Some((
+                    PlaceBase::ObjectDeref {
+                        reference: *reference,
+                        ty: target,
+                    },
+                    Vec::new(),
+                ))
+            }
+            PlaceHir::Direct(_) | PlaceHir::BitField { .. } => None,
         }
     }
 
@@ -1951,6 +2010,7 @@ impl Lowerer<'_> {
             },
             PlaceBase::This(_) => None,
             PlaceBase::Local(_) | PlaceBase::Param(_) | PlaceBase::Result(_) => return None,
+            PlaceBase::ObjectDeref { .. } => return None,
         };
         let mut dimension = 0_usize;
         for step in &path.steps {
@@ -2040,6 +2100,7 @@ impl Lowerer<'_> {
                 }))
             }
             PlaceBase::Local(_) | PlaceBase::Param(_) | PlaceBase::Result(_) => Ok(None),
+            PlaceBase::ObjectDeref { .. } => Ok(None),
         }
     }
 
@@ -2520,7 +2581,7 @@ impl Lowerer<'_> {
     }
 
     /// Gathers an FB value from its record.
-    fn gather_fb(
+    pub(crate) fn gather_fb(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,
@@ -2552,7 +2613,7 @@ impl Lowerer<'_> {
     }
 
     /// Splits an FB value back into its record leaves.
-    fn split_fb(
+    pub(crate) fn split_fb(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,
@@ -2707,6 +2768,7 @@ impl Lowerer<'_> {
                 _ => return Err(CodegenError::internal("global base is not a global")),
             },
             PlaceBase::This(_) => None,
+            PlaceBase::ObjectDeref { ty, .. } => Some(*ty),
             PlaceBase::Local(_) | PlaceBase::Param(_) | PlaceBase::Result(_) => {
                 return Err(CodegenError::internal(
                     "transient base has no persistent type walk",
@@ -2918,6 +2980,11 @@ impl Lowerer<'_> {
                     span,
                 ))
             }
+            PlaceBase::ObjectDeref { .. } => Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "a split aggregate cannot be rooted at an object reference".into(),
+                span,
+            )),
         }
     }
 
@@ -3332,6 +3399,12 @@ impl Lowerer<'_> {
                 operand,
                 span,
             );
+        }
+        if let (TypeCategory::Reference { target }, TypeCategory::Interface { def: interface }) =
+            (&from_facts.category, &to_facts.category)
+            && self.types.facts(*target)?.is_object()
+        {
+            return self.lower_reference_to_interface(f, value, *interface, &to_facts.llvm_storage);
         }
         if let (TypeCategory::Interface { .. }, TypeCategory::Interface { def: target }) =
             (&from_facts.category, &to_facts.category)
@@ -4619,7 +4692,7 @@ impl Lowerer<'_> {
             return Ok(None);
         };
         match place {
-            PlaceHir::Deref(base) => Ok(Some(self.pointer_base_storage(f, info, base, expr.span)?)),
+            PlaceHir::Deref(base) => self.pointer_base_storage(f, info, base, expr.span),
             PlaceHir::Index { base, indices } => {
                 let base_ty = self.hir.expr(base).ty;
                 if let Ty::Ptr(pointer) = self.hir.types.get(base_ty).clone() {
@@ -4677,20 +4750,29 @@ impl Lowerer<'_> {
 
     /// Resolves the storage pointer held by a `REF_TO` or `POINTER TO`
     /// expression, trapping on a null pointer.
+    ///
+    /// A reference to a class/FB object has no contiguous storage pointer;
+    /// its places are resolved through the object-record cursor instead, so
+    /// this returns `None`.
     fn pointer_base_storage(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,
         base: ExprId,
         span: Span,
-    ) -> Res<Value> {
+    ) -> Res<Option<Value>> {
         match self.hir.types.get(self.hir.expr(base).ty).clone() {
             Ty::Ptr(_) => {
                 let value = self.lower_expr(f, info, base)?;
                 self.check_pointer(f, &value, span)?;
-                Ok(value)
+                Ok(Some(value))
             }
-            Ty::Ref(_) => self.deref_pointer(f, info, base, span),
+            Ty::Ref(reference) => {
+                if self.types.facts(reference.target)?.is_object() {
+                    return Ok(None);
+                }
+                Ok(Some(self.deref_pointer(f, info, base, span)?))
+            }
             _ => Err(CodegenError::internal(
                 "dereference base is neither a reference nor a pointer",
             )),

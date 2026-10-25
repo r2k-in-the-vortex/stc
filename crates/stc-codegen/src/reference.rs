@@ -1,6 +1,6 @@
 //! M5 phase 3: reference descriptors, dereference, and output negation.
 
-use stc_hir::{ExprId, PlaceHir, TyId};
+use stc_hir::{DefId, ExprId, PlaceHir, TyId};
 use stc_span::Span;
 
 use crate::CodegenError;
@@ -8,6 +8,7 @@ use crate::abi::trap;
 use crate::codes;
 use crate::expr::{BodyInfo, Res};
 use crate::ir::{Function, IrType, Value};
+use crate::place::{PlaceValue, ResolvedPointer};
 use crate::types::{PLACE_DESCRIPTOR_LLVM, TypeCategory, place_kind};
 use crate::unit::Lowerer;
 
@@ -21,6 +22,9 @@ impl Lowerer<'_> {
         span: Span,
     ) -> Res<Value> {
         let target_expr = self.hir.expr(target).clone();
+        if self.types.facts(target_expr.ty)?.is_object() {
+            return self.lower_object_ref(f, info, target, span);
+        }
         if let stc_hir::ExprKindHir::Place(PlaceHir::Direct(address)) = &target_expr.kind {
             let kind = self.types.scalar_kind(target_expr.ty, span)?;
             let image = crate::layout::image_span(address, kind)?;
@@ -78,7 +82,8 @@ impl Lowerer<'_> {
         let kind = match &path.base {
             crate::place::PlaceBase::Local(_)
             | crate::place::PlaceBase::Param(_)
-            | crate::place::PlaceBase::Result(_) => place_kind::STACK,
+            | crate::place::PlaceBase::Result(_)
+            | crate::place::PlaceBase::ObjectDeref { .. } => place_kind::STACK,
             _ => place_kind::ROOT,
         };
         let (lo, hi) = self.descriptor_identity(&path);
@@ -144,6 +149,158 @@ impl Lowerer<'_> {
         value = f.insert_value_at(&value, &data, &[5], ty.clone());
         value = f.insert_value_at(&value, &Value::null_ptr(), &[6], ty);
         Ok(value)
+    }
+
+    /// Builds an `Object` place descriptor.
+    ///
+    /// The data field is the object record handle and the descriptor field is
+    /// the object's TYPEINFO pointer (D-150; Runtime and Execution §2.6).
+    pub(crate) fn build_object_descriptor(
+        &mut self,
+        f: &mut Function,
+        handle: &Value,
+        typeinfo: &Value,
+    ) -> Res<Value> {
+        let ty = IrType::aggregate(PLACE_DESCRIPTOR_LLVM);
+        let value = self.build_descriptor(f, place_kind::OBJECT, 0, 0, 0, 0, handle.clone())?;
+        Ok(f.insert_value_at(&value, typeinfo, &[6], ty))
+    }
+
+    /// Loads the kind, data, and descriptor fields of a place descriptor
+    /// without validating it.
+    ///
+    /// Callers that must not trap (assignment attempts and interface
+    /// conversions) decide what a null or malformed descriptor means.
+    pub(crate) fn descriptor_parts(
+        &mut self,
+        f: &mut Function,
+        value: &Value,
+    ) -> Res<(Value, Value, Value)> {
+        let desc_ty = IrType::aggregate(PLACE_DESCRIPTOR_LLVM);
+        let temp = f.alloca(desc_ty.clone());
+        f.store(value, &temp, None);
+        let pointee = desc_ty.render();
+        let kind_ptr = f.gep(&pointee, &temp, &["i64 0".into(), "i32 0".into()], true);
+        let kind = f.load(IrType::Int(32), &kind_ptr, None);
+        let data_ptr = f.gep(&pointee, &temp, &["i64 0".into(), "i32 5".into()], true);
+        let data = f.load(IrType::Ptr, &data_ptr, None);
+        let descriptor_ptr = f.gep(&pointee, &temp, &["i64 0".into(), "i32 6".into()], true);
+        let descriptor = f.load(IrType::Ptr, &descriptor_ptr, None);
+        Ok((kind, data, descriptor))
+    }
+
+    /// Lowers `REF(object place)` to an `Object` place descriptor (D-150).
+    ///
+    /// A class value with a null handle yields the null descriptor, so a
+    /// reference to a null class value still compares equal to `NULL`.
+    fn lower_object_ref(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        target: ExprId,
+        span: Span,
+    ) -> Res<Value> {
+        let ty = self.hir.expr(target).ty;
+        let facts = self.types.facts(ty)?.clone();
+        let Some(path) = self.collect_place(target) else {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "`REF` requires an object place".into(),
+                span,
+            ));
+        };
+        let Some(value) = self.resolve_place_value(f, info, &path)? else {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "`REF` requires an object place".into(),
+                span,
+            ));
+        };
+        let handle = match value {
+            PlaceValue::ClassValue(handle) => handle,
+            PlaceValue::ClassSlot(slot) => f.load(IrType::Ptr, &slot, None),
+            PlaceValue::FbRecord(record) => record,
+            PlaceValue::Leaf(_) => {
+                return Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "`REF` requires an object place".into(),
+                    span,
+                ));
+            }
+        };
+        let desc_ty = IrType::aggregate(PLACE_DESCRIPTOR_LLVM);
+        if !facts.is_class() {
+            let typeinfo = f.load(IrType::Ptr, &handle, Some(8));
+            return self.build_object_descriptor(f, &handle, &typeinfo);
+        }
+        let result = f.alloca(desc_ty.clone());
+        f.store(&Value::zero(desc_ty.clone()), &result, None);
+        let build = f.next_block_label();
+        let done = f.next_block_label();
+        let is_null = f.icmp("eq", &handle, &Value::null_ptr());
+        f.cond_branch(&is_null, &done, &build);
+        f.start_block(&build);
+        let typeinfo = f.load(IrType::Ptr, &handle, Some(8));
+        let descriptor = self.build_object_descriptor(f, &handle, &typeinfo)?;
+        f.store(&descriptor, &result, None);
+        f.branch(&done);
+        f.start_block(&done);
+        Ok(f.load(desc_ty, &result, None))
+    }
+
+    /// Converts a `REF_TO` class/FB value to an interface (D-150, Q-152).
+    ///
+    /// The reference's `Object` descriptor supplies the record and TYPEINFO;
+    /// the interface map is searched by interface `GotId`. A null reference, a
+    /// null record, or an object that does not satisfy the interface yields
+    /// the all-zero interface (Q-171); the conversion never traps.
+    pub(crate) fn lower_reference_to_interface(
+        &mut self,
+        f: &mut Function,
+        value: Value,
+        interface: DefId,
+        pair_ty: &IrType,
+    ) -> Res<Value> {
+        let (kind, record, typeinfo) = self.descriptor_parts(f, &value)?;
+        let result = f.alloca(pair_ty.clone());
+        f.store(&Value::zero(pair_ty.clone()), &result, None);
+
+        let check_kind = f.next_block_label();
+        let check_record = f.next_block_label();
+        let check_typeinfo = f.next_block_label();
+        let search = f.next_block_label();
+        let found = f.next_block_label();
+        let done = f.next_block_label();
+
+        let is_null = f.icmp("eq", &kind, &Value::int(32, i128::from(place_kind::NULL)));
+        f.cond_branch(&is_null, &done, &check_kind);
+        f.start_block(&check_kind);
+        let is_object = f.icmp("eq", &kind, &Value::int(32, i128::from(place_kind::OBJECT)));
+        f.cond_branch(&is_object, &check_record, &done);
+        f.start_block(&check_record);
+        let record_null = f.icmp("eq", &record, &Value::null_ptr());
+        f.cond_branch(&record_null, &done, &check_typeinfo);
+        f.start_block(&check_typeinfo);
+        let typeinfo_null = f.icmp("eq", &typeinfo, &Value::null_ptr());
+        f.cond_branch(&typeinfo_null, &done, &search);
+
+        f.start_block(&search);
+        let (vtable, matched) = self.interface_vtable_lookup(f, &typeinfo, interface)?;
+        f.cond_branch(&matched, &found, &done);
+
+        f.start_block(&found);
+        let pair = f.insert_value_at(
+            &Value::zero(pair_ty.clone()),
+            &record,
+            &[0],
+            pair_ty.clone(),
+        );
+        let pair = f.insert_value_at(&pair, &vtable, &[1], pair_ty.clone());
+        f.store(&pair, &result, None);
+        f.branch(&done);
+
+        f.start_block(&done);
+        Ok(f.load(pair_ty.clone(), &result, None))
     }
 
     /// Lowers an explicit `POINTER TO T` ↔ `REF_TO T` conversion.
@@ -324,8 +481,15 @@ impl Lowerer<'_> {
         ty: TyId,
         span: Span,
     ) -> Res<Value> {
-        let pointer = self.deref_pointer(f, info, reference, span)?;
         let facts = self.types.facts(ty)?.clone();
+        if facts.is_object() {
+            let record = self.deref_object_record(f, info, reference, span)?;
+            if facts.is_class() {
+                return Ok(record);
+            }
+            return self.gather_fb(f, info, ty, &record);
+        }
+        let pointer = self.deref_pointer(f, info, reference, span)?;
         if let Some(kind) = facts.scalar() {
             return Self::read_scalar(f, &pointer, kind);
         }
@@ -342,14 +506,88 @@ impl Lowerer<'_> {
         value: Value,
         span: Span,
     ) -> Res<()> {
-        let pointer = self.deref_pointer(f, info, reference, span)?;
         let facts = self.types.facts(ty)?.clone();
+        if facts.is_object() {
+            let record = self.deref_object_record(f, info, reference, span)?;
+            if facts.is_class() {
+                // Assignment through an `Object` reference copies state into
+                // the referenced object; it never rebinds the original
+                // variable's handle (D-150).
+                self.check_pointer(f, &value, span)?;
+                return self.copy_object_state(f, ty, &record, &value);
+            }
+            return self.split_fb(f, info, ty, &record, &value);
+        }
+        let pointer = self.deref_pointer(f, info, reference, span)?;
         if let Some(kind) = facts.scalar() {
             self.check_subrange(f, ty, &value, span)?;
             Self::write_scalar(f, &pointer, kind, &value);
             return Ok(());
         }
         f.store(&value, &pointer, None);
+        Ok(())
+    }
+
+    /// Loads the object record named by a dereferenced `Object` descriptor.
+    ///
+    /// The record pointer is the descriptor's data field; a null reference
+    /// traps `STC-TRAP_NULL_REF` (`^` dereferences, unlike `?=`).
+    fn deref_object_record(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        reference: ExprId,
+        span: Span,
+    ) -> Res<Value> {
+        let value = self.lower_expr(f, info, reference)?;
+        let (_, record, _) = self.descriptor_parts(f, &value)?;
+        self.check_pointer(f, &record, span)?;
+        Ok(record)
+    }
+
+    /// Copies one object's leaf state into another record of the same
+    /// static type, leaving both handles untouched.
+    fn copy_object_state(
+        &mut self,
+        f: &mut Function,
+        ty: TyId,
+        destination: &Value,
+        source: &Value,
+    ) -> Res<()> {
+        let def = match self.types.category(ty)? {
+            TypeCategory::Object { def } => *def,
+            _ => return Err(CodegenError::internal("object state on a non-object")),
+        };
+        let layout = self
+            .objects
+            .get(&def)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("object type has no leaf layout"))?;
+        let ordinals = self.object_ordinals_for(def)?;
+        let destination_table = Self::object_table_pointer(f, destination);
+        let source_table = Self::object_table_pointer(f, source);
+        for leaf in &layout.leaves {
+            let source_pointer = Self::table_entry(f, &source_table, &ordinals, &leaf.segments);
+            let value = self.read_leaf(
+                f,
+                &ResolvedPointer {
+                    pointer: source_pointer,
+                    direct: None,
+                },
+                leaf.ty,
+            )?;
+            let destination_pointer =
+                Self::table_entry(f, &destination_table, &ordinals, &leaf.segments);
+            self.write_leaf(
+                f,
+                &ResolvedPointer {
+                    pointer: destination_pointer,
+                    direct: None,
+                },
+                leaf.ty,
+                value,
+            )?;
+        }
         Ok(())
     }
 }

@@ -1107,12 +1107,21 @@ VAR
   i : I;
   f : FB;
   g : FB;
+  r : REF_TO C;
+  ri : REF_TO I;
 END_VAR
   i := c;
   i := f;
   i ?= c;
   i ?= f;
   f := g;
+  r := REF(c);
+  ri := REF(i);
+  i := r;
+  i ?= r;
+  r ?= REF(c);
+  r ?= ri;
+  r ?= NULL;
 END_FUNCTION_BLOCK
 ",
     );
@@ -1128,6 +1137,64 @@ END_VAR
 END_FUNCTION_BLOCK
 ",
         stc_sema::codes::REF_ATTEMPT,
+    );
+    // A reference to an interface value does not convert to the interface.
+    assert_error(
+        "INTERFACE I
+END_INTERFACE
+FUNCTION_BLOCK Use
+VAR
+  i : I;
+  ri : REF_TO I;
+END_VAR
+  i := ri;
+END_FUNCTION_BLOCK
+",
+        stc_sema::codes::TYPE_ASSIGN,
+    );
+    // An assignment attempt between references requires reference-like
+    // targets.
+    assert_error(
+        "CLASS C
+END_CLASS
+FUNCTION_BLOCK Use
+VAR
+  r : REF_TO C;
+  x : REF_TO DINT;
+END_VAR
+  r ?= x;
+END_FUNCTION_BLOCK
+",
+        stc_sema::codes::REF_ATTEMPT,
+    );
+    // Pointer-to-object/interface conversions and `ADR` of objects stay
+    // rejected (D-150, Q-153, Q-173).
+    assert_error(
+        "CLASS C
+END_CLASS
+FUNCTION_BLOCK Use
+VAR
+  c : C;
+  r : REF_TO C;
+  p : POINTER TO C;
+END_VAR
+  p := POINTER TO C(r);
+END_FUNCTION_BLOCK
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "CLASS C
+END_CLASS
+PROGRAM P
+VAR
+  c : C;
+  p : POINTER TO C;
+END_VAR
+  p := ADR(c);
+END_PROGRAM
+",
+        stc_sema::codes::REF_RULE,
     );
 }
 

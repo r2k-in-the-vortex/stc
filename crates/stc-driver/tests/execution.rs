@@ -762,7 +762,9 @@ fn unsupported_constructs_are_compiler_errors() {
     let directory = TestDir::new("unsupported");
     let source = directory.write_source(
         "unsupported",
-        "CLASS A\nEND_CLASS\nCLASS B EXTENDS A\nEND_CLASS\nPROGRAM Main\nVAR a : A; b : B; END_VAR\n  a ?= b;\nEND_PROGRAM\n\
+        "TYPE\n  Point : STRUCT\n    x : DINT;\n    y : DINT;\n  END_STRUCT;\nEND_TYPE\n\
+         VAR_GLOBAL\n  g : Point;\nEND_VAR\n\
+         PROGRAM Main\nVAR r : REF_TO Point; END_VAR\n  r := REF(g);\nEND_PROGRAM\n\
          CONFIGURATION Cfg\nRESOURCE R ON Cpu\n  PROGRAM inst : Main;\nEND_RESOURCE\nEND_CONFIGURATION\n",
     );
     let output = run_stc(&[
@@ -1110,7 +1112,9 @@ fn build_json_emits_codegen_errors_on_stdout() {
     let directory = TestDir::new("json");
     let source = directory.write_source(
         "unsupported",
-        "CLASS A\nEND_CLASS\nCLASS B EXTENDS A\nEND_CLASS\nPROGRAM Main\nVAR a : A; b : B; END_VAR\n  a ?= b;\nEND_PROGRAM\n\
+        "TYPE\n  Point : STRUCT\n    x : DINT;\n    y : DINT;\n  END_STRUCT;\nEND_TYPE\n\
+         VAR_GLOBAL\n  g : Point;\nEND_VAR\n\
+         PROGRAM Main\nVAR r : REF_TO Point; END_VAR\n  r := REF(g);\nEND_PROGRAM\n\
          CONFIGURATION Cfg\nRESOURCE R ON Cpu\n  PROGRAM inst : Main;\nEND_RESOURCE\nEND_CONFIGURATION\n",
     );
     let output = run_stc(&[
@@ -2939,5 +2943,291 @@ fn interface_values_and_dispatch_run_under_a_c_harness() {
         &library,
         &built_module(&directory, "interfaces"),
         "interfaces_harness",
+    );
+}
+
+const OBJECT_ATTEMPTS: &str = r#"
+INTERFACE IBase
+METHOD Base : DINT
+END_METHOD
+END_INTERFACE
+
+INTERFACE IDerived EXTENDS IBase
+METHOD More : DINT
+END_METHOD
+END_INTERFACE
+
+CLASS BaseImpl IMPLEMENTS IBase
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Base : DINT
+  Base := id;
+END_METHOD
+END_CLASS
+
+CLASS DerivedImpl EXTENDS BaseImpl IMPLEMENTS IDerived
+VAR PUBLIC
+  extra : DINT;
+END_VAR
+METHOD PUBLIC OVERRIDE Base : DINT
+  Base := SUPER.Base() + extra;
+END_METHOD
+METHOD PUBLIC More : DINT
+  More := extra;
+END_METHOD
+END_CLASS
+
+CLASS OtherImpl IMPLEMENTS IBase
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Base : DINT
+  Base := id;
+END_METHOD
+END_CLASS
+
+FUNCTION_BLOCK FbImpl IMPLEMENTS IBase
+VAR PUBLIC
+  cv : DINT;
+END_VAR
+METHOD PUBLIC Base : DINT
+  Base := cv;
+END_METHOD
+END_FUNCTION_BLOCK
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunAttempts : DINT
+VAR
+  d : DerivedImpl;
+  b : BaseImpl;
+  o : OtherImpl;
+  f : FbImpl;
+  a : BaseImpl;
+  x : DerivedImpl;
+  i : IBase;
+  di : IDerived;
+  n : DINT;
+END_VAR
+  d.id := 3;
+  d.extra := 4;
+  b.id := 2;
+  o.id := 9;
+  f.cv := 5;
+  n := 0;
+
+  a := NULL;
+  a ?= d;
+  IF a <> NULL THEN n := n + a.Base(); END_IF;
+
+  x := NULL;
+  x ?= b;
+  IF x = NULL THEN n := n + 100; END_IF;
+
+  x ?= d;
+  IF x <> NULL THEN n := n + x.More(); END_IF;
+
+  i := o;
+  x := NULL;
+  x ?= i;
+  IF x = NULL THEN n := n + 1000; END_IF;
+
+  i := NULL;
+  i ?= d;
+  IF i <> NULL THEN n := n + i.Base(); END_IF;
+
+  i := NULL;
+  i ?= f;
+  IF i <> NULL THEN n := n + i.Base(); END_IF;
+
+  di := NULL;
+  di ?= d;
+  i := NULL;
+  i ?= di;
+  IF i <> NULL THEN n := n + i.Base(); END_IF;
+
+  di := NULL;
+  i := o;
+  di ?= i;
+  IF di = NULL THEN n := n + 10000; END_IF;
+
+  x := NULL;
+  x ?= di;
+  IF x = NULL THEN n := n + 100000; END_IF;
+
+  di ?= d;
+  x := NULL;
+  x ?= di;
+  IF x <> NULL THEN n := n + x.More(); END_IF;
+
+  a := d;
+  a ?= NULL;
+  IF a = NULL THEN n := n + 1000000; END_IF;
+
+  i := NULL;
+  i ?= i;
+  IF i = NULL THEN n := n + 10000000; END_IF;
+
+  RunAttempts := n;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunObjectRefs : DINT
+VAR
+  d : DerivedImpl;
+  x : DerivedImpl;
+  f : FbImpl;
+  f2 : FbImpl;
+  r : REF_TO DerivedImpl;
+  rb : REF_TO DerivedImpl;
+  rf : REF_TO FbImpl;
+  n : DINT;
+END_VAR
+  d.id := 3;
+  d.extra := 4;
+  f.cv := 5;
+  f2.cv := 6;
+  n := 0;
+
+  r := REF(d);
+  n := n + r^.Base();
+  r^.id := 11;
+  r^.extra := 12;
+  n := n + d.Base();
+
+  x.id := 21;
+  x.extra := 22;
+  r^ := x;
+  n := n + d.Base();
+  n := n + x.Base();
+  x.id := 31;
+  n := n + d.id;
+  n := n + x.Base();
+
+  rb := REF(d);
+  n := n + rb^.id;
+  d := NULL;
+  rb := REF(d);
+  IF rb = NULL THEN n := n + 1000; END_IF;
+
+  rf := REF(f);
+  n := n + rf^.Base();
+  rf^ := f2;
+  n := n + f.Base();
+  rf^.cv := 8;
+  n := n + f.cv;
+
+  RunObjectRefs := n;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunRefInterface : DINT
+VAR
+  d : DerivedImpl;
+  o : OtherImpl;
+  r : REF_TO DerivedImpl;
+  ro : REF_TO OtherImpl;
+  i : IBase;
+  di : IDerived;
+  n : DINT;
+END_VAR
+  d.id := 3;
+  d.extra := 4;
+  o.id := 9;
+  n := 0;
+
+  r := REF(d);
+  i := NULL;
+  i := r;
+  IF i <> NULL THEN n := n + i.Base(); END_IF;
+
+  di := NULL;
+  di := r;
+  IF di <> NULL THEN n := n + di.More(); END_IF;
+
+  r := NULL;
+  i := d;
+  i := r;
+  IF i = NULL THEN n := n + 100; END_IF;
+
+  ro := REF(o);
+  di := d;
+  di := ro;
+  IF di = NULL THEN n := n + 1000; END_IF;
+
+  r := REF(d);
+  i := NULL;
+  i ?= r;
+  IF i <> NULL THEN n := n + i.Base(); END_IF;
+
+  ro := REF(o);
+  di := d;
+  di ?= ro;
+  IF di = NULL THEN n := n + 100000; END_IF;
+
+  RunRefInterface := n;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunRefAttempts : DINT
+VAR
+  d : DerivedImpl;
+  b : BaseImpl;
+  r : REF_TO DerivedImpl;
+  s : REF_TO BaseImpl;
+  sb : REF_TO BaseImpl;
+  n : DINT;
+END_VAR
+  d.id := 3;
+  d.extra := 4;
+  b.id := 8;
+  n := 0;
+
+  r := REF(d);
+  s := NULL;
+  s ?= r;
+  IF s <> NULL THEN n := n + s^.id; END_IF;
+  n := n + s^.Base();
+
+  r := NULL;
+  r ?= s;
+  IF r <> NULL THEN n := n + r^.More(); END_IF;
+
+  sb := REF(b);
+  r := NULL;
+  r ?= sb;
+  IF r = NULL THEN n := n + 100; END_IF;
+
+  s := NULL;
+  r ?= s;
+  IF r = NULL THEN n := n + 1000; END_IF;
+
+  RunRefAttempts := n;
+END_FUNCTION
+
+PROGRAM Main
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn assignment_attempts_and_object_references_run_under_a_c_harness() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("object_attempts");
+    build_library(&directory, OBJECT_ATTEMPTS, "object_attempts");
+    let library = lib_path(&directory.path, "object_attempts");
+    assert!(library.is_file(), "{}", library.display());
+    compile_harness(
+        &directory,
+        "object_attempts.c",
+        &library,
+        &built_module(&directory, "object_attempts"),
+        "object_attempts_harness",
     );
 }

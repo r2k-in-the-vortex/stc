@@ -1097,6 +1097,17 @@ impl Analyzer<'_> {
         if matches!(self.hir.types.get(src), Ty::Null) {
             return self.is_reference_like(dst);
         }
+        // `REF_TO` class/FB → interface uses the referenced object's
+        // descriptor; an object that does not satisfy the interface fails the
+        // attempt at run time instead of being a static error (D-150, Q-171).
+        if self.is_object_reference(src)
+            && matches!(
+                self.hir.types.get(dst),
+                Ty::Named(def) if matches!(self.hir.defs[def.index()].kind, DefKind::Interface { .. })
+            )
+        {
+            return true;
+        }
         match (self.hir.types.get(dst), self.hir.types.get(src)) {
             (Ty::Ref(dst), Ty::Ref(src)) => {
                 self.is_reference_like(dst.target)

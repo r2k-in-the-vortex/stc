@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b.4 interface values/upcasts/dispatch implemented (2026-10-25); `?=` remains
+Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b interfaces/`?=`/object references implemented (2026-10-25)
 
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
@@ -52,9 +52,17 @@ returned by value and stored as single roots in fields, globals, program fields,
 class/FB-to-interface upcasts use the compile-time base-first interface-map index,
 interface-to-interface upcasts search the runtime TYPEINFO map, `= NULL`/`<> NULL` compare the
 record pointer, and interface calls dispatch through the pair's vtable. Interfaces that refer to
-activation-owned records are rejected from escaping. Assignment attempts (`?=`), object
-references, interface identity comparison, and references to split aggregate values remain
-explicit `STC-E-CODEGEN-001` diagnostics; the transient `STC-POINTER` extension is implemented. The
+activation-owned records are rejected from escaping. Phase 4b.5 lowers assignment attempts
+(`?=`) inline: a class destination checks the object TYPEINFO's base chain, an interface
+destination checks membership in the TYPEINFO interface map (including `EXTENDS`), and a
+reference destination compares the descriptors; a failed attempt yields the all-zero `NULL`
+value and attempts never trap. `REF(object)` produces an `Object` place descriptor whose data is
+the record handle and whose descriptor field is the TYPEINFO pointer, so dereference, field
+access, whole-object assignment, and object-reference attempts use object semantics;
+`REF_TO`-to-interface converts a class/FB object reference and yields a null interface for a
+null or incompatible object. Interface identity comparison and references to split aggregate
+values remain explicit diagnostics; pointer-to-object/interface conversions and `ADR` of objects
+stay rejected. The transient `STC-POINTER` extension is implemented. The
 manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; full task
 scheduling is M6 (M5 keeps one task per resource). `stc check <file>...` analyzes one in-memory
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
@@ -72,8 +80,8 @@ artifacts on both hosts. Phase 10 closes the documentation and handover pass: th
 set and M5 handover describe the implemented host/module model, and the M6.5 interface boundary
 is recorded. M5 phases 1–6 extend that foundation to aggregates, references, OOP, the standard
 library, and aggregate retained state, including an online change preserving FB and aggregate
-roots; phase 4b.4 implements interface values, upcasts, and dispatch, while `?=` remains. Full
-debug/monitoring is M6.5.
+roots; phase 4b.4 implements interface values, upcasts, and dispatch, and phase 4b.5 implements
+assignment attempts, object references, and `REF_TO`-to-interface. Full debug/monitoring is M6.5.
 
 ## 2. Input languages
 

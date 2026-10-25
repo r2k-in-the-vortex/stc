@@ -545,36 +545,105 @@ fn m5_metadata_is_deterministic() {
 }
 
 #[test]
-fn assignment_attempts_are_rejected_once_with_a_span() {
+fn assignment_attempts_and_object_references_emit_and_verify_with_clang() {
     let source = r#"
-CLASS A
-END_CLASS
-CLASS B EXTENDS A
-END_CLASS
-PROGRAM Main
-VAR
-  a : A;
-  b : B;
+INTERFACE IBase
+METHOD Base : DINT
+END_METHOD
+END_INTERFACE
+
+INTERFACE IDerived EXTENDS IBase
+METHOD More : DINT
+END_METHOD
+END_INTERFACE
+
+CLASS BaseImpl IMPLEMENTS IBase
+VAR PUBLIC
+  id : DINT;
 END_VAR
-  a ?= b;
+METHOD PUBLIC Base : DINT
+  Base := id;
+END_METHOD
+END_CLASS
+
+CLASS DerivedImpl EXTENDS BaseImpl IMPLEMENTS IDerived
+VAR PUBLIC
+  extra : DINT;
+END_VAR
+METHOD PUBLIC OVERRIDE Base : DINT
+  Base := SUPER.Base() + extra;
+END_METHOD
+METHOD PUBLIC More : DINT
+  More := extra;
+END_METHOD
+END_CLASS
+
+FUNCTION_BLOCK FbImpl IMPLEMENTS IBase
+VAR PUBLIC
+  cv : DINT;
+END_VAR
+METHOD PUBLIC Base : DINT
+  Base := cv;
+END_METHOD
+END_FUNCTION_BLOCK
+
+{stc:export}{stc:no_mangle}
+FUNCTION Run : DINT
+VAR
+  d : DerivedImpl;
+  b : BaseImpl;
+  f : FbImpl;
+  a : BaseImpl;
+  x : DerivedImpl;
+  i : IBase;
+  di : IDerived;
+  r : REF_TO DerivedImpl;
+  s : REF_TO BaseImpl;
+  n : DINT;
+END_VAR
+  d.id := 3;
+  d.extra := 4;
+  b.id := 2;
+  f.cv := 5;
+  a ?= d;
+  x ?= b;
+  x ?= d;
+  i ?= d;
+  i ?= f;
+  di ?= i;
+  a ?= i;
+  r := REF(d);
+  s ?= r;
+  i := r;
+  di := r;
+  r ?= s;
+  r^ := x;
+  n := r^.Base() + s^.id + a.Base() + x.More() + i.Base() + di.More();
+  Run := n;
+END_FUNCTION
+
+PROGRAM Main
 END_PROGRAM
-CONFIGURATION Cfg
+CONFIGURATION C
 RESOURCE R ON Cpu
   PROGRAM inst : Main;
 END_RESOURCE
 END_CONFIGURATION
 "#;
-    let hir = clean_hir(source);
-    let sources = vec!["<test>".to_string()];
-    let errors = stc_codegen::generate(&hir, &options("test", Mode::Executable, &sources))
-        .expect_err("assignment attempts are deferred to phase 4");
-    assert_eq!(errors.len(), 1, "{errors:#?}");
-    assert_eq!(errors[0].code(), "STC-E-CODEGEN-001");
+    let output = generate(source, Mode::Executable);
+    let module = &output.module;
+    // `REF(object)` emits an `Object` descriptor with the TYPEINFO pointer in
+    // the descriptor field, and object attempts compare TYPEINFO identities.
+    assert!(module.contains("i32 4, 0"), "object descriptors:\n{module}");
     assert!(
-        errors[0].message().contains("assignment attempts"),
-        "{errors:#?}"
+        module.contains("icmp eq i64") && module.contains("icmp ult i32"),
+        "typeinfo base-chain and interface-map checks:\n{module}"
     );
-    assert!(errors[0].span().is_some_and(|span| span.start != span.end));
+    assert!(
+        !module.contains("stc_rt_attempt") && !module.contains("stc_rt_place_deref"),
+        "attempts stay inline:\n{module}"
+    );
+    verify_with_clang("attempts", module);
 }
 
 #[test]

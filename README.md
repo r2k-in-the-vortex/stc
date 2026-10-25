@@ -68,8 +68,9 @@ aggregate/string/FB retained-state leaves. These constructs are
 covered by clang acceptance, C-harness execution, and an online change that preserves FB and
 aggregate roots across a code-only swap. The transient `STC-POINTER` extension (`POINTER TO`,
 `ADR`, `SIZEOF`, pointer arithmetic/indexing, and `REF_TO`↔pointer conversions) is implemented.
-Interface source constructs and dispatch, assignment attempts (`?=`), and references to
-split aggregate values remain explicit diagnostics; phase 4b implements them. Step 4b.0 records
+Interface source constructs, dispatch, assignment attempts (`?=`), object references, and
+`REF_TO`-to-interface are implemented in phase 4b; references to split aggregate values remain
+explicit diagnostics. Step 4b.0 records
 host ABI 2.1 with the inline TYPEINFO, VTABLE, and object-record layout in
 [GOT Artifacts](Specification/Architecture/GOT-Artifacts.md) §8.5 and
 [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §2.6. Step 4b.1
@@ -90,8 +91,12 @@ value and stored as single roots in fields, globals, program fields, and arrays;
 class/FB-to-interface upcasts use the compile-time base-first map index, interface-to-interface
 upcasts search the TYPEINFO interface map, `= NULL`/`<> NULL` compare the record pointer, and
 interface calls dispatch through the pair's vtable with `(record, table, ...)`. Interfaces to
-activation-owned records are also rejected from escaping. Assignment attempts (`?=`), object
-references, and interface identity comparison remain diagnostics until 4b.5. The project
+activation-owned records are also rejected from escaping. Step 4b.5 lowers assignment attempts
+inline (class base-chain checks, interface-map membership, and reference descriptor
+compatibility; failure yields the all-zero `NULL` value without trapping), builds `Object` place
+descriptors for `REF(object)` with record/state dereference and whole-object state assignment,
+and converts `REF_TO` class/FB references to interfaces with null on null or incompatible input.
+Interface identity comparison remains a diagnostic. The project
 manifest, `stc run`, `stc test`, and file-backed retained state are M6,
 and full task scheduling is M6 (M5 keeps one task per resource). The persistent host, loadable
 modules, GOT roots, manifests, swap protocol, and process-image remap are implemented and shared
