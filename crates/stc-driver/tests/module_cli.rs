@@ -711,6 +711,220 @@ fn a_generated_module_runs_and_survives_an_online_change() {
     );
 }
 
+const M5_HOT_V1: &str = r#"
+TYPE
+  Point : STRUCT
+    x : DINT;
+    y : DINT;
+  END_STRUCT;
+END_TYPE
+
+FUNCTION_BLOCK Counter
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR_OUTPUT
+  q : DINT;
+END_VAR
+VAR
+  cv : DINT;
+END_VAR
+  cv := cv + inc;
+  q := cv;
+END_FUNCTION_BLOCK
+
+VAR_GLOBAL
+  fbc : Counter;
+  gp : Point;
+  gs : STRING[8];
+  ga : ARRAY[1..2] OF Point;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+  q : DINT;
+END_VAR
+  ticks := ticks + 1;
+  fbc(inc := 1, q => q);
+  gp.x := ticks;
+  ga[2].y := ticks;
+  gs := 'v1';
+END_PROGRAM
+"#;
+
+const M5_HOT_V2_CODE_ONLY: &str = r#"
+TYPE
+  Point : STRUCT
+    x : DINT;
+    y : DINT;
+  END_STRUCT;
+END_TYPE
+
+FUNCTION_BLOCK Counter
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR_OUTPUT
+  q : DINT;
+END_VAR
+VAR
+  cv : DINT;
+END_VAR
+  cv := cv + inc;
+  q := cv;
+END_FUNCTION_BLOCK
+
+VAR_GLOBAL
+  fbc : Counter;
+  gp : Point;
+  gs : STRING[8];
+  ga : ARRAY[1..2] OF Point;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+  q : DINT;
+END_VAR
+  ticks := ticks + 2;
+  fbc(inc := 2, q => q);
+  gp.x := ticks;
+  ga[2].y := ticks;
+  gs := 'v2';
+END_PROGRAM
+"#;
+
+#[test]
+fn m5_fb_and_aggregate_roots_survive_an_online_change() {
+    use stc_runtime::{Candidate, Host, HostPlatform, LoadMode, LoadOutcome, ManifestStore};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("online-m5");
+    let v1_source = directory.source("m5_v1", M5_HOT_V1);
+    build_ok(&directory, &v1_source, "m5_v1", &[]);
+    let v1 = directory.manifest("m5_v1");
+    let baseline_path = directory.path.join("m5_v1.stc-got.bin");
+    let v2_source = directory.source("m5_v2", M5_HOT_V2_CODE_ONLY);
+    build_ok(
+        &directory,
+        &v2_source,
+        "m5_v2",
+        &["--got-manifest", baseline_path.to_str().unwrap()],
+    );
+    let v2 = directory.manifest("m5_v2");
+
+    let platform = HostPlatform::new(
+        stc_runtime::PROFILE,
+        stc_codegen::resolve_target(Some(&stc_codegen::host_triple())),
+        stc_got::HOST_ABI_MAJOR,
+        stc_got::HOST_ABI_MINOR,
+    );
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+
+    let find_root = |manifest: &stc_got::Manifest, needle: &str| {
+        manifest
+            .roots
+            .iter()
+            .find(|root| root.key.contains(needle))
+            .unwrap_or_else(|| {
+                panic!(
+                    "root containing `{needle}` missing; roots: {:?}",
+                    manifest
+                        .roots
+                        .iter()
+                        .map(|root| root.key.as_str())
+                        .collect::<Vec<_>>()
+                )
+            })
+            .got_id
+    };
+    let fbc_cv = find_root(&v1, "FBC.CV");
+    let gp_x = find_root(&v1, "GP.X");
+    let gp_y = find_root(&v1, "GP.Y");
+    let ga_y = find_root(&v1, "GA.E0.Y");
+    let ga2_y = find_root(&v1, "GA.E1.Y");
+    let gs = find_root(&v1, "GS");
+    let ticks = find_root(&v1, "TICKS");
+
+    let v1_candidate = Candidate::open(
+        &platform,
+        &directory.path.join(module_file(&directory, "m5_v1")),
+        &directory.path.join("m5_v1.stc-got.bin"),
+    )
+    .expect("v1 candidate");
+    let outcome = host
+        .load(v1_candidate, LoadMode::Auto)
+        .expect("cold install");
+    assert!(matches!(outcome, LoadOutcome::ColdInstalled { .. }));
+
+    let write_i32 = |host: &mut Host, root: stc_got::GotId, value: i32| {
+        host.root_storage_mut(root).expect("root")[..4].copy_from_slice(&value.to_le_bytes());
+    };
+    write_i32(&mut host, fbc_cv, 41);
+    write_i32(&mut host, gp_x, 5);
+    write_i32(&mut host, gp_y, 6);
+    write_i32(&mut host, ga_y, 7);
+    write_i32(&mut host, ga2_y, 11);
+    write_i32(&mut host, ticks, 7);
+    let string = host.root_storage_mut(gs).expect("string root");
+    string[..4].copy_from_slice(&2_i32.to_le_bytes());
+    string[4] = b'h';
+    string[5] = b'i';
+
+    let read_i32 = |host: &Host, root: stc_got::GotId| {
+        i32::from_le_bytes(
+            host.root_storage(root).expect("root")[..4]
+                .try_into()
+                .unwrap(),
+        )
+    };
+
+    let v2_candidate = Candidate::open(
+        &platform,
+        &directory.path.join(module_file(&directory, "m5_v2")),
+        &directory.path.join("m5_v2.stc-got.bin"),
+    )
+    .expect("v2 candidate");
+    let outcome = host.load(v2_candidate, LoadMode::Auto).expect("prepare");
+    assert!(matches!(outcome, LoadOutcome::Prepared { .. }));
+    assert_eq!(read_i32(&host, fbc_cv), 41);
+    assert_eq!(read_i32(&host, gp_x), 5);
+    assert_eq!(read_i32(&host, gp_y), 6);
+    assert_eq!(read_i32(&host, ga_y), 7);
+    assert_eq!(read_i32(&host, ga2_y), 11);
+    assert_eq!(read_i32(&host, ticks), 7);
+    assert_eq!(
+        &host.root_storage(gs).expect("string root")[..6],
+        &[2, 0, 0, 0, b'h', b'i']
+    );
+
+    host.activate().expect("activate");
+    host.cycle().expect("commit cycle");
+    assert_eq!(host.active_build_id(), Some(v2.header.build_id));
+    assert_eq!(read_i32(&host, ticks), 9);
+    assert_eq!(read_i32(&host, fbc_cv), 43, "FB state continued from 41");
+    assert_eq!(read_i32(&host, gp_x), 9);
+    assert_eq!(read_i32(&host, gp_y), 6, "untouched struct field preserved");
+    assert_eq!(
+        read_i32(&host, ga_y),
+        7,
+        "untouched array element preserved"
+    );
+    assert_eq!(
+        read_i32(&host, ga2_y),
+        9,
+        "new code updated the second element"
+    );
+    assert_eq!(
+        &host.root_storage(gs).expect("string root")[..6],
+        &[2, 0, 0, 0, b'v', b'2']
+    );
+}
+
 const SINGLE_TASK: &str = r#"
 VAR_GLOBAL
   A : DINT;

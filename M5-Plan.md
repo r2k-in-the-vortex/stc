@@ -163,7 +163,7 @@ materialized into a transient alloca on read and split back into roots on write.
 | 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; interfaces, `?=`, and runtime descriptors remain |
 | 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Complete: per-leaf flattening, packed offsets, GOT-root save/load, and metadata paths |
-| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate codegen/clang/execution coverage in place; OOP/stdlib/fuzz/docs remain |
+| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state harnesses, M5 hot-swap coverage, and M5 fuzz seeds are in place; final docs and the closing check pass remain |
 
 ### Phase 1 — type and layout substrate
 

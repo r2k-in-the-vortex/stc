@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end and M4 scalar codegen implemented; M4.5 online-change foundation complete (2026-10-25)  
+Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–6 implemented (2026-10-25); interfaces/descriptors, `?=`, and `STC-POINTER` remain  
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
 Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`, `STC-POINTER`  
@@ -28,23 +28,28 @@ capabilities**, not IEC language features. They are specified in
 [Debug and Monitoring](Architecture/Debug-and-Monitoring.md). The project is **not a safety PLC
 and is not responsible for safety in any way**; debug sessions may hold outputs indefinitely.
 
-**Implementation status (M4):** the lexical surface, the full syntactic surface (CST, typed AST
+**Implementation status (M5):** the lexical surface, the full syntactic surface (CST, typed AST
 views, pragma payload validation, recovery), and the semantic surface (collection, namespaces
 and `USING`, name resolution, type checking, constant evaluation, initializers, access control,
 OOP, references, I/O and retention diagnostics, configurations, and HIR lowering) are
-implemented. In addition, `stc-codegen` emits deterministic textual LLVM IR for the M4
-elementary scalar subset — scalar expressions/operators, checked arithmetic, casts, control
-flow, functions, programs, globals, `AT` process-image access, and scalar retained leaves — and
-`stc build` emits IR, objects, executables, static libraries, and metadata through clang.
-Function blocks, OOP lowering, aggregates, strings, references, standard functions, the
-standard FB library, the manifest, `stc run`, `stc test`, and file-backed retained state are
-not implemented and are rejected explicitly. `stc check <file>...` analyzes one in-memory
+implemented. `stc-codegen` emits deterministic textual LLVM IR for the M5 lowering: scalar and
+aggregate values (`STRUCT`, enums, subranges, static and rank-1 conformant arrays,
+`STRING`/`WSTRING`/`USTRING`), references and `VAR_IN_OUT`/output parameters, classes and
+function blocks with methods/inheritance/`THIS`/`SUPER`, all standard functions, the standard FB
+library with cycle-latched timers, and host-rooted retained state for aggregate/string/FB leaves.
+Function blocks, OOP lowering, aggregates, strings, references, standard functions, and the
+standard FB library are therefore covered by clang acceptance, C-harness execution, and
+online-change preservation tests. Interfaces with runtime-owned descriptors/vtables, assignment
+attempts (`?=`), the transient `STC-POINTER` extension, multi-dimensional conformant arrays, and
+references to split aggregate values remain explicit `STC-E-CODEGEN-001` diagnostics. The
+manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; full task
+scheduling is M6 (M5 keeps one task per resource). `stc check <file>...` analyzes one in-memory
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
 surface. Unsupported constructs are rejected with the diagnostics in
 [Grammar](Syntax/Grammar.md) §13 or `STC-E-CODEGEN-001` rather than silently accepted.
 The online-change/GOT/manifest/debug architecture is resolved and the M4.5 foundation is
 implemented. M4.5 phases 0–10 are complete (2026-10-25):
-generated M4 scalar programs execute as ABI 2 loadable modules through the persistent host, with
+generated programs execute as ABI 2 loadable modules through the persistent host, with
 GOT-rooted state, manifest baselines, a thin launcher, and an embedding host. Scalar hot swaps
 preserve compatible roots, initialize new roots once, quarantine removed roots, execute tracked
 renames, reject incompatible type/layout changes until a cold rebuild, and reconfigure the
@@ -52,7 +57,9 @@ process image/remap direct cells at activation. The phase-9 test/CI pass covers 
 determinism, malformed manifest/descriptor inputs, concurrent pinning, and the launcher/embedding
 artifacts on both hosts. Phase 10 closes the documentation and handover pass: the specification
 set and M5 handover describe the implemented host/module model, and the M6.5 interface boundary
-is recorded. M5 is the next milestone; full debug/monitoring is M6.5.
+is recorded. M5 phases 1–6 extend that foundation to aggregates, references, OOP, the standard
+library, and aggregate retained state, including an online change preserving FB and aggregate
+roots; interfaces/descriptors and `STC-POINTER` remain. Full debug/monitoring is M6.5.
 
 ## 2. Input languages
 
