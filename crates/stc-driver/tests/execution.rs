@@ -194,6 +194,7 @@ fn source_name_source(name: &str) -> &'static str {
         "strrange" => STRRANGE,
         "conf2bounds" => CONF2BOUNDS,
         "ptrtrap" => PTR_NULL_TRAP,
+        "objtrap" => OBJECT_NULL_TRAP,
         other => panic!("unknown source {other}"),
     }
 }
@@ -417,6 +418,7 @@ fn traps_are_fatal_and_reported() {
         ("strrange", "RANGE"),
         ("conf2bounds", "BOUNDS"),
         ("ptrtrap", "NULL_REF"),
+        ("objtrap", "NULL_REF"),
     ] {
         let directory = TestDir::new(source);
         build_executable(&directory, source, source);
@@ -429,6 +431,38 @@ fn traps_are_fatal_and_reported() {
         assert!(stderr.contains(needle), "{source}: {stderr}");
     }
 }
+
+const OBJECT_NULL_TRAP: &str = r#"
+CLASS Obj
+VAR PUBLIC
+  x : DINT;
+END_VAR
+METHOD PUBLIC M : DINT
+  M := x;
+END_METHOD
+END_CLASS
+
+FUNCTION Boom : DINT
+VAR
+  c : Obj;
+END_VAR
+  c := NULL;
+  Boom := c.M();
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+  x := Boom();
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
 
 const PTR_NULL_TRAP: &str = r#"
 FUNCTION Boom : DINT
@@ -2028,5 +2062,519 @@ fn standard_function_blocks_run_under_a_c_harness() {
         &library,
         &built_module(&directory, "std_fbs"),
         "stdlib_harness",
+    );
+}
+
+const OOP_OBJECTS: &str = r#"
+CLASS Inner
+VAR PUBLIC
+  x : DINT;
+END_VAR
+METHOD PUBLIC Bump : DINT
+  x := x + 1;
+  Bump := x;
+END_METHOD
+END_CLASS
+
+CLASS Base
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC M : DINT
+  M := id;
+END_METHOD
+METHOD PUBLIC Mix : DINT
+VAR_INPUT
+  o : Base;
+END_VAR
+  Mix := o.M() + id;
+END_METHOD
+METHOD PUBLIC Self : Base
+  Self := THIS;
+END_METHOD
+METHOD PUBLIC Give : DINT
+VAR_OUTPUT
+  o : Base;
+END_VAR
+  o := gD;
+  Give := 3;
+END_METHOD
+END_CLASS
+
+CLASS ABSTRACT Shape
+METHOD PUBLIC ABSTRACT Area : DINT
+END_METHOD
+END_CLASS
+
+CLASS Square EXTENDS Shape
+VAR PUBLIC
+  side : DINT;
+END_VAR
+METHOD PUBLIC OVERRIDE Area : DINT
+  Area := side * side;
+END_METHOD
+END_CLASS
+
+CLASS Derived EXTENDS Base
+VAR PUBLIC
+  extra : DINT;
+END_VAR
+METHOD PUBLIC OVERRIDE M : DINT
+  M := SUPER.M() + extra;
+END_METHOD
+END_CLASS
+
+FUNCTION_BLOCK FB
+VAR_INPUT PUBLIC
+  inc : DINT;
+END_VAR
+VAR_OUTPUT PUBLIC
+  q : DINT;
+END_VAR
+VAR PUBLIC
+  cv : DINT;
+END_VAR
+METHOD PUBLIC GetCv : DINT
+  GetCv := cv;
+END_METHOD
+  cv := cv + inc;
+  q := cv;
+END_FUNCTION_BLOCK
+
+
+
+
+
+
+
+
+FUNCTION_BLOCK BaseFb
+VAR_INPUT PUBLIC
+  delta : DINT;
+END_VAR
+VAR_OUTPUT PUBLIC
+  val : DINT;
+END_VAR
+VAR
+  cv : DINT;
+END_VAR
+  cv := cv + delta;
+  val := cv;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK DerivedFb EXTENDS BaseFb
+VAR_INPUT PUBLIC
+  mult : DINT;
+END_VAR
+  SUPER();
+  val := val * mult;
+END_FUNCTION_BLOCK
+
+CLASS Holder
+VAR PUBLIC
+  inner : Inner;
+  fb : FB;
+  base : Base;
+END_VAR
+METHOD PUBLIC Sum : DINT
+  fb(inc := 1);
+  Sum := inner.Bump() + fb.q + base.M();
+END_METHOD
+END_CLASS
+
+CLASS Pool
+VAR PUBLIC
+  items : ARRAY[1..3] OF Base;
+END_VAR
+METHOD PUBLIC Total : DINT
+VAR
+  i : DINT;
+  acc : DINT;
+END_VAR
+  FOR i := 1 TO 3 DO
+    acc := acc + items[i].M();
+  END_FOR;
+  Total := acc;
+END_METHOD
+END_CLASS
+
+CLASS Rec
+VAR PUBLIC
+  sink : DINT;
+END_VAR
+METHOD PUBLIC Sum : DINT
+VAR_INPUT
+  n : DINT;
+END_VAR
+  IF n <= 0 THEN
+    Sum := 0;
+  ELSE
+    Sum := n + THIS.Sum(n - 1);
+  END_IF;
+END_METHOD
+END_CLASS
+
+TYPE
+  Bundle : STRUCT
+    obj : Base;
+    fb : FB;
+  END_STRUCT;
+END_TYPE
+
+VAR_GLOBAL
+  gD : Derived;
+  gh : Holder;
+  gb : Bundle;
+  gRun : DINT;
+END_VAR
+
+FUNCTION UseBase : DINT
+VAR_INPUT
+  b : Base;
+END_VAR
+  UseBase := b.M();
+END_FUNCTION
+
+FUNCTION Rebind : DINT
+VAR_OUTPUT
+  o : Base;
+END_VAR
+  o := gD;
+  Rebind := 0;
+END_FUNCTION
+
+FUNCTION SwapHandle : DINT
+VAR_IN_OUT
+  o : Base;
+END_VAR
+  o := gD;
+  SwapHandle := o.id;
+END_FUNCTION
+
+FUNCTION RebindIn : DINT
+VAR_INPUT
+  b : Base;
+END_VAR
+  b := NULL;
+  RebindIn := 1;
+  IF b = NULL THEN
+    RebindIn := 2;
+  END_IF;
+END_FUNCTION
+
+FUNCTION Pick : Base
+VAR_INPUT
+  useGlobal : BOOL;
+END_VAR
+  IF useGlobal THEN
+    Pick := gD;
+  ELSE
+    Pick := NULL;
+  END_IF;
+END_FUNCTION
+
+FUNCTION StepFb : DINT
+VAR_IN_OUT
+  f : FB;
+END_VAR
+  f(inc := 2);
+  StepFb := f.q;
+END_FUNCTION
+
+FUNCTION UseFb : DINT
+VAR_INPUT
+  f : FB;
+END_VAR
+  f(inc := 5);
+  UseFb := f.q;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunBasic : DINT
+VAR
+  d : Derived;
+  b : Base;
+  v : DINT;
+END_VAR
+  d.id := 1;
+  d.extra := 5;
+  b := d;
+  v := b.M();
+  b.id := 2;
+  v := v + d.M();
+  b.id := 40;
+  v := v + UseBase(d);
+  gD.id := 9;
+  Rebind(o => b);
+  v := v + b.M();
+  RunBasic := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunCopy : DINT
+VAR
+  a : Derived;
+  b : Derived;
+  c : Derived;
+  v : DINT;
+END_VAR
+  a.id := 1;
+  a.extra := 2;
+  b.id := 10;
+  b.extra := 20;
+  c := b;
+  b := a;
+  v := c.M();
+  v := v + b.M();
+  c.id := 7;
+  v := v + c.M();
+  RunCopy := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunArray : DINT
+VAR
+  items : ARRAY[1..3] OF Derived;
+  b : Base;
+  i : DINT;
+  v : DINT;
+END_VAR
+  FOR i := 1 TO 3 DO
+    items[i].id := i;
+    items[i].extra := i * 10;
+  END_FOR;
+  FOR i := 1 TO 3 DO
+    b := items[i];
+    v := v + b.M();
+  END_FOR;
+  items[2].id := 100;
+  v := v + items[2].M();
+  RunArray := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunStruct : DINT
+VAR
+  s : Bundle;
+  d : Derived;
+  v : DINT;
+END_VAR
+  d.id := 2;
+  d.extra := 8;
+  s.obj := d;
+  v := s.obj.M();
+  s.fb(inc := 3);
+  v := v + s.fb.q;
+  s.obj.id := 4;
+  v := v + d.M();
+  RunStruct := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunGlobalStruct : DINT
+VAR
+  v : DINT;
+END_VAR
+  gD.id := 6;
+  gD.extra := 1;
+  gb.obj := gD;
+  v := gb.obj.M();
+  gb.fb(inc := 4);
+  v := v + gb.fb.q;
+  RunGlobalStruct := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunAbstract : DINT
+VAR
+  s : Square;
+  b : Shape;
+END_VAR
+  s.side := 5;
+  b := s;
+  RunAbstract := b.Area();
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunFbSuper : DINT
+VAR
+  d : DerivedFb;
+  v : DINT;
+END_VAR
+  d.delta := 2;
+  d.mult := 3;
+  d();
+  v := d.val;
+  d();
+  v := d.val;
+  RunFbSuper := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunPool : DINT
+VAR
+  p : Pool;
+  d : Derived;
+END_VAR
+  d.id := 1;
+  d.extra := 2;
+  p.items[1] := d;
+  p.items[2].id := 4;
+  p.items[3].id := 5;
+  RunPool := p.Total();
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunNested : DINT
+VAR
+  h : Holder;
+  v : DINT;
+END_VAR
+  h.base.id := 9;
+  v := h.Sum();
+  v := v + h.inner.Bump();
+  v := v + h.base.M();
+  RunNested := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunGlobal : DINT
+  gh.base.id := 7;
+  RunGlobal := gh.Sum() + gh.inner.Bump() + gh.base.M() + gh.fb.GetCv();
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunRec : DINT
+VAR
+  r : Rec;
+END_VAR
+  RunRec := r.Sum(10);
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunFb : DINT
+VAR
+  f : FB;
+  g : FB;
+  v : DINT;
+END_VAR
+  v := UseFb(f);
+  v := v + f.q;
+  v := v + StepFb(f);
+  v := v + StepFb(f);
+  g := f;
+  v := v + StepFb(g);
+  v := v + g.q;
+  v := v + g.inc;
+  v := v + f.cv;
+  v := v + f.GetCv();
+  RunFb := v;
+END_FUNCTION
+
+FUNCTION ZeroFb : DINT
+VAR_OUTPUT
+  o : FB;
+END_VAR
+  o.cv := 0;
+  o.q := 0;
+  o.inc := 0;
+  ZeroFb := 7;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunFbOut : DINT
+VAR
+  f : FB;
+  v : DINT;
+END_VAR
+  v := StepFb(f);
+  v := v + ZeroFb(o => f);
+  v := v + f.GetCv() * 10 + f.q + f.cv;
+  RunFbOut := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunParam : DINT
+VAR
+  d : Derived;
+  b : Base;
+  v : DINT;
+END_VAR
+  d.id := 3;
+  d.extra := 4;
+  v := UseBase(d);
+  v := v + RebindIn(d);
+  v := v + d.M();
+  b := d;
+  v := v + UseBase(b);
+  v := v + d.Mix(b);
+  gD.id := 5;
+  v := v + SwapHandle(b);
+  v := v + b.id;
+  v := v + d.Give(o => b);
+  v := v + b.id;
+  v := v + UseBase(d.Self());
+  RunParam := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunNull : DINT
+VAR
+  b : Base;
+  v : DINT;
+END_VAR
+  b := Pick(FALSE);
+  IF b = NULL THEN
+    v := 3;
+  END_IF;
+  gD.id := 30;
+  b := Pick(TRUE);
+  IF b <> NULL THEN
+    v := v + b.M();
+  END_IF;
+  RunNull := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION CheckMain : DINT
+  CheckMain := gRun;
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  d : Derived;
+  b : Base;
+  f : FB;
+  s : Bundle;
+END_VAR
+  d.id := 4;
+  d.extra := 6;
+  b := d;
+  f(inc := 2);
+  s.obj := d;
+  gRun := b.M() + f.q + s.obj.M();
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn object_records_and_virtual_dispatch_run_under_a_c_harness() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("oop");
+    build_library(&directory, OOP_OBJECTS, "oop");
+    let library = lib_path(&directory.path, "oop");
+    assert!(library.is_file(), "{}", library.display());
+    compile_harness(
+        &directory,
+        "oop.c",
+        &library,
+        &built_module(&directory, "oop"),
+        "oop_harness",
     );
 }

@@ -499,6 +499,7 @@ impl Analyzer<'_> {
         let rhs_id = self.check_expr(ctx, &rhs, None);
         let rhs_ty = self.hir.expr(rhs_id).ty;
         self.check_pointer_escape(place, rhs_id, span);
+        self.check_class_handle_escape(place, rhs_id, span);
         let lhs_is_deref = matches!(
             self.hir.expr(place).kind,
             ExprKindHir::Place(PlaceHir::Deref(_))
@@ -550,6 +551,54 @@ impl Analyzer<'_> {
                 span,
             );
         }
+    }
+
+    /// Rejects class handles that refer to activation-owned records escaping
+    /// into a result, persistent storage, or an `OUT`/`VAR_IN_OUT` parameter.
+    ///
+    /// A class local owns its record on the activation stack; a handle to it
+    /// cannot outlive the call. Handles read from an `IN` parameter, `THIS`,
+    /// or persistent storage refer to caller- or host-owned records and are
+    /// therefore allowed (Runtime and Execution §2.6).
+    fn check_class_handle_escape(&mut self, place: ExprId, value: ExprId, span: Span) {
+        let value_ty = self.hir.expr(value).ty;
+        if !self.contains_class_handle(value_ty) || !self.destination_allows_escape(place) {
+            return;
+        }
+        if self.class_handle_is_callee_owned(value) {
+            self.error(
+                crate::codes::REF_RULE,
+                "a class handle to activation-owned storage cannot escape this call",
+                span,
+            );
+        }
+    }
+
+    /// Returns `true` when assigning to `place` stores into result, persistent,
+    /// or caller storage.
+    fn destination_allows_escape(&self, place: ExprId) -> bool {
+        let root = self.place_root(place).unwrap_or(place);
+        match &self.hir.expr(root).kind {
+            ExprKindHir::Place(PlaceHir::Result(_))
+            | ExprKindHir::Place(PlaceHir::Global(_))
+            | ExprKindHir::Place(PlaceHir::This(_))
+            | ExprKindHir::Place(PlaceHir::InstanceField { .. })
+            | ExprKindHir::Place(PlaceHir::Deref(_)) => true,
+            ExprKindHir::Place(PlaceHir::Param(param)) => {
+                self.hir.param(*param).direction != ArgDirection::Input
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns `true` when a class-typed expression reads a handle from
+    /// activation-owned storage.
+    fn class_handle_is_callee_owned(&self, value: ExprId) -> bool {
+        let root = self.place_root(value).unwrap_or(value);
+        matches!(
+            &self.hir.expr(root).kind,
+            ExprKindHir::Place(PlaceHir::Local(_))
+        )
     }
 
     /// Returns `true` when the addressed place is callee-owned stack storage:

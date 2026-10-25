@@ -55,13 +55,14 @@ impl Lowerer<'_> {
             SymbolAttrs::internal(),
             IrType::Void,
             vec![
-                (IrType::Ptr, "%fields".into()),
+                (IrType::Ptr, "%this".into()),
+                (IrType::Ptr, "%table".into()),
                 (IrType::Ptr, "%slots".into()),
             ],
         );
         f.start_fresh_block();
-        let slots = f.param_value(1);
-        let table = f.param_value(0);
+        let slots = f.param_value(2);
+        let table = f.param_value(1);
         let mut pointers: BTreeMap<String, Value> = BTreeMap::new();
         for (field_name, (index, _)) in &fields {
             let entry = f.gep(
@@ -75,10 +76,12 @@ impl Lowerer<'_> {
         let info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
+            local_objects: BTreeMap::new(),
             result_ptr: None,
             result_ty: None,
             slots,
             fields: None,
+            handle: None,
             return_label: String::new(),
         };
         let now = if matches!(name, "TON" | "TOF" | "TP") {

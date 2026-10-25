@@ -353,6 +353,8 @@ pub(crate) enum PointerOrigin {
     Cell(CellAccess),
     /// A module-level symbol.
     Global(String),
+    /// Function code loaded from a host function cell named by a VTABLE entry.
+    VtableCode,
 }
 
 /// Structural facts recorded while an instruction is emitted.
@@ -821,6 +823,25 @@ impl Function {
     pub fn slot_value(&mut self, slots: &Value, slot: u32) -> Value {
         let cell = self.slot_cell(slots, slot);
         self.cell_value(&cell)
+    }
+
+    /// Loads the host function cell address stored in a VTABLE entry.
+    pub fn vtable_cell(&mut self, entry: &Value) -> Value {
+        debug_assert_eq!(entry.ty, IrType::Ptr);
+        self.load(IrType::Ptr, entry, Some(8))
+    }
+
+    /// Loads the code address from a VTABLE function cell.
+    ///
+    /// The result is callable with [`Self::call_ptr`]; the verifier accepts it
+    /// as a vtable-dispatched callee (GOT Artifacts §8.5.3, §8.5.8).
+    pub fn vtable_code(&mut self, cell: &Value) -> Value {
+        debug_assert_eq!(cell.ty, IrType::Ptr);
+        let code = self.load(IrType::Ptr, cell, Some(8));
+        self.facts
+            .origins
+            .insert(code.repr.clone(), PointerOrigin::VtableCode);
+        code
     }
 
     /// Emits `extractvalue`.

@@ -205,11 +205,29 @@ fn verify_function_bodies(module: &Module, contract: &Contract, errors: &mut Vec
             }
         }
         for callee in &facts.indirect_calls {
-            let Some(PointerOrigin::Cell(access)) = facts.origins.get(callee) else {
+            let Some(origin) = facts.origins.get(callee) else {
                 errors.push(VerifyError::new(
                     "indirect-call",
                     format!(
-                        "function `{}` calls through `{callee}`, which is not a GOT cell value",
+                        "function `{}` calls through `{callee}`, which is not a GOT cell value \
+                         or a VTABLE code pointer",
+                        function.name
+                    ),
+                ));
+                continue;
+            };
+            if matches!(origin, PointerOrigin::VtableCode) {
+                // VTABLE dispatch loads the host cell named by a TYPEINFO/class
+                // or per-pair VTABLE entry and then the cell's code address
+                // (GOT Artifacts §8.5.3, §8.5.8).
+                continue;
+            }
+            let PointerOrigin::Cell(access) = origin else {
+                errors.push(VerifyError::new(
+                    "indirect-call",
+                    format!(
+                        "function `{}` calls through `{callee}`, which is not a GOT cell value \
+                         or a VTABLE code pointer",
                         function.name
                     ),
                 ));

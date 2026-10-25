@@ -1510,6 +1510,53 @@ impl<'a> TypeSystem<'a> {
         Ok(())
     }
 
+    /// Returns `true` when `ty` is an object or contains one anywhere in its
+    /// instance layout.
+    ///
+    /// Class values are pointer-sized handles whose owned instances are not
+    /// adjacent storage; function-block values are objects too, though their
+    /// instances are inline. Paths that reach either need the object-record
+    /// access path rather than plain GEP.
+    #[must_use]
+    pub fn type_has_class(&self, ty: TyId) -> bool {
+        fn scan(system: &TypeSystem<'_>, ty: TyId, visited: &mut BTreeSet<TyId>) -> bool {
+            let mut pending = vec![ty];
+            while let Some(next) = pending.pop() {
+                if !visited.insert(next) {
+                    continue;
+                }
+                match system.hir.types.get(next) {
+                    Ty::Array(array) => pending.push(array.element),
+                    Ty::Named(def) => match &system.hir.defs[def.index()].kind {
+                        DefKind::Alias { target } => pending.push(*target),
+                        DefKind::Class { .. } | DefKind::FunctionBlock { .. } => return true,
+                        DefKind::Struct { fields, .. } => {
+                            for field in fields {
+                                pending.push(system.hir.field(*field).ty);
+                            }
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            false
+        }
+        let mut visited = BTreeSet::new();
+        scan(self, ty, &mut visited)
+    }
+
+    /// Returns the runtime object-record type spelling (`[N+1 x ptr]`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed types.
+    pub fn object_record_llvm(&self, def: DefId) -> Result<String, CodegenError> {
+        let record = self.object_record(def)?;
+        let count = u64::from(record.leaf_count).saturating_add(1);
+        Ok(format!("[{count} x ptr]"))
+    }
+
     /// Returns the base-to-derived field chain (base first).
     ///
     /// # Errors
@@ -1584,9 +1631,11 @@ impl<'a> TypeSystem<'a> {
                 return Ok(indices);
             }
             let Some(base) = named.base else {
-                return Err(CodegenError::internal(
-                    "field owner is not in the base chain",
-                ));
+                return Err(CodegenError::internal(format!(
+                    "field `{}` owner is not in the base chain of `{}`",
+                    self.hir.interner.text(self.hir.field(field).name),
+                    self.hir.def_name(def)
+                )));
             };
             indices.push(0);
             current = base;
@@ -1605,7 +1654,10 @@ impl<'a> TypeSystem<'a> {
                 dims,
                 conformant,
             } => Ok((*element, dims, *conformant)),
-            _ => Err(CodegenError::internal("type is not an array")),
+            _ => Err(CodegenError::internal(format!(
+                "type `{}` is not an array",
+                self.hir.type_name(ty)
+            ))),
         }
     }
 

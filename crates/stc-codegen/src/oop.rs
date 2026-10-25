@@ -1,9 +1,11 @@
-//! M5 phase 4: object tables, FB invocation, and method calls.
+//! M5 phase 4/4b.3: object records, FB invocation, and method dispatch.
 //!
-//! Class/FB instances are statically known and their persistent fields are
-//! host roots. A call into an FB body or method receives a `[N x ptr]` table
-//! of the instance's leaf roots, ordered by the object type's base-first leaf
-//! layout (D-131, D-133). Object assignment copies state per field.
+//! A class value is a handle to a host-owned (or activation-owned) object
+//! record; an FB value is an inline instance with a record used by the body
+//! ABI. Records are `{ typeinfo, leaf[N] }` where the tail is the base-first
+//! leaf storage table (GOT Artifacts §8.5.1, §8.5.6). FB bodies and methods
+//! receive `(handle, table, ...)`; class methods dispatch through the
+//! TYPEINFO's class VTABLE (D-147–D-152).
 
 use stc_hir::{ArgDirection, ArgHir, DefId, ExprId, FieldId, TyId};
 use stc_span::Span;
@@ -13,113 +15,64 @@ use crate::codes;
 use crate::expr::{BodyInfo, Res};
 use crate::ir::{Function, IrType, Value};
 use crate::module::FunctionTarget;
-use crate::place::{PlacePath, field_table_pointer};
+use crate::place::{PlacePath, PlaceValue};
 use crate::unit::Lowerer;
 
 impl Lowerer<'_> {
-    /// Builds the root table for one class/FB instance.
-    pub(crate) fn object_table(
+    /// Resolves an object receiver to its record pointer.
+    ///
+    /// Class receivers produce the loaded handle; FB receivers produce the
+    /// instance record.
+    pub(crate) fn object_receiver(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,
-        instance: ExprId,
-        target: DefId,
+        receiver: ExprId,
         span: Span,
     ) -> Res<Value> {
-        let Some(path) = self.collect_place(instance) else {
+        let receiver_ty = self.hir.expr(receiver).ty;
+        let receiver_facts = self.types.facts(receiver_ty)?.clone();
+        let Some(path) = self.collect_place(receiver) else {
+            if receiver_facts.is_class() {
+                // A class-typed value (for example a function result) already
+                // is the handle; no place storage is needed for dispatch.
+                let handle = self.lower_expr(f, info, receiver)?;
+                self.check_pointer(f, &handle, span)?;
+                return Ok(handle);
+            }
             return Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
-                "an object receiver must be a place".into(),
+                "an FB receiver must be a place".into(),
                 span,
             ));
         };
-        if matches!(path.base, crate::place::PlaceBase::This(_))
-            && path.steps.is_empty()
-            && let Some(fields) = &info.fields
-        {
-            return Ok(fields.pointer.clone());
-        }
-        let transient = matches!(
-            path.base,
-            crate::place::PlaceBase::Local(_)
-                | crate::place::PlaceBase::Param(_)
-                | crate::place::PlaceBase::Result(_)
-        );
-        let prefix = if transient {
-            Vec::new()
-        } else {
-            self.static_segments(&path).ok_or_else(|| {
-                CodegenError::unsupported(
+        let facts = self.types.facts(path.ty)?.clone();
+        let Some(value) = self.resolve_place_value(f, info, &path)? else {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "the object receiver has no stable storage".into(),
+                span,
+            ));
+        };
+        let handle = match value {
+            PlaceValue::ClassValue(handle) => handle,
+            PlaceValue::ClassSlot(slot) => f.load(IrType::Ptr, &slot, None),
+            PlaceValue::FbRecord(record) => record,
+            PlaceValue::Leaf(_) => {
+                return Err(CodegenError::unsupported(
                     codes::CODEGEN_UNSUPPORTED,
-                    "a runtime-indexed object receiver is not supported in M5".into(),
+                    format!(
+                        "a `{}` receiver is not an object",
+                        self.hir.type_name(path.ty)
+                    ),
                     span,
-                )
-            })?
+                ));
+            }
         };
-        let transient_pointer = if transient {
-            Some(
-                self.transient_place_pointer(f, info, &path)?
-                    .ok_or_else(|| CodegenError::internal("local object has no storage"))?
-                    .pointer,
-            )
-        } else {
-            None
-        };
-        let layout = self
-            .objects
-            .get(&target)
-            .cloned()
-            .ok_or_else(|| CodegenError::internal("object type has no leaf layout"))?;
-        let table_type = format!("[{} x ptr]", layout.leaves.len());
-        let table = f.alloca_typed(&table_type);
-        for (index, leaf) in layout.leaves.iter().enumerate() {
-            let mut full = prefix.clone();
-            full.extend(leaf.segments.iter().copied());
-            let pointer = match &path.base {
-                crate::place::PlaceBase::This(_) | crate::place::PlaceBase::Instance { .. } => {
-                    let Some(fields) = &info.fields else {
-                        return Err(CodegenError::internal(
-                            "an object receiver outside an instance body",
-                        ));
-                    };
-                    let Some(ordinal) = fields.ordinals.get(&full).copied() else {
-                        return Err(CodegenError::unsupported(
-                            codes::CODEGEN_UNSUPPORTED,
-                            "a call through a nested class instance is M5 phase 4b.3".into(),
-                            span,
-                        ));
-                    };
-                    field_table_pointer(f, fields, ordinal)
-                }
-                crate::place::PlaceBase::Global(def) => {
-                    let target = Self::global_leaf_target(*def, &full, leaf.class_handle.is_some());
-                    let Some(slot) = self.got.root_slot(&target) else {
-                        return Err(CodegenError::unsupported(
-                            codes::CODEGEN_UNSUPPORTED,
-                            "a call through a nested class instance is M5 phase 4b.3".into(),
-                            span,
-                        ));
-                    };
-                    Self::slot_storage(f, info, slot)
-                }
-                crate::place::PlaceBase::Local(_)
-                | crate::place::PlaceBase::Param(_)
-                | crate::place::PlaceBase::Result(_) => {
-                    let base_pointer = transient_pointer.as_ref().ok_or_else(|| {
-                        CodegenError::internal("transient object pointer missing")
-                    })?;
-                    self.aggregate_pointer(f, path.ty, base_pointer, &leaf.segments)?
-                }
-            };
-            let entry = f.gep(
-                &table_type,
-                &table,
-                &["i64 0".into(), format!("i64 {index}")],
-                true,
-            );
-            f.store(&pointer, &entry, Some(8));
+        if facts.is_class() {
+            self.check_pointer(f, &handle, span)?;
         }
-        Ok(table)
+        Ok(handle)
     }
 
     /// Extends a place path with one field.
@@ -141,17 +94,7 @@ impl Lowerer<'_> {
         info: &BodyInfo,
         path: &PlacePath,
     ) -> Res<Value> {
-        let facts = self.types.facts(path.ty)?.clone();
-        if let Some(kind) = facts.scalar()
-            && let Some(resolved) = self.resolve_place_pointer(f, info, path)?
-        {
-            if let Some(address) = &resolved.direct {
-                let bit = crate::place::direct_bit(address, kind)?;
-                return self.read_direct_pointer(f, &resolved.pointer, kind, bit);
-            }
-            return Self::read_scalar(f, &resolved.pointer, kind);
-        }
-        self.read_aggregate_place(f, info, path)
+        self.read_place_path(f, info, path)
     }
 
     /// Writes a class/FB field through its place path.
@@ -162,28 +105,7 @@ impl Lowerer<'_> {
         path: &PlacePath,
         value: Value,
     ) -> Res<()> {
-        let facts = self.types.facts(path.ty)?.clone();
-        if let Some(kind) = facts.scalar() {
-            let Some(resolved) = self.resolve_place_pointer(f, info, path)? else {
-                return Err(CodegenError::internal("object field has no storage"));
-            };
-            if let Some(address) = &resolved.direct {
-                let bit = crate::place::direct_bit(address, kind)?;
-                self.check_subrange(f, path.ty, &value, path.span)?;
-                return self.write_direct_pointer(f, &resolved.pointer, kind, value, bit);
-            }
-            self.check_subrange(f, path.ty, &value, path.span)?;
-            Self::write_scalar(f, &resolved.pointer, kind, &value);
-            return Ok(());
-        }
-        if let Some(resolved) = self.resolve_place_pointer(f, info, path)? {
-            f.store(&value, &resolved.pointer, None);
-            return Ok(());
-        }
-        let storage = self.types.llvm_storage(path.ty)?;
-        let temp = f.alloca(storage.clone());
-        f.store(&value, &temp, None);
-        self.split_place_from_temp(f, info, path, &temp)
+        self.write_place_path(f, info, path, value)
     }
 
     /// Lowers an FB invocation (`instance(...)` or `SUPER(...)`).
@@ -205,7 +127,8 @@ impl Lowerer<'_> {
                 span,
             ));
         };
-        let table = self.object_table(f, info, instance, def, span)?;
+        let record = self.object_receiver(f, info, instance, span)?;
+        let table = Self::object_table_pointer(f, &record);
         for arg in args {
             if !matches!(arg.direction, ArgDirection::Input | ArgDirection::InOut) {
                 continue;
@@ -223,7 +146,7 @@ impl Lowerer<'_> {
         let body = base.unwrap_or(def);
         let slot = self.function_slot(FunctionTarget::FbBody(body))?;
         let callee = Self::slot_storage(f, info, slot);
-        f.call_ptr(IrType::Void, &callee, &[table, info.slots.clone()]);
+        f.call_ptr(IrType::Void, &callee, &[record, table, info.slots.clone()]);
         for arg in args {
             if arg.direction != ArgDirection::Output {
                 continue;
@@ -257,7 +180,54 @@ impl Lowerer<'_> {
         self.lower_fb_call(f, info, instance, base, Some(base), args, span)
     }
 
-    /// Placeholder for interface dispatch (phase 4b).
+    /// Returns the class-vtable slot assigned to a method.
+    pub(crate) fn method_slot(&self, owner: DefId, method: DefId) -> Res<u32> {
+        let named = self.types.named(owner)?;
+        named
+            .vtable
+            .iter()
+            .find(|entry| entry.def == method)
+            .map(|entry| entry.slot)
+            .ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "method `{}` has no vtable slot in `{}`",
+                    self.hir.def_name(method),
+                    self.hir.def_name(owner)
+                ))
+            })
+    }
+
+    /// Emits one virtual class/FB method dispatch.
+    ///
+    /// The record's TYPEINFO supplies the class VTABLE; the slot names a host
+    /// function cell, and the cell's value is the code address. Every
+    /// dereference traps `STC-TRAP_NULL_REF` (GOT Artifacts §8.5.3, §8.5.8).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_virtual_method(
+        &mut self,
+        f: &mut Function,
+        handle: &Value,
+        slot: u32,
+        ret: IrType,
+        call_args: &[Value],
+        span: Span,
+    ) -> Res<Option<Value>> {
+        self.check_pointer(f, handle, span)?;
+        let typeinfo = f.load(IrType::Ptr, handle, Some(8));
+        self.check_pointer(f, &typeinfo, span)?;
+        let vtable_ptr = f.gep("i64", &typeinfo, &["i64 8".into()], false);
+        let vtable = f.load(IrType::Ptr, &vtable_ptr, Some(8));
+        self.check_pointer(f, &vtable, span)?;
+        let entry_index = 6_u64.saturating_add(u64::from(slot));
+        let entry = f.gep("i64", &vtable, &[format!("i64 {entry_index}")], false);
+        let cell = f.vtable_cell(&entry);
+        self.check_pointer(f, &cell, span)?;
+        let code = f.vtable_code(&cell);
+        self.check_pointer(f, &code, span)?;
+        Ok(f.call_ptr(ret, &code, call_args))
+    }
+
+    /// Placeholder for interface dispatch (phase 4b.4).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn lower_interface_method(
         &mut self,

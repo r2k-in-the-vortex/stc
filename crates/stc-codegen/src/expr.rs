@@ -37,6 +37,35 @@ pub(crate) struct FieldAccess {
     pub direct: BTreeMap<Vec<crate::types::RootSegment>, stc_hir::DirectAddress>,
 }
 
+/// The declaration that owns a local object instance.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ObjectRoot {
+    /// A function local.
+    Local(LocalId),
+    /// A function or method result.
+    Result(DefId),
+}
+
+/// One class/FB instance owned by a local declaration or result.
+#[derive(Clone, Debug)]
+pub(crate) struct LocalObject {
+    /// Class/FB definition.
+    pub def: DefId,
+    /// Interned named value type of the object.
+    pub ty: TyId,
+    /// `true` for a class value, `false` for an inline function block.
+    pub class: bool,
+    /// Path from the declaration to the instance.
+    pub segments: Vec<crate::types::RootSegment>,
+    /// Owned instance storage (the field struct).
+    pub instance: Value,
+    /// Runtime object record (`[N+1 x ptr]`) stack alloca.
+    pub record: Value,
+    /// Handle slot holding the record pointer; for an FB this repeats the
+    /// record address and is not used as an assignable class value.
+    pub handle: Value,
+}
+
 /// Per-function lowering context.
 #[derive(Clone, Debug)]
 pub(crate) struct BodyInfo {
@@ -44,6 +73,8 @@ pub(crate) struct BodyInfo {
     pub params: BTreeMap<ParamId, Value>,
     /// Local allocas.
     pub locals: BTreeMap<LocalId, Value>,
+    /// Local class/FB instances and their nested objects.
+    pub local_objects: BTreeMap<(ObjectRoot, Vec<crate::types::RootSegment>), LocalObject>,
     /// Result alloca.
     pub result_ptr: Option<Value>,
     /// Result storage type.
@@ -52,6 +83,8 @@ pub(crate) struct BodyInfo {
     pub slots: Value,
     /// Program-instance field access, when the body runs for an instance.
     pub fields: Option<FieldAccess>,
+    /// Method/FB receiver record (`THIS` is the handle), when the body has one.
+    pub handle: Option<Value>,
     /// Return/exit block label.
     pub return_label: String,
 }
@@ -471,29 +504,7 @@ impl Lowerer<'_> {
             return Ok(f.load(facts.llvm_storage, &pointer, None));
         }
         if let Some(path) = self.collect_place(id) {
-            let facts = self.types.facts(path.ty)?.clone();
-            if facts.is_class() {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "class values cannot be used as expressions until M5 phase 4b.3".into(),
-                    expr.span,
-                ));
-            }
-            if let Some(kind) = facts.scalar() {
-                if let Some(resolved) = self.resolve_place_pointer(f, info, &path)? {
-                    if let Some(address) = &resolved.direct {
-                        let bit = Self::direct_bit(address, kind)?;
-                        return self.read_direct_pointer(f, &resolved.pointer, kind, bit);
-                    }
-                    return Self::read_scalar(f, &resolved.pointer, kind);
-                }
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    format!("place of type `{}` has no storage", facts.key),
-                    expr.span,
-                ));
-            }
-            return self.read_aggregate_place(f, info, &path);
+            return self.read_place_path(f, info, &path);
         }
         let kind = self.types.scalar_kind(expr.ty, expr.span)?;
         let pointer = self.place_ptr(f, info, id)?;
@@ -537,32 +548,7 @@ impl Lowerer<'_> {
             return Ok(());
         }
         if let Some(path) = self.collect_place(id) {
-            let facts = self.types.facts(path.ty)?.clone();
-            if facts.is_class() {
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "class assignment is M5 phase 4b.3".into(),
-                    expr.span,
-                ));
-            }
-            if let Some(kind) = facts.scalar() {
-                if let Some(resolved) = self.resolve_place_pointer(f, info, &path)? {
-                    if let Some(address) = &resolved.direct {
-                        Self::reject_input_write(address, expr.span)?;
-                        let bit = Self::direct_bit(address, kind)?;
-                        return self.write_direct_pointer(f, &resolved.pointer, kind, value, bit);
-                    }
-                    self.check_subrange(f, path.ty, &value, expr.span)?;
-                    Self::write_scalar(f, &resolved.pointer, kind, &value);
-                    return Ok(());
-                }
-                return Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    format!("place of type `{}` has no storage", facts.key),
-                    expr.span,
-                ));
-            }
-            return self.write_aggregate_place(f, info, &path, value);
+            return self.write_place_path(f, info, &path, value);
         }
         let kind = self.types.scalar_kind(expr.ty, expr.span)?;
         let pointer = self.place_ptr(f, info, id)?;
@@ -773,7 +759,7 @@ impl Lowerer<'_> {
         Ok(())
     }
 
-    fn reject_input_write(address: &DirectAddress, span: Span) -> Res<()> {
+    pub(crate) fn reject_input_write(address: &DirectAddress, span: Span) -> Res<()> {
         if address.area == Some(DirectArea::Input) {
             return Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
@@ -824,8 +810,20 @@ impl Lowerer<'_> {
                     )
                 })
             }
-            CalleeHir::Method { receiver, def } | CalleeHir::SuperMethod { receiver, def } => {
+            CalleeHir::Method { receiver, def } => {
                 let value = self.lower_method_call(
+                    f, info, *receiver, *def, args, supplied, result_ty, span, false,
+                )?;
+                value.ok_or_else(|| {
+                    CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "a method without a result cannot be used as an expression".into(),
+                        span,
+                    )
+                })
+            }
+            CalleeHir::SuperMethod { receiver, def } => {
+                let value = self.lower_super_method_call(
                     f, info, *receiver, *def, args, supplied, result_ty, span, false,
                 )?;
                 value.ok_or_else(|| {
@@ -886,7 +884,7 @@ impl Lowerer<'_> {
                 )?;
                 Ok(())
             }
-            CalleeHir::Method { receiver, def } | CalleeHir::SuperMethod { receiver, def } => {
+            CalleeHir::Method { receiver, def } => {
                 let mut supplied = Vec::new();
                 for arg in &args {
                     if arg.direction == stc_hir::ArgDirection::Input
@@ -896,6 +894,20 @@ impl Lowerer<'_> {
                     }
                 }
                 let _ = self.lower_method_call(
+                    f, info, *receiver, *def, &args, &supplied, expr.ty, expr.span, true,
+                )?;
+                Ok(())
+            }
+            CalleeHir::SuperMethod { receiver, def } => {
+                let mut supplied = Vec::new();
+                for arg in &args {
+                    if arg.direction == stc_hir::ArgDirection::Input
+                        && let Some(value) = arg.value
+                    {
+                        supplied.push(self.lower_expr(f, info, value)?);
+                    }
+                }
+                let _ = self.lower_super_method_call(
                     f, info, *receiver, *def, &args, &supplied, expr.ty, expr.span, true,
                 )?;
                 Ok(())
@@ -936,6 +948,15 @@ impl Lowerer<'_> {
 
     // ---- operators --------------------------------------------------------
 
+    /// Returns `true` when an expression is `NULL` or a cast of `NULL`.
+    fn is_null_value(&self, id: ExprId) -> bool {
+        match &self.hir.expr(id).kind {
+            ExprKindHir::Null => true,
+            ExprKindHir::Cast { operand, .. } => self.is_null_value(*operand),
+            _ => false,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn lower_binary(
         &mut self,
@@ -956,6 +977,32 @@ impl Lowerer<'_> {
             return self.lower_pointer_binary(
                 f, op, lhs_ty, rhs_ty, lhs, rhs, &lhs_value, &rhs_value, span,
             );
+        }
+        if lhs_facts.is_class() || rhs_facts.is_class() {
+            let lhs_null = self.is_null_value(lhs);
+            let rhs_null = self.is_null_value(rhs);
+            let nullable = (lhs_facts.is_class() && rhs_null) || (rhs_facts.is_class() && lhs_null);
+            if nullable && matches!(op, BinOp::Eq | BinOp::Ne) {
+                let handle = if lhs_facts.is_class() {
+                    lhs_value
+                } else {
+                    rhs_value
+                };
+                let is_null = f.icmp("eq", &handle, &Value::null_ptr());
+                return Ok(if op == BinOp::Eq {
+                    is_null
+                } else {
+                    f.binop("xor", &is_null, &Value::bool(true))
+                });
+            }
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!(
+                    "operator `{}` is not supported for class handles (only NULL tests)",
+                    op.as_str()
+                ),
+                span,
+            ));
         }
         let reference_like = |facts: &crate::types::TypeFacts| {
             facts.is_reference() || matches!(facts.category, crate::types::TypeCategory::Null)

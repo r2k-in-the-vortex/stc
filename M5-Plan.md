@@ -4,8 +4,8 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-25  
 Status: Phase 0 written. Phases 1–7 and the `STC-POINTER` surface are implemented; phase 4b
 (interfaces, runtime descriptors, `?=`) is planned in D-147–D-152 and §4b. Steps 4b.0 (contracts
-and documentation), 4b.1 (catalog, descriptors, and hidden roots), and 4b.2 (host registry and
-ABI 2.1) are complete.
+and documentation), 4b.1 (catalog, descriptors, and hidden roots), 4b.2 (host registry and
+ABI 2.1), and 4b.3 (object records and virtual dispatch) are complete.
 
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8, [Architecture](Specification/Architecture/Architecture.md)
 §4, [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §1–§4,
@@ -165,7 +165,7 @@ materialized into a transient alloca on read and split back into roots on write.
 | 1 | Type/layout substrate, aggregate IR builder, type/descriptor catalog records | Complete |
 | 2 | Structs, enums, subranges, arrays, strings: values, roots, initializers, traps | Complete for values, roots, initializers, and traps; string search functions are phase 5 |
 | 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, conformant `ARRAY[*]`, and `STC-POINTER` complete; `?=` needs phase 4 |
-| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; phase 4b (interfaces, descriptors, `?=`) is planned in D-147–D-152 and §4b, with steps 4b.0–4b.2 complete |
+| 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object records, class handle/FB state assignment, FB bodies/invocation, methods, virtual dispatch, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; interface values/dispatch and `?=` remain in 4b.4–4b.5 |
 | 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Complete: per-leaf flattening, packed offsets, GOT-root save/load, and metadata paths |
 | 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state/pointer harnesses, M5 hot-swap coverage, M5 fuzz seeds, and status documentation are in place; interfaces/descriptors remain (phase 4b) |
@@ -218,7 +218,7 @@ materialized into a transient alloca on read and split back into roots on write.
 
 ### Phase 4b — interfaces, descriptors, and `?=`
 
-Status: steps 4b.0–4b.2 complete (2026-10-25); steps 4b.3–4b.6 planned. Decisions
+Status: steps 4b.0–4b.3 complete (2026-10-25); steps 4b.4–4b.6 planned. Decisions
 D-147–D-152. Land the steps in order; each step keeps the manifest and descriptor formats at
 version 1 and adds its tests with the code.
 
@@ -322,6 +322,18 @@ object records store real TYPEINFO addresses. Interface dispatch and `?=` remain
   object-record preserve/allocate/rollback.
 
 #### 4b.3 — Object records and virtual dispatch
+
+Complete (2026-10-25). Object values are record handles. `unit` and `place` allocate local
+class/FB instances, handle slots, and records on the stack, read and write persistent objects
+through their hidden `HANDLE`/`OBJREC` roots, treat `THIS` as the record handle, and apply the
+handle/record parameter rules. Class `:=` copies the handle, FB `:=` copies state, and method/FB
+bodies receive `(handle, table, ...)`. `oop`/`call` dispatch every class/FB method through
+TYPEINFO and the class VTABLE; `SUPER` calls the base function cell directly. `sema` rejects
+class handles that refer to activation-owned records from escaping through results, persistent
+storage, or `OUT`/`VAR_IN_OUT` parameters. The C harness covers base-typed virtual overrides,
+handle aliasing/orphaning, class arrays, nested local/persistent objects, recursion,
+`THIS`/`SUPER`, class/FB parameters and copy isolation, and null dispatch traps; the existing
+C harness covers FB fields and counters.
 
 - `stc-codegen::unit` and `place`: object values become record pointers; local class instances
   (owned instance, handle slot, record) and local FB instances and records are stack allocas;
@@ -429,15 +441,18 @@ no heap allocation or raw persistent object pointer.
 
 ### Remaining M5 work
 
-- **Phase 4b — interfaces, descriptors, `?=`.** Step 4b.0 records host ABI 2.1 and the inline
+- **Phase 4b — interfaces, descriptors, `?=`.** Step 4b.3 makes object values record handles,
+  allocates stack-local instances and records, applies class-handle versus FB-state assignment,
+  emits the handled object-body ABI, and dispatches class/FB methods virtually through TYPEINFO
+  and the class VTABLE; the analyzer rejects stack-record handle escape. Step 4b.0 records host ABI 2.1 and the inline
   record contracts (GOT Artifacts §8.5, Runtime and Execution §2.6). Step 4b.1 projects the
   catalog: one TYPEINFO per class/FB, class VTABLES, interface prototype records with trap stubs,
   and hidden `HANDLE`/`OBJREC` roots; prepare fills fresh records and handles. Step 4b.2 builds
   and validates the host-owned descriptor registry before prepare, keeps compatible record
   addresses stable across a warm swap, patches entries at activation, quarantines removed
-  descriptors, and releases fresh records on rollback. Object values are still root-table
-  pointers outside the new roots, so interface assignment and method dispatch remain rejected
-  explicitly until 4b.3–4b.5. The resolved decisions are D-147–D-152.
+  descriptors, and releases fresh records on rollback. Step 4b.3 then becomes the object-record
+  and virtual-dispatch implementation; interface assignment and interface dispatch remain
+  rejected explicitly until 4b.4–4b.5. The resolved decisions are D-147–D-152.
 - **References to split persistent aggregates** remain rejected because they have no single
   stable storage location; contiguous transient aggregates and single-root persistent values are
   supported (D-144). A multi-root descriptor with host-side resolution is recorded as a possible

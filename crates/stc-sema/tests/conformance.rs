@@ -1697,3 +1697,40 @@ END_FUNCTION
 ",
     );
 }
+
+#[test]
+fn class_handles_to_callee_storage_cannot_escape() {
+    let shell =
+        |body: &str| format!("CLASS C\nVAR PUBLIC\n  x : DINT;\nEND_VAR\nEND_CLASS\n{body}");
+    assert_error(
+        &shell("FUNCTION F : C\nVAR\n  c : C;\nEND_VAR\n  F := c;\nEND_FUNCTION\n"),
+        stc_sema::codes::REF_RULE,
+    );
+    assert_error(
+        &shell(
+            "VAR_GLOBAL\n  g : C;\nEND_VAR\nFUNCTION F : DINT\nVAR\n  c : C;\nEND_VAR\n  g := c;\n  F := 0;\nEND_FUNCTION\n",
+        ),
+        stc_sema::codes::REF_RULE,
+    );
+    assert_error(
+        &shell(
+            "FUNCTION F : DINT\nVAR_OUTPUT\n  o : C;\nEND_VAR\nVAR\n  c : C;\nEND_VAR\n  o := c;\n  F := 0;\nEND_FUNCTION\n",
+        ),
+        stc_sema::codes::REF_RULE,
+    );
+    assert_clean(&shell(
+        "VAR_GLOBAL\n  g : C;\nEND_VAR\nFUNCTION F : C\n  F := g;\nEND_FUNCTION\n",
+    ));
+    assert_clean(&shell(
+        "FUNCTION F : DINT\nVAR_INPUT\n  p : C;\nEND_VAR\nVAR\n  c : C;\nEND_VAR\n  p := c;\n  c := p;\n  F := 0;\nEND_FUNCTION\n",
+    ));
+    assert_error(
+        &shell(
+            "FUNCTION_BLOCK HasC\nVAR PUBLIC\n  c : C;\nEND_VAR\nEND_FUNCTION_BLOCK\nVAR_GLOBAL\n  gFB : HasC;\nEND_VAR\nFUNCTION F : DINT\nVAR\n  h : HasC;\nEND_VAR\n  gFB := h;\n  F := 0;\nEND_FUNCTION\n",
+        ),
+        stc_sema::codes::REF_RULE,
+    );
+    assert_clean(&shell(
+        "FUNCTION_BLOCK Plain\nVAR PUBLIC\n  n : DINT;\nEND_VAR\nEND_FUNCTION_BLOCK\nVAR_GLOBAL\n  gFb : Plain;\nEND_VAR\nFUNCTION F : DINT\nVAR\n  p : Plain;\nEND_VAR\n  gFb := p;\n  F := 0;\nEND_FUNCTION\n",
+    ));
+}

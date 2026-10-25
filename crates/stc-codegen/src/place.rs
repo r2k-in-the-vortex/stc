@@ -87,6 +87,1802 @@ pub(crate) struct ResolvedPointer {
     pub direct: Option<DirectAddress>,
 }
 
+/// A resolved class/FB object record.
+///
+/// `handle` is the record pointer — a class handle or an FB instance record —
+/// and `table` is the record's leaf-pointer tail (`handle + 8`).
+#[derive(Clone, Debug)]
+pub(crate) struct ObjectRef {
+    /// Class/FB definition.
+    pub def: DefId,
+    /// Interned named value type of the object.
+    pub ty: TyId,
+    /// Record pointer.
+    pub handle: Value,
+    /// Record tail (`[N x ptr]`).
+    pub table: Value,
+}
+
+/// One place resolved to the storage form its type needs.
+#[derive(Clone, Debug)]
+pub(crate) enum PlaceValue {
+    /// Contiguous storage for a scalar or single-root aggregate.
+    Leaf(ResolvedPointer),
+    /// Storage for a class value (a pointer-sized handle slot).
+    ClassSlot(Value),
+    /// A class handle value with no assignable storage (`THIS`).
+    ClassValue(Value),
+    /// The record pointer of an FB value.
+    FbRecord(Value),
+}
+
+/// A persistent root path base.
+#[derive(Clone, Debug)]
+enum PersistentBase {
+    /// A global declaration.
+    Global(DefId),
+    /// A configured program instance.
+    Instance(Symbol),
+}
+
+/// A place-resolution cursor (D-147–D-152).
+///
+/// Contiguous storage is reached by GEP; a field table is the `[N x ptr]`
+/// table of an object record or a program instance; persistent storage is
+/// reached through GOT roots; and an object cursor walks a class/FB record and
+/// its base-first leaf ordinals.
+#[derive(Clone, Debug)]
+enum Cursor {
+    /// Contiguous transient/local storage.
+    Contiguous {
+        /// Current type.
+        ty: TyId,
+        /// Storage pointer.
+        pointer: Value,
+        /// Direct address when the storage is an image location.
+        direct: Option<DirectAddress>,
+        /// Current array dimension.
+        dim: usize,
+    },
+    /// A `[N x ptr]` leaf table (program instance or object record tail).
+    Table {
+        /// Current type.
+        ty: TyId,
+        /// Table pointer.
+        table: Value,
+        /// Path from the table root to the current type.
+        segments: Vec<RootSegment>,
+        /// Leaf ordinal by path.
+        ordinals: BTreeMap<Vec<RootSegment>, u32>,
+        /// Direct (`AT`) leaves.
+        direct: BTreeMap<Vec<RootSegment>, DirectAddress>,
+        /// Current array dimension.
+        dim: usize,
+    },
+    /// Persistent host roots reached through GOT slots.
+    Persistent {
+        /// Current type.
+        ty: TyId,
+        /// Root base.
+        base: PersistentBase,
+        /// Path below the declaration or instance.
+        segments: Vec<RootSegment>,
+        /// Current array dimension.
+        dim: usize,
+    },
+    /// An object record and a path relative to its type.
+    Object {
+        /// Object record.
+        object: ObjectRef,
+        /// Current type (the object type at the path's end).
+        ty: TyId,
+        /// Path relative to the object type.
+        segments: Vec<RootSegment>,
+        /// Current array dimension.
+        dim: usize,
+    },
+    /// A class handle slot (storage form of a class value).
+    ClassSlot {
+        /// Class value type.
+        ty: TyId,
+        /// Pointer to the pointer-sized handle.
+        slot: Value,
+    },
+    /// A class handle value with no storage (`THIS`).
+    ClassValue {
+        /// Class value type.
+        ty: TyId,
+        /// Handle value.
+        handle: Value,
+    },
+    /// An FB record pointer treated as a terminal value.
+    FbRecord {
+        /// FB value type.
+        ty: TyId,
+        /// Record pointer.
+        record: Value,
+    },
+    /// A selected scalar leaf reached through dynamic indices.
+    Leaf {
+        /// Leaf type.
+        ty: TyId,
+        /// Storage pointer.
+        pointer: Value,
+        /// Direct address for `AT` leaves.
+        direct: Option<DirectAddress>,
+    },
+}
+
+impl Cursor {
+    fn ty(&self) -> TyId {
+        match self {
+            Self::Contiguous { ty, .. } => *ty,
+            Self::Table { ty, .. } => *ty,
+            Self::Persistent { ty, .. } => *ty,
+            Self::Object { ty, .. } => *ty,
+            Self::ClassSlot { ty, .. } => *ty,
+            Self::ClassValue { ty, .. } => *ty,
+            Self::FbRecord { ty, .. } => *ty,
+            Self::Leaf { ty, .. } => *ty,
+        }
+    }
+}
+
+impl Lowerer<'_> {
+    /// Returns the record tail pointer (`record + 8`).
+    pub(crate) fn object_table_pointer(f: &mut Function, handle: &Value) -> Value {
+        f.gep("i8", handle, &["i64 8".into()], false)
+    }
+
+    /// Returns the leaf ordinals of one class/FB type.
+    fn object_ordinals_for(&self, def: DefId) -> Res<BTreeMap<Vec<RootSegment>, u32>> {
+        self.object_ordinal_map
+            .get(&def)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal(format!("object type `{def:?}` has no leaves")))
+    }
+
+    /// Returns the TYPEINFO record address for a class/FB type.
+    pub(crate) fn typeinfo_value(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        def: DefId,
+    ) -> Res<Value> {
+        let slot = self
+            .got
+            .descriptor_slot(def, stc_got::model::DescriptorKind::TypeInfo)
+            .ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "object type `{}` has no TYPEINFO slot",
+                    self.hir.def_name(def)
+                ))
+            })?;
+        Ok(Self::slot_storage(f, info, slot))
+    }
+
+    /// Returns the base type of a place.
+    fn place_base_ty(&self, base: &PlaceBase) -> Res<Option<TyId>> {
+        match base {
+            PlaceBase::Instance { fields, .. } => {
+                Ok(fields.last().map(|field| self.hir.field(*field).ty))
+            }
+            PlaceBase::Global(def) => match &self.hir.defs[def.index()].kind {
+                DefKind::Global { ty, .. } => Ok(Some(*ty)),
+                _ => Ok(None),
+            },
+            PlaceBase::This(owner) => Ok(Some(self.types.named_ty(*owner)?)),
+            PlaceBase::Local(local) => Ok(Some(self.hir.local(*local).ty)),
+            PlaceBase::Param(param) => Ok(Some(self.hir.param(*param).ty)),
+            PlaceBase::Result(def) => Ok(match &self.hir.defs[def.index()].kind {
+                DefKind::Function { result, .. } | DefKind::Method { result, .. } => *result,
+                _ => None,
+            }),
+        }
+    }
+
+    /// Returns `true` when a place's base type is or contains an object.
+    fn path_has_class(&self, path: &PlacePath) -> bool {
+        match &path.base {
+            PlaceBase::This(owner) => match &self.hir.defs[owner.index()].kind {
+                DefKind::Program { fields, .. } => fields
+                    .iter()
+                    .any(|field| self.types.type_has_class(self.hir.field(*field).ty)),
+                DefKind::Class { .. } => true,
+                DefKind::FunctionBlock { .. } => self
+                    .types
+                    .named_ty(*owner)
+                    .is_ok_and(|ty| self.types.type_has_class(ty)),
+                _ => false,
+            },
+            _ => self
+                .place_base_ty(&path.base)
+                .ok()
+                .flatten()
+                .is_some_and(|ty| self.types.type_has_class(ty)),
+        }
+    }
+
+    /// Builds the initial cursor for a place.
+    fn start_cursor(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        path: &PlacePath,
+    ) -> Res<Option<Cursor>> {
+        let base_ty = self.place_base_ty(&path.base)?;
+        let cursor = match &path.base {
+            PlaceBase::This(owner) => match &self.hir.defs[owner.index()].kind {
+                DefKind::Program { .. } => {
+                    let Some(fields) = &info.fields else {
+                        return Ok(None);
+                    };
+                    let Some(ty) = base_ty else {
+                        return Ok(None);
+                    };
+                    Cursor::Table {
+                        ty,
+                        table: fields.pointer.clone(),
+                        segments: Vec::new(),
+                        ordinals: fields.ordinals.clone(),
+                        direct: fields.direct.clone(),
+                        dim: 0,
+                    }
+                }
+                DefKind::Class { .. } | DefKind::FunctionBlock { .. } => {
+                    let Some(ty) = base_ty else {
+                        return Ok(None);
+                    };
+                    let Some(handle) = info.handle.clone() else {
+                        return Ok(None);
+                    };
+                    if self.types.named(*owner)?.is_class() {
+                        Cursor::ClassValue { ty, handle }
+                    } else {
+                        let table = Self::object_table_pointer(f, &handle);
+                        Cursor::Object {
+                            object: ObjectRef {
+                                def: *owner,
+                                ty,
+                                handle,
+                                table,
+                            },
+                            ty,
+                            segments: Vec::new(),
+                            dim: 0,
+                        }
+                    }
+                }
+                _ => return Ok(None),
+            },
+            PlaceBase::Local(local) => {
+                let Some(ty) = base_ty else {
+                    return Ok(None);
+                };
+                let Some(storage) = info.locals.get(local).cloned() else {
+                    return Ok(None);
+                };
+                let facts = self.types.facts(ty)?.clone();
+                if facts.is_class() {
+                    Cursor::ClassSlot { ty, slot: storage }
+                } else if facts.is_object() {
+                    let record = info
+                        .local_objects
+                        .get(&(crate::expr::ObjectRoot::Local(*local), Vec::new()))
+                        .map(|object| object.record.clone())
+                        .ok_or_else(|| {
+                            CodegenError::internal("an FB local has no object record")
+                        })?;
+                    let table = Self::object_table_pointer(f, &record);
+                    Cursor::Object {
+                        object: ObjectRef {
+                            def: match facts.category {
+                                TypeCategory::Object { def } => def,
+                                _ => unreachable!(),
+                            },
+                            ty,
+                            handle: record,
+                            table,
+                        },
+                        ty,
+                        segments: Vec::new(),
+                        dim: 0,
+                    }
+                } else {
+                    Cursor::Contiguous {
+                        ty,
+                        pointer: storage,
+                        direct: None,
+                        dim: 0,
+                    }
+                }
+            }
+            PlaceBase::Param(param) => {
+                let Some(ty) = base_ty else {
+                    return Ok(None);
+                };
+                let Some(storage) = info.params.get(param).cloned() else {
+                    return Ok(None);
+                };
+                let facts = self.types.facts(ty)?.clone();
+                if facts.is_class() {
+                    Cursor::ClassSlot { ty, slot: storage }
+                } else if facts.is_object() {
+                    let table = Self::object_table_pointer(f, &storage);
+                    Cursor::Object {
+                        object: ObjectRef {
+                            def: match facts.category {
+                                TypeCategory::Object { def } => def,
+                                _ => unreachable!(),
+                            },
+                            ty,
+                            handle: storage,
+                            table,
+                        },
+                        ty,
+                        segments: Vec::new(),
+                        dim: 0,
+                    }
+                } else {
+                    Cursor::Contiguous {
+                        ty,
+                        pointer: storage,
+                        direct: None,
+                        dim: 0,
+                    }
+                }
+            }
+            PlaceBase::Result(def) => {
+                let Some(ty) = base_ty else {
+                    return Ok(None);
+                };
+                let Some(storage) = info.result_ptr.clone() else {
+                    return Ok(None);
+                };
+                let facts = self.types.facts(ty)?.clone();
+                if facts.is_class() {
+                    Cursor::ClassSlot { ty, slot: storage }
+                } else if facts.is_object() {
+                    let record = info
+                        .local_objects
+                        .get(&(crate::expr::ObjectRoot::Result(*def), Vec::new()))
+                        .map(|object| object.record.clone())
+                        .ok_or_else(|| {
+                            CodegenError::internal("an FB result has no object record")
+                        })?;
+                    let table = Self::object_table_pointer(f, &record);
+                    Cursor::Object {
+                        object: ObjectRef {
+                            def: match facts.category {
+                                TypeCategory::Object { def } => def,
+                                _ => unreachable!(),
+                            },
+                            ty,
+                            handle: record,
+                            table,
+                        },
+                        ty,
+                        segments: Vec::new(),
+                        dim: 0,
+                    }
+                } else {
+                    Cursor::Contiguous {
+                        ty,
+                        pointer: storage,
+                        direct: None,
+                        dim: 0,
+                    }
+                }
+            }
+            PlaceBase::Global(def) => {
+                let Some(ty) = base_ty else {
+                    return Ok(None);
+                };
+                self.start_persistent(f, info, ty, PersistentBase::Global(*def), Vec::new())?
+            }
+            PlaceBase::Instance {
+                instance, fields, ..
+            } => {
+                let Some(ty) = base_ty else {
+                    return Ok(None);
+                };
+                let segments = fields
+                    .iter()
+                    .map(|field| RootSegment::Field(*field))
+                    .collect();
+                self.start_persistent(f, info, ty, PersistentBase::Instance(*instance), segments)?
+            }
+        };
+        Ok(Some(cursor))
+    }
+
+    /// Builds a cursor for a persistent declaration.
+    fn start_persistent(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        ty: TyId,
+        base: PersistentBase,
+        segments: Vec<RootSegment>,
+    ) -> Res<Cursor> {
+        let facts = self.types.facts(ty)?.clone();
+        if facts.is_class() {
+            let slot = match &base {
+                PersistentBase::Global(def) => {
+                    let target = Self::global_leaf_target(*def, &segments, true);
+                    Self::slot_storage(f, info, self.root_slot(&target)?)
+                }
+                PersistentBase::Instance(instance) => {
+                    let target = self.program_leaf_target(*instance, &segments, true);
+                    Self::slot_storage(f, info, self.root_slot(&target)?)
+                }
+            };
+            Ok(Cursor::ClassSlot { ty, slot })
+        } else if facts.is_object() {
+            let def = match facts.category {
+                TypeCategory::Object { def } => def,
+                _ => unreachable!(),
+            };
+            let Some(record) = self.persistent_record_storage(f, info, &base, &segments) else {
+                return Err(CodegenError::internal(
+                    "a persistent FB declaration has no record root",
+                ));
+            };
+            let table = Self::object_table_pointer(f, &record);
+            Ok(Cursor::Object {
+                object: ObjectRef {
+                    def,
+                    ty,
+                    handle: record,
+                    table,
+                },
+                ty,
+                segments: Vec::new(),
+                dim: 0,
+            })
+        } else {
+            Ok(Cursor::Persistent {
+                ty,
+                base,
+                segments,
+                dim: 0,
+            })
+        }
+    }
+
+    /// Returns the storage of a class-handle or object-record root.
+    fn persistent_record_storage(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        base: &PersistentBase,
+        segments: &[RootSegment],
+    ) -> Option<Value> {
+        let target = match base {
+            PersistentBase::Global(def) => RootTarget::global_record(*def, segments),
+            PersistentBase::Instance(instance) => RootTarget::instance_record(*instance, segments),
+        };
+        self.got
+            .root_slot(&target)
+            .map(|slot| Self::slot_storage(f, info, slot))
+    }
+
+    /// Applies one place step, consuming one or more steps.
+    fn apply_place_step(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        cursor: Cursor,
+        steps: &[PlaceStep],
+        span: Span,
+    ) -> Res<Option<(Cursor, usize)>> {
+        let Some(step) = steps.first() else {
+            return Ok(Some((cursor, 0)));
+        };
+        let last = steps.len() == 1;
+        let cursor = self.deref_class_cursor(f, cursor, span)?;
+        let next = match cursor {
+            Cursor::Contiguous {
+                ty,
+                pointer,
+                direct,
+                dim,
+            } => self.contiguous_step(f, info, ty, pointer, direct, dim, step, last, span)?,
+            Cursor::Table {
+                ty,
+                table,
+                segments,
+                ordinals,
+                direct,
+                dim,
+            } => self.table_step(
+                f, info, ty, table, segments, ordinals, direct, dim, step, steps, last, span,
+            )?,
+            Cursor::Persistent {
+                ty,
+                base,
+                segments,
+                dim,
+            } => self.persistent_step(f, info, ty, base, segments, dim, step, steps, last, span)?,
+            Cursor::Object {
+                object,
+                ty,
+                segments,
+                dim,
+            } => self.object_step(f, info, object, ty, segments, dim, step, steps, last, span)?,
+            Cursor::ClassSlot { .. } | Cursor::ClassValue { .. } | Cursor::FbRecord { .. } => {
+                unreachable!("class cursors were dereferenced")
+            }
+            Cursor::Leaf { .. } => {
+                return Err(CodegenError::internal(
+                    "a selected leaf has no further place steps",
+                ));
+            }
+        };
+        let consumed = if matches!(next, Cursor::Leaf { .. }) {
+            steps.len()
+        } else {
+            1
+        };
+        Ok(Some((next, consumed)))
+    }
+
+    /// Loads a class handle cursor so field steps can proceed.
+    fn deref_class_cursor(&mut self, f: &mut Function, cursor: Cursor, span: Span) -> Res<Cursor> {
+        match cursor {
+            Cursor::ClassSlot { ty, slot } => {
+                let handle = f.load(IrType::Ptr, &slot, None);
+                self.check_pointer(f, &handle, span)?;
+                let def = self.object_def(ty)?;
+                let table = Self::object_table_pointer(f, &handle);
+                Ok(Cursor::Object {
+                    object: ObjectRef {
+                        def,
+                        ty,
+                        handle,
+                        table,
+                    },
+                    ty,
+                    segments: Vec::new(),
+                    dim: 0,
+                })
+            }
+            Cursor::ClassValue { ty, handle } => {
+                self.check_pointer(f, &handle, span)?;
+                let def = self.object_def(ty)?;
+                let table = Self::object_table_pointer(f, &handle);
+                Ok(Cursor::Object {
+                    object: ObjectRef {
+                        def,
+                        ty,
+                        handle,
+                        table,
+                    },
+                    ty,
+                    segments: Vec::new(),
+                    dim: 0,
+                })
+            }
+            Cursor::FbRecord { ty, record } => {
+                let def = self.object_def(ty)?;
+                let table = Self::object_table_pointer(f, &record);
+                Ok(Cursor::Object {
+                    object: ObjectRef {
+                        def,
+                        ty,
+                        handle: record,
+                        table,
+                    },
+                    ty,
+                    segments: Vec::new(),
+                    dim: 0,
+                })
+            }
+            other => Ok(other),
+        }
+    }
+
+    fn object_def(&self, ty: TyId) -> Res<DefId> {
+        match self.types.category(ty)? {
+            TypeCategory::Object { def } => Ok(*def),
+            _ => Err(CodegenError::internal("class value is not an object type")),
+        }
+    }
+
+    /// Classifies the cursor after the place's steps.
+    fn classify_cursor(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        cursor: &Cursor,
+    ) -> Res<Option<PlaceValue>> {
+        let ty = cursor.ty();
+        let facts = self.types.facts(ty)?.clone();
+        if facts.is_class() {
+            let slot = match cursor {
+                Cursor::ClassSlot { slot, .. } => slot.clone(),
+                Cursor::ClassValue { handle, .. } => {
+                    return Ok(Some(PlaceValue::ClassValue(handle.clone())));
+                }
+                Cursor::Contiguous { pointer, .. } => pointer.clone(),
+                Cursor::Table {
+                    table,
+                    segments,
+                    ordinals,
+                    ..
+                } => Self::table_value_pointer(f, table, ordinals, segments)?,
+                Cursor::Object {
+                    object, segments, ..
+                } => {
+                    let ordinals = self.object_ordinals_for(object.def)?;
+                    Self::table_value_pointer(f, &object.table, &ordinals, segments)?
+                }
+                Cursor::Persistent { base, segments, .. } => {
+                    self.persistent_leaf_pointer(f, info, base, segments, true)?
+                }
+                Cursor::Leaf { pointer, .. } => pointer.clone(),
+                Cursor::FbRecord { .. } => {
+                    return Err(CodegenError::internal(
+                        "class place resolved to an FB record",
+                    ));
+                }
+            };
+            return Ok(Some(PlaceValue::ClassSlot(slot)));
+        }
+        if facts.is_object() {
+            let def = self.object_def(ty)?;
+            let record = match cursor {
+                Cursor::FbRecord { record, .. } => record.clone(),
+                Cursor::Object {
+                    object, segments, ..
+                } if segments.is_empty() => object.handle.clone(),
+                Cursor::Persistent { base, segments, .. } => {
+                    match self.persistent_record_storage(f, info, base, segments) {
+                        Some(record) => record,
+                        None => self.record_from_cursor(f, info, cursor, def)?,
+                    }
+                }
+                _ => self.record_from_cursor(f, info, cursor, def)?,
+            };
+            return Ok(Some(PlaceValue::FbRecord(record)));
+        }
+        Ok(match cursor {
+            Cursor::Leaf {
+                pointer, direct, ..
+            } => Some(PlaceValue::Leaf(ResolvedPointer {
+                pointer: pointer.clone(),
+                direct: direct.clone(),
+            })),
+            Cursor::Contiguous {
+                pointer, direct, ..
+            } => Some(PlaceValue::Leaf(ResolvedPointer {
+                pointer: pointer.clone(),
+                direct: direct.clone(),
+            })),
+            Cursor::Table {
+                table,
+                segments,
+                ordinals,
+                direct,
+                ..
+            } => ordinals.get(segments).map(|_| {
+                let pointer = Self::table_entry(f, table, ordinals, segments);
+                PlaceValue::Leaf(ResolvedPointer {
+                    pointer,
+                    direct: direct.get(segments).cloned(),
+                })
+            }),
+            Cursor::Object {
+                object, segments, ..
+            } => {
+                let ordinals = self.object_ordinals_for(object.def)?;
+                ordinals.get(segments).map(|_| {
+                    let pointer = Self::table_entry(f, &object.table, &ordinals, segments);
+                    PlaceValue::Leaf(ResolvedPointer {
+                        pointer,
+                        direct: None,
+                    })
+                })
+            }
+            Cursor::Persistent { base, segments, .. } => {
+                if self.types.is_single_root(ty)? {
+                    let class_handle = self.types.class_def(ty)?.is_some();
+                    let pointer =
+                        self.persistent_leaf_pointer(f, info, base, segments, class_handle)?;
+                    let direct = match base {
+                        PersistentBase::Global(def) if segments.is_empty() => {
+                            self.global_address(*def)
+                        }
+                        _ => None,
+                    };
+                    Some(PlaceValue::Leaf(ResolvedPointer { pointer, direct }))
+                } else {
+                    None
+                }
+            }
+            Cursor::ClassSlot { .. } | Cursor::ClassValue { .. } | Cursor::FbRecord { .. } => None,
+        })
+    }
+
+    /// Walks a place to its final cursor.
+    fn walk_place_cursor(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        path: &PlacePath,
+    ) -> Res<Option<Cursor>> {
+        let Some(mut cursor) = self.start_cursor(f, info, path)? else {
+            return Ok(None);
+        };
+        let mut position = 0;
+        while position < path.steps.len() {
+            let remaining = &path.steps[position..];
+            let Some((next, consumed)) =
+                self.apply_place_step(f, info, cursor, remaining, path.span)?
+            else {
+                return Ok(None);
+            };
+            cursor = next;
+            position += consumed.max(1);
+        }
+        Ok(Some(cursor))
+    }
+
+    /// Loads one leaf pointer from a `[N x ptr]` table.
+    fn table_entry(
+        f: &mut Function,
+        table: &Value,
+        ordinals: &BTreeMap<Vec<RootSegment>, u32>,
+        segments: &[RootSegment],
+    ) -> Value {
+        let index = ordinals.get(segments).copied().unwrap_or(u32::MAX);
+        let array_type = format!("[{} x ptr]", ordinals.len());
+        let entry = f.gep(
+            &array_type,
+            table,
+            &["i64 0".into(), format!("i64 {index}")],
+            true,
+        );
+        f.load(IrType::Ptr, &entry, Some(8))
+    }
+
+    /// Loads the leaf pointer for a class handle value.
+    fn table_value_pointer(
+        f: &mut Function,
+        table: &Value,
+        ordinals: &BTreeMap<Vec<RootSegment>, u32>,
+        segments: &[RootSegment],
+    ) -> Res<Value> {
+        if !ordinals.contains_key(segments) {
+            return Err(CodegenError::internal(
+                "class handle leaf is not in the object leaf table",
+            ));
+        }
+        Ok(Self::table_entry(f, table, ordinals, segments))
+    }
+
+    /// Loads the host root for a persistent leaf.
+    fn persistent_leaf_pointer(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        base: &PersistentBase,
+        segments: &[RootSegment],
+        class_handle: bool,
+    ) -> Res<Value> {
+        let target = match base {
+            PersistentBase::Global(def) => Self::global_leaf_target(*def, segments, class_handle),
+            PersistentBase::Instance(instance) => {
+                self.program_leaf_target(*instance, segments, class_handle)
+            }
+        };
+        let slot = self
+            .root_slot(&target)
+            .map_err(|error| error.with_span(Span::empty(stc_span::FileId::new(0), 0)))?;
+        Ok(Self::slot_storage(f, info, slot))
+    }
+
+    /// Resolves a leaf path relative to a cursor.
+    fn cursor_leaf_pointer(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        cursor: &Cursor,
+        extra: &[RootSegment],
+        class_handle: bool,
+    ) -> Res<ResolvedPointer> {
+        match cursor {
+            Cursor::Contiguous {
+                ty,
+                pointer,
+                direct,
+                ..
+            } => {
+                let pointer = self.aggregate_pointer(f, *ty, pointer, extra)?;
+                Ok(ResolvedPointer {
+                    pointer,
+                    direct: if extra.is_empty() {
+                        direct.clone()
+                    } else {
+                        None
+                    },
+                })
+            }
+            Cursor::Table {
+                table,
+                segments,
+                ordinals,
+                direct,
+                ..
+            } => {
+                let mut full = segments.clone();
+                full.extend(extra.iter().copied());
+                if !ordinals.contains_key(&full) {
+                    return Err(CodegenError::internal(
+                        "a place leaf is not in the instance leaf table",
+                    ));
+                }
+                Ok(ResolvedPointer {
+                    pointer: Self::table_entry(f, table, ordinals, &full),
+                    direct: direct.get(&full).cloned(),
+                })
+            }
+            Cursor::Object {
+                object, segments, ..
+            } => {
+                let ordinals = self.object_ordinals_for(object.def)?;
+                let mut full = segments.clone();
+                full.extend(extra.iter().copied());
+                if !ordinals.contains_key(&full) {
+                    return Err(CodegenError::internal(format!(
+                        "leaf {full:?} is not in the `{}` record table (cursor {:?}, keys {:?})",
+                        self.hir.def_name(object.def),
+                        segments,
+                        ordinals.keys().collect::<Vec<_>>()
+                    )));
+                }
+                Ok(ResolvedPointer {
+                    pointer: Self::table_entry(f, &object.table, &ordinals, &full),
+                    direct: None,
+                })
+            }
+            Cursor::Persistent { base, segments, .. } => {
+                let mut full = segments.clone();
+                full.extend(extra.iter().copied());
+                let pointer = self.persistent_leaf_pointer(f, info, base, &full, class_handle)?;
+                let direct = match base {
+                    PersistentBase::Global(def) if full.is_empty() => self.global_address(*def),
+                    _ => None,
+                };
+                Ok(ResolvedPointer { pointer, direct })
+            }
+            Cursor::ClassSlot { .. }
+            | Cursor::ClassValue { .. }
+            | Cursor::FbRecord { .. }
+            | Cursor::Leaf { .. } => Err(CodegenError::internal(
+                "a leaf path cannot continue through a resolved value",
+            )),
+        }
+    }
+
+    /// Builds a class/FB record over a contiguous instance.
+    pub(crate) fn record_from_contiguous(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        pointer: &Value,
+        ty: TyId,
+    ) -> Res<Value> {
+        let def = self.object_def(ty)?;
+        let layout = self
+            .objects
+            .get(&def)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("object type has no leaf layout"))?;
+        let record_type = format!("[{} x ptr]", layout.leaves.len() + 1);
+        let record = f.alloca_typed(&record_type);
+        let typeinfo = self.typeinfo_value(f, info, def)?;
+        self.write_record_entry_cursor(f, &record, 0, &typeinfo);
+        for (index, leaf) in layout.leaves.iter().enumerate() {
+            let pointer = self.aggregate_pointer(f, ty, pointer, &leaf.segments)?;
+            self.write_record_entry_cursor(f, &record, index + 1, &pointer);
+        }
+        Ok(record)
+    }
+
+    /// Builds a class/FB record over the leaves of a cursor.
+    fn record_from_cursor(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        cursor: &Cursor,
+        def: DefId,
+    ) -> Res<Value> {
+        let layout = self
+            .objects
+            .get(&def)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("object type has no leaf layout"))?;
+        let record_type = format!("[{} x ptr]", layout.leaves.len() + 1);
+        let record = f.alloca_typed(&record_type);
+        let typeinfo = self.typeinfo_value(f, info, def)?;
+        self.write_record_entry_cursor(f, &record, 0, &typeinfo);
+        for (index, leaf) in layout.leaves.iter().enumerate() {
+            let resolved = self.cursor_leaf_pointer(
+                f,
+                info,
+                cursor,
+                &leaf.segments,
+                leaf.class_handle.is_some(),
+            )?;
+            self.write_record_entry_cursor(f, &record, index + 1, &resolved.pointer);
+        }
+        Ok(record)
+    }
+
+    fn write_record_entry_cursor(
+        &self,
+        f: &mut Function,
+        record: &Value,
+        index: usize,
+        value: &Value,
+    ) {
+        let slot = f.gep("ptr", record, &[format!("i64 {index}")], true);
+        f.store(value, &slot, Some(8));
+    }
+
+    /// Resolves a contiguous GEP step.
+    #[allow(clippy::too_many_arguments)]
+    fn contiguous_step(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        ty: TyId,
+        pointer: Value,
+        direct: Option<DirectAddress>,
+        dim: usize,
+        step: &PlaceStep,
+        last: bool,
+        span: Span,
+    ) -> Res<Cursor> {
+        match step {
+            PlaceStep::Field(field) => {
+                let data = self.hir.field(*field).clone();
+                let category = self.types.category(ty)?.clone();
+                let overlap = match category {
+                    TypeCategory::Struct { def, .. } => self.types.named(def)?.overlap,
+                    _ => false,
+                };
+                let pointer = if overlap {
+                    let offset = self
+                        .types
+                        .field_offset(*field)
+                        .ok_or_else(|| CodegenError::internal("overlap field has no offset"))?;
+                    f.gep_bytes(&pointer, i64::try_from(offset).unwrap_or(i64::MAX))
+                } else {
+                    let indices = self.types.field_gep_indices(ty, *field)?;
+                    let pointee = self.types.instance_llvm_storage(ty)?.render();
+                    let mut gep = vec!["i32 0".to_owned()];
+                    for index in indices {
+                        gep.push(format!("i32 {index}"));
+                    }
+                    f.gep(&pointee, &pointer, &gep, true)
+                };
+                let _ = direct;
+                self.value_cursor(f, info, data.ty, pointer, last, 0, span)
+            }
+            PlaceStep::Index(index) => match self.types.category(ty)?.clone() {
+                TypeCategory::Array {
+                    element,
+                    dims,
+                    conformant,
+                } => {
+                    if conformant {
+                        return Err(CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "conformant array indexing inside an object value is not supported in M5"
+                                .into(),
+                            span,
+                        ));
+                    }
+                    let bound = *dims
+                        .get(dim)
+                        .ok_or_else(|| CodegenError::internal("too many array indices"))?;
+                    let delta = self.bounds_checked_index(f, info, *index, &bound, span)?;
+                    let pointee = self.array_tail_type(ty, dim)?;
+                    let pointer = f.gep(
+                        &pointee,
+                        &pointer,
+                        &["i64 0".into(), format!("i64 {delta}")],
+                        true,
+                    );
+                    let (next_ty, next_dim) = self.array_advance(ty, dim)?;
+                    let _ = element;
+                    self.value_cursor(f, info, next_ty, pointer, last, next_dim, span)
+                }
+                TypeCategory::String { capacity, .. } => {
+                    let bound = ArrayDim {
+                        lower: 1,
+                        upper: i128::from(capacity),
+                        length: u64::from(capacity),
+                    };
+                    let delta = self.bounds_checked_index(f, info, *index, &bound, span)?;
+                    let pointee = self.types.llvm_storage(ty)?.render();
+                    let pointer = f.gep(
+                        &pointee,
+                        &pointer,
+                        &["i64 0".into(), "i32 1".into(), format!("i64 {delta}")],
+                        true,
+                    );
+                    let char_ty = self.types.string_char_ty(ty)?;
+                    Ok(Cursor::Contiguous {
+                        ty: char_ty,
+                        pointer,
+                        direct: None,
+                        dim: 0,
+                    })
+                }
+                _ => Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "subscript on a non-array place".into(),
+                    span,
+                )),
+            },
+        }
+    }
+
+    /// Continues a contiguous value cursor after a step.
+    #[allow(clippy::too_many_arguments)]
+    fn value_cursor(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        ty: TyId,
+        pointer: Value,
+        last: bool,
+        dim: usize,
+        span: Span,
+    ) -> Res<Cursor> {
+        let facts = self.types.facts(ty)?.clone();
+        if facts.is_class() {
+            if last {
+                return Ok(Cursor::ClassSlot { ty, slot: pointer });
+            }
+            let handle = f.load(IrType::Ptr, &pointer, None);
+            self.check_pointer(f, &handle, span)?;
+            let def = self.object_def(ty)?;
+            let table = Self::object_table_pointer(f, &handle);
+            return Ok(Cursor::Object {
+                object: ObjectRef {
+                    def,
+                    ty,
+                    handle,
+                    table,
+                },
+                ty,
+                segments: Vec::new(),
+                dim: 0,
+            });
+        }
+        if facts.is_object() {
+            if last {
+                let record = self.record_from_contiguous(f, info, &pointer, ty)?;
+                return Ok(Cursor::FbRecord { ty, record });
+            }
+            return Ok(Cursor::Contiguous {
+                ty,
+                pointer,
+                direct: None,
+                dim: 0,
+            });
+        }
+        Ok(Cursor::Contiguous {
+            ty,
+            pointer,
+            direct: None,
+            dim,
+        })
+    }
+
+    /// Resolves a field/table step.
+    #[allow(clippy::too_many_arguments)]
+    fn table_step(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        ty: TyId,
+        table: Value,
+        mut segments: Vec<RootSegment>,
+        ordinals: BTreeMap<Vec<RootSegment>, u32>,
+        direct: BTreeMap<Vec<RootSegment>, DirectAddress>,
+        dim: usize,
+        step: &PlaceStep,
+        steps: &[PlaceStep],
+        last: bool,
+        span: Span,
+    ) -> Res<Cursor> {
+        match step {
+            PlaceStep::Field(field) => {
+                let newty = self.hir.field(*field).ty;
+                segments.push(RootSegment::Field(*field));
+                let facts = self.types.facts(newty)?.clone();
+                if facts.is_class() {
+                    let slot = Self::table_value_pointer(f, &table, &ordinals, &segments)?;
+                    if last {
+                        return Ok(Cursor::ClassSlot { ty: newty, slot });
+                    }
+                    let handle = f.load(IrType::Ptr, &slot, None);
+                    self.check_pointer(f, &handle, span)?;
+                    let def = self.object_def(newty)?;
+                    let table = Self::object_table_pointer(f, &handle);
+                    return Ok(Cursor::Object {
+                        object: ObjectRef {
+                            def,
+                            ty: newty,
+                            handle,
+                            table,
+                        },
+                        ty: newty,
+                        segments: Vec::new(),
+                        dim: 0,
+                    });
+                }
+                if facts.is_object() && last {
+                    let cursor = Cursor::Table {
+                        ty: newty,
+                        table,
+                        segments,
+                        ordinals,
+                        direct,
+                        dim: 0,
+                    };
+                    let def = self.object_def(newty)?;
+                    let record = self.record_from_cursor(f, info, &cursor, def)?;
+                    return Ok(Cursor::FbRecord { ty: newty, record });
+                }
+                Ok(Cursor::Table {
+                    ty: newty,
+                    table,
+                    segments,
+                    ordinals,
+                    direct,
+                    dim: 0,
+                })
+            }
+            PlaceStep::Index(index) => {
+                let category = self.types.category(ty)?.clone();
+                let TypeCategory::Array {
+                    element,
+                    dims,
+                    conformant,
+                } = category
+                else {
+                    if let TypeCategory::String { capacity, .. } = category {
+                        let bound = ArrayDim {
+                            lower: 1,
+                            upper: i128::from(capacity),
+                            length: u64::from(capacity),
+                        };
+                        let delta = self.bounds_checked_index(f, info, *index, &bound, span)?;
+                        let base = Self::table_entry(f, &table, &ordinals, &segments);
+                        let pointee = self.types.llvm_storage(ty)?.render();
+                        let pointer = f.gep(
+                            &pointee,
+                            &base,
+                            &["i64 0".into(), "i32 1".into(), format!("i64 {delta}")],
+                            true,
+                        );
+                        let char_ty = self.types.string_char_ty(ty)?;
+                        return Ok(Cursor::Contiguous {
+                            ty: char_ty,
+                            pointer,
+                            direct: None,
+                            dim: 0,
+                        });
+                    }
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "subscript on a non-array place".into(),
+                        span,
+                    ));
+                };
+                if conformant {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "conformant array indexing inside an object value is not supported in M5"
+                            .into(),
+                        span,
+                    ));
+                }
+                let bound = *dims
+                    .get(dim)
+                    .ok_or_else(|| CodegenError::internal("too many array indices"))?;
+                let delta = self.bounds_checked_index(f, info, *index, &bound, span)?;
+                let (next_ty, next_dim) = self.array_advance(ty, dim)?;
+                let element_facts = self.types.facts(element)?.clone();
+                if element_facts.is_class() {
+                    let base = Self::table_entry(f, &table, &ordinals, &segments);
+                    let pointee = self.array_tail_type(ty, dim)?;
+                    let pointer = f.gep(
+                        &pointee,
+                        &base,
+                        &["i64 0".into(), format!("i64 {delta}")],
+                        true,
+                    );
+                    if last {
+                        return Ok(Cursor::ClassSlot {
+                            ty: next_ty,
+                            slot: pointer,
+                        });
+                    }
+                    let handle = f.load(IrType::Ptr, &pointer, None);
+                    self.check_pointer(f, &handle, span)?;
+                    let def = self.object_def(next_ty)?;
+                    let table = Self::object_table_pointer(f, &handle);
+                    return Ok(Cursor::Object {
+                        object: ObjectRef {
+                            def,
+                            ty: next_ty,
+                            handle,
+                            table,
+                        },
+                        ty,
+                        segments: Vec::new(),
+                        dim: 0,
+                    });
+                }
+                if self.types.is_single_root(ty)? {
+                    let base = Self::table_entry(f, &table, &ordinals, &segments);
+                    let pointee = self.array_tail_type(ty, dim)?;
+                    let pointer = f.gep(
+                        &pointee,
+                        &base,
+                        &["i64 0".into(), format!("i64 {delta}")],
+                        true,
+                    );
+                    return Ok(Cursor::Contiguous {
+                        ty: next_ty,
+                        pointer,
+                        direct: None,
+                        dim: next_dim,
+                    });
+                }
+                if let Some(element_index) = self.static_element(*index, &bound) {
+                    segments.push(RootSegment::Element {
+                        index: element_index,
+                        dim: u32::try_from(dim).unwrap_or(u32::MAX),
+                    });
+                    return Ok(Cursor::Table {
+                        ty: next_ty,
+                        table,
+                        segments,
+                        ordinals,
+                        direct,
+                        dim: next_dim,
+                    });
+                }
+                let cursor = Cursor::Table {
+                    ty,
+                    table,
+                    segments,
+                    ordinals,
+                    direct,
+                    dim,
+                };
+                self.expand_cursor_leaf(f, info, cursor, steps, span)
+            }
+        }
+    }
+
+    /// Returns a compile-time element index when the subscript is constant.
+    fn static_element(&self, index: ExprId, bound: &ArrayDim) -> Option<u64> {
+        let value = self.const_int(index)?;
+        let delta = value.checked_sub(bound.lower)?;
+        if delta < 0 {
+            return None;
+        }
+        let delta = u64::try_from(delta).ok()?;
+        (delta < bound.length).then_some(delta)
+    }
+
+    /// Resolves an object-record step.
+    #[allow(clippy::too_many_arguments)]
+    fn object_step(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        object: ObjectRef,
+        ty: TyId,
+        mut segments: Vec<RootSegment>,
+        dim: usize,
+        step: &PlaceStep,
+        steps: &[PlaceStep],
+        last: bool,
+        span: Span,
+    ) -> Res<Cursor> {
+        let ordinals = self.object_ordinals_for(object.def)?;
+        match step {
+            PlaceStep::Field(field) => {
+                let newty = self.hir.field(*field).ty;
+                segments.push(RootSegment::Field(*field));
+                let facts = self.types.facts(newty)?.clone();
+                if facts.is_class() {
+                    let slot = Self::table_value_pointer(f, &object.table, &ordinals, &segments)?;
+                    if last {
+                        return Ok(Cursor::ClassSlot { ty: newty, slot });
+                    }
+                    let handle = f.load(IrType::Ptr, &slot, None);
+                    self.check_pointer(f, &handle, span)?;
+                    let def = self.object_def(newty)?;
+                    let table = Self::object_table_pointer(f, &handle);
+                    return Ok(Cursor::Object {
+                        object: ObjectRef {
+                            def,
+                            ty: newty,
+                            handle,
+                            table,
+                        },
+                        ty,
+                        segments: Vec::new(),
+                        dim: 0,
+                    });
+                }
+                let cursor = Cursor::Object {
+                    object: object.clone(),
+                    ty: newty,
+                    segments,
+                    dim: 0,
+                };
+                if facts.is_object() && last {
+                    let def = self.object_def(newty)?;
+                    let record = self.record_from_cursor(f, info, &cursor, def)?;
+                    return Ok(Cursor::FbRecord { ty: newty, record });
+                }
+                Ok(cursor)
+            }
+            PlaceStep::Index(index) => match self.types.category(ty)?.clone() {
+                TypeCategory::Array {
+                    element,
+                    dims,
+                    conformant,
+                } => {
+                    if conformant {
+                        return Err(CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "conformant array indexing inside an object value is not \
+                                 supported in M5"
+                                .into(),
+                            span,
+                        ));
+                    }
+                    let bound = *dims
+                        .get(dim)
+                        .ok_or_else(|| CodegenError::internal("too many array indices"))?;
+                    let delta = self.bounds_checked_index(f, info, *index, &bound, span)?;
+                    let (next_ty, next_dim) = self.array_advance(ty, dim)?;
+                    let element_facts = self.types.facts(element)?.clone();
+                    if element_facts.is_class() {
+                        let base = Self::table_entry(f, &object.table, &ordinals, &segments);
+                        let pointee = self.array_tail_type(ty, dim)?;
+                        let pointer = f.gep(
+                            &pointee,
+                            &base,
+                            &["i64 0".into(), format!("i64 {delta}")],
+                            true,
+                        );
+                        if last {
+                            return Ok(Cursor::ClassSlot {
+                                ty: next_ty,
+                                slot: pointer,
+                            });
+                        }
+                        let handle = f.load(IrType::Ptr, &pointer, None);
+                        self.check_pointer(f, &handle, span)?;
+                        let def = self.object_def(next_ty)?;
+                        let table = Self::object_table_pointer(f, &handle);
+                        return Ok(Cursor::Object {
+                            object: ObjectRef {
+                                def,
+                                ty: next_ty,
+                                handle,
+                                table,
+                            },
+                            ty: next_ty,
+                            segments: Vec::new(),
+                            dim: 0,
+                        });
+                    }
+                    if self.types.is_single_root(ty)? {
+                        let base = Self::table_entry(f, &object.table, &ordinals, &segments);
+                        let pointee = self.array_tail_type(ty, dim)?;
+                        let pointer = f.gep(
+                            &pointee,
+                            &base,
+                            &["i64 0".into(), format!("i64 {delta}")],
+                            true,
+                        );
+                        return Ok(Cursor::Contiguous {
+                            ty: next_ty,
+                            pointer,
+                            direct: None,
+                            dim: next_dim,
+                        });
+                    }
+                    if let Some(element_index) = self.static_element(*index, &bound) {
+                        segments.push(RootSegment::Element {
+                            index: element_index,
+                            dim: u32::try_from(dim).unwrap_or(u32::MAX),
+                        });
+                        return Ok(Cursor::Object {
+                            object,
+                            ty: next_ty,
+                            segments,
+                            dim: next_dim,
+                        });
+                    }
+                    let cursor = Cursor::Object {
+                        object,
+                        ty,
+                        segments,
+                        dim,
+                    };
+                    self.expand_cursor_leaf(f, info, cursor, steps, span)
+                }
+                TypeCategory::String { capacity, .. } => {
+                    let bound = ArrayDim {
+                        lower: 1,
+                        upper: i128::from(capacity),
+                        length: u64::from(capacity),
+                    };
+                    let delta = self.bounds_checked_index(f, info, *index, &bound, span)?;
+                    let base = Self::table_entry(f, &object.table, &ordinals, &segments);
+                    let pointee = self.types.llvm_storage(ty)?.render();
+                    let pointer = f.gep(
+                        &pointee,
+                        &base,
+                        &["i64 0".into(), "i32 1".into(), format!("i64 {delta}")],
+                        true,
+                    );
+                    let char_ty = self.types.string_char_ty(ty)?;
+                    Ok(Cursor::Contiguous {
+                        ty: char_ty,
+                        pointer,
+                        direct: None,
+                        dim: 0,
+                    })
+                }
+                _ => Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "subscript on a non-array place".into(),
+                    span,
+                )),
+            },
+        }
+    }
+
+    /// Resolves a persistent step.
+    #[allow(clippy::too_many_arguments)]
+    fn persistent_step(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        ty: TyId,
+        base: PersistentBase,
+        mut segments: Vec<RootSegment>,
+        dim: usize,
+        step: &PlaceStep,
+        steps: &[PlaceStep],
+        last: bool,
+        span: Span,
+    ) -> Res<Cursor> {
+        match step {
+            PlaceStep::Field(field) => {
+                let newty = self.hir.field(*field).ty;
+                segments.push(RootSegment::Field(*field));
+                let facts = self.types.facts(newty)?.clone();
+                if facts.is_class() {
+                    let slot = self.persistent_leaf_pointer(f, info, &base, &segments, true)?;
+                    if last {
+                        return Ok(Cursor::ClassSlot { ty: newty, slot });
+                    }
+                    let handle = f.load(IrType::Ptr, &slot, None);
+                    self.check_pointer(f, &handle, span)?;
+                    let def = self.object_def(newty)?;
+                    let table = Self::object_table_pointer(f, &handle);
+                    return Ok(Cursor::Object {
+                        object: ObjectRef {
+                            def,
+                            ty: newty,
+                            handle,
+                            table,
+                        },
+                        ty: newty,
+                        segments: Vec::new(),
+                        dim: 0,
+                    });
+                }
+                if facts.is_object() && last {
+                    if let Some(record) = self.persistent_record_storage(f, info, &base, &segments)
+                    {
+                        return Ok(Cursor::FbRecord { ty: newty, record });
+                    }
+                    let cursor = Cursor::Persistent {
+                        ty: newty,
+                        base,
+                        segments,
+                        dim: 0,
+                    };
+                    let def = self.object_def(newty)?;
+                    let record = self.record_from_cursor(f, info, &cursor, def)?;
+                    return Ok(Cursor::FbRecord { ty: newty, record });
+                }
+                Ok(Cursor::Persistent {
+                    ty: newty,
+                    base,
+                    segments,
+                    dim: 0,
+                })
+            }
+            PlaceStep::Index(index) => {
+                let category = self.types.category(ty)?.clone();
+                let TypeCategory::Array {
+                    element,
+                    dims,
+                    conformant,
+                } = category
+                else {
+                    if let TypeCategory::String { capacity, .. } = category {
+                        let bound = ArrayDim {
+                            lower: 1,
+                            upper: i128::from(capacity),
+                            length: u64::from(capacity),
+                        };
+                        let delta = self.bounds_checked_index(f, info, *index, &bound, span)?;
+                        let class_handle = false;
+                        let root =
+                            self.persistent_leaf_pointer(f, info, &base, &segments, class_handle)?;
+                        let pointee = self.types.llvm_storage(ty)?.render();
+                        let pointer = f.gep(
+                            &pointee,
+                            &root,
+                            &["i64 0".into(), "i32 1".into(), format!("i64 {delta}")],
+                            true,
+                        );
+                        let char_ty = self.types.string_char_ty(ty)?;
+                        return Ok(Cursor::Contiguous {
+                            ty: char_ty,
+                            pointer,
+                            direct: None,
+                            dim: 0,
+                        });
+                    }
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "subscript on a non-array place".into(),
+                        span,
+                    ));
+                };
+                if conformant {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "conformant array indexing inside a persistent value is not supported in M5"
+                            .into(),
+                        span,
+                    ));
+                }
+                let bound = *dims
+                    .get(dim)
+                    .ok_or_else(|| CodegenError::internal("too many array indices"))?;
+                let delta = self.bounds_checked_index(f, info, *index, &bound, span)?;
+                let (next_ty, next_dim) = self.array_advance(ty, dim)?;
+                let element_facts = self.types.facts(element)?.clone();
+                if element_facts.is_class() {
+                    let root = self.persistent_leaf_pointer(f, info, &base, &segments, true)?;
+                    let pointee = self.array_tail_type(ty, dim)?;
+                    let pointer = f.gep(
+                        &pointee,
+                        &root,
+                        &["i64 0".into(), format!("i64 {delta}")],
+                        true,
+                    );
+                    if last {
+                        return Ok(Cursor::ClassSlot {
+                            ty: next_ty,
+                            slot: pointer,
+                        });
+                    }
+                    let handle = f.load(IrType::Ptr, &pointer, None);
+                    self.check_pointer(f, &handle, span)?;
+                    let def = self.object_def(next_ty)?;
+                    let table = Self::object_table_pointer(f, &handle);
+                    return Ok(Cursor::Object {
+                        object: ObjectRef {
+                            def,
+                            ty: next_ty,
+                            handle,
+                            table,
+                        },
+                        ty,
+                        segments: Vec::new(),
+                        dim: 0,
+                    });
+                }
+                if self.types.is_single_root(ty)? {
+                    let root = self.persistent_leaf_pointer(f, info, &base, &segments, false)?;
+                    let pointee = self.array_tail_type(ty, dim)?;
+                    let pointer = f.gep(
+                        &pointee,
+                        &root,
+                        &["i64 0".into(), format!("i64 {delta}")],
+                        true,
+                    );
+                    return Ok(Cursor::Contiguous {
+                        ty: next_ty,
+                        pointer,
+                        direct: None,
+                        dim: next_dim,
+                    });
+                }
+                if let Some(element_index) = self.static_element(*index, &bound) {
+                    segments.push(RootSegment::Element {
+                        index: element_index,
+                        dim: u32::try_from(dim).unwrap_or(u32::MAX),
+                    });
+                    return Ok(Cursor::Persistent {
+                        ty: next_ty,
+                        base,
+                        segments,
+                        dim: next_dim,
+                    });
+                }
+                let cursor = Cursor::Persistent {
+                    ty,
+                    base,
+                    segments,
+                    dim,
+                };
+                self.expand_cursor_leaf(f, info, cursor, steps, span)
+            }
+        }
+    }
+
+    /// Expands dynamic indices into a bounded select chain over scalar leaves.
+    fn expand_cursor_leaf(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        cursor: Cursor,
+        steps: &[PlaceStep],
+        span: Span,
+    ) -> Res<Cursor> {
+        #[derive(Clone)]
+        struct Candidate {
+            segments: Vec<RootSegment>,
+            condition: Option<Value>,
+        }
+        let mut candidates = vec![Candidate {
+            segments: Vec::new(),
+            condition: None,
+        }];
+        let mut ty = cursor.ty();
+        let mut dim = match &cursor {
+            Cursor::Table { dim, .. }
+            | Cursor::Persistent { dim, .. }
+            | Cursor::Object { dim, .. } => *dim,
+            _ => 0,
+        };
+        let mut position = 0;
+        while position < steps.len() {
+            let step = &steps[position];
+            position += 1;
+            match step {
+                PlaceStep::Field(field) => {
+                    for candidate in &mut candidates {
+                        candidate.segments.push(RootSegment::Field(*field));
+                    }
+                    ty = self.hir.field(*field).ty;
+                    dim = 0;
+                }
+                PlaceStep::Index(index) => {
+                    let (element, dims, conformant) = self.types.array_info(ty)?;
+                    if conformant {
+                        return Err(CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "conformant array indexing inside an object value is not supported \
+                             in M5"
+                                .into(),
+                            span,
+                        ));
+                    }
+                    if self.types.facts(element)?.is_class() || self.types.is_single_root(ty)? {
+                        return Err(CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "a dynamic index through this aggregate is not supported in M5".into(),
+                            span,
+                        ));
+                    }
+                    let bound = *dims
+                        .get(dim)
+                        .ok_or_else(|| CodegenError::internal("too many array indices"))?;
+                    let delta = self.bounds_checked_index(f, info, *index, &bound, span)?;
+                    if bound.length > 4096 {
+                        return Err(CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "runtime selection in an array of more than 4096 aggregate elements \
+                             is not supported in M5"
+                                .into(),
+                            span,
+                        ));
+                    }
+                    let delta = Value {
+                        ty: IrType::Int(64),
+                        repr: delta,
+                    };
+                    let mut expanded = Vec::with_capacity(
+                        candidates
+                            .len()
+                            .saturating_mul(usize::try_from(bound.length).unwrap_or(usize::MAX)),
+                    );
+                    for candidate in &candidates {
+                        for element_index in 0..bound.length {
+                            let matches =
+                                f.icmp("eq", &delta, &Value::int(64, i128::from(element_index)));
+                            let condition = match &candidate.condition {
+                                Some(previous) => f.binop("and", previous, &matches),
+                                None => matches,
+                            };
+                            let mut segments = candidate.segments.clone();
+                            segments.push(RootSegment::Element {
+                                index: element_index,
+                                dim: u32::try_from(dim).unwrap_or(u32::MAX),
+                            });
+                            expanded.push(Candidate {
+                                condition: Some(condition),
+                                segments,
+                            });
+                        }
+                    }
+                    candidates = expanded;
+                    let (next_ty, next_dim) = self.array_advance(ty, dim)?;
+                    ty = next_ty;
+                    dim = next_dim;
+                }
+            }
+        }
+        if !self.types.facts(ty)?.is_scalar_shaped() {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "dynamic indices inside an aggregate value are not supported in M5".into(),
+                span,
+            ));
+        }
+        let mut pointer: Option<Value> = None;
+        let mut direct: Option<DirectAddress> = None;
+        for candidate in candidates {
+            let resolved =
+                self.cursor_leaf_pointer(f, info, &cursor, &candidate.segments, false)?;
+            if resolved.direct.is_some() {
+                direct = resolved.direct;
+            }
+            pointer = Some(match (pointer, candidate.condition) {
+                (None, _) => resolved.pointer,
+                (Some(previous), Some(condition)) => {
+                    f.select(&condition, &resolved.pointer, &previous)
+                }
+                (Some(previous), None) => previous,
+            });
+        }
+        let pointer = pointer.ok_or_else(|| {
+            CodegenError::internal("dynamic place expansion produced no candidates")
+        })?;
+        Ok(Cursor::Leaf {
+            ty,
+            pointer,
+            direct,
+        })
+    }
+}
+
 impl Lowerer<'_> {
     /// Resolves an expression that is a place into root/steps.
     #[must_use]
@@ -550,7 +2346,28 @@ impl Lowerer<'_> {
     /// Resolves a place to a contiguous pointer: transient storage first, then
     /// a persistent single root, then a dynamic index into a single-root array
     /// whose prefix is static.
+    ///
+    /// Places whose type chain contains a class value use the object-record
+    /// cursor instead.
     pub(crate) fn resolve_place_pointer(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        path: &PlacePath,
+    ) -> Res<Option<ResolvedPointer>> {
+        if self.path_has_class(path) {
+            let Some(cursor) = self.walk_place_cursor(f, info, path)? else {
+                return Ok(None);
+            };
+            return Ok(match self.classify_cursor(f, info, &cursor)? {
+                Some(PlaceValue::Leaf(resolved)) => Some(resolved),
+                _ => None,
+            });
+        }
+        self.resolve_place_pointer_plain(f, info, path)
+    }
+
+    fn resolve_place_pointer_plain(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,
@@ -566,6 +2383,266 @@ impl Lowerer<'_> {
             return Ok(Some(pointer));
         }
         self.expanded_leaf_pointer(f, info, path)
+    }
+
+    /// Resolves a place to the storage form its type needs.
+    pub(crate) fn resolve_place_value(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        path: &PlacePath,
+    ) -> Res<Option<PlaceValue>> {
+        if !self.path_has_class(path) {
+            return Ok(self
+                .resolve_place_pointer_plain(f, info, path)?
+                .map(PlaceValue::Leaf));
+        }
+        let Some(cursor) = self.walk_place_cursor(f, info, path)? else {
+            return Ok(None);
+        };
+        self.classify_cursor(f, info, &cursor)
+    }
+
+    /// Reads a resolved place of any supported type.
+    pub(crate) fn read_place_path(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        path: &PlacePath,
+    ) -> Res<Value> {
+        let facts = self.types.facts(path.ty)?.clone();
+        if !self.path_has_class(path) {
+            if let Some(kind) = facts.scalar() {
+                let Some(resolved) = self.resolve_place_pointer_plain(f, info, path)? else {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        format!("place of type `{}` has no storage", facts.key),
+                        path.span,
+                    ));
+                };
+                if let Some(address) = &resolved.direct {
+                    let bit = direct_bit(address, kind)?;
+                    return self.read_direct_pointer(f, &resolved.pointer, kind, bit);
+                }
+                return Self::read_scalar(f, &resolved.pointer, kind);
+            }
+            return self.read_aggregate_place_plain(f, info, path);
+        }
+        let Some(cursor) = self.walk_place_cursor(f, info, path)? else {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!("place of type `{}` has no storage", facts.key),
+                path.span,
+            ));
+        };
+        match self.classify_cursor(f, info, &cursor)? {
+            Some(PlaceValue::ClassSlot(slot)) => Ok(f.load(IrType::Ptr, &slot, None)),
+            Some(PlaceValue::ClassValue(handle)) => Ok(handle),
+            Some(PlaceValue::FbRecord(record)) => self.gather_fb(f, info, path.ty, &record),
+            Some(PlaceValue::Leaf(resolved)) => {
+                if let Some(kind) = facts.scalar() {
+                    if let Some(address) = &resolved.direct {
+                        let bit = direct_bit(address, kind)?;
+                        return self.read_direct_pointer(f, &resolved.pointer, kind, bit);
+                    }
+                    return Self::read_scalar(f, &resolved.pointer, kind);
+                }
+                let storage = self.types.llvm_storage(path.ty)?;
+                Ok(f.load(storage, &resolved.pointer, None))
+            }
+            None => self.materialize_cursor(f, info, &cursor, path.ty),
+        }
+    }
+
+    /// Writes a resolved place of any supported type.
+    pub(crate) fn write_place_path(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        path: &PlacePath,
+        value: Value,
+    ) -> Res<()> {
+        let facts = self.types.facts(path.ty)?.clone();
+        if !self.path_has_class(path) {
+            if let Some(kind) = facts.scalar() {
+                let Some(resolved) = self.resolve_place_pointer_plain(f, info, path)? else {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        format!("place of type `{}` has no storage", facts.key),
+                        path.span,
+                    ));
+                };
+                if let Some(address) = &resolved.direct {
+                    Self::reject_input_write(address, path.span)?;
+                    let bit = direct_bit(address, kind)?;
+                    return self.write_direct_pointer(f, &resolved.pointer, kind, value, bit);
+                }
+                self.check_subrange(f, path.ty, &value, path.span)?;
+                Self::write_scalar(f, &resolved.pointer, kind, &value);
+                return Ok(());
+            }
+            return self.write_aggregate_place_plain(f, info, path, value);
+        }
+        let Some(cursor) = self.walk_place_cursor(f, info, path)? else {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!("place of type `{}` has no storage", facts.key),
+                path.span,
+            ));
+        };
+        match self.classify_cursor(f, info, &cursor)? {
+            Some(PlaceValue::ClassSlot(slot)) => {
+                f.store(&value, &slot, Some(8));
+                Ok(())
+            }
+            Some(PlaceValue::ClassValue(_)) => Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "`THIS` has no assignable handle storage".into(),
+                path.span,
+            )),
+            Some(PlaceValue::FbRecord(record)) => self.split_fb(f, info, path.ty, &record, &value),
+            Some(PlaceValue::Leaf(resolved)) => {
+                if let Some(kind) = facts.scalar() {
+                    if let Some(address) = &resolved.direct {
+                        Self::reject_input_write(address, path.span)?;
+                        let bit = direct_bit(address, kind)?;
+                        return self.write_direct_pointer(f, &resolved.pointer, kind, value, bit);
+                    }
+                    self.check_subrange(f, path.ty, &value, path.span)?;
+                    Self::write_scalar(f, &resolved.pointer, kind, &value);
+                    return Ok(());
+                }
+                f.store(&value, &resolved.pointer, None);
+                Ok(())
+            }
+            None => self.split_cursor(f, info, &cursor, path.ty, &value),
+        }
+    }
+
+    /// Gathers an FB value from its record.
+    fn gather_fb(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        ty: TyId,
+        record: &Value,
+    ) -> Res<Value> {
+        let def = self.object_def(ty)?;
+        let ordinals = self.object_ordinals_for(def)?;
+        let leaves = self
+            .types
+            .root_leaves(ty, "TEMP", RetainPolicy::None)
+            .map_err(|error| error.with_span(Span::empty(stc_span::FileId::new(0), 0)))?;
+        let storage = self.types.llvm_storage(ty)?;
+        let table = Self::object_table_pointer(f, record);
+        let temp = f.alloca(storage.clone());
+        f.store(&Value::zero(storage.clone()), &temp, None);
+        for leaf in leaves {
+            let pointer = Self::table_entry(f, &table, &ordinals, &leaf.segments);
+            let source = ResolvedPointer {
+                pointer,
+                direct: None,
+            };
+            let value = self.read_leaf(f, &source, leaf.ty)?;
+            let destination = self.aggregate_pointer(f, ty, &temp, &leaf.segments)?;
+            f.store(&value, &destination, None);
+        }
+        let _ = info;
+        Ok(f.load(storage, &temp, None))
+    }
+
+    /// Splits an FB value back into its record leaves.
+    fn split_fb(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        ty: TyId,
+        record: &Value,
+        value: &Value,
+    ) -> Res<()> {
+        let def = self.object_def(ty)?;
+        let ordinals = self.object_ordinals_for(def)?;
+        let leaves = self
+            .types
+            .root_leaves(ty, "TEMP", RetainPolicy::None)
+            .map_err(|error| error.with_span(Span::empty(stc_span::FileId::new(0), 0)))?;
+        let storage = self.types.llvm_storage(ty)?;
+        let table = Self::object_table_pointer(f, record);
+        let temp = f.alloca(storage.clone());
+        f.store(value, &temp, None);
+        for leaf in &leaves {
+            let source = self.aggregate_pointer(f, ty, &temp, &leaf.segments)?;
+            let value = f.load(self.types.llvm_storage(leaf.ty)?, &source, None);
+            let pointer = Self::table_entry(f, &table, &ordinals, &leaf.segments);
+            let destination = ResolvedPointer {
+                pointer,
+                direct: None,
+            };
+            self.write_leaf(f, &destination, leaf.ty, value)?;
+        }
+        let _ = info;
+        Ok(())
+    }
+
+    /// Materializes a split aggregate from a cursor.
+    fn materialize_cursor(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        cursor: &Cursor,
+        ty: TyId,
+    ) -> Res<Value> {
+        let leaves = self
+            .types
+            .root_leaves(ty, "TEMP", RetainPolicy::None)
+            .map_err(|error| error.with_span(Span::empty(stc_span::FileId::new(0), 0)))?;
+        let storage = self.types.llvm_storage(ty)?;
+        let temp = f.alloca(storage.clone());
+        f.store(&Value::zero(storage.clone()), &temp, None);
+        for leaf in leaves {
+            let resolved = self.cursor_leaf_pointer(
+                f,
+                info,
+                cursor,
+                &leaf.segments,
+                leaf.class_handle.is_some(),
+            )?;
+            let value = self.read_leaf(f, &resolved, leaf.ty)?;
+            let destination = self.aggregate_pointer(f, ty, &temp, &leaf.segments)?;
+            f.store(&value, &destination, None);
+        }
+        Ok(f.load(storage, &temp, None))
+    }
+
+    /// Splits an aggregate value back into a cursor's leaves.
+    fn split_cursor(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        cursor: &Cursor,
+        ty: TyId,
+        value: &Value,
+    ) -> Res<()> {
+        let leaves = self
+            .types
+            .root_leaves(ty, "TEMP", RetainPolicy::None)
+            .map_err(|error| error.with_span(Span::empty(stc_span::FileId::new(0), 0)))?;
+        let storage = self.types.llvm_storage(ty)?;
+        let temp = f.alloca(storage.clone());
+        f.store(value, &temp, None);
+        for leaf in leaves {
+            let source = self.aggregate_pointer(f, ty, &temp, &leaf.segments)?;
+            let value = f.load(self.types.llvm_storage(leaf.ty)?, &source, None);
+            let destination = self.cursor_leaf_pointer(
+                f,
+                info,
+                cursor,
+                &leaf.segments,
+                leaf.class_handle.is_some(),
+            )?;
+            self.write_leaf(f, &destination, leaf.ty, value)?;
+        }
+        Ok(())
     }
 
     fn dynamic_single_root_pointer(
@@ -664,21 +2741,23 @@ impl Lowerer<'_> {
         info: &BodyInfo,
         path: &PlacePath,
     ) -> Res<Value> {
-        if let Some(resolved) = self.resolve_place_pointer(f, info, path)? {
+        self.read_place_path(f, info, path)
+    }
+
+    fn read_aggregate_place_plain(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        path: &PlacePath,
+    ) -> Res<Value> {
+        if let Some(resolved) = self.resolve_place_pointer_plain(f, info, path)? {
             if resolved.direct.is_some() {
                 return Err(CodegenError::internal(
                     "an aggregate direct variable has no M5 representation",
                 ));
             }
-            let ty = self.types.instance_llvm_storage(path.ty)?;
+            let ty = self.types.llvm_storage(path.ty)?;
             return Ok(f.load(ty, &resolved.pointer, None));
-        }
-        if self.types.facts(path.ty)?.is_object() {
-            return Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "class and FB values are M5 phase 4".into(),
-                path.span,
-            ));
         }
         self.materialize_place(f, info, path)
     }
@@ -692,7 +2771,17 @@ impl Lowerer<'_> {
         path: &PlacePath,
         value: Value,
     ) -> Res<()> {
-        if let Some(resolved) = self.resolve_place_pointer(f, info, path)? {
+        self.write_place_path(f, info, path, value)
+    }
+
+    fn write_aggregate_place_plain(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        path: &PlacePath,
+        value: Value,
+    ) -> Res<()> {
+        if let Some(resolved) = self.resolve_place_pointer_plain(f, info, path)? {
             if resolved.direct.is_some() {
                 return Err(CodegenError::internal(
                     "an aggregate direct variable has no M5 representation",
@@ -701,14 +2790,7 @@ impl Lowerer<'_> {
             f.store(&value, &resolved.pointer, None);
             return Ok(());
         }
-        if self.types.facts(path.ty)?.is_object() {
-            return Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "class and FB assignment is M5 phase 4".into(),
-                path.span,
-            ));
-        }
-        let storage = self.types.instance_llvm_storage(path.ty)?;
+        let storage = self.types.llvm_storage(path.ty)?;
         let temp = f.alloca(storage.clone());
         f.store(&value, &temp, None);
         self.split_place_from_temp(f, info, path, &temp)?;
@@ -1223,6 +3305,14 @@ impl Lowerer<'_> {
         let to_facts = self.types.facts(to)?.clone();
         if from_facts.key == to_facts.key {
             return Ok(value);
+        }
+        if from_facts.is_class() && to_facts.is_class() {
+            // Every class value is a record handle; upcasts and downcasts at
+            // the static-type level do not change the representation.
+            return Ok(value);
+        }
+        if matches!(from_facts.category, TypeCategory::Null) && to_facts.is_class() {
+            return Ok(Value::zero(IrType::Ptr));
         }
         match (&from_facts.category, &to_facts.category) {
             (
@@ -2761,64 +4851,6 @@ impl Lowerer<'_> {
         let above = f.icmp("sgt", value, &Value::int(bits, upper));
         let bad = f.binop("or", &below, &above);
         self.trap_if(f, &bad, trap::RANGE, span)
-    }
-}
-
-impl Lowerer<'_> {
-    /// Copies an object's state per field, preserving the destination object.
-    pub(crate) fn copy_object_place(
-        &mut self,
-        f: &mut Function,
-        info: &BodyInfo,
-        destination: &crate::place::PlacePath,
-        source: &crate::place::PlacePath,
-    ) -> Res<()> {
-        // Local class values keep the phase-4a state copy until phase 4b.3
-        // introduces stack handles. Any assignment involving a persistent
-        // class instance changes the handle, which needs the 4b.3 object-record
-        // access path, so it stays an explicit diagnostic instead of silently
-        // producing handle-copy semantics over instance-based field reads.
-        let class_value = self.types.facts(destination.ty)?.is_class();
-        let transient = |path: &crate::place::PlacePath| {
-            matches!(
-                path.base,
-                crate::place::PlaceBase::Local(_)
-                    | crate::place::PlaceBase::Param(_)
-                    | crate::place::PlaceBase::Result(_)
-            )
-        };
-        if class_value && !(transient(destination) && transient(source)) {
-            return Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "class assignment involving a persistent instance is M5 phase 4b.3".into(),
-                destination.span,
-            ));
-        }
-        let storage = self.types.instance_llvm_storage(destination.ty)?;
-        let destination_pointer = self.resolve_place_pointer(f, info, destination)?;
-        let source_pointer = self.resolve_place_pointer(f, info, source)?;
-        if let (Some(destination_pointer), Some(source_pointer)) =
-            (&destination_pointer, &source_pointer)
-        {
-            let value = f.load(storage, &source_pointer.pointer, None);
-            f.store(&value, &destination_pointer.pointer, None);
-            return Ok(());
-        }
-        let temp = f.alloca(storage.clone());
-        f.store(&Value::zero(storage.clone()), &temp, None);
-        if let Some(source_pointer) = &source_pointer {
-            let value = f.load(storage.clone(), &source_pointer.pointer, None);
-            f.store(&value, &temp, None);
-        } else {
-            self.gather_place_into_temp(f, info, source, &temp)?;
-        }
-        if let Some(destination_pointer) = &destination_pointer {
-            let value = f.load(storage, &temp, None);
-            f.store(&value, &destination_pointer.pointer, None);
-        } else {
-            self.split_place_from_temp(f, info, destination, &temp)?;
-        }
-        Ok(())
     }
 }
 

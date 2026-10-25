@@ -79,8 +79,14 @@ the class value/instance layout split (`PTR_TO` handle keys), and hidden non-ret
 formats remain version 1. Step 4b.2 builds the host-owned TYPEINFO/VTABLE registry before
 prepare, keeps compatible record addresses stable across a warm swap, patches entries at
 activation, rejects shape changes that a preserved object or interface depends on, and
-quarantines removed descriptors. Interface dispatch and `?=` remain diagnostics until
-4b.3–4b.5. The project manifest, `stc run`, `stc test`, and file-backed retained state are M6,
+quarantines removed descriptors. Step 4b.3 makes object values record handles: class and FB
+locals own stack records, persistent objects use the hidden `HANDLE`/`OBJREC` roots, `THIS` is
+the record handle, method and FB bodies receive `(handle, table, ...)`, class `:=` copies the
+handle while FB `:=` copies fields, class/FB parameters follow handle/record isolation rules,
+and every class/FB method call dispatches through TYPEINFO and the class VTABLE (`SUPER` calls
+the base cell directly). Handles to activation-owned records are rejected from escaping.
+Interface dispatch, `?=`, and object references remain diagnostics until 4b.4–4b.5. The
+project manifest, `stc run`, `stc test`, and file-backed retained state are M6,
 and full task scheduling is M6 (M5 keeps one task per resource). The persistent host, loadable
 modules, GOT roots, manifests, swap protocol, and process-image remap are implemented and shared
 by the M5 lowering. Parser and semantic snapshots, IR snapshots, clang verification, execution

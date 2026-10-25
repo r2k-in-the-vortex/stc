@@ -129,6 +129,21 @@ fn descriptors_and_hidden_roots_emit_and_verify_with_clang() {
         "FB declarations get no handle root"
     );
 
+    // FB bodies and methods take `(handle, root table, slots)`.
+    assert!(
+        module.contains("define internal void @stc_fb_body_FB(ptr %this, ptr %table, ptr %slots)"),
+        "{}",
+        module
+    );
+    assert!(
+        module
+            .matches("(ptr %this, ptr %table, ptr %slots)")
+            .count()
+            >= 2,
+        "object bodies use the handled ABI:
+{module}"
+    );
+
     // Prepare fills fresh records and handles from the slot table.
     let prepare = module
         .split("@stc_module_prepare")
@@ -223,7 +238,7 @@ END_CONFIGURATION
 }
 
 #[test]
-fn persistent_class_assignment_is_explicitly_deferred() {
+fn persistent_class_assignment_copies_the_handle() {
     let source = r#"
 CLASS Shape
 VAR PUBLIC
@@ -239,7 +254,8 @@ VAR
   x : DINT;
 END_VAR
   a := b;
-  x := a.id;
+  a.id := 3;
+  x := a.id + b.id;
 END_PROGRAM
 CONFIGURATION C
 RESOURCE R ON Cpu
@@ -247,18 +263,16 @@ RESOURCE R ON Cpu
 END_RESOURCE
 END_CONFIGURATION
 "#;
-    let hir = clean_hir(source);
-    let sources = vec!["<test>".to_string()];
-    let errors = stc_codegen::generate(&hir, &options("test", Mode::Executable, &sources))
-        .expect_err("persistent class assignment needs phase 4b.3");
+    let output = generate(source, Mode::Executable);
+    // The assignment and the field write go through the referenced record.
     assert!(
-        errors.iter().any(|error| {
-            error.code() == "STC-E-CODEGEN-001"
-                && error.message().contains("class assignment")
-                && error.span().is_some_and(|span| span.start != span.end)
-        }),
-        "{errors:#?}"
+        output
+            .module
+            .contains("define internal void @stc_prog_MAIN_body"),
+        "{}",
+        output.module
     );
+    verify_with_clang("class_handle_assignment", &output.module);
 }
 
 #[test]
@@ -1174,4 +1188,102 @@ fn aggregate_program_emits_and_verifies_with_clang() {
         output.got.manifest.roots
     );
     verify_with_clang("aggregates", module);
+}
+
+#[test]
+fn virtual_dispatch_reads_typeinfo_and_the_class_vtable() {
+    let source = r#"
+CLASS Base
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC M : DINT
+  M := id;
+END_METHOD
+END_CLASS
+
+CLASS Derived EXTENDS Base
+VAR PUBLIC
+  extra : DINT;
+END_VAR
+METHOD PUBLIC OVERRIDE M : DINT
+  M := SUPER.M() + extra;
+END_METHOD
+END_CLASS
+
+{stc:export}{stc:no_mangle}
+FUNCTION Dispatch : DINT
+VAR
+  d : Derived;
+  b : Base;
+END_VAR
+  d.id := 1;
+  d.extra := 2;
+  b := d;
+  Dispatch := b.M();
+END_FUNCTION
+
+PROGRAM Main
+VAR x : DINT; END_VAR
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+    let output = generate(source, Mode::Executable);
+    // The dispatch loads TYPEINFO (record word 0), the class VTABLE at
+    // TYPEINFO+64, and slot 0 at VTABLE+48 before calling the cell's code.
+    assert!(
+        output.module.contains("getelementptr i64, ptr %t") && output.module.contains(", i64 8"),
+        "{}",
+        output.module
+    );
+    assert!(
+        output.module.contains(", i64 6"),
+        "the class VTABLE entry GEP is missing:\n{}",
+        output.module
+    );
+    assert!(
+        output.module.matches("call i32 %").count() >= 2,
+        "virtual and SUPER calls are missing:\n{}",
+        output.module
+    );
+    verify_with_clang("virtual_dispatch", &output.module);
+}
+
+#[test]
+fn class_null_dispatch_traps_at_runtime() {
+    let source = r#"
+CLASS Obj
+VAR PUBLIC
+  x : DINT;
+END_VAR
+METHOD PUBLIC M : DINT
+  M := x;
+END_METHOD
+END_CLASS
+
+{stc:export}{stc:no_mangle}
+FUNCTION Boom : DINT
+VAR
+  c : Obj;
+END_VAR
+  c := NULL;
+  Boom := c.M();
+END_FUNCTION
+
+PROGRAM Main
+VAR x : DINT; END_VAR
+  x := Boom();
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+    let output = generate(source, Mode::Executable);
+    verify_with_clang("class_null_dispatch", &output.module);
 }

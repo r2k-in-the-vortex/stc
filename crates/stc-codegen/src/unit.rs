@@ -45,6 +45,8 @@ pub(crate) struct Lowerer<'a> {
     pub types: crate::types::TypeSystem<'a>,
     pub layouts: BTreeMap<DefId, ProgramLayout>,
     pub objects: BTreeMap<DefId, config::ObjectLayout>,
+    /// Leaf-ordinal map per class/FB type, keyed by root segments.
+    pub object_ordinal_map: BTreeMap<DefId, BTreeMap<Vec<crate::types::RootSegment>, u32>>,
     pub used_std: BTreeSet<DefId>,
     pub plan: Plan,
     pub image: ImageLayout,
@@ -68,6 +70,8 @@ struct AbiParam {
     by_pointer: bool,
     llvm: IrType,
     storage: IrType,
+    /// Function-block values pass a caller-owned record pointer.
+    fb: bool,
 }
 
 /// Generates IR and metadata for a checked HIR crate.
@@ -82,6 +86,23 @@ pub(crate) fn generate(
         .map_err(|errors| errors.into_iter().collect::<Vec<_>>())?;
     let layouts = config::program_layouts(hir, &plan, &types)?;
     let objects = config::object_layouts(hir, &types)?;
+    let object_ordinal_map = objects
+        .iter()
+        .map(|(def, layout)| {
+            let ordinals = layout
+                .leaves
+                .iter()
+                .enumerate()
+                .map(|(index, leaf)| {
+                    (
+                        leaf.segments.clone(),
+                        u32::try_from(index).unwrap_or(u32::MAX),
+                    )
+                })
+                .collect();
+            (*def, ordinals)
+        })
+        .collect();
     let used_std = crate::types::used_standard_fbs(hir);
     let image = config::image_layout(hir, &plan, &layouts)?;
     let retain = config::retain_layout(hir, &plan, &layouts, &types)?;
@@ -94,6 +115,7 @@ pub(crate) fn generate(
         got,
         layouts,
         objects,
+        object_ordinal_map,
         used_std,
         types,
         plan,
@@ -152,18 +174,6 @@ impl Lowerer<'_> {
 
     pub(crate) fn span_id(&self, span: Span) -> u32 {
         self.span_ids.get(&span).copied().unwrap_or(0)
-    }
-
-    /// Rejects class-typed callable parameters and results until phase 4b.3
-    /// wires the handle ABI; the type/layout projection itself is ready.
-    fn check_callable_class_ty(&mut self, ty: TyId, what: &str, span: Span) {
-        if self.types.facts(ty).is_ok_and(|facts| facts.is_class()) {
-            self.push_error(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                format!("class {what}s are M5 phase 4b.3"),
-                span,
-            ));
-        }
     }
 
     fn build_symbols(&mut self) {
@@ -271,15 +281,13 @@ impl Lowerer<'_> {
                             def.span,
                         ));
                     }
-                    if let Some(result) = result {
-                        self.check_callable_class_ty(*result, "result", def.span);
-                        if let Err(error) = self.types.facts(*result) {
-                            self.push_error(error);
-                        }
+                    if let Some(result) = result
+                        && let Err(error) = self.types.facts(*result)
+                    {
+                        self.push_error(error);
                     }
                     for param in params {
                         let data = self.hir.param(*param);
-                        self.check_callable_class_ty(data.ty, "parameter", data.span);
                         if let Err(error) = self.types.facts(data.ty) {
                             self.push_error(error);
                         }
@@ -291,15 +299,13 @@ impl Lowerer<'_> {
                     }
                 }
                 DefKind::Method { result, params, .. } => {
-                    if let Some(result) = result {
-                        self.check_callable_class_ty(*result, "result", def.span);
-                        if let Err(error) = self.types.facts(*result) {
-                            self.push_error(error);
-                        }
+                    if let Some(result) = result
+                        && let Err(error) = self.types.facts(*result)
+                    {
+                        self.push_error(error);
                     }
                     for param in params {
                         let data = self.hir.param(*param);
-                        self.check_callable_class_ty(data.ty, "parameter", data.span);
                         if let Err(error) = self.types.facts(data.ty) {
                             self.push_error(error);
                         }
@@ -419,12 +425,31 @@ impl Lowerer<'_> {
     fn abi_param(&self, param: ParamId) -> Result<AbiParam, CodegenError> {
         let data = self.hir.param(param).clone();
         let facts = self.types.facts(data.ty)?.clone();
+        if facts.is_class() {
+            // A class IN parameter is a handle value; OUT and VAR_IN_OUT
+            // parameters receive the caller's handle slot.
+            let by_pointer = data.direction != ArgDirection::Input;
+            return Ok(AbiParam {
+                id: param,
+                by_pointer,
+                llvm: IrType::Ptr,
+                storage: IrType::Ptr,
+                fb: false,
+            });
+        }
+        if facts.is_object() {
+            // An FB parameter is a caller-owned instance record for every
+            // direction; IN receives a copy the caller made.
+            return Ok(AbiParam {
+                id: param,
+                by_pointer: true,
+                llvm: IrType::Ptr,
+                storage: facts.llvm_storage.clone(),
+                fb: true,
+            });
+        }
         let by_pointer = data.direction != ArgDirection::Input || facts.is_contiguous_aggregate();
-        let storage = if facts.is_object() {
-            facts.llvm_value.clone()
-        } else {
-            facts.llvm_storage.clone()
-        };
+        let storage = facts.llvm_storage.clone();
         let llvm = if by_pointer {
             IrType::Ptr
         } else {
@@ -435,6 +460,7 @@ impl Lowerer<'_> {
             by_pointer,
             llvm,
             storage,
+            fb: false,
         })
     }
 
@@ -447,7 +473,7 @@ impl Lowerer<'_> {
     ) {
         for (index, param) in params.iter().enumerate() {
             let incoming = f.param_value(offset + index);
-            if param.by_pointer {
+            if param.fb || param.by_pointer {
                 info.params.insert(param.id, incoming);
             } else {
                 let slot = f.alloca(param.storage.clone());
@@ -501,8 +527,6 @@ impl Lowerer<'_> {
         let result_abi = result_facts.as_ref().map(|facts| {
             if aggregate_result {
                 IrType::Void
-            } else if facts.is_object() {
-                facts.llvm_value.clone()
             } else {
                 facts.llvm_storage.clone()
             }
@@ -528,10 +552,12 @@ impl Lowerer<'_> {
         let mut info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
+            local_objects: BTreeMap::new(),
             result_ptr: None,
             result_ty: None,
             slots: slots.clone(),
             fields: None,
+            handle: None,
             return_label: f.next_block_label(),
         };
         self.bind_abi_params(&mut f, &mut info, &param_data, 0);
@@ -552,6 +578,7 @@ impl Lowerer<'_> {
             info.result_ptr = Some(slot);
             info.result_ty = result_abi.clone();
         }
+        self.lower_result_objects(&mut f, &mut info, def, result)?;
         let previous = self.current_slots.replace(slots);
         let result = (|| -> Result<(), CodegenError> {
             self.lower_locals(&mut f, &mut info, &body.locals)?;
@@ -577,6 +604,27 @@ impl Lowerer<'_> {
         result
     }
 
+    /// Allocates the owned instance of an FB result.
+    fn lower_result_objects(
+        &mut self,
+        f: &mut Function,
+        info: &mut BodyInfo,
+        def: DefId,
+        result: Option<TyId>,
+    ) -> Result<(), CodegenError> {
+        let Some(ty) = result else {
+            return Ok(());
+        };
+        let facts = self.types.facts(ty)?.clone();
+        if !facts.is_object() || facts.is_class() {
+            return Ok(());
+        }
+        let Some(pointer) = info.result_ptr.clone() else {
+            return Ok(());
+        };
+        self.allocate_object_tree(f, info, crate::expr::ObjectRoot::Result(def), ty, &pointer)
+    }
+
     fn lower_locals(
         &mut self,
         f: &mut Function,
@@ -588,19 +636,152 @@ impl Lowerer<'_> {
             if data.external_target.is_some() {
                 continue;
             }
-            // Class/FB locals keep their owned instance storage until phase
-            // 4b.3 introduces the stack handle and record.
-            let storage = self.types.instance_llvm_storage(data.ty)?;
-            let slot = f.alloca(storage.clone());
+            let facts = self.types.facts(data.ty)?.clone();
+            let has_class = self.types.type_has_class(data.ty);
+            let storage_type = if facts.is_class() {
+                IrType::Ptr
+            } else if has_class {
+                self.types.instance_llvm_storage(data.ty)?
+            } else {
+                facts.llvm_storage.clone()
+            };
+            let slot = f.alloca(storage_type.clone());
             info.locals.insert(*local, slot.clone());
+            f.store(&Value::zero(storage_type.clone()), &slot, None);
+            if has_class {
+                self.allocate_object_tree(
+                    f,
+                    info,
+                    crate::expr::ObjectRoot::Local(*local),
+                    data.ty,
+                    &slot,
+                )?;
+            }
             if let Some(init) = data.init {
                 let value = self.lower_expr(f, info, init)?;
                 self.store_value_as_storage(f, &slot, data.ty, value)?;
-            } else {
-                f.store(&Value::zero(storage), &slot, None);
             }
         }
         Ok(())
+    }
+
+    /// Allocates the stack instances and records of every class/FB object
+    /// owned by one local declaration or result.
+    ///
+    /// A class value is a handle slot; its owned instance is a separate alloca.
+    /// An FB value is an inline instance; nested function blocks share the
+    /// enclosing instance storage. Every object gets a `[N+1 x ptr]` record
+    /// whose first entry is the type's TYPEINFO address and whose tail is the
+    /// base-first leaf storage table (GOT Artifacts §8.5.1, §8.5.6).
+    fn allocate_object_tree(
+        &mut self,
+        f: &mut Function,
+        info: &mut BodyInfo,
+        root: crate::expr::ObjectRoot,
+        ty: TyId,
+        local_storage: &Value,
+    ) -> Result<(), CodegenError> {
+        let plan = self.types.storage_plan(ty, stc_hir::RetainPolicy::None)?;
+        if plan.objects.is_empty() {
+            return Ok(());
+        }
+        let mut allocated: Vec<(Vec<crate::types::RootSegment>, crate::expr::LocalObject)> =
+            Vec::with_capacity(plan.objects.len());
+        for object in &plan.objects {
+            let named_ty = self.types.named_ty(object.def)?;
+            let instance_type = self.types.instance_llvm_storage(named_ty)?;
+            let location = if let Some((container, container_ty, relative)) =
+                self.object_container(&allocated, ty, local_storage, &object.segments)
+            {
+                Some(self.aggregate_pointer(f, container_ty, &container, &relative)?)
+            } else {
+                None
+            };
+            let instance = if object.class {
+                let instance = f.alloca(instance_type.clone());
+                // Each class owns a fresh instance; nested instances are not
+                // part of the declaration's zero-initialized storage.
+                f.store(&Value::zero(instance_type), &instance, None);
+                instance
+            } else if object.segments.is_empty() {
+                local_storage.clone()
+            } else {
+                location.clone().ok_or_else(|| {
+                    CodegenError::internal("a nested FB instance has no container storage")
+                })?
+            };
+            let record_type = self.types.object_record_llvm(object.def)?;
+            let record = f.alloca_typed(&record_type);
+            let handle = if object.class {
+                match object.segments.is_empty() {
+                    true => local_storage.clone(),
+                    false => location.ok_or_else(|| {
+                        CodegenError::internal("a nested class value has no handle slot")
+                    })?,
+                }
+            } else {
+                record.clone()
+            };
+            allocated.push((
+                object.segments.clone(),
+                crate::expr::LocalObject {
+                    def: object.def,
+                    ty: named_ty,
+                    class: object.class,
+                    segments: object.segments.clone(),
+                    instance,
+                    record,
+                    handle,
+                },
+            ));
+        }
+        for (index, (_, object)) in allocated.iter().enumerate() {
+            let typeinfo = self.typeinfo_value(f, info, object.def)?;
+            self.write_record_entry(f, &object.record, 0, &typeinfo);
+            let leaves = plan.objects[index].leaves.clone();
+            for (leaf_index, leaf) in leaves.iter().enumerate() {
+                // Storage-plan object leaves carry the instance's declaration
+                // path; the record stores paths relative to the object type.
+                let relative = leaf.segments.get(object.segments.len()..).unwrap_or(&[]);
+                let pointer = self.aggregate_pointer(f, object.ty, &object.instance, relative)?;
+                self.write_record_entry(f, &object.record, leaf_index + 1, &pointer);
+            }
+        }
+        for (segments, object) in allocated {
+            if object.class {
+                f.store(&object.record, &object.handle, Some(8));
+            }
+            info.local_objects.insert((root.clone(), segments), object);
+        }
+        Ok(())
+    }
+
+    /// Finds the storage of an object's containing instance.
+    fn object_container(
+        &self,
+        allocated: &[(Vec<crate::types::RootSegment>, crate::expr::LocalObject)],
+        local_ty: TyId,
+        local_storage: &Value,
+        segments: &[crate::types::RootSegment],
+    ) -> Option<(Value, TyId, Vec<crate::types::RootSegment>)> {
+        let parent = allocated
+            .iter()
+            .filter(|(prefix, _)| prefix.len() < segments.len() && segments.starts_with(prefix))
+            .max_by_key(|(prefix, _)| prefix.len());
+        match parent {
+            Some((prefix, object)) => Some((
+                object.instance.clone(),
+                object.ty,
+                segments[prefix.len()..].to_vec(),
+            )),
+            None => Some((local_storage.clone(), local_ty, segments.to_vec())),
+        }
+    }
+
+    /// Emits the record-entry store used by local object initialization.
+    fn write_record_entry(&self, f: &mut Function, record: &Value, index: usize, value: &Value) {
+        let slot = f.gep("ptr", record, &[format!("i64 {index}")], true);
+        f.store(value, &slot, Some(8));
     }
 
     fn emit_fb_bodies(&mut self) {
@@ -654,24 +835,27 @@ impl Lowerer<'_> {
             SymbolAttrs::internal(),
             IrType::Void,
             vec![
-                (IrType::Ptr, "%fields".into()),
+                (IrType::Ptr, "%this".into()),
+                (IrType::Ptr, "%table".into()),
                 (IrType::Ptr, "%slots".into()),
             ],
         );
         f.start_fresh_block();
         let ordinals = self.object_ordinals(&layout);
-        let slots = f.param_value(1);
+        let slots = f.param_value(2);
         let mut info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
+            local_objects: BTreeMap::new(),
             result_ptr: None,
             result_ty: None,
             slots: slots.clone(),
             fields: Some(FieldAccess {
-                pointer: f.param_value(0),
+                pointer: f.param_value(1),
                 ordinals,
                 direct: BTreeMap::new(),
             }),
+            handle: Some(f.param_value(0)),
             return_label: f.next_block_label(),
         };
         let previous = self.current_slots.replace(slots);
@@ -742,14 +926,15 @@ impl Lowerer<'_> {
         let result_abi = result_facts.as_ref().map(|facts| {
             if aggregate_result {
                 IrType::Void
-            } else if facts.is_object() {
-                facts.llvm_value.clone()
             } else {
                 facts.llvm_storage.clone()
             }
         });
         let param_data = self.abi_params(&params)?;
-        let mut fn_params = vec![(IrType::Ptr, "%this".into())];
+        let mut fn_params = vec![
+            (IrType::Ptr, "%this".into()),
+            (IrType::Ptr, "%table".into()),
+        ];
         fn_params.extend(
             param_data
                 .iter()
@@ -773,17 +958,19 @@ impl Lowerer<'_> {
         let mut info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
+            local_objects: BTreeMap::new(),
             result_ptr: None,
             result_ty: None,
             slots: slots.clone(),
             fields: Some(FieldAccess {
-                pointer: f.param_value(0),
+                pointer: f.param_value(1),
                 ordinals,
                 direct: BTreeMap::new(),
             }),
+            handle: Some(f.param_value(0)),
             return_label: f.next_block_label(),
         };
-        self.bind_abi_params(&mut f, &mut info, &param_data, 1);
+        self.bind_abi_params(&mut f, &mut info, &param_data, 2);
         if aggregate_result {
             let pointer = f.param_value(sret_index.expect("aggregate result has sret"));
             let storage = self
@@ -801,6 +988,7 @@ impl Lowerer<'_> {
             info.result_ptr = Some(slot);
             info.result_ty = result_abi.clone();
         }
+        self.lower_result_objects(&mut f, &mut info, def, result)?;
         let previous = self.current_slots.replace(slots);
         let result = (|| -> Result<(), CodegenError> {
             let body = self.hir.bodies[body_id.index()].clone();
@@ -873,14 +1061,15 @@ impl Lowerer<'_> {
         let result_abi = result_facts.as_ref().map(|facts| {
             if aggregate_result {
                 IrType::Void
-            } else if facts.is_object() {
-                facts.llvm_value.clone()
             } else {
                 facts.llvm_storage.clone()
             }
         });
         let param_data = self.abi_params(&params)?;
-        let mut fn_params = vec![(IrType::Ptr, "%this".into())];
+        let mut fn_params = vec![
+            (IrType::Ptr, "%this".into()),
+            (IrType::Ptr, "%table".into()),
+        ];
         fn_params.extend(
             param_data
                 .iter()
@@ -957,6 +1146,7 @@ impl Lowerer<'_> {
         let mut info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
+            local_objects: BTreeMap::new(),
             result_ptr: None,
             result_ty: None,
             slots: slots.clone(),
@@ -965,6 +1155,7 @@ impl Lowerer<'_> {
                 ordinals,
                 direct,
             }),
+            handle: None,
             return_label: f.next_block_label(),
         };
         let previous = self.current_slots.replace(slots);
@@ -994,10 +1185,12 @@ impl Lowerer<'_> {
         BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
+            local_objects: BTreeMap::new(),
             result_ptr: None,
             result_ty: None,
             slots,
             fields: None,
+            handle: None,
             return_label: f.next_block_label(),
         }
     }

@@ -10,6 +10,7 @@ use crate::codes;
 use crate::expr::{BodyInfo, Res, storage_to_value, to_storage};
 use crate::ir::{Function, IrType, Value};
 use crate::module::FunctionTarget;
+use crate::place::PlaceValue;
 use crate::types::TypeCategory;
 use crate::unit::Lowerer;
 
@@ -17,6 +18,14 @@ struct DeferredCopy {
     target: ExprId,
     temp: Value,
     ty: TyId,
+}
+
+/// How a callable is reached.
+enum CallTarget {
+    /// A GOT function cell.
+    Cell(FunctionTarget),
+    /// A class/FB vtable slot (all class and FB method calls are virtual).
+    Virtual { slot: u32 },
 }
 
 impl Lowerer<'_> {
@@ -48,13 +57,13 @@ impl Lowerer<'_> {
             args,
             supplied,
             Vec::new(),
-            FunctionTarget::Function(def),
+            CallTarget::Cell(FunctionTarget::Function(def)),
             span,
             discard,
         )
     }
 
-    /// Lowers a method call with the receiver object table first.
+    /// Lowers a virtual method call with `(handle, table)` first.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn lower_method_call(
         &mut self,
@@ -77,7 +86,9 @@ impl Lowerer<'_> {
         else {
             return Err(CodegenError::internal("callee is not a method"));
         };
-        let table = self.object_table(f, info, receiver, owner, span)?;
+        let handle = self.object_receiver(f, info, receiver, span)?;
+        let table = Self::object_table_pointer(f, &handle);
+        let slot = self.method_slot(owner, def)?;
         self.lower_callable(
             f,
             info,
@@ -85,8 +96,41 @@ impl Lowerer<'_> {
             result,
             args,
             supplied,
-            vec![table],
-            FunctionTarget::Method(def),
+            vec![handle, table],
+            CallTarget::Virtual { slot },
+            span,
+            discard,
+        )
+    }
+
+    /// Lowers a `SUPER.method()` call to the direct base implementation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn lower_super_method_call(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        receiver: ExprId,
+        def: DefId,
+        args: &[ArgHir],
+        supplied: &[Value],
+        _result_ty: TyId,
+        span: Span,
+        discard: bool,
+    ) -> Res<Option<Value>> {
+        let DefKind::Method { params, result, .. } = self.hir.defs[def.index()].kind.clone() else {
+            return Err(CodegenError::internal("callee is not a method"));
+        };
+        let handle = self.object_receiver(f, info, receiver, span)?;
+        let table = Self::object_table_pointer(f, &handle);
+        self.lower_callable(
+            f,
+            info,
+            &params,
+            result,
+            args,
+            supplied,
+            vec![handle, table],
+            CallTarget::Cell(FunctionTarget::Method(def)),
             span,
             discard,
         )
@@ -103,7 +147,7 @@ impl Lowerer<'_> {
         args: &[ArgHir],
         supplied: &[Value],
         mut call_args: Vec<Value>,
-        target: FunctionTarget,
+        target: CallTarget,
         span: Span,
         discard: bool,
     ) -> Res<Option<Value>> {
@@ -171,11 +215,19 @@ impl Lowerer<'_> {
                         let temp = f.alloca(facts.llvm_storage.clone());
                         f.store(&descriptor, &temp, None);
                         call_args.push(temp);
+                    } else if facts.is_class() {
+                        call_args.push(value);
+                    } else if facts.is_object() {
+                        let storage = facts.llvm_storage.clone();
+                        let temp = f.alloca(storage.clone());
+                        f.store(&value, &temp, None);
+                        let record = self.record_from_contiguous(f, info, &temp, data.ty)?;
+                        call_args.push(record);
                     } else if facts.is_contiguous_aggregate() {
                         let temp = f.alloca(facts.llvm_storage.clone());
                         f.store(&value, &temp, None);
                         call_args.push(temp);
-                    } else if facts.is_object() || facts.is_pointer() {
+                    } else if facts.is_pointer() {
                         call_args.push(value);
                     } else {
                         let kind = facts.scalar().expect("non-aggregate is scalar");
@@ -194,9 +246,21 @@ impl Lowerer<'_> {
                                 span,
                             ));
                         }
-                        let temp = f.alloca(facts.llvm_storage.clone());
-                        f.store(&Value::zero(facts.llvm_storage.clone()), &temp, None);
-                        call_args.push(temp);
+                        if facts.is_class() {
+                            let temp = f.alloca(IrType::Ptr);
+                            f.store(&Value::null_ptr(), &temp, None);
+                            call_args.push(temp);
+                        } else if facts.is_object() {
+                            let storage = facts.llvm_storage.clone();
+                            let temp = f.alloca(storage.clone());
+                            f.store(&Value::zero(storage), &temp, None);
+                            let record = self.record_from_contiguous(f, info, &temp, data.ty)?;
+                            call_args.push(record);
+                        } else {
+                            let temp = f.alloca(facts.llvm_storage.clone());
+                            f.store(&Value::zero(facts.llvm_storage.clone()), &temp, None);
+                            call_args.push(temp);
+                        }
                         continue;
                     };
                     if matches!(
@@ -227,6 +291,40 @@ impl Lowerer<'_> {
                     } else {
                         arg.target
                     };
+                    if facts.is_class() || facts.is_object() {
+                        let Some(place_expr) = place else {
+                            return Err(CodegenError::internal(
+                                "an object output argument has no place",
+                            ));
+                        };
+                        let Some(path) = self.collect_place(place_expr) else {
+                            return Err(CodegenError::unsupported(
+                                codes::CODEGEN_UNSUPPORTED,
+                                "an object output argument must be a place".into(),
+                                span,
+                            ));
+                        };
+                        match self.resolve_place_value(f, info, &path)? {
+                            Some(PlaceValue::ClassSlot(slot)) if facts.is_class() => {
+                                call_args.push(slot);
+                            }
+                            Some(PlaceValue::FbRecord(record)) if facts.is_object() => {
+                                call_args.push(record);
+                            }
+                            _ => {
+                                return Err(CodegenError::unsupported(
+                                    codes::CODEGEN_UNSUPPORTED,
+                                    "an object output argument has no handle or record storage"
+                                        .into(),
+                                    span,
+                                ));
+                            }
+                        }
+                        if arg.negated {
+                            negated_targets.push(place_expr);
+                        }
+                        continue;
+                    }
                     let (pointer, copy) = self.prepare_indirect_argument(
                         f,
                         info,
@@ -259,18 +357,28 @@ impl Lowerer<'_> {
         }
         call_args.push(info.slots.clone());
 
-        let slot = self.function_slot(target)?;
-        let callee = Self::slot_storage(f, info, slot);
         let ret_storage = if aggregate_result {
             IrType::Void
         } else {
             match &result_facts {
-                Some(facts) if facts.is_object() || facts.is_pointer() => IrType::Ptr,
+                Some(facts) if facts.is_class() || facts.is_pointer() => IrType::Ptr,
                 Some(facts) => facts.llvm_storage.clone(),
                 None => IrType::Void,
             }
         };
-        let returned = f.call_ptr(ret_storage, &callee, &call_args);
+        let returned = match target {
+            CallTarget::Cell(target) => {
+                let slot = self.function_slot(target)?;
+                let callee = Self::slot_storage(f, info, slot);
+                f.call_ptr(ret_storage.clone(), &callee, &call_args)
+            }
+            CallTarget::Virtual { slot } => {
+                let handle = call_args.first().cloned().ok_or_else(|| {
+                    CodegenError::internal("a virtual method call has no handle argument")
+                })?;
+                self.call_virtual_method(f, &handle, slot, ret_storage.clone(), &call_args, span)?
+            }
+        };
 
         for copy in deferred {
             let facts = self.types.facts(copy.ty)?.clone();

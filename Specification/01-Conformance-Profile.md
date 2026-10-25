@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b.1 descriptor/hidden-root projection implemented (2026-10-25); interface dispatch and `?=` remain
+Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b.3 object records/virtual dispatch implemented (2026-10-25); interface dispatch and `?=` remain
 
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
@@ -41,9 +41,14 @@ library with cycle-latched timers, and host-rooted retained state for aggregate/
 Function blocks, OOP lowering, aggregates, strings, references, standard functions, and the
 standard FB library are therefore covered by clang acceptance, C-harness execution, and
 online-change preservation tests. Phase 4b.1 projects runtime-owned TYPEINFO/VTABLE descriptors,
-interface-prototype trap stubs, and hidden `HANDLE`/`OBJREC` roots. Interface dispatch,
-assignment attempts (`?=`), and references to split aggregate values remain explicit
-`STC-E-CODEGEN-001` diagnostics; the transient `STC-POINTER` extension is implemented. The
+interface-prototype trap stubs, and hidden `HANDLE`/`OBJREC` roots. Phase 4b.3 lowers object
+values as record handles, allocates local class/FB instances and records on the stack, reads and
+writes persistent objects through their hidden roots, passes `(handle, table, ...)` to object
+bodies, copies class handles versus FB state on assignment, and dispatches every class/FB method
+through TYPEINFO and the class VTABLE (`SUPER` calls the base function cell directly). Class
+handles that refer to activation-owned records are rejected from escaping. Interface dispatch,
+assignment attempts (`?=`), object references, and references to split aggregate values remain
+explicit `STC-E-CODEGEN-001` diagnostics; the transient `STC-POINTER` extension is implemented. The
 manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; full task
 scheduling is M6 (M5 keeps one task per resource). `stc check <file>...` analyzes one in-memory
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
@@ -61,7 +66,7 @@ artifacts on both hosts. Phase 10 closes the documentation and handover pass: th
 set and M5 handover describe the implemented host/module model, and the M6.5 interface boundary
 is recorded. M5 phases 1–6 extend that foundation to aggregates, references, OOP, the standard
 library, and aggregate retained state, including an online change preserving FB and aggregate
-roots; phase 4b.1 projects descriptors and hidden object roots, while interface dispatch and
+roots; phase 4b.3 implements object records and virtual dispatch, while interface dispatch and
 `?=` remain. Full debug/monitoring is M6.5.
 
 ## 2. Input languages
