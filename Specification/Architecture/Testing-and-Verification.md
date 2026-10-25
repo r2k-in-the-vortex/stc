@@ -1,18 +1,19 @@
 # Testing and Verification
 
-Status: M4 suite implemented; online-change/debug test plan resolved (2026-10-24)  
+Status: M4.5 implementation and test plan complete (2026-10-25); M5/M6.5 suites are the target  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
 > **M4/M4.5 status:** IR snapshots, clang verification (`STC_REQUIRE_CLANG=1` in CI), execution
 > tests, C-harness library tests, process-image tests, scalar retained-state tests, determinism
-> checks, the 20k-term deep chain, and the six fuzz targets are implemented. The M4 execution
-> tests build `stc-runtime` once per test process and link harnesses with the driver toolchain
-> discovery. M4.5 phase 9 adds `fuzz_got_manifest` and `fuzz_module_descriptor`, byte-identical
-> end-to-end double builds across output directories, combined launcher/embedding artifact
-> loading, malformed-baseline/metadata negatives, concurrent generation pinning, and a recorded
-> switch-latency measurement. CI runs an explicit `online` job on Windows x64 and Ubuntu x64 and
-> caps fuzz inputs at one MiB.
+> checks, the 20k-term deep chain, and the six fuzz targets are implemented. The execution tests
+> build `stc-runtime` once per test process and link harnesses with the driver toolchain
+> discovery. M4.5 phases 6–9 add the host lifecycle, preservation/remap, artifact/metadata
+> fuzzing, byte-identical end-to-end double builds across output directories, combined
+> launcher/embedding artifact loading, malformed-baseline/metadata negatives, concurrent
+> generation pinning, and a recorded switch-latency measurement. CI runs an explicit `online`
+> job on Windows x64 and Ubuntu x64 and caps fuzz inputs at one MiB. Phase 10 applies the
+> documentation and handover pass; the M5 suites below are the next implementation target.
 
 ## 1. Layers of testing
 

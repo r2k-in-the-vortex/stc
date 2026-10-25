@@ -1,6 +1,6 @@
 # I/O and Device Linking
 
-Status: M4 scalar image implemented; online-change policy resolved (2026-10-24)  
+Status: M4.5 scalar process image and online remap implemented (2026-10-25); device backends are M6  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Tokenization](../Syntax/Tokenization.md)
 
@@ -27,12 +27,15 @@ Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [
 receive type defaults, unbound outputs are discarded), `memory` (tests), or optionally `file`.
 EtherCAT, Modbus, and MQTT are planned for v2 and are noted here but not designed in v1.
 
-> **M4 status:** `AT` scalar layout, contiguous `%I`/`%Q`/`%M` image sizing, `offset_bits`,
-> `{stc:io}` hints, `<name>.stc-meta.json`, and unbound-input defaults are implemented.
-> Generated `stc_init` calls `stc_rt_io_configure`/`stc_rt_io_image`, caches the image pointer,
-> and applies declared input defaults once. The generated cycle does not reapply defaults, so a
-> library host can drive inputs between cycles; M6 owns per-cycle backend precedence. The
-> device tree, project bindings, `VAR_ACCESS` metadata, and non-null backends are M6.
+> **M4.5 status (2026-10-25):** `AT` scalar layout, contiguous `%I`/`%Q`/`%M` image sizing,
+> `offset_bits`, `{stc:io}` hints, `<name>.stc-meta.json`, and unbound-input defaults are
+> implemented. The host reads the metadata sidecar, configures the image on cold install, and
+> binds `Direct` cells; the module reaches the image through the ABI 2 `io_image`/`io_size`
+> services. Activation reconfigures the image or remaps direct cells by `GotId`, preserves `%M`
+> and same-address values, snapshots the image for rollback, and warns about moved variables.
+> The generated cycle does not reapply input defaults, so an embedding host can drive inputs
+> between cycles. The device tree, project bindings, `VAR_ACCESS` metadata, file/device
+> backends, and per-cycle backend precedence are M6.
 >
 > **Online-change policy (resolved):** the host owns the process image. Each direct variable/
 > field has a per-generation GOT cell; a swap reconfigures the image, re-evaluates bindings,

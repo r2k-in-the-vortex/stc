@@ -1,6 +1,6 @@
 # stc Project Plan
 
-Status: Online-change architecture resolved (2026-10-24)  
+Status: M4.5 online-change foundation implemented (2026-10-25); M5 is next  
 Date: 2026-10-24  
 Profile: `stc-2013-oop-utf8-v1`  
 Standard reference: IEC 61131-3:2013 (Ed. 3.0), local copy under `Specification/Reference/`
@@ -35,9 +35,9 @@ is specified in
 4. A small Rust runtime with a stable C ABI, usable by both generated executables and embedding
    hosts.
 5. Both artifact modes:
-   - executable: generated `main` + cyclic runtime scheduler;
-   - library: no `main`; exported `stc_init`, the `stc_module_*` entry points, and explicit
-     exports.
+   - executable: a thin host launcher that loads an adjacent module/manifest pair;
+   - library: no `main`; an embedding host that exports the `stc_host_*`/`stc_rt_execute`
+     boundary, with the generated `stc_module_*` code kept in the separate module.
 6. A Cargo-like CLI with human and JSON diagnostics, verbose phase output, and a built-in test
    runner.
 7. Lean models and proofs for exact functions (integer, bitwise, conversion, selection, and
@@ -157,7 +157,7 @@ portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 por
 - Rust workspace under `crates/`.
 - `crates/stc-runtime` — persistent host runtime with a C ABI: cycle loop, GOT, root
   allocator, module loader, manifest store, swap controller, state, I/O, and debug services;
-  also the `staticlib`/`cdylib` used by embedding hosts.
+  also the `staticlib` (with an `rlib` for Rust integration tests) used by embedding hosts.
 - Loadable `module` artifacts (`.dll`/`.so`) generated from ST, each paired with a GOT
   manifest; `exe` is a thin host launcher for an adjacent module.
 - `stdlib/` — standard function blocks written in ST (dogfooding the compiler).
@@ -337,7 +337,7 @@ Exit criteria:
   and measured.
 - M4 scalar semantics are unchanged; M4 code-linked artifacts are explicitly non-loadable.
 
-> **M4.5 status (2026-10-25):** phases 0–9 are complete for review; phase 10 is next. Phase 1
+> **M4.5 status (2026-10-25):** phases 0–10 are complete. Phase 1
 > fixes the versioned artifact contracts in [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md):
 > stable keys, `GotId`, catalog, module descriptor, host ABI 2.0, manifest/plan formats, build IDs,
 > and pairing. Phase 2 implements the identity/manifest layer in `stc-got`; decisions
@@ -359,7 +359,11 @@ Exit criteria:
 > (D-125). Phase 9 adds artifact/metadata fuzz targets, end-to-end byte-identical double builds
 > with deterministic Windows PE timestamps, a combined launcher/embedding artifact test,
 > malformed-baseline and metadata negatives, concurrent generation-pin coverage, a recorded
-> O(1) switch measurement, and an explicit Windows/Linux `online` CI job (D-126).
+> O(1) switch measurement, and an explicit Windows/Linux `online` CI job (D-126). Phase 10
+> completes the documentation and handover pass: the specification set, README, decisions, and
+> `handover_to_M5.md` describe the implemented host/module model, and
+> [Debug and Monitoring](Architecture/Debug-and-Monitoring.md) §12 records the M4.5 interface
+> that M6.5 extends (D-127). M5 is the next milestone.
 
 ### M5 — FBs, OOP, aggregates, and UTF-8 strings
 
@@ -540,13 +544,15 @@ Exit criteria:
    online-change architecture is recorded in
    [Online Change and GOT](Architecture/Online-Change-and-GOT.md), and the resolved question log
    is in `update_plan_got.md` §13.0.
-2. Apply the remaining documentation checklist from `update_plan_got.md` §12: architecture,
-   runtime, state, I/O, CLI, testing, AST/HIR, conformance, decisions, README, M4 note, and M5
-   handover.
-3. `M4.5-Plan.md` and `M6.5-Plan.md` are written; M4.5 phase 0 is complete and phase 1 fixes
-   the artifact schemas in [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md).
-4. Do not implement M5 OOP/aggregates on the old direct-reference or contiguous-object model.
-   Implement the M4.5 foundation first (Q-090/Q-091/Q-095).
+2. The `update_plan_got.md` §12 documentation checklist is applied: architecture, runtime, state,
+   I/O, CLI, testing, AST/HIR, conformance, decisions, README, M4/M4.5 notes, and the M5 handover
+   reflect the implemented host/module model.
+3. `M4.5-Plan.md` is complete through phase 10 and `M6.5-Plan.md` is written; the M5 handover
+   addendum is final, and the artifact schemas are fixed in
+   [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md).
+4. M4.5 is implemented; do not implement M5 OOP/aggregates on the old direct-reference or
+   contiguous-object model, and do not reintroduce module-owned state or descriptors
+   (Q-090/Q-091/Q-095).
 5. Keep host-specific operations (paths, clock, linker discovery, module loading, atomic
    replace) behind a platform layer; Linux x86-64/AArch64 host support follows basic development
    (M8, D-042).

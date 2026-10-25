@@ -1,6 +1,6 @@
 # Architecture
 
-Status: M4 implemented; online-change architecture resolved (2026-10-24)  
+Status: M4.5 host/module model implemented for the scalar surface (2026-10-25); M5 is next  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
 
@@ -52,7 +52,7 @@ stc/
     stc-sema/                name resolution, type checking, const eval, lowering
     stc-codegen/             IR builder, GOT/manifest model, ABI, mangling, module emission
     stc-manifest/            stc.toml schema, local dependency graph, source discovery
-    stc-runtime/             persistent host, loader/GOT/root allocator, staticlib/cdylib
+    stc-runtime/             persistent host, loader/GOT/root allocator, staticlib/rlib
     stc-test/                test discovery, runner, reporting
     stc-driver/              CLI binary `stc`
   stdlib/                    standard function blocks in ST
@@ -134,18 +134,22 @@ expressions with resolved places, callees, and explicit casts.
 
 ## 4. Code generation
 
-> **M4 status:** §4.1–§4.12 are implemented for the elementary scalar subset (D-076–D-093).
-> Functions, programs, globals, scalar operators, checked arithmetic, control flow, the process
-> image, scalar retained leaves, executable/library units, and `{stc:export}` wrappers are
-> emitted and tested. OOP lowering (§4.6), aggregates, strings, references, and standard
-> functions remain M5; codegen rejects them with `STC-E-CODEGEN-001`. `stc_abi_version` is
-> supplied by the runtime, not by the generated module, to avoid a duplicate symbol.
+> **M4.5 status (2026-10-25):** §4.1–§4.12 are implemented for the elementary scalar subset, and
+> the scalar path now uses the persistent host + loadable module model. Functions, programs,
+> globals, scalar operators, checked arithmetic, control flow, the process image, scalar retained
+> leaves, export wrappers, and executable/embedding host units are emitted and tested. Persistent
+> scalars, program fields, direct variables, retained leaves, and task guards are host GOT roots;
+> calls are indirect through function cells; the module exports the ABI 2 entry points,
+> descriptor, and function table; `exe` is a thin launcher and `lib` is the embedding host
+> archive. OOP lowering (§4.6), aggregates, strings, references, and standard functions remain
+> M5; codegen rejects them with `STC-E-CODEGEN-001`. `stc_abi_version` is supplied by the host,
+> not by the generated module, to avoid a duplicate symbol.
 >
-> **Post-M4 architecture (resolved 2026-10-24):** the direct-reference, code-linked artifact
-> model is superseded by M4.5's persistent host + loadable module model. §4.3–§4.9 below are
-> revised so M5 OOP/aggregate/string/reference features are built on GOT roots, runtime
-> descriptors, handles, and place descriptors rather than module-owned contiguous objects. The
-> existing M4 implementation remains the current scalar artifact; the new model begins in M4.5.
+> **Migrated model (implemented 2026-10-25):** the direct-reference, code-linked artifact model
+> is retired. §4.3–§4.9 describe the implemented host/module model: GOT roots, runtime
+> descriptors, handles, and place descriptors rather than module-owned contiguous objects. M4
+> ABI-1 artifacts are explicitly non-loadable; the driver no longer emits a code-linked
+> executable or library.
 
 ### 4.1 IR builder
 
@@ -365,15 +369,17 @@ storage and must not retain the pointer beyond the call.
 - Executable mode generates a thin host launcher:
 
   ```llvm
+  @stc_module_path = private constant [N x i8] c"<module-file>\00"
   define i32 @main(i32 %argc, ptr %argv) {
   entry:
-    %rc = call i32 @stc_rt_execute(i32 %argc, ptr %argv, ptr @stc_module_descriptor)
+    %rc = call i32 @stc_rt_execute(i32 %argc, ptr %argv, ptr @stc_module_path)
     ret i32 %rc
   }
   ```
 
-  `stc_rt_execute` loads the adjacent module, owns the cycle loop, time base, cycle limit,
-  signal handling, error reporting, and the online-change controller.
+  `stc_rt_execute` resolves the adjacent module, owns the cold-install and cycle loop, cycle
+  limit, latched time base, error reporting, and the host state machine. M4.5's launcher is
+  cold-install only; signal handling and the background online-change controller are M6.
 - Library mode exports the host embedding entry points; `{stc:export}` wrappers are served
   through the host export registry for the active module, which remains a separate loadable
   artifact. The embedding host owns the loop, I/O backend, manifest store, and debug services.
@@ -402,7 +408,9 @@ signature hash is a stable 64-bit FNV-1a of the canonical type string, not a ran
 ### 4.11 Debug information
 
 - Debug information is the default v1 build output; `--release` selects the optional stripped,
-  optimised mode. Debug and release builds have distinct build IDs and manifests.
+  optimised mode. Debug and release builds have distinct build IDs and manifests. This is the
+  M6.5 target; M4.5 emits no DWARF/CodeView or checkpoints (see
+  [Debug and Monitoring](Debug-and-Monitoring.md) §12).
 - Codegen emits full DWARF/CodeView variable/type/location information through clang, plus a
   checkpoint table and host check calls for breakpoints. It does not patch machine code.
 - The IR builder retains source-span IDs and manifest-linked field/type identities so the
@@ -487,12 +495,13 @@ project targets IR syntax accepted by LLVM 15 and later.
 | Artifact | Command shape |
 | --- | --- |
 | IR only | `stc build --emit=ir` writes `<name>.ll`; no clang call |
-| Object | `clang --target=<triple> -x ir <name>.ll -c -o <name>.o -O<level> [-g]` |
-| Module | `clang --target=<triple> -shared -fPIC <name>.ll -o <name>.dll/.so`; paired manifest written by the compiler |
-| Executable | `clang --target=<triple> <launcher>.ll <runtime_staticlib> -o <name>.exe -O<level> [-g]`; loads an adjacent module |
-| Static library | `clang ... -c` then `llvm-ar rcs <name>.a <objects>` plus the runtime object |
-| Embedding library | `clang --target=<triple> -shared <name>.ll <runtime> -o <name>.dll/.so` with the host embedded |
+| Object | `clang --target=<triple> -x ir <name>.ll -c -o <name>.o [-fPIC] -O0` |
+| Module | `clang --target=<triple> <name>.o -shared -o <name>-<build-id>.dll/.so` (Windows adds `/Brepro`); the paired manifest and metadata are written by the compiler |
+| Launcher | `clang --target=<triple> <name>-launcher.o <runtime_staticlib> -o <name>.exe`; loads the adjacent module pair |
+| Embedding library | copy the runtime staticlib to `<name>.lib`/`.a`; generated code stays in the separate module |
 
+- M4.5 compiles at `-O0` without debug information. Optimisation levels, `-g`, and `--release`
+  are M6.5; the generated module and manifest remain separate artifacts in every mode.
 - The runtime staticlib is built with the toolchain that matches the target C ABI: the MSVC
   toolchain for `*-pc-windows-msvc` and the GNU toolchain for `*-unknown-linux-gnu`.
 - On Windows MSVC targets, clang uses `link.exe` or `lld-link`. On Linux targets it uses the
@@ -505,11 +514,14 @@ project targets IR syntax accepted by LLVM 15 and later.
 ### 6.3 Artifact layout
 
 ```text
-target/stc/<profile>/
+target/stc/debug/            M4.5 default; the v1 project manifest uses target/stc/<profile>/
   <name>.ll
   <name>.o
-  <name>.exe | <name>.dll/.so | <name>.a
-  <name>.stc-meta.json       runtime descriptor, exports, source map
+  <name>.exe                                     thin host launcher
+  <name>-launcher.ll | <name>-launcher.o         launcher IR/object when `exe`
+  <name>.lib | <name>.a                          embedding host archive
+  <name>-<build-id>.dll | <name>-<build-id>.so  loadable module
+  <name>.stc-meta.json       runtime descriptor, exports, source map, image/direct bindings
   <name>.stc-got.json        canonical manifest (tooling/download)
   <name>.stc-got.bin         compact runtime manifest projection
   build.log                  verbose log (if -v)

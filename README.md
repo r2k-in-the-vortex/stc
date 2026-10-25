@@ -7,25 +7,25 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M4 LLVM IR core codegen complete.** The repository contains the source-map and diagnostic
-crates, the full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST views,
-strict pragma JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery,
-unsupported-construct diagnostics), `stc-hir` (arenas, stable IDs, interner, canonical types,
-resolved bodies, `{stc:io}` hints, export names, folded task values), `stc-sema` (collection,
-namespaces/`USING`, name resolution, type checking, constant evaluation, initializers, access
-control, OOP, references, I/O and retention checks, HIR lowering), `stc-codegen` (deterministic
-textual LLVM IR for the elementary scalar subset: expressions, checked arithmetic, casts,
-control flow, functions, programs, globals, process image, scalar retained leaves), and
-`stc-runtime` (Rust `staticlib` with the C ABI, cycle loop, process image, clock, traps, and
-retained-state stubs). The driver provides `stc parse`, `stc check`, and the M4
-`stc build <file>...` bridge with `--emit=ir,obj,module,exe,lib,metadata`; clang lowers and links
-`module`, `executable` (thin launcher), and embedding-library artifacts.
+**M4.5 online-change foundation complete; M5 is next.** The repository contains the source-map
+and diagnostic crates, the full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST,
+typed AST views, strict pragma JSON), `stc-parser` (full ST grammar, Annex A precedence, error
+recovery, unsupported-construct diagnostics), `stc-hir` (arenas, stable IDs, interner, canonical
+types, resolved bodies, `{stc:io}` hints, export names, folded task values), `stc-sema`
+(collection, namespaces/`USING`, name resolution, type checking, constant evaluation,
+initializers, access control, OOP, references, I/O and retention checks, HIR lowering),
+`stc-codegen` (deterministic textual LLVM IR for the elementary scalar subset, the GOT module IR
+builder and verifier, and the catalog/descriptor/manifest projection), `stc-got` (stable keys,
+`GotId`, catalog, manifest/plan and descriptor codecs), and `stc-runtime` (persistent host with
+the GOT, root allocator, loader, manifest store, swap state machine, ABI 2 services, cycle loop,
+process image, traps, and retained-state stubs). The driver provides `stc parse`, `stc check`,
+and the `stc build <file>...` bridge with `--emit=ir,obj,module,exe,lib,metadata`; clang lowers
+and links `module`, `executable` (thin launcher), and embedding-library artifacts.
 
 The online-change architecture is **resolved** (2026-10-24): the v1 runtime is a persistent host
 plus loadable whole-program modules, persistent memory is host-owned and accessed through a
 project-defined GOT, every module is paired with a persistent GOT manifest, and activation is a
-cycle-boundary module swap. M4.5 phases 0–9 are complete for review (2026-10-25): the versioned
-`GotId`,
+cycle-boundary module swap. M4.5 phases 0–10 are complete (2026-10-25): the versioned `GotId`,
 catalog, descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md); `stc-got` implements
 stable keys, catalog records, binary/canonical-JSON manifests, baseline matching, tracked
@@ -54,13 +54,18 @@ deterministic Windows PE timestamps); a combined `exe,lib` build is loaded by bo
 and the embedding C harness; malformed baselines and options are negative-tested; concurrent
 generation pins and metadata parsing have focused tests; and a recorded switch measurement (1 µs
 at 1024 roots versus 86 ms prepare) supports the O(1) activation claim. CI runs an explicit
-online-change job on Windows and Ubuntu. The foundation milestone is M4.5 before M5; full
-debug/monitoring is M6.5. Phase 10 (final documentation and M5 handover) remains.
+online-change job on Windows and Ubuntu. Phase 10 closes the milestone's documentation: the
+specification set, plan, decision log, and M5 handover describe the implemented host/module
+model, [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md) §12 records
+the boundary M6.5 builds on, and the M5 handover addendum records the contracts M5 must extend.
+The foundation milestone is M4.5 before M5; full debug/monitoring is M6.5.
 
-M4 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
-functions, the standard FB library, the manifest, `stc run`, or `stc test`; those constructs are
-rejected with explicit `STC-E-CODEGEN-001` diagnostics. Retained-state file I/O is an M6 stub
-(returns "disabled"), and task scheduling beyond one task per resource is M5. Parser and
+M4.5 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
+functions, or the standard FB library; those constructs are rejected with explicit
+`STC-E-CODEGEN-001` diagnostics and are M5. The project manifest, `stc run`, `stc test`, and
+file-backed retained state are M6, and full task scheduling is M6 (M5 keeps one task per
+resource). The persistent host, loadable modules, GOT roots, manifests, swap protocol, and
+process-image remap are implemented for the M4 scalar surface. Parser and
 semantic snapshots, IR snapshots, clang verification, execution and C-harness tests, a committed
 corpus, traceability tables, deterministic property tests, a 20k-term deep-chain test, and
 `fuzz_lexer`, `fuzz_parser`, `fuzz_analyzer`, `fuzz_codegen`, `fuzz_got_manifest`, and
@@ -213,14 +218,14 @@ stc run --watch         watch, rebuild, and deploy online (M6)
 stc debug               start a local debug/monitoring session (M6.5)
 ```
 
-M4 implements `stc parse`, `stc check`, and `stc build` (with `--name`, `--emit`, `--out-dir`,
-`--target`, `--clang`, `--runtime`, `--relaxed`, `--message-format`, and `-v`). `stc new`,
-`stc run`, `stc test`, `stc fmt`, `stc clean`, `stc metadata`, and `stc compliance`, the
-manifest, verbose `-vv`, color control, and warnings-as-errors arrive in M6. M4.5 adds
-`--emit=module`, `--got-manifest`, `--cold`, `--rename`, the thin `exe` launcher, the embedding
-`lib` host, and the online-change foundation.
-`--debug`/`--release` select debug-info emission; debug is the default and `--release` is the
-optional stripped/optimised mode.
+M4.5 implements `stc parse`, `stc check`, and `stc build` (with `--name`, `--emit`, `--out-dir`,
+`--target`, `--clang`, `--runtime`, `--relaxed`, `--message-format`, `-v`, `--got-manifest`,
+`--cold`, `--rename`, and `--allow-untracked-removal`). `stc new`, `stc run`, `stc test`,
+`stc fmt`, `stc clean`, `stc metadata`, and `stc compliance`, the project manifest, verbose
+`-vv`, color control, and warnings-as-errors arrive in M6. M4.5 adds `--emit=module`, the thin
+`exe` launcher, the embedding `lib` host, and the online-change foundation. The `--debug` and
+`--release` options and debug-info emission are M6.5; M4.5 artifacts are always built in the
+unoptimised debug form and contain no DWARF/CodeView or checkpoint hooks yet.
 
 Cargo-like diagnostics (`file:line:col: error[STC-E-...]`), source snippets, notes, suggestions,
 and JSON output are implemented. Details:
@@ -288,8 +293,9 @@ schema details are in
 stc/
   .github/workflows/         GitHub Actions CI
   .markdownlint-cli2.jsonc   Markdown lint configuration
-  M4.5-Plan.md               online-change foundation plan
+  M4.5-Plan.md               online-change foundation plan (complete)
   M6.5-Plan.md               debug/monitoring plan
+  handover_to_M5.md          M4.5 handover and M5 opening contract
   update_plan_got.md         resolved online-change planning record
   tools/ci/check_docs.py     specification, link, and profile checks
   Cargo.toml                 workspace manifest
@@ -303,13 +309,13 @@ stc/
     stc-fmt/                 fixed-style formatter over the lossless CST
     stc-hir/                 resolved/typed HIR, arenas, types
     stc-sema/                name resolution, type checking, constant eval, lowering
-    stc-codegen/             textual LLVM IR builder, ABI, mangling
-    stc-got/                 stable keys, GotId, catalog, GOT manifest/plan codecs
+    stc-codegen/             textual LLVM IR, GOT module builder, catalog/manifest projection
+    stc-got/                 stable keys, GotId, catalog, GOT manifest/plan and descriptor codecs
     stc-manifest/            stc.toml schema, dependency graph, source discovery
-    stc-runtime/             Rust runtime library with C ABI
+    stc-runtime/             persistent host: GOT, roots, loader, swap, ABI 2 services, C ABI
     stc-test/                test discovery and runner
     stc-driver/              CLI binary `stc`
-  fuzz/                      cargo-fuzz workspace; lexer/parser/analyzer/codegen targets
+  fuzz/                      cargo-fuzz workspace; lexer/parser/analyzer/codegen/manifest/descriptor targets
   stdlib/                    standard function blocks in ST
   lean/                      Lake project: exact models, proofs, vector generator
   tests/                     conformance, UI, codegen, execution, projects
@@ -363,7 +369,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-010 | Rust workspace under `crates/`; spec under `Specification/`. |
 | D-011 | v1 runtime is single-task; full config is parsed/analysed. |
 | D-012 | Standard FBs in ST; standard functions in the runtime. |
-| D-013 | Runtime ABI: `stc_init`/`stc_cycle`/`stc_shutdown` + `stc_rt_*`. |
+| D-013 | Runtime ABI: `stc_init`/`stc_cycle`/`stc_shutdown` + `stc_rt_*`. Superseded by D-094/ABI 2 (`stc_module_*` + host API). |
 | D-014 | Strings are length-prefixed fixed-capacity values; `USTRING` uses 4-byte scalars; default 255 characters. |
 | D-015 | Overflow, divide-by-zero, bounds, invalid conversions trap. |
 | D-023 | `ARRAY [*]` is limited to conformant parameters; no dynamic locals/globals/returns. |
@@ -396,6 +402,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-124 | M4.5 phase 7 converts generated execution to the GOT/module model: persistent state, direct variables, retain leaves, and task guards use GOT cells; calls are indirect through function cells; host services use import cells; slot access is the two-load sequence; generated modules export the ABI 2 entry-point set; the host configures the process image and direct bindings from the metadata sidecar; `--emit=module`, the thin launcher, and the embedding host archive are driver artifacts; and a non-local trap boundary enables rollback-window recovery. Existing execution tests run through compiler-produced module pairs, completing the execution conversion before M5 and giving phase 8 a working preservation/rollback substrate. |
 | D-125 | M4.5 phase 8 completes the scalar compatibility/preservation policy: online activation reconfigures the process image or remaps direct cells in place, preserves values by `GotId`, and snapshots the image for rollback; moved variables and quarantined roots are exposed as runtime warnings; `reset_quarantine` is the explicit reset primitive while `Reset`/`Migrate` plans remain rejected; cold installs reinitialize roots and the image, and online prepare initializes only fresh roots; and compiler-produced modules cover initializer/state preservation, tracked rename, untracked-removal policy, type-change rejection with a cold reset, and direct-variable remap. |
 | D-126 | M4.5 phase 9 completes test and CI coverage: `fuzz_got_manifest` and `fuzz_module_descriptor` decode untrusted artifacts without loading native code; end-to-end double builds are byte-identical after adding content-derived Windows PE timestamps (`/Brepro`); combined `exe,lib` output is loaded by both the launcher and an embedding C harness; malformed baselines, invalid options, metadata sidecars, and concurrent generation pins are covered; an ignored measurement records 500 ns/1 µs activation at 16/1024 roots against 1.7 ms/86 ms prepare; and CI adds an explicit Windows/Linux online-change job plus one-MiB fuzz input caps; this closes the M4.5 verification gap on both hosts and records the O(1) switch evidence. |
+| D-127 | M4.5 phase 10 closes the milestone with a documentation and handover pass: the README, project plan, conformance profile, architecture/runtime/state/I/O/CLI/testing/debug specifications, plan, and decision log describe the implemented host/module model; `handover_to_M5.md` records the implemented contracts, M5 extension points, and open M5 decisions; and `Debug-and-Monitoring.md` §12 records the M4.5 boundary for M6.5. The debug-build entry flag is clarified: M4.5 marks its default non-release artifact form but emits no debug information or checkpoint hooks, and the M6.5 required-feature bit stays clear. This keeps the documentation truthful at the milestone boundary and prevents M5/M6.5 from reintroducing the retired direct-reference model or assuming debug hooks that do not exist yet. |
 
 ## Question log
 
@@ -442,7 +449,7 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 (A-005 through A-030). The detailed online-change disposition is in `update_plan_got.md`
 §13.0. New questions will be added here one at a time.
 
-## Building and running (M4)
+## Building and running (M4.5)
 
 ```sh
 cargo test --workspace --locked
@@ -450,15 +457,17 @@ cargo build -p stc-runtime
 cargo run -p stc-driver -- parse path/to/file.st
 cargo run -p stc-driver -- check path/to/file.st path/to/other.st
 cargo run -p stc-driver -- build examples/hello.st --emit=ir
-cargo run -p stc-driver -- build examples/hello.st --emit=exe     --runtime target/debug/stc_runtime.lib
-cargo run -p stc-driver -- build examples/hello.st --emit=lib,metadata     --runtime target/debug/stc_runtime.lib
+cargo run -p stc-driver -- build examples/hello.st --emit=module,metadata
+cargo run -p stc-driver -- build examples/hello.st --emit=module --got-manifest active.stc-got.json
+cargo run -p stc-driver -- build examples/hello.st --emit=exe,lib,metadata --runtime target/debug/stc_runtime.lib
 ```
 
 `stc parse` prints a lossless CST dump (and the typed AST dump with `--ast`). `stc check` accepts
 one or more files, builds one in-memory package, and reports lexical, syntax, and semantic
 diagnostics. Semantic analysis is skipped when parsing has errors (D-070). `stc build` performs
 the same analysis and then emits deterministic IR and, when requested and the toolchain is
-available, objects, executables, or static libraries. Runtime artifact names differ by host:
+available, the loadable ABI 2 module with its manifest, the thin launcher, the embedding host
+library, and metadata. Runtime artifact names differ by host:
 `stc_runtime.lib` on Windows MSVC and `libstc_runtime.a` on Linux GNU. Human diagnostics go to
 stderr; JSON diagnostics go to stdout.
 

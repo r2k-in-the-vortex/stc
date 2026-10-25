@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end and M4 scalar codegen implemented; online-change architecture resolved (2026-10-24)  
+Status: Target profile; M3 front end and M4 scalar codegen implemented; M4.5 online-change foundation complete (2026-10-25)  
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
 Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`, `STC-POINTER`  
@@ -42,14 +42,17 @@ not implemented and are rejected explicitly. `stc check <file>...` analyzes one 
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
 surface. Unsupported constructs are rejected with the diagnostics in
 [Grammar](Syntax/Grammar.md) §13 or `STC-E-CODEGEN-001` rather than silently accepted.
-The online-change/GOT/manifest/debug architecture is resolved. M4.5 phases 0–9 are implemented:
+The online-change/GOT/manifest/debug architecture is resolved and the M4.5 foundation is
+implemented. M4.5 phases 0–10 are complete (2026-10-25):
 generated M4 scalar programs execute as ABI 2 loadable modules through the persistent host, with
 GOT-rooted state, manifest baselines, a thin launcher, and an embedding host. Scalar hot swaps
 preserve compatible roots, initialize new roots once, quarantine removed roots, execute tracked
 renames, reject incompatible type/layout changes until a cold rebuild, and reconfigure the
 process image/remap direct cells at activation. The phase-9 test/CI pass covers double-build
 determinism, malformed manifest/descriptor inputs, concurrent pinning, and the launcher/embedding
-artifacts on both hosts. Phase 10 (final documentation and M5 handover) remains before M5.
+artifacts on both hosts. Phase 10 closes the documentation and handover pass: the specification
+set and M5 handover describe the implemented host/module model, and the M6.5 interface boundary
+is recorded. M5 is the next milestone; full debug/monitoring is M6.5.
 
 ## 2. Input languages
 

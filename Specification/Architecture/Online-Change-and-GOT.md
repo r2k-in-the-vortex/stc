@@ -1,6 +1,6 @@
 # Online Change and GOT
 
-Status: Resolved specification (2026-10-24)  
+Status: Resolved specification (2026-10-24); implemented for the M4 scalar surface (2026-10-25)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -14,6 +14,16 @@ is the normative companion to
 plan, host API, and build-ID formats are fixed in
 [GOT Artifacts and Schemas](GOT-Artifacts.md). The resolved planning rationale and the full
 question disposition are in `update_plan_got.md`.
+
+**Implementation status (2026-10-25):** M4.5 implements the host/module split, host-owned GOT
+and per-field roots, descriptor/manifest pairing, exact-baseline online change, the
+load/prepare/activate/commit/rollback/unload state machine, generation pins, process-image
+reconfiguration and direct-cell remap, and the thin launcher/embedding host artifacts for the
+M4 scalar surface. The byte formats and host API are fixed by
+[GOT Artifacts and Schemas](GOT-Artifacts.md); aggregate/FB roots, OOP descriptors and vtables,
+and place-descriptor references are M5 extensions of the same model. The user-facing
+`stc online` commands and the background loader/service threads are M6; the Rust `Host` API
+drives online prepare/activation today.
 
 ## 1. Terms
 

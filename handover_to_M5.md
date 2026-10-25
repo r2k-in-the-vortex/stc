@@ -1,7 +1,7 @@
 # Handover to M5 — FBs, OOP, Aggregates, Strings, and Standard Library
 
 Profile: `stc-2013-oop-utf8-v1`  
-Date: 2026-10-24  
+Date: 2026-10-24; finalized after M4.5 completion 2026-10-25  
 Prepared after M4 (LLVM IR core codegen) completion
 
 Read this together with the project plan (`Specification/00-Project-Plan.md` §8, M5–M7),
@@ -10,17 +10,18 @@ Read this together with the project plan (`Specification/00-Project-Plan.md` §8
 `Specification/Architecture/IO-and-Devices.md` §2–§5,
 `Specification/Architecture/State-and-Retain.md` §2–§7,
 `Specification/Architecture/Testing-and-Verification.md` §1–§4 and §6,
-`Specification/AST/AST.md` §5–§8, `Specification/Decisions.md` D-059–D-118,
+`Specification/AST/AST.md` §5–§8, `Specification/Decisions.md` D-059–D-127,
 `Specification/Architecture/Online-Change-and-GOT.md`,
 `Specification/Architecture/GOT-Artifacts.md`,
 `Specification/Architecture/Debug-and-Monitoring.md`,
 `M4-Plan.md`, `M4.5-Plan.md`, `update_plan_got.md` §13.0, and `handover_to_M4.md` (the M3→M4
 input, retained for history).
 
-## 0. Online-change addendum (2026-10-24)
+## 0. Online-change addendum — final M4.5 handoff (2026-10-25)
 
-**M4.5 is inserted before M5.** Do not implement M5 directly on M4's artifact model. The
-resolved online-change architecture supersedes several M4-era recommendations in this document:
+**M4.5 is complete and M5 starts on the host/module model.** Do not implement M5 on M4's
+artifact model. The resolved online-change architecture supersedes several M4-era
+recommendations in this document:
 
 - Persistent globals/fields are **host-owned per-field roots** accessed through GOT cells, not
   module-owned globals or contiguous parent structs. This supersedes the struct layouts and
@@ -32,29 +33,55 @@ resolved online-change architecture supersedes several M4-era recommendations in
   superseded for persistent-capable values.
 - Retained state and the state file are host-rooted; references and pointers are never persisted.
   Online attach does **not** load the state file; in-memory values win.
-- `stc build` gains `--emit=module` and the paired GOT manifest. M5 must emit identity records
-  for every new root/field, function/method/FB body, type/descriptor, instance, task, and export.
-- `exe` becomes a thin launcher and `lib` becomes the embedding host library with generated code
-  kept in the separate module; the two may be emitted together (D-109–D-112). M4-era statements
-  that `exe` and `lib` cannot coexist describe the historical M4 path.
+- `stc build` has `--emit=module` and the paired GOT manifest. M5 must emit identity records for
+  every new root/field, function/method/FB body, type/descriptor, instance, task, and export.
+- `exe` is a thin launcher and `lib` is the embedding host library with generated code kept in
+  the separate module; the two may be emitted together (D-109–D-112). M4-era statements that
+  `exe` and `lib` cannot coexist describe the historical M4 path.
 - M5 exit criteria include hot-swap coverage for FB/class state, aggregates/strings, interfaces,
   descriptors, and `POINTER TO`; see §2 and the project plan M5.
 
-M4.5 phases 0–9 are complete: the compiler already projects the M4 scalar surface to the catalog,
-canonical slot bindings, descriptor, manifest, and online-change plan through
-`stc_codegen::module::project` and validates descriptor/manifest pairs in `stc-got`. M5 code must
-extend that catalog (types, descriptors, FB bodies, methods, aggregates) rather than derive
-identities in a second path. Phases 5–7 added the host, loader, and execution conversion. Phase 8
-adds scalar preservation/hot-swap behavior: online activation reconfigures the process image and
-remaps direct cells by `GotId`, preserves compatible roots and direct values, reports moved
-variables and dropped roots through `Host::warnings`, and restores the image with a rollback;
-cold installs reinitialize roots and the image; tracked rename executes; untracked removal needs
-an explicit policy; and incompatible layout/type changes are rejected until a cold rebuild. M5
-must extend the same catalog and plan for aggregate/FB roots, use the `image` remap snapshot for
-any additional host-owned state, and keep `Reset`/`Migrate` reserved. Phase 9 adds full test/CI
-coverage (artifact/metadata fuzzers, double-build determinism, launcher/embedding artifact
-loading, concurrent pins, and the explicit online-change CI job); phase 10 completes the final M5
-handover documentation.
+### 0.1 Implemented M4.5 contracts
+
+M4.5 phases 0–10 are complete. The implementation is the contract M5 extends:
+
+| Crate | Implemented contract |
+| --- | --- |
+| `stc-got` | Stable keys and `GotId`; catalog records; binary/canonical-JSON manifest and plan format 1; descriptor format-1 codec, digest, and pairing; baseline matching; tracked rename/move; preserve/allocate/drop/reject classification; canonical slot assignment; build-ID derivation |
+| `stc-codegen::ir` / `verify` | GOT slot-table access, cell-kind checks, indirect function/import calls, ABI 2 entry points, descriptor/function-table globals, structural verification |
+| `stc-codegen::module` | M4 scalar-surface root catalog (global, program field, direct, task guard), instance/task/export/function records, canonical slot bindings, descriptor, manifest pair, online-change plan, deterministic snapshots |
+| `stc-codegen` lowering | Persistent scalars, program fields, direct `AT` variables, retained leaves, and task guards through GOT cells; user/program calls through function cells; host services through import cells; retain helpers and export wrappers |
+| `stc-runtime` | Host GOT, stable zeroed roots, quarantine, transient allocator, descriptor/manifest/plan validation, platform loader, ABI 2.0 host services, atomic manifest store/download, exact-baseline load/prepare/activate/commit/rollback/unload, generation pins, process-image reconfiguration/remap, runtime warnings, non-local trap boundary |
+| `stc-driver` | `module`/`exe`/`lib`/`metadata` emission; `--got-manifest`, `--cold`, `--rename`, `--allow-untracked-removal`; adjacent module/manifest/metadata naming |
+
+Tests cover identity and second-build reuse, golden descriptors/manifests, byte-identical double
+builds, host lifecycle and rollback, real compiler-produced module hot swaps (code-only, add,
+drop, tracked rename, untracked-removal policy, type/layout rejection with cold reset), direct
+remap, malformed/tampered artifacts, fuzzed manifests/descriptors, concurrent pins, launcher and
+embedding-host artifact loading, and the recorded O(1) switch measurement. CI runs the `online`
+suite on Windows x64 and Ubuntu x64.
+
+### 0.2 What M5 must extend
+
+- Extend the **catalog projection** in `stc_codegen::module` for aggregate/FB/class/interface
+  roots, methods, vtable/type descriptors, and place descriptors. Do not derive identities in a
+  second path.
+- Use `stc-got` classification and slot assignment unchanged; format 1 leaves the later record
+  tables empty, so M5 populates records rather than changing formats.
+- Apply the **per-field root** model recursively. Contiguous objects, module-owned vtables, raw
+  `this` pointers, and persisted references are not permitted.
+- Extend `stc_codegen::ir`/`verify` for aggregate loads/stores and other M5 IR needs; indirect
+  calls and `call_ptr` already exist. Keep the structural contract (no direct persistent root or
+  user-callable reference).
+- Extend the runtime `image`/`memory`/`host` substrate for any new host-owned state; preserve
+  `Reset`/`Migrate` as reserved and keep scalar rollback semantics.
+- Add tests at the same layers: catalog/manifest snapshots, clang acceptance, execution through
+  module pairs, and real hot swaps.
+
+The phase-8 preservation policy is the M5 baseline: matching roots preserve by `GotId`, new roots
+initialize once, removed roots quarantine, tracked renames execute, untracked removals require an
+explicit policy, incompatible type/layout changes are rejected until a cold rebuild, and the
+process image/direct cells remap with a rollback snapshot.
 
 Read [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md),
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md), and `M4.5-Plan.md`
@@ -63,29 +90,33 @@ specification and the schema document win.
 
 ## 1. State at handover
 
-M4 is implemented, verified, and committed as `4c55d71` (`M4: LLVM IR core codegen`). The
-working tree is clean as of 2026-10-24. M3 is `4ddd5ea`; M2 is `24da2f7`; M1 is `51cab11`.
+M4.5 is implemented and complete as of 2026-10-25 (phase 9 commit `5b5da2c` plus this phase-10
+documentation pass). M4 was `4c55d71` (`M4: LLVM IR core codegen`); M3 is `4ddd5ea`; M2 is
+`24da2f7`; M1 is `51cab11`.
 
 | Item | State |
 | --- | --- |
-| Workspace | `stc-span`, `stc-diag`, `stc-lexer`, `stc-syntax`, `stc-parser`, `stc-hir`, `stc-sema`, `stc-codegen`, `stc-runtime`, `stc-driver`; `fuzz/` is separate |
+| Workspace | `stc-span`, `stc-diag`, `stc-lexer`, `stc-syntax`, `stc-parser`, `stc-hir`, `stc-sema`, `stc-codegen`, `stc-got`, `stc-runtime`, `stc-driver`; `fuzz/` is separate |
 | Toolchain | Rust 1.99.1, edition 2024; workspace `unsafe_code = "forbid"`; `stc-runtime` is the documented exception |
-| Tests | 327 passing (`cargo test --workspace --locked`), including codegen, clang verification, execution, and C-harness tests |
+| Tests | 553 passing (`cargo test --workspace --locked`) across 58 test binaries, including codegen, clang verification, execution, host lifecycle, hot-swap, launcher/embedding, and C-harness tests |
 | Checks | clippy `-D warnings`, `cargo fmt --check`, `check_docs.py`, Markdown lint all pass |
-| Fuzzing | `fuzz_lexer`, `fuzz_parser`, `fuzz_analyzer`, `fuzz_codegen`; codegen smoke ~27k runs in 11 s, no findings |
+| Fuzzing | `fuzz_lexer`, `fuzz_parser`, `fuzz_analyzer`, `fuzz_codegen`, `fuzz_got_manifest`, `fuzz_module_descriptor`; descriptor/manifest targets never load native code |
 | Host tools | clang/LLVM 23.1.4, `llvm-ar`, host triple `x86_64-pc-windows-msvc` |
-| Artifacts | `.ll`, `.o`, `.exe`, static `.lib`/`.a`, `.stc-meta.json` produced by `stc build` |
-| Uncommitted | none |
-| Manifest | still absent; `stc check`/`stc build` use the M3 `_root`/`PackageId(0)` bridge |
+| Artifacts | `.ll`, `.o`, loadable `<name>-<build-id>.dll`/`.so` module, `.stc-got.json`/`.stc-got.bin` manifest pair, `.stc-meta.json`, thin `.exe` launcher, embedding `.lib`/`.a` host |
+| Build options | `--emit=ir,obj,module,exe,lib,metadata`, `--got-manifest`, `--cold`, `--rename`, `--allow-untracked-removal` |
+| Uncommitted | phase-10 documentation only |
+| Manifest | implemented; descriptor/manifest pairing, exact-parent baseline, rename/classification, and export/download work |
 
-M4 delivered the first executable artifacts: deterministic textual LLVM IR for the elementary
-scalar subset, a Rust runtime with the C ABI and cycle loop, clang invocation, executable and
-static-library modes, process-image layout/metadata, scalar retained-state ABI, execution tests,
-a C harness, IR snapshots, and a codegen fuzz target.
+M4.5 delivered the online-change foundation: deterministic module IR and GOT slot access, the
+root catalog and identity/manifest projections, the persistent host with stable roots and
+quarantine, the module loader and swap state machine, ABI 2 host services, the execution
+conversion of the M4 scalar surface, the scalar compatibility/remap/rollback policy, the thin
+launcher and embedding host artifacts, artifact fuzzing, and the Windows/Linux CI suite.
 
 `stc check` and `stc build` are the current end of the pipeline. `stc parse` remains single-file
 and syntax-only. Semantic analysis is skipped when lexing/parsing produced errors (D-070).
-`stc-run`/`stc test`/`stc fmt`/the manifest remain later milestones.
+`stc run`/`stc test`/`stc fmt` and the project `stc.toml` manifest remain later milestones (M6);
+the GOT manifest is implemented.
 
 ## 2. M5 scope and exit criteria
 
@@ -113,7 +144,7 @@ From the project plan:
 
 M5 is the milestone where the HIR produced since M3 is fully lowered. It should not change the
 language surface or the semantic rules; M5 implements what the M3 analyzer already resolves.
-M4's explicit deferrals are the M5 work list.
+M4/M4.5's explicit deferrals are the M5 work list.
 
 Recommended M5 boundary:
 
@@ -128,30 +159,34 @@ Recommended M5 boundary:
 | I/O | no new image forms; aggregate `AT` remains rejected by sema | device tree, `VAR_ACCESS` metadata, non-null backends (M6) |
 | ABI | vtables/type descriptors, attempt helper, string/math/date helpers, aggregate retain leaves | file-backed retained state (M6); `stc_rt_assert` (M6 test runner) |
 | Stdlib | standard functions; `SR`, `RS`, `R_TRIG`, `F_TRIG`, `CTU`, `CTD`, `CTUD`, `TP`, `TON`, `TOF`; cycle-latched clock | full task scheduler/mock-clock CLI (M6) |
-| Build | unchanged M4 bridge; `--emit` and artifact names stay stable | manifest, `stc run`, `stc test`, `stc fmt` (M6) |
+| Build | `--emit=module` plus the GOT manifest pair; `--got-manifest`, `--cold`, `--rename`, `--allow-untracked-removal`; extend the catalog/metadata with M5 roots | project `stc.toml`, `stc run`, `stc test`, `stc fmt` (M6) |
 | Test runner | recommend deferring `stc test` execution to M6 (see §9) | test discovery/runner/assert harness (M6) |
 
 Anything outside the M5 column must fail with an explicit codegen diagnostic. Silent emission of
 wrong IR remains worse than a deliberate “not implemented until M6” error.
 
-## 3. Contracts M4 provides
+## 3. Contracts M4.5 provides
 
 ### 3.1 Crates and dependency direction
 
 ```text
 stc-span -> stc-hir -> stc-sema -> stc-parser/stc-syntax
-stc-hir -> stc-codegen -> stc-driver
-stc-span -> stc-codegen
-stc-runtime (independent staticlib, linked by the driver)
+stc-got (format/identity crate; no workspace dependencies)
+stc-hir + stc-span + stc-got -> stc-codegen -> stc-driver
+stc-got -> stc-runtime (staticlib; linked as an artifact, not a normal dependency)
 ```
 
 Rules to preserve:
 
 - `stc-hir` does not depend on `stc-syntax`, `stc-parser`, or `stc-sema`.
-- `stc-codegen` depends only on `stc-hir`, `stc-span`, and std. Tests may use parser/sema as
-  dev-dependencies; production code must not reach into syntax or semantic internals.
-- `stc-runtime` is not a Rust dependency of any workspace crate. The driver discovers and links
-  the artifact.
+- `stc-codegen` depends only on `stc-hir`, `stc-span`, `stc-got`, and std. Tests may use
+  parser/sema as dev-dependencies; production code must not reach into syntax or semantic
+  internals.
+- `stc-got` is the shared identity/manifest/descriptor format crate. Both the compiler and the
+  runtime depend on it so there is one codec and one digest implementation.
+- `stc-runtime` is not a normal Rust dependency of any workspace crate; it depends on `stc-got`
+  (not on compiler crates). The driver links the runtime artifact and uses the crate only as a
+  dev-dependency for host tests.
 - `stc-driver` is both a binary (`stc`) and a small support library (`stc_driver`) exposing
   `toolchain::system_link_args` for integration tests.
 - Only `stc-runtime` may use unsafe code, through a narrow crate-level allowance (D-077).
@@ -187,9 +222,9 @@ impl HirCrate {
 }
 ```
 
-`stc_sema::Analysis` exposes `hir` plus the resolution map. M4 codegen uses only `hir`.
+`stc_sema::Analysis` exposes `hir` plus the resolution map. Codegen uses only `hir`.
 
-M4 added these HIR fields used by M5:
+M4/M4.5 added these HIR fields used by M5:
 
 - `Def.export_name: Option<Symbol>` — validated final C symbol (D-086).
 - `FieldHir.io: Option<IoHint>` and `DefKind::Global { io: Option<IoHint>, .. }` — validated
@@ -287,11 +322,11 @@ codegen must emit these nodes and must never invent a cast.
 - A configuration without `RESOURCE` has a synthesized resource named `RESOURCE`.
 - `HirCrate.entry_configuration` is set only when exactly one configuration exists.
 - Program-instance bindings use `This(program)` for program fields and ordinary places for
-  external targets. M4 binds that pseudo-`this` to the current instance global while lowering
-  `stc_cycle` (D-083).
-- `ConfigInitHir` may carry an `AT` override. M4 rejects overrides explicitly; M5 or M6 may
+  external targets. M4.5 binds that pseudo-`this` to the current instance's field-storage array
+  while lowering the module cycle.
+- `ConfigInitHir` may carry an `AT` override. Codegen rejects overrides explicitly; M5 or M6 may
   implement them.
-- `PlaceHir::InstanceField` is used by `VAR_ACCESS` and other configuration paths; M4 supports
+- `PlaceHir::InstanceField` is used by `VAR_ACCESS` and other configuration paths; M4.5 supports
   only scalar/final-`AT` paths.
 
 ### 3.6 Codegen public API
@@ -299,19 +334,32 @@ codegen must emit these nodes and must never invent a cast.
 ```rust
 pub enum Mode { Executable, Library }
 
+pub struct ModuleBuildOptions<'a> {
+    pub compiler_version: String,
+    pub source_fingerprint: Digest32,
+    pub baseline: Option<&'a Manifest>,
+    pub cold: bool,
+    pub allow_untracked_removal: bool,
+    pub renames: Vec<Rename>,
+}
+
 pub struct Options<'a> {
     pub artifact_name: &'a str,
     pub target: Option<&'a str>,
-    pub debug: bool,
+    pub debug: bool,              // accepted; debug info is M6.5
     pub emit_metadata: bool,
     pub mode: Mode,
+    pub relaxed: bool,
+    pub release: bool,            // artifact-form flag; --release CLI is M6.5
     pub sources: &'a [String],
+    pub module: ModuleBuildOptions<'a>,
 }
 
 pub struct Output {
     pub module: String,
     pub metadata: Metadata,
     pub spans: Vec<SpanEntry>,
+    pub got: ModuleArtifacts,     // descriptor, manifest, slots, JSON/binary bytes
 }
 
 pub enum CodegenError {
@@ -320,21 +368,34 @@ pub enum CodegenError {
 }
 
 pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<CodegenError>>;
+pub fn generate_launcher(artifact_name: &str, module_file: &str, target: Option<&str>) -> String;
 ```
 
-M4's `generate` sequence:
+`stc_codegen::module` exposes the artifact projection M5 extends:
+
+```rust
+pub struct ModuleOptions<'a> { /* target, module name, compiler version,
+                                 source fingerprint, release, relaxed, baseline,
+                                 cold, allow_untracked_removal, renames */ }
+pub struct ModuleArtifacts { /* catalog, manifest + binary/JSON bytes, descriptor +
+                                 bytes/digest, slots, diagnostics */ }
+pub fn project(hir: &HirCrate, sources: &[String], options: &ModuleOptions<'_>)
+    -> Result<ModuleArtifacts, Vec<ModuleError>>;
+```
+
+`stc_codegen::ir` is the textual LLVM builder and `stc_codegen::verify` is the structural
+verifier M5 must keep passing.
+
+M4.5 `generate` sequence:
 
 1. `hir.check_invariants()`.
-2. `config::select_plan` (configuration/implicit-program rules, task-count check).
-3. `config::program_layouts` (scalar program structs, `VAR_CONFIG AT` rejection).
-4. `config::image_layout` (declared `AT` bindings plus anonymous direct-expression spans,
-   sizes, defaults).
-5. `config::retain_layout` (scalar retained leaves, packed offsets, FNV-1a hash).
-6. Build span table and symbol maps.
-7. Preflight definitions; emit types/globals/declarations.
-8. Emit functions, program bodies, `stc_init`/`stc_cycle`/`stc_shutdown`, retain functions,
-   export wrappers, `main` or library metadata.
-9. Build metadata; add embedded metadata symbol in library mode; structural check; render.
+2. `module::project` resolves the selected plan, builds the scalar catalog, matches the baseline,
+   classifies actions, assigns canonical slots, and emits the descriptor, manifest pair, and
+   online-change plan.
+3. `unit::generate` lowers module-shaped IR: GOT slot access, indirect calls, entry points,
+   descriptor/function-table globals, initializers, retain helpers, and export wrappers.
+4. The structural verifier checks the module contract; metadata and spans are assembled and the
+   IR is rendered deterministically.
 
 Driver mapping: `Unsupported` with a span becomes a source diagnostic; empty-span errors are
 printed without a fake location; `Internal` prints `STC-E-CODEGEN-002` and exits 3.
@@ -343,8 +404,11 @@ printed without a fake location; `Internal` prints `STC-E-CODEGEN-002` and exits
 
 ```text
 crates/stc-codegen/src/
-  lib.rs        API, Options/Mode, CodegenError, Output, SpanEntry
-  module.rs     textual IR: IrType, Value, Function, Module, GlobalDef, c_string/quote
+  lib.rs        API, Options/ModuleBuildOptions/Mode, CodegenError, Output, SpanEntry
+  ir.rs         textual IR builder: IrType, Value, Function, Module, GlobalDef, GOT helpers
+  verify.rs     module structural verifier (GOT/cell/entry-point contract)
+  module.rs     catalog projection, descriptor, manifest pair, plan, slot bindings
+  launcher.rs   thin `main` launcher IR for the adjacent module
   layout.rs     ScalarKind, scalar_kind(_at), canonical_type_name, image_span,
                 render_address, FNV-1a
   mangle.rs     normalize_ident, namespace_segments, function_symbol, signature_text,
@@ -357,76 +421,98 @@ crates/stc-codegen/src/
                 checked arithmetic, integer power helper, trap_if, storage conversions
   stmt.rs       statements, control flow, loop stack, CASE chains
   unit.rs       Lowerer, generate orchestration, symbols/preflight, functions/program bodies,
-                init/cycle/shutdown/main/library metadata/exports/retain, metadata assembly
+                GOT-based init/cycle/shutdown, entry points, main/library metadata/exports/retain
   metadata.rs   Json value/model and deterministic writers
-  abi.rs        runtime symbol names, ABI version, trap codes
-  codes.rs      M4 diagnostic/build code constants
+  abi.rs        host-service IDs, ABI version, trap codes
+  codes.rs      M4/M4.5 diagnostic/build code constants
 ```
 
-`BodyInfo` contains parameter/local alloca maps, the result alloca and storage type, an optional
-`this` pointer, and the return label. `Lowerer` owns the module, plan, layouts, image, retain,
-symbol maps, span IDs, and errors.
+`BodyInfo` contains parameter/local alloca maps, the result alloca and storage type, the slot
+table pointer, an optional per-instance field-storage array, and the return label. `Lowerer` owns
+the module, plan, layouts, image, retain, the projected `ModuleArtifacts`, symbol maps, span IDs,
+and errors.
 
 ### 3.8 Module builder surface
 
 ```text
 IrType = Void | Int(u16) | Float | Double | Ptr | Overflow(u16)
 Value  = { ty: IrType, repr: String }   // repr is a temp (%tN) or literal
-Function::new(name, linkage, ret, params)
+SymbolAttrs { linkage, visibility, export, dso_local } / external / internal / private /
+             module_export
+Function::new(name, attrs, ret, params)
   start_block / start_fresh_block / next_block_label / ensure_open
   temp / emit_value / emit / terminate
   branch / cond_branch / ret / unreachable
-  alloca / load / store / binop / unop / icmp / fcmp / select
+  alloca / alloca_typed / load / store / binop / unop / icmp / fcmp / select
   gep(pointee_text, base, indices, inbounds) / gep_bytes
-  call(ret, callee, args) / extract_value / phi / param_value
-  render / check
+  call(ret, callee, args) / call_ptr(ret, callee_cell, args)
+  slot_cell(slots, n) / cell_value(cell) / slot_value(slots, n)
+  extract_value / phi / param_value / render / check
 Module::new(artifact, target)
-  add_type(name, body) / add_global(GlobalDef) / declare(name, signature)
-  add_function(Function) / render / check
+  add_type(name, body) / add_global(GlobalDef) / add_constant_bytes(...)
+  add_descriptor(name, bytes) / add_function_table(name, functions)
+  declare(name, signature) / add_function(Function) / render / check
 ```
 
 `Value.render()` includes the type for contexts that need it (`store`, `ret`, call arguments).
 `binop`/`icmp`/`fcmp`/`phi` emit the type once, as LLVM requires. Names are stable and sorted.
+`slot_cell`/`cell_value`/`slot_value` implement the GOT access contract and record structural
+facts for `verify`.
 
 ### 3.9 Runtime ABI
 
-`crates/stc-runtime` is a Rust `staticlib` exposing:
+`crates/stc-runtime` is a Rust `staticlib` built as the persistent host and embedding library.
 
 ```c
-int32_t stc_abi_version(void);                    /* runtime-owned, value 1 */
-void    stc_rt_trap(int32_t code, uint32_t span_id);   /* exits 70 */
-int32_t stc_rt_execute(int32_t argc, char** argv,
-                       void (*init)(void), void (*cycle)(void), void (*shutdown)(void));
-int64_t stc_rt_cycle_now_ns(void);
-uint64_t stc_rt_monotonic_now_ns(void);
-void    stc_rt_set_cycle_time_ns(int64_t ns);
-int64_t stc_rt_local_date_ns(void);
-void    stc_rt_io_configure(uint64_t input_len, uint64_t output_len, uint64_t marker_len);
-void    stc_rt_io_image(uint8_t** base, uint64_t* len);
-int32_t stc_rt_state_load(void* buffer, int64_t len, int64_t layout_hash);   /* 5 = disabled */
-int32_t stc_rt_state_save(const void* buffer, int64_t len, int64_t layout_hash); /* 5 */
-void    stc_rt_state_configure(const char* path, int32_t policy, int32_t enabled);
+int32_t stc_abi_version(void);                     /* runtime-owned, value 2 */
+int32_t stc_rt_execute(int32_t argc, char** argv, const char* module_path);
+                                                   /* thin-launcher host loop */
+
+int32_t stc_host_load_module(const char* path, int32_t mode); /* 0 cold, 1 online, 2 auto */
+int32_t stc_host_cycle(void);
+int32_t stc_host_shutdown(void);
+void*   stc_host_symbol(const char* name);
+int32_t stc_host_export_manifest(char* buffer, int64_t* len);
+const char* stc_metadata_json(void);
+/* stc_host_run and the full options struct are M6. */
 ```
 
-Generated code declarations in M4 use `i64` for the `uint64_t` lengths; this is ABI-compatible
-on the supported hosts but should be normalized when the ABI is revised.
+Generated modules **do not import `stc_rt_*` symbols**. They receive the ABI 2.0 host API table
+in `stc_module_attach` and call services through import cells: trap, cycle/monotonic/local
+clocks, transient alloc/free, process-image base/size, retained-state load/save, and assert. The
+table layout and signatures are fixed in
+[GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md) §8. The legacy
+`stc_rt_*` helpers remain host-side utilities for the process image, clock, and retained-state
+stubs; the state stubs return 5 (disabled) until M6.
 
 ### 3.10 Build bridge and tests
 
-`stc build <file>... [--name] [--emit=ir,obj,exe,lib,metadata] [--out-dir] [--target]
-[--clang] [--runtime] [--relaxed] [--message-format] [-v]`.
+`stc build <file>... [--name] [--emit=ir,obj,module,exe,lib,metadata] [--out-dir] [--target]
+[--clang] [--runtime] [--got-manifest <path>] [--cold] [--rename old=new]...
+[--allow-untracked-removal] [--relaxed] [--message-format] [-v]`.
 
 - Default emit is `ir`; default out-dir is `target/stc/debug`; default name is the sanitized
   first sorted file stem.
-- `exe` and `lib` cannot be emitted together in M4.
+- The generated program is always the loadable module. `module` emits it with
+  `<name>.stc-got.json`/`.bin` and `.stc-meta.json`; `exe` adds the thin launcher; `lib` copies
+  the embedding host archive; `exe` and `lib` may be emitted together, and generated code is
+  never linked into either host artifact.
+- `--got-manifest` selects the identity baseline, `--cold` ignores it, and `--rename` records a
+  tracked rename/move. A missing/stale/invalid baseline warns and produces a cold-layout plan.
 - Windows MSVC link discovery lives in `crates/stc-driver/src/toolchain.rs`; Linux GNU adds
-  `-ldl -lpthread -lm`; `llvm-ar` is used with an `ar` fallback on non-Windows.
-- Execution tests live in `crates/stc-driver/tests/execution.rs`; C harnesses in
-  `crates/stc-driver/tests/harness/`. The runtime is built once per test process.
+  `-ldl -lpthread -lm`. The embedding `lib` artifact is the runtime staticlib copied into the
+  output directory; generated code is never archived into it.
+- Execution tests live in `crates/stc-driver/tests/execution.rs` and `module_cli.rs`; C harnesses
+  in `crates/stc-driver/tests/harness/`. The runtime is built once per test process.
 - Codegen tests live in `crates/stc-codegen/tests/`; the snapshot harness uses
   `STC_UPDATE_SNAPSHOTS=1`; clang verification is mandatory when `STC_REQUIRE_CLANG=1`.
+- Runtime host tests live in `crates/stc-runtime/tests/`; the switch-latency measurement is an
+  ignored test.
 
 ## 4. M4 behavior and gaps M5 must close
+
+The gaps below are still M5 work, but the M4.5 conversion changed several implementation facts.
+§4.12 lists the corrections; where this section conflicts with §0, §0 wins.
 
 ### 4.1 Preflight rejects every M5 definition
 
@@ -440,7 +526,7 @@ not a per-expression cascade” rule (D-093).
 
 `IrType` has no named, array, struct, string, reference, or interface representation, and
 `Module.type_defs` stores raw strings. M5 needs a typed representation that still renders
-deterministically. Recommended direction: add a module-owned type table with a small `TypeRef`
+deterministically. Recommended direction: add a module-IR type table with a small `TypeRef`
 ID, keep `Value` cheap, and render named types as `%stc.*` names. Do not embed target offsets.
 
 The builder also lacks indirect calls (needed for vtables), aggregate loads/stores, `memcpy`,
@@ -462,19 +548,22 @@ The builder also lacks indirect calls (needed for vtables), aggregate loads/stor
 `ProgramLayout` keeps only non-`AT` scalar fields and a field-index map. `stc_prog_<type>_body`
 is generated for programs only. M5 needs:
 
-- A named struct per class/FB, including inherited base state in a prefix layout.
-- FB bodies `void @stc_prog_<type>_body(ptr %this)` (or the FB naming in Architecture §4.10),
-  with input fields written before the body and output fields read after it.
-- Method functions with an explicit `this` first parameter.
-- `stc_init` initialization of FB/class fields and nested instances.
-- Class/FB method vtables and type descriptors, with deterministic slot order from HIR.
-- Interface values as fat pointers and indirect dispatch through the vtable slot.
-- `THIS`/`SUPER` places and calls, including `SUPER()` body invocation.
+- Per-field host roots for every persistent class/FB field, including inherited fields, with
+  object handles and runtime-owned records/descriptors (not a named module struct with raw
+  `this`).
+- FB bodies called through function cells with the instance handle/field-storage view, with
+  input fields written before the body and output fields read after it.
+- Method functions called through function cells with the receiver handle first.
+- Prepare-time initialization of fresh FB/class fields and nested instances; preserved roots are
+  never reinitialized.
+- Runtime-owned descriptor/vtable records with deterministic slot order from HIR.
+- Interface values `{handle, descriptor}` and dispatch through host-owned function cells.
+- `THIS`/`SUPER` places and calls, including `SUPER()` body invocation, on the same handle.
 
 ### 4.5 Calls and places deferred to M5
 
-M4 lowers only `CalleeHir::Function` and `CalleeHir::Conversion`; all other callee kinds are
-rejected. M4 also rejects `PlaceHir::Index`, `Deref`, `Direct` as ordinary storage, and
+M4.5 lowers only `CalleeHir::Function` and `CalleeHir::Conversion` (through function cells); all
+other callee kinds are rejected and remain M5. M4.5 also rejects `PlaceHir::Index`, `Deref`, `Direct` as ordinary storage, and
 `InstanceField` paths beyond a final `AT` leaf. M5 must implement:
 
 - `StdFunction` (all categories in Runtime §3.1).
@@ -484,13 +573,15 @@ rejected. M4 also rejects `PlaceHir::Index`, `Deref`, `Direct` as ordinary stora
 - Output arguments (`=>`, `ArgHir.target`/`negated`) and `VAR_IN_OUT` parameters.
 - Arrays with declared bounds, 1-based indexing, bounds traps, and conformant descriptors.
 
-M4 has a working trap path (`trap_if`, span IDs) and checked arithmetic; reuse it for bounds,
+M4.5 has a working trap path (`trap_if`, span IDs, the host trap boundary) and checked
+arithmetic; reuse it for bounds,
 string capacity, subrange assignment, and conversion failures.
 
 ### 4.6 Retain is scalar-only
 
 `RetainLayout` serializes scalar retained globals and program fields as a packed sequence of
-leaves sorted by path. M5 must extend it to:
+leaves sorted by path. The leaves are copied from host roots, not module globals. M5 must extend
+it to:
 
 - structs, arrays, strings, enums/subranges (as base integers), and FB/class instance state;
 - nested paths and inheritance (`Main.Timer.Elapsed`);
@@ -500,18 +591,18 @@ leaves sorted by path. M5 must extend it to:
 Do **not** compute LLVM struct offsets in the compiler. Save/load should use GEP chains per leaf
 and write packed payload bytes; metadata offsets remain payload offsets (D-087). Non-persistable
 leaves must keep `STC-E-RETAIN-001` behavior. File-backed state remains M6: keep the
-`stc_retain_*` ABI and the disabled `stc_rt_state_*` stubs.
+`stc_retain_*` ABI; the ABI 2 state services stay disabled until M6.
 
 ### 4.7 Exports are function-only
 
-Sema accepts `{stc:export}` only on `FUNCTION` in M4. Decide whether M5 exports methods or
+Sema accepts `{stc:export}` only on `FUNCTION` in M4.5. Decide whether M5 exports methods or
 class/FB types (likely no: the C ABI is scalar-function-oriented). If export support expands,
 keep the same validation, exact C names, and uniqueness rules. `stc_abi_version` remains
 runtime-owned; do not reintroduce a duplicate generated symbol.
 
 ### 4.8 Standard functions and standard FBs are signature-only
 
-`HirCrate.std_fns` contains signatures (`StdFnKind`, `StdParam`, `StdResult`). M4 rejects every
+`HirCrate.std_fns` contains signatures (`StdFnKind`, `StdParam`, `StdResult`). M4.5 rejects every
 `StdFunction` call. M5 must implement all `StdFnKind` variants, including shifts/rotates,
 selection, comparisons, math, date/time, and string functions. The standard FB definitions are
 synthetic empty-span HIR defs with fields but no bodies; codegen currently skips all empty-span
@@ -520,30 +611,31 @@ defs. M5 must provide real FB bodies, not emit empty functions.
 Recommended delivery: add `stdlib/*.st` sources for `SR`, `RS`, `R_TRIG`, `F_TRIG`, `CTU`,
 `CTD`, `CTUD`, `TP`, `TON`, `TOF` and inject/compile them as production HIR in the driver or
 sema. If textual stdlib injection is deferred, synthesize HIR bodies and record the deviation.
-Timers must read `stc_rt_cycle_now_ns()`, never the live clock.
+Timers must read the host's latched `cycle_now_ns` service, never the live clock.
 
 ### 4.9 Clock and tasks
 
-The runtime already latches the clock per cycle in `stc_rt_execute` and supports library
-overrides through `stc_rt_set_cycle_time_ns`. Generated code does not yet read the clock because
-there are no time functions or timers. M5 adds those reads. M4 still accepts at most one task
-per resource (`STC-E-RUN-001`) and runs all instances each cycle; a `SINGLE` task uses a
-first-cycle guard. Full task scheduling, priorities, and a mock-clock CLI remain M6.
+The runtime already latches the clock per cycle and exposes it through the ABI 2 `cycle_now_ns`
+service; library hosts can set the cycle time through the `stc_rt_set_cycle_time_ns` host utility.
+Generated code does not yet read the clock because there are no time functions or timers; M5 adds
+those reads. M4.5 still accepts at most one task per resource (`STC-E-RUN-001`) and runs all
+instances each cycle; a `SINGLE` task uses a first-cycle guard. Full task scheduling, priorities,
+and a mock-clock CLI remain M6.
 
 ### 4.10 Test-only units and the test runner
 
-M4 codegen skips `Def.test_only` defs and treats `{stc:test}` functions as production-absent
+M4.5 codegen skips `Def.test_only` defs and treats `{stc:test}` functions as production-absent
 (D-071). The M5 plan lists a “test runner MVP”, but test discovery depends on the M6 manifest.
 Recommend deferring `stc test` to M6 and continuing to use `cargo test` plus C harnesses in M5.
 If a file-list MVP is required, scope it explicitly in an M5 decision and do not pull manifest
 rules forward.
 
-### 4.11 Other M4 facts codegen will meet
+### 4.11 Other HIR/codegen facts M5 will meet
 
 - `Ty::Named` includes programs; a `PROGRAM` field access in a program body uses
   `PlaceHir::This(program)` internally even though the `THIS` keyword is rejected there.
 - `VAR_EXTERNAL` aliases are lowered to `PlaceHir::Global(target)`; do not allocate storage.
-- Missing defaulted input arguments are absent from `ArgHir`; M4 materializes scalar defaults
+- Missing defaulted input arguments are absent from `ArgHir`; M4.5 materializes scalar defaults
   at the call site. M5 aggregate/reference defaults need a consistent policy.
 - Standard FB defs have empty spans and no bodies; never emit them.
 - `ExprKindHir::Error` must not reach codegen; report an internal error.
@@ -558,10 +650,42 @@ rules forward.
   `AT` word (`word.0`) is supported through `PlaceHir::BitField`.
 - `type_name_to_ty` recognizes elementary names plus date/time and char aliases only; user-type
   conversion functions are not resolved. Extend it carefully if M5 needs `MyEnum_TO_...`.
-- M4 rejects `VAR_CONFIG AT` overrides; do not silently ignore them.
+- Codegen rejects `VAR_CONFIG AT` overrides; do not silently ignore them.
 - `VAR_ACCESS` is resolved in HIR but its metadata is M6; do not invent code for it.
 
+### 4.12 M4.5 corrections to the M4 facts above
+
+- Persistent globals and program fields are **host GOT roots**, not module globals. Program
+  bodies receive a per-instance `[N x ptr]` field-storage array; scalar layout/config code still
+  computes field order and types, but storage lives in the host.
+- User functions, program bodies, and exports are reached through **function cells**; a symbol
+  table still exists for module-local helpers, export wrappers, and the function-address table,
+  but emitted calls use `call_ptr` through a cell.
+- The generated module exports the seven ABI 2 `stc_module_*` entry points, descriptor, function
+  table, retain helpers, and export wrappers. `stc_init` is an internal prepare helper, not an
+  exported ABI-1 entry point.
+- `stc build` always produces a loadable module. `exe` is a thin launcher, `lib` is the embedding
+  host archive, and they may be emitted together; generated code is never linked into either.
+- Generated modules do not import `stc_rt_*`. Traps, image access, retained state, and any
+  clock/allocation/assert use go through ABI 2 host API import cells (D-116, D-124).
+- Retained leaves are host roots; online prepare initializes only fresh roots, and the
+  file-backed state services remain disabled until M6.
+- Task guards are GOT roots; task execution state is host-owned and keyed by task identity.
+- Direct `AT` variables are `Direct` roots with per-generation cells. The host reads the
+  metadata sidecar to bind them and remaps values by `GotId` at activation (D-125).
+- Metadata carries the module/manifest/descriptor summary, the process image and direct
+  bindings, and scalar retain leaves. It is not the M4 metadata schema; see CLI and Manifest §4.
+- Trap handling crosses a non-local host boundary. M5 code must keep generated functions
+  `uwtable` and must not assume it can resume after a trap.
+
 ## 5. Recommended M5 architecture
+
+The recommendations below remain a useful starting point, but the representations are for
+**transient values only**. Persistent aggregates, objects, interfaces, and references must use
+the §0/Online Change model: recursive per-field roots, stable handles, runtime-owned
+descriptors/vtables, and place descriptors. Where this section proposes module-owned
+descriptors/vtables or fat pointers for persistent-capable values, §0 and the online-change
+specification win.
 
 ### 5.1 Type and layout layer
 
@@ -573,8 +697,8 @@ pub enum StorageType {
     Named(u32),              // index into a module type table
     Array { element: Box<StorageType>, count: u64 },
     String { kind: StringKind, capacity: u32 },
-    Ref,                     // opaque ptr
-    Interface,               // { ptr, ptr }
+    Ref,                     // transient view; persistent REF_TO uses a place descriptor
+    Interface,               // transient {ptr, ptr}; persistent values use {handle, descriptor}
 }
 ```
 
@@ -610,24 +734,27 @@ payload offsets and `align 1`.
 
 ### 5.3 OOP and FB lowering
 
-- Reuse the sema-assigned `vtable` order. Emit one vtable global per concrete class/FB.
-- Type descriptor format (decision required): at minimum `{ptr vtable, i64 type_id}` plus
-  interface information sufficient for `?=`. Keep it deterministic and metadata-free if
-  runtime `?=` is the only consumer.
-- Direct calls for concrete receivers; interface calls load the vtable slot and use
-  `call_indirect`.
-- `SUPER.method()` calls the base implementation directly.
-- `SUPER()` invokes the base FB body on the current instance.
+- Reuse the sema-assigned `vtable` order. Vtables and type descriptors are **runtime-owned**
+  records (D-098); the module emits catalog/descriptor records and slot bindings, not
+  module-owned vtable globals that would dangle after unload.
+- Interface dispatch loads a host-owned descriptor/vtable cell and calls the method's
+  **function cell** through `call_ptr`; a raw `call_indirect` on a module-owned address is not
+  permitted for persistent-capable values.
+- `SUPER.method()` calls the base implementation through its function cell.
+- `SUPER()` invokes the base FB body on the current instance through its function cell.
 - FB invocation:
-  1. evaluate the instance place to a `ptr`;
-  2. store input arguments into fields (including nested/defaulted inputs);
-  3. call the FB body `void @..._body(ptr %this)`;
+  1. evaluate the instance/handle place;
+  2. store input arguments into the host-rooted input fields (including nested/defaulted inputs);
+  3. call the FB body function cell with the instance handle/field storage;
   4. copy output fields to `ArgHir.target` places, applying `negated` for `NOT =>`.
-- Method signatures: `this` first, scalar/aggregate parameters follow the chosen ABI.
-- `stc_init` initializes instance state and declared initializers, then loads retained state.
-  Static vtables/descriptors should be constant globals where possible; avoid runtime patching.
-- `THIS` is the current `%this`; `SUPER` uses the base pointer (no adjustment under prefix
-  layout).
+- Method signatures: the receiver handle/field storage first; scalar/aggregate parameters follow
+  the chosen ABI.
+- `stc_module_prepare` initializes fresh instance roots and declared initializers; preserved
+  roots are never reinitialized. Keep descriptor/vtable records in the host, not patched into
+  module text.
+- `THIS` is the current instance handle; `SUPER` uses the base view of the same handle.
+- Register every method/FB body/descriptor as an identity in the catalog; do not create
+  identities for compiler helpers.
 
 ### 5.4 Aggregates and strings
 
@@ -655,8 +782,8 @@ Follow Runtime §3.1 ownership:
   conversions.
 - `llvm.sqrt`/`llvm.fabs` where semantics match.
 - Keep the existing checked arithmetic/trap machinery. `ABS(MIN)` traps overflow.
-- Standard functions must never call the live monotonic clock; `NOW()`/`TIME()` use
-  `stc_rt_cycle_now_ns`.
+- Standard functions must never call the live monotonic clock; `NOW()`/`TIME()` use the host
+  `cycle_now_ns` service.
 - Add Lean-generated vector tests for exact functions, or keep them as test vectors under the
   existing `tests/vectors` convention if present.
 
@@ -665,42 +792,48 @@ Follow Runtime §3.1 ownership:
 - Compile the standard FBs from `stdlib/*.st` into production HIR, or synthesize equivalent
   HIR bodies. They live in the reserved `STC_STD` namespace and are shadowable.
 - Implement `SR`, `RS`, `R_TRIG`, `F_TRIG`, `CTU`, `CTD`, `CTUD`, `TP`, `TON`, `TOF`.
-- Timers capture start times in instance fields and compare against the latched
-  `stc_rt_cycle_now_ns()`. All timers in one scan see the same value.
-- Provide deterministic tests using `stc_rt_set_cycle_time_ns` in library harnesses or
+- Timers capture start times in instance fields and compare against the latched `cycle_now_ns`
+  service. All timers in one scan see the same value.
+- Provide deterministic tests using `stc_rt_set_cycle_time_ns` in embedding-host harnesses or
   `--cycle-time` once the runtime CLI supports it (M6).
-- Do not implement multi-task scheduling in M5; keep the M4 one-task rule and metadata task
+- Do not implement multi-task scheduling in M5; keep the M4.5 one-task rule and metadata task
   attributes.
 
 ### 5.7 Retained state
 
-- Flatten aggregate/string/FB instance state into scalar/string leaves with readable paths.
+- Flatten aggregate/string/FB instance state into scalar/string leaves with readable paths,
+  rooted in the host per-field root registry.
 - Payload offsets are cumulative packed sizes in sorted-path order (D-087); no LLVM struct
   offsets.
 - Exclude pointers, interface/vtable/descriptor pointers, references, and `VAR_IN_OUT`.
-- Extend metadata `retain.leaves` with aggregate-derived paths and canonical type names.
-- Keep `stc_retain_size/layout_hash/save/load`; save/load use GEP chains + `align 1` stores.
+- Extend metadata `retain.leaves` with aggregate-derived paths and canonical type names; the
+  owning root `GotId` stays in the GOT manifest.
+- Keep `stc_retain_size/layout_hash/save/load`; save/load use GEP chains + `align 1` stores over
+  host roots. Online prepare initializes only fresh roots and skips the state file; cold installs
+  keep the M4.5 reset policy.
 - Update D-087/D-075 to record the M5 aggregate scope; file I/O remains M6.
 
 ### 5.8 Metadata and ABI
 
 - Extend `metadata.rs` with new metadata if needed (types/vtables are not required by the
-  current specs; prefer not to invent keys).
-- If runtime symbols are added, bump the runtime ABI minor version per Runtime §2.2 and record
-  it in Decisions. `stc_abi_version` stays runtime-owned.
-- Keep `stc_metadata_json` library-only; executable metadata remains the sidecar JSON.
+  current specs; prefer not to invent keys). The M4.5 schema is in CLI and Manifest §4.
+- If host services are added, append them to the ABI 2 table and bump the minor version per
+  Runtime §2.2; record it in Decisions. `stc_abi_version` stays runtime-owned.
+- Keep `stc_metadata_json` embedding-host-only; executable metadata remains the sidecar JSON.
 - Span/trap tables stay sorted by `(FileId, start, end)`; trap messages still carry only the
   span ID in M5.
 
 ### 5.9 Driver
 
-The M4 build bridge is sufficient. M5 should not add the manifest. Possible additions:
+The M4.5 build bridge already emits the module/manifest pair and accepts the baseline options;
+M5 extends the projected catalog and lowering, not the artifact pipeline. Possible additions:
 
 - include `stdlib/*.st` in the analyzed file set (deterministic order; reserved package);
 - optionally add `--stdlib <dir>` for experiments, but keep the default self-contained;
-- keep `--emit` names/exit codes stable.
+- keep `--emit` names, module/manifest naming, and exit codes stable.
 
-If stdlib injection needs a source list, prefer a driver-level convention over a manifest.
+The project `stc.toml` manifest and dependency graph remain M6; use a driver-level convention
+for stdlib source lists in M5.
 
 ### 5.10 Test runner decision
 
@@ -777,7 +910,7 @@ useful. Keep the 60 s CI smoke.
 
 ## 8. Suggested order
 
-1. Record M5 decisions D-094+ and write `M5-Plan.md`; confirm M4 is committed (it is).
+1. Record M5 decisions starting at D-128 and write `M5-Plan.md`; M4.5 is complete and committed.
 2. Extend the IR builder type system and layout layer with aggregates/strings/references.
 3. Lower structs, enums, subranges, arrays, and strings; add bounds/string traps and tests.
 4. Lower references, `NULL`, deref, `RefAssign`, `Attempt`/`?=`, and output/`VAR_IN_OUT`
@@ -792,20 +925,27 @@ useful. Keep the 60 s CI smoke.
 
 ## 9. Decisions/open items to resolve during M5
 
-Record each in `Specification/Decisions.md` before or as it is implemented:
+Record each in `Specification/Decisions.md` before or as it is implemented. M4.5 already fixes
+several boundaries: item 2 extends the existing `stc-got` catalog/type-key/layout model rather
+than designing a second type system; item 5's place-descriptor and nullable-interface
+representation is fixed by D-097; item 6's runtime-owned descriptors/vtables and cell dispatch
+are fixed by D-098; item 11's retained leaves are host roots; item 12's host API is append-only
+ABI 2; item 16's determinism baseline is the GOT artifact model; and item 17's CI already
+includes the `online` job. The concrete M5 record contents and trap/ABI choices remain open.
 
 1. **Aggregate ABI.** Which aggregates pass by value, by pointer, or result via hidden pointer;
    how arrays/strings/FB instances are passed; whether aggregate function results are allowed.
-2. **Module type system.** Type table/ID design; how named types render; how operand types are
-   checked without `Copy`-hostile recursive enums.
+2. **Module type system.** Extend the catalog/type-key/layout records for M5 types; type
+   table/ID design and named-type rendering in module IR; how operand types are checked without
+   `Copy`-hostile recursive enums.
 3. **Aggregate layout.** Prefix inheritance, `OVERLAP`, arrays, strings, conformant descriptors;
    no target datalayout.
 4. **Bounds and assignment checks.** Subrange assignment, array bounds, string capacity,
    conversion ranges; which trap codes.
-5. **References and assignment attempt.** `REF`/`NULL`/deref semantics, fat-pointer conversion,
-   `?=` helper/descriptor format, null traps.
-6. **OOP representation.** Vtable/descriptor shape, slot order source (HIR `vtable`), direct vs
-   indirect call rules, interface upcast/downcast.
+5. **References and assignment attempt.** `REF`/`NULL`/deref semantics, place-descriptor
+   conversion, `?=` helper/descriptor format, null traps.
+6. **OOP representation.** Descriptor/vtable record contents and slot order source (HIR
+   `vtable`), function-cell dispatch rules, interface upcast/downcast.
 7. **FB invocation.** Input/output binding order, defaults, negation, nested instances,
    reentrancy/aliasing.
 8. **Standard functions.** Inline vs runtime split, math library calls, Lean vector coverage,
@@ -814,10 +954,10 @@ Record each in `Specification/Decisions.md` before or as it is implemented:
    shadowing and diagnostics.
 10. **Clock and timers.** Library mock-clock usage, duration arithmetic, timer state fields,
     `STC_CLOCK_ADVANCE` scope.
-11. **Retained scope.** Aggregate/string/FB leaf flattening, packed offsets, non-persistable
-    exclusions, hash-format compatibility.
-12. **Runtime ABI revision.** New `stc_rt_str_*`/`stc_rt_math_*`/attempt helpers; minor version
-    bump; whether `i64` vs `uint64_t` length declarations are normalized.
+11. **Retained scope.** Aggregate/string/FB leaf flattening over host roots, packed offsets,
+    non-persistable exclusions, hash-format compatibility.
+12. **Host API additions.** Append `stc_rt_str_*`/`stc_rt_math_*`/attempt services to ABI 2;
+    bump the minor version; normalize `i64` vs `uint64_t` length declarations.
 13. **Export scope.** Whether methods/classes can be exported; wrapper naming; metadata.
 14. **Test runner.** Confirm deferral to M6 or define a file-list MVP with `{stc:test}`.
 15. **Metadata additions.** Only add keys required by a spec or tested consumer; keep sorted.
@@ -841,10 +981,10 @@ Record each in `Specification/Decisions.md` before or as it is implemented:
       dynamic locals/globals/returns remain explicit diagnostics.
 - [ ] Aggregate/string/FB retained leaves are laid out, hashed, saved, and loaded through
       `stc_retain_*`; file-backed state remains explicitly M6.
-- [ ] `stc build` still emits deterministic IR/objects/executables/static libraries/metadata;
-      `clang` accepts and runs them on the host.
-- [ ] Unsupported M6 constructs (manifest, `stc run/test`, device tree, file state, full task
-      scheduling) produce explicit diagnostics or remain absent as documented.
+- [ ] `stc build` still emits a deterministic loadable module, paired manifest, metadata, thin
+      launcher, and embedding host; `clang` accepts and runs the module on the host.
+- [ ] Unsupported M6 constructs (project `stc.toml`, `stc run/test`, device tree, file-backed
+      state, full task scheduling) produce explicit diagnostics or remain absent as documented.
 - [ ] IR/metadata are deterministic, target-independent, path/timestamp-free, and snapshotted.
 - [ ] `cargo test --workspace --locked`, clippy `-D warnings`, `cargo fmt --check`,
       `check_docs.py`, Markdown lint, and the fuzz smoke pass.
@@ -865,9 +1005,9 @@ npx --yes markdownlint-cli2@0.24.0
 # Runtime staticlib and direct builds
 cargo build -p stc-runtime --locked
 cargo run -p stc-driver -- build examples/hello.st --emit=ir
-cargo run -p stc-driver -- build examples/hello.st --emit=ir,obj,exe \
-    --runtime target/debug/stc_runtime.lib
-cargo run -p stc-driver -- build examples/hello.st --emit=lib,metadata \
+cargo run -p stc-driver -- build examples/hello.st --emit=module,metadata
+cargo run -p stc-driver -- build examples/hello.st --emit=module --got-manifest active.stc-got.json
+cargo run -p stc-driver -- build examples/hello.st --emit=exe,lib,metadata \
     --runtime target/debug/stc_runtime.lib
 
 # IR verification
@@ -875,7 +1015,8 @@ clang -x ir -c -o /tmp/hello.o target/stc/debug/hello.ll
 
 # Fuzz workspace
 cargo check --manifest-path fuzz/Cargo.toml --locked --offline
-cargo +nightly fuzz run fuzz_codegen -- -max_total_time=60 -rss_limit_mb=2048 -timeout=25
+cargo +nightly fuzz run fuzz_got_manifest -- -max_total_time=60 -rss_limit_mb=2048 -timeout=25
+cargo +nightly fuzz run fuzz_module_descriptor -- -max_total_time=60 -rss_limit_mb=2048 -timeout=25
 rustfmt --edition 2024 --check fuzz/fuzz_targets/*.rs
 ```
 
@@ -887,16 +1028,25 @@ In PowerShell, set environment variables first, for example
 `$env:RUSTFLAGS = "-D warnings"; cargo clippy --workspace --all-targets --locked -- -D warnings`.
 Set `$env:STC_REQUIRE_CLANG = "1"` to make clang verification mandatory locally.
 
-## 12. Key files from M4
+## 12. Key files after M4.5
 
-- `crates/stc-codegen/src/{lib,module,layout,mangle,config,expr,stmt,unit,metadata,abi,codes}.rs`
-- `crates/stc-codegen/tests/{codegen.rs,common/mod.rs,snapshots/library.ll}`
-- `crates/stc-runtime/src/lib.rs` — C ABI, image, clock, traps, state stubs
-- `crates/stc-driver/src/{main,build,toolchain,lib}.rs` — CLI build bridge and link discovery
-- `crates/stc-driver/tests/{execution.rs,harness/*.c}` — host/library execution tests
+- `crates/stc-got/src/{lib,catalog,model,manifest,descriptor,identity,build,...}.rs` — stable
+  keys, `GotId`, catalog, manifest/plan codecs, descriptor format 1
+- `crates/stc-codegen/src/{lib,ir,verify,module,launcher,layout,mangle,config,expr,stmt,unit,metadata,abi,codes}.rs`
+- `crates/stc-codegen/tests/` — builder/verifier, module projection, golden manifest/descriptor,
+  clang acceptance, determinism
+- `crates/stc-runtime/src/{lib,got,memory,catalog,migration,loader,host_api,store,host,image,module_info,trap_boundary}.rs`
+- `crates/stc-runtime/tests/{host_lifecycle,image_remap,switch_latency,...}.rs` — swap,
+  preservation/remap, pins, warnings, latency
+- `crates/stc-driver/src/{main,build,toolchain,lib}.rs` — CLI, module/launcher/embedding
+  artifacts, link discovery
+- `crates/stc-driver/tests/{execution,module_cli,...}.rs` and `tests/harness/*.c` — module
+  execution, hot-swap CLI, launcher/embedding C harnesses
 - `crates/stc-hir/src/{hir,ty,id,interner,dump}.rs` — resolved HIR and invariants
 - `crates/stc-sema/src/{session,collect,types,resolve,consteval,check,prelude,codes}.rs`
 - `crates/stc-sema/tests/{conformance,traceability,snapshots,hir_lowering,m4_gaps}.rs`
-- `Specification/Decisions.md` D-059–D-093; `M4-Plan.md`; `handover_to_M4.md`
-- Architecture §4 (especially §4.3–§4.10), Runtime §2–§4, IO §2/§5, State §2/§5–§6,
-  Testing §1–§4/§6, AST §5–§8
+- `fuzz/fuzz_targets/{fuzz_got_manifest,fuzz_module_descriptor}.rs`
+- `Specification/Decisions.md` D-059–D-127; `M4.5-Plan.md`; `M4-Plan.md`;
+  `handover_to_M4.md`
+- Architecture §4 (especially §4.3–§4.10), Runtime §1–§4, IO §2/§5, State §2/§5–§6,
+  Testing §1–§4/§6, GOT Artifacts §7–§12, Debug and Monitoring §12, AST §5–§8

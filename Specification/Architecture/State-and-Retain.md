@@ -1,6 +1,6 @@
 # State and RETAIN Persistence
 
-Status: M4 scalar layout implemented; online-change policy resolved (2026-10-24)  
+Status: M4.5 scalar roots and online preservation implemented (2026-10-25); file-backed state is M6  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Architecture](Architecture.md), [Decisions](../Decisions.md)
 
@@ -19,12 +19,14 @@ state file is not loaded. Matching per-field roots are preserved, new roots are 
 removed roots are quarantined. A **cold download** stops/reinitializes the program and applies
 the restart policy above. See [Online Change and GOT](Online-Change-and-GOT.md) §8.
 
-> **M4 status:** scalar-leaf `RetainLayout` is computed (retained globals and program fields,
-> `AT` excluded), emitted as metadata, and exposed through generated
-> `stc_retain_size/layout_hash/save/load`. `stc_init` calls `stc_rt_state_load` and restores on
-> success; `stc_shutdown` saves through `stc_rt_state_save`. The runtime state functions are
-> stubs returning 5 (retention disabled) until M6. Aggregate/string/FB leaves and the
-> file-backed atomic format are M5/M6.
+> **M4.5 status (2026-10-25):** scalar-leaf `RetainLayout` is computed (retained globals and
+> program fields, `AT` excluded), emitted as metadata, and exposed through generated
+> `stc_retain_size/layout_hash/save/load`. Retained leaves are host-owned per-field roots.
+> `stc_init` calls the ABI 2 `state_load` service during prepare and restores on success;
+> shutdown saves through `state_save`. The runtime state services are stubs returning 5
+> (retention disabled) until M6. Online prepare preserves matching roots and initializes only
+> fresh roots; cold installs skip the retained-state file. Aggregate/string/FB leaves are M5;
+> the file-backed atomic format is M6.
 >
 > **Online-change policy (resolved):** v1 preserves values in host memory across an online
 > change; it does not migrate retained leaves by `GotId` across restarts. The state-file format
@@ -73,11 +75,12 @@ Not persistable:
   `stc_init` before state is loaded; they are excluded from the payload);
 - variables containing any non-persistable field (`STC-E-RETAIN-001`).
 
-The compiler emits a **retained layout**: an ordered list of leaf fields with path, `GotId`,
-type, byte offset within its root, and size. The layout is the contract between generated code
-and the runtime. Under the per-field root model, each retained leaf is copied from its host root;
-a leaf cannot contain a persisted raw reference/pointer. The `GotId` is recorded for diagnostics
-and for a possible later state-format migration; v1 still matches the whole layout hash.
+The compiler emits a **retained layout**: an ordered list of leaf fields with path, type, byte
+offset within its root, and size. The layout is the contract between generated code and the
+runtime. Under the per-field root model, each retained leaf is copied from its host root; a leaf
+cannot contain a persisted raw reference/pointer. The owning root's `GotId` is recorded in the
+GOT manifest (and is available for diagnostics and a possible later state-format migration); v1
+still matches the whole layout hash.
 
 ## 3. State file format
 
@@ -236,11 +239,9 @@ storage. The host owns path/atomicity/policy in that case.
   "retain": {
     "size": 128,
     "layout_hash": "0x9f2c...",
-    "file": "motor.stcstate",
-    "on_mismatch": "error",
     "leaves": [
-      { "path": "Main.Counter", "got_id": "0x…", "type": "DINT", "offset": 0, "size": 4 },
-      { "path": "Main.Timer.Elapsed", "got_id": "0x…", "type": "TIME", "offset": 8, "size": 8 }
+      { "path": "Main.Counter", "type": "DINT", "offset": 0, "size": 4 },
+      { "path": "Main.Timer.Elapsed", "type": "TIME", "offset": 8, "size": 8 }
     ]
   }
 }
@@ -248,7 +249,10 @@ storage. The host owns path/atomicity/policy in that case.
 
 - `leaves` is sorted by path/offset and is the human-readable form of the layout hash input.
 - The runtime uses `size`/`layout_hash` with the generated functions; it does not interpret leaf
-  types.
+  types. Root identities (`GotId`) live in the GOT manifest, not in the leaf list.
+- M4.5 emits `size`, `layout_hash`, and `leaves` for scalar programs; `file` and `on_mismatch`
+  are part of the M6 file-backed state policy. Aggregate/FB leaf paths such as
+  `Main.Timer.Elapsed` are M5.
 
 ## 7. Diagnostics
 

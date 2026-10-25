@@ -1,37 +1,35 @@
 # Runtime and Execution Model
 
-Status: M4 runtime implemented; online-change architecture resolved (2026-10-24)  
+Status: M4.5 persistent host and ABI 2 module execution implemented (2026-10-25)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 
 This document defines how generated code executes, what the host runtime provides, and how
 module, executable, and embedding-library artifacts differ.
 
-> **M4 status:** `crates/stc-runtime` implements the C ABI, the `--cycles N` executable loop,
-> the latched cycle clock, the process image (`stc_rt_io_configure`/`stc_rt_io_image`), trap
-> reporting (exit 70), and retained-state stubs that return 5 (disabled). It uses `std` and is
-> the only crate permitted unsafe code (D-077). `stc_rt_assert`, the memory/file I/O backends,
-> vtable/type descriptors, and file-backed state are later milestones. `stc_abi_version` is
-> runtime-owned; generated library modules export `stc_init`, `stc_cycle`, `stc_shutdown`,
-> `stc_metadata_json`, export wrappers, and the retain functions, but not `stc_abi_version`.
+> **M4.5 status (2026-10-25):** `crates/stc-runtime` is the persistent host. It owns the GOT,
+> root allocator and quarantine, module loader, manifest store, process image, swap controller,
+> generation pins, and the load/prepare/activate/commit/rollback/unload state machine. Generated
+> code executes as an ABI 2 module: persistent scalars, program fields, direct `AT` variables,
+> retained leaves, and task guards use GOT cells; user calls are indirect through function cells;
+> host services use import cells; and the module exports the seven entry-point set. The host reads
+> `<name>.stc-meta.json` to configure the process image and bind direct cells, reconfigures or
+> remaps the image at activation, and preserves direct values by `GotId`. `--emit=exe` emits the
+> thin launcher; `--emit=lib` emits the embedding archive with the module separate.
 >
-> **Post-M4 architecture (resolved):** the runtime becomes a persistent host that owns the GOT,
-> root allocator, module loader, manifest store, swap controller, and service threads. Host ABI 2
-> adds attach/prepare/detach, GOT/cell access, the reference resolver, and versioned host services.
-> The M4 `staticlib` remains as the embedding/host library; the direct-reference executable model
-> is superseded by a thin launcher plus loadable module.
+> The trap service performs a non-local exit to the host boundary (`__intrinsic_setjmpex` on
+> Windows, `_setjmp` on POSIX; generated functions are `uwtable`; an assembly shim owns the
+> second `setjmp` return), enabling rollback-window recovery and exit code 70 outside it. The
+> embedding C ABI exposes `stc_host_load_module`, `stc_host_cycle`, `stc_host_shutdown`,
+> `stc_host_symbol`, `stc_host_export_manifest`, `stc_metadata_json`, and
+> `stc_rt_execute`; `stc_host_run` and the full options struct remain M6.
 >
-> **M4.5 phase 7 status (2026-10-25):** generated code executes as an ABI 2 module through the
-> persistent host. Persistent scalars, program fields, direct `AT` variables, retained leaves, and
-> task guards use GOT cells; user calls are indirect through function cells; host services use
-> import cells; and the module exports the seven entry-point set. The host reads
-> `<name>.stc-meta.json` to configure the process image and bind direct cells, `--emit=exe` emits
-> the thin launcher, and `--emit=lib` emits the embedding archive with the module separate. The
-> trap service performs a non-local exit to the host boundary (`__intrinsic_setjmpex` on Windows,
-> `_setjmp` on POSIX; generated functions are `uwtable`; an assembly shim owns the second `setjmp`
-> return), enabling rollback-window recovery and exit code 70 outside it. The embedding C ABI currently exposes `stc_host_load_module`,
-> `stc_host_cycle`, `stc_host_shutdown`, `stc_host_symbol`, `stc_host_export_manifest`, and
-> `stc_metadata_json`; `stc_host_run` and the full options struct remain for a later phase.
+> The runtime uses `std` and is the only crate permitted unsafe code (D-077). File-backed
+> retained state remains M6: the ABI 2 state services and the legacy `stc_rt_state_*` symbols
+> return 5 ("disabled"). `stc_rt_assert` remains available through the host API for the M6 test
+> runner and M5 hosted checks but is unused by M4.5-generated code. Full typed debug/monitoring
+> is M6.5; the interface it builds on is recorded in
+> [Debug and Monitoring](Debug-and-Monitoring.md) §12.
 
 ## 1. Execution model
 
@@ -58,10 +56,12 @@ remains the generated initialization entry used during prepare.
 has no `main` and no persistent storage of its own.
 
 `stc build --emit=exe` emits a thin host launcher whose `main` calls
-`stc_rt_execute(argc, argv, descriptor_path)`, together with the adjacent module and manifest
+`stc_rt_execute(argc, argv, module_path)`, together with the adjacent module and manifest
 pair it loads. The host:
 
-1. Parses runtime arguments (`--cycles`, `--cycle-time`, `--io`, `--trace`, `--module`).
+1. Parses runtime arguments. M4.5 accepts `--cycles <n>` and `--module <path>`; the
+   `--cycle-time`, `--io`, and `--trace` options in the v1 target are M6 and are rejected with a
+   clear "not supported in this build" error.
 2. Loads and validates the active module and manifest pair.
 3. Initializes the process image, clock, GOT cells, and root allocator.
 4. Attaches the module and runs its preparation (cold start or online attach).
@@ -73,11 +73,16 @@ pair it loads. The host:
    - write outputs from the output image,
    - sleep until the next cycle deadline if a cycle time is configured,
    - check the watchdog and service queues.
+
+   M4.5's thin launcher cold-installs the adjacent pair and then runs the cycle loop; background
+   loading/preparation, queued debug writes/forces, and service threads are not part of the
+   launcher yet. Online prepare/activation is driven through the Rust `Host` API and the
+   embedding host, and the background loader/service threads are M6.
 6. Runs shutdown, saves retained state, and unloads generations.
 7. Returns exit code 0 on normal completion, non-zero on a trap or configuration error.
 
-Default behavior without `--cycles`: run until interrupted. Tests always pass a finite cycle
-count or use library mode.
+The M4.5 launcher defaults to one cycle when `--cycles` is omitted; the "run until interrupted"
+default and signal handling are M6. Tests pass a finite cycle count or use library mode.
 
 ### 1.2 Embedding library mode
 
@@ -127,8 +132,9 @@ goes through the typed generation-pinned API, and the cycle thread is the only S
 
 ### 2.1 Implementation
 
-- `crates/stc-runtime` is a Rust crate built as `staticlib` and optionally `cdylib`. It is the
-  persistent host as well as the embedding library.
+- `crates/stc-runtime` is a Rust crate built as `staticlib` (the embedding/host artifact) with
+  an `rlib` target for Rust integration tests. It is the persistent host as well as the
+  embedding library. Shared host libraries are M6.
 - It exposes a C ABI (`extern "C"`, `#[no_mangle]`, `#[repr(C)]`) through a versioned host API
   table, not a flat set of mandatory exported symbols.
 - No Rust types cross the ABI except `u8`/`i32`/`i64`/`f32`/`f64`/pointers/opaque handles.
@@ -159,7 +165,7 @@ goes through the typed generation-pinned API, and the cycle thread is the only S
 typedef void (*stc_fn)(void);
 
 /* Launcher/embedding-host exports. These are host symbols, not module imports. */
-int32_t  stc_rt_execute(int32_t argc, char** argv, const char* module_descriptor_path);
+int32_t  stc_rt_execute(int32_t argc, char** argv, const char* module_path);
 uint32_t stc_abi_version(void);
 
 typedef enum {
@@ -194,7 +200,9 @@ new services are appended and bump the minor version; a module rejects a host wh
 shorter than it requires. Modules receive the table in `stc_module_attach` and do not import
 platform symbols from the host executable. Reference resolution, object/descriptor access, typed
 variable access, string/math helpers, and generation pin/unpin are later minor-version
-extensions; M4.5 uses trap, clocks, state, I/O, transient alloc/free, and assert.
+extensions; M4.5-generated code imports trap, I/O image/size, and the retained-state stubs.
+Clocks, transient alloc/free, and assert are in ABI 2.0 but unused by M4.5-generated code;
+M5/M6 consumers add the corresponding import slots when they first emit those calls.
 
 The trap entry is non-returning by contract. The host calls prepare and cycle from a platform
 trap boundary and converts a module trap into a failed generation (or exit code 70 when there is
@@ -428,7 +436,7 @@ assignment copies the root's value; the destination root identity is preserved.
 - `stc test` compiles the project plus test sources and links a test runner.
 - Each test runs in a separate process with a timeout (default 5 s) to isolate hangs and traps.
 - The runner provides:
-  - a fresh runtime (`stc_init`) per test,
+  - a fresh host/module state per test,
   - a mock clock,
   - a memory I/O backend,
   - assertion helpers that record failures without aborting immediately.

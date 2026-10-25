@@ -1,6 +1,6 @@
 # Debug and Monitoring
 
-Status: Resolved specification (2026-10-24)  
+Status: Resolved specification (2026-10-24); M4.5 interface recorded, M6.5 implementation pending (2026-10-25)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -95,9 +95,10 @@ Forcing overrides a variable's value at the cycle boundary until explicitly rele
 
 ### 5.1 Breakpoints
 
-Breakpoints are source-level locations resolved to compiler-emitted checkpoints. Codegen emits a
-checkpoint table and a call to a host check at each eligible statement/block boundary. The host
-does not patch machine code and does not require writable text pages. A breakpoint:
+Breakpoints are source-level locations resolved to compiler-emitted checkpoints. In M6.5, codegen
+will emit a checkpoint table and a call to a host check at each eligible statement/block
+boundary; M4.5 does not emit either. The host does not patch machine code and does not require
+writable text pages. A breakpoint:
 
 - is set/cleared by source location or checkpoint ID;
 - is matched against the active generation's table;
@@ -128,7 +129,8 @@ than inventing values. `SUPER`/interface dispatch reports the dynamic function i
 
 Debug information is the default build output. `--release` selects the optional stripped and
 optimised mode. Debug and release builds have distinct build IDs and manifests. Debug hooks and
-checkpoint calls are absent from release artifacts.
+checkpoint calls are absent from release artifacts. This is the M6.5 target; M4.5 emits no debug
+information and does not accept `--debug`/`--release` (§12).
 
 - Debug: full DWARF/CodeView, checkpoint table, frame information, and typed location metadata.
 - Release: optimised code, no debug hooks, optionally a sidecar symbol file; the sidecar does not
@@ -199,3 +201,69 @@ debug-info errors. Online-change diagnostics use their own `MODULE`/`MANIFEST`/`
 - [State and RETAIN](State-and-Retain.md) — state-file interaction.
 - [Testing and Verification](Testing-and-Verification.md) — debug test levels.
 - [CLI and Manifest](CLI-and-Manifest.md) — debug CLI and `[debug]` table.
+
+## 12. M4.5 interface notes (2026-10-25)
+
+M4.5 does not implement the debugger. It fixes the host/module substrate and leaves the debug
+surface to M6.5. This section records the boundary so M6.5 can build on it without changing
+format 1 or the ABI 2.0 service signatures.
+
+### 12.1 Available now
+
+- **Identity, layout, and storage.** Every persistent root, function, instance, task, and export
+  has a stable `GotId`, normalized key, and kind-specific identity (type/layout/signature) in the
+  active manifest; roots additionally carry size and source location.
+  `Host::active_manifest()`, `Host::roots()`, `Host::root_storage(got_id)`, and
+  `Host::export_manifest*()` expose the active baseline and stable root bytes without copying or
+  moving storage. The metadata sidecar carries the process-image layout and direct bindings for
+  the split-object view.
+- **Generation pinning.** `Host::pin_active()` and `Host::pin(generation)` return a
+  `GenerationPin`; the pin keeps a retired generation and its module loaded, and a cold install
+  fails while any pin is held. This is the epoch/refcount primitive for typed reads, watch
+  snapshots, and debug-info lifetime. M4.5 has no service thread yet, so pins are used by tests
+  and embedding hosts.
+- **Descriptor feature gates.** The module descriptor has `entry_flags` bit 4 (debug build form)
+  and bit 6 (debug hooks active), plus `required_features` bit 4 (debug checkpoint hooks). M4.5
+  sets the debug-build form bit but neither debug-hook bit, and it requires no host debug
+  support, so M6.5 can introduce checkpoints behind the feature bit without a descriptor format
+  change.
+- **Append-only host API.** ABI 2.0 services are appended within major 2 and gated by
+  `struct_size`/minor version. Debug services can be added without breaking M4.5 modules; a
+  module only requires the services it uses.
+- **Trap records and boundary.** `TrapRecord { code, span_id, generation }` records the last
+  module trap, and the non-local trap boundary turns a module trap into a failed generation (in
+  the rollback window) or exit code 70. M6.5 can report trap state and stop/continue around it.
+- **Swap semantics.** Activation is explicit (`Host::activate`), commit follows one successful
+  cycle, rollback is bounded to that window, and retired-module unload waits for pins. M6.5 must
+  end a debug session at activation/swap and drop the old generation's debug information after
+  unload.
+- **Direct variables.** The metadata bindings, `Host::warnings`, and `image::DirectRemap`
+  identify direct variables that moved during an online change for the split-object view.
+
+### 12.2 Not present (M6.5 work)
+
+- No checkpoint table or host-check call is emitted by codegen; `entry_flags` bit 6 and
+  `required_features` bit 4 stay clear in M4.5.
+- No DWARF/CodeView emission and no `--debug`/`--release` CLI options. M4.5 artifacts use the
+  default debug build form but contain no debug information.
+- No typed read/write/force/watch API, write/force queue, or boundary application in the host
+  API.
+- No debug session, local transport, authentication, authorization, rate limits, audit log,
+  watchdog pause, or output hold.
+- No `stc debug` command and no `STC-E-DEBUG-*`/`STC-W-DEBUG-*` diagnostics.
+- No service/monitor thread driving typed access or watch streams.
+- No manifest-assisted split-object presentation; the manifest data it needs is available.
+
+### 12.3 Rules for M6.5
+
+- Add checkpoint and typed-access services as appended ABI 2.x entries; do not change the M4.5
+  service signatures or the descriptor format.
+- Set `required_features` bit 4 and `entry_flags` bit 6 only when a module actually emits
+  checkpoint hooks; release artifacts must not set them.
+- Keep `--release` artifacts hook-free and give debug/release builds distinct build IDs and
+  manifests.
+- Never take a cycle-blocking lock: pin a generation for reads, and queue writes/forces for the
+  cycle boundary.
+- End every debug session on an online swap; never keep a raw code or descriptor pointer across
+  unload.
+- Preserve the non-safety stance in CLI output and documentation.

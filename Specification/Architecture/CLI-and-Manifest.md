@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4 subset implemented; online-change CLI/schema resolved (2026-10-24)  
+Status: M4.5 module/build CLI implemented (2026-10-25); project manifest and M6 commands pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -11,20 +11,21 @@ output goes to stdout.
 
 ### 1.1 Commands
 
-> **M4 status:** `stc parse <file>`, `stc check <file>...`, and the manifest-free
+> **M4.5 status:** `stc parse <file>`, `stc check <file>...`, and the manifest-free
 > `stc build <file>...` bridge are implemented. `parse` is single-file and syntax-only; `check`
-> analyzes one or more files as one in-memory package; `build` also emits `ir`, `obj`, `module`,
+> analyzes one or more files as one in-memory package; `build` emits `ir`, `obj`, `module`,
 > `exe`, `lib`, or `metadata` and accepts `--name`, `--emit`, `--out-dir`, `--target`,
-> `--clang`, `--runtime`, `--got-manifest`, `--cold`, `--rename`, and
-> `--allow-untracked-removal`, and `-v`. Semantic analysis is skipped when parsing produced
-> errors (D-070). `--message-format` supports `human` and `json` (not `short`), and `--relaxed`
-> is supported. Exit codes 0/1/2/3 follow §1.3; codegen-internal failures use 3. The project
+> `--clang`, `--runtime`, `--got-manifest`, `--cold`, `--rename`,
+> `--allow-untracked-removal`, `--relaxed`, `--message-format`, and `-v`. Semantic analysis is
+> skipped when parsing produced errors (D-070). `--message-format` supports `human` and `json`
+> (not `short`). Exit codes 0/1/2/3 follow §1.3; codegen-internal failures use 3. The project
 > manifest, `stc run`/`test`/`fmt`/`clean`/`metadata`/`compliance`, shared libraries, and the
 > user-facing `stc online` commands remain the v1 target and arrive in later milestones
-> (D-051, D-079, M6). M4.5 phase 7 emits the loadable `module` with its binary/JSON manifest and
+> (D-051, D-079, M6). M4.5 emits the loadable `module` with its binary/JSON manifest and
 > metadata, the thin `exe` launcher that loads the adjacent module pair, and the embedding `lib`
-> host archive; `exe` and `lib` may be emitted together. The generated module stays separate from
-> both host artifacts.
+> host archive; `exe` and `lib` may be emitted together, and the generated module stays separate
+> from both host artifacts. `--debug`/`--release` and their debug-info behavior are M6.5; M4.5
+> builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks.
 
 | Command | Purpose |
 | --- | --- |
@@ -58,8 +59,8 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--cold` | Explicitly build without an online-change baseline (cold-layout build) |
 | `--rename <old=new>` | Record a tracked rename/move; repeatable, including field and package paths |
 | `--clang <path>` | clang executable |
-| `--runtime <path>` | Runtime static library |
-| `--out-dir <path>` | Artifact directory; default `target/stc/<profile>` |
+| `--runtime <path>` | Runtime host archive used when linking `exe`/`lib` |
+| `--out-dir <path>` | Artifact directory; M4.5 default `target/stc/debug`; the M6 project manifest uses `target/stc/<profile>` |
 | `--io <backend>` | Override `[io].backend` for `run`/`test` (`null`, `memory`, `file`) |
 | `--io-file <path>` | File used by the file backend |
 | `--relaxed` | Accept the documented semicolon-relaxation syntax superset |
@@ -78,6 +79,12 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 
 Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LOG`) >
 `stc.toml` > built-in defaults.
+
+The table describes the v1 target surface. M4.5 accepts the options listed in the status note
+above; `--manifest-path`, `--release`/`--debug`, `--io`/`--io-file`, `--state-file`,
+`--reset-retain`, `--no-retain`, `--debug-protocol`, `--color`, `-q`, `-D`/`-W`/`-A`,
+`--deny warnings`, `-vv`, and `--locked` are accepted only when their command or milestone
+lands (M6, except `--debug`/`--release` in M6.5).
 
 ### 1.3 Exit codes
 
@@ -406,12 +413,13 @@ Rules:
 ## 4. Artifact and metadata layout
 
 ```text
-target/stc/<profile>/
+target/stc/debug/                               M4.5 default (v1: target/stc/<profile>/)
   <name>.ll
   <name>.o
-  <name>.exe
-  <name>.lib | <name>.a | <name>.dll | <name>.so
-  <name>-<build-id>.dll | <name>-<build-id>.so   loadable module
+  <name>.exe                                     thin host launcher (exe)
+  <name>-launcher.ll | <name>-launcher.o         launcher IR/object when `exe`
+  <name>.lib | <name>.a                          embedding host archive (lib)
+  <name>-<build-id>.dll | <name>-<build-id>.so  loadable module (module)
   <name>.stc-meta.json
   <name>.stc-got.json                           canonical GOT manifest
   <name>.stc-got.bin                            compact runtime manifest
@@ -422,53 +430,54 @@ target/stc/<profile>/
 
 ```json
 {
-  "profile": "stc-2013-oop-utf8-v1",
-  "compiler": "0.1.0",
-  "abi": 2,
+  "abi_version": 2,
+  "artifact": "motor-control",
   "build_id": "0x…",
-  "parent_build_id": "0x…",
-  "target": "x86_64-pc-windows-msvc",
+  "compiler": "stc 0.1.0",
   "configuration": "Main",
-  "module": { "file": "motor-control-<build-id>.dll", "format": 1 },
-  "manifest": { "file": "motor-control.stc-got.json", "digest": "0x…", "format": 1 },
   "descriptor_digest": "0x…",
-  "packages": [
-    { "name": "motor-control", "version": "0.1.0", "path": "." },
-    { "name": "motor-lib", "version": "0.2.0", "path": "../motor-lib" }
-  ],
-  "artifacts": ["exe", "ir"],
   "exports": [
-    { "name": "stc_init", "kind": "entry" },
-    { "name": "stc_module_cycle", "kind": "entry" },
-    { "name": "stc_module_shutdown", "kind": "entry" },
-    { "name": "stc_export_Main", "kind": "pou", "source": "Main" }
+    { "function": "stc_fn_…", "no_mangle": false, "symbol": "stc_export_Main" }
   ],
   "io": {
     "backend": "null",
-    "image": { "input_bytes": 16, "output_bytes": 16, "marker_bytes": 64 },
-    "input_defaults_hex": "0000...",
-    "devices": [
-      { "name": "drive1", "kind": "ethercat", "config": { "revision": 3, "vendor": "0x1234" } }
-    ],
     "bindings": [
-      { "variable": "Main.MyBool", "area": "I", "address": "IX5", "offset_bits": 5,
-        "type": "BOOL", "hint": { "device": "drive1", "channel": 5 }, "source": "pragma" }
-    ]
+      { "area": "I", "address": "IX5", "got_id": "0x…", "offset_bits": 5,
+        "source": "pragma", "type": "BOOL", "variable": "Main.MyBool", "width_bits": 1 }
+    ],
+    "image": { "inputs_bytes": 16, "markers_bytes": 64, "outputs_bytes": 16 },
+    "input_defaults_hex": "0000…",
+    "output_defaults_hex": "0000…"
   },
+  "manifest": { "digest": "0x…", "format": 1 },
+  "mode": "executable",
+  "module": { "file": "motor-control-<build-id>.dll", "format": 1 },
+  "profile": "stc-2013-oop-utf8-v1",
+  "programs": [
+    { "name": "main_instance", "program": "Main", "resource": "Cpu", "task": "MainTask" }
+  ],
   "retain": {
-    "size": 128,
-    "layout_hash": "0x9f2c...",
-    "file": "motor.stcstate",
-    "on_mismatch": "error",
+    "layout_hash": "0x…",
     "leaves": [
-      { "path": "Main.Counter", "got_id": "0x…", "type": "DINT", "offset": 0, "size": 4 }
-    ]
+      { "offset": 0, "path": "Main.Counter", "size": 4, "type": "DINT" }
+    ],
+    "size": 4
   },
-  "strings": [{ "type": "USTRING", "capacity": 255, "unit_bytes": 4, "length_unit": "character" }],
-  "spans": { "files": ["src/main.st"], "entries": [[0, 0, 12]] },
-  "retained": []
+  "spans": {
+    "entries": [ { "end": 42, "file": 0, "id": 0, "start": 12 } ],
+    "files": ["src/main.st"]
+  },
+  "target": "x86_64-pc-windows-msvc",
+  "tasks": [
+    { "interval_ns": 1000000, "name": "MainTask", "priority": 1,
+      "resource": "Cpu", "single": false }
+  ]
 }
 ```
+
+The M4.5 schema above is what the driver writes. The v1 target adds package/device/`VAR_ACCESS`
+metadata and the `file`/`on_mismatch` retained-state policy in M6; these fields are not emitted
+by M4.5. `parent_build_id` is carried by the manifest lineage rather than the metadata sidecar.
 
 - `lib` is the embedding host library, not generated module code. In M4.5 it is a static host
   archive; shared host libraries (`lib-type = "shared"`) are M6. `exe` is a thin launcher and
@@ -477,9 +486,9 @@ target/stc/<profile>/
 - The metadata is consumed by the runtime and by embedding hosts.
 - It contains no timestamps or absolute paths, so builds are reproducible.
 - The span table is optional in library mode if the host does not need diagnostics.
-- `build_id` is content-derived; `parent_build_id` is present only for an online-change build.
-  The module/manifest digest pair is validated by the host before activation. The exact
-  build-ID, descriptor, manifest, and pairing rules are in
+- `build_id` is content-derived; the online-change parent identity is carried by the GOT
+  manifest lineage, not the metadata sidecar. The module/manifest digest pair is validated by
+  the host before activation. The exact build-ID, descriptor, manifest, and pairing rules are in
   [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§11.
 - The full identity/layout/history record is in the GOT manifest; metadata carries only the
   summary needed by tooling and the host.

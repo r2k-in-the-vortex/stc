@@ -1,6 +1,6 @@
 # GOT Artifacts and Schemas
 
-Status: M4.5 phase 1 design finalized (2026-10-24)  
+Status: Format 1 implemented for the M4 scalar surface (2026-10-25); M5 extends record contents  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: Normative formats for stable keys, `GotId`, the compiler catalog, the module descriptor,
 the persistent GOT manifest, the online-change plan, host ABI 2.0, and build IDs.
@@ -454,9 +454,9 @@ nonzero values are invalid. `entry_flags` bits:
 | 1 | `stc_module_cycle` is callable |
 | 2 | `stc_module_shutdown` performs retained-state work |
 | 3 | `stc_module_detach` releases module-local resources |
-| 4 | Debug build; debug information and checkpoint hooks are present |
+| 4 | Debug build form (the default non-`--release` artifact). M4.5 emits no debug information or checkpoint hooks; M6.5 adds them |
 | 5 | The module uses retained-state host services |
-| 6 | Debug hooks are active (M6.5) |
+| 6 | Debug hooks are active (M6.5; always clear in M4.5) |
 | 7–31 | Reserved, must be zero in format 1 |
 
 `FunctionRecord`:
@@ -506,10 +506,13 @@ every `Descriptor` slot's `GotId` appears in the manifest descriptor table.
 | 1 | Online-change plan present in the paired manifest |
 | 2 | OOP descriptors/vtables in use (M5) |
 | 3 | Place-descriptor references in use (M5) |
-| 4 | Debug checkpoint hooks in use (M6.5) |
+| 4 | Debug checkpoint hooks in use (M6.5; not set by M4.5) |
 | 5–63 | Reserved; a host that does not implement a set bit rejects the module |
 
-M4.5 sets bit 0 and bit 1.
+M4.5 sets bit 0 and bit 1. It does not set bit 4; the host does not require it. The
+`entry_flags` debug-build bit may be set by M4.5's default artifact form, but it conveys no
+debug-information or checkpoint capability until M6.5 sets the feature bit and emits the
+corresponding data.
 
 ### 7.2 Descriptor digest
 
@@ -1218,8 +1221,9 @@ For the M4 scalar surface, the compiler populates:
 - **Slots:** data, function, direct, and import slots as assigned in §6.2; descriptor slots are
   empty.
 - **Plan:** `Preserve`, `Allocate`, `Drop`, and `Reject`; `Migrate`/`Reset` are not emitted.
-- **Host services:** trap, clocks, I/O image, and retained-state stubs. Transient `alloc`/`free`
-  and `assert` are in ABI 2.0 but unused by M4.5-generated code.
+- **Host services:** trap, I/O image/size, and retained-state stubs. Clocks, transient
+  `alloc`/`free`, and `assert` are in ABI 2.0 but unused by M4.5-generated code and are added as
+  import slots when a later construct first needs them.
 
 Direct-root records carry the identity, type, layout, and slot, but not the process-image
 area/address; that stays in the `.stc-meta.json` sidecar. Address-remap detection is therefore a
@@ -1236,7 +1240,7 @@ parameters, temporaries, compiler helpers, or module-local read-only data.
 
 ### 12.2 Schema conformance tests
 
-The implementation phases that follow must add:
+The implementation phases added:
 
 1. Golden descriptor and manifest snapshots for a small scalar program, including both JSON and
    binary projections and their digests.
@@ -1299,9 +1303,9 @@ projections. The `migration` module validates a plan against the exact parent bu
 identity, preserve-shape compatibility, allocate reuse (including retired identities), drop
 restrictions, and retirement coverage. Runtime unit tests cover malformed and tampered artifacts
 and allocation lifetimes; loader, swap, and plan execution remain for phase 6 and later. D-122
-records the choices. Implementation of host API bindings and runtime loading in later phases must
-follow these formats exactly, and any further change discovered during implementation returns to
-this document and the decision log before code lands.
+records the choices. Host API bindings and runtime loading in the later phases followed these
+formats exactly, and any further change returns to this document and the decision log before
+code lands.
 
 Phase 6 is implemented (2026-10-25) in `stc-runtime`. `loader` is the platform layer over
 `LoadLibraryW`/`GetProcAddress`/`FreeLibrary` and `dlopen`/`dlsym`/`dlclose`; it resolves the seven
@@ -1377,6 +1381,14 @@ The build rejects missing, truncated, and malformed baselines with `STC-E-BUILD-
 generation pinning and malformed metadata. The recorded switch measurement supports the O(1)
 activation contract in §8. D-126 records the phase choices.
 
+Phase 10 is the documentation and handover pass (2026-10-25). The schema text is unchanged:
+format 1 remains what M4.5 emits, M5 extends the existing record tables without a format bump,
+and the M4.5 implementation follows these formats exactly. The phase clarifies the debug flags
+(§7.1): M4.5's default artifact form may set the entry-flag debug bit but emits no debug
+information or checkpoint hooks, and the debug-checkpoint required-feature bit stays clear until
+M6.5. D-127 records the pass; the M6.5 boundary is in
+[Debug and Monitoring](Debug-and-Monitoring.md) §12.
+
 ## 13. Related documents
 
 - [Online Change and GOT](Online-Change-and-GOT.md) — host/module model, lifecycle, policy.
@@ -1385,4 +1397,4 @@ activation contract in §8. D-126 records the phase choices.
 - [CLI and Manifest](CLI-and-Manifest.md) — commands, options, artifact layout.
 - [State and RETAIN](State-and-Retain.md) — retained-state file and cold/warm policy.
 - [Testing and Verification](Testing-and-Verification.md) — hot-swap and manifest tests.
-- [Decisions](../Decisions.md) — D-113–D-118 and the prior online-change decisions.
+- [Decisions](../Decisions.md) — D-113–D-127 and the prior online-change decisions.
