@@ -416,7 +416,7 @@ pub fn project(
     let used_std = crate::types::used_standard_fbs(hir);
     let layouts = config::program_layouts(hir, &plan, &types).map_err(map_codegen_errors)?;
     let _image = config::image_layout(hir, &plan, &layouts).map_err(map_codegen_errors)?;
-    let retain = config::retain_layout(hir, &plan, &layouts).map_err(map_codegen_errors)?;
+    let retain = config::retain_layout(hir, &plan, &layouts, &types).map_err(map_codegen_errors)?;
     let source_paths = package_relative_paths(sources);
 
     let context = Context {

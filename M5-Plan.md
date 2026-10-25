@@ -162,7 +162,7 @@ materialized into a transient alloca on read and split back into roots on write.
 | 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, and conformant `ARRAY[*]` complete; `?=` needs phase 4 and `STC-POINTER` remains |
 | 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; interfaces, `?=`, and runtime descriptors remain |
 | 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
-| 6 | Aggregate/string/FB retained-state leaves and metadata | Planned |
+| 6 | Aggregate/string/FB retained-state leaves and metadata | Complete: per-leaf flattening, packed offsets, GOT-root save/load, and metadata paths |
 | 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate codegen/clang/execution coverage in place; OOP/stdlib/fuzz/docs remain |
 
 ### Phase 1 — type and layout substrate
@@ -220,10 +220,14 @@ materialized into a transient alloca on read and split back into roots on write.
 
 ### Phase 6 — retained state
 
-- Flatten aggregate/string/FB leaves with recursive paths and packed offsets.
+- Flatten aggregate/string/FB leaves with recursive paths and packed offsets. Complete in
+  `config::retain_layout`, driven by `TypeSystem::root_leaves`.
 - Save/load through GEP chains; exclude non-persistable values; keep the metadata schema and
-  layout-hash policy.
-- Round-trip tests for aggregate/string/FB leaves and cold/online policy tests.
+  layout-hash policy. Complete: leaves reach their host roots through `GlobalLeaf`/`InstanceLeaf`
+  GOT slots and the retain mover loads/stores whole leaf values at `align 1`.
+- Round-trip tests for aggregate/string/FB leaves and cold/online policy tests. Complete for
+  structs, arrays of structs, strings, FB state, and program-instance aggregate fields; file
+  policy remains M6.
 
 ### Phase 7 — verification and documentation
 

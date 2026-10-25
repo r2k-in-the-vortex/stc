@@ -11,9 +11,10 @@ use stc_span::Span;
 
 use crate::CodegenError;
 use crate::codes;
+use crate::ir::IrType;
 use crate::layout::{self, ScalarKind};
 use crate::mangle;
-use crate::types::{RootSegment, StorageLayout, TypeSystem};
+use crate::types::{RootSegment, StorageLayout, TypeCategory, TypeSystem};
 
 /// One task selected for execution/metadata.
 #[derive(Clone, Debug)]
@@ -116,8 +117,6 @@ pub(crate) struct ObjectLayout {
 /// An LLVM struct layout for one program type.
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramLayout {
-    /// Non-`AT` fields in declaration order.
-    pub fields: Vec<FieldId>,
     /// Persistent leaves in canonical order.
     pub leaves: Vec<ProgramLeaf>,
 }
@@ -179,26 +178,40 @@ pub(crate) struct ImageLayout {
 /// How a retained leaf is reached in generated code.
 #[derive(Clone, Debug)]
 pub(crate) enum RetainPlace {
-    /// A global definition.
+    /// A global whose whole value is one root.
     Global(DefId),
-    /// A field of a configured program instance.
+    /// One nested root of an aggregate global.
+    GlobalLeaf {
+        /// Global declaration.
+        def: DefId,
+        /// Path below the global.
+        segments: Vec<RootSegment>,
+    },
+    /// A program-instance field whose whole value is one root.
     InstanceField {
         /// Instance name.
         instance: Symbol,
         /// Field.
         field: FieldId,
     },
+    /// One nested root of a program-instance field.
+    InstanceLeaf {
+        /// Instance name.
+        instance: Symbol,
+        /// Path below the program type.
+        segments: Vec<RootSegment>,
+    },
 }
 
-/// One retained scalar leaf.
+/// One retained persistent leaf.
 #[derive(Clone, Debug)]
 pub(crate) struct RetainLeaf {
     /// Readable path.
     pub path: String,
-    /// Canonical type name.
+    /// Canonical type spelling.
     pub ty: String,
-    /// Scalar kind.
-    pub kind: ScalarKind,
+    /// LLVM storage type of the leaf.
+    pub storage: IrType,
     /// Payload offset.
     pub offset: u64,
     /// Leaf size.
@@ -207,7 +220,7 @@ pub(crate) struct RetainLeaf {
     pub place: RetainPlace,
 }
 
-/// Scalar retained-state layout.
+/// Retained-state layout.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RetainLayout {
     /// Total payload size.
@@ -423,7 +436,6 @@ pub(crate) fn program_layouts(
         let DefKind::Program { fields, .. } = &hir.defs[program.index()].kind else {
             continue;
         };
-        let mut kept = Vec::new();
         let mut leaves = Vec::new();
         for field in fields {
             let data = hir.field(*field);
@@ -436,9 +448,6 @@ pub(crate) fn program_layouts(
             };
             match types.root_leaves(data.ty, &leaf_prefix, data.retain) {
                 Ok(declared) => {
-                    if data.at.is_none() {
-                        kept.push(*field);
-                    }
                     for mut leaf in declared {
                         leaf.segments.insert(0, RootSegment::Field(*field));
                         let at = if data.at.is_some() && leaf.segments.len() == 1 {
@@ -460,13 +469,7 @@ pub(crate) fn program_layouts(
                 Err(error) => errors.push(error.with_span(data.span)),
             }
         }
-        layouts.insert(
-            *program,
-            ProgramLayout {
-                fields: kept,
-                leaves,
-            },
-        );
+        layouts.insert(*program, ProgramLayout { leaves });
     }
     for init in &plan.config_inits {
         if let Some(address) = &init.at {
@@ -789,42 +792,73 @@ fn encode_const(value: &ConstValue, kind: ScalarKind) -> Vec<u8> {
     }
 }
 
-/// Builds the scalar retained layout.
+/// Builds the retained layout from effective per-leaf retention (D-135).
+///
+/// Structs, arrays, and class/FB objects recurse through their persistent
+/// roots; strings and scalar arrays stay single leaves. References,
+/// interfaces, and pointers are rejected by sema before code generation.
 ///
 /// # Errors
 ///
-/// Reports retained leaves outside the M4 scalar scope.
+/// Reports malformed types and unsupported leaf shapes.
 pub(crate) fn retain_layout(
     hir: &HirCrate,
     plan: &Plan,
     layouts: &BTreeMap<DefId, ProgramLayout>,
+    types: &TypeSystem<'_>,
 ) -> Result<RetainLayout, Vec<CodegenError>> {
     let mut leaves = Vec::new();
     let mut errors = Vec::new();
     for (index, def) in hir.defs.iter().enumerate() {
-        let DefKind::Global {
-            ty,
-            retain: RetainPolicy::Retain,
-            at,
-            ..
-        } = &def.kind
-        else {
+        let DefKind::Global { ty, retain, at, .. } = &def.kind else {
             continue;
         };
         if at.is_some() {
             continue;
         }
         let id = DefId::new(u32::try_from(index).unwrap_or(0));
-        match layout::scalar_kind_at(hir, *ty, def.span) {
-            Ok(kind) => leaves.push(RetainLeaf {
-                path: def.name_text(&hir.interner).to_string(),
-                ty: kind.canonical_name(),
-                kind,
+        let prefix = def.name_text(&hir.interner).to_string();
+        let declared = match types.root_leaves(*ty, &prefix, *retain) {
+            Ok(leaves) => leaves,
+            Err(error) => {
+                errors.push(error.with_span(def.span));
+                continue;
+            }
+        };
+        for leaf in declared {
+            if leaf.retain != RetainPolicy::Retain {
+                continue;
+            }
+            let path = match retain_path(hir, types, *ty, &prefix, &leaf.segments) {
+                Ok(path) => path,
+                Err(error) => {
+                    errors.push(error.with_span(def.span));
+                    continue;
+                }
+            };
+            let storage = match types.llvm_storage(leaf.ty) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    errors.push(error.with_span(def.span));
+                    continue;
+                }
+            };
+            let place = if leaf.segments.is_empty() {
+                RetainPlace::Global(id)
+            } else {
+                RetainPlace::GlobalLeaf {
+                    def: id,
+                    segments: leaf.segments,
+                }
+            };
+            leaves.push(RetainLeaf {
+                path,
+                ty: hir.type_name(leaf.ty),
+                storage,
                 offset: 0,
-                size: kind.size_bytes(),
-                place: RetainPlace::Global(id),
-            }),
-            Err(error) => errors.push(error),
+                size: leaf.layout.size,
+                place,
+            });
         }
     }
 
@@ -832,29 +866,56 @@ pub(crate) fn retain_layout(
         let Some(layout) = layouts.get(&instance.program) else {
             continue;
         };
-        for field in &layout.fields {
-            let data = hir.field(*field);
-            if data.retain != RetainPolicy::Retain || data.at.is_some() {
+        let program_ty = match types.named_ty(instance.program) {
+            Ok(ty) => ty,
+            Err(error) => {
+                errors.push(error);
                 continue;
             }
-            match layout::scalar_kind_at(hir, data.ty, data.span) {
-                Ok(kind) => leaves.push(RetainLeaf {
-                    path: format!("{}.{}", instance.name_text, hir.interner.text(data.name)),
-                    ty: kind.canonical_name(),
-                    kind,
-                    offset: 0,
-                    size: kind.size_bytes(),
-                    place: RetainPlace::InstanceField {
-                        instance: instance.name,
-                        field: *field,
-                    },
-                }),
-                Err(error) => errors.push(error),
+        };
+        for leaf in &layout.leaves {
+            if leaf.retain != RetainPolicy::Retain || leaf.at.is_some() {
+                continue;
             }
+            let path =
+                match retain_path(hir, types, program_ty, &instance.name_text, &leaf.segments) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        errors.push(error);
+                        continue;
+                    }
+                };
+            let storage = match types.llvm_storage(leaf.ty) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    errors.push(error);
+                    continue;
+                }
+            };
+            let place = match leaf.segments.as_slice() {
+                [RootSegment::Field(field)] => RetainPlace::InstanceField {
+                    instance: instance.name,
+                    field: *field,
+                },
+                _ => RetainPlace::InstanceLeaf {
+                    instance: instance.name,
+                    segments: leaf.segments.clone(),
+                },
+            };
+            leaves.push(RetainLeaf {
+                path,
+                ty: hir.type_name(leaf.ty),
+                storage,
+                offset: 0,
+                size: leaf.layout.size,
+                place,
+            });
         }
     }
 
     if !errors.is_empty() {
+        errors.sort_by_key(|error| error.span());
+        errors.dedup();
         return Err(errors);
     }
     leaves.sort_by(|left, right| {
@@ -882,4 +943,46 @@ pub(crate) fn retain_layout(
         hash,
         leaves,
     })
+}
+
+/// Formats a retained path with source field names and source array indices.
+fn retain_path(
+    hir: &HirCrate,
+    types: &TypeSystem<'_>,
+    ty: TyId,
+    prefix: &str,
+    segments: &[RootSegment],
+) -> Result<String, CodegenError> {
+    let mut out = String::from(prefix);
+    let mut current = ty;
+    for segment in segments {
+        match segment {
+            RootSegment::Field(field) => {
+                let data = hir.field(*field);
+                out.push('.');
+                out.push_str(hir.interner.text(data.name));
+                current = data.ty;
+            }
+            RootSegment::Element { index, dim } => {
+                let facts = types.facts(current)?;
+                let TypeCategory::Array { dims, element, .. } = &facts.category else {
+                    return Err(CodegenError::internal(
+                        "retained leaf has an array index outside an array",
+                    ));
+                };
+                let Some(dimension) = dims.get(usize::try_from(*dim).unwrap_or(usize::MAX)) else {
+                    return Err(CodegenError::internal(
+                        "retained leaf has an out-of-range array dimension",
+                    ));
+                };
+                out.push('[');
+                out.push_str(&(dimension.lower + i128::from(*index)).to_string());
+                out.push(']');
+                if usize::try_from(*dim).unwrap_or(usize::MAX) + 1 == dims.len() {
+                    current = *element;
+                }
+            }
+        }
+    }
+    Ok(out)
 }

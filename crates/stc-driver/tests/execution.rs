@@ -732,6 +732,29 @@ fn toolchain_errors_use_exit_two() {
 }
 
 const ADVANCED: &str = r#"
+TYPE
+  Point : STRUCT
+    x : DINT;
+    y : DINT;
+  END_STRUCT;
+END_TYPE
+
+FUNCTION_BLOCK Counter
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR_OUTPUT
+  q : DINT;
+END_VAR
+VAR PUBLIC
+  cv : DINT;
+  label : STRING[8];
+END_VAR
+  cv := cv + inc;
+  label := 'fb';
+  q := cv;
+END_FUNCTION_BLOCK
+
 VAR_GLOBAL
   seed : DINT := 5;
   result : DINT;
@@ -740,6 +763,10 @@ VAR_GLOBAL
 END_VAR
 VAR_GLOBAL RETAIN
   Saved : DINT;
+  SavedPoint : Point;
+  SavedPoints : ARRAY[1..2] OF Point;
+  SavedText : STRING[8];
+  SavedFb : Counter;
 END_VAR
 
 FUNCTION Bump : BOOL
@@ -777,6 +804,59 @@ END_FUNCTION
 {stc:export}{stc:no_mangle}
 FUNCTION GetValue : DINT
   GetValue := Saved;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION SetAgg : DINT
+  SavedPoint.x := 11;
+  SavedPoint.y := 22;
+  SavedPoints[1].x := 1;
+  SavedPoints[1].y := 2;
+  SavedPoints[2].x := 3;
+  SavedPoints[2].y := 4;
+  SavedText := 'agg';
+  SetAgg := 0;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION GetAgg : DINT
+VAR
+  total : DINT;
+END_VAR
+  total := SavedPoint.x + SavedPoint.y;
+  total := total + SavedPoints[1].x + SavedPoints[1].y;
+  total := total + SavedPoints[2].x + SavedPoints[2].y;
+  total := total + LEN(SavedText);
+  GetAgg := total;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION ClearAgg : DINT
+  SavedPoint.x := 0;
+  SavedPoint.y := 0;
+  SavedPoints[1].x := 0;
+  SavedPoints[1].y := 0;
+  SavedPoints[2].x := 0;
+  SavedPoints[2].y := 0;
+  SavedText := '';
+  ClearAgg := 0;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION BumpFb : DINT
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR
+  q : DINT;
+END_VAR
+  SavedFb(inc := inc, q => q);
+  BumpFb := q;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION GetFb : DINT
+  GetFb := SavedFb.cv + LEN(SavedFb.label);
 END_FUNCTION
 
 {stc:export}{stc:no_mangle}
@@ -889,7 +969,14 @@ END_VAR
 VAR
   configurable : DINT := 1;
 END_VAR
+VAR RETAIN
+  sp : Point;
+  st : STRING[8];
+END_VAR
   cycles := cycles + 1;
+  sp.x := sp.x + 1;
+  sp.y := sp.y + 1;
+  st := 'p';
   output := input + configurable;
 END_PROGRAM
 
@@ -912,8 +999,19 @@ fn bindings_short_circuit_casts_and_retained_state() {
     build_library(&directory, ADVANCED, "advanced");
     let metadata = std::fs::read_to_string(directory.path.join("advanced.stc-meta.json"))
         .expect("metadata file");
-    assert!(metadata.contains("\"path\": \"Saved\""), "{metadata}");
-    assert!(metadata.contains("\"size\": 4"), "{metadata}");
+    for path in [
+        "\"path\": \"Saved\"",
+        "\"path\": \"SavedPoint.x\"",
+        "\"path\": \"SavedPoints[1].y\"",
+        "\"path\": \"SavedText\"",
+        "\"path\": \"SavedFb.CV\"",
+        "\"path\": \"SavedFb.label\"",
+        "\"path\": \"inst.sp.x\"",
+        "\"path\": \"inst.st\"",
+    ] {
+        assert!(metadata.contains(path), "{path} missing: {metadata}");
+    }
+    assert!(metadata.contains("\"size\": 84"), "{metadata}");
     let library = lib_path(&directory.path, "advanced");
     compile_harness(
         &directory,

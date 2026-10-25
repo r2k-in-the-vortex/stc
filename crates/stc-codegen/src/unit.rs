@@ -83,7 +83,7 @@ pub(crate) fn generate(
     let objects = config::object_layouts(hir, &types)?;
     let used_std = crate::types::used_standard_fbs(hir);
     let image = config::image_layout(hir, &plan, &layouts)?;
-    let retain = config::retain_layout(hir, &plan, &layouts)?;
+    let retain = config::retain_layout(hir, &plan, &layouts, &types)?;
     let (span_ids, span_entries) = build_span_table(hir);
     let mut lowerer = Lowerer {
         hir,
@@ -1472,15 +1472,22 @@ impl Lowerer<'_> {
         f.start_block(&valid);
         let leaves = self.retain.leaves.clone();
         for leaf in &leaves {
-            let slot = match &leaf.place {
-                RetainPlace::Global(def) => self.root_slot(&RootTarget::Global(*def))?,
-                RetainPlace::InstanceField { instance, field } => {
-                    self.root_slot(&RootTarget::InstanceField {
-                        instance: *instance,
-                        field: *field,
-                    })?
-                }
+            let target = match &leaf.place {
+                RetainPlace::Global(def) => RootTarget::Global(*def),
+                RetainPlace::GlobalLeaf { def, segments } => RootTarget::GlobalLeaf {
+                    def: *def,
+                    segments: segments.clone(),
+                },
+                RetainPlace::InstanceField { instance, field } => RootTarget::InstanceField {
+                    instance: *instance,
+                    field: *field,
+                },
+                RetainPlace::InstanceLeaf { instance, segments } => RootTarget::InstanceLeaf {
+                    instance: *instance,
+                    segments: segments.clone(),
+                },
             };
+            let slot = self.root_slot(&target)?;
             let source = Self::slot_storage(f, info, slot);
             let offset = f.gep(
                 buffer_type,
@@ -1489,10 +1496,10 @@ impl Lowerer<'_> {
                 true,
             );
             if saving {
-                let value = f.load(leaf.kind.storage(), &source, None);
+                let value = f.load(leaf.storage.clone(), &source, None);
                 f.store(&value, &offset, Some(1));
             } else {
-                let value = f.load(leaf.kind.storage(), &offset, Some(1));
+                let value = f.load(leaf.storage.clone(), &offset, Some(1));
                 f.store(&value, &source, None);
             }
         }
