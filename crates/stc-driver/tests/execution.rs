@@ -193,6 +193,7 @@ fn source_name_source(name: &str) -> &'static str {
         "bounds" => BOUNDS,
         "strrange" => STRRANGE,
         "conf2bounds" => CONF2BOUNDS,
+        "ptrtrap" => PTR_NULL_TRAP,
         other => panic!("unknown source {other}"),
     }
 }
@@ -415,6 +416,7 @@ fn traps_are_fatal_and_reported() {
         ("bounds", "BOUNDS"),
         ("strrange", "RANGE"),
         ("conf2bounds", "BOUNDS"),
+        ("ptrtrap", "NULL_REF"),
     ] {
         let directory = TestDir::new(source);
         build_executable(&directory, source, source);
@@ -427,6 +429,29 @@ fn traps_are_fatal_and_reported() {
         assert!(stderr.contains(needle), "{source}: {stderr}");
     }
 }
+
+const PTR_NULL_TRAP: &str = r#"
+FUNCTION Boom : DINT
+VAR
+  p : POINTER TO DINT;
+END_VAR
+  p := NULL;
+  Boom := p^;
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+  x := Boom();
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
 
 const LIBRARY: &str = r#"
 {stc:export}
@@ -1664,6 +1689,316 @@ END_VAR
   ELSE
     FbCV := 0;
   END_CASE;
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn pointer_operations_run_under_a_c_harness() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("pointers");
+    build_library(&directory, POINTERS, "pointers");
+    let library = lib_path(&directory.path, "pointers");
+    assert!(library.is_file(), "{}", library.display());
+    compile_harness(
+        &directory,
+        "pointers.c",
+        &library,
+        &built_module(&directory, "pointers"),
+        "pointers_harness",
+    );
+}
+
+const POINTERS: &str = r#"
+TYPE
+  Point : STRUCT
+    x : DINT;
+    y : DINT;
+  END_STRUCT;
+  Node : STRUCT
+    value : DINT;
+    next : POINTER TO Node;
+  END_STRUCT;
+END_TYPE
+
+VAR_GLOBAL
+  g : DINT;
+  gpt : Point;
+  g2 : ARRAY[1..2, 1..3] OF DINT;
+END_VAR
+
+FUNCTION ReadP : DINT
+VAR_INPUT
+  p : POINTER TO DINT;
+END_VAR
+  ReadP := p^;
+END_FUNCTION
+
+FUNCTION BumpP : DINT
+VAR_INPUT
+  p : POINTER TO DINT;
+END_VAR
+  p^ := p^ + 1;
+  BumpP := p^;
+END_FUNCTION
+
+FUNCTION GetNext : DINT
+VAR_INPUT
+  p : POINTER TO DINT;
+END_VAR
+VAR_OUTPUT
+  q : POINTER TO DINT;
+END_VAR
+  q := p + 1;
+  GetNext := q^;
+END_FUNCTION
+
+FUNCTION BumpPoint : DINT
+VAR_IN_OUT
+  a : Point;
+END_VAR
+  a.x := a.x + 1;
+  BumpPoint := a.x;
+END_FUNCTION
+
+FUNCTION NextP : POINTER TO DINT
+VAR_INPUT
+  p : POINTER TO DINT;
+END_VAR
+  NextP := p + 1;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrGlobal : DINT
+VAR
+  p : POINTER TO DINT;
+END_VAR
+  g := 5;
+  p := ADR(g);
+  p^ := 7;
+  PtrGlobal := g + p^;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrIndex : DINT
+VAR
+  arr : ARRAY[1..4] OF DINT;
+  p : POINTER TO DINT;
+  i : DINT;
+END_VAR
+  p := ADR(arr);
+  FOR i := 0 TO 3 DO
+    p[i] := i + 1;
+  END_FOR;
+  PtrIndex := arr[1] * 10 + arr[4];
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrArith : DINT
+VAR
+  arr : ARRAY[1..4] OF DINT;
+  p : POINTER TO DINT;
+  q : POINTER TO DINT;
+  n : DINT;
+END_VAR
+  arr[1] := 1;
+  arr[2] := 2;
+  arr[3] := 9;
+  arr[4] := 4;
+  p := ADR(arr);
+  q := 2 + p;
+  n := q - p;
+  PtrArith := n * 10 + q^;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrParam : DINT
+VAR
+  arr : ARRAY[1..2] OF DINT;
+  p : POINTER TO DINT;
+  q : POINTER TO DINT;
+  v : DINT;
+END_VAR
+  arr[1] := 3;
+  arr[2] := 4;
+  p := ADR(arr);
+  v := ReadP(p);
+  v := v + BumpP(p);
+  v := v + GetNext(p, q => q);
+  v := v + q^;
+  PtrParam := v;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrResult : DINT
+VAR
+  arr : ARRAY[1..2] OF DINT;
+  p : POINTER TO DINT;
+END_VAR
+  arr[1] := 5;
+  arr[2] := 6;
+  p := NextP(ADR(arr));
+  PtrResult := p^;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrConv : DINT
+VAR
+  p : POINTER TO DINT;
+  r : REF_TO DINT;
+  rp : REF_TO DINT;
+END_VAR
+  r := REF(g);
+  p := POINTER TO DINT(r);
+  p^ := 11;
+  rp := REF_TO DINT(p);
+  rp^ := 12;
+  PtrConv := g;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrSize : DINT
+VAR
+  p : POINTER TO DINT;
+END_VAR
+  PtrSize := SIZEOF(DINT) + SIZEOF(p) + SIZEOF(p^)
+    + SIZEOF(STRING[10]) + SIZEOF(ARRAY[1..3] OF INT);
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrString : DINT
+VAR
+  s : STRING[10];
+  ps : POINTER TO STRING[10];
+  r : DINT;
+END_VAR
+  s := 'abc';
+  ps := ADR(s);
+  r := 0;
+  IF ps^[1] = CHAR#'a' THEN r := r + 10; END_IF;
+  IF ps^ = 'abc' THEN r := r + 1; END_IF;
+  PtrString := r + LEN(ps^);
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrArray2 : DINT
+VAR
+  p : POINTER TO ARRAY[1..3] OF DINT;
+END_VAR
+  p := ADR(g2);
+  p[1][3] := 7;
+  PtrArray2 := g2[2, 3];
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrField : DINT
+VAR
+  pt : Point;
+  p : POINTER TO Point;
+  n : Node;
+  other : Node;
+END_VAR
+  p := ADR(pt);
+  p^.x := 5;
+  p^.y := 6;
+  other.value := 9;
+  n.next := ADR(other);
+  PtrField := pt.x * 10 + pt.y + n.next^.value;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrPtr : DINT
+VAR
+  p : POINTER TO DINT;
+  pp : POINTER TO POINTER TO DINT;
+END_VAR
+  p := ADR(g);
+  pp := ADR(p);
+  pp^^ := 8;
+  PtrPtr := g;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrDirect : DINT
+VAR
+  p : POINTER TO DWORD;
+END_VAR
+  p := ADR(%MD10);
+  p^ := 42;
+  IF %MD10 = DWORD#42 THEN
+    PtrDirect := 42;
+  ELSE
+    PtrDirect := 0;
+  END_IF;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrArrayOfPtrs : DINT
+VAR
+  buf : ARRAY[1..3] OF DINT;
+  ptrs : ARRAY[1..2] OF POINTER TO DINT;
+  p : POINTER TO DINT;
+END_VAR
+  ptrs[1] := ADR(buf[2]);
+  p := ptrs[1];
+  p^ := 9;
+  PtrArrayOfPtrs := buf[2];
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrNull : DINT
+VAR
+  p : POINTER TO DINT;
+  r : REF_TO DINT;
+  rp : REF_TO DINT;
+  n : DINT;
+END_VAR
+  p := NULL;
+  n := 0;
+  IF p = NULL THEN n := 1; ELSE n := 2; END_IF;
+  IF p <> NULL THEN n := n + 10; END_IF;
+  r := REF_TO DINT(p);
+  IF r = NULL THEN n := n + 100; END_IF;
+  rp := r;
+  p := POINTER TO DINT(rp);
+  IF p = NULL THEN n := n + 1000; END_IF;
+  PtrNull := n;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrInOut : DINT
+VAR
+  pt : Point;
+  p : POINTER TO Point;
+  v : DINT;
+END_VAR
+  pt.x := 1;
+  pt.y := 2;
+  p := ADR(pt);
+  v := BumpPoint(p^);
+  PtrInOut := v * 10 + pt.x;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION PtrLeaf : DINT
+VAR
+  p : POINTER TO DINT;
+END_VAR
+  p := ADR(gpt.y);
+  p^ := 7;
+  PtrLeaf := gpt.y;
 END_FUNCTION
 
 PROGRAM Main

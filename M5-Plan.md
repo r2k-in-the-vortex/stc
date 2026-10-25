@@ -2,8 +2,8 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-25  
-Status: Phase 0 written. Phases 1–7 are implemented incrementally; the status table records
-the state of each phase.
+Status: Phase 0 written. Phases 1–7 and the `STC-POINTER` surface are implemented; interfaces,
+runtime descriptors, and `?=` remain phase 4b.
 
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8, [Architecture](Specification/Architecture/Architecture.md)
 §4, [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §1–§4,
@@ -124,11 +124,14 @@ materialized into a transient alloca on read and split back into roots on write.
   descriptor (generation, null, type/layout) and returns storage. Null or invalid dereference
   traps `STC-TRAP_NULL_REF`/`STC-TRAP_RANGE`.
 - `POINTER TO` is the transient `STC-POINTER` extension: a raw pointer used for locals,
-  parameters, contiguous leaves, array elements, strings, and `OVERLAP` views. Pointer
+  parameters, results, contiguous leaves, array elements, strings, and `OVERLAP` views. Pointer
   arithmetic/indexing is unchecked within the target object; null dereference traps. Persistent
-  pointer fields and pointer↔integer conversions are rejected.
-- Pointer→`REF_TO` goes through the host resolver and yields `NULL` on failure; pointer→
-  object/interface is not allowed.
+  pointer fields, pointer↔integer conversions, and pointer targets that are not contiguous
+  storage are rejected.
+- Pointer→`REF_TO` builds a `Stack` place descriptor from the raw address (a null pointer yields
+  a null descriptor); `REF_TO`→`POINTER` extracts the descriptor's storage pointer, resolves
+  `Direct` descriptors through `io_image`, and yields `NULL` for null, object, `%I` input, or
+  invalid descriptors. Pointer→object/interface is not allowed.
 
 ### 3.5 Standard library
 
@@ -159,11 +162,11 @@ materialized into a transient alloca on read and split back into roots on write.
 | 0 | Decisions D-128–D-136 and this plan | Complete |
 | 1 | Type/layout substrate, aggregate IR builder, type/descriptor catalog records | Complete |
 | 2 | Structs, enums, subranges, arrays, strings: values, roots, initializers, traps | Complete for values, roots, initializers, and traps; string search functions are phase 5 |
-| 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, and conformant `ARRAY[*]` complete; `?=` needs phase 4 and `STC-POINTER` remains |
+| 3 | References, `NULL`, deref, `RefAssign`, `?=`, output/`VAR_IN_OUT` params, `STC-POINTER` | References, `NULL`, deref, `RefAssign`, aggregate/out/in-out ABI, conformant `ARRAY[*]`, and `STC-POINTER` complete; `?=` needs phase 4 |
 | 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object copy, FB bodies/invocation, methods, inheritance, `THIS`/`SUPER`, and the object-table ABI are complete; interfaces, `?=`, and runtime descriptors remain |
 | 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Complete: per-leaf flattening, packed offsets, GOT-root save/load, and metadata paths |
-| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state harnesses, M5 hot-swap coverage, and M5 fuzz seeds are in place; final docs and the closing check pass remain |
+| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state/pointer harnesses, M5 hot-swap coverage, M5 fuzz seeds, and status documentation are in place; interfaces/descriptors remain (phase 4b) |
 
 ### Phase 1 — type and layout substrate
 
@@ -196,6 +199,11 @@ materialized into a transient alloca on read and split back into roots on write.
   descriptors with rank bounds.
 - Add the `STC-POINTER` front-end surface (lexer/parser/AST/sema/HIR), transient pointer
   lowering, arithmetic/indexing, `SIZEOF`, null traps, and persistent-pointer rejection.
+  Complete: `POINTER TO`, `ADR`, `SIZEOF`, `REF_TO T(expr)`/`POINTER TO T(expr)`, pointer
+  fields/parameters/results, typed arithmetic and indexing, `SIZEOF` constants, null traps, and
+  the transient-storage/contiguous-target rules are implemented and covered by a C harness and a
+  null-deref trap executable. `SIZEOF` is folded during code generation, so it is a constant in
+  emitted IR but is not accepted in analyzer constant-expression positions.
 
 ### Phase 4 — OOP and FBs
 
@@ -233,9 +241,10 @@ materialized into a transient alloca on read and split back into roots on write.
 
 - Codegen snapshots and clang verification for every new construct. Clang acceptance and
   execution coverage are in place for the implemented surface, including an M5 determinism test.
-- Driver execution harnesses for OOP, arrays/strings, conformant arrays, timers, and retained
-  state; online-change coverage for FB/class state, aggregate roots, and descriptors. FB and
-  aggregate state preservation is covered; interface/descriptor preservation waits on phase 4b.
+- Driver execution harnesses for OOP, arrays/strings, conformant arrays, timers, pointers, and
+  retained state; online-change coverage for FB/class state, aggregate roots, and descriptors.
+  FB and aggregate state preservation is covered; interface/descriptor preservation waits on
+  phase 4b.
 - Extend `fuzz_codegen` with M5 HIR; keep bounded output/time and determinism. The target already
   generates arbitrary analyzed HIR; local M5 seeds were used during development but the corpus
   directory is gitignored.
@@ -251,12 +260,10 @@ materialized into a transient alloca on read and split back into roots on write.
   rejected explicitly at their call sites. Completing this requires the runtime type-info/vtable/
   object registry, stable object records across swaps, descriptor projection, and interface
   lowering/dispatch.
-- **`STC-POINTER`.** The surface grammar and semantic envelope are now recorded in Grammar
-  §4/§9.4 and D-145. The lexer, parser, AST, HIR, and sema still contain no pointer type,
-  address-of expression, or `SIZEOF` surface, so implementation remains.
 - **References to split persistent aggregates** remain rejected because they have no single
   stable storage location; contiguous transient aggregates and single-root persistent values are
-  supported (D-144).
+  supported (D-144). Pointer targets obey the same rule: `ADR` of a split persistent aggregate
+  is rejected, while leaves, single-root values, and transient aggregates are supported.
 
 ## 5. Diagnostics
 

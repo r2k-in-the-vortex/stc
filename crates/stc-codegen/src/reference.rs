@@ -44,6 +44,9 @@ impl Lowerer<'_> {
                 Value::null_ptr(),
             );
         }
+        if let Some(pointer) = self.pointer_place_address(f, info, target)? {
+            return self.build_descriptor(f, place_kind::STACK, 0, 0, 0, 0, pointer);
+        }
         let Some(path) = self.collect_place(target) else {
             return Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
@@ -103,7 +106,7 @@ impl Lowerer<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn build_descriptor(
+    pub(crate) fn build_descriptor(
         &mut self,
         f: &mut Function,
         kind: i32,
@@ -130,6 +133,92 @@ impl Lowerer<'_> {
         Ok(value)
     }
 
+    /// Lowers an explicit `POINTER TO T` ↔ `REF_TO T` conversion.
+    pub(crate) fn lower_pointer_conversion(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        value: Value,
+        from: TyId,
+        to: TyId,
+        span: Span,
+    ) -> Res<Value> {
+        let from_facts = self.types.facts(from)?.clone();
+        let to_facts = self.types.facts(to)?.clone();
+        match (&from_facts.category, &to_facts.category) {
+            (
+                crate::types::TypeCategory::Pointer { .. },
+                crate::types::TypeCategory::Reference { .. },
+            ) => {
+                let is_null = f.icmp("eq", &value, &Value::null_ptr());
+                let descriptor =
+                    self.build_descriptor(f, place_kind::STACK, 0, 0, 0, 0, value.clone())?;
+                let null = Value::zero(descriptor.ty.clone());
+                Ok(f.select(&is_null, &null, &descriptor))
+            }
+            (
+                crate::types::TypeCategory::Reference { .. },
+                crate::types::TypeCategory::Pointer { .. },
+            ) => self.reference_value_pointer(f, info, value, span),
+            (crate::types::TypeCategory::Null, crate::types::TypeCategory::Pointer { .. }) => {
+                Ok(Value::zero(IrType::Ptr))
+            }
+            (
+                crate::types::TypeCategory::Pointer { .. },
+                crate::types::TypeCategory::Pointer { .. },
+            ) => Ok(value),
+            _ => Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "only `POINTER TO T` ↔ `REF_TO T` conversions are supported".into(),
+                span,
+            )),
+        }
+    }
+
+    /// Extracts the raw storage pointer from a reference descriptor.
+    ///
+    /// Null, object, `%I` input, and invalid descriptors yield `NULL`; the
+    /// conversion never traps (D-145).
+    fn reference_value_pointer(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        value: Value,
+        _span: Span,
+    ) -> Res<Value> {
+        let desc_ty = IrType::aggregate(PLACE_DESCRIPTOR_LLVM);
+        let pointee = desc_ty.render();
+        let temp = f.alloca(desc_ty.clone());
+        f.store(&value, &temp, None);
+        let kind_ptr = f.gep(&pointee, &temp, &["i64 0".into(), "i32 0".into()], true);
+        let kind = f.load(IrType::Int(32), &kind_ptr, None);
+        let flags_ptr = f.gep(&pointee, &temp, &["i64 0".into(), "i32 1".into()], true);
+        let flags = f.load(IrType::Int(32), &flags_ptr, None);
+        let offset_ptr = f.gep(&pointee, &temp, &["i64 0".into(), "i32 2".into()], true);
+        let offset = f.load(IrType::Int(64), &offset_ptr, None);
+        let data_ptr = f.gep(&pointee, &temp, &["i64 0".into(), "i32 5".into()], true);
+        let data = f.load(IrType::Ptr, &data_ptr, None);
+        let is_direct = f.icmp("eq", &kind, &Value::int(32, i128::from(place_kind::DIRECT)));
+        let is_null = f.icmp("eq", &kind, &Value::int(32, i128::from(place_kind::NULL)));
+        let is_object = f.icmp("eq", &kind, &Value::int(32, i128::from(place_kind::OBJECT)));
+        let is_input = f.icmp("eq", &flags, &Value::int(32, 1));
+        let direct_input = f.binop("and", &is_direct, &is_input);
+        let not_direct = f.binop("xor", &is_direct, &Value::bool(true));
+        let data_null = f.icmp("eq", &data, &Value::null_ptr());
+        let bad_data = f.binop("and", &not_direct, &data_null);
+        let null_or_object = f.binop("or", &is_null, &is_object);
+        let bad_direct = f.binop("or", &direct_input, &bad_data);
+        let invalid = f.binop("or", &null_or_object, &bad_direct);
+        let slot = self.import_slot(stc_got::catalog::ImportService::IoImage)?;
+        let service = Self::slot_storage(f, info, slot);
+        let image = f
+            .call_ptr(IrType::Ptr, &service, &[flags])
+            .ok_or_else(|| CodegenError::internal("io_image returned void"))?;
+        let base = f.select(&is_direct, &image, &data);
+        let pointer = f.gep("i8", &base, &[format!("i64 {}", offset.repr)], false);
+        Ok(f.select(&invalid, &Value::null_ptr(), &pointer))
+    }
+
     /// Resolves a reference value to the storage pointer it denotes.
     pub(crate) fn deref_pointer(
         &mut self,
@@ -139,6 +228,13 @@ impl Lowerer<'_> {
         span: Span,
     ) -> Res<Value> {
         let value = self.lower_expr(f, info, reference)?;
+        if matches!(
+            self.hir.types.get(self.hir.expr(reference).ty),
+            stc_hir::Ty::Ptr(_)
+        ) {
+            self.check_pointer(f, &value, span)?;
+            return Ok(value);
+        }
         let ty = IrType::aggregate(PLACE_DESCRIPTOR_LLVM);
         let temp = f.alloca(ty.clone());
         f.store(&value, &temp, None);
@@ -176,7 +272,7 @@ fn area_service(area: stc_hir::DirectArea) -> i32 {
     }
 }
 
-fn direct_byte_offset(address: &stc_hir::DirectAddress) -> Res<i64> {
+pub(crate) fn direct_byte_offset(address: &stc_hir::DirectAddress) -> Res<i64> {
     // The image span depends on the target type, which the caller validated
     // when the direct address was resolved. Bits are not addressable here.
     let indices = &address.indices;

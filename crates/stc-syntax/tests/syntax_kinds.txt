@@ -190,6 +190,9 @@ KwInitialStep 207
 KwTransition 208
 KwEndTransition 209
 KwFrom 210
+KwPointer 211
+KwAdr 212
+KwSizeof 213
 SourceFile 256
 UsingDirective 257
 NamespaceDecl 258
@@ -264,3 +267,6 @@ StructFieldInit 326
 ArrayBound 327
 ElseBranch 328
 CaseLabel 329
+AddressOfExpr 330
+SizeOfExpr 331
+PointerConversionExpr 332

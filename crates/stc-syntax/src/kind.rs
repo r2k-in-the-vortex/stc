@@ -271,6 +271,9 @@ define_syntax_kinds! {
         KwTransition => Transition = 208,
         KwEndTransition => EndTransition = 209,
         KwFrom => From = 210,
+        KwPointer => Pointer = 211,
+        KwAdr => Adr = 212,
+        KwSizeof => Sizeof = 213,
     }
     nodes {
         SourceFile = 256,
@@ -347,6 +350,9 @@ define_syntax_kinds! {
         ArrayBound = 327,
         ElseBranch = 328,
         CaseLabel = 329,
+        AddressOfExpr = 330,
+        SizeOfExpr = 331,
+        PointerConversionExpr = 332,
     }
 }
 

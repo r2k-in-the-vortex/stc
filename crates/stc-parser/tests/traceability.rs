@@ -520,6 +520,31 @@ const PRODUCTIONS: &[(&str, &str, &str)] = &[
         "stc_gram_008_expressions_negative",
     ),
     (
+        "place",
+        "stc_gram_018_pointer_expressions",
+        "stc_gram_018_pointer_expressions_negative",
+    ),
+    (
+        "address_of",
+        "stc_gram_018_pointer_expressions",
+        "stc_gram_018_pointer_expressions_negative",
+    ),
+    (
+        "sizeof_expr",
+        "stc_gram_018_pointer_expressions",
+        "stc_gram_018_pointer_expressions_negative",
+    ),
+    (
+        "sizeof_operand",
+        "stc_gram_018_pointer_expressions",
+        "stc_gram_018_pointer_expressions_negative",
+    ),
+    (
+        "pointer_conversion",
+        "stc_gram_018_pointer_expressions",
+        "stc_gram_018_pointer_expressions_negative",
+    ),
+    (
         "elementary_type_name",
         "stc_gram_003_type_declarations",
         "stc_gram_003_type_declarations_negative",
@@ -583,6 +608,8 @@ const RULES: &[(&str, &str)] = &[
     ("STC-GRAM-014", "stc_gram_014_operand_order_parses"),
     ("STC-GRAM-015", "stc_gram_015_not_precedence"),
     ("STC-GRAM-016", "stc_gram_016_strict_and_relaxed_semicolons"),
+    ("STC-GRAM-017", "stc_gram_017_pointer_types"),
+    ("STC-GRAM-018", "stc_gram_018_pointer_expressions"),
 ];
 
 const ERROR_CODES: &[(&str, &str)] = &[
@@ -631,7 +658,7 @@ fn every_grammar_production_has_positive_and_negative_tests() {
 
 #[test]
 fn rule_ids_have_named_tests() {
-    assert_eq!(RULES.len(), 16);
+    assert_eq!(RULES.len(), 18);
     let sources = crate_sources();
     for (index, (rule, test)) in RULES.iter().enumerate() {
         assert_eq!(*rule, format!("STC-GRAM-{:03}", index + 1));

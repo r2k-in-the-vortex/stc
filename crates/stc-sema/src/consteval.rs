@@ -1276,6 +1276,7 @@ impl Analyzer<'_> {
                     if reference.is_null() {
                         let ty = if self.is_class_like(expected)
                             || matches!(self.hir.types.get(expected), Ty::Ref(_))
+                            || self.is_pointer_ty(expected)
                         {
                             expected
                         } else {

@@ -164,15 +164,21 @@ impl Analyzer<'_> {
                         self.hir.types.error()
                     }
                 };
-                if matches!(self.hir.types.get(target), Ty::Ref(_)) {
-                    self.error(
-                        crate::codes::TYPE_INVALID,
-                        "`REF_TO` of a reference is not allowed; use a named reference type",
-                        type_ref.token_span(),
-                    );
-                    return self.hir.types.error();
-                }
-                self.hir.types.intern(Ty::Ref(stc_hir::RefTy { target }))
+                self.resolve_reference_target(target, type_ref.token_span())
+            }
+            SyntaxKind::KwPointer => {
+                let target = match type_ref.element_type() {
+                    Some(inner) => self.resolve_type_ref(&inner, ns),
+                    None => {
+                        self.error(
+                            crate::codes::TYPE_INVALID,
+                            "`POINTER TO` requires a target type",
+                            type_ref.token_span(),
+                        );
+                        self.hir.types.error()
+                    }
+                };
+                self.resolve_pointer_target(target, type_ref.token_span())
             }
             _ => match type_ref.path() {
                 Some(path) => match self.resolve_type_path(&path, ns) {
@@ -220,7 +226,7 @@ impl Analyzer<'_> {
         }
     }
 
-    fn resolve_named_type_def(&mut self, def: DefId) -> TyId {
+    pub(crate) fn resolve_named_type_def(&mut self, def: DefId) -> TyId {
         match self.hir.defs[def.index()].kind {
             DefKind::Alias { .. } => self.resolve_alias_def(def),
             DefKind::Namespace { .. } => {
@@ -891,6 +897,24 @@ impl Analyzer<'_> {
                 "`CONSTANT` is not valid on a `VAR_IN_OUT` parameter",
                 site.name_span,
             );
+        }
+        if self.contains_pointer(ty) {
+            let persistent = match site.id {
+                DeclId::Global(_) => true,
+                DeclId::Field(_) => matches!(
+                    owner,
+                    DeclOwner::Program | DeclOwner::FunctionBlock | DeclOwner::Class
+                ),
+                DeclId::Param(_) => site.section == VarSectionKind::InOut,
+                DeclId::Local(_) => false,
+            };
+            if persistent {
+                self.error(
+                    crate::codes::TYPE_INVALID,
+                    "pointer values are transient and cannot be stored persistently",
+                    site.name_span,
+                );
+            }
         }
         if site.retain == RetainPolicy::Retain {
             let invalid = matches!(
@@ -1803,6 +1827,7 @@ impl Analyzer<'_> {
                     stack.push(array.element);
                 }
                 Ty::Ref(reference) => stack.push(reference.target),
+                Ty::Ptr(pointer) => stack.push(pointer.target),
                 Ty::Named(def) => match &self.hir.defs[def.index()].kind {
                     DefKind::Struct { fields, .. }
                     | DefKind::FunctionBlock { fields, .. }
@@ -1821,6 +1846,207 @@ impl Analyzer<'_> {
         false
     }
 
+    /// Validates a `REF_TO T` target and interns the reference type.
+    pub(crate) fn resolve_reference_target(&mut self, target: TyId, span: Span) -> TyId {
+        if target == self.hir.types.error() {
+            return target;
+        }
+        if matches!(self.hir.types.get(target), Ty::Ref(_)) {
+            self.error(
+                crate::codes::TYPE_INVALID,
+                "`REF_TO` of a reference is not allowed; use a named reference type",
+                span,
+            );
+            return self.hir.types.error();
+        }
+        if matches!(self.hir.types.get(target), Ty::Ptr(_)) {
+            self.error(
+                crate::codes::TYPE_INVALID,
+                "`REF_TO` of a pointer is not allowed; use a named reference type",
+                span,
+            );
+            return self.hir.types.error();
+        }
+        self.hir.types.intern(Ty::Ref(stc_hir::RefTy { target }))
+    }
+
+    /// Validates a `POINTER TO T` target and interns the pointer type
+    /// (D-145).
+    pub(crate) fn resolve_pointer_target(&mut self, target: TyId, span: Span) -> TyId {
+        if target == self.hir.types.error() {
+            return target;
+        }
+        if matches!(self.hir.types.get(target), Ty::Ref(_)) {
+            self.error(
+                crate::codes::TYPE_INVALID,
+                "`POINTER TO` a reference is not allowed",
+                span,
+            );
+            return self.hir.types.error();
+        }
+        if let Some(problem) = self.pointer_target_problem(target) {
+            self.error(
+                crate::codes::TYPE_INVALID,
+                format!("`POINTER TO` target must be contiguous storage, found {problem}"),
+                span,
+            );
+            return self.hir.types.error();
+        }
+        self.hir.types.pointer(target)
+    }
+
+    /// Returns a description of why `ty` cannot be a pointer target.
+    pub(crate) fn pointer_target_problem(&self, ty: TyId) -> Option<&'static str> {
+        let mut stack = vec![ty];
+        let mut visited = BTreeSet::new();
+        let mut conformant = false;
+        let mut object = false;
+        while let Some(next) = stack.pop() {
+            if !visited.insert(next) {
+                continue;
+            }
+            match self.hir.types.get(next) {
+                Ty::Error => {}
+                Ty::Ref(_) => return Some("a reference"),
+                Ty::Null => return Some("NULL"),
+                Ty::Generic(_) => return Some("a generic type"),
+                Ty::Array(array) => {
+                    if array.conformant {
+                        conformant = true;
+                    }
+                    stack.push(array.element);
+                }
+                Ty::Named(def) => match &self.hir.defs[def.index()].kind {
+                    DefKind::Alias { target } => stack.push(*target),
+                    DefKind::Class { .. }
+                    | DefKind::Interface { .. }
+                    | DefKind::FunctionBlock { .. }
+                    | DefKind::Program { .. } => object = true,
+                    DefKind::Struct { fields, .. } => {
+                        for field in fields {
+                            stack.push(self.hir.fields[field.index()].ty);
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        if object {
+            Some("an object or interface type")
+        } else if conformant {
+            Some("a conformant array")
+        } else {
+            None
+        }
+    }
+
+    /// Returns `true` when `ty` transitively contains a transient pointer.
+    pub(crate) fn contains_pointer(&self, ty: TyId) -> bool {
+        let mut stack = vec![ty];
+        let mut visited = BTreeSet::new();
+        while let Some(next) = stack.pop() {
+            if !visited.insert(next) {
+                continue;
+            }
+            match self.hir.types.get(next) {
+                Ty::Ptr(_) => return true,
+                Ty::Array(array) => stack.push(array.element),
+                // A reference value is a descriptor, not raw pointer storage.
+                Ty::Ref(_) => {}
+                Ty::Named(def) => match &self.hir.defs[def.index()].kind {
+                    DefKind::Alias { target } => stack.push(*target),
+                    DefKind::Struct { fields, .. }
+                    | DefKind::FunctionBlock { fields, .. }
+                    | DefKind::Class { fields, .. }
+                    | DefKind::Program { fields, .. } => {
+                        for field in fields {
+                            stack.push(self.hir.fields[field.index()].ty);
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Returns `true` when `ty` transitively contains an object or interface
+    /// value (not reached through a pointer).
+    pub(crate) fn contains_object(&self, ty: TyId) -> bool {
+        let mut stack = vec![ty];
+        let mut visited = BTreeSet::new();
+        while let Some(next) = stack.pop() {
+            if !visited.insert(next) {
+                continue;
+            }
+            match self.hir.types.get(next) {
+                Ty::Array(array) => stack.push(array.element),
+                Ty::Ref(reference) => stack.push(reference.target),
+                Ty::Named(def) => match &self.hir.defs[def.index()].kind {
+                    DefKind::Alias { target } => stack.push(*target),
+                    DefKind::Class { .. }
+                    | DefKind::Interface { .. }
+                    | DefKind::FunctionBlock { .. }
+                    | DefKind::Program { .. } => return true,
+                    DefKind::Struct { fields, .. } => {
+                        for field in fields {
+                            stack.push(self.hir.fields[field.index()].ty);
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Returns `true` for a raw pointer type.
+    pub(crate) fn is_pointer_ty(&self, ty: TyId) -> bool {
+        matches!(self.hir.types.get(ty), Ty::Ptr(_))
+    }
+
+    /// Returns `true` when a persistent declaration of `ty` is one root.
+    ///
+    /// Mirrors the codegen root model (D-131): structs without `OVERLAP`
+    /// recurse per field; arrays recurse per element; objects are not roots.
+    pub(crate) fn is_single_root_ty(&self, ty: TyId) -> bool {
+        let mut current = ty;
+        let mut visited = BTreeSet::new();
+        loop {
+            if !visited.insert(current) {
+                return false;
+            }
+            match self.hir.types.get(current) {
+                Ty::Error
+                | Ty::Bool
+                | Ty::Int(_)
+                | Ty::Real(_)
+                | Ty::BitString(_)
+                | Ty::Time(_)
+                | Ty::Date(_)
+                | Ty::Char(_)
+                | Ty::String(_)
+                | Ty::Ref(_)
+                | Ty::Ptr(_)
+                | Ty::Null => return true,
+                Ty::Array(array) => current = array.element,
+                Ty::Named(def) => match &self.hir.defs[def.index()].kind {
+                    DefKind::Alias { target } => current = *target,
+                    DefKind::Struct { overlap, .. } => return *overlap,
+                    DefKind::Class { .. }
+                    | DefKind::Interface { .. }
+                    | DefKind::FunctionBlock { .. }
+                    | DefKind::Program { .. } => return false,
+                    _ => return true,
+                },
+                Ty::Generic(_) => return true,
+            }
+        }
+    }
+
     pub(crate) fn is_persistable(&self, ty: TyId) -> bool {
         let mut stack = vec![ty];
         let mut visited = BTreeSet::new();
@@ -1829,11 +2055,8 @@ impl Analyzer<'_> {
                 continue;
             }
             match self.hir.types.get(next) {
-                Ty::Error | Ty::Null | Ty::Ref(_) => {
-                    if matches!(self.hir.types.get(next), Ty::Ref(_) | Ty::Null) {
-                        return false;
-                    }
-                }
+                Ty::Error => {}
+                Ty::Null | Ty::Ref(_) | Ty::Ptr(_) => return false,
                 Ty::Named(def) => match &self.hir.defs[def.index()].kind {
                     DefKind::Class { .. } | DefKind::Interface { .. } => return false,
                     DefKind::Struct { fields, .. }
@@ -1994,7 +2217,7 @@ impl Analyzer<'_> {
         let dst_ty = self.hir.types.get(dst);
         let src_ty = self.hir.types.get(src);
         if matches!(src_ty, Ty::Null) {
-            return if self.is_reference_like(dst) {
+            return if self.is_reference_like(dst) || matches!(dst_ty, Ty::Ptr(_)) {
                 Conv::Implicit
             } else {
                 Conv::No
@@ -2085,6 +2308,13 @@ impl Analyzer<'_> {
                     Conv::No
                 } else {
                     Conv::Implicit
+                }
+            }
+            (Ty::Ptr(dst), Ty::Ptr(src)) => {
+                if dst.target == src.target {
+                    Conv::Exact
+                } else {
+                    Conv::No
                 }
             }
             (Ty::Array(dst), Ty::Array(src)) if dst.conformant => {

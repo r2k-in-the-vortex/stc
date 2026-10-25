@@ -134,6 +134,11 @@ pub enum TypeCategory {
         /// Referenced type.
         target: TyId,
     },
+    /// A transient raw pointer (`STC-POINTER`).
+    Pointer {
+        /// Pointee type.
+        target: TyId,
+    },
     /// An interface value.
     Interface {
         /// Interface definition.
@@ -206,6 +211,12 @@ impl TypeFacts {
     #[must_use]
     pub const fn is_reference(&self) -> bool {
         matches!(self.category, TypeCategory::Reference { .. })
+    }
+
+    /// Returns `true` for transient raw pointer values.
+    #[must_use]
+    pub const fn is_pointer(&self) -> bool {
+        matches!(self.category, TypeCategory::Pointer { .. })
     }
 
     /// Returns `true` for interface values.
@@ -710,6 +721,7 @@ impl<'a> TypeSystem<'a> {
                 | TypeCategory::NamedValue { .. }
                 | TypeCategory::String { .. }
                 | TypeCategory::Reference { .. }
+                | TypeCategory::Pointer { .. }
                 | TypeCategory::Interface { .. }
                 | TypeCategory::Null => return Ok(true),
                 TypeCategory::Struct { overlap, .. } => return Ok(*overlap),
@@ -1377,6 +1389,67 @@ impl Builder<'_> {
         Ok(format!("({})->{result}", parameters.join(",")))
     }
 
+    /// Renders a canonical structural key without computing target layout.
+    ///
+    /// Reference and pointer keys may name a struct that is still being laid
+    /// out (a self-referential linked-list node), so they must not force the
+    /// pointee's facts.
+    fn structural_key(&self, ty: TyId) -> Result<String, CodegenError> {
+        let span = Span::empty(FileId::new(0), 0);
+        match self.hir.types.get(ty) {
+            Ty::Error | Ty::Generic(_) => Err(unsupported(ty, span, self.hir)),
+            Ty::Bool
+            | Ty::Int(_)
+            | Ty::Real(_)
+            | Ty::BitString(_)
+            | Ty::Time(_)
+            | Ty::Date(_)
+            | Ty::Char(_) => Ok(scalar_kind(self.hir, ty)
+                .map_err(|error| error.with_span(span))?
+                .canonical_name()),
+            Ty::String(string) => Ok(format!(
+                "{}[{}]",
+                string_kind_name(string.kind),
+                string.capacity
+            )),
+            Ty::Array(array) => {
+                let mut key = self.structural_key(array.element)?;
+                for bound in array.bounds.iter().rev() {
+                    let (lower, upper) = if array.conformant {
+                        (ArrayBound::Conformant, ArrayBound::Conformant)
+                    } else {
+                        (
+                            ArrayBound::Value(bound.lower),
+                            ArrayBound::Value(bound.upper),
+                        )
+                    };
+                    key = format!("ARRAY[{lower}..{upper}]OF({key})");
+                }
+                Ok(key)
+            }
+            Ty::Ref(reference) => Ok(format!(
+                "REF_TO({})",
+                self.structural_key(reference.target)?
+            )),
+            Ty::Ptr(pointer) => Ok(format!("PTR_TO({})", self.structural_key(pointer.target)?)),
+            Ty::Named(def) => match &self.hir.defs[def.index()].kind {
+                DefKind::Alias { target } => self.structural_key(*target),
+                kind if named_kind(kind).is_some() => self
+                    .ids
+                    .get(def)
+                    .map(|id| format!("T:{}", id.to_hex_plain()))
+                    .ok_or_else(|| {
+                        CodegenError::internal(format!(
+                            "named type `{}` has no content identity",
+                            self.hir.def_name(*def)
+                        ))
+                    }),
+                _ => Err(unsupported(ty, span, self.hir)),
+            },
+            Ty::Null => Ok("NULL".into()),
+        }
+    }
+
     fn layout_of(&mut self, ty: TyId) -> Result<StorageLayout, CodegenError> {
         let span = Span::empty(FileId::new(0), 0);
         match self.hir.types.get(ty).clone() {
@@ -1396,6 +1469,13 @@ impl Builder<'_> {
                 PLACE_DESCRIPTOR_SIZE,
                 PLACE_DESCRIPTOR_ALIGN,
             )),
+            Ty::Ptr(_) => {
+                let pointer = u64::from(self.target.pointer_width);
+                Ok(StorageLayout::new(
+                    pointer,
+                    u32::from(self.target.pointer_width),
+                ))
+            }
             Ty::Named(def) => match self.hir.defs[def.index()].kind.clone() {
                 DefKind::Alias { target } => self.layout_of(target),
                 _ => {
@@ -1529,7 +1609,7 @@ impl Builder<'_> {
             }
             Ty::Array(array) => self.array_facts(ty, &array),
             Ty::Ref(reference) => {
-                let target_key = self.key_of(reference.target)?;
+                let target_key = self.structural_key(reference.target)?;
                 let key = format!("REF_TO({target_key})");
                 let type_key = TypeKey::parse(&key).map_err(|error| {
                     CodegenError::internal(format!("reference key `{key}`: {}", error.message))
@@ -1545,6 +1625,29 @@ impl Builder<'_> {
                     layout_hash: hash,
                     category: TypeCategory::Reference {
                         target: reference.target,
+                    },
+                })
+            }
+            Ty::Ptr(pointer) => {
+                let target_key = self.structural_key(pointer.target)?;
+                let key = format!("PTR_TO({target_key})");
+                let type_key = TypeKey::parse(&key).map_err(|error| {
+                    CodegenError::internal(format!("pointer key `{key}`: {}", error.message))
+                })?;
+                let bytes = reference_layout_bytes(2, &type_key);
+                let hash = layout_hash(&self.target, &type_key, &bytes);
+                let layout = StorageLayout::new(
+                    u64::from(self.target.pointer_width),
+                    u32::from(self.target.pointer_width),
+                );
+                Ok(TypeFacts {
+                    key,
+                    llvm_value: IrType::Ptr,
+                    llvm_storage: IrType::Ptr,
+                    layout,
+                    layout_hash: hash,
+                    category: TypeCategory::Pointer {
+                        target: pointer.target,
                     },
                 })
             }
@@ -1822,6 +1925,7 @@ pub fn used_standard_fbs(hir: &HirCrate) -> BTreeSet<DefId> {
         match hir.types.get(ty) {
             Ty::Array(array) => scan(hir, array.element, out, visited),
             Ty::Ref(reference) => scan(hir, reference.target, out, visited),
+            Ty::Ptr(pointer) => scan(hir, pointer.target, out, visited),
             Ty::Named(def) => {
                 if standard_fb_name(hir, *def).is_some() {
                     out.insert(*def);
@@ -2119,6 +2223,41 @@ END_PROGRAM
         assert_eq!(dim_length(1, 3), Some(3));
         assert_eq!(dim_length(-2, 0), Some(3));
         assert_eq!(dim_length(3, 1), None);
+    }
+
+    #[test]
+    fn pointers_use_pointer_width_layout_and_the_ptr_key() {
+        let analysis = analyze_source(
+            "TYPE
+  P : POINTER TO DINT;
+  Node : STRUCT value : DINT; next : POINTER TO Node; END_STRUCT;
+END_TYPE
+",
+        );
+        let types = type_system(&analysis.hir);
+        let pointer = analysis
+            .hir
+            .types
+            .iter()
+            .find_map(|(id, ty)| matches!(ty, Ty::Ptr(_)).then_some(id))
+            .expect("pointer type");
+        let facts = types.facts(pointer).expect("pointer facts");
+        assert_eq!(facts.key, "PTR_TO(DINT)");
+        assert_eq!(facts.layout, StorageLayout::new(8, 8));
+        assert_eq!(facts.llvm_value, IrType::Ptr);
+        assert_eq!(facts.llvm_storage, IrType::Ptr);
+        assert!(facts.is_pointer());
+        assert!(matches!(facts.category, TypeCategory::Pointer { .. }));
+
+        let node = named_def(&analysis.hir, "Node");
+        let named = types.named(node).expect("node layout");
+        let next = named
+            .fields
+            .iter()
+            .find(|field| field.path.eq_ignore_ascii_case("next"))
+            .expect("next field");
+        assert!(next.key.starts_with("PTR_TO(T:"));
+        assert_eq!(next.layout, StorageLayout::new(8, 8));
     }
 
     #[test]

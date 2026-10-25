@@ -1177,3 +1177,490 @@ fn deep_left_associative_expressions_do_not_overflow() {
     let source = format!("PROGRAM P\nVAR\n  x : DINT;\nEND_VAR\n  x := {terms};\nEND_PROGRAM\n");
     assert_clean(&source);
 }
+
+#[test]
+fn pointer_locals_parameters_and_results_are_supported() {
+    assert_clean(
+        "TYPE
+  Node : STRUCT value : DINT; next : POINTER TO Node; END_STRUCT;
+END_TYPE
+
+VAR_GLOBAL
+  g : DINT;
+  arr : ARRAY[1..4] OF DINT;
+  gs : STRING[8];
+END_VAR
+
+FUNCTION Deref : DINT
+VAR_INPUT
+  p : POINTER TO DINT;
+END_VAR
+  Deref := p^;
+END_FUNCTION
+
+FUNCTION Next : POINTER TO DINT
+VAR_INPUT
+  p : POINTER TO DINT;
+END_VAR
+  Next := p + 1;
+END_FUNCTION
+
+FUNCTION PtrOps : DINT
+VAR
+  p : POINTER TO DINT;
+  pn : POINTER TO DINT := NULL;
+  q : POINTER TO DINT;
+  pp : POINTER TO POINTER TO DINT;
+  ps : POINTER TO STRING[8];
+  r : REF_TO DINT;
+  n : Node;
+  buf : ARRAY[1..4] OF DINT;
+  ptrs : ARRAY[1..2] OF POINTER TO DINT;
+  x : DINT;
+  i : DINT;
+END_VAR
+  p := ADR(g);
+  p^ := 3;
+  q := p + 1;
+  q := q - 1;
+  x := q - p;
+  p[0] := 4;
+  i := p[1];
+  pp := ADR(p);
+  x := pp^^;
+  r := REF(g);
+  p := POINTER TO DINT(r);
+  r := REF_TO DINT(p);
+  x := SIZEOF(DINT) + SIZEOF(p) + SIZEOF(p^) + SIZEOF(n);
+  IF p <> NULL THEN x := x + 1; END_IF;
+  IF p = ADR(g) THEN x := x + 1; END_IF;
+  p := ADR(arr);
+  ps := ADR(gs);
+  p := ADR(buf);
+  n.next := NULL;
+  ptrs[1] := p;
+  x := Deref(p) + PtrOpsHelper(Next(p));
+  PtrOps := x;
+END_FUNCTION
+
+FUNCTION PtrOpsHelper : DINT
+VAR_INPUT
+  p : POINTER TO DINT;
+END_VAR
+  PtrOpsHelper := p^;
+END_FUNCTION
+
+FUNCTION ConfPtr : DINT
+VAR_IN_OUT
+  a : ARRAY[*] OF DINT;
+END_VAR
+VAR
+  p : POINTER TO DINT;
+  n : DINT;
+END_VAR
+  p := ADR(a[1]);
+  n := SIZEOF(a[1]);
+  ConfPtr := p^ + n;
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+  x := PtrOps();
+END_PROGRAM
+",
+    );
+}
+
+#[test]
+fn pointer_storage_is_rejected_in_persistent_declarations() {
+    assert_error(
+        "VAR_GLOBAL
+  gp : POINTER TO DINT;
+END_VAR
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "PROGRAM P
+VAR
+  p : POINTER TO DINT;
+END_VAR
+END_PROGRAM
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "FUNCTION_BLOCK FB
+VAR_INPUT
+  p : POINTER TO DINT;
+END_VAR
+END_FUNCTION_BLOCK
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "CLASS C
+VAR
+  p : POINTER TO DINT;
+END_VAR
+END_CLASS
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR_IN_OUT
+  p : POINTER TO DINT;
+END_VAR
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "TYPE
+  Holder : STRUCT p : POINTER TO DINT; END_STRUCT;
+END_TYPE
+VAR_GLOBAL
+  h : Holder;
+END_VAR
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "PROGRAM P
+VAR
+  x : DINT;
+END_VAR
+VAR_ACCESS
+  pa : x : POINTER TO DINT;
+END_VAR
+END_PROGRAM
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+}
+
+#[test]
+fn pointer_type_forms_are_restricted() {
+    assert_error(
+        "TYPE P : REF_TO POINTER TO INT; END_TYPE
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "TYPE P : POINTER TO REF_TO INT; END_TYPE
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "CLASS C
+END_CLASS
+TYPE P : POINTER TO C; END_TYPE
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR_IN_OUT
+  a : ARRAY[*] OF DINT;
+END_VAR
+  F := 0;
+END_FUNCTION
+TYPE P : POINTER TO ARRAY[*] OF DINT; END_TYPE
+",
+        stc_sema::codes::TYPE_INVALID,
+    );
+    assert_clean(
+        "TYPE P : POINTER TO POINTER TO POINTER TO INT; END_TYPE
+PROGRAM Q
+VAR x : DINT; END_VAR
+END_PROGRAM
+",
+    );
+}
+
+#[test]
+fn adr_and_sizeof_target_rules_are_checked() {
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+END_VAR
+  x := ADR(Abs(x));
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::REF_RULE,
+    );
+    assert_error(
+        "VAR_GLOBAL CONSTANT
+  c : DINT := 1;
+END_VAR
+FUNCTION F : DINT
+  F := ADR(c);
+END_FUNCTION
+",
+        stc_sema::codes::REF_RULE,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+  r : REF_TO DINT;
+  p : POINTER TO DINT;
+END_VAR
+  r := REF(x);
+  p := ADR(r^);
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::REF_RULE,
+    );
+    assert_error(
+        "TYPE
+  Point : STRUCT x : DINT; y : DINT; END_STRUCT;
+END_TYPE
+VAR_GLOBAL
+  gp : Point;
+END_VAR
+FUNCTION F : DINT
+VAR
+  p : POINTER TO Point;
+END_VAR
+  p := ADR(gp);
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::REF_RULE,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  p : POINTER TO DINT;
+  x : DINT;
+  r : REF_TO DINT;
+END_VAR
+  x := SIZEOF(r);
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::TYPE_INVALID_OPERAND,
+    );
+    assert_error(
+        "TYPE
+  Point : STRUCT x : DINT; y : DINT; END_STRUCT;
+END_TYPE
+VAR_GLOBAL
+  gp : Point;
+END_VAR
+PROGRAM P
+VAR
+  x : DINT;
+END_VAR
+  x := SIZEOF(gp);
+END_PROGRAM
+",
+        stc_sema::codes::TYPE_INVALID_OPERAND,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+  p : POINTER TO DINT;
+END_VAR
+  x := SIZEOF(x.0);
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::TYPE_INVALID_OPERAND,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+END_VAR
+  x := ADR(%IB0);
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::REF_RULE,
+    );
+    assert_clean(
+        "TYPE
+  Color : (Red, Green);
+  View : STRUCT OVERLAP
+    a AT %MW0 : INT;
+    b AT %MW1 : INT;
+  END_STRUCT;
+END_TYPE
+VAR_GLOBAL
+  c : Color;
+  u : View;
+END_VAR
+FUNCTION F : DINT
+VAR
+  p : POINTER TO Color;
+  q : POINTER TO View;
+END_VAR
+  p := ADR(c);
+  q := ADR(u);
+  F := SIZEOF(Color) + SIZEOF(View);
+END_FUNCTION
+",
+    );
+}
+
+#[test]
+fn pointer_conversions_and_arithmetic_are_typed() {
+    assert_clean(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+  p : POINTER TO DINT;
+  r : REF_TO DINT;
+  b : BOOL;
+END_VAR
+  r := REF(x);
+  p := POINTER TO DINT(r);
+  r := REF_TO DINT(p);
+  p := p + 1;
+  p := 1 + p;
+  p := p - 1;
+  b := p = NULL;
+  b := p <> NULL;
+  b := p < p;
+  F := 0;
+END_FUNCTION
+",
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+  p : POINTER TO DINT;
+  q : POINTER TO BOOL;
+END_VAR
+  p := q;
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::TYPE_ASSIGN,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+  p : POINTER TO DINT;
+END_VAR
+  x := p * 2;
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::TYPE_INVALID_OPERAND,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  p : POINTER TO DINT;
+  q : POINTER TO DINT;
+END_VAR
+  p := p + q;
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::TYPE_INVALID_OPERAND,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+  p : POINTER TO DINT;
+  q : POINTER TO BOOL;
+END_VAR
+  x := p - q;
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::TYPE_INVALID_OPERAND,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+  r : REF_TO DINT;
+  p : POINTER TO BOOL;
+END_VAR
+  p := POINTER TO BOOL(r);
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::REF_RULE,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  x : DINT;
+  r : REF_TO DINT;
+  p : POINTER TO DINT;
+END_VAR
+  r ?= p;
+  F := 0;
+END_FUNCTION",
+        stc_sema::codes::REF_ATTEMPT,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  p : POINTER TO DINT;
+END_VAR
+  p := POINTER TO DINT(1);
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::REF_RULE,
+    );
+    assert_error(
+        "FUNCTION F : DINT
+VAR
+  p : POINTER TO DINT;
+  r : REF_TO DINT;
+END_VAR
+  r := REF(p);
+  F := 0;
+END_FUNCTION
+",
+        stc_sema::codes::REF_RULE,
+    );
+}
+
+#[test]
+fn pointers_to_callee_storage_cannot_escape() {
+    assert_error(
+        "FUNCTION F : POINTER TO DINT
+VAR
+  x : DINT;
+END_VAR
+  F := ADR(x);
+END_FUNCTION
+",
+        stc_sema::codes::REF_RULE,
+    );
+    assert_clean(
+        "VAR_GLOBAL
+  gv : DINT;
+END_VAR
+FUNCTION G : POINTER TO DINT
+  G := ADR(gv);
+END_FUNCTION
+FUNCTION H : POINTER TO DINT
+VAR_INPUT
+  p : POINTER TO DINT;
+END_VAR
+  H := ADR(p^);
+END_FUNCTION
+",
+    );
+}

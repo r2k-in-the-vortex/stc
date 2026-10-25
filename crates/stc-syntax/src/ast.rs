@@ -108,6 +108,9 @@ ast_node!(ParenExpr, ParenExpr);
 ast_node!(LiteralExpr, LiteralExpr);
 ast_node!(PathExpr, PathExpr);
 ast_node!(RefValueExpr, RefValueExpr);
+ast_node!(AddressOfExpr, AddressOfExpr);
+ast_node!(SizeOfExpr, SizeOfExpr);
+ast_node!(PointerConversionExpr, PointerConversionExpr);
 ast_node!(Name, Name);
 ast_node!(Path, Path);
 ast_node!(TypeRef, TypeRef);
@@ -381,6 +384,12 @@ pub enum Expr {
     Path(PathExpr),
     /// `REF(...)` or `NULL`.
     RefValue(RefValueExpr),
+    /// `ADR(place)`.
+    AddressOf(AddressOfExpr),
+    /// `SIZEOF(type | place)`.
+    SizeOf(SizeOfExpr),
+    /// `REF_TO T(expr)` or `POINTER TO T(expr)`.
+    PointerConversion(PointerConversionExpr),
     /// A recovered error.
     Error(ErrorNode),
 }
@@ -400,6 +409,11 @@ impl Expr {
             SyntaxKind::LiteralExpr => Self::Literal(LiteralExpr::cast(node)?),
             SyntaxKind::PathExpr => Self::Path(PathExpr::cast(node)?),
             SyntaxKind::RefValueExpr => Self::RefValue(RefValueExpr::cast(node)?),
+            SyntaxKind::AddressOfExpr => Self::AddressOf(AddressOfExpr::cast(node)?),
+            SyntaxKind::SizeOfExpr => Self::SizeOf(SizeOfExpr::cast(node)?),
+            SyntaxKind::PointerConversionExpr => {
+                Self::PointerConversion(PointerConversionExpr::cast(node)?)
+            }
             SyntaxKind::Error => Self::Error(ErrorNode::cast(node)?),
             _ => return None,
         })
@@ -419,6 +433,9 @@ impl Expr {
             Self::Literal(node) => node.syntax(),
             Self::Path(node) => node.syntax(),
             Self::RefValue(node) => node.syntax(),
+            Self::AddressOf(node) => node.syntax(),
+            Self::SizeOf(node) => node.syntax(),
+            Self::PointerConversion(node) => node.syntax(),
             Self::Error(node) => node.syntax(),
         }
     }
@@ -1602,6 +1619,52 @@ impl RefValueExpr {
     /// Returns the referenced expression or name.
     #[must_use]
     pub fn target(&self) -> Option<Expr> {
+        expr_children(self.syntax()).into_iter().next()
+    }
+}
+
+impl AddressOfExpr {
+    /// Returns the place operand.
+    #[must_use]
+    pub fn operand(&self) -> Option<Expr> {
+        expr_children(self.syntax()).into_iter().next()
+    }
+}
+
+impl SizeOfExpr {
+    /// Returns the type operand, when the operand was written as a type.
+    #[must_use]
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::TypeRef)
+            .and_then(|node| TypeRef::cast(&node))
+    }
+
+    /// Returns the place operand, when the operand was written as an expression.
+    #[must_use]
+    pub fn operand(&self) -> Option<Expr> {
+        expr_children(self.syntax()).into_iter().next()
+    }
+}
+
+impl PointerConversionExpr {
+    /// Returns `true` for `POINTER TO T(expr)` and `false` for `REF_TO T(expr)`.
+    #[must_use]
+    pub fn is_pointer_form(&self) -> bool {
+        self.syntax().has_direct_token(SyntaxKind::KwPointer)
+    }
+
+    /// Returns the target type.
+    #[must_use]
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        self.syntax()
+            .first_child_of_kind(SyntaxKind::TypeRef)
+            .and_then(|node| TypeRef::cast(&node))
+    }
+
+    /// Returns the converted expression.
+    #[must_use]
+    pub fn operand(&self) -> Option<Expr> {
         expr_children(self.syntax()).into_iter().next()
     }
 }

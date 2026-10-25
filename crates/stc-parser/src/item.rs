@@ -532,6 +532,10 @@ impl Parser<'_> {
         } else if kind == SyntaxKind::KwRefTo {
             self.bump();
             self.parse_type_spec();
+        } else if kind == SyntaxKind::KwPointer {
+            self.bump();
+            self.expect_keyword(Keyword::To);
+            self.parse_type_spec();
         } else if is_string_type_keyword(kind) {
             self.bump();
             if self.at_punct(Punct::LBracket)

@@ -198,6 +198,7 @@ fn describe_type(hir: &HirCrate, ty: &Ty) -> String {
         Ty::String(string) => format!("{:?}[{}]", string.kind, string.capacity),
         Ty::Array(_) => "ARRAY".into(),
         Ty::Ref(_) => "REF_TO".into(),
+        Ty::Ptr(_) => "POINTER TO".into(),
         Ty::Named(def) => hir.def_name(*def).to_string(),
         Ty::Null => "NULL".into(),
         Ty::Generic(generic) => generic.as_str().into(),

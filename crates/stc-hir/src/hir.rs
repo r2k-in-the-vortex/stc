@@ -761,6 +761,25 @@ pub enum ExprKindHir {
         /// Referenced place.
         target: ExprId,
     },
+    /// `ADR(place)`.
+    AddressOf {
+        /// Addressed place.
+        target: ExprId,
+    },
+    /// `SIZEOF(type | place)`.
+    SizeOf {
+        /// Resolved operand.
+        operand: SizeOfHir,
+    },
+    /// Explicit `REF_TO T(expr)` / `POINTER TO T(expr)` conversion.
+    PointerConversion {
+        /// Converted expression.
+        operand: ExprId,
+        /// Result (or target) type.
+        to: TyId,
+        /// Written explicitly on the surface.
+        kind: CastKind,
+    },
     /// `NULL`.
     Null,
     /// Explicit or implicit conversion.
@@ -784,6 +803,15 @@ pub enum ExprKindHir {
     },
     /// A recovered or invalid expression.
     Error,
+}
+
+/// The resolved operand of a `SIZEOF` expression.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SizeOfHir {
+    /// A type operand.
+    Type(TyId),
+    /// A place operand.
+    Place(ExprId),
 }
 
 /// Binary operators.
@@ -1605,6 +1633,10 @@ impl HirCrate {
                 out.push_str("REF_TO ");
                 self.write_type(reference.target, out, depth + 1);
             }
+            Ty::Ptr(pointer) => {
+                out.push_str("POINTER TO ");
+                self.write_type(pointer.target, out, depth + 1);
+            }
             Ty::Named(def) => {
                 let def = &self.defs[def.index()];
                 if let Some(name) = def.name {
@@ -1624,6 +1656,14 @@ impl HirCrate {
     ///
     /// Returns a description of the first violated invariant.
     pub fn check_invariants(&self) -> Result<(), String> {
+        for (_, ty) in self.types.iter() {
+            match ty {
+                Ty::Ref(reference) => self.check_ty_id(reference.target)?,
+                Ty::Ptr(pointer) => self.check_ty_id(pointer.target)?,
+                Ty::Array(array) => self.check_ty_id(array.element)?,
+                _ => {}
+            }
+        }
         for def in &self.defs {
             for &field in def.field_ids() {
                 self.check_field_id(field)?;
@@ -1913,6 +1953,15 @@ impl HirCrate {
                 }
             }
             ExprKindHir::Ref { target } => self.check_expr_id(*target)?,
+            ExprKindHir::AddressOf { target } => self.check_expr_id(*target)?,
+            ExprKindHir::SizeOf { operand } => match operand {
+                SizeOfHir::Type(ty) => self.check_ty_id(*ty)?,
+                SizeOfHir::Place(place) => self.check_expr_id(*place)?,
+            },
+            ExprKindHir::PointerConversion { operand, to, .. } => {
+                self.check_expr_id(*operand)?;
+                self.check_ty_id(*to)?;
+            }
             ExprKindHir::Null | ExprKindHir::Error => {}
             ExprKindHir::Cast { operand, to, .. } => {
                 self.check_expr_id(*operand)?;

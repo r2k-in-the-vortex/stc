@@ -135,6 +135,13 @@ pub struct RefTy {
     pub target: TyId,
 }
 
+/// A transient raw pointer type (`STC-POINTER`, D-145).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PtrTy {
+    /// Pointee type.
+    pub target: TyId,
+}
+
 /// Standard-function generic category (`ANY_*`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GenericKind {
@@ -222,6 +229,8 @@ pub enum Ty {
     Array(ArrayTy),
     /// Reference.
     Ref(RefTy),
+    /// Transient raw pointer (`STC-POINTER`).
+    Ptr(PtrTy),
     /// Nominal user type (enum, subrange, struct, class, FB, interface, ...).
     Named(DefId),
     /// The type of `NULL` (internal compatibility type).
@@ -310,6 +319,12 @@ impl TyArena {
     #[must_use]
     pub fn null(&self) -> TyId {
         self.id_of(&Ty::Null)
+    }
+
+    /// Returns a pointer type ID, interning a new pointee on demand.
+    #[must_use]
+    pub fn pointer(&mut self, target: TyId) -> TyId {
+        self.intern(Ty::Ptr(PtrTy { target }))
     }
 
     /// Returns an integer type ID.

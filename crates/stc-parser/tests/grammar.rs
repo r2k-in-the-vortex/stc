@@ -143,6 +143,105 @@ fn stc_gram_003_type_declarations_negative() {
     );
 }
 
+// ---- STC-GRAM-017/018: STC-POINTER surface (D-145) ----------------------
+
+#[test]
+fn stc_gram_017_pointer_types() {
+    let source = r"
+TYPE
+  IntPtr : POINTER TO INT;
+  IntPtrPtr : POINTER TO POINTER TO INT;
+  NamedIntPtr : POINTER TO IntPtr;
+END_TYPE
+
+PROGRAM P
+VAR
+  p : POINTER TO DINT;
+  q : POINTER TO ARRAY[1..3] OF INT;
+  a : ARRAY[1..2] OF POINTER TO DINT;
+END_VAR
+  p := NULL;
+END_PROGRAM
+";
+    let items = items(source);
+    let Item::DataType(data) = &items[0] else {
+        panic!("expected data type");
+    };
+    let types = data.types();
+    assert_eq!(types.len(), 3);
+    assert!(types.iter().all(|decl| matches!(decl, TypeDecl::Simple(_))));
+    let Item::Program(program) = &items[1] else {
+        panic!("expected program");
+    };
+    let declarations = program.var_sections()[0].declarations();
+    assert_eq!(declarations.len(), 3);
+}
+
+#[test]
+fn stc_gram_017_pointer_types_negative() {
+    assert_error("TYPE P : POINTER INT; END_TYPE\n", "STC-E-GRAM-106");
+    assert_error("TYPE P : POINTER TO ; END_TYPE\n", "STC-E-GRAM-106");
+}
+
+#[test]
+fn stc_gram_018_pointer_expressions() {
+    let source = r"
+PROGRAM P
+VAR
+  a : DINT;
+  p : POINTER TO DINT;
+  r : REF_TO DINT;
+  s : DINT;
+END_VAR
+  p := ADR(a);
+  s := SIZEOF(DINT);
+  s := SIZEOF(a);
+  s := SIZEOF(ARRAY[1..2] OF INT);
+  p := POINTER TO DINT(r);
+  r := REF_TO DINT(p);
+  p := p + 1;
+  p := 1 + p;
+  p := p - 1;
+  s := p - p;
+  s := p[2];
+  p^ := 3;
+  (p + 1)^ := 4;
+  ADR(a)^ := 5;
+END_PROGRAM
+";
+    let statements = first_program(source);
+    assert!(matches!(
+        &statements[0],
+        Stmt::Assign(assign)
+            if matches!(assign.rhs(), Some(Expr::AddressOf(_)))
+    ));
+    assert!(matches!(
+        &statements[1],
+        Stmt::Assign(assign) if matches!(assign.rhs(), Some(Expr::SizeOf(_)))
+    ));
+    assert!(matches!(
+        &statements[4],
+        Stmt::Assign(assign)
+            if matches!(assign.rhs(), Some(Expr::PointerConversion(_)))
+    ));
+    assert!(matches!(&statements[6], Stmt::Assign(_)));
+    assert!(matches!(&statements[11], Stmt::RefAssign(_)));
+    assert!(matches!(&statements[12], Stmt::RefAssign(_)));
+    assert!(matches!(&statements[13], Stmt::RefAssign(_)));
+}
+
+#[test]
+fn stc_gram_018_pointer_expressions_negative() {
+    assert_error(
+        "PROGRAM P\nVAR a : DINT; END_VAR\n  a := ADR(a;\nEND_PROGRAM\n",
+        "STC-E-GRAM-106",
+    );
+    assert_error(
+        "PROGRAM P\nVAR a : DINT; END_VAR\n  a := SIZEOF(POINTER TO);\nEND_PROGRAM\n",
+        "STC-E-GRAM-106",
+    );
+}
+
 // ---- STC-GRAM-004: variable declarations --------------------------------
 
 #[test]

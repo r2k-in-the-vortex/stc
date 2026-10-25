@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use stc_hir::{
     ConstValue, DefId, DefKind, DirectAddress, ExprId, ExprKindHir, FieldId, LocalId, ParamId,
-    PlaceHir, RetainPolicy, Symbol, TyId,
+    PlaceHir, RetainPolicy, Symbol, Ty, TyId,
 };
 use stc_span::Span;
 
@@ -985,6 +985,12 @@ pub(crate) fn field_table_pointer(f: &mut Function, fields: &FieldAccess, index:
     f.load(IrType::Ptr, &entry, Some(8))
 }
 
+/// Returns `true` for a direct address that names an individual bit.
+pub(crate) fn is_bit_address(address: &DirectAddress) -> bool {
+    matches!(address.size, Some(stc_hir::DirectSize::Bit))
+        || (address.size.is_none() && address.indices.len() == 2)
+}
+
 pub(crate) fn direct_bit(
     address: &DirectAddress,
     kind: crate::layout::ScalarKind,
@@ -1231,9 +1237,12 @@ impl Lowerer<'_> {
         match (&from_facts.category, &to_facts.category) {
             (
                 TypeCategory::Null,
-                TypeCategory::Reference { .. } | TypeCategory::Interface { .. },
+                TypeCategory::Reference { .. }
+                | TypeCategory::Interface { .. }
+                | TypeCategory::Pointer { .. },
             ) => Ok(Value::zero(to_facts.llvm_storage.clone())),
             (TypeCategory::Reference { .. }, TypeCategory::Reference { .. }) => Ok(value),
+            (TypeCategory::Pointer { .. }, TypeCategory::Pointer { .. }) => Ok(value),
             (
                 TypeCategory::String {
                     kind: from_kind, ..
@@ -2483,6 +2492,265 @@ impl Lowerer<'_> {
 }
 
 impl Lowerer<'_> {
+    /// Returns the storage pointer denoted by a place rooted at a pointer or
+    /// reference dereference. Returns `None` when the place has no such root;
+    /// ordinary places are resolved through [`Self::collect_place`].
+    pub(crate) fn pointer_place_address(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        id: ExprId,
+    ) -> Res<Option<Value>> {
+        let expr = self.hir.expr(id).clone();
+        let ExprKindHir::Place(place) = expr.kind else {
+            return Ok(None);
+        };
+        match place {
+            PlaceHir::Deref(base) => Ok(Some(self.pointer_base_storage(f, info, base, expr.span)?)),
+            PlaceHir::Index { base, indices } => {
+                let base_ty = self.hir.expr(base).ty;
+                if let Ty::Ptr(pointer) = self.hir.types.get(base_ty).clone() {
+                    if indices.len() != 1 {
+                        return Err(CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "pointer indexing consumes exactly one subscript".into(),
+                            expr.span,
+                        ));
+                    }
+                    let pointer_value = self.lower_expr(f, info, base)?;
+                    self.check_pointer(f, &pointer_value, expr.span)?;
+                    let index = self.pointer_index_value(f, info, indices[0], expr.span)?;
+                    let pointee = self.types.llvm_storage(pointer.target)?.render();
+                    let pointer = f.gep(
+                        &pointee,
+                        &pointer_value,
+                        &[format!("i64 {}", index.repr)],
+                        false,
+                    );
+                    return Ok(Some(pointer));
+                }
+                let Some(pointer) = self.pointer_place_address(f, info, base)? else {
+                    return Ok(None);
+                };
+                let pointer =
+                    self.index_pointer_value(f, info, &pointer, base_ty, &indices, expr.span)?;
+                Ok(Some(pointer))
+            }
+            PlaceHir::Field { base, field } => {
+                let Some(mut pointer) = self.pointer_place_address(f, info, base)? else {
+                    return Ok(None);
+                };
+                let base_ty = self.hir.expr(base).ty;
+                let overlap = matches!(self.types.category(base_ty)?, TypeCategory::Struct { .. })
+                    && self.types.named(self.owner_of(base_ty)?)?.overlap;
+                if overlap {
+                    let offset = self
+                        .types
+                        .field_offset(field)
+                        .ok_or_else(|| CodegenError::internal("overlap field has no offset"))?;
+                    pointer = f.gep_bytes(&pointer, i64::try_from(offset).unwrap_or(i64::MAX));
+                } else {
+                    let indices = self.types.field_gep_indices(base_ty, field)?;
+                    let pointee = self.types.llvm_storage(base_ty)?.render();
+                    let mut gep = vec!["i32 0".to_owned()];
+                    gep.extend(indices.into_iter().map(|index| format!("i32 {index}")));
+                    pointer = f.gep(&pointee, &pointer, &gep, true);
+                }
+                Ok(Some(pointer))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Resolves the storage pointer held by a `REF_TO` or `POINTER TO`
+    /// expression, trapping on a null pointer.
+    fn pointer_base_storage(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        base: ExprId,
+        span: Span,
+    ) -> Res<Value> {
+        match self.hir.types.get(self.hir.expr(base).ty).clone() {
+            Ty::Ptr(_) => {
+                let value = self.lower_expr(f, info, base)?;
+                self.check_pointer(f, &value, span)?;
+                Ok(value)
+            }
+            Ty::Ref(_) => self.deref_pointer(f, info, base, span),
+            _ => Err(CodegenError::internal(
+                "dereference base is neither a reference nor a pointer",
+            )),
+        }
+    }
+
+    /// Applies array/string subscripts to a pointer that addresses `ty`.
+    fn index_pointer_value(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        pointer: &Value,
+        ty: TyId,
+        indices: &[ExprId],
+        span: Span,
+    ) -> Res<Value> {
+        let mut pointer = pointer.clone();
+        let mut ty = ty;
+        let mut dimension = 0_usize;
+        for index in indices {
+            match self.types.category(ty)?.clone() {
+                TypeCategory::Array { .. } => {
+                    let dim = self.array_dim_at(ty, dimension)?;
+                    let delta = self.bounds_checked_index(f, info, *index, &dim, span)?;
+                    let pointee = self.array_tail_type(ty, dimension)?;
+                    pointer = f.gep(
+                        &pointee,
+                        &pointer,
+                        &["i64 0".into(), format!("i64 {delta}")],
+                        true,
+                    );
+                    let (next_ty, next_dim) = self.array_advance(ty, dimension)?;
+                    ty = next_ty;
+                    dimension = next_dim;
+                }
+                TypeCategory::String { capacity, .. } => {
+                    let dim = ArrayDim {
+                        lower: 1,
+                        upper: i128::from(capacity),
+                        length: u64::from(capacity),
+                    };
+                    let delta = self.bounds_checked_index(f, info, *index, &dim, span)?;
+                    let pointee = self.types.llvm_storage(ty)?.render();
+                    pointer = f.gep(
+                        &pointee,
+                        &pointer,
+                        &["i64 0".into(), "i32 1".into(), format!("i64 {delta}")],
+                        true,
+                    );
+                    ty = self.types.string_char_ty(ty)?;
+                }
+                _ => {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "subscript on a value reached through a pointer".into(),
+                        span,
+                    ));
+                }
+            }
+        }
+        Ok(pointer)
+    }
+
+    /// Lowers a pointer index to a sign- or zero-extended `i64`.
+    fn pointer_index_value(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        index: ExprId,
+        span: Span,
+    ) -> Res<Value> {
+        let value = self.lower_expr(f, info, index)?;
+        let kind = self
+            .types
+            .facts(self.hir.expr(index).ty)?
+            .scalar()
+            .ok_or_else(|| {
+                CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "pointer index is not an integer".into(),
+                    span,
+                )
+            })?;
+        Ok(if kind.is_signed() {
+            f.emit_value_cast("sext", &value, IrType::Int(64))
+        } else {
+            f.emit_value_cast("zext", &value, IrType::Int(64))
+        })
+    }
+
+    /// Traps when a raw pointer is null (`STC-TRAP_NULL_REF`).
+    pub(crate) fn check_pointer(&mut self, f: &mut Function, value: &Value, span: Span) -> Res<()> {
+        let is_null = f.icmp("eq", value, &Value::null_ptr());
+        self.trap_if(f, &is_null, trap::NULL_REF, span)
+    }
+
+    /// Lowers `ADR(place)`.
+    pub(crate) fn lower_address_of(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        target: ExprId,
+        span: Span,
+    ) -> Res<Value> {
+        let expr = self.hir.expr(target).clone();
+        if let ExprKindHir::Place(PlaceHir::Direct(address)) = &expr.kind {
+            if is_bit_address(address) {
+                return Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "an individual `AT` bit has no pointer representation".into(),
+                    span,
+                ));
+            }
+            let kind = self.scalar_at(expr.ty, span)?;
+            return self.image_service_pointer(f, info, address, kind);
+        }
+        if let Some(path) = self.collect_place(target)
+            && let Some(resolved) = self.resolve_place_pointer(f, info, &path)?
+        {
+            if let Some(address) = &resolved.direct
+                && is_bit_address(address)
+            {
+                return Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "an individual `AT` bit has no pointer representation".into(),
+                    span,
+                ));
+            }
+            return Ok(resolved.pointer);
+        }
+        if let Some(pointer) = self.pointer_place_address(f, info, target)? {
+            return Ok(pointer);
+        }
+        Err(CodegenError::unsupported(
+            codes::CODEGEN_UNSUPPORTED,
+            "the pointer target has no contiguous storage".into(),
+            span,
+        ))
+    }
+
+    /// Lowers `SIZEOF(type | place)` to its constant `UDINT` value.
+    pub(crate) fn lower_sizeof(&mut self, ty: TyId, span: Span) -> Res<Value> {
+        let facts = self.types.facts(ty)?.clone();
+        if facts.is_object() || facts.is_interface() || facts.is_reference() {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "`SIZEOF` requires a statically sized type".into(),
+                span,
+            ));
+        }
+        if matches!(
+            facts.category,
+            TypeCategory::Array {
+                conformant: true,
+                ..
+            }
+        ) {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "`SIZEOF` of a conformant array is not defined".into(),
+                span,
+            ));
+        }
+        let size = u32::try_from(facts.layout.size).map_err(|_| {
+            CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "`SIZEOF` does not fit `UDINT`".into(),
+                span,
+            )
+        })?;
+        Ok(Value::int(32, i128::from(size)))
+    }
+
     /// Checks that an integer value is inside a subrange, trapping `RANGE`.
     pub(crate) fn check_subrange(
         &mut self,

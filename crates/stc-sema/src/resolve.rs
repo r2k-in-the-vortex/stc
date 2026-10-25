@@ -181,15 +181,37 @@ impl Analyzer<'_> {
 
     /// Resolves a type-name path to a definition.
     pub(crate) fn resolve_type_path(&mut self, path: &Path, ns: DefId) -> Option<DefId> {
-        let names = path.segments();
+        let segments = path.segments();
+        self.resolve_type_segments(&segments, ns, path.token_span(), &path.text().to_string())
+    }
+
+    /// Resolves a type name written as a `PathExpr` (a `SIZEOF` operand).
+    pub(crate) fn resolve_type_path_expr(
+        &mut self,
+        path: &stc_syntax::ast::PathExpr,
+        ns: DefId,
+    ) -> Option<DefId> {
+        let segments = path.segments();
+        if path.prefix().is_some() {
+            return None;
+        }
+        self.resolve_type_segments(&segments, ns, path.token_span(), &path.text().to_string())
+    }
+
+    fn resolve_type_segments(
+        &mut self,
+        names: &[stc_syntax::ast::Name],
+        ns: DefId,
+        span: Span,
+        text: &str,
+    ) -> Option<DefId> {
         let first = names.first()?;
         let symbol = self.hir.intern(first.text());
         let mut defs = match self.lookup_scope(ns, symbol) {
             Lookup::Entries(defs) => defs,
             Lookup::Constant(_) => return None,
             Lookup::Ambiguous(spans) => {
-                let text = path.text().to_string();
-                self.report_ambiguous(&text, path.token_span(), &spans);
+                self.report_ambiguous(text, span, &spans);
                 return None;
             }
             Lookup::NotFound => return None,
@@ -204,8 +226,7 @@ impl Analyzer<'_> {
                 Lookup::Entries(defs) => defs,
                 Lookup::Constant(_) => return None,
                 Lookup::Ambiguous(spans) => {
-                    let text = path.text().to_string();
-                    self.report_ambiguous(&text, path.token_span(), &spans);
+                    self.report_ambiguous(text, span, &spans);
                     return None;
                 }
                 Lookup::NotFound => return None,
@@ -220,8 +241,7 @@ impl Analyzer<'_> {
                 .iter()
                 .map(|def| self.hir.defs[def.index()].span)
                 .collect();
-            let text = path.text().to_string();
-            self.report_ambiguous(&text, path.token_span(), &spans);
+            self.report_ambiguous(text, span, &spans);
             return None;
         }
         types.first().copied()

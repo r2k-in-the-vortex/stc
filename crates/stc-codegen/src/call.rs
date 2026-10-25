@@ -175,7 +175,7 @@ impl Lowerer<'_> {
                         let temp = f.alloca(facts.llvm_storage.clone());
                         f.store(&value, &temp, None);
                         call_args.push(temp);
-                    } else if facts.is_object() {
+                    } else if facts.is_object() || facts.is_pointer() {
                         call_args.push(value);
                     } else {
                         let kind = facts.scalar().expect("non-aggregate is scalar");
@@ -265,7 +265,7 @@ impl Lowerer<'_> {
             IrType::Void
         } else {
             match &result_facts {
-                Some(facts) if facts.is_object() => IrType::Ptr,
+                Some(facts) if facts.is_object() || facts.is_pointer() => IrType::Ptr,
                 Some(facts) => facts.llvm_storage.clone(),
                 None => IrType::Void,
             }
@@ -299,7 +299,7 @@ impl Lowerer<'_> {
                     .ok_or_else(|| CodegenError::internal("aggregate result temp missing"))?;
                 Ok(Some(f.load(storage, &temp, None)))
             }
-            Some(facts) if facts.is_object() => Ok(returned),
+            Some(facts) if facts.is_object() || facts.is_pointer() => Ok(returned),
             Some(facts) => {
                 let value = returned
                     .ok_or_else(|| CodegenError::internal("scalar function call returned void"))?;
@@ -336,7 +336,16 @@ impl Lowerer<'_> {
             f.store(&Value::zero(storage), &temp, None);
             return Ok((temp, None));
         };
-        let path = self.place_path(target, span)?;
+        let Some(path) = self.collect_place(target) else {
+            if let Some(pointer) = self.pointer_place_address(f, info, target)? {
+                return Ok((pointer, None));
+            }
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "an output or `VAR_IN_OUT` target must be a place".into(),
+                span,
+            ));
+        };
         if let Some(resolved) = self.resolve_place_pointer(f, info, &path)? {
             if resolved.direct.is_none() {
                 return Ok((resolved.pointer, None));

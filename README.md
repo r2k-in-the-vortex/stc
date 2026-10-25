@@ -60,14 +60,16 @@ model, [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md
 the boundary M6.5 builds on, and the M5 handover addendum records the contracts M5 must extend.
 The foundation milestone is M4.5 before M5; full debug/monitoring is M6.5.
 
-M5 phases 1–6 extend that model with structs, enums, subranges, static arrays,
-`STRING`/`WSTRING`/`USTRING`, references and output/in-out parameters, classes and function
-blocks with methods/inheritance/`THIS`/`SUPER`, all standard functions, the standard FB library
-with cycle-latched timers, and aggregate/string/FB retained-state leaves. These constructs are
+M5 phases 1–7 extend that model with structs, enums, subranges, static arrays,
+`STRING`/`WSTRING`/`USTRING`, references and output/in-out parameters, transient pointers
+(`STC-POINTER`), classes and function blocks with methods/inheritance/`THIS`/`SUPER`, all
+standard functions, the standard FB library with cycle-latched timers, and
+aggregate/string/FB retained-state leaves. These constructs are
 covered by clang acceptance, C-harness execution, and an online change that preserves FB and
-aggregate roots across a code-only swap. Interfaces, runtime-owned descriptors/vtables,
-assignment attempts (`?=`), the transient `STC-POINTER` extension, and references to split
-aggregate values remain explicit diagnostics. The project
+aggregate roots across a code-only swap. The transient `STC-POINTER` extension (`POINTER TO`,
+`ADR`, `SIZEOF`, pointer arithmetic/indexing, and `REF_TO`↔pointer conversions) is implemented.
+Interfaces, runtime-owned descriptors/vtables, assignment attempts (`?=`), and references to
+split aggregate values remain explicit diagnostics. The project
 manifest, `stc run`, `stc test`, and file-backed retained state are M6, and full task scheduling
 is M6 (M5 keeps one task per resource). The persistent host, loadable modules, GOT roots,
 manifests, swap protocol, and process-image remap are implemented and shared by the M5 lowering.

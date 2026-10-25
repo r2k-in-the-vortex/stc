@@ -5,15 +5,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use stc_diag::Diagnostic;
 use stc_hir::{
     ArgDirection, ArgHir, BinOp, Body, CalleeHir, CaseArmHir, CaseLabelHir, CastKind, ConstValue,
-    DefId, DefKind, ExprId, ExprKindHir, FieldId, GenericKind, LocalId, ParamId, PlaceHir, StmtId,
-    StmtKindHir, Symbol, Ty, TyId, UnOp, Visibility,
+    DefId, DefKind, ExprId, ExprKindHir, FieldId, GenericKind, LocalId, ParamId, PlaceHir,
+    SizeOfHir, StmtId, StmtKindHir, Symbol, Ty, TyId, UnOp, Visibility,
 };
 use stc_lexer::Literal;
 use stc_span::Span;
 use stc_syntax::ast::AstNode;
 use stc_syntax::ast::{
-    Arg, CallExpr, CaseStmt, Expr, ForStmt, IfStmt, Name, PathExpr, RefValueExpr, RepeatStmt, Stmt,
-    StmtList, UnaryExpr, WhileStmt,
+    AddressOfExpr, Arg, CallExpr, CaseStmt, Expr, ForStmt, IfStmt, Name, PathExpr,
+    PointerConversionExpr, RefValueExpr, RepeatStmt, SizeOfExpr, Stmt, StmtList, UnaryExpr,
+    WhileStmt,
 };
 
 use crate::prelude::ty_matches_generic;
@@ -357,6 +358,14 @@ impl Analyzer<'_> {
                 }
                 (expr, ty)
             };
+            if self.contains_pointer(declared) || self.contains_pointer(actual_ty) {
+                self.error(
+                    crate::codes::TYPE_INVALID,
+                    "pointer values cannot be exposed through `VAR_ACCESS`",
+                    span,
+                );
+                continue;
+            }
             if declared != self.hir.types.error()
                 && actual_ty != self.hir.types.error()
                 && self.can_assign(declared, actual_ty) == Conv::No
@@ -489,6 +498,7 @@ impl Analyzer<'_> {
         }
         let rhs_id = self.check_expr(ctx, &rhs, None);
         let rhs_ty = self.hir.expr(rhs_id).ty;
+        self.check_pointer_escape(place, rhs_id, span);
         let lhs_is_deref = matches!(
             self.hir.expr(place).kind,
             ExprKindHir::Place(PlaceHir::Deref(_))
@@ -518,6 +528,56 @@ impl Analyzer<'_> {
             );
             self.hir
                 .alloc_stmt(StmtKindHir::Assign { place, value }, span)
+        }
+    }
+
+    /// Rejects the direct escape of a pointer to callee-owned storage through
+    /// a function or method result (Grammar §9.4).
+    fn check_pointer_escape(&mut self, place: ExprId, value: ExprId, span: Span) {
+        if !matches!(
+            self.hir.expr(place).kind,
+            ExprKindHir::Place(PlaceHir::Result(_))
+        ) {
+            return;
+        }
+        let ExprKindHir::AddressOf { target } = self.hir.expr(value).kind else {
+            return;
+        };
+        if self.addressed_storage_is_callee_owned(target) {
+            self.error(
+                crate::codes::REF_RULE,
+                "a pointer to a local, parameter, or result temporary cannot be returned",
+                span,
+            );
+        }
+    }
+
+    /// Returns `true` when the addressed place is callee-owned stack storage:
+    /// a local, parameter, result, or a field/subscript of one. A pointer or
+    /// reference dereference addresses storage owned elsewhere.
+    fn addressed_storage_is_callee_owned(&self, id: ExprId) -> bool {
+        let ExprKindHir::Place(place) = &self.hir.expr(id).kind else {
+            return false;
+        };
+        match place {
+            PlaceHir::Local(_) | PlaceHir::Param(_) | PlaceHir::Result(_) => true,
+            PlaceHir::Field { base, .. } => self.addressed_storage_is_callee_owned(*base),
+            PlaceHir::Index { base, .. } => {
+                if matches!(
+                    self.hir.types.get(self.hir.expr(*base).ty),
+                    Ty::Ptr(_) | Ty::Ref(_)
+                ) {
+                    false
+                } else {
+                    self.addressed_storage_is_callee_owned(*base)
+                }
+            }
+            PlaceHir::This(_)
+            | PlaceHir::Global(_)
+            | PlaceHir::Deref(_)
+            | PlaceHir::BitField { .. }
+            | PlaceHir::Direct(_)
+            | PlaceHir::InstanceField { .. } => false,
         }
     }
 
@@ -1014,6 +1074,9 @@ impl Analyzer<'_> {
             }
             Expr::Path(path) => self.check_path_value(ctx, path, expected),
             Expr::RefValue(reference) => self.check_ref_value(ctx, reference),
+            Expr::AddressOf(node) => self.check_address_of(ctx, node),
+            Expr::SizeOf(node) => self.check_sizeof(ctx, node),
+            Expr::PointerConversion(node) => self.check_pointer_conversion(ctx, node),
             Expr::Call(call) => self.check_call_expr(ctx, call, false, expected),
             Expr::Member(_) | Expr::Index(_) | Expr::Deref(_) => {
                 let id = self.check_postfix(ctx, expr);
@@ -1169,6 +1232,9 @@ impl Analyzer<'_> {
                 span,
             );
         }
+        if self.is_pointer_ty(lhs_ty) || self.is_pointer_ty(rhs_ty) {
+            return self.build_pointer_binary(op, lhs, rhs, span);
+        }
         if op.is_comparison() {
             let (lhs, rhs, _) = self.comparable_operands(op, lhs, rhs, span);
             return self.hir.alloc_expr(
@@ -1198,6 +1264,81 @@ impl Analyzer<'_> {
                 self.hir.types.error(),
                 span,
             ),
+        }
+    }
+
+    /// Types and checks pointer arithmetic and comparisons (D-145).
+    fn build_pointer_binary(&mut self, op: BinOp, lhs: ExprId, rhs: ExprId, span: Span) -> ExprId {
+        let lhs_ty = self.hir.expr(lhs).ty;
+        let rhs_ty = self.hir.expr(rhs).ty;
+        let lhs_ptr = self.is_pointer_ty(lhs_ty);
+        let rhs_ptr = self.is_pointer_ty(rhs_ty);
+        if op.is_comparison() {
+            let comparable = (lhs_ptr && rhs_ptr)
+                || (lhs_ptr && matches!(self.hir.types.get(rhs_ty), Ty::Null))
+                || (rhs_ptr && matches!(self.hir.types.get(lhs_ty), Ty::Null));
+            if !comparable {
+                self.error(
+                    crate::codes::TYPE_INVALID_OPERAND,
+                    format!(
+                        "cannot compare `{}` with `{}` using `{}`",
+                        self.type_name(lhs_ty),
+                        self.type_name(rhs_ty),
+                        op.as_str()
+                    ),
+                    span,
+                );
+                return self.hir.alloc_expr(
+                    ExprKindHir::Binary { op, lhs, rhs },
+                    self.hir.types.error(),
+                    span,
+                );
+            }
+            let (lhs, rhs, _) = self.comparable_operands(op, lhs, rhs, span);
+            return self.hir.alloc_expr(
+                ExprKindHir::Binary { op, lhs, rhs },
+                self.hir.types.bool(),
+                span,
+            );
+        }
+        match op {
+            BinOp::Add if lhs_ptr && self.is_int_ty(rhs_ty) => {
+                let ty = lhs_ty;
+                self.hir
+                    .alloc_expr(ExprKindHir::Binary { op, lhs, rhs }, ty, span)
+            }
+            BinOp::Add if rhs_ptr && self.is_int_ty(lhs_ty) => {
+                let ty = rhs_ty;
+                self.hir
+                    .alloc_expr(ExprKindHir::Binary { op, lhs, rhs }, ty, span)
+            }
+            BinOp::Sub if lhs_ptr && self.is_int_ty(rhs_ty) => {
+                let ty = lhs_ty;
+                self.hir
+                    .alloc_expr(ExprKindHir::Binary { op, lhs, rhs }, ty, span)
+            }
+            BinOp::Sub if lhs_ptr && rhs_ptr && lhs_ty == rhs_ty => {
+                let ty = self.hir.types.int(true, 64);
+                self.hir
+                    .alloc_expr(ExprKindHir::Binary { op, lhs, rhs }, ty, span)
+            }
+            _ => {
+                self.error(
+                    crate::codes::TYPE_INVALID_OPERAND,
+                    format!(
+                        "operator `{}` is not defined for `{}` and `{}`",
+                        op.as_str(),
+                        self.type_name(lhs_ty),
+                        self.type_name(rhs_ty)
+                    ),
+                    span,
+                );
+                self.hir.alloc_expr(
+                    ExprKindHir::Binary { op, lhs, rhs },
+                    self.hir.types.error(),
+                    span,
+                )
+            }
         }
     }
 
@@ -1517,6 +1658,35 @@ impl Analyzer<'_> {
         span: Span,
     ) -> ExprId {
         let base_ty = self.hir.expr(base).ty;
+        if let Ty::Ptr(pointer) = self.hir.types.get(self.scalar_base(base_ty)).clone() {
+            if indices.len() != 1 {
+                self.error(
+                    crate::codes::TYPE_INVALID_OPERAND,
+                    "pointer indexing consumes exactly one subscript; use `p^[i, j]` to index the pointee array",
+                    span,
+                );
+            }
+            let dint = self.hir.types.int(true, 32);
+            let mut lowered = Vec::new();
+            for index in indices {
+                let id = self.check_expr(ctx, index, Some(dint));
+                if !self.is_int_ty(self.hir.expr(id).ty) {
+                    self.error(
+                        crate::codes::TYPE_INVALID_OPERAND,
+                        "pointer index must be an integer",
+                        index.token_span(),
+                    );
+                }
+                lowered.push(id);
+            }
+            let place = PlaceHir::Index {
+                base,
+                indices: lowered,
+            };
+            return self
+                .hir
+                .alloc_expr(ExprKindHir::Place(place), pointer.target, span);
+        }
         let result_ty = match self.hir.types.get(self.scalar_base(base_ty)).clone() {
             Ty::Array(array) => {
                 if indices.len() != array.bounds.len() {
@@ -1671,6 +1841,11 @@ impl Analyzer<'_> {
                 self.hir
                     .alloc_expr(ExprKindHir::Place(place), reference.target, span)
             }
+            Ty::Ptr(pointer) => {
+                let place = PlaceHir::Deref(base);
+                self.hir
+                    .alloc_expr(ExprKindHir::Place(place), pointer.target, span)
+            }
             Ty::Null => {
                 self.error(crate::codes::REF_NULL, "cannot dereference `NULL`", span);
                 self.alloc_error_expr(span)
@@ -1679,7 +1854,7 @@ impl Analyzer<'_> {
                 self.error(
                     crate::codes::REF_RULE,
                     format!(
-                        "`^` requires a reference, found `{}`",
+                        "`^` requires a reference or pointer, found `{}`",
                         self.type_name(base_ty)
                     ),
                     span,
@@ -1727,12 +1902,416 @@ impl Analyzer<'_> {
             );
         }
         let target_ty = self.hir.expr(target_id).ty;
+        if self.is_pointer_ty(target_ty) {
+            self.error(
+                crate::codes::REF_RULE,
+                "`REF` of a pointer is not allowed; use the pointer value directly",
+                span,
+            );
+            return self.alloc_error_expr(span);
+        }
         let ty = self
             .hir
             .types
             .intern(Ty::Ref(stc_hir::RefTy { target: target_ty }));
         self.hir
             .alloc_expr(ExprKindHir::Ref { target: target_id }, ty, span)
+    }
+
+    // ---- STC-POINTER expressions ------------------------------------------
+
+    fn check_address_of(&mut self, ctx: &mut BodyCtx, node: &AddressOfExpr) -> ExprId {
+        let span = node.token_span();
+        let Some(operand) = node.operand() else {
+            self.error(crate::codes::REF_RULE, "`ADR` requires a place", span);
+            return self.alloc_error_expr(span);
+        };
+        let target = self.check_expr(ctx, &operand, None);
+        let target_ty = self.hir.expr(target).ty;
+        if target_ty == self.hir.types.error() {
+            return self.alloc_error_expr(span);
+        }
+        if !self.is_place_expr(target) {
+            self.error(
+                crate::codes::REF_RULE,
+                "`ADR` requires a place, not a value",
+                span,
+            );
+            return self.alloc_error_expr(span);
+        }
+        if let Some(problem) = self.address_of_place_problem(target) {
+            self.error(crate::codes::REF_RULE, problem, span);
+            return self.alloc_error_expr(span);
+        }
+        let Some(decayed) = self.decay_pointer_target(target_ty, span) else {
+            return self.alloc_error_expr(span);
+        };
+        if let Some(problem) = self.pointer_target_problem(decayed) {
+            self.error(
+                crate::codes::REF_RULE,
+                format!("`ADR` target must be contiguous storage, found {problem}"),
+                span,
+            );
+            return self.alloc_error_expr(span);
+        }
+        if self.place_is_persistent(target) && !self.is_single_root_ty(target_ty) {
+            self.error(
+                crate::codes::REF_RULE,
+                "`ADR` of a split persistent aggregate has no stable storage; address a leaf or a transient value",
+                span,
+            );
+            return self.alloc_error_expr(span);
+        }
+        let ty = self.hir.types.pointer(decayed);
+        self.hir
+            .alloc_expr(ExprKindHir::AddressOf { target }, ty, span)
+    }
+
+    /// Returns a diagnostic message for a place `ADR` may not address.
+    fn address_of_place_problem(&self, id: ExprId) -> Option<&'static str> {
+        let ExprKindHir::Place(place) = &self.hir.expr(id).kind else {
+            return None;
+        };
+        match place {
+            PlaceHir::BitField { .. } => Some("`ADR` cannot target a bit field"),
+            PlaceHir::Global(def) => match &self.hir.defs[def.index()].kind {
+                DefKind::Global { constant: true, .. } => {
+                    Some("`ADR` cannot target a `CONSTANT` variable")
+                }
+                _ => None,
+            },
+            PlaceHir::Field { base, field } => {
+                if self.hir.field(*field).constant {
+                    Some("`ADR` cannot target a `CONSTANT` field")
+                } else {
+                    self.address_of_place_problem(*base)
+                }
+            }
+            PlaceHir::Index { base, .. } => self.address_of_place_problem(*base),
+            PlaceHir::Direct(address) => {
+                let bit_address = matches!(address.size, Some(stc_hir::DirectSize::Bit))
+                    || (address.size.is_none() && address.indices.len() == 2);
+                if address.wildcard {
+                    Some("`ADR` cannot target a wildcard `AT` address")
+                } else if bit_address {
+                    Some("`ADR` cannot target an individual bit")
+                } else if matches!(address.area, Some(stc_hir::DirectArea::Input)) {
+                    Some("`ADR` cannot target a `%I` input")
+                } else {
+                    None
+                }
+            }
+            PlaceHir::Deref(base) => {
+                if matches!(self.hir.types.get(self.hir.expr(*base).ty), Ty::Ref(_)) {
+                    Some(
+                        "`ADR` of a `REF_TO` dereference is not allowed; use the `POINTER TO T(reference)` conversion",
+                    )
+                } else {
+                    None
+                }
+            }
+            PlaceHir::Local(local) => self
+                .declaration_is_constant(crate::DeclId::Local(*local))
+                .then_some("`ADR` cannot target a `CONSTANT` variable"),
+            PlaceHir::Param(param) => self
+                .declaration_is_constant(crate::DeclId::Param(*param))
+                .then_some("`ADR` cannot target a `CONSTANT` variable"),
+            PlaceHir::Result(_) | PlaceHir::This(_) | PlaceHir::InstanceField { .. } => None,
+        }
+    }
+
+    fn declaration_is_constant(&self, id: crate::DeclId) -> bool {
+        self.decl_sites
+            .iter()
+            .any(|site| site.id == id && site.constant)
+    }
+
+    /// Returns `true` when a place's root is persistent host storage.
+    fn place_is_persistent(&self, id: ExprId) -> bool {
+        self.place_root(id).is_some_and(|root| {
+            matches!(
+                &self.hir.expr(root).kind,
+                ExprKindHir::Place(
+                    PlaceHir::Global(_) | PlaceHir::This(_) | PlaceHir::InstanceField { .. }
+                )
+            )
+        })
+    }
+
+    /// Applies the `ADR(array)` one-dimension decay.
+    fn decay_pointer_target(&mut self, ty: TyId, span: Span) -> Option<TyId> {
+        let Ty::Array(array) = self.hir.types.get(ty).clone() else {
+            return Some(ty);
+        };
+        if array.conformant {
+            self.error(
+                crate::codes::ARRAY_CONFORMANT,
+                "a whole `ARRAY [*]` value is not a pointer target",
+                span,
+            );
+            return None;
+        }
+        if array.bounds.len() <= 1 {
+            return Some(array.element);
+        }
+        let bounds = array.bounds[1..].to_vec();
+        Some(self.hir.types.intern(Ty::Array(stc_hir::ArrayTy {
+            element: array.element,
+            bounds,
+            conformant: false,
+        })))
+    }
+
+    fn check_sizeof(&mut self, ctx: &mut BodyCtx, node: &SizeOfExpr) -> ExprId {
+        let span = node.token_span();
+        let udint = self.hir.types.int(false, 32);
+        if let Some(type_ref) = node.type_ref() {
+            let ty = self.resolve_type_ref(&type_ref, ctx.scope);
+            if ty == self.hir.types.error() {
+                return self.alloc_error_expr(span);
+            }
+            if let Some(problem) = self.sizeof_type_problem(ty) {
+                self.error(
+                    crate::codes::TYPE_INVALID_OPERAND,
+                    format!("`SIZEOF` requires a statically sized type, found {problem}"),
+                    span,
+                );
+                return self.alloc_error_expr(span);
+            }
+            return self.hir.alloc_expr(
+                ExprKindHir::SizeOf {
+                    operand: SizeOfHir::Type(ty),
+                },
+                udint,
+                span,
+            );
+        }
+        let Some(operand) = node.operand() else {
+            self.error(
+                crate::codes::TYPE_INVALID_OPERAND,
+                "`SIZEOF` requires a type or a place",
+                span,
+            );
+            return self.alloc_error_expr(span);
+        };
+        if let Expr::Path(path) = &operand
+            && !self.path_has_value(ctx, path)
+            && let Some(def) = self.resolve_type_path_expr(path, ctx.scope)
+        {
+            let ty = self.resolve_named_type_def(def);
+            if ty != self.hir.types.error() {
+                if let Some(problem) = self.sizeof_type_problem(ty) {
+                    self.error(
+                        crate::codes::TYPE_INVALID_OPERAND,
+                        format!("`SIZEOF` requires a statically sized type, found {problem}"),
+                        span,
+                    );
+                    return self.alloc_error_expr(span);
+                }
+                return self.hir.alloc_expr(
+                    ExprKindHir::SizeOf {
+                        operand: SizeOfHir::Type(ty),
+                    },
+                    udint,
+                    span,
+                );
+            }
+        }
+        let place = self.check_expr(ctx, &operand, None);
+        let ty = self.hir.expr(place).ty;
+        if ty == self.hir.types.error() {
+            return self.alloc_error_expr(span);
+        }
+        if !self.is_place_expr(place) {
+            self.error(
+                crate::codes::TYPE_INVALID_OPERAND,
+                "`SIZEOF` requires a type or a place",
+                span,
+            );
+            return self.alloc_error_expr(span);
+        }
+        if self.is_bit_field(place) {
+            self.error(
+                crate::codes::TYPE_INVALID_OPERAND,
+                "`SIZEOF` of a bit field is not allowed",
+                span,
+            );
+            return self.alloc_error_expr(span);
+        }
+        if let Some(problem) = self.sizeof_type_problem(ty) {
+            self.error(
+                crate::codes::TYPE_INVALID_OPERAND,
+                format!("`SIZEOF` requires a statically sized place, found {problem}"),
+                span,
+            );
+            return self.alloc_error_expr(span);
+        }
+        if self.place_is_persistent(place) && !self.is_single_root_ty(ty) {
+            self.error(
+                crate::codes::TYPE_INVALID_OPERAND,
+                "`SIZEOF` of a split persistent aggregate has no contiguous storage",
+                span,
+            );
+            return self.alloc_error_expr(span);
+        }
+        self.hir.alloc_expr(
+            ExprKindHir::SizeOf {
+                operand: SizeOfHir::Place(place),
+            },
+            udint,
+            span,
+        )
+    }
+
+    fn is_bit_field(&self, id: ExprId) -> bool {
+        matches!(
+            &self.hir.expr(id).kind,
+            ExprKindHir::Place(PlaceHir::BitField { .. })
+        )
+    }
+
+    fn sizeof_type_problem(&self, ty: TyId) -> Option<&'static str> {
+        match self.hir.types.get(ty) {
+            Ty::Generic(_) => Some("a generic type"),
+            Ty::Null | Ty::Ref(_) => Some("a reference"),
+            Ty::Named(def)
+                if matches!(
+                    &self.hir.defs[def.index()].kind,
+                    DefKind::Class { .. }
+                        | DefKind::Interface { .. }
+                        | DefKind::FunctionBlock { .. }
+                        | DefKind::Program { .. }
+                ) =>
+            {
+                Some("an object or interface type")
+            }
+            Ty::Array(array) if array.conformant => Some("a conformant array"),
+            _ => {
+                if self.contains_conformant(ty) {
+                    Some("a conformant array")
+                } else if self.contains_object(ty) {
+                    Some("an object or interface type")
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Returns `true` when a bare or qualified name denotes a value or place
+    /// in the current context. A visible value wins over a type of the same
+    /// name (Grammar §11.11).
+    fn path_has_value(&mut self, ctx: &BodyCtx, path: &PathExpr) -> bool {
+        if path.prefix().is_some() {
+            return true;
+        }
+        let segments = path.segments();
+        let Some(first) = segments.first() else {
+            return false;
+        };
+        let symbol = self.hir.intern(first.text());
+        if ctx.locals.contains_key(&symbol)
+            || ctx.params.contains_key(&symbol)
+            || ctx.result == Some(symbol)
+        {
+            return true;
+        }
+        if let Some(owner) = ctx.owner {
+            let ty = self.hir.types.intern(Ty::Named(owner));
+            if self.field_lookup(ty, symbol).is_some() {
+                return true;
+            }
+        }
+        match self.lookup_scope(ctx.scope, symbol) {
+            Lookup::Entries(defs) => {
+                if defs
+                    .iter()
+                    .any(|def| matches!(self.hir.defs[def.index()].kind, DefKind::Namespace { .. }))
+                {
+                    return false;
+                }
+                defs.iter()
+                    .any(|def| !crate::resolve::is_type_like(&self.hir.defs[def.index()].kind))
+            }
+            Lookup::Constant(_) => true,
+            Lookup::Ambiguous(_) | Lookup::NotFound => false,
+        }
+    }
+
+    fn check_pointer_conversion(
+        &mut self,
+        ctx: &mut BodyCtx,
+        node: &PointerConversionExpr,
+    ) -> ExprId {
+        let span = node.token_span();
+        let Some(type_ref) = node.type_ref() else {
+            self.error(
+                crate::codes::REF_RULE,
+                "the conversion requires a target type",
+                span,
+            );
+            return self.alloc_error_expr(span);
+        };
+        let target = self.resolve_type_ref(&type_ref, ctx.scope);
+        let to = if node.is_pointer_form() {
+            self.resolve_pointer_target(target, span)
+        } else {
+            self.resolve_reference_target(target, span)
+        };
+        let Some(operand) = node.operand() else {
+            self.error(
+                crate::codes::REF_RULE,
+                "the conversion requires an operand",
+                span,
+            );
+            return self.alloc_error_expr(span);
+        };
+        let value = self.check_expr(ctx, &operand, None);
+        let from = self.hir.expr(value).ty;
+        if from == self.hir.types.error() || to == self.hir.types.error() {
+            return self.alloc_error_expr(span);
+        }
+        let ok = match (self.hir.types.get(from), self.hir.types.get(to)) {
+            (Ty::Ptr(source), Ty::Ref(destination)) if source.target == destination.target => true,
+            (Ty::Ref(source), Ty::Ptr(destination)) if source.target == destination.target => {
+                if let Some(problem) = self.pointer_target_problem(source.target) {
+                    self.error(
+                        crate::codes::REF_RULE,
+                        format!(
+                            "`POINTER TO` conversion requires contiguous target storage, found {problem}"
+                        ),
+                        span,
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => {
+                self.error(
+                    crate::codes::REF_RULE,
+                    format!(
+                        "the conversion requires `POINTER TO T` and `REF_TO T` with the same target type; found `{}` and `{}`",
+                        self.type_name(from),
+                        self.type_name(to)
+                    ),
+                    span,
+                );
+                false
+            }
+        };
+        if !ok {
+            return self.alloc_error_expr(span);
+        }
+        self.hir.alloc_expr(
+            ExprKindHir::PointerConversion {
+                operand: value,
+                to,
+                kind: CastKind::Explicit,
+            },
+            to,
+            span,
+        )
     }
 
     // ---- paths and names -------------------------------------------------
@@ -5082,6 +5661,14 @@ impl Analyzer<'_> {
                     (place, ty)
                 }
             };
+            if self.contains_pointer(declared) || self.contains_pointer(actual_ty) {
+                self.error(
+                    crate::codes::TYPE_INVALID,
+                    "pointer values cannot be exposed through `VAR_ACCESS`",
+                    span,
+                );
+                continue;
+            }
             if declared != self.hir.types.error()
                 && actual_ty != self.hir.types.error()
                 && self.can_assign(declared, actual_ty) == Conv::No

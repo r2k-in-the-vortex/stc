@@ -1896,6 +1896,7 @@ fn type_key_text(hir: &HirCrate, ty: TyId) -> String {
         Ty::Time(stc_hir::TimeTy::LTime) => "LTIME".to_owned(),
         Ty::Date(kind) => format!("{kind:?}"),
         Ty::Char(kind) => format!("{kind:?}"),
+        Ty::Ptr(pointer) => format!("PTR_TO({})", type_key_text(hir, pointer.target)),
         other => format!("{other:?}"),
     }
 }
@@ -2174,6 +2175,28 @@ fn write_expr(
         ExprKindHir::Ref { target } => {
             write_tag(out, 6);
             write_expr(hir, *target, out, depth + 1)?;
+        }
+        ExprKindHir::AddressOf { target } => {
+            write_tag(out, 12);
+            write_expr(hir, *target, out, depth + 1)?;
+        }
+        ExprKindHir::SizeOf { operand } => {
+            write_tag(out, 13);
+            match operand {
+                stc_hir::SizeOfHir::Type(ty) => {
+                    write_tag(out, 1);
+                    write_type_key(hir, *ty, out);
+                }
+                stc_hir::SizeOfHir::Place(place) => {
+                    write_tag(out, 2);
+                    write_expr(hir, *place, out, depth + 1)?;
+                }
+            }
+        }
+        ExprKindHir::PointerConversion { operand, to, .. } => {
+            write_tag(out, 14);
+            write_type_key(hir, *to, out);
+            write_expr(hir, *operand, out, depth + 1)?;
         }
         ExprKindHir::Null => write_tag(out, 7),
         ExprKindHir::Cast { operand, to, kind } => {

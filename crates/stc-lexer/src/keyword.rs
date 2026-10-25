@@ -114,6 +114,11 @@ keywords! {
     Ref => "REF",
     Null => "NULL",
 
+    // Pointer extension keywords (Tokenization §3.8, STC-POINTER, D-145).
+    Pointer => "POINTER",
+    Adr => "ADR",
+    Sizeof => "SIZEOF",
+
     // POUs, OOP, and namespaces (Tokenization §3.3).
     Function => "FUNCTION",
     EndFunction => "END_FUNCTION",

@@ -522,6 +522,29 @@ impl Dumper<'_> {
                 self.line(indent, &format!("{prefix}ref"));
                 self.dump_expr(*target, indent + 1, depth + 1);
             }
+            ExprKindHir::AddressOf { target } => {
+                self.line(indent, &format!("{prefix}address-of"));
+                self.dump_expr(*target, indent + 1, depth + 1);
+            }
+            ExprKindHir::SizeOf { operand } => match operand {
+                crate::hir::SizeOfHir::Type(ty) => {
+                    self.line(
+                        indent,
+                        &format!("{prefix}sizeof-type {}", self.hir.type_name(*ty)),
+                    );
+                }
+                crate::hir::SizeOfHir::Place(place) => {
+                    self.line(indent, &format!("{prefix}sizeof-place"));
+                    self.dump_expr(*place, indent + 1, depth + 1);
+                }
+            },
+            ExprKindHir::PointerConversion { operand, to, .. } => {
+                self.line(
+                    indent,
+                    &format!("{prefix}pointer-conversion {}", self.hir.type_name(*to)),
+                );
+                self.dump_expr(*operand, indent + 1, depth + 1);
+            }
             ExprKindHir::Null => self.line(indent, &format!("{prefix}null")),
             ExprKindHir::Cast { operand, to, kind } => {
                 self.line(

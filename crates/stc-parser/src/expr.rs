@@ -227,6 +227,9 @@ impl Parser<'_> {
             SyntaxKind::Ident => self.parse_path_expr(),
             SyntaxKind::KwThis | SyntaxKind::KwSuper => self.parse_this_super_path(),
             SyntaxKind::KwRef | SyntaxKind::KwNull => self.parse_ref_value(),
+            SyntaxKind::KwAdr => self.parse_address_of(),
+            SyntaxKind::KwSizeof => self.parse_sizeof(),
+            SyntaxKind::KwRefTo | SyntaxKind::KwPointer => self.parse_pointer_conversion(),
             SyntaxKind::PunctLParen => {
                 self.start_node(SyntaxKind::ParenExpr);
                 self.bump();
@@ -297,6 +300,63 @@ impl Parser<'_> {
         self.leave_depth();
     }
 
+    fn parse_address_of(&mut self) {
+        if !self.enter_depth() {
+            self.recover_expression();
+            return;
+        }
+        self.start_node(SyntaxKind::AddressOfExpr);
+        self.bump(); // ADR
+        self.expect_punct(Punct::LParen);
+        if !self.at_punct(Punct::RParen) {
+            self.parse_postfix_expr();
+        }
+        self.expect_punct(Punct::RParen);
+        self.finish_node();
+        self.leave_depth();
+    }
+
+    fn parse_sizeof(&mut self) {
+        if !self.enter_depth() {
+            self.recover_expression();
+            return;
+        }
+        self.start_node(SyntaxKind::SizeOfExpr);
+        self.bump(); // SIZEOF
+        self.expect_punct(Punct::LParen);
+        if !self.at_punct(Punct::RParen) {
+            if starts_type_operand(self.kind_at(0)) {
+                self.parse_type_spec();
+            } else {
+                self.parse_postfix_expr();
+            }
+        }
+        self.expect_punct(Punct::RParen);
+        self.finish_node();
+        self.leave_depth();
+    }
+
+    fn parse_pointer_conversion(&mut self) {
+        if !self.enter_depth() {
+            self.recover_expression();
+            return;
+        }
+        self.start_node(SyntaxKind::PointerConversionExpr);
+        let pointer = self.at_keyword(Keyword::Pointer);
+        self.bump(); // REF_TO or POINTER
+        if pointer {
+            self.expect_keyword(Keyword::To);
+        }
+        self.parse_type_spec();
+        self.expect_punct(Punct::LParen);
+        if !self.at_punct(Punct::RParen) {
+            self.parse_expression();
+        }
+        self.expect_punct(Punct::RParen);
+        self.finish_node();
+        self.leave_depth();
+    }
+
     fn parse_param_list(&mut self) {
         self.start_node(SyntaxKind::ParamList);
         self.expect_punct(Punct::LParen);
@@ -339,4 +399,14 @@ impl Parser<'_> {
             self.parse_expression();
         }
     }
+}
+
+/// Returns `true` when the token can begin a `SIZEOF` type operand
+/// (Grammar §11.11). A bare name is always parsed as a place; the analyzer
+/// resolves it as a type when no value of that name is visible.
+fn starts_type_operand(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::KwArray | SyntaxKind::KwStruct | SyntaxKind::KwRefTo | SyntaxKind::KwPointer
+    ) || crate::parser::is_type_name_keyword(kind)
 }

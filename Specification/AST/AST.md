@@ -412,17 +412,17 @@ pub enum ExprKindHir {
     Binary { op: BinOp, lhs: Box<ExprHir>, rhs: Box<ExprHir>, ty: TyId },
     Unary { op: UnOp, operand: Box<ExprHir>, ty: TyId },
     Call { callee: CalleeHir, args: Vec<ArgHir>, ty: TyId },
-    Ref { target: PlaceHir },
+    Ref { target: ExprId },
     Null,
-    AddressOf { place: PlaceHir },
-    Sizeof { operand: SizeofHir },
-    PointerConversion { operand: Box<ExprHir>, target: TyId, kind: CastKind },
-    Cast { operand: Box<ExprHir>, from: TyId, to: TyId, kind: CastKind },
+    AddressOf { target: ExprId },
+    SizeOf { operand: SizeOfHir },
+    PointerConversion { operand: ExprId, to: TyId, kind: CastKind },
+    Cast { operand: ExprId, to: TyId, kind: CastKind },
 }
 
-pub enum SizeofHir {
+pub enum SizeOfHir {
     Type(TyId),
-    Place(PlaceHir),
+    Place(ExprId),
 }
 ```
 
@@ -469,7 +469,7 @@ pub enum Ty {
     Enum(EnumTy),
     Subrange(SubrangeTy),
     Ref(RefTy),
-    Pointer(PointerTy), // raw pointer; STC-POINTER
+    Ptr(PtrTy), // raw pointer; STC-POINTER
     Class(ClassTy),
     Interface(InterfaceTy),
     FunctionBlock(FbTy),

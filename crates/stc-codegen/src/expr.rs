@@ -188,6 +188,22 @@ impl Lowerer<'_> {
                 let value = self.lower_ref(f, info, target, expr.span)?;
                 values.push(value);
             }
+            ExprKindHir::AddressOf { target } => {
+                let value = self.lower_address_of(f, info, target, expr.span)?;
+                values.push(value);
+            }
+            ExprKindHir::SizeOf { operand } => {
+                let ty = match operand {
+                    stc_hir::SizeOfHir::Type(ty) => ty,
+                    stc_hir::SizeOfHir::Place(place) => self.hir.expr(place).ty,
+                };
+                let value = self.lower_sizeof(ty, expr.span)?;
+                values.push(value);
+            }
+            ExprKindHir::PointerConversion { operand, .. } => {
+                tasks.push(Task::Apply(id));
+                tasks.push(Task::Eval(operand));
+            }
             ExprKindHir::Null => {
                 let ty = self.types.llvm_value(expr.ty)?;
                 values.push(Value::zero(ty));
@@ -275,6 +291,15 @@ impl Lowerer<'_> {
                     .pop()
                     .ok_or_else(|| CodegenError::internal("missing unary operand"))?;
                 let value = self.lower_unary(f, op, operand, operand_value, expr.span)?;
+                values.push(value);
+            }
+            ExprKindHir::PointerConversion { operand, to, .. } => {
+                let operand_value = values
+                    .pop()
+                    .ok_or_else(|| CodegenError::internal("missing pointer conversion operand"))?;
+                let from_ty = self.hir.expr(operand).ty;
+                let value =
+                    self.lower_pointer_conversion(f, info, operand_value, from_ty, to, expr.span)?;
                 values.push(value);
             }
             ExprKindHir::Cast { operand, to, .. } => {
@@ -431,6 +456,13 @@ impl Lowerer<'_> {
         if let PlaceHir::Deref(reference) = place {
             return self.read_deref(f, info, reference, expr.ty, expr.span);
         }
+        if let Some(pointer) = self.pointer_place_address(f, info, id)? {
+            let facts = self.types.facts(expr.ty)?.clone();
+            if let Some(kind) = facts.scalar() {
+                return Self::read_scalar(f, &pointer, kind);
+            }
+            return Ok(f.load(facts.llvm_storage, &pointer, None));
+        }
         if let Some(path) = self.collect_place(id) {
             let facts = self.types.facts(path.ty)?.clone();
             if let Some(kind) = facts.scalar() {
@@ -480,6 +512,16 @@ impl Lowerer<'_> {
         if let PlaceHir::Deref(reference) = place {
             return self.write_deref(f, info, reference, expr.ty, value, expr.span);
         }
+        if let Some(pointer) = self.pointer_place_address(f, info, id)? {
+            let facts = self.types.facts(expr.ty)?.clone();
+            if let Some(kind) = facts.scalar() {
+                self.check_subrange(f, expr.ty, &value, expr.span)?;
+                Self::write_scalar(f, &pointer, kind, &value);
+                return Ok(());
+            }
+            f.store(&value, &pointer, None);
+            return Ok(());
+        }
         if let Some(path) = self.collect_place(id) {
             let facts = self.types.facts(path.ty)?.clone();
             if let Some(kind) = facts.scalar() {
@@ -521,6 +563,9 @@ impl Lowerer<'_> {
             && let Some(resolved) = self.resolve_place_pointer(f, info, &path)?
         {
             return Ok(resolved.pointer);
+        }
+        if let Some(pointer) = self.pointer_place_address(f, info, id)? {
+            return Ok(pointer);
         }
         match place {
             PlaceHir::Result(_) => info.result_ptr.clone().ok_or_else(|| {
@@ -636,7 +681,7 @@ impl Lowerer<'_> {
 
     /// Resolves an ad-hoc `%I`/`%Q`/`%M` expression through the `io_image`
     /// host service and returns the byte pointer.
-    fn image_service_pointer(
+    pub(crate) fn image_service_pointer(
         &mut self,
         f: &mut Function,
         info: &BodyInfo,
@@ -886,6 +931,11 @@ impl Lowerer<'_> {
         let rhs_ty = self.hir.expr(rhs).ty;
         let lhs_facts = self.types.facts(lhs_ty)?.clone();
         let rhs_facts = self.types.facts(rhs_ty)?.clone();
+        if lhs_facts.is_pointer() || rhs_facts.is_pointer() {
+            return self.lower_pointer_binary(
+                f, op, lhs_ty, rhs_ty, lhs, rhs, &lhs_value, &rhs_value, span,
+            );
+        }
         let reference_like = |facts: &crate::types::TypeFacts| {
             facts.is_reference() || matches!(facts.category, crate::types::TypeCategory::Null)
         };
@@ -957,6 +1007,112 @@ impl Lowerer<'_> {
                 span,
             )),
         }
+    }
+
+    /// Lowers comparison and arithmetic on raw pointers (`STC-POINTER`).
+    #[allow(clippy::too_many_arguments)]
+    fn lower_pointer_binary(
+        &mut self,
+        f: &mut Function,
+        op: BinOp,
+        lhs_ty: TyId,
+        rhs_ty: TyId,
+        lhs_expr: ExprId,
+        rhs_expr: ExprId,
+        lhs: &Value,
+        rhs: &Value,
+        span: Span,
+    ) -> Res<Value> {
+        if op.is_comparison() {
+            let predicate = match op {
+                BinOp::Eq => "eq",
+                BinOp::Ne => "ne",
+                BinOp::Lt => "ult",
+                BinOp::Le => "ule",
+                BinOp::Gt => "ugt",
+                BinOp::Ge => "uge",
+                _ => unreachable!("comparison operator"),
+            };
+            return Ok(f.icmp(predicate, lhs, rhs));
+        }
+        let lhs_target = self.pointer_target(lhs_ty);
+        let rhs_target = self.pointer_target(rhs_ty);
+        match op {
+            BinOp::Add => {
+                let (pointer, index_expr, index, target) = if let Some(target) = lhs_target {
+                    (lhs, rhs_expr, rhs, target)
+                } else if let Some(target) = rhs_target {
+                    (rhs, lhs_expr, lhs, target)
+                } else {
+                    return Err(CodegenError::internal("pointer addition without a pointer"));
+                };
+                let index = self.lower_pointer_index(f, index_expr, index, span)?;
+                let pointee = self.types.llvm_storage(target)?.render();
+                Ok(f.gep(&pointee, pointer, &[format!("i64 {}", index.repr)], false))
+            }
+            BinOp::Sub if lhs_target.is_some() && rhs_target.is_some() => {
+                let target = lhs_target.expect("pointer target");
+                let lhs_int = f.emit_value_cast("ptrtoint", lhs, IrType::Int(64));
+                let rhs_int = f.emit_value_cast("ptrtoint", rhs, IrType::Int(64));
+                let difference = f.binop("sub", &lhs_int, &rhs_int);
+                let stride = self.types.layout(target)?.size;
+                if stride == 0 {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "pointer difference of a zero-sized target is not defined".into(),
+                        span,
+                    ));
+                }
+                Ok(f.binop("sdiv", &difference, &Value::int(64, i128::from(stride))))
+            }
+            BinOp::Sub if lhs_target.is_some() => {
+                let target = lhs_target.expect("pointer target");
+                let index = self.lower_pointer_index(f, rhs_expr, rhs, span)?;
+                let negative = f.binop("sub", &Value::int(64, 0), &index);
+                let pointee = self.types.llvm_storage(target)?.render();
+                Ok(f.gep(&pointee, lhs, &[format!("i64 {}", negative.repr)], false))
+            }
+            _ => Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!("operator `{}` is not defined for pointers", op.as_str()),
+                span,
+            )),
+        }
+    }
+
+    fn pointer_target(&self, ty: TyId) -> Option<TyId> {
+        match self.hir.types.get(ty) {
+            stc_hir::Ty::Ptr(pointer) => Some(pointer.target),
+            _ => None,
+        }
+    }
+
+    fn lower_pointer_index(
+        &mut self,
+        f: &mut Function,
+        expr: ExprId,
+        value: &Value,
+        span: Span,
+    ) -> Res<Value> {
+        if value.ty == IrType::Int(64) {
+            return Ok(value.clone());
+        }
+        let kind = self
+            .types
+            .facts(self.hir.expr(expr).ty)?
+            .scalar()
+            .ok_or_else(|| {
+                CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "pointer arithmetic requires an integer offset".into(),
+                    span,
+                )
+            })?;
+        Ok(if kind.is_signed() {
+            f.emit_value_cast("sext", value, IrType::Int(64))
+        } else {
+            f.emit_value_cast("zext", value, IrType::Int(64))
+        })
     }
 
     pub(crate) fn lower_comparison(

@@ -1,6 +1,7 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–6 implemented (2026-10-25); interfaces/descriptors, `?=`, and `STC-POINTER` remain  
+Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7 and `STC-POINTER` implemented (2026-10-25); interfaces/descriptors and `?=` remain
+
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
 Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`, `STC-POINTER`  
@@ -40,8 +41,8 @@ library with cycle-latched timers, and host-rooted retained state for aggregate/
 Function blocks, OOP lowering, aggregates, strings, references, standard functions, and the
 standard FB library are therefore covered by clang acceptance, C-harness execution, and
 online-change preservation tests. Interfaces with runtime-owned descriptors/vtables, assignment
-attempts (`?=`), the transient `STC-POINTER` extension, and references to split aggregate
-values remain explicit `STC-E-CODEGEN-001` diagnostics. The
+attempts (`?=`), and references to split aggregate values remain explicit
+`STC-E-CODEGEN-001` diagnostics; the transient `STC-POINTER` extension is implemented. The
 manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; full task
 scheduling is M6 (M5 keeps one task per resource). `stc check <file>...` analyzes one in-memory
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
@@ -59,7 +60,7 @@ artifacts on both hosts. Phase 10 closes the documentation and handover pass: th
 set and M5 handover describe the implemented host/module model, and the M6.5 interface boundary
 is recorded. M5 phases 1–6 extend that foundation to aggregates, references, OOP, the standard
 library, and aggregate retained state, including an online change preserving FB and aggregate
-roots; interfaces/descriptors and `STC-POINTER` remain. Full debug/monitoring is M6.5.
+roots; interfaces/descriptors remain. Full debug/monitoring is M6.5.
 
 ## 2. Input languages
 
