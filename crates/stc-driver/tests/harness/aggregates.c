@@ -30,6 +30,7 @@ int main(int argc, char** argv) {
   int_fn string_ops = (int_fn)stc_host_symbol("StringOps");
   int_fn wide_ops = (int_fn)stc_host_symbol("WideOps");
   int_fn unicode_ops = (int_fn)stc_host_symbol("UnicodeOps");
+  int_fn run_conf2 = (int_fn)stc_host_symbol("RunConf2");
   if (!set_point) return 40;
   if (!get_sum) return 41;
   if (!set_elem) return 42;
@@ -48,6 +49,7 @@ int main(int argc, char** argv) {
   if (!string_ops) return 55;
   if (!wide_ops) return 56;
   if (!unicode_ops) return 57;
+  if (!run_conf2) return 58;
 
   if (set_point(3, 4) != 34) return 1;
   if (get_sum() != 7) return 2;
@@ -66,6 +68,7 @@ int main(int argc, char** argv) {
   if (string_ops() != 1111111111) return 21;
   if (wide_ops() != 111) return 22;
   if (unicode_ops() != 111111) return 23;
+  if (run_conf2() != 300) return 24;
   if (tick() != 1) return 17;
   if (tick() != 2) return 18;
 

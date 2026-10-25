@@ -291,7 +291,10 @@ impl Lowerer<'_> {
             _ => return Ok(None),
         };
         let mut dimension = 0_usize;
-        for step in &path.steps {
+        let mut position = 0_usize;
+        while position < path.steps.len() {
+            let step = &path.steps[position];
+            position += 1;
             match step {
                 PlaceStep::Field(field) => {
                     dimension = 0;
@@ -323,65 +326,93 @@ impl Lowerer<'_> {
                         conformant,
                     } => {
                         if conformant {
-                            if dims.len() != 1 {
-                                return Err(CodegenError::unsupported(
-                                    codes::CODEGEN_UNSUPPORTED,
-                                    "multi-dimensional conformant arrays are not supported in M5"
-                                        .into(),
-                                    path.span,
+                            let rank = dims.len();
+                            if rank == 0 {
+                                return Err(CodegenError::internal(
+                                    "conformant array has no dimensions",
                                 ));
+                            }
+                            let mut indices = Vec::with_capacity(rank);
+                            indices.push(*index);
+                            for _ in 1..rank {
+                                let Some(PlaceStep::Index(next)) = path.steps.get(position) else {
+                                    return Err(CodegenError::unsupported(
+                                        codes::CODEGEN_UNSUPPORTED,
+                                        format!(
+                                            "a rank-{rank} conformant array requires {rank} subscripts"
+                                        ),
+                                        path.span,
+                                    ));
+                                };
+                                indices.push(*next);
+                                position += 1;
                             }
                             let desc_ty = self.types.llvm_storage(ty)?.render();
                             let data_ptr =
                                 f.gep(&desc_ty, &pointer, &["i64 0".into(), "i32 0".into()], true);
                             let data = f.load(IrType::Ptr, &data_ptr, None);
-                            let lower_ptr = f.gep(
-                                &desc_ty,
-                                &pointer,
-                                &[
-                                    "i64 0".into(),
-                                    "i32 2".into(),
-                                    "i64 0".into(),
-                                    "i32 0".into(),
-                                ],
-                                true,
-                            );
-                            let lower = f.load(IrType::Int(64), &lower_ptr, None);
-                            let upper_ptr = f.gep(
-                                &desc_ty,
-                                &pointer,
-                                &[
-                                    "i64 0".into(),
-                                    "i32 2".into(),
-                                    "i64 0".into(),
-                                    "i32 1".into(),
-                                ],
-                                true,
-                            );
-                            let upper = f.load(IrType::Int(64), &upper_ptr, None);
-                            let index_value = self.lower_expr(f, info, *index)?;
-                            let kind = self
-                                .types
-                                .facts(self.hir.expr(*index).ty)?
-                                .scalar()
-                                .ok_or_else(|| {
-                                    CodegenError::internal(
-                                        "conformant array subscript is not an integer",
-                                    )
-                                })?;
-                            let wide = if kind.is_signed() {
-                                f.emit_value_cast("sext", &index_value, IrType::Int(64))
-                            } else {
-                                f.emit_value_cast("zext", &index_value, IrType::Int(64))
-                            };
-                            let below = f.icmp("slt", &wide, &lower);
-                            let above = f.icmp("sgt", &wide, &upper);
-                            let bad = f.binop("or", &below, &above);
-                            self.trap_if(f, &bad, trap::BOUNDS, path.span)?;
-                            let delta = f.binop("sub", &wide, &lower);
+                            let mut lower_bounds = Vec::with_capacity(rank);
+                            let mut lengths = Vec::with_capacity(rank);
+                            for bound in 0..rank {
+                                let lower_ptr = f.gep(
+                                    &desc_ty,
+                                    &pointer,
+                                    &[
+                                        "i64 0".into(),
+                                        "i32 2".into(),
+                                        format!("i64 {bound}"),
+                                        "i32 0".into(),
+                                    ],
+                                    true,
+                                );
+                                let lower = f.load(IrType::Int(64), &lower_ptr, None);
+                                let upper_ptr = f.gep(
+                                    &desc_ty,
+                                    &pointer,
+                                    &[
+                                        "i64 0".into(),
+                                        "i32 2".into(),
+                                        format!("i64 {bound}"),
+                                        "i32 1".into(),
+                                    ],
+                                    true,
+                                );
+                                let upper = f.load(IrType::Int(64), &upper_ptr, None);
+                                let length = f.binop("sub", &upper, &lower);
+                                let length = f.binop("add", &length, &Value::int(64, 1));
+                                lower_bounds.push(lower);
+                                lengths.push(length);
+                            }
+                            let mut linear = Value::int(64, 0);
+                            for (bound, index_expr) in indices.iter().enumerate() {
+                                let index_value = self.lower_expr(f, info, *index_expr)?;
+                                let kind = self
+                                    .types
+                                    .facts(self.hir.expr(*index_expr).ty)?
+                                    .scalar()
+                                    .ok_or_else(|| {
+                                        CodegenError::internal(
+                                            "conformant array subscript is not an integer",
+                                        )
+                                    })?;
+                                let wide = if kind.is_signed() {
+                                    f.emit_value_cast("sext", &index_value, IrType::Int(64))
+                                } else {
+                                    f.emit_value_cast("zext", &index_value, IrType::Int(64))
+                                };
+                                let lower = &lower_bounds[bound];
+                                let upper = f.binop("add", lower, &lengths[bound]);
+                                let below = f.icmp("slt", &wide, lower);
+                                let above = f.icmp("sge", &wide, &upper);
+                                let bad = f.binop("or", &below, &above);
+                                self.trap_if(f, &bad, trap::BOUNDS, path.span)?;
+                                let delta = f.binop("sub", &wide, lower);
+                                linear = f.binop("mul", &linear, &lengths[bound]);
+                                linear = f.binop("add", &linear, &delta);
+                            }
                             let element_ty = self.types.llvm_storage(element)?.render();
                             pointer =
-                                f.gep(&element_ty, &data, &[format!("i64 {}", delta.repr)], false);
+                                f.gep(&element_ty, &data, &[format!("i64 {}", linear.repr)], false);
                             ty = element;
                             dimension = 0;
                             continue;

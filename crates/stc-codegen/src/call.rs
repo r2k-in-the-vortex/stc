@@ -403,7 +403,7 @@ impl Lowerer<'_> {
 }
 
 impl Lowerer<'_> {
-    /// Builds a rank-1 conformant-array descriptor for an actual argument.
+    /// Builds a conformant-array descriptor for an actual argument.
     pub(crate) fn conformant_descriptor(
         &mut self,
         f: &mut Function,
@@ -414,7 +414,7 @@ impl Lowerer<'_> {
         let actual_ty = self.hir.expr(actual).ty;
         let facts = self.types.facts(actual_ty)?.clone();
         let TypeCategory::Array {
-            element,
+            element: _,
             dims,
             conformant,
         } = facts.category
@@ -428,14 +428,11 @@ impl Lowerer<'_> {
         if conformant {
             return self.lower_expr(f, info, actual);
         }
-        if dims.len() != 1 {
-            return Err(CodegenError::unsupported(
-                codes::CODEGEN_UNSUPPORTED,
-                "multi-dimensional conformant arrays are not supported in M5".into(),
-                span,
+        if dims.is_empty() {
+            return Err(CodegenError::internal(
+                "a conformant array has no dimensions",
             ));
         }
-        let dim = dims[0];
         if !self.types.is_single_root(actual_ty)? {
             return Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
@@ -464,23 +461,34 @@ impl Lowerer<'_> {
                 span,
             ));
         }
-        let desc_ty = IrType::aggregate("{ ptr, i64, [1 x { i64, i64 }] }");
-        let _ = element;
+        let rank = dims.len();
+        let desc_ty = IrType::aggregate(format!("{{ ptr, i64, [{rank} x {{ i64, i64 }}] }}"));
+        let total = dims
+            .iter()
+            .fold(1_u64, |total, dim| total.saturating_mul(dim.length));
         let mut value = Value::zero(desc_ty.clone());
         value = f.insert_value_at(&value, &resolved.pointer, &[0], desc_ty.clone());
         value = f.insert_value_at(
             &value,
-            &Value::int(64, i128::from(dim.length)),
+            &Value::int(64, i128::from(total)),
             &[1],
             desc_ty.clone(),
         );
-        value = f.insert_value_at(
-            &value,
-            &Value::int(64, dim.lower),
-            &[2, 0, 0],
-            desc_ty.clone(),
-        );
-        value = f.insert_value_at(&value, &Value::int(64, dim.upper), &[2, 0, 1], desc_ty);
+        for (index, dimension) in dims.iter().enumerate() {
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
+            value = f.insert_value_at(
+                &value,
+                &Value::int(64, dimension.lower),
+                &[2, index, 0],
+                desc_ty.clone(),
+            );
+            value = f.insert_value_at(
+                &value,
+                &Value::int(64, dimension.upper),
+                &[2, index, 1],
+                desc_ty.clone(),
+            );
+        }
         Ok(value)
     }
 }

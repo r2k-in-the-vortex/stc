@@ -192,6 +192,7 @@ fn source_name_source(name: &str) -> &'static str {
         "subrange" => SUBRANGE,
         "bounds" => BOUNDS,
         "strrange" => STRRANGE,
+        "conf2bounds" => CONF2BOUNDS,
         other => panic!("unknown source {other}"),
     }
 }
@@ -339,6 +340,28 @@ END_RESOURCE
 END_CONFIGURATION
 "#;
 
+const CONF2BOUNDS: &str = r#"
+FUNCTION Sum2 : DINT
+VAR_IN_OUT
+  a : ARRAY[*, *] OF DINT;
+END_VAR
+  Sum2 := a[3, 1];
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  m : ARRAY[1..2, 1..3] OF DINT;
+  x : DINT;
+END_VAR
+  x := Sum2(m);
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
 const NARROW: &str = r#"
 PROGRAM Main
 VAR
@@ -391,6 +414,7 @@ fn traps_are_fatal_and_reported() {
         ("subrange", "RANGE"),
         ("bounds", "BOUNDS"),
         ("strrange", "RANGE"),
+        ("conf2bounds", "BOUNDS"),
     ] {
         let directory = TestDir::new(source);
         build_executable(&directory, source, source);
@@ -1436,6 +1460,45 @@ END_VAR
   IF FIND(s, '') = 1 THEN r := r + 100000000; END_IF;
   IF LEFT(s, 0) = '' THEN r := r + 1000000000; END_IF;
   StringOps := r;
+END_FUNCTION
+
+FUNCTION Sum2 : DINT
+VAR_IN_OUT
+  a : ARRAY[*, *] OF DINT;
+END_VAR
+VAR
+  i : DINT;
+  j : DINT;
+END_VAR
+  Sum2 := 0;
+  FOR i := 1 TO 2 DO
+    FOR j := 1 TO 3 DO
+      Sum2 := Sum2 + a[i, j];
+    END_FOR;
+  END_FOR;
+END_FUNCTION
+
+FUNCTION Fill2 : DINT
+VAR_IN_OUT
+  a : ARRAY[*, *] OF DINT;
+END_VAR
+  a[2, 3] := 99;
+  Fill2 := a[2, 3];
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION RunConf2 : DINT
+VAR
+  m : ARRAY[1..2, 1..3] OF DINT;
+  i : DINT;
+  j : DINT;
+END_VAR
+  FOR i := 1 TO 2 DO
+    FOR j := 1 TO 3 DO
+      m[i, j] := i * 10 + j;
+    END_FOR;
+  END_FOR;
+  RunConf2 := Sum2(m) + Fill2(m) + m[2, 3];
 END_FUNCTION
 
 {stc:export}{stc:no_mangle}

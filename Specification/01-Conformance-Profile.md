@@ -40,8 +40,8 @@ library with cycle-latched timers, and host-rooted retained state for aggregate/
 Function blocks, OOP lowering, aggregates, strings, references, standard functions, and the
 standard FB library are therefore covered by clang acceptance, C-harness execution, and
 online-change preservation tests. Interfaces with runtime-owned descriptors/vtables, assignment
-attempts (`?=`), the transient `STC-POINTER` extension, multi-dimensional conformant arrays, and
-references to split aggregate values remain explicit `STC-E-CODEGEN-001` diagnostics. The
+attempts (`?=`), the transient `STC-POINTER` extension, and references to split aggregate
+values remain explicit `STC-E-CODEGEN-001` diagnostics. The
 manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; full task
 scheduling is M6 (M5 keeps one task per resource). `stc check <file>...` analyzes one in-memory
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target

@@ -66,8 +66,8 @@ blocks with methods/inheritance/`THIS`/`SUPER`, all standard functions, the stan
 with cycle-latched timers, and aggregate/string/FB retained-state leaves. These constructs are
 covered by clang acceptance, C-harness execution, and an online change that preserves FB and
 aggregate roots across a code-only swap. Interfaces, runtime-owned descriptors/vtables,
-assignment attempts (`?=`), the transient `STC-POINTER` extension, multi-dimensional conformant
-arrays, and references to split aggregate values remain explicit diagnostics. The project
+assignment attempts (`?=`), the transient `STC-POINTER` extension, and references to split
+aggregate values remain explicit diagnostics. The project
 manifest, `stc run`, `stc test`, and file-backed retained state are M6, and full task scheduling
 is M6 (M5 keeps one task per resource). The persistent host, loadable modules, GOT roots,
 manifests, swap protocol, and process-image remap are implemented and shared by the M5 lowering.
