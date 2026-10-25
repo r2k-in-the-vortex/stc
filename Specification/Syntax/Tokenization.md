@@ -77,7 +77,7 @@ token does not store a second copy.
 | --- | --- | --- |
 | `Eof` | | Always emitted once at the end |
 | `Identifier` | `motor_1`, `_12V7` | Case-insensitive lookup |
-| `Keyword` | `IF`, `FUNCTION_BLOCK`, `USTRING` | Reserved, case-insensitive |
+| `Keyword` | `IF`, `FUNCTION_BLOCK`, `USTRING`, `POINTER` | Reserved, case-insensitive |
 | `IntLiteral` | `0`, `123_4`, `+7` (sign handled by parser) | Decimal |
 | `RealLiteral` | `0.0`, `3.14159_26`, `1.34E-12` | Decimal point required |
 | `BasedLiteral` | `2#1010`, `8#377`, `16#DEAD_BEEF` | Bit-string valued |
@@ -123,6 +123,7 @@ VAR END_VAR VAR_INPUT VAR_OUTPUT VAR_IN_OUT VAR_TEMP
 VAR_GLOBAL VAR_EXTERNAL VAR_ACCESS VAR_CONFIG
 CONSTANT RETAIN NON_RETAIN R_EDGE F_EDGE
 REF_TO REF NULL
+POINTER                                        (* STC-POINTER extension *)
 ```
 
 ### 3.3 POU, OOP, and namespace keywords
@@ -144,6 +145,7 @@ WHILE END_WHILE REPEAT UNTIL END_REPEAT
 EXIT CONTINUE RETURN
 TRUE FALSE
 AND OR XOR NOT MOD
+ADR SIZEOF                                     (* STC-POINTER extension *)
 ```
 
 ### 3.5 Configuration keywords
@@ -170,6 +172,19 @@ ACTION END_ACTION STEP END_STEP INITIAL_STEP TRANSITION END_TRANSITION FROM
   `LDATE_AND_TIME` may be followed immediately by `#` to form a time literal. The lexer handles
   the literal prefix before keyword classification (see §5.4).
 - `T#` and `LT#` are literal prefixes, not general identifiers.
+
+### 3.8 Pointer extension keywords (`STC-POINTER`)
+
+```text
+POINTER ADR SIZEOF
+```
+
+- `POINTER` introduces a `POINTER TO` type; `ADR` and `SIZEOF` are operator keywords.
+- `TO`, `NULL`, and `^` are already reserved/tokenized and are reused by the extension.
+- The extension is always part of the `stc-2013-oop-utf8-v1` profile, so these spellings are
+  reserved in all contexts and cannot be identifiers (**STC-LEX-059**). A future profile that
+  omits `STC-POINTER` would need a separate lexical mode before these names could be identifiers
+  again.
 
 ## 4. Identifiers
 

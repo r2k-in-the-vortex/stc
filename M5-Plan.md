@@ -251,11 +251,9 @@ materialized into a transient alloca on read and split back into roots on write.
   rejected explicitly at their call sites. Completing this requires the runtime type-info/vtable/
   object registry, stable object records across swaps, descriptor projection, and interface
   lowering/dispatch.
-- **`STC-POINTER`.** D-128/D-132 describe the extension as fully fixed by Q-131–Q-150, but the
-  lexer, parser, AST, HIR, and sema contain no pointer type, address-of expression, or
-  `SIZEOF` surface, and the repository's grammar does not define one. Implementing it requires
-  recording the missing language-surface decisions first rather than inventing syntax in
-  codegen.
+- **`STC-POINTER`.** The surface grammar and semantic envelope are now recorded in Grammar
+  §4/§9.4 and D-145. The lexer, parser, AST, HIR, and sema still contain no pointer type,
+  address-of expression, or `SIZEOF` surface, so implementation remains.
 - **References to split persistent aggregates** remain rejected because they have no single
   stable storage location; contiguous transient aggregates and single-root persistent values are
   supported (D-144).

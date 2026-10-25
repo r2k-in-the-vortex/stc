@@ -1175,8 +1175,9 @@ keep option 1 and defer the extension. Option 3 is not recommended for v1.
 Resolved v1 scope (Q-131/Q-135–Q-138):
 
 - `POINTER TO` is a **distinct type**, not an alias for `REF_TO`.
-- It is **transient-only**: no pointer-typed globals, persistent fields, RETAIN leaves, or
-  manifest roots. It may appear in locals, parameters, and (subject to Q-147) function results.
+- It is **transient-only**: no pointer-typed globals, persistent fields (including fields of
+  persistent aggregates), RETAIN leaves, or manifest roots. It may appear in transient
+  locals/parameters/results and in aggregate values proven transient.
 - It supports **full arithmetic, indexing, and `SIZEOF`**, not just `ADR`/`^`/`NULL`.
 - It does **not** bring `__NEW`/`__DELETE`; dynamic allocation remains v2.
 - Pointers are cycle-local: they cannot be stored in persistent roots, cannot enter the state
@@ -2455,7 +2456,7 @@ Priority meanings:
 | Q-133 | How are pointer-bearing roots handled during online change/migration? | Reject or reset pointer-bearing roots in v1; do not raw-copy references. A reference survives only when its target identity/type/layout/storage is preserved. Runtime pointer translation is a later design. | P0 |
 | Q-134 | Are references/interfaces/handles persisted in the retained-state file? | No. They remain excluded from the RETAIN payload (A-012/D-032) and are reset or reconstructed on warm start. Persisting stable identities and reconstructing them is a later state-format design, not v1. | P1 |
 | Q-135 | Is `POINTER TO` in v1, and in what scope? | Resolved (non-default). `POINTER TO` is a distinct transient-only type in v1 with full arithmetic/indexing/`SIZEOF`; no persistent pointer fields; the safety envelope is Q-143–Q-150. | P0 |
-| Q-136 | Which `POINTER TO` operations are allowed? | For a transient subset: `ADR`, `^`, `NULL`, and explicit conversions only; no arithmetic, indexing, `SIZEOF`, or function pointers. Full CODESYS operations remain v2. | P0 |
+| Q-136 | Which `POINTER TO` operations are allowed? | Superseded by Q-135's resolution: the transient v1 type supports arithmetic, indexing, `SIZEOF`, `ADR`, `^`, `NULL`, and explicit conversions. The earlier "no arithmetic/indexing/`SIZEOF`" subset was not adopted. | P0 |
 | Q-137 | May `POINTER TO` appear in persistent fields/manifest-tracked roots? | No for the recommended subset. Persistent pointers cannot be identity-migrated; if later allowed, they require reject/reset and exclusion from state/migration. | P0 |
 | Q-138 | Is `POINTER TO` a distinct type or an alias/spelling? | Distinct type if added. Aliasing it to `REF_TO` would misrepresent raw-pointer semantics. `REFERENCE TO` is not the 2013 spelling; it may be an alias only if explicitly approved. | P0 |
 | Q-139 | What conversions/interop apply between `POINTER TO`, `REF_TO`, interfaces, and `VAR_IN_OUT`? | Explicit conversions only; no implicit raw-pointer conversion. Interfaces/handles remain the aggregate representation; `VAR_IN_OUT` rules are documented separately. | P1 |

@@ -330,8 +330,10 @@ only for class/FB object references with a descriptor check. Interfaces are null
 
 `POINTER TO` is a distinct transient-only `STC-POINTER` extension: full typed arithmetic,
 indexing, `SIZEOF` for contiguous values, pointer parameters/results, null-dereference traps, and
-documented dangling behavior. Persistent pointer fields are rejected. Pointer→object/interface
-and pointer↔integer conversions are not allowed.
+documented dangling behavior. Pointer storage is transient, including pointer fields inside
+transient aggregates; persistent pointer roots/fields are rejected. Pointer→object/interface and
+pointer↔integer conversions are not allowed; explicit `POINTER TO`↔`REF_TO` casts are validated
+by the host resolver.
 
 ## 10. Threads, services, and diagnostics
 

@@ -169,6 +169,10 @@ ParenExpr
 LiteralExpr
 PathExpr
 RefValueExpr
+AddressOfExpr
+SizeofExpr
+PointerConversionExpr
+SizeofOperand
 
 Name
 Path
@@ -263,6 +267,9 @@ pub enum ExprKind {
     Literal(LiteralExpr),
     Path(PathExpr),
     RefValue(RefValueExpr),
+    AddrOf(AddressOfExpr),
+    Sizeof(SizeofExpr),
+    PointerConversion(PointerConversionExpr),
     Error(ErrorNode),
 }
 ```
@@ -299,6 +306,8 @@ pub struct PragmaAnnotation {
 - `CaseStmt` has one or more selections; at most one `ELSE`.
 - `CallExpr` has a callee path and an argument list; arguments preserve source order and whether
   they are named/positional/output.
+- `AddressOfExpr` has exactly one place operand; `SizeofExpr` has exactly one type or place
+  operand; `PointerConversionExpr` has a target type and one expression operand.
 - `MethodDecl` records its enclosing POU kind (class, FB, interface) and access specifier.
 - Every node has a span; missing delimiters are represented by zero-width spans and an `Error`
   node/flag.
@@ -405,18 +414,32 @@ pub enum ExprKindHir {
     Call { callee: CalleeHir, args: Vec<ArgHir>, ty: TyId },
     Ref { target: PlaceHir },
     Null,
+    AddressOf { place: PlaceHir },
+    Sizeof { operand: SizeofHir },
+    PointerConversion { operand: Box<ExprHir>, target: TyId, kind: CastKind },
     Cast { operand: Box<ExprHir>, from: TyId, to: TyId, kind: CastKind },
+}
+
+pub enum SizeofHir {
+    Type(TyId),
+    Place(PlaceHir),
 }
 ```
 
 Notes:
 
-- `PlaceHir` is a resolved lvalue: local, parameter, global, field, index, or deref.
+- `PlaceHir` is a resolved lvalue: local, parameter, global, field, index, or deref. A deref of a
+  `POINTER TO` place and a deref of a `REF_TO` place share the same place node; the operand type
+  distinguishes them.
+- `SizeofHir` records whether `SIZEOF` named a type or a place. A bare/qualified name is resolved
+  by the analyzer: a visible place wins, otherwise the name is resolved as a type.
 - `CalleeHir` is `Function(DefId)`, `FunctionBlock(DefId)`, `Method { receiver, def }`, or
   `InterfaceMethod { receiver, slot }`. The analyzer resolves overloads and stores the chosen
   definition.
 - `ArgHir` records the formal parameter ID, direction (input/output/in-out), and expression.
 - `Cast` nodes are explicit. Codegen never inserts implicit conversions on its own.
+- `PointerConversion` is reserved for the explicit `POINTER TO T`↔`REF_TO T` forms; scalar and
+  other conversions remain `Cast` nodes.
 - `TyId` indexes the type arena; types are canonicalized (same type = same ID).
 - `ConfigHir` contains the selected configuration, resources, tasks, program instances, and
   variable bindings needed by the runtime generator.
@@ -446,6 +469,7 @@ pub enum Ty {
     Enum(EnumTy),
     Subrange(SubrangeTy),
     Ref(RefTy),
+    Pointer(PointerTy), // raw pointer; STC-POINTER
     Class(ClassTy),
     Interface(InterfaceTy),
     FunctionBlock(FbTy),
@@ -462,6 +486,10 @@ Canonicalization rules:
 - Arrays retain element type and bounds; variable-length arrays carry a conformant marker and are
   only valid as `VAR_IN_OUT`/FB parameters in v1 (A-007). Dynamic locals/globals/returns are
   rejected.
+- Pointer types retain their target type and are canonicalized structurally. `POINTER TO T` is
+  distinct from `REF_TO T`; pointer storage transience and target restrictions are checked at
+  declarations and places, not in the type identity. A persistent root rejects any type that
+  transitively contains a pointer.
 - Structs retain field order, `OVERLAP` flags, and `AT` bindings.
 - Class/FB types retain a base type, implemented interfaces, methods, fields, and vtable slots.
 - Interface types retain method prototypes and a stable slot order (sorted by name + signature).
@@ -530,7 +558,10 @@ Lowering is a single pass after type checking, with these transformations:
    assignments. Output bindings become assignment targets.
 4. **Method calls** become `CalleeHir::Method` with an explicit `this` receiver. Calls through an
    interface or base-class reference become `InterfaceMethod`/virtual slots.
-5. **`VAR_IN_OUT`** parameters and `REF_TO` values become pointer/reference operations.
+5. **`VAR_IN_OUT`** parameters, `REF_TO` values, and `POINTER TO` values become
+   pointer/reference operations. `ADR` lowers to the address of a resolved place, `SIZEOF` folds
+   to an integer constant, and pointer↔reference conversions lower to the host resolver calls
+   (or `NULL` on failure).
 6. **Class/interface references** become explicit reference values; assignment attempts become
    runtime type checks.
 7. **`FOR`** retains its structure; codegen emits the initialization, condition, body, and

@@ -111,7 +111,7 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | ARRAY with variable bounds (`ARRAY [*]`) | Implemented for conformant parameters (`VAR_IN_OUT`, FB inputs/outputs); rejected for locals, globals, and returns |
 | STRUCT types, including `OVERLAP` | Implemented |
 | Reference types (`REF_TO`, `REF()`, `^`, `NULL`) | Implemented; persistent-capable values use host-resolved place descriptors |
-| `POINTER TO` (`STC-POINTER`) | Project extension: transient-only, full arithmetic/indexing/`SIZEOF`, no persistent pointer fields |
+| `POINTER TO` (`STC-POINTER`) | Project extension: transient-only, full arithmetic/indexing/`SIZEOF`, explicit `REF_TO`↔`POINTER TO` casts. Pointer storage may appear in transient aggregates, never in persistent roots or fields |
 | Class types | Implemented |
 | Interface types | Implemented |
 | Generic types (`ANY_*`) | Implemented for standard function signatures; user POUs may not declare them |
@@ -159,7 +159,7 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | Operators: `**`, unary `+`/`-`/`NOT`, `*`/`/`/`MOD`, `+`/`-`, comparisons, `&`/`AND`, `XOR`, `OR` | Implemented |
 | Parenthesized expressions, array subscripts, struct access, partial bit access, dereference | Implemented |
 | `POINTER TO` arithmetic/indexing/`SIZEOF` | Project extension (`STC-POINTER`), transient-only |
-| Pointer conversions | Explicit `POINTER TO`↔`REF_TO` only; runtime validation; no pointer↔integer or pointer↔object/interface |
+| Pointer conversions | Explicit casts `REF_TO T(x)` / `POINTER TO T(x)` only; runtime validation; no pointer↔integer or pointer↔object/interface |
 | `A ** B` equivalent to `EXPT(A, B)` | Implemented |
 
 ## 5. UTF-8 extension (`STC-UTF8`)

@@ -132,6 +132,7 @@ type_spec          ::= elementary_type_name
                      | 'ARRAY' '[' array_bound ( ',' array_bound )* ']' 'OF' type_spec
                      | 'STRUCT' 'OVERLAP'? ( struct_elem ';' )+ 'END_STRUCT'
                      | 'REF_TO' type_spec
+                     | 'POINTER' 'TO' type_spec          (* STC-POINTER *)
                      | qualified_name ;
 
 array_type         ::= 'ARRAY' '[' array_bound ( ',' array_bound )* ']' 'OF' type_spec ;
@@ -165,6 +166,26 @@ name nested fields with dots.
   conformant parameters with a descriptor pointing at caller-owned storage (A-007).
 - A `REF_TO` type may not be `REF_TO` of another reference directly; use a named reference type
   if needed. This is a semantic restriction, recorded as `STC-TYPE-*`.
+- `POINTER TO T` is the `STC-POINTER` transient raw-pointer type. It is a distinct type from
+  `REF_TO T`. Named pointer types use the ordinary `simple_type_decl` form
+  (`TYPE P : POINTER TO INT; END_TYPE`); there is no separate `TYPE` production.
+- A pointer value is transient storage: pointer-typed globals, `RETAIN` leaves, manifest roots,
+  PROGRAM/FB/class instance variables (including FB `VAR_INPUT`/`VAR_OUTPUT`), pointer-typed
+  `VAR_IN_OUT` parameters, and pointer-typed `VAR_ACCESS` declarations are rejected. Pointer
+  fields and pointer array elements are allowed only while the containing aggregate value is
+  transient (a function/method local or parameter temporary, a result temporary, or `VAR_TEMP`);
+  a type containing a pointer may not be used for persistent storage. Pointer storage is excluded
+  from the state file and from online-change roots.
+- A pointer target must resolve to contiguous storage: elementary values (including enum and
+  subrange values), strings, arrays and their elements, `OVERLAP` regions, transient
+  structs/arrays, contiguous persistent roots and leaf field roots, and other pointer values
+  (`POINTER TO POINTER TO T`). FB/class/interface object types, split persistent aggregates,
+  `REF_TO` targets, `ARRAY [*]` conformant arrays, and bit fields are rejected. The only directly
+  nested pointer/reference type form is `POINTER TO POINTER TO T`; `POINTER TO REF_TO T` and
+  `REF_TO POINTER TO T` are rejected.
+- Pointers may *target* persistent roots even though pointer variables themselves are transient;
+  this is required for pointer→`REF_TO` validation (Q-155). The pointer does not extend the
+  target's lifetime and is never persisted.
 - `STRING`, `WSTRING`, `CHAR`, `WCHAR` are 2013 types. `USTRING` and `UCHAR` are `STC-UTF8`
   extensions.
 - `named_value_type_decl` covers the 2013 "data type with named values" form (for example a
@@ -222,6 +243,8 @@ Rules and notes:
   `RETAIN`/`NON_RETAIN` are meaningful only on selected variable sections.
 - `AT` binds a variable or struct element to a directly represented address. `DIRECT_VAR` may be
   a wildcard (`%I*`, `%Q*`, `%M*`) in declarations and `VAR_ACCESS`.
+- `var_type` inherits `type_spec`, so `POINTER TO` parses in every declaration position. The
+  transient-storage and contiguous-target restrictions in §4 are enforced by the analyzer.
 - A variable declaration may carry leading pragmas and one trailing pragma before `;`. The
   trailing form is used for I/O hints: `MyBool AT %IX5 : BOOL {stc:io {...}};`. Leading and
   trailing pragmas both attach to the declaration; duplicate `stc:io` pragmas are an error.
@@ -412,7 +435,7 @@ stmt               ::= assignment_stmt
                      | exit_stmt
                      | continue_stmt ;
 
-assignment_stmt    ::= variable ':=' expression ;
+assignment_stmt    ::= place ':=' expression ;
 
 ref_assignment     ::= ref_name ':=' ( ref_name | ref_deref | ref_value ) ;
 
@@ -459,6 +482,10 @@ Rules and notes:
 - A `call_stmt` is syntactically any call expression. The analyzer decides whether it is a
   function call (result may be discarded), an FB invocation, or a method call. A function call
   used as a statement is allowed; its result is discarded.
+- Pointer stores use ordinary assignment: `p^ := v`, `p[i] := v`, and `(p + 1)^ := v`.
+  `ref_assignment` remains the reference-binding form and is not used for pointer values.
+  `p := NULL` is an ordinary assignment. Assignment attempts with a pointer operand are
+  rejected semantically.
 - `RETURN` exits a function, method, FB body, or program early. It may be followed by `;`.
 - `FOR` uses `BY`, not `STEP`. The 2013 prose contains an example with `STEP`; the normative
   grammar uses `BY`, and `stc` follows the grammar.
@@ -511,6 +538,9 @@ primary_expr       ::= literal
                      | enum_value
                      | variable_or_call
                      | ref_value
+                     | address_of
+                     | sizeof_expr
+                     | pointer_conversion
                      | '(' expression ')' ;
 
 variable_or_call   ::= ( 'THIS' | 'SUPER' ) ( '.' path )? ( '(' arg_list? ')' )?
@@ -578,6 +608,8 @@ Notes:
   evaluation order exposed to the user.
 - `STC-GRAM-015`: `NOT` is a unary operator at level 8. `NOT A = B` parses as `(NOT A) = B`;
   write `NOT (A = B)` for the other meaning.
+- `ADR`, `SIZEOF`, and pointer casts are primary expressions; postfix operations bind to their
+  results. No new precedence level is introduced.
 
 ### 9.2 Calls and parameters
 
@@ -593,18 +625,103 @@ Notes:
   - an FB call with a result used in an expression follows the 2013 rules (the result is the
     most recent assignment to the FB name).
 - `SUPER()` with no arguments is a special FB-body call; `SUPER.method()` calls a base method.
+- `ADR(...)`, `SIZEOF(...)`, `REF_TO T(...)`, and `POINTER TO T(...)` are operator forms, not
+  calls; they do not participate in call resolution or parameter binding.
 
 ### 9.3 Variable access and partial access
 
 - `a.b` — struct/class member, FB output, or namespace member, resolved semantically.
 - `a[1]`, `a[1, 2]` — array subscripts; multidimensional arrays use comma-separated indices.
 - `a[1][2]` — an array of arrays, not a multidimensional array.
-- `a^` — dereference a `REF_TO` value; multiple `^` are allowed only if the type is a reference
-  to a reference type (a semantic check).
+- `a^` — dereference a `REF_TO` or `POINTER TO` value. Multiple `^` are allowed for a pointer
+  to a pointer; `REF_TO REF_TO` remains a semantic error (use a named reference type).
+- `p[i]` on a pointer is pointer indexing: it is equivalent to `(p + i)^`, is zero-based, and
+  uses the pointee's stride. For `p : POINTER TO ARRAY[...] OF T`, `p[i]` selects the i-th
+  array value; use `p^[i]` for its elements.
+- `p.field` does not implicitly dereference a pointer; write `p^.field`.
 - `a.0` — partial bit access (2013 `Multibit_Part_Access`); `a.%X0`, `a.%B0`, etc. are the
   alternative forms. The bit range is checked against the underlying bit-string type.
 - `THIS` is a reference to the current class/FB instance and may be passed to an interface
   variable. `THIS` cannot be applied to another instance.
+
+### 9.4 Pointer expressions (`STC-POINTER`)
+
+```ebnf
+(* STC-GRAM-018 *)
+place              ::= variable
+                     | address_of postfix+
+                     | ref_value postfix+
+                     | pointer_conversion postfix+
+                     | '(' expression ')' postfix+ ;
+
+address_of         ::= 'ADR' '(' place ')' ;
+
+sizeof_expr        ::= 'SIZEOF' '(' sizeof_operand ')' ;
+sizeof_operand     ::= type_spec | place ;
+
+pointer_conversion ::= 'REF_TO' type_spec '(' expression ')'
+                     | 'POINTER' 'TO' type_spec '(' expression ')' ;
+```
+
+Rules:
+
+- `ADR(place)` yields a pointer to the place's storage. When the place is an array variable, the
+  result decays one dimension: `ADR(arr)` for `arr : ARRAY[l1..u1, l2..u2] OF T` has type
+  `POINTER TO ARRAY[l2..u2] OF T`; for a one-dimensional array it has type `POINTER TO T`.
+  `ADR(arr[i])` is always a pointer to the element type. The declared lower bound is not carried
+  into pointer indexing; `p[i]` is zero-based.
+- `ADR` requires a place, not a value: `ADR(a + b)`, `ADR(f())`, `ADR(NULL)`, and `ADR(x.0)` are
+  rejected. `ADR` of a `CONSTANT`, `%I` input, or `READ_ONLY` access path is rejected because v1
+  has no pointer-to-const type. `ADR` of a place reached through a `REF_TO` dereference is also
+  rejected; use the explicit `POINTER TO T(r)` conversion so the reference is resolved through
+  the host resolver. `ADR` of a persistent root or leaf field root is allowed; the pointer value
+  itself remains transient. `ADR` is never a constant expression.
+- `SIZEOF(operand)` is a compile-time constant when the operand has a statically known size.
+  `SIZEOF(type_spec)` returns the storage size of the type; `SIZEOF(place)` returns the storage
+  size of the place's type. `SIZEOF(p)` is the pointer size; `SIZEOF(p^)` is the target size.
+  Arrays return their total element storage, strings return their fixed storage including the
+  length header and capacity, `OVERLAP` returns the region size, and a transient struct returns
+  its contiguous transient layout. A place that resolves to split persistent storage, an
+  object/reference/interface type, a bit field, or an `ARRAY [*]` operand is rejected. The
+  result type is `UDINT`.
+- A whole `ARRAY [*]` value is not a pointer target and has no `SIZEOF`; element places such as
+  `arr[i]` remain valid `ADR`/`SIZEOF` operands because their element type is statically sized.
+- `REF_TO T(expr)` and `POINTER TO T(expr)` are the explicit conversions. The source must be
+  `POINTER TO T` / `REF_TO T` with the same target type `T`; there is no pointer-to-pointer
+  reinterpretation. Pointer→`REF_TO` returns `NULL` when the host resolver rejects the address;
+  `REF_TO`→`POINTER` returns `NULL` for a null reference and is rejected for object, split
+  aggregate, interface, `%I` input, and other read-only targets. The result inherits the source's
+  lifetime; a pointer to a stack target must not escape the call. Neither form is a constant
+  expression.
+- Pointer arithmetic is `p + n`, `n + p`, and `p - n` with typed stride (the size of the
+  pointee); `p - q` yields `LINT` and is defined only when both pointers address the same
+  object/root. Arithmetic is unchecked, one-past-end is representable, and crossing a root or
+  array boundary is undefined. `*`, `/`, `MOD`, and unary `-` are rejected on pointers. Pointer
+  equality and ordering comparisons are allowed; ordering is meaningful only within one
+  object/root.
+- `p[i]` is pointer indexing and is equivalent to `(p + i)^`, with zero-based indexing and the
+  pointee's stride. Pointer indexing consumes exactly one subscript: use `p[i][j]` for a pointer
+  to a multidimensional array, or `p^[i, j]` to index the array value. For
+  `p : POINTER TO ARRAY[...] OF T`, `p[i]` selects the i-th array value; use `p^[i]` for its
+  elements. `p.field` does not implicitly dereference; write `p^.field`.
+- `NULL` is assignable to any pointer. Dereferencing `NULL` traps `STC-TRAP_NULL_REF`.
+  Pointer-typed storage is initialized to `NULL` unless an explicit initializer is present; a
+  pointer reaching a persistent root is still never persisted.
+- A pointer to a local, parameter, or result temporary must not escape the call. A direct
+  `RETURN ADR(local)` or returning such a pointer is diagnosed; other escapes are documented
+  undefined behavior (Q-147/Q-150).
+- Pointer stores use ordinary assignment (see §8): `p^ := v`, `p[i] := v`, `(p + 1)^ := v`.
+  `p := q`, `p := NULL`, and `p := ADR(x)` are ordinary assignments. `ref_assignment` remains
+  the reference-binding form and is not used for pointers.
+
+TwinCAT-style usage:
+
+```st
+pSample := ADR(nVar1);   (* pSample : POINTER TO INT *)
+nVar2   := pSample^;
+pArr    := ADR(arr);     (* decays to POINTER TO INT for a one-dimensional array *)
+nVar2   := pArr[0];      (* first element; pointer indexing is zero-based *)
+```
 
 ## 10. UTF-8 extension grammar (`STC-UTF8`)
 
@@ -664,6 +781,13 @@ These are resolved by the parser/analyzer, in addition to the EBNF:
    terminators with both spans.
 10. **Pragmas** attach to the following declaration/statement. A pragma at the end of a block
     attaches to the block terminator and is reported as unused if it has no meaning.
+11. **`SIZEOF` operand**: a type-only keyword (`ARRAY`, `STRUCT`, `REF_TO`, `POINTER`, an
+    elementary/string type name, or `STRING[n]`) begins a `type_spec`; otherwise the operand is
+    parsed as a `place`. A bare or qualified name is resolved as a type when no value/place of
+    that name is visible; if a place is visible, the value form wins.
+12. **`POINTER TO`** begins a type in type context. In expression context it is valid only
+    inside a `SIZEOF` type operand or a `pointer_conversion`. `ADR` and `SIZEOF` are keywords and
+    cannot be identifiers.
 
 ## 12. Semicolon rules (strict by default; relaxed mode)
 
@@ -731,6 +855,8 @@ unexpected terminator for the enclosing construct (D-053).
 | `STC-GRAM-014` | Operand evaluation order |
 | `STC-GRAM-015` | `NOT` precedence |
 | `STC-GRAM-016` | Semicolon rules: strict by default, `--relaxed` superset |
+| `STC-GRAM-017` | `POINTER TO` type (`STC-POINTER`) |
+| `STC-GRAM-018` | `ADR`, `SIZEOF`, pointer casts, and computed places (`STC-POINTER`) |
 
 ## 15. Resolved grammar questions
 
@@ -739,3 +865,7 @@ No open grammar questions currently.
 - **Q-009 resolved (A-014):** Annex A's split is used: relational binds tighter than equality.
 - **Q-010 resolved (A-015):** strict 2013 semicolons by default; `--relaxed` enables the
   documented superset.
+- **Pointer grammar resolved (D-145):** `POINTER TO`, `ADR(place)`, `SIZEOF(type | place)`,
+  `REF_TO T(expr)` / `POINTER TO T(expr)`, and computed-place assignment are in the profile as
+  the transient `STC-POINTER` extension. Target/storage restrictions are recorded in §4 and
+  Q-131–Q-150.
