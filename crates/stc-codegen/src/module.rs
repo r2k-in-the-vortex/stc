@@ -413,6 +413,7 @@ pub fn project(
     }
     let plan = config::select_plan(hir).map_err(map_codegen_errors)?;
     let types = TypeSystem::new(hir, &options.target).map_err(map_codegen_errors)?;
+    let used_std = crate::types::used_standard_fbs(hir);
     let layouts = config::program_layouts(hir, &plan, &types).map_err(map_codegen_errors)?;
     let _image = config::image_layout(hir, &plan, &layouts).map_err(map_codegen_errors)?;
     let retain = config::retain_layout(hir, &plan, &layouts).map_err(map_codegen_errors)?;
@@ -424,6 +425,7 @@ pub fn project(
         retain: &retain,
         source_paths: &source_paths,
         types: &types,
+        used_std: &used_std,
     };
     let built = context.build_catalog().map_err(|error| vec![error])?;
 
@@ -650,6 +652,7 @@ struct Context<'a> {
     retain: &'a RetainLayout,
     source_paths: &'a [String],
     types: &'a TypeSystem<'a>,
+    used_std: &'a BTreeSet<DefId>,
 }
 
 impl Context<'_> {
@@ -670,7 +673,7 @@ impl Context<'_> {
         self.add_instances(&package, &mut catalog)?;
         self.add_tasks(&package, &mut catalog)?;
         self.add_exports(&mut catalog)?;
-        catalog.imports = default_imports(self.retain);
+        catalog.imports = default_imports(self.retain, !self.used_std.is_empty());
         Ok(BuiltCatalog {
             catalog,
             root_targets,
@@ -1112,17 +1115,16 @@ impl Context<'_> {
     ) -> Result<(), ModuleError> {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
-            if synthetic(self.hir, id) || def.test_only {
+            let used_std = self.used_std.contains(&id);
+            if (synthetic(self.hir, id) && !used_std) || def.test_only {
                 continue;
             }
-            let DefKind::FunctionBlock {
-                body: Some(_),
-                fields,
-                ..
-            } = &def.kind
-            else {
+            let DefKind::FunctionBlock { body, fields, .. } = &def.kind else {
                 continue;
             };
+            if body.is_none() && !used_std {
+                continue;
+            }
             let package = self.def_package(id)?;
             let type_path = self.qualified_path(id)?;
             let mut parameters = Vec::new();
@@ -1516,9 +1518,9 @@ impl Context<'_> {
         for named in self.types.named_types() {
             // Synthetic prelude FBs are projected only when a build actually
             // references them (D-134); user declarations are always included.
-            if named.def.index() < self.hir.defs.len()
-                && synthetic(self.hir, named.def)
+            if synthetic(self.hir, named.def)
                 && named.kind.is_object()
+                && !self.used_std.contains(&named.def)
             {
                 continue;
             }
@@ -1661,14 +1663,18 @@ fn instance_path(configuration: &str, resource: &str, instance: &str) -> String 
     )
 }
 
-fn default_imports(_retain: &RetainLayout) -> Vec<ImportService> {
-    vec![
+fn default_imports(_retain: &RetainLayout, clock: bool) -> Vec<ImportService> {
+    let mut imports = vec![
         ImportService::Trap,
         ImportService::IoImage,
         ImportService::IoSize,
         ImportService::StateLoad,
         ImportService::StateSave,
-    ]
+    ];
+    if clock {
+        imports.push(ImportService::CycleNowNs);
+    }
+    imports
 }
 
 fn map_error(error: stc_got::Error, span: Option<Span>) -> ModuleError {

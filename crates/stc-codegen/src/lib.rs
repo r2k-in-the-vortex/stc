@@ -23,6 +23,7 @@ pub mod module;
 mod oop;
 mod place;
 mod reference;
+mod stdlib;
 mod stmt;
 mod types;
 mod unit;

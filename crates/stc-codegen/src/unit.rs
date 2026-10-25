@@ -44,6 +44,7 @@ pub(crate) struct Lowerer<'a> {
     pub types: crate::types::TypeSystem<'a>,
     pub layouts: BTreeMap<DefId, ProgramLayout>,
     pub objects: BTreeMap<DefId, config::ObjectLayout>,
+    pub used_std: BTreeSet<DefId>,
     pub plan: Plan,
     pub image: ImageLayout,
     pub retain: RetainLayout,
@@ -80,6 +81,7 @@ pub(crate) fn generate(
         .map_err(|errors| errors.into_iter().collect::<Vec<_>>())?;
     let layouts = config::program_layouts(hir, &plan, &types)?;
     let objects = config::object_layouts(hir, &types)?;
+    let used_std = crate::types::used_standard_fbs(hir);
     let image = config::image_layout(hir, &plan, &layouts)?;
     let retain = config::retain_layout(hir, &plan, &layouts)?;
     let (span_ids, span_entries) = build_span_table(hir);
@@ -91,6 +93,7 @@ pub(crate) fn generate(
         got,
         layouts,
         objects,
+        used_std,
         types,
         plan,
         image,
@@ -153,7 +156,8 @@ impl Lowerer<'_> {
     fn build_symbols(&mut self) {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(0));
-            if synthetic(self.hir, id) || def.test_only {
+            let used_std = self.used_std.contains(&id);
+            if (synthetic(self.hir, id) && !used_std) || def.test_only {
                 continue;
             }
             match &def.kind {
@@ -179,7 +183,7 @@ impl Lowerer<'_> {
                         Err(error) => self.push_error(error.with_span(def.span)),
                     }
                 }
-                DefKind::FunctionBlock { body: Some(_), .. } => {
+                DefKind::FunctionBlock { body, .. } if body.is_some() || used_std => {
                     match mangle::fb_body_symbol(self.hir, id) {
                         Ok(symbol) => {
                             self.function_symbols.insert(id, symbol);
@@ -563,10 +567,15 @@ impl Lowerer<'_> {
             .enumerate()
             .filter_map(|(index, def)| {
                 let id = DefId::new(u32::try_from(index).ok()?);
-                if def.test_only || synthetic(self.hir, id) {
+                if def.test_only {
                     return None;
                 }
-                matches!(def.kind, DefKind::FunctionBlock { body: Some(_), .. }).then_some(id)
+                match &def.kind {
+                    DefKind::FunctionBlock { body, .. } => {
+                        (body.is_some() || self.used_std.contains(&id)).then_some(id)
+                    }
+                    _ => None,
+                }
             })
             .collect();
         for def in defs {
@@ -577,12 +586,14 @@ impl Lowerer<'_> {
     }
 
     fn emit_fb_body(&mut self, def: DefId) -> Result<(), CodegenError> {
-        let DefKind::FunctionBlock {
-            body: Some(body_id),
-            ..
-        } = self.hir.defs[def.index()].kind.clone()
-        else {
+        let DefKind::FunctionBlock { body, .. } = self.hir.defs[def.index()].kind.clone() else {
             return Ok(());
+        };
+        let Some(body_id) = body else {
+            let Some(name) = crate::types::standard_fb_name(self.hir, def) else {
+                return Ok(());
+            };
+            return self.emit_standard_fb_body(def, name);
         };
         let symbol = self
             .function_symbols

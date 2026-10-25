@@ -1,7 +1,7 @@
 # oop (1 file(s), 0 diagnostics)
 ## diagnostics
 ## hir
-# hir defs=16 fields=44 params=0 locals=0 bodies=2 exprs=12 stmts=3 types=34 std_fns=50
+# hir defs=16 fields=57 params=0 locals=0 bodies=2 exprs=12 stmts=3 types=34 std_fns=50
 package 0 name="_root" root="_root"
 [types]
 ty 0 = <error>
@@ -47,6 +47,8 @@ def 1 function-block "TON" @0:0..0 parent=0 vis=PUBLIC
   field PT: TIME VAR_INPUT
   field Q: BOOL VAR_OUTPUT
   field ET: TIME VAR_OUTPUT
+  field __START: TIME VAR
+  field __RUN: BOOL VAR
   methods=[] vtable=[]
 def 2 function-block "TOF" @0:0..0 parent=0 vis=PUBLIC
   base=- interfaces=[] final=false abstract=false body=-
@@ -54,6 +56,8 @@ def 2 function-block "TOF" @0:0..0 parent=0 vis=PUBLIC
   field PT: TIME VAR_INPUT
   field Q: BOOL VAR_OUTPUT
   field ET: TIME VAR_OUTPUT
+  field __START: TIME VAR
+  field __RUN: BOOL VAR
   methods=[] vtable=[]
 def 3 function-block "TP" @0:0..0 parent=0 vis=PUBLIC
   base=- interfaces=[] final=false abstract=false body=-
@@ -61,6 +65,9 @@ def 3 function-block "TP" @0:0..0 parent=0 vis=PUBLIC
   field PT: TIME VAR_INPUT
   field Q: BOOL VAR_OUTPUT
   field ET: TIME VAR_OUTPUT
+  field __START: TIME VAR
+  field __RUN: BOOL VAR
+  field __DONE: BOOL VAR
   methods=[] vtable=[]
 def 4 function-block "CTU" @0:0..0 parent=0 vis=PUBLIC
   base=- interfaces=[] final=false abstract=false body=-
@@ -69,6 +76,7 @@ def 4 function-block "CTU" @0:0..0 parent=0 vis=PUBLIC
   field PV: INT VAR_INPUT
   field Q: BOOL VAR_OUTPUT
   field CV: INT VAR_OUTPUT
+  field __PREV: BOOL VAR
   methods=[] vtable=[]
 def 5 function-block "CTD" @0:0..0 parent=0 vis=PUBLIC
   base=- interfaces=[] final=false abstract=false body=-
@@ -77,6 +85,7 @@ def 5 function-block "CTD" @0:0..0 parent=0 vis=PUBLIC
   field PV: INT VAR_INPUT
   field Q: BOOL VAR_OUTPUT
   field CV: INT VAR_OUTPUT
+  field __PREV: BOOL VAR
   methods=[] vtable=[]
 def 6 function-block "CTUD" @0:0..0 parent=0 vis=PUBLIC
   base=- interfaces=[] final=false abstract=false body=-
@@ -88,16 +97,20 @@ def 6 function-block "CTUD" @0:0..0 parent=0 vis=PUBLIC
   field QU: BOOL VAR_OUTPUT
   field QD: BOOL VAR_OUTPUT
   field CV: INT VAR_OUTPUT
+  field __PREVU: BOOL VAR
+  field __PREVD: BOOL VAR
   methods=[] vtable=[]
 def 7 function-block "R_TRIG" @0:0..0 parent=0 vis=PUBLIC
   base=- interfaces=[] final=false abstract=false body=-
   field CLK: BOOL VAR_INPUT
   field Q: BOOL VAR_OUTPUT
+  field __PREV: BOOL VAR
   methods=[] vtable=[]
 def 8 function-block "F_TRIG" @0:0..0 parent=0 vis=PUBLIC
   base=- interfaces=[] final=false abstract=false body=-
   field CLK: BOOL VAR_INPUT
   field Q: BOOL VAR_OUTPUT
+  field __PREV: BOOL VAR
   methods=[] vtable=[]
 def 9 function-block "SR" @0:0..0 parent=0 vis=PUBLIC
   base=- interfaces=[] final=false abstract=false body=-
@@ -132,46 +145,59 @@ field 0 IN: BOOL owner=1 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
 field 1 PT: TIME owner=1 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
 field 2 Q: BOOL owner=1 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
 field 3 ET: TIME owner=1 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 4 IN: BOOL owner=2 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 5 PT: TIME owner=2 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 6 Q: BOOL owner=2 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 7 ET: TIME owner=2 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 8 IN: BOOL owner=3 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 9 PT: TIME owner=3 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 10 Q: BOOL owner=3 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 11 ET: TIME owner=3 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 12 CU: BOOL owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 13 R: BOOL owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 14 PV: INT owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 15 Q: BOOL owner=4 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 16 CV: INT owner=4 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 17 CD: BOOL owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 18 LD: BOOL owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 19 PV: INT owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 20 Q: BOOL owner=5 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 21 CV: INT owner=5 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 22 CU: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 23 CD: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 24 R: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 25 LD: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 26 PV: INT owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 27 QU: BOOL owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 28 QD: BOOL owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 29 CV: INT owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 30 CLK: BOOL owner=7 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 31 Q: BOOL owner=7 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 32 CLK: BOOL owner=8 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 33 Q: BOOL owner=8 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 34 SET1: BOOL owner=9 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 35 RESET: BOOL owner=9 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 36 Q: BOOL owner=9 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 37 SET: BOOL owner=10 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 38 RESET1: BOOL owner=10 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
-field 39 Q: BOOL owner=10 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
-field 40 w: DINT owner=13 section=VAR vis=PUBLIC retain=None at=- io=-
-field 41 R: Rect owner=15 section=VAR vis=PROTECTED retain=None at=- io=-
-field 42 s: IShape owner=15 section=VAR vis=PROTECTED retain=None at=- io=-
-field 43 x: DINT owner=15 section=VAR vis=PROTECTED retain=None at=- io=-
+field 4 __START: TIME owner=1 section=VAR vis=PRIVATE retain=None at=- io=-
+field 5 __RUN: BOOL owner=1 section=VAR vis=PRIVATE retain=None at=- io=-
+field 6 IN: BOOL owner=2 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 7 PT: TIME owner=2 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 8 Q: BOOL owner=2 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 9 ET: TIME owner=2 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 10 __START: TIME owner=2 section=VAR vis=PRIVATE retain=None at=- io=-
+field 11 __RUN: BOOL owner=2 section=VAR vis=PRIVATE retain=None at=- io=-
+field 12 IN: BOOL owner=3 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 13 PT: TIME owner=3 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 14 Q: BOOL owner=3 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 15 ET: TIME owner=3 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 16 __START: TIME owner=3 section=VAR vis=PRIVATE retain=None at=- io=-
+field 17 __RUN: BOOL owner=3 section=VAR vis=PRIVATE retain=None at=- io=-
+field 18 __DONE: BOOL owner=3 section=VAR vis=PRIVATE retain=None at=- io=-
+field 19 CU: BOOL owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 20 R: BOOL owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 21 PV: INT owner=4 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 22 Q: BOOL owner=4 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 23 CV: INT owner=4 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 24 __PREV: BOOL owner=4 section=VAR vis=PRIVATE retain=None at=- io=-
+field 25 CD: BOOL owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 26 LD: BOOL owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 27 PV: INT owner=5 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 28 Q: BOOL owner=5 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 29 CV: INT owner=5 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 30 __PREV: BOOL owner=5 section=VAR vis=PRIVATE retain=None at=- io=-
+field 31 CU: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 32 CD: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 33 R: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 34 LD: BOOL owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 35 PV: INT owner=6 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 36 QU: BOOL owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 37 QD: BOOL owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 38 CV: INT owner=6 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 39 __PREVU: BOOL owner=6 section=VAR vis=PRIVATE retain=None at=- io=-
+field 40 __PREVD: BOOL owner=6 section=VAR vis=PRIVATE retain=None at=- io=-
+field 41 CLK: BOOL owner=7 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 42 Q: BOOL owner=7 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 43 __PREV: BOOL owner=7 section=VAR vis=PRIVATE retain=None at=- io=-
+field 44 CLK: BOOL owner=8 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 45 Q: BOOL owner=8 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 46 __PREV: BOOL owner=8 section=VAR vis=PRIVATE retain=None at=- io=-
+field 47 SET1: BOOL owner=9 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 48 RESET: BOOL owner=9 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 49 Q: BOOL owner=9 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 50 SET: BOOL owner=10 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 51 RESET1: BOOL owner=10 section=VAR_INPUT vis=PUBLIC retain=None at=- io=-
+field 52 Q: BOOL owner=10 section=VAR_OUTPUT vis=PUBLIC retain=None at=- io=-
+field 53 w: DINT owner=13 section=VAR vis=PUBLIC retain=None at=- io=-
+field 54 R: Rect owner=15 section=VAR vis=PROTECTED retain=None at=- io=-
+field 55 s: IShape owner=15 section=VAR vis=PROTECTED retain=None at=- io=-
+field 56 x: DINT owner=15 section=VAR vis=PROTECTED retain=None at=- io=-
 [params]
 [locals]
 [bodies]
@@ -179,13 +205,13 @@ body 0 owner=14 params=[] locals=[]
   stmt 0 @0:149..163 assign
     expr 0 : DINT @0:149..153 place result#14 (Area)
     expr 4 : DINT @0:159..160 binary *
-      expr 2 : DINT @0:157..158 place field#40 (w) of expr#1
-      expr 3 : DINT @0:161..162 place field#40 (w) of expr#1
+      expr 2 : DINT @0:157..158 place field#53 (w) of expr#1
+      expr 3 : DINT @0:161..162 place field#53 (w) of expr#1
 body 1 owner=15 params=[] locals=[]
   stmt 1 @0:256..263 ref-assign
-    expr 6 : IShape @0:256..257 place field#42 (s) of expr#5
+    expr 6 : IShape @0:256..257 place field#55 (s) of expr#5
     expr 8 : IShape @0:261..262 cast Implicit IShape
-      expr 7 : Rect @0:261..262 place field#41 (R) of expr#5
+      expr 7 : Rect @0:261..262 place field#54 (R) of expr#5
   stmt 2 @0:266..280 assign
-    expr 9 : DINT @0:266..267 place field#43 (x) of expr#5
+    expr 9 : DINT @0:266..267 place field#56 (x) of expr#5
     expr 11 : DINT @0:271..279 call interface-method#12 (Area) of iface#11 on expr#10

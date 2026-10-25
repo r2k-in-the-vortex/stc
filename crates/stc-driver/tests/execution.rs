@@ -1331,3 +1331,123 @@ fn aggregate_library_runs_under_a_c_harness() {
         "aggregates_harness",
     );
 }
+
+const STANDARD_FBS: &str = r#"
+VAR_GLOBAL
+  ton1 : TON;
+  tof1 : TOF;
+  tp1 : TP;
+  rt1 : R_TRIG;
+  ft1 : F_TRIG;
+  cu1 : CTU;
+  cd1 : CTD;
+  cud1 : CTUD;
+  sr1 : SR;
+  rs1 : RS;
+END_VAR
+
+{stc:export}{stc:no_mangle}
+FUNCTION FbStep : BOOL
+VAR_INPUT
+  which : DINT;
+  inp : BOOL;
+  aux : BOOL;
+END_VAR
+  FbStep := FALSE;
+  CASE which OF
+    0:
+      ton1(IN := inp, PT := T#100ns);
+      FbStep := ton1.Q;
+    1:
+      tof1(IN := inp, PT := T#100ns);
+      FbStep := tof1.Q;
+    2:
+      tp1(IN := inp, PT := T#100ns);
+      FbStep := tp1.Q;
+    3:
+      rt1(CLK := inp);
+      FbStep := rt1.Q;
+    4:
+      ft1(CLK := inp);
+      FbStep := ft1.Q;
+    5:
+      cu1(CU := inp, R := aux, PV := 3);
+      FbStep := cu1.Q;
+    6:
+      cd1(CD := inp, LD := aux, PV := 3);
+      FbStep := cd1.Q;
+    7:
+      cud1(CU := inp, CD := FALSE, R := aux, LD := FALSE, PV := 3);
+      FbStep := cud1.QU;
+    8:
+      sr1(SET1 := inp, RESET := aux);
+      FbStep := sr1.Q;
+    9:
+      rs1(SET := inp, RESET1 := aux);
+      FbStep := rs1.Q;
+    10:
+      cud1(CU := FALSE, CD := inp, R := aux, LD := FALSE, PV := 3);
+      FbStep := cud1.QD;
+  ELSE
+    FbStep := FALSE;
+  END_CASE;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION FbET : TIME
+VAR_INPUT
+  which : DINT;
+END_VAR
+  CASE which OF
+    0: FbET := ton1.ET;
+    1: FbET := tof1.ET;
+    2: FbET := tp1.ET;
+  ELSE
+    FbET := T#0ns;
+  END_CASE;
+END_FUNCTION
+
+{stc:export}{stc:no_mangle}
+FUNCTION FbCV : INT
+VAR_INPUT
+  which : DINT;
+END_VAR
+  CASE which OF
+    5: FbCV := cu1.CV;
+    6: FbCV := cd1.CV;
+    7: FbCV := cud1.CV;
+    10: FbCV := cud1.CV;
+  ELSE
+    FbCV := 0;
+  END_CASE;
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn standard_function_blocks_run_under_a_c_harness() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("stdlib-fbs");
+    build_library(&directory, STANDARD_FBS, "std_fbs");
+    let library = lib_path(&directory.path, "std_fbs");
+    assert!(library.is_file(), "{}", library.display());
+    compile_harness(
+        &directory,
+        "stdlib.c",
+        &library,
+        &built_module(&directory, "std_fbs"),
+        "stdlib_harness",
+    );
+}

@@ -653,6 +653,7 @@ pub unsafe extern "C" fn stc_host_load_module(module_path: *const c_char, mode: 
 /// module is loaded.
 #[unsafe(no_mangle)]
 pub extern "C" fn stc_host_cycle() -> i32 {
+    latch_cycle_clock();
     let mut state = embedded();
     let Some(host) = state.host.as_mut() else {
         return 2;

@@ -125,7 +125,11 @@ const STANDARD_FBS: &[StdFbSpec<'static>] = &[
         "TP",
         &[("IN", StdFbType::Bool), ("PT", StdFbType::Time)],
         &[("Q", StdFbType::Bool), ("ET", StdFbType::Time)],
-        &[("__START", StdFbType::Time), ("__RUN", StdFbType::Bool)],
+        &[
+            ("__START", StdFbType::Time),
+            ("__RUN", StdFbType::Bool),
+            ("__DONE", StdFbType::Bool),
+        ],
     ),
     (
         "CTU",
@@ -387,7 +391,9 @@ fn std_signature(kind: StdFnKind) -> (Vec<StdParam>, StdResult) {
 pub fn is_standard_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     ALL_STD_FNS.iter().any(|kind| kind.as_str() == upper)
-        || STANDARD_FBS.iter().any(|(fb, _, _, _)| *fb == upper.as_str())
+        || STANDARD_FBS
+            .iter()
+            .any(|(fb, _, _, _)| *fb == upper.as_str())
 }
 
 /// Returns the concrete type category check used by the prelude.
