@@ -1,6 +1,6 @@
 # Testing and Verification
 
-Status: M4.5 implementation and test plan complete (2026-10-25); M5/M6.5 suites are the target  
+Status: M4.5 and M5 implementation and test plan complete (2026-10-25); M6.5 suites are the target  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
@@ -13,7 +13,10 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 > launcher/embedding artifact loading, malformed-baseline/metadata negatives, concurrent
 > generation pinning, and a recorded switch-latency measurement. CI runs an explicit `online`
 > job on Windows x64 and Ubuntu x64 and caps fuzz inputs at one MiB. Phase 10 applies the
-> documentation and handover pass; the M5 suites below are the next implementation target.
+> documentation and handover pass. The M5 suites below are implemented, including phase 4b
+> interface/attempt/reference C harnesses, module-level warm swaps that preserve interface
+> values and class handles with stable descriptors, fresh-record and rollback coverage, and OOP
+> fuzz seeds.
 
 ## 1. Layers of testing
 
@@ -214,7 +217,10 @@ Targets:
 
 `fuzz_manifest` follows the project `stc.toml` parser in M6. The other six targets are
 implemented. `fuzz_got_manifest` and `fuzz_module_descriptor` validate artifact bytes only; they
-never map, load, or execute native module code. Use `cargo-fuzz` with a bounded input size and a
+never map, load, or execute native module code. Committed seeds under `fuzz/seeds/` provide a
+compiler-produced class/interface manifest and descriptor blob plus decodable malformed
+TYPEINFO, VTABLE, and interface-map variants, and CI copies them into both artifact corpora.
+Use `cargo-fuzz` with a bounded input size and a
 time limit. CI runs each target for 60 s with `-max_len=1048576`; run a longer campaign
 locally/nightly.
 
@@ -265,6 +271,13 @@ both hosts:
 - missing, invalid, unpaired, and stale manifests: cold download, no merge/rebase;
 - prepare failure, trap in the rollback window, and unload after grace;
 - preserved FB/class/interface state and descriptor shape checks;
+- preserved interface values and class handles across a real module warm swap: stable TYPEINFO,
+  VTABLE, record, handle, and per-pair vtable addresses, activation-patched pair entries, and
+  dispatch to the new method cells;
+- fresh object records, handles, leaf roots, and TYPEINFO descriptors initialized once at
+  prepare and released on rollback while preserved records keep their address and state;
+- vtable-shape changes rejected against an active baseline, with the runtime registry as the
+  load-time defense;
 - direct-variable preservation/remap and I/O reconfiguration;
 - O(1) switch latency (measured by the ignored `switch_latency` test), bounded maintenance
   jitter, service-reader pinning, and unload safety;

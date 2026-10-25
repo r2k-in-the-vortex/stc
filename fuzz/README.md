@@ -48,5 +48,12 @@ cargo +nightly fuzz run fuzz_module_descriptor -- -max_total_time=60 -timeout=25
 ```
 
 The seed corpus under `corpus/` is ignored by git, like the other targets. CI rebuilds seeds for
-both artifact targets from the committed codec snapshots and adds `-max_len=1048576` so an input
-cannot exceed one MiB.
+both artifact targets from the committed codec snapshots, adds the committed OOP fixtures under
+`seeds/`, and adds `-max_len=1048576` so an input cannot exceed one MiB.
+
+`seeds/fuzz_got_manifest` holds a compiler-produced manifest for a class/interface module
+(TYPEINFO and VTABLE descriptors, the base-first interface map, and hidden `HANDLE`/`OBJREC`
+roots) plus decodable malformed variants: a TYPEINFO whose size contradicts its type, a
+self-referential base chain with a class listed as its own interface, and a vtable shape that no
+longer matches the interface map. `seeds/fuzz_module_descriptor` holds the matching descriptor
+blob, a mutated function-table entry, and a truncated blob.

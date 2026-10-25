@@ -1,6 +1,7 @@
 # stc Project Plan
 
-Status: M4.5 online-change foundation implemented (2026-10-25); M5 is next  
+Status: M4.5 online-change foundation and M5 lowering (phases 1–7 and 4b) implemented
+(2026-10-25); M6 is next  
 Date: 2026-10-24  
 Profile: `stc-2013-oop-utf8-v1`  
 Standard reference: IEC 61131-3:2013 (Ed. 3.0), local copy under `Specification/Reference/`
@@ -363,9 +364,14 @@ Exit criteria:
 > completes the documentation and handover pass: the specification set, README, decisions, and
 > `handover_to_M5.md` describe the implemented host/module model, and
 > [Debug and Monitoring](Architecture/Debug-and-Monitoring.md) §12 records the M4.5 interface
-> that M6.5 extends (D-127). M5 is the next milestone.
+> that M6.5 extends (D-127). M5 is implemented.
 
 ### M5 — FBs, OOP, aggregates, and UTF-8 strings
+
+Status: Complete (2026-10-25). Phases 1–7, the `STC-POINTER` surface, and phase 4b
+(interfaces, runtime descriptors, `?=`, object references, and their verification) are
+implemented; the exit criteria below pass in the codegen, execution, online-change, and
+clang-required suites.
 
 Deliverables: FB instances/state, methods, inheritance, interfaces/vtables, `THIS`/`SUPER`,
 references, `VAR_IN_OUT`; static arrays, conformant `ARRAY [*]` parameters, structs, enums,
@@ -550,9 +556,9 @@ Exit criteria:
 3. `M4.5-Plan.md` is complete through phase 10 and `M6.5-Plan.md` is written; the M5 handover
    addendum is final, and the artifact schemas are fixed in
    [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md).
-4. M4.5 is implemented; do not implement M5 OOP/aggregates on the old direct-reference or
-   contiguous-object model, and do not reintroduce module-owned state or descriptors
-   (Q-090/Q-091/Q-095).
+4. M4.5 and M5 are implemented on the host/module model; do not reintroduce the old
+   direct-reference or contiguous-object model, and do not reintroduce module-owned state or
+   descriptors (Q-090/Q-091/Q-095).
 5. Keep host-specific operations (paths, clock, linker discovery, module loading, atomic
    replace) behind a platform layer; Linux x86-64/AArch64 host support follows basic development
    (M8, D-042).

@@ -331,6 +331,10 @@ jobs:
           printf '%s\n' \
             '{"io":{"image":{"inputs_bytes":4,"outputs_bytes":4,"markers_bytes":2},"bindings":[]}}' \
             > corpus/fuzz_module_descriptor/metadata
+          # Committed OOP fixtures exercise TYPEINFO/VTABLE/interface-map
+          # decoding and validation, including the malformed variants.
+          cp seeds/fuzz_got_manifest/* corpus/fuzz_got_manifest/
+          cp seeds/fuzz_module_descriptor/* corpus/fuzz_module_descriptor/
       - name: Smoke each target for 60 seconds
         working-directory: fuzz
         shell: bash

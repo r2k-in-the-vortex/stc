@@ -1,6 +1,6 @@
 # GOT Artifacts and Schemas
 
-Status: Format 1 implemented for the M4 scalar surface (2026-10-25); M5 extends record contents  
+Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: Normative formats for stable keys, `GotId`, the compiler catalog, the module descriptor,
 the persistent GOT manifest, the online-change plan, host ABI 2.1, and build IDs.
@@ -1625,7 +1625,10 @@ inline, the hidden `HANDLE`/`OBJREC` root-key convention, interface-prototype fu
 with trap-stub cells, and the inline access rules. Descriptor records keep the owning type's
 type key, layout hash, size, and alignment; the record layout is separate and versioned. The
 module and manifest formats remain 1. D-147–D-152 record the phase decisions; the catalog
-projection, host registry, dispatch, and attempt code land in phases 4b.1–4b.5.
+projection, host registry, dispatch, and attempt code land in phases 4b.1–4b.5, and 4b.6
+(2026-10-25) verifies the format end to end with real module warm swaps, preserved interface
+values and class handles, descriptor identity, vtable-shape rejection, fresh records, rollback,
+and OOP manifest/descriptor fuzz seeds.
 
 M5 phase 4b.1 is implemented (2026-10-25) in `stc-codegen` and `stc-got`. `types` projects the
 class value/instance layout split, `PTR_TO` handle keys for class-typed fields and leaves, the

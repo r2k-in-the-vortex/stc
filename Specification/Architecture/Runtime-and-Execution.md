@@ -1,6 +1,6 @@
 # Runtime and Execution Model
 
-Status: M4.5 persistent host and ABI 2 module execution implemented (2026-10-25)  
+Status: M4.5 persistent host and ABI 2 module execution, including M5 OOP descriptors, implemented (2026-10-25)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 
@@ -328,7 +328,12 @@ handles with the candidate's roots; a preserved handle to a removed instance is 
 freed. Phase 4b.2 implements the registry: descriptor cells are bound to the host-owned records
 before `stc_module_prepare`, compatible shapes keep their addresses and shadow contents are
 patched at activation, shape changes and removals reject while a preserved object or interface
-value can depend on them, and removed descriptors quarantine with their roots.
+value can depend on them, and removed descriptors quarantine with their roots. Phase 4b.6
+verifies the lifecycle end to end with compiler-produced modules: a preserved interface value
+and class handle keep their record, handle, TYPEINFO, VTABLE, and per-pair vtable addresses
+across a warm swap, activation patches the preserved pair to the new method cells, fresh object
+records and handles initialize once at prepare, and rollback releases them while preserved
+records retain their address and state.
 
 **Class values and FB values.** A class value is a non-retained handle to an object record; the
 declaration owns an embedded instance whose field roots keep their retention policy, and a

@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b interfaces/`?=`/object references implemented (2026-10-25)
+Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25)
 
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
@@ -60,9 +60,14 @@ value and attempts never trap. `REF(object)` produces an `Object` place descript
 the record handle and whose descriptor field is the TYPEINFO pointer, so dereference, field
 access, whole-object assignment, and object-reference attempts use object semantics;
 `REF_TO`-to-interface converts a class/FB object reference and yields a null interface for a
-null or incompatible object. Interface identity comparison and references to split aggregate
-values remain explicit diagnostics; pointer-to-object/interface conversions and `ADR` of objects
-stay rejected. The transient `STC-POINTER` extension is implemented. The
+null or incompatible object. Phase 4b.6 verifies the phase with clang acceptance, C-harness
+execution, real module warm swaps, and OOP fuzz seeds: preserved interface values and class
+handles keep stable TYPEINFO, VTABLE, record, handle, and per-pair vtable addresses, activation
+patches the preserved pair to the new method cells, fresh object records and handles initialize
+once and roll back, and vtable-shape changes are rejected against an active baseline. Interface
+identity comparison and references to split aggregate values remain explicit diagnostics;
+pointer-to-object/interface conversions and `ADR` of objects stay rejected. The transient
+`STC-POINTER` extension is implemented. The
 manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; full task
 scheduling is M6 (M5 keeps one task per resource). `stc check <file>...` analyzes one in-memory
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
@@ -79,9 +84,11 @@ determinism, malformed manifest/descriptor inputs, concurrent pinning, and the l
 artifacts on both hosts. Phase 10 closes the documentation and handover pass: the specification
 set and M5 handover describe the implemented host/module model, and the M6.5 interface boundary
 is recorded. M5 phases 1–6 extend that foundation to aggregates, references, OOP, the standard
-library, and aggregate retained state, including an online change preserving FB and aggregate
-roots; phase 4b.4 implements interface values, upcasts, and dispatch, and phase 4b.5 implements
-assignment attempts, object references, and `REF_TO`-to-interface. Full debug/monitoring is M6.5.
+library, and aggregate retained state, including an online change preserving FB, aggregate,
+interface, class-handle, and descriptor state; phase 4b.4 implements interface values, upcasts,
+and dispatch, phase 4b.5 implements assignment attempts, object references, and
+`REF_TO`-to-interface, and phase 4b.6 verifies the phase end to end. Full debug/monitoring is
+M6.5.
 
 ## 2. Input languages
 

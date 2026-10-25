@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
-use stc_got::{GotId, Manifest, PlanVerdict};
+use stc_got::{DescriptorKind, GotId, Manifest, PlanVerdict};
 
 fn stc() -> &'static str {
     env!("CARGO_BIN_EXE_stc")
@@ -923,6 +923,492 @@ fn m5_fb_and_aggregate_roots_survive_an_online_change() {
         &host.root_storage(gs).expect("string root")[..6],
         &[2, 0, 0, 0, b'v', b'2']
     );
+}
+
+const OOP_HOT_V1: &str = r#"
+INTERFACE IBase
+METHOD Area : DINT
+END_METHOD
+END_INTERFACE
+INTERFACE IShape EXTENDS IBase
+METHOD Perimeter : DINT
+END_METHOD
+END_INTERFACE
+
+CLASS Shape IMPLEMENTS IShape
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Area : DINT
+  Area := id;
+END_METHOD
+METHOD PUBLIC Perimeter : DINT
+  Perimeter := id + 1;
+END_METHOD
+END_CLASS
+
+VAR_GLOBAL
+  s : Shape;
+  i : IShape;
+  result : DINT;
+  ticks : DINT;
+END_VAR
+
+PROGRAM Main
+  s.id := s.id + 1;
+  i := s;
+  ticks := ticks + 1;
+  result := i.Area() * 100 + i.Perimeter() * 10 + s.Area();
+END_PROGRAM
+"#;
+
+const OOP_HOT_V2_CODE_ONLY: &str = r#"
+INTERFACE IBase
+METHOD Area : DINT
+END_METHOD
+END_INTERFACE
+INTERFACE IShape EXTENDS IBase
+METHOD Perimeter : DINT
+END_METHOD
+END_INTERFACE
+
+CLASS Shape IMPLEMENTS IShape
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Area : DINT
+  Area := id + 10;
+END_METHOD
+METHOD PUBLIC Perimeter : DINT
+  Perimeter := id + 20;
+END_METHOD
+END_CLASS
+
+VAR_GLOBAL
+  s : Shape;
+  i : IShape;
+  result : DINT;
+  ticks : DINT;
+END_VAR
+
+PROGRAM Main
+  s.id := s.id + 1;
+  i := s;
+  ticks := ticks + 1;
+  result := i.Area() * 100 + i.Perimeter() * 10 + s.Area();
+END_PROGRAM
+"#;
+
+fn descriptor_id(manifest: &Manifest, owner: GotId, kind: DescriptorKind) -> GotId {
+    manifest
+        .descriptors
+        .iter()
+        .find(|descriptor| {
+            descriptor.owner_type == Some(owner) && descriptor.descriptor_kind == kind
+        })
+        .unwrap_or_else(|| panic!("descriptor for type {owner}"))
+        .got_id
+}
+
+fn type_id(manifest: &Manifest, key: &str) -> GotId {
+    manifest
+        .types
+        .iter()
+        .find(|ty| ty.key == key)
+        .unwrap_or_else(|| panic!("type `{key}`"))
+        .got_id
+}
+
+fn read_u64(host: &stc_runtime::Host, root: GotId) -> u64 {
+    let storage = host.root_storage(root).expect("root storage");
+    u64::from_le_bytes(storage[..8].try_into().expect("eight bytes"))
+}
+
+#[test]
+fn interface_values_and_class_handles_survive_an_online_change() {
+    use stc_runtime::{Host, LoadMode, LoadOutcome, ManifestStore};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("online-oop");
+    let v1_source = directory.source("oop_v1", OOP_HOT_V1);
+    build_ok(&directory, &v1_source, "oop_v1", &[]);
+    let v1 = directory.manifest("oop_v1");
+    let baseline = directory.path.join("oop_v1.stc-got.bin");
+    let v2_source = directory.source("oop_v2", OOP_HOT_V2_CODE_ONLY);
+    build_ok(
+        &directory,
+        &v2_source,
+        "oop_v2",
+        &["--got-manifest", baseline.to_str().unwrap()],
+    );
+    let v2 = directory.manifest("oop_v2");
+
+    let shape = type_id(&v1, "_ROOT::SHAPE");
+    let ishape = type_id(&v1, "_ROOT::ISHAPE");
+    assert_eq!(type_id(&v2, "_ROOT::SHAPE"), shape);
+    assert_eq!(type_id(&v2, "_ROOT::ISHAPE"), ishape);
+    let typeinfo = descriptor_id(&v1, shape, DescriptorKind::TypeInfo);
+    let vtable = descriptor_id(&v1, shape, DescriptorKind::Vtable);
+    let handle_root = root_id(&v1, "_ROOT::S#HANDLE");
+    let record_root = root_id(&v1, "_ROOT::S#OBJREC");
+    let interface_root = root_id(&v1, "_ROOT::I");
+    let id_root = root_id(&v1, "_ROOT::S.ID");
+    let result = root_id(&v1, "_ROOT::RESULT");
+    let ticks = key_with(&v1, "TICKS");
+
+    let platform = host_platform();
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    let outcome = host
+        .load(
+            open_candidate(&directory, "oop_v1", &platform),
+            LoadMode::Auto,
+        )
+        .expect("cold install");
+    assert!(matches!(outcome, LoadOutcome::ColdInstalled { .. }));
+    host.cycle().expect("cycle v1");
+    assert_eq!(read_u32(&host, id_root), 1);
+    assert_eq!(read_u32(&host, result), 121);
+    assert_eq!(read_u32(&host, ticks), 1);
+
+    // The hidden roots and descriptors describe one live object and one
+    // interface value: handle -> record -> TYPEINFO/leaf, interface -> record.
+    let record_address = host.roots().address(record_root).expect("record address");
+    let typeinfo_address = host.descriptor_address(typeinfo).expect("TYPEINFO address");
+    let vtable_address = host.descriptor_address(vtable).expect("VTABLE address");
+    let pair_address = host
+        .interface_vtable_address(shape, ishape)
+        .expect("interface pair");
+    assert_eq!(read_u64(&host, handle_root), record_address as u64);
+    assert_eq!(host.root_storage(record_root).expect("record").len(), 16);
+    assert_eq!(
+        u64::from_le_bytes(
+            host.root_storage(record_root).expect("record")[..8]
+                .try_into()
+                .unwrap()
+        ),
+        typeinfo_address as u64
+    );
+    let interface_before = host
+        .root_storage(interface_root)
+        .expect("interface value")
+        .to_vec();
+    assert_eq!(
+        u64::from_le_bytes(interface_before[..8].try_into().unwrap()),
+        record_address as u64
+    );
+    assert_eq!(
+        u64::from_le_bytes(interface_before[8..16].try_into().unwrap()),
+        pair_address as u64
+    );
+    let pair_before = host
+        .interface_vtable_words(shape, ishape)
+        .expect("interface pair")
+        .to_vec();
+
+    let outcome = host
+        .load(
+            open_candidate(&directory, "oop_v2", &platform),
+            LoadMode::Auto,
+        )
+        .expect("prepare");
+    assert!(matches!(outcome, LoadOutcome::Prepared { .. }));
+    // Descriptors keep their identity and the preserved object and interface
+    // roots keep their bytes; the pair still points at v1 cells until activation.
+    assert_eq!(host.descriptor_address(typeinfo), Some(typeinfo_address));
+    assert_eq!(host.descriptor_address(vtable), Some(vtable_address));
+    assert_eq!(
+        host.interface_vtable_address(shape, ishape),
+        Some(pair_address)
+    );
+    assert_eq!(host.roots().address(record_root), Some(record_address));
+    assert_eq!(read_u64(&host, handle_root), record_address as u64);
+    assert_eq!(
+        host.root_storage(interface_root).expect("interface value"),
+        interface_before.as_slice()
+    );
+    assert_eq!(
+        host.interface_vtable_words(shape, ishape).expect("pair"),
+        pair_before.as_slice(),
+        "entries stay on the active generation until activation"
+    );
+    assert_eq!(read_u32(&host, id_root), 1);
+    assert_eq!(read_u32(&host, result), 121);
+
+    host.activate().expect("activate");
+    assert_eq!(host.descriptor_address(typeinfo), Some(typeinfo_address));
+    assert_eq!(host.descriptor_address(vtable), Some(vtable_address));
+    assert_eq!(
+        host.interface_vtable_address(shape, ishape),
+        Some(pair_address),
+        "a preserved interface value keeps its pair address"
+    );
+    assert_ne!(
+        host.interface_vtable_words(shape, ishape).expect("pair"),
+        pair_before.as_slice(),
+        "activation patches the preserved interface pair"
+    );
+    assert_eq!(
+        host.root_storage(interface_root).expect("interface value"),
+        interface_before.as_slice(),
+        "the preserved interface value itself is untouched"
+    );
+    assert_eq!(host.roots().address(record_root), Some(record_address));
+    assert_eq!(read_u64(&host, handle_root), record_address as u64);
+    assert_eq!(read_u32(&host, result), 121, "no code ran before the cycle");
+
+    host.cycle().expect("commit cycle");
+    assert_eq!(host.active_build_id(), Some(v2.header.build_id));
+    assert_eq!(read_u32(&host, id_root), 2);
+    assert_eq!(read_u32(&host, ticks), 2);
+    assert_eq!(
+        read_u32(&host, result),
+        1432,
+        "dispatch through the preserved interface value and class handle runs v2"
+    );
+    assert_eq!(host.descriptor_address(typeinfo), Some(typeinfo_address));
+    assert_eq!(
+        host.interface_vtable_address(shape, ishape),
+        Some(pair_address)
+    );
+    assert_eq!(host.roots().address(record_root), Some(record_address));
+}
+
+const FRESH_RECORD_V1: &str = r#"
+CLASS Thing
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC M : DINT
+  M := id;
+END_METHOD
+END_CLASS
+
+VAR_GLOBAL
+  th : Thing;
+  counter : DINT;
+END_VAR
+
+PROGRAM Main
+  th.id := th.id + 1;
+  counter := counter + 1;
+END_PROGRAM
+"#;
+
+const FRESH_RECORD_V2: &str = r#"
+CLASS Thing
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC M : DINT
+  M := id;
+END_METHOD
+END_CLASS
+
+CLASS Extra
+VAR PUBLIC
+  x : DINT;
+END_VAR
+METHOD PUBLIC Double : DINT
+  Double := x * 2;
+END_METHOD
+END_CLASS
+
+VAR_GLOBAL
+  th : Thing;
+  ex : Extra;
+  counter : DINT;
+END_VAR
+
+PROGRAM Main
+  th.id := th.id + 1;
+  ex.x := ex.x + 2;
+  counter := counter + 1;
+END_PROGRAM
+"#;
+
+#[test]
+fn fresh_object_records_initialize_and_roll_back() {
+    use stc_runtime::{Host, LoadMode, LoadOutcome, ManifestStore};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("online-fresh-record");
+    let v1_source = directory.source("fresh_v1", FRESH_RECORD_V1);
+    build_ok(&directory, &v1_source, "fresh_v1", &[]);
+    let v1 = directory.manifest("fresh_v1");
+    let baseline = directory.path.join("fresh_v1.stc-got.bin");
+    let v2_source = directory.source("fresh_v2", FRESH_RECORD_V2);
+    build_ok(
+        &directory,
+        &v2_source,
+        "fresh_v2",
+        &["--got-manifest", baseline.to_str().unwrap()],
+    );
+    let v2 = directory.manifest("fresh_v2");
+
+    let platform = host_platform();
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    let outcome = host
+        .load(
+            open_candidate(&directory, "fresh_v1", &platform),
+            LoadMode::Auto,
+        )
+        .expect("cold install");
+    assert!(matches!(outcome, LoadOutcome::ColdInstalled { .. }));
+    host.cycle().expect("cycle v1");
+
+    let preserved_handle = root_id(&v1, "_ROOT::TH#HANDLE");
+    let preserved_record = root_id(&v1, "_ROOT::TH#OBJREC");
+    let preserved_leaf = root_id(&v1, "_ROOT::TH.ID");
+    let preserved_address = host
+        .roots()
+        .address(preserved_record)
+        .expect("preserved record");
+    assert_eq!(read_u64(&host, preserved_handle), preserved_address as u64);
+    assert_eq!(read_u32(&host, preserved_leaf), 1);
+
+    let extra_type = type_id(&v2, "_ROOT::EXTRA");
+    let extra_typeinfo = descriptor_id(&v2, extra_type, DescriptorKind::TypeInfo);
+    let extra_record = root_id(&v2, "_ROOT::EX#OBJREC");
+    let extra_handle = root_id(&v2, "_ROOT::EX#HANDLE");
+    let extra_leaf = root_id(&v2, "_ROOT::EX.X");
+
+    let outcome = host
+        .load(
+            open_candidate(&directory, "fresh_v2", &platform),
+            LoadMode::Auto,
+        )
+        .expect("prepare");
+    assert!(matches!(outcome, LoadOutcome::Prepared { .. }));
+
+    // Prepare initializes the fresh record and handle once; the record names
+    // its TYPEINFO and its leaf root, and the handle points at the record.
+    assert!(host.roots().contains(extra_record));
+    assert!(host.roots().contains(extra_handle));
+    assert!(host.roots().contains(extra_leaf));
+    let extra_record_address = host.roots().address(extra_record).expect("fresh record");
+    let extra_typeinfo_address = host
+        .descriptor_address(extra_typeinfo)
+        .expect("fresh TYPEINFO");
+    assert_eq!(read_u64(&host, extra_handle), extra_record_address as u64);
+    assert_eq!(
+        u64::from_le_bytes(
+            host.root_storage(extra_record).expect("record")[..8]
+                .try_into()
+                .unwrap()
+        ),
+        extra_typeinfo_address as u64
+    );
+    assert_eq!(
+        u64::from_le_bytes(
+            host.root_storage(extra_record).expect("record")[8..16]
+                .try_into()
+                .unwrap()
+        ),
+        host.roots().address(extra_leaf).expect("leaf") as u64
+    );
+    assert_eq!(host.root_storage(extra_leaf).expect("leaf"), [0; 4]);
+    // The preserved object and its state still sit at their addresses.
+    assert_eq!(
+        host.roots().address(preserved_record),
+        Some(preserved_address)
+    );
+    assert_eq!(read_u32(&host, preserved_leaf), 1);
+    assert_eq!(read_u32(&host, root_id(&v1, "_ROOT::COUNTER")), 1);
+
+    host.activate().expect("activate");
+    host.rollback().expect("rollback");
+    assert_eq!(host.active_build_id(), Some(v1.header.build_id));
+    assert!(!host.roots().contains(extra_record));
+    assert!(!host.roots().contains(extra_handle));
+    assert!(!host.roots().contains(extra_leaf));
+    assert!(host.descriptor_address(extra_typeinfo).is_none());
+    assert_eq!(host.quarantined_descriptors(), 0);
+    assert_eq!(
+        host.roots().address(preserved_record),
+        Some(preserved_address)
+    );
+    assert_eq!(read_u32(&host, preserved_leaf), 1);
+}
+
+const VTABLE_SHAPE_V1: &str = r#"
+CLASS Thing
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC M : DINT
+  M := id;
+END_METHOD
+END_CLASS
+
+VAR_GLOBAL
+  th : Thing;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+END_PROGRAM
+"#;
+
+const VTABLE_SHAPE_V2: &str = r#"
+CLASS Thing
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC M : DINT
+  M := id;
+END_METHOD
+METHOD PUBLIC N : DINT
+  N := id + 1;
+END_METHOD
+END_CLASS
+
+VAR_GLOBAL
+  th : Thing;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+END_PROGRAM
+"#;
+
+#[test]
+fn vtable_shape_changes_are_rejected_by_a_baseline_build() {
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("vtable-shape");
+    let v1_source = directory.source("shape_v1", VTABLE_SHAPE_V1);
+    build_ok(&directory, &v1_source, "shape_v1", &[]);
+    let baseline = directory.path.join("shape_v1.stc-got.bin");
+
+    let v2_source = directory.source("shape_v2", VTABLE_SHAPE_V2);
+    let rejected = build(
+        &directory,
+        &v2_source,
+        "shape_v2",
+        &["--got-manifest", baseline.to_str().unwrap()],
+    );
+    assert_eq!(rejected.status.code(), Some(1));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&rejected.stdout),
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    assert!(text.contains("STC-E-ONLINE-003"), "{text}");
+    assert!(text.contains("vtable shape"), "{text}");
 }
 
 const SINGLE_TASK: &str = r#"

@@ -1,6 +1,6 @@
 # Online Change and GOT
 
-Status: Resolved specification (2026-10-24); implemented for the M4 scalar surface (2026-10-25)  
+Status: Resolved specification (2026-10-24); implemented for the M4.5/M5 surface (2026-10-25)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -327,7 +327,12 @@ releases fresh records and handles. Hidden `HANDLE`/`OBJREC` roots and descripto
 non-retained, so the retained-state payload never contains a record or handle pointer; the owned
 instance's field roots are ordinary retained leaves. `REF_TO` values use place descriptors and
 are remapped by identity/offset; an `Object` descriptor carries the record handle and TYPEINFO
-pointer, and `Stack` descriptors never outlive the call.
+pointer, and `Stack` descriptors never outlive the call. Phase 4b.6 verifies this contract with
+compiler-produced modules: a preserved interface value and class handle keep their record,
+handle, TYPEINFO, VTABLE, and per-pair vtable addresses across a warm swap, the next cycle
+dispatches through the patched pair to the new method cells, a fresh record and handle are
+initialized once at prepare and released on rollback, and a vtable-shape change is rejected
+against the active baseline.
 
 ### 8.4 State and cold download
 

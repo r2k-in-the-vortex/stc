@@ -1,6 +1,6 @@
 # State and RETAIN Persistence
 
-Status: M4.5 scalar roots and online preservation implemented (2026-10-25); file-backed state is M6  
+Status: M4.5 scalar roots, M5 aggregate/string/FB leaves, and online preservation implemented (2026-10-25); file-backed state is M6  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Architecture](Architecture.md), [Decisions](../Decisions.md)
 

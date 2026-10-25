@@ -606,9 +606,8 @@ artifact test, concurrent pinning, and the recorded switch measurement. Phase 10
 debug-flag and metadata-schema clarifications. M4.5 is complete and M5 is the next milestone.
 M5 phase 0 (2026-10-25) records the milestone boundary and architecture in D-128–D-136 and
 `M5-Plan.md`; phases 1–6 are recorded in D-137–D-144. D-145 records the `STC-POINTER` surface
-grammar and D-146 records its implementation. Phase 4b is planned in D-147–D-152 and
-`M5-Plan.md`; step 4b.0 (host ABI 2.1 and the inline record contracts) is complete, and the
-implementation continues from that plan with 4b.1.
+grammar and D-146 records its implementation. Phase 4b is complete (2026-10-25) in D-147–D-152
+and `M5-Plan.md`; steps 4b.0–4b.6 are implemented and verified.
 
 D-094 through D-152 affect
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),

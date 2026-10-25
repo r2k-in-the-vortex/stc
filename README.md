@@ -65,12 +65,13 @@ M5 phases 1–7 extend that model with structs, enums, subranges, static arrays,
 (`STC-POINTER`), classes and function blocks with methods/inheritance/`THIS`/`SUPER`, all
 standard functions, the standard FB library with cycle-latched timers, and
 aggregate/string/FB retained-state leaves. These constructs are
-covered by clang acceptance, C-harness execution, and an online change that preserves FB and
-aggregate roots across a code-only swap. The transient `STC-POINTER` extension (`POINTER TO`,
+covered by clang acceptance, C-harness execution, and an online change that preserves FB,
+aggregate, interface, class-handle, and descriptor state across a code-only swap. The transient
+`STC-POINTER` extension (`POINTER TO`,
 `ADR`, `SIZEOF`, pointer arithmetic/indexing, and `REF_TO`↔pointer conversions) is implemented.
 Interface source constructs, dispatch, assignment attempts (`?=`), object references, and
-`REF_TO`-to-interface are implemented in phase 4b; references to split aggregate values remain
-explicit diagnostics. Step 4b.0 records
+`REF_TO`-to-interface are implemented and verified in phase 4b; references to split aggregate
+values remain explicit diagnostics. Step 4b.0 records
 host ABI 2.1 with the inline TYPEINFO, VTABLE, and object-record layout in
 [GOT Artifacts](Specification/Architecture/GOT-Artifacts.md) §8.5 and
 [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §2.6. Step 4b.1
@@ -96,7 +97,12 @@ inline (class base-chain checks, interface-map membership, and reference descrip
 compatibility; failure yields the all-zero `NULL` value without trapping), builds `Object` place
 descriptors for `REF(object)` with record/state dereference and whole-object state assignment,
 and converts `REF_TO` class/FB references to interfaces with null on null or incompatible input.
-Interface identity comparison remains a diagnostic. The project
+Step 4b.6 verifies the phase: real module warm swaps preserve interface values and class handles
+while descriptor, record, and per-pair vtable addresses stay stable, activation patches the
+preserved pair to the new method cells, fresh object records and handles initialize once and
+roll back, vtable-shape changes are rejected against an active baseline, and committed OOP fuzz
+seeds cover malformed TYPEINFO/VTABLE/interface-map inputs. Interface identity comparison
+remains a diagnostic. The project
 manifest, `stc run`, `stc test`, and file-backed retained state are M6,
 and full task scheduling is M6 (M5 keeps one task per resource). The persistent host, loadable
 modules, GOT roots, manifests, swap protocol, and process-image remap are implemented and shared

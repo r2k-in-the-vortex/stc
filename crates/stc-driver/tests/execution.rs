@@ -757,11 +757,14 @@ fn build_emits_deterministic_ir_and_metadata() {
     assert_eq!(first, second);
 }
 
+/// A split persistent aggregate has no single stable address, so `REF` (and
+/// `ADR`) stay explicit diagnostics after phase 4b; the reference, interface,
+/// `?=`, and object-reference surface is covered by the C-harness tests below.
 #[test]
-fn unsupported_constructs_are_compiler_errors() {
-    let directory = TestDir::new("unsupported");
+fn split_persistent_aggregate_references_are_compiler_errors() {
+    let directory = TestDir::new("split-aggregate");
     let source = directory.write_source(
-        "unsupported",
+        "split_aggregate",
         "TYPE\n  Point : STRUCT\n    x : DINT;\n    y : DINT;\n  END_STRUCT;\nEND_TYPE\n\
          VAR_GLOBAL\n  g : Point;\nEND_VAR\n\
          PROGRAM Main\nVAR r : REF_TO Point; END_VAR\n  r := REF(g);\nEND_PROGRAM\n\
@@ -777,6 +780,7 @@ fn unsupported_constructs_are_compiler_errors() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("STC-E-CODEGEN-001"), "{stderr}");
+    assert!(stderr.contains("no stable storage"), "{stderr}");
 }
 
 #[test]

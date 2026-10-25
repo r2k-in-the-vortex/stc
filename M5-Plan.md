@@ -2,12 +2,12 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-25  
-Status: Phase 0 written. Phases 1–7 and the `STC-POINTER` surface are implemented; phase 4b
+Status: Complete (2026-10-25). Phases 1–7 and the `STC-POINTER` surface are implemented; phase 4b
 (interfaces, runtime descriptors, `?=`) is specified in D-147–D-152 and §4b. Steps 4b.0
 (contracts and documentation), 4b.1 (catalog, descriptors, and hidden roots), 4b.2 (host
 registry and ABI 2.1), 4b.3 (object records and virtual dispatch), 4b.4 (interface values and
-upcasts), and 4b.5 (`?=`, object references, and `REF_TO`-to-interface) are complete; 4b.6
-(verification, online-change coverage, and documentation) remains.
+upcasts), 4b.5 (`?=`, object references, and `REF_TO`-to-interface), and 4b.6 (verification,
+online-change coverage, and documentation) are complete.
 
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8, [Architecture](Specification/Architecture/Architecture.md)
 §4, [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §1–§4,
@@ -170,7 +170,7 @@ materialized into a transient alloca on read and split back into roots on write.
 | 4 | Classes, FBs, methods, inheritance, interfaces, descriptors/vtables, `THIS`/`SUPER` | Class/FB fields, object records, class handle/FB state assignment, FB bodies/invocation, methods, virtual dispatch, inheritance, `THIS`/`SUPER`, the object-table ABI, interface values/upcasts/dispatch, `?=`, object references, and NULL tests are complete |
 | 5 | Standard functions, standard FB bodies, cycle-latched timers | Complete: all `StdFnKind` variants (including `LEFT`/`RIGHT`/`MID`/`INSERT`/`DELETE`/`REPLACE`/`FIND`), standard FB bodies, and deterministic clock tests; the HIR surface defines no date/time functions |
 | 6 | Aggregate/string/FB retained-state leaves and metadata | Complete: per-leaf flattening, packed offsets, GOT-root save/load, and metadata paths |
-| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Aggregate/OOP/standard-FB/retained-state/pointer/interface/attempt-reference harnesses, M5 hot-swap coverage, M5 fuzz seeds, and status documentation are in place; the final phase-4b verification pass (4b.6) remains |
+| 7 | Execution/OOP/stdlib harnesses, clang coverage, fuzz, docs, full checks | Complete: aggregate/OOP/standard-FB/retained-state/pointer/interface/attempt-reference harnesses, M5 hot-swap coverage (including preserved interface values and class handles, descriptor identity, vtable-shape rejection, fresh records, and rollback), M5 fuzz seeds, and status documentation |
 
 ### Phase 1 — type and layout substrate
 
@@ -220,9 +220,8 @@ materialized into a transient alloca on read and split back into roots on write.
 
 ### Phase 4b — interfaces, descriptors, and `?=`
 
-Status: steps 4b.0–4b.5 complete (2026-10-25); step 4b.6 planned. Decisions
-D-147–D-152. Land the steps in order; each step keeps the manifest and descriptor formats at
-version 1 and adds its tests with the code.
+Status: steps 4b.0–4b.6 complete (2026-10-25). Decisions D-147–D-152. Each step kept the
+manifest and descriptor formats at version 1 and added its tests with the code.
 
 #### 4b.0 — Contracts and documentation
 
@@ -419,6 +418,28 @@ failure; clang accepts the generated attempt/reference IR.
 
 #### 4b.6 — Verification, online change, and documentation
 
+Complete (2026-10-25). The phase-4 rejection tests were converted as features landed in 4b.4 and
+4b.5; the remaining diagnostics are genuinely unsupported combinations. `stc-codegen` keeps
+interface identity comparison and `REF`/`ADR` of split persistent aggregates as errors, and the
+driver keeps the split-aggregate `REF` build case with its "no stable storage" message. The
+C-harness surface landed with 4b.3–4b.5 (`oop.c`, `interfaces.c`, and `object_attempts.c` cover
+virtual dispatch, class handle copy/aliasing and per-element instances, interface
+parameters/results/arrays/`THIS`, upcasts, attempts, NULL, object references, and
+`REF_TO`-to-interface). The
+`stc-driver/tests/module_cli.rs` hot-swap suite now covers a real warm swap with a preserved
+interface value and class handle: TYPEINFO, VTABLE, object-record, handle, and per-pair vtable
+addresses stay stable, activation patches the preserved pair, and the next cycle dispatches
+through it to the new method cells. A second module test initializes a fresh object record,
+handle, leaf root, and TYPEINFO at prepare and releases them on rollback while the preserved
+record keeps its address and state. A third module test verifies that a vtable-shape change is
+rejected against an active baseline with `STC-E-ONLINE-003`; the runtime descriptor suite remains
+the load-time defense. Fuzz seeds under `fuzz/seeds/` provide a compiler-produced class/interface
+manifest and descriptor blob plus decodable malformed TYPEINFO, VTABLE, and interface-map
+variants, and CI copies them into both artifact corpora. README, Decisions, the project plan and
+conformance status, the architecture/GOT/runtime/testing docs, the fuzz README, and this plan are
+updated. `cargo test --workspace --locked`, clippy, fmt, the docs check, markdown lint, and the
+clang-required tests pass; double builds remain byte-identical.
+
 - Update the phase-4 rejection tests in `stc-codegen/tests/codegen.rs` (assignment attempt; the
   interface-dispatch rejection test was replaced by success coverage in 4b.4) and
   `stc-driver/tests/execution.rs` (unsupported constructs) to success coverage; keep explicit
@@ -465,8 +486,7 @@ no heap allocation or raw persistent object pointer.
   execution coverage are in place for the implemented surface, including an M5 determinism test.
 - Driver execution harnesses for OOP, arrays/strings, conformant arrays, timers, pointers, and
   retained state; online-change coverage for FB/class state, aggregate roots, and descriptors.
-  FB and aggregate state preservation is covered; interface/descriptor preservation waits on
-  phase 4b.
+  FB, aggregate, interface, class-handle, and descriptor preservation is covered.
 - Extend `fuzz_codegen` with M5 HIR; keep bounded output/time and determinism. The target already
   generates arbitrary analyzed HIR; local M5 seeds were used during development but the corpus
   directory is gitignored.
@@ -474,10 +494,10 @@ no heap allocation or raw persistent object pointer.
   testing docs, and this plan; run all checks and commit. The status docs now distinguish the
   implemented M5 surface from the deferred items below.
 
-### Remaining M5 work
+### Post-M5 limitations
 
-- **Phase 4b — interfaces, descriptors, `?=`.** Step 4b.4 makes interface values 16-byte
-  `{record, per-pair vtable}` pairs passed and returned by value, covers interface
+- **Phase 4b — interfaces, descriptors, `?=`** is complete. Step 4b.4 makes interface values
+  16-byte `{record, per-pair vtable}` pairs passed and returned by value, covers interface
   parameters/results/fields/globals/arrays and FB implementors, upcasts class/FB values through
   the compile-time base-first map index, upcasts interface values through a bounded map search,
   implements `= NULL`/`<> NULL`, dispatches interface calls through the pair vtable, and extends
@@ -491,9 +511,9 @@ no heap allocation or raw persistent object pointer.
   handles and dispatches class/FB methods virtually through TYPEINFO and the class VTABLE.
   Step 4b.5 lowers `?=` inline for class/interface/reference destinations, implements
   `REF(object)` descriptors with record/state dereference and state-copy assignment, and converts
-  `REF_TO` class/FB references to interfaces with null on null or incompatible input. Interface
-  identity comparison remains an explicit diagnostic; step 4b.6 updates the remaining rejection
-  tests and documentation. The resolved decisions are D-147–D-152.
+  `REF_TO` class/FB references to interfaces with null on null or incompatible input. Step 4b.6
+  verifies the phase and updates the documentation. Interface identity comparison remains an
+  explicit diagnostic. The resolved decisions are D-147–D-152.
 - **References to split persistent aggregates** remain rejected because they have no single
   stable storage location; contiguous transient aggregates and single-root persistent values are
   supported (D-144). A multi-root descriptor with host-side resolution is recorded as a possible

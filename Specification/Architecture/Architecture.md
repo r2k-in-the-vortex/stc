@@ -1,6 +1,6 @@
 # Architecture
 
-Status: M4.5 host/module model implemented for the scalar surface (2026-10-25); M5 is next  
+Status: M4.5 host/module model and M5 lowering implemented (2026-10-25); M6.5 debug/monitoring is next  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
 

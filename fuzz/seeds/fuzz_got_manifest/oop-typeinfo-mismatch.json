@@ -1,0 +1,697 @@
+{
+  "body": {
+    "descriptors": [
+      {
+        "align": 4,
+        "descriptor_kind": "type_info",
+        "got_id": "0xbe7f958027abd7f9601c751a03329156",
+        "key": "_ROOT::SHAPE#DESC:TYPEINFO",
+        "layout_hash": "0x0a9a80b2bf429bd7530de02359ba8cbb",
+        "owner_type": "0x04ae93ce220105612654d39be8f67ae3",
+        "previous_keys": [],
+        "size": 8,
+        "slot": 12,
+        "source": {
+          "end": 328,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 141
+        },
+        "type_key": "T:04ae93ce220105612654d39be8f67ae3"
+      },
+      {
+        "align": 4,
+        "descriptor_kind": "vtable",
+        "got_id": "0x3d49ad78c76dc98c195512e771a22ba6",
+        "key": "_ROOT::SHAPE#DESC:VTABLE",
+        "layout_hash": "0x0a9a80b2bf429bd7530de02359ba8cbb",
+        "owner_type": "0x04ae93ce220105612654d39be8f67ae3",
+        "previous_keys": [],
+        "size": 4,
+        "slot": 11,
+        "source": {
+          "end": 328,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 141
+        },
+        "type_key": "T:04ae93ce220105612654d39be8f67ae3"
+      }
+    ],
+    "exports": [],
+    "functions": [
+      {
+        "export_name": null,
+        "flags": 72,
+        "function_kind": "method",
+        "got_id": "0x07ae7b6378e77742eafeb7a6361c770e",
+        "key": "_ROOT::IBASE.AREA@()->DINT",
+        "owner_type": "0x75ce77961c14198d2b590d7e6787b092",
+        "previous_keys": [],
+        "signature_key": "()->DINT",
+        "slot": 6,
+        "source": {
+          "end": 45,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 16
+        },
+        "vtable_slot": 0
+      },
+      {
+        "export_name": null,
+        "flags": 72,
+        "function_kind": "method",
+        "got_id": "0x15266d8c4e0b17259659fce833f0df50",
+        "key": "_ROOT::ISHAPE.PERIMETER@()->DINT",
+        "owner_type": "0xc52a97c332e843713d7c03f92b4d3839",
+        "previous_keys": [],
+        "signature_key": "()->DINT",
+        "slot": 7,
+        "source": {
+          "end": 125,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 91
+        },
+        "vtable_slot": 1
+      },
+      {
+        "export_name": null,
+        "flags": 66,
+        "function_kind": "program_body",
+        "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+        "key": "_ROOT::MAIN#BODY@()->VOID",
+        "owner_type": null,
+        "previous_keys": [],
+        "signature_key": "()->VOID",
+        "slot": 9,
+        "source": {
+          "end": 451,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 377
+        },
+        "vtable_slot": null
+      },
+      {
+        "export_name": null,
+        "flags": 73,
+        "function_kind": "method",
+        "got_id": "0xc70bc2761a68260ab7b6871c4842c90e",
+        "key": "_ROOT::SHAPE.AREA@()->DINT",
+        "owner_type": "0x04ae93ce220105612654d39be8f67ae3",
+        "previous_keys": [],
+        "signature_key": "()->DINT",
+        "slot": 10,
+        "source": {
+          "end": 253,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 203
+        },
+        "vtable_slot": 0
+      },
+      {
+        "export_name": null,
+        "flags": 73,
+        "function_kind": "method",
+        "got_id": "0x7cc36fe236a781bdc71f8228e6e90b42",
+        "key": "_ROOT::SHAPE.PERIMETER@()->DINT",
+        "owner_type": "0x04ae93ce220105612654d39be8f67ae3",
+        "previous_keys": [],
+        "signature_key": "()->DINT",
+        "slot": 8,
+        "source": {
+          "end": 318,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 254
+        },
+        "vtable_slot": 1
+      }
+    ],
+    "header": {
+      "active_configuration": "",
+      "build_id": "0xdc1fa09c7a5874f06f21ae6b1016df3e",
+      "catalog_digest": "0x5b772be78084ed9c62eed069fd4d0a4a622a41f6dba5ea48479d44f30e467fee",
+      "compiler_version": "stc 0.1.0",
+      "descriptor_digest": "0x01f062f1f9f06d10abec8d5ee9235ae02425e381e3fe52858be15e3e3242d7d6",
+      "endianness": 0,
+      "generator_flags": 65,
+      "host_abi_major": 2,
+      "host_abi_minor": 1,
+      "module_format": 1,
+      "module_name": "oop",
+      "parent_build_id": null,
+      "parent_manifest_digest": null,
+      "plan_digest": "0x3c5fc867f1dae114f60af3702dd5029ab118d85c4b57cedc9b52ee7b58f58419",
+      "pointer_width": 8,
+      "profile": "stc-2013-oop-utf8-v1",
+      "required_features": 15,
+      "source_fingerprint": "0x9d7fe50f8193943a8831f82385d029267cded384ca15e53e100a6959fffe5fd0",
+      "target_triple": "x86_64-pc-windows-msvc"
+    },
+    "history": {
+      "retired": []
+    },
+    "instances": [
+      {
+        "configuration": "_DEFAULT",
+        "got_id": "0x4df36adc1bef4dc7593750376810e96b",
+        "instance_path": "_DEFAULT/_DEFAULT/_DEFAULT",
+        "key": "_ROOT::_DEFAULT/_DEFAULT/_DEFAULT",
+        "previous_keys": [],
+        "program_type": null,
+        "program_type_key": "MAIN",
+        "resource": "_DEFAULT",
+        "source": {
+          "end": 451,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 377
+        },
+        "task_key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT"
+      }
+    ],
+    "plan": {
+      "actions": [
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0x02cfd026801ac8529f061125e7a5d36a",
+          "key": "_ROOT::I",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new type",
+          "got_id": "0x04ae93ce220105612654d39be8f67ae3",
+          "key": "_ROOT::SHAPE",
+          "kind": 3,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new callable",
+          "got_id": "0x07ae7b6378e77742eafeb7a6361c770e",
+          "key": "_ROOT::IBASE.AREA@()->DINT",
+          "kind": 2,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new callable",
+          "got_id": "0x15266d8c4e0b17259659fce833f0df50",
+          "key": "_ROOT::ISHAPE.PERIMETER@()->DINT",
+          "kind": 2,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new descriptor",
+          "got_id": "0x3d49ad78c76dc98c195512e771a22ba6",
+          "key": "_ROOT::SHAPE#DESC:VTABLE",
+          "kind": 4,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new instance",
+          "got_id": "0x4df36adc1bef4dc7593750376810e96b",
+          "key": "_ROOT::_DEFAULT/_DEFAULT/_DEFAULT",
+          "kind": 5,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0x681e3120b143f8b9e8b198b16e7c776c",
+          "key": "_ROOT::S#HANDLE",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new type",
+          "got_id": "0x75ce77961c14198d2b590d7e6787b092",
+          "key": "_ROOT::IBASE",
+          "kind": 3,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new callable",
+          "got_id": "0x7cc36fe236a781bdc71f8228e6e90b42",
+          "key": "_ROOT::SHAPE.PERIMETER@()->DINT",
+          "kind": 2,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new task",
+          "got_id": "0x8f9c2c412b036923364e4c6453370c3a",
+          "key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT",
+          "kind": 6,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new callable",
+          "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+          "key": "_ROOT::MAIN#BODY@()->VOID",
+          "kind": 2,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0xa0dcf255dbd70f811d035575d384ec25",
+          "key": "_ROOT::MAIN.TICKS#_DEFAULT/_DEFAULT/_DEFAULT",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new descriptor",
+          "got_id": "0xbe7f958027abd7f9601c751a03329156",
+          "key": "_ROOT::SHAPE#DESC:TYPEINFO",
+          "kind": 4,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new type",
+          "got_id": "0xc52a97c332e843713d7c03f92b4d3839",
+          "key": "_ROOT::ISHAPE",
+          "kind": 3,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new callable",
+          "got_id": "0xc70bc2761a68260ab7b6871c4842c90e",
+          "key": "_ROOT::SHAPE.AREA@()->DINT",
+          "kind": 2,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0xe1465cf9af547c69e7d7a755940b0b17",
+          "key": "_ROOT::S#OBJREC",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0xf730376fa6d046accb367ab2421ec08c",
+          "key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT.GUARD",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0xfeeef4df4e60f94e35a23394fa16a4a2",
+          "key": "_ROOT::S.ID",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "STC-W-MANIFEST-001",
+          "got_id": null,
+          "message": "no baseline manifest; the build uses a cold layout",
+          "new_key": null,
+          "old_key": null,
+          "severity": "warning"
+        }
+      ],
+      "parent_build_id": null,
+      "parent_manifest_digest": null,
+      "verdict": "cold"
+    },
+    "roots": [
+      {
+        "align": 8,
+        "field_path": "",
+        "got_id": "0x02cfd026801ac8529f061125e7a5d36a",
+        "initializer": "zero",
+        "initializer_digest": null,
+        "key": "_ROOT::I",
+        "layout_hash": "0x3c423c30e955ebd6ce7f2d71c7ffbf85",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "global",
+        "size": 16,
+        "slot": 0,
+        "source": {
+          "end": 357,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 356
+        },
+        "type_key": "T:c52a97c332e843713d7c03f92b4d3839"
+      },
+      {
+        "align": 4,
+        "field_path": "TICKS",
+        "got_id": "0xa0dcf255dbd70f811d035575d384ec25",
+        "initializer": "zero",
+        "initializer_digest": null,
+        "key": "_ROOT::MAIN.TICKS#_DEFAULT/_DEFAULT/_DEFAULT",
+        "layout_hash": "0x43b7181ffa4bd87044d8426dd83ae420",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "program_field",
+        "size": 4,
+        "slot": 2,
+        "source": {
+          "end": 401,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 396
+        },
+        "type_key": "DINT"
+      },
+      {
+        "align": 8,
+        "field_path": "",
+        "got_id": "0x681e3120b143f8b9e8b198b16e7c776c",
+        "initializer": "none",
+        "initializer_digest": null,
+        "key": "_ROOT::S#HANDLE",
+        "layout_hash": "0x279ea0ad3afcb6be7e48751d0b9cbf7f",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "nested_field",
+        "size": 8,
+        "slot": 1,
+        "source": {
+          "end": 344,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 343
+        },
+        "type_key": "PTR_TO(T:04ae93ce220105612654d39be8f67ae3)"
+      },
+      {
+        "align": 8,
+        "field_path": "",
+        "got_id": "0xe1465cf9af547c69e7d7a755940b0b17",
+        "initializer": "none",
+        "initializer_digest": null,
+        "key": "_ROOT::S#OBJREC",
+        "layout_hash": "0x5aaf370a6fcc7c0c0a542125a3f8f567",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "nested_field",
+        "size": 16,
+        "slot": 3,
+        "source": {
+          "end": 344,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 343
+        },
+        "type_key": "ARRAY[0..1]OF(PTR_TO(T:04ae93ce220105612654d39be8f67ae3))"
+      },
+      {
+        "align": 4,
+        "field_path": "ID",
+        "got_id": "0xfeeef4df4e60f94e35a23394fa16a4a2",
+        "initializer": "zero",
+        "initializer_digest": null,
+        "key": "_ROOT::S.ID",
+        "layout_hash": "0x43b7181ffa4bd87044d8426dd83ae420",
+        "owner_type": "0x04ae93ce220105612654d39be8f67ae3",
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "global",
+        "size": 4,
+        "slot": 5,
+        "source": {
+          "end": 344,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 343
+        },
+        "type_key": "DINT"
+      },
+      {
+        "align": 1,
+        "field_path": "",
+        "got_id": "0xf730376fa6d046accb367ab2421ec08c",
+        "initializer": "constant",
+        "initializer_digest": "0x45458a6d6d93d8c9925ac3cfe66dbab649778ecaff37d941b62e105e0cccc487",
+        "key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT.GUARD",
+        "layout_hash": "0x01ebc917a3943d15d6f22e94f2e995de",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "task_guard",
+        "size": 1,
+        "slot": 4,
+        "source": null,
+        "type_key": "BOOL"
+      }
+    ],
+    "slots": [
+      {
+        "got_id": "0x02cfd026801ac8529f061125e7a5d36a",
+        "kind": "data",
+        "service": 0,
+        "slot": 0
+      },
+      {
+        "got_id": "0x681e3120b143f8b9e8b198b16e7c776c",
+        "kind": "data",
+        "service": 0,
+        "slot": 1
+      },
+      {
+        "got_id": "0xa0dcf255dbd70f811d035575d384ec25",
+        "kind": "data",
+        "service": 0,
+        "slot": 2
+      },
+      {
+        "got_id": "0xe1465cf9af547c69e7d7a755940b0b17",
+        "kind": "data",
+        "service": 0,
+        "slot": 3
+      },
+      {
+        "got_id": "0xf730376fa6d046accb367ab2421ec08c",
+        "kind": "data",
+        "service": 0,
+        "slot": 4
+      },
+      {
+        "got_id": "0xfeeef4df4e60f94e35a23394fa16a4a2",
+        "kind": "data",
+        "service": 0,
+        "slot": 5
+      },
+      {
+        "got_id": "0x07ae7b6378e77742eafeb7a6361c770e",
+        "kind": "function",
+        "service": 0,
+        "slot": 6
+      },
+      {
+        "got_id": "0x15266d8c4e0b17259659fce833f0df50",
+        "kind": "function",
+        "service": 0,
+        "slot": 7
+      },
+      {
+        "got_id": "0x7cc36fe236a781bdc71f8228e6e90b42",
+        "kind": "function",
+        "service": 0,
+        "slot": 8
+      },
+      {
+        "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+        "kind": "function",
+        "service": 0,
+        "slot": 9
+      },
+      {
+        "got_id": "0xc70bc2761a68260ab7b6871c4842c90e",
+        "kind": "function",
+        "service": 0,
+        "slot": 10
+      },
+      {
+        "got_id": "0x3d49ad78c76dc98c195512e771a22ba6",
+        "kind": "descriptor",
+        "service": 0,
+        "slot": 11
+      },
+      {
+        "got_id": "0xbe7f958027abd7f9601c751a03329156",
+        "kind": "descriptor",
+        "service": 0,
+        "slot": 12
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 1,
+        "slot": 13
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 7,
+        "slot": 14
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 8,
+        "slot": 15
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 9,
+        "slot": 16
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 10,
+        "slot": 17
+      }
+    ],
+    "tasks": [
+      {
+        "configuration": "_DEFAULT",
+        "got_id": "0x8f9c2c412b036923364e4c6453370c3a",
+        "guard_got_id": "0xf730376fa6d046accb367ab2421ec08c",
+        "interval_ns": null,
+        "key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT",
+        "name": "_DEFAULT",
+        "previous_keys": [],
+        "priority": null,
+        "resource": "_DEFAULT",
+        "single": false,
+        "source": null
+      }
+    ],
+    "types": [
+      {
+        "align": 8,
+        "base": null,
+        "fields": [],
+        "got_id": "0x75ce77961c14198d2b590d7e6787b092",
+        "interfaces": [],
+        "key": "_ROOT::IBASE",
+        "layout_hash": "0x8ed59f452811b2f2c9638994e1abdb55",
+        "previous_keys": [],
+        "size": 16,
+        "source": {
+          "end": 59,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 0
+        },
+        "type_key": "T:75ce77961c14198d2b590d7e6787b092",
+        "type_kind": "interface",
+        "vtable_shape": "0xe1939befd673d4891885bb1c00ed6625"
+      },
+      {
+        "align": 8,
+        "base": null,
+        "fields": [],
+        "got_id": "0xc52a97c332e843713d7c03f92b4d3839",
+        "interfaces": [
+          "0x75ce77961c14198d2b590d7e6787b092"
+        ],
+        "key": "_ROOT::ISHAPE",
+        "layout_hash": "0x3c423c30e955ebd6ce7f2d71c7ffbf85",
+        "previous_keys": [],
+        "size": 16,
+        "source": {
+          "end": 139,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 60
+        },
+        "type_key": "T:c52a97c332e843713d7c03f92b4d3839",
+        "type_kind": "interface",
+        "vtable_shape": "0xe497ac65cc12f786225f8ede07a99ef2"
+      },
+      {
+        "align": 4,
+        "base": null,
+        "fields": [
+          {
+            "align": 4,
+            "got_id": "0x7a13688e5d6ab944b2292bfac447de7c",
+            "layout_hash": "0x43b7181ffa4bd87044d8426dd83ae420",
+            "offset": 0,
+            "path": "ID",
+            "retention": "none",
+            "size": 4,
+            "source": {
+              "end": 186,
+              "file": "oop.st",
+              "package": "_ROOT",
+              "start": 184
+            },
+            "type_key": "DINT"
+          }
+        ],
+        "got_id": "0x04ae93ce220105612654d39be8f67ae3",
+        "interfaces": [
+          "0xc52a97c332e843713d7c03f92b4d3839"
+        ],
+        "key": "_ROOT::SHAPE",
+        "layout_hash": "0x0a9a80b2bf429bd7530de02359ba8cbb",
+        "previous_keys": [],
+        "size": 4,
+        "source": {
+          "end": 328,
+          "file": "oop.st",
+          "package": "_ROOT",
+          "start": 141
+        },
+        "type_key": "T:04ae93ce220105612654d39be8f67ae3",
+        "type_kind": "class",
+        "vtable_shape": "0xe497ac65cc12f786225f8ede07a99ef2"
+      }
+    ]
+  },
+  "digest": "0x57973a3a52402049cf5ee66165e6697744c1e2cfd4ddcd481d59b319a14231c8",
+  "flags": 0,
+  "format": 1
+}
