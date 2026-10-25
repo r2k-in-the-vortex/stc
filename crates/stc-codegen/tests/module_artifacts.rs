@@ -5,7 +5,10 @@ mod common;
 
 use stc_codegen::module::{FunctionTarget, ModuleArtifacts, ModuleOptions, RootTarget, project};
 use stc_got::catalog::ImportService;
-use stc_got::{Digest32, Endianness, PlanAction, PlanVerdict, Target};
+use stc_got::{
+    DescriptorKind, Digest32, Endianness, FunctionKind, InitializerKind, PlanAction, PlanVerdict,
+    RootKind, Target,
+};
 use stc_hir::{DefId, DefKind};
 
 const SOURCE: &str = r#"
@@ -55,6 +58,67 @@ END_VAR
   counter := counter + 1;
   flag := counter > 3;
 END_PROGRAM
+"#;
+
+/// Phase 4b.1 surface: interfaces, classes, FBs, and hidden roots.
+const OOP: &str = r#"
+INTERFACE IBase
+METHOD Area : DINT
+END_METHOD
+END_INTERFACE
+INTERFACE IShape EXTENDS IBase
+METHOD Perimeter : DINT
+END_METHOD
+END_INTERFACE
+
+CLASS Shape IMPLEMENTS IShape
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Area : DINT
+  Area := id;
+END_METHOD
+METHOD PUBLIC Perimeter : DINT
+  Perimeter := id + 1;
+END_METHOD
+END_CLASS
+
+CLASS Holder
+VAR PUBLIC
+  shape : Shape;
+END_VAR
+END_CLASS
+
+FUNCTION_BLOCK FB
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR
+  cv : DINT;
+END_VAR
+  cv := cv + inc;
+END_FUNCTION_BLOCK
+
+VAR_GLOBAL
+  s : Shape;
+  f : FB;
+  sa : ARRAY[1..2] OF Shape;
+END_VAR
+
+PROGRAM Main
+VAR
+  m : Shape;
+  fb : FB;
+END_VAR
+  m := s;
+  fb(inc := 1);
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
 "#;
 
 fn target() -> Target {
@@ -742,6 +806,298 @@ fn hex(bytes: &[u8]) -> String {
     }
     out.push('\n');
     out
+}
+
+fn find_def(hir: &stc_hir::HirCrate, name: &str) -> DefId {
+    hir.defs
+        .iter()
+        .enumerate()
+        .find_map(|(index, def)| {
+            (def.name_text(&hir.interner).eq_ignore_ascii_case(name))
+                .then_some(DefId::new(u32::try_from(index).ok()?))
+        })
+        .unwrap_or_else(|| panic!("definition `{name}`"))
+}
+
+#[test]
+fn projects_interface_prototypes_with_trap_stub_symbols() {
+    let artifacts = project_source(OOP, "oop");
+    let base_id = artifacts
+        .manifest
+        .types
+        .iter()
+        .find(|ty| ty.key == "_ROOT::IBASE")
+        .expect("IBase type")
+        .got_id;
+    let shape_iface_id = artifacts
+        .manifest
+        .types
+        .iter()
+        .find(|ty| ty.key == "_ROOT::ISHAPE")
+        .expect("IShape type")
+        .got_id;
+
+    let prototype = |key: &str, slot: u32, owner: stc_got::GotId| {
+        let record = artifacts
+            .manifest
+            .functions
+            .iter()
+            .find(|function| function.key == key)
+            .unwrap_or_else(|| panic!("missing prototype `{key}`"));
+        assert_eq!(record.function_kind, FunctionKind::Method);
+        assert_eq!(record.vtable_slot, Some(slot));
+        assert_eq!(record.owner_type, Some(owner));
+        assert_eq!(
+            record.flags,
+            stc_got::descriptor::function_flag::METHOD
+                | stc_got::descriptor::function_flag::INDIRECT_CALLABLE
+        );
+        record.got_id
+    };
+    let area = prototype("_ROOT::IBASE.AREA@()->DINT", 0, base_id);
+    let perimeter = prototype("_ROOT::ISHAPE.PERIMETER@()->DINT", 1, shape_iface_id);
+    for id in [area, perimeter] {
+        let binding = artifacts
+            .slots
+            .iter()
+            .find(|binding| binding.got_id == id)
+            .expect("prototype slot");
+        assert!(binding.symbol.is_some(), "prototypes have trap stubs");
+    }
+    // The sema-assigned slots are base-first: the derived interface's
+    // prototype follows its base's table.
+    assert_eq!(
+        artifacts
+            .manifest
+            .functions
+            .iter()
+            .find(|function| function.key == "_ROOT::ISHAPE.PERIMETER@()->DINT")
+            .and_then(|function| function.vtable_slot),
+        Some(1)
+    );
+}
+
+#[test]
+fn projects_typeinfo_and_vtable_descriptors() {
+    let artifacts = project_source(OOP, "descriptors");
+    let shape = artifacts
+        .manifest
+        .types
+        .iter()
+        .find(|ty| ty.key == "_ROOT::SHAPE")
+        .expect("Shape type");
+    let fb = artifacts
+        .manifest
+        .types
+        .iter()
+        .find(|ty| ty.key == "_ROOT::FB")
+        .expect("FB type");
+    let descriptor = |key: &str| {
+        artifacts
+            .manifest
+            .descriptors
+            .iter()
+            .find(|descriptor| descriptor.key == key)
+            .unwrap_or_else(|| panic!("missing descriptor `{key}`"))
+    };
+    for (record, kind) in [
+        (shape, DescriptorKind::TypeInfo),
+        (shape, DescriptorKind::Vtable),
+        (fb, DescriptorKind::TypeInfo),
+    ] {
+        let decl = artifacts
+            .manifest
+            .descriptors
+            .iter()
+            .find(|descriptor| {
+                descriptor.owner_type == Some(record.got_id) && descriptor.descriptor_kind == kind
+            })
+            .unwrap_or_else(|| panic!("missing descriptor for {}", record.key));
+        assert_eq!(decl.type_key, record.type_key);
+        assert_eq!(decl.layout_hash, record.layout_hash);
+        assert_eq!(decl.size, record.size);
+        assert_eq!(decl.align, record.align);
+    }
+    assert_eq!(
+        descriptor("_ROOT::SHAPE#DESC:TYPEINFO").descriptor_kind,
+        DescriptorKind::TypeInfo
+    );
+    assert_eq!(
+        descriptor("_ROOT::SHAPE#DESC:VTABLE").descriptor_kind,
+        DescriptorKind::Vtable
+    );
+    assert_eq!(
+        descriptor("_ROOT::FB#DESC:TYPEINFO").descriptor_kind,
+        DescriptorKind::TypeInfo
+    );
+    assert!(
+        !artifacts
+            .manifest
+            .descriptors
+            .iter()
+            .any(|descriptor| descriptor.key.contains("ISHAPE")),
+        "interface types have no descriptor of their own"
+    );
+    assert!(
+        !artifacts
+            .manifest
+            .descriptors
+            .iter()
+            .any(|descriptor| descriptor.key.contains("#DESC:VTABLE")
+                && descriptor.key.contains("FB")),
+        "a method-less FB has no class VTABLE"
+    );
+
+    let def = find_def(&common::clean_hir(OOP), "Shape");
+    let typeinfo = artifacts
+        .descriptor_slot(def, DescriptorKind::TypeInfo)
+        .expect("TYPEINFO slot");
+    let vtable = artifacts
+        .descriptor_slot(def, DescriptorKind::Vtable)
+        .expect("VTABLE slot");
+    assert_ne!(typeinfo, vtable);
+    assert_eq!(
+        artifacts.slots[typeinfo as usize].descriptor,
+        Some(stc_codegen::module::DescriptorTarget {
+            def,
+            kind: DescriptorKind::TypeInfo
+        })
+    );
+}
+
+#[test]
+fn projects_hidden_object_records_and_class_handles() {
+    let artifacts = project_source(OOP, "hidden");
+    let hir = common::clean_hir(OOP);
+    let globals = artifacts
+        .manifest
+        .roots
+        .iter()
+        .map(|root| (root.key.as_str(), root))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let handle = globals.get("_ROOT::S#HANDLE").expect("class handle root");
+    assert_eq!(handle.root_kind, RootKind::NestedField);
+    assert_eq!(handle.retention, stc_got::Retention::None);
+    assert_eq!(handle.initializer, InitializerKind::None);
+    assert!(handle.type_key.starts_with("PTR_TO(T:"));
+    assert_eq!(handle.size, 8);
+    assert_eq!(handle.align, 8);
+    assert!(handle.source.is_some(), "declaration span");
+    let record = globals.get("_ROOT::S#OBJREC").expect("class record root");
+    assert_eq!(record.root_kind, RootKind::NestedField);
+    let shape_record = artifacts
+        .manifest
+        .types
+        .iter()
+        .find(|ty| ty.key == "_ROOT::SHAPE")
+        .expect("Shape type");
+    assert_eq!(
+        record.type_key,
+        format!("ARRAY[0..1]OF(PTR_TO({}))", shape_record.type_key)
+    );
+    assert_eq!(record.size, 16);
+    assert_eq!(record.align, 8);
+    assert_eq!(record.retention, stc_got::Retention::None);
+    assert!(
+        globals.contains_key("_ROOT::S.ID"),
+        "the owned instance's fields stay ordinary roots"
+    );
+
+    // FB values stay inline and have a record root but no handle root.
+    assert!(globals.contains_key("_ROOT::F#OBJREC"));
+    assert!(!globals.contains_key("_ROOT::F#HANDLE"));
+    assert!(globals.contains_key("_ROOT::F.CV"));
+
+    // Arrays of classes own one handle array and one record per element.
+    let array = globals.get("_ROOT::SA#HANDLE").expect("array handle root");
+    assert!(array.type_key.starts_with("ARRAY[1..2]OF(PTR_TO(T:"));
+    assert_eq!(array.size, 16);
+    for element in ["_ROOT::SA.E0#OBJREC", "_ROOT::SA.E1#OBJREC"] {
+        assert!(globals.contains_key(element), "{element}");
+    }
+
+    // Program fields use the configured instance path.
+    for key in [
+        "_ROOT::MAIN.M#C/R/INST/HANDLE",
+        "_ROOT::MAIN.M#C/R/INST/OBJREC",
+        "_ROOT::MAIN.M.ID#C/R/INST",
+        "_ROOT::MAIN.FB#C/R/INST/OBJREC",
+        "_ROOT::MAIN.FB.CV#C/R/INST",
+    ] {
+        assert!(globals.contains_key(key), "{key}");
+    }
+    assert!(!globals.contains_key("_ROOT::MAIN.FB#C/R/INST/HANDLE"));
+
+    // Hidden roots bind to codegen targets and have slots.
+    let s = find_global(&hir, "s");
+    assert!(
+        artifacts
+            .root_slot(&RootTarget::global_handle(s, &[]))
+            .is_some()
+    );
+    assert!(
+        artifacts
+            .root_slot(&RootTarget::global_record(s, &[]))
+            .is_some()
+    );
+    let sa = find_global(&hir, "sa");
+    assert!(
+        artifacts
+            .root_slot(&RootTarget::global_handle(sa, &[]))
+            .is_some()
+    );
+    let element_record = artifacts
+        .slot_for_key("_ROOT::SA.E1#OBJREC")
+        .expect("array-element record binding");
+    assert_eq!(element_record.kind, stc_codegen::ir::CellKind::Data);
+    assert!(element_record.got_id != stc_got::GotId::ZERO);
+}
+
+#[test]
+fn class_typed_field_records_use_handle_keys() {
+    let artifacts = project_source(OOP, "fields");
+    let holder = artifacts
+        .manifest
+        .types
+        .iter()
+        .find(|ty| ty.key == "_ROOT::HOLDER")
+        .expect("Holder type");
+    let field = holder
+        .fields
+        .iter()
+        .find(|field| field.path == "SHAPE")
+        .expect("shape field");
+    assert!(field.type_key.starts_with("PTR_TO(T:"));
+    assert_eq!(field.size, 8);
+    assert_eq!(field.align, 8);
+    assert!(holder.type_key.starts_with("T:"));
+    assert_eq!(holder.size, 8, "the instance layout is one handle");
+}
+
+#[test]
+fn hidden_root_projection_is_deterministic() {
+    let first = project_source(OOP, "hidden_determinism");
+    let second = project_source(OOP, "hidden_determinism");
+    assert_eq!(first.manifest_binary, second.manifest_binary);
+    assert_eq!(first.manifest_json, second.manifest_json);
+    assert_eq!(first.descriptor_bytes, second.descriptor_bytes);
+    assert_eq!(first.slots, second.slots);
+    assert_eq!(first.manifest.roots.len(), second.manifest.roots.len());
+}
+
+#[test]
+fn required_features_cover_descriptors_and_places() {
+    let artifacts = project_source(OOP, "features");
+    let features = artifacts.manifest.header.required_features;
+    assert_eq!(
+        features & stc_got::manifest::FEATURE_DESCRIPTORS,
+        stc_got::manifest::FEATURE_DESCRIPTORS
+    );
+    assert_eq!(
+        features & stc_got::manifest::FEATURE_PLACES,
+        stc_got::manifest::FEATURE_PLACES
+    );
+    assert_eq!(artifacts.descriptor.required_features, features);
 }
 
 #[test]

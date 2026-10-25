@@ -27,7 +27,7 @@
       "build_id": "0x3a2b33b578be275fce19dc8b2b257642",
       "catalog_digest": "0xda906c55f4f7bfcdffb1da1e288ba02b5faa5bc5965be0436ac619ee3b5f198f",
       "compiler_version": "stc 0.1.0",
-      "descriptor_digest": "0x7baaccba011d5a11fd13429d98cf150e3dcc1e8c2a596f759e412b564f5b3dce",
+      "descriptor_digest": "0xf4532eac5f4f8c48f4fbd6d8276371206673c1d14489e3a38034a03ea5562b38",
       "endianness": 0,
       "generator_flags": 65,
       "host_abi_major": 2,
@@ -39,7 +39,7 @@
       "plan_digest": "0xebb0f4d2f1ae49a39a06ec87fa873312bd375f493251f23fe5c353aba1b95f4a",
       "pointer_width": 8,
       "profile": "stc-2013-oop-utf8-v1",
-      "required_features": 3,
+      "required_features": 15,
       "source_fingerprint": "0x839c3ffa94d4904af6130585a082d3713627571f6a9d882879e78dfb9832bd51",
       "target_triple": "x86_64-unknown-linux-gnu"
     },
@@ -272,7 +272,7 @@
     ],
     "types": []
   },
-  "digest": "0x410b671755a5a03c87b3d280e1bb09902b61472f46362c57ff07ec3f28711820",
+  "digest": "0xa1a1845a82e5cef54315aff21041569631be069e0985b055574dedd63dfae51b",
   "flags": 0,
   "format": 1
 }

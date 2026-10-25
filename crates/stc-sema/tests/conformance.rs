@@ -942,6 +942,39 @@ END_PROGRAM
 }
 
 #[test]
+fn retained_class_instances_are_persistable() {
+    // A class value is a handle, but its owned instance's fields are ordinary
+    // retained leaves (D-152, State and RETAIN §2.3).
+    common::assert_no_error(
+        "CLASS Shape
+VAR PUBLIC
+  id : DINT;
+END_VAR
+END_CLASS
+PROGRAM P
+VAR RETAIN
+  s : Shape;
+END_VAR
+  s.id := 1;
+END_PROGRAM
+",
+    );
+    assert_error(
+        "INTERFACE I
+METHOD M : DINT
+END_METHOD
+END_INTERFACE
+PROGRAM P
+VAR RETAIN
+  i : I;
+END_VAR
+END_PROGRAM
+",
+        stc_sema::codes::RETAIN_NOT_PERSISTABLE,
+    );
+}
+
+#[test]
 fn test_only_units_are_excluded_and_references_are_errors() {
     assert_error(
         "{stc:test}

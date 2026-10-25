@@ -89,6 +89,8 @@ pub(crate) struct ProgramLeaf {
     pub retain: RetainPolicy,
     /// Direct `AT` address for a top-level direct field.
     pub at: Option<stc_hir::DirectAddress>,
+    /// Class definition when the leaf is a class handle value.
+    pub class_handle: Option<DefId>,
 }
 
 /// One persistent leaf of a class/FB object type.
@@ -105,6 +107,8 @@ pub(crate) struct ObjectLeaf {
     pub layout: StorageLayout,
     /// Leaf layout hash.
     pub layout_hash: stc_got::GotId,
+    /// Class definition when the leaf is a class handle value.
+    pub class_handle: Option<DefId>,
 }
 
 /// Persistent leaf layout for one class/FB type.
@@ -439,16 +443,9 @@ pub(crate) fn program_layouts(
         let mut leaves = Vec::new();
         for field in fields {
             let data = hir.field(*field);
-            let leaf_prefix = match normalize_field_name(hir, *field) {
-                Ok(name) => name,
-                Err(error) => {
-                    errors.push(error);
-                    continue;
-                }
-            };
-            match types.root_leaves(data.ty, &leaf_prefix, data.retain) {
-                Ok(declared) => {
-                    for mut leaf in declared {
+            match types.storage_plan(data.ty, data.retain) {
+                Ok(plan) => {
+                    for mut leaf in plan.leaves {
                         leaf.segments.insert(0, RootSegment::Field(*field));
                         let at = if data.at.is_some() && leaf.segments.len() == 1 {
                             data.at.clone()
@@ -463,6 +460,7 @@ pub(crate) fn program_layouts(
                             layout_hash: leaf.layout_hash,
                             retain: leaf.retain,
                             at,
+                            class_handle: leaf.class_handle,
                         });
                     }
                 }
@@ -516,7 +514,7 @@ pub(crate) fn object_layouts(
             // interned value type and therefore no object layout.
             continue;
         }
-        match types.root_leaves_for_def(id, "", RetainPolicy::None) {
+        match types.instance_leaves_for_def(id, RetainPolicy::None) {
             Ok(leaves) => {
                 layouts.insert(
                     id,
@@ -529,6 +527,7 @@ pub(crate) fn object_layouts(
                                 key: leaf.key,
                                 layout: leaf.layout,
                                 layout_hash: leaf.layout_hash,
+                                class_handle: leaf.class_handle,
                             })
                             .collect(),
                     },
@@ -544,20 +543,6 @@ pub(crate) fn object_layouts(
         errors.dedup();
         Err(errors)
     }
-}
-
-fn normalize_field_name(hir: &HirCrate, field: FieldId) -> Result<String, CodegenError> {
-    let data = hir.field(field);
-    stc_got::normalize_ident(hir.interner.text(data.name)).map_err(|_| {
-        CodegenError::unsupported(
-            codes::CODEGEN_UNSUPPORTED,
-            format!(
-                "field `{}` is not a valid identifier",
-                hir.interner.text(data.name)
-            ),
-            data.span,
-        )
-    })
 }
 
 /// Builds the process-image layout and defaults.
@@ -818,15 +803,15 @@ pub(crate) fn retain_layout(
         }
         let id = DefId::new(u32::try_from(index).unwrap_or(0));
         let prefix = def.name_text(&hir.interner).to_string();
-        let declared = match types.root_leaves(*ty, &prefix, *retain) {
-            Ok(leaves) => leaves,
+        let declared = match types.storage_plan(*ty, *retain) {
+            Ok(plan) => plan.leaves,
             Err(error) => {
                 errors.push(error.with_span(def.span));
                 continue;
             }
         };
         for leaf in declared {
-            if leaf.retain != RetainPolicy::Retain {
+            if leaf.retain != RetainPolicy::Retain || leaf.is_class_handle() {
                 continue;
             }
             let path = match retain_path(hir, types, *ty, &prefix, &leaf.segments) {
@@ -874,7 +859,10 @@ pub(crate) fn retain_layout(
             }
         };
         for leaf in &layout.leaves {
-            if leaf.retain != RetainPolicy::Retain || leaf.at.is_some() {
+            if leaf.retain != RetainPolicy::Retain
+                || leaf.at.is_some()
+                || leaf.class_handle.is_some()
+            {
                 continue;
             }
             let path =

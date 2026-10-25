@@ -373,7 +373,8 @@ The catalog contains:
 
 - **Roots:** one record per persistent data root. M4.5 roots are scalar globals and per-instance
   scalar program fields, plus one task-guard root per task. Direct `AT` variables are not
-  persistent roots; they use direct cells and a direct identity record.
+  persistent roots; they use direct cells and a direct identity record. M5 phase 4b.1 adds hidden
+  non-retained `HANDLE` roots for class values and `OBJREC` roots for class/FB instances (§8.5.6).
 - **Functions:** one record per user function, program body, method, FB body, standard function
   that is called indirectly, and export wrapper. Compiler-generated helpers are module-local and
   do not get identities.
@@ -850,7 +851,10 @@ byte layout and its bound carries the leaf count into the layout hash.
 The `HANDLE` and `OBJREC` markers never occur in a source identifier position: they follow the
 `#` marker, so a user field named `HANDLE` or `OBJREC` keeps its ordinary path key. A generated
 key never uses `HANDLE` or `OBJREC` as a nested instance name, and a source declaration whose
-derived key would collide with a hidden root is rejected rather than merged.
+derived key would collide with a hidden root is rejected rather than merged. The marker is
+recognized only as the whole detail suffix or as the final segment after a complete
+(`CONFIG/RESOURCE/INSTANCE`) path, so a three-segment ordinary instance that happens to be named
+`HANDLE` or `OBJREC` keeps its ordinary root key.
 
 The host allocates hidden roots like any data root and zeroes fresh storage. Generated
 `stc_module_prepare` then fills every fresh object record (TYPEINFO pointer plus leaf storage
@@ -1101,7 +1105,8 @@ source          option<SourceLocation>
 Descriptor records are sorted by `(key, got_id)`. A descriptor cell is host-owned; the record
 describes its shape, and the host creates the runtime object during prepare. Vtable and object
 descriptor shape changes are rejected while a live instance or interface depends on them. M4.5
-emits no descriptors.
+emits no descriptors; M5 phase 4b.1 emits one TYPEINFO per class/FB type and one VTABLE when the
+type has class method slots (interface types get no descriptor).
 
 `InstanceRecord`:
 
@@ -1621,6 +1626,20 @@ with trap-stub cells, and the inline access rules. Descriptor records keep the o
 type key, layout hash, size, and alignment; the record layout is separate and versioned. The
 module and manifest formats remain 1. D-147–D-152 record the phase decisions; the catalog
 projection, host registry, dispatch, and attempt code land in phases 4b.1–4b.5.
+
+M5 phase 4b.1 is implemented (2026-10-25) in `stc-codegen` and `stc-got`. `types` projects the
+class value/instance layout split, `PTR_TO` handle keys for class-typed fields and leaves, the
+object-record type key (`ARRAY[0..N]OF(PTR_TO(T:…))` with `N + 1` pointers), the base-first
+interface map and per-interface vtable order, and per-object instance leaves. `module` emits one
+TYPEINFO per class/FB (and a VTABLE when class slots exist), interface prototypes as method
+function records with trap-stub symbols, one hidden `OBJREC` root per persistent instance and one
+hidden `HANDLE` root per class value, and sets required-feature bits 2 and 3. `unit` emits the
+trap stubs and fills fresh records and handles in `stc_module_prepare`; `stc-got` accepts the
+markers while keeping format 1 and rejects a marker on a non-hidden root or a pointer type on an
+ordinary root. The runtime binds descriptor cells during the 4b.1 window with zeroed placeholder
+storage until the 4b.2 registry replaces it. Class-owned instance fields remain ordinary retained
+leaves; handle and record roots are non-retained. Recursive class ownership has no finite
+persistent storage and is rejected at the declaration.
 
 ## 13. Related documents
 

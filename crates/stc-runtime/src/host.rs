@@ -260,6 +260,40 @@ impl Candidate {
 }
 
 /// One active or prepared module generation.
+/// Zero-filled host storage bound to descriptor cells until the ABI 2.1
+/// descriptor registry replaces it (phase 4b.2).
+///
+/// Generated prepare reads the TYPEINFO cell value when it fills a fresh
+/// object record. The placeholder keeps the cell bound and non-null; no
+/// generated code dereferences the record header before the registry lands.
+#[derive(Default)]
+struct DescriptorPlaceholders {
+    storage: Vec<Box<[u8; DESCRIPTOR_PLACEHOLDER_SIZE]>>,
+}
+
+/// Size of one placeholder descriptor cell.
+const DESCRIPTOR_PLACEHOLDER_SIZE: usize = 4096;
+
+impl DescriptorPlaceholders {
+    fn new(manifest: &Manifest) -> Self {
+        let storage = manifest
+            .descriptors
+            .iter()
+            .map(|_| Box::new([0_u8; DESCRIPTOR_PLACEHOLDER_SIZE]))
+            .collect();
+        Self { storage }
+    }
+
+    fn addresses(&self, manifest: &Manifest) -> BTreeMap<GotId, usize> {
+        manifest
+            .descriptors
+            .iter()
+            .zip(&self.storage)
+            .map(|(descriptor, storage)| (descriptor.got_id, storage.as_ptr() as usize))
+            .collect()
+    }
+}
+
 struct Generation {
     id: u64,
     module: LoadedModule,
@@ -271,6 +305,10 @@ struct Generation {
     attached: bool,
     shutdown_done: bool,
     cycles: u64,
+    /// Placeholder descriptor storage owned by this generation. The field is
+    /// never read directly; it keeps the addresses bound in the GOT alive.
+    #[allow(dead_code)]
+    descriptors: DescriptorPlaceholders,
 }
 
 impl Generation {
@@ -281,6 +319,7 @@ impl Generation {
         manifest: Manifest,
         manifest_digest: Digest32,
         info: Option<ModuleInfo>,
+        descriptors: DescriptorPlaceholders,
     ) -> Self {
         Self {
             id,
@@ -293,6 +332,7 @@ impl Generation {
             attached: false,
             shutdown_done: false,
             cycles: 0,
+            descriptors,
         }
     }
 
@@ -1203,16 +1243,6 @@ impl Host {
         let Candidate { module, pair, info } = candidate;
         let manifest = pair.manifest;
         let manifest_digest = pair.manifest_digest;
-        if manifest
-            .slots
-            .iter()
-            .any(|slot| slot.kind == SlotKind::Descriptor)
-        {
-            return Err(Error::new(
-                codes::ONLINE_BINDING,
-                "descriptor cells require the M5 runtime descriptor table",
-            ));
-        }
         let slot_count = u32::try_from(manifest.slots.len())
             .map_err(|_| Error::new(codes::ONLINE_BINDING, "slot count exceeds u32"))?;
 
@@ -1230,6 +1260,8 @@ impl Host {
                 functions.insert(function.got_id, *address as usize);
             }
             got.bind_functions(&functions)?;
+            let descriptors = DescriptorPlaceholders::new(&manifest);
+            got.bind_descriptors(&descriptors.addresses(&manifest))?;
             got.bind_direct(direct)?;
             got.bind_imports(host_api::service_address)?;
             if !got.unbound_slots().is_empty() {
@@ -1239,8 +1271,15 @@ impl Host {
                 ));
             }
 
-            let mut generation =
-                Generation::new(generation_id, module, got, manifest, manifest_digest, info);
+            let mut generation = Generation::new(
+                generation_id,
+                module,
+                got,
+                manifest,
+                manifest_digest,
+                info,
+                descriptors,
+            );
             let mask = if mode == 0 {
                 Vec::new()
             } else {

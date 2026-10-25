@@ -171,14 +171,18 @@ pub struct TypeFacts {
     pub key: String,
     /// LLVM value type in SSA and calls (`BOOL` is `i1`, objects are handles).
     pub llvm_value: IrType,
-    /// LLVM storage type for allocas and roots (`BOOL` is `i8`).
+    /// LLVM storage type for allocas and roots (`BOOL` is `i8`, class values
+    /// are pointer-sized handles, FB values are inline instances).
     pub llvm_storage: IrType,
-    /// Size and natural alignment.
+    /// Size and natural alignment of the value.
     pub layout: StorageLayout,
     /// Target-specific layout hash.
     pub layout_hash: GotId,
     /// Structural category.
     pub category: TypeCategory,
+    /// `true` for a class value (a pointer-sized handle); `false` for every
+    /// other type, including inline function-block values.
+    pub class_value: bool,
 }
 
 impl TypeFacts {
@@ -199,6 +203,12 @@ impl TypeFacts {
     #[must_use]
     pub const fn is_object(&self) -> bool {
         matches!(self.category, TypeCategory::Object { .. })
+    }
+
+    /// Returns `true` for class values (handles), `false` for inline FBs.
+    #[must_use]
+    pub const fn is_class(&self) -> bool {
+        self.class_value
     }
 
     /// Returns `true` for string values.
@@ -329,6 +339,12 @@ impl NamedType {
     pub const fn is_object(&self) -> bool {
         matches!(self.kind, NamedKind::FunctionBlock | NamedKind::Class)
     }
+
+    /// Returns `true` for class types, whose values are pointer-sized handles.
+    #[must_use]
+    pub const fn is_class(&self) -> bool {
+        matches!(self.kind, NamedKind::Class)
+    }
 }
 
 /// Named type kinds.
@@ -402,6 +418,10 @@ pub struct RootLeaf {
     pub layout_hash: GotId,
     /// Effective retention policy.
     pub retain: RetainPolicy,
+    /// Set when the leaf is a class value handle: one class value or one
+    /// array of class values. The class definition identifies the owned
+    /// instance the handle refers to; hidden `HANDLE` roots own this storage.
+    pub class_handle: Option<DefId>,
 }
 
 impl RootLeaf {
@@ -412,6 +432,77 @@ impl RootLeaf {
             RootSegment::Element { .. } => None,
         })
     }
+
+    /// Returns `true` when the leaf is a class handle value.
+    #[must_use]
+    pub const fn is_class_handle(&self) -> bool {
+        self.class_handle.is_some()
+    }
+}
+
+/// One persistent class/FB instance below a declaration.
+#[derive(Clone, Debug)]
+pub struct ObjectInstance {
+    /// Declaration-relative path of the instance.
+    pub segments: Vec<RootSegment>,
+    /// Class/FB definition owning the instance state.
+    pub def: DefId,
+    /// `true` for a class (its handle is a separate root), `false` for an
+    /// inline function block.
+    pub class: bool,
+    /// For a class value that is one element of an array of classes, the
+    /// zero-based flat element index into the owning handle array.
+    pub handle_index: Option<u64>,
+    /// The instance's record leaves in base-first ordinal order.
+    pub leaves: Vec<RootLeaf>,
+}
+
+/// The persistent storage tree below one declaration.
+#[derive(Clone, Debug, Default)]
+pub struct StoragePlan {
+    /// Every value leaf, including class handle leaves.
+    pub leaves: Vec<RootLeaf>,
+    /// Every class/FB instance in declaration order.
+    pub objects: Vec<ObjectInstance>,
+}
+
+/// The class-handle projection of a class value or an array of class values.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassHandle {
+    /// Class definition owning the handle target.
+    pub def: DefId,
+    /// `PTR_TO(T:<class>)`, or the array key with that element key.
+    pub key: String,
+    /// Pointer-size handle, or the pointer array layout.
+    pub layout: StorageLayout,
+    /// Handle (or handle-array) layout hash.
+    pub layout_hash: GotId,
+    /// `true` when the value is an array of handles.
+    pub is_array: bool,
+}
+
+/// The runtime record shape of one class/FB type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectRecord {
+    /// Class/FB definition.
+    pub def: DefId,
+    /// Canonical `ARRAY[0..N]OF(PTR_TO(T:...))` record key.
+    pub key: String,
+    /// `ptr typeinfo` plus one pointer per instance leaf.
+    pub layout: StorageLayout,
+    /// Target-specific record layout hash.
+    pub layout_hash: GotId,
+    /// Number of instance leaves (`N`); the record has `N + 1` pointers.
+    pub leaf_count: u32,
+}
+
+/// One entry of a type's base-first interface map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InterfaceEntry {
+    /// Interface definition.
+    pub def: DefId,
+    /// Interface type identity.
+    pub id: GotId,
 }
 
 struct Builder<'a> {
@@ -700,8 +791,9 @@ impl<'a> TypeSystem<'a> {
     /// Returns `true` when a declaration of this type is one persistent root.
     ///
     /// Scalars, enums, subranges, strings, references, interfaces, `OVERLAP`
-    /// structs, and arrays whose element chain ends in one of those are single
-    /// roots. Structs, class/FB objects, and arrays of aggregates recurse.
+    /// structs, class values, and arrays whose element chain ends in one of
+    /// those are single roots. Structs, function-block values, and arrays of
+    /// aggregates recurse.
     ///
     /// # Errors
     ///
@@ -726,12 +818,17 @@ impl<'a> TypeSystem<'a> {
                 | TypeCategory::Null => return Ok(true),
                 TypeCategory::Struct { overlap, .. } => return Ok(*overlap),
                 TypeCategory::Array { element, .. } => ty = *element,
-                TypeCategory::Object { .. } => return Ok(false),
+                TypeCategory::Object { def } => return Ok(self.named(*def)?.is_class()),
             }
         }
     }
 
-    /// Enumerates the persistent leaf roots below a declaration of `ty`.
+    /// Enumerates the persistent value leaves below a declaration of `ty`.
+    ///
+    /// A class value (including an array of class values) is one handle leaf;
+    /// function-block values stay inline and recurse. The owned instance state
+    /// of a class is *not* part of the value leaf set; use [`Self::storage_plan`]
+    /// to enumerate instance roots.
     ///
     /// `prefix` is the normalized dotted path of the declaration itself (for
     /// example a program field name); returned paths are `prefix.segments`.
@@ -753,6 +850,577 @@ impl<'a> TypeSystem<'a> {
         Ok(leaves)
     }
 
+    /// Enumerates the instance leaves of one class/FB type.
+    ///
+    /// The result is the record's leaf order: base fields first, then derived
+    /// fields in declaration order. Class-typed fields contribute one handle
+    /// leaf; nested function-block fields recurse.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed layouts.
+    pub fn instance_leaves_for_def(
+        &self,
+        def: DefId,
+        retain: RetainPolicy,
+    ) -> Result<Vec<RootLeaf>, CodegenError> {
+        let mut leaves = Vec::new();
+        let mut segments = Vec::new();
+        self.collect_instance_leaves(def, retain, &mut segments, "", &mut leaves)?;
+        Ok(leaves)
+    }
+
+    fn collect_instance_leaves(
+        &self,
+        def: DefId,
+        retain: RetainPolicy,
+        segments: &mut Vec<RootSegment>,
+        prefix: &str,
+        out: &mut Vec<RootLeaf>,
+    ) -> Result<(), CodegenError> {
+        for named in self.field_chain(def)? {
+            for field in &named.fields {
+                let data = self.hir.field(field.field);
+                let retain = effective_retain(retain, data.retain);
+                segments.push(RootSegment::Field(field.field));
+                self.collect_leaves(data.ty, retain, segments, prefix, out)?;
+                segments.pop();
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns the class definition named by a class value or by an array
+    /// whose elements are class values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed types.
+    pub fn class_def(&self, ty: TyId) -> Result<Option<DefId>, CodegenError> {
+        Ok(self.class_handle_projection(ty)?.map(|handle| handle.def))
+    }
+
+    /// Projects a class value (or an array of class values) to its handle
+    /// key, layout, and layout hash.
+    ///
+    /// The handle key is `PTR_TO(T:<class>)`, or the array key with that
+    /// element key. It is the type key the catalog uses for `HANDLE` roots and
+    /// class-typed fields, while the class `TypeRecord` keeps the instance
+    /// layout (GOT Artifacts §8.5.5).
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed types.
+    pub fn class_handle_projection(&self, ty: TyId) -> Result<Option<ClassHandle>, CodegenError> {
+        let original = ty;
+        let mut current = ty;
+        let mut array = false;
+        let mut seen = BTreeSet::new();
+        loop {
+            if !seen.insert(current) {
+                return Err(CodegenError::internal("recursive class-handle projection"));
+            }
+            match &self.facts(current)?.category {
+                TypeCategory::Array { element, .. } => {
+                    array = true;
+                    current = *element;
+                }
+                TypeCategory::Object { def } => {
+                    if !self.named(*def)?.is_class() {
+                        return Ok(None);
+                    }
+                    let facts = self.facts(original)?;
+                    return Ok(Some(ClassHandle {
+                        def: *def,
+                        key: facts.key.clone(),
+                        layout: facts.layout,
+                        layout_hash: facts.layout_hash,
+                        is_array: array,
+                    }));
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    /// Returns the owned instance layout of a class/FB value, or the value
+    /// layout for every other type.
+    ///
+    /// A class value is a pointer-sized handle; the instance layout is the
+    /// field struct owned by the declaring storage and recorded in
+    /// `TypeRecord` (GOT Artifacts §8.5.5).
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed types.
+    pub fn instance_layout(&self, ty: TyId) -> Result<StorageLayout, CodegenError> {
+        match self.category(ty)? {
+            TypeCategory::Object { def } => Ok(self.named(*def)?.layout),
+            _ => Ok(self.facts(ty)?.layout),
+        }
+    }
+
+    /// Returns the owned instance LLVM storage type of a class/FB value, or
+    /// the value storage type for every other type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed types.
+    pub fn instance_llvm_storage(&self, ty: TyId) -> Result<IrType, CodegenError> {
+        match self.category(ty)? {
+            TypeCategory::Object { def } => Ok(self.named(*def)?.llvm_storage.clone()),
+            _ => Ok(self.facts(ty)?.llvm_storage.clone()),
+        }
+    }
+
+    /// Returns the runtime object-record shape of a class/FB type.
+    ///
+    /// The record is `ptr typeinfo` followed by one pointer per instance leaf;
+    /// its canonical key is `ARRAY[0..N]OF(PTR_TO(T:<type>))` with `N + 1`
+    /// elements (GOT Artifacts §8.5.1, §8.5.6).
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed types.
+    pub fn object_record(&self, def: DefId) -> Result<ObjectRecord, CodegenError> {
+        let named = self.named(def)?;
+        if !named.is_object() {
+            return Err(CodegenError::internal(
+                "object record requested for a non-object type",
+            ));
+        }
+        let leaf_count = self.instance_leaves_for_def(def, RetainPolicy::None)?.len();
+        let count = u64::try_from(leaf_count).unwrap_or(u64::MAX);
+        let pointer = u64::from(self.target.pointer_width);
+        let align = u32::from(self.target.pointer_width);
+        let element_key_text = format!("PTR_TO(T:{})", named.id.to_hex_plain());
+        let element_key = TypeKey::parse(&element_key_text).map_err(|error| {
+            CodegenError::internal(format!(
+                "object record element key `{element_key_text}`: {}",
+                error.message
+            ))
+        })?;
+        let element_hash = layout_hash(
+            &self.target,
+            &element_key,
+            &reference_layout_bytes(2, &element_key),
+        );
+        let key = format!("ARRAY[0..{count}]OF({element_key_text})");
+        let record_key = TypeKey::parse(&key).map_err(|error| {
+            CodegenError::internal(format!("object record key `{key}`: {}", error.message))
+        })?;
+        let layout = StorageLayout::new(pointer.saturating_mul(count.saturating_add(1)), align);
+        let hash = layout_hash(
+            &self.target,
+            &record_key,
+            &array_layout_bytes(count.saturating_add(1), pointer, &element_key, element_hash),
+        );
+        Ok(ObjectRecord {
+            def,
+            key,
+            layout,
+            layout_hash: hash,
+            leaf_count: u32::try_from(leaf_count).unwrap_or(u32::MAX),
+        })
+    }
+
+    /// Returns a class/FB type's base-first interface map.
+    ///
+    /// Inherited entries keep their indices; interfaces newly satisfied by the
+    /// type (including interfaces reached through an interface's `EXTENDS`
+    /// closure) are appended sorted by `GotId` (GOT Artifacts §8.5.2).
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed types.
+    pub fn interface_map(&self, def: DefId) -> Result<Vec<InterfaceEntry>, CodegenError> {
+        let named = self.named(def)?;
+        let mut entries = match named.base {
+            Some(base) => self.interface_map(base)?,
+            None => Vec::new(),
+        };
+        let mut seen: BTreeSet<DefId> = entries.iter().map(|entry| entry.def).collect();
+        let mut added = Vec::new();
+        for interface in &named.interfaces {
+            self.collect_interface_closure(*interface, &mut seen, &mut added)?;
+        }
+        added.sort_by_key(|(_, id)| *id);
+        entries.extend(
+            added
+                .into_iter()
+                .map(|(def, id)| InterfaceEntry { def, id }),
+        );
+        Ok(entries)
+    }
+
+    fn collect_interface_closure(
+        &self,
+        def: DefId,
+        seen: &mut BTreeSet<DefId>,
+        out: &mut Vec<(DefId, GotId)>,
+    ) -> Result<(), CodegenError> {
+        let def = self.resolve_alias(def)?;
+        if !seen.insert(def) {
+            return Ok(());
+        }
+        let named = self.named(def)?;
+        if !matches!(named.kind, NamedKind::Interface) {
+            return Err(CodegenError::internal(
+                "an implemented type is not an interface",
+            ));
+        }
+        out.push((def, named.id));
+        let extends = named.interfaces.clone();
+        for parent in extends {
+            self.collect_interface_closure(parent, seen, out)?;
+        }
+        Ok(())
+    }
+
+    /// Returns an interface type's vtable entries in slot order.
+    ///
+    /// The entries are the prototypes in the interface's `EXTENDS` closure,
+    /// base-first: each interface contributes its own prototypes sorted by
+    /// (name, signature), and a duplicate (name, signature) is kept only at its
+    /// earliest occurrence (GOT Artifacts §8.5.3). Sema assigns the slots; this
+    /// returns them in that order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for non-interface types.
+    pub fn interface_vtable(&self, def: DefId) -> Result<Vec<MethodSlot>, CodegenError> {
+        let named = self.named(def)?;
+        if !matches!(named.kind, NamedKind::Interface) {
+            return Err(CodegenError::internal(
+                "interface vtable requested for a non-interface type",
+            ));
+        }
+        Ok(named.vtable.clone())
+    }
+
+    /// Returns the signature key of a function or method definition.
+    ///
+    /// The interface-prototype stub function records use this signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for non-callables.
+    pub fn callable_signature(&self, def: DefId) -> Result<String, CodegenError> {
+        let (params, result) = match self.hir.defs[def.index()].kind.clone() {
+            DefKind::Method { params, result, .. } | DefKind::Function { params, result, .. } => {
+                (params, result)
+            }
+            _ => {
+                return Err(CodegenError::internal(
+                    "signature requested for a non-callable",
+                ));
+            }
+        };
+        let mut parameters = Vec::new();
+        for param in params {
+            let data = self.hir.param(param).clone();
+            let mode = match data.direction {
+                ArgDirection::Input => "IN",
+                ArgDirection::Output => "OUT",
+                ArgDirection::InOut => "INOUT",
+            };
+            let key = self.key(data.ty)?;
+            parameters.push(format!("{mode}:{key}"));
+        }
+        let result = match result {
+            Some(ty) => self.key(ty)?,
+            None => "VOID",
+        };
+        Ok(format!("({})->{result}", parameters.join(",")))
+    }
+
+    /// Enumerates every persistent root and class/FB instance below a
+    /// declaration.
+    ///
+    /// Unlike [`Self::root_leaves`], a class value contributes its handle leaf
+    /// *and* the owned instance's storage: the instance's field roots, nested
+    /// handles, and nested object records. This is the catalog root set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-construct error for malformed layouts.
+    pub fn storage_plan(
+        &self,
+        ty: TyId,
+        retain: RetainPolicy,
+    ) -> Result<StoragePlan, CodegenError> {
+        let mut plan = StoragePlan::default();
+        let mut segments = Vec::new();
+        let mut owning = BTreeSet::new();
+        self.collect_storage(ty, retain, &mut segments, "", &mut plan, &mut owning)?;
+        Ok(plan)
+    }
+
+    /// Marks one owned class/FB instance as being stored, rejecting recursive
+    /// ownership that would require infinite persistent storage.
+    fn enter_owned_object(
+        &self,
+        def: DefId,
+        owning: &mut BTreeSet<DefId>,
+    ) -> Result<(), CodegenError> {
+        if !owning.insert(def) {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!(
+                    "`{}` recursively owns an instance of itself; persistent class/FB \
+                     instances need finite storage",
+                    self.hir.def_name(def)
+                ),
+                Span::empty(FileId::new(0), 0),
+            ));
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_storage(
+        &self,
+        ty: TyId,
+        retain: RetainPolicy,
+        segments: &mut Vec<RootSegment>,
+        prefix: &str,
+        plan: &mut StoragePlan,
+        owning: &mut BTreeSet<DefId>,
+    ) -> Result<(), CodegenError> {
+        if matches!(
+            self.facts(ty)?.category,
+            TypeCategory::Array {
+                conformant: true,
+                ..
+            }
+        ) {
+            return Err(CodegenError::internal(
+                "a conformant array cannot be a persistent root",
+            ));
+        }
+        if let Some(handle) = self.class_handle_projection(ty)? {
+            plan.leaves.push(RootLeaf {
+                segments: segments.clone(),
+                path: segment_path(self.hir, prefix, segments),
+                ty,
+                key: handle.key,
+                layout: handle.layout,
+                layout_hash: handle.layout_hash,
+                retain,
+                class_handle: Some(handle.def),
+            });
+            match &self.facts(ty)?.category {
+                TypeCategory::Object { def } => {
+                    self.enter_owned_object(*def, owning)?;
+                    self.push_object(*def, true, None, segments, prefix, plan)?;
+                    self.collect_storage_fields(*def, retain, segments, prefix, plan, owning)?;
+                    owning.remove(def);
+                }
+                TypeCategory::Array { element, dims, .. } => {
+                    if dims.is_empty() {
+                        return Err(CodegenError::internal(
+                            "a class-handle array has no dimensions",
+                        ));
+                    }
+                    self.collect_class_array(
+                        *element, dims, 0, 0, retain, segments, prefix, plan, owning,
+                    )?;
+                }
+                _ => {
+                    return Err(CodegenError::internal(
+                        "a class handle is not an object or array",
+                    ));
+                }
+            }
+            return Ok(());
+        }
+        if self.is_single_root(ty)? {
+            let facts = self.facts(ty)?;
+            plan.leaves.push(RootLeaf {
+                segments: segments.clone(),
+                path: segment_path(self.hir, prefix, segments),
+                ty,
+                key: facts.key.clone(),
+                layout: facts.layout,
+                layout_hash: facts.layout_hash,
+                retain,
+                class_handle: None,
+            });
+            return Ok(());
+        }
+        match &self.facts(ty)?.category {
+            TypeCategory::Object { def } => {
+                self.enter_owned_object(*def, owning)?;
+                self.push_object(*def, false, None, segments, prefix, plan)?;
+                self.collect_storage_fields(*def, retain, segments, prefix, plan, owning)?;
+                owning.remove(def);
+            }
+            TypeCategory::Struct { def, .. } => {
+                for field in &self.named(*def)?.fields {
+                    let data = self.hir.field(field.field);
+                    let retain = effective_retain(retain, data.retain);
+                    segments.push(RootSegment::Field(field.field));
+                    self.collect_storage(data.ty, retain, segments, prefix, plan, owning)?;
+                    segments.pop();
+                }
+            }
+            TypeCategory::Array {
+                element,
+                dims,
+                conformant,
+            } => {
+                if *conformant {
+                    return Err(CodegenError::internal(
+                        "a conformant array cannot be a persistent root",
+                    ));
+                }
+                self.collect_storage_array(
+                    *element, dims, 0, retain, segments, prefix, plan, owning,
+                )?;
+            }
+            _ => {
+                let facts = self.facts(ty)?;
+                plan.leaves.push(RootLeaf {
+                    segments: segments.clone(),
+                    path: segment_path(self.hir, prefix, segments),
+                    ty,
+                    key: facts.key.clone(),
+                    layout: facts.layout,
+                    layout_hash: facts.layout_hash,
+                    retain,
+                    class_handle: None,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_storage_fields(
+        &self,
+        def: DefId,
+        retain: RetainPolicy,
+        segments: &mut Vec<RootSegment>,
+        prefix: &str,
+        plan: &mut StoragePlan,
+        owning: &mut BTreeSet<DefId>,
+    ) -> Result<(), CodegenError> {
+        for named in self.field_chain(def)? {
+            for field in &named.fields {
+                let data = self.hir.field(field.field);
+                let retain = effective_retain(retain, data.retain);
+                segments.push(RootSegment::Field(field.field));
+                self.collect_storage(data.ty, retain, segments, prefix, plan, owning)?;
+                segments.pop();
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_storage_array(
+        &self,
+        element: TyId,
+        dims: &[ArrayDim],
+        dim: usize,
+        retain: RetainPolicy,
+        segments: &mut Vec<RootSegment>,
+        prefix: &str,
+        plan: &mut StoragePlan,
+        owning: &mut BTreeSet<DefId>,
+    ) -> Result<(), CodegenError> {
+        if dim >= dims.len() {
+            return self.collect_storage(element, retain, segments, prefix, plan, owning);
+        }
+        for index in 0..dims[dim].length {
+            segments.push(RootSegment::Element {
+                index,
+                dim: u32::try_from(dim).unwrap_or(u32::MAX),
+            });
+            self.collect_storage_array(
+                element,
+                dims,
+                dim + 1,
+                retain,
+                segments,
+                prefix,
+                plan,
+                owning,
+            )?;
+            segments.pop();
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_class_array(
+        &self,
+        element: TyId,
+        dims: &[ArrayDim],
+        dim: usize,
+        flat: u64,
+        retain: RetainPolicy,
+        segments: &mut Vec<RootSegment>,
+        prefix: &str,
+        plan: &mut StoragePlan,
+        owning: &mut BTreeSet<DefId>,
+    ) -> Result<(), CodegenError> {
+        if dim >= dims.len() {
+            let Some(def) = self.class_def(element)? else {
+                return Err(CodegenError::internal(
+                    "a class-handle array has a non-class element",
+                ));
+            };
+            self.enter_owned_object(def, owning)?;
+            self.push_object(def, true, Some(flat), segments, prefix, plan)?;
+            self.collect_storage_fields(def, retain, segments, prefix, plan, owning)?;
+            owning.remove(&def);
+            return Ok(());
+        }
+        for index in 0..dims[dim].length {
+            segments.push(RootSegment::Element {
+                index,
+                dim: u32::try_from(dim).unwrap_or(u32::MAX),
+            });
+            let next = flat.saturating_mul(dims[dim].length).saturating_add(index);
+            self.collect_class_array(
+                element,
+                dims,
+                dim + 1,
+                next,
+                retain,
+                segments,
+                prefix,
+                plan,
+                owning,
+            )?;
+            segments.pop();
+        }
+        Ok(())
+    }
+
+    fn push_object(
+        &self,
+        def: DefId,
+        class: bool,
+        handle_index: Option<u64>,
+        segments: &[RootSegment],
+        prefix: &str,
+        plan: &mut StoragePlan,
+    ) -> Result<(), CodegenError> {
+        let mut leaves = Vec::new();
+        let mut path = segments.to_vec();
+        self.collect_instance_leaves(def, RetainPolicy::None, &mut path, prefix, &mut leaves)?;
+        plan.objects.push(ObjectInstance {
+            segments: segments.to_vec(),
+            def,
+            class,
+            handle_index,
+            leaves,
+        });
+        Ok(())
+    }
+
     fn collect_leaves(
         &self,
         ty: TyId,
@@ -761,6 +1429,18 @@ impl<'a> TypeSystem<'a> {
         prefix: &str,
         out: &mut Vec<RootLeaf>,
     ) -> Result<(), CodegenError> {
+        if matches!(
+            self.facts(ty)?.category,
+            TypeCategory::Array {
+                conformant: true,
+                ..
+            }
+        ) {
+            return Err(CodegenError::internal(
+                "a conformant array cannot be a persistent root",
+            ));
+        }
+        let handle = self.class_handle_projection(ty)?;
         if self.is_single_root(ty)? {
             let facts = self.facts(ty)?;
             out.push(RootLeaf {
@@ -771,6 +1451,7 @@ impl<'a> TypeSystem<'a> {
                 layout: facts.layout,
                 layout_hash: facts.layout_hash,
                 retain,
+                class_handle: handle.map(|handle| handle.def),
             });
             return Ok(());
         }
@@ -1476,13 +2157,25 @@ impl Builder<'_> {
                     u32::from(self.target.pointer_width),
                 ))
             }
-            Ty::Named(def) => match self.hir.defs[def.index()].kind.clone() {
-                DefKind::Alias { target } => self.layout_of(target),
-                _ => {
-                    self.compute_named(def)?;
-                    Ok(self.named[&def].layout)
+            Ty::Named(def) => {
+                if matches!(self.hir.defs[def.index()].kind, DefKind::Class { .. }) {
+                    // A class value is a pointer-sized handle. Its instance
+                    // layout is separate storage, so a class may refer to
+                    // itself by value without a layout recursion.
+                    let pointer = u64::from(self.target.pointer_width);
+                    return Ok(StorageLayout::new(
+                        pointer,
+                        u32::from(self.target.pointer_width),
+                    ));
                 }
-            },
+                match self.hir.defs[def.index()].kind.clone() {
+                    DefKind::Alias { target } => self.layout_of(target),
+                    _ => {
+                        self.compute_named(def)?;
+                        Ok(self.named[&def].layout)
+                    }
+                }
+            }
             Ty::Null => Ok(StorageLayout::new(0, 1)),
             Ty::Error | Ty::Generic(_) => Err(unsupported(ty, span, self.hir)),
         }
@@ -1545,6 +2238,7 @@ impl Builder<'_> {
                     layout_hash: elementary_layout_hash(&self.target, &TypeKey::Bool)
                         .ok_or_else(|| CodegenError::internal("BOOL layout hash missing"))?,
                     category: TypeCategory::Scalar(kind),
+                    class_value: false,
                 })
             }
             Ty::Int(_)
@@ -1571,6 +2265,7 @@ impl Builder<'_> {
                     layout: StorageLayout::new(kind.size_bytes(), scalar_align(kind)),
                     layout_hash: hash,
                     category: TypeCategory::Scalar(kind),
+                    class_value: false,
                 })
             }
             Ty::String(string) => {
@@ -1605,6 +2300,7 @@ impl Builder<'_> {
                         capacity: string.capacity,
                         unit_bytes: unit,
                     },
+                    class_value: false,
                 })
             }
             Ty::Array(array) => self.array_facts(ty, &array),
@@ -1626,6 +2322,7 @@ impl Builder<'_> {
                     category: TypeCategory::Reference {
                         target: reference.target,
                     },
+                    class_value: false,
                 })
             }
             Ty::Ptr(pointer) => {
@@ -1649,10 +2346,42 @@ impl Builder<'_> {
                     category: TypeCategory::Pointer {
                         target: pointer.target,
                     },
+                    class_value: false,
                 })
             }
             Ty::Named(def) => match self.hir.defs[def.index()].kind.clone() {
                 DefKind::Alias { target } => self.build_facts(target),
+                DefKind::Class { .. } => {
+                    let id = *self.ids.get(&def).ok_or_else(|| {
+                        CodegenError::internal(format!(
+                            "class `{}` has no content identity",
+                            self.hir.def_name(def)
+                        ))
+                    })?;
+                    let pointer = u64::from(self.target.pointer_width);
+                    let align = u32::from(self.target.pointer_width);
+                    let key = format!("PTR_TO(T:{})", id.to_hex_plain());
+                    let type_key = TypeKey::parse(&key).map_err(|error| {
+                        CodegenError::internal(format!(
+                            "class handle key `{key}`: {}",
+                            error.message
+                        ))
+                    })?;
+                    let hash = layout_hash(
+                        &self.target,
+                        &type_key,
+                        &reference_layout_bytes(2, &type_key),
+                    );
+                    Ok(TypeFacts {
+                        key,
+                        llvm_value: IrType::Ptr,
+                        llvm_storage: IrType::Ptr,
+                        layout: StorageLayout::new(pointer, align),
+                        layout_hash: hash,
+                        category: TypeCategory::Object { def },
+                        class_value: true,
+                    })
+                }
                 kind if named_kind(&kind).is_none() => Err(unsupported(ty, span, self.hir)),
                 _ => {
                     self.compute_named(def)?;
@@ -1662,7 +2391,7 @@ impl Builder<'_> {
                             def,
                             overlap: named.overlap,
                         },
-                        NamedKind::FunctionBlock | NamedKind::Class => TypeCategory::Object { def },
+                        NamedKind::FunctionBlock => TypeCategory::Object { def },
                         NamedKind::Interface => TypeCategory::Interface { def },
                         NamedKind::Enum => TypeCategory::Enum {
                             def,
@@ -1678,6 +2407,7 @@ impl Builder<'_> {
                             lower: named.subrange.map(|value| value.0).unwrap_or(0),
                             upper: named.subrange.map(|value| value.1).unwrap_or(0),
                         },
+                        NamedKind::Class => unreachable!("classes are handled above"),
                     };
                     Ok(TypeFacts {
                         key: named.key.clone(),
@@ -1686,6 +2416,7 @@ impl Builder<'_> {
                         layout: named.layout,
                         layout_hash: named.layout_hash,
                         category,
+                        class_value: false,
                     })
                 }
             },
@@ -1696,6 +2427,7 @@ impl Builder<'_> {
                 layout: StorageLayout::new(0, 1),
                 layout_hash: GotId::from_bytes([0xFF; 16]),
                 category: TypeCategory::Null,
+                class_value: false,
             }),
         }
     }
@@ -1754,6 +2486,7 @@ impl Builder<'_> {
                         .collect(),
                     conformant: true,
                 },
+                class_value: false,
             });
         }
         let element_layout = self.layout_of(array.element)?;
@@ -1807,6 +2540,7 @@ impl Builder<'_> {
                 dims,
                 conformant: false,
             },
+            class_value: false,
         })
     }
 }
@@ -2154,16 +2888,311 @@ END_PROGRAM
         let hir = &analysis.hir;
         let system = type_system(hir);
         let derived = system.named(named_def(hir, "Derived")).unwrap();
+        // The type record keeps the owned instance layout.
         assert_eq!(derived.layout, StorageLayout::new(8, 4));
         assert_eq!(derived.fields.len(), 1);
         assert_eq!(derived.fields[0].offset, 4);
         assert_eq!(derived.llvm_value, IrType::Ptr);
+        // A class value is a pointer-sized handle.
+        let facts = system
+            .facts(system.named_ty(named_def(hir, "Derived")).unwrap())
+            .unwrap();
+        assert_eq!(facts.layout, StorageLayout::new(8, 8));
+        assert_eq!(facts.llvm_storage, IrType::Ptr);
+        assert!(facts.is_class());
+        assert!(facts.key.starts_with("PTR_TO(T:"));
+        assert_eq!(
+            system
+                .instance_layout(system.named_ty(named_def(hir, "Derived")).unwrap())
+                .unwrap(),
+            StorageLayout::new(8, 4)
+        );
         let program = named_def(hir, "P");
         let ty = hir.field(field_id(hir, program, "d")).ty;
         let leaves = system.root_leaves(ty, "P", RetainPolicy::None).unwrap();
-        assert_eq!(leaves.len(), 2);
-        assert_eq!(leaves[0].path, "P.a");
-        assert_eq!(leaves[1].path, "P.b");
+        assert_eq!(leaves.len(), 1, "a class value is one handle root");
+        assert_eq!(leaves[0].path, "P");
+        assert!(leaves[0].is_class_handle());
+        let instance = system
+            .instance_leaves_for_def(named_def(hir, "Derived"), RetainPolicy::None)
+            .unwrap();
+        assert_eq!(instance.len(), 2);
+        assert_eq!(instance[0].path, ".a");
+        assert_eq!(instance[1].path, ".b");
+        let plan = system.storage_plan(ty, RetainPolicy::None).unwrap();
+        assert_eq!(plan.leaves.len(), 3, "handle plus two instance fields");
+        assert!(plan.leaves[0].is_class_handle());
+        assert_eq!(plan.objects.len(), 1);
+        assert_eq!(plan.objects[0].leaves.len(), 2);
+        assert!(plan.objects[0].class);
+    }
+
+    #[test]
+    fn class_values_and_instance_layouts_are_distinct() {
+        let analysis = analyze_source(
+            r#"
+CLASS Inner
+VAR PUBLIC
+  x : DINT;
+  y : BOOL;
+END_VAR
+END_CLASS
+CLASS Outer
+VAR PUBLIC
+  inner : Inner;
+  n : DINT;
+END_VAR
+END_CLASS
+PROGRAM P
+VAR
+  o : Outer;
+END_VAR
+END_PROGRAM
+"#,
+        );
+        let hir = &analysis.hir;
+        let system = type_system(hir);
+        let inner = system.named(named_def(hir, "Inner")).unwrap();
+        let outer = system.named(named_def(hir, "Outer")).unwrap();
+        assert_eq!(outer.layout, StorageLayout::new(16, 8));
+        assert_eq!(outer.llvm_storage.render(), "{ ptr, i32 }");
+        let field = outer
+            .fields
+            .iter()
+            .find(|field| field.path == "INNER")
+            .expect("inner field");
+        assert_eq!(field.layout, StorageLayout::new(8, 8));
+        assert!(field.key.starts_with("PTR_TO(T:"));
+        assert_eq!(field.llvm_storage, IrType::Ptr);
+        assert!(inner.key.starts_with("T:"));
+
+        let outer_ty = system.named_ty(named_def(hir, "Outer")).unwrap();
+        let values = system
+            .root_leaves(outer_ty, "O", RetainPolicy::None)
+            .unwrap();
+        assert_eq!(values.len(), 1, "a class value is one handle");
+        assert!(values[0].is_class_handle());
+        let instance = system
+            .instance_leaves_for_def(named_def(hir, "Outer"), RetainPolicy::None)
+            .unwrap();
+        assert_eq!(instance.len(), 2);
+        assert!(instance[0].is_class_handle(), "nested class field handle");
+        assert!(!instance[1].is_class_handle());
+
+        let record = system
+            .object_record(named_def(hir, "Outer"))
+            .expect("outer record");
+        assert_eq!(record.leaf_count, 2);
+        assert_eq!(record.layout, StorageLayout::new(24, 8));
+        assert_eq!(
+            record.key,
+            format!("ARRAY[0..2]OF(PTR_TO(T:{}))", outer.id.to_hex_plain())
+        );
+        TypeKey::parse(&record.key).expect("record key");
+
+        let plan = system.storage_plan(outer_ty, RetainPolicy::None).unwrap();
+        // Outer handle, inner handle, inner.x, inner.y, n.
+        assert_eq!(plan.leaves.len(), 5, "{:#?}", plan.leaves);
+        assert_eq!(plan.objects.len(), 2, "{:#?}", plan.objects);
+        assert_eq!(plan.objects[0].segments.len(), 0);
+        assert_eq!(plan.objects[1].segments[0], RootSegment::Field(field.field));
+        assert!(plan.objects[0].class && plan.objects[1].class);
+        assert_eq!(plan.objects[0].leaves.len(), 2);
+        assert_eq!(plan.objects[1].leaves.len(), 2);
+    }
+
+    #[test]
+    fn arrays_of_classes_own_one_instance_and_record_per_element() {
+        let analysis = analyze_source(
+            r#"
+CLASS Item
+VAR PUBLIC
+  x : DINT;
+END_VAR
+END_CLASS
+PROGRAM P
+VAR
+  items : ARRAY[1..2] OF Item;
+END_VAR
+END_PROGRAM
+"#,
+        );
+        let hir = &analysis.hir;
+        let system = type_system(hir);
+        let program = named_def(hir, "P");
+        let ty = hir.field(field_id(hir, program, "items")).ty;
+        let facts = system.facts(ty).unwrap();
+        assert_eq!(facts.layout, StorageLayout::new(16, 8));
+        assert!(facts.key.contains("OF(PTR_TO(T:"));
+        assert!(system.is_single_root(ty).unwrap());
+
+        let plan = system.storage_plan(ty, RetainPolicy::None).unwrap();
+        assert_eq!(plan.leaves.len(), 3, "one handle array plus two fields");
+        assert!(plan.leaves[0].is_class_handle());
+        assert_eq!(plan.leaves[0].layout, StorageLayout::new(16, 8));
+        assert_eq!(plan.objects.len(), 2);
+        assert_eq!(plan.objects[0].segments.len(), 1);
+        assert_eq!(plan.objects[1].segments.len(), 1);
+        assert_eq!(plan.objects[0].handle_index, Some(0));
+        assert_eq!(plan.objects[1].handle_index, Some(1));
+        assert!(plan.objects.iter().all(|object| object.leaves.len() == 1));
+    }
+
+    #[test]
+    fn interface_maps_are_base_first_and_append_new_interfaces_by_id() {
+        let analysis = analyze_source(
+            r#"
+INTERFACE IZ
+METHOD Zed : DINT
+END_METHOD
+END_INTERFACE
+INTERFACE IA
+METHOD Aye : DINT
+END_METHOD
+END_INTERFACE
+CLASS Base IMPLEMENTS IZ
+METHOD PUBLIC Zed : DINT
+  Zed := 1;
+END_METHOD
+END_CLASS
+CLASS Derived EXTENDS Base IMPLEMENTS IA
+METHOD PUBLIC Aye : DINT
+  Aye := 2;
+END_METHOD
+END_CLASS
+PROGRAM P
+VAR d : Derived; END_VAR
+END_PROGRAM
+"#,
+        );
+        let hir = &analysis.hir;
+        let system = type_system(hir);
+        let base = system.interface_map(named_def(hir, "Base")).unwrap();
+        assert_eq!(base.len(), 1);
+        assert_eq!(base[0].def, named_def(hir, "IZ"));
+        let derived = system.interface_map(named_def(hir, "Derived")).unwrap();
+        assert_eq!(derived.len(), 2);
+        assert_eq!(
+            derived[0].def,
+            named_def(hir, "IZ"),
+            "inherited entries keep their index"
+        );
+        let mut new = [derived[1]];
+        new.sort_by_key(|entry| entry.id);
+        assert_eq!(new[0].def, named_def(hir, "IA"));
+    }
+
+    #[test]
+    fn interface_vtables_are_base_first_prefix_extensions() {
+        let analysis = analyze_source(
+            r#"
+INTERFACE IBase
+METHOD Zeta : DINT
+END_METHOD
+METHOD Alpha : DINT
+END_METHOD
+END_INTERFACE
+INTERFACE IDerived EXTENDS IBase
+METHOD Middle : DINT
+END_METHOD
+END_INTERFACE
+PROGRAM P
+VAR i : IDerived; END_VAR
+END_PROGRAM
+"#,
+        );
+        let hir = &analysis.hir;
+        let system = type_system(hir);
+        let base = system.interface_vtable(named_def(hir, "IBase")).unwrap();
+        assert_eq!(base.len(), 2);
+        assert_eq!(base[0].slot, 0);
+        assert_eq!(base[0].def, named_def(hir, "Alpha"));
+        assert_eq!(base[1].slot, 1);
+        assert_eq!(base[1].def, named_def(hir, "Zeta"));
+
+        let derived = system.interface_vtable(named_def(hir, "IDerived")).unwrap();
+        assert_eq!(derived.len(), 3);
+        assert_eq!(&derived[..2], &base[..], "base table is a prefix");
+        assert_eq!(derived[2].slot, 2);
+        assert_eq!(derived[2].def, named_def(hir, "Middle"));
+    }
+
+    #[test]
+    fn class_vtables_keep_base_slots_and_append_new_methods_by_name() {
+        let analysis = analyze_source(
+            r#"
+CLASS Base
+METHOD PUBLIC Zed : DINT
+  Zed := 1;
+END_METHOD
+METHOD PUBLIC Alpha : DINT
+  Alpha := 2;
+END_METHOD
+END_CLASS
+CLASS Derived EXTENDS Base
+METHOD PUBLIC OVERRIDE Alpha : DINT
+  Alpha := SUPER.Alpha() + 1;
+END_METHOD
+METHOD PUBLIC Middle : DINT
+  Middle := 3;
+END_METHOD
+END_CLASS
+PROGRAM P
+VAR d : Derived; END_VAR
+END_PROGRAM
+"#,
+        );
+        let hir = &analysis.hir;
+        let system = type_system(hir);
+        let base = system.named(named_def(hir, "Base")).unwrap();
+        let base_names: Vec<&str> = base
+            .vtable
+            .iter()
+            .map(|entry| hir.def_name(entry.def))
+            .collect();
+        assert_eq!(base_names, ["Alpha", "Zed"], "{:?}", base.vtable);
+        let derived = system.named(named_def(hir, "Derived")).unwrap();
+        assert_eq!(derived.vtable.len(), 3);
+        let derived_names: Vec<&str> = derived
+            .vtable
+            .iter()
+            .map(|entry| hir.def_name(entry.def))
+            .collect();
+        assert_eq!(derived_names, ["Alpha", "Zed", "Middle"]);
+        assert_eq!(derived.vtable[0].slot, 0);
+        assert_eq!(derived.vtable[1].slot, 1);
+        assert_eq!(derived.vtable[2].slot, 2);
+        assert_ne!(
+            derived.vtable[0].def, base.vtable[0].def,
+            "the override replaces the base entry at the same slot"
+        );
+    }
+
+    #[test]
+    fn interface_prototype_signatures_use_projected_class_keys() {
+        let analysis = analyze_source(
+            r#"
+CLASS Value
+VAR PUBLIC x : DINT; END_VAR
+END_CLASS
+INTERFACE IUse
+METHOD Take : DINT
+VAR_INPUT v : Value; END_VAR
+END_METHOD
+END_INTERFACE
+PROGRAM P
+VAR i : IUse; END_VAR
+END_PROGRAM
+"#,
+        );
+        let hir = &analysis.hir;
+        let system = type_system(hir);
+        let prototype = system.interface_vtable(named_def(hir, "IUse")).unwrap()[0].def;
+        let signature = system.callable_signature(prototype).unwrap();
+        assert!(
+            signature.starts_with("(IN:PTR_TO(T:") && signature.ends_with(")->DINT"),
+            "{signature}"
+        );
     }
 
     #[test]

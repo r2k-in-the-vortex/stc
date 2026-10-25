@@ -3,6 +3,319 @@ mod common;
 use common::{clean_hir, generate, options, verify_with_clang};
 use stc_codegen::Mode;
 
+const OOP_HIDDEN: &str = r#"
+INTERFACE IShape
+METHOD Area : DINT
+END_METHOD
+END_INTERFACE
+
+CLASS Shape IMPLEMENTS IShape
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Area : DINT
+  Area := id;
+END_METHOD
+END_CLASS
+
+FUNCTION_BLOCK FB
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR
+  cv : DINT;
+END_VAR
+  cv := cv + inc;
+END_FUNCTION_BLOCK
+
+VAR_GLOBAL
+  shared : Shape;
+  sa : ARRAY[1..2] OF Shape;
+END_VAR
+
+PROGRAM Main
+VAR RETAIN
+  held : Shape;
+END_VAR
+VAR
+  fb : FB;
+  s : Shape;
+END_VAR
+  held.id := held.id + 1;
+  s.id := held.id;
+  shared.id := s.id;
+  fb(inc := 1);
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn descriptors_and_hidden_roots_emit_and_verify_with_clang() {
+    let output = generate(OOP_HIDDEN, Mode::Executable);
+    let module = &output.module;
+    let manifest = &output.got.manifest;
+
+    // Interface prototypes are function records with trap-stub bodies.
+    let stub = manifest
+        .functions
+        .iter()
+        .find(|function| function.key == "_ROOT::ISHAPE.AREA@()->DINT")
+        .expect("interface prototype record");
+    assert_eq!(stub.function_kind, stc_got::FunctionKind::Method);
+    assert_eq!(stub.vtable_slot, Some(0));
+    assert!(
+        module.contains("define internal i32 @stc_m_ISHAPE_AREA_"),
+        "{module}"
+    );
+    assert!(
+        module.contains("call void %t") && module.contains("(i32 10, i32"),
+        "the trap stub raises STC-TRAP_UNIMPLEMENTED:\n{module}"
+    );
+
+    // One TYPEINFO for each class/FB and a VTABLE for the class.
+    for key in [
+        "_ROOT::SHAPE#DESC:TYPEINFO",
+        "_ROOT::SHAPE#DESC:VTABLE",
+        "_ROOT::FB#DESC:TYPEINFO",
+    ] {
+        assert!(
+            manifest
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.key == key),
+            "missing {key}: {:#?}",
+            manifest.descriptors
+        );
+    }
+    assert!(
+        !manifest
+            .descriptors
+            .iter()
+            .any(|descriptor| descriptor.key.contains("ISHAPE")),
+        "interface types have no descriptor"
+    );
+
+    // Hidden roots: handles for classes, records for classes and FBs.
+    for key in [
+        "_ROOT::SHARED#HANDLE",
+        "_ROOT::SHARED#OBJREC",
+        "_ROOT::SA#HANDLE",
+        "_ROOT::SA.E0#OBJREC",
+        "_ROOT::SA.E1#OBJREC",
+        "_ROOT::MAIN.HELD#C/R/INST/HANDLE",
+        "_ROOT::MAIN.HELD#C/R/INST/OBJREC",
+        "_ROOT::MAIN.FB#C/R/INST/OBJREC",
+    ] {
+        assert!(
+            manifest.roots.iter().any(|root| root.key == key),
+            "missing {key}: {:#?}",
+            manifest
+                .roots
+                .iter()
+                .map(|root| &root.key)
+                .collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        !manifest
+            .roots
+            .iter()
+            .any(|root| root.key == "_ROOT::MAIN.FB#C/R/INST/HANDLE"),
+        "FB declarations get no handle root"
+    );
+
+    // Prepare fills fresh records and handles from the slot table.
+    let prepare = module
+        .split("@stc_module_prepare")
+        .nth(1)
+        .expect("prepare body");
+    assert!(
+        prepare.contains("getelementptr inbounds ptr, ptr"),
+        "record entries are pointer-sized GEP stores:\n{prepare}"
+    );
+
+    // The owned instance's field roots stay retained; hidden roots never
+    // appear in the payload or its metadata.
+    let leaves = &output.metadata.retain.leaves;
+    assert_eq!(leaves.len(), 1, "{leaves:#?}");
+    assert_eq!(leaves[0].path.to_ascii_uppercase(), "INST.HELD.ID");
+    assert_eq!(output.metadata.retain.size, 4);
+    assert!(
+        leaves
+            .iter()
+            .all(|leaf| !leaf.path.contains("HANDLE") && !leaf.path.contains("OBJREC"))
+    );
+    for key in [
+        "_ROOT::MAIN.HELD#C/R/INST/HANDLE",
+        "_ROOT::MAIN.HELD#C/R/INST/OBJREC",
+    ] {
+        let root = manifest
+            .roots
+            .iter()
+            .find(|root| root.key == key)
+            .unwrap_or_else(|| panic!("missing {key}"));
+        assert_eq!(root.retention, stc_got::Retention::None);
+    }
+    let retained = manifest
+        .roots
+        .iter()
+        .find(|root| root.key == "_ROOT::MAIN.HELD.ID#C/R/INST")
+        .expect("owned instance field root");
+    assert_eq!(retained.retention, stc_got::Retention::Retain);
+
+    verify_with_clang("oop_hidden", module);
+}
+
+#[test]
+fn class_methods_on_persistent_receivers_emit_and_verify() {
+    let source = r#"
+CLASS Shape
+VAR PUBLIC
+  id : DINT;
+END_VAR
+METHOD PUBLIC Area : DINT
+  Area := id;
+END_METHOD
+END_CLASS
+
+VAR_GLOBAL
+  g : Shape;
+END_VAR
+
+PROGRAM Main
+VAR
+  m : Shape;
+  x : DINT;
+END_VAR
+  g.id := 3;
+  m.id := 4;
+  x := g.Area() + m.Area();
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+    let output = generate(source, Mode::Executable);
+    // Both receivers pass the owned instance's field roots.
+    assert!(
+        output
+            .module
+            .contains("define internal void @stc_prog_MAIN_body"),
+        "{}",
+        output.module
+    );
+    assert!(
+        output
+            .module
+            .contains("define internal i32 @stc_m_SHAPE_AREA_"),
+        "{}",
+        output.module
+    );
+    verify_with_clang("class_methods", &output.module);
+}
+
+#[test]
+fn persistent_class_assignment_is_explicitly_deferred() {
+    let source = r#"
+CLASS Shape
+VAR PUBLIC
+  id : DINT;
+END_VAR
+END_CLASS
+VAR_GLOBAL
+  a : Shape;
+  b : Shape;
+END_VAR
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+  a := b;
+  x := a.id;
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+    let hir = clean_hir(source);
+    let sources = vec!["<test>".to_string()];
+    let errors = stc_codegen::generate(&hir, &options("test", Mode::Executable, &sources))
+        .expect_err("persistent class assignment needs phase 4b.3");
+    assert!(
+        errors.iter().any(|error| {
+            error.code() == "STC-E-CODEGEN-001"
+                && error.message().contains("class assignment")
+                && error.span().is_some_and(|span| span.start != span.end)
+        }),
+        "{errors:#?}"
+    );
+}
+
+#[test]
+fn recursive_class_ownership_is_rejected_at_the_declaration() {
+    let source = r#"
+CLASS Node
+VAR PUBLIC
+  next : Node;
+END_VAR
+END_CLASS
+PROGRAM Main
+VAR
+  root : Node;
+END_VAR
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+    let hir = clean_hir(source);
+    let sources = vec!["<test>".to_string()];
+    let errors = stc_codegen::generate(&hir, &options("test", Mode::Executable, &sources))
+        .expect_err("recursive owned instances have no finite storage");
+    assert!(
+        errors.iter().any(|error| {
+            error.code() == "STC-E-CODEGEN-001"
+                && error.message().contains("recursively owns")
+                && error.span().is_some_and(|span| span.start != span.end)
+        }),
+        "{errors:#?}"
+    );
+}
+
+#[test]
+fn object_record_fills_are_guarded_by_the_fresh_mask() {
+    let output = generate(OOP_HIDDEN, Mode::Executable);
+    let prepare = output
+        .module
+        .split("@stc_module_prepare")
+        .nth(1)
+        .expect("prepare body");
+    // Every record/handle fill is guarded by the cold-or-fresh phi.
+    assert!(prepare.contains("phi i1 [ true,"), "{prepare}");
+    assert!(prepare.contains("and i8"), "{prepare}");
+
+    let second = generate(OOP_HIDDEN, Mode::Executable);
+    assert_eq!(output.module, second.module);
+    assert_eq!(
+        output.metadata.to_json().render(),
+        second.metadata.to_json().render()
+    );
+    assert_eq!(output.got.manifest_binary, second.got.manifest_binary);
+    assert_eq!(output.got.descriptor_bytes, second.got.descriptor_bytes);
+}
+
 const SCALARS: &str = r#"
 FUNCTION Fact : DINT
 VAR_INPUT

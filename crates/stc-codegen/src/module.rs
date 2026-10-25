@@ -15,14 +15,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use stc_got::catalog::ImportService;
 use stc_got::descriptor::{Descriptor, DescriptorFunction, entry_flag, function_flag};
-use stc_got::manifest::{FEATURE_HOST_ABI, FEATURE_ONLINE_PLAN};
-use stc_got::model::{Retention, RootKind, SourceLocation};
+use stc_got::manifest::{
+    FEATURE_DESCRIPTORS, FEATURE_HOST_ABI, FEATURE_ONLINE_PLAN, FEATURE_PLACES,
+};
+use stc_got::model::{DescriptorKind, Retention, RootKind, SourceLocation};
 use stc_got::{
-    BuildInput, BuildOptions, Catalog, Digest32, ExportDecl, FieldDecl, FunctionDecl, FunctionKind,
-    GotId, Identity, IdentityKind, InitializerKind, InstanceDecl, Manifest, Rename, RootDecl,
-    Signature, Target, TaskDecl, TypeDecl, TypeKey, direct_root_key, export_identity_key,
-    expression_initializer_digest, field_identity_key, field_root_key, function_key,
-    global_root_key, initializer_digest, instance_identity_key, normalize_ident, normalize_package,
+    BuildInput, BuildOptions, Catalog, DescriptorDecl, Digest32, ExportDecl, FieldDecl,
+    FunctionDecl, FunctionKind, GotId, Identity, IdentityKind, InitializerKind, InstanceDecl,
+    Manifest, Rename, RootDecl, Signature, Target, TaskDecl, TypeDecl, TypeKey,
+    descriptor_identity_key, direct_root_key, export_identity_key, expression_initializer_digest,
+    field_identity_key, field_root_key, function_key, global_root_key, hidden_root_key,
+    initializer_digest, instance_identity_key, normalize_ident, normalize_package,
     program_body_key, task_guard_root_key, task_identity_key, type_identity_key,
 };
 use stc_hir::{
@@ -37,7 +40,7 @@ use crate::config::{self, Plan, PlanTask, RetainLayout};
 use crate::ir::CellKind;
 use crate::layout;
 use crate::mangle;
-use crate::types::{RootSegment, TypeSystem};
+use crate::types::{NamedKind, RootSegment, TypeSystem};
 
 /// The conformance profile embedded in module artifacts.
 pub const PROFILE: &str = "stc-2013-oop-utf8-v1";
@@ -169,6 +172,34 @@ pub enum RootTarget {
         /// Path below the program type.
         segments: Vec<RootSegment>,
     },
+    /// A hidden class-handle root of a global declaration.
+    GlobalHandle {
+        /// Global declaration owning the handle.
+        def: DefId,
+        /// Path below the global to the handle value.
+        segments: Vec<RootSegment>,
+    },
+    /// A hidden class-handle root of a program-instance field.
+    InstanceHandle {
+        /// Configured instance name.
+        instance: Symbol,
+        /// Path below the program type to the handle value.
+        segments: Vec<RootSegment>,
+    },
+    /// A hidden object-record root of a global declaration.
+    GlobalRecord {
+        /// Global declaration owning the object.
+        def: DefId,
+        /// Path below the global to the class/FB instance.
+        segments: Vec<RootSegment>,
+    },
+    /// A hidden object-record root of a program-instance field.
+    InstanceRecord {
+        /// Configured instance name.
+        instance: Symbol,
+        /// Path below the program type to the class/FB instance.
+        segments: Vec<RootSegment>,
+    },
     /// A task guard flag.
     TaskGuard {
         /// Configuration name.
@@ -178,6 +209,104 @@ pub enum RootTarget {
         /// Task name.
         task: String,
     },
+}
+
+impl RootTarget {
+    /// Returns the hidden class-handle target for a global declaration.
+    #[must_use]
+    pub fn global_handle(def: DefId, segments: &[RootSegment]) -> Self {
+        Self::GlobalHandle {
+            def,
+            segments: segments.to_vec(),
+        }
+    }
+
+    /// Returns the hidden class-handle target for a program-instance field.
+    #[must_use]
+    pub fn instance_handle(instance: Symbol, segments: &[RootSegment]) -> Self {
+        Self::InstanceHandle {
+            instance,
+            segments: segments.to_vec(),
+        }
+    }
+
+    /// Returns the ordinary (non-handle) leaf target for a global declaration.
+    #[must_use]
+    pub fn global_leaf(def: DefId, segments: &[RootSegment]) -> Self {
+        if segments.is_empty() {
+            Self::Global(def)
+        } else {
+            Self::GlobalLeaf {
+                def,
+                segments: segments.to_vec(),
+            }
+        }
+    }
+
+    /// Returns the ordinary (non-handle) leaf target for a program field.
+    #[must_use]
+    pub fn instance_leaf(instance: Symbol, segments: &[RootSegment]) -> Self {
+        if let [RootSegment::Field(field)] = segments {
+            Self::InstanceField {
+                instance,
+                field: *field,
+            }
+        } else {
+            Self::InstanceLeaf {
+                instance,
+                segments: segments.to_vec(),
+            }
+        }
+    }
+
+    /// Returns the hidden object-record target for a global declaration.
+    #[must_use]
+    pub fn global_record(def: DefId, segments: &[RootSegment]) -> Self {
+        Self::GlobalRecord {
+            def,
+            segments: segments.to_vec(),
+        }
+    }
+
+    /// Returns the hidden object-record target for a program-instance field.
+    #[must_use]
+    pub fn instance_record(instance: Symbol, segments: &[RootSegment]) -> Self {
+        Self::InstanceRecord {
+            instance,
+            segments: segments.to_vec(),
+        }
+    }
+}
+
+/// One runtime descriptor identity bound to a catalog declaration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DescriptorTarget {
+    /// Owning class/FB type.
+    pub def: DefId,
+    /// TYPEINFO or VTABLE.
+    pub kind: DescriptorKind,
+}
+
+/// One hidden object-record binding emitted by generated prepare.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObjectBinding {
+    /// The `OBJREC` root.
+    pub target: RootTarget,
+    /// Owning class/FB type.
+    pub def: DefId,
+    /// The record's leaf storage roots in ordinal order.
+    pub leaves: Vec<RootTarget>,
+    /// The class handle that points at this record, when the object is a class.
+    pub handle: Option<HandleBinding>,
+}
+
+/// One class handle root that generated prepare points at an owned instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HandleBinding {
+    /// The `HANDLE` root.
+    pub target: RootTarget,
+    /// Flat element index when the handle root is an array of handles.
+    pub index: Option<u64>,
 }
 
 /// Which compiled body owns a function cell.
@@ -210,6 +339,8 @@ pub struct SlotBinding {
     pub root: Option<RootTarget>,
     /// Owning callable, for function slots.
     pub function: Option<FunctionTarget>,
+    /// Owning descriptor, for descriptor slots.
+    pub descriptor: Option<DescriptorTarget>,
     /// M4 code symbol, when the slot has one.
     pub symbol: Option<String>,
 }
@@ -284,6 +415,8 @@ pub struct ModuleArtifacts {
     pub manifest_digest: Digest32,
     /// Canonical slot bindings.
     pub slots: Vec<SlotBinding>,
+    /// Hidden object-record bindings in declaration order.
+    pub(crate) objects: Vec<ObjectBinding>,
     /// Compiler diagnostics; errors make the artifacts undeployable.
     pub diagnostics: Vec<ModuleError>,
 }
@@ -341,6 +474,24 @@ impl ModuleArtifacts {
         self.slots
             .iter()
             .find(|binding| binding.function == Some(target))
+            .map(|binding| binding.got_id)
+    }
+
+    /// Returns the slot for a TYPEINFO or VTABLE descriptor.
+    #[must_use]
+    pub fn descriptor_slot(&self, def: DefId, kind: DescriptorKind) -> Option<u32> {
+        self.slots
+            .iter()
+            .find(|binding| binding.descriptor == Some(DescriptorTarget { def, kind }))
+            .map(|binding| binding.slot)
+    }
+
+    /// Returns the identity of a TYPEINFO or VTABLE descriptor.
+    #[must_use]
+    pub fn descriptor_got_id(&self, def: DefId, kind: DescriptorKind) -> Option<GotId> {
+        self.slots
+            .iter()
+            .find(|binding| binding.descriptor == Some(DescriptorTarget { def, kind }))
             .map(|binding| binding.got_id)
     }
 
@@ -437,7 +588,8 @@ pub fn project(
     );
     input.active_configuration = plan.configuration.clone().unwrap_or_default();
     input.generator_flags = base_generator_flags(options);
-    input.required_features = FEATURE_HOST_ABI | FEATURE_ONLINE_PLAN;
+    input.required_features =
+        FEATURE_HOST_ABI | FEATURE_ONLINE_PLAN | FEATURE_DESCRIPTORS | FEATURE_PLACES;
     input.descriptor_digest = PLACEHOLDER_DESCRIPTOR_DIGEST;
     input.source_fingerprint = options.source_fingerprint;
 
@@ -482,6 +634,7 @@ pub fn project(
     let manifest_binary = manifest.encode_binary().map_err(map_got_error)?;
     let manifest_json = manifest.to_json_text().map_err(map_got_error)?;
     let slots = built.bind_slots(&manifest).map_err(|error| vec![error])?;
+    let objects = built.objects.clone();
 
     Ok(ModuleArtifacts {
         catalog: built.catalog,
@@ -493,6 +646,7 @@ pub fn project(
         descriptor_digest,
         manifest_digest,
         slots,
+        objects,
         diagnostics,
     })
 }
@@ -517,6 +671,8 @@ struct BuiltCatalog {
     catalog: Catalog,
     root_targets: BTreeMap<String, (RootTarget, Option<String>)>,
     function_targets: BTreeMap<String, (FunctionTarget, Option<String>)>,
+    descriptor_targets: BTreeMap<String, DescriptorTarget>,
+    objects: Vec<ObjectBinding>,
 }
 
 impl BuiltCatalog {
@@ -531,9 +687,14 @@ impl BuiltCatalog {
             .iter()
             .map(|function| (function.got_id, function))
             .collect::<BTreeMap<_, _>>();
+        let descriptors = manifest
+            .descriptors
+            .iter()
+            .map(|descriptor| (descriptor.got_id, descriptor))
+            .collect::<BTreeMap<_, _>>();
         let mut bindings = Vec::with_capacity(manifest.slots.len());
         for slot in &manifest.slots {
-            let (key, root, function, service, symbol) = match slot.kind {
+            let (key, root, function, descriptor, service, symbol) = match slot.kind {
                 stc_got::SlotKind::Data | stc_got::SlotKind::Direct => {
                     let record = roots.get(&slot.got_id).ok_or_else(|| {
                         ModuleError::error(
@@ -548,7 +709,7 @@ impl BuiltCatalog {
                                 format!("root `{}` has no catalog target", record.key),
                             )
                         })?;
-                    (record.key.clone(), Some(target), None, None, symbol)
+                    (record.key.clone(), Some(target), None, None, None, symbol)
                 }
                 stc_got::SlotKind::Function => {
                     let record = functions.get(&slot.got_id).ok_or_else(|| {
@@ -567,9 +728,27 @@ impl BuiltCatalog {
                                 format!("function `{}` has no catalog target", record.key),
                             )
                         })?;
-                    (record.key.clone(), None, Some(target), None, symbol)
+                    (record.key.clone(), None, Some(target), None, None, symbol)
                 }
-                stc_got::SlotKind::Descriptor => (String::new(), None, None, None, None),
+                stc_got::SlotKind::Descriptor => {
+                    let record = descriptors.get(&slot.got_id).ok_or_else(|| {
+                        ModuleError::error(
+                            codes::CODEGEN_INTERNAL,
+                            format!("slot {} references an unknown descriptor", slot.slot),
+                        )
+                    })?;
+                    let target = self
+                        .descriptor_targets
+                        .get(&record.key)
+                        .copied()
+                        .ok_or_else(|| {
+                            ModuleError::error(
+                                codes::CODEGEN_INTERNAL,
+                                format!("descriptor `{}` has no catalog target", record.key),
+                            )
+                        })?;
+                    (record.key.clone(), None, None, Some(target), None, None)
+                }
                 stc_got::SlotKind::Import => {
                     let service = ImportService::from_id(slot.service).ok_or_else(|| {
                         ModuleError::error(
@@ -577,7 +756,7 @@ impl BuiltCatalog {
                             format!("slot {} has unknown service {}", slot.slot, slot.service),
                         )
                     })?;
-                    (String::new(), None, None, Some(service), None)
+                    (String::new(), None, None, None, Some(service), None)
                 }
             };
             bindings.push(SlotBinding {
@@ -588,6 +767,7 @@ impl BuiltCatalog {
                 service,
                 root,
                 function,
+                descriptor,
                 symbol,
             });
         }
@@ -660,11 +840,14 @@ impl Context<'_> {
         let mut catalog = Catalog::default();
         let mut root_targets = BTreeMap::new();
         let mut function_targets = BTreeMap::new();
+        let mut descriptor_targets = BTreeMap::new();
+        let mut objects = Vec::new();
         let package = self.default_package()?;
 
         self.add_types(&mut catalog)?;
-        self.add_global_roots(&mut catalog, &mut root_targets)?;
-        self.add_instance_roots(&mut catalog, &mut root_targets)?;
+        self.add_descriptors(&mut catalog, &mut descriptor_targets)?;
+        self.add_global_roots(&mut catalog, &mut root_targets, &mut objects)?;
+        self.add_instance_roots(&mut catalog, &mut root_targets, &mut objects)?;
         self.add_task_guards(&package, &mut catalog, &mut root_targets)?;
         self.add_functions(&mut catalog, &mut function_targets)?;
         self.add_fb_bodies(&mut catalog, &mut function_targets)?;
@@ -678,6 +861,8 @@ impl Context<'_> {
             catalog,
             root_targets,
             function_targets,
+            descriptor_targets,
+            objects,
         })
     }
 
@@ -713,6 +898,7 @@ impl Context<'_> {
         &self,
         catalog: &mut Catalog,
         root_targets: &mut BTreeMap<String, (RootTarget, Option<String>)>,
+        objects: &mut Vec<ObjectBinding>,
     ) -> Result<(), ModuleError> {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
@@ -755,16 +941,39 @@ impl Context<'_> {
                 root_targets.insert(key, (RootTarget::Global(id), None));
                 continue;
             }
-            let leaves = self
+            let plan = self
                 .types
-                .root_leaves(*ty, &path, *retain)
+                .storage_plan(*ty, *retain)
                 .map_err(|error| ModuleError::from(error.with_span(def.span)))?;
-            for leaf in leaves {
-                let leaf_path = if leaf.segments.is_empty() {
-                    path.clone()
-                } else {
-                    format!("{path}.{}", self.segment_text(&leaf.segments)?)
-                };
+            for leaf in &plan.leaves {
+                let leaf_segments = self.segment_text(&leaf.segments)?;
+                let leaf_path = join_root_path(&path, &leaf_segments);
+                if leaf.is_class_handle() {
+                    let key = hidden_root_key(&def_package, &leaf_path, None, "HANDLE")
+                        .map_err(|error| map_error(error, Some(def.span)))?;
+                    catalog.roots.push(RootDecl {
+                        identity: Identity::new(
+                            IdentityKind::DataRoot,
+                            &def_package,
+                            &leaf_path,
+                            "HANDLE",
+                        ),
+                        key: key.clone(),
+                        root_kind: RootKind::NestedField,
+                        owner_type: self.leaf_owner_type(&leaf.segments),
+                        field_path: leaf_segments,
+                        type_key: leaf.key.clone(),
+                        layout_hash: leaf.layout_hash,
+                        size: leaf.layout.size,
+                        align: leaf.layout.align,
+                        retention: Retention::None,
+                        initializer: InitializerKind::None,
+                        initializer_digest: None,
+                        source: source.clone(),
+                    });
+                    root_targets.insert(key, (RootTarget::global_handle(id, &leaf.segments), None));
+                    continue;
+                }
                 let key = global_root_key(&def_package, &leaf_path)
                     .map_err(|error| map_error(error, Some(def.span)))?;
                 let (initializer, init_digest) = self.leaf_initializer(
@@ -783,8 +992,8 @@ impl Context<'_> {
                     key: key.clone(),
                     root_kind: RootKind::Global,
                     owner_type: self.leaf_owner_type(&leaf.segments),
-                    field_path: self.segment_text(&leaf.segments)?,
-                    type_key: leaf.key,
+                    field_path: leaf_segments,
+                    type_key: leaf.key.clone(),
                     layout_hash: leaf.layout_hash,
                     size: leaf.layout.size,
                     align: leaf.layout.align,
@@ -793,15 +1002,60 @@ impl Context<'_> {
                     initializer_digest: init_digest,
                     source: source.clone(),
                 });
-                let target = if leaf.segments.is_empty() {
-                    RootTarget::Global(id)
-                } else {
-                    RootTarget::GlobalLeaf {
-                        def: id,
-                        segments: leaf.segments,
-                    }
-                };
-                root_targets.insert(key, (target, symbol));
+                root_targets.insert(key, (RootTarget::global_leaf(id, &leaf.segments), symbol));
+            }
+            for object in &plan.objects {
+                let object_segments = self.segment_text(&object.segments)?;
+                let object_path = join_root_path(&path, &object_segments);
+                let record = self
+                    .types
+                    .object_record(object.def)
+                    .map_err(ModuleError::from)?;
+                let key = hidden_root_key(&def_package, &object_path, None, "OBJREC")
+                    .map_err(|error| map_error(error, Some(def.span)))?;
+                catalog.roots.push(RootDecl {
+                    identity: Identity::new(
+                        IdentityKind::DataRoot,
+                        &def_package,
+                        &object_path,
+                        "OBJREC",
+                    ),
+                    key: key.clone(),
+                    root_kind: RootKind::NestedField,
+                    owner_type: self.leaf_owner_type(&object.segments),
+                    field_path: object_segments,
+                    type_key: record.key,
+                    layout_hash: record.layout_hash,
+                    size: record.layout.size,
+                    align: record.layout.align,
+                    retention: Retention::None,
+                    initializer: InitializerKind::None,
+                    initializer_digest: None,
+                    source: source.clone(),
+                });
+                let target = RootTarget::global_record(id, &object.segments);
+                root_targets.insert(key, (target.clone(), None));
+                let leaves = object
+                    .leaves
+                    .iter()
+                    .map(|leaf| {
+                        if leaf.is_class_handle() {
+                            RootTarget::global_handle(id, &leaf.segments)
+                        } else {
+                            RootTarget::global_leaf(id, &leaf.segments)
+                        }
+                    })
+                    .collect();
+                let handle = object.class.then(|| HandleBinding {
+                    target: RootTarget::global_handle(id, &handle_segments(&object.segments)),
+                    index: object.handle_index,
+                });
+                objects.push(ObjectBinding {
+                    target,
+                    def: object.def,
+                    leaves,
+                    handle,
+                });
             }
         }
         Ok(())
@@ -811,6 +1065,7 @@ impl Context<'_> {
         &self,
         catalog: &mut Catalog,
         root_targets: &mut BTreeMap<String, (RootTarget, Option<String>)>,
+        objects: &mut Vec<ObjectBinding>,
     ) -> Result<(), ModuleError> {
         let configuration = self.configuration_name();
         let overrides = config_overrides(self.plan);
@@ -886,18 +1141,48 @@ impl Context<'_> {
                     );
                     continue;
                 }
-                let leaves = self
+                let plan = self
                     .types
-                    .root_leaves(data.ty, &field_name, data.retain)
+                    .storage_plan(data.ty, data.retain)
                     .map_err(|error| ModuleError::from(error.with_span(data.span)))?;
-                for mut leaf in leaves {
+                for leaf in &plan.leaves {
+                    let leaf_segments = self.segment_text(&leaf.segments)?;
+                    let leaf_path = join_root_path(&root_path, &leaf_segments);
+                    let full_segments = prefixed_segments(field, &leaf.segments);
+                    if leaf.is_class_handle() {
+                        let key =
+                            hidden_root_key(&package, &leaf_path, Some(&instance_path), "HANDLE")
+                                .map_err(|error| map_error(error, Some(data.span)))?;
+                        catalog.roots.push(RootDecl {
+                            identity: Identity::new(
+                                IdentityKind::DataRoot,
+                                &package,
+                                &leaf_path,
+                                hidden_qualifier(&instance_path, "HANDLE"),
+                            ),
+                            key: key.clone(),
+                            root_kind: RootKind::NestedField,
+                            owner_type: None,
+                            field_path: self.segment_text(&full_segments)?,
+                            type_key: leaf.key.clone(),
+                            layout_hash: leaf.layout_hash,
+                            size: leaf.layout.size,
+                            align: leaf.layout.align,
+                            retention: Retention::None,
+                            initializer: InitializerKind::None,
+                            initializer_digest: None,
+                            source: source.clone(),
+                        });
+                        root_targets.insert(
+                            key,
+                            (
+                                RootTarget::instance_handle(instance.name, &full_segments),
+                                None,
+                            ),
+                        );
+                        continue;
+                    }
                     let top_level = leaf.segments.is_empty();
-                    leaf.segments.insert(0, RootSegment::Field(field));
-                    let leaf_path = if top_level {
-                        root_path.clone()
-                    } else {
-                        format!("{root_path}.{}", self.segment_text(&leaf.segments[1..])?)
-                    };
                     let key = field_root_key(&package, &leaf_path, &instance_path)
                         .map_err(|error| map_error(error, Some(data.span)))?;
                     let (initializer, init_digest) = self.leaf_initializer(
@@ -921,8 +1206,8 @@ impl Context<'_> {
                             RootKind::NestedField
                         },
                         owner_type: None,
-                        field_path: self.segment_text(&leaf.segments)?,
-                        type_key: leaf.key,
+                        field_path: self.segment_text(&full_segments)?,
+                        type_key: leaf.key.clone(),
                         layout_hash: leaf.layout_hash,
                         size: leaf.layout.size,
                         align: leaf.layout.align,
@@ -931,18 +1216,72 @@ impl Context<'_> {
                         initializer_digest: init_digest,
                         source: source.clone(),
                     });
-                    let target = if top_level {
-                        RootTarget::InstanceField {
-                            instance: instance.name,
-                            field,
-                        }
-                    } else {
-                        RootTarget::InstanceLeaf {
-                            instance: instance.name,
-                            segments: leaf.segments,
-                        }
-                    };
-                    root_targets.insert(key, (target, None));
+                    root_targets.insert(
+                        key,
+                        (
+                            RootTarget::instance_leaf(instance.name, &full_segments),
+                            None,
+                        ),
+                    );
+                }
+                for object in &plan.objects {
+                    let object_segments = self.segment_text(&object.segments)?;
+                    let object_path = join_root_path(&root_path, &object_segments);
+                    let full_segments = prefixed_segments(field, &object.segments);
+                    let record = self
+                        .types
+                        .object_record(object.def)
+                        .map_err(ModuleError::from)?;
+                    let key =
+                        hidden_root_key(&package, &object_path, Some(&instance_path), "OBJREC")
+                            .map_err(|error| map_error(error, Some(data.span)))?;
+                    catalog.roots.push(RootDecl {
+                        identity: Identity::new(
+                            IdentityKind::DataRoot,
+                            &package,
+                            &object_path,
+                            hidden_qualifier(&instance_path, "OBJREC"),
+                        ),
+                        key: key.clone(),
+                        root_kind: RootKind::NestedField,
+                        owner_type: None,
+                        field_path: self.segment_text(&full_segments)?,
+                        type_key: record.key,
+                        layout_hash: record.layout_hash,
+                        size: record.layout.size,
+                        align: record.layout.align,
+                        retention: Retention::None,
+                        initializer: InitializerKind::None,
+                        initializer_digest: None,
+                        source: source.clone(),
+                    });
+                    let target = RootTarget::instance_record(instance.name, &full_segments);
+                    root_targets.insert(key, (target.clone(), None));
+                    let leaves = object
+                        .leaves
+                        .iter()
+                        .map(|leaf| {
+                            let leaf_segments = prefixed_segments(field, &leaf.segments);
+                            if leaf.is_class_handle() {
+                                RootTarget::instance_handle(instance.name, &leaf_segments)
+                            } else {
+                                RootTarget::instance_leaf(instance.name, &leaf_segments)
+                            }
+                        })
+                        .collect();
+                    let handle = object.class.then(|| HandleBinding {
+                        target: RootTarget::instance_handle(
+                            instance.name,
+                            &handle_segments(&full_segments),
+                        ),
+                        index: object.handle_index,
+                    });
+                    objects.push(ObjectBinding {
+                        target,
+                        def: object.def,
+                        leaves,
+                        handle,
+                    });
                 }
             }
         }
@@ -1060,6 +1399,65 @@ impl Context<'_> {
                     Some(symbol),
                 ),
             );
+        }
+        Ok(())
+    }
+
+    fn add_descriptors(
+        &self,
+        catalog: &mut Catalog,
+        descriptor_targets: &mut BTreeMap<String, DescriptorTarget>,
+    ) -> Result<(), ModuleError> {
+        for named in self.types.named_types() {
+            if !named.is_object() {
+                continue;
+            }
+            // Synthetic prelude FBs are projected only when a build actually
+            // references them (D-134).
+            if synthetic(self.hir, named.def) && !self.used_std.contains(&named.def) {
+                continue;
+            }
+            if named.layout.size == 0 {
+                continue;
+            }
+            let owner_type = self.catalog_type_key(named.def)?;
+            let source =
+                self.source_location(&named.package, self.hir.defs[named.def.index()].span);
+            let entries = [
+                (DescriptorKind::TypeInfo, "TYPEINFO", true),
+                (DescriptorKind::Vtable, "VTABLE", !named.vtable.is_empty()),
+            ];
+            for (kind, kind_name, present) in entries {
+                if !present {
+                    continue;
+                }
+                let key = descriptor_identity_key(&named.package, &named.path, kind_name)
+                    .map_err(|error| map_error(error, None))?;
+                let identity = Identity::new(
+                    IdentityKind::Descriptor,
+                    &named.package,
+                    &named.path,
+                    kind_name,
+                );
+                catalog.descriptors.push(DescriptorDecl {
+                    identity,
+                    key: key.clone(),
+                    descriptor_kind: kind,
+                    owner_type: Some(owner_type.clone()),
+                    type_key: named.key.clone(),
+                    layout_hash: named.layout_hash,
+                    size: named.layout.size,
+                    align: named.layout.align,
+                    source: source.clone(),
+                });
+                descriptor_targets.insert(
+                    key,
+                    DescriptorTarget {
+                        def: named.def,
+                        kind,
+                    },
+                );
+            }
         }
         Ok(())
     }
@@ -1189,14 +1587,16 @@ impl Context<'_> {
                 continue;
             }
             let DefKind::Method {
-                owner,
-                body: Some(_),
-                slot,
-                ..
+                owner, body, slot, ..
             } = &def.kind
             else {
                 continue;
             };
+            let owner_named = self.types.named(*owner)?;
+            let prototype = body.is_none() && matches!(owner_named.kind, NamedKind::Interface);
+            if body.is_none() && !prototype {
+                continue;
+            }
             let package = self.def_package(*owner)?;
             let owner_path = self.qualified_path(*owner)?;
             let method_name = normalize_ident(self.hir.def_name(id))
@@ -1207,15 +1607,18 @@ impl Context<'_> {
             let key = function_key(&package, &path, &signature)
                 .map_err(|error| map_error(error, Some(def.span)))?;
             let owner_type = Some(self.catalog_type_key(*owner)?);
+            let flags = if prototype {
+                function_flag::METHOD | function_flag::INDIRECT_CALLABLE
+            } else {
+                function_flag::METHOD | function_flag::USER | function_flag::INDIRECT_CALLABLE
+            };
             catalog.functions.push(FunctionDecl {
                 identity: Identity::new(IdentityKind::Function, &package, &path, &signature_key),
                 key: key.clone(),
                 signature_key,
                 function_kind: FunctionKind::Method,
                 owner_type,
-                flags: function_flag::METHOD
-                    | function_flag::USER
-                    | function_flag::INDIRECT_CALLABLE,
+                flags,
                 export_name: None,
                 vtable_slot: *slot,
                 source: self.source_location(&package, def.span),
@@ -1630,6 +2033,37 @@ fn retention(policy: RetainPolicy) -> Retention {
         RetainPolicy::Retain => Retention::Retain,
         RetainPolicy::None | RetainPolicy::NonRetain => Retention::None,
     }
+}
+
+/// Appends a dotted segment path to a declaration path.
+fn join_root_path(path: &str, segments: &str) -> String {
+    if segments.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}.{segments}")
+    }
+}
+
+/// Returns the hidden-root identity qualifier for a declaration.
+fn hidden_qualifier(instance_path: &str, marker: &str) -> String {
+    format!("{instance_path}/{marker}")
+}
+
+/// Strips trailing array-element segments from a handle path.
+fn handle_segments(segments: &[RootSegment]) -> Vec<RootSegment> {
+    let mut end = segments.len();
+    while end > 0 && matches!(segments[end - 1], RootSegment::Element { .. }) {
+        end -= 1;
+    }
+    segments[..end].to_vec()
+}
+
+/// Prefixes a path with the declaration's own field segment.
+fn prefixed_segments(field: FieldId, segments: &[RootSegment]) -> Vec<RootSegment> {
+    let mut full = Vec::with_capacity(segments.len() + 1);
+    full.push(RootSegment::Field(field));
+    full.extend_from_slice(segments);
+    full
 }
 
 fn config_overrides(plan: &Plan) -> BTreeMap<(Symbol, FieldId), ExprId> {

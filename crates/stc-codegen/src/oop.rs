@@ -83,15 +83,23 @@ impl Lowerer<'_> {
                         ));
                     };
                     let Some(ordinal) = fields.ordinals.get(&full).copied() else {
-                        return Err(CodegenError::internal(format!(
-                            "object leaf {full:?} has no root table entry"
-                        )));
+                        return Err(CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "a call through a nested class instance is M5 phase 4b.3".into(),
+                            span,
+                        ));
                     };
                     field_table_pointer(f, fields, ordinal)
                 }
                 crate::place::PlaceBase::Global(def) => {
-                    let target = Self::global_leaf_target(*def, &full);
-                    let slot = self.root_slot(&target)?;
+                    let target = Self::global_leaf_target(*def, &full, leaf.class_handle.is_some());
+                    let Some(slot) = self.got.root_slot(&target) else {
+                        return Err(CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "a call through a nested class instance is M5 phase 4b.3".into(),
+                            span,
+                        ));
+                    };
                     Self::slot_storage(f, info, slot)
                 }
                 crate::place::PlaceBase::Local(_)

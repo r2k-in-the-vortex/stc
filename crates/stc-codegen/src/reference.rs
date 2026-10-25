@@ -87,11 +87,24 @@ impl Lowerer<'_> {
 
     /// Returns the split 128-bit identity of a persistent place, when known.
     fn descriptor_identity(&self, path: &crate::place::PlacePath) -> (i64, i64) {
-        let Some(segments) = self.static_segments(path) else {
+        let Some(mut segments) = self.static_segments(path) else {
             return (0, 0);
         };
+        let class_handle = self.types.class_def(path.ty).ok().flatten().is_some();
+        if class_handle {
+            // A class handle's root is its declaration path; an array of
+            // handles owns one root for the whole array.
+            while matches!(
+                segments.last(),
+                Some(crate::types::RootSegment::Element { .. })
+            ) {
+                segments.pop();
+            }
+        }
         let target = match &path.base {
-            crate::place::PlaceBase::Global(def) => Some(Self::global_leaf_target(*def, &segments)),
+            crate::place::PlaceBase::Global(def) => {
+                Some(Self::global_leaf_target(*def, &segments, class_handle))
+            }
             _ => None,
         };
         let Some(id) = target.and_then(|target| self.got.root_got_id(&target)) else {

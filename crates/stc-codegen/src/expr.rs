@@ -410,9 +410,16 @@ impl Lowerer<'_> {
     }
 
     pub(crate) fn root_slot(&self, target: &RootTarget) -> Res<u32> {
-        self.got
-            .root_slot(target)
-            .ok_or_else(|| CodegenError::internal(format!("no GOT slot for root {target:?}")))
+        self.got.root_slot(target).ok_or_else(|| {
+            let name = match target {
+                RootTarget::Global(def)
+                | RootTarget::GlobalLeaf { def, .. }
+                | RootTarget::GlobalHandle { def, .. }
+                | RootTarget::GlobalRecord { def, .. } => self.hir.def_name(*def).to_string(),
+                _ => String::new(),
+            };
+            CodegenError::internal(format!("no GOT slot for root {target:?} (`{name}`)"))
+        })
     }
 
     pub(crate) fn function_slot(&self, target: FunctionTarget) -> Res<u32> {
@@ -465,6 +472,13 @@ impl Lowerer<'_> {
         }
         if let Some(path) = self.collect_place(id) {
             let facts = self.types.facts(path.ty)?.clone();
+            if facts.is_class() {
+                return Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "class values cannot be used as expressions until M5 phase 4b.3".into(),
+                    expr.span,
+                ));
+            }
             if let Some(kind) = facts.scalar() {
                 if let Some(resolved) = self.resolve_place_pointer(f, info, &path)? {
                     if let Some(address) = &resolved.direct {
@@ -524,6 +538,13 @@ impl Lowerer<'_> {
         }
         if let Some(path) = self.collect_place(id) {
             let facts = self.types.facts(path.ty)?.clone();
+            if facts.is_class() {
+                return Err(CodegenError::unsupported(
+                    codes::CODEGEN_UNSUPPORTED,
+                    "class assignment is M5 phase 4b.3".into(),
+                    expr.span,
+                ));
+            }
             if let Some(kind) = facts.scalar() {
                 if let Some(resolved) = self.resolve_place_pointer(f, info, &path)? {
                     if let Some(address) = &resolved.direct {

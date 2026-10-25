@@ -222,6 +222,75 @@ pub fn task_guard_root_key(
     ))
 }
 
+/// Reserved hidden-root detail markers (GOT Artifacts §8.5.6).
+///
+/// A hidden object-record or class-handle root appends one of these markers as
+/// the final segment of the key's `#` detail suffix. The markers never occur in
+/// a source identifier position.
+pub const HIDDEN_ROOT_MARKERS: [&str; 2] = ["HANDLE", "OBJREC"];
+
+/// Returns the hidden-root marker named by a data-root key, when present.
+///
+/// A marker is recognized only when it is unambiguous: either the whole detail
+/// suffix (`PATH#HANDLE`) or the final segment of a complete instance path
+/// (`PATH#CONFIG/RESOURCE/INSTANCE/HANDLE`). A three-segment ordinary instance
+/// path may legitimately end in an instance named `HANDLE`; that key has no
+/// hidden marker.
+#[must_use]
+pub fn hidden_root_marker(key: &str) -> Option<&'static str> {
+    let (_, suffix) = key.split_once('#')?;
+    if let Some(marker) = HIDDEN_ROOT_MARKERS
+        .iter()
+        .copied()
+        .find(|marker| suffix == *marker)
+    {
+        return Some(marker);
+    }
+    let (instance, marker) = suffix.rsplit_once('/')?;
+    if instance.split('/').count() < 3 {
+        return None;
+    }
+    HIDDEN_ROOT_MARKERS
+        .iter()
+        .copied()
+        .find(|candidate| marker == *candidate)
+}
+
+/// Builds a hidden object-record or class-handle root key.
+///
+/// `instance` is the declaration's instance path, present for a program-instance
+/// field and absent for a global. The marker follows the detail suffix.
+///
+/// # Errors
+///
+/// Rejects an unknown marker and malformed package, path, or instance
+/// components.
+pub fn hidden_root_key(
+    package: &str,
+    path: &str,
+    instance: Option<&str>,
+    marker: &str,
+) -> Result<String> {
+    let marker = HIDDEN_ROOT_MARKERS
+        .iter()
+        .copied()
+        .find(|candidate| candidate.eq_ignore_ascii_case(marker))
+        .ok_or_else(|| {
+            Error::manifest(format!(
+                "unknown hidden-root marker `{marker}` (expected HANDLE or OBJREC)"
+            ))
+        })?;
+    let package = normalize_package(package)?;
+    let path = normalize_name_path(path)?;
+    match instance {
+        Some(instance) => Ok(format!(
+            "{package}::{path}#{}/{marker}",
+            normalize_instance_path(instance)?
+        )),
+        None => Ok(format!("{package}::{path}#{marker}")),
+    }
+}
+
 /// Builds a direct-variable root key.
 ///
 /// `instance` is present for a program-instance field and absent for a global.
@@ -502,6 +571,21 @@ fn validate_root_key(rest: &str, allow_task_guard: bool) -> Result<()> {
                 return validate_normalized_ident(task);
             }
             validate_name_path(path)?;
+            // A hidden root appends `HANDLE` or `OBJREC` as the final detail
+            // segment: `PATH#MARKER` for a global, `PATH#CONFIG/RESOURCE/
+            // INSTANCE[/NESTED]/MARKER` for a configured instance.
+            if hidden_root_marker(rest).is_some() {
+                let Some((instance, _marker)) = suffix.rsplit_once('/') else {
+                    return Ok(());
+                };
+                let segments = validate_instance_path(instance)?;
+                if segments < 3 {
+                    return Err(Error::manifest(
+                        "a hidden root's instance path is `CONFIG/RESOURCE/INSTANCE`",
+                    ));
+                }
+                return Ok(());
+            }
             let segments = validate_instance_path(suffix)?;
             if segments < 3 {
                 return Err(Error::manifest(
@@ -674,6 +758,22 @@ mod tests {
                 "_ROOT::MAIN/R1#FAST.GUARD",
             ),
             (
+                IdentityKind::DataRoot,
+                hidden_root_key("_root", "main.motor", None, "OBJREC").unwrap(),
+                "_ROOT::MAIN.MOTOR#OBJREC",
+            ),
+            (
+                IdentityKind::DataRoot,
+                hidden_root_key("_root", "main.motor", Some("main/r1/inst"), "HANDLE").unwrap(),
+                "_ROOT::MAIN.MOTOR#MAIN/R1/INST/HANDLE",
+            ),
+            (
+                IdentityKind::DataRoot,
+                hidden_root_key("_root", "main.arr.e1", Some("main/r1/inst/fb1"), "objrec")
+                    .unwrap(),
+                "_ROOT::MAIN.ARR.E1#MAIN/R1/INST/FB1/OBJREC",
+            ),
+            (
                 IdentityKind::Direct,
                 direct_root_key("_root", "main.input", Some("main/r1/inst")).unwrap(),
                 "_ROOT::MAIN.INPUT#MAIN/R1/INST",
@@ -738,6 +838,61 @@ mod tests {
         assert!(validate_key(IdentityKind::Task, "_ROOT::MAIN#FAST").is_err());
         assert!(validate_key(IdentityKind::Type, "_root::MAIN").is_err());
         assert!(validate_key(IdentityKind::Export, "_ROOT::F@()->VOID#C:1x").is_err());
+    }
+
+    #[test]
+    fn hidden_root_keys_are_marked_and_distinct() {
+        let global = hidden_root_key("_root", "main.motor", None, "HANDLE").unwrap();
+        let instance =
+            hidden_root_key("_root", "main.motor", Some("main/r1/inst"), "HANDLE").unwrap();
+        let record =
+            hidden_root_key("_root", "main.motor", Some("main/r1/inst"), "OBJREC").unwrap();
+        assert_eq!(hidden_root_marker(&global), Some("HANDLE"));
+        assert_eq!(hidden_root_marker(&instance), Some("HANDLE"));
+        assert_eq!(hidden_root_marker(&record), Some("OBJREC"));
+        assert_ne!(global, instance);
+        assert_ne!(instance, record);
+        assert_eq!(hidden_root_marker("_ROOT::MAIN.VALUE#MAIN/R1/INST"), None);
+        assert_eq!(hidden_root_marker("_ROOT::MAIN/R1#FAST.GUARD"), None);
+        assert!(hidden_root_key("_root", "main.motor", None, "HANDLES").is_err());
+        // A field named HANDLE keeps its ordinary path key: the marker follows
+        // the `#`, never a `.`.
+        let field = field_root_key("_root", "main.handle", "main/r1/inst").unwrap();
+        assert_eq!(hidden_root_marker(&field), None);
+        assert_ne!(field, instance);
+    }
+
+    #[test]
+    fn hidden_root_keys_require_a_complete_instance_path() {
+        assert!(validate_key(IdentityKind::DataRoot, "_ROOT::MAIN.MOTOR#HANDLE").is_ok());
+        assert!(
+            validate_key(
+                IdentityKind::DataRoot,
+                "_ROOT::MAIN.MOTOR#MAIN/R1/INST/HANDLE"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_key(
+                IdentityKind::DataRoot,
+                "_ROOT::MAIN.ARR.E0#MAIN/R1/INST/FB1/OBJREC"
+            )
+            .is_ok()
+        );
+        // A marker with a short instance path is not a hidden root.
+        assert!(validate_key(IdentityKind::DataRoot, "_ROOT::MAIN.MOTOR#HANDLE/HANDLE").is_err());
+        assert!(validate_key(IdentityKind::DataRoot, "_ROOT::MAIN.MOTOR#MAIN/HANDLE").is_err());
+        // A three-segment instance named HANDLE keeps its ordinary root key.
+        let ordinary = "_ROOT::MAIN.MOTOR#C/R/HANDLE";
+        assert_eq!(hidden_root_marker(ordinary), None);
+        assert!(validate_key(IdentityKind::DataRoot, ordinary).is_ok());
+        // A nested instance whose final segment is a marker is reserved.
+        assert_eq!(
+            hidden_root_marker("_ROOT::MAIN.MOTOR#C/R/INST/NESTED/HANDLE"),
+            Some("HANDLE")
+        );
+        // Ordinary roots still reject unknown suffixes.
+        assert!(validate_key(IdentityKind::DataRoot, "_ROOT::MAIN.MOTOR#OTHER").is_err());
     }
 
     #[test]

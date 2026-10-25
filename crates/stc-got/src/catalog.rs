@@ -364,6 +364,7 @@ impl Catalog {
                 .split_once('#')
                 .is_some_and(|(_, suffix)| suffix.ends_with(".GUARD"));
             let keyed = root.key.contains('#');
+            let hidden = crate::keys::hidden_root_marker(&root.key).is_some();
             let shape_ok = match root.root_kind {
                 RootKind::Global => !keyed,
                 RootKind::ProgramField | RootKind::NestedField => keyed && !guard_key,
@@ -376,9 +377,27 @@ impl Catalog {
                     root.key, root.root_kind
                 )));
             }
-            crate::layout::TypeKey::parse(&root.type_key).map_err(|error| {
+            if hidden && root.root_kind != RootKind::NestedField {
+                return Err(Error::manifest(format!(
+                    "hidden root `{}` must use root_kind nested_field",
+                    root.key
+                )));
+            }
+            let type_key = crate::layout::TypeKey::parse(&root.type_key).map_err(|error| {
                 Error::manifest(format!("root `{}` type key: {}", root.key, error.message))
             })?;
+            if hidden && !type_key.contains_pointer() {
+                return Err(Error::manifest(format!(
+                    "hidden root `{}` must use a pointer type key",
+                    root.key
+                )));
+            }
+            if !hidden && type_key.contains_pointer() {
+                return Err(Error::manifest(format!(
+                    "persistent root `{}` has a PTR_TO type",
+                    root.key
+                )));
+            }
         }
         for function in &self.functions {
             require_identity(&function.identity, IdentityKind::Function, &function.key)?;

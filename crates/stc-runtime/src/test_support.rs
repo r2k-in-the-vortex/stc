@@ -43,6 +43,38 @@ END_VAR
 END_PROGRAM
 "#;
 
+/// An OOP surface with class/FB types, descriptors, and hidden roots.
+pub const OOP: &str = r#"
+CLASS Shape
+VAR PUBLIC
+  id : DINT;
+END_VAR
+END_CLASS
+
+FUNCTION_BLOCK MyCounter
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR
+  cv : DINT;
+END_VAR
+  cv := cv + inc;
+END_FUNCTION_BLOCK
+
+VAR_GLOBAL
+  frame : Shape;
+  counter : MyCounter;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  counter(inc := 1);
+END_PROGRAM
+"#;
+
 /// Returns the fixed test target.
 #[must_use]
 pub fn target() -> Target {

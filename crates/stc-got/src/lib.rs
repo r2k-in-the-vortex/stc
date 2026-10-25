@@ -38,10 +38,11 @@ pub use engine::{BuildInput, BuildOptions, BuildOutcome, Rename, build, source_f
 pub use error::{BuildError, Diagnostic, Error, Result, Severity, codes};
 pub use json::Json;
 pub use keys::{
-    IdentityKind, descriptor_identity_key, direct_root_key, export_identity_key,
-    field_identity_key, field_root_key, function_key, global_root_key, instance_identity_key,
-    key_package, normalize_ident, normalize_instance_path, normalize_name_path, normalize_package,
-    program_body_key, task_guard_root_key, task_identity_key, type_identity_key, validate_key,
+    HIDDEN_ROOT_MARKERS, IdentityKind, descriptor_identity_key, direct_root_key,
+    export_identity_key, field_identity_key, field_root_key, function_key, global_root_key,
+    hidden_root_key, hidden_root_marker, instance_identity_key, key_package, normalize_ident,
+    normalize_instance_path, normalize_name_path, normalize_package, program_body_key,
+    task_guard_root_key, task_identity_key, type_identity_key, validate_key,
 };
 pub use layout::{
     ArrayBound, Endianness, FieldLayout, Layout, ParamMode, Parameter, Signature, StringKind,

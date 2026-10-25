@@ -218,6 +218,7 @@ impl Lowerer<'_> {
         if !self.types.is_single_root(path.ty)? {
             return Ok(None);
         }
+        let class_handle = self.types.class_def(path.ty)?.is_some();
         match &path.base {
             PlaceBase::This(_) | PlaceBase::Instance { .. } => {
                 let Some(fields) = &info.fields else {
@@ -231,14 +232,7 @@ impl Lowerer<'_> {
                 Ok(Some(ResolvedPointer { pointer, direct }))
             }
             PlaceBase::Global(def) => {
-                let target = if segments.is_empty() {
-                    RootTarget::Global(*def)
-                } else {
-                    RootTarget::GlobalLeaf {
-                        def: *def,
-                        segments,
-                    }
-                };
+                let target = Self::global_leaf_target(*def, &segments, class_handle);
                 let Some(slot) = self.got.root_slot(&target) else {
                     // The place extends a single-root array; the GEP path
                     // resolves the declaration root and indexes it.
@@ -311,7 +305,7 @@ impl Lowerer<'_> {
                         continue;
                     }
                     let indices = self.types.field_gep_indices(ty, *field)?;
-                    let pointee = self.types.llvm_storage(ty)?.render();
+                    let pointee = self.types.instance_llvm_storage(ty)?.render();
                     let mut gep = vec!["i32 0".to_owned()];
                     for index in indices {
                         gep.push(format!("i32 {index}"));
@@ -676,7 +670,7 @@ impl Lowerer<'_> {
                     "an aggregate direct variable has no M5 representation",
                 ));
             }
-            let ty = self.types.llvm_storage(path.ty)?;
+            let ty = self.types.instance_llvm_storage(path.ty)?;
             return Ok(f.load(ty, &resolved.pointer, None));
         }
         if self.types.facts(path.ty)?.is_object() {
@@ -714,7 +708,7 @@ impl Lowerer<'_> {
                 path.span,
             ));
         }
-        let storage = self.types.llvm_storage(path.ty)?;
+        let storage = self.types.instance_llvm_storage(path.ty)?;
         let temp = f.alloca(storage.clone());
         f.store(&value, &temp, None);
         self.split_place_from_temp(f, info, path, &temp)?;
@@ -871,7 +865,7 @@ impl Lowerer<'_> {
                         continue;
                     }
                     let indices = self.types.field_gep_indices(ty, *field)?;
-                    let pointee = self.types.llvm_storage(ty)?.render();
+                    let pointee = self.types.instance_llvm_storage(ty)?.render();
                     let mut gep = vec!["i32 0".to_owned()];
                     for index in indices {
                         gep.push(format!("i32 {index}"));
@@ -1001,34 +995,30 @@ pub(crate) fn direct_bit(
 }
 
 impl Lowerer<'_> {
-    /// Returns the per-instance direct-address map for a program layout.
+    /// Returns the per-instance root target for a leaf path.
     pub(crate) fn program_leaf_target(
         &self,
         instance: Symbol,
         segments: &[RootSegment],
+        class_handle: bool,
     ) -> RootTarget {
-        if let [RootSegment::Field(field)] = segments {
-            RootTarget::InstanceField {
-                instance,
-                field: *field,
-            }
+        if class_handle {
+            RootTarget::instance_handle(instance, segments)
         } else {
-            RootTarget::InstanceLeaf {
-                instance,
-                segments: segments.to_vec(),
-            }
+            RootTarget::instance_leaf(instance, segments)
         }
     }
 
     /// Returns the global root target for a leaf path.
-    pub(crate) fn global_leaf_target(def: DefId, segments: &[RootSegment]) -> RootTarget {
-        if segments.is_empty() {
-            RootTarget::Global(def)
+    pub(crate) fn global_leaf_target(
+        def: DefId,
+        segments: &[RootSegment],
+        class_handle: bool,
+    ) -> RootTarget {
+        if class_handle {
+            RootTarget::global_handle(def, segments)
         } else {
-            RootTarget::GlobalLeaf {
-                def,
-                segments: segments.to_vec(),
-            }
+            RootTarget::global_leaf(def, segments)
         }
     }
 
@@ -2783,7 +2773,28 @@ impl Lowerer<'_> {
         destination: &crate::place::PlacePath,
         source: &crate::place::PlacePath,
     ) -> Res<()> {
-        let storage = self.types.llvm_storage(destination.ty)?;
+        // Local class values keep the phase-4a state copy until phase 4b.3
+        // introduces stack handles. Any assignment involving a persistent
+        // class instance changes the handle, which needs the 4b.3 object-record
+        // access path, so it stays an explicit diagnostic instead of silently
+        // producing handle-copy semantics over instance-based field reads.
+        let class_value = self.types.facts(destination.ty)?.is_class();
+        let transient = |path: &crate::place::PlacePath| {
+            matches!(
+                path.base,
+                crate::place::PlaceBase::Local(_)
+                    | crate::place::PlaceBase::Param(_)
+                    | crate::place::PlaceBase::Result(_)
+            )
+        };
+        if class_value && !(transient(destination) && transient(source)) {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "class assignment involving a persistent instance is M5 phase 4b.3".into(),
+                destination.span,
+            ));
+        }
+        let storage = self.types.instance_llvm_storage(destination.ty)?;
         let destination_pointer = self.resolve_place_pointer(f, info, destination)?;
         let source_pointer = self.resolve_place_pointer(f, info, source)?;
         if let (Some(destination_pointer), Some(source_pointer)) =

@@ -31,6 +31,10 @@ pub const PLAN_DOMAIN: &str = "stc:plan:v1";
 pub const FEATURE_HOST_ABI: u64 = 1 << 0;
 /// Feature bit: an online-change plan is present.
 pub const FEATURE_ONLINE_PLAN: u64 = 1 << 1;
+/// Feature bit: OOP descriptors and vtables are in use (M5).
+pub const FEATURE_DESCRIPTORS: u64 = 1 << 2;
+/// Feature bit: place-descriptor references are in use (M5).
+pub const FEATURE_PLACES: u64 = 1 << 3;
 /// Feature bits defined by manifest/module format 1.
 pub const FEATURE_MASK: u64 = 0b1_1111;
 
@@ -666,11 +670,19 @@ impl Manifest {
             let type_key = TypeKey::parse(&root.type_key).map_err(|error| {
                 Error::manifest(format!("root `{}` type key: {}", root.key, error.message))
             })?;
-            if type_key.contains_pointer() {
+            let hidden = crate::keys::hidden_root_marker(&root.key).is_some();
+            if hidden && root.root_kind != RootKind::NestedField {
                 return Err(Error::manifest(format!(
-                    "persistent root `{}` has a PTR_TO type",
+                    "hidden root `{}` must use root_kind nested_field",
                     root.key
                 )));
+            }
+            if type_key.contains_pointer() != hidden {
+                return Err(Error::manifest(if hidden {
+                    format!("hidden root `{}` must use a pointer type key", root.key)
+                } else {
+                    format!("persistent root `{}` has a PTR_TO type", root.key)
+                }));
             }
             if root.size == 0 {
                 return Err(Error::manifest(format!(

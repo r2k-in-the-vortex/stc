@@ -17,9 +17,14 @@ use stc_got::{Descriptor, Digest32, HOST_ABI_MAJOR, HOST_ABI_MINOR, MODULE_FORMA
 /// The only language profile M4.5 accepts.
 pub const PROFILE: &str = "stc-2013-oop-utf8-v1";
 
-/// Feature bits implemented by an M4.5 host.
-pub const SUPPORTED_FEATURES: u64 =
-    stc_got::descriptor::feature::HOST_ABI | stc_got::descriptor::feature::ONLINE_PLAN;
+/// Feature bits implemented by an M5 host.
+///
+/// ABI 2.1 hosts implement the inline TYPEINFO/VTABLE/object-record layout
+/// (D-147–D-151) and place-descriptor references.
+pub const SUPPORTED_FEATURES: u64 = stc_got::descriptor::feature::HOST_ABI
+    | stc_got::descriptor::feature::ONLINE_PLAN
+    | stc_got::descriptor::feature::DESCRIPTORS
+    | stc_got::descriptor::feature::PLACES;
 
 /// The host's profile, target, ABI range, and implemented feature bits.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -328,6 +333,36 @@ mod tests {
         assert_eq!(pair.manifest, artifacts.manifest);
         assert_eq!(pair.descriptor_digest, artifacts.descriptor_digest);
         assert_eq!(pair.manifest_digest, artifacts.manifest_digest);
+    }
+
+    #[test]
+    fn accepts_oop_descriptors_and_hidden_roots() {
+        let artifacts = artifacts(test_support::OOP, "oop");
+        assert!(
+            !artifacts.manifest.descriptors.is_empty(),
+            "class/FB descriptors are projected"
+        );
+        assert!(
+            artifacts
+                .manifest
+                .roots
+                .iter()
+                .any(|root| stc_got::hidden_root_marker(&root.key) == Some("OBJREC")),
+            "{:?}",
+            artifacts.manifest.roots
+        );
+        let pair = ValidatedPair::from_bytes(
+            &platform(),
+            &artifacts.descriptor_bytes,
+            &artifacts.manifest_binary,
+        )
+        .expect("valid OOP pair");
+        let features = pair.manifest.header.required_features;
+        assert_eq!(
+            features & SUPPORTED_FEATURES,
+            features,
+            "the host advertises the descriptor and place feature bits"
+        );
     }
 
     #[test]

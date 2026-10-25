@@ -605,6 +605,66 @@ mod tests {
     }
 
     #[test]
+    fn binds_descriptor_cells_and_hidden_roots() {
+        let artifacts = test_support::artifacts(test_support::OOP, "oop");
+        let manifest = &artifacts.manifest;
+        let mut roots = RootRegistry::new();
+        for root in manifest
+            .roots
+            .iter()
+            .filter(|root| root.root_kind != RootKind::Direct)
+        {
+            roots.allocate(root, 1).expect("allocate root");
+        }
+        let mut got = Got::new(&manifest.slots).expect("got");
+        got.bind_data_roots(&roots).expect("data roots");
+        let functions: BTreeMap<GotId, usize> = manifest
+            .functions
+            .iter()
+            .map(|function| (function.got_id, 0x1000))
+            .collect();
+        got.bind_functions(&functions).expect("functions");
+        let descriptors: BTreeMap<GotId, usize> = manifest
+            .descriptors
+            .iter()
+            .enumerate()
+            .map(|(index, descriptor)| (descriptor.got_id, 0x3000 + index))
+            .collect();
+        assert!(!descriptors.is_empty());
+        got.bind_descriptors(&descriptors).expect("descriptors");
+        got.bind_direct(&BTreeMap::new()).expect("direct");
+        got.bind_imports(|service| Some(0x2000 + usize::from(service)))
+            .expect("imports");
+        assert!(got.unbound_slots().is_empty(), "{:?}", got.unbound_slots());
+
+        for slot in manifest
+            .slots
+            .iter()
+            .filter(|slot| slot.kind == SlotKind::Descriptor)
+        {
+            assert_eq!(
+                got.cell_value(slot.slot).unwrap(),
+                descriptors[&slot.got_id]
+            );
+        }
+        for root in manifest
+            .roots
+            .iter()
+            .filter(|root| stc_got::hidden_root_marker(&root.key).is_some())
+        {
+            let slot = manifest
+                .slots
+                .iter()
+                .find(|slot| slot.got_id == root.got_id)
+                .expect("hidden root slot");
+            assert_eq!(
+                got.cell_value(slot.slot).unwrap(),
+                roots.address(root.got_id).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn direct_cells_bind_to_process_image_addresses() {
         let slots = [slot(0, SlotKind::Direct, 0, 3)];
         let mut got = Got::new(&slots).unwrap();

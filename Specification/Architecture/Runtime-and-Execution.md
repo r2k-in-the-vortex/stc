@@ -325,7 +325,9 @@ address. Preserved records and handles are not rewritten. `stc_module_cycle` can
 the host activates the generation, at which point it patches descriptor entries and interface
 maps under the cycle boundary. A failed prepare or first cycle releases fresh records and
 handles with the candidate's roots; a preserved handle to a removed instance is quarantined, not
-freed.
+freed. While phase 4b.1 is the active step, the host binds descriptor cells to zeroed
+per-generation placeholder storage instead of the registry; generated prepare uses those cells
+only to store the TYPEINFO pointer and no code dereferences the record header until 4b.2.
 
 **Class values and FB values.** A class value is a non-retained handle to an object record; the
 declaration owns an embedded instance whose field roots keep their retention policy, and a

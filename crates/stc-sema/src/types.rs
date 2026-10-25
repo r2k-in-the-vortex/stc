@@ -1396,17 +1396,34 @@ impl Analyzer<'_> {
     }
 
     fn assign_interface_vtable(&mut self, def: DefId) {
-        let mut prototypes = self.interface_closure(&def);
-        prototypes.sort_by_key(|method| {
-            let name = self.hir.defs[method.index()]
-                .name
-                .unwrap_or_else(|| Symbol::new(u32::MAX));
-            (name, self.method_signature(*method))
-        });
-        prototypes.dedup_by(|left, right| {
-            self.hir.defs[left.index()].name == self.hir.defs[right.index()].name
-                && self.method_signature(*left) == self.method_signature(*right)
-        });
+        // Base-first: every interface in the `EXTENDS` closure contributes its
+        // own prototypes sorted by (name, signature), and a duplicate is kept
+        // only at its earliest occurrence. A derived interface's table is
+        // therefore a prefix extension of its base's table (GOT Artifacts
+        // §8.5.3).
+        let interfaces = self.interface_closure_base_first(&def);
+        let mut seen = BTreeSet::new();
+        let mut prototypes = Vec::new();
+        for interface in interfaces {
+            let methods = match &self.hir.defs[interface.index()].kind {
+                DefKind::Interface { methods, .. } => methods.clone(),
+                _ => continue,
+            };
+            let mut own = methods;
+            own.sort_by_key(|method| {
+                let name = self.hir.defs[method.index()]
+                    .name_text(&self.hir.interner)
+                    .to_owned();
+                (name, self.method_signature(*method))
+            });
+            for method in own {
+                let name = self.hir.defs[method.index()].name;
+                let key = (name, self.method_signature(method));
+                if seen.insert(key) {
+                    prototypes.push(method);
+                }
+            }
+        }
         for (index, method) in prototypes.iter().enumerate() {
             if let DefKind::Method { slot, .. } = &mut self.hir.defs[method.index()].kind {
                 *slot = Some(index as u32);
@@ -1415,6 +1432,26 @@ impl Analyzer<'_> {
         if let DefKind::Interface { vtable, .. } = &mut self.hir.defs[def.index()].kind {
             *vtable = prototypes;
         }
+    }
+
+    /// Returns an interface and its `EXTENDS` closure, base interfaces first.
+    fn interface_closure_base_first(&self, interface: &DefId) -> Vec<DefId> {
+        let mut out = Vec::new();
+        let mut seen = BTreeSet::new();
+        self.visit_interface(*interface, &mut seen, &mut out);
+        out
+    }
+
+    fn visit_interface(&self, interface: DefId, seen: &mut BTreeSet<DefId>, out: &mut Vec<DefId>) {
+        if !seen.insert(interface) {
+            return;
+        }
+        if let DefKind::Interface { extends, .. } = &self.hir.defs[interface.index()].kind {
+            for parent in extends {
+                self.visit_interface(*parent, seen, out);
+            }
+        }
+        out.push(interface);
     }
 
     fn assign_class_vtable(&mut self, def: DefId) {
@@ -1508,11 +1545,11 @@ impl Analyzer<'_> {
                 }
             }
         }
-        new_methods.sort_by_key(|(name, method)| {
-            (
-                name.unwrap_or_else(|| Symbol::new(u32::MAX)),
-                self.method_signature(*method),
-            )
+        new_methods.sort_by_key(|(_, method)| {
+            let name = self.hir.defs[method.index()]
+                .name_text(&self.hir.interner)
+                .to_owned();
+            (name, self.method_signature(*method))
         });
         for (_, method) in new_methods {
             let slot = u32::try_from(vtable.len()).ok();
@@ -2058,8 +2095,13 @@ impl Analyzer<'_> {
                 Ty::Error => {}
                 Ty::Null | Ty::Ref(_) | Ty::Ptr(_) => return false,
                 Ty::Named(def) => match &self.hir.defs[def.index()].kind {
-                    DefKind::Class { .. } | DefKind::Interface { .. } => return false,
-                    DefKind::Struct { fields, .. }
+                    DefKind::Interface { .. } => return false,
+                    // A class value is a handle, but its owned instance's
+                    // fields are ordinary persistent leaves (D-152). A
+                    // recursive owned-instance cycle has no finite storage and
+                    // is rejected by code generation.
+                    DefKind::Class { fields, .. }
+                    | DefKind::Struct { fields, .. }
                     | DefKind::FunctionBlock { fields, .. }
                     | DefKind::Program { fields, .. } => {
                         for field in fields {

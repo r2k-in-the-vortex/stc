@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use stc_got::Target;
 use stc_got::catalog::ImportService;
+use stc_got::model::DescriptorKind;
 use stc_hir::{
     ArgDirection, DefId, DefKind, ExprId, HirCrate, ParamId, Symbol, TyId, VarSectionKind,
 };
@@ -153,6 +154,18 @@ impl Lowerer<'_> {
         self.span_ids.get(&span).copied().unwrap_or(0)
     }
 
+    /// Rejects class-typed callable parameters and results until phase 4b.3
+    /// wires the handle ABI; the type/layout projection itself is ready.
+    fn check_callable_class_ty(&mut self, ty: TyId, what: &str, span: Span) {
+        if self.types.facts(ty).is_ok_and(|facts| facts.is_class()) {
+            self.push_error(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!("class {what}s are M5 phase 4b.3"),
+                span,
+            ));
+        }
+    }
+
     fn build_symbols(&mut self) {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(0));
@@ -192,6 +205,18 @@ impl Lowerer<'_> {
                     }
                 }
                 DefKind::Method { body: Some(_), .. } => {
+                    match mangle::method_symbol(self.hir, &self.types, id) {
+                        Ok(symbol) => {
+                            self.function_symbols.insert(id, symbol);
+                        }
+                        Err(error) => self.push_error(error.with_span(def.span)),
+                    }
+                }
+                DefKind::Method {
+                    owner, body: None, ..
+                } if matches!(self.hir.defs[owner.index()].kind, DefKind::Interface { .. }) => {
+                    // Interface prototypes are projected as function records
+                    // with a trap-stub body (GOT Artifacts §8.5.7).
                     match mangle::method_symbol(self.hir, &self.types, id) {
                         Ok(symbol) => {
                             self.function_symbols.insert(id, symbol);
@@ -246,13 +271,15 @@ impl Lowerer<'_> {
                             def.span,
                         ));
                     }
-                    if let Some(result) = result
-                        && let Err(error) = self.types.facts(*result)
-                    {
-                        self.push_error(error);
+                    if let Some(result) = result {
+                        self.check_callable_class_ty(*result, "result", def.span);
+                        if let Err(error) = self.types.facts(*result) {
+                            self.push_error(error);
+                        }
                     }
                     for param in params {
                         let data = self.hir.param(*param);
+                        self.check_callable_class_ty(data.ty, "parameter", data.span);
                         if let Err(error) = self.types.facts(data.ty) {
                             self.push_error(error);
                         }
@@ -261,6 +288,21 @@ impl Lowerer<'_> {
                 DefKind::Global { ty, .. } => {
                     if let Err(error) = self.types.facts(*ty) {
                         self.push_error(error);
+                    }
+                }
+                DefKind::Method { result, params, .. } => {
+                    if let Some(result) = result {
+                        self.check_callable_class_ty(*result, "result", def.span);
+                        if let Err(error) = self.types.facts(*result) {
+                            self.push_error(error);
+                        }
+                    }
+                    for param in params {
+                        let data = self.hir.param(*param);
+                        self.check_callable_class_ty(data.ty, "parameter", data.span);
+                        if let Err(error) = self.types.facts(data.ty) {
+                            self.push_error(error);
+                        }
                     }
                 }
                 DefKind::Program { fields, .. } => {
@@ -293,7 +335,6 @@ impl Lowerer<'_> {
                 | DefKind::Class { .. }
                 | DefKind::FunctionBlock { .. }
                 | DefKind::Interface { .. }
-                | DefKind::Method { .. }
                 | DefKind::Configuration { .. } => {}
             }
         }
@@ -304,6 +345,7 @@ impl Lowerer<'_> {
         self.emit_user_functions();
         self.emit_fb_bodies();
         self.emit_methods();
+        self.emit_interface_stubs();
         self.emit_program_bodies();
         self.emit_prepare();
         self.emit_cycle();
@@ -546,7 +588,9 @@ impl Lowerer<'_> {
             if data.external_target.is_some() {
                 continue;
             }
-            let storage = self.types.llvm_storage(data.ty)?;
+            // Class/FB locals keep their owned instance storage until phase
+            // 4b.3 introduces the stack handle and record.
+            let storage = self.types.instance_llvm_storage(data.ty)?;
             let slot = f.alloca(storage.clone());
             info.locals.insert(*local, slot.clone());
             if let Some(init) = data.init {
@@ -783,6 +827,97 @@ impl Lowerer<'_> {
         result
     }
 
+    fn emit_interface_stubs(&mut self) {
+        let stubs: Vec<DefId> = self
+            .hir
+            .defs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, def)| {
+                if def.test_only {
+                    return None;
+                }
+                let DefKind::Method {
+                    owner, body: None, ..
+                } = &def.kind
+                else {
+                    return None;
+                };
+                matches!(self.hir.defs[owner.index()].kind, DefKind::Interface { .. })
+                    .then_some(DefId::new(u32::try_from(index).ok()?))
+            })
+            .collect();
+        for def in stubs {
+            if let Err(error) = self.emit_interface_stub(def) {
+                self.push_error(error);
+            }
+        }
+    }
+
+    /// Emits the trap-stub body of one interface prototype (GOT Artifacts
+    /// §8.5.7). Dispatched interface calls never reach this body; reaching it
+    /// means dispatch was bypassed or an implementation is missing.
+    fn emit_interface_stub(&mut self, def: DefId) -> Result<(), CodegenError> {
+        let DefKind::Method { result, params, .. } = self.hir.defs[def.index()].kind.clone() else {
+            return Ok(());
+        };
+        let symbol = self
+            .function_symbols
+            .get(&def)
+            .cloned()
+            .ok_or_else(|| CodegenError::internal("interface prototype has no symbol"))?;
+        let result_facts = result.map(|ty| self.types.facts(ty).cloned()).transpose()?;
+        let aggregate_result = result_facts
+            .as_ref()
+            .is_some_and(|facts| facts.is_contiguous_aggregate());
+        let result_abi = result_facts.as_ref().map(|facts| {
+            if aggregate_result {
+                IrType::Void
+            } else if facts.is_object() {
+                facts.llvm_value.clone()
+            } else {
+                facts.llvm_storage.clone()
+            }
+        });
+        let param_data = self.abi_params(&params)?;
+        let mut fn_params = vec![(IrType::Ptr, "%this".into())];
+        fn_params.extend(
+            param_data
+                .iter()
+                .enumerate()
+                .map(|(index, param)| (param.llvm.clone(), format!("%a{index}"))),
+        );
+        if aggregate_result {
+            fn_params.push((IrType::Ptr, "%sret".into()));
+        }
+        let slots_index = fn_params.len();
+        fn_params.push((IrType::Ptr, "%slots".into()));
+        let ret_ty = result_abi.unwrap_or(IrType::Void);
+        let mut f = Function::new(symbol, SymbolAttrs::internal(), ret_ty, fn_params);
+        f.start_fresh_block();
+        let slots = f.param_value(slots_index);
+        let previous = self.current_slots.replace(slots.clone());
+        let result = (|| -> Result<(), CodegenError> {
+            let slot = self.import_slot(ImportService::Trap)?;
+            let span_id = self.span_id(self.hir.defs[def.index()].span);
+            let trap_fn = f.slot_value(&slots, slot);
+            f.call_ptr(
+                IrType::Void,
+                &trap_fn,
+                &[
+                    Value::int(32, i128::from(abi::trap::UNIMPLEMENTED)),
+                    Value::int(32, i128::from(span_id)),
+                ],
+            );
+            f.unreachable();
+            f.check().map_err(CodegenError::internal)?;
+            self.module.add_function(f);
+            Ok(())
+        })();
+        self.current_slots = previous;
+        result
+    }
+
     fn emit_program_bodies(&mut self) {
         let programs = self.plan.programs.clone();
         for program in programs {
@@ -924,8 +1059,64 @@ impl Lowerer<'_> {
         self.emit_instance_initializers(f, info, &cold, &mask)?;
         self.emit_task_guard_initializers(f, info, &cold, &mask)?;
         self.emit_state_load(f, info, &cold)?;
+        self.emit_object_records(f, info, &cold, &mask)?;
         f.ret(Some(&Value::int(32, 0)));
         Ok(())
+    }
+
+    /// Fills fresh hidden object records and class handles from the active
+    /// slot table (GOT Artifacts §8.5.1, §8.5.6; Runtime and Execution §2.6).
+    fn emit_object_records(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        cold: &Value,
+        mask: &Value,
+    ) -> Result<(), CodegenError> {
+        let objects = self.got.objects.clone();
+        for object in &objects {
+            let record_slot = self.root_slot(&object.target)?;
+            let typeinfo_slot = self
+                .got
+                .descriptor_slot(object.def, DescriptorKind::TypeInfo)
+                .ok_or_else(|| {
+                    CodegenError::internal(format!(
+                        "object type `{}` has no TYPEINFO descriptor slot",
+                        self.hir.def_name(object.def)
+                    ))
+                })?;
+            // The record's storage address is valid whether the root is fresh
+            // or preserved; load it before the conditional fill so the handle
+            // block below can use the same value.
+            let record = Self::slot_storage(f, info, record_slot);
+            let (_, next) = Self::begin_init(f, cold, mask, Some(record_slot))?;
+            let typeinfo = Self::slot_storage(f, info, typeinfo_slot);
+            Self::store_record_entry(f, &record, 0, &typeinfo);
+            for (index, leaf) in object.leaves.iter().enumerate() {
+                let slot = self.root_slot(leaf)?;
+                let pointer = Self::slot_storage(f, info, slot);
+                Self::store_record_entry(f, &record, index + 1, &pointer);
+            }
+            Self::close_init(f, &next);
+            let Some(handle) = &object.handle else {
+                continue;
+            };
+            let handle_slot = self.root_slot(&handle.target)?;
+            let (_, next) = Self::begin_init(f, cold, mask, Some(handle_slot))?;
+            let storage = Self::slot_storage(f, info, handle_slot);
+            let pointer = match handle.index {
+                Some(index) => f.gep("ptr", &storage, &[format!("i64 {index}")], true),
+                None => storage,
+            };
+            f.store(&record, &pointer, Some(8));
+            Self::close_init(f, &next);
+        }
+        Ok(())
+    }
+
+    fn store_record_entry(f: &mut Function, record: &Value, index: usize, value: &Value) {
+        let slot = f.gep("ptr", record, &[format!("i64 {index}")], true);
+        f.store(value, &slot, Some(8));
     }
 
     fn return_if(f: &mut Function, condition: &Value, code: i32) {
@@ -1042,7 +1233,8 @@ impl Lowerer<'_> {
                 .root_leaves(ty, &name, retain)
                 .map_err(|error| error.with_span(span))?;
             for leaf in leaves {
-                let target = Self::global_leaf_target(def, &leaf.segments);
+                let target =
+                    Self::global_leaf_target(def, &leaf.segments, leaf.class_handle.is_some());
                 let slot = self.root_slot(&target)?;
                 let direct = at.clone();
                 let (_, next) = Self::begin_init(
@@ -1105,7 +1297,11 @@ impl Lowerer<'_> {
                     let top_level = leaf.segments.is_empty();
                     leaf.segments
                         .insert(0, crate::types::RootSegment::Field(field));
-                    let target = self.program_leaf_target(instance.name, &leaf.segments);
+                    let target = self.program_leaf_target(
+                        instance.name,
+                        &leaf.segments,
+                        leaf.class_handle.is_some(),
+                    );
                     let slot = self.root_slot(&target)?;
                     let direct = if top_level { data.at.clone() } else { None };
                     let (_, next) = Self::begin_init(
@@ -1300,7 +1496,11 @@ impl Lowerer<'_> {
             .collect();
         let mut pointers = Vec::new();
         for leaf in &layout.leaves {
-            let target = self.program_leaf_target(instance.name, &leaf.segments);
+            let target = self.program_leaf_target(
+                instance.name,
+                &leaf.segments,
+                leaf.class_handle.is_some(),
+            );
             let slot = self.root_slot(&target)?;
             pointers.push(Self::slot_storage(f, info, slot));
         }
