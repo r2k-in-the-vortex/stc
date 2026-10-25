@@ -291,6 +291,14 @@ fn new_global_initializes_and_removed_global_is_quarantined() {
         .expect("prepare");
     assert!(matches!(outcome, LoadOutcome::Prepared { .. }));
     host.activate().expect("activate");
+    assert!(
+        host.warnings().iter().any(|warning| {
+            warning.code == stc_got::codes::W_ONLINE_REMOVED
+                && warning.message.contains("_ROOT::FLAG")
+        }),
+        "the dropped root is reported: {:?}",
+        host.warnings()
+    );
 
     let added = key_ending(&v2, "::ADDED");
     assert!(host.roots().contains(added));
@@ -748,6 +756,56 @@ fn rollback_restores_a_tracked_rename() {
 }
 
 #[test]
+fn reset_quarantine_releases_removed_root_storage() {
+    let v1 = common::artifacts(common::SIMPLE, "simple");
+    let Some(v1_fixture) = fixture("simple-v1", v1.clone()) else {
+        return;
+    };
+    let mut host = in_memory_host();
+    cold_install(&mut host, &v1_fixture);
+    let flag = root_id(&v1, "_ROOT::FLAG");
+    host.root_storage_mut(flag).expect("flag")[0] = 1;
+
+    let v2 = common::artifacts_with_renames(
+        common::SIMPLE_REPLACED,
+        "simple",
+        v1.manifest.clone(),
+        false,
+        Vec::new(),
+        true,
+    );
+    let Some(v2_fixture) = fixture("simple-v2", v2) else {
+        return;
+    };
+    host.load(open(&v2_fixture), LoadMode::Auto)
+        .expect("prepare");
+    host.activate().expect("activate");
+    assert_eq!(
+        host.reset_quarantine().expect_err("rollback window").code,
+        stc_got::codes::ONLINE_PREPARE,
+        "quarantine cannot be released while a rollback may still need it"
+    );
+    host.cycle().expect("commit");
+    assert_eq!(host.roots().quarantined().len(), 1);
+    assert!(
+        host.runtime_layout()
+            .entries
+            .iter()
+            .any(|entry| { entry.got_id == flag && entry.state == LayoutState::Quarantined })
+    );
+
+    assert_eq!(host.reset_quarantine().expect("reset"), 1);
+    assert!(host.roots().quarantined().is_empty());
+    assert!(!host.roots().contains(flag));
+    assert!(
+        host.runtime_layout()
+            .entries
+            .iter()
+            .all(|entry| entry.got_id != flag)
+    );
+}
+
+#[test]
 fn transient_blocks_are_reclaimed_on_failure_and_unload() {
     let v1 = common::artifacts(common::SIMPLE, "simple");
     let Some(v1_fixture) = fixture("simple-v1", v1.clone()) else {
@@ -988,6 +1046,7 @@ fn direct_info(artifacts: &stc_codegen::module::ModuleArtifacts, inputs: u64) ->
 
 #[test]
 fn failed_cold_install_restores_the_process_image_and_direct_cells() {
+    let _guard = common::image_guard();
     let artifacts = common::artifacts(common::DIRECT, "direct");
     let Some(fixture) = fixture("direct-info", artifacts.clone()) else {
         return;

@@ -337,7 +337,7 @@ Exit criteria:
   and measured.
 - M4 scalar semantics are unchanged; M4 code-linked artifacts are explicitly non-loadable.
 
-> **M4.5 status (2026-10-25):** phases 0–7 are complete for review; phase 8 is next. Phase 1
+> **M4.5 status (2026-10-25):** phases 0–8 are complete for review; phase 9 is next. Phase 1
 > fixes the versioned artifact contracts in [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md):
 > stable keys, `GotId`, catalog, module descriptor, host ABI 2.0, manifest/plan formats, build IDs,
 > and pairing. Phase 2 implements the identity/manifest layer in `stc-got`; decisions
@@ -350,7 +350,13 @@ Exit criteria:
 > generated execution to the module model: persistent state, direct variables, retain leaves, and
 > task guards use GOT cells; calls are indirect through function cells; the launcher and
 > embedding host load compiler-produced module pairs; and a non-local trap boundary enables
-> rollback-window recovery (D-124). Existing M4 execution tests run through modules.
+> rollback-window recovery (D-124). Existing M4 execution tests run through modules. Phase 8
+> completes the scalar compatibility policy: activation reconfigures the process image and
+> remaps direct cells, values are preserved by `GotId`, moved variables and dropped roots are
+> reported as runtime warnings, rollback restores the image with the generation, cold installs
+> reinitialize roots and the image, incompatible layout/type changes require a cold rebuild, and
+> real compiler-produced modules cover hot-swap, rename, reject/cold, and direct-remap paths
+> (D-125).
 
 ### M5 — FBs, OOP, aggregates, and UTF-8 strings
 

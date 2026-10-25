@@ -1333,8 +1333,8 @@ cells; host services are called through import cells whose values are the servic
 and the module exports the seven entry points, descriptor, function table, metadata, retain
 helpers, and export wrappers. The host reads `<name>.stc-meta.json` for process-image sizes and
 direct-binding `GotId`s, configures the image on cold install, and binds `Direct` cells before
-prepare; an online candidate with a different image layout or binding set selects the cold path
-until phase 8's remap policy. The driver emits `module`, `exe` (thin launcher), and `lib`
+prepare; phase 8 added the online reconfiguration and remap policy for a changed layout or
+binding set. The driver emits `module`, `exe` (thin launcher), and `lib`
 (embedding host archive) artifacts, and `exe`/`lib` may be combined; `--got-manifest`, `--cold`,
 `--rename`, and `--allow-untracked-removal` feed the identity engine. The runtime installs a
 non-local trap boundary around every module entry-point call (`__intrinsic_setjmpex` on Windows,
@@ -1344,6 +1344,27 @@ trap restores the previous generation and a trap outside the window exits 70. Ex
 C harnesses, traps, the process image, exports, bindings, and retained leaves, run through
 compiler-produced module pairs on Windows; a Rust host test covers cold install, online prepare,
 activation, commit, and preserved roots. D-124 records the phase choices.
+
+Phase 8 is implemented (2026-10-25) in `stc-runtime` and `stc-driver`. The `image` module
+validates `<name>.stc-meta.json` against a host image limit, computes provisional and actual
+direct-cell addresses, detects moved bindings, and preserves direct values by `GotId` across an
+image reconfiguration. At activation the host snapshots the old image, applies the candidate
+layout or remaps bindings in place, rebinds the candidate's `Direct` cells, and keeps the
+snapshot plus old bindings in the rollback record; a failed first cycle restores both. Prepare
+leaves the active image untouched. A changed image layout or binding set is therefore an online
+change rather than a mandatory cold download; unsafe metadata, duplicate or missing bindings,
+unaligned multi-byte ranges, and out-of-area bindings are rejected with `STC-E-ONLINE-IO-001`
+(or `STC-E-ONLINE-006` for a missing direct-root binding). `Host::warnings` reports remapped
+direct variables as `STC-W-ONLINE-IO-001` and dropped data roots as `STC-W-ONLINE-001`.
+`Host::reset_quarantine` releases quarantined storage under the explicit reset policy;
+`PlanAction::Reset` and `Migrate` remain reserved and rejected in M4.5. Cold installation
+reinitializes roots and the process image, and online prepare initializes only fresh roots, so
+preserved state, initializer changes, and the disabled retained-state file follow State and
+RETAIN §4.1.1. Driver tests drive compiler-produced modules through state-preserving code-only
+changes, new-root initialization, tracked rename, untracked removal, type-change rejection with a
+cold reset, and direct-variable remap through generated code; runtime tests cover image
+reconfiguration, same-layout remap, rollback, cold image reset, quarantine reset, and the warning
+surface. D-125 records the phase choices.
 
 ## 13. Related documents
 

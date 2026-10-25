@@ -21,7 +21,9 @@
 //!   machine and the generation-bound root and GOT state;
 //! - [`module_info`] reads the process-image and direct-binding metadata
 //!   sidecar;
-//! - [`trap_boundary`] provides the non-local trap exit around module calls.
+//! - [`image`] validates image layouts and applies direct-variable remaps at
+//!   activation, preserving values by `GotId`;
+//! - `trap_boundary` provides the non-local trap exit around module calls.
 //!
 //! Generated ABI 2 modules execute through [`stc_rt_execute`] (the thin
 //! launcher path) or the `stc_host_*` embedding exports. The legacy ABI 1
@@ -41,6 +43,7 @@ pub mod catalog;
 pub mod got;
 pub mod host;
 pub mod host_api;
+pub mod image;
 pub mod loader;
 pub mod memory;
 pub mod migration;
@@ -53,12 +56,15 @@ mod test_support;
 
 pub use catalog::{HostPlatform, PROFILE, SUPPORTED_FEATURES, ValidatedPair};
 pub use got::Got;
-pub use host::{Candidate, CycleOutcome, GenerationPin, Host, LoadMode, LoadOutcome, ManifestDiff};
+pub use host::{
+    Candidate, CycleOutcome, GenerationPin, Host, HostWarning, LoadMode, LoadOutcome, ManifestDiff,
+};
 pub use host_api::{ABI_VERSION, HOST_API, HostApi, TrapRecord};
+pub use image::{DirectRemap, MAX_IMAGE_BYTES};
 pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
 pub use migration::{PlanDecision, validate_deployable, validate_plan};
-pub use module_info::{DirectBinding, ModuleInfo};
+pub use module_info::{DirectBinding, ImageLayout, ModuleInfo};
 pub use store::{
     Deployment, Download, LayoutState, ManifestStore, RuntimeLayout, RuntimeLayoutEntry,
     StoredManifest,
@@ -344,6 +350,24 @@ pub(crate) fn restore_image(snapshot: (Vec<u8>, u64, u64, u64)) {
     state.markers = snapshot.3;
 }
 
+/// Runs `f` with mutable access to the configured process image.
+///
+/// The host calls this on the activation path, after the old generation has
+/// completed its cycle and before the new generation starts.
+pub(crate) fn image_with<R>(f: impl FnOnce(&mut [u8]) -> R) -> R {
+    let mut state = state();
+    f(&mut state.image)
+}
+
+/// Returns the process-image base address without exposing the buffer.
+///
+/// Planned direct-cell values use this base before activation; the values are
+/// rebound once the image is configured for the candidate layout.
+pub(crate) fn image_base_address() -> usize {
+    let mut state = state();
+    state.image.as_mut_ptr() as usize
+}
+
 /// Returns the byte address of a process-image range.
 ///
 /// Areas are `1` inputs, `2` outputs, and `3` markers.
@@ -467,6 +491,58 @@ pub unsafe extern "C" fn stc_rt_io_image(base: *mut *mut u8, len: *mut u64) {
         // SAFETY: the caller contract above guarantees writable pointers.
         unsafe { *len = total };
     }
+}
+
+/// Returns the configured process-image length in bytes.
+///
+/// This is the safe Rust accessor used by embedding hosts and tests; generated
+/// code reaches the image through the host I/O service.
+#[must_use]
+pub fn image_length() -> u64 {
+    state().image.len() as u64
+}
+
+/// Returns the process-image base address, or `0` when no image is configured.
+///
+/// The address is only meaningful while the image layout is unchanged; a
+/// reconfiguration may move the buffer.
+#[must_use]
+pub fn image_base() -> usize {
+    let mut state = state();
+    if state.image.is_empty() {
+        0
+    } else {
+        state.image.as_mut_ptr() as usize
+    }
+}
+
+/// Copies up to `buffer.len()` process-image bytes starting at `offset`.
+///
+/// Returns the number of bytes copied. A range outside the image copies
+/// nothing.
+pub fn image_read(offset: usize, buffer: &mut [u8]) -> usize {
+    let state = state();
+    let Some(slice) = state.image.get(offset..) else {
+        return 0;
+    };
+    let count = slice.len().min(buffer.len());
+    buffer[..count].copy_from_slice(&slice[..count]);
+    count
+}
+
+/// Writes `bytes` into the process image at `offset`.
+///
+/// Returns `false` when the range lies outside the configured image.
+pub fn image_write(offset: usize, bytes: &[u8]) -> bool {
+    let mut state = state();
+    let Some(slice) = state.image.get_mut(offset..) else {
+        return false;
+    };
+    if bytes.len() > slice.len() {
+        return false;
+    }
+    slice[..bytes.len()].copy_from_slice(bytes);
+    true
 }
 
 /// Retained-state load stub (5 = retention disabled until M6).

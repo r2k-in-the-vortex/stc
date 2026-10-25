@@ -35,12 +35,16 @@ pub mod codes {
     pub const ONLINE_PREPARE: &str = "STC-E-ONLINE-005";
     /// Slot table or cell binding failure.
     pub const ONLINE_BINDING: &str = "STC-E-ONLINE-006";
+    /// Direct-variable or process-image layout cannot be preserved.
+    pub const ONLINE_IO: &str = "STC-E-ONLINE-IO-001";
     /// Removed root quarantined.
     pub const W_ONLINE_REMOVED: &str = "STC-W-ONLINE-001";
     /// Initializer ignored on a preserved root.
     pub const W_ONLINE_INITIALIZER: &str = "STC-W-ONLINE-002";
     /// Direct-variable address remapped during swap.
     pub const W_ONLINE_DIRECT: &str = "STC-W-ONLINE-003";
+    /// Direct variable/field remapped during an online change.
+    pub const W_ONLINE_IO: &str = "STC-W-ONLINE-IO-001";
     /// Stale reference may point at quarantined storage.
     pub const W_ONLINE_STALE_REF: &str = "STC-W-ONLINE-004";
     /// Baseline manifest is not current.

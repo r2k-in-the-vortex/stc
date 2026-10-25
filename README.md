@@ -24,7 +24,7 @@ retained-state stubs). The driver provides `stc parse`, `stc check`, and the M4
 The online-change architecture is **resolved** (2026-10-24): the v1 runtime is a persistent host
 plus loadable whole-program modules, persistent memory is host-owned and accessed through a
 project-defined GOT, every module is paired with a persistent GOT manifest, and activation is a
-cycle-boundary module swap. M4.5 phases 0–7 are complete for review (2026-10-25): the versioned
+cycle-boundary module swap. M4.5 phases 0–8 are complete for review (2026-10-25): the versioned
 `GotId`,
 catalog, descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md); `stc-got` implements
@@ -41,9 +41,14 @@ active-manifest store/download, the load/prepare/activate/commit/rollback/unload
 and a non-local trap boundary. Phase 7 converts generated execution to that model: globals,
 program fields, direct variables, retain leaves, and task guards use GOT cells; user calls are
 indirect; the launcher and embedding host load real compiler-produced module pairs; and existing
-execution, trap, process-image, binding, and retain tests run through modules. The foundation
-milestone is M4.5 before M5; full debug/monitoring is M6.5. Phase 8 (scalar
-compatibility/preservation and cold policy) and phase 9 (full test/CI coverage) remain.
+execution, trap, process-image, binding, and retain tests run through modules. Phase 8 completes
+the scalar compatibility policy: online changes reconfigure the process image and remap direct
+cells at activation, preserve values by `GotId`, warn about moved variables and quarantined roots,
+and restore the image with a rollback; cold installs reinitialize roots and the image;
+incompatible type/layout changes remain rejected until an explicit cold rebuild; and
+compiler-produced modules exercise state preservation, new-root initialization, tracked rename,
+untracked-removal policy, reject/cold, and direct remap. The foundation milestone is M4.5 before
+M5; full debug/monitoring is M6.5. Phase 9 (full test/CI coverage) remains.
 
 M4 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
 functions, the standard FB library, the manifest, `stc run`, or `stc test`; those constructs are
@@ -379,6 +384,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-119–D-121 | M4.5 phases 3–4 fix the module IR shape (slot-table cell loads, indirect cell calls, ABI 2.0 entry points, structural verification), the M4 catalog projection (global/program-field/direct/task-guard roots, synthesized `_DEFAULT` topology, canonical imports, declaration-to-slot bindings), and the shared descriptor format-1 codec with digest/pairing validation and the acyclic descriptor/manifest sealing order. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
 | D-122–D-123 | M4.5 phases 5–6 implement the host substrate and swap controller: stable root/GOT storage, quarantine and transient lifetimes, descriptor/manifest/plan validation, the platform module loader, the ABI 2.0 host service table, atomic active-manifest storage and download, and load/prepare/activate/commit/rollback/unload with exact-currentness and cold paths. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
 | D-124 | M4.5 phase 7 converts generated execution to the GOT/module model: persistent state, direct variables, retain leaves, and task guards use GOT cells; calls are indirect through function cells; host services use import cells; slot access is the two-load sequence; generated modules export the ABI 2 entry-point set; the host configures the process image and direct bindings from the metadata sidecar; `--emit=module`, the thin launcher, and the embedding host archive are driver artifacts; and a non-local trap boundary enables rollback-window recovery. Existing execution tests run through compiler-produced module pairs, completing the execution conversion before M5 and giving phase 8 a working preservation/rollback substrate. |
+| D-125 | M4.5 phase 8 completes the scalar compatibility/preservation policy: online activation reconfigures the process image or remaps direct cells in place, preserves values by `GotId`, and snapshots the image for rollback; moved variables and quarantined roots are exposed as runtime warnings; `reset_quarantine` is the explicit reset primitive while `Reset`/`Migrate` plans remain rejected; cold installs reinitialize roots and the image, and online prepare initializes only fresh roots; and compiler-produced modules cover initializer/state preservation, tracked rename, untracked-removal policy, type-change rejection with a cold reset, and direct-variable remap. |
 
 ## Question log
 

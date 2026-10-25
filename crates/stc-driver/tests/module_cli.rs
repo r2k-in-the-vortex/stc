@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
-use stc_got::{Manifest, PlanVerdict};
+use stc_got::{GotId, Manifest, PlanVerdict};
 
 fn stc() -> &'static str {
     env!("CARGO_BIN_EXE_stc")
@@ -152,6 +152,90 @@ fn module_file(directory: &TestDir, name: &str) -> String {
         .filter_map(|entry| entry.file_name().into_string().ok())
         .find(|file| file.starts_with(&prefix) && file.ends_with(&suffix))
         .unwrap_or_else(|| panic!("module for `{name}` was not emitted"))
+}
+
+/// Serializes tests that drive a `Host`, because the process image is
+/// process-global. Cold installs of compiler modules configure (and clear) it.
+static HOST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn host_guard() -> std::sync::MutexGuard<'static, ()> {
+    HOST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn host_platform() -> stc_runtime::HostPlatform {
+    stc_runtime::HostPlatform::new(
+        stc_runtime::PROFILE,
+        stc_codegen::resolve_target(Some(&stc_codegen::host_triple())),
+        stc_got::HOST_ABI_MAJOR,
+        stc_got::HOST_ABI_MINOR,
+    )
+}
+
+fn open_candidate(
+    directory: &TestDir,
+    name: &str,
+    platform: &stc_runtime::HostPlatform,
+) -> stc_runtime::Candidate {
+    stc_runtime::Candidate::open(
+        platform,
+        &directory.path.join(module_file(directory, name)),
+        &directory.path.join(format!("{name}.stc-got.bin")),
+    )
+    .unwrap_or_else(|error| panic!("candidate `{name}`: {error}"))
+}
+
+fn root_id(manifest: &Manifest, key: &str) -> GotId {
+    manifest
+        .roots
+        .iter()
+        .find(|root| root.key == key)
+        .unwrap_or_else(|| panic!("root `{key}`"))
+        .got_id
+}
+
+fn key_with(manifest: &Manifest, needle: &str) -> GotId {
+    manifest
+        .roots
+        .iter()
+        .find(|root| root.key.contains(needle))
+        .unwrap_or_else(|| panic!("root containing `{needle}`"))
+        .got_id
+}
+
+fn read_u32(host: &stc_runtime::Host, got_id: GotId) -> u32 {
+    let storage = host.root_storage(got_id).expect("root storage");
+    u32::from_le_bytes(storage[..4].try_into().expect("four bytes"))
+}
+
+fn write_u32(host: &mut stc_runtime::Host, got_id: GotId, value: u32) {
+    let storage = host.root_storage_mut(got_id).expect("root storage");
+    storage[..4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn image_length() -> usize {
+    usize::try_from(stc_runtime::image_length()).expect("image length")
+}
+
+fn image_base() -> usize {
+    let base = stc_runtime::image_base();
+    assert_ne!(base, 0, "the process image is configured");
+    base
+}
+
+fn image_bytes() -> Vec<u8> {
+    let len = image_length();
+    let mut bytes = vec![0; len];
+    assert_eq!(stc_runtime::image_read(0, &mut bytes), len);
+    bytes
+}
+
+fn write_image(offset: usize, bytes: &[u8]) {
+    assert!(
+        stc_runtime::image_write(offset, bytes),
+        "write inside the process image"
+    );
 }
 
 const V1: &str = r#"
@@ -369,6 +453,7 @@ fn a_generated_module_runs_and_survives_an_online_change() {
     let Some(_) = clang() else {
         return;
     };
+    let _guard = host_guard();
     let directory = TestDir::new("online");
     let v1_source = directory.source("app_v1", V1);
     build_ok(&directory, &v1_source, "app_v1", &[]);
@@ -506,6 +591,7 @@ fn single_task_guards_execute_once_through_the_got() {
     let Some(_) = clang() else {
         return;
     };
+    let _guard = host_guard();
     let directory = TestDir::new("single");
     let source = directory.source("single", SINGLE_TASK);
     build_ok(&directory, &source, "single", &[]);
@@ -572,6 +658,7 @@ fn a_rollback_window_trap_restores_the_previous_generation() {
     let Some(_) = clang() else {
         return;
     };
+    let _guard = host_guard();
     let directory = TestDir::new("trap_rollback");
     let v1_source = directory.source("trap_v1", V1);
     build_ok(&directory, &v1_source, "trap_v1", &[]);
@@ -646,4 +733,618 @@ fn a_rollback_window_trap_restores_the_previous_generation() {
         host.cycle().expect("cycle after rollback"),
         CycleOutcome::Ran { .. }
     ));
+}
+
+// ---- Phase 8: scalar preservation, rename, reject/cold, and direct remap ----
+
+const INITIALIZED_V1: &str = r#"
+VAR_GLOBAL RETAIN
+  Counter : DINT := 41;
+  Flag : BOOL := TRUE;
+END_VAR
+
+PROGRAM Main
+VAR RETAIN
+  ticks : DINT := 7;
+END_VAR
+  ticks := ticks + 1;
+  Counter := ticks;
+  Flag := Counter > 100;
+END_PROGRAM
+"#;
+
+const INITIALIZED_V2: &str = r#"
+VAR_GLOBAL RETAIN
+  Counter : DINT := 99;
+  Flag : BOOL := FALSE;
+END_VAR
+
+PROGRAM Main
+VAR RETAIN
+  ticks : DINT := 9;
+END_VAR
+  ticks := ticks + 2;
+  Counter := ticks;
+  Flag := Counter > 100;
+END_PROGRAM
+"#;
+
+const INITIALIZED_V3: &str = r#"
+VAR_GLOBAL RETAIN
+  Counter : DINT := 99;
+  Flag : BOOL := FALSE;
+  Added : DINT := 5;
+END_VAR
+
+PROGRAM Main
+VAR RETAIN
+  ticks : DINT := 9;
+END_VAR
+  ticks := ticks + 2;
+  Counter := ticks;
+  Flag := Counter > 100;
+  Added := Added + 1;
+END_PROGRAM
+"#;
+
+#[test]
+fn preserved_roots_survive_and_new_roots_initialize_once() {
+    use stc_runtime::{Host, LoadMode, LoadOutcome, ManifestStore, PlanDecision};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("init");
+    let v1_source = directory.source("init_v1", INITIALIZED_V1);
+    build_ok(&directory, &v1_source, "init_v1", &[]);
+    let v1 = directory.manifest("init_v1");
+    let baseline = directory.path.join("init_v1.stc-got.bin");
+
+    let v2_source = directory.source("init_v2", INITIALIZED_V2);
+    build_ok(
+        &directory,
+        &v2_source,
+        "init_v2",
+        &["--got-manifest", baseline.to_str().unwrap()],
+    );
+    let v2 = directory.manifest("init_v2");
+    assert_eq!(v2.plan.verdict, PlanVerdict::OnlineCandidate);
+    assert!(
+        v2.plan
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == stc_got::codes::W_ONLINE_INITIALIZER),
+        "changed initializers on preserved roots are diagnosed"
+    );
+
+    let platform = host_platform();
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    let outcome = host
+        .load(
+            open_candidate(&directory, "init_v1", &platform),
+            LoadMode::Auto,
+        )
+        .expect("cold install");
+    assert!(matches!(outcome, LoadOutcome::ColdInstalled { .. }));
+    let counter = root_id(&v1, "_ROOT::COUNTER");
+    let flag = root_id(&v1, "_ROOT::FLAG");
+    let ticks = key_with(&v1, ".TICKS#");
+    assert_eq!(
+        read_u32(&host, counter),
+        41,
+        "cold install applies initializers"
+    );
+    assert_ne!(host.root_storage(flag).expect("flag")[0], 0);
+    assert_eq!(read_u32(&host, ticks), 7);
+    host.cycle().expect("cycle");
+    assert_eq!(read_u32(&host, counter), 8);
+    assert_eq!(read_u32(&host, ticks), 8);
+    assert_eq!(host.root_storage(flag).expect("flag")[0], 0);
+
+    let candidate = open_candidate(&directory, "init_v2", &platform);
+    let diff = host.diff(&candidate).expect("diff");
+    assert_eq!(diff.decision, Some(PlanDecision::Online));
+    assert!(
+        diff.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == stc_got::codes::W_ONLINE_INITIALIZER)
+    );
+    assert!(matches!(
+        host.load(candidate, LoadMode::Auto).expect("prepare"),
+        LoadOutcome::Prepared { .. }
+    ));
+    assert_eq!(
+        read_u32(&host, counter),
+        8,
+        "an online prepare must not reinitialize a preserved root"
+    );
+    assert_eq!(read_u32(&host, ticks), 8);
+    assert_eq!(host.root_storage(flag).expect("flag")[0], 0);
+    host.activate().expect("activate");
+    assert_eq!(host.active_build_id(), Some(v2.header.build_id));
+    host.cycle().expect("commit");
+    assert_eq!(read_u32(&host, counter), 10);
+    assert_eq!(read_u32(&host, ticks), 10);
+
+    let baseline = directory.path.join("init_v2.stc-got.bin");
+    let v3_source = directory.source("init_v3", INITIALIZED_V3);
+    build_ok(
+        &directory,
+        &v3_source,
+        "init_v3",
+        &["--got-manifest", baseline.to_str().unwrap()],
+    );
+    let v3 = directory.manifest("init_v3");
+    let added = root_id(&v3, "_ROOT::ADDED");
+    let outcome = host
+        .load(
+            open_candidate(&directory, "init_v3", &platform),
+            LoadMode::Auto,
+        )
+        .expect("prepare v3");
+    assert!(matches!(outcome, LoadOutcome::Prepared { .. }));
+    assert_eq!(
+        read_u32(&host, added),
+        5,
+        "a new root initializes exactly once during prepare"
+    );
+    host.activate().expect("activate v3");
+    host.cycle().expect("commit v3");
+    assert_eq!(read_u32(&host, added), 6);
+    assert_eq!(read_u32(&host, counter), 12);
+    assert_eq!(read_u32(&host, ticks), 12);
+}
+
+const RENAME_V1: &str = r#"
+VAR_GLOBAL
+  Counter : DINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Counter := ticks;
+END_PROGRAM
+"#;
+
+const RENAME_V2: &str = r#"
+VAR_GLOBAL
+  Count : DINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Count := ticks;
+END_PROGRAM
+"#;
+
+#[test]
+fn tracked_rename_is_executed_by_the_host() {
+    use stc_runtime::{Host, LoadMode, LoadOutcome, ManifestStore};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("rename_host");
+    let v1_source = directory.source("rename_v1", RENAME_V1);
+    build_ok(&directory, &v1_source, "rename_v1", &[]);
+    let v1 = directory.manifest("rename_v1");
+    let baseline = directory.path.join("rename_v1.stc-got.bin");
+    let v2_source = directory.source("rename_v2", RENAME_V2);
+    build_ok(
+        &directory,
+        &v2_source,
+        "rename_v2",
+        &[
+            "--got-manifest",
+            baseline.to_str().unwrap(),
+            "--rename",
+            "_ROOT::COUNTER=_ROOT::COUNT",
+        ],
+    );
+    let v2 = directory.manifest("rename_v2");
+    let counter = root_id(&v1, "_ROOT::COUNTER");
+    let renamed = root_id(&v2, "_ROOT::COUNT");
+    assert_eq!(renamed, counter, "the tracked rename keeps the identity");
+    assert_eq!(
+        v2.roots
+            .iter()
+            .find(|root| root.got_id == renamed)
+            .expect("renamed root")
+            .previous_keys,
+        vec!["_ROOT::COUNTER".to_owned()]
+    );
+
+    let platform = host_platform();
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.load(
+        open_candidate(&directory, "rename_v1", &platform),
+        LoadMode::Auto,
+    )
+    .expect("cold install");
+    let ticks = key_with(&v1, ".TICKS#");
+    write_u32(&mut host, counter, 41);
+    write_u32(&mut host, ticks, 7);
+
+    let outcome = host
+        .load(
+            open_candidate(&directory, "rename_v2", &platform),
+            LoadMode::Auto,
+        )
+        .expect("prepare");
+    assert!(matches!(outcome, LoadOutcome::Prepared { .. }));
+    host.activate().expect("activate");
+    assert_eq!(
+        host.roots().get(counter).expect("renamed root").record.key,
+        "_ROOT::COUNT"
+    );
+    assert_eq!(read_u32(&host, counter), 41);
+    host.cycle().expect("commit");
+    assert_eq!(read_u32(&host, counter), 8);
+    assert_eq!(read_u32(&host, ticks), 8);
+}
+
+const REJECT_V1: &str = r#"
+VAR_GLOBAL
+  Counter : DINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Counter := ticks;
+END_PROGRAM
+"#;
+
+const REJECT_V2: &str = r#"
+VAR_GLOBAL
+  Counter : LINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Counter := ticks;
+END_PROGRAM
+"#;
+
+#[test]
+fn incompatible_layout_is_rejected_and_a_cold_build_resets() {
+    use stc_runtime::{Host, LoadMode, LoadOutcome, ManifestStore};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("reject");
+    let v1_source = directory.source("reject_v1", REJECT_V1);
+    build_ok(&directory, &v1_source, "reject_v1", &[]);
+    let v1 = directory.manifest("reject_v1");
+    let baseline = directory.path.join("reject_v1.stc-got.bin");
+
+    let v2_source = directory.source("reject_v2", REJECT_V2);
+    let rejected = build(
+        &directory,
+        &v2_source,
+        "reject_v2",
+        &["--got-manifest", baseline.to_str().unwrap()],
+    );
+    assert!(
+        !rejected.status.success(),
+        "a layout change against the exact baseline is rejected"
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&rejected.stdout),
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    assert!(text.contains("STC-E-ONLINE-001"), "{text}");
+
+    let cold_source = directory.source("reject_v2_cold", REJECT_V2);
+    build_ok(&directory, &cold_source, "reject_v2_cold", &["--cold"]);
+    let cold = directory.manifest("reject_v2_cold");
+    assert_eq!(cold.plan.verdict, PlanVerdict::Cold);
+
+    let platform = host_platform();
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.load(
+        open_candidate(&directory, "reject_v1", &platform),
+        LoadMode::Auto,
+    )
+    .expect("cold install");
+    let counter = root_id(&v1, "_ROOT::COUNTER");
+    write_u32(&mut host, counter, 41);
+    let outcome = host
+        .load(
+            open_candidate(&directory, "reject_v2_cold", &platform),
+            LoadMode::Auto,
+        )
+        .expect("stale auto");
+    assert!(outcome.is_cold_required());
+    assert_eq!(
+        read_u32(&host, counter),
+        41,
+        "the old version keeps running"
+    );
+    let outcome = host
+        .load(
+            open_candidate(&directory, "reject_v2_cold", &platform),
+            LoadMode::Cold,
+        )
+        .expect("cold reset");
+    assert!(matches!(outcome, LoadOutcome::ColdInstalled { .. }));
+    assert_eq!(read_u32(&host, counter), 0, "a cold install resets state");
+}
+
+const REMOVAL_V1: &str = r#"
+VAR_GLOBAL
+  Counter : DINT;
+  Flag : BOOL;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Counter := ticks;
+  Flag := Counter > 3;
+END_PROGRAM
+"#;
+
+const REMOVAL_V2: &str = r#"
+VAR_GLOBAL
+  Counter : DINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Counter := ticks;
+END_PROGRAM
+"#;
+
+#[test]
+fn untracked_removal_requires_an_explicit_policy() {
+    use stc_runtime::{Host, LoadMode, ManifestStore};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("removal");
+    let v1_source = directory.source("removal_v1", REMOVAL_V1);
+    build_ok(&directory, &v1_source, "removal_v1", &[]);
+    let v1 = directory.manifest("removal_v1");
+    let baseline = directory.path.join("removal_v1.stc-got.bin");
+
+    let v2_source = directory.source("removal_v2", REMOVAL_V2);
+    let refused = build(
+        &directory,
+        &v2_source,
+        "removal_v2",
+        &["--got-manifest", baseline.to_str().unwrap()],
+    );
+    assert!(!refused.status.success());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(text.contains("STC-E-MANIFEST-003"), "{text}");
+    assert!(text.contains("--allow-untracked-removal"), "{text}");
+
+    build_ok(
+        &directory,
+        &v2_source,
+        "removal_v2",
+        &[
+            "--got-manifest",
+            baseline.to_str().unwrap(),
+            "--allow-untracked-removal",
+        ],
+    );
+    let v2 = directory.manifest("removal_v2");
+    let flag = root_id(&v1, "_ROOT::FLAG");
+    assert!(
+        v2.plan
+            .actions
+            .iter()
+            .any(|action| { action.got_id == flag && action.action == stc_got::PlanAction::Drop })
+    );
+
+    let platform = host_platform();
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.load(
+        open_candidate(&directory, "removal_v1", &platform),
+        LoadMode::Auto,
+    )
+    .expect("cold install");
+    let counter = root_id(&v1, "_ROOT::COUNTER");
+    write_u32(&mut host, counter, 7);
+    host.root_storage_mut(flag).expect("flag")[0] = 1;
+    host.load(
+        open_candidate(&directory, "removal_v2", &platform),
+        LoadMode::Auto,
+    )
+    .expect("prepare");
+    host.activate().expect("activate");
+    assert!(
+        host.warnings().iter().any(|warning| {
+            warning.code == stc_got::codes::W_ONLINE_REMOVED
+                && warning.message.contains("_ROOT::FLAG")
+        }),
+        "the removed root is reported: {:?}",
+        host.warnings()
+    );
+    assert!(
+        host.roots()
+            .quarantined()
+            .iter()
+            .any(|root| root.record.got_id == flag)
+    );
+    assert_eq!(read_u32(&host, counter), 7);
+    host.cycle().expect("commit");
+    assert_eq!(host.reset_quarantine().expect("reset"), 1);
+
+    let cold_source = directory.source("removal_v2_cold", REMOVAL_V2);
+    build_ok(&directory, &cold_source, "removal_v2_cold", &["--cold"]);
+    let outcome = host
+        .load(
+            open_candidate(&directory, "removal_v2_cold", &platform),
+            LoadMode::Auto,
+        )
+        .expect("stale auto");
+    assert!(outcome.is_cold_required());
+    assert!(!host.roots().contains(flag));
+}
+
+const DIRECT_REMAP_V1: &str = r#"
+VAR_GLOBAL
+  Input AT %ID0 : DINT;
+  Marker AT %MD0 : DINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Marker := Marker + Input;
+END_PROGRAM
+"#;
+
+const DIRECT_REMAP_V2: &str = r#"
+VAR_GLOBAL
+  Input AT %ID1 : DINT;
+  Marker AT %MD0 : DINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Marker := Marker + Input;
+END_PROGRAM
+"#;
+
+#[test]
+fn direct_variables_remap_across_a_real_online_change() {
+    use stc_runtime::{Host, LoadMode, LoadOutcome, ManifestStore};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("direct_remap");
+    let v1_source = directory.source("direct_v1", DIRECT_REMAP_V1);
+    build_ok(&directory, &v1_source, "direct_v1", &[]);
+    let v1 = directory.manifest("direct_v1");
+    let baseline = directory.path.join("direct_v1.stc-got.bin");
+    let v2_source = directory.source("direct_v2", DIRECT_REMAP_V2);
+    build_ok(
+        &directory,
+        &v2_source,
+        "direct_v2",
+        &["--got-manifest", baseline.to_str().unwrap()],
+    );
+    let v2 = directory.manifest("direct_v2");
+
+    let platform = host_platform();
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.load(
+        open_candidate(&directory, "direct_v1", &platform),
+        LoadMode::Auto,
+    )
+    .expect("cold install");
+    assert_eq!(image_bytes().len(), 8, "4 input bytes and 4 marker bytes");
+    write_image(0, &1000_u32.to_le_bytes());
+    write_image(4, &42_u32.to_le_bytes());
+    let input = root_id(&v1, "_ROOT::INPUT");
+    let marker = root_id(&v1, "_ROOT::MARKER");
+    let old_base = image_base();
+    assert_eq!(
+        host.runtime_layout()
+            .entries
+            .iter()
+            .find(|entry| entry.got_id == input)
+            .and_then(|entry| entry.storage),
+        Some(old_base)
+    );
+
+    assert!(matches!(
+        host.load(
+            open_candidate(&directory, "direct_v2", &platform),
+            LoadMode::Auto,
+        )
+        .expect("prepare"),
+        LoadOutcome::Prepared { .. }
+    ));
+    assert_eq!(
+        image_bytes().len(),
+        8,
+        "prepare leaves the active image alone"
+    );
+    host.activate().expect("activate");
+    let bytes = image_bytes();
+    assert_eq!(bytes.len(), 12, "the input area grew from 4 to 8 bytes");
+    assert_eq!(&bytes[4..8], &1000_u32.to_le_bytes());
+    assert_eq!(&bytes[8..12], &42_u32.to_le_bytes());
+    assert!(
+        host.warnings().iter().any(|warning| {
+            warning.code == stc_got::codes::W_ONLINE_IO && warning.message.contains("INPUT")
+        }),
+        "the direct remap is reported: {:?}",
+        host.warnings()
+    );
+    let base = image_base();
+    let layout = host.runtime_layout();
+    assert_eq!(
+        layout
+            .entries
+            .iter()
+            .find(|entry| entry.got_id == input)
+            .and_then(|entry| entry.storage),
+        Some(base + 4)
+    );
+    assert_eq!(
+        layout
+            .entries
+            .iter()
+            .find(|entry| entry.got_id == marker)
+            .and_then(|entry| entry.storage),
+        Some(base + 8)
+    );
+
+    host.cycle().expect("cycle");
+    assert_eq!(
+        &image_bytes()[8..12],
+        &(42_u32 + 1000).to_le_bytes(),
+        "the new code reads the remapped input cell"
+    );
+    assert_eq!(host.active_build_id(), Some(v2.header.build_id));
+
+    let cold_source = directory.source("direct_v2_cold", DIRECT_REMAP_V2);
+    build_ok(&directory, &cold_source, "direct_v2_cold", &["--cold"]);
+    let outcome = host
+        .load(
+            open_candidate(&directory, "direct_v2_cold", &platform),
+            LoadMode::Auto,
+        )
+        .expect("stale auto");
+    assert!(outcome.is_cold_required());
 }

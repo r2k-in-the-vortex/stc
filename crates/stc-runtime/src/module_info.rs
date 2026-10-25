@@ -27,6 +27,47 @@ pub struct DirectBinding {
     pub width_bits: u64,
 }
 
+/// Byte sizes of the three process-image areas.
+///
+/// The process image is contiguous: `%I` inputs, then `%Q` outputs, then `%M`
+/// markers (Runtime §2.4). Direct cell addresses are computed from these sizes
+/// and the area-relative offsets in [`DirectBinding`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImageLayout {
+    /// Input image bytes.
+    pub inputs_bytes: u64,
+    /// Output image bytes.
+    pub outputs_bytes: u64,
+    /// Marker image bytes.
+    pub markers_bytes: u64,
+}
+
+impl ImageLayout {
+    /// Returns the total image length, or `None` when the sizes overflow.
+    #[must_use]
+    pub fn total_bytes(&self) -> Option<u64> {
+        self.inputs_bytes
+            .checked_add(self.outputs_bytes)?
+            .checked_add(self.markers_bytes)
+    }
+
+    /// Returns the byte offset and length of one image area.
+    ///
+    /// Areas are `1` inputs, `2` outputs, and `3` markers.
+    #[must_use]
+    pub fn area(&self, area: u8) -> Option<(u64, u64)> {
+        match area {
+            1 => Some((0, self.inputs_bytes)),
+            2 => Some((self.inputs_bytes, self.outputs_bytes)),
+            3 => Some((
+                self.inputs_bytes.checked_add(self.outputs_bytes)?,
+                self.markers_bytes,
+            )),
+            _ => None,
+        }
+    }
+}
+
 /// The runtime-relevant fields of the metadata sidecar.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModuleInfo {
@@ -43,11 +84,28 @@ pub struct ModuleInfo {
 }
 
 impl ModuleInfo {
+    /// Returns the process-image area sizes declared by this sidecar.
+    #[must_use]
+    pub fn image_layout(&self) -> ImageLayout {
+        ImageLayout {
+            inputs_bytes: self.inputs_bytes,
+            outputs_bytes: self.outputs_bytes,
+            markers_bytes: self.markers_bytes,
+        }
+    }
+
+    /// Returns the binding for one direct-root identity.
+    #[must_use]
+    pub fn binding(&self, got_id: GotId) -> Option<&DirectBinding> {
+        self.bindings
+            .iter()
+            .find(|binding| binding.got_id == got_id)
+    }
+
     /// Returns `true` when the process-image layout and direct bindings match.
     ///
-    /// An online change may reuse the active image only when this holds; a
-    /// layout or binding change requires a cold download until phase 8's
-    /// reconfiguration and remap policy lands.
+    /// An equal layout reuses the active image and only rebinds direct cells;
+    /// a different layout reconfigures the image at activation (§7.3).
     #[must_use]
     pub fn layout_eq(&self, other: &Self) -> bool {
         self.inputs_bytes == other.inputs_bytes

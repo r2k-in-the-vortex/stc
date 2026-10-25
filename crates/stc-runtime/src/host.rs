@@ -2,17 +2,21 @@
 //! roll back, and unload whole-program module generations.
 //!
 //! The host owns persistent roots, the GOT, the committed manifest baseline,
-//! and the mapping from stable identity to storage. A candidate is loaded and
-//! validated without touching the active generation; an online candidate is
-//! prepared into a temporary GOT and swapped in at an explicit cycle boundary.
-//! The previous generation stays resident for one successful cycle and is
-//! restored if that cycle fails.
+//! the process image, and the mapping from stable identity to storage. A
+//! candidate is loaded and validated without touching the active generation;
+//! an online candidate is prepared into a temporary GOT and swapped in at an
+//! explicit cycle boundary. The previous generation stays resident for one
+//! successful cycle and is restored if that cycle fails.
+//!
+//! Activation also applies the direct-variable remap policy: a candidate whose
+//! process-image layout or direct bindings differ is reconfigured at the
+//! boundary, values are preserved by `GotId`, moved variables are warned about,
+//! and the old image is snapshotted for rollback (Online Change §6.2, §8.1).
 //!
 //! Phase 6 runs the loader, prepare, and swap machinery synchronously on the
-//! caller's thread. The background loader/service threads, trap-boundary
-//! rollback for non-local traps, process-image reconfiguration, and execution
-//! lowering are later phases; the state machine and entry-point contract are
-//! already the ones those phases use.
+//! caller's thread. The background loader/service threads are later work; the
+//! state machine and entry-point contract are already the ones those phases
+//! use.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -30,6 +34,7 @@ use stc_got::{
 use crate::catalog::{HostPlatform, ValidatedPair};
 use crate::got::Got;
 use crate::host_api;
+use crate::image::{self, ImageSnapshot};
 use crate::loader::LoadedModule;
 use crate::memory::{MemoryLimits, RootRegistry};
 use crate::migration::{self, PlanDecision, validate_plan};
@@ -120,6 +125,19 @@ pub enum CycleOutcome {
         /// Failure reported by the candidate.
         reason: String,
     },
+}
+
+/// A non-fatal diagnostic recorded by a host load or activation.
+///
+/// The compiler's plan diagnostics travel in the manifest; these warnings are
+/// observations the runtime makes while applying a change, such as a dropped
+/// root being quarantined or a direct variable being remapped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostWarning {
+    /// Stable diagnostic code.
+    pub code: &'static str,
+    /// Human-readable message.
+    pub message: String,
 }
 
 /// A validated module/manifest pair that has not changed host state.
@@ -373,15 +391,34 @@ impl RootUndo {
     }
 }
 
+/// Process-image work a prepared candidate needs at activation.
+struct PendingImage {
+    /// Candidate metadata: image layout and direct bindings.
+    info: ModuleInfo,
+    /// Whether the image itself must be reconfigured (not just rebound).
+    reconfigure: bool,
+}
+
+/// Process-image state captured when activation applied a direct remap.
+struct ImageRollback {
+    /// Image at the moment of activation.
+    snapshot: ImageSnapshot,
+    /// Direct bindings before the swap, used to rebind the restored GOT.
+    bindings: BTreeMap<GotId, usize>,
+}
+
 struct Pending {
     generation: Generation,
     undo: RootUndo,
+    image: Option<PendingImage>,
+    warnings: Vec<HostWarning>,
 }
 
 struct Rollback {
     generation: Generation,
     undo: RootUndo,
     successful_cycles: u64,
+    image: Option<ImageRollback>,
 }
 
 /// A value-free comparison of a candidate against the committed baseline.
@@ -415,6 +452,7 @@ pub struct Host {
     direct_bindings: BTreeMap<GotId, usize>,
     last_rollback: Option<String>,
     last_candidate: Option<u64>,
+    last_warnings: Vec<HostWarning>,
 }
 
 impl Host {
@@ -438,6 +476,7 @@ impl Host {
             direct_bindings: BTreeMap::new(),
             last_rollback: None,
             last_candidate: None,
+            last_warnings: Vec::new(),
         }
     }
 
@@ -487,6 +526,35 @@ impl Host {
     #[must_use]
     pub fn last_rollback(&self) -> Option<&str> {
         self.last_rollback.as_deref()
+    }
+
+    /// Returns the non-fatal diagnostics recorded by the latest activation.
+    ///
+    /// These are runtime observations such as a dropped root being quarantined
+    /// or a direct variable being remapped. Compiler plan diagnostics remain in
+    /// the manifest and in [`Self::diff`].
+    #[must_use]
+    pub fn warnings(&self) -> &[HostWarning] {
+        &self.last_warnings
+    }
+
+    /// Releases every quarantined root's storage.
+    ///
+    /// Removed roots stay addressable until this explicit reset policy is
+    /// applied; a host restart has the same effect. Any stale reference into
+    /// released storage becomes invalid.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a reset while a prepared candidate or rollback window still
+    /// needs the quarantined roots to undo a change.
+    pub fn reset_quarantine(&mut self) -> Result<usize> {
+        if self.pending.is_some() || self.rollback.is_some() {
+            return Err(prepare_error(
+                "cannot reset quarantine while an online change is in progress",
+            ));
+        }
+        Ok(self.roots.clear_quarantine())
     }
 
     /// Returns the generation ID most recently created for a load attempt.
@@ -790,6 +858,11 @@ impl Host {
     /// leaves the active generation and committed baseline intact.
     pub fn load(&mut self, candidate: Candidate, mode: LoadMode) -> Result<LoadOutcome> {
         migration::validate_deployable(candidate.manifest())?;
+        validate_direct_metadata(
+            candidate.manifest(),
+            candidate.info(),
+            &self.direct_bindings,
+        )?;
         match mode {
             LoadMode::Cold => self.install_cold(candidate),
             LoadMode::Online => self.load_online(candidate),
@@ -838,19 +911,6 @@ impl Host {
                 reason: "the committed manifest does not match the active generation".into(),
             });
         }
-        if let Some(info) = candidate.info() {
-            let Some(active_info) = active.info.as_ref() else {
-                return Ok(LoadOutcome::ColdRequired {
-                    reason: "the active generation has no process-image metadata".into(),
-                });
-            };
-            if !active_info.layout_eq(info) {
-                return Ok(LoadOutcome::ColdRequired {
-                    reason: "the candidate changes the process-image layout or direct bindings"
-                        .into(),
-                });
-            }
-        }
         let baseline = stored.manifest.clone();
         let decision = validate_plan(candidate.manifest(), Some(&baseline));
         match decision {
@@ -870,7 +930,79 @@ impl Host {
         }
     }
 
+    /// Returns the process-image work the candidate needs at activation.
+    ///
+    /// `None` means the candidate's bindings are already the active ones (or
+    /// the candidate declares no direct variables), so activation only swaps
+    /// the GOT.
+    fn pending_image(&self, candidate: &Candidate) -> Option<PendingImage> {
+        let info = candidate.info()?.clone();
+        let active_info = self
+            .active
+            .as_ref()
+            .and_then(|generation| generation.info.as_ref());
+        let layout = info.image_layout();
+        if active_info.is_none() && layout.total_bytes() == Some(0) && info.bindings.is_empty() {
+            return None;
+        }
+        let reconfigure = active_info.is_none_or(|active| !active.image_layout().eq(&layout));
+        let changed =
+            reconfigure || active_info.is_none_or(|active| active.bindings != info.bindings);
+        changed.then_some(PendingImage { info, reconfigure })
+    }
+
+    /// Returns the runtime warnings for an online candidate.
+    fn change_warnings(&self, candidate: &Candidate) -> Vec<HostWarning> {
+        let mut warnings = Vec::new();
+        for action in &candidate.manifest().plan.actions {
+            if action.action == PlanAction::Drop && action.kind == IdentityKind::DataRoot.as_u8() {
+                warnings.push(HostWarning {
+                    code: codes::W_ONLINE_REMOVED,
+                    message: format!("root `{}` was removed and quarantined", action.key),
+                });
+            }
+        }
+        if let Some(info) = candidate.info()
+            && let Some(active_info) = self
+                .active
+                .as_ref()
+                .and_then(|generation| generation.info.as_ref())
+        {
+            for remap in image::remaps(active_info, info) {
+                let key = candidate
+                    .manifest()
+                    .roots
+                    .iter()
+                    .find(|root| root.got_id == remap.got_id)
+                    .map_or("direct variable", |root| root.key.as_str());
+                warnings.push(HostWarning {
+                    code: codes::W_ONLINE_IO,
+                    message: format!(
+                        "direct variable `{key}` was remapped from area {} offset {} to area {} offset {}",
+                        remap.previous.area,
+                        remap.previous.offset_bits,
+                        remap.current.area,
+                        remap.current.offset_bits
+                    ),
+                });
+            }
+        }
+        warnings.sort_by(|left, right| {
+            (left.code, left.message.as_str()).cmp(&(right.code, right.message.as_str()))
+        });
+        warnings
+    }
+
     fn prepare_online(&mut self, candidate: Candidate) -> Result<LoadOutcome> {
+        let image_plan = self.pending_image(&candidate);
+        let warnings = self.change_warnings(&candidate);
+        let direct = match &image_plan {
+            Some(plan) => {
+                let layout = plan.info.image_layout();
+                image::planned_bindings(layout, &plan.info.bindings)?
+            }
+            None => self.direct_bindings.clone(),
+        };
         let manifest = candidate.manifest().clone();
         let generation_id = allocate_generation();
         self.last_candidate = Some(generation_id);
@@ -973,9 +1105,14 @@ impl Host {
             return Err(error);
         }
 
-        match self.build_generation(candidate, &self.roots, generation_id, &fresh, 1) {
+        match self.build_generation(candidate, &self.roots, generation_id, &fresh, 1, &direct) {
             Ok(generation) => {
-                self.pending = Some(Pending { generation, undo });
+                self.pending = Some(Pending {
+                    generation,
+                    undo,
+                    image: image_plan,
+                    warnings,
+                });
                 Ok(LoadOutcome::Prepared {
                     generation: generation_id,
                 })
@@ -1011,7 +1148,9 @@ impl Host {
                 roots.allocate(root, generation_id)?;
             }
             let fresh = BTreeSet::new();
-            let generation = self.build_generation(candidate, &roots, generation_id, &fresh, 0)?;
+            let direct = self.direct_bindings.clone();
+            let generation =
+                self.build_generation(candidate, &roots, generation_id, &fresh, 0, &direct)?;
             let stored = StoredManifest::new(generation.manifest.clone())?;
             self.store.install(stored)?;
             Ok((generation, roots))
@@ -1045,6 +1184,7 @@ impl Host {
         self.roots = roots;
         self.active = Some(generation);
         self.last_rollback = None;
+        self.last_warnings.clear();
         self.unload_retired();
         Ok(LoadOutcome::ColdInstalled {
             generation: generation_id,
@@ -1058,6 +1198,7 @@ impl Host {
         generation_id: u64,
         fresh: &BTreeSet<GotId>,
         mode: u32,
+        direct: &BTreeMap<GotId, usize>,
     ) -> Result<Generation> {
         let Candidate { module, pair, info } = candidate;
         let manifest = pair.manifest;
@@ -1089,7 +1230,7 @@ impl Host {
                 functions.insert(function.got_id, *address as usize);
             }
             got.bind_functions(&functions)?;
-            got.bind_direct(&self.direct_bindings)?;
+            got.bind_direct(direct)?;
             got.bind_imports(host_api::service_address)?;
             if !got.unbound_slots().is_empty() {
                 return Err(Error::new(
@@ -1178,10 +1319,47 @@ impl Host {
                 "the previous change is still in its rollback window",
             ));
         }
-        let Some(pending) = self.pending.take() else {
+        let Some(mut pending) = self.pending.take() else {
             return Err(prepare_error("no prepared candidate to activate"));
         };
+        if self.active.is_none() {
+            self.pending = Some(pending);
+            return Err(prepare_error("no active generation to replace"));
+        }
+        let mut image_rollback = None;
+        if let Some(image) = pending.image.as_ref() {
+            let previous_info = self
+                .active
+                .as_ref()
+                .and_then(|generation| generation.info.clone());
+            let snapshot = image::snapshot();
+            let applied = if image.reconfigure {
+                image::reconfigure(&snapshot, previous_info.as_ref(), &image.info)
+            } else {
+                image::remap_in_place(&snapshot, previous_info.as_ref(), &image.info)
+            };
+            match applied {
+                Ok(bindings) => {
+                    if let Err(error) = pending.generation.got.bind_direct(&bindings) {
+                        self.restore_image_state(&snapshot);
+                        self.pending = Some(pending);
+                        return Err(error);
+                    }
+                    let bindings_before = std::mem::replace(&mut self.direct_bindings, bindings);
+                    image_rollback = Some(ImageRollback {
+                        snapshot,
+                        bindings: bindings_before,
+                    });
+                }
+                Err(error) => {
+                    self.restore_image_state(&snapshot);
+                    self.pending = Some(pending);
+                    return Err(error);
+                }
+            }
+        }
         let Some(previous) = self.active.take() else {
+            self.pending = Some(pending);
             return Err(prepare_error("no active generation to replace"));
         };
         let generation = pending.generation.id;
@@ -1189,9 +1367,32 @@ impl Host {
             generation: previous,
             undo: pending.undo,
             successful_cycles: 0,
+            image: image_rollback,
         });
         self.active = Some(pending.generation);
+        self.last_warnings = pending.warnings;
         Ok(generation)
+    }
+
+    /// Restores the process image after a failed activation and rebinds the
+    /// active generation's direct cells, whose addresses may have moved.
+    fn restore_image_state(&mut self, snapshot: &ImageSnapshot) {
+        image::restore(snapshot);
+        self.rebind_active_direct();
+    }
+
+    /// Recomputes and rebinds the active generation's direct cells.
+    fn rebind_active_direct(&mut self) {
+        let Some(active) = self.active.as_mut() else {
+            return;
+        };
+        let Some(info) = active.info.as_ref() else {
+            return;
+        };
+        if let Ok(bindings) = image::current_bindings(info) {
+            let _ = active.got.bind_direct(&bindings);
+            self.direct_bindings = bindings;
+        }
     }
 
     /// Runs one cycle of the active generation.
@@ -1328,6 +1529,11 @@ impl Host {
         let restored = rollback.generation.id;
         let undo = rollback.undo;
         self.active = Some(rollback.generation);
+        if let Some(image) = rollback.image {
+            image::restore(&image.snapshot);
+            self.direct_bindings = image.bindings;
+            self.rebind_active_direct();
+        }
         self.last_rollback = Some(reason.to_owned());
         undo.undo(&mut self.roots)?;
         Ok(restored)
@@ -1407,6 +1613,68 @@ impl Drop for Host {
     fn drop(&mut self) {
         let _ = self.shutdown();
     }
+}
+
+/// Validates a candidate's direct roots against its metadata or host bindings.
+///
+/// Compiler-produced modules carry one metadata binding per `Direct` root.
+/// Modules without a sidecar may still be installed by an embedding host that
+/// supplies the bindings explicitly; those must cover every direct root.
+fn validate_direct_metadata(
+    manifest: &Manifest,
+    info: Option<&ModuleInfo>,
+    fallback: &BTreeMap<GotId, usize>,
+) -> Result<()> {
+    let direct: Vec<&RootRecord> = manifest
+        .roots
+        .iter()
+        .filter(|root| root.root_kind == RootKind::Direct)
+        .collect();
+    match info {
+        Some(info) => {
+            let layout = info.image_layout();
+            image::validate_layout(layout, &info.bindings)?;
+            let direct_ids: BTreeSet<GotId> = direct.iter().map(|root| root.got_id).collect();
+            let bound: BTreeSet<GotId> =
+                info.bindings.iter().map(|binding| binding.got_id).collect();
+            for binding in &info.bindings {
+                if !direct_ids.contains(&binding.got_id) {
+                    return Err(Error::new(
+                        codes::ONLINE_IO,
+                        format!(
+                            "process-image metadata binds {} but the manifest has no such direct root",
+                            binding.got_id
+                        ),
+                    ));
+                }
+            }
+            for root in direct {
+                if !bound.contains(&root.got_id) {
+                    return Err(Error::new(
+                        codes::ONLINE_BINDING,
+                        format!(
+                            "direct variable `{}` has no process-image binding",
+                            root.key
+                        ),
+                    ));
+                }
+            }
+        }
+        None => {
+            for root in direct {
+                if !fallback.contains_key(&root.got_id) {
+                    return Err(Error::new(
+                        codes::ONLINE_BINDING,
+                        format!(
+                            "direct variable `{}` has no process-image binding",
+                            root.key
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn direct_bindings_for(info: &ModuleInfo) -> Result<BTreeMap<GotId, usize>> {

@@ -21,6 +21,18 @@ use stc_span::FileId;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
+static IMAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Serializes tests that configure or observe the process-global image.
+///
+/// The runtime has one process image per host process, so tests that assert on
+/// its contents must not run concurrently with each other.
+pub fn image_guard() -> std::sync::MutexGuard<'static, ()> {
+    IMAGE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// A program with two scalar globals and one program body.
 pub const SIMPLE: &str = r#"
 VAR_GLOBAL
