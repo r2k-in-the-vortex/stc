@@ -29,6 +29,8 @@ pub(crate) struct PlanTask {
     pub interval_ns: Option<i128>,
     /// Folded priority.
     pub priority: Option<i128>,
+    /// Declaration span.
+    pub span: Span,
 }
 
 /// One configured program instance.
@@ -48,6 +50,8 @@ pub(crate) struct PlanInstance {
     pub bindings: Vec<BindingHir>,
     /// Instance global symbol.
     pub global: String,
+    /// Declaration span.
+    pub span: Span,
 }
 
 /// The selected execution plan.
@@ -245,6 +249,7 @@ pub(crate) fn select_plan(hir: &HirCrate) -> Result<Plan, Vec<CodegenError>> {
                         task: None,
                         bindings: Vec::new(),
                         global: mangle::program_instance_symbol("_default"),
+                        span: hir.defs[program.index()].span,
                     }],
                     tasks: Vec::new(),
                     programs: vec![*program],
@@ -328,6 +333,7 @@ pub(crate) fn select_plan(hir: &HirCrate) -> Result<Plan, Vec<CodegenError>> {
                 task: program.task,
                 bindings: program.bindings.clone(),
                 global,
+                span: program.span,
             });
         }
     }
@@ -351,6 +357,7 @@ fn plan_task(hir: &HirCrate, resource: &str, task: &TaskHir) -> PlanTask {
         single: task.single_value,
         interval_ns: task.interval_ns,
         priority: task.priority_value,
+        span: task.span,
     }
 }
 

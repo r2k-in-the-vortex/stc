@@ -26,10 +26,7 @@ use crate::wire::Encoder;
 pub const GENERATOR_UNTRACKED_ALLOWED: u64 = 1 << 5;
 /// Generator flag: cold-layout build.
 pub const GENERATOR_COLD_LAYOUT: u64 = 1 << 6;
-/// The host ABI the M4.5 compiler targets.
-pub const HOST_ABI_MAJOR: u16 = 2;
-/// The host ABI minor the M4.5 compiler targets.
-pub const HOST_ABI_MINOR: u16 = 0;
+pub use crate::descriptor::{HOST_ABI_MAJOR, HOST_ABI_MINOR};
 
 /// Inputs that describe one build.
 #[derive(Clone, Debug, PartialEq, Eq)]

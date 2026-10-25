@@ -939,9 +939,9 @@ impl Manifest {
                             "non-import slots must have a nonzero GotId",
                         ));
                     }
-                    if !first_in_kind && slot.got_id < last_got_id {
+                    if !first_in_kind && slot.got_id <= last_got_id {
                         return Err(Error::manifest(
-                            "slots within a group must be sorted by GotId",
+                            "slots within a group must be strictly sorted by GotId",
                         ));
                     }
                     match slot.kind {

@@ -40,6 +40,13 @@ resolved online-change architecture supersedes several M4-era recommendations in
 - M5 exit criteria include hot-swap coverage for FB/class state, aggregates/strings, interfaces,
   descriptors, and `POINTER TO`; see §2 and the project plan M5.
 
+M4.5 phases 0–4 are complete: the compiler already projects the M4 scalar surface to the catalog,
+canonical slot bindings, descriptor, manifest, and online-change plan through
+`stc_codegen::module::project` and validates descriptor/manifest pairs in `stc-got`. M5 code must
+extend that catalog (types, descriptors, FB bodies, methods, aggregates) rather than derive
+identities in a second path; phases 5–10 add the host, loader, execution lowering, hot-swap
+tests, and documentation.
+
 Read [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md),
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md), and `M4.5-Plan.md`
 before starting M5. If a recommendation below conflicts with those documents, the online-change

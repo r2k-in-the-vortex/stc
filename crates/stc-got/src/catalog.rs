@@ -285,6 +285,25 @@ impl ImportService {
         self as u8
     }
 
+    /// Parses a host API service ID.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<Self> {
+        match id {
+            1 => Some(Self::Trap),
+            2 => Some(Self::CycleNowNs),
+            3 => Some(Self::MonotonicNowNs),
+            4 => Some(Self::LocalDateNs),
+            5 => Some(Self::Alloc),
+            6 => Some(Self::Free),
+            7 => Some(Self::IoImage),
+            8 => Some(Self::IoSize),
+            9 => Some(Self::StateLoad),
+            10 => Some(Self::StateSave),
+            11 => Some(Self::Assert),
+            _ => None,
+        }
+    }
+
     /// Returns the host API field name.
     #[must_use]
     pub const fn name(self) -> &'static str {

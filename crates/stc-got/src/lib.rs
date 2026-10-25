@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod descriptor;
 pub mod digest;
 pub mod engine;
 pub mod error;
@@ -27,6 +28,10 @@ pub use catalog::{
     Catalog, DescriptorDecl, ExportDecl, FieldDecl, FunctionDecl, Identity, ImportService,
     InstanceDecl, RootDecl, TaskDecl, TypeDecl, expression_initializer_digest, initializer_digest,
     root_kind_identity,
+};
+pub use descriptor::{
+    DESCRIPTOR_FORMAT, DESCRIPTOR_MAGIC, Descriptor, DescriptorFunction, HOST_ABI_MAJOR,
+    HOST_ABI_MINOR, MODULE_FORMAT,
 };
 pub use digest::{Digest32, GotId};
 pub use engine::{BuildInput, BuildOptions, BuildOutcome, Rename, build, source_fingerprint};

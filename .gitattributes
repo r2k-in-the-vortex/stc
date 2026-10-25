@@ -7,4 +7,5 @@
 *.snap text eol=lf
 *.ll text eol=lf
 *.json text eol=lf
+*.hex text eol=lf
 *.txt text eol=lf

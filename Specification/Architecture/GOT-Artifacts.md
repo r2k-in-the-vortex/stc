@@ -1272,10 +1272,21 @@ signatures, private descriptor blobs, and function-address tables. The `verify` 
 structural contract of §7 and §12.2 item 6: bodies reference no persistent root or user callable
 directly, cell uses match their kinds, generated code never writes a cell, pre-attach entry
 points do not touch the slot table, direct global access is limited to an allowlisted module-local
-set, and the function-address table is the only initializer that names a user function. D-119 records the IR-level choices. Implementation of descriptor bytes, manifest
-projection, host API bindings, and runtime loading in later phases must follow these formats
-exactly, and any further change discovered during implementation returns to this document and the
-decision log before code lands.
+set, and the function-address table is the only initializer that names a user function. D-119 records the IR-level choices.
+
+Phase 4 is implemented (2026-10-25) in `stc-got::descriptor` and `stc-codegen::module`. The descriptor format-1
+codec encodes, decodes, validates, computes the zeroed-digest projection, and checks the
+descriptor/manifest pairing of §11.4. The module projection builds the root catalog for the M4
+surface (global, program-field, direct, and task-guard roots; user and program-body functions;
+instances, tasks, and exports), obtains canonical slot assignments from the identity engine,
+exposes declaration-to-slot bindings, and emits the descriptor, binary manifest, canonical JSON
+manifest, and online-change plan from one deterministic model. Configuration-less builds
+synthesize `_DEFAULT` configuration/resource/task identities; imports are trap, I/O image/size,
+and retained-state load/save. Golden descriptor/manifest snapshots, double-build byte equality,
+baseline reuse, rename/drop/reject/cold, and tamper rejection are tested. D-120–D-121 record the
+choices. Implementation of host API bindings and runtime loading in later phases must follow
+these formats exactly, and any further change discovered during implementation returns to this
+document and the decision log before code lands.
 
 ## 13. Related documents
 

@@ -2917,5 +2917,18 @@ function-address tables, and linkage/visibility attributes. A structural verifie
 build contract (no direct persistent-root/callable references, cell-kind-correct loads/stores and
 calls, allowlisted module-local globals, ABI 2.0 entry-point signatures, descriptor/table shapes).
 Builder, determinism, rejection, and clang-acceptance tests run on the host and both x64 targets;
-D-119 records the IR-level choices. Phase 4 (slot assignment, root catalog, manifest projection)
-is next; descriptor bytes and runtime work have not started.
+D-119 records the IR-level choices.
+
+**Update 2026-10-25 (M4.5 phase 4):** the compiler artifact projection is implemented. The
+`stc-got::descriptor` module encodes/decodes descriptor format 1, computes its zeroed-digest
+projection, validates canonical function/slot tables, and checks descriptor/manifest pairing
+(§11.4). `stc-codegen::module` builds the M4 scalar catalog (global, program-field, direct, and
+task-guard roots; user and program-body functions; instances, tasks, and exports), obtains the
+canonical slot assignment, exposes declaration-to-slot bindings for the module-shaped lowering,
+and emits the descriptor, manifest binary/canonical JSON, and online-change plan from one
+deterministic model. Configuration-less builds synthesize `_DEFAULT` configuration/resource/task
+identities; imports are trap, I/O image/size, and retained-state load/save. Golden
+descriptor/manifest snapshots, double-build byte equality, second-build baseline reuse,
+rename/drop/reject/cold paths, and tamper rejection are covered. D-120–D-121 record the choices.
+Phase 5 (host GOT, root registry, allocator, and artifact validation) is next; IR execution
+lowering and runtime integration have not started.

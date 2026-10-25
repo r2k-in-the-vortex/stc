@@ -79,6 +79,7 @@ name = "stc-codegen"
 version = "0.1.0"
 dependencies = [
  "stc-diag",
+ "stc-got",
  "stc-hir",
  "stc-lexer",
  "stc-parser",

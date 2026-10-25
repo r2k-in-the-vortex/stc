@@ -9,6 +9,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Stable diagnostic codes from GOT Artifacts §6.10.
 pub mod codes {
+    /// Malformed module descriptor.
+    pub const MODULE_INVALID: &str = "STC-E-MODULE-001";
     /// Malformed or unpaired manifest.
     pub const MANIFEST_PAIRING: &str = "STC-E-MANIFEST-001";
     /// Invalid manifest schema, digest, `GotId`, or duplicate key.

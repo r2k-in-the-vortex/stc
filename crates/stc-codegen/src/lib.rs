@@ -17,6 +17,7 @@ pub mod ir;
 mod layout;
 mod mangle;
 mod metadata;
+pub mod module;
 mod stmt;
 mod unit;
 pub mod verify;
@@ -27,6 +28,9 @@ use stc_hir::HirCrate;
 use stc_span::{FileId, Span};
 
 pub use metadata::Metadata;
+pub use module::{
+    FunctionTarget, ModuleArtifacts, ModuleError, ModuleOptions, RootTarget, Severity, SlotBinding,
+};
 
 /// Artifact mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

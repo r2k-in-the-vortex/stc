@@ -19,7 +19,10 @@ output goes to stdout.
 > (D-070). `--message-format` supports `human` and `json` (not `short`), and `--relaxed` is
 > supported. Exit codes 0/1/2/3 follow §1.3; codegen-internal failures use 3. The manifest,
 > `stc run`/`test`/`fmt`/`clean`/`metadata`/`compliance`, shared libraries, and the remaining
-> options below are the v1 target and arrive in later milestones (D-051, D-079).
+> options below are the v1 target and arrive in later milestones (D-051, D-079). M4.5 phase 4
+> implements the compiler-side catalog, descriptor, manifest, and plan projection in
+> `stc-codegen::module`; `--emit=module`, the baseline/cold/rename flags, and the manifest files
+> become driver outputs with the module loader and execution conversion in M4.5 phases 6–7.
 
 | Command | Purpose |
 | --- | --- |

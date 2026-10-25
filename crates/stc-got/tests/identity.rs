@@ -675,6 +675,20 @@ fn duplicate_slots_are_rejected() {
 }
 
 #[test]
+fn duplicate_slot_identities_are_rejected() {
+    let outcome = cold();
+    let mut manifest = outcome.manifest.clone();
+    let first = manifest.slots[0].got_id;
+    let duplicate = manifest
+        .slots
+        .iter_mut()
+        .find(|slot| slot.kind == stc_got::SlotKind::Data && slot.got_id != first)
+        .expect("a second data slot");
+    duplicate.got_id = first;
+    assert!(manifest.validate().is_err());
+}
+
+#[test]
 fn unknown_required_features_are_rejected() {
     let outcome = cold();
     let mut manifest = outcome.manifest.clone();

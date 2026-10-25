@@ -139,9 +139,15 @@ pub fn program_body_symbol(hir: &HirCrate, def: DefId) -> String {
 /// Returns the SINGLE-task guard global name.
 #[must_use]
 pub fn task_guard_symbol(resource: &str, name: Symbol, hir: &HirCrate) -> String {
+    task_guard_symbol_text(resource, hir.interner.text(name))
+}
+
+/// Returns a task-guard symbol from already-resolved name text.
+#[must_use]
+pub fn task_guard_symbol_text(resource: &str, name: &str) -> String {
     format!(
         "stc_single_{}_{}",
         normalize_ident(resource),
-        normalize_ident(hir.interner.text(name))
+        normalize_ident(name)
     )
 }
