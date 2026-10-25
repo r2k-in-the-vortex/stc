@@ -1,10 +1,21 @@
-//! Minimal M4 runtime for generated ST programs.
+//! The persistent host runtime for generated ST programs.
 //!
 //! The crate is a Rust `staticlib` exposing the stable C ABI from
 //! Runtime-and-Execution §2.3 (D-077). It owns the process image, the latched
 //! cycle clock, trap reporting, and the executable cycle loop. Retained-state
 //! file I/O is deliberately a stub until M6: the entry points exist and return
 //! "retention disabled" (5).
+//!
+//! M4.5 adds the host-side online-change substrate:
+//!
+//! - [`got`] owns the per-generation cell table and binds data, function,
+//!   descriptor, direct, and import cells;
+//! - [`memory`] owns persistent roots, quarantine, and transient module blocks;
+//! - [`catalog`] validates descriptor/manifest pairs against host policy;
+//! - [`migration`] validates an online-change plan against the active baseline.
+//!
+//! Module loading and generation switching build on these primitives in later
+//! phases; the M4 ABI 1 entry points below remain the executable path for now.
 //!
 //! This is the only workspace crate that permits unsafe code; every unsafe
 //! operation is an FFI pointer access confined to the functions below.
@@ -13,6 +24,19 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+pub mod catalog;
+pub mod got;
+pub mod memory;
+pub mod migration;
+
+#[cfg(test)]
+mod test_support;
+
+pub use catalog::{HostPlatform, PROFILE, SUPPORTED_FEATURES, ValidatedPair};
+pub use got::Got;
+pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
+pub use migration::{PlanDecision, validate_plan};
 
 /// Runtime ABI version (Runtime-and-Execution §2.2).
 pub const STC_RUNTIME_ABI: i32 = 1;

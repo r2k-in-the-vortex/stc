@@ -1284,9 +1284,23 @@ manifest, and online-change plan from one deterministic model. Configuration-les
 synthesize `_DEFAULT` configuration/resource/task identities; imports are trap, I/O image/size,
 and retained-state load/save. Golden descriptor/manifest snapshots, double-build byte equality,
 baseline reuse, rename/drop/reject/cold, and tamper rejection are tested. D-120–D-121 record the
-choices. Implementation of host API bindings and runtime loading in later phases must follow
-these formats exactly, and any further change discovered during implementation returns to this
-document and the decision log before code lands.
+choices.
+
+Phase 5 is implemented (2026-10-25) in `stc-runtime`. The host `got` module owns a fixed
+per-generation cell vector, validates canonical slot tables, exposes stable cell and slot-table
+addresses, builds the §7.3 fresh-root mask, and binds data, function, descriptor, direct, and
+import cells by `GotId` or service ID. The `memory` module owns stable zeroed aligned root
+storage, exact-match preservation, quarantine, transactional
+reset, failed-candidate discard, memory budgets, and per-generation transient allocations with
+exact-base free and `free_all`. The `catalog` module validates descriptor/manifest pairs against host profile, target,
+endianness, pointer width, ABI range, and implemented features, and parses both manifest
+projections. The `migration` module validates a plan against the exact parent build/manifest
+identity, preserve-shape compatibility, allocate reuse (including retired identities), drop
+restrictions, and retirement coverage. Runtime unit tests cover malformed and tampered artifacts
+and allocation lifetimes; loader, swap, and plan execution remain for phase 6 and later. D-122
+records the choices. Implementation of host API bindings and runtime loading in later phases must
+follow these formats exactly, and any further change discovered during implementation returns to
+this document and the decision log before code lands.
 
 ## 13. Related documents
 

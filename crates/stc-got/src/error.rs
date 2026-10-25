@@ -11,6 +11,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub mod codes {
     /// Malformed module descriptor.
     pub const MODULE_INVALID: &str = "STC-E-MODULE-001";
+    /// Module target/profile/endianness/pointer-width mismatch.
+    pub const MODULE_TARGET: &str = "STC-E-MODULE-002";
+    /// Host ABI version mismatch.
+    pub const ABI_MISMATCH: &str = "STC-E-ABI-001";
     /// Malformed or unpaired manifest.
     pub const MANIFEST_PAIRING: &str = "STC-E-MANIFEST-001";
     /// Invalid manifest schema, digest, `GotId`, or duplicate key.
@@ -27,6 +31,10 @@ pub mod codes {
     pub const ONLINE_VTABLE: &str = "STC-E-ONLINE-003";
     /// Incompatible configuration or task topology.
     pub const ONLINE_TOPOLOGY: &str = "STC-E-ONLINE-004";
+    /// Module prepare or activation failure.
+    pub const ONLINE_PREPARE: &str = "STC-E-ONLINE-005";
+    /// Slot table or cell binding failure.
+    pub const ONLINE_BINDING: &str = "STC-E-ONLINE-006";
     /// Removed root quarantined.
     pub const W_ONLINE_REMOVED: &str = "STC-W-ONLINE-001";
     /// Initializer ignored on a preserved root.

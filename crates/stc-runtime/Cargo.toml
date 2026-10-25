@@ -9,6 +9,16 @@ publish.workspace = true
 crate-type = ["staticlib"]
 
 [dependencies]
+stc-got = { path = "../stc-got" }
+
+[dev-dependencies]
+stc-codegen = { path = "../stc-codegen" }
+stc-diag = { path = "../stc-diag" }
+stc-hir = { path = "../stc-hir" }
+stc-lexer = { path = "../stc-lexer" }
+stc-parser = { path = "../stc-parser" }
+stc-sema = { path = "../stc-sema" }
+stc-span = { path = "../stc-span" }
 
 # The workspace forbids unsafe code. This crate is the documented exception:
 # it is the C ABI boundary and owns all FFI pointer handling (D-077). Cargo
