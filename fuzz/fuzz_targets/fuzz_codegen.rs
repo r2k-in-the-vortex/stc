@@ -13,7 +13,10 @@ fn generate_stub(analysis: &stc_sema::Analysis) {
         debug: false,
         emit_metadata: true,
         mode: stc_codegen::Mode::Executable,
+        relaxed: false,
+        release: false,
         sources: &sources,
+        module: stc_codegen::ModuleBuildOptions::default(),
     };
     match stc_codegen::generate(&analysis.hir, &options) {
         Ok(output) => {
