@@ -16,12 +16,16 @@ path = "src/main.rs"
 [dependencies]
 stc-codegen = { path = "../stc-codegen" }
 stc-diag = { path = "../stc-diag" }
+stc-got = { path = "../stc-got" }
 stc-hir = { path = "../stc-hir" }
 stc-lexer = { path = "../stc-lexer" }
 stc-parser = { path = "../stc-parser" }
 stc-sema = { path = "../stc-sema" }
 stc-span = { path = "../stc-span" }
 stc-syntax = { path = "../stc-syntax" }
+
+[dev-dependencies]
+stc-runtime = { path = "../stc-runtime" }
 
 [lints]
 workspace = true

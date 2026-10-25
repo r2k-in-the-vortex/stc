@@ -20,6 +20,18 @@ module, executable, and embedding-library artifacts differ.
 > adds attach/prepare/detach, GOT/cell access, the reference resolver, and versioned host services.
 > The M4 `staticlib` remains as the embedding/host library; the direct-reference executable model
 > is superseded by a thin launcher plus loadable module.
+>
+> **M4.5 phase 7 status (2026-10-25):** generated code executes as an ABI 2 module through the
+> persistent host. Persistent scalars, program fields, direct `AT` variables, retained leaves, and
+> task guards use GOT cells; user calls are indirect through function cells; host services use
+> import cells; and the module exports the seven entry-point set. The host reads
+> `<name>.stc-meta.json` to configure the process image and bind direct cells, `--emit=exe` emits
+> the thin launcher, and `--emit=lib` emits the embedding archive with the module separate. The
+> trap service performs a non-local exit to the host boundary (`__intrinsic_setjmpex` on Windows,
+> `_setjmp` on POSIX; generated functions are `uwtable`; an assembly shim owns the second `setjmp`
+> return), enabling rollback-window recovery and exit code 70 outside it. The embedding C ABI currently exposes `stc_host_load_module`,
+> `stc_host_cycle`, `stc_host_shutdown`, `stc_host_symbol`, `stc_host_export_manifest`, and
+> `stc_metadata_json`; `stc_host_run` and the full options struct remain for a later phase.
 
 ## 1. Execution model
 
@@ -69,19 +81,24 @@ count or use library mode.
 
 ### 1.2 Embedding library mode
 
-`stc build --emit=lib` emits an embedding host library with no `main`. It exports the host API
-plus any `{stc:export}` wrappers:
+`stc build --emit=lib` emits an embedding host library with no `main`. It exports the host API,
+and `{stc:export}` wrappers are resolved through the host export registry because the generated
+code stays in the separate module:
 
 ```c
 uint32_t stc_abi_version(void);
-const char* stc_metadata_json(void);
-int32_t stc_host_run(stc_host_options* options);
+const char* stc_metadata_json(void);            /* metadata sidecar, after a load */
 int32_t stc_host_load_module(const char* path, stc_load_mode mode);
+int32_t stc_host_cycle(void);
+int32_t stc_host_shutdown(void);
+void* stc_host_symbol(const char* name);        /* exported module symbol registry */
 int32_t stc_host_export_manifest(char* buffer, int64_t* len);
+int32_t stc_host_run(stc_host_options* options); /* later phase */
 ```
 
 The generated module remains a separate loadable artifact; M4.5 emits the embedding host as a
-static library, and shared host libraries are M6. The embedding host owns the loop, I/O, clock,
+static library, and shared host libraries are M6. `stc_host_load_module` takes mode `0` (cold),
+`1` (online prepare), or `2` (auto). The embedding host owns the loop, I/O, clock,
 GOT, root allocator, manifest store, loader/prepare thread, and service/monitor threads.
 `stc_module_cycle` is called only by the host's cycle thread; external callers must serialize
 all host API calls. The runtime is not a general-purpose thread-safe library: service access

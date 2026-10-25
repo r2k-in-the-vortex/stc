@@ -14,6 +14,7 @@ pub mod codes;
 mod config;
 mod expr;
 pub mod ir;
+mod launcher;
 mod layout;
 mod mangle;
 mod metadata;
@@ -24,9 +25,11 @@ pub mod verify;
 
 use std::fmt;
 
+use stc_got::{Digest32, Endianness, Manifest, Rename, Target};
 use stc_hir::HirCrate;
 use stc_span::{FileId, Span};
 
+pub use launcher::generate_launcher;
 pub use metadata::Metadata;
 pub use module::{
     FunctionTarget, ModuleArtifacts, ModuleError, ModuleOptions, RootTarget, Severity, SlotBinding,
@@ -35,9 +38,9 @@ pub use module::{
 /// Artifact mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// Generate `main` and call the runtime cycle loop.
+    /// Executable host launcher plus a loadable module.
     Executable,
-    /// Export `stc_init`/`stc_cycle`/`stc_shutdown` and no `main`.
+    /// Embedding host library plus a loadable module.
     Library,
 }
 
@@ -48,6 +51,41 @@ impl Mode {
         match self {
             Self::Executable => "executable",
             Self::Library => "library",
+        }
+    }
+}
+
+/// Identity and baseline inputs for the module projection.
+///
+/// The generated artifact is always a loadable module; these values decide the
+/// persistent identities, the manifest, and the paired descriptor.
+#[derive(Clone, Debug)]
+pub struct ModuleBuildOptions<'a> {
+    /// Compiler package version embedded in the manifest and descriptor.
+    pub compiler_version: String,
+    /// Hash of the production source files.
+    pub source_fingerprint: Digest32,
+    /// Optional identity baseline.
+    pub baseline: Option<&'a Manifest>,
+    /// Force a cold-layout build and ignore the baseline.
+    pub cold: bool,
+    /// Permit untracked removal of data roots.
+    pub allow_untracked_removal: bool,
+    /// Tracked rename/move maps.
+    pub renames: Vec<Rename>,
+}
+
+impl Default for ModuleBuildOptions<'_> {
+    fn default() -> Self {
+        Self {
+            compiler_version: format!("stc {}", env!("CARGO_PKG_VERSION")),
+            // Deterministic non-zero placeholder; the driver passes the real
+            // source fingerprint.
+            source_fingerprint: Digest32::from_bytes([0xA5; 32]),
+            baseline: None,
+            cold: false,
+            allow_untracked_removal: false,
+            renames: Vec::new(),
         }
     }
 }
@@ -65,8 +103,14 @@ pub struct Options<'a> {
     pub emit_metadata: bool,
     /// Artifact mode.
     pub mode: Mode,
+    /// Relaxed syntax was accepted.
+    pub relaxed: bool,
+    /// Optimised, stripped build (`--release`).
+    pub release: bool,
     /// Source file paths in `FileId` order.
     pub sources: &'a [String],
+    /// Module identity and baseline inputs.
+    pub module: ModuleBuildOptions<'a>,
 }
 
 /// One harness-visible span-table entry.
@@ -91,6 +135,9 @@ pub struct Output {
     pub metadata: Metadata,
     /// Span table entries in ID order.
     pub spans: Vec<SpanEntry>,
+    /// The module projection: descriptor, manifest, canonical slots, and the
+    /// canonical JSON/binary manifest bytes.
+    pub got: ModuleArtifacts,
 }
 
 /// A structured code generation failure.
@@ -193,11 +240,65 @@ impl fmt::Display for CodegenError {
 
 /// Generates IR and metadata for a checked HIR crate.
 ///
+/// The artifact is a loadable ABI 2 module. `exe` and `lib` host wrappers are
+/// separate artifacts emitted by the driver around the same module.
+///
 /// # Errors
 ///
-/// Returns every unsupported-construct or internal error encountered.
+/// Returns every unsupported-construct, identity, projection, or internal
+/// error encountered.
 pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<CodegenError>> {
     hir.check_invariants()
         .map_err(|message| vec![CodegenError::internal(message)])?;
-    unit::generate(hir, options)
+    let target = resolve_target(options.target);
+    let mut module_options = ModuleOptions::new(
+        target.clone(),
+        options.artifact_name,
+        options.module.compiler_version.clone(),
+        options.module.source_fingerprint,
+    );
+    module_options.release = options.release;
+    module_options.relaxed = options.relaxed;
+    module_options.baseline = options.module.baseline;
+    module_options.cold = options.module.cold;
+    module_options.allow_untracked_removal = options.module.allow_untracked_removal;
+    module_options.renames = options.module.renames.clone();
+    let got = module::project(hir, options.sources, &module_options).map_err(project_errors)?;
+    unit::generate(hir, options, &target, got)
+}
+
+fn project_errors(errors: Vec<ModuleError>) -> Vec<CodegenError> {
+    // `module::project` returns only errors here; non-fatal warnings are
+    // carried in `ModuleArtifacts::diagnostics` on success.
+    errors
+        .into_iter()
+        .map(|error| CodegenError::Unsupported {
+            code: error.code,
+            message: error.message,
+            span: error.span.unwrap_or_else(|| Span::empty(FileId::new(0), 0)),
+        })
+        .collect()
+}
+
+/// Resolves the build target triple.
+///
+/// Every supported target is little-endian with 64-bit pointers.
+#[must_use]
+pub fn resolve_target(target: Option<&str>) -> Target {
+    let triple = target.map_or_else(host_triple, str::to_owned);
+    Target::new(triple, Endianness::Little, 8)
+}
+
+/// Returns the host target triple used when `--target` is omitted.
+#[must_use]
+pub fn host_triple() -> String {
+    if cfg!(all(windows, target_env = "msvc")) {
+        "x86_64-pc-windows-msvc".into()
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu".into()
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu".into()
+    } else {
+        "x86_64-unknown-linux-gnu".into()
+    }
 }

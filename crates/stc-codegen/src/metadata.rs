@@ -160,8 +160,13 @@ pub struct IoBindingMetadata {
     pub address: String,
     /// Area-relative start bit.
     pub offset_bits: u64,
+    /// Declared width in bits.
+    pub width_bits: u64,
     /// Canonical type name.
     pub ty: String,
+    /// Persistent GOT identity of the direct root, when the binding is a
+    /// declared `AT` variable or field.
+    pub got_id: Option<String>,
     /// `{stc:io}` hint fields.
     pub hint: Option<HintMetadata>,
     /// `pragma` or `project`.
@@ -264,8 +269,19 @@ pub struct Metadata {
     pub abi_version: i64,
     /// Artifact name.
     pub artifact: String,
-    /// `executable` or `library`.
+    /// `executable` or `library` host artifact mode.
     pub mode: &'static str,
+    /// Content-derived build identity (`0x…`).
+    pub build_id: String,
+    /// Resolved target triple.
+    pub target: String,
+    /// Loadable module file name; filled in by the driver, which owns the
+    /// output-directory naming convention.
+    pub module_file: String,
+    /// Paired manifest digest (`0x…`).
+    pub manifest_digest: String,
+    /// Descriptor digest (`0x…`).
+    pub descriptor_digest: String,
     /// Selected configuration name, when any.
     pub configuration: Option<String>,
     /// Program instances.
@@ -293,6 +309,26 @@ impl Metadata {
         );
         root.insert("artifact".into(), Json::String(self.artifact.clone()));
         root.insert("compiler".into(), Json::String(self.compiler.clone()));
+        root.insert("build_id".into(), Json::String(self.build_id.clone()));
+        root.insert(
+            "descriptor_digest".into(),
+            Json::String(self.descriptor_digest.clone()),
+        );
+        root.insert(
+            "module".into(),
+            Json::object([
+                ("file".into(), Json::String(self.module_file.clone())),
+                ("format".into(), Json::Number(1)),
+            ]),
+        );
+        root.insert(
+            "manifest".into(),
+            Json::object([
+                ("digest".into(), Json::String(self.manifest_digest.clone())),
+                ("format".into(), Json::Number(1)),
+            ]),
+        );
+        root.insert("target".into(), Json::String(self.target.clone()));
         root.insert(
             "configuration".into(),
             self.configuration.clone().map_or(Json::Null, Json::String),
@@ -398,6 +434,10 @@ fn io_json(io: &IoMetadata) -> Json {
             Json::object([
                 ("address".into(), Json::String(binding.address.clone())),
                 ("area".into(), Json::String(binding.area.to_string())),
+                (
+                    "got_id".into(),
+                    binding.got_id.clone().map_or(Json::Null, Json::String),
+                ),
                 ("hint".into(), hint),
                 (
                     "offset_bits".into(),
@@ -405,6 +445,10 @@ fn io_json(io: &IoMetadata) -> Json {
                 ),
                 ("source".into(), Json::String(binding.source.into())),
                 ("type".into(), Json::String(binding.ty.clone())),
+                (
+                    "width_bits".into(),
+                    Json::Number(i128::from(binding.width_bits)),
+                ),
                 ("variable".into(), Json::String(binding.variable.clone())),
             ])
         })

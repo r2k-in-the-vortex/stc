@@ -33,6 +33,7 @@ use crate::host_api;
 use crate::loader::LoadedModule;
 use crate::memory::{MemoryLimits, RootRegistry};
 use crate::migration::{self, PlanDecision, validate_plan};
+use crate::module_info::ModuleInfo;
 use crate::store::{
     Deployment, Download, LayoutState, ManifestStore, RuntimeLayout, RuntimeLayoutEntry,
     StoredManifest,
@@ -125,6 +126,7 @@ pub enum CycleOutcome {
 pub struct Candidate {
     module: LoadedModule,
     pair: ValidatedPair,
+    info: Option<ModuleInfo>,
 }
 
 impl Candidate {
@@ -138,7 +140,24 @@ impl Candidate {
     pub fn open(platform: &HostPlatform, module_path: &Path, manifest_path: &Path) -> Result<Self> {
         let manifest_binary = crate::store::read_file_bounded(manifest_path, MAX_MANIFEST_BYTES)?;
         let module = LoadedModule::load(module_path)?;
-        Self::from_loaded(platform, module, manifest_binary)
+        let info = ModuleInfo::read_beside(module_path)?;
+        Self::from_loaded_with_info(platform, module, manifest_binary, info)
+    }
+
+    /// Loads a module and its manifest, using an explicit metadata sidecar.
+    ///
+    /// # Errors
+    ///
+    /// Applies the same validation as [`Self::open`].
+    pub fn open_with_info(
+        platform: &HostPlatform,
+        module_path: &Path,
+        manifest_path: &Path,
+        info: Option<ModuleInfo>,
+    ) -> Result<Self> {
+        let manifest_binary = crate::store::read_file_bounded(manifest_path, MAX_MANIFEST_BYTES)?;
+        let module = LoadedModule::load(module_path)?;
+        Self::from_loaded_with_info(platform, module, manifest_binary, info)
     }
 
     /// Validates an already loaded module against binary manifest bytes.
@@ -151,6 +170,20 @@ impl Candidate {
         platform: &HostPlatform,
         module: LoadedModule,
         manifest_binary: Vec<u8>,
+    ) -> Result<Self> {
+        Self::from_loaded_with_info(platform, module, manifest_binary, None)
+    }
+
+    /// Validates an already loaded module with metadata.
+    ///
+    /// # Errors
+    ///
+    /// Applies the same validation as [`Self::from_loaded`].
+    pub fn from_loaded_with_info(
+        platform: &HostPlatform,
+        module: LoadedModule,
+        manifest_binary: Vec<u8>,
+        info: Option<ModuleInfo>,
     ) -> Result<Self> {
         let pair =
             ValidatedPair::from_bytes(platform, module.descriptor_bytes(), &manifest_binary)?;
@@ -174,7 +207,13 @@ impl Candidate {
                 ),
             ));
         }
-        Ok(Self { module, pair })
+        Ok(Self { module, pair, info })
+    }
+
+    /// Returns the candidate metadata sidecar, when present.
+    #[must_use]
+    pub fn info(&self) -> Option<&ModuleInfo> {
+        self.info.as_ref()
     }
 
     /// Returns the candidate manifest.
@@ -209,6 +248,7 @@ struct Generation {
     got: Got,
     manifest: Manifest,
     manifest_digest: Digest32,
+    info: Option<ModuleInfo>,
     pins: Arc<AtomicUsize>,
     attached: bool,
     shutdown_done: bool,
@@ -222,6 +262,7 @@ impl Generation {
         got: Got,
         manifest: Manifest,
         manifest_digest: Digest32,
+        info: Option<ModuleInfo>,
     ) -> Self {
         Self {
             id,
@@ -229,6 +270,7 @@ impl Generation {
             got,
             manifest,
             manifest_digest,
+            info,
             pins: Arc::new(AtomicUsize::new(0)),
             attached: false,
             shutdown_done: false,
@@ -250,7 +292,7 @@ impl Generation {
         }
         self.shutdown_done = true;
         let _guard = host_api::enter_generation(self.id);
-        let _ = self.module.shutdown(0);
+        let _ = crate::trap_boundary::with_boundary(|| self.module.shutdown(0));
         let _ = host_api::drain_faults(self.id);
     }
 
@@ -260,7 +302,7 @@ impl Generation {
         }
         self.attached = false;
         let _guard = host_api::enter_generation(self.id);
-        self.module.detach(self.id);
+        let _ = crate::trap_boundary::with_boundary(|| self.module.detach(self.id));
         let _ = host_api::drain_faults(self.id);
     }
 }
@@ -468,6 +510,26 @@ impl Host {
         self.active.as_ref().map(|generation| &generation.manifest)
     }
 
+    /// Returns the active generation's module metadata.
+    #[must_use]
+    pub fn active_info(&self) -> Option<&ModuleInfo> {
+        self.active
+            .as_ref()
+            .and_then(|generation| generation.info.as_ref())
+    }
+
+    /// Resolves an exported symbol in the active module.
+    ///
+    /// The address is valid until the active generation is retired and
+    /// unloaded; embedding hosts call it through [`GenerationPin`] when they
+    /// need a stable reference.
+    #[must_use]
+    pub fn export_symbol(&self, name: &str) -> Option<*const std::ffi::c_void> {
+        self.active
+            .as_ref()
+            .and_then(|generation| generation.module.export_address(name))
+    }
+
     /// Returns the active generation's build identity.
     #[must_use]
     pub fn active_build_id(&self) -> Option<GotId> {
@@ -508,6 +570,37 @@ impl Host {
     /// Removes every direct-variable binding.
     pub fn clear_direct_bindings(&mut self) {
         self.direct_bindings.clear();
+    }
+
+    /// Configures the process image and direct bindings from module metadata.
+    ///
+    /// Cold installation uses this before preparing roots. The image contents
+    /// are reset; the module applies input/output defaults in prepare.
+    fn apply_info(&mut self, info: &ModuleInfo) -> Result<()> {
+        crate::stc_rt_io_configure(info.inputs_bytes, info.outputs_bytes, info.markers_bytes);
+        self.direct_bindings = direct_bindings_for(info)?;
+        Ok(())
+    }
+
+    /// Recomputes the active generation's direct cell addresses after the
+    /// process image was restored by a failed cold install.
+    fn restore_direct_bindings(&mut self, fallback: BTreeMap<GotId, usize>) {
+        let Some(info) = self
+            .active
+            .as_ref()
+            .and_then(|generation| generation.info.clone())
+        else {
+            self.direct_bindings = fallback;
+            return;
+        };
+        let Ok(bindings) = direct_bindings_for(&info) else {
+            self.direct_bindings = fallback;
+            return;
+        };
+        self.direct_bindings = bindings;
+        if let Some(active) = self.active.as_mut() {
+            let _ = active.got.bind_direct(&self.direct_bindings);
+        }
     }
 
     /// Returns the committed manifest, when the store has a valid baseline.
@@ -745,6 +838,19 @@ impl Host {
                 reason: "the committed manifest does not match the active generation".into(),
             });
         }
+        if let Some(info) = candidate.info() {
+            let Some(active_info) = active.info.as_ref() else {
+                return Ok(LoadOutcome::ColdRequired {
+                    reason: "the active generation has no process-image metadata".into(),
+                });
+            };
+            if !active_info.layout_eq(info) {
+                return Ok(LoadOutcome::ColdRequired {
+                    reason: "the candidate changes the process-image layout or direct bindings"
+                        .into(),
+                });
+            }
+        }
         let baseline = stored.manifest.clone();
         let decision = validate_plan(candidate.manifest(), Some(&baseline));
         match decision {
@@ -888,20 +994,40 @@ impl Host {
             ));
         }
         let manifest = candidate.manifest().clone();
+        let previous_bindings = self.direct_bindings.clone();
+        let image = candidate.info().map(|_| crate::image_snapshot());
         let generation_id = allocate_generation();
         self.last_candidate = Some(generation_id);
-        let mut roots = RootRegistry::with_limits(self.roots.limits());
-        for root in manifest
-            .roots
-            .iter()
-            .filter(|root| root.root_kind != RootKind::Direct)
-        {
-            roots.allocate(root, generation_id)?;
-        }
-        let fresh = BTreeSet::new();
-        let generation = self.build_generation(candidate, &roots, generation_id, &fresh, 0)?;
-        let stored = StoredManifest::new(generation.manifest.clone())?;
-        self.store.install(stored)?;
+        let prepared = (|| -> Result<(Generation, RootRegistry)> {
+            if let Some(info) = candidate.info() {
+                self.apply_info(info)?;
+            }
+            let mut roots = RootRegistry::with_limits(self.roots.limits());
+            for root in manifest
+                .roots
+                .iter()
+                .filter(|root| root.root_kind != RootKind::Direct)
+            {
+                roots.allocate(root, generation_id)?;
+            }
+            let fresh = BTreeSet::new();
+            let generation = self.build_generation(candidate, &roots, generation_id, &fresh, 0)?;
+            let stored = StoredManifest::new(generation.manifest.clone())?;
+            self.store.install(stored)?;
+            Ok((generation, roots))
+        })();
+        let (generation, roots) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if let Some(image) = image {
+                    crate::restore_image(image);
+                    self.restore_direct_bindings(previous_bindings);
+                } else {
+                    self.direct_bindings = previous_bindings;
+                }
+                return Err(error);
+            }
+        };
 
         // No fallible operation follows; the swap is atomic from here.
         if let Some(pending) = self.pending.take() {
@@ -933,7 +1059,7 @@ impl Host {
         fresh: &BTreeSet<GotId>,
         mode: u32,
     ) -> Result<Generation> {
-        let Candidate { module, pair } = candidate;
+        let Candidate { module, pair, info } = candidate;
         let manifest = pair.manifest;
         let manifest_digest = pair.manifest_digest;
         if manifest
@@ -973,7 +1099,7 @@ impl Host {
             }
 
             let mut generation =
-                Generation::new(generation_id, module, got, manifest, manifest_digest);
+                Generation::new(generation_id, module, got, manifest, manifest_digest, info);
             let mask = if mode == 0 {
                 Vec::new()
             } else {
@@ -986,35 +1112,51 @@ impl Host {
             } else {
                 mask.as_ptr()
             };
-            {
+            let attached = {
                 let _guard = host_api::enter_generation(generation_id);
-                // SAFETY: the host API table is a live static and the GOT
-                // exposes a stable slot array for this generation.
-                let attach = unsafe {
-                    generation.module.attach(
-                        host_api::api_pointer(),
-                        generation.got.slot_table_pointer(),
-                        slot_count,
-                        generation_id,
-                    )
-                };
-                check_attach(attach)?;
-                generation.attached = true;
-                // SAFETY: `mask` is alive across the call and its length is
-                // passed with it; null is used only for an empty mask.
-                let prepare = unsafe {
-                    generation
-                        .module
-                        .prepare(mode, generation_id, mask_pointer, mask_size)
-                };
-                check_prepare(prepare)?;
-                let faults = host_api::drain_faults(generation_id);
-                if !faults.is_empty() {
+                crate::trap_boundary::with_boundary(|| -> Result<()> {
+                    // SAFETY: the host API table is a live static and the GOT
+                    // exposes a stable slot array for this generation.
+                    let attach = unsafe {
+                        generation.module.attach(
+                            host_api::api_pointer(),
+                            generation.got.slot_table_pointer(),
+                            slot_count,
+                            generation_id,
+                        )
+                    };
+                    check_attach(attach)?;
+                    generation.attached = true;
+                    // SAFETY: `mask` is alive across the call and its length
+                    // is passed with it; null is used only for an empty mask.
+                    let prepare = unsafe {
+                        generation
+                            .module
+                            .prepare(mode, generation_id, mask_pointer, mask_size)
+                    };
+                    check_prepare(prepare)?;
+                    Ok(())
+                })
+            };
+            let faults = host_api::drain_faults(generation_id);
+            match attached {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => return Err(error),
+                Err(trap) => {
                     return Err(Error::new(
                         codes::ONLINE_PREPARE,
-                        format!("module reported prepare faults: {}", faults.join("; ")),
+                        format!(
+                            "module trapped during attach or prepare (code {} at span {})",
+                            trap.code, trap.span_id
+                        ),
                     ));
                 }
+            }
+            if !faults.is_empty() {
+                return Err(Error::new(
+                    codes::ONLINE_PREPARE,
+                    format!("module reported prepare faults: {}", faults.join("; ")),
+                ));
             }
             Ok(generation)
         })();
@@ -1067,11 +1209,27 @@ impl Host {
             return Err(prepare_error("no active generation"));
         };
         let generation_id = generation.id;
-        let (code, faults) = {
+        let outcome = {
             let _guard = host_api::enter_generation(generation_id);
-            let code = generation.module.cycle(generation_id);
+            let outcome =
+                crate::trap_boundary::with_boundary(|| generation.module.cycle(generation_id));
             let faults = host_api::drain_faults(generation_id);
-            (code, faults)
+            (outcome, faults)
+        };
+        let (outcome, faults) = outcome;
+        let code = match outcome {
+            Ok(code) => code,
+            Err(trap) => {
+                let reason = format!(
+                    "module trapped during cycle (code {} at span {})",
+                    trap.code, trap.span_id
+                );
+                if self.rollback.is_some() {
+                    let restored = self.rollback_internal(&reason)?;
+                    return Ok(CycleOutcome::RolledBack { restored, reason });
+                }
+                return Err(Error::new(codes::ONLINE_PREPARE, reason));
+            }
         };
         if code != 0 || !faults.is_empty() {
             let reason = if faults.is_empty() {
@@ -1249,6 +1407,25 @@ impl Drop for Host {
     fn drop(&mut self) {
         let _ = self.shutdown();
     }
+}
+
+fn direct_bindings_for(info: &ModuleInfo) -> Result<BTreeMap<GotId, usize>> {
+    let mut bindings = BTreeMap::new();
+    for binding in &info.bindings {
+        let offset = binding.offset_bits / 8;
+        let bytes = binding.width_bits.div_ceil(8).max(1);
+        let Some(address) = crate::image_area_address(binding.area, offset, bytes) else {
+            return Err(Error::new(
+                codes::ONLINE_BINDING,
+                format!(
+                    "direct binding {} lies outside the configured process image",
+                    binding.got_id
+                ),
+            ));
+        };
+        bindings.insert(binding.got_id, address);
+    }
+    Ok(bindings)
 }
 
 fn slot_for(manifest: &Manifest, got_id: GotId) -> Option<u32> {

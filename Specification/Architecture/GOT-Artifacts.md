@@ -601,10 +601,11 @@ The table is host-owned and read-only to the module. The module receives it in
 `struct_size` grows accordingly. The host and module use the same target C ABI, so field offsets
 are identical; `struct_size` protects against a module built against a newer minor version.
 
-An import slot's host cell holds the address of the corresponding table entry. The host binds
-import cells when it builds the generation's slot table; the module reads them like function
-cells. The module may also use its cached host API pointer for a service that has no import
-slot, but M4.5-generated code uses import slots for every service it calls.
+An import slot's host cell holds the service entry point itself (the function address from the
+corresponding table field). The host binds import cells when it builds the generation's slot
+table; the module loads the cell value and calls it exactly like a function cell. The module may
+also use its cached host API pointer for a service that has no import slot, but M4.5-generated
+code uses import slots for every service it calls.
 
 ### 8.2 Services
 
@@ -1320,8 +1321,29 @@ at an explicit cycle boundary, commits after one successful cycle, rolls back a 
 unload behind generation pins. Generation pins and IDs, the active-manifest store, and the
 download artifact are covered by runtime tests; a real native no-op module exercises load,
 attach, prepare, cycle, commit, rollback, and unload on Windows and Linux. The non-local
-trap-boundary rollback and the C-facing launcher/embedding exports remain with phase 7 execution
-conversion. D-123 records the phase choices.
+trap-boundary rollback and the C-facing launcher/embedding exports landed with the phase 7
+execution conversion. D-123 records the phase choices.
+
+Phase 7 is implemented (2026-10-25) across `stc-codegen`, `stc-runtime`, and `stc-driver`.
+Generated IR is a complete ABI 2 module: data roots, per-instance program fields, direct `AT`
+variables, retained leaves, and task guards are accessed through GOT cells; a data or direct cell
+is read with the two loads of §7.3 (table entry to cell address, then cell value); program bodies
+receive a per-instance `[N x ptr]` field-storage array; user calls are indirect through function
+cells; host services are called through import cells whose values are the service entry points;
+and the module exports the seven entry points, descriptor, function table, metadata, retain
+helpers, and export wrappers. The host reads `<name>.stc-meta.json` for process-image sizes and
+direct-binding `GotId`s, configures the image on cold install, and binds `Direct` cells before
+prepare; an online candidate with a different image layout or binding set selects the cold path
+until phase 8's remap policy. The driver emits `module`, `exe` (thin launcher), and `lib`
+(embedding host archive) artifacts, and `exe`/`lib` may be combined; `--got-manifest`, `--cold`,
+`--rename`, and `--allow-untracked-removal` feed the identity engine. The runtime installs a
+non-local trap boundary around every module entry-point call (`__intrinsic_setjmpex` on Windows,
+`_setjmp` on POSIX; generated functions are `uwtable`; a small assembly shim owns the second
+`setjmp` return because Rust cannot mark the external call `returns_twice`), so a rollback-window
+trap restores the previous generation and a trap outside the window exits 70. Existing execution tests, including
+C harnesses, traps, the process image, exports, bindings, and retained leaves, run through
+compiler-produced module pairs on Windows; a Rust host test covers cold install, online prepare,
+activation, commit, and preserved roots. D-124 records the phase choices.
 
 ## 13. Related documents
 

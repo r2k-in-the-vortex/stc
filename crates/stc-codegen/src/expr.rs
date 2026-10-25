@@ -3,23 +3,39 @@
 //! Expressions are evaluated with an explicit work stack so a 20k-term
 //! left-associative binary chain never recurses (D-073, handover §6.18).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use stc_hir::{
     BinOp, CalleeHir, ConstValue, DefId, DefKind, DirectAddress, DirectArea, ExprId, ExprKindHir,
-    FieldId, HirCrate, LocalId, ParamId, PlaceHir, TyId, UnOp,
+    FieldId, HirCrate, LocalId, ParamId, PlaceHir, Symbol, TyId, UnOp,
 };
 use stc_span::Span;
 
 use crate::CodegenError;
-use crate::abi::{self, trap};
+use crate::abi::trap;
 use crate::codes;
 use crate::ir::{Function, IrType, Module, SymbolAttrs, Value};
 use crate::layout::{self, ScalarKind};
+use crate::module::{FunctionTarget, RootTarget};
 use crate::unit::Lowerer;
 
 /// Result alias for lowering.
 pub(crate) type Res<T> = Result<T, CodegenError>;
+
+/// Per-instance field storage resolved to host-cell pointers.
+///
+/// Program bodies do not know which configured instance they run for, so the
+/// cycle resolver passes an array of storage pointers indexed by declaration
+/// ordinal. Direct (`AT`) field pointers address the process image directly.
+#[derive(Clone, Debug)]
+pub(crate) struct FieldAccess {
+    /// Pointer to an `[N x ptr]` array of field storage pointers.
+    pub pointer: Value,
+    /// Field declaration to array ordinal.
+    pub ordinals: BTreeMap<FieldId, u32>,
+    /// Fields that are direct `AT` variables.
+    pub direct: BTreeSet<FieldId>,
+}
 
 /// Per-function lowering context.
 #[derive(Clone, Debug)]
@@ -32,8 +48,10 @@ pub(crate) struct BodyInfo {
     pub result_ptr: Option<Value>,
     /// Result storage type.
     pub result_ty: Option<IrType>,
-    /// `%this` pointer (program bodies).
-    pub this_ptr: Option<Value>,
+    /// Slot-table pointer for GOT access.
+    pub slots: Value,
+    /// Program-instance field access, when the body runs for an instance.
+    pub fields: Option<FieldAccess>,
     /// Return/exit block label.
     pub return_label: String,
 }
@@ -356,6 +374,76 @@ impl Lowerer<'_> {
 
     // ---- places -----------------------------------------------------------
 
+    pub(crate) fn slot_storage(f: &mut Function, info: &BodyInfo, slot: u32) -> Value {
+        f.slot_value(&info.slots, slot)
+    }
+
+    pub(crate) fn root_slot(&self, target: &RootTarget) -> Res<u32> {
+        self.got
+            .root_slot(target)
+            .ok_or_else(|| CodegenError::internal(format!("no GOT slot for root {target:?}")))
+    }
+
+    pub(crate) fn function_slot(&self, target: FunctionTarget) -> Res<u32> {
+        self.got
+            .function_slot(target)
+            .ok_or_else(|| CodegenError::internal(format!("no GOT slot for function {target:?}")))
+    }
+
+    pub(crate) fn import_slot(&self, service: stc_got::catalog::ImportService) -> Res<u32> {
+        self.got.import_slot(service).ok_or_else(|| {
+            CodegenError::internal(format!("no GOT import slot for service {service:?}"))
+        })
+    }
+
+    pub(crate) fn global_pointer(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        def: DefId,
+    ) -> Res<Value> {
+        let slot = self.root_slot(&RootTarget::Global(def))?;
+        Ok(Self::slot_storage(f, info, slot))
+    }
+
+    pub(crate) fn instance_field_pointer(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        instance: Symbol,
+        field: FieldId,
+    ) -> Res<Value> {
+        let slot = self.root_slot(&RootTarget::InstanceField { instance, field })?;
+        Ok(Self::slot_storage(f, info, slot))
+    }
+
+    fn field_array_pointer(
+        f: &mut Function,
+        fields: &FieldAccess,
+        field: FieldId,
+        span: Span,
+    ) -> Res<Value> {
+        let Some(index) = fields.ordinals.get(&field).copied() else {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "a direct-variable field has no ordinary storage".into(),
+                span,
+            ));
+        };
+        let entry = f.gep(
+            &format!("[{} x ptr]", fields.ordinals.len()),
+            &fields.pointer,
+            &["i64 0".into(), format!("i64 {index}")],
+            true,
+        );
+        Ok(f.load(IrType::Ptr, &entry, Some(8)))
+    }
+
+    fn direct_bit(address: &DirectAddress, kind: ScalarKind) -> Res<Option<u8>> {
+        let span = layout::image_span(address, kind)?;
+        Ok((kind == ScalarKind::Bool).then(|| u8::try_from(span.start_bit % 8).unwrap_or(0)))
+    }
+
     pub(crate) fn read_place(
         &mut self,
         f: &mut Function,
@@ -371,31 +459,58 @@ impl Lowerer<'_> {
         let kind = self.scalar_at(expr.ty, expr.span)?;
         match place {
             PlaceHir::BitField { base, bit } => self.read_bitfield(f, info, base, bit, expr.span),
-            PlaceHir::Direct(address) => self.read_direct(f, &address, kind, expr.span),
+            PlaceHir::Direct(address) => {
+                let pointer = self.image_service_pointer(f, info, &address, kind)?;
+                let bit = Self::direct_bit(&address, kind)?;
+                self.read_direct_pointer(f, &pointer, kind, bit)
+            }
             PlaceHir::Global(def) => {
+                let pointer = self.global_pointer(f, info, def)?;
                 if let Some(address) = self.global_address(def) {
-                    self.read_direct(f, &address, kind, expr.span)
+                    let bit = Self::direct_bit(&address, kind)?;
+                    self.read_direct_pointer(f, &pointer, kind, bit)
                 } else {
-                    let pointer = self.place_ptr(f, info, id)?;
                     Self::read_scalar(f, &pointer, kind)
                 }
             }
             PlaceHir::Field { field, .. } => {
-                if let Some(address) = self.field_address(field) {
-                    self.read_direct(f, &address, kind, expr.span)
-                } else {
-                    let pointer = self.place_ptr(f, info, id)?;
-                    Self::read_scalar(f, &pointer, kind)
-                }
-            }
-            PlaceHir::InstanceField { fields, .. } => {
-                if let Some(field) = fields.last()
-                    && let Some(address) = self.field_address(*field)
+                if let Some(fields) = &info.fields
+                    && fields.ordinals.contains_key(&field)
                 {
-                    return self.read_direct(f, &address, kind, expr.span);
+                    let pointer = Self::field_array_pointer(f, fields, field, expr.span)?;
+                    if fields.direct.contains(&field) {
+                        let address = self
+                            .field_address(field)
+                            .ok_or_else(|| CodegenError::internal("direct field has no address"))?;
+                        let bit = Self::direct_bit(&address, kind)?;
+                        return self.read_direct_pointer(f, &pointer, kind, bit);
+                    }
+                    return Self::read_scalar(f, &pointer, kind);
+                }
+                if self.field_address(field).is_some() {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "a direct-variable field has no ordinary storage".into(),
+                        expr.span,
+                    ));
                 }
                 let pointer = self.place_ptr(f, info, id)?;
                 Self::read_scalar(f, &pointer, kind)
+            }
+            PlaceHir::InstanceField {
+                instance, fields, ..
+            } => {
+                let field = fields
+                    .last()
+                    .copied()
+                    .ok_or_else(|| CodegenError::internal("an instance field path is empty"))?;
+                let pointer = self.instance_field_pointer(f, info, instance, field)?;
+                if let Some(address) = self.field_address(field) {
+                    let bit = Self::direct_bit(&address, kind)?;
+                    self.read_direct_pointer(f, &pointer, kind, bit)
+                } else {
+                    Self::read_scalar(f, &pointer, kind)
+                }
             }
             _ => {
                 let pointer = self.place_ptr(f, info, id)?;
@@ -422,34 +537,66 @@ impl Lowerer<'_> {
             PlaceHir::BitField { base, bit } => {
                 self.write_bitfield(f, info, base, bit, value, expr.span)
             }
-            PlaceHir::Direct(address) => self.write_direct(f, &address, kind, value, expr.span),
+            PlaceHir::Direct(address) => {
+                Self::reject_input_write(&address, expr.span)?;
+                let pointer = self.image_service_pointer(f, info, &address, kind)?;
+                let bit = Self::direct_bit(&address, kind)?;
+                self.write_direct_pointer(f, &pointer, kind, value, bit)
+            }
             PlaceHir::Global(def) => {
+                let pointer = self.global_pointer(f, info, def)?;
                 if let Some(address) = self.global_address(def) {
-                    self.write_direct(f, &address, kind, value, expr.span)
+                    Self::reject_input_write(&address, expr.span)?;
+                    let bit = Self::direct_bit(&address, kind)?;
+                    self.write_direct_pointer(f, &pointer, kind, value, bit)
                 } else {
-                    let pointer = self.place_ptr(f, info, id)?;
                     Self::write_scalar(f, &pointer, kind, &value);
                     Ok(())
                 }
             }
             PlaceHir::Field { field, .. } => {
-                if let Some(address) = self.field_address(field) {
-                    self.write_direct(f, &address, kind, value, expr.span)
-                } else {
-                    let pointer = self.place_ptr(f, info, id)?;
-                    Self::write_scalar(f, &pointer, kind, &value);
-                    Ok(())
-                }
-            }
-            PlaceHir::InstanceField { fields, .. } => {
-                if let Some(field) = fields.last()
-                    && let Some(address) = self.field_address(*field)
+                if let Some(fields) = &info.fields
+                    && fields.ordinals.contains_key(&field)
                 {
-                    return self.write_direct(f, &address, kind, value, expr.span);
+                    let pointer = Self::field_array_pointer(f, fields, field, expr.span)?;
+                    if fields.direct.contains(&field) {
+                        let address = self
+                            .field_address(field)
+                            .ok_or_else(|| CodegenError::internal("direct field has no address"))?;
+                        Self::reject_input_write(&address, expr.span)?;
+                        let bit = Self::direct_bit(&address, kind)?;
+                        return self.write_direct_pointer(f, &pointer, kind, value, bit);
+                    }
+                    Self::write_scalar(f, &pointer, kind, &value);
+                    return Ok(());
+                }
+                if self.field_address(field).is_some() {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "a direct-variable field has no ordinary storage".into(),
+                        expr.span,
+                    ));
                 }
                 let pointer = self.place_ptr(f, info, id)?;
                 Self::write_scalar(f, &pointer, kind, &value);
                 Ok(())
+            }
+            PlaceHir::InstanceField {
+                instance, fields, ..
+            } => {
+                let field = fields
+                    .last()
+                    .copied()
+                    .ok_or_else(|| CodegenError::internal("an instance field path is empty"))?;
+                let pointer = self.instance_field_pointer(f, info, instance, field)?;
+                if let Some(address) = self.field_address(field) {
+                    Self::reject_input_write(&address, expr.span)?;
+                    let bit = Self::direct_bit(&address, kind)?;
+                    self.write_direct_pointer(f, &pointer, kind, value, bit)
+                } else {
+                    Self::write_scalar(f, &pointer, kind, &value);
+                    Ok(())
+                }
             }
             _ => {
                 let pointer = self.place_ptr(f, info, id)?;
@@ -485,12 +632,7 @@ impl Lowerer<'_> {
                         expr.span,
                     ))
                 } else {
-                    let name = self
-                        .global_symbols
-                        .get(&def)
-                        .cloned()
-                        .ok_or_else(|| CodegenError::internal("unknown global symbol"))?;
-                    Ok(Value::symbol(&name))
+                    self.global_pointer(f, info, def)
                 }
             }
             PlaceHir::Result(_) => info.result_ptr.clone().ok_or_else(|| {
@@ -500,14 +642,24 @@ impl Lowerer<'_> {
                     expr.span,
                 )
             }),
-            PlaceHir::This(_) => info.this_ptr.clone().ok_or_else(|| {
-                CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    "`THIS` is only available in program bodies".into(),
-                    expr.span,
-                )
-            }),
+            PlaceHir::This(_) => Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "`THIS` has no whole-program value in M4".into(),
+                expr.span,
+            )),
             PlaceHir::Field { base, field } => {
+                if let Some(fields) = &info.fields
+                    && fields.ordinals.contains_key(&field)
+                {
+                    if fields.direct.contains(&field) {
+                        return Err(CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "a direct-variable field has no ordinary storage".into(),
+                            expr.span,
+                        ));
+                    }
+                    return Self::field_array_pointer(f, fields, field, expr.span);
+                }
                 if self.field_address(field).is_some() {
                     return Err(CodegenError::unsupported(
                         codes::CODEGEN_UNSUPPORTED,
@@ -521,23 +673,18 @@ impl Lowerer<'_> {
             PlaceHir::InstanceField {
                 instance, fields, ..
             } => {
-                let mut pointer = Value::symbol(
-                    self.instance_globals
-                        .get(&instance)
-                        .ok_or_else(|| CodegenError::internal("unknown instance global"))?
-                        .as_str(),
-                );
-                for field in fields {
-                    if self.field_address(field).is_some() {
-                        return Err(CodegenError::unsupported(
-                            codes::CODEGEN_UNSUPPORTED,
-                            "a direct-variable field has no ordinary storage".into(),
-                            expr.span,
-                        ));
-                    }
-                    pointer = self.field_ptr(f, &pointer, field, expr.span)?;
+                let field = fields
+                    .last()
+                    .copied()
+                    .ok_or_else(|| CodegenError::internal("an instance field path is empty"))?;
+                if self.field_address(field).is_some() {
+                    return Err(CodegenError::unsupported(
+                        codes::CODEGEN_UNSUPPORTED,
+                        "a direct-variable field has no ordinary storage".into(),
+                        expr.span,
+                    ));
                 }
-                Ok(pointer)
+                self.instance_field_pointer(f, info, instance, field)
             }
             PlaceHir::Index { .. } => Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
@@ -663,90 +810,111 @@ impl Lowerer<'_> {
         self.hir.field(field).at.clone()
     }
 
-    /// Resolves an `AT` address to `(byte pointer, optional bit index)`.
-    fn image_pointer(
-        &mut self,
-        f: &mut Function,
-        address: &DirectAddress,
-        kind: ScalarKind,
-    ) -> Res<(Value, Option<u8>)> {
-        let span = layout::image_span(address, kind)?;
-        let base = f.load(IrType::Ptr, &Value::symbol(abi::symbols::IO_BASE), None);
-        let offset = self.image.area_base(span.area) + span.start_bit / 8;
-        let byte_pointer = f.gep_bytes(&base, i64::try_from(offset).unwrap_or(i64::MAX));
-        let bit = (kind == ScalarKind::Bool).then(|| u8::try_from(span.start_bit % 8).unwrap_or(0));
-        Ok((byte_pointer, bit))
+    fn area_service(area: DirectArea) -> i128 {
+        match area {
+            DirectArea::Input => 1,
+            DirectArea::Output => 2,
+            DirectArea::Memory => 3,
+        }
     }
 
-    fn read_direct(
+    /// Resolves an ad-hoc `%I`/`%Q`/`%M` expression through the `io_image`
+    /// host service and returns the byte pointer.
+    fn image_service_pointer(
         &mut self,
         f: &mut Function,
+        info: &BodyInfo,
         address: &DirectAddress,
         kind: ScalarKind,
-        span: Span,
     ) -> Res<Value> {
-        let (pointer, bit) = self.image_pointer(f, address, kind)?;
+        let span = layout::image_span(address, kind)?;
+        let Some(area) = address.area else {
+            return Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                "a wildcard `AT` address is not supported in M4".into(),
+                address.span,
+            ));
+        };
+        let slot = self.import_slot(stc_got::catalog::ImportService::IoImage)?;
+        let service = Self::slot_storage(f, info, slot);
+        let base = f
+            .call_ptr(
+                IrType::Ptr,
+                &service,
+                &[Value::int(32, Self::area_service(area))],
+            )
+            .ok_or_else(|| CodegenError::internal("io_image service returned void"))?;
+        let offset = i64::try_from(span.start_bit / 8).unwrap_or(i64::MAX);
+        Ok(f.gep_bytes(&base, offset))
+    }
+
+    fn read_direct_pointer(
+        &mut self,
+        f: &mut Function,
+        pointer: &Value,
+        kind: ScalarKind,
+        bit: Option<u8>,
+    ) -> Res<Value> {
         if let Some(bit) = bit {
-            let raw = f.load(IrType::Int(8), &pointer, Some(1));
+            let raw = f.load(IrType::Int(8), pointer, Some(1));
             let mask = Value::int(8, 1 << bit);
             let masked = f.binop("and", &raw, &mask);
             return Ok(f.icmp("ne", &masked, &Value::int(8, 0)));
         }
-        let _ = span;
-        Ok(f.load(kind.storage(), &pointer, Some(1)))
+        Ok(f.load(kind.storage(), pointer, Some(1)))
     }
 
-    pub(crate) fn write_direct_initial(
+    fn write_direct_pointer(
         &mut self,
         f: &mut Function,
-        address: &DirectAddress,
+        pointer: &Value,
         kind: ScalarKind,
         value: Value,
-        span: Span,
+        bit: Option<u8>,
     ) -> Res<()> {
-        self.write_direct_inner(f, address, kind, value, span, true)
+        if let Some(bit) = bit {
+            let raw = f.load(IrType::Int(8), pointer, Some(1));
+            let mask = Value::int(8, 1 << bit);
+            let clear_mask = Value::int(8, !(1_i128 << bit));
+            let cleared = f.binop("and", &raw, &clear_mask);
+            let set = f.select(&value, &mask, &Value::int(8, 0));
+            let combined = f.binop("or", &cleared, &set);
+            f.store(&combined, pointer, Some(1));
+        } else {
+            let stored = if kind == ScalarKind::Bool {
+                cast_raw(f, "zext", &value, IrType::Int(8))
+            } else {
+                value
+            };
+            f.store(&stored, pointer, Some(1));
+        }
+        Ok(())
     }
 
-    fn write_direct(
-        &mut self,
-        f: &mut Function,
-        address: &DirectAddress,
-        kind: ScalarKind,
-        value: Value,
-        span: Span,
-    ) -> Res<()> {
-        self.write_direct_inner(f, address, kind, value, span, false)
-    }
-
-    fn write_direct_inner(
-        &mut self,
-        f: &mut Function,
-        address: &DirectAddress,
-        kind: ScalarKind,
-        value: Value,
-        span: Span,
-        allow_input: bool,
-    ) -> Res<()> {
-        if address.area == Some(DirectArea::Input) && !allow_input {
+    fn reject_input_write(address: &DirectAddress, span: Span) -> Res<()> {
+        if address.area == Some(DirectArea::Input) {
             return Err(CodegenError::unsupported(
                 codes::CODEGEN_UNSUPPORTED,
                 "writing an `%I` input is not allowed".into(),
                 span,
             ));
         }
-        let (pointer, bit) = self.image_pointer(f, address, kind)?;
-        if let Some(bit) = bit {
-            let raw = f.load(IrType::Int(8), &pointer, Some(1));
-            let mask = Value::int(8, 1 << bit);
-            let clear_mask = Value::int(8, !(1_i128 << bit));
-            let cleared = f.binop("and", &raw, &clear_mask);
-            let set = f.select(&value, &mask, &Value::int(8, 0));
-            let combined = f.binop("or", &cleared, &set);
-            f.store(&combined, &pointer, Some(1));
-        } else {
-            f.store(&value, &pointer, Some(1));
-        }
         Ok(())
+    }
+
+    /// Writes a declared `AT` root's initial value during cold preparation.
+    pub(crate) fn write_direct_initial(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        slot: u32,
+        address: &DirectAddress,
+        kind: ScalarKind,
+        value: Value,
+    ) -> Res<()> {
+        let pointer = Self::slot_storage(f, info, slot);
+        let bit = Self::direct_bit(address, kind)?;
+        self.write_direct_pointer(f, &pointer, kind, value, bit)
     }
 
     // ---- calls ------------------------------------------------------------
@@ -797,11 +965,8 @@ impl Lowerer<'_> {
                 };
                 let params = params.clone();
                 let result = *result;
-                let symbol = self
-                    .function_symbols
-                    .get(def)
-                    .cloned()
-                    .ok_or_else(|| CodegenError::internal("unknown function symbol"))?;
+                let slot = self.function_slot(FunctionTarget::Function(*def))?;
+                let callee = Self::slot_storage(f, info, slot);
                 let mut call_args = Vec::new();
                 for param in &params {
                     let data = self.hir.param(*param).clone();
@@ -822,13 +987,16 @@ impl Lowerer<'_> {
                     Some(ty) => self.scalar_at(ty, span)?.storage(),
                     None => IrType::Void,
                 };
-                let value = f.call(ret_storage, &symbol, &call_args).ok_or_else(|| {
-                    CodegenError::unsupported(
-                        codes::CODEGEN_UNSUPPORTED,
-                        "a function without a result cannot be used as an expression".into(),
-                        span,
-                    )
-                })?;
+                call_args.push(info.slots.clone());
+                let value = f
+                    .call_ptr(ret_storage, &callee, &call_args)
+                    .ok_or_else(|| {
+                        CodegenError::unsupported(
+                            codes::CODEGEN_UNSUPPORTED,
+                            "a function without a result cannot be used as an expression".into(),
+                            span,
+                        )
+                    })?;
                 let kind = self.scalar_at(result_ty, span)?;
                 Ok(storage_to_value(f, &value, kind))
             }
@@ -867,11 +1035,8 @@ impl Lowerer<'_> {
                     return Err(CodegenError::internal("callee is not a function"));
                 };
                 let params = params.clone();
-                let symbol = self
-                    .function_symbols
-                    .get(def)
-                    .cloned()
-                    .ok_or_else(|| CodegenError::internal("unknown function symbol"))?;
+                let slot = self.function_slot(FunctionTarget::Function(*def))?;
+                let callee = Self::slot_storage(f, info, slot);
                 let mut by_formal: BTreeMap<ParamId, Value> = BTreeMap::new();
                 for arg in &args {
                     let Some(value) = arg.value else {
@@ -895,7 +1060,8 @@ impl Lowerer<'_> {
                     let kind = self.scalar_at(data.ty, data.span)?;
                     call_args.push(to_storage(f, &value, kind));
                 }
-                f.call(IrType::Void, &symbol, &call_args);
+                call_args.push(info.slots.clone());
+                f.call_ptr(IrType::Void, &callee, &call_args);
                 Ok(())
             }
             CalleeHir::Conversion { .. } => {
@@ -927,7 +1093,6 @@ impl Lowerer<'_> {
         rhs_value: Value,
         span: Span,
     ) -> Res<Value> {
-        let _ = info;
         let lhs_kind = self.scalar_at(self.hir.expr(lhs).ty, span)?;
         let rhs_kind = self.scalar_at(self.hir.expr(rhs).ty, span)?;
         if op.is_comparison() {
@@ -940,19 +1105,16 @@ impl Lowerer<'_> {
                         f, op, lhs_kind, rhs_kind, &lhs_value, &rhs_value, span,
                     );
                 }
-                self.lower_arithmetic(f, op, lhs_kind, &lhs_value, &rhs_value, span)
+                self.lower_arithmetic(f, info, op, lhs_kind, &lhs_value, &rhs_value, span)
             }
             BinOp::And => self.bit_op(f, "and", lhs_kind, &lhs_value, &rhs_value, span),
             BinOp::Or => self.bit_op(f, "or", lhs_kind, &lhs_value, &rhs_value, span),
             BinOp::Xor => self.bit_op(f, "xor", lhs_kind, &lhs_value, &rhs_value, span),
-            _ => {
-                let _ = info;
-                Err(CodegenError::unsupported(
-                    codes::CODEGEN_UNSUPPORTED,
-                    format!("operator `{}` is not supported in M4", op.as_str()),
-                    span,
-                ))
-            }
+            _ => Err(CodegenError::unsupported(
+                codes::CODEGEN_UNSUPPORTED,
+                format!("operator `{}` is not supported in M4", op.as_str()),
+                span,
+            )),
         }
     }
 
@@ -1025,9 +1187,11 @@ impl Lowerer<'_> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_arithmetic(
         &mut self,
         f: &mut Function,
+        info: &BodyInfo,
         op: BinOp,
         kind: ScalarKind,
         lhs: &Value,
@@ -1079,7 +1243,7 @@ impl Lowerer<'_> {
                     f.call(
                         IrType::Int(width),
                         &name,
-                        &[lhs.clone(), rhs.clone(), span_value],
+                        &[lhs.clone(), rhs.clone(), span_value, info.slots.clone()],
                     )
                     .ok_or_else(|| CodegenError::internal("pow helper returned void"))
                 }
@@ -1193,7 +1357,7 @@ impl Lowerer<'_> {
             .ok_or_else(|| CodegenError::internal("overflow intrinsic returned void"))?;
         let value = f.extract_value(&aggregate, 0, ty);
         let overflow = f.extract_value(&aggregate, 1, IrType::Int(1));
-        self.trap_if(f, &overflow, trap::OVERFLOW, span);
+        self.trap_if(f, &overflow, trap::OVERFLOW, span)?;
         Ok(value)
     }
 
@@ -1210,13 +1374,13 @@ impl Lowerer<'_> {
     ) -> Res<Value> {
         let ty = IrType::Int(bits);
         let zero = f.icmp("eq", rhs, &Value::int(bits, 0));
-        self.trap_if(f, &zero, trap::DIV_ZERO, span);
+        self.trap_if(f, &zero, trap::DIV_ZERO, span)?;
         if signed {
             let minimum = Value::int(bits, -(1_i128 << (bits - 1)));
             let is_min = f.icmp("eq", lhs, &minimum);
             let is_neg_one = f.icmp("eq", rhs, &Value::int(bits, -1));
             let overflow = f.binop("and", &is_min, &is_neg_one);
-            self.trap_if(f, &overflow, trap::OVERFLOW, span);
+            self.trap_if(f, &overflow, trap::OVERFLOW, span)?;
         }
         let op = match (remainder, signed) {
             (false, true) => "sdiv",
@@ -1229,15 +1393,27 @@ impl Lowerer<'_> {
         Ok(value)
     }
 
-    pub(crate) fn trap_if(&mut self, f: &mut Function, cond: &Value, code: i32, span: Span) {
+    pub(crate) fn trap_if(
+        &mut self,
+        f: &mut Function,
+        cond: &Value,
+        code: i32,
+        span: Span,
+    ) -> Res<()> {
+        let slots = self
+            .current_slots
+            .clone()
+            .ok_or_else(|| CodegenError::internal("trap emitted outside a GOT-aware function"))?;
+        let slot = self.import_slot(stc_got::catalog::ImportService::Trap)?;
         let cont = f.next_block_label();
         let trap_block = f.next_block_label();
         f.cond_branch(cond, &trap_block, &cont);
         f.start_block(&trap_block);
         let span_id = self.span_id(span);
-        f.call(
+        let trap_fn = f.slot_value(&slots, slot);
+        f.call_ptr(
             IrType::Void,
-            abi::symbols::TRAP,
+            &trap_fn,
             &[
                 Value::int(32, i128::from(code)),
                 Value::int(32, i128::from(span_id)),
@@ -1245,6 +1421,7 @@ impl Lowerer<'_> {
         );
         f.unreachable();
         f.start_block(&cont);
+        Ok(())
     }
 
     fn lower_unary(
@@ -1370,7 +1547,7 @@ impl Lowerer<'_> {
         if from_width > to_width {
             let fits = range_check(f, value, from, to_width, to_signed);
             let outside = f.binop("xor", &fits, &Value::bool(true));
-            self.trap_if(f, &outside, trap::RANGE, span);
+            self.trap_if(f, &outside, trap::RANGE, span)?;
             return Ok(cast_raw(f, "trunc", value, IrType::Int(to_width)));
         }
         Ok(value.clone())
@@ -1386,10 +1563,10 @@ impl Lowerer<'_> {
     ) -> Res<Value> {
         let ordered = f.fcmp("ord", value, value);
         let unordered = f.binop("xor", &ordered, &Value::bool(true));
-        self.trap_if(f, &unordered, trap::CONVERSION, span);
+        self.trap_if(f, &unordered, trap::CONVERSION, span)?;
         let fits = float_range_check(f, value, to_width, to_signed);
         let outside = f.binop("xor", &fits, &Value::bool(true));
-        self.trap_if(f, &outside, trap::RANGE, span);
+        self.trap_if(f, &outside, trap::RANGE, span)?;
         let op = if to_signed { "fptosi" } else { "fptoui" };
         Ok(cast_raw(f, op, value, IrType::Int(to_width)))
     }
@@ -1433,6 +1610,7 @@ impl Lowerer<'_> {
                 (ty, "%a0".into()),
                 (ty, "%a1".into()),
                 (IrType::Int(32), "%a2".into()),
+                (IrType::Ptr, "%slots".into()),
             ],
         );
         helper.start_fresh_block();
@@ -1442,6 +1620,8 @@ impl Lowerer<'_> {
         let base = helper.param_value(0);
         let exponent = helper.param_value(1);
         let span_value = helper.param_value(2);
+        let slots_value = helper.param_value(3);
+        let trap_slot = self.import_slot(stc_got::catalog::ImportService::Trap)?;
         helper.store(&base, &base_ptr, None);
         helper.store(&exponent, &exponent_ptr, None);
         helper.store(&Value::int(bits, 1), &result_ptr, None);
@@ -1451,9 +1631,10 @@ impl Lowerer<'_> {
             let negative = helper.icmp("slt", &exponent_value, &Value::int(bits, 0));
             emit_trap_block(
                 &mut helper,
-                &mut self.module,
                 &negative,
                 &span_value,
+                &slots_value,
+                trap_slot,
                 trap::RANGE,
             );
         }
@@ -1490,6 +1671,8 @@ impl Lowerer<'_> {
             &result,
             &base_value,
             &span_value,
+            &slots_value,
+            trap_slot,
         );
         helper.store(&product, &result_ptr, None);
         helper.branch(&after_multiply);
@@ -1516,6 +1699,8 @@ impl Lowerer<'_> {
             &base_value,
             &base_value,
             &span_value,
+            &slots_value,
+            trap_slot,
         );
         helper.store(&squared, &base_ptr, None);
         helper.branch(&loop_label);
@@ -1531,25 +1716,27 @@ impl Lowerer<'_> {
 
 fn emit_trap_block(
     f: &mut Function,
-    module: &mut Module,
     condition: &Value,
     span_value: &Value,
+    slots: &Value,
+    trap_slot: u32,
     code: i32,
 ) {
     let continuation = f.next_block_label();
     let trap_block = f.next_block_label();
     f.cond_branch(condition, &trap_block, &continuation);
     f.start_block(&trap_block);
-    module.declare(abi::symbols::TRAP, "void @stc_rt_trap(i32, i32)");
-    f.call(
+    let trap_fn = f.slot_value(slots, trap_slot);
+    f.call_ptr(
         IrType::Void,
-        abi::symbols::TRAP,
+        &trap_fn,
         &[Value::int(32, i128::from(code)), span_value.clone()],
     );
     f.unreachable();
     f.start_block(&continuation);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn checked_mul_in_helper(
     f: &mut Function,
     module: &mut Module,
@@ -1558,6 +1745,8 @@ fn checked_mul_in_helper(
     lhs: &Value,
     rhs: &Value,
     span_value: &Value,
+    slots: &Value,
+    trap_slot: u32,
 ) -> Value {
     let ty = IrType::Int(bits);
     let name = format!(
@@ -1580,7 +1769,7 @@ fn checked_mul_in_helper(
         .expect("overflow intrinsic returns a value");
     let value = f.extract_value(&aggregate, 0, ty);
     let overflow = f.extract_value(&aggregate, 1, IrType::Int(1));
-    emit_trap_block(f, module, &overflow, span_value, trap::OVERFLOW);
+    emit_trap_block(f, &overflow, span_value, slots, trap_slot, trap::OVERFLOW);
     value
 }
 

@@ -516,8 +516,16 @@ impl Function {
 
     /// Emits an `alloca`.
     pub fn alloca(&mut self, ty: IrType) -> Value {
+        self.alloca_typed(&ty.render())
+    }
+
+    /// Emits an `alloca` of an explicitly rendered type.
+    ///
+    /// This covers array and struct types the [`IrType`] model does not name
+    /// directly, such as the per-instance field-pointer arrays.
+    pub fn alloca_typed(&mut self, ty: &str) -> Value {
         let pointer = self.temp(IrType::Ptr);
-        self.emit_value(&pointer, format!("alloca {}", ty.render()));
+        self.emit_value(&pointer, format!("alloca {ty}"));
         pointer
     }
 
@@ -717,13 +725,15 @@ impl Function {
         }
     }
 
-    /// Emits a slot-table entry address: `getelementptr ptr, ptr %slots, i64 slot`.
+    /// Emits a slot-table cell address.
     ///
     /// `slots` is the host-provided array of cell pointers (`void* const*`).
-    /// The result is the address of the host cell, not the cell value.
+    /// The table entry at `slot` holds the address of the host cell; this
+    /// loads that address. The result is the cell address, not the cell value.
     pub fn slot_cell(&mut self, slots: &Value, slot: u32) -> Value {
         debug_assert_eq!(slots.ty, IrType::Ptr);
-        let cell = self.gep("ptr", slots, &[format!("i64 {slot}")], false);
+        let entry = self.gep("ptr", slots, &[format!("i64 {slot}")], false);
+        let cell = self.load(IrType::Ptr, &entry, Some(8));
         self.facts.origins.insert(
             cell.repr.clone(),
             PointerOrigin::Cell(CellAccess {
@@ -807,7 +817,7 @@ impl Function {
             .join(", ");
         let _ = writeln!(
             out,
-            "define {}{} @{}({params}) {{",
+            "define {}{} @{}({params}) uwtable {{",
             self.attrs.render(),
             self.ret.render(),
             self.name

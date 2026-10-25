@@ -13,16 +13,18 @@ output goes to stdout.
 
 > **M4 status:** `stc parse <file>`, `stc check <file>...`, and the manifest-free
 > `stc build <file>...` bridge are implemented. `parse` is single-file and syntax-only; `check`
-> analyzes one or more files as one in-memory package; `build` also emits `ir`, `obj`, `exe`,
-> static `lib`, or `metadata` and accepts `--name`, `--emit`, `--out-dir`, `--target`,
-> `--clang`, `--runtime`, and `-v`. Semantic analysis is skipped when parsing produced errors
-> (D-070). `--message-format` supports `human` and `json` (not `short`), and `--relaxed` is
-> supported. Exit codes 0/1/2/3 follow §1.3; codegen-internal failures use 3. The manifest,
-> `stc run`/`test`/`fmt`/`clean`/`metadata`/`compliance`, shared libraries, and the remaining
-> options below are the v1 target and arrive in later milestones (D-051, D-079). M4.5 phase 4
-> implements the compiler-side catalog, descriptor, manifest, and plan projection in
-> `stc-codegen::module`; `--emit=module`, the baseline/cold/rename flags, and the manifest files
-> become driver outputs with the module loader and execution conversion in M4.5 phases 6–7.
+> analyzes one or more files as one in-memory package; `build` also emits `ir`, `obj`, `module`,
+> `exe`, `lib`, or `metadata` and accepts `--name`, `--emit`, `--out-dir`, `--target`,
+> `--clang`, `--runtime`, `--got-manifest`, `--cold`, `--rename`, and
+> `--allow-untracked-removal`, and `-v`. Semantic analysis is skipped when parsing produced
+> errors (D-070). `--message-format` supports `human` and `json` (not `short`), and `--relaxed`
+> is supported. Exit codes 0/1/2/3 follow §1.3; codegen-internal failures use 3. The project
+> manifest, `stc run`/`test`/`fmt`/`clean`/`metadata`/`compliance`, shared libraries, and the
+> user-facing `stc online` commands remain the v1 target and arrive in later milestones
+> (D-051, D-079, M6). M4.5 phase 7 emits the loadable `module` with its binary/JSON manifest and
+> metadata, the thin `exe` launcher that loads the adjacent module pair, and the embedding `lib`
+> host archive; `exe` and `lib` may be emitted together. The generated module stays separate from
+> both host artifacts.
 
 | Command | Purpose |
 | --- | --- |

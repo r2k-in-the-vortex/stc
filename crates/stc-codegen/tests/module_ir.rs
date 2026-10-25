@@ -227,22 +227,27 @@ fn slot_access_and_indirect_calls_render_canonically() {
         .lines()
         .filter(|line| line.contains("load ptr, ptr %t"))
         .count();
-    assert_eq!(loads, 3, "one cell load per slot:\n{cycle}");
+    assert_eq!(
+        loads, 6,
+        "two loads per slot: the cell address and its value:\n{cycle}"
+    );
     assert!(
         cycle
             .lines()
-            .any(|line| line.contains("= call i32 %t6(i32 %t4)")),
+            .any(|line| line.contains("= call i32 %t") && line.contains("(i32 %t")),
         "function-cell call:\n{cycle}"
     );
     assert!(
-        cycle.lines().any(|line| line.contains("= call i64 %t9()")),
+        cycle
+            .lines()
+            .any(|line| line.contains("= call i64 %t") && line.contains("()")),
         "import-cell call:\n{cycle}"
     );
 
     let rendered = module.render();
-    assert!(
-        rendered.contains("define dso_local dllexport ptr @stc_module_descriptor(ptr %out_size) {")
-    );
+    assert!(rendered.contains(
+        "define dso_local dllexport ptr @stc_module_descriptor(ptr %out_size) uwtable {"
+    ));
     assert!(rendered.contains(&format!(
         "@{DESCRIPTOR} = private constant [{} x i8] {}, align 8",
         DESCRIPTOR_BYTES.len(),

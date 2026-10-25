@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use stc_got::{HOST_ABI_MAJOR, HOST_ABI_MINOR, PlanAction, PlanVerdict, RootKind};
 use stc_runtime::{
-    Candidate, CycleOutcome, Download, Host, HostPlatform, LayoutState, LoadMode, LoadOutcome,
-    ManifestStore, PROFILE, PlanDecision,
+    Candidate, CycleOutcome, DirectBinding, Download, Host, HostPlatform, LayoutState, LoadMode,
+    LoadOutcome, ManifestStore, ModuleInfo, PROFILE, PlanDecision,
 };
 
 use common::{Behavior, Fixture};
@@ -963,4 +963,111 @@ fn missing_manifest_file_is_a_manifest_error() {
         Err(error) => error,
     };
     assert_eq!(error.code, stc_got::codes::MANIFEST_INVALID);
+}
+
+fn direct_info(artifacts: &stc_codegen::module::ModuleArtifacts, inputs: u64) -> ModuleInfo {
+    let direct = artifacts
+        .manifest
+        .roots
+        .iter()
+        .find(|root| root.root_kind == RootKind::Direct)
+        .expect("direct root");
+    ModuleInfo {
+        inputs_bytes: inputs,
+        outputs_bytes: 0,
+        markers_bytes: 0,
+        bindings: vec![DirectBinding {
+            got_id: direct.got_id,
+            area: 1,
+            offset_bits: 0,
+            width_bits: 8,
+        }],
+        text: "{}".into(),
+    }
+}
+
+#[test]
+fn failed_cold_install_restores_the_process_image_and_direct_cells() {
+    let artifacts = common::artifacts(common::DIRECT, "direct");
+    let Some(fixture) = fixture("direct-info", artifacts.clone()) else {
+        return;
+    };
+    let info = direct_info(&artifacts, 4);
+    let mut host = in_memory_host();
+    let platform = platform();
+    let candidate = Candidate::open_with_info(
+        &platform,
+        &fixture.module_path,
+        &fixture.manifest_path,
+        Some(info),
+    )
+    .expect("candidate");
+    let outcome = host.load(candidate, LoadMode::Cold).expect("cold install");
+    assert!(matches!(outcome, LoadOutcome::ColdInstalled { .. }));
+
+    let mut base: *mut u8 = std::ptr::null_mut();
+    let mut len: u64 = 0;
+    // SAFETY: the runtime writes the base and length into valid locals.
+    unsafe { stc_runtime::stc_rt_io_image(&mut base, &mut len) };
+    assert_eq!(len, 4);
+    // SAFETY: the image has four bytes.
+    unsafe {
+        *base.add(0) = 0xA5;
+        *base.add(3) = 0x5A;
+    }
+
+    let replacement = common::artifacts(common::SIMPLE_ALTERNATE, "replacement");
+    let Some(failing) = Fixture::build(
+        "direct-cold-fails",
+        replacement.clone(),
+        Behavior {
+            prepare: 2,
+            ..Behavior::default()
+        },
+    ) else {
+        return;
+    };
+    let failing_info = ModuleInfo {
+        inputs_bytes: 64,
+        outputs_bytes: 0,
+        markers_bytes: 0,
+        bindings: Vec::new(),
+        text: "{}".into(),
+    };
+    let candidate = Candidate::open_with_info(
+        &platform,
+        &failing.module_path,
+        &failing.manifest_path,
+        Some(failing_info),
+    )
+    .expect("failing candidate");
+    let error = host
+        .load(candidate, LoadMode::Cold)
+        .expect_err("cold prepare failure");
+    assert_eq!(error.code, stc_got::codes::ONLINE_PREPARE);
+
+    let mut restored: *mut u8 = std::ptr::null_mut();
+    let mut restored_len: u64 = 0;
+    // SAFETY: the runtime writes the base and length into valid locals.
+    unsafe { stc_runtime::stc_rt_io_image(&mut restored, &mut restored_len) };
+    assert_eq!(restored_len, 4);
+    // SAFETY: the restored image has four bytes.
+    unsafe {
+        assert_eq!(*restored.add(0), 0xA5);
+        assert_eq!(*restored.add(3), 0x5A);
+    }
+
+    let direct = artifacts
+        .manifest
+        .roots
+        .iter()
+        .find(|root| root.root_kind == RootKind::Direct)
+        .expect("direct root");
+    let layout = host.runtime_layout();
+    let entry = layout
+        .entries
+        .iter()
+        .find(|entry| entry.got_id == direct.got_id)
+        .expect("direct layout entry");
+    assert_eq!(entry.storage, Some(restored as usize));
 }

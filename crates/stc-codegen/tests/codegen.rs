@@ -94,20 +94,28 @@ END_CONFIGURATION
 fn emits_scalar_program_and_verifies_with_clang() {
     let output = generate(SCALARS, Mode::Executable);
     let module = &output.module;
-    assert!(module.contains("define i32 @main("), "{module}");
     assert!(
-        module.contains("define internal void @stc_cycle()"),
+        module.contains("define dso_local dllexport i32 @stc_module_cycle("),
         "{module}"
     );
     assert!(
-        module.contains("define internal void @stc_init()"),
+        module.contains("define dso_local dllexport i32 @stc_module_prepare("),
         "{module}"
     );
-    assert!(module.contains("@stc_pi_INST"), "{module}");
+    assert!(
+        module.contains("define dso_local dllexport i32 @stc_module_attach("),
+        "{module}"
+    );
+    assert!(!module.contains("@stc_pi_INST"), "{module}");
     assert!(module.contains("llvm.smul.with.overflow.i32"), "{module}");
     assert!(
         module.contains("define internal i32 @stc_fn_FACT_"),
         "{module}"
+    );
+    assert!(
+        module.contains("call i32 %t"),
+        "user calls are indirect:
+{module}"
     );
     assert_eq!(output.metadata.programs.len(), 1);
     assert_eq!(output.metadata.programs[0].name, "inst");
@@ -119,15 +127,20 @@ fn library_mode_exports_wrappers_and_metadata() {
     let output = generate(LIBRARY, Mode::Library);
     let module = &output.module;
     assert!(!module.contains("@main("), "{module}");
-    assert!(module.contains("define void @stc_init()"), "{module}");
-    assert!(module.contains("define void @stc_cycle()"), "{module}");
-    assert!(module.contains("define void @stc_shutdown()"), "{module}");
     assert!(
-        module.contains("define i32 @stc_export_TESTADD("),
+        module.contains("define dso_local dllexport i32 @stc_module_cycle("),
         "{module}"
     );
     assert!(
-        module.contains("define ptr @stc_metadata_json()"),
+        module.contains("define dso_local dllexport i32 @stc_module_shutdown("),
+        "{module}"
+    );
+    assert!(
+        module.contains("define dso_local dllexport i32 @stc_export_TESTADD("),
+        "{module}"
+    );
+    assert!(
+        module.contains("define dso_local dllexport ptr @stc_metadata_json()"),
         "{module}"
     );
     assert_eq!(output.metadata.exports.len(), 1);
@@ -337,8 +350,11 @@ END_PROGRAM
     assert!(output.metadata.configuration.is_none());
     assert_eq!(output.metadata.programs.len(), 1);
     assert_eq!(output.metadata.programs[0].name, "_default");
+    assert!(!output.module.contains("@stc_pi_"), "{}", output.module);
     assert!(
-        output.module.contains("@stc_pi__DEFAULT"),
+        output
+            .module
+            .contains("define internal void @stc_prog_ONLY_body("),
         "{}",
         output.module
     );
@@ -409,17 +425,17 @@ END_CONFIGURATION
 "#;
     let output = generate(source, Mode::Executable);
     assert!(
-        output
-            .module
-            .contains("@stc_single_R_STARTUP = internal global i1 true"),
-        "{}",
+        !output.module.contains("@stc_single_R_STARTUP"),
+        "task guards are data roots:
+{}",
         output.module
     );
-    assert!(
-        output
-            .module
-            .contains("store i1 false, ptr @stc_single_R_STARTUP")
-    );
+    let cycle = output
+        .module
+        .split("define dso_local dllexport i32 @stc_module_cycle(")
+        .nth(1)
+        .expect("cycle entry");
+    assert!(cycle.contains("store i8 %t"), "{cycle}");
     assert_eq!(output.metadata.tasks.len(), 1);
     assert_eq!(output.metadata.tasks[0].single, Some(true));
     assert_eq!(output.metadata.tasks[0].priority, Some(1));
@@ -474,7 +490,8 @@ END_CONFIGURATION
     assert_eq!(output.metadata.io.inputs_bytes, 2);
     assert_eq!(output.metadata.io.outputs_bytes, 3);
     assert_eq!(output.metadata.io.markers_bytes, 0);
-    assert!(output.module.contains("load ptr, ptr @stc_io_base"));
+    assert!(!output.module.contains("@stc_io_base"));
+    assert!(output.module.contains("@stc_module_slots"));
     assert!(output.module.contains("load i16, ptr"), "{}", output.module);
     assert!(output.module.contains("load i8, ptr"), "{}", output.module);
     verify_with_clang("direct", &output.module);
@@ -502,8 +519,9 @@ END_CONFIGURATION
 "#;
     let output = generate(source, Mode::Executable);
     assert!(
-        output.module.contains("i16 2)"),
-        "default argument missing:\n{}",
+        output.module.contains("i16 2,"),
+        "default argument missing:
+{}",
         output.module
     );
     verify_with_clang("defaults", &output.module);
@@ -543,7 +561,7 @@ END_CONFIGURATION
         "{}",
         output.module
     );
-    assert!(output.module.contains("call void @stc_fn_TOUCH_"));
+    assert!(output.module.contains("call void %t"), "{}", output.module);
     verify_with_clang("void_functions", &output.module);
 }
 
@@ -562,27 +580,23 @@ END_RESOURCE
 END_CONFIGURATION
 "#;
     let output = generate(source, Mode::Executable);
-    assert!(
+    assert!(!output.module.contains("@stc_pi_A"), "{}", output.module);
+    assert!(!output.module.contains("@stc_pi_B"), "{}", output.module);
+    assert_eq!(
         output
             .module
-            .contains("@stc_pi_A = internal global %stc.prog.P"),
-        "{}",
-        output.module
-    );
-    assert!(
-        output
-            .module
-            .contains("@stc_pi_B = internal global %stc.prog.P"),
-        "{}",
-        output.module
+            .lines()
+            .filter(|line| line.contains("define internal void @stc_prog_P_body("))
+            .count(),
+        1,
+        "the program body is compiled once"
     );
     let cycle = output
         .module
-        .split("define internal void @stc_cycle()")
+        .split("define dso_local dllexport i32 @stc_module_cycle(")
         .nth(1)
         .unwrap();
-    let cycle = cycle.split('}').next().unwrap();
-    assert_eq!(cycle.matches("@stc_prog_P_body").count(), 2, "{cycle}");
+    assert_eq!(cycle.matches("alloca [1 x ptr]").count(), 2, "{cycle}");
     verify_with_clang("instances", &output.module);
 }
 
@@ -673,4 +687,75 @@ END_CONFIGURATION
         output.module
     );
     verify_with_clang("namespaces", &output.module);
+}
+
+const GOT_SURFACE: &str = r#"
+VAR_GLOBAL RETAIN
+  Counter : DINT := 3;
+END_VAR
+VAR_GLOBAL
+  Flag AT %MX0.0 : BOOL;
+END_VAR
+
+FUNCTION Bump : DINT
+VAR_INPUT
+  value : DINT;
+END_VAR
+  Counter := Counter + value;
+  Bump := Counter;
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  input AT %IX0.0 : BOOL;
+  output AT %QX0.0 : BOOL;
+  ticks : DINT;
+END_VAR
+VAR RETAIN
+  saved : DINT;
+END_VAR
+  ticks := ticks + 1;
+  saved := Bump(ticks);
+  output := input;
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  TASK Fast (SINGLE := TRUE);
+  PROGRAM inst WITH Fast : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn generated_module_has_no_direct_persistent_or_user_references() {
+    let output = generate(GOT_SURFACE, Mode::Executable);
+    let module = &output.module;
+    assert!(!module.contains("@stc_g_"), "{module}");
+    assert!(!module.contains("@stc_pi_"), "{module}");
+    assert!(!module.contains("@stc_single_"), "{module}");
+    assert!(!module.contains("@stc_io_base"), "{module}");
+    assert!(module.contains("define dso_local dllexport i32 @stc_module_attach("));
+    assert!(module.contains("define dso_local dllexport i32 @stc_module_prepare("));
+    assert!(module.contains("define dso_local dllexport i32 @stc_module_cycle("));
+    assert!(module.contains("define dso_local dllexport i32 @stc_module_shutdown("));
+    assert!(module.contains("define dso_local dllexport void @stc_module_detach("));
+    for line in module.lines() {
+        assert!(
+            !line.trim_start().starts_with("call ") || !line.contains("@stc_fn_"),
+            "direct user call in:\n{module}"
+        );
+    }
+
+    let table = output.got.function_table();
+    let descriptor = &output.got.descriptor.functions;
+    assert_eq!(table.len(), descriptor.len(), "function table length");
+    for (index, (got_id, symbol)) in table.iter().enumerate() {
+        assert_eq!(*got_id, descriptor[index].got_id, "descriptor order");
+        assert!(
+            module.contains(&format!("ptr @{symbol}")),
+            "function table names `{symbol}`"
+        );
+    }
+    verify_with_clang("got_surface", module);
 }

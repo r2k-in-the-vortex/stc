@@ -55,11 +55,16 @@ pub fn options<'a>(
 ) -> stc_codegen::Options<'a> {
     stc_codegen::Options {
         artifact_name: name,
-        target: None,
+        // A fixed target keeps descriptors, manifests, and golden snapshots
+        // identical on Windows and Linux CI hosts.
+        target: Some("x86_64-unknown-linux-gnu"),
         debug: false,
         emit_metadata: true,
         mode,
+        relaxed: false,
+        release: false,
         sources,
+        module: stc_codegen::ModuleBuildOptions::default(),
     }
 }
 

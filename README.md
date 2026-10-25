@@ -18,13 +18,13 @@ textual LLVM IR for the elementary scalar subset: expressions, checked arithmeti
 control flow, functions, programs, globals, process image, scalar retained leaves), and
 `stc-runtime` (Rust `staticlib` with the C ABI, cycle loop, process image, clock, traps, and
 retained-state stubs). The driver provides `stc parse`, `stc check`, and the M4
-`stc build <file>...` bridge with `--emit=ir,obj,exe,lib,metadata`; clang lowers and links
-`executable` and static-library artifacts.
+`stc build <file>...` bridge with `--emit=ir,obj,module,exe,lib,metadata`; clang lowers and links
+`module`, `executable` (thin launcher), and embedding-library artifacts.
 
 The online-change architecture is **resolved** (2026-10-24): the v1 runtime is a persistent host
 plus loadable whole-program modules, persistent memory is host-owned and accessed through a
 project-defined GOT, every module is paired with a persistent GOT manifest, and activation is a
-cycle-boundary module swap. M4.5 phases 0–6 are complete for review (2026-10-25): the versioned
+cycle-boundary module swap. M4.5 phases 0–7 are complete for review (2026-10-25): the versioned
 `GotId`,
 catalog, descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md); `stc-got` implements
@@ -37,10 +37,13 @@ descriptor/function-table globals) plus a structural verifier checked by clang-a
 bindings, descriptor bytes, manifest pair, and online-change plan with golden snapshots and
 second-build baseline tests; and `stc-runtime` provides the host GOT, root registry, quarantine,
 transient allocator, artifact validation, platform module loader, ABI 2.0 host services,
-active-manifest store/download, and the load/prepare/activate/commit/rollback/unload state
-machine, exercised by a real no-op module fixture. The foundation milestone is M4.5 before M5;
-full debug/monitoring is M6.5. IR execution lowering and the process-image/global conversion have
-not started, and the M4 artifact model remains the current implemented execution path.
+active-manifest store/download, the load/prepare/activate/commit/rollback/unload state machine,
+and a non-local trap boundary. Phase 7 converts generated execution to that model: globals,
+program fields, direct variables, retain leaves, and task guards use GOT cells; user calls are
+indirect; the launcher and embedding host load real compiler-produced module pairs; and existing
+execution, trap, process-image, binding, and retain tests run through modules. The foundation
+milestone is M4.5 before M5; full debug/monitoring is M6.5. Phase 8 (scalar
+compatibility/preservation and cold policy) and phase 9 (full test/CI coverage) remain.
 
 M4 does not implement function blocks, OOP lowering, aggregates, strings, references, standard
 functions, the standard FB library, the manifest, `stc run`, or `stc test`; those constructs are
@@ -130,17 +133,17 @@ ST source (UTF-8)
 ```sh
 stc build --emit=ir                 # <name>.ll
 stc build --emit=ir,obj             # .ll + .o
-stc build --emit=exe                # M4: code-linked exe; M4.5+: launcher + module
-stc build --emit=lib                # M4: static code archive; M4.5+: embedding host lib
+stc build --emit=exe                # thin launcher + adjacent module pair
+stc build --emit=lib                # embedding host archive + separate module
 stc build --emit=metadata           # <name>.stc-meta.json
-stc build --emit=module             # loadable module + GOT manifest (M4.5+)
+stc build --emit=module             # loadable module + GOT manifest
 ```
 
 - M4 defaults to `ir`; `stc build --emit=ir` stops after IR. The v1 target default becomes
   `module` (with its paired manifest) for online-change deployments; `exe` is a thin host
   launcher for an adjacent module, and `lib` is the embedding host library with generated code
-  kept in the separate module. M4.5 allows `exe` and `lib` in one build; M4 rejects that
-  combination because both are code-linked. Shared host libraries are M6.
+  kept in the separate module. M4.5 allows `exe` and `lib` in one build; the shared host library
+  form is M6.
 - A module is paired with `<name>.stc-got.json` (canonical tooling/download) and
   `<name>.stc-got.bin` (compact runtime projection). `--got-manifest <file>` selects the build
   baseline; `--cold` explicitly requests a cold-layout build; `--rename old=new` records a
@@ -375,6 +378,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-118 | M4.5 phase 2 records implementation clarifications without changing format 1: elementary layout encoding tags, export wrappers as module-local code paired with the wrapped callable's identity, rejection of reintroduced retired `GotId`s, and direct-variable address metadata remaining in the sidecar. The `stc-got` crate implements the identity, manifest, and plan layer. |
 | D-119–D-121 | M4.5 phases 3–4 fix the module IR shape (slot-table cell loads, indirect cell calls, ABI 2.0 entry points, structural verification), the M4 catalog projection (global/program-field/direct/task-guard roots, synthesized `_DEFAULT` topology, canonical imports, declaration-to-slot bindings), and the shared descriptor format-1 codec with digest/pairing validation and the acyclic descriptor/manifest sealing order. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
 | D-122–D-123 | M4.5 phases 5–6 implement the host substrate and swap controller: stable root/GOT storage, quarantine and transient lifetimes, descriptor/manifest/plan validation, the platform module loader, the ABI 2.0 host service table, atomic active-manifest storage and download, and load/prepare/activate/commit/rollback/unload with exact-currentness and cold paths. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
+| D-124 | M4.5 phase 7 converts generated execution to the GOT/module model: persistent state, direct variables, retain leaves, and task guards use GOT cells; calls are indirect through function cells; host services use import cells; slot access is the two-load sequence; generated modules export the ABI 2 entry-point set; the host configures the process image and direct bindings from the metadata sidecar; `--emit=module`, the thin launcher, and the embedding host archive are driver artifacts; and a non-local trap boundary enables rollback-window recovery. Existing execution tests run through compiler-produced module pairs, completing the execution conversion before M5 and giving phase 8 a working preservation/rollback substrate. |
 
 ## Question log
 

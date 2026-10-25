@@ -88,6 +88,45 @@ fn lib_path(directory: &Path, name: &str) -> PathBuf {
     }
 }
 
+fn built_module(directory: &TestDir, name: &str) -> String {
+    let extension = if cfg!(windows) { "dll" } else { "so" };
+    let prefix = format!("{name}-");
+    let suffix = format!(".{extension}");
+    std::fs::read_dir(&directory.path)
+        .expect("artifact directory")
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .find(|file| file.starts_with(&prefix) && file.ends_with(&suffix))
+        .unwrap_or_else(|| panic!("module for `{name}` was not emitted"))
+}
+
+fn build_library(directory: &TestDir, source: &str, name: &str) {
+    let source_path = directory.write_source(name, source);
+    let runtime = runtime_artifact();
+    let output = run_stc(&[
+        "build",
+        source_path.to_str().unwrap(),
+        "--emit=lib",
+        "--name",
+        name,
+        "--out-dir",
+        directory.path.to_str().unwrap(),
+        "--runtime",
+        runtime.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "library build failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = built_module(directory, name);
+    assert!(
+        directory.path.join(format!("{name}.stc-got.bin")).is_file(),
+        "manifest missing"
+    );
+}
+
 struct TestDir {
     path: PathBuf,
 }
@@ -406,6 +445,7 @@ END_VAR
   count := count + 1;
   marker := 42;
   done := start;
+  %QW1 := %IW1;
 END_PROGRAM
 CONFIGURATION C
 RESOURCE R ON Cpu
@@ -418,6 +458,7 @@ fn compile_harness(
     directory: &TestDir,
     harness: &str,
     library: &Path,
+    module: &str,
     output_name: &str,
 ) -> PathBuf {
     let clang = clang().expect("clang required for harness tests");
@@ -438,11 +479,7 @@ fn compile_harness(
     );
     let exe = exe_path(&directory.path, output_name);
     let mut link = Command::new(clang);
-    link.arg(&object)
-        .arg(library)
-        .arg(runtime_artifact())
-        .args(["-o"])
-        .arg(&exe);
+    link.arg(&object).arg(library).args(["-o"]).arg(&exe);
     for argument in stc_driver::toolchain::system_link_args() {
         link.arg(argument);
     }
@@ -451,6 +488,17 @@ fn compile_harness(
         linked.status.success(),
         "harness link failed:\n{}",
         String::from_utf8_lossy(&linked.stderr)
+    );
+    let run = Command::new(&exe)
+        .arg(module)
+        .output()
+        .expect("run harness");
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "{harness} failed: stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
     );
     exe
 }
@@ -461,33 +509,15 @@ fn library_mode_exports_run_under_a_c_harness() {
         return;
     }
     let directory = TestDir::new("library");
-    let source = directory.write_source("library", LIBRARY);
-    let runtime = runtime_artifact();
-    let output = run_stc(&[
-        "build",
-        source.to_str().unwrap(),
-        "--emit=lib",
-        "--name",
-        "library",
-        "--out-dir",
-        directory.path.to_str().unwrap(),
-        "--runtime",
-        runtime.to_str().unwrap(),
-    ]);
-    assert!(
-        output.status.success(),
-        "library build failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    build_library(&directory, LIBRARY, "library");
     let library = lib_path(&directory.path, "library");
     assert!(library.is_file(), "{}", library.display());
-    let harness = compile_harness(&directory, "library.c", &library, "harness");
-    let result = Command::new(harness).output().expect("run harness");
-    assert_eq!(
-        result.status.code(),
-        Some(0),
-        "harness failed: {}",
-        String::from_utf8_lossy(&result.stderr)
+    compile_harness(
+        &directory,
+        "library.c",
+        &library,
+        &built_module(&directory, "library"),
+        "harness",
     );
 }
 
@@ -497,38 +527,21 @@ fn process_image_is_observable_through_a_c_harness() {
         return;
     }
     let directory = TestDir::new("io");
-    let source = directory.write_source("io", IO_SOURCE);
-    let runtime = runtime_artifact();
-    let output = run_stc(&[
-        "build",
-        source.to_str().unwrap(),
-        "--emit=lib",
-        "--name",
-        "io",
-        "--out-dir",
-        directory.path.to_str().unwrap(),
-        "--runtime",
-        runtime.to_str().unwrap(),
-    ]);
-    assert!(
-        output.status.success(),
-        "io build failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    build_library(&directory, IO_SOURCE, "io");
     let metadata =
         std::fs::read_to_string(directory.path.join("io.stc-meta.json")).expect("metadata file");
     assert!(
-        metadata.contains("\"input_defaults_hex\": \"01\""),
+        metadata.contains("\"input_defaults_hex\": \"01000000\""),
         "{metadata}"
     );
+    assert!(metadata.contains("\"got_id\":"), "{metadata}");
     let library = lib_path(&directory.path, "io");
-    let harness = compile_harness(&directory, "io.c", &library, "io_harness");
-    let result = Command::new(harness).output().expect("run io harness");
-    assert_eq!(
-        result.status.code(),
-        Some(0),
-        "io harness failed: {}",
-        String::from_utf8_lossy(&result.stderr)
+    compile_harness(
+        &directory,
+        "io.c",
+        &library,
+        &built_module(&directory, "io"),
+        "io_harness",
     );
 }
 
@@ -797,38 +810,18 @@ fn bindings_short_circuit_casts_and_retained_state() {
         return;
     }
     let directory = TestDir::new("advanced");
-    let source = directory.write_source("advanced", ADVANCED);
-    let runtime = runtime_artifact();
-    let output = run_stc(&[
-        "build",
-        source.to_str().unwrap(),
-        "--emit=lib",
-        "--name",
-        "advanced",
-        "--out-dir",
-        directory.path.to_str().unwrap(),
-        "--runtime",
-        runtime.to_str().unwrap(),
-    ]);
-    assert!(
-        output.status.success(),
-        "advanced build failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    build_library(&directory, ADVANCED, "advanced");
     let metadata = std::fs::read_to_string(directory.path.join("advanced.stc-meta.json"))
         .expect("metadata file");
     assert!(metadata.contains("\"path\": \"Saved\""), "{metadata}");
     assert!(metadata.contains("\"size\": 4"), "{metadata}");
     let library = lib_path(&directory.path, "advanced");
-    let harness = compile_harness(&directory, "advanced.c", &library, "advanced_harness");
-    let result = Command::new(harness)
-        .output()
-        .expect("run advanced harness");
-    assert_eq!(
-        result.status.code(),
-        Some(0),
-        "advanced harness failed: {}",
-        String::from_utf8_lossy(&result.stderr)
+    compile_harness(
+        &directory,
+        "advanced.c",
+        &library,
+        &built_module(&directory, "advanced"),
+        "advanced_harness",
     );
 }
 

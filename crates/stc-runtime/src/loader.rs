@@ -168,6 +168,15 @@ impl LoadedModule {
         &self.functions
     }
 
+    /// Resolves an exported module symbol by name.
+    ///
+    /// This serves the embedding host's export registry. The address is valid
+    /// while this module remains loaded.
+    #[must_use]
+    pub fn export_address(&self, name: &str) -> Option<*const c_void> {
+        platform::symbol(&self._library.handle, name).ok()
+    }
+
     /// Calls `stc_module_attach`.
     ///
     /// # Safety

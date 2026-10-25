@@ -1,6 +1,6 @@
 //! Stable, C-identifier-safe symbol names and signature hashes (D-082).
 
-use stc_hir::{ArgDirection, DefId, DefKind, HirCrate, Symbol};
+use stc_hir::{ArgDirection, DefId, DefKind, HirCrate};
 
 use crate::CodegenError;
 use crate::layout::{canonical_type_name, fnv1a};
@@ -134,12 +134,6 @@ pub fn program_body_symbol(hir: &HirCrate, def: DefId) -> String {
     out.push_str(&normalize_ident(hir.def_name(def)));
     out.push_str("_body");
     out
-}
-
-/// Returns the SINGLE-task guard global name.
-#[must_use]
-pub fn task_guard_symbol(resource: &str, name: Symbol, hir: &HirCrate) -> String {
-    task_guard_symbol_text(resource, hir.interner.text(name))
 }
 
 /// Returns a task-guard symbol from already-resolved name text.

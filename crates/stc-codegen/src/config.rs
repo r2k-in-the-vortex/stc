@@ -80,6 +80,20 @@ pub(crate) struct ProgramLayout {
     pub field_indices: BTreeMap<FieldId, u32>,
 }
 
+/// Which declaration owns a process-image binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IoRootTarget {
+    /// A global `AT` variable.
+    Global(DefId),
+    /// A program-instance `AT` field.
+    InstanceField {
+        /// Configured instance.
+        instance: Symbol,
+        /// Field declaration.
+        field: FieldId,
+    },
+}
+
 /// One internal process-image binding.
 #[derive(Clone, Debug)]
 pub(crate) struct IoBinding {
@@ -99,6 +113,8 @@ pub(crate) struct IoBinding {
     pub source: &'static str,
     /// Initializer expression, when the declared leaf has one.
     pub init: Option<ExprId>,
+    /// Owning declaration, when the binding comes from an `AT` declaration.
+    pub target: Option<IoRootTarget>,
 }
 
 /// Process-image layout.
@@ -116,18 +132,6 @@ pub(crate) struct ImageLayout {
     pub output_defaults: Vec<u8>,
     /// Bindings sorted by area, offset, and variable.
     pub bindings: Vec<IoBinding>,
-}
-
-impl ImageLayout {
-    /// Returns the byte offset of an area within the contiguous image.
-    #[must_use]
-    pub fn area_base(&self, area: DirectArea) -> u64 {
-        match area {
-            DirectArea::Input => 0,
-            DirectArea::Output => self.inputs_bytes,
-            DirectArea::Memory => self.inputs_bytes + self.outputs_bytes,
-        }
-    }
 }
 
 /// How a retained leaf is reached in generated code.
@@ -439,7 +443,7 @@ pub(crate) fn image_layout(
         }
     }
 
-    for def in &hir.defs {
+    for (index, def) in hir.defs.iter().enumerate() {
         let DefKind::Global {
             ty,
             at: Some(address),
@@ -461,6 +465,9 @@ pub(crate) fn image_layout(
                     hint: io.clone(),
                     source: "pragma",
                     init: *init,
+                    target: Some(IoRootTarget::Global(DefId::new(
+                        u32::try_from(index).unwrap_or(u32::MAX),
+                    ))),
                 }),
                 Err(error) => errors.push(error),
             },
@@ -495,6 +502,10 @@ pub(crate) fn image_layout(
                             .get(&(instance.name, *field))
                             .copied()
                             .or(data.init),
+                        target: Some(IoRootTarget::InstanceField {
+                            instance: instance.name,
+                            field: *field,
+                        }),
                     }),
                     Err(error) => errors.push(error),
                 },

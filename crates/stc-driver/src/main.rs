@@ -1,10 +1,10 @@
 //! The `stc` command-line driver.
 //!
-//! M4 provides `stc parse <file>` (lex/parse only), `stc check <file>...`
+//! M4.5 provides `stc parse <file>` (lex/parse only), `stc check <file>...`
 //! (lex, parse, resolve, and type-check), and `stc build <file>...`
-//! (check plus IR/object/executable/library/metadata emission). The driver
-//! owns the exit-code contract, human/JSON diagnostics, and the panic
-//! boundary from CLI-and-Manifest §1.3–§1.4.
+//! (check plus IR/object/module/launcher/embedding-host/metadata emission).
+//! The driver owns the exit-code contract, human/JSON diagnostics, and the
+//! panic boundary from CLI-and-Manifest §1.3–§1.4.
 
 #![forbid(unsafe_code)]
 
@@ -266,6 +266,23 @@ fn parse_args(args: &[String]) -> Result<Option<Invocation>, String> {
             other if other.starts_with("--runtime=") => {
                 build.runtime = Some(other["--runtime=".len()..].to_owned());
             }
+            "--got-manifest" => {
+                build.got_manifest = Some(next_value(args, &mut index, "--got-manifest")?);
+            }
+            other if other.starts_with("--got-manifest=") => {
+                build.got_manifest = Some(other["--got-manifest=".len()..].to_owned());
+            }
+            "--cold" => build.cold = true,
+            "--allow-untracked-removal" => build.allow_untracked_removal = true,
+            "--rename" => {
+                let value = next_value(args, &mut index, "--rename")?;
+                build.renames.push(parse_rename(&value)?);
+            }
+            other if other.starts_with("--rename=") => {
+                build
+                    .renames
+                    .push(parse_rename(&other["--rename=".len()..])?);
+            }
             "-v" | "--verbose" => build.verbose = true,
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
@@ -290,6 +307,7 @@ fn parse_args(args: &[String]) -> Result<Option<Invocation>, String> {
     if command == Command::Build && build.emit.is_empty() {
         build.emit.insert(Emit::Ir);
     }
+    build.relaxed = relaxed;
     Ok(Some(Invocation {
         command,
         paths,
@@ -314,7 +332,23 @@ fn build_option_present(build: &build::Request) -> bool {
         || build.target.is_some()
         || build.clang.is_some()
         || build.runtime.is_some()
+        || build.got_manifest.is_some()
+        || build.cold
+        || !build.renames.is_empty()
+        || build.allow_untracked_removal
         || build.verbose
+}
+
+fn parse_rename(value: &str) -> Result<(String, String), String> {
+    let Some((old, new)) = value.split_once('=') else {
+        return Err(format!("`--rename` expects `old=new`, found `{value}`"));
+    };
+    if old.is_empty() || new.is_empty() {
+        return Err(format!(
+            "`--rename` expects non-empty keys, found `{value}`"
+        ));
+    }
+    Ok((old.to_owned(), new.to_owned()))
 }
 
 fn parse_emit(value: &str) -> Result<BTreeSet<Emit>, String> {
@@ -323,13 +357,14 @@ fn parse_emit(value: &str) -> Result<BTreeSet<Emit>, String> {
         let kind = match part {
             "ir" => Emit::Ir,
             "obj" => Emit::Obj,
+            "module" => Emit::Module,
             "exe" => Emit::Exe,
             "lib" => Emit::Lib,
             "metadata" => Emit::Metadata,
             "" => continue,
             other => {
                 return Err(format!(
-                    "unknown emit kind `{other}` (expected ir, obj, exe, lib, or metadata)"
+                    "unknown emit kind `{other}` (expected ir, obj, module, exe, lib, or metadata)"
                 ));
             }
         };
@@ -358,16 +393,18 @@ fn print_help() {
          Usage:\n\
          \x20 stc parse <file> [--ast] [--relaxed] [--message-format human|json]\n\
          \x20 stc check <file>... [--relaxed] [--message-format human|json]\n\
-         \x20 stc build <file>... [--name <name>] [--emit ir,obj,exe,lib,metadata]\n\
+         \x20 stc build <file>... [--name <name>] [--emit ir,obj,module,exe,lib,metadata]\n\
          \x20             [--out-dir <dir>] [--target <triple>] [--clang <path>]\n\
-         \x20             [--runtime <path>] [--relaxed] [--message-format human|json] [-v]\n\
+         \x20             [--runtime <path>] [--got-manifest <path>] [--cold]\n\
+         \x20             [--rename old=new]... [--allow-untracked-removal]\n\
+         \x20             [--relaxed] [--message-format human|json] [-v]\n\
          \x20 stc --version\n\
          \x20 stc --help\n\
          \n\
          `parse` lexes and parses one file. `check` lexes, parses, resolves, and\n\
          type-checks one or more files in one in-memory package. `build` also\n\
-         emits IR and, when requested, objects, executables, or static libraries\n\
-         through clang.\n\
+         emits a loadable ABI 2 module and, when requested, its manifest, a thin\n\
+         executable launcher, or the embedding host library through clang.\n\
          Exit codes: 0 success, 1 compile error, 2 usage/toolchain error, 3 internal error.",
         env!("CARGO_PKG_VERSION")
     );

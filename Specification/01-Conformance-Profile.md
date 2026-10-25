@@ -42,8 +42,10 @@ not implemented and are rejected explicitly. `stc check <file>...` analyzes one 
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
 surface. Unsupported constructs are rejected with the diagnostics in
 [Grammar](Syntax/Grammar.md) §13 or `STC-E-CODEGEN-001` rather than silently accepted.
-The online-change/GOT/manifest/debug architecture is resolved but not yet implemented; M4.5 is
-the foundation milestone before M5.
+The online-change/GOT/manifest/debug architecture is resolved. M4.5 phases 0–7 are implemented:
+generated M4 scalar programs execute as ABI 2 loadable modules through the persistent host, with
+GOT-rooted state, manifest baselines, a thin launcher, and an embedding host. Phase 8 (scalar
+compatibility/preservation and cold policy) and phase 9 (full test/CI coverage) remain before M5.
 
 ## 2. Input languages
 

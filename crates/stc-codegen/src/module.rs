@@ -298,6 +298,15 @@ impl ModuleArtifacts {
             .map(|binding| binding.slot)
     }
 
+    /// Returns the identity of a root declaration.
+    #[must_use]
+    pub fn root_got_id(&self, target: &RootTarget) -> Option<GotId> {
+        self.slots
+            .iter()
+            .find(|binding| binding.root.as_ref() == Some(target))
+            .map(|binding| binding.got_id)
+    }
+
     /// Returns the slot for a compiled body.
     #[must_use]
     pub fn function_slot(&self, target: FunctionTarget) -> Option<u32> {
@@ -305,6 +314,36 @@ impl ModuleArtifacts {
             .iter()
             .find(|binding| binding.function == Some(target))
             .map(|binding| binding.slot)
+    }
+
+    /// Returns the identity of a compiled body.
+    #[must_use]
+    pub fn function_got_id(&self, target: FunctionTarget) -> Option<GotId> {
+        self.slots
+            .iter()
+            .find(|binding| binding.function == Some(target))
+            .map(|binding| binding.got_id)
+    }
+
+    /// Returns the function-address table contents in descriptor order.
+    ///
+    /// Descriptor records are sorted by `GotId`; the table `stc_module_functions`
+    /// returns must have the same order and length (GOT Artifacts §7.1).
+    #[must_use]
+    pub fn function_table(&self) -> Vec<(GotId, String)> {
+        let mut functions: Vec<(GotId, String)> = self
+            .slots
+            .iter()
+            .filter_map(|binding| {
+                binding
+                    .function
+                    .is_some()
+                    .then(|| (binding.got_id, binding.symbol.clone()))
+                    .and_then(|(got_id, symbol)| symbol.map(|symbol| (got_id, symbol)))
+            })
+            .collect();
+        functions.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+        functions
     }
 
     /// Returns the slot for a host service.

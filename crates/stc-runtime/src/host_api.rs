@@ -2,8 +2,8 @@
 //!
 //! GOT Artifacts §8 fixes the table layout: version and size followed by trap,
 //! clocks, transient allocation, process-image access, retained-state stubs,
-//! and assert. Import cells hold the address of the corresponding table field,
-//! so generated code reads a service pointer exactly like a function cell.
+//! and assert. Import cells hold the service entry point itself, so generated
+//! code reads and calls a service exactly like a function cell.
 //!
 //! The table is a read-only static. Service implementations route transient
 //! allocation and free to the generation whose entry point is currently
@@ -126,27 +126,26 @@ pub fn api_pointer() -> *const HostApi {
     std::ptr::addr_of!(HOST_API)
 }
 
-/// Returns the address of one host API field for an import cell.
+/// Returns the entry-point address of one host API service for an import cell.
 ///
-/// The returned value is what the module reads from the cell and calls.
+/// The returned value is the code address the module calls after loading its
+/// import cell value.
 #[must_use]
 pub fn service_address(service: u8) -> Option<usize> {
-    let base = std::ptr::addr_of!(HOST_API) as usize;
-    let offset = match service {
-        service::TRAP => std::mem::offset_of!(HostApi, trap),
-        service::CYCLE_NOW_NS => std::mem::offset_of!(HostApi, cycle_now_ns),
-        service::MONOTONIC_NOW_NS => std::mem::offset_of!(HostApi, monotonic_now_ns),
-        service::LOCAL_DATE_NS => std::mem::offset_of!(HostApi, local_date_ns),
-        service::ALLOC => std::mem::offset_of!(HostApi, alloc),
-        service::FREE => std::mem::offset_of!(HostApi, free),
-        service::IO_IMAGE => std::mem::offset_of!(HostApi, io_image),
-        service::IO_SIZE => std::mem::offset_of!(HostApi, io_size),
-        service::STATE_LOAD => std::mem::offset_of!(HostApi, state_load),
-        service::STATE_SAVE => std::mem::offset_of!(HostApi, state_save),
-        service::ASSERT => std::mem::offset_of!(HostApi, assert),
-        _ => return None,
-    };
-    Some(base + offset)
+    match service {
+        service::TRAP => HOST_API.trap.map(|function| function as usize),
+        service::CYCLE_NOW_NS => HOST_API.cycle_now_ns.map(|function| function as usize),
+        service::MONOTONIC_NOW_NS => HOST_API.monotonic_now_ns.map(|function| function as usize),
+        service::LOCAL_DATE_NS => HOST_API.local_date_ns.map(|function| function as usize),
+        service::ALLOC => HOST_API.alloc.map(|function| function as usize),
+        service::FREE => HOST_API.free.map(|function| function as usize),
+        service::IO_IMAGE => HOST_API.io_image.map(|function| function as usize),
+        service::IO_SIZE => HOST_API.io_size.map(|function| function as usize),
+        service::STATE_LOAD => HOST_API.state_load.map(|function| function as usize),
+        service::STATE_SAVE => HOST_API.state_save.map(|function| function as usize),
+        service::ASSERT => HOST_API.assert.map(|function| function as usize),
+        _ => None,
+    }
 }
 
 /// A recorded trap.
@@ -261,11 +260,16 @@ pub(crate) fn drain_faults(generation: u64) -> Vec<String> {
 
 /// Returns the last recorded trap.
 ///
-/// A trap exits the process in M4.5, so this is mainly useful to an embedding
-/// host that installs its own trap boundary.
+/// A trap outside a host boundary exits the process. Host module calls install
+/// a boundary, so this records the most recent recoverable trap.
 #[must_use]
 pub fn last_trap() -> Option<TrapRecord> {
     service_state().trap
+}
+
+/// Clears the last recorded trap.
+pub(crate) fn clear_last_trap() {
+    service_state().trap = None;
 }
 
 /// Returns the bytes reserved by one generation's live transient blocks.
@@ -295,13 +299,14 @@ fn record_trap(code: i32, span_id: u32) {
 
 /// Records the trap and transfers control to the host trap boundary.
 ///
-/// The M4.5 trap service is non-returning; it prints the trap name and exits
-/// with code 70 exactly like the ABI-1 runtime path. Recovering a trap during a
-/// rollback window requires a platform non-local-exit shim and lands with the
-/// execution conversion.
+/// Inside a host module call this performs a non-local exit to
+/// [`crate::trap_boundary::with_boundary`]. With no boundary installed the M4.5
+/// behavior remains: print the trap name and exit with code 70.
 unsafe extern "C" fn service_trap(code: i32, span_id: u32) {
     record_trap(code, span_id);
-    crate::stc_rt_trap(code, span_id);
+    if !crate::trap_boundary::escape(code, span_id) {
+        crate::stc_rt_trap(code, span_id);
+    }
 }
 
 unsafe extern "C" fn service_cycle_now_ns() -> i64 {
@@ -447,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn every_service_id_has_a_distinct_field_address() {
+    fn every_service_id_has_a_distinct_entry_point() {
         let mut addresses = Vec::new();
         for id in 1..=11 {
             let address = service_address(id).expect("service address");
@@ -458,7 +463,7 @@ mod tests {
         assert_eq!(service_address(12), None);
         assert_eq!(
             service_address(service::TRAP),
-            Some(std::ptr::addr_of!(HOST_API.trap) as usize)
+            Some(HOST_API.trap.expect("trap") as usize)
         );
     }
 

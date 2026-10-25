@@ -1,8 +1,9 @@
-//! The M4 `stc build` bridge (D-079).
+//! The `stc build` bridge: module, manifest, launcher, and host artifacts.
 //!
-//! This module owns artifact naming, clang/runtime discovery, clang
-//! invocation, and toolchain diagnostics. It keeps the M6 manifest rules out
-//! of the driver until the manifest exists.
+//! The compiler emits one loadable ABI 2 module. `exe` is a thin launcher that
+//! loads the adjacent module pair; `lib` is the embedding host library (the
+//! runtime static archive) with the generated module kept separate. Both may be
+//! emitted together (D-109–D-112, M4.5 §6.3).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use std::process::Command;
 use stc_driver::toolchain::system_link_args;
 
 use stc_diag::DiagnosticSink;
+use stc_got::{Manifest, Rename};
 use stc_hir::HirCrate;
 
 /// One requested artifact kind.
@@ -20,9 +22,11 @@ pub(crate) enum Emit {
     Ir,
     /// Object file.
     Obj,
-    /// Executable.
+    /// Loadable module and its manifest pair.
+    Module,
+    /// Thin host launcher.
     Exe,
-    /// Static library.
+    /// Embedding host library (runtime archive).
     Lib,
     /// Build metadata JSON.
     Metadata,
@@ -43,12 +47,21 @@ pub(crate) struct Request {
     pub clang: Option<String>,
     /// `--runtime`.
     pub runtime: Option<String>,
+    /// `--got-manifest`.
+    pub got_manifest: Option<String>,
+    /// `--cold`.
+    pub cold: bool,
+    /// `--rename old=new`.
+    pub renames: Vec<(String, String)>,
+    /// `--allow-untracked-removal`.
+    pub allow_untracked_removal: bool,
+    /// `--relaxed` was accepted by the parser.
+    pub relaxed: bool,
     /// `-v`: print exact toolchain commands.
     pub verbose: bool,
 }
 
 /// Runs code generation and artifact emission.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     request: &Request,
     hir: &HirCrate,
@@ -64,12 +77,6 @@ pub(crate) fn run(
         return usage_error(json, "artifact name must be a non-empty file name");
     }
     let emit = &request.emit;
-    if emit.contains(&Emit::Exe) && emit.contains(&Emit::Lib) {
-        return usage_error(
-            json,
-            "`exe` and `lib` cannot be emitted from the same module in M4",
-        );
-    }
     let out_dir = PathBuf::from(
         request
             .out_dir
@@ -86,21 +93,67 @@ pub(crate) fn run(
         );
     }
 
-    let mode = if emit.contains(&Emit::Lib) {
+    let target_triple = request
+        .target
+        .clone()
+        .unwrap_or_else(stc_codegen::host_triple);
+    let sources = paths.to_vec();
+    let mut source_bytes = Vec::new();
+    for path in paths {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return artifact_error(json, &format!("cannot read `{path}`: {error}"));
+            }
+        };
+        source_bytes.push((path.clone(), bytes));
+    }
+    let fingerprint = match stc_codegen::module::source_fingerprint(&source_bytes) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            return artifact_error(
+                json,
+                &format!("cannot fingerprint sources: {}", error.message),
+            );
+        }
+    };
+    let baseline = match &request.got_manifest {
+        Some(path) => match read_baseline(Path::new(path)) {
+            Ok(manifest) => Some(manifest),
+            Err(message) => return artifact_error(json, &message),
+        },
+        None => None,
+    };
+    let renames = request
+        .renames
+        .iter()
+        .map(|(old, new)| Rename::new(old.as_str(), new.as_str()))
+        .collect();
+
+    let mode = if emit.contains(&Emit::Lib) && !emit.contains(&Emit::Exe) {
         stc_codegen::Mode::Library
     } else {
         stc_codegen::Mode::Executable
     };
-    let sources: Vec<String> = paths.to_vec();
     let options = stc_codegen::Options {
         artifact_name: &name,
         target: request.target.as_deref(),
         debug: false,
         emit_metadata: emit.contains(&Emit::Metadata),
         mode,
+        relaxed: request.relaxed,
+        release: false,
         sources: &sources,
+        module: stc_codegen::ModuleBuildOptions {
+            compiler_version: format!("stc {}", env!("CARGO_PKG_VERSION")),
+            source_fingerprint: fingerprint,
+            baseline: baseline.as_ref(),
+            cold: request.cold,
+            allow_untracked_removal: request.allow_untracked_removal,
+            renames,
+        },
     };
-    let output = match stc_codegen::generate(hir, &options) {
+    let mut output = match stc_codegen::generate(hir, &options) {
         Ok(output) => output,
         Err(errors) => {
             let mut internal = false;
@@ -127,20 +180,42 @@ pub(crate) fn run(
             return if internal { 3 } else { 1 };
         }
     };
+    for diagnostic in &output.got.diagnostics {
+        if diagnostic.is_error() {
+            report_no_span(json, diagnostic.code, &diagnostic.message);
+            return 1;
+        }
+        report_warning(json, diagnostic.code, &diagnostic.message);
+    }
+    if !output.got.is_deployable() {
+        report_no_span(
+            json,
+            "STC-E-MANIFEST-004",
+            "the module artifacts are not deployable",
+        );
+        return 1;
+    }
+    let module_file = module_file_name(&name, &target_triple, output.got.manifest.header.build_id);
 
+    let needs_ir = emit.iter().any(|kind| {
+        matches!(
+            kind,
+            Emit::Ir | Emit::Obj | Emit::Module | Emit::Exe | Emit::Lib
+        )
+    });
     let ir_path = out_dir.join(format!("{name}.ll"));
-    let needs_ir = emit
-        .iter()
-        .any(|kind| matches!(kind, Emit::Ir | Emit::Obj | Emit::Exe | Emit::Lib));
     if needs_ir && let Err(error) = std::fs::write(&ir_path, &output.module) {
         return artifact_error(
             json,
             &format!("cannot write `{}`: {error}", ir_path.display()),
         );
     }
-    let needs_metadata =
-        emit.contains(&Emit::Metadata) || emit.contains(&Emit::Exe) || emit.contains(&Emit::Lib);
+
+    let needs_metadata = emit
+        .iter()
+        .any(|kind| matches!(kind, Emit::Metadata | Emit::Module | Emit::Exe | Emit::Lib));
     if needs_metadata {
+        output.metadata.module_file = module_file.clone();
         let metadata_path = out_dir.join(format!("{name}.stc-meta.json"));
         if let Err(error) =
             std::fs::write(&metadata_path, output.metadata.to_json().render_pretty())
@@ -152,65 +227,170 @@ pub(crate) fn run(
         }
     }
 
+    let needs_pair = emit
+        .iter()
+        .any(|kind| matches!(kind, Emit::Module | Emit::Exe | Emit::Lib));
+    if needs_pair {
+        let json_path = out_dir.join(format!("{name}.stc-got.json"));
+        if let Err(error) = std::fs::write(&json_path, &output.got.manifest_json) {
+            return artifact_error(
+                json,
+                &format!("cannot write `{}`: {error}", json_path.display()),
+            );
+        }
+        let binary_path = out_dir.join(format!("{name}.stc-got.bin"));
+        if let Err(error) = std::fs::write(&binary_path, &output.got.manifest_binary) {
+            return artifact_error(
+                json,
+                &format!("cannot write `{}`: {error}", binary_path.display()),
+            );
+        }
+    }
+
     let needs_clang = emit
         .iter()
-        .any(|kind| matches!(kind, Emit::Obj | Emit::Exe | Emit::Lib));
+        .any(|kind| matches!(kind, Emit::Obj | Emit::Module | Emit::Exe | Emit::Lib));
     if !needs_clang {
         return 0;
     }
-    let clang = match find_clang(request.clang.as_deref()) {
-        Ok(clang) => clang,
-        Err(message) => return toolchain_error(json, "STC-E-BUILD-001", &message),
-    };
     if emit.contains(&Emit::Exe)
         && let Some(target) = &request.target
         && !is_host_triple(target)
     {
         return usage_error(
             json,
-            &format!("cross-target executables are not supported in M4 (`{target}`)"),
+            &format!("cross-target executables are not supported in M4.5 (`{target}`)"),
         );
     }
-
+    if emit.contains(&Emit::Lib)
+        && let Some(target) = &request.target
+        && !is_host_triple(target)
+    {
+        return usage_error(
+            json,
+            &format!("cross-target embedding libraries are not supported in M4.5 (`{target}`)"),
+        );
+    }
+    let clang = match find_clang(request.clang.as_deref()) {
+        Ok(clang) => clang,
+        Err(message) => return toolchain_error(json, "STC-E-BUILD-001", &message),
+    };
     let object_path = out_dir.join(format!("{name}.o"));
+    let pic = !target_triple.contains("windows");
     if let Err(message) = compile_ir(
         &clang,
         &ir_path,
         &object_path,
         request.target.as_deref(),
+        pic,
         request.verbose,
     ) {
         return build_failure(json, &message, &ir_path);
     }
-    if emit.contains(&Emit::Obj) {
+    if emit.contains(&Emit::Obj)
+        && !needs_pair
+        && !emit.contains(&Emit::Exe)
+        && !emit.contains(&Emit::Lib)
+    {
         return 0;
     }
-    let runtime = match find_runtime(request.runtime.as_deref()) {
-        Ok(runtime) => runtime,
-        Err(message) => return toolchain_error(json, "STC-E-BUILD-003", &message),
-    };
-    if emit.contains(&Emit::Exe) {
-        let exe_path = out_dir.join(exe_name(&name));
-        if let Err(message) = link_exe(
+
+    if needs_pair {
+        let module_path = out_dir.join(&module_file);
+        if let Err(message) = link_module(
             &clang,
             &object_path,
-            &runtime,
-            &exe_path,
+            &module_path,
             request.target.as_deref(),
             request.verbose,
         ) {
             return build_failure(json, &message, &ir_path);
         }
-        return 0;
     }
     if emit.contains(&Emit::Lib) {
-        let lib_path = out_dir.join(lib_name(&name));
-        if let Err(message) = archive(&object_path, &lib_path, request.verbose) {
-            return build_failure(json, &message, &ir_path);
+        let runtime = match find_runtime(request.runtime.as_deref()) {
+            Ok(runtime) => runtime,
+            Err(message) => return toolchain_error(json, "STC-E-BUILD-003", &message),
+        };
+        let library_path = out_dir.join(lib_name(&name));
+        if let Err(error) = std::fs::copy(&runtime, &library_path) {
+            return artifact_error(
+                json,
+                &format!(
+                    "cannot write embedding host library `{}`: {error}",
+                    library_path.display()
+                ),
+            );
         }
-        return 0;
+    }
+    if emit.contains(&Emit::Exe) {
+        let runtime = match find_runtime(request.runtime.as_deref()) {
+            Ok(runtime) => runtime,
+            Err(message) => return toolchain_error(json, "STC-E-BUILD-003", &message),
+        };
+        let launcher_ir =
+            stc_codegen::generate_launcher(&name, &module_file, request.target.as_deref());
+        let launcher_ir_path = out_dir.join(format!("{name}-launcher.ll"));
+        if let Err(error) = std::fs::write(&launcher_ir_path, &launcher_ir) {
+            return artifact_error(
+                json,
+                &format!("cannot write `{}`: {error}", launcher_ir_path.display()),
+            );
+        }
+        let launcher_object = out_dir.join(format!("{name}-launcher.o"));
+        if let Err(message) = compile_ir(
+            &clang,
+            &launcher_ir_path,
+            &launcher_object,
+            request.target.as_deref(),
+            false,
+            request.verbose,
+        ) {
+            return build_failure(json, &message, &launcher_ir_path);
+        }
+        let exe_path = out_dir.join(exe_name(&name));
+        if let Err(message) = link_exe(
+            &clang,
+            &launcher_object,
+            &runtime,
+            &exe_path,
+            request.target.as_deref(),
+            request.verbose,
+        ) {
+            return build_failure(json, &message, &launcher_ir_path);
+        }
     }
     0
+}
+
+fn read_baseline(path: &Path) -> Result<Manifest, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("cannot read baseline `{}`: {error}", path.display()))?;
+    let manifest = if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        let text = String::from_utf8(bytes)
+            .map_err(|_| format!("baseline `{}` is not UTF-8", path.display()))?;
+        Manifest::decode_json(&text)
+    } else {
+        Manifest::decode_binary(&bytes)
+    }
+    .map_err(|error| {
+        format!(
+            "baseline `{}` is not a valid GOT manifest: {}",
+            path.display(),
+            error.message
+        )
+    })?;
+    manifest.validate().map_err(|error| {
+        format!(
+            "baseline `{}` is not a valid GOT manifest: {}",
+            path.display(),
+            error.message
+        )
+    })?;
+    Ok(manifest)
 }
 
 fn default_name(paths: &[String]) -> String {
@@ -252,17 +432,17 @@ fn lib_name(name: &str) -> String {
     }
 }
 
-fn is_host_triple(target: &str) -> bool {
-    let host = if cfg!(all(windows, target_env = "msvc")) {
-        "x86_64-pc-windows-msvc"
-    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        "x86_64-unknown-linux-gnu"
-    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        "aarch64-unknown-linux-gnu"
+fn module_file_name(name: &str, target: &str, build_id: stc_got::GotId) -> String {
+    let extension = if target.contains("windows") {
+        "dll"
     } else {
-        ""
+        "so"
     };
-    target == host
+    format!("{name}-{}.{extension}", build_id.to_hex_plain())
+}
+
+fn is_host_triple(target: &str) -> bool {
+    target == stc_codegen::host_triple()
 }
 
 fn find_clang(explicit: Option<&str>) -> Result<String, String> {
@@ -328,6 +508,7 @@ fn compile_ir(
     ir: &Path,
     object: &Path,
     target: Option<&str>,
+    pic: bool,
     verbose: bool,
 ) -> Result<(), String> {
     let mut command = Command::new(clang);
@@ -338,8 +519,35 @@ fn compile_ir(
         .args(["-x", "ir"])
         .arg(ir)
         .args(["-c", "-o"])
-        .arg(object)
-        .arg("-O0");
+        .arg(object);
+    if pic {
+        command.arg("-fPIC");
+    }
+    command.arg("-O0");
+    run_tool(&mut command, verbose)
+}
+
+fn link_module(
+    clang: &str,
+    object: &Path,
+    output: &Path,
+    target: Option<&str>,
+    verbose: bool,
+) -> Result<(), String> {
+    let mut command = Command::new(clang);
+    if let Some(target) = target {
+        command.arg(format!("--target={target}"));
+    }
+    command.arg(object).arg("-shared").arg("-o").arg(output);
+    let target_triple = target.map_or_else(stc_codegen::host_triple, str::to_owned);
+    if target.is_none() || is_host_triple(&target_triple) {
+        for argument in system_link_args() {
+            command.arg(argument);
+        }
+    }
+    if target_triple.contains("windows") {
+        command.args(["-Xlinker", "/NOIMPLIB"]);
+    }
     run_tool(&mut command, verbose)
 }
 
@@ -361,31 +569,6 @@ fn link_exe(
     }
     command.args(["-o"]).arg(output);
     run_tool(&mut command, verbose)
-}
-
-fn archive(object: &Path, library: &Path, verbose: bool) -> Result<(), String> {
-    let candidates: &[&str] = if cfg!(windows) {
-        &["llvm-ar"]
-    } else {
-        &["llvm-ar", "ar"]
-    };
-    let mut last_error = String::new();
-    for candidate in candidates {
-        let mut command = Command::new(candidate);
-        command.arg("rcs").arg(library).arg(object);
-        match run_tool(&mut command, verbose) {
-            Ok(()) => return Ok(()),
-            Err(message) => {
-                let missing = message.starts_with("cannot run");
-                last_error = message;
-                if missing {
-                    continue;
-                }
-                break;
-            }
-        }
-    }
-    Err(last_error)
 }
 
 fn run_tool(command: &mut Command, verbose: bool) -> Result<(), String> {
@@ -440,6 +623,17 @@ fn build_failure(json: bool, message: &str, ir_path: &Path) -> u8 {
         ),
     );
     1
+}
+
+fn report_warning(json: bool, code: &'static str, message: &str) {
+    if json {
+        println!(
+            "{{\"code\":\"{code}\",\"severity\":\"warning\",\"message\":\"{}\"}}",
+            escape_json(message)
+        );
+    } else {
+        eprintln!("warning[{code}]: {message}");
+    }
 }
 
 fn report_no_span(json: bool, code: &'static str, message: &str) {

@@ -1,7 +1,7 @@
 //! Runtime ABI names and trap codes (Runtime-and-Execution §2.3).
 
 /// Runtime ABI version embedded in metadata.
-pub const ABI_VERSION: i32 = 1;
+pub const ABI_VERSION: i32 = 2;
 
 /// Trap codes passed to `stc_rt_trap`.
 pub mod trap {
@@ -43,6 +43,27 @@ pub mod module {
     pub const SHUTDOWN: &str = "stc_module_shutdown";
     /// Detach entry point.
     pub const DETACH: &str = "stc_module_detach";
+
+    /// Module-local cached host API pointer.
+    pub const API_GLOBAL: &str = "stc_module_api";
+    /// Module-local cached slot-table pointer.
+    pub const SLOTS_GLOBAL: &str = "stc_module_slots";
+    /// Embedded descriptor blob.
+    pub const DESCRIPTOR_DATA: &str = "stc_module_descriptor_data";
+    /// Module-local function-address table.
+    pub const FUNCTION_TABLE: &str = "stc_module_function_table";
+}
+
+/// ABI 2 host API table layout constants used by generated entry points.
+pub mod host_api {
+    /// `(major << 16) | minor` for ABI 2.0.
+    pub const ABI_VERSION: u32 = 2 << 16;
+    /// Offset of `abi_version` in `stc_host_api`.
+    pub const ABI_VERSION_OFFSET: u64 = 0;
+    /// Offset of `struct_size` in `stc_host_api`.
+    pub const STRUCT_SIZE_OFFSET: u64 = 4;
+    /// Required prefix length: version, size, and the eleven service pointers.
+    pub const REQUIRED_SIZE: u64 = 8 + 11 * 8;
 }
 
 /// Built-in unit symbols.

@@ -100,9 +100,11 @@ version = "0.1.0"
 dependencies = [
  "stc-codegen",
  "stc-diag",
+ "stc-got",
  "stc-hir",
  "stc-lexer",
  "stc-parser",
+ "stc-runtime",
  "stc-sema",
  "stc-span",
  "stc-syntax",

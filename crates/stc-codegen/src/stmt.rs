@@ -292,7 +292,7 @@ impl Lowerer<'_> {
             .ok_or_else(|| CodegenError::internal("checked add returned void"))?;
         let value = f.extract_value(&aggregate, 0, ty);
         let overflow = f.extract_value(&aggregate, 1, IrType::Int(1));
-        self.trap_if(f, &overflow, crate::abi::trap::OVERFLOW, span);
+        self.trap_if(f, &overflow, crate::abi::trap::OVERFLOW, span)?;
         Ok(value)
     }
 

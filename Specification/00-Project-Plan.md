@@ -337,17 +337,20 @@ Exit criteria:
   and measured.
 - M4 scalar semantics are unchanged; M4 code-linked artifacts are explicitly non-loadable.
 
-> **M4.5 status (2026-10-25):** phases 0–4 are complete for review; phase 5 is next. Phase 1
+> **M4.5 status (2026-10-25):** phases 0–7 are complete for review; phase 8 is next. Phase 1
 > fixes the versioned artifact contracts in [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md):
 > stable keys, `GotId`, catalog, module descriptor, host ABI 2.0, manifest/plan formats, build IDs,
 > and pairing. Phase 2 implements the identity/manifest layer in `stc-got`; decisions
 > D-113–D-118 record the choices and phase-2 clarifications. Phase 3 adds the module IR builder
-> and structural verifier in `stc-codegen` (GOT slot-table access, indirect cell calls, exported
-> entry points, descriptor/function-table globals, clang-acceptance tests); D-119 records the
-> IR-level choices. Phase 4 adds the descriptor codec and pairing validation in `stc-got` plus
-> the `stc-codegen::module` catalog/slot/descriptor/manifest/plan projection with golden
-> snapshots and baseline tests; D-120–D-121 record the choices. IR execution lowering and
-> runtime integration have not started.
+> and structural verifier in `stc-codegen`; D-119 records the IR-level choices. Phase 4 adds the
+> descriptor codec and pairing validation plus the `stc-codegen::module`
+> catalog/slot/descriptor/manifest/plan projection; D-120–D-121 record the choices. Phase 5 adds
+> the host GOT, roots, quarantine, transient allocation, and artifact validation (D-122); phase 6
+> adds the loader, ABI 2 services, manifest store, and swap controller (D-123). Phase 7 converts
+> generated execution to the module model: persistent state, direct variables, retain leaves, and
+> task guards use GOT cells; calls are indirect through function cells; the launcher and
+> embedding host load compiler-produced module pairs; and a non-local trap boundary enables
+> rollback-window recovery (D-124). Existing M4 execution tests run through modules.
 
 ### M5 — FBs, OOP, aggregates, and UTF-8 strings
 

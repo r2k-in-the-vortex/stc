@@ -44,8 +44,9 @@ M4.5 phases 0–4 are complete: the compiler already projects the M4 scalar surf
 canonical slot bindings, descriptor, manifest, and online-change plan through
 `stc_codegen::module::project` and validates descriptor/manifest pairs in `stc-got`. M5 code must
 extend that catalog (types, descriptors, FB bodies, methods, aggregates) rather than derive
-identities in a second path; phases 5–10 add the host, loader, execution lowering, hot-swap
-tests, and documentation.
+identities in a second path. Phases 5–7 have added the host, loader, and execution conversion;
+phases 8–10 add scalar preservation/hot-swap behavior, full coverage, and the M5 handover
+documentation.
 
 Read [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md),
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md), and `M4.5-Plan.md`
