@@ -125,6 +125,7 @@ dependencies = [
  "stc-got",
  "stc-hir",
  "stc-lexer",
+ "stc-manifest",
  "stc-parser",
  "stc-runtime",
  "stc-sema",

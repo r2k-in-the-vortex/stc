@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–1 complete (2026-10-26); phases 2–11 ready to start. M5 (phases 1–7 and 4b) is
+Status: Phases 0–2 complete (2026-10-26); phases 3–11 ready to start. M5 (phases 1–7 and 4b) is
 complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
 usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
@@ -178,12 +178,14 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0 and 1 are complete (2026-10-26); phases 2–11 are pending. Phase 0 fixed
+Phase status: phases 0–2 are complete (2026-10-26); phases 3–11 are pending. Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
-resolved project graph and lockfile API, and `fuzz_manifest`. Phases may proceed in parallel only
-where the dependency direction allows (for example, Lean and the conformance harness can start
-once phase 0 fixes the vector and corpus contracts).
+resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
+multi-package analyzer, package-aware visibility and configuration selection, and package
+identities in codegen/GOT artifacts and source fingerprints; the driver now compiles `stc.toml`
+projects. Phases may proceed in parallel only where the dependency direction allows (for example,
+Lean and the conformance harness can start once phase 0 fixes the vector and corpus contracts).
 
 ## 6. Phase details
 
@@ -277,6 +279,22 @@ changes yet.
 Tests: cross-package function/FB/type/global references, alias-vs-name identity, `INTERNAL`
 rejection, duplicate names across packages, `USING` across packages, configuration selection,
 `stdlib = false`, deterministic file/package order, and a separate test project dependency.
+
+Status (2026-10-26): implemented. `stc-sema` exposes `ProjectSession`/`PackageSession` and
+`analyze_project`, which allocate one `PackageInfo` and root namespace per package in the merged
+HIR, stamp `Def.package` during collection, link dependency aliases into dependent root scopes,
+resolve qualified and `USING` names across packages, and enforce `INTERNAL` as package-private
+while keeping `PRIVATE` member visibility. Only root-package `CONFIGURATION`s are build entries;
+an explicit `[project].configuration` that names a dependency configuration or no configuration
+reports `STC-E-PROJECT-007`. `[project].stdlib = false` suppresses standard FB synthesis but
+keeps standard functions. `stc-codegen`/`stc-got` now include the package identity in mangled
+symbols, use package-relative source paths and a package-qualified source fingerprint, and select
+configurations/programs only from the root package. The driver compiles a project when
+`stc check`/`stc build` has no input files or `--manifest-path` is given: it lexes/parses sources
+in package-topological order, runs the merged analysis, renders `<package>/<relative>` source
+paths, and defaults project builds to `--emit module` under `<project>/target/stc/debug`. The
+manifest-free `<file>...` bridge is unchanged and still defaults to `--emit ir`. Artifact formats
+are unchanged; the full project CLI/build settings remain phase 3.
 
 Acceptance: a two-package project builds a module whose GOT keys use package identities and whose
 cross-package calls resolve.

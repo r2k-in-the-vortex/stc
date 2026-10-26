@@ -98,6 +98,10 @@ pub const RETAIN_DIRECT: &str = "STC-W-RETAIN-001";
 /// Invalid or duplicate `{stc:export}`/`{stc:no_mangle}` symbol.
 pub const EXPORT_INVALID: &str = "STC-E-EXPORT-001";
 
+// Project configuration.
+/// `[project].configuration` selects a missing or ambiguous configuration.
+pub const PROJECT_CONFIGURATION: &str = "STC-E-PROJECT-007";
+
 // Test-only units.
 /// Production code references a test-only unit.
 pub const TEST_REFERENCE: &str = "STC-E-TEST-001";

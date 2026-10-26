@@ -9,7 +9,7 @@ use stc_hir::{
     SizeOfHir, StmtId, StmtKindHir, Symbol, Ty, TyId, UnOp, Visibility,
 };
 use stc_lexer::Literal;
-use stc_span::Span;
+use stc_span::{FileId, Span};
 use stc_syntax::ast::AstNode;
 use stc_syntax::ast::{
     AddressOfExpr, Arg, CallExpr, CaseStmt, Expr, ForStmt, IfStmt, Name, PathExpr,
@@ -17,6 +17,7 @@ use stc_syntax::ast::{
     WhileStmt,
 };
 
+use crate::codes;
 use crate::prelude::ty_matches_generic;
 use crate::resolve::Lookup;
 use crate::types::Conv;
@@ -104,6 +105,7 @@ impl Analyzer<'_> {
     pub(crate) fn check_bodies(&mut self) {
         let sites = self.pou_sites.clone();
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             let stmt_list = match &site.node {
                 crate::PouNode::Function(node) => node.body(),
                 crate::PouNode::FunctionBlock(node) => node.body(),
@@ -2684,6 +2686,7 @@ impl Analyzer<'_> {
                         return self.alloc_error_expr(path.token_span());
                     }
                     let def = defs[0];
+                    self.check_ctx_access(def, ctx, segment.token_span());
                     if last {
                         let kind = self.hir.defs[def.index()].kind.clone();
                         return match kind {
@@ -2841,6 +2844,7 @@ impl Analyzer<'_> {
                     return FirstName::Error;
                 }
                 let def = defs[0];
+                self.check_ctx_access(def, ctx, span);
                 match &self.hir.defs[def.index()].kind {
                     DefKind::Function { .. } => FirstName::Function,
                     DefKind::Global { .. } => FirstName::Global(def),
@@ -2890,7 +2894,10 @@ impl Analyzer<'_> {
         if let Some(decl_span) = self
             .test_only
             .iter()
-            .find(|(symbol, _)| self.hir.interner.normalized(**symbol) == name.to_ascii_uppercase())
+            .find(|((package, symbol), _)| {
+                *package == self.current_package
+                    && self.hir.interner.normalized(*symbol) == name.to_ascii_uppercase()
+            })
             .map(|(_, span)| *span)
         {
             self.push_diag(
@@ -4504,10 +4511,14 @@ impl Analyzer<'_> {
                         })
                         .collect();
                     if !functions.is_empty() {
+                        for def in &functions {
+                            self.check_ctx_access(*def, ctx, span);
+                        }
                         return CalleeKind::Functions(functions);
                     }
                     if defs.len() == 1 {
                         let def = defs[0];
+                        self.check_ctx_access(def, ctx, span);
                         match &self.hir.defs[def.index()].kind {
                             DefKind::Global { ty, .. } => {
                                 let ty = *ty;
@@ -4646,6 +4657,7 @@ impl Analyzer<'_> {
             .iter()
             .copied()
             .find(|def| crate::resolve::is_namespace(&self.hir.defs[def.index()].kind))?;
+        self.check_ctx_access(namespace, ctx, first.token_span());
         for index in 1..segments.len() {
             let segment = &segments[index];
             let symbol = self.hir.intern(segment.text());
@@ -4661,10 +4673,14 @@ impl Analyzer<'_> {
                             })
                             .collect();
                         if !functions.is_empty() {
+                            for def in &functions {
+                                self.check_ctx_access(*def, ctx, span);
+                            }
                             return Some(CalleeKind::Functions(functions));
                         }
                         if defs.len() == 1 {
                             let def = defs[0];
+                            self.check_ctx_access(def, ctx, span);
                             match &self.hir.defs[def.index()].kind {
                                 DefKind::Global { ty, .. } => {
                                     let ty = *ty;
@@ -4711,10 +4727,12 @@ impl Analyzer<'_> {
                         && crate::resolve::is_namespace(&self.hir.defs[defs[0].index()].kind)
                     {
                         namespace = defs[0];
+                        self.check_ctx_access(namespace, ctx, segment.token_span());
                         continue;
                     }
                     if defs.len() == 1 {
                         let def = defs[0];
+                        self.check_ctx_access(def, ctx, segment.token_span());
                         let DefKind::Global { ty, .. } = &self.hir.defs[def.index()].kind else {
                             return Some(CalleeKind::Invalid);
                         };
@@ -4898,6 +4916,7 @@ impl Analyzer<'_> {
         match self.lookup_scope(ctx.scope, symbol) {
             Lookup::Entries(defs) if defs.len() == 1 => {
                 let def = defs[0];
+                self.check_ctx_access(def, ctx, span);
                 if let DefKind::Global { ty, .. } = &self.hir.defs[def.index()].kind {
                     let ty = *ty;
                     return Some((
@@ -5213,6 +5232,12 @@ impl Analyzer<'_> {
         matches!(self.hir.types.get(self.scalar_base(ty)), Ty::Time(_))
     }
 
+    /// Checks package-level access for a definition resolved from a body.
+    fn check_ctx_access(&mut self, def: DefId, ctx: &BodyCtx, span: Span) -> bool {
+        let package = self.package_of(ctx.scope);
+        self.check_def_access(def, package, span)
+    }
+
     fn check_field_access(
         &mut self,
         field: FieldId,
@@ -5251,7 +5276,8 @@ impl Analyzer<'_> {
         span: Span,
     ) -> bool {
         let ok = match visibility {
-            Visibility::Public | Visibility::Internal => true,
+            Visibility::Public => true,
+            Visibility::Internal => self.package_of(owner) == self.current_package,
             Visibility::Private => from_owner == Some(owner),
             Visibility::Protected => match from_owner {
                 Some(current) if current == owner => true,
@@ -5265,6 +5291,17 @@ impl Analyzer<'_> {
         };
         if !ok {
             let name = self.def_name(owner);
+            let note = if visibility == Visibility::Internal {
+                let package = self
+                    .hir
+                    .packages
+                    .get(self.package_of(owner).index())
+                    .map_or("", |package| package.name.as_str())
+                    .to_string();
+                format!("its visibility is `INTERNAL` in package `{package}`")
+            } else {
+                format!("its visibility is `{}`", visibility.as_str())
+            };
             self.push_diag(
                 Diagnostic::error(
                     crate::codes::NAME_INACCESSIBLE,
@@ -5272,7 +5309,7 @@ impl Analyzer<'_> {
                     span,
                 )
                 .with_label(decl, "declaration is here")
-                .with_note(format!("its visibility is `{}`", visibility.as_str())),
+                .with_note(note),
             );
         }
         ok
@@ -5370,11 +5407,63 @@ impl Analyzer<'_> {
     pub(crate) fn check_configurations(&mut self) {
         let sites = self.config_sites.clone();
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             self.check_configuration(site);
         }
-        let configs: Vec<DefId> = sites.iter().map(|site| site.def).collect();
-        if configs.len() == 1 {
-            self.entry_configuration = Some(configs[0]);
+        // Only the root package's configurations are build entries; a
+        // dependency's configurations are declarations (D-153).
+        let root = self.root_package;
+        let root_configs: Vec<DefId> = sites
+            .iter()
+            .map(|site| site.def)
+            .filter(|def| self.package_of(*def) == root)
+            .collect();
+        let selection = self.selected_configuration.clone();
+        let Some(name) = selection else {
+            if let [only] = root_configs.as_slice() {
+                self.entry_configuration = Some(*only);
+            }
+            return;
+        };
+        let wanted = name.to_ascii_uppercase();
+        let matches: Vec<DefId> = root_configs
+            .iter()
+            .copied()
+            .filter(|def| {
+                self.hir.defs[def.index()]
+                    .name
+                    .is_some_and(|symbol| self.hir.interner.normalized(symbol) == wanted)
+            })
+            .collect();
+        match matches.as_slice() {
+            [only] => self.entry_configuration = Some(*only),
+            [] => {
+                let package = self
+                    .hir
+                    .packages
+                    .get(root.index())
+                    .map_or("", |package| package.name.as_str());
+                let span = root_configs.first().map_or_else(
+                    || Span::empty(FileId::new(0), 0),
+                    |def| self.hir.defs[def.index()].span,
+                );
+                self.error(
+                    codes::PROJECT_CONFIGURATION,
+                    format!("configuration `{name}` is not declared in package `{package}`"),
+                    span,
+                );
+            }
+            _ => {
+                let span = matches.first().map_or_else(
+                    || Span::empty(FileId::new(0), 0),
+                    |def| self.hir.defs[def.index()].span,
+                );
+                self.error(
+                    codes::PROJECT_CONFIGURATION,
+                    format!("configuration `{name}` is ambiguous"),
+                    span,
+                );
+            }
         }
     }
 

@@ -2349,7 +2349,10 @@ impl Lowerer<'_> {
             },
             exports,
             spans: SpanMetadata {
-                files: crate::module::package_relative_paths(self.options.sources),
+                files: match self.options.source_paths {
+                    Some(paths) => paths.to_vec(),
+                    None => crate::module::package_relative_paths(self.options.sources),
+                },
                 entries: span_entries,
             },
         }

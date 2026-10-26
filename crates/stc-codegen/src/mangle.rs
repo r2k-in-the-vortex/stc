@@ -39,8 +39,20 @@ pub fn namespace_segments(hir: &HirCrate, def: DefId) -> Vec<String> {
     segments
 }
 
+/// Returns the normalized package segment for a definition (D-153).
+#[must_use]
+pub fn package_segment(hir: &HirCrate, def: DefId) -> String {
+    let package = hir.defs[def.index()].package;
+    hir.packages.get(package.index()).map_or_else(
+        || "UNKNOWN".to_owned(),
+        |package| normalize_ident(&package.name),
+    )
+}
+
 fn prefix(prefix: &str, hir: &HirCrate, def: DefId, name: &str) -> String {
     let mut out = String::from(prefix);
+    out.push_str(&package_segment(hir, def));
+    out.push_str("_n_");
     for segment in namespace_segments(hir, def) {
         out.push_str(&segment);
         out.push_str("_n_");
@@ -124,6 +136,8 @@ pub fn program_instance_symbol(name_text: &str) -> String {
 #[must_use]
 pub fn program_body_symbol(hir: &HirCrate, def: DefId) -> String {
     let mut out = String::from("stc_prog_");
+    out.push_str(&package_segment(hir, def));
+    out.push_str("_n_");
     for segment in namespace_segments(hir, def) {
         out.push_str(&segment);
         out.push_str("_n_");
@@ -173,6 +187,8 @@ pub fn method_symbol(
     let signature = signature_text(hir, types, def)?;
     let hash = fnv1a(signature.as_bytes());
     let mut out = String::from("stc_m_");
+    out.push_str(&package_segment(hir, *owner));
+    out.push_str("_n_");
     for segment in namespace_segments(hir, *owner) {
         out.push_str(&segment);
         out.push_str("_n_");

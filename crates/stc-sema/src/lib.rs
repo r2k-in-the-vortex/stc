@@ -31,8 +31,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use stc_diag::{Diagnostic, DiagnosticSink};
 use stc_hir::{
-    ConstValue, DefId, ExprId, FieldId, HirCrate, LocalId, ParamId, StdFnId, Symbol, TyId,
-    Visibility,
+    ConstValue, DefId, ExprId, FieldId, HirCrate, LocalId, PackageId, PackageInfo, ParamId,
+    StdFnId, Symbol, TyId, Visibility,
 };
 use stc_parser::ParsedFile;
 use stc_span::{FileId, Span};
@@ -43,7 +43,9 @@ use stc_syntax::ast::{
 };
 use stc_syntax::{NodeId, SyntaxNode};
 
-pub use session::{Analysis, Res, Session, analyze, analyze_with};
+pub use session::{
+    Analysis, PackageSession, ProjectSession, Res, Session, analyze, analyze_project, analyze_with,
+};
 
 /// Empty span used for synthesized declarations.
 pub(crate) const EMPTY_SPAN: Span = Span::new(FileId::new(0), 0, 0);
@@ -187,12 +189,24 @@ pub(crate) enum AliasState {
 
 /// The semantic analyzer for one build.
 pub(crate) struct Analyzer<'a> {
-    pub files: &'a [ParsedFile],
+    pub packages: Vec<PackageSession<'a>>,
     pub hir: HirCrate,
     pub diags: &'a mut DiagnosticSink,
     pub resolutions: BTreeMap<(FileId, NodeId), Res>,
+    /// Root namespace of the root package.
     pub root_ns: DefId,
-    pub namespaces: BTreeMap<Vec<Symbol>, DefId>,
+    /// Root namespace for every package, indexed by `PackageId`.
+    pub root_namespaces: Vec<DefId>,
+    /// The root package whose configurations/programs select the build.
+    pub root_package: PackageId,
+    /// Package whose declarations are currently being collected or checked.
+    pub current_package: PackageId,
+    /// Whether standard function blocks are synthesized.
+    pub stdlib: bool,
+    /// `[project].configuration` from the root package.
+    pub selected_configuration: Option<String>,
+    /// Namespace paths per package (the empty path is the package root).
+    pub namespaces: Vec<BTreeMap<Vec<Symbol>, DefId>>,
     pub scopes: BTreeMap<DefId, ScopeData>,
     pub type_sites: Vec<TypeSite>,
     pub field_inits: Vec<(FieldId, DefId, Initializer)>,
@@ -203,7 +217,7 @@ pub(crate) struct Analyzer<'a> {
     pub pou_sites: Vec<PouSite>,
     pub config_sites: Vec<ConfigSite>,
     pub locals_by_owner: BTreeMap<DefId, Vec<LocalId>>,
-    pub test_only: BTreeMap<Symbol, Span>,
+    pub test_only: BTreeMap<(PackageId, Symbol), Span>,
     pub std_fns: BTreeMap<Symbol, Vec<StdFnId>>,
     pub std_fbs: BTreeMap<Symbol, DefId>,
     pub entry_configuration: Option<DefId>,
@@ -212,28 +226,64 @@ pub(crate) struct Analyzer<'a> {
 }
 
 impl<'a> Analyzer<'a> {
-    pub(crate) fn new(
-        session: &Session,
-        files: &'a [ParsedFile],
+    pub(crate) fn new_project(
+        session: &'a ProjectSession<'a>,
         diags: &'a mut DiagnosticSink,
     ) -> Self {
-        let mut hir = HirCrate::new(session.package_name.clone(), session.root_namespace.clone());
-        let root_symbol = hir.intern(&session.root_namespace);
-        let root_ns = hir.alloc_def(
-            stc_hir::DefKind::Namespace { internal: false },
-            Some(root_symbol),
-            EMPTY_SPAN,
-            None,
-            Visibility::Public,
-        );
+        let mut packages = session.packages.clone();
+        if packages.is_empty() {
+            packages.push(PackageSession::new("_root", "_root", &[], true));
+        }
+        let root_package = packages
+            .iter()
+            .position(|package| package.is_root)
+            .unwrap_or(0);
+        let root_package = PackageId::new(u32::try_from(root_package).expect("package limit"));
+        let package_infos = packages
+            .iter()
+            .enumerate()
+            .map(|(index, package)| PackageInfo {
+                id: PackageId::new(u32::try_from(index).expect("package limit")),
+                name: package.name.clone(),
+                root_namespace: package.root_namespace.clone(),
+            })
+            .collect();
+        let mut hir = HirCrate::with_packages(package_infos, root_package);
+
+        let mut root_namespaces = Vec::with_capacity(packages.len());
+        let mut namespaces = Vec::with_capacity(packages.len());
+        let mut scopes = BTreeMap::new();
+        for (index, package) in packages.iter().enumerate() {
+            let id = PackageId::new(u32::try_from(index).expect("package limit"));
+            let symbol = hir.intern(&package.root_namespace);
+            let root_ns = hir.alloc_def(
+                stc_hir::DefKind::Namespace { internal: false },
+                Some(symbol),
+                EMPTY_SPAN,
+                None,
+                Visibility::Public,
+            );
+            hir.defs[root_ns.index()].package = id;
+            root_namespaces.push(root_ns);
+            let mut paths = BTreeMap::new();
+            paths.insert(Vec::new(), root_ns);
+            namespaces.push(paths);
+            scopes.insert(root_ns, ScopeData::default());
+        }
+        let root_ns = root_namespaces[root_package.index()];
         let mut analyzer = Self {
-            files,
+            packages,
             hir,
             diags,
             resolutions: BTreeMap::new(),
             root_ns,
-            namespaces: BTreeMap::new(),
-            scopes: BTreeMap::new(),
+            root_namespaces,
+            root_package,
+            current_package: root_package,
+            stdlib: session.stdlib,
+            selected_configuration: session.configuration.clone(),
+            namespaces,
+            scopes,
             type_sites: Vec::new(),
             field_inits: Vec::new(),
             type_site_by_def: BTreeMap::new(),
@@ -250,10 +300,30 @@ impl<'a> Analyzer<'a> {
             const_globals: BTreeMap::new(),
             const_in_progress: BTreeSet::new(),
         };
-        analyzer.namespaces.insert(vec![root_symbol], root_ns);
-        analyzer.scopes.insert(root_ns, ScopeData::default());
-        analyzer.install_prelude();
+        analyzer.link_dependencies();
+        analyzer.install_prelude(session.stdlib);
         analyzer
+    }
+
+    /// Makes every direct dependency's root namespace visible from its
+    /// dependent's root scope (D-153).
+    fn link_dependencies(&mut self) {
+        for index in 0..self.packages.len() {
+            let package = PackageId::new(u32::try_from(index).expect("package limit"));
+            let root = self.root_namespaces[index];
+            let dependencies = self.packages[index].dependencies.clone();
+            for dependency in dependencies {
+                let Some(dependency_root) = self.root_namespaces.get(dependency) else {
+                    continue;
+                };
+                let Some(symbol) = self.hir.defs[dependency_root.index()].name else {
+                    continue;
+                };
+                self.current_package = package;
+                self.add_entry(root, symbol, *dependency_root, EMPTY_SPAN, false);
+            }
+        }
+        self.current_package = self.root_package;
     }
 
     pub(crate) fn run(&mut self) {
@@ -267,6 +337,78 @@ impl<'a> Analyzer<'a> {
         self.check_bodies();
         self.check_configurations();
         self.hir.entry_configuration = self.entry_configuration;
+    }
+
+    /// Allocates a definition owned by the current package.
+    pub(crate) fn alloc_def(
+        &mut self,
+        kind: stc_hir::DefKind,
+        name: Option<Symbol>,
+        span: Span,
+        parent: Option<DefId>,
+        visibility: Visibility,
+    ) -> DefId {
+        let package = self.current_package;
+        self.alloc_def_in(package, kind, name, span, parent, visibility)
+    }
+
+    /// Allocates a definition owned by an explicit package.
+    pub(crate) fn alloc_def_in(
+        &mut self,
+        package: PackageId,
+        kind: stc_hir::DefKind,
+        name: Option<Symbol>,
+        span: Span,
+        parent: Option<DefId>,
+        visibility: Visibility,
+    ) -> DefId {
+        let def = self.hir.alloc_def(kind, name, span, parent, visibility);
+        self.hir.defs[def.index()].package = package;
+        def
+    }
+
+    /// Returns the owning package of a definition.
+    pub(crate) fn package_of(&self, def: DefId) -> PackageId {
+        self.hir.defs[def.index()].package
+    }
+
+    /// Returns the manifest name of the package owning a definition.
+    pub(crate) fn package_name(&self, def: DefId) -> &str {
+        let package = self.package_of(def);
+        self.hir
+            .packages
+            .get(package.index())
+            .map_or("", |package| package.name.as_str())
+    }
+
+    /// Reports a cross-package `INTERNAL` access violation.
+    ///
+    /// Returns `false` when `def` is internal to a package other than
+    /// `from_package`. The reference stays resolved so the caller can report
+    /// one diagnostic instead of cascading unknown-name errors.
+    pub(crate) fn check_def_access(
+        &mut self,
+        def: DefId,
+        from_package: PackageId,
+        span: Span,
+    ) -> bool {
+        let data = &self.hir.defs[def.index()];
+        if data.visibility != Visibility::Internal || data.package == from_package {
+            return true;
+        }
+        let name = data.name_text(&self.hir.interner).to_string();
+        let decl = data.span;
+        let package = self.package_name(def).to_string();
+        self.push_diag(
+            Diagnostic::error(
+                codes::NAME_INACCESSIBLE,
+                format!("`{name}` is internal to package `{package}`"),
+                span,
+            )
+            .with_label(decl, "declaration is here")
+            .with_note("`INTERNAL` declarations are visible only inside their own package"),
+        );
+        false
     }
 
     pub(crate) fn error(&mut self, code: &'static str, message: impl Into<String>, span: Span) {

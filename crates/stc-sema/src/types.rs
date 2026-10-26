@@ -22,6 +22,7 @@ impl Analyzer<'_> {
     pub(crate) fn resolve_aliases(&mut self) {
         let sites: Vec<TypeSite> = self.type_sites.clone();
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             if matches!(&self.hir.defs[site.def.index()].kind, DefKind::Alias { .. }) {
                 let _ = self.resolve_alias_def(site.def);
             }
@@ -33,31 +34,37 @@ impl Analyzer<'_> {
         // Enums and named values first so their constants are available to
         // array bounds and subranges.
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             if matches!(site.decl, TypeDecl::Enum(_)) {
                 self.resolve_enum_site(site);
             }
         }
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             if matches!(site.decl, TypeDecl::NamedValue(_)) {
                 self.resolve_named_value_site(site);
             }
         }
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             if matches!(site.decl, TypeDecl::Simple(_) | TypeDecl::Array(_)) {
                 let _ = self.resolve_alias_def(site.def);
             }
         }
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             if matches!(site.decl, TypeDecl::Subrange(_)) {
                 self.resolve_subrange_site(site);
             }
         }
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             if matches!(site.decl, TypeDecl::Struct(_)) {
                 self.resolve_struct_site(site);
             }
         }
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             if matches!(site.decl, TypeDecl::String(_) | TypeDecl::Ref(_)) {
                 let _ = self.resolve_alias_def(site.def);
             }
@@ -401,7 +408,9 @@ impl Analyzer<'_> {
 
     fn resolve_inline_struct(&mut self, type_ref: &TypeRef, ns: DefId) -> TyId {
         let overlap = type_ref.syntax().has_direct_token(SyntaxKind::KwOverlap);
-        let def = self.hir.alloc_def(
+        let package = self.package_of(ns);
+        let def = self.alloc_def_in(
+            package,
             DefKind::Struct {
                 fields: Vec::new(),
                 overlap,
@@ -800,6 +809,7 @@ impl Analyzer<'_> {
     fn resolve_decl_types(&mut self) {
         let sites: Vec<crate::DeclSite> = self.decl_sites.clone();
         for site in &sites {
+            self.current_package = self.decl_package(site.id);
             let scope = self.decl_scope(site.id, site.ns);
             let ty = if site.edge {
                 self.hir.types.bool()
@@ -819,6 +829,15 @@ impl Analyzer<'_> {
             self.set_decl_type(site.id, ty);
             let owner_kind = self.decl_owner_kind(site);
             self.check_decl_rules(site, ty, owner_kind);
+        }
+    }
+
+    fn decl_package(&self, id: DeclId) -> stc_hir::PackageId {
+        match id {
+            DeclId::Global(def) => self.package_of(def),
+            DeclId::Field(field) => self.package_of(self.hir.fields[field.index()].owner),
+            DeclId::Param(param) => self.package_of(self.hir.params[param.index()].owner),
+            DeclId::Local(local) => self.package_of(self.hir.locals[local.index()].owner),
         }
     }
 
@@ -1013,10 +1032,12 @@ impl Analyzer<'_> {
     fn resolve_pou_signatures(&mut self) {
         let sites = self.pou_sites.clone();
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             self.resolve_pou_signature(site);
         }
         // Inheritance links second, after all signatures exist.
         for site in &sites {
+            self.current_package = self.package_of(site.def);
             self.resolve_pou_hierarchy(site);
         }
     }
@@ -1785,12 +1806,14 @@ impl Analyzer<'_> {
     pub(crate) fn resolve_initializers(&mut self) {
         let type_sites = self.type_sites.clone();
         for site in &type_sites {
+            self.current_package = self.package_of(site.def);
             if let Some((initializer, ty)) = self.type_default_initializer(site) {
                 let _ = self.lower_initializer(&initializer, ty, site.ns);
             }
         }
         let decls = self.decl_sites.clone();
         for site in &decls {
+            self.current_package = self.decl_package(site.id);
             let Some(init) = &site.init else {
                 continue;
             };
@@ -1804,6 +1827,7 @@ impl Analyzer<'_> {
         }
         let fields = self.field_inits.clone();
         for (field, ns, init) in fields {
+            self.current_package = self.package_of(ns);
             let ty = self.hir.fields[field.index()].ty;
             if ty == self.hir.types.error() {
                 continue;

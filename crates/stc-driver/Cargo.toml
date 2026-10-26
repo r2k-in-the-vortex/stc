@@ -19,6 +19,7 @@ stc-diag = { path = "../stc-diag" }
 stc-got = { path = "../stc-got" }
 stc-hir = { path = "../stc-hir" }
 stc-lexer = { path = "../stc-lexer" }
+stc-manifest = { path = "../stc-manifest" }
 stc-parser = { path = "../stc-parser" }
 stc-sema = { path = "../stc-sema" }
 stc-span = { path = "../stc-span" }

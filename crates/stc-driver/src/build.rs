@@ -61,7 +61,7 @@ pub(crate) struct Request {
     pub verbose: bool,
 }
 
-/// Runs code generation and artifact emission.
+/// Runs code generation and artifact emission for the manifest-free bridge.
 pub(crate) fn run(
     request: &Request,
     hir: &HirCrate,
@@ -76,6 +76,79 @@ pub(crate) fn run(
     if name.is_empty() || name.contains(['/', '\\']) {
         return usage_error(json, "artifact name must be a non-empty file name");
     }
+    let sources = paths.to_vec();
+    let mut source_bytes = Vec::new();
+    for path in paths {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return artifact_error(json, &format!("cannot read `{path}`: {error}"));
+            }
+        };
+        source_bytes.push((path.clone(), bytes));
+    }
+    let fingerprint = match stc_codegen::module::source_fingerprint(&source_bytes) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            return artifact_error(
+                json,
+                &format!("cannot fingerprint sources: {}", error.message),
+            );
+        }
+    };
+    finish(
+        request,
+        hir,
+        name,
+        &sources,
+        None,
+        fingerprint,
+        diagnostics,
+        json,
+    )
+}
+
+/// Runs code generation and artifact emission for a project build.
+///
+/// `sources` are the file paths in `FileId` order; `source_paths` are the
+/// package-relative source paths used by GOT source locations and metadata.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_project(
+    request: &Request,
+    hir: &HirCrate,
+    name: &str,
+    sources: &[String],
+    source_paths: &[String],
+    fingerprint: stc_got::Digest32,
+    diagnostics: &mut DiagnosticSink,
+    json: bool,
+) -> u8 {
+    if name.is_empty() || name.contains(['/', '\\']) {
+        return usage_error(json, "artifact name must be a non-empty file name");
+    }
+    finish(
+        request,
+        hir,
+        name.to_owned(),
+        sources,
+        Some(source_paths),
+        fingerprint,
+        diagnostics,
+        json,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish(
+    request: &Request,
+    hir: &HirCrate,
+    name: String,
+    sources: &[String],
+    source_paths: Option<&[String]>,
+    fingerprint: stc_got::Digest32,
+    diagnostics: &mut DiagnosticSink,
+    json: bool,
+) -> u8 {
     let emit = &request.emit;
     let out_dir = PathBuf::from(
         request
@@ -97,26 +170,6 @@ pub(crate) fn run(
         .target
         .clone()
         .unwrap_or_else(stc_codegen::host_triple);
-    let sources = paths.to_vec();
-    let mut source_bytes = Vec::new();
-    for path in paths {
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                return artifact_error(json, &format!("cannot read `{path}`: {error}"));
-            }
-        };
-        source_bytes.push((path.clone(), bytes));
-    }
-    let fingerprint = match stc_codegen::module::source_fingerprint(&source_bytes) {
-        Ok(fingerprint) => fingerprint,
-        Err(error) => {
-            return artifact_error(
-                json,
-                &format!("cannot fingerprint sources: {}", error.message),
-            );
-        }
-    };
     let baseline = match &request.got_manifest {
         Some(path) => match read_baseline(Path::new(path)) {
             Ok(manifest) => Some(manifest),
@@ -143,7 +196,8 @@ pub(crate) fn run(
         mode,
         relaxed: request.relaxed,
         release: false,
-        sources: &sources,
+        sources,
+        source_paths,
         module: stc_codegen::ModuleBuildOptions {
             compiler_version: format!("stc {}", env!("CARGO_PKG_VERSION")),
             source_fingerprint: fingerprint,

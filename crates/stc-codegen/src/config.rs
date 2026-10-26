@@ -246,7 +246,10 @@ fn program_defs(hir: &HirCrate) -> Vec<DefId> {
         .enumerate()
         .filter_map(|(index, def)| {
             let id = DefId::new(u32::try_from(index).ok()?);
-            (matches!(def.kind, DefKind::Program { .. }) && !def.test_only && !synthetic(hir, id))
+            (matches!(def.kind, DefKind::Program { .. })
+                && !def.test_only
+                && !synthetic(hir, id)
+                && def.package == hir.root_package)
                 .then_some(id)
         })
         .collect()
@@ -257,7 +260,7 @@ fn configuration_defs(hir: &HirCrate) -> Vec<DefId> {
         .iter()
         .enumerate()
         .filter_map(|(index, def)| {
-            matches!(def.kind, DefKind::Configuration { .. })
+            (matches!(def.kind, DefKind::Configuration { .. }) && def.package == hir.root_package)
                 .then_some(DefId::new(u32::try_from(index).ok()?))
         })
         .collect()

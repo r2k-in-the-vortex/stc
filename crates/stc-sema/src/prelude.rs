@@ -8,7 +8,7 @@ use stc_hir::{
 use crate::{Analyzer, EMPTY_SPAN};
 
 impl Analyzer<'_> {
-    pub(crate) fn install_prelude(&mut self) {
+    pub(crate) fn install_prelude(&mut self, stdlib: bool) {
         for kind in ALL_STD_FNS {
             let name = self.hir.intern(kind.as_str());
             let (params, result) = std_signature(*kind);
@@ -24,9 +24,13 @@ impl Analyzer<'_> {
                 .or_default()
                 .push(stc_hir::StdFnId::new(raw));
         }
+        if !stdlib {
+            return;
+        }
         for (name, inputs, outputs, state) in STANDARD_FBS.iter().copied() {
             let symbol = self.hir.intern(name);
-            let def = self.hir.alloc_def(
+            let def = self.alloc_def_in(
+                self.root_package,
                 DefKind::FunctionBlock {
                     base: None,
                     interfaces: Vec::new(),
@@ -386,14 +390,20 @@ fn std_signature(kind: StdFnKind) -> (Vec<StdParam>, StdResult) {
     }
 }
 
-/// Returns `true` when `name` is a standard function or FB name.
+/// Returns `true` when `name` is a standard function name.
 #[must_use]
-pub fn is_standard_name(name: &str) -> bool {
+pub fn is_standard_function_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     ALL_STD_FNS.iter().any(|kind| kind.as_str() == upper)
-        || STANDARD_FBS
-            .iter()
-            .any(|(fb, _, _, _)| *fb == upper.as_str())
+}
+
+/// Returns `true` when `name` is a standard function-block name.
+#[must_use]
+pub fn is_standard_fb_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    STANDARD_FBS
+        .iter()
+        .any(|(fb, _, _, _)| *fb == upper.as_str())
 }
 
 /// Returns the concrete type category check used by the prelude.

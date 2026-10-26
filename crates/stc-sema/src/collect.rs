@@ -14,7 +14,6 @@ use stc_syntax::ast::{
 };
 use stc_syntax::{SyntaxKind, SyntaxToken};
 
-use crate::prelude::is_standard_name;
 use crate::{Analyzer, ConfigSite, DeclId, DeclSite, PouNode, PouSite, TypeSite, UsingSite};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,14 +38,20 @@ enum SectionTarget {
 
 impl Analyzer<'_> {
     pub(crate) fn collect_files(&mut self) {
-        let files = self.files;
-        for file in files {
-            let root = file.tree().root();
-            if let Some(source) = SourceFile::cast(&root) {
-                let items = source.items();
-                self.collect_items(&items, self.root_ns);
+        for index in 0..self.packages.len() {
+            self.current_package =
+                stc_hir::PackageId::new(u32::try_from(index).expect("package limit"));
+            let files = self.packages[index].files;
+            let root_ns = self.root_namespaces[index];
+            for file in files {
+                let root = file.tree().root();
+                if let Some(source) = SourceFile::cast(&root) {
+                    let items = source.items();
+                    self.collect_items(&items, root_ns);
+                }
             }
         }
+        self.current_package = self.root_package;
     }
 
     fn collect_items(&mut self, items: &[Item], ns: DefId) {
@@ -114,17 +119,18 @@ impl Analyzer<'_> {
         full: &[Symbol],
         span: Span,
     ) -> DefId {
-        if let Some(def) = self.namespaces.get(full) {
+        let package = self.current_package.index();
+        if let Some(def) = self.namespaces[package].get(full) {
             return *def;
         }
-        let def = self.hir.alloc_def(
+        let def = self.alloc_def(
             DefKind::Namespace { internal: false },
             Some(segment),
             span,
             Some(parent),
             Visibility::Public,
         );
-        self.namespaces.insert(full.to_vec(), def);
+        self.namespaces[package].insert(full.to_vec(), def);
         self.scopes.entry(def).or_default();
         self.add_entry(parent, segment, def, span, false);
         def
@@ -181,9 +187,7 @@ impl Analyzer<'_> {
             },
             TypeDecl::Error(_) => return,
         };
-        let def = self
-            .hir
-            .alloc_def(kind, Some(symbol), span, Some(ns), Visibility::Public);
+        let def = self.alloc_def(kind, Some(symbol), span, Some(ns), Visibility::Public);
         self.add_entry(ns, symbol, def, span, false);
         self.type_site_by_def.insert(def, self.type_sites.len());
         self.type_sites.push(TypeSite {
@@ -200,7 +204,7 @@ impl Analyzer<'_> {
         };
         let symbol = self.hir.intern(name.text());
         let span = decl.token_span();
-        let def = self.hir.alloc_def(
+        let def = self.alloc_def(
             DefKind::Function {
                 result: None,
                 params: Vec::new(),
@@ -227,7 +231,7 @@ impl Analyzer<'_> {
         };
         let symbol = self.hir.intern(name.text());
         let span = decl.token_span();
-        let def = self.hir.alloc_def(
+        let def = self.alloc_def(
             DefKind::FunctionBlock {
                 base: None,
                 interfaces: Vec::new(),
@@ -259,7 +263,7 @@ impl Analyzer<'_> {
         };
         let symbol = self.hir.intern(name.text());
         let span = decl.token_span();
-        let def = self.hir.alloc_def(
+        let def = self.alloc_def(
             DefKind::Program {
                 fields: Vec::new(),
                 body: None,
@@ -286,7 +290,7 @@ impl Analyzer<'_> {
         };
         let symbol = self.hir.intern(name.text());
         let span = decl.token_span();
-        let def = self.hir.alloc_def(
+        let def = self.alloc_def(
             DefKind::Class {
                 base: None,
                 interfaces: Vec::new(),
@@ -310,7 +314,7 @@ impl Analyzer<'_> {
         };
         let symbol = self.hir.intern(name.text());
         let span = decl.token_span();
-        let def = self.hir.alloc_def(
+        let def = self.alloc_def(
             DefKind::Interface {
                 extends: Vec::new(),
                 methods: Vec::new(),
@@ -354,7 +358,9 @@ impl Analyzer<'_> {
                 _ => {}
             }
         }
-        if is_standard_name(self.hir.interner.text(symbol)) {
+        if crate::prelude::is_standard_function_name(self.hir.interner.text(symbol))
+            || (self.stdlib && crate::prelude::is_standard_fb_name(self.hir.interner.text(symbol)))
+        {
             let name = self.hir.interner.text(symbol).to_string();
             self.push_diag(
                 stc_diag::Diagnostic::warning(
@@ -370,7 +376,7 @@ impl Analyzer<'_> {
         self.hir.defs[def.index()].no_mangle = no_mangle;
         if test_only {
             if !is_method {
-                self.test_only.insert(symbol, span);
+                self.test_only.insert((self.current_package, symbol), span);
             }
             // Test-only units are excluded from production analysis (D-071).
             return;
@@ -417,7 +423,7 @@ impl Analyzer<'_> {
             let span = method.token_span();
             let access = visibility_from_token(method.access().map(|token| token.kind()))
                 .unwrap_or(Visibility::Public);
-            let def = self.hir.alloc_def(
+            let def = self.alloc_def(
                 DefKind::Method {
                     owner,
                     result: None,
@@ -463,7 +469,7 @@ impl Analyzer<'_> {
             let span = method.token_span();
             let access = visibility_from_token(method.access().map(|token| token.kind()))
                 .unwrap_or(Visibility::Public);
-            let def = self.hir.alloc_def(
+            let def = self.alloc_def(
                 DefKind::Method {
                     owner,
                     result: None,
@@ -705,7 +711,7 @@ impl Analyzer<'_> {
                 DeclId::Local(local)
             }
             SectionTarget::Global => {
-                let def = self.hir.alloc_def(
+                let def = self.alloc_def(
                     DefKind::Global {
                         ty: self.hir.types.error(),
                         section: VarSectionKind::Global,
@@ -787,7 +793,7 @@ impl Analyzer<'_> {
         };
         let symbol = self.hir.intern(name.text());
         let span = decl.token_span();
-        let def = self.hir.alloc_def(
+        let def = self.alloc_def(
             DefKind::Configuration {
                 config: Box::new(stc_hir::ConfigurationHir {
                     name: symbol,
@@ -804,7 +810,8 @@ impl Analyzer<'_> {
         );
         self.add_entry(ns, symbol, def, span, false);
         self.scopes.entry(def).or_default();
-        if ns != self.root_ns {
+        let package_root = self.root_namespaces[self.current_package.index()];
+        if ns != package_root {
             self.error(
                 crate::codes::NAME_INVALID_CONTEXT,
                 "CONFIGURATION declarations are only allowed at the top level",

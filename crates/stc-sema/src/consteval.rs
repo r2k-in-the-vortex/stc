@@ -1104,6 +1104,8 @@ impl Analyzer<'_> {
                         return None;
                     }
                     let def = defs[0];
+                    let from_package = self.package_of(ns);
+                    self.check_def_access(def, from_package, segment.token_span());
                     if last {
                         match &self.hir.defs[def.index()].kind {
                             DefKind::Global { constant: true, .. } => {

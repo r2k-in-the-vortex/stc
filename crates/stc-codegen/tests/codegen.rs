@@ -69,7 +69,7 @@ fn descriptors_and_hidden_roots_emit_and_verify_with_clang() {
     assert_eq!(stub.function_kind, stc_got::FunctionKind::Method);
     assert_eq!(stub.vtable_slot, Some(0));
     assert!(
-        module.contains("define internal i32 @stc_m_ISHAPE_AREA_"),
+        module.contains("define internal i32 @stc_m__ROOT_n_ISHAPE_AREA_"),
         "{module}"
     );
     assert!(
@@ -131,7 +131,9 @@ fn descriptors_and_hidden_roots_emit_and_verify_with_clang() {
 
     // FB bodies and methods take `(handle, root table, slots)`.
     assert!(
-        module.contains("define internal void @stc_fb_body_FB(ptr %this, ptr %table, ptr %slots)"),
+        module.contains(
+            "define internal void @stc_fb_body__ROOT_n_FB(ptr %this, ptr %table, ptr %slots)"
+        ),
         "{}",
         module
     );
@@ -223,14 +225,14 @@ END_CONFIGURATION
     assert!(
         output
             .module
-            .contains("define internal void @stc_prog_MAIN_body"),
+            .contains("define internal void @stc_prog__ROOT_n_MAIN_body"),
         "{}",
         output.module
     );
     assert!(
         output
             .module
-            .contains("define internal i32 @stc_m_SHAPE_AREA_"),
+            .contains("define internal i32 @stc_m__ROOT_n_SHAPE_AREA_"),
         "{}",
         output.module
     );
@@ -268,7 +270,7 @@ END_CONFIGURATION
     assert!(
         output
             .module
-            .contains("define internal void @stc_prog_MAIN_body"),
+            .contains("define internal void @stc_prog__ROOT_n_MAIN_body"),
         "{}",
         output.module
     );
@@ -436,7 +438,7 @@ fn emits_scalar_program_and_verifies_with_clang() {
     assert!(!module.contains("@stc_pi_INST"), "{module}");
     assert!(module.contains("llvm.smul.with.overflow.i32"), "{module}");
     assert!(
-        module.contains("define internal i32 @stc_fn_FACT_"),
+        module.contains("define internal i32 @stc_fn__ROOT_n_FACT_"),
         "{module}"
     );
     assert!(
@@ -738,11 +740,11 @@ END_CONFIGURATION
     // Interface values pass and return by value as `{ ptr, ptr }`.
     let use_fn = module
         .lines()
-        .find(|line| line.starts_with("define internal i32 @stc_fn_USE_"))
+        .find(|line| line.starts_with("define internal i32 @stc_fn__ROOT_n_USE_"))
         .unwrap_or_else(|| panic!("interface parameter ABI is missing:\n{module}"));
     assert!(use_fn.contains("({ ptr, ptr } %a0"), "{use_fn}");
     assert!(
-        module.contains("define internal { ptr, ptr } @stc_fn_CHOOSE_"),
+        module.contains("define internal { ptr, ptr } @stc_fn__ROOT_n_CHOOSE_"),
         "interface result ABI is missing:\n{module}"
     );
     // Dispatch indexes the interface value's VTABLE and calls the cell code.
@@ -816,7 +818,7 @@ fn deep_binary_chain_does_not_overflow() {
     assert!(
         output
             .module
-            .contains("define internal void @stc_prog_MAIN_body")
+            .contains("define internal void @stc_prog__ROOT_n_MAIN_body")
     );
 }
 
@@ -848,7 +850,7 @@ END_CONFIGURATION
     let symbols: Vec<&str> = first
         .module
         .lines()
-        .filter_map(|line| line.strip_prefix("define internal i32 @stc_fn_F_"))
+        .filter_map(|line| line.strip_prefix("define internal i32 @stc_fn__ROOT_n_F_"))
         .map(|rest| rest.split('(').next().unwrap_or(""))
         .collect();
     assert_eq!(symbols.len(), 2, "{}", first.module);
@@ -885,7 +887,7 @@ END_PROGRAM
     assert!(
         output
             .module
-            .contains("define internal void @stc_prog_ONLY_body("),
+            .contains("define internal void @stc_prog__ROOT_n_ONLY_body("),
         "{}",
         output.module
     );
@@ -1088,7 +1090,7 @@ END_CONFIGURATION
     assert!(
         output
             .module
-            .contains("define internal void @stc_fn_TOUCH_"),
+            .contains("define internal void @stc_fn__ROOT_n_TOUCH_"),
         "{}",
         output.module
     );
@@ -1117,7 +1119,7 @@ END_CONFIGURATION
         output
             .module
             .lines()
-            .filter(|line| line.contains("define internal void @stc_prog_P_body("))
+            .filter(|line| line.contains("define internal void @stc_prog__ROOT_n_P_body("))
             .count(),
         1,
         "the program body is compiled once"
@@ -1208,12 +1210,12 @@ END_CONFIGURATION
 "#;
     let output = generate(source, Mode::Executable);
     assert!(
-        output.module.contains("@stc_fn_ALPHA_n_F_"),
+        output.module.contains("@stc_fn__ROOT_n_ALPHA_n_F_"),
         "{}",
         output.module
     );
     assert!(
-        output.module.contains("@stc_fn_BETA_n_F_"),
+        output.module.contains("@stc_fn__ROOT_n_BETA_n_F_"),
         "{}",
         output.module
     );
@@ -1273,7 +1275,7 @@ fn generated_module_has_no_direct_persistent_or_user_references() {
     assert!(module.contains("define dso_local dllexport void @stc_module_detach("));
     for line in module.lines() {
         assert!(
-            !line.trim_start().starts_with("call ") || !line.contains("@stc_fn_"),
+            !line.trim_start().starts_with("call ") || !line.contains("@stc_fn__ROOT_n_"),
             "direct user call in:\n{module}"
         );
     }

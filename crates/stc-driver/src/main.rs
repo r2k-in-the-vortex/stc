@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod build;
+mod project;
 
 use std::any::Any;
 use std::collections::BTreeSet;
@@ -44,6 +45,7 @@ struct Invocation {
     format: Format,
     relaxed: bool,
     ast: bool,
+    manifest: Option<String>,
     build: build::Request,
 }
 
@@ -77,7 +79,7 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> ExitCode {
-    let invocation = match parse_args(args) {
+    let mut invocation = match parse_args(args) {
         Ok(Some(invocation)) => invocation,
         Ok(None) => return ExitCode::SUCCESS,
         Err(message) => {
@@ -86,6 +88,21 @@ fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    // Project mode: `check`/`build` without input files compile `stc.toml`.
+    if invocation.paths.is_empty() {
+        let code = project::run(
+            invocation.command == Command::Check,
+            invocation.manifest.as_deref(),
+            invocation.relaxed,
+            invocation.format == Format::Json,
+            &invocation.build,
+        );
+        return ExitCode::from(code);
+    }
+    if invocation.command == Command::Build && invocation.build.emit.is_empty() {
+        invocation.build.emit.insert(Emit::Ir);
+    }
 
     let mut paths = invocation.paths.clone();
     if matches!(invocation.command, Command::Check | Command::Build) {
@@ -215,6 +232,7 @@ fn parse_args(args: &[String]) -> Result<Option<Invocation>, String> {
     let mut format = Format::Human;
     let mut relaxed = false;
     let mut ast = false;
+    let mut manifest = None;
     let mut paths = Vec::new();
     let mut build = build::Request::default();
     while index < args.len() {
@@ -239,6 +257,12 @@ fn parse_args(args: &[String]) -> Result<Option<Invocation>, String> {
             }
             other if other.starts_with("--message-format=") => {
                 format = parse_format(&other["--message-format=".len()..])?;
+            }
+            "--manifest-path" => {
+                manifest = Some(next_value(args, &mut index, "--manifest-path")?);
+            }
+            other if other.starts_with("--manifest-path=") => {
+                manifest = Some(other["--manifest-path=".len()..].to_owned());
             }
             "--name" => build.name = Some(next_value(args, &mut index, "--name")?),
             other if other.starts_with("--name=") => {
@@ -296,16 +320,20 @@ fn parse_args(args: &[String]) -> Result<Option<Invocation>, String> {
     }
 
     if paths.is_empty() {
-        return Err("missing input file".into());
+        if !matches!(command, Command::Check | Command::Build) {
+            return Err("missing input file".into());
+        }
+    } else if manifest.is_some() {
+        return Err("`--manifest-path` cannot be combined with input files".into());
+    }
+    if manifest.is_some() && !matches!(command, Command::Check | Command::Build) {
+        return Err("`--manifest-path` is only valid with `stc check` or `stc build`".into());
     }
     if command == Command::Parse && paths.len() != 1 {
         return Err("`stc parse` accepts exactly one input file".into());
     }
     if command != Command::Parse && ast {
         return Err("`--ast` is only valid with `stc parse`".into());
-    }
-    if command == Command::Build && build.emit.is_empty() {
-        build.emit.insert(Emit::Ir);
     }
     build.relaxed = relaxed;
     Ok(Some(Invocation {
@@ -314,6 +342,7 @@ fn parse_args(args: &[String]) -> Result<Option<Invocation>, String> {
         format,
         relaxed,
         ast,
+        manifest,
         build,
     }))
 }
@@ -392,12 +421,14 @@ fn print_help() {
          \n\
          Usage:\n\
          \x20 stc parse <file> [--ast] [--relaxed] [--message-format human|json]\n\
-         \x20 stc check <file>... [--relaxed] [--message-format human|json]\n\
-         \x20 stc build <file>... [--name <name>] [--emit ir,obj,module,exe,lib,metadata]\n\
-         \x20             [--out-dir <dir>] [--target <triple>] [--clang <path>]\n\
-         \x20             [--runtime <path>] [--got-manifest <path>] [--cold]\n\
-         \x20             [--rename old=new]... [--allow-untracked-removal]\n\
-         \x20             [--relaxed] [--message-format human|json] [-v]\n\
+         \x20 stc check [<file>...] [--manifest-path <stc.toml|dir>] [--relaxed]\n\
+         \x20           [--message-format human|json]\n\
+         \x20 stc build [<file>...] [--manifest-path <stc.toml|dir>] [--name <name>]\n\
+         \x20           [--emit ir,obj,module,exe,lib,metadata]\n\
+         \x20           [--out-dir <dir>] [--target <triple>] [--clang <path>]\n\
+         \x20           [--runtime <path>] [--got-manifest <path>] [--cold]\n\
+         \x20           [--rename old=new]... [--allow-untracked-removal]\n\
+         \x20           [--relaxed] [--message-format human|json] [-v]\n\
          \x20 stc --version\n\
          \x20 stc --help\n\
          \n\
@@ -405,6 +436,10 @@ fn print_help() {
          type-checks one or more files in one in-memory package. `build` also\n\
          emits a loadable ABI 2 module and, when requested, its manifest, a thin\n\
          executable launcher, or the embedding host library through clang.\n\
+         Without input files (or with `--manifest-path`), `check` and `build`\n\
+         load `stc.toml`, compile the package graph in dependency order, and\n\
+         report package-qualified diagnostics. Project builds default to\n\
+         `--emit module`; the manifest-free bridge keeps `--emit ir`.\n\
          Exit codes: 0 success, 1 compile error, 2 usage/toolchain error, 3 internal error.",
         env!("CARGO_PKG_VERSION")
     );

@@ -115,6 +115,9 @@ pub struct Options<'a> {
     pub release: bool,
     /// Source file paths in `FileId` order.
     pub sources: &'a [String],
+    /// Explicit package-relative source paths in `FileId` order. When absent,
+    /// `sources` is reduced to package-relative paths.
+    pub source_paths: Option<&'a [String]>,
     /// Module identity and baseline inputs.
     pub module: ModuleBuildOptions<'a>,
 }
@@ -265,6 +268,7 @@ pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<Cod
     );
     module_options.release = options.release;
     module_options.relaxed = options.relaxed;
+    module_options.source_paths = options.source_paths;
     module_options.baseline = options.module.baseline;
     module_options.cold = options.module.cold;
     module_options.allow_untracked_removal = options.module.allow_untracked_removal;

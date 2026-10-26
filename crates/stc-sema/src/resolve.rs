@@ -30,6 +30,7 @@ impl Analyzer<'_> {
             .flat_map(|(scope, data)| data.using_paths.iter().cloned().map(|site| (*scope, site)))
             .collect();
         for (scope, site) in sites {
+            self.current_package = self.package_of(scope);
             match self.resolve_namespace_path(&site.path, site.ns) {
                 Some(namespace) if is_namespace(&self.hir.defs[namespace.index()].kind) => {
                     let using = &mut self.scopes.entry(scope).or_default().using;
@@ -145,11 +146,17 @@ impl Analyzer<'_> {
     }
 
     /// Resolves a namespace path to a namespace definition.
+    ///
+    /// The first segment resolves in the referring package's root scope (which
+    /// includes the package's own namespaces and its dependency aliases) and
+    /// then in the scope tree of `from`.
     pub(crate) fn resolve_namespace_path(&mut self, path: &Path, from: DefId) -> Option<DefId> {
         let names = path.segments();
         let first = names.first()?;
+        let from_package = self.package_of(from);
+        let package_root = self.root_namespaces[from_package.index()];
         let symbol = self.hir.intern(first.text());
-        let lookup = self.lookup_scope(self.root_ns, symbol);
+        let lookup = self.lookup_scope(package_root, symbol);
         let mut current = match self.single_namespace(lookup) {
             Some(def) => def,
             None => {
@@ -157,10 +164,12 @@ impl Analyzer<'_> {
                 self.single_namespace(lookup)?
             }
         };
+        self.check_def_access(current, from_package, path.token_span());
         for name in names.iter().skip(1) {
             let symbol = self.hir.intern(name.text());
             let lookup = self.lookup_scope(current, symbol);
             current = self.single_namespace(lookup)?;
+            self.check_def_access(current, from_package, path.token_span());
         }
         Some(current)
     }
@@ -206,6 +215,7 @@ impl Analyzer<'_> {
         text: &str,
     ) -> Option<DefId> {
         let first = names.first()?;
+        let from_package = self.package_of(ns);
         let symbol = self.hir.intern(first.text());
         let mut defs = match self.lookup_scope(ns, symbol) {
             Lookup::Entries(defs) => defs,
@@ -221,6 +231,7 @@ impl Analyzer<'_> {
                 .iter()
                 .copied()
                 .find(|def| is_namespace(&self.hir.defs[def.index()].kind))?;
+            self.check_def_access(namespace, from_package, span);
             let symbol = self.hir.intern(name.text());
             defs = match self.lookup_scope(namespace, symbol) {
                 Lookup::Entries(defs) => defs,
@@ -236,6 +247,9 @@ impl Analyzer<'_> {
             .into_iter()
             .filter(|def| is_type_like(&self.hir.defs[def.index()].kind))
             .collect();
+        for def in &types {
+            self.check_def_access(*def, from_package, span);
+        }
         if types.len() > 1 {
             let spans: Vec<Span> = types
                 .iter()
@@ -251,6 +265,7 @@ impl Analyzer<'_> {
     pub(crate) fn resolve_def_path(&mut self, path: &Path, ns: DefId) -> Option<DefId> {
         let names = path.segments();
         let first = names.first()?;
+        let from_package = self.package_of(ns);
         let symbol = self.hir.intern(first.text());
         let mut defs = match self.lookup_scope(ns, symbol) {
             Lookup::Entries(defs) => defs,
@@ -267,6 +282,7 @@ impl Analyzer<'_> {
                 .iter()
                 .copied()
                 .find(|def| is_namespace(&self.hir.defs[def.index()].kind))?;
+            self.check_def_access(namespace, from_package, path.token_span());
             let symbol = self.hir.intern(name.text());
             defs = match self.lookup_scope(namespace, symbol) {
                 Lookup::Entries(defs) => defs,
@@ -280,7 +296,9 @@ impl Analyzer<'_> {
             };
         }
         if defs.len() == 1 {
-            defs.first().copied()
+            let def = defs[0];
+            self.check_def_access(def, from_package, path.token_span());
+            Some(def)
         } else {
             None
         }

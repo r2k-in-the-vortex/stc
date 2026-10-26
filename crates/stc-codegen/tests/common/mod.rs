@@ -64,6 +64,7 @@ pub fn options<'a>(
         relaxed: false,
         release: false,
         sources,
+        source_paths: None,
         module: stc_codegen::ModuleBuildOptions::default(),
     }
 }

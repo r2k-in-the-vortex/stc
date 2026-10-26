@@ -1396,6 +1396,8 @@ pub struct HirCrate {
     pub stmts: Vec<StmtHir>,
     /// Packages.
     pub packages: Vec<PackageInfo>,
+    /// The root package whose configurations and programs select the build.
+    pub root_package: PackageId,
     /// Standard-function signatures.
     pub std_fns: Vec<StdFunction>,
     /// Selected configuration, when exactly one exists and no manifest
@@ -1407,6 +1409,24 @@ impl HirCrate {
     /// Creates an empty crate with the builtin type arena.
     #[must_use]
     pub fn new(package_name: impl Into<String>, root_namespace: impl Into<String>) -> Self {
+        Self::with_packages(
+            vec![PackageInfo {
+                id: PackageId::new(0),
+                name: package_name.into(),
+                root_namespace: root_namespace.into(),
+            }],
+            PackageId::new(0),
+        )
+    }
+
+    /// Creates an empty crate for a merged multi-package build.
+    ///
+    /// `packages` are in package order (dependencies before dependents) and
+    /// every [`PackageInfo::id`] must equal its index; `root_package` selects
+    /// the package whose `CONFIGURATION` and `PROGRAM` declarations provide
+    /// the build entry point.
+    #[must_use]
+    pub fn with_packages(packages: Vec<PackageInfo>, root_package: PackageId) -> Self {
         Self {
             interner: Interner::new(),
             types: TyArena::new(),
@@ -1417,14 +1437,21 @@ impl HirCrate {
             bodies: Vec::new(),
             exprs: Vec::new(),
             stmts: Vec::new(),
-            packages: vec![PackageInfo {
-                id: PackageId::new(0),
-                name: package_name.into(),
-                root_namespace: root_namespace.into(),
-            }],
+            packages,
+            root_package,
             std_fns: Vec::new(),
             entry_configuration: None,
         }
+    }
+
+    /// Returns the root package.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the crate has no packages.
+    #[must_use]
+    pub fn root_package(&self) -> &PackageInfo {
+        &self.packages[self.root_package.index()]
     }
 
     /// Interns an identifier.
@@ -1656,6 +1683,32 @@ impl HirCrate {
     ///
     /// Returns a description of the first violated invariant.
     pub fn check_invariants(&self) -> Result<(), String> {
+        if self.packages.is_empty() {
+            return Err("HIR crate has no packages".into());
+        }
+        if self.root_package.index() >= self.packages.len() {
+            return Err(format!(
+                "root package {} out of range",
+                self.root_package.raw()
+            ));
+        }
+        for (index, package) in self.packages.iter().enumerate() {
+            if package.id.index() != index {
+                return Err(format!(
+                    "package {} has mismatched id {}",
+                    index,
+                    package.id.raw()
+                ));
+            }
+        }
+        for (index, def) in self.defs.iter().enumerate() {
+            if def.package.index() >= self.packages.len() {
+                return Err(format!(
+                    "definition {index} has out-of-range package {}",
+                    def.package.raw()
+                ));
+            }
+        }
         for (_, ty) in self.types.iter() {
             match ty {
                 Ty::Ref(reference) => self.check_ty_id(reference.target)?,

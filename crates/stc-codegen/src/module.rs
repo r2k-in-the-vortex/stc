@@ -356,6 +356,9 @@ pub struct ModuleOptions<'a> {
     pub compiler_version: String,
     /// Hash of the production source files.
     pub source_fingerprint: Digest32,
+    /// Explicit package-relative source paths in `FileId` order. When absent,
+    /// `sources` is reduced to package-relative paths.
+    pub source_paths: Option<&'a [String]>,
     /// Optimised, stripped build (`--release`).
     pub release: bool,
     /// Relaxed syntax was accepted.
@@ -384,6 +387,7 @@ impl<'a> ModuleOptions<'a> {
             module_name: module_name.into(),
             compiler_version: compiler_version.into(),
             source_fingerprint,
+            source_paths: None,
             release: false,
             relaxed: false,
             baseline: None,
@@ -568,7 +572,10 @@ pub fn project(
     let layouts = config::program_layouts(hir, &plan, &types).map_err(map_codegen_errors)?;
     let _image = config::image_layout(hir, &plan, &layouts).map_err(map_codegen_errors)?;
     let retain = config::retain_layout(hir, &plan, &layouts, &types).map_err(map_codegen_errors)?;
-    let source_paths = package_relative_paths(sources);
+    let source_paths = match options.source_paths {
+        Some(paths) => paths.to_vec(),
+        None => package_relative_paths(sources),
+    };
 
     let context = Context {
         hir,
@@ -879,7 +886,7 @@ impl Context<'_> {
                 let package = self
                     .hir
                     .packages
-                    .first()
+                    .get(self.hir.root_package.index())
                     .ok_or_else(|| ModuleError::error(codes::CODEGEN_INTERNAL, "no package"))?;
                 normalize_package(&package.name).map_err(|error| map_error(error, None))
             }
@@ -2148,6 +2155,26 @@ pub fn source_fingerprint(sources: &[(String, Vec<u8>)]) -> Result<Digest32, Mod
         .zip(relative)
         .map(|((_, bytes), path)| (format!("{M4_PACKAGE}/{path}"), bytes.clone()))
         .collect::<Vec<_>>();
+    stc_got::source_fingerprint(&files).map_err(|error| map_error(error, None))
+}
+
+/// Computes the source fingerprint for a multi-package project.
+///
+/// Each entry is `(package name, package-relative path, bytes)`. Package
+/// identities are normalized and prefixed, so the same relative path in two
+/// packages produces distinct fingerprint entries (GOT Artifacts §11.1).
+///
+/// # Errors
+///
+/// Rejects unrepresentable counts, invalid package names, or invalid paths.
+pub fn project_source_fingerprint(
+    sources: &[(String, String, Vec<u8>)],
+) -> Result<Digest32, ModuleError> {
+    let mut files = Vec::with_capacity(sources.len());
+    for (package, path, bytes) in sources {
+        let package = normalize_package(package).map_err(|error| map_error(error, None))?;
+        files.push((format!("{package}/{path}"), bytes.clone()));
+    }
     stc_got::source_fingerprint(&files).map_err(|error| map_error(error, None))
 }
 
