@@ -308,6 +308,13 @@ jobs:
         run: |
           rustup toolchain install nightly --profile minimal
           cargo install cargo-fuzz --locked
+      # fuzz/ is a separate workspace, so the clippy and test jobs never
+      # compile it. Build every target up front: a stale target fails here in
+      # seconds instead of only when its 60-second smoke run comes up.
+      - name: Build fuzz targets
+        working-directory: fuzz
+        shell: bash
+        run: cargo +nightly fuzz build
       # The checked-in corpus is gitignored. Seed the artifact targets from the
       # committed codec snapshots so the binary and JSON paths are exercised.
       - name: Seed artifact corpora

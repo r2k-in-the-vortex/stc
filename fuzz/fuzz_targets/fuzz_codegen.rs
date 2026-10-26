@@ -18,6 +18,7 @@ fn generate_stub(analysis: &stc_sema::Analysis) {
         sources: &sources,
         source_paths: None,
         module: stc_codegen::ModuleBuildOptions::default(),
+        project: stc_codegen::ProjectOptions::default(),
     };
     match stc_codegen::generate(&analysis.hir, &options) {
         Ok(output) => {
