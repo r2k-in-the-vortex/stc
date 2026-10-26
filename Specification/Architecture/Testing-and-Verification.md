@@ -17,7 +17,7 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 > interface/attempt/reference C harnesses, module-level warm swaps that preserve interface
 > values and class handles with stable descriptors, fresh-record and rollback coverage, and OOP
 > fuzz seeds.
-
+>
 > **M6 phase 6 status (2026-10-26):** `stc test` and `crates/stc-test` are implemented. Discovery
 > is syntax-level; each test builds one cold ABI 2 module under `target/stc/test/<artifact>` with
 > the synthetic `STC_TEST` configuration; the test host is a generated launcher over the runtime's

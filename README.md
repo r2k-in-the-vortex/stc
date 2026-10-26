@@ -344,6 +344,7 @@ stc/
   handover_to_M5.md          M4.5 handover and M5 opening contract
   update_plan_got.md         resolved online-change planning record
   tools/ci/check_docs.py     specification, link, and profile checks
+  tools/ci/check_local.py    local CI parity checks (docs, lint, tests, fuzz)
   Cargo.toml                 workspace manifest
   rust-toolchain.toml        pinned Rust toolchain
   crates/
@@ -507,6 +508,19 @@ cargo run -p stc-driver -- build examples/hello.st --emit=module,metadata
 cargo run -p stc-driver -- build examples/hello.st --emit=module --got-manifest active.stc-got.json
 cargo run -p stc-driver -- build examples/hello.st --emit=exe,lib,metadata --runtime target/debug/stc_runtime.lib
 ```
+
+Before pushing, run the same checks as the CI matrix (formatting, clippy, the
+workspace tests with clang required, specification/link checks, Markdown lint, and a
+compile of the separate `fuzz/` workspace):
+
+```sh
+python tools/ci/check_local.py
+```
+
+`fuzz/` is its own workspace, so `cargo test --workspace` and
+`cargo clippy --workspace` do not compile it; the local script does. Pass
+`--skip-markdownlint` or `--skip-fuzz` when Node.js or the fuzz workspace is
+unavailable, and `--fail-fast` to stop at the first failing check.
 
 `stc parse` prints a lossless CST dump (and the typed AST dump with `--ast`). `stc check` accepts
 one or more files, builds one in-memory package, and reports lexical, syntax, and semantic

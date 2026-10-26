@@ -9,16 +9,12 @@ fn generate_stub(analysis: &stc_sema::Analysis) {
     let sources = vec!["fuzz.st".to_string()];
     let options = stc_codegen::Options {
         artifact_name: "fuzz",
-        target: None,
-        debug: false,
         emit_metadata: true,
         mode: stc_codegen::Mode::Executable,
-        relaxed: false,
-        release: false,
         sources: &sources,
-        source_paths: None,
-        module: stc_codegen::ModuleBuildOptions::default(),
-        project: stc_codegen::ProjectOptions::default(),
+        // Keep the fuzz target compiling when a new option is added with a
+        // sensible default; the local CI script also compiles this workspace.
+        ..stc_codegen::Options::default()
     };
     match stc_codegen::generate(&analysis.hir, &options) {
         Ok(output) => {

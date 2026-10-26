@@ -45,9 +45,10 @@ pub use module::{
 };
 
 /// Artifact mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     /// Executable host launcher plus a loadable module.
+    #[default]
     Executable,
     /// Embedding host library plus a loadable module.
     Library,
@@ -155,7 +156,13 @@ pub struct ProjectOptions {
 }
 
 /// Code generation options.
-#[derive(Clone, Debug)]
+///
+/// The `Default` implementation is the cold production form: unoptimised
+/// debug artifacts, no target override, module emit metadata, and no test
+/// build. Callers that only vary a few fields (including the `fuzz` workspace)
+/// can use `..Options::default()` so a new option with a sensible default does
+/// not break them.
+#[derive(Clone, Debug, Default)]
 pub struct Options<'a> {
     /// Artifact/name stem used in `source_filename` and metadata.
     pub artifact_name: &'a str,

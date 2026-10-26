@@ -23,7 +23,7 @@ output goes to stdout.
 > its binary/JSON manifest and metadata, the thin `exe` launcher, and the embedding `lib` host
 > archive keep their M4.5 shapes. `--debug`/`--release` and their debug-info behavior are M6.5;
 > M6 builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks.
-
+>
 > **M6 phase 6 status (2026-10-26):** `stc test` is implemented. It compiles the project's
 > production sources and the root package's `[test].sources`, discovers `{stc:test}` POUs in the
 > current package, builds one cold test artifact per test under `target/stc/test/<artifact>`, and
