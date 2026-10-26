@@ -1,0 +1,18 @@
+schema = 1
+
+[package]
+name = "9bad name"
+version = "one"
+language = 7
+
+[project]
+sources = "src/*.st"
+
+[build]
+opt-level = "fast"
+emit = ["module", "module"]
+out-dir = "../outside"
+
+[io]
+backend = "hardware"
+input-bytes = -4

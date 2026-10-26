@@ -42,14 +42,21 @@ metadata sidecars. Other inputs are wrapped in a valid descriptor header with a 
 declared size so arbitrary bytes reach the record decoders. Accepted descriptors must re-encode
 and round-trip with a stable digest. The target never maps, loads, or executes native module code.
 
+`fuzz_manifest` parses arbitrary UTF-8 as both a `stc.toml` project manifest and a `stc.lock`
+lockfile. Parsing is pure: the target never touches the filesystem, resolves dependencies, writes
+a lockfile, or executes generated code. The no-panic, bounded-recursion, and deterministic-
+diagnostic contracts are checked. `seeds/fuzz_manifest` holds valid manifests, an unknown-key
+document, wrong types, invalid globs, and a canonical lockfile.
+
 ```sh
 cargo +nightly fuzz run fuzz_got_manifest -- -max_total_time=60 -timeout=25 -rss_limit_mb=2048
 cargo +nightly fuzz run fuzz_module_descriptor -- -max_total_time=60 -timeout=25 -rss_limit_mb=2048
+cargo +nightly fuzz run fuzz_manifest -- -max_total_time=60 -timeout=25 -rss_limit_mb=2048
 ```
 
 The seed corpus under `corpus/` is ignored by git, like the other targets. CI rebuilds seeds for
-both artifact targets from the committed codec snapshots, adds the committed OOP fixtures under
-`seeds/`, and adds `-max_len=1048576` so an input cannot exceed one MiB.
+the artifact targets from the committed codec snapshots, copies the committed OOP fixtures and
+manifest seeds under `seeds/`, and adds `-max_len=1048576` so an input cannot exceed one MiB.
 
 `seeds/fuzz_got_manifest` holds a compiler-produced manifest for a class/interface module
 (TYPEINFO and VTABLE descriptors, the base-first interface map, and hidden `HANDLE`/`OBJREC`

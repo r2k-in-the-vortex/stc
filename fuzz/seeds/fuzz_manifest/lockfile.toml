@@ -1,0 +1,13 @@
+schema = 1
+
+[[package]]
+name = "motor-control"
+version = "0.1.0"
+source = "root"
+dependencies = ["motor-lib"]
+
+[[package]]
+name = "motor-lib"
+version = "0.2.0"
+source = { path = "../motor-lib" }
+dependencies = []

@@ -16,6 +16,7 @@ stc-codegen = { path = "../crates/stc-codegen" }
 stc-diag = { path = "../crates/stc-diag" }
 stc-got = { path = "../crates/stc-got" }
 stc-lexer = { path = "../crates/stc-lexer" }
+stc-manifest = { path = "../crates/stc-manifest" }
 stc-parser = { path = "../crates/stc-parser" }
 stc-runtime = { path = "../crates/stc-runtime" }
 stc-sema = { path = "../crates/stc-sema" }
@@ -59,6 +60,13 @@ bench = false
 [[bin]]
 name = "fuzz_module_descriptor"
 path = "fuzz_targets/fuzz_module_descriptor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_manifest"
+path = "fuzz_targets/fuzz_manifest.rs"
 test = false
 doc = false
 bench = false

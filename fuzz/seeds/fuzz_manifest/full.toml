@@ -1,0 +1,87 @@
+schema = 1
+
+[package]
+name = "motor-control"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[dependencies]
+motor-lib = { path = "../motor-lib" }
+
+[project]
+sources = ["src/**/*.st"]
+stdlib = true
+configuration = "Main"
+
+[build]
+opt-level = 2
+out-dir = "target/stc"
+lib-type = "static"
+debug = true
+syntax = "strict"
+emit = ["module", "ir"]
+target = "x86_64-pc-windows-msvc"
+
+[io]
+backend = "null"
+file = "io.bin"
+input-bytes = 16
+output-bytes = 16
+marker-bytes = 64
+
+[[io.devices]]
+name = "drive1"
+kind = "ethercat"
+config = { vendor = "0x1234", revision = 3 }
+
+  [[io.devices.channels]]
+  name = "DI5"
+  direction = "input"
+  width = 1
+
+[[io.bindings]]
+variable = "Main.MyBool"
+device = "drive1"
+channel = 5
+direction = "input"
+
+[retain]
+enabled = true
+file = "motor.stcstate"
+on-mismatch = "error"
+
+[runtime]
+module-dir = "runtime/modules"
+manifest-dir = "runtime/manifests"
+max-retired-generations = 1
+
+[online]
+baseline = "active"
+cold-policy = "require-confirmation"
+allow-untracked-removal = false
+
+[debug]
+default = true
+protocol = "pipe"
+force-sessions-end-on-swap = true
+
+[lints]
+warnings = "warn"
+"STC-W-NAME-002" = "allow"
+
+[run]
+cycles = 10
+cycle-time = "10ms"
+
+[test]
+sources = ["tests/**/*.st"]
+timeout = "5s"
+default-cycles = 1
+mock-clock = "0ns"
+io = "memory"
+
+[[test.case]]
+name = "TimerBlink"
+cycles = 25
+timeout = "2s"
+expect-trap = "STC_TRAP_DIV_ZERO"

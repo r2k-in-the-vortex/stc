@@ -10,6 +10,7 @@ members = [
     "crates/stc-sema",
     "crates/stc-codegen",
     "crates/stc-got",
+    "crates/stc-manifest",
     "crates/stc-runtime",
     "crates/stc-driver",
 ]

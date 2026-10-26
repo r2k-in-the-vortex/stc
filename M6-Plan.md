@@ -2,9 +2,9 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phase 0 complete (2026-10-26); phases 1–11 ready to start; no M6 code written yet. M5
-(phases 1–7 and 4b) is complete and M6.5 is planned, so M6 is the bridge from the completed
-compiler/runtime surface to a usable v1 project tool.  
+Status: Phases 0–1 complete (2026-10-26); phases 2–11 ready to start. M5 (phases 1–7 and 4b) is
+complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
+usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
 [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §1–§6,
 [State and RETAIN](Specification/Architecture/State-and-Retain.md),
@@ -178,11 +178,12 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phase 0 is complete (2026-10-26) in D-153–D-164 and §14; phases 1–11 are pending.
-Phase 0 fixed the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary,
-and the test-build, scheduler, and rename-history interfaces, so phases 1–10 may start. Phases
-may proceed in parallel only where the dependency direction allows (for example, Lean and the
-conformance harness can start once phase 0 fixes the vector and corpus contracts).
+Phase status: phases 0 and 1 are complete (2026-10-26); phases 2–11 are pending. Phase 0 fixed
+the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
+test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
+resolved project graph and lockfile API, and `fuzz_manifest`. Phases may proceed in parallel only
+where the dependency direction allows (for example, Lean and the conformance harness can start
+once phase 0 fixes the vector and corpus contracts).
 
 ## 6. Phase details
 
@@ -213,7 +214,7 @@ conformance harness can start once phase 0 fixes the vector and corpus contracts
 Acceptance: decisions recorded; no code; the phase-1 schema and the phase-8 workflow have stable
 interfaces. Phase 0 also records D-164 for the applied contract fixes.
 
-### Phase 1 — Project manifest, source discovery, and dependency graph
+### Phase 1 — Project manifest, source discovery, and dependency graph (complete 2026-10-26)
 
 Add `crates/stc-manifest` (workspace member):
 
@@ -241,6 +242,15 @@ Add `crates/stc-manifest` (workspace member):
 Tests: schema positives/negatives (unknown keys, wrong types, missing fields, bad names/versions),
 path containment and forward-slash rules, glob discovery (case, hidden, target, symlink, empty),
 dependency aliases/dedup/cycles, lockfile determinism and `--locked`, and manifest fuzz smoke.
+
+Status (2026-10-26): implemented in `crates/stc-manifest` with `parse_manifest`,
+`parse_lockfile`, and `load_project` → `ProjectGraph`. The crate parses the full schema with
+span-mapped `STC-E-PROJECT-*`/`STC-E-LOCK-*` diagnostics and did-you-mean suggestions, discovers
+production and test sources with the documented exclusion/symlink rules, resolves deduplicated
+path dependencies in deterministic topological order with alias/name identity separation, and
+writes/checks the canonical `stc.lock` (including `--locked`). `fuzz_manifest` and committed
+valid/invalid seeds are in `fuzz/`; the stable-toolchain seed smoke test runs with the crate tests.
+The driver is not wired to the new crate yet, and no analyzer changes were made.
 
 Acceptance: `stc-manifest` resolves a project graph and lockfile deterministically; no analyzer
 changes yet.
