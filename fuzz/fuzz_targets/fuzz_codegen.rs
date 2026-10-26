@@ -16,6 +16,7 @@ fn generate_stub(analysis: &stc_sema::Analysis) {
         relaxed: false,
         release: false,
         sources: &sources,
+        source_paths: None,
         module: stc_codegen::ModuleBuildOptions::default(),
     };
     match stc_codegen::generate(&analysis.hir, &options) {
