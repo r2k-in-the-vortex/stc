@@ -175,6 +175,12 @@ impl Reporter {
         self.format.is_json()
     }
 
+    /// Returns `true` when `-q` suppresses non-error output.
+    #[must_use]
+    pub(crate) const fn is_quiet(&self) -> bool {
+        self.quiet
+    }
+
     /// Returns `true` when a warning was promoted to an error.
     #[must_use]
     pub(crate) const fn denied(&self) -> bool {

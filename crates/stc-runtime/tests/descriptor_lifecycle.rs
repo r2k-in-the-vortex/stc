@@ -762,7 +762,7 @@ fn feature_bits_reject_oop_modules_on_older_hosts() {
         PROFILE,
         common::target(),
         HOST_ABI_MAJOR,
-        HOST_ABI_MINOR - 1,
+        HOST_ABI_MINOR - 2,
     );
     let error = stc_runtime::ValidatedPair::from_bytes(
         &abi_20,

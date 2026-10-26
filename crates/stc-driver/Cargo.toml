@@ -24,6 +24,7 @@ stc-parser = { path = "../stc-parser" }
 stc-sema = { path = "../stc-sema" }
 stc-span = { path = "../stc-span" }
 stc-syntax = { path = "../stc-syntax" }
+stc-test = { path = "../stc-test" }
 
 [dev-dependencies]
 stc-runtime = { path = "../stc-runtime" }

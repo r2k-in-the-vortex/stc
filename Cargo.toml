@@ -12,6 +12,7 @@ members = [
     "crates/stc-got",
     "crates/stc-manifest",
     "crates/stc-runtime",
+    "crates/stc-test",
     "crates/stc-driver",
 ]
 exclude = ["fuzz"]

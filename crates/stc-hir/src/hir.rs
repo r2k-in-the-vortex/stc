@@ -1241,9 +1241,29 @@ pub enum StdFnKind {
     Replace,
     /// `FIND`.
     Find,
+    /// `STC_ASSERT` (test-only prelude).
+    Assert,
+    /// `STC_CLOCK_ADVANCE` (test-only prelude).
+    ClockAdvance,
+    /// `STC_IO_SET_INPUT` (test-only prelude).
+    IoSetInput,
+    /// `STC_IO_GET_OUTPUT` (test-only prelude).
+    IoGetOutput,
 }
 
 impl StdFnKind {
+    /// Returns `true` for the test-only prelude functions.
+    ///
+    /// They resolve only in test builds and only inside test-only units
+    /// (Testing and Verification §2.2, §2.5).
+    #[must_use]
+    pub const fn is_test_prelude(self) -> bool {
+        matches!(
+            self,
+            Self::Assert | Self::ClockAdvance | Self::IoSetInput | Self::IoGetOutput
+        )
+    }
+
     /// Returns the canonical name.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -1298,6 +1318,10 @@ impl StdFnKind {
             Self::Delete => "DELETE",
             Self::Replace => "REPLACE",
             Self::Find => "FIND",
+            Self::Assert => "STC_ASSERT",
+            Self::ClockAdvance => "STC_CLOCK_ADVANCE",
+            Self::IoSetInput => "STC_IO_SET_INPUT",
+            Self::IoGetOutput => "STC_IO_GET_OUTPUT",
         }
     }
 }

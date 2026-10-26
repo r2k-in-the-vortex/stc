@@ -44,6 +44,8 @@ impl Analyzer<'_> {
             let files = self.packages[index].files;
             let root_ns = self.root_namespaces[index];
             for file in files {
+                self.current_file_test =
+                    self.test_build && self.test_file_ids.contains(&file.tree().file());
                 let root = file.tree().root();
                 if let Some(source) = SourceFile::cast(&root) {
                     let items = source.items();
@@ -51,7 +53,19 @@ impl Analyzer<'_> {
                 }
             }
         }
+        self.current_file_test = false;
         self.current_package = self.root_package;
+        if self.test_build {
+            let test_files = self.test_file_ids.clone();
+            for def in &mut self.hir.defs {
+                if def.span.start != def.span.end
+                    && test_files.contains(&def.span.file)
+                    && !matches!(def.kind, DefKind::Namespace { .. })
+                {
+                    def.test_only = true;
+                }
+            }
+        }
     }
 
     fn collect_items(&mut self, items: &[Item], ns: DefId) {
@@ -344,7 +358,7 @@ impl Analyzer<'_> {
         ns: DefId,
         is_method: bool,
     ) {
-        let mut test_only = false;
+        let mut test_only = self.current_file_test;
         let mut export = false;
         let mut no_mangle = false;
         for pragma in node.pragmas() {
@@ -379,7 +393,11 @@ impl Analyzer<'_> {
                 self.test_only.insert((self.current_package, symbol), span);
             }
             // Test-only units are excluded from production analysis (D-071).
-            return;
+            // Dependencies compile as production packages even in a test build;
+            // only the root package's test units are analyzed.
+            if !(self.test_build && self.current_package == self.root_package) {
+                return;
+            }
         }
         let allow_overload = matches!(&self.hir.defs[def.index()].kind, DefKind::Function { .. });
         self.add_entry(ns, symbol, def, span, allow_overload);

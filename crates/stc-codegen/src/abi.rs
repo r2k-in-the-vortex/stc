@@ -58,17 +58,22 @@ pub mod module {
 ///
 /// Minor 1 (host ABI 2.1) adds no service: it records the inline TYPEINFO,
 /// VTABLE, and object-record layout that generated code reads directly
-/// (GOT Artifacts §8.5, Runtime and Execution §2.6). The table shape,
-/// `REQUIRED_SIZE`, and service IDs are unchanged from 2.0.
+/// (GOT Artifacts §8.5, Runtime and Execution §2.6). Minor 2 (host ABI 2.2)
+/// appends the test-clock service (ID 12) after assert; only test builds
+/// import it and therefore require the larger table prefix.
 pub mod host_api {
-    /// `(major << 16) | minor` for ABI 2.1.
-    pub const ABI_VERSION: u32 = (2 << 16) | 1;
+    /// `(major << 16) | minor` for ABI 2.2.
+    pub const ABI_VERSION: u32 = (2 << 16) | 2;
     /// Offset of `abi_version` in `stc_host_api`.
     pub const ABI_VERSION_OFFSET: u64 = 0;
     /// Offset of `struct_size` in `stc_host_api`.
     pub const STRUCT_SIZE_OFFSET: u64 = 4;
-    /// Required prefix length: version, size, and the eleven service pointers.
+    /// Required prefix length for a production module: version, size, and the
+    /// eleven ABI 2.1 service pointers.
     pub const REQUIRED_SIZE: u64 = 8 + 11 * 8;
+    /// Required prefix length for a test-build module: version, size, and the
+    /// twelve ABI 2.2 service pointers.
+    pub const REQUIRED_SIZE_TEST: u64 = 8 + 12 * 8;
 }
 
 /// Built-in unit symbols.
@@ -122,8 +127,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_abi_is_2_1_with_an_unchanged_service_table() {
-        assert_eq!(host_api::ABI_VERSION, 0x0002_0001);
+    fn host_abi_is_2_2_with_the_test_clock_appended() {
+        assert_eq!(host_api::ABI_VERSION, 0x0002_0002);
         assert_eq!(
             host_api::ABI_VERSION >> 16,
             u32::from(stc_got::HOST_ABI_MAJOR)
@@ -132,8 +137,10 @@ mod tests {
             host_api::ABI_VERSION & 0xFFFF,
             u32::from(stc_got::HOST_ABI_MINOR)
         );
-        // 2.1 appends no service: version word plus eleven pointers.
+        // Production modules keep the ABI 2.1 prefix; test builds append the
+        // twelfth service pointer.
         assert_eq!(host_api::REQUIRED_SIZE, 8 + 11 * 8);
+        assert_eq!(host_api::REQUIRED_SIZE_TEST, 8 + 12 * 8);
         // Metadata records the ABI major version.
         assert_eq!(ABI_VERSION, i32::from(stc_got::HOST_ABI_MAJOR));
     }

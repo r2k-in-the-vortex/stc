@@ -130,3 +130,94 @@ pub fn parse_only(source: &str) -> ParsedFile {
         &mut sink,
     )
 }
+
+/// Analyzes one package as a test build: `{stc:test}` units are included and
+/// the test-only prelude resolves.
+pub fn analyze_test_source(source: &str) -> (Analysis, DiagnosticSink) {
+    let mut sink = DiagnosticSink::unlimited();
+    let file = FileId::new(0);
+    let lexed = tokenize_bytes(file, source.as_bytes(), &mut sink);
+    let parsed = parse(
+        file,
+        lexed.text.as_str(),
+        &lexed.stream,
+        ParseOptions::default(),
+        &mut sink,
+    );
+    assert!(!sink.has_errors(), "parse errors for:\n{source}");
+    let files = vec![parsed];
+    let session = stc_sema::ProjectSession {
+        packages: vec![stc_sema::PackageSession::new(
+            "_root", "_root", &files, true,
+        )],
+        configuration: None,
+        stdlib: true,
+        test_build: true,
+        test_files: &[],
+    };
+    let analysis = stc_sema::analyze_project(&session, &mut sink);
+    analysis
+        .hir
+        .check_invariants()
+        .unwrap_or_else(|message| panic!("HIR invariant: {message}"));
+    (analysis, sink)
+}
+
+pub fn assert_test_clean(source: &str) {
+    let (_, sink) = analyze_test_source(source);
+    let errors = error_codes(&sink);
+    assert!(
+        errors.is_empty(),
+        "unexpected test-build errors for:\n{source}\ngot {errors:?}\n{:#?}",
+        sink.diagnostics()
+    );
+}
+
+pub fn assert_test_error(source: &str, code: &str) {
+    let (_, sink) = analyze_test_source(source);
+    let codes = error_codes(&sink);
+    assert!(
+        codes.contains(&code),
+        "expected {code} for:\n{source}\ngot {codes:?}\n{:#?}",
+        sink.diagnostics()
+    );
+}
+
+/// Analyzes a production file plus one `[test].sources` file.
+pub fn assert_test_source_clean(production: &str, test_source: &str) {
+    let mut sink = DiagnosticSink::unlimited();
+    let mut files = Vec::new();
+    for (index, source) in [production, test_source].iter().enumerate() {
+        let file = FileId::new(u32::try_from(index).expect("file limit"));
+        let lexed = tokenize_bytes(file, source.as_bytes(), &mut sink);
+        let parsed = parse(
+            file,
+            lexed.text.as_str(),
+            &lexed.stream,
+            ParseOptions::default(),
+            &mut sink,
+        );
+        files.push(parsed);
+    }
+    let test_files = vec![files[1].clone()];
+    let session = stc_sema::ProjectSession {
+        packages: vec![stc_sema::PackageSession::new(
+            "_root", "_root", &files, true,
+        )],
+        configuration: None,
+        stdlib: true,
+        test_build: true,
+        test_files: &test_files,
+    };
+    let analysis = stc_sema::analyze_project(&session, &mut sink);
+    analysis
+        .hir
+        .check_invariants()
+        .unwrap_or_else(|message| panic!("HIR invariant: {message}"));
+    let errors = error_codes(&sink);
+    assert!(
+        errors.is_empty(),
+        "unexpected test-source errors:\n{test_source}\ngot {errors:?}\n{:#?}",
+        sink.diagnostics()
+    );
+}

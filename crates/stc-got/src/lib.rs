@@ -31,7 +31,7 @@ pub use catalog::{
 };
 pub use descriptor::{
     DESCRIPTOR_FORMAT, DESCRIPTOR_MAGIC, Descriptor, DescriptorFunction, HOST_ABI_MAJOR,
-    HOST_ABI_MINOR, MODULE_FORMAT,
+    HOST_ABI_MINOR, MODULE_FORMAT, PRODUCTION_ABI_MINOR, TEST_ABI_MINOR,
 };
 pub use digest::{Digest32, GotId};
 pub use engine::{BuildInput, BuildOptions, BuildOutcome, Rename, build, source_fingerprint};

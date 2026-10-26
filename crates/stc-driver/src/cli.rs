@@ -1,9 +1,10 @@
 //! Command-line parsing for the driver.
 //!
-//! The parser recognizes the full M6 command surface. `new`/`check`/`build`/
-//! `run`/`clean`/`metadata`/`compliance` are implemented; commands whose
-//! workflow lands in a later phase (test/fmt/online/rename) are parsed and
-//! validated now, then reported as not yet implemented by the dispatcher.
+//! The parser recognizes the full M6 command surface.
+//! `new`/`check`/`build`/`run`/`test`/`clean`/`metadata`/`compliance` are
+//! implemented; commands whose workflow lands in a later phase
+//! (fmt/online/rename) are parsed and validated now, then reported as not yet
+//! implemented by the dispatcher.
 
 use stc_manifest::LintLevel;
 
@@ -41,11 +42,24 @@ pub(crate) enum Command {
     Rename,
 }
 
+/// `stc test` options.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TestOptions {
+    /// `--list`: print discovered tests without building.
+    pub list: bool,
+    /// `--no-run`: build test artifacts without executing them.
+    pub no_run: bool,
+    /// `--timeout <duration>` override in nanoseconds.
+    pub timeout_ns: Option<u64>,
+    /// `-- --nocapture`: forward test-host output.
+    pub nocapture: bool,
+}
+
 /// A parsed invocation.
 pub(crate) struct Invocation {
     /// Selected command.
     pub(crate) command: Command,
-    /// Positional arguments (files, a scaffold path, or rename keys).
+    /// Positional arguments (files, a scaffold path, test filters, or rename keys).
     pub(crate) paths: Vec<String>,
     /// Diagnostic message format.
     pub(crate) format: Format,
@@ -69,6 +83,8 @@ pub(crate) struct Invocation {
     pub(crate) watch: bool,
     /// Build settings and overrides.
     pub(crate) build: Request,
+    /// `stc test` options.
+    pub(crate) test: TestOptions,
 }
 
 /// Parses argv.
@@ -134,6 +150,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     let mut lints = LintOverrides::default();
     let mut watch = false;
     let mut fmt_check = false;
+    let mut test = TestOptions::default();
     let mut paths = Vec::new();
     let mut build = Request::default();
 
@@ -153,6 +170,34 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             "--locked" => locked = true,
             "--watch" => watch = true,
             "--check" => fmt_check = true,
+            "--list" => test.list = true,
+            "--no-run" => test.no_run = true,
+            "--timeout" => {
+                test.timeout_ns = Some(parse_cycle_time(&next_value(
+                    args,
+                    &mut index,
+                    "--timeout",
+                )?)?);
+            }
+            other if other.starts_with("--timeout=") => {
+                test.timeout_ns = Some(parse_cycle_time(&other["--timeout=".len()..])?);
+            }
+            "--" => {
+                if command != Command::Test {
+                    return Err("`--` is only valid with `stc test`".into());
+                }
+                for passthrough in &args[index + 1..] {
+                    match passthrough.as_str() {
+                        "--nocapture" => test.nocapture = true,
+                        other => {
+                            return Err(format!(
+                                "unknown test argument `{other}` (expected `--nocapture`)"
+                            ));
+                        }
+                    }
+                }
+                break;
+            }
             "-q" | "--quiet" => quiet = true,
             "-v" | "--verbose" => verbosity = verbosity.max(1),
             "-vv" => verbosity = 2,
@@ -297,6 +342,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         watch,
         fmt_check,
         &build,
+        &test,
     )?;
 
     Ok(Some(Invocation {
@@ -313,6 +359,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         lints,
         watch,
         build,
+        test,
     }))
 }
 
@@ -343,6 +390,7 @@ fn validate(
     watch: bool,
     fmt_check: bool,
     build: &Request,
+    test: &TestOptions,
 ) -> Result<(), String> {
     let build_only = build.name.is_some()
         || !build.emit.is_empty()
@@ -354,10 +402,35 @@ fn validate(
         || !build.renames.is_empty()
         || build.allow_untracked_removal
         || build.debug;
-    if build_only && !matches!(command, Command::Build | Command::Metadata | Command::Run) {
+    if build_only
+        && !matches!(
+            command,
+            Command::Build | Command::Metadata | Command::Run | Command::Test
+        )
+    {
         return Err(
-            "build options are only valid with `stc build`, `stc metadata`, or `stc run`".into(),
+            "build options are only valid with `stc build`, `stc metadata`, `stc run`, or `stc test`"
+                .into(),
         );
+    }
+    if command == Command::Test {
+        if build.name.is_some() || !build.emit.is_empty() {
+            return Err(
+                "`stc test` builds one test artifact per test; `--name`/`--emit` are not valid"
+                    .into(),
+            );
+        }
+        if build.got_manifest.is_some()
+            || build.cold
+            || !build.renames.is_empty()
+            || build.allow_untracked_removal
+        {
+            return Err(
+                "`stc test` builds cold test artifacts and never uses a baseline; \
+                 `--got-manifest`, `--cold`, `--rename`, and `--allow-untracked-removal` are not valid"
+                    .into(),
+            );
+        }
     }
     if command == Command::Run && (build.name.is_some() || !build.emit.is_empty()) {
         return Err(
@@ -366,26 +439,36 @@ fn validate(
     }
     let run_only = build.run.cycles.is_some()
         || build.run.cycle_time_ns.is_some()
-        || build.run.io.is_some()
-        || build.run.io_file.is_some()
         || build.run.state_file.is_some()
         || build.run.reset_retain
         || build.run.no_retain;
     if run_only && command != Command::Run {
         return Err(
-            "`--cycles`, `--cycle-time`, `--io`, and retain options are only valid with \
-                    `stc run`"
+            "`--cycles`, `--cycle-time`, `--state-file`, and the retain options are only valid \
+             with `stc run`"
+                .into(),
+        );
+    }
+    let io_override = build.run.io.is_some() || build.run.io_file.is_some();
+    if io_override && !matches!(command, Command::Run | Command::Test) {
+        return Err("`--io` and `--io-file` are only valid with `stc run` or `stc test`".into());
+    }
+    if (test.list || test.no_run || test.timeout_ns.is_some() || test.nocapture)
+        && command != Command::Test
+    {
+        return Err(
+            "`--list`, `--no-run`, `--timeout`, and `-- --nocapture` are only valid with `stc test`"
                 .into(),
         );
     }
     if build.out_dir.is_some()
         && !matches!(
             command,
-            Command::Build | Command::Metadata | Command::Clean | Command::Run
+            Command::Build | Command::Metadata | Command::Clean | Command::Run | Command::Test
         )
     {
         return Err(
-            "`--out-dir` is only valid with `stc build`, `stc metadata`, `stc clean`, or `stc run`"
+            "`--out-dir` is only valid with `stc build`, `stc metadata`, `stc clean`, `stc run`, or `stc test`"
                 .into(),
         );
     }
@@ -401,10 +484,10 @@ fn validate(
     if relaxed
         && !matches!(
             command,
-            Command::Parse | Command::Check | Command::Build | Command::Metadata
+            Command::Parse | Command::Check | Command::Build | Command::Metadata | Command::Test
         )
     {
-        return Err("`--relaxed` is only valid with parse, check, build, or metadata".into());
+        return Err("`--relaxed` is only valid with parse, check, build, metadata, or test".into());
     }
     if manifest.is_some() {
         if !matches!(
@@ -454,9 +537,9 @@ fn validate(
     let allowed = match command {
         Command::Parse | Command::New => path_count == 1,
         Command::Rename => path_count == 2,
-        Command::Check | Command::Build | Command::Fmt => true,
+        // Test positional arguments are substring filters.
+        Command::Check | Command::Build | Command::Fmt | Command::Test => true,
         Command::Run
-        | Command::Test
         | Command::Clean
         | Command::Metadata
         | Command::Compliance
@@ -468,7 +551,7 @@ fn validate(
             Command::Parse => "`stc parse` accepts exactly one input file".into(),
             Command::New => "`stc new` accepts exactly one project path".into(),
             Command::Rename => "`stc rename` accepts `<old> <new>`".into(),
-            Command::Check | Command::Build | Command::Fmt => {
+            Command::Check | Command::Build | Command::Fmt | Command::Test => {
                 "unexpected positional arguments".into()
             }
             _ => format!(
@@ -603,7 +686,12 @@ fn print_help() {
          \x20         [--no-retain] [--target <triple>] [--clang <path>]\n\
          \x20         [--runtime <path>] [-v|-vv] [-q]\n\
          \x20 stc run --watch        (M6 phase 8)\n\
-         \x20 stc test               (M6 phase 6)\n\
+         \x20 stc test [<filter>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
+         \x20          [--list] [--no-run] [--timeout <duration>]\n\
+         \x20          [--io null|memory|file] [--io-file <path>]\n\
+         \x20          [--target <triple>] [--clang <path>] [--runtime <path>]\n\
+         \x20          [--out-dir <dir>] [--relaxed] [--message-format human|json]\n\
+         \x20          [-v|-vv] [-q] [-- --nocapture]\n\
          \x20 stc fmt [<path>...] [--check] (M6 phase 7)\n\
          \x20 stc online download|diff      (M6 phase 8)\n\
          \x20 stc rename <old> <new>        (M6 phase 8)\n\

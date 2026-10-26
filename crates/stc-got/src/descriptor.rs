@@ -23,13 +23,21 @@ pub const DESCRIPTOR_FORMAT: u16 = 1;
 pub const MODULE_FORMAT: u16 = 1;
 /// Descriptor format 1 is defined for host ABI major version 2.
 pub const HOST_ABI_MAJOR: u16 = 2;
-/// Host ABI minor version emitted by the compiler.
+/// Host ABI minor version provided by the runtime host.
 ///
 /// Minor 1 (host ABI 2.1) records the inline TYPEINFO, VTABLE, and
-/// object-record layout generated code reads directly. No host service is
-/// appended; the module's required minor rises so a 2.0-only host rejects a
-/// generation that depends on the layout.
-pub const HOST_ABI_MINOR: u16 = 1;
+/// object-record layout generated code reads directly. Minor 2 (host ABI 2.2)
+/// appends the test-clock service (ID 12, `set_cycle_time_ns`); only test
+/// builds require it, so production modules keep [`PRODUCTION_ABI_MINOR`].
+pub const HOST_ABI_MINOR: u16 = 2;
+
+/// Host ABI minor version required by production modules.
+///
+/// Production modules never import service 12 and therefore run on a 2.1 host.
+pub const PRODUCTION_ABI_MINOR: u16 = 1;
+
+/// Host ABI minor version required by test-build modules.
+pub const TEST_ABI_MINOR: u16 = 2;
 /// Descriptor digest domain string.
 pub const DESCRIPTOR_DOMAIN: &str = "stc:descriptor:v1";
 /// Byte offset of `descriptor_size` in the encoded header.
@@ -146,7 +154,7 @@ impl Descriptor {
         Self {
             required_features: feature::HOST_ABI | feature::ONLINE_PLAN,
             host_abi_major: HOST_ABI_MAJOR,
-            host_abi_minor: HOST_ABI_MINOR,
+            host_abi_minor: PRODUCTION_ABI_MINOR,
             module_format: MODULE_FORMAT,
             endianness: 0,
             pointer_width: 8,
@@ -511,7 +519,7 @@ impl Descriptor {
             }
             match slot.kind {
                 SlotKind::Import => {
-                    if slot.service == 0 || slot.service > 11 {
+                    if slot.service == 0 || slot.service > 12 {
                         return Err(Error::new(
                             codes::MODULE_INVALID,
                             format!(
@@ -719,11 +727,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_abi_minor_records_the_inline_oop_layout() {
+    fn host_abi_minor_records_the_inline_oop_layout_and_test_clock() {
         assert_eq!(HOST_ABI_MAJOR, 2);
-        assert_eq!(HOST_ABI_MINOR, 1);
+        assert_eq!(PRODUCTION_ABI_MINOR, 1);
+        assert_eq!(TEST_ABI_MINOR, 2);
+        assert_eq!(HOST_ABI_MINOR, 2);
         let descriptor = Descriptor::new(GotId::from_bytes([0x11; 16]));
         assert_eq!(descriptor.host_abi_major, 2);
-        assert_eq!(descriptor.host_abi_minor, 1);
+        assert_eq!(descriptor.host_abi_minor, PRODUCTION_ABI_MINOR);
     }
 }

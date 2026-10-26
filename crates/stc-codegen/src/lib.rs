@@ -35,7 +35,7 @@ use stc_got::{Digest32, Endianness, Manifest, Rename, Target};
 use stc_hir::HirCrate;
 use stc_span::{FileId, Span};
 
-pub use launcher::generate_launcher;
+pub use launcher::{generate_launcher, generate_test_launcher};
 pub use metadata::{
     ChannelMetadata, DeviceMetadata, Json, Metadata, ProjectBinding, ProjectChannel,
     VarAccessMetadata,
@@ -180,6 +180,10 @@ pub struct Options<'a> {
     pub module: ModuleBuildOptions<'a>,
     /// Project-level metadata settings.
     pub project: ProjectOptions,
+    /// Whether this is a test build: appends the test-clock service (host ABI
+    /// 2.2) and the test-only prelude lowering. Test artifacts are cold,
+    /// non-deployable, and never part of `[build].emit`.
+    pub test_build: bool,
 }
 
 /// One harness-visible span-table entry.
@@ -333,6 +337,7 @@ pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<Cod
     module_options.cold = options.module.cold;
     module_options.allow_untracked_removal = options.module.allow_untracked_removal;
     module_options.renames = options.module.renames.clone();
+    module_options.test_build = options.test_build;
     let got = module::project(hir, options.sources, &module_options).map_err(project_errors)?;
     unit::generate(hir, options, &target, got)
 }

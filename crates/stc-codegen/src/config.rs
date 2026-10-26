@@ -648,12 +648,13 @@ pub(crate) fn program_layouts(
 pub(crate) fn object_layouts(
     hir: &HirCrate,
     types: &TypeSystem<'_>,
+    test_build: bool,
 ) -> Result<BTreeMap<DefId, ObjectLayout>, Vec<CodegenError>> {
     let mut layouts = BTreeMap::new();
     let mut errors = Vec::new();
     for (index, def) in hir.defs.iter().enumerate() {
         let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
-        if def.test_only {
+        if def.test_only && !test_build {
             continue;
         }
         if !matches!(

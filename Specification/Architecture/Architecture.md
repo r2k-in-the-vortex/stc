@@ -569,7 +569,7 @@ state directory holds the active copy and a current pointer.
 ## 7. Runtime boundary
 
 The generated module uses a versioned host API table (host ABI 2), not a fixed set of exported
-global symbols. Host ABI 2.1 provides:
+global symbols. Host ABI 2.2 provides:
 
 | Entry | Purpose |
 | --- | --- |
@@ -581,16 +581,18 @@ global symbols. Host ABI 2.1 provides:
 | `alloc` / `free` | Transient module-version allocation |
 | `io_image` / `io_size` | Process-image access |
 | `state_load` / `state_save` | Retained-state helpers |
+| `set_cycle_time_ns` | Next-cycle clock override (host ABI 2.2, test builds only) |
 
 Reference resolution, typed variable access, string/math helpers, tracing, and debug services are
-later minor-version additions; they are not part of ABI 2.1 and M5 does not call them. Minor 1
+later minor-version additions; they are not part of ABI 2.2 and M6 does not call them. Minor 1
 appends no service: it fixes the inline TYPEINFO, VTABLE, and object-record layout that generated
-OOP code reads directly, so `?=`, interface upcasts, and virtual dispatch need no host call. M6
-fixes minor 2 as the single test-clock append (service ID 12, `set_cycle_time_ns`, test builds
-only) and adds no debug service or checkpoint hook (D-157/D-158). The launch/embedding entry
-points (`stc_rt_execute`, `stc_host_*`) are host exports, not module imports. The exact table,
-service IDs, versions, and signatures are in [GOT Artifacts and Schemas](GOT-Artifacts.md) §8; the
-lifecycle is in [Online Change and GOT](Online-Change-and-GOT.md).
+OOP code reads directly, so `?=`, interface upcasts, and virtual dispatch need no host call.
+Minor 2 appends the single test-clock service (ID 12, `set_cycle_time_ns`, test builds only) and
+adds no debug service or checkpoint hook (D-157/D-158); production modules keep required minor
+2.1. The launch/embedding entry points (`stc_rt_execute`, `stc_host_*`, `stc_rt_test_main`) are
+host exports, not module imports. The exact table, service IDs, versions, and signatures are in
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §8; the lifecycle is in
+[Online Change and GOT](Online-Change-and-GOT.md).
 
 ## 8. Security and robustness
 

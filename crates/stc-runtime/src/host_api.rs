@@ -1,14 +1,16 @@
-//! Host ABI 2.1 service table.
+//! Host ABI 2.2 service table.
 //!
 //! GOT Artifacts §8 fixes the table layout: version and size followed by trap,
 //! clocks, transient allocation, process-image access, retained-state stubs,
-//! and assert. Import cells hold the service entry point itself, so generated
-//! code reads and calls a service exactly like a function cell.
+//! assert, and the test-clock service. Import cells hold the service entry
+//! point itself, so generated code reads and calls a service exactly like a
+//! function cell.
 //!
 //! Minor 1 adds no service. It records the inline TYPEINFO, VTABLE, and
 //! object-record layout of §8.5 that generated code reads directly; the table
 //! shape is unchanged, so a 2.0 host rejects a 2.1 module by minor version
-//! before the layout can be used.
+//! before the layout can be used. Minor 2 appends the test-clock service
+//! (ID 12); only test builds import it.
 //!
 //! The table is a read-only static. Service implementations route transient
 //! allocation and free to the generation whose entry point is currently
@@ -25,7 +27,7 @@ use stc_got::error::{Error, Result, codes};
 use crate::memory::TransientAllocator;
 
 /// Host ABI version word: `(major << 16) | minor` (GOT Artifacts §8.1).
-pub const ABI_VERSION: u32 = (2 << 16) | 1;
+pub const ABI_VERSION: u32 = (2 << 16) | 2;
 
 /// Service IDs used by import slots (GOT Artifacts §8.2).
 pub mod service {
@@ -51,6 +53,8 @@ pub mod service {
     pub const STATE_SAVE: u8 = 10;
     /// Assertion service.
     pub const ASSERT: u8 = 11;
+    /// Next-cycle clock override (test builds).
+    pub const SET_CYCLE_TIME_NS: u8 = 12;
 }
 
 /// Trap function signature.
@@ -75,12 +79,14 @@ pub type StateLoadFn = unsafe extern "C" fn(*mut u8, i64, i64) -> i32;
 pub type StateSaveFn = unsafe extern "C" fn(*const u8, i64, i64) -> i32;
 /// Assert signature.
 pub type AssertFn = unsafe extern "C" fn(i32, i32, u32);
+/// Next-cycle clock override signature.
+pub type SetCycleTimeFn = unsafe extern "C" fn(i64);
 
-/// The host API 2.1 table (GOT Artifacts §8.1).
+/// The host API 2.2 table (GOT Artifacts §8.1).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct HostApi {
-    /// `(major << 16) | minor`; 2.1 is `0x0002_0001`.
+    /// `(major << 16) | minor`; 2.2 is `0x0002_0002`.
     pub abi_version: u32,
     /// Size of this table in bytes.
     pub struct_size: u32,
@@ -106,6 +112,8 @@ pub struct HostApi {
     pub state_save: Option<StateSaveFn>,
     /// Assertion trap.
     pub assert: Option<AssertFn>,
+    /// Sets the next cycle's latched time (host ABI 2.2).
+    pub set_cycle_time_ns: Option<SetCycleTimeFn>,
 }
 
 /// The process-wide host API table passed to every attached module.
@@ -123,6 +131,7 @@ pub static HOST_API: HostApi = HostApi {
     state_load: Some(service_state_load),
     state_save: Some(service_state_save),
     assert: Some(service_assert),
+    set_cycle_time_ns: Some(service_set_cycle_time_ns),
 };
 
 /// Returns the table pointer passed to `stc_module_attach`.
@@ -149,6 +158,7 @@ pub fn service_address(service: u8) -> Option<usize> {
         service::STATE_LOAD => HOST_API.state_load.map(|function| function as usize),
         service::STATE_SAVE => HOST_API.state_save.map(|function| function as usize),
         service::ASSERT => HOST_API.assert.map(|function| function as usize),
+        service::SET_CYCLE_TIME_NS => HOST_API.set_cycle_time_ns.map(|function| function as usize),
         _ => None,
     }
 }
@@ -168,6 +178,8 @@ struct ServiceState {
     allocators: BTreeMap<u64, TransientAllocator>,
     faults: Vec<(u64, String)>,
     trap: Option<TrapRecord>,
+    record_assertions: bool,
+    assertions: Vec<AssertRecord>,
 }
 
 impl ServiceState {
@@ -176,6 +188,8 @@ impl ServiceState {
             allocators: BTreeMap::new(),
             faults: Vec::new(),
             trap: None,
+            record_assertions: false,
+            assertions: Vec::new(),
         }
     }
 }
@@ -302,6 +316,33 @@ fn record_trap(code: i32, span_id: u32) {
     });
 }
 
+/// A recorded assertion failure raised through the `assert` service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssertRecord {
+    /// Assertion trap code (Runtime-and-Execution §2.3).
+    pub code: i32,
+    /// Span ID supplied by generated code.
+    pub span_id: u32,
+}
+
+/// Starts recording assertion failures instead of trapping.
+///
+/// The test host enables this around its run loop so `STC_ASSERT` records
+/// failures and execution continues (Testing §2.3). Returns any records left
+/// from a previous recording session.
+pub fn begin_assert_recording() -> Vec<AssertRecord> {
+    let mut state = service_state();
+    state.record_assertions = true;
+    std::mem::take(&mut state.assertions)
+}
+
+/// Stops recording assertion failures and returns the recorded failures.
+pub fn end_assert_recording() -> Vec<AssertRecord> {
+    let mut state = service_state();
+    state.record_assertions = false;
+    std::mem::take(&mut state.assertions)
+}
+
 /// Records the trap and transfers control to the host trap boundary.
 ///
 /// Inside a host module call this performs a non-local exit to
@@ -417,11 +458,21 @@ unsafe extern "C" fn service_state_save(buffer: *const u8, len: i64, layout_hash
 
 unsafe extern "C" fn service_assert(condition: i32, code: i32, span_id: u32) {
     if condition == 0 {
+        let mut state = service_state();
+        if state.record_assertions {
+            state.assertions.push(AssertRecord { code, span_id });
+            return;
+        }
+        drop(state);
         // SAFETY: the trap service has the table's non-returning signature.
         unsafe {
             service_trap(code, span_id);
         }
     }
+}
+
+unsafe extern "C" fn service_set_cycle_time_ns(ns: i64) {
+    crate::stc_rt_set_cycle_time_ns(ns);
 }
 
 #[cfg(test)]
@@ -439,8 +490,8 @@ mod tests {
     }
 
     #[test]
-    fn table_has_the_abi_2_1_shape() {
-        assert_eq!(HOST_API.abi_version, 0x0002_0001);
+    fn table_has_the_abi_2_2_shape() {
+        assert_eq!(HOST_API.abi_version, 0x0002_0002);
         assert_eq!(
             ABI_VERSION,
             (u32::from(stc_got::HOST_ABI_MAJOR) << 16) | u32::from(stc_got::HOST_ABI_MINOR)
@@ -460,18 +511,19 @@ mod tests {
         assert!(HOST_API.state_load.is_some());
         assert!(HOST_API.state_save.is_some());
         assert!(HOST_API.assert.is_some());
+        assert!(HOST_API.set_cycle_time_ns.is_some());
     }
 
     #[test]
     fn every_service_id_has_a_distinct_entry_point() {
         let mut addresses = Vec::new();
-        for id in 1..=11 {
+        for id in 1..=12 {
             let address = service_address(id).expect("service address");
             assert!(!addresses.contains(&address), "duplicate address for {id}");
             addresses.push(address);
         }
         assert_eq!(service_address(0), None);
-        assert_eq!(service_address(12), None);
+        assert_eq!(service_address(13), None);
         assert_eq!(
             service_address(service::TRAP),
             Some(HOST_API.trap.expect("trap") as usize)

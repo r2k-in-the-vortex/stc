@@ -36,7 +36,7 @@ descriptor/function-table globals) plus a structural verifier checked by clang-a
 `stc-codegen::module` projects the M4 scalar surface to the root catalog, canonical slot
 bindings, descriptor bytes, manifest pair, and online-change plan with golden snapshots and
 second-build baseline tests; and `stc-runtime` provides the host GOT, root registry, quarantine,
-transient allocator, artifact validation, platform module loader, ABI 2.1 host services,
+transient allocator, artifact validation, platform module loader, ABI 2.2 host services,
 active-manifest store/download, the load/prepare/activate/commit/rollback/unload state machine,
 and a non-local trap boundary. Phase 7 converts generated execution to that model: globals,
 program fields, direct variables, retain leaves, and task guards use GOT cells; user calls are
@@ -103,10 +103,11 @@ preserved pair to the new method cells, fresh object records and handles initial
 roll back, vtable-shape changes are rejected against an active baseline, and committed OOP fuzz
 seeds cover malformed TYPEINFO/VTABLE/interface-map inputs. Interface identity comparison
 remains a diagnostic. The project
-manifest, `stc run`, `stc test`, and file-backed retained state are M6,
-and full task scheduling is M6 (M5 keeps one task per resource). The persistent host, loadable
-modules, GOT roots, manifests, swap protocol, and process-image remap are implemented and shared
-by the M5 lowering. Parser and semantic snapshots, IR snapshots, clang verification, execution
+manifest, the project CLI, `stc run`, `stc test`, file-backed retained state, I/O device
+bindings, and cooperative multi-task scheduling are implemented (M6 phases 1-6). `stc fmt`, the
+online-change workflow, Lean vectors, the conformance/UI/traceability pass, and the CI matrix
+remain phases 7-11. The persistent host, loadable modules, GOT roots, manifests, swap protocol,
+and process-image remap are implemented and shared by the M5 lowering. Parser and semantic snapshots, IR snapshots, clang verification, execution
 and C-harness tests, a committed
 corpus, traceability tables, deterministic property tests, a 20k-term deep-chain test, and
 `fuzz_lexer`, `fuzz_parser`, `fuzz_analyzer`, `fuzz_codegen`, `fuzz_got_manifest`, and
@@ -261,11 +262,12 @@ stc debug               start a local debug/monitoring session (M6.5)
 
 M4.5 implements `stc parse`, `stc check`, and `stc build` (with `--name`, `--emit`, `--out-dir`,
 `--target`, `--clang`, `--runtime`, `--relaxed`, `--message-format`, `-v`, `--got-manifest`,
-`--cold`, `--rename`, and `--allow-untracked-removal`). `stc new`, `stc run`, `stc test`,
-`stc fmt`, `stc clean`, `stc metadata`, and `stc compliance`, the project manifest, verbose
-`-vv`, color control, and warnings-as-errors arrive in M6. M4.5 adds `--emit=module`, the thin
-`exe` launcher, the embedding `lib` host, and the online-change foundation. The `--debug` and
-`--release` options and debug-info emission are M6.5; M4.5 artifacts are always built in the
+`--cold`, `--rename`, and `--allow-untracked-removal`). M6 phases 1-6 add the project manifest
+and lockfile, `stc new`, `stc check/build/run/test/clean/metadata/compliance`, verbose `-vv`,
+color control, and warnings-as-errors; `stc fmt`, `online`, `rename`, and `run --watch` remain
+phases 7-8. M4.5 adds `--emit=module`, the thin `exe` launcher, the embedding `lib` host, and
+the online-change foundation. The `--debug` and `--release` options and debug-info emission are
+M6.5; M6 artifacts are always built in the
 unoptimised debug form and contain no DWARF/CodeView or checkpoint hooks yet.
 
 Cargo-like diagnostics (`file:line:col: error[STC-E-...]`), source snippets, notes, suggestions,

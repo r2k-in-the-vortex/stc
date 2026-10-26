@@ -223,14 +223,15 @@ goes through the typed generation-pinned API, and the cycle thread is the only S
 
 ### 2.2 ABI versioning
 
-- `STC_HOST_ABI_MAJOR = 2`; `STC_HOST_ABI_MINOR = 1` is implemented for v1's persistent host.
-  Minor 1 appends no service and changes no signature; it records the inline TYPEINFO, VTABLE,
-  and object-record layout of §2.6 that generated OOP code reads without a host call (D-151).
-- M6 phase 0 fixes the next minor: **2.2** appends exactly one service, ID 12,
-  `void (*set_cycle_time_ns)(int64_t ns)`, appended after `assert` in `stc_host_api`. It sets the
-  next cycle's latched time and does not change the current scan. Only test builds import it;
-  production modules keep required minor 2.1 (D-157). The table and service IDs are fixed in
-  [GOT Artifacts and Schemas](GOT-Artifacts.md) §8.
+- `STC_HOST_ABI_MAJOR = 2`; the v1 persistent host implements minor **2** (2.2). Minor 1
+  appends no service and changes no signature; it records the inline TYPEINFO, VTABLE, and
+  object-record layout of §2.6 that generated OOP code reads without a host call (D-151). M6
+  phase 6 implements minor 2.
+- Minor **2.2** appends exactly one service, ID 12, `void (*set_cycle_time_ns)(int64_t ns)`,
+  after `assert` in `stc_host_api`. It sets the next cycle's latched time and does not change the
+  current scan; `STC_CLOCK_ADVANCE` lowers to `set(cycle_now_ns() + duration)`. Only test builds
+  import it; production modules keep required minor 2.1 (D-157). The table and service IDs are
+  fixed in [GOT Artifacts and Schemas](GOT-Artifacts.md) §8.
 - The runtime exposes `stc_abi_version()` and a host API struct with `abi_version` and
   `struct_size`. A module rejects a host whose struct is shorter than required.
 - Generated modules embed the expected ABI version in metadata and their descriptor; the loader
@@ -267,11 +268,12 @@ void stc_rt_state_configure(const char* path, int32_t policy, int32_t enabled);
 ```
 
 Generated modules do not import `stc_rt_*` symbols. They call traps, clocks, state, I/O, and
-allocation through the host API table (ABI 2.1 implemented; 2.2 appends service ID 12) defined
-below and in [GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The flat `stc_rt_*` module ABI is
-M4 ABI 1 and is not loadable by the persistent host. `stc_rt_set_cycle_time_ns` is a host-only
-export for the launcher and embedding hosts; generated test code advances the next cycle's time
-through service ID 12 instead.
+allocation through the host API table (ABI 2.2 implemented; production modules require 2.1 and
+test modules 2.2) defined below and in [GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The
+flat `stc_rt_*` module ABI is M4 ABI 1 and is not loadable by the persistent host.
+`stc_rt_set_cycle_time_ns` is a host-only export for the launcher and embedding hosts; generated
+test code advances the next cycle's time through service ID 12 instead. `stc_rt_test_main` is
+the test-host entry point linked by a generated test launcher; production modules never call it.
 
 #### 2.3.1 Host API table
 
@@ -609,9 +611,11 @@ assignment copies the root's value; the destination root identity is preserved.
   - assertion helpers that record failures without aborting immediately,
   - no retained-state load or save.
 - Test functions return `BOOL` (TRUE = pass) and may call `STC_ASSERT`; assertions use the
-  existing ABI 2 `assert` service with a recording sink, and `STC_CLOCK_ADVANCE` uses the
-  appended ABI 2.2 service ID 12. `STC_IO_SET_INPUT`/`STC_IO_GET_OUTPUT` use the existing I/O
-  services.
+  existing ABI 2 `assert` service with a recording sink (the host records span IDs and the
+  driver's sidecar supplies messages/locations), and `STC_CLOCK_ADVANCE` uses the appended ABI
+  2.2 service ID 12 as `set(cycle_now_ns() + duration)`. `STC_IO_SET_INPUT(offset, value)` and
+  `STC_IO_GET_OUTPUT(offset)` use the existing I/O services. An FB test's optional `PASSED`
+  output is read by the host through its GOT leaf root because FB fields are `PROTECTED`.
 - Program/FB tests may run a configured number of cycles (`cycles = N` in the test metadata) and
   inspect outputs/globals.
 - Results are reported as human-readable text or the JSON shape in

@@ -1,10 +1,10 @@
 # GOT Artifacts and Schemas
 
-Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25); M6 phase-0 host ABI 2.2 test-clock append fixed (2026-10-26)  
+Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25); M6 phase-6 host ABI 2.2 test-clock append implemented (2026-10-26)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: Normative formats for stable keys, `GotId`, the compiler catalog, the module descriptor,
-the persistent GOT manifest, the online-change plan, host ABI 2 (2.1 implemented, 2.2 M6
-target), and build IDs.
+the persistent GOT manifest, the online-change plan, host ABI 2 (2.2 implemented;
+production modules require 2.1), and build IDs.
 
 This document is the machine-readable companion to
 [Online Change and GOT](Online-Change-and-GOT.md). It fixes the bytes and identifiers that the
@@ -28,7 +28,7 @@ v1 layouts, and M4.5 simply leaves later record kinds empty.
 | Type-key/layout derivation | 1 | `STC_LAYOUT_V1` |
 | Module descriptor | 1 | `STC_DESCRIPTOR_V1` |
 | Loadable module (container contract) | 1 | `STC_MODULE_V1` |
-| Host API | 2.1 implemented; 2.2 M6 target | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=1` (M6: `2`) |
+| Host API | 2.2 implemented (production modules require 2.1) | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=2` |
 | GOT manifest | 1 | `STC_MANIFEST_V1` |
 | Online-change plan | 1 | `STC_PLAN_V1` |
 | Build ID derivation | 1 | `STC_BUILD_V1` |
@@ -586,7 +586,7 @@ void stc_module_detach(uint64_t generation_id);
   generation switch; the host only switches at a cycle boundary, so values cached within one
   cycle are valid.
 
-## 8. Host API 2 (2.1 implemented; 2.2 M6 target)
+## 8. Host API 2 (2.2 implemented; production modules require 2.1)
 
 ### 8.1 Table
 

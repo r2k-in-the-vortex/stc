@@ -87,7 +87,7 @@ pub(crate) fn generate(
     let types = crate::types::TypeSystem::new(hir, target)
         .map_err(|errors| errors.into_iter().collect::<Vec<_>>())?;
     let layouts = config::program_layouts(hir, &plan, &types)?;
-    let objects = config::object_layouts(hir, &types)?;
+    let objects = config::object_layouts(hir, &types, options.test_build)?;
     let object_ordinal_map = objects
         .iter()
         .map(|(def, layout)| {
@@ -247,7 +247,8 @@ impl Lowerer<'_> {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(0));
             let used_std = self.used_std.contains(&id);
-            if (synthetic(self.hir, id) && !used_std) || def.test_only {
+            if (synthetic(self.hir, id) && !used_std) || (def.test_only && !self.options.test_build)
+            {
                 continue;
             }
             match &def.kind {
@@ -332,7 +333,7 @@ impl Lowerer<'_> {
     fn preflight(&mut self) {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(0));
-            if synthetic(self.hir, id) || def.test_only {
+            if synthetic(self.hir, id) || (def.test_only && !self.options.test_build) {
                 continue;
             }
             match &def.kind {
@@ -562,7 +563,9 @@ impl Lowerer<'_> {
             })
             .collect();
         for def in functions {
-            if synthetic(self.hir, def) || self.hir.defs[def.index()].test_only {
+            if synthetic(self.hir, def)
+                || (self.hir.defs[def.index()].test_only && !self.options.test_build)
+            {
                 continue;
             }
             if let Err(error) = self.emit_function(def) {
@@ -859,7 +862,7 @@ impl Lowerer<'_> {
             .enumerate()
             .filter_map(|(index, def)| {
                 let id = DefId::new(u32::try_from(index).ok()?);
-                if def.test_only {
+                if def.test_only && !self.options.test_build {
                     return None;
                 }
                 match &def.kind {
@@ -951,7 +954,7 @@ impl Lowerer<'_> {
             .iter()
             .enumerate()
             .filter_map(|(index, def)| {
-                if def.test_only {
+                if def.test_only && !self.options.test_build {
                     return None;
                 }
                 matches!(def.kind, DefKind::Method { body: Some(_), .. })
@@ -1089,7 +1092,7 @@ impl Lowerer<'_> {
             .iter()
             .enumerate()
             .filter_map(|(index, def)| {
-                if def.test_only {
+                if def.test_only && !self.options.test_build {
                     return None;
                 }
                 let DefKind::Method {
@@ -1462,7 +1465,7 @@ impl Lowerer<'_> {
             .enumerate()
             .filter_map(|(index, def)| {
                 let id = DefId::new(u32::try_from(index).ok()?);
-                if synthetic(self.hir, id) || def.test_only {
+                if synthetic(self.hir, id) || (def.test_only && !self.options.test_build) {
                     return None;
                 }
                 let DefKind::Global {
@@ -1934,7 +1937,7 @@ impl Lowerer<'_> {
             .enumerate()
             .filter_map(|(index, def)| {
                 let name = def.export_name?;
-                if def.test_only {
+                if def.test_only && !self.options.test_build {
                     return None;
                 }
                 let symbol = self.hir.interner.text(name).to_string();
@@ -2105,9 +2108,14 @@ impl Lowerer<'_> {
             i64::try_from(abi::host_api::STRUCT_SIZE_OFFSET).unwrap_or(4),
         );
         let size = f.load(IrType::Int(32), &size_pointer, Some(4));
+        let required_size = if self.options.test_build {
+            abi::host_api::REQUIRED_SIZE_TEST
+        } else {
+            abi::host_api::REQUIRED_SIZE
+        };
         let required_size = Value::int(
             32,
-            i128::from(u32::try_from(abi::host_api::REQUIRED_SIZE).unwrap_or(u32::MAX)),
+            i128::from(u32::try_from(required_size).unwrap_or(u32::MAX)),
         );
         let short_table = f.icmp("ult", &size, &required_size);
         Self::return_if(&mut f, &short_table, 2);
@@ -2439,7 +2447,7 @@ impl Lowerer<'_> {
             .enumerate()
             .filter_map(|(index, def)| {
                 let name = def.export_name?;
-                if def.test_only {
+                if def.test_only && !self.options.test_build {
                     return None;
                 }
                 let id = DefId::new(u32::try_from(index).ok()?);

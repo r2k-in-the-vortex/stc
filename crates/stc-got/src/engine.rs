@@ -74,7 +74,7 @@ impl BuildInput {
             active_configuration: String::new(),
             module_format: 1,
             host_abi_major: HOST_ABI_MAJOR,
-            host_abi_minor: HOST_ABI_MINOR,
+            host_abi_minor: crate::descriptor::PRODUCTION_ABI_MINOR,
             generator_flags: 0,
             required_features: FEATURE_HOST_ABI | FEATURE_ONLINE_PLAN,
             descriptor_digest: Digest32::ZERO,

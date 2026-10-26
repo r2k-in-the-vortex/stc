@@ -920,7 +920,7 @@ impl Manifest {
             }
             match slot.kind {
                 SlotKind::Import => {
-                    if slot.service == 0 || slot.service > 11 {
+                    if slot.service == 0 || slot.service > 12 {
                         return Err(Error::manifest(format!(
                             "import slot service ID {} is outside the ABI 2 service table",
                             slot.service

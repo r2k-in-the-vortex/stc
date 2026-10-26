@@ -105,3 +105,10 @@ pub const PROJECT_CONFIGURATION: &str = "STC-E-PROJECT-007";
 // Test-only units.
 /// Production code references a test-only unit.
 pub const TEST_REFERENCE: &str = "STC-E-TEST-001";
+
+// Test prelude.
+/// Production code uses `STC_ASSERT`.
+pub const ASSERT_PRODUCTION: &str = "STC-E-ASSERT-001";
+/// `STC_ASSERT` (or another test-prelude function) is used outside a
+/// test-only unit, or with an invalid argument form.
+pub const ASSERT_INVALID: &str = "STC-E-ASSERT-002";

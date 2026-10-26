@@ -163,6 +163,8 @@ pub(crate) fn run(
         packages,
         configuration: root.manifest.project.configuration.clone(),
         stdlib: root.manifest.project.stdlib,
+        test_build: false,
+        test_files: &[],
     };
     let analyze_start = Instant::now();
     let analysis = stc_sema::analyze_project(&session, &mut diagnostics);

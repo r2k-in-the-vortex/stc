@@ -1,10 +1,10 @@
 //! The `stc` command-line driver.
 //!
 //! M6 phase 3 implements `new`, `check`, `build`, `clean`, `metadata`, and
-//! `compliance`; phase 4 adds `run`. The remaining M6 verbs are parsed and
-//! validated; their workflows land in later phases. The driver owns the
-//! exit-code contract, human/JSON/short diagnostics, colors, lint levels, and
-//! the panic boundary from CLI-and-Manifest §1.3–§1.4.
+//! `compliance`; phase 4 adds `run`; phase 6 adds `test`. The remaining M6
+//! verbs are parsed and validated; their workflows land in later phases. The
+//! driver owns the exit-code contract, human/JSON/short diagnostics, colors,
+//! lint levels, and the panic boundary from CLI-and-Manifest §1.3–§1.4.
 
 #![forbid(unsafe_code)]
 
@@ -17,6 +17,7 @@ mod new;
 mod project;
 mod report;
 mod run;
+mod test;
 
 use std::any::Any;
 use std::ffi::OsString;
@@ -129,11 +130,18 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
-        Command::Test
-        | Command::Fmt
-        | Command::OnlineDownload
-        | Command::OnlineDiff
-        | Command::Rename => not_implemented(invocation.command, invocation.watch),
+        Command::Test => test::run(
+            invocation.manifest.as_deref(),
+            invocation.locked,
+            &invocation.build,
+            &invocation.test,
+            &invocation.paths,
+            &mut reporter,
+            log,
+        ),
+        Command::Fmt | Command::OnlineDownload | Command::OnlineDiff | Command::Rename => {
+            not_implemented(invocation.command, invocation.watch)
+        }
     };
     ExitCode::from(code)
 }

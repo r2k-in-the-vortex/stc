@@ -9,7 +9,8 @@ use crate::{Analyzer, EMPTY_SPAN};
 
 impl Analyzer<'_> {
     pub(crate) fn install_prelude(&mut self, stdlib: bool) {
-        for kind in ALL_STD_FNS {
+        let test_fns: &[StdFnKind] = if self.test_build { TEST_STD_FNS } else { &[] };
+        for kind in ALL_STD_FNS.iter().chain(test_fns.iter()) {
             let name = self.hir.intern(kind.as_str());
             let (params, result) = std_signature(*kind);
             let raw = u32::try_from(self.hir.std_fns.len()).expect("std fn limit exceeded");
@@ -251,7 +252,7 @@ const ALL_STD_FNS: &[StdFnKind] = &[
 ];
 
 fn std_signature(kind: StdFnKind) -> (Vec<StdParam>, StdResult) {
-    use GenericKind::{Any, AnyBit, AnyInt, AnyMagnitude, AnyNum, AnyReal, AnyString};
+    use GenericKind::{Any, AnyBit, AnyDuration, AnyInt, AnyMagnitude, AnyNum, AnyReal, AnyString};
     let param = |name, generic, variadic| StdParam {
         name,
         generic,
@@ -387,8 +388,29 @@ fn std_signature(kind: StdFnKind) -> (Vec<StdParam>, StdResult) {
             ],
             StdResult::Dint,
         ),
+        StdFnKind::Assert => (
+            vec![param("CONDITION", Any, false), param("MESSAGE", Any, false)],
+            StdResult::Bool,
+        ),
+        StdFnKind::ClockAdvance => (vec![param("DURATION", AnyDuration, false)], StdResult::Bool),
+        StdFnKind::IoSetInput => (
+            vec![
+                param("OFFSET", AnyInt, false),
+                param("VALUE", AnyInt, false),
+            ],
+            StdResult::Bool,
+        ),
+        StdFnKind::IoGetOutput => (vec![param("OFFSET", AnyInt, false)], StdResult::Dint),
     }
 }
+
+/// Test-only prelude functions (Testing and Verification §2.2, §2.5).
+const TEST_STD_FNS: &[StdFnKind] = &[
+    StdFnKind::Assert,
+    StdFnKind::ClockAdvance,
+    StdFnKind::IoSetInput,
+    StdFnKind::IoGetOutput,
+];
 
 /// Returns `true` when `name` is a standard function name.
 #[must_use]

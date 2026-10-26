@@ -75,6 +75,8 @@ fn generate() -> (stc_codegen::Output, stc_sema::Analysis) {
         packages,
         configuration: None,
         stdlib: true,
+        test_build: false,
+        test_files: &[],
     };
     let analysis = analyze_project(&session, &mut sink);
     assert!(
@@ -106,6 +108,7 @@ fn generate() -> (stc_codegen::Output, stc_sema::Analysis) {
         release: false,
         sources: &sources,
         source_paths: Some(&source_paths),
+        test_build: false,
         module: stc_codegen::ModuleBuildOptions {
             compiler_version: "stc test".into(),
             source_fingerprint: fingerprint,

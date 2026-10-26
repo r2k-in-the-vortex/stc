@@ -1849,3 +1849,65 @@ fn interfaces_to_callee_storage_cannot_escape() {
          METHOD PUBLIC AsI : I\n  AsI := THIS;\nEND_METHOD\nEND_CLASS\n",
     ));
 }
+
+#[test]
+fn the_test_prelude_resolves_only_inside_test_units() {
+    common::assert_test_clean(
+        "{stc:test}
+FUNCTION Asserts : BOOL
+  STC_ASSERT(1 + 1 = 2, \"arithmetic\");
+  Asserts := TRUE;
+END_FUNCTION
+",
+    );
+    common::assert_test_clean(
+        "{stc:test}
+FUNCTION Clock : BOOL
+  STC_CLOCK_ADVANCE(T#1ms);
+  STC_IO_SET_INPUT(0, 16#42);
+  Clock := STC_IO_GET_OUTPUT(0) = 16#42;
+END_FUNCTION
+",
+    );
+    common::assert_test_error(
+        "PROGRAM P
+  STC_ASSERT(TRUE, \"not a test\");
+END_PROGRAM
+",
+        stc_sema::codes::ASSERT_PRODUCTION,
+    );
+    common::assert_test_error(
+        "{stc:test}
+FUNCTION Bad : BOOL
+  STC_ASSERT(1, \"condition is DINT\");
+  Bad := TRUE;
+END_FUNCTION
+",
+        stc_sema::codes::ASSERT_INVALID,
+    );
+    common::assert_test_source_clean(
+        "PROGRAM P
+  ;
+END_PROGRAM
+",
+        "FUNCTION Helper : BOOL
+  STC_ASSERT(TRUE, \"test-source helper\");
+  Helper := TRUE;
+END_FUNCTION
+",
+    );
+    common::assert_test_error(
+        "{stc:test}
+FUNCTION Hidden : BOOL
+  Hidden := TRUE;
+END_FUNCTION
+PROGRAM P
+VAR
+  x : BOOL;
+END_VAR
+  x := Hidden();
+END_PROGRAM
+",
+        stc_sema::codes::TEST_REFERENCE,
+    );
+}

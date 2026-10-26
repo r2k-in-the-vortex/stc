@@ -371,6 +371,9 @@ pub struct ModuleOptions<'a> {
     pub allow_untracked_removal: bool,
     /// Tracked rename/move maps.
     pub renames: Vec<Rename>,
+    /// Whether this is a test build: import the test-clock service and record
+    /// host ABI minor 2.
+    pub test_build: bool,
 }
 
 impl<'a> ModuleOptions<'a> {
@@ -394,6 +397,7 @@ impl<'a> ModuleOptions<'a> {
             cold: false,
             allow_untracked_removal: false,
             renames: Vec::new(),
+            test_build: false,
         }
     }
 }
@@ -584,6 +588,7 @@ pub fn project(
         source_paths: &source_paths,
         types: &types,
         used_std: &used_std,
+        test_build: options.test_build,
     };
     let built = context.build_catalog().map_err(|error| vec![error])?;
 
@@ -597,6 +602,11 @@ pub fn project(
     input.generator_flags = base_generator_flags(options);
     input.required_features =
         FEATURE_HOST_ABI | FEATURE_ONLINE_PLAN | FEATURE_DESCRIPTORS | FEATURE_PLACES;
+    input.host_abi_minor = if options.test_build {
+        stc_got::TEST_ABI_MINOR
+    } else {
+        stc_got::PRODUCTION_ABI_MINOR
+    };
     input.descriptor_digest = PLACEHOLDER_DESCRIPTOR_DIGEST;
     input.source_fingerprint = options.source_fingerprint;
 
@@ -840,6 +850,7 @@ struct Context<'a> {
     source_paths: &'a [String],
     types: &'a TypeSystem<'a>,
     used_std: &'a BTreeSet<DefId>,
+    test_build: bool,
 }
 
 impl Context<'_> {
@@ -863,7 +874,7 @@ impl Context<'_> {
         self.add_instances(&package, &mut catalog)?;
         self.add_tasks(&package, &mut catalog)?;
         self.add_exports(&mut catalog)?;
-        catalog.imports = default_imports(self.retain, !self.used_std.is_empty());
+        catalog.imports = default_imports(self.retain, !self.used_std.is_empty(), self.test_build);
         Ok(BuiltCatalog {
             catalog,
             root_targets,
@@ -909,7 +920,7 @@ impl Context<'_> {
     ) -> Result<(), ModuleError> {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
-            if synthetic(self.hir, id) || def.test_only {
+            if synthetic(self.hir, id) || (def.test_only && !self.test_build) {
                 continue;
             }
             let DefKind::Global {
@@ -1476,7 +1487,7 @@ impl Context<'_> {
     ) -> Result<(), ModuleError> {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
-            if synthetic(self.hir, id) || def.test_only {
+            if synthetic(self.hir, id) || (def.test_only && !self.test_build) {
                 continue;
             }
             let DefKind::Function { body, .. } = &def.kind else {
@@ -1521,7 +1532,7 @@ impl Context<'_> {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
             let used_std = self.used_std.contains(&id);
-            if (synthetic(self.hir, id) && !used_std) || def.test_only {
+            if (synthetic(self.hir, id) && !used_std) || (def.test_only && !self.test_build) {
                 continue;
             }
             let DefKind::FunctionBlock { body, fields, .. } = &def.kind else {
@@ -1590,7 +1601,7 @@ impl Context<'_> {
     ) -> Result<(), ModuleError> {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
-            if synthetic(self.hir, id) || def.test_only {
+            if synthetic(self.hir, id) || (def.test_only && !self.test_build) {
                 continue;
             }
             let DefKind::Method {
@@ -1766,7 +1777,7 @@ impl Context<'_> {
     fn add_exports(&self, catalog: &mut Catalog) -> Result<(), ModuleError> {
         for (index, def) in self.hir.defs.iter().enumerate() {
             let id = DefId::new(u32::try_from(index).unwrap_or(u32::MAX));
-            if synthetic(self.hir, id) || def.test_only {
+            if synthetic(self.hir, id) || (def.test_only && !self.test_build) {
                 continue;
             }
             let Some(c_name) = def.export_name else {
@@ -2106,7 +2117,7 @@ fn instance_path(configuration: &str, resource: &str, instance: &str) -> String 
     )
 }
 
-fn default_imports(_retain: &RetainLayout, clock: bool) -> Vec<ImportService> {
+fn default_imports(_retain: &RetainLayout, clock: bool, test_build: bool) -> Vec<ImportService> {
     let mut imports = vec![
         ImportService::Trap,
         ImportService::IoImage,
@@ -2116,6 +2127,16 @@ fn default_imports(_retain: &RetainLayout, clock: bool) -> Vec<ImportService> {
     ];
     if clock {
         imports.push(ImportService::CycleNowNs);
+    }
+    if test_build {
+        // Test builds lower STC_ASSERT, STC_CLOCK_ADVANCE, and the test I/O
+        // helpers to these services; production modules never import service
+        // 12. `STC_CLOCK_ADVANCE` also reads the latched clock.
+        if !imports.contains(&ImportService::CycleNowNs) {
+            imports.push(ImportService::CycleNowNs);
+        }
+        imports.push(ImportService::Assert);
+        imports.push(ImportService::SetCycleTimeNs);
     }
     imports
 }

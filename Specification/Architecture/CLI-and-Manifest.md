@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 phase-0 project-manifest, diagnostic, report-shape, and rename-history contracts fixed (2026-10-26); project manifest and M6 commands pending  
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 phase-0 project-manifest, diagnostic, report-shape, and rename-history contracts fixed (2026-10-26); M6 phases 3–6 commands implemented (2026-10-26); `fmt`, `online`, `rename`, and `run --watch` pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -17,12 +17,22 @@ output goes to stdout.
 > `exe,module,metadata`, applies `[run]` defaults and the `--cycles`/`--cycle-time`/`--io`/
 > `--io-file`/`--state-file`/`--reset-retain`/`--no-retain` overrides, starts the launcher, and
 > returns its exit code. The I/O and retained-state backends behind those options arrive in phase
-> 5; the options are parsed and carried now. `stc test`, `fmt`, `online`, `rename`, and
+> 5; the options are parsed and carried now. `stc fmt`, `online`, `rename`, and
 > `run --watch` remain later phases. `--message-format` supports `human`, `json`, and `short`;
 > exit codes follow §1.3 (a `stc run` trap exits 4, an interrupt 130). The loadable `module` with
 > its binary/JSON manifest and metadata, the thin `exe` launcher, and the embedding `lib` host
 > archive keep their M4.5 shapes. `--debug`/`--release` and their debug-info behavior are M6.5;
 > M6 builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks.
+
+> **M6 phase 6 status (2026-10-26):** `stc test` is implemented. It compiles the project's
+> production sources and the root package's `[test].sources`, discovers `{stc:test}` POUs in the
+> current package, builds one cold test artifact per test under `target/stc/test/<artifact>`, and
+> runs each in its own test-host process sequentially. It supports substring filters, `--list`,
+> `--no-run`, `--timeout`, `--io`/`--io-file`, `--out-dir`, `--target`, `--clang`, `--runtime`,
+> `--relaxed`, `-- --nocapture`, and human/JSON results. Test builds never read a baseline, never
+> touch the runtime store or retained state, and are not part of `[build].emit`. `stc fmt`,
+> `online`, `rename`, and `run --watch` remain later phases. `--message-format` supports `human`,
+> `json`, and `short`; exit codes follow §1.3 (a test that traps unexpectedly exits 4).
 
 | Command | Purpose |
 | --- | --- |
@@ -73,6 +83,10 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `-D <lint>` / `-W <lint>` / `-A <lint>` | Deny/warn/allow a diagnostic group |
 | `--deny warnings` | Equivalent to `-D warnings` |
 | `--locked` | Require `stc.lock` to match the manifest/dependency graph; fail instead of updating it |
+| `--list` | `stc test`: list discovered tests without building |
+| `--no-run` | `stc test`: build test artifacts without executing them |
+| `--timeout <duration>` | `stc test`: override the per-test timeout (default 5 s) |
+| `-- --nocapture` | `stc test`: forward test-host output instead of only reporting results |
 
 Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LOG`) >
 `stc.toml` > built-in defaults.
@@ -491,6 +505,17 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
 - `[[test.case]].expect-trap` (M6) records the expected trap code; a test that traps with that
   code passes, and any other trap fails it. The same key is accepted in the `{stc:test}` JSON
   payload; a pragma/manifest conflict is `STC-E-PROJECT-008`.
+
+> **M6 phase 6 status (2026-10-26):** implemented. `stc test` parses production sources plus the
+> root package's `[test].sources`, discovers only the current package's `{stc:test}` POUs (in
+> production and test sources), and merges `[[test.case]]` overrides with the pragma. Both set
+> the same field is `STC-E-PROJECT-008`; an unknown case name is also `STC-E-PROJECT-008`;
+> duplicate names are `STC-E-TEST-002`; invalid signatures and reserved synthetic names are
+> `STC-E-TEST-003`. The synthetic configuration uses lexable names (`STC_TEST`,
+> `STC_TEST_RES`, `STC_TEST_TASK`, `STC_TEST_CPU`, `STC_TEST_INSTANCE`, `STC_TEST_WRAPPER`);
+> the phase-0 `__STC_TEST__` spelling is not lexable and is superseded. Test artifacts go to
+> `target/stc/test/<artifact>` (or `<out-dir>/<artifact>`), never join `[build].emit`, and
+> never read a baseline or the active manifest store.
 
 ## 3. Lockfile: `stc.lock`
 

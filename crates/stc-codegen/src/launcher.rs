@@ -10,12 +10,37 @@ use crate::ir::{Function, GlobalDef, IrType, Module, SymbolAttrs, Value, c_strin
 /// Name of the module-relative file-name global.
 pub const MODULE_PATH: &str = "stc_module_path";
 
+/// Name of the runtime test-host entry point.
+pub const TEST_HOST_ENTRY: &str = "stc_rt_test_main";
+
 /// Generates the launcher IR for a module file.
 ///
 /// `module_file` is the file name the runtime resolves relative to the
 /// launcher's directory.
 #[must_use]
 pub fn generate_launcher(artifact_name: &str, module_file: &str, target: Option<&str>) -> String {
+    generate_launcher_with(artifact_name, module_file, target, abi::symbols::EXECUTE)
+}
+
+/// Generates the test-host launcher IR for a test module file.
+///
+/// The test host runs one test, records assertions, and prints the structured
+/// result line (Testing and Verification §2.5).
+#[must_use]
+pub fn generate_test_launcher(
+    artifact_name: &str,
+    module_file: &str,
+    target: Option<&str>,
+) -> String {
+    generate_launcher_with(artifact_name, module_file, target, TEST_HOST_ENTRY)
+}
+
+fn generate_launcher_with(
+    artifact_name: &str,
+    module_file: &str,
+    target: Option<&str>,
+    entry: &str,
+) -> String {
     let mut module = Module::new(artifact_name, target);
     module.add_global(GlobalDef {
         name: MODULE_PATH.into(),
@@ -25,7 +50,7 @@ pub fn generate_launcher(artifact_name: &str, module_file: &str, target: Option<
         constant: true,
         align: Some(1),
     });
-    module.declare(abi::symbols::EXECUTE, "i32 @stc_rt_execute(i32, ptr, ptr)");
+    module.declare(entry, &format!("i32 @{entry}(i32, ptr, ptr)"));
 
     let mut f = Function::new(
         "main",
@@ -41,7 +66,7 @@ pub fn generate_launcher(artifact_name: &str, module_file: &str, target: Option<
     let argv = f.param_value(1);
     let code = f.call(
         IrType::Int(32),
-        abi::symbols::EXECUTE,
+        entry,
         &[argc, argv, Value::symbol(MODULE_PATH)],
     );
     match code {

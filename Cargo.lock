@@ -131,6 +131,7 @@ dependencies = [
  "stc-sema",
  "stc-span",
  "stc-syntax",
+ "stc-test",
 ]
 
 [[package]]
@@ -210,6 +211,19 @@ dependencies = [
  "stc-diag",
  "stc-lexer",
  "stc-span",
+]
+
+[[package]]
+name = "stc-test"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "stc-diag",
+ "stc-lexer",
+ "stc-manifest",
+ "stc-parser",
+ "stc-span",
+ "stc-syntax",
 ]
 
 [[package]]

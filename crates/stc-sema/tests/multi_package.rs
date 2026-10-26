@@ -86,6 +86,8 @@ fn analyze(
         packages,
         configuration: configuration.map(str::to_owned),
         stdlib,
+        test_build: false,
+        test_files: &[],
     };
     let analysis = analyze_project(&session, &mut sink);
     analysis

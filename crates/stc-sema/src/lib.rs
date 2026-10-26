@@ -203,6 +203,12 @@ pub(crate) struct Analyzer<'a> {
     pub current_package: PackageId,
     /// Whether standard function blocks are synthesized.
     pub stdlib: bool,
+    /// Whether this is a test build (Testing and Verification §2.5).
+    pub test_build: bool,
+    /// Source files declared by `[test].sources`.
+    pub test_file_ids: BTreeSet<FileId>,
+    /// Whether the file currently being collected is a test-only source.
+    pub current_file_test: bool,
     /// `[project].configuration` from the root package.
     pub selected_configuration: Option<String>,
     /// Namespace paths per package (the empty path is the package root).
@@ -271,6 +277,11 @@ impl<'a> Analyzer<'a> {
             scopes.insert(root_ns, ScopeData::default());
         }
         let root_ns = root_namespaces[root_package.index()];
+        let test_file_ids = session
+            .test_files
+            .iter()
+            .map(|file| file.tree().file())
+            .collect();
         let mut analyzer = Self {
             packages,
             hir,
@@ -281,6 +292,9 @@ impl<'a> Analyzer<'a> {
             root_package,
             current_package: root_package,
             stdlib: session.stdlib,
+            test_build: session.test_build,
+            test_file_ids,
+            current_file_test: false,
             selected_configuration: session.configuration.clone(),
             namespaces,
             scopes,

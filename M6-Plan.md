@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–5 complete (2026-10-26); phases 6–11 ready to start. M5 (phases 1–7 and 4b) is
+Status: Phases 0–6 complete (2026-10-26); phases 7–11 ready to start. M5 (phases 1–7 and 4b) is
 complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
 usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
@@ -178,7 +178,7 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0–5 are complete (2026-10-26); phases 6–11 are pending. Phase 0 fixed
+Phase status: phases 0–6 are complete (2026-10-26); phases 7–11 are pending. Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
 resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
@@ -193,9 +193,12 @@ the rewritten launcher loop with mock clocks and stop signals, `stc run`, `stc_h
 the host status surface. Phase 5 added the `STCRET01` state file with CRC32 and atomic replace,
 host `state_load`/`state_save` wiring and the policy overrides, project device/binding/
 `VAR_ACCESS` metadata with `source`/`direct_id`/effective binding fields, and the `null`/
-`memory`/`file` host backends with per-scan input defaults and one output publish. Phases may
-proceed in parallel only where the dependency direction allows (for example, Lean and the
-conformance harness can start once phase 0 fixes the vector and corpus contracts).
+`memory`/`file` host backends with per-scan input defaults and one output publish. Phase 6 added
+`crates/stc-test`, the `stc test` command and test-build mode, the test-only prelude, host ABI
+2.2 service 12, and the process-isolated runner with filters, list/no-run, timeouts, traps, mock
+clocks, I/O, and human/JSON reports; production builds exclude test units and assert calls.
+Phases may proceed in parallel only where the dependency direction allows (for example, Lean and
+the conformance harness can start once phase 0 fixes the vector and corpus contracts).
 
 ## 6. Phase details
 
@@ -499,7 +502,7 @@ persistence.
 Acceptance: state round-trips and the documented policies pass on Windows; I/O metadata and
 backends match IO-and-Devices; online attach/cold behavior matches State-and-RETAIN §4.1.1.
 
-### Phase 6 — Test runner
+### Phase 6 — Test runner (complete 2026-10-26)
 
 - Add `crates/stc-test` (discovery/reporting/runner) and a codegen test-build mode.
 - Discovery: `{stc:test}` on `FUNCTION`, `FUNCTION_BLOCK`, and `PROGRAM`; test `FUNCTION` has no
@@ -533,6 +536,34 @@ backends match IO-and-Devices; online attach/cold behavior matches State-and-RET
   separate project, and no test code or assert calls in production artifacts.
 
 Acceptance: `stc test` runs the scaffold's smoke test and the suite end-to-end on Windows.
+
+Status (2026-10-26): implemented. The new `crates/stc-test` crate owns syntax-level discovery
+(`{stc:test}` on FUNCTION/FUNCTION_BLOCK/PROGRAM, signature validation, duplicate detection,
+`[[test.case]]` merging and conflict diagnostics), wrapper generation, the process-isolated
+runner (timeout, kill, structured result parsing), and human/JSON reports. `stc test` parses the
+production sources plus the root package's `[test].sources`, discovers only the current
+package's tests, and builds one artifact per test under `target/stc/test/<artifact>` with a
+synthetic `STC_TEST` configuration (resource `STC_TEST_RES`, task `STC_TEST_TASK`, one
+instance). The synthetic names are compiler-reserved and use lexable single-underscore
+spellings (`STC_TEST_WRAPPER`, `STC_TEST_INSTANCE`, ...) because the lexer rejects leading or
+trailing double underscores. Function tests get a one-shot wrapper that asserts the `BOOL`
+result; FB tests instantiate the block and the host reads the `PASSED` leaf directly (FB fields
+are `PROTECTED` by default); program tests configure the program itself. Test builds are always
+cold, disable retention, default to the `memory` I/O backend, start the mock clock at
+`[test].mock-clock`, and set the task guard through the normal host scheduler. The test host is
+a generated launcher around the runtime's `stc_rt_test_main`; ABI 2.2 service 12 is imported by
+test modules only, and production modules keep required minor 2.1. The test-only prelude lowers
+`STC_ASSERT` to the assert service (the host records failures and continues, with the driver's
+span-keyed sidecar supplying messages/locations), `STC_CLOCK_ADVANCE(T#…)` to
+`set_cycle_time_ns(now + duration)`, and `STC_IO_SET_INPUT(offset, value)` /
+`STC_IO_GET_OUTPUT(offset)` to the process image. Production analysis excludes `{stc:test}` and
+test-source units; `STC_ASSERT` or a test-only reference in production reports
+`STC-E-ASSERT-001`/`STC-E-TEST-001`, including inside test builds. `--list`, `--no-run`,
+substring filters, `--timeout`, `-- --nocapture`, per-test timeouts and expected traps work, and
+tests run sequentially with exit codes 0/1/4 (4 for an unexpected trap). Integration tests
+cover function/FB/program pass and fail, assertion collection, cycles/clock/timers, I/O, timeout,
+expected/mismatched traps, filters/list/no-run/JSON, duplicate/invalid conflict diagnostics,
+production exclusion and assert calls, a user configuration, and a separate test project.
 
 ### Phase 7 — Formatter
 
@@ -905,23 +936,28 @@ JSON shapes are fixed in
 **Discovery and build.** `stc test` discovers `{stc:test}` POUs in the current package plus
 `[test].sources` (Testing §2.1) and builds one test artifact per test case. A function test gets a
 synthetic wrapper `PROGRAM` that calls the function once and asserts its `BOOL` result; an FB test
-gets a wrapper that instantiates the FB, calls it once per scan, and exposes the optional
-`PASSED : BOOL`; a program test uses the program itself.
+gets a wrapper that instantiates the FB and calls it once per scan (the host reads the optional
+`PASSED : BOOL` leaf root because FB fields are `PROTECTED`); a program test uses the program
+itself.
 
 **Synthetic configuration.** Each test artifact is a normal ABI 2 module/manifest pair built with
-a synthetic single-task configuration (configuration `__STC_TEST__`, resource `__STC_TEST_RES__`,
-task `__STC_TEST_TASK__`, one instance). These names are compiler-reserved; a user declaration
-with one of them is invalid test metadata. The task has no interval, priority, or `SINGLE`; the
-test host sets its guard before each cycle, exactly as the scheduler would. The build is always
-cold-layout: it never reads the project's active baseline, never writes the runtime's active
-manifest store, and never involves online change. Test builds are not deployable and are not part
-of `[build].emit`.
+a synthetic single-task configuration (configuration `STC_TEST`, resource `STC_TEST_RES`, task
+`STC_TEST_TASK`, processor `STC_TEST_CPU`, instance `STC_TEST_INSTANCE`, wrapper
+`STC_TEST_WRAPPER`). These names are compiler-reserved; a user declaration with one of them is
+invalid test metadata. (The spellings use single embedded underscores because the lexer rejects
+leading/trailing double underscores; the earlier `__STC_TEST__` sketch was not lexable.) The task
+has no interval, priority, or `SINGLE`; the test host sets its guard before each cycle, exactly
+as the scheduler would. The build is always cold-layout: it never reads the project's active
+baseline, never writes the runtime's active manifest store, and never involves online change.
+Test builds are not deployable and are not part of `[build].emit`.
 
 **Runtime settings.** No retained state is loaded or saved; the I/O backend is `memory` unless
 `[test].io` overrides it; the mock clock starts at `[test].mock-clock` (default `0ns`), and the
 runner advances it cycle by cycle. The test host uses the existing assert service (ID 11), the
 appended test-clock service (ID 12), and the existing I/O services; no other ABI addition is
-needed.
+needed. The driver writes a span-keyed assertion sidecar next to each test artifact so the host
+can report the source `message`/`file`/`line`/`column` while the ABI assert service keeps its
+fixed `(condition, code, span_id)` signature.
 
 **Test host and result protocol.** `stc test` builds a test-only executable that links the
 runtime test-host support, loads its module, runs the requested cycle count, and prints exactly

@@ -3856,6 +3856,125 @@ impl Lowerer<'_> {
             ),
             StdFnKind::Delete => self.lower_string_delete(f, args, supplied, result_ty, span),
             StdFnKind::Find => self.lower_string_find(f, args, supplied, span),
+            StdFnKind::Assert => self.lower_assert(f, info, supplied, span),
+            StdFnKind::ClockAdvance => self.lower_clock_advance(f, info, supplied),
+            StdFnKind::IoSetInput | StdFnKind::IoGetOutput => {
+                self.lower_test_io(f, info, supplied, span, std.kind == StdFnKind::IoGetOutput)
+            }
+        }
+    }
+
+    /// Lowers `STC_ASSERT(condition, message)` to the assert service.
+    ///
+    /// The message text is not part of the service signature; the driver
+    /// records it in the test assertion sidecar keyed by the call-site span.
+    fn lower_assert(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        supplied: &[Value],
+        span: Span,
+    ) -> Res<Value> {
+        let Some(condition) = supplied.first() else {
+            return Err(CodegenError::internal(
+                "STC_ASSERT requires a condition argument",
+            ));
+        };
+        let condition = if condition.ty == IrType::Int(1) {
+            f.emit_value_cast("zext", condition, IrType::Int(32))
+        } else {
+            condition.clone()
+        };
+        let slot = self.import_slot(stc_got::catalog::ImportService::Assert)?;
+        let service = Self::slot_storage(f, info, slot);
+        let span_id = self.span_id(span);
+        f.call_ptr(
+            IrType::Void,
+            &service,
+            &[
+                condition,
+                Value::int(32, i128::from(trap::ASSERT)),
+                Value::int(32, i128::from(span_id)),
+            ],
+        );
+        Ok(Value::bool(true))
+    }
+
+    /// Lowers `STC_CLOCK_ADVANCE(T#…)` to the host ABI 2.2 test clock.
+    ///
+    /// The prelude advances the mock clock by the duration: it reads the
+    /// latched cycle time and sets the next cycle's latched time to
+    /// `now + duration` (D-157).
+    fn lower_clock_advance(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        supplied: &[Value],
+    ) -> Res<Value> {
+        let Some(duration) = supplied.first() else {
+            return Err(CodegenError::internal(
+                "STC_CLOCK_ADVANCE requires a duration argument",
+            ));
+        };
+        let now_slot = self.import_slot(stc_got::catalog::ImportService::CycleNowNs)?;
+        let set_slot = self.import_slot(stc_got::catalog::ImportService::SetCycleTimeNs)?;
+        let now_fn = Self::slot_storage(f, info, now_slot);
+        let set_fn = Self::slot_storage(f, info, set_slot);
+        let now = f
+            .call_ptr(IrType::Int(64), &now_fn, &[])
+            .ok_or_else(|| CodegenError::internal("cycle clock returned void"))?;
+        let next = f.binop("add", &now, duration);
+        f.call_ptr(IrType::Void, &set_fn, &[next]);
+        Ok(Value::bool(true))
+    }
+
+    /// Lowers `STC_IO_SET_INPUT`/`STC_IO_GET_OUTPUT` to the process image.
+    fn lower_test_io(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        supplied: &[Value],
+        span: Span,
+        read: bool,
+    ) -> Res<Value> {
+        let Some(offset) = supplied.first() else {
+            return Err(CodegenError::internal(
+                "test I/O prelude requires an offset argument",
+            ));
+        };
+        let offset = if offset.ty == IrType::Int(64) {
+            offset.clone()
+        } else {
+            f.emit_value_cast("sext", offset, IrType::Int(64))
+        };
+        let area = Value::int(32, if read { 2 } else { 1 });
+        let image_slot = self.import_slot(stc_got::catalog::ImportService::IoImage)?;
+        let size_slot = self.import_slot(stc_got::catalog::ImportService::IoSize)?;
+        let image_fn = Self::slot_storage(f, info, image_slot);
+        let size_fn = Self::slot_storage(f, info, size_slot);
+        let base = f
+            .call_ptr(IrType::Ptr, &image_fn, std::slice::from_ref(&area))
+            .ok_or_else(|| CodegenError::internal("io_image returned void"))?;
+        let size = f
+            .call_ptr(IrType::Int(64), &size_fn, std::slice::from_ref(&area))
+            .ok_or_else(|| CodegenError::internal("io_size returned void"))?;
+        let negative = f.icmp("slt", &offset, &Value::int(64, 0));
+        let outside = f.icmp("uge", &offset, &size);
+        let bad = f.binop("or", &negative, &outside);
+        self.trap_if(f, &bad, trap::BOUNDS, span)?;
+        let address = f.gep("i8", &base, &[offset.render()], false);
+        if read {
+            let byte = f.load(IrType::Int(8), &address, Some(1));
+            Ok(f.emit_value_cast("zext", &byte, IrType::Int(32)))
+        } else {
+            let Some(value) = supplied.get(1) else {
+                return Err(CodegenError::internal(
+                    "STC_IO_SET_INPUT requires a value argument",
+                ));
+            };
+            let byte = f.emit_value_cast("trunc", value, IrType::Int(8));
+            f.store(&byte, &address, Some(1));
+            Ok(Value::bool(true))
         }
     }
 

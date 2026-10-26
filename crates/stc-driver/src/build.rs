@@ -206,6 +206,9 @@ pub(crate) struct Request {
     pub relaxed: bool,
     /// `--debug` was accepted; M6 always builds the unoptimised debug form.
     pub debug: bool,
+    /// Whether this is a test build (`stc test`): emit the test-host launcher
+    /// and the host ABI 2.2 test-clock import.
+    pub test_build: bool,
     /// `[build].opt-level`.
     pub opt_level: OptLevel,
     /// `[build].lib-type`.
@@ -237,6 +240,7 @@ impl Default for Request {
             allow_untracked_removal: false,
             relaxed: false,
             debug: false,
+            test_build: false,
             opt_level: OptLevel::O0,
             lib_type: LibType::Static,
             manifest_target: None,
@@ -400,7 +404,7 @@ fn finish(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn generate(
+pub(crate) fn generate(
     request: &Request,
     hir: &HirCrate,
     name: &str,
@@ -470,6 +474,7 @@ fn generate(
                 bindings: request.project.bindings.clone(),
             },
         },
+        test_build: request.test_build,
     };
     let codegen_start = Instant::now();
     let output = match stc_codegen::generate(hir, &options) {
@@ -518,6 +523,11 @@ fn generate(
 
     let mut plan_error = false;
     for diagnostic in &output.got.diagnostics {
+        // Test artifacts are deliberately cold-layout and never deployed; the
+        // missing-baseline warning is expected noise for `stc test`.
+        if request.test_build && !diagnostic.is_error() && diagnostic.code == "STC-W-MANIFEST-001" {
+            continue;
+        }
         let severity = if diagnostic.is_error() {
             plan_error = true;
             Severity::Error
@@ -552,7 +562,7 @@ fn generate(
     })
 }
 
-fn emit(
+pub(crate) fn emit(
     request: &Request,
     name: &str,
     generated: &Generated,
@@ -716,11 +726,19 @@ fn emit(
             Ok(runtime) => runtime,
             Err(message) => return toolchain_error(reporter, "STC-E-BUILD-003", &message),
         };
-        let launcher_ir = stc_codegen::generate_launcher(
-            name,
-            &generated.module_file,
-            effective_target(request).as_deref(),
-        );
+        let launcher_ir = if request.test_build {
+            stc_codegen::generate_test_launcher(
+                name,
+                &generated.module_file,
+                effective_target(request).as_deref(),
+            )
+        } else {
+            stc_codegen::generate_launcher(
+                name,
+                &generated.module_file,
+                effective_target(request).as_deref(),
+            )
+        };
         let launcher_ir_path = out_dir.join(format!("{name}-launcher.ll"));
         if let Err(error) = std::fs::write(&launcher_ir_path, &launcher_ir) {
             return artifact_error(

@@ -86,6 +86,13 @@ pub struct ProjectSession<'a> {
     /// `[project].stdlib` from the root package. When false, standard
     /// function blocks are not synthesized; standard functions remain.
     pub stdlib: bool,
+    /// Whether this is a test build: `{stc:test}` and test-source units are
+    /// analyzed, and the test-only prelude resolves inside them.
+    pub test_build: bool,
+    /// Root-package test-only sources. Their units are test-only even without
+    /// a `{stc:test}` marker (Testing and Verification §2.2). The files are
+    /// also present in the root package's `files`.
+    pub test_files: &'a [ParsedFile],
 }
 
 impl Default for ProjectSession<'_> {
@@ -94,6 +101,8 @@ impl Default for ProjectSession<'_> {
             packages: Vec::new(),
             configuration: None,
             stdlib: true,
+            test_build: false,
+            test_files: &[],
         }
     }
 }
@@ -153,6 +162,8 @@ pub fn analyze_with(
         }],
         configuration: None,
         stdlib: true,
+        test_build: false,
+        test_files: &[],
     };
     analyze_project(&project, diagnostics)
 }

@@ -18,7 +18,7 @@
 //! - [`migration`] validates an online-change plan against the active baseline;
 //! - [`loader`] maps a native module and copies its descriptor and function
 //!   table;
-//! - [`host_api`] provides the ABI 2.1 service table;
+//! - [`host_api`] provides the ABI 2.2 service table;
 //! - [`store`] persists the committed manifest baseline and builds downloads;
 //! - [`host`] owns the load/prepare/activate/commit/rollback/unload state
 //!   machine and the generation-bound root and GOT state;
@@ -68,6 +68,7 @@ pub mod scheduler;
 mod signal;
 pub mod state;
 pub mod store;
+mod test_host;
 mod trap_boundary;
 
 #[cfg(test)]
@@ -139,7 +140,7 @@ fn state() -> std::sync::MutexGuard<'static, State> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn trap_name(code: i32) -> &'static str {
+pub(crate) fn trap_name(code: i32) -> &'static str {
     match code {
         TRAP_OVERFLOW => "OVERFLOW",
         TRAP_DIV_ZERO => "DIV_ZERO",
@@ -513,7 +514,7 @@ fn print_last_trap() {
     }
 }
 
-fn resolve_module_path(argument: &str) -> PathBuf {
+pub(crate) fn resolve_module_path(argument: &str) -> PathBuf {
     let path = Path::new(argument);
     if path.is_absolute() || path.components().count() > 1 {
         return path.to_path_buf();
@@ -628,7 +629,7 @@ pub(crate) fn set_cycle_now(ns: i64) {
     state().cycle_now_ns = ns;
 }
 
-fn collect_args(argc: i32, argv: *const *const c_char) -> Vec<String> {
+pub(crate) fn collect_args(argc: i32, argv: *const *const c_char) -> Vec<String> {
     if argv.is_null() || argc <= 0 {
         return Vec::new();
     }

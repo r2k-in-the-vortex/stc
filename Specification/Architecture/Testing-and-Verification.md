@@ -1,6 +1,6 @@
 # Testing and Verification
 
-Status: M4.5 and M5 implementation and test plan complete (2026-10-25); M6 phase-0 test-build and test-clock contracts fixed (2026-10-26); M6.5 suites are the target  
+Status: M4.5 and M5 implementation and test plan complete (2026-10-25); M6 phase-0 test-build and test-clock contracts fixed (2026-10-26); M6 phase 6 test runner implemented (2026-10-26); M6.5 suites are the target  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
@@ -17,6 +17,17 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 > interface/attempt/reference C harnesses, module-level warm swaps that preserve interface
 > values and class handles with stable descriptors, fresh-record and rollback coverage, and OOP
 > fuzz seeds.
+
+> **M6 phase 6 status (2026-10-26):** `stc test` and `crates/stc-test` are implemented. Discovery
+> is syntax-level; each test builds one cold ABI 2 module under `target/stc/test/<artifact>` with
+> the synthetic `STC_TEST` configuration; the test host is a generated launcher over the runtime's
+> `stc_rt_test_main`. `STC_ASSERT` lowers to the existing assert service (the host records and
+> continues; a driver sidecar maps span IDs to messages/locations), `STC_CLOCK_ADVANCE(T#…)`
+> advances the mock clock through host ABI 2.2 service 12, and `STC_IO_SET_INPUT(offset, value)` /
+> `STC_IO_GET_OUTPUT(offset)` access the process image. The runner enforces per-test timeouts,
+> kills on expiry, parses the one-line result, and supports filters, `--list`, `--no-run`,
+> expected traps, `-- --nocapture`, and human/JSON reports. Production builds exclude test units
+> and assert calls.
 
 ## 1. Layers of testing
 
@@ -118,6 +129,9 @@ END_FUNCTION
 ```
 
 - `STC_ASSERT(condition, message)` records a failure with the call site's source span and message.
+  The ABI `assert` service carries only the condition, code, and span ID, so the driver records
+  each call site's message in a span-keyed sidecar next to the test artifact; a string literal
+  supplies its value and any other string expression contributes its source text.
 - Assertions do not abort the test by default; the runner collects all failures.
 - `STC_ASSERT` is **test-only**. It resolves only in test-only units: POUs marked `{stc:test}` and
   sources listed in `[test].sources`.
@@ -146,10 +160,12 @@ END_FUNCTION
   STC_CLOCK_ADVANCE(T#10ms);
   ```
 
-  It lowers to host ABI 2.2 service ID 12, `set_cycle_time_ns(int64_t)`, which sets the next
-  cycle's latched time and does not change the time already latched in the current scan (D-157).
-- Default I/O backend is memory; tests set input bytes with `STC_IO_SET_INPUT(...)` and read
-  outputs with `STC_IO_GET_OUTPUT(...)`, both lowered through the existing I/O services.
+  It lowers to host ABI 2.2 service ID 12, `set_cycle_time_ns(int64_t)`, as
+  `set(cycle_now_ns() + duration)`; it sets the next cycle's latched time and does not change the
+  time already latched in the current scan (D-157).
+- Default I/O backend is memory; tests set input bytes with `STC_IO_SET_INPUT(offset, value)`
+  and read outputs with `STC_IO_GET_OUTPUT(offset)`, both lowered through the existing I/O
+  services. Offsets are byte offsets into the input/output image; values are `DINT` low bytes.
 - A test may declare expected traps via `[[test.case]] expect-trap = "STC_TRAP_DIV_ZERO"` (or the
   `{stc:test}` payload); the runner passes if the test host reports that trap code and fails on
   any other trap or on a timeout.
@@ -179,12 +195,16 @@ test case; the artifact is a normal ABI 2 module/manifest pair plus a test host,
 `exe` and not a shared test registry.
 
 - **Body.** A function test gets a synthetic wrapper program that calls the function once and
-  asserts its `BOOL` result. An FB test gets a wrapper that instantiates the FB, calls it once per
-  scan, and exposes the optional `PASSED : BOOL`. A program test uses the program itself.
-- **Synthetic configuration.** Each artifact has one synthetic configuration, one resource, one
-  task, and one program instance. The task has no interval, priority, or `SINGLE`; the test host
-  sets its guard before each cycle, exactly as the scheduler would. The synthetic names are
-  reserved and are not visible to user code.
+  asserts its `BOOL` result. An FB test gets a wrapper that instantiates the FB and calls it once
+  per scan; because FB fields are `PROTECTED` by default, the test host reads the optional
+  `PASSED : BOOL` leaf through its GOT root instead of source access. A program test uses the
+  program itself.
+- **Synthetic configuration.** Each artifact has one synthetic configuration `STC_TEST`, resource
+  `STC_TEST_RES`, task `STC_TEST_TASK`, processor `STC_TEST_CPU`, instance `STC_TEST_INSTANCE`,
+  and wrapper `STC_TEST_WRAPPER`. The lexer rejects leading/trailing double underscores, so these
+  lexable single-underscore spellings replace the phase-0 `__STC_TEST__` sketch. The task has no
+  interval, priority, or `SINGLE`; the test host sets its guard before each cycle, exactly as the
+  scheduler would. The synthetic names are reserved and are not visible to user code.
 - **Build policy.** Test builds are always cold-layout: they do not read or write the runtime's
   active manifest store, do not use online change, do not load or save retained state, and are
   excluded from `[build].emit`. Dependencies compile as production packages; only the current package's

@@ -2686,6 +2686,10 @@ impl Analyzer<'_> {
                         return self.alloc_error_expr(path.token_span());
                     }
                     let def = defs[0];
+                    if !self.ctx_is_test_only(ctx) && self.def_is_test_only(def) {
+                        self.report_test_reference(def, segment.token_span());
+                        return self.alloc_error_expr(path.token_span());
+                    }
                     self.check_ctx_access(def, ctx, segment.token_span());
                     if last {
                         let kind = self.hir.defs[def.index()].kind.clone();
@@ -2834,6 +2838,13 @@ impl Analyzer<'_> {
         }
         match self.lookup_scope(ctx.scope, symbol) {
             Lookup::Entries(defs) => {
+                if !self.ctx_is_test_only(ctx)
+                    && let Some(test_def) =
+                        defs.iter().copied().find(|def| self.def_is_test_only(*def))
+                {
+                    self.report_test_reference(test_def, span);
+                    return FirstName::Error;
+                }
                 if defs.len() > 1 {
                     let spans: Vec<Span> = defs
                         .iter()
@@ -2890,7 +2901,59 @@ impl Analyzer<'_> {
         }
     }
 
+    /// Returns `true` when `def` or an enclosing owner is test-only.
+    ///
+    /// Methods inside a test-only FB and POUs declared in `[test].sources`
+    /// both count as test contexts.
+    fn def_is_test_only(&self, def: DefId) -> bool {
+        let mut current = Some(def);
+        while let Some(def) = current {
+            let data = &self.hir.defs[def.index()];
+            if data.test_only {
+                return true;
+            }
+            current = data.parent;
+        }
+        false
+    }
+
+    fn ctx_is_test_only(&self, ctx: &BodyCtx) -> bool {
+        self.def_is_test_only(ctx.def)
+    }
+
+    fn report_test_reference(&mut self, def: DefId, span: Span) {
+        let name = self.hir.def_name(def);
+        let decl_span = self.hir.defs[def.index()].span;
+        self.push_diag(
+            Diagnostic::error(
+                crate::codes::TEST_REFERENCE,
+                format!("`{name}` is a test-only unit and is not available in production"),
+                span,
+            )
+            .with_label(decl_span, "test-only declaration is here"),
+        );
+    }
+
     fn unknown_name(&mut self, name: &str, span: Span) {
+        if name.eq_ignore_ascii_case("STC_ASSERT") {
+            self.error(
+                crate::codes::ASSERT_PRODUCTION,
+                "`STC_ASSERT` is a test-only assertion and is not available in production builds",
+                span,
+            );
+            return;
+        }
+        if name.eq_ignore_ascii_case("STC_CLOCK_ADVANCE")
+            || name.eq_ignore_ascii_case("STC_IO_SET_INPUT")
+            || name.eq_ignore_ascii_case("STC_IO_GET_OUTPUT")
+        {
+            self.error(
+                crate::codes::ASSERT_INVALID,
+                format!("`{name}` is a test-only prelude function and is not available here"),
+                span,
+            );
+            return;
+        }
         if let Some(decl_span) = self
             .test_only
             .iter()
@@ -3422,6 +3485,38 @@ impl Analyzer<'_> {
             arg_ids.push(id);
             arg_tys.push(ty);
             arg_spans.push(arg_span);
+        }
+        if std_fn.kind.is_test_prelude() {
+            if !self.ctx_is_test_only(ctx) {
+                let code = if std_fn.kind == stc_hir::StdFnKind::Assert {
+                    crate::codes::ASSERT_PRODUCTION
+                } else {
+                    crate::codes::ASSERT_INVALID
+                };
+                self.error(
+                    code,
+                    format!("`{name}` is only available inside test-only units"),
+                    span,
+                );
+            }
+            if std_fn.kind == stc_hir::StdFnKind::Assert {
+                let valid = arg_tys.len() == 2
+                    && matches!(
+                        self.hir.types.get(self.scalar_base(arg_tys[0])),
+                        stc_hir::Ty::Bool
+                    )
+                    && matches!(
+                        self.hir.types.get(self.scalar_base(arg_tys[1])),
+                        stc_hir::Ty::String(_)
+                    );
+                if !valid {
+                    self.error(
+                        crate::codes::ASSERT_INVALID,
+                        "`STC_ASSERT` expects `(condition : BOOL, message : STRING)`",
+                        span,
+                    );
+                }
+            }
         }
         let Some((result_ty, arg_ids)) =
             self.std_unify(std_fn.kind, arg_ids, arg_tys, arg_spans, span)
@@ -4306,6 +4401,14 @@ impl Analyzer<'_> {
                     );
                 }
             }
+            stc_hir::StdFnKind::Assert
+            | stc_hir::StdFnKind::ClockAdvance
+            | stc_hir::StdFnKind::IoSetInput => {
+                result = self.hir.types.bool();
+            }
+            stc_hir::StdFnKind::IoGetOutput => {
+                result = self.hir.types.int(true, 32);
+            }
         }
         Some((result, ids))
     }
@@ -4503,6 +4606,13 @@ impl Analyzer<'_> {
             }
             match self.lookup_scope(ctx.scope, symbol) {
                 Lookup::Entries(defs) => {
+                    if !self.ctx_is_test_only(ctx)
+                        && let Some(test_def) =
+                            defs.iter().copied().find(|def| self.def_is_test_only(*def))
+                    {
+                        self.report_test_reference(test_def, span);
+                        return CalleeKind::Invalid;
+                    }
                     let functions: Vec<DefId> = defs
                         .iter()
                         .copied()
@@ -4665,6 +4775,13 @@ impl Analyzer<'_> {
             match self.lookup_scope(namespace, symbol) {
                 Lookup::Entries(defs) => {
                     if last {
+                        if !self.ctx_is_test_only(ctx)
+                            && let Some(test_def) =
+                                defs.iter().copied().find(|def| self.def_is_test_only(*def))
+                        {
+                            self.report_test_reference(test_def, span);
+                            return Some(CalleeKind::Invalid);
+                        }
                         let functions: Vec<DefId> = defs
                             .iter()
                             .copied()

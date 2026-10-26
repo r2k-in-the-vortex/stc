@@ -357,7 +357,7 @@ fn validate_slot_table(slots: &[SlotRecord]) -> Result<()> {
         }
         match slot.kind {
             SlotKind::Import => {
-                if slot.service == 0 || slot.service > 11 {
+                if slot.service == 0 || slot.service > 12 {
                     return Err(Error::new(
                         codes::MODULE_INVALID,
                         format!(
@@ -498,7 +498,7 @@ mod tests {
             vec![slot(0, SlotKind::Data, 1, 1)],
             vec![slot(0, SlotKind::Data, 0, 0)],
             vec![slot(0, SlotKind::Import, 0, 0)],
-            vec![slot(0, SlotKind::Import, 12, 0)],
+            vec![slot(0, SlotKind::Import, 13, 0)],
             vec![import_with_id],
             vec![
                 slot(0, SlotKind::Import, 8, 0),
