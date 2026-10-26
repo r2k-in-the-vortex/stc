@@ -36,7 +36,7 @@ use stc_hir::HirCrate;
 use stc_span::{FileId, Span};
 
 pub use launcher::generate_launcher;
-pub use metadata::Metadata;
+pub use metadata::{Json, Metadata};
 pub use module::{
     FunctionTarget, ModuleArtifacts, ModuleError, ModuleOptions, RootTarget, Severity, SlotBinding,
 };

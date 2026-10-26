@@ -1,19 +1,28 @@
 //! The `stc build` bridge: module, manifest, launcher, and host artifacts.
 //!
 //! The compiler emits one loadable ABI 2 module. `exe` is a thin launcher that
-//! loads the adjacent module pair; `lib` is the embedding host library (the
-//! runtime static archive) with the generated module kept separate. Both may be
-//! emitted together (D-109–D-112, M4.5 §6.3).
+//! loads the adjacent module pair; `lib` is the embedding host library (static
+//! archive or shared host library) with the generated module kept separate.
+//! Both may be emitted together (D-109–D-112, M4.5 §6.3).
+//!
+//! Project builds resolve defaults from `stc.toml`; the manifest-free
+//! `<file>...` bridge keeps the M4.5 defaults. Toolchain discovery follows
+//! CLI > `STC_*` environment > manifest > built-in default
+//! (CLI-and-Manifest §1.2).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
+use stc_codegen::Json;
+use stc_diag::{DiagnosticSink, Severity};
 use stc_driver::toolchain::system_link_args;
-
-use stc_diag::DiagnosticSink;
-use stc_got::{Manifest, Rename};
+use stc_got::{Digest32, Manifest, PlanAction, PlanVerdict, Rename};
 use stc_hir::HirCrate;
+use stc_manifest::{EmitKind, LibType, OptLevel};
+
+use crate::report::{Log, Reporter, display_path, elapsed};
 
 /// One requested artifact kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,18 +35,31 @@ pub(crate) enum Emit {
     Module,
     /// Thin host launcher.
     Exe,
-    /// Embedding host library (runtime archive).
+    /// Embedding host library (runtime archive or shared library).
     Lib,
     /// Build metadata JSON.
     Metadata,
 }
 
-/// Parsed `stc build` options.
-#[derive(Clone, Debug, Default)]
+impl From<EmitKind> for Emit {
+    fn from(kind: EmitKind) -> Self {
+        match kind {
+            EmitKind::Ir => Self::Ir,
+            EmitKind::Obj => Self::Obj,
+            EmitKind::Module => Self::Module,
+            EmitKind::Exe => Self::Exe,
+            EmitKind::Lib => Self::Lib,
+            EmitKind::Metadata => Self::Metadata,
+        }
+    }
+}
+
+/// Parsed project build settings and CLI overrides.
+#[derive(Clone, Debug)]
 pub(crate) struct Request {
-    /// `--name` or the default from the first input.
+    /// `--name` or the default from the first input or `[package].name`.
     pub name: Option<String>,
-    /// Requested artifacts.
+    /// Requested artifacts; empty selects the manifest/default.
     pub emit: BTreeSet<Emit>,
     /// `--out-dir`.
     pub out_dir: Option<String>,
@@ -55,10 +77,56 @@ pub(crate) struct Request {
     pub renames: Vec<(String, String)>,
     /// `--allow-untracked-removal`.
     pub allow_untracked_removal: bool,
-    /// `--relaxed` was accepted by the parser.
+    /// `--relaxed` or `[build].syntax = "relaxed"`.
     pub relaxed: bool,
-    /// `-v`: print exact toolchain commands.
-    pub verbose: bool,
+    /// `--debug` was accepted; M6 always builds the unoptimised debug form.
+    pub debug: bool,
+    /// `[build].opt-level`.
+    pub opt_level: OptLevel,
+    /// `[build].lib-type`.
+    pub lib_type: LibType,
+    /// `[build].target`.
+    pub manifest_target: Option<String>,
+    /// `[build].clang`.
+    pub manifest_clang: Option<String>,
+    /// `[build].runtime`.
+    pub manifest_runtime: Option<String>,
+}
+
+impl Default for Request {
+    fn default() -> Self {
+        Self {
+            name: None,
+            emit: BTreeSet::new(),
+            out_dir: None,
+            target: None,
+            clang: None,
+            runtime: None,
+            got_manifest: None,
+            cold: false,
+            renames: Vec::new(),
+            allow_untracked_removal: false,
+            relaxed: false,
+            debug: false,
+            opt_level: OptLevel::O0,
+            lib_type: LibType::Static,
+            manifest_target: None,
+            manifest_clang: None,
+            manifest_runtime: None,
+        }
+    }
+}
+
+/// A generated module projection ready for artifact emission.
+pub(crate) struct Generated {
+    /// Resolved output directory.
+    pub out_dir: PathBuf,
+    /// Resolved target triple.
+    pub target_triple: String,
+    /// Loadable module file name.
+    pub module_file: String,
+    /// Code generation output.
+    pub output: stc_codegen::Output,
 }
 
 /// Runs code generation and artifact emission for the manifest-free bridge.
@@ -67,14 +135,15 @@ pub(crate) fn run(
     hir: &HirCrate,
     paths: &[String],
     diagnostics: &mut DiagnosticSink,
-    json: bool,
+    reporter: &mut Reporter,
+    log: Log,
 ) -> u8 {
     let name = match request.name.clone() {
         Some(name) => name,
         None => default_name(paths),
     };
     if name.is_empty() || name.contains(['/', '\\']) {
-        return usage_error(json, "artifact name must be a non-empty file name");
+        return usage_error(reporter, "artifact name must be a non-empty file name");
     }
     let sources = paths.to_vec();
     let mut source_bytes = Vec::new();
@@ -82,7 +151,7 @@ pub(crate) fn run(
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                return artifact_error(json, &format!("cannot read `{path}`: {error}"));
+                return artifact_error(reporter, &format!("cannot read `{path}`: {error}"));
             }
         };
         source_bytes.push((path.clone(), bytes));
@@ -91,7 +160,7 @@ pub(crate) fn run(
         Ok(fingerprint) => fingerprint,
         Err(error) => {
             return artifact_error(
-                json,
+                reporter,
                 &format!("cannot fingerprint sources: {}", error.message),
             );
         }
@@ -104,14 +173,12 @@ pub(crate) fn run(
         None,
         fingerprint,
         diagnostics,
-        json,
+        reporter,
+        log,
     )
 }
 
 /// Runs code generation and artifact emission for a project build.
-///
-/// `sources` are the file paths in `FileId` order; `source_paths` are the
-/// package-relative source paths used by GOT source locations and metadata.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_project(
     request: &Request,
@@ -119,12 +186,13 @@ pub(crate) fn run_project(
     name: &str,
     sources: &[String],
     source_paths: &[String],
-    fingerprint: stc_got::Digest32,
+    fingerprint: Digest32,
     diagnostics: &mut DiagnosticSink,
-    json: bool,
+    reporter: &mut Reporter,
+    log: Log,
 ) -> u8 {
     if name.is_empty() || name.contains(['/', '\\']) {
-        return usage_error(json, "artifact name must be a non-empty file name");
+        return usage_error(reporter, "artifact name must be a non-empty file name");
     }
     finish(
         request,
@@ -134,7 +202,40 @@ pub(crate) fn run_project(
         Some(source_paths),
         fingerprint,
         diagnostics,
-        json,
+        reporter,
+        log,
+    )
+}
+
+/// Generates the module projection for `metadata` without writing artifacts.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn generate_project(
+    request: &Request,
+    hir: &HirCrate,
+    name: &str,
+    sources: &[String],
+    source_paths: &[String],
+    fingerprint: Digest32,
+    diagnostics: &mut DiagnosticSink,
+    reporter: &mut Reporter,
+    log: Log,
+) -> Result<Generated, u8> {
+    if name.is_empty() || name.contains(['/', '\\']) {
+        return Err(usage_error(
+            reporter,
+            "artifact name must be a non-empty file name",
+        ));
+    }
+    generate(
+        request,
+        hir,
+        name,
+        sources,
+        Some(source_paths),
+        fingerprint,
+        diagnostics,
+        reporter,
+        log,
     )
 }
 
@@ -145,35 +246,52 @@ fn finish(
     name: String,
     sources: &[String],
     source_paths: Option<&[String]>,
-    fingerprint: stc_got::Digest32,
+    fingerprint: Digest32,
     diagnostics: &mut DiagnosticSink,
-    json: bool,
+    reporter: &mut Reporter,
+    log: Log,
 ) -> u8 {
-    let emit = &request.emit;
+    let generated = match generate(
+        request,
+        hir,
+        &name,
+        sources,
+        source_paths,
+        fingerprint,
+        diagnostics,
+        reporter,
+        log,
+    ) {
+        Ok(generated) => generated,
+        Err(code) => return code,
+    };
+    emit(request, &name, &generated, reporter, log)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate(
+    request: &Request,
+    hir: &HirCrate,
+    name: &str,
+    sources: &[String],
+    source_paths: Option<&[String]>,
+    fingerprint: Digest32,
+    diagnostics: &mut DiagnosticSink,
+    reporter: &mut Reporter,
+    log: Log,
+) -> Result<Generated, u8> {
     let out_dir = PathBuf::from(
         request
             .out_dir
             .clone()
             .unwrap_or_else(|| "target/stc/debug".into()),
     );
-    if let Err(error) = std::fs::create_dir_all(&out_dir) {
-        return artifact_error(
-            json,
-            &format!(
-                "cannot create output directory `{}`: {error}",
-                out_dir.display()
-            ),
-        );
-    }
-
-    let target_triple = request
-        .target
-        .clone()
-        .unwrap_or_else(stc_codegen::host_triple);
+    let target = effective_target(request);
+    let target_triple = target.clone().unwrap_or_else(stc_codegen::host_triple);
     let baseline = match &request.got_manifest {
         Some(path) => match read_baseline(Path::new(path)) {
             Ok(manifest) => Some(manifest),
-            Err(message) => return artifact_error(json, &message),
+            Err(message) => return Err(artifact_error(reporter, &message)),
         },
         None => None,
     };
@@ -183,16 +301,18 @@ fn finish(
         .map(|(old, new)| Rename::new(old.as_str(), new.as_str()))
         .collect();
 
-    let mode = if emit.contains(&Emit::Lib) && !emit.contains(&Emit::Exe) {
+    let mode = if request.emit.contains(&Emit::Lib) && !request.emit.contains(&Emit::Exe) {
         stc_codegen::Mode::Library
     } else {
         stc_codegen::Mode::Executable
     };
     let options = stc_codegen::Options {
-        artifact_name: &name,
-        target: request.target.as_deref(),
-        debug: false,
-        emit_metadata: emit.contains(&Emit::Metadata),
+        artifact_name: name,
+        // Only an explicitly configured target emits a `target triple` line;
+        // the resolved host triple still drives layouts and file names.
+        target: target.as_deref(),
+        debug: request.debug,
+        emit_metadata: request.emit.contains(&Emit::Metadata),
         mode,
         relaxed: request.relaxed,
         release: false,
@@ -207,7 +327,8 @@ fn finish(
             renames,
         },
     };
-    let mut output = match stc_codegen::generate(hir, &options) {
+    let codegen_start = Instant::now();
+    let output = match stc_codegen::generate(hir, &options) {
         Ok(output) => output,
         Err(errors) => {
             let mut internal = false;
@@ -218,7 +339,7 @@ fn finish(
                         message,
                         span,
                     } if span.start == 0 && span.end == 0 => {
-                        report_no_span(json, code, &message);
+                        reporter.plain(code, Severity::Error, &message);
                     }
                     stc_codegen::CodegenError::Unsupported {
                         code,
@@ -226,30 +347,76 @@ fn finish(
                         span,
                     } => diagnostics.error(code, message, span),
                     stc_codegen::CodegenError::Internal { message } => {
-                        report_no_span(json, stc_codegen::codes::CODEGEN_INTERNAL, &message);
+                        reporter.plain(
+                            stc_codegen::codes::CODEGEN_INTERNAL,
+                            Severity::Error,
+                            &message,
+                        );
                         internal = true;
                     }
                 }
             }
-            return if internal { 3 } else { 1 };
+            return Err(if internal { 3 } else { 1 });
         }
     };
+    log.info(format!("codegen {}", elapsed(codegen_start)));
+
+    let mut plan_error = false;
     for diagnostic in &output.got.diagnostics {
-        if diagnostic.is_error() {
-            report_no_span(json, diagnostic.code, &diagnostic.message);
-            return 1;
-        }
-        report_warning(json, diagnostic.code, &diagnostic.message);
+        let severity = if diagnostic.is_error() {
+            plan_error = true;
+            Severity::Error
+        } else {
+            Severity::Warning
+        };
+        reporter.plain(diagnostic.code, severity, &diagnostic.message);
+    }
+    if plan_error {
+        return Err(1);
     }
     if !output.got.is_deployable() {
-        report_no_span(
-            json,
+        reporter.plain(
             "STC-E-MANIFEST-004",
+            Severity::Error,
             "the module artifacts are not deployable",
         );
-        return 1;
+        return Err(1);
     }
-    let module_file = module_file_name(&name, &target_triple, output.got.manifest.header.build_id);
+    if let Some(baseline) = &baseline
+        && !request.cold
+    {
+        let report = CompatibilityReport::new(&output.got.manifest, baseline);
+        report.print(reporter, log);
+    }
+    let module_file = module_file_name(name, &target_triple, output.got.manifest.header.build_id);
+    Ok(Generated {
+        out_dir,
+        target_triple,
+        module_file,
+        output,
+    })
+}
+
+fn emit(
+    request: &Request,
+    name: &str,
+    generated: &Generated,
+    reporter: &mut Reporter,
+    log: Log,
+) -> u8 {
+    let emit = &request.emit;
+    let out_dir = &generated.out_dir;
+    if let Err(error) = std::fs::create_dir_all(out_dir) {
+        return artifact_error(
+            reporter,
+            &format!(
+                "cannot create output directory `{}`: {error}",
+                out_dir.display()
+            ),
+        );
+    }
+    let target_triple = &generated.target_triple;
+    let output = &generated.output;
 
     let needs_ir = emit.iter().any(|kind| {
         matches!(
@@ -260,22 +427,24 @@ fn finish(
     let ir_path = out_dir.join(format!("{name}.ll"));
     if needs_ir && let Err(error) = std::fs::write(&ir_path, &output.module) {
         return artifact_error(
-            json,
+            reporter,
             &format!("cannot write `{}`: {error}", ir_path.display()),
         );
+    }
+    if needs_ir {
+        log.detail(format!("ir {}", display_path(&ir_path)));
     }
 
     let needs_metadata = emit
         .iter()
         .any(|kind| matches!(kind, Emit::Metadata | Emit::Module | Emit::Exe | Emit::Lib));
     if needs_metadata {
-        output.metadata.module_file = module_file.clone();
+        let mut metadata = output.metadata.clone();
+        metadata.module_file = generated.module_file.clone();
         let metadata_path = out_dir.join(format!("{name}.stc-meta.json"));
-        if let Err(error) =
-            std::fs::write(&metadata_path, output.metadata.to_json().render_pretty())
-        {
+        if let Err(error) = std::fs::write(&metadata_path, metadata.to_json().render_pretty()) {
             return artifact_error(
-                json,
+                reporter,
                 &format!("cannot write `{}`: {error}", metadata_path.display()),
             );
         }
@@ -288,14 +457,14 @@ fn finish(
         let json_path = out_dir.join(format!("{name}.stc-got.json"));
         if let Err(error) = std::fs::write(&json_path, &output.got.manifest_json) {
             return artifact_error(
-                json,
+                reporter,
                 &format!("cannot write `{}`: {error}", json_path.display()),
             );
         }
         let binary_path = out_dir.join(format!("{name}.stc-got.bin"));
         if let Err(error) = std::fs::write(&binary_path, &output.got.manifest_binary) {
             return artifact_error(
-                json,
+                reporter,
                 &format!("cannot write `{}`: {error}", binary_path.display()),
             );
         }
@@ -305,71 +474,81 @@ fn finish(
         .iter()
         .any(|kind| matches!(kind, Emit::Obj | Emit::Module | Emit::Exe | Emit::Lib));
     if !needs_clang {
+        log.info(format!("artifacts {}", display_path(out_dir)));
         return 0;
     }
     if emit.contains(&Emit::Exe)
-        && let Some(target) = &request.target
-        && !is_host_triple(target)
+        && let Some(target) = effective_target(request)
+        && !is_host_triple(&target)
     {
         return usage_error(
-            json,
-            &format!("cross-target executables are not supported in M4.5 (`{target}`)"),
+            reporter,
+            &format!("cross-target executables are not supported (`{target}`)"),
         );
     }
     if emit.contains(&Emit::Lib)
-        && let Some(target) = &request.target
-        && !is_host_triple(target)
+        && let Some(target) = effective_target(request)
+        && !is_host_triple(&target)
     {
         return usage_error(
-            json,
-            &format!("cross-target embedding libraries are not supported in M4.5 (`{target}`)"),
+            reporter,
+            &format!("cross-target embedding libraries are not supported (`{target}`)"),
         );
     }
-    let clang = match find_clang(request.clang.as_deref()) {
+    let clang = match find_clang(request) {
         Ok(clang) => clang,
-        Err(message) => return toolchain_error(json, "STC-E-BUILD-001", &message),
+        Err(message) => return toolchain_error(reporter, "STC-E-BUILD-001", &message),
     };
+    let mut clang_time = Duration::ZERO;
     let object_path = out_dir.join(format!("{name}.o"));
     let pic = !target_triple.contains("windows");
+    let start = Instant::now();
     if let Err(message) = compile_ir(
         &clang,
         &ir_path,
         &object_path,
-        request.target.as_deref(),
+        effective_target(request).as_deref(),
         pic,
-        request.verbose,
+        request.opt_level,
+        log,
     ) {
-        return build_failure(json, &message, &ir_path);
+        return build_failure(reporter, &message, &ir_path);
     }
+    clang_time += start.elapsed();
     if emit.contains(&Emit::Obj)
         && !needs_pair
         && !emit.contains(&Emit::Exe)
         && !emit.contains(&Emit::Lib)
     {
+        log.info(format!("clang {}", duration(clang_time)));
+        log.info(format!("artifacts {}", display_path(out_dir)));
         return 0;
     }
 
     if needs_pair {
-        let module_path = out_dir.join(&module_file);
+        let module_path = out_dir.join(&generated.module_file);
+        let start = Instant::now();
         if let Err(message) = link_module(
             &clang,
             &object_path,
             &module_path,
-            request.target.as_deref(),
-            request.verbose,
+            effective_target(request).as_deref(),
+            log,
         ) {
-            return build_failure(json, &message, &ir_path);
+            return build_failure(reporter, &message, &ir_path);
         }
+        clang_time += start.elapsed();
     }
     if emit.contains(&Emit::Lib) {
-        let runtime = match find_runtime(request.runtime.as_deref()) {
+        let kind = RuntimeKind::from(request.lib_type);
+        let runtime = match find_runtime(request, kind) {
             Ok(runtime) => runtime,
-            Err(message) => return toolchain_error(json, "STC-E-BUILD-003", &message),
+            Err(message) => return toolchain_error(reporter, "STC-E-BUILD-003", &message),
         };
-        let library_path = out_dir.join(lib_name(&name));
+        let library_path = out_dir.join(lib_name(name, request.lib_type));
         if let Err(error) = std::fs::copy(&runtime, &library_path) {
             return artifact_error(
-                json,
+                reporter,
                 &format!(
                     "cannot write embedding host library `{}`: {error}",
                     library_path.display()
@@ -378,43 +557,83 @@ fn finish(
         }
     }
     if emit.contains(&Emit::Exe) {
-        let runtime = match find_runtime(request.runtime.as_deref()) {
+        let runtime = match find_runtime(request, RuntimeKind::Static) {
             Ok(runtime) => runtime,
-            Err(message) => return toolchain_error(json, "STC-E-BUILD-003", &message),
+            Err(message) => return toolchain_error(reporter, "STC-E-BUILD-003", &message),
         };
-        let launcher_ir =
-            stc_codegen::generate_launcher(&name, &module_file, request.target.as_deref());
+        let launcher_ir = stc_codegen::generate_launcher(
+            name,
+            &generated.module_file,
+            effective_target(request).as_deref(),
+        );
         let launcher_ir_path = out_dir.join(format!("{name}-launcher.ll"));
         if let Err(error) = std::fs::write(&launcher_ir_path, &launcher_ir) {
             return artifact_error(
-                json,
+                reporter,
                 &format!("cannot write `{}`: {error}", launcher_ir_path.display()),
             );
         }
+        log.detail(format!("ir {}", display_path(&launcher_ir_path)));
         let launcher_object = out_dir.join(format!("{name}-launcher.o"));
+        let start = Instant::now();
         if let Err(message) = compile_ir(
             &clang,
             &launcher_ir_path,
             &launcher_object,
-            request.target.as_deref(),
+            effective_target(request).as_deref(),
             false,
-            request.verbose,
+            request.opt_level,
+            log,
         ) {
-            return build_failure(json, &message, &launcher_ir_path);
+            return build_failure(reporter, &message, &launcher_ir_path);
         }
-        let exe_path = out_dir.join(exe_name(&name));
+        let exe_path = out_dir.join(exe_name(name));
         if let Err(message) = link_exe(
             &clang,
             &launcher_object,
             &runtime,
             &exe_path,
-            request.target.as_deref(),
-            request.verbose,
+            effective_target(request).as_deref(),
+            log,
         ) {
-            return build_failure(json, &message, &launcher_ir_path);
+            return build_failure(reporter, &message, &launcher_ir_path);
         }
+        clang_time += start.elapsed();
     }
+    log.info(format!("clang {}", duration(clang_time)));
+    log.info(format!("artifacts {}", display_path(out_dir)));
     0
+}
+
+/// Builds the stable artifact file name for one emit kind.
+#[must_use]
+pub(crate) fn artifact_file(
+    kind: Emit,
+    name: &str,
+    module_file: &str,
+    lib_type: LibType,
+) -> String {
+    match kind {
+        Emit::Ir => format!("{name}.ll"),
+        Emit::Obj => format!("{name}.o"),
+        Emit::Module => module_file.to_owned(),
+        Emit::Exe => exe_name(name),
+        Emit::Lib => lib_name(name, lib_type),
+        Emit::Metadata => format!("{name}.stc-meta.json"),
+    }
+}
+
+/// Returns the `stc metadata` emit-kind spelling.
+#[must_use]
+pub(crate) const fn emit_kind(kind: Emit) -> &'static str {
+    match kind {
+        Emit::Ir => "ir",
+        Emit::Obj => "obj",
+        Emit::Module => "module",
+        Emit::Exe => "exe",
+        Emit::Lib => "lib",
+        Emit::Metadata => "metadata",
+    }
 }
 
 fn read_baseline(path: &Path) -> Result<Manifest, String> {
@@ -478,11 +697,24 @@ fn exe_name(name: &str) -> String {
     }
 }
 
-fn lib_name(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.lib")
-    } else {
-        format!("{name}.a")
+fn lib_name(name: &str, lib_type: LibType) -> String {
+    match lib_type {
+        LibType::Static => {
+            if cfg!(windows) {
+                format!("{name}.lib")
+            } else {
+                format!("{name}.a")
+            }
+        }
+        LibType::Shared => {
+            if cfg!(windows) {
+                format!("{name}.dll")
+            } else if cfg!(target_os = "macos") {
+                format!("lib{name}.dylib")
+            } else {
+                format!("lib{name}.so")
+            }
+        }
     }
 }
 
@@ -499,10 +731,20 @@ fn is_host_triple(target: &str) -> bool {
     target == stc_codegen::host_triple()
 }
 
-fn find_clang(explicit: Option<&str>) -> Result<String, String> {
-    let candidate = explicit
-        .map(str::to_owned)
-        .or_else(|| std::env::var("STC_CLANG").ok())
+fn effective_target(request: &Request) -> Option<String> {
+    request
+        .target
+        .clone()
+        .or_else(|| environment("STC_TARGET"))
+        .or_else(|| request.manifest_target.clone())
+}
+
+fn find_clang(request: &Request) -> Result<String, String> {
+    let candidate = request
+        .clang
+        .clone()
+        .or_else(|| environment("STC_CLANG"))
+        .or_else(|| request.manifest_clang.clone())
         .unwrap_or_else(|| "clang".into());
     match Command::new(&candidate).arg("--version").output() {
         Ok(output) if output.status.success() => Ok(candidate),
@@ -511,28 +753,58 @@ fn find_clang(explicit: Option<&str>) -> Result<String, String> {
     }
 }
 
-fn find_runtime(explicit: Option<&str>) -> Result<PathBuf, String> {
-    let file_name = if cfg!(windows) {
-        "stc_runtime.lib"
-    } else {
-        "libstc_runtime.a"
-    };
-    if let Some(required) = explicit.map(PathBuf::from) {
-        if required.is_file() {
-            return Ok(required);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeKind {
+    Static,
+    Shared,
+}
+
+impl From<LibType> for RuntimeKind {
+    fn from(lib_type: LibType) -> Self {
+        match lib_type {
+            LibType::Static => Self::Static,
+            LibType::Shared => Self::Shared,
         }
-        return Err(format!(
-            "runtime static library `{}` was not found",
-            required.display()
-        ));
     }
-    if let Ok(value) = std::env::var("STC_RUNTIME") {
-        let required = PathBuf::from(value);
+}
+
+impl RuntimeKind {
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Static => {
+                if cfg!(windows) {
+                    "stc_runtime.lib"
+                } else {
+                    "libstc_runtime.a"
+                }
+            }
+            Self::Shared => {
+                if cfg!(windows) {
+                    "stc_runtime.dll"
+                } else if cfg!(target_os = "macos") {
+                    "libstc_runtime.dylib"
+                } else {
+                    "libstc_runtime.so"
+                }
+            }
+        }
+    }
+}
+
+fn find_runtime(request: &Request, kind: RuntimeKind) -> Result<PathBuf, String> {
+    let file_name = kind.file_name();
+    if let Some(required) = request
+        .runtime
+        .clone()
+        .or_else(|| environment("STC_RUNTIME"))
+        .or_else(|| request.manifest_runtime.clone())
+        .map(PathBuf::from)
+    {
         if required.is_file() {
             return Ok(required);
         }
         return Err(format!(
-            "runtime static library `{}` was not found",
+            "runtime host library `{}` was not found",
             required.display()
         ));
     }
@@ -551,10 +823,19 @@ fn find_runtime(explicit: Option<&str>) -> Result<PathBuf, String> {
             return Ok(candidate);
         }
     }
+    let action = if kind == RuntimeKind::Shared {
+        "the shared host library"
+    } else {
+        "the static host archive"
+    };
     Err(format!(
-        "runtime static library `{file_name}` was not found; build it with \
+        "{action} `{file_name}` was not found; build it with \
          `cargo build -p stc-runtime` or pass `--runtime <path>`"
     ))
+}
+
+fn environment(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 fn compile_ir(
@@ -563,7 +844,8 @@ fn compile_ir(
     object: &Path,
     target: Option<&str>,
     pic: bool,
-    verbose: bool,
+    opt_level: OptLevel,
+    log: Log,
 ) -> Result<(), String> {
     let mut command = Command::new(clang);
     if let Some(target) = target {
@@ -577,8 +859,8 @@ fn compile_ir(
     if pic {
         command.arg("-fPIC");
     }
-    command.arg("-O0");
-    run_tool(&mut command, verbose)
+    command.arg(opt_level.clang_flag());
+    run_tool(&mut command, log)
 }
 
 fn link_module(
@@ -586,7 +868,7 @@ fn link_module(
     object: &Path,
     output: &Path,
     target: Option<&str>,
-    verbose: bool,
+    log: Log,
 ) -> Result<(), String> {
     let mut command = Command::new(clang);
     if let Some(target) = target {
@@ -605,7 +887,7 @@ fn link_module(
         // wall-clock time. /Brepro turns it into a content-derived value.
         command.args(["-Xlinker", "/Brepro"]);
     }
-    run_tool(&mut command, verbose)
+    run_tool(&mut command, log)
 }
 
 fn link_exe(
@@ -614,7 +896,7 @@ fn link_exe(
     runtime: &Path,
     output: &Path,
     target: Option<&str>,
-    verbose: bool,
+    log: Log,
 ) -> Result<(), String> {
     let mut command = Command::new(clang);
     if let Some(target) = target {
@@ -629,11 +911,11 @@ fn link_exe(
         command.args(["-Xlinker", "/Brepro"]);
     }
     command.args(["-o"]).arg(output);
-    run_tool(&mut command, verbose)
+    run_tool(&mut command, log)
 }
 
-fn run_tool(command: &mut Command, verbose: bool) -> Result<(), String> {
-    if verbose {
+fn run_tool(command: &mut Command, log: Log) -> Result<(), String> {
+    if log.trace() {
         let mut rendered = command.get_program().to_string_lossy().into_owned();
         for argument in command.get_args() {
             rendered.push(' ');
@@ -659,25 +941,29 @@ fn run_tool(command: &mut Command, verbose: bool) -> Result<(), String> {
     }
 }
 
-fn usage_error(json: bool, message: &str) -> u8 {
-    report_no_span(json, "STC-E-BUILD-004", message);
+fn duration(duration: Duration) -> String {
+    format!("{:.1}ms", duration.as_secs_f64() * 1000.0)
+}
+
+fn usage_error(reporter: &mut Reporter, message: &str) -> u8 {
+    reporter.plain("STC-E-BUILD-004", Severity::Error, message);
     2
 }
 
-fn toolchain_error(json: bool, code: &'static str, message: &str) -> u8 {
-    report_no_span(json, code, message);
+fn toolchain_error(reporter: &mut Reporter, code: &'static str, message: &str) -> u8 {
+    reporter.plain(code, Severity::Error, message);
     2
 }
 
-fn artifact_error(json: bool, message: &str) -> u8 {
-    report_no_span(json, "STC-E-BUILD-002", message);
+fn artifact_error(reporter: &mut Reporter, message: &str) -> u8 {
+    reporter.plain("STC-E-BUILD-002", Severity::Error, message);
     1
 }
 
-fn build_failure(json: bool, message: &str, ir_path: &Path) -> u8 {
-    report_no_span(
-        json,
+fn build_failure(reporter: &mut Reporter, message: &str, ir_path: &Path) -> u8 {
+    reporter.plain(
         "STC-E-BUILD-002",
+        Severity::Error,
         &format!(
             "{message}\n  = note: the generated IR is kept at `{}`",
             ir_path.display()
@@ -686,42 +972,183 @@ fn build_failure(json: bool, message: &str, ir_path: &Path) -> u8 {
     1
 }
 
-fn report_warning(json: bool, code: &'static str, message: &str) {
-    if json {
-        println!(
-            "{{\"code\":\"{code}\",\"severity\":\"warning\",\"message\":\"{}\"}}",
-            escape_json(message)
-        );
-    } else {
-        eprintln!("warning[{code}]: {message}");
-    }
+/// The `stc build` compatibility summary when a baseline is used.
+struct CompatibilityReport {
+    verdict: &'static str,
+    baseline_build_id: Option<String>,
+    candidate_build_id: String,
+    preserved: usize,
+    allocated: usize,
+    dropped: usize,
+    retired: usize,
+    rejected: usize,
+    warnings: Vec<(String, String)>,
+    rejections: Vec<(String, String)>,
+    actions: Vec<(String, String, String)>,
 }
 
-fn report_no_span(json: bool, code: &'static str, message: &str) {
-    if json {
-        println!(
-            "{{\"code\":\"{code}\",\"severity\":\"error\",\"message\":\"{}\"}}",
-            escape_json(message)
-        );
-    } else {
-        eprintln!("error[{code}]: {message}");
-    }
-}
-
-fn escape_json(text: &str) -> String {
-    let mut out = String::new();
-    for character in text.chars() {
-        match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            character if (character as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04X}", character as u32));
+impl CompatibilityReport {
+    fn new(candidate: &Manifest, baseline: &Manifest) -> Self {
+        let verdict = match candidate.plan.verdict {
+            PlanVerdict::Cold => "cold",
+            PlanVerdict::OnlineCandidate => "compatible",
+            PlanVerdict::Rejected => "incompatible",
+        };
+        let mut preserved = 0;
+        let mut allocated = 0;
+        let mut dropped = 0;
+        let mut rejected = 0;
+        let mut actions = Vec::new();
+        for action in &candidate.plan.actions {
+            match action.action {
+                PlanAction::Preserve | PlanAction::Migrate => preserved += 1,
+                PlanAction::Allocate | PlanAction::Reset => allocated += 1,
+                PlanAction::Drop => dropped += 1,
+                PlanAction::Reject => rejected += 1,
             }
-            character => out.push(character),
+            actions.push((
+                action.got_id.to_hex(),
+                identity_kind_name(action.kind),
+                action.key.clone(),
+            ));
+        }
+        let retired = candidate
+            .history
+            .retired
+            .len()
+            .saturating_sub(baseline.history.retired.len());
+        let mut warnings = Vec::new();
+        let mut rejections = Vec::new();
+        for diagnostic in &candidate.plan.diagnostics {
+            let entry = (diagnostic.code.clone(), diagnostic.message.clone());
+            if diagnostic.severity >= 2 {
+                rejections.push(entry);
+            } else {
+                warnings.push(entry);
+            }
+        }
+        Self {
+            verdict,
+            baseline_build_id: candidate.plan.parent_build_id.map(stc_got::GotId::to_hex),
+            candidate_build_id: candidate.header.build_id.to_hex(),
+            preserved,
+            allocated,
+            dropped,
+            retired,
+            rejected,
+            warnings,
+            rejections,
+            actions,
         }
     }
-    out
+
+    fn to_json(&self, verbose: bool) -> Json {
+        let mut fields = vec![
+            ("verdict".into(), Json::String(self.verdict.into())),
+            (
+                "baseline_build_id".into(),
+                self.baseline_build_id
+                    .clone()
+                    .map_or(Json::Null, Json::String),
+            ),
+            (
+                "candidate_build_id".into(),
+                Json::String(self.candidate_build_id.clone()),
+            ),
+            ("counts".into(), self.counts_json()),
+            ("warnings".into(), diagnostics_json(&self.warnings)),
+            ("rejections".into(), diagnostics_json(&self.rejections)),
+        ];
+        if verbose {
+            fields.push((
+                "actions".into(),
+                Json::Array(
+                    self.actions
+                        .iter()
+                        .map(|(got_id, kind, key)| {
+                            Json::object([
+                                ("got_id".into(), Json::String(got_id.clone())),
+                                ("kind".into(), Json::String(kind.clone())),
+                                ("key".into(), Json::String(key.clone())),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ));
+        }
+        Json::object(fields)
+    }
+
+    fn counts_json(&self) -> Json {
+        Json::object([
+            (
+                "preserved".into(),
+                Json::Number(i128::try_from(self.preserved).unwrap_or(i128::MAX)),
+            ),
+            (
+                "allocated".into(),
+                Json::Number(i128::try_from(self.allocated).unwrap_or(i128::MAX)),
+            ),
+            (
+                "dropped".into(),
+                Json::Number(i128::try_from(self.dropped).unwrap_or(i128::MAX)),
+            ),
+            (
+                "retired".into(),
+                Json::Number(i128::try_from(self.retired).unwrap_or(i128::MAX)),
+            ),
+            (
+                "rejected".into(),
+                Json::Number(i128::try_from(self.rejected).unwrap_or(i128::MAX)),
+            ),
+        ])
+    }
+
+    fn print(&self, reporter: &Reporter, log: Log) {
+        if reporter.is_json() {
+            println!("{}", self.to_json(log.verbose()).render());
+            return;
+        }
+        let baseline = self.baseline_build_id.as_deref().unwrap_or("<none>");
+        log.status(format!(
+            "compatibility {}: baseline {baseline} candidate {}",
+            self.verdict, self.candidate_build_id
+        ));
+        log.status(format!(
+            "  preserved {}  allocated {}  dropped {}  retired {}  rejected {}",
+            self.preserved, self.allocated, self.dropped, self.retired, self.rejected
+        ));
+        for (code, message) in &self.warnings {
+            log.status(format!("  warning[{code}]: {message}"));
+        }
+        for (code, message) in &self.rejections {
+            log.status(format!("  rejection[{code}]: {message}"));
+        }
+        if log.verbose() {
+            for (got_id, kind, key) in &self.actions {
+                log.info(format!("  action {kind} {key} {got_id}"));
+            }
+        }
+    }
+}
+
+fn identity_kind_name(tag: u8) -> String {
+    stc_got::IdentityKind::from_tag(tag).map_or_else(
+        || format!("kind-{tag}"),
+        |kind| kind.name().replace(' ', "-"),
+    )
+}
+
+fn diagnostics_json(entries: &[(String, String)]) -> Json {
+    Json::Array(
+        entries
+            .iter()
+            .map(|(code, message)| {
+                Json::object([
+                    ("code".into(), Json::String(code.clone())),
+                    ("message".into(), Json::String(message.clone())),
+                ])
+            })
+            .collect(),
+    )
 }

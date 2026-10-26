@@ -30,4 +30,5 @@ pub use model::{
     Manifest, MismatchPolicy, OnlineSettings, OptLevel, PROFILE_ID, PackageInfo, ProjectSettings,
     RetainSettings, RunSettings, RuntimeSettings, SourcePath, SyntaxMode, TestCase, TestSettings,
 };
+pub use parse::is_known_lint_code;
 pub use parse::{ParsedManifest, parse_manifest};

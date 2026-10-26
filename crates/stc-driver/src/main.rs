@@ -1,53 +1,40 @@
 //! The `stc` command-line driver.
 //!
-//! M4.5 provides `stc parse <file>` (lex/parse only), `stc check <file>...`
-//! (lex, parse, resolve, and type-check), and `stc build <file>...`
-//! (check plus IR/object/module/launcher/embedding-host/metadata emission).
-//! The driver owns the exit-code contract, human/JSON diagnostics, and the
-//! panic boundary from CLI-and-Manifest §1.3–§1.4.
+//! M6 phase 3 implements `new`, `check`, `build`, `clean`, `metadata`, and
+//! `compliance`, plus the manifest-free `parse`/`check`/`build` bridge. The
+//! remaining M6 verbs are parsed and validated; their workflows land in later
+//! phases. The driver owns the exit-code contract, human/JSON/short
+//! diagnostics, colors, lint levels, and the panic boundary from
+//! CLI-and-Manifest §1.3–§1.4.
 
 #![forbid(unsafe_code)]
 
 mod build;
+mod clean;
+mod cli;
+mod compliance;
+mod metadata;
+mod new;
 mod project;
+mod report;
 
 use std::any::Any;
-use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
-use stc_diag::{DiagnosticSink, render_human, render_json};
+use stc_diag::DiagnosticSink;
 use stc_lexer::tokenize_bytes;
-use stc_parser::{ParseOptions, ParsedFile, parse};
+use stc_parser::{ParseOptions, parse};
 use stc_span::{FileId, SourceMap};
 use stc_syntax::{dump_cst, dump_typed_ast};
 
 use crate::build::Emit;
+use crate::cli::{Command, Invocation};
+use crate::project::Mode;
+use crate::report::{Log, Reporter, elapsed};
 
 const INTERNAL_ERROR: &str = "STC-I-0001";
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Command {
-    Parse,
-    Check,
-    Build,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Format {
-    Human,
-    Json,
-}
-
-struct Invocation {
-    command: Command,
-    paths: Vec<String>,
-    format: Format,
-    relaxed: bool,
-    ast: bool,
-    manifest: Option<String>,
-    build: build::Request,
-}
 
 fn main() -> ExitCode {
     let suppress_panic_output = std::env::var_os("RUST_BACKTRACE").is_none();
@@ -79,7 +66,7 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> ExitCode {
-    let mut invocation = match parse_args(args) {
+    let invocation = match cli::parse(args) {
         Ok(Some(invocation)) => invocation,
         Ok(None) => return ExitCode::SUCCESS,
         Err(message) => {
@@ -88,43 +75,147 @@ fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-
-    // Project mode: `check`/`build` without input files compile `stc.toml`.
-    if invocation.paths.is_empty() {
-        let code = project::run(
-            invocation.command == Command::Check,
+    let log = Log::new(invocation.quiet, invocation.verbosity);
+    let mut reporter = Reporter::new(
+        invocation.format,
+        invocation.color,
+        invocation.quiet,
+        &invocation.lints,
+    );
+    let code = match invocation.command {
+        Command::Parse => run_parse(&invocation, &mut reporter, log),
+        Command::Check | Command::Build => {
+            if invocation.paths.is_empty() {
+                let mode = if invocation.command == Command::Check {
+                    Mode::Check
+                } else {
+                    Mode::Build
+                };
+                project::run(
+                    mode,
+                    invocation.manifest.as_deref(),
+                    invocation.locked,
+                    &invocation.build,
+                    &mut reporter,
+                    log,
+                )
+            } else {
+                run_files(&invocation, &mut reporter, log)
+            }
+        }
+        Command::Metadata => project::run(
+            Mode::Metadata,
             invocation.manifest.as_deref(),
-            invocation.relaxed,
-            invocation.format == Format::Json,
+            invocation.locked,
             &invocation.build,
-        );
-        return ExitCode::from(code);
-    }
-    if invocation.command == Command::Build && invocation.build.emit.is_empty() {
-        invocation.build.emit.insert(Emit::Ir);
-    }
+            &mut reporter,
+            log,
+        ),
+        Command::New => new::run(&invocation.paths[0], log),
+        Command::Clean => clean::run(
+            invocation.manifest.as_deref(),
+            invocation.build.out_dir.as_deref(),
+            invocation.locked,
+            &mut reporter,
+            log,
+        ),
+        Command::Compliance => compliance::run(invocation.format),
+        Command::Run
+        | Command::Test
+        | Command::Fmt
+        | Command::OnlineDownload
+        | Command::OnlineDiff
+        | Command::Rename => not_implemented(invocation.command, invocation.watch),
+    };
+    ExitCode::from(code)
+}
 
-    let mut paths = invocation.paths.clone();
-    if matches!(invocation.command, Command::Check | Command::Build) {
-        // File order is not semantic (D-060).
-        paths.sort();
+fn run_parse(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
+    let path = &invocation.paths[0];
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("stc: cannot read `{path}`: {error}");
+            return 2;
+        }
+    };
+    let mut sources = SourceMap::new();
+    let mut diagnostics = DiagnosticSink::new();
+    let file = FileId::new(0);
+    let lex_start = Instant::now();
+    let lexed = tokenize_bytes(file, &bytes, &mut diagnostics);
+    let lex_elapsed = lex_start.elapsed();
+    let mapped = sources.add_file(path.clone(), lexed.text.clone());
+    debug_assert_eq!(mapped, file);
+    let parse_start = Instant::now();
+    let parsed = parse(
+        file,
+        lexed.text.as_str(),
+        &lexed.stream,
+        ParseOptions {
+            relaxed_semicolons: invocation.relaxed,
+            ..ParseOptions::default()
+        },
+        &mut diagnostics,
+    );
+    let parse_elapsed = parse_start.elapsed();
+    log.info(format!(
+        "lex {}  parse {}",
+        duration(lex_elapsed),
+        duration(parse_elapsed)
+    ));
+    reporter.diagnostics(diagnostics.diagnostics(), &sources);
+    if diagnostics.suppressed() > 0 {
+        reporter.note(format!(
+            "note: {} further diagnostic(s) suppressed",
+            diagnostics.suppressed()
+        ));
     }
+    // JSON stays one object per line (D-051); human and short still print the
+    // requested CST/AST dump on stdout.
+    if !invocation.format.is_json() {
+        print!("{}", dump_cst(parsed.tree()));
+        if invocation.ast {
+            print!("{}", dump_typed_ast(parsed.tree()));
+        }
+    }
+    if diagnostics.has_errors() || reporter.denied() {
+        1
+    } else {
+        0
+    }
+}
+
+/// The explicit manifest-free bridge: one in-memory package from `<file>...`.
+fn run_files(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
+    let command = invocation.command;
+    let mut paths = invocation.paths.clone();
+    // File order is not semantic (D-060).
+    paths.sort();
 
     let mut sources = SourceMap::new();
     let mut diagnostics = DiagnosticSink::new();
     let mut parsed_files = Vec::new();
+    let mut line_count = 0_usize;
+    let mut lex_time = Duration::ZERO;
+    let mut parse_time = Duration::ZERO;
     for (index, path) in paths.iter().enumerate() {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) => {
                 eprintln!("stc: cannot read `{path}`: {error}");
-                return ExitCode::from(2);
+                return 2;
             }
         };
+        line_count += bytes.iter().filter(|byte| **byte == b'\n').count();
         let file = FileId::new(u32::try_from(index).expect("too many input files"));
+        let lex_start = Instant::now();
         let lexed = tokenize_bytes(file, &bytes, &mut diagnostics);
+        let lex_elapsed = lex_start.elapsed();
+        lex_time += lex_elapsed;
         let mapped = sources.add_file(path.clone(), lexed.text.clone());
         debug_assert_eq!(mapped, file);
+        let parse_start = Instant::now();
         let parsed = parse(
             file,
             lexed.text.as_str(),
@@ -135,314 +226,84 @@ fn run(args: &[String]) -> ExitCode {
             },
             &mut diagnostics,
         );
+        let parse_elapsed = parse_start.elapsed();
+        parse_time += parse_elapsed;
+        log.detail(format!(
+            "{path} lex {} parse {}",
+            duration(lex_elapsed),
+            duration(parse_elapsed)
+        ));
         parsed_files.push(parsed);
     }
+    log.info(format!("sources {} files, {line_count} lines", paths.len()));
+    log.info(format!(
+        "lex {}  parse {}",
+        duration(lex_time),
+        duration(parse_time)
+    ));
 
     // D-070: do not analyze recovered trees when syntax errors exist.
     let mut analysis = None;
-    if matches!(invocation.command, Command::Check | Command::Build) && !diagnostics.has_errors() {
+    if matches!(command, Command::Check | Command::Build) && !diagnostics.has_errors() {
+        let analyze_start = Instant::now();
         analysis = Some(stc_sema::analyze(&parsed_files, &mut diagnostics));
+        log.info(format!("analyze {}", elapsed(analyze_start)));
     }
 
     let mut build_result = None;
-    if invocation.command == Command::Build
+    if command == Command::Build
         && !diagnostics.has_errors()
         && let Some(analysis) = &analysis
     {
+        let mut request = invocation.build.clone();
+        if request.emit.is_empty() {
+            request.emit.insert(Emit::Ir);
+        }
         build_result = Some(build::run(
-            &invocation.build,
+            &request,
             &analysis.hir,
             &paths,
             &mut diagnostics,
-            invocation.format == Format::Json,
+            reporter,
+            log,
         ));
     }
 
-    report(&invocation, &parsed_files, &diagnostics, &sources);
-
+    reporter.diagnostics(diagnostics.diagnostics(), &sources);
+    if diagnostics.suppressed() > 0 {
+        reporter.note(format!(
+            "note: {} further diagnostic(s) suppressed",
+            diagnostics.suppressed()
+        ));
+    }
     if let Some(code) = build_result
         && code != 0
     {
-        return ExitCode::from(code);
+        return code;
     }
-    if diagnostics.has_errors() {
-        ExitCode::from(1)
+    if diagnostics.has_errors() || reporter.denied() {
+        1
     } else {
-        ExitCode::SUCCESS
+        0
     }
 }
 
-fn report(
-    invocation: &Invocation,
-    parsed_files: &[ParsedFile],
-    diagnostics: &DiagnosticSink,
-    sources: &SourceMap,
-) {
-    match invocation.format {
-        Format::Human => {
-            for diagnostic in diagnostics.iter() {
-                eprint!("{}", render_human(diagnostic, sources));
-            }
-            if diagnostics.suppressed() > 0 {
-                eprintln!(
-                    "note: {} further diagnostic(s) suppressed",
-                    diagnostics.suppressed()
-                );
-            }
-            if invocation.command == Command::Parse
-                && let Some(parsed) = parsed_files.first()
-            {
-                print!("{}", dump_cst(parsed.tree()));
-                if invocation.ast {
-                    print!("{}", dump_typed_ast(parsed.tree()));
-                }
-            }
-        }
-        Format::Json => {
-            for diagnostic in diagnostics.iter() {
-                println!("{}", render_json(diagnostic, sources));
-            }
-            // The dump is not emitted in JSON mode so stdout stays one JSON
-            // object per line (D-051).
-        }
-    }
-}
-
-fn parse_args(args: &[String]) -> Result<Option<Invocation>, String> {
-    if args.is_empty() {
-        return Err("missing command".into());
-    }
-    let mut index = 0;
-    let command = match args[index].as_str() {
-        "--help" | "-h" => {
-            print_help();
-            return Ok(None);
-        }
-        "--version" | "-V" => {
-            println!("stc {}", env!("CARGO_PKG_VERSION"));
-            return Ok(None);
-        }
-        "parse" => Command::Parse,
-        "check" => Command::Check,
-        "build" => Command::Build,
-        other => return Err(format!("unknown command `{other}`")),
+fn not_implemented(command: Command, watch: bool) -> u8 {
+    let (name, phase) = match command {
+        Command::Run if watch => ("stc run --watch", "phase 8"),
+        Command::Run => ("stc run", "phase 4"),
+        Command::Test => ("stc test", "phase 6"),
+        Command::Fmt => ("stc fmt", "phase 7"),
+        Command::OnlineDownload | Command::OnlineDiff => ("stc online", "phase 8"),
+        Command::Rename => ("stc rename", "phase 8"),
+        _ => unreachable!("only phase-later commands are stubbed"),
     };
-    index += 1;
-
-    let mut format = Format::Human;
-    let mut relaxed = false;
-    let mut ast = false;
-    let mut manifest = None;
-    let mut paths = Vec::new();
-    let mut build = build::Request::default();
-    while index < args.len() {
-        let argument = &args[index];
-        match argument.as_str() {
-            "--help" | "-h" => {
-                print_help();
-                return Ok(None);
-            }
-            "--version" | "-V" => {
-                println!("stc {}", env!("CARGO_PKG_VERSION"));
-                return Ok(None);
-            }
-            "--relaxed" => relaxed = true,
-            "--ast" => ast = true,
-            "--message-format" => {
-                index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| "`--message-format` needs a value".to_string())?;
-                format = parse_format(value)?;
-            }
-            other if other.starts_with("--message-format=") => {
-                format = parse_format(&other["--message-format=".len()..])?;
-            }
-            "--manifest-path" => {
-                manifest = Some(next_value(args, &mut index, "--manifest-path")?);
-            }
-            other if other.starts_with("--manifest-path=") => {
-                manifest = Some(other["--manifest-path=".len()..].to_owned());
-            }
-            "--name" => build.name = Some(next_value(args, &mut index, "--name")?),
-            other if other.starts_with("--name=") => {
-                build.name = Some(other["--name=".len()..].to_owned());
-            }
-            "--emit" => {
-                build.emit = parse_emit(&next_value(args, &mut index, "--emit")?)?;
-            }
-            other if other.starts_with("--emit=") => {
-                build.emit = parse_emit(&other["--emit=".len()..])?;
-            }
-            "--out-dir" => build.out_dir = Some(next_value(args, &mut index, "--out-dir")?),
-            other if other.starts_with("--out-dir=") => {
-                build.out_dir = Some(other["--out-dir=".len()..].to_owned());
-            }
-            "--target" => build.target = Some(next_value(args, &mut index, "--target")?),
-            other if other.starts_with("--target=") => {
-                build.target = Some(other["--target=".len()..].to_owned());
-            }
-            "--clang" => build.clang = Some(next_value(args, &mut index, "--clang")?),
-            other if other.starts_with("--clang=") => {
-                build.clang = Some(other["--clang=".len()..].to_owned());
-            }
-            "--runtime" => build.runtime = Some(next_value(args, &mut index, "--runtime")?),
-            other if other.starts_with("--runtime=") => {
-                build.runtime = Some(other["--runtime=".len()..].to_owned());
-            }
-            "--got-manifest" => {
-                build.got_manifest = Some(next_value(args, &mut index, "--got-manifest")?);
-            }
-            other if other.starts_with("--got-manifest=") => {
-                build.got_manifest = Some(other["--got-manifest=".len()..].to_owned());
-            }
-            "--cold" => build.cold = true,
-            "--allow-untracked-removal" => build.allow_untracked_removal = true,
-            "--rename" => {
-                let value = next_value(args, &mut index, "--rename")?;
-                build.renames.push(parse_rename(&value)?);
-            }
-            other if other.starts_with("--rename=") => {
-                build
-                    .renames
-                    .push(parse_rename(&other["--rename=".len()..])?);
-            }
-            "-v" | "--verbose" => build.verbose = true,
-            other if other.starts_with('-') && other != "-" => {
-                return Err(format!("unknown option `{other}`"));
-            }
-            other => paths.push(other.to_owned()),
-        }
-        if command != Command::Build && build_option_present(&build) {
-            return Err("build options are only valid with `stc build`".into());
-        }
-        index += 1;
-    }
-
-    if paths.is_empty() {
-        if !matches!(command, Command::Check | Command::Build) {
-            return Err("missing input file".into());
-        }
-    } else if manifest.is_some() {
-        return Err("`--manifest-path` cannot be combined with input files".into());
-    }
-    if manifest.is_some() && !matches!(command, Command::Check | Command::Build) {
-        return Err("`--manifest-path` is only valid with `stc check` or `stc build`".into());
-    }
-    if command == Command::Parse && paths.len() != 1 {
-        return Err("`stc parse` accepts exactly one input file".into());
-    }
-    if command != Command::Parse && ast {
-        return Err("`--ast` is only valid with `stc parse`".into());
-    }
-    build.relaxed = relaxed;
-    Ok(Some(Invocation {
-        command,
-        paths,
-        format,
-        relaxed,
-        ast,
-        manifest,
-        build,
-    }))
+    eprintln!("stc: `{name}` is not implemented until M6 {phase}");
+    2
 }
 
-fn next_value(args: &[String], index: &mut usize, option: &str) -> Result<String, String> {
-    *index += 1;
-    args.get(*index)
-        .cloned()
-        .ok_or_else(|| format!("`{option}` needs a value"))
-}
-
-fn build_option_present(build: &build::Request) -> bool {
-    build.name.is_some()
-        || !build.emit.is_empty()
-        || build.out_dir.is_some()
-        || build.target.is_some()
-        || build.clang.is_some()
-        || build.runtime.is_some()
-        || build.got_manifest.is_some()
-        || build.cold
-        || !build.renames.is_empty()
-        || build.allow_untracked_removal
-        || build.verbose
-}
-
-fn parse_rename(value: &str) -> Result<(String, String), String> {
-    let Some((old, new)) = value.split_once('=') else {
-        return Err(format!("`--rename` expects `old=new`, found `{value}`"));
-    };
-    if old.is_empty() || new.is_empty() {
-        return Err(format!(
-            "`--rename` expects non-empty keys, found `{value}`"
-        ));
-    }
-    Ok((old.to_owned(), new.to_owned()))
-}
-
-fn parse_emit(value: &str) -> Result<BTreeSet<Emit>, String> {
-    let mut emit = BTreeSet::new();
-    for part in value.split(',') {
-        let kind = match part {
-            "ir" => Emit::Ir,
-            "obj" => Emit::Obj,
-            "module" => Emit::Module,
-            "exe" => Emit::Exe,
-            "lib" => Emit::Lib,
-            "metadata" => Emit::Metadata,
-            "" => continue,
-            other => {
-                return Err(format!(
-                    "unknown emit kind `{other}` (expected ir, obj, module, exe, lib, or metadata)"
-                ));
-            }
-        };
-        emit.insert(kind);
-    }
-    if emit.is_empty() {
-        return Err("`--emit` needs at least one artifact".into());
-    }
-    Ok(emit)
-}
-
-fn parse_format(value: &str) -> Result<Format, String> {
-    match value {
-        "human" => Ok(Format::Human),
-        "json" => Ok(Format::Json),
-        other => Err(format!(
-            "unsupported message format `{other}` (expected `human` or `json`)"
-        )),
-    }
-}
-
-fn print_help() {
-    println!(
-        "stc {} — IEC 61131-3 Structured Text compiler\n\
-         \n\
-         Usage:\n\
-         \x20 stc parse <file> [--ast] [--relaxed] [--message-format human|json]\n\
-         \x20 stc check [<file>...] [--manifest-path <stc.toml|dir>] [--relaxed]\n\
-         \x20           [--message-format human|json]\n\
-         \x20 stc build [<file>...] [--manifest-path <stc.toml|dir>] [--name <name>]\n\
-         \x20           [--emit ir,obj,module,exe,lib,metadata]\n\
-         \x20           [--out-dir <dir>] [--target <triple>] [--clang <path>]\n\
-         \x20           [--runtime <path>] [--got-manifest <path>] [--cold]\n\
-         \x20           [--rename old=new]... [--allow-untracked-removal]\n\
-         \x20           [--relaxed] [--message-format human|json] [-v]\n\
-         \x20 stc --version\n\
-         \x20 stc --help\n\
-         \n\
-         `parse` lexes and parses one file. `check` lexes, parses, resolves, and\n\
-         type-checks one or more files in one in-memory package. `build` also\n\
-         emits a loadable ABI 2 module and, when requested, its manifest, a thin\n\
-         executable launcher, or the embedding host library through clang.\n\
-         Without input files (or with `--manifest-path`), `check` and `build`\n\
-         load `stc.toml`, compile the package graph in dependency order, and\n\
-         report package-qualified diagnostics. Project builds default to\n\
-         `--emit module`; the manifest-free bridge keeps `--emit ir`.\n\
-         Exit codes: 0 success, 1 compile error, 2 usage/toolchain error, 3 internal error.",
-        env!("CARGO_PKG_VERSION")
-    );
+fn duration(value: Duration) -> String {
+    format!("{:.1}ms", value.as_secs_f64() * 1000.0)
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {

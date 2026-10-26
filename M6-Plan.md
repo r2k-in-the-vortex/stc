@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–2 complete (2026-10-26); phases 3–11 ready to start. M5 (phases 1–7 and 4b) is
+Status: Phases 0–3 complete (2026-10-26); phases 4–11 ready to start. M5 (phases 1–7 and 4b) is
 complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
 usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
@@ -178,14 +178,18 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0–2 are complete (2026-10-26); phases 3–11 are pending. Phase 0 fixed
+Phase status: phases 0–3 are complete (2026-10-26); phases 4–11 are pending. Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
 resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
 multi-package analyzer, package-aware visibility and configuration selection, and package
 identities in codegen/GOT artifacts and source fingerprints; the driver now compiles `stc.toml`
-projects. Phases may proceed in parallel only where the dependency direction allows (for example,
-Lean and the conformance harness can start once phase 0 fixes the vector and corpus contracts).
+projects. Phase 3 added the project CLI (`new`/`check`/`build`/`clean`/`metadata`/`compliance`),
+manifest build settings and toolchain precedence, human/short/JSON diagnostics with colors and
+lint levels, verbose phase timings, shared host libraries, and the baseline compatibility
+summary; the later verbs are parsed but return a usage error until their phase. Phases may
+proceed in parallel only where the dependency direction allows (for example, Lean and the
+conformance harness can start once phase 0 fixes the vector and corpus contracts).
 
 ## 6. Phase details
 
@@ -330,6 +334,23 @@ Tests: every verb and exit code, `new` scaffold build/run/test, manifest default
 target/clang/runtime precedence, `--locked`, out-dir containment, shared/static `lib`, short/JSON
 diagnostics, color off/on, `-q`, `-v`/`-vv`, lint overrides/unknown codes, and `metadata`/
 `compliance` shapes.
+
+Status (2026-10-26): implemented. The driver parses the full M6 command surface; `new`, `check`,
+`build`, `clean`, `metadata`, and `compliance` are implemented, while `run`/`test`/`fmt`/
+`online`/`rename` are parsed and return a usage error until phases 4–8. Project builds use the
+manifest emit list (default `module`), `target/stc/debug`, `[package].name`, `[build].opt-level`,
+`syntax`, and `lib-type`; target/clang/runtime discovery follows CLI > `STC_TARGET`/`STC_CLANG`/
+`STC_RUNTIME` > manifest > default, and the manifest-free `<file>...` bridge keeps `ir`, the
+sanitized file stem, and `target/stc/debug`. `stc build` emits `module`/`exe`/`lib`/`ir`/`obj`/
+`metadata`, including `stc-runtime`'s cdylib for `lib-type = "shared"` while generated code stays
+in the separate module. Diagnostics support human/short/JSON, `--color auto|always|never`, `-q`,
+`-v`/`-vv` phase timings (per-file lex/parse, clang commands, and IR paths at `-vv`), and
+`-D`/`-W`/`-A`/`--deny warnings` with manifest `[lints]` beneath CLI overrides; a warning
+promoted to an error keeps its original code. Project/lockfile failures exit 2, compile errors
+exit 1, and usage/toolchain errors exit 2. `stc new` writes the documented scaffold, `stc clean`
+removes the configured out-dir while preserving `stc.lock` and retained-state files, `stc
+metadata` and `stc compliance` print the §1.6 summaries, and a baseline build prints the
+compatibility verdict, counts, warnings, and (with `-v`) per-record actions.
 
 Acceptance: `stc new/build/check/clean/metadata/compliance` work end-to-end on Windows; the
 manifest-free bridge still passes its existing tests.

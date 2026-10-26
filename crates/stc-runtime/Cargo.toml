@@ -6,9 +6,11 @@ rust-version.workspace = true
 publish.workspace = true
 
 [lib]
-# The staticlib is the embedding/host artifact. The rlib lets the integration
-# tests link the host API directly; it is not a separate product artifact.
-crate-type = ["staticlib", "rlib"]
+# The staticlib is the default embedding/host artifact; the cdylib is the
+# shared host library requested by `[build] lib-type = "shared"`. The rlib lets
+# the integration tests link the host API directly; it is not a product
+# artifact.
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 stc-got = { path = "../stc-got" }

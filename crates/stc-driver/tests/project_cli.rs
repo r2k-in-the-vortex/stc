@@ -452,9 +452,10 @@ fn manifest_path_cannot_be_combined_with_input_files() {
 fn project_files_and_manifest_are_reported_when_missing() {
     let project = TestDir::new("missing-manifest");
     let output = project.run(".", &["check"]);
+    // A manifest error is exit code 2 (CLI-and-Manifest §1.3).
     assert_eq!(
         output.status.code(),
-        Some(1),
+        Some(2),
         "stderr:\n{}",
         stderr(&output)
     );
@@ -470,9 +471,10 @@ fn empty_source_glob_is_an_error() {
     let project = TestDir::new("no-sources");
     project.write("app/stc.toml", &manifest("app", "", ""));
     let output = project.run("app", &["check"]);
+    // A manifest error is exit code 2 (CLI-and-Manifest §1.3).
     assert_eq!(
         output.status.code(),
-        Some(1),
+        Some(2),
         "stderr:\n{}",
         stderr(&output)
     );

@@ -1868,6 +1868,13 @@ fn parse_duration(text: &str) -> Option<DurationNs> {
     number.checked_mul(factor).map(DurationNs)
 }
 
+/// Returns whether `code` is a documented diagnostic code accepted by
+/// `[lints]` and the CLI lint options.
+#[must_use]
+pub fn is_known_lint_code(code: &str) -> bool {
+    codes::is_known(code)
+}
+
 /// Returns why a manifest path setting is not a project-relative path.
 pub(crate) fn relative_path_problem(value: &str) -> Option<&'static str> {
     if value.is_empty() {
