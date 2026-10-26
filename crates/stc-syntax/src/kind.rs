@@ -70,6 +70,15 @@ macro_rules! define_syntax_kinds {
                     $(Punct::$punct => Self::$punct_variant,)*
                 }
             }
+
+            /// Returns `true` for a keyword token kind.
+            #[must_use]
+            pub const fn is_keyword(self) -> bool {
+                match self {
+                    $(Self::$keyword_variant => true,)*
+                    _ => false,
+                }
+            }
         }
     };
 }

@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 stc-codegen = { path = "../stc-codegen" }
 stc-diag = { path = "../stc-diag" }
+stc-fmt = { path = "../stc-fmt" }
 stc-got = { path = "../stc-got" }
 stc-hir = { path = "../stc-hir" }
 stc-lexer = { path = "../stc-lexer" }

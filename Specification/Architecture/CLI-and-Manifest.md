@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 phase-0 project-manifest, diagnostic, report-shape, and rename-history contracts fixed (2026-10-26); M6 phases 3–6 commands implemented (2026-10-26); `fmt`, `online`, `rename`, and `run --watch` pending  
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 phase-0 project-manifest, diagnostic, report-shape, and rename-history contracts fixed (2026-10-26); M6 phases 3–7 commands implemented (2026-10-26); `online`, `rename`, and `run --watch` pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -33,6 +33,15 @@ output goes to stdout.
 > touch the runtime store or retained state, and are not part of `[build].emit`. `stc fmt`,
 > `online`, `rename`, and `run --watch` remain later phases. `--message-format` supports `human`,
 > `json`, and `short`; exit codes follow §1.3 (a test that traps unexpectedly exits 4).
+>
+> **M6 phase 7 status (2026-10-26):** `stc fmt` is implemented. Without paths it formats the root
+> package's production and test sources discovered through `stc.toml`; explicit paths format those
+> files without loading a manifest. It supports `--check`, preserves comments, blank lines,
+> existing line breaks, the file's BOM, and each existing line break's encoding, uppercases
+> keywords, keeps identifier and literal spelling, emits two-space indentation and strict
+> semicolons (including after relaxed block statements), and is idempotent. Syntax errors prevent
+> formatting (`STC-E-FMT-001`); unreadable or unwritable files report `STC-E-FMT-002`. `online`,
+> `rename`, and `run --watch` remain later phases.
 
 | Command | Purpose |
 | --- | --- |
@@ -154,8 +163,8 @@ JSON format: one object per diagnostic on stdout, one per line:
 
 ### 1.5 Formatter (`stc fmt`)
 
-`stc fmt [paths...]` formats the project sources (or the given files) in place. `--check` writes
-nothing and exits 1 if any file would change.
+`stc fmt [paths...]` formats the root package's production and test sources (or the given files)
+in place. `--check` writes nothing and exits 1 if any file would change.
 
 The v1 style is fixed:
 

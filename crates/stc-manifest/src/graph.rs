@@ -145,7 +145,32 @@ pub fn load_project(
     manifest_path: impl AsRef<Path>,
     options: &LoadOptions,
 ) -> Result<ProjectGraph, ProjectError> {
-    let input = manifest_path.as_ref();
+    load_project_impl(manifest_path.as_ref(), options, true)
+}
+
+/// Loads a project graph without creating or updating `stc.lock`.
+///
+/// The graph, source discovery, and manifest diagnostics are identical to
+/// [`load_project`]. Without `locked`, a missing or stale lockfile is ignored
+/// instead of rewritten, so commands such as `stc fmt --check` have no
+/// filesystem side effects.
+///
+/// # Errors
+///
+/// Returns [`ProjectError`] with manifest, source, dependency, or lockfile
+/// diagnostics. With `locked`, a missing or stale lockfile is still an error.
+pub fn load_project_readonly(
+    manifest_path: impl AsRef<Path>,
+    options: &LoadOptions,
+) -> Result<ProjectGraph, ProjectError> {
+    load_project_impl(manifest_path.as_ref(), options, false)
+}
+
+fn load_project_impl(
+    input: &Path,
+    options: &LoadOptions,
+    write_lock: bool,
+) -> Result<ProjectGraph, ProjectError> {
     let manifest_input = if input.is_dir() {
         input.join("stc.toml")
     } else {
@@ -196,7 +221,7 @@ pub fn load_project(
         return Err(loader.into_error());
     };
     let lockfile_path = loader.root_dir.join("stc.lock");
-    if !loader.check_lockfile(&computed, options.locked) {
+    if !loader.check_lockfile(&computed, options.locked, write_lock) {
         return Err(loader.into_error());
     }
     let root = packages
@@ -767,7 +792,12 @@ impl Loader {
         Some(lockfile)
     }
 
-    fn check_lockfile(&mut self, computed: &Lockfile, locked: bool) -> bool {
+    fn check_lockfile(&mut self, computed: &Lockfile, locked: bool, write_lock: bool) -> bool {
+        if !locked && !write_lock {
+            // A read-only load is used by commands that do not consume the
+            // lockfile (`stc fmt`); it must not create or update one.
+            return true;
+        }
         let path = self.root_dir.join("stc.lock");
         let display = self.lock_display();
         let rendered = render_lockfile(computed);

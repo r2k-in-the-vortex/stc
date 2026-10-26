@@ -1,9 +1,9 @@
 //! Command-line parsing for the driver.
 //!
 //! The parser recognizes the full M6 command surface.
-//! `new`/`check`/`build`/`run`/`test`/`clean`/`metadata`/`compliance` are
-//! implemented; commands whose workflow lands in a later phase
-//! (fmt/online/rename) are parsed and validated now, then reported as not yet
+//! `new`/`check`/`build`/`run`/`test`/`fmt`/`clean`/`metadata`/`compliance`
+//! are implemented; commands whose workflow lands in a later phase
+//! (online/rename) are parsed and validated now, then reported as not yet
 //! implemented by the dispatcher.
 
 use stc_manifest::LintLevel;
@@ -81,6 +81,8 @@ pub(crate) struct Invocation {
     pub(crate) lints: LintOverrides,
     /// `run --watch`.
     pub(crate) watch: bool,
+    /// `fmt --check`.
+    pub(crate) fmt_check: bool,
     /// Build settings and overrides.
     pub(crate) build: Request,
     /// `stc test` options.
@@ -358,6 +360,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         locked,
         lints,
         watch,
+        fmt_check,
         build,
         test,
     }))
@@ -692,7 +695,8 @@ fn print_help() {
          \x20          [--target <triple>] [--clang <path>] [--runtime <path>]\n\
          \x20          [--out-dir <dir>] [--relaxed] [--message-format human|json]\n\
          \x20          [-v|-vv] [-q] [-- --nocapture]\n\
-         \x20 stc fmt [<path>...] [--check] (M6 phase 7)\n\
+         \x20 stc fmt [<path>...] [--check] [--manifest-path <stc.toml|dir>]\n\
+         \x20         [--locked] [--message-format human|json|short] [-v|-vv] [-q]\n\
          \x20 stc online download|diff      (M6 phase 8)\n\
          \x20 stc rename <old> <new>        (M6 phase 8)\n\
          \x20 stc --version\n\
@@ -711,7 +715,10 @@ fn print_help() {
          dependency order, and report package-qualified diagnostics. The\n\
          file-based form is the explicit manifest-free bridge. Project builds\n\
          default to `--emit module` and `target/stc/debug`; the manifest-free\n\
-         bridge keeps `--emit ir` and a sanitized file stem.\n\
+         bridge keeps `--emit ir` and a sanitized file stem. `fmt` formats the\n\
+         given files, or the root package's sources and test sources when no\n\
+         paths are given, with the fixed lossless-CST style; `--check` writes\n\
+         nothing and exits 1 when a file would change.\n\
          Exit codes: 0 success, 1 compile error, 2 usage/manifest/toolchain error,\n\
          3 internal error, 4 runtime trap, 130 interrupted.",
         env!("CARGO_PKG_VERSION")

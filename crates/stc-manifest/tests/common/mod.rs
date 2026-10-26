@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use stc_diag::Diagnostic;
-use stc_manifest::{LoadOptions, ProjectError, ProjectGraph, load_project};
+use stc_manifest::{LoadOptions, ProjectError, ProjectGraph, load_project, load_project_readonly};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -54,6 +54,10 @@ impl TempProject {
 
     pub fn load_locked(&self) -> Result<ProjectGraph, ProjectError> {
         load_project(self.root(), &LoadOptions { locked: true })
+    }
+
+    pub fn load_readonly(&self) -> Result<ProjectGraph, ProjectError> {
+        load_project_readonly(self.root(), &LoadOptions::default())
     }
 }
 

@@ -1,6 +1,7 @@
 mod common;
 
 use common::{MAIN_ST, TempProject, codes, manifest_with};
+use stc_manifest::LoadOptions;
 
 fn write_package(project: &TempProject, directory: &str, name: &str) {
     project.write(
@@ -191,4 +192,29 @@ fn locked_does_not_modify_the_lockfile() {
     project.load_locked().expect("matching");
     let after = std::fs::read_to_string(project.path("stc.lock")).unwrap();
     assert_eq!(before, after);
+}
+
+#[test]
+fn a_read_only_load_never_creates_or_rewrites_the_lockfile() {
+    let project = TempProject::new("fmt-readonly");
+    write_app(&project, "");
+    project.load_readonly().expect("read-only load");
+    assert!(!project.path("stc.lock").exists());
+
+    project.load().expect("write lockfile");
+    std::fs::write(project.path("stc.lock"), "schema = 1\n").expect("stale lockfile");
+    project.load_readonly().expect("stale lockfile is ignored");
+    assert_eq!(
+        std::fs::read_to_string(project.path("stc.lock")).unwrap(),
+        "schema = 1\n"
+    );
+}
+
+#[test]
+fn a_read_only_load_still_enforces_locked() {
+    let project = TempProject::new("fmt-readonly-locked");
+    write_app(&project, "");
+    let error = stc_manifest::load_project_readonly(project.root(), &LoadOptions { locked: true })
+        .expect_err("missing lockfile");
+    assert_eq!(codes(&error), vec!["STC-E-LOCK-001"]);
 }

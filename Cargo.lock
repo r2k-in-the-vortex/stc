@@ -122,6 +122,7 @@ version = "0.1.0"
 dependencies = [
  "stc-codegen",
  "stc-diag",
+ "stc-fmt",
  "stc-got",
  "stc-hir",
  "stc-lexer",
@@ -132,6 +133,17 @@ dependencies = [
  "stc-span",
  "stc-syntax",
  "stc-test",
+]
+
+[[package]]
+name = "stc-fmt"
+version = "0.1.0"
+dependencies = [
+ "stc-diag",
+ "stc-lexer",
+ "stc-parser",
+ "stc-span",
+ "stc-syntax",
 ]
 
 [[package]]

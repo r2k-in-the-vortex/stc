@@ -1,10 +1,11 @@
 //! The `stc` command-line driver.
 //!
 //! M6 phase 3 implements `new`, `check`, `build`, `clean`, `metadata`, and
-//! `compliance`; phase 4 adds `run`; phase 6 adds `test`. The remaining M6
-//! verbs are parsed and validated; their workflows land in later phases. The
-//! driver owns the exit-code contract, human/JSON/short diagnostics, colors,
-//! lint levels, and the panic boundary from CLI-and-Manifest §1.3–§1.4.
+//! `compliance`; phase 4 adds `run`, phase 6 adds `test`, and phase 7 adds
+//! `fmt`. The remaining M6 verbs are parsed and validated; their workflows
+//! land in later phases. The driver owns the exit-code contract,
+//! human/JSON/short diagnostics, colors, lint levels, and the panic boundary
+//! from CLI-and-Manifest §1.3–§1.4.
 
 #![forbid(unsafe_code)]
 
@@ -12,6 +13,7 @@ mod build;
 mod clean;
 mod cli;
 mod compliance;
+mod fmt;
 mod metadata;
 mod new;
 mod project;
@@ -139,7 +141,15 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
-        Command::Fmt | Command::OnlineDownload | Command::OnlineDiff | Command::Rename => {
+        Command::Fmt => fmt::run(
+            &invocation.paths,
+            invocation.fmt_check,
+            invocation.manifest.as_deref(),
+            invocation.locked,
+            &mut reporter,
+            log,
+        ),
+        Command::OnlineDownload | Command::OnlineDiff | Command::Rename => {
             not_implemented(invocation.command, invocation.watch)
         }
     };
@@ -308,7 +318,6 @@ fn not_implemented(command: Command, _watch: bool) -> u8 {
     let (name, phase) = match command {
         Command::Run => ("stc run --watch", "phase 8"),
         Command::Test => ("stc test", "phase 6"),
-        Command::Fmt => ("stc fmt", "phase 7"),
         Command::OnlineDownload | Command::OnlineDiff => ("stc online", "phase 8"),
         Command::Rename => ("stc rename", "phase 8"),
         _ => unreachable!("only phase-later commands are stubbed"),

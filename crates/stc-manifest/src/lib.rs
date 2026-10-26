@@ -21,6 +21,7 @@ mod parse;
 
 pub use graph::{
     LoadOptions, Package, PackageDependency, PackageId, ProjectError, ProjectGraph, load_project,
+    load_project_readonly,
 };
 pub use lock::{LockPackage, LockSource, Lockfile, parse_lockfile, render_lockfile};
 pub use model::{

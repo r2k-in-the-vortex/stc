@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–6 complete (2026-10-26); phases 7–11 ready to start. M5 (phases 1–7 and 4b) is
+Status: Phases 0–7 complete (2026-10-26); phases 8–11 ready to start. M5 (phases 1–7 and 4b) is
 complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
 usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
@@ -178,7 +178,7 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0–6 are complete (2026-10-26); phases 7–11 are pending. Phase 0 fixed
+Phase status: phases 0–7 are complete (2026-10-26); phases 8–11 are pending. Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
 resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
@@ -197,6 +197,10 @@ host `state_load`/`state_save` wiring and the policy overrides, project device/b
 `crates/stc-test`, the `stc test` command and test-build mode, the test-only prelude, host ABI
 2.2 service 12, and the process-isolated runner with filters, list/no-run, timeouts, traps, mock
 clocks, I/O, and human/JSON reports; production builds exclude test units and assert calls.
+Phase 7 added `crates/stc-fmt`, the fixed-style lossless-CST formatter, and `stc fmt`
+(`--check`, manifest-free paths, and root-package source formatting) with strict-semicolon
+insertion, preserved comments/blank lines/BOM/per-break line endings, and stable idempotent
+output.
 Phases may proceed in parallel only where the dependency direction allows (for example, Lean and
 the conformance harness can start once phase 0 fixes the vector and corpus contracts).
 
@@ -565,7 +569,7 @@ cover function/FB/program pass and fail, assertion collection, cycles/clock/time
 expected/mismatched traps, filters/list/no-run/JSON, duplicate/invalid conflict diagnostics,
 production exclusion and assert calls, a user configuration, and a separate test project.
 
-### Phase 7 — Formatter
+### Phase 7 — Formatter (complete 2026-10-26)
 
 - Add `crates/stc-fmt` over the lossless CST.
 - Fixed style: keywords uppercase; identifiers keep spelling; 2-space indentation; one statement
@@ -580,6 +584,24 @@ production exclusion and assert calls, a user configuration, and a separate test
   indentation, CRLF/BOM, unknown tokens untouched, `--check` exit code, and a project format run.
 
 Acceptance: `stc fmt` followed by `stc fmt --check` succeeds on the examples and corpus.
+
+Status (2026-10-26): implemented. `crates/stc-fmt` re-emits the lossless CST with the fixed style:
+uppercase keywords, original identifier/literal spelling, two-space indentation, one
+statement/declaration per line, normalized operator/comma/`:=`/`=>` spacing, `name : TYPE`
+colons, `END_*` on its own line, and strict semicolons (a terminator is inserted when relaxed
+input omitted one after a block statement). Comments and pragmas are preserved verbatim, blank
+lines and existing line breaks are kept, and each file's BOM and per-break line-ending encoding
+survive a rewrite; inserted breaks use the dominant ending. The driver's `stc fmt [paths...]
+[--check]` formats the root package's production and test sources or the given manifest-free
+files, writes in place, and makes `--check` write nothing and exit 1 on a difference; lexer or
+parser errors prevent formatting (`STC-E-FMT-001`), and read/write failures report
+`STC-E-FMT-002`. Project discovery uses a read-only graph load, so `stc fmt` never creates or
+updates `stc.lock` (a `--locked` project still fails on a missing or stale lockfile). The
+`stc new` scaffold is already in the fixed style, so `stc new` followed by
+`stc fmt --check` succeeds. Tests cover spacing/indentation, relaxed-to-strict semicolons,
+comment/blank-line preservation, one declaration per line, CRLF/BOM and mixed line endings,
+unknown-token spelling, syntax errors, `--check`/idempotence, and a project run over production
+and test sources.
 
 ### Phase 8 — Online-change workflow
 
