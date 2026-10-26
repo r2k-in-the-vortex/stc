@@ -1455,10 +1455,9 @@ For the M4 scalar surface, the compiler populates:
   `function_got_id`. The C-ABI wrapper is module-local code bound by that export record.
 - **Types and descriptors:** both tables are empty for elementary scalar programs; named user
   types, vtables, and object/type descriptors appear in M5.
-- **Instances and tasks:** the selected or synthesized configuration, one resource, one task,
-  and the program instances it runs. Multi-task topologies are rejected at build time in M4.5;
-  M6 removes that restriction and projects every task with its interval/priority/`SINGLE` and
-  guard (D-154). The task record layout is unchanged.
+- **Instances and tasks:** the selected or synthesized configuration and the program instances it
+  runs. Every task is projected with its interval/priority/`SINGLE` and guard identity (D-154);
+  the M4.5 one-task-per-resource restriction is removed. The task record layout is unchanged.
 - **Exports:** `{stc:export}` wrappers and their C names.
 - **Slots:** data, function, direct, and import slots as assigned in §6.2; descriptor slots are
   empty.

@@ -1250,7 +1250,6 @@ impl Lowerer<'_> {
 
         self.emit_global_initializers(f, info, &cold, &mask)?;
         self.emit_instance_initializers(f, info, &cold, &mask)?;
-        self.emit_task_guard_initializers(f, info, &cold, &mask)?;
         self.emit_state_load(f, info, &cold)?;
         self.emit_object_records(f, info, &cold, &mask)?;
         f.ret(Some(&Value::int(32, 0)));
@@ -1522,27 +1521,6 @@ impl Lowerer<'_> {
         Ok(())
     }
 
-    fn emit_task_guard_initializers(
-        &mut self,
-        f: &mut Function,
-        info: &BodyInfo,
-        cold: &Value,
-        mask: &Value,
-    ) -> Result<(), CodegenError> {
-        let tasks = self.plan.tasks.clone();
-        for task in &tasks {
-            if task.single != Some(true) {
-                continue;
-            }
-            let slot = self.task_guard_slot(&task.resource, task.name)?;
-            let (_, next) = Self::begin_init(f, cold, mask, Some(slot))?;
-            let pointer = Self::slot_storage(f, info, slot);
-            Self::write_scalar(f, &pointer, ScalarKind::Bool, &Value::bool(true));
-            Self::close_init(f, &next);
-        }
-        Ok(())
-    }
-
     fn emit_state_load(
         &mut self,
         f: &mut Function,
@@ -1627,29 +1605,11 @@ impl Lowerer<'_> {
 
     fn emit_cycle_body(&mut self, f: &mut Function, info: &BodyInfo) -> Result<(), CodegenError> {
         let instances = self.plan.instances.clone();
-        let single_tasks: BTreeSet<(String, Symbol)> = self
-            .plan
-            .tasks
-            .iter()
-            .filter(|task| task.single == Some(true))
-            .map(|task| (task.resource.clone(), task.name))
-            .collect();
-        let last_for_task: Vec<bool> = instances
-            .iter()
-            .enumerate()
-            .map(|(index, instance)| {
-                !instances
-                    .iter()
-                    .skip(index + 1)
-                    .any(|other| other.resource == instance.resource && other.task == instance.task)
-            })
-            .collect();
-        for (index, instance) in instances.iter().enumerate() {
-            let guarded = instance
-                .task
-                .is_some_and(|task| single_tasks.contains(&(instance.resource.clone(), task)));
-            if guarded {
-                let task = instance.task.expect("guarded instance has a task");
+        for index in self.plan.cycle_instances() {
+            let instance = &instances[index];
+            if let Some(task) = instance.task {
+                // The host owns the guard: it sets the root before every scan
+                // and the cycle never clears it (D-154, Runtime §1.3).
                 let slot = self.task_guard_slot(&instance.resource, task)?;
                 let guard_value = Self::slot_storage(f, info, slot);
                 let guard = Self::read_scalar(f, &guard_value, ScalarKind::Bool)?;
@@ -1658,9 +1618,6 @@ impl Lowerer<'_> {
                 f.cond_branch(&guard, &run, &skip);
                 f.start_block(&run);
                 self.emit_instance_cycle(f, info, instance)?;
-                if last_for_task[index] {
-                    Self::write_scalar(f, &guard_value, ScalarKind::Bool, &Value::bool(false));
-                }
                 f.branch(&skip);
                 f.start_block(&skip);
             } else {

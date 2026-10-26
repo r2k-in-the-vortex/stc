@@ -149,16 +149,36 @@ pub fn target() -> Target {
     Target::new("x86_64-unknown-linux-gnu", Endianness::Little, 8)
 }
 
+/// Returns the target of the running test host.
+#[must_use]
+pub fn host_target() -> Target {
+    stc_codegen::resolve_target(Some(&stc_codegen::host_triple()))
+}
+
 /// Builds artifacts without a baseline.
 #[must_use]
 pub fn artifacts(source: &str, name: &str) -> ModuleArtifacts {
-    build(source, name, None, false, Vec::new(), false)
+    build(source, name, None, false, Vec::new(), false, target())
+}
+
+/// Builds artifacts for the running host (for the C embedding surface).
+#[must_use]
+pub fn artifacts_native(source: &str, name: &str) -> ModuleArtifacts {
+    build(source, name, None, false, Vec::new(), false, host_target())
 }
 
 /// Builds artifacts with a baseline.
 #[must_use]
 pub fn artifacts_with(source: &str, name: &str, baseline: Manifest, cold: bool) -> ModuleArtifacts {
-    build(source, name, Some(baseline), cold, Vec::new(), false)
+    build(
+        source,
+        name,
+        Some(baseline),
+        cold,
+        Vec::new(),
+        false,
+        target(),
+    )
 }
 
 /// Builds artifacts with a baseline, renames, and the untracked-removal policy.
@@ -178,9 +198,11 @@ pub fn artifacts_with_renames(
         cold,
         renames,
         allow_untracked_removal,
+        target(),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build(
     source: &str,
     name: &str,
@@ -188,12 +210,13 @@ fn build(
     cold: bool,
     renames: Vec<Rename>,
     allow_untracked_removal: bool,
+    target: Target,
 ) -> ModuleArtifacts {
     let hir = clean_hir(source);
     let sources = vec![format!("{name}.st")];
     let fingerprint = source_fingerprint(&[(format!("{name}.st"), source.as_bytes().to_vec())])
         .expect("source fingerprint");
-    let mut options = ModuleOptions::new(target(), name, "stc 0.1.0", fingerprint);
+    let mut options = ModuleOptions::new(target, name, "stc 0.1.0", fingerprint);
     options.baseline = baseline.as_ref();
     options.cold = cold;
     options.renames = renames;

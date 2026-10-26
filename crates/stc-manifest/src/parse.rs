@@ -1848,7 +1848,9 @@ fn valid_version_identifiers(identifiers: &str) -> bool {
         })
 }
 
-fn parse_duration(text: &str) -> Option<DurationNs> {
+/// Parses a duration literal (`10ms`, `5s`, `0ns`, `2us`, `1m`, `1h`).
+#[must_use]
+pub fn parse_duration(text: &str) -> Option<DurationNs> {
     let split = text
         .find(|ch: char| !ch.is_ascii_digit())
         .unwrap_or(text.len());

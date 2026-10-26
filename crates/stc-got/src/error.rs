@@ -51,6 +51,8 @@ pub mod codes {
     pub const W_ONLINE_STALE_BASELINE: &str = "STC-W-ONLINE-005";
     /// Manifest missing or invalid; cold download required.
     pub const W_ONLINE_MISSING: &str = "STC-W-ONLINE-006";
+    /// Invalid run option or runtime scheduling configuration.
+    pub const RUN_OPTION: &str = "STC-E-RUN-003";
     /// No baseline manifest; build uses a cold layout.
     pub const W_MANIFEST_COLD: &str = "STC-W-MANIFEST-001";
     /// Untracked rename or removal will discard state.

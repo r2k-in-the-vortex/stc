@@ -1,6 +1,6 @@
 # Runtime and Execution Model
 
-Status: M4.5 persistent host and ABI 2 module execution, including M5 OOP descriptors, implemented (2026-10-25); M6 phase-0 scheduler and ABI 2.2 test-clock contracts fixed (2026-10-26)  
+Status: M4.5 persistent host and ABI 2 module execution, including M5 OOP descriptors, implemented (2026-10-25); M6 phase-0 scheduler and ABI 2.2 test-clock contracts fixed (2026-10-26); M6 phase-4 cooperative task scheduler and run loop implemented (2026-10-26)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 
@@ -21,8 +21,16 @@ module, executable, and embedding-library artifacts differ.
 > Windows, `_setjmp` on POSIX; generated functions are `uwtable`; an assembly shim owns the
 > second `setjmp` return), enabling rollback-window recovery and exit code 70 outside it. The
 > embedding C ABI exposes `stc_host_load_module`, `stc_host_cycle`, `stc_host_shutdown`,
-> `stc_host_symbol`, `stc_host_export_manifest`, `stc_metadata_json`, and
-> `stc_rt_execute`; `stc_host_run` and the full options struct remain M6.
+> `stc_host_symbol`, `stc_host_export_manifest`, `stc_metadata_json`, `stc_rt_execute`, and the
+> M6 phase-4 `stc_host_run` with its `stc_host_options` struct. The launcher and embedding hosts
+> share one run loop.
+>
+> M6 phase 4 added the cooperative task scheduler and the project run workflow: the host owns
+> task run state keyed by task `GotId`, writes each `TaskGuard` before every scan, applies the
+> interval/`SINGLE`/no-catch-up rules, preserves state across compatible swaps, and resets it on
+> a cold install. The launcher parses the run options, sleeps to the cycle deadline, installs
+> stop handlers, and returns 0/1/2/3/4/130; `stc run` builds `exe,module,metadata` and returns
+> the launcher's exit code.
 >
 > The runtime uses `std` and is the only crate permitted unsafe code (D-077). File-backed
 > retained state remains M6: the ABI 2 state services and the legacy `stc_rt_state_*` symbols
@@ -59,31 +67,39 @@ has no `main` and no persistent storage of its own.
 `stc_rt_execute(argc, argv, module_path)`, together with the adjacent module and manifest
 pair it loads. The host:
 
-1. Parses runtime arguments. M4.5 accepts `--cycles <n>` and `--module <path>`; the
-   `--cycle-time`, `--io`, and `--trace` options in the v1 target are M6 and are rejected with a
-   clear "not supported in this build" error.
+1. Parses runtime arguments: `--cycles <n>` (absent or `0` runs until interrupted),
+   `--cycle-time <duration>`, `--io null|memory|file`, `--io-file <path>`,
+   `--state-file <path>`, `--reset-retain`, `--no-retain`, `--mock-clock <duration>`,
+   `--status`, and `--module <path>`. `--trace` is rejected with a clear error. `stc run`
+   resolves `[run].cycles` and `[run].cycle-time` into these options.
 2. Loads and validates the active module and manifest pair.
 3. Initializes the process image, clock, GOT cells, and root allocator.
 4. Attaches the module and runs its preparation (cold start or online attach).
 5. Repeats until the cycle limit is reached or a stop signal is received:
-   - latch the cycle time and inputs into the input image,
-   - set each task's guard from the host scheduler (M6; §1.3),
-   - apply queued debug writes/forces at the boundary,
+   - consume a pending mock-clock override, or read the live clock, and latch `cycle_now_ns`,
+   - set each task's guard from the host scheduler (§1.3),
+   - apply queued debug writes/forces at the boundary (M6.5),
    - check for a prepared candidate and switch generations if ready,
    - call `stc_module_cycle`,
-   - write outputs from the output image,
-   - sleep until the next cycle deadline if a cycle time is configured,
+   - write outputs from the output image (phase 5),
+   - sleep until the next cycle deadline if a cycle time is configured; a mock-clock run
+     advances the mock time by the cycle time instead of sleeping,
+   - mark due `SINGLE` tasks complete and advance interval deadlines after a successful scan,
    - check the watchdog and service queues.
 
-   M4.5's thin launcher cold-installs the adjacent pair and then runs the cycle loop; background
-   loading/preparation, queued debug writes/forces, and service threads are not part of the
-   launcher yet. Online prepare/activation is driven through the Rust `Host` API and the
-   embedding host, and the background loader/service threads are M6.
-6. Runs shutdown, saves retained state, and unloads generations.
-7. Returns exit code 0 on normal completion, non-zero on a trap or configuration error.
+   The phase-4 launcher cold-installs the adjacent pair and runs the host scheduler and cycle
+   loop. Background loading/preparation, queued debug writes/forces, and service threads are
+   later work. Online prepare/activation is driven through the Rust `Host` API and the embedding
+   host.
+6. Runs shutdown, saves retained state (phase 5), and unloads generations.
+7. Returns exit code `0` on normal completion, `1` for a load or cycle failure, `2` for an
+   invalid runtime option, `3` for an internal panic, `4` for a trap, and `130` when
+   interrupted by Ctrl-C (Ctrl-Break on Windows). The raw `stc_rt_trap` service keeps exit code
+   70 when it fires outside a host boundary.
 
-The M4.5 launcher defaults to one cycle when `--cycles` is omitted; the "run until interrupted"
-default and signal handling are M6. Tests pass a finite cycle count or use library mode.
+The launcher defaults to running until interrupted when `--cycles` is omitted or `0`. Stop
+handlers are installed at loop start; the handler sets an atomic flag and the loop shuts down
+normally before returning 130.
 
 ### 1.2 Embedding library mode
 
@@ -99,8 +115,32 @@ int32_t stc_host_cycle(void);
 int32_t stc_host_shutdown(void);
 void* stc_host_symbol(const char* name);        /* exported module symbol registry */
 int32_t stc_host_export_manifest(char* buffer, int64_t* len);
-int32_t stc_host_run(stc_host_options* options); /* later phase */
+int32_t stc_host_run(const stc_host_options* options);
+
+typedef struct {
+    uint32_t struct_size;       /* sizeof(stc_host_options), or 0 */
+    uint32_t abi_version;       /* host ABI major (2), or 0 */
+    uint64_t cycles;            /* 0 = until interrupted or *stop */
+    int64_t  cycle_time_ns;     /* negative = no fixed cycle time */
+    int32_t  io_backend;        /* -1/0 null, 1 memory, 2 file (phase 5) */
+    int32_t  reset_retain;
+    int32_t  no_retain;
+    int32_t  status;            /* print the status summary at exit */
+    int64_t  mock_clock_ns;     /* negative = live clock */
+    const char* module_path;    /* null = run the already-loaded module */
+    const char* io_file;
+    const char* state_file;
+    const char* control_endpoint; /* reserved: M6 phase 8; must be null */
+    const int32_t* stop;        /* nonzero stops before the next scan */
+} stc_host_options;
 ```
+
+`stc_host_run` loads `module_path` cold when it is non-null and otherwise runs the module
+already loaded through `stc_host_load_module`. It shares one loop implementation with the
+launcher: the same latched clock, scheduler, cycle-time deadline, mock clock, status output, and
+0/1/2/3/4/130 exit codes. The control endpoint, I/O file image, and retained-state file are carried
+by the struct; the endpoint is rejected until phase 8 and the I/O/state paths take effect in
+phase 5.
 
 The generated module remains a separate loadable artifact; M4.5 emits the embedding host as a
 static library, and shared host libraries are M6. `stc_host_load_module` takes mode `0` (cold),
@@ -145,10 +185,14 @@ goes through the typed generation-pinned API, and the cycle thread is the only S
   from the first scan's time. Task state is host memory, not a manifest field or state-file
   content; guard roots are `TaskGuard` roots and are never retained.
 - The M4.5 one-task-per-resource restriction and its `--allow-multi-task` testing escape are
-  historical; M6 implements the scheduler above. Codegen keeps `STC-E-RUN-001/002` for genuinely
-  ambiguous or unsupported configurations, and the runtime uses `STC-E-RUN-003` for invalid run
-  options and runtime scheduling configuration. The HIR keeps the full task/program mapping, so
-  the schedule is checked in codegen and executed by the host.
+  historical; M6 phase 4 implements the scheduler above. Codegen keeps `STC-E-RUN-001/002` for
+  genuinely ambiguous or unsupported configurations, and the runtime uses `STC-E-RUN-003` for
+  invalid run options and runtime scheduling configuration. The HIR keeps the full task/program
+  mapping, so the schedule is checked in codegen and executed by the host.
+- **Status surface.** `Host::status()` reports the active, pending, and retired build IDs, the
+  active cycle count, the last rejection, activation warnings, and per-task
+  `due`/`completed`/`next_deadline_ns` state. The launcher prints it under `--status` (used by
+  `stc run -v`), and the M6 control channel consumes the same snapshot.
 
 ## 2. Runtime library
 

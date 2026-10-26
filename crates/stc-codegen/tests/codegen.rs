@@ -938,7 +938,7 @@ END_CONFIGURATION
 }
 
 #[test]
-fn single_tasks_run_through_a_first_cycle_guard() {
+fn single_tasks_are_guarded_without_a_generated_guard_clear() {
     let source = r#"
 PROGRAM A
 VAR x : DINT; END_VAR
@@ -968,32 +968,76 @@ END_CONFIGURATION
         .split("define dso_local dllexport i32 @stc_module_cycle(")
         .nth(1)
         .expect("cycle entry");
-    assert!(cycle.contains("store i8 %t"), "{cycle}");
+    // The host sets the guard before every scan; the cycle only reads it. The
+    // program bodies store DINT fields, so a guard store would be `store i8`.
+    assert!(cycle.contains("load i8"), "{cycle}");
+    assert!(!cycle.contains("store i8"), "{cycle}");
     assert_eq!(output.metadata.tasks.len(), 1);
     assert_eq!(output.metadata.tasks[0].single, Some(true));
     assert_eq!(output.metadata.tasks[0].priority, Some(1));
+    assert_eq!(output.got.manifest.tasks.len(), 1);
+    assert!(output.got.manifest.tasks[0].guard_got_id.is_some());
     verify_with_clang("single_task", &output.module);
 }
 
 #[test]
-fn multiple_tasks_per_resource_are_rejected() {
+fn multiple_tasks_per_resource_are_projected_with_schedules() {
     let source = r#"
-PROGRAM A
+PROGRAM P1
 VAR x : DINT; END_VAR
+  x := x + 1;
+END_PROGRAM
+PROGRAM P2
+VAR y : DINT; END_VAR
+  y := y + 1;
+END_PROGRAM
+PROGRAM P3
+VAR z : DINT; END_VAR
+  z := z + 1;
 END_PROGRAM
 CONFIGURATION Cfg
 RESOURCE R ON Cpu
-  TASK T1 (INTERVAL := T#1ms);
-  TASK T2 (INTERVAL := T#2ms);
-  PROGRAM inst WITH T1 : A;
+  TASK Low (INTERVAL := T#10ms, PRIORITY := 10);
+  TASK High (INTERVAL := T#1ms, PRIORITY := 1);
+  TASK Once (SINGLE := TRUE);
+  PROGRAM low WITH Low : P1;
+  PROGRAM high WITH High : P2;
+  PROGRAM once WITH Once : P3;
 END_RESOURCE
 END_CONFIGURATION
 "#;
-    let hir = clean_hir(source);
-    let sources = vec!["<test>".to_string()];
-    let errors = stc_codegen::generate(&hir, &options("test", Mode::Executable, &sources))
-        .expect_err("M4 supports one task per resource");
-    assert_eq!(errors[0].code(), "STC-E-RUN-001");
+    let output = generate(source, Mode::Executable);
+    assert_eq!(output.metadata.tasks.len(), 3);
+    assert_eq!(output.got.manifest.tasks.len(), 3);
+    let tasks = &output.got.manifest.tasks;
+    let task = |name: &str| {
+        tasks
+            .iter()
+            .find(|task| task.name == name)
+            .unwrap_or_else(|| panic!("task `{name}`"))
+    };
+    assert_eq!(task("LOW").interval_ns, Some(10_000_000));
+    assert_eq!(task("LOW").priority, Some(10));
+    assert_eq!(task("HIGH").interval_ns, Some(1_000_000));
+    assert_eq!(task("HIGH").priority, Some(1));
+    assert!(task("ONCE").single);
+    for task in tasks {
+        assert!(
+            task.guard_got_id.is_some(),
+            "task `{}` has no guard",
+            task.key
+        );
+    }
+    let cycle = output
+        .module
+        .split("define dso_local dllexport i32 @stc_module_cycle(")
+        .nth(1)
+        .expect("cycle entry");
+    // Every task-bound instance reads its guard, including non-SINGLE tasks,
+    // and no guard is cleared by generated code.
+    assert_eq!(cycle.matches("load i8").count(), 3, "{cycle}");
+    assert!(!cycle.contains("store i8"), "{cycle}");
+    verify_with_clang("multi_task", &output.module);
 }
 
 #[test]

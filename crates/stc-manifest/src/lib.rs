@@ -31,4 +31,5 @@ pub use model::{
     RetainSettings, RunSettings, RuntimeSettings, SourcePath, SyntaxMode, TestCase, TestSettings,
 };
 pub use parse::is_known_lint_code;
+pub use parse::parse_duration;
 pub use parse::{ParsedManifest, parse_manifest};

@@ -2198,3 +2198,122 @@ fn direct_variables_remap_across_a_real_online_change() {
         .expect("stale auto");
     assert!(outcome.is_cold_required());
 }
+
+const MULTI_TASK: &str = r#"
+VAR_GLOBAL
+  ORDER : DINT;
+  ET_HIGH : TIME;
+  ET_LOW : TIME;
+END_VAR
+
+PROGRAM Free
+  ORDER := ORDER * 10 + 1;
+END_PROGRAM
+PROGRAM HighA
+VAR
+  ton : TON;
+END_VAR
+  ORDER := ORDER * 10 + 2;
+  ton(IN := TRUE, PT := T#100ms);
+  ET_HIGH := ton.ET;
+END_PROGRAM
+PROGRAM LowB
+VAR
+  ton : TON;
+END_VAR
+  ORDER := ORDER * 10 + 3;
+  ton(IN := TRUE, PT := T#100ms);
+  ET_LOW := ton.ET;
+END_PROGRAM
+PROGRAM Timed
+  ORDER := ORDER * 10 + 4;
+END_PROGRAM
+PROGRAM Once
+  ORDER := ORDER * 10 + 5;
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  TASK Low (PRIORITY := 10);
+  TASK High (PRIORITY := 1);
+  TASK Tick (INTERVAL := T#10ms);
+  TASK OnceTask (SINGLE := TRUE);
+  PROGRAM low WITH Low : LowB;
+  PROGRAM high WITH High : HighA;
+  PROGRAM tick WITH Tick : Timed;
+  PROGRAM once WITH OnceTask : Once;
+  PROGRAM free : Free;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+fn root_got_id(manifest: &Manifest, key: &str) -> GotId {
+    manifest
+        .roots
+        .iter()
+        .find(|root| root.key == key)
+        .unwrap_or_else(|| panic!("root `{key}`"))
+        .got_id
+}
+
+fn read_i32_host(host: &stc_runtime::Host, manifest: &Manifest, key: &str) -> i32 {
+    let storage = host
+        .root_storage(root_got_id(manifest, key))
+        .expect("root storage");
+    i32::from_le_bytes(storage[..4].try_into().expect("four bytes"))
+}
+
+fn read_i64_host(host: &stc_runtime::Host, manifest: &Manifest, key: &str) -> i64 {
+    let storage = host
+        .root_storage(root_got_id(manifest, key))
+        .expect("root storage");
+    i64::from_le_bytes(storage[..8].try_into().expect("eight bytes"))
+}
+
+#[test]
+fn multi_task_scheduling_orders_due_work_and_latches_one_clock() {
+    use stc_runtime::{Candidate, Host, HostPlatform, LoadMode, LoadOutcome, ManifestStore};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("multi-task");
+    let source = directory.source("multi", MULTI_TASK);
+    build_ok(&directory, &source, "multi", &[]);
+    let manifest = directory.manifest("multi");
+
+    let platform = HostPlatform::new(
+        stc_runtime::PROFILE,
+        stc_codegen::resolve_target(Some(&stc_codegen::host_triple())),
+        stc_got::HOST_ABI_MAJOR,
+        stc_got::HOST_ABI_MINOR,
+    );
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    let candidate = Candidate::open(
+        &platform,
+        &directory.path.join(module_file(&directory, "multi")),
+        &directory.path.join("multi.stc-got.bin"),
+    )
+    .expect("candidate");
+    assert!(matches!(
+        host.load(candidate, LoadMode::Auto).expect("cold install"),
+        LoadOutcome::ColdInstalled { .. }
+    ));
+
+    // Unbound `free` runs first, then priority order High, Low, and SINGLE
+    // `Once`; the interval task is not due on the first scan.
+    host.cycle_at(0).expect("first scan");
+    assert_eq!(read_i32_host(&host, &manifest, "_ROOT::ORDER"), 1235);
+    assert_eq!(read_i64_host(&host, &manifest, "_ROOT::ET_HIGH"), 0);
+    assert_eq!(read_i64_host(&host, &manifest, "_ROOT::ET_LOW"), 0);
+
+    // At the interval deadline the timed task joins the same scan; both
+    // timers observe one latched cycle time, and `Once` never runs again.
+    host.cycle_at(10_000_000).expect("second scan");
+    assert_eq!(read_i32_host(&host, &manifest, "_ROOT::ORDER"), 12_351_234);
+    assert_eq!(
+        read_i64_host(&host, &manifest, "_ROOT::ET_HIGH"),
+        10_000_000
+    );
+    assert_eq!(read_i64_host(&host, &manifest, "_ROOT::ET_LOW"), 10_000_000);
+}

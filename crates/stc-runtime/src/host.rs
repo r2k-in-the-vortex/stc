@@ -41,6 +41,7 @@ use crate::loader::LoadedModule;
 use crate::memory::{MemoryLimits, RootRegistry};
 use crate::migration::{self, PlanDecision, validate_plan};
 use crate::module_info::ModuleInfo;
+use crate::scheduler::{TaskScheduler, TaskStatus};
 use crate::store::{
     Deployment, Download, LayoutState, ManifestStore, RuntimeLayout, RuntimeLayoutEntry,
     StoredManifest,
@@ -414,6 +415,7 @@ struct Pending {
     descriptors: PreparedDescriptors,
     image: Option<PendingImage>,
     warnings: Vec<HostWarning>,
+    scheduler: TaskScheduler,
 }
 
 struct Rollback {
@@ -422,6 +424,27 @@ struct Rollback {
     descriptors: DescriptorActivation,
     successful_cycles: u64,
     image: Option<ImageRollback>,
+    scheduler: TaskScheduler,
+}
+
+/// A host status snapshot for verbose runs and the control channel
+/// (M6-Plan §14.5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostStatus {
+    /// Active generation build, when one is installed.
+    pub active_build_id: Option<GotId>,
+    /// Prepared candidate build awaiting activation.
+    pub pending_build_id: Option<GotId>,
+    /// Retired generation builds still resident.
+    pub retired_build_ids: Vec<GotId>,
+    /// Cycles completed by the active generation.
+    pub cycles: u64,
+    /// Why the latest load request was rejected or required a cold download.
+    pub last_rejection: Option<String>,
+    /// Non-fatal diagnostics from the latest activation.
+    pub warnings: Vec<HostWarning>,
+    /// Per-task schedule state.
+    pub tasks: Vec<TaskStatus>,
 }
 
 /// A value-free comparison of a candidate against the committed baseline.
@@ -457,6 +480,8 @@ pub struct Host {
     last_rollback: Option<String>,
     last_candidate: Option<u64>,
     last_warnings: Vec<HostWarning>,
+    last_rejection: Option<String>,
+    scheduler: TaskScheduler,
 }
 
 impl Host {
@@ -482,6 +507,8 @@ impl Host {
             last_rollback: None,
             last_candidate: None,
             last_warnings: Vec::new(),
+            last_rejection: None,
+            scheduler: TaskScheduler::default(),
         }
     }
 
@@ -541,6 +568,39 @@ impl Host {
     #[must_use]
     pub fn warnings(&self) -> &[HostWarning] {
         &self.last_warnings
+    }
+
+    /// Returns a status snapshot for verbose runs and the control channel.
+    #[must_use]
+    pub fn status(&self) -> HostStatus {
+        HostStatus {
+            active_build_id: self
+                .active
+                .as_ref()
+                .map(|generation| generation.manifest.header.build_id),
+            pending_build_id: self
+                .pending
+                .as_ref()
+                .map(|pending| pending.generation.manifest.header.build_id),
+            retired_build_ids: self
+                .retired
+                .iter()
+                .map(|generation| generation.manifest.header.build_id)
+                .collect(),
+            cycles: self
+                .active
+                .as_ref()
+                .map_or(0, |generation| generation.cycles),
+            last_rejection: self.last_rejection.clone(),
+            warnings: self.last_warnings.clone(),
+            tasks: self.scheduler.status(),
+        }
+    }
+
+    /// Returns the per-task schedule state.
+    #[must_use]
+    pub fn task_status(&self) -> Vec<TaskStatus> {
+        self.scheduler.status()
     }
 
     /// Releases every quarantined root's storage.
@@ -916,6 +976,23 @@ impl Host {
     /// preparation failure, or a manifest-store write failure. Every failure
     /// leaves the active generation and committed baseline intact.
     pub fn load(&mut self, candidate: Candidate, mode: LoadMode) -> Result<LoadOutcome> {
+        let result = self.load_inner(candidate, mode);
+        match &result {
+            Ok(LoadOutcome::ColdRequired { reason }) => {
+                self.last_rejection = Some(reason.clone());
+            }
+            Ok(_) => self.last_rejection = None,
+            Err(error) => {
+                self.last_rejection = Some(format!("{}: {}", error.code, error.message));
+            }
+        }
+        result
+    }
+
+    fn load_inner(&mut self, candidate: Candidate, mode: LoadMode) -> Result<LoadOutcome> {
+        // Reject a scheduling configuration the host cannot run before any
+        // host state changes: every task needs a host-owned guard root.
+        TaskScheduler::from_manifest(candidate.manifest())?;
         migration::validate_deployable(candidate.manifest())?;
         validate_direct_metadata(
             candidate.manifest(),
@@ -1063,6 +1140,7 @@ impl Host {
             None => self.direct_bindings.clone(),
         };
         let manifest = candidate.manifest().clone();
+        let scheduler = self.scheduler.reconcile(&manifest)?;
         let live = live_descriptor_types(&manifest)?;
         let generation_id = allocate_generation();
         self.last_candidate = Some(generation_id);
@@ -1182,6 +1260,7 @@ impl Host {
                     descriptors,
                     image: image_plan,
                     warnings,
+                    scheduler,
                 });
                 Ok(LoadOutcome::Prepared {
                     generation: generation_id,
@@ -1205,7 +1284,7 @@ impl Host {
         let image = candidate.info().map(|_| crate::image_snapshot());
         let generation_id = allocate_generation();
         self.last_candidate = Some(generation_id);
-        let prepared = (|| -> Result<(Generation, RootRegistry, DescriptorRegistry, PreparedDescriptors)> {
+        let prepared = (|| -> Result<(Generation, RootRegistry, DescriptorRegistry, PreparedDescriptors, TaskScheduler)> {
             if let Some(info) = candidate.info() {
                 self.apply_info(info)?;
             }
@@ -1230,11 +1309,12 @@ impl Host {
                 &mut descriptors,
                 &BTreeSet::new(),
             )?;
+            let scheduler = TaskScheduler::from_manifest(&generation.manifest)?;
             let stored = StoredManifest::new(generation.manifest.clone())?;
             self.store.install(stored)?;
-            Ok((generation, roots, descriptors, prepared))
+            Ok((generation, roots, descriptors, prepared, scheduler))
         })();
-        let (generation, roots, mut descriptors, prepared) = match prepared {
+        let (generation, roots, mut descriptors, prepared, scheduler) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 if let Some(image) = image {
@@ -1264,6 +1344,7 @@ impl Host {
         }
         self.roots = roots;
         self.active = Some(generation);
+        self.scheduler = scheduler;
         self.last_rollback = None;
         self.last_warnings.clear();
         // Retired generations still hold descriptor cell addresses from the
@@ -1464,6 +1545,7 @@ impl Host {
             descriptors,
             image: _,
             warnings,
+            scheduler,
         } = pending;
         let generation = new_generation.id;
         let descriptor_activation = self.descriptors.activate(descriptors);
@@ -1473,6 +1555,7 @@ impl Host {
             descriptors: descriptor_activation,
             successful_cycles: 0,
             image: image_rollback,
+            scheduler: std::mem::replace(&mut self.scheduler, scheduler),
         });
         self.active = Some(new_generation);
         self.last_warnings = warnings;
@@ -1500,7 +1583,7 @@ impl Host {
         }
     }
 
-    /// Runs one cycle of the active generation.
+    /// Runs one cycle of the active generation at the latched clock time.
     ///
     /// During the rollback window, a failed cycle restores the previous
     /// generation and returns [`CycleOutcome::RolledBack`]. A successful cycle
@@ -1511,11 +1594,32 @@ impl Host {
     /// Rejects a call with no active generation or a cycle failure outside a
     /// rollback window.
     pub fn cycle(&mut self) -> Result<CycleOutcome> {
-        let Some(generation) = self.active.as_ref() else {
+        let now = crate::latch_cycle_clock();
+        self.cycle_at(now)
+    }
+
+    /// Runs one cycle with an explicit scan time.
+    ///
+    /// Embedding hosts that own the loop use this to supply the mock clock's
+    /// next value. The value becomes the latched `cycle_now_ns` the module
+    /// reads, and the task scheduler uses the same value.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a call with no active generation or a cycle failure outside a
+    /// rollback window.
+    pub fn cycle_at(&mut self, now_ns: i64) -> Result<CycleOutcome> {
+        crate::set_cycle_now(now_ns);
+        let Some(generation_id) = self.active.as_ref().map(|generation| generation.id) else {
             return Err(prepare_error("no active generation"));
         };
-        let generation_id = generation.id;
+        self.scheduler.begin_scan(now_ns);
+        if let Err(error) = self.write_task_guards() {
+            self.scheduler.finish_scan(false);
+            return Err(error);
+        }
         let outcome = {
+            let generation = self.active.as_ref().expect("checked above");
             let _guard = host_api::enter_generation(generation_id);
             let outcome =
                 crate::trap_boundary::with_boundary(|| generation.module.cycle(generation_id));
@@ -1526,6 +1630,7 @@ impl Host {
         let code = match outcome {
             Ok(code) => code,
             Err(trap) => {
+                self.scheduler.finish_scan(false);
                 let reason = format!(
                     "module trapped during cycle (code {} at span {})",
                     trap.code, trap.span_id
@@ -1538,6 +1643,7 @@ impl Host {
             }
         };
         if code != 0 || !faults.is_empty() {
+            self.scheduler.finish_scan(false);
             let reason = if faults.is_empty() {
                 format!("stc_module_cycle returned {code}")
             } else {
@@ -1549,6 +1655,7 @@ impl Host {
             }
             return Err(Error::new(codes::ONLINE_PREPARE, reason));
         }
+        self.scheduler.finish_scan(true);
         if let Some(active) = self.active.as_mut() {
             active.cycles = active.cycles.saturating_add(1);
         }
@@ -1566,6 +1673,27 @@ impl Host {
         Ok(CycleOutcome::Ran {
             generation: generation_id,
         })
+    }
+
+    /// Writes every task's guard root for the scan prepared by the scheduler.
+    fn write_task_guards(&mut self) -> Result<()> {
+        let guards: Vec<(GotId, bool)> = self.scheduler.guards().collect();
+        for (got_id, due) in guards {
+            let Some(root) = self.roots.get_mut(got_id) else {
+                return Err(Error::new(
+                    codes::RUN_OPTION,
+                    format!("task-guard root {} is not active", got_id.to_hex()),
+                ));
+            };
+            let Some(slot) = root.storage_mut().first_mut() else {
+                return Err(Error::new(
+                    codes::RUN_OPTION,
+                    format!("task-guard root {} has no storage", got_id.to_hex()),
+                ));
+            };
+            *slot = u8::from(due);
+        }
+        Ok(())
     }
 
     /// Commits the active generation after its rollback window.
@@ -1637,10 +1765,12 @@ impl Host {
             undo,
             descriptors,
             image,
+            scheduler,
             ..
         } = rollback;
         let restored = restored_generation.id;
         self.active = Some(restored_generation);
+        self.scheduler = scheduler;
         if let Some(image) = image {
             image::restore(&image.snapshot);
             self.direct_bindings = image.bindings;

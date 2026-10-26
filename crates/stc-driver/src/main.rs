@@ -1,11 +1,10 @@
 //! The `stc` command-line driver.
 //!
 //! M6 phase 3 implements `new`, `check`, `build`, `clean`, `metadata`, and
-//! `compliance`, plus the manifest-free `parse`/`check`/`build` bridge. The
-//! remaining M6 verbs are parsed and validated; their workflows land in later
-//! phases. The driver owns the exit-code contract, human/JSON/short
-//! diagnostics, colors, lint levels, and the panic boundary from
-//! CLI-and-Manifest §1.3–§1.4.
+//! `compliance`; phase 4 adds `run`. The remaining M6 verbs are parsed and
+//! validated; their workflows land in later phases. The driver owns the
+//! exit-code contract, human/JSON/short diagnostics, colors, lint levels, and
+//! the panic boundary from CLI-and-Manifest §1.3–§1.4.
 
 #![forbid(unsafe_code)]
 
@@ -17,6 +16,7 @@ mod metadata;
 mod new;
 mod project;
 mod report;
+mod run;
 
 use std::any::Any;
 use std::ffi::OsString;
@@ -120,8 +120,16 @@ fn run(args: &[String]) -> ExitCode {
             log,
         ),
         Command::Compliance => compliance::run(invocation.format),
-        Command::Run
-        | Command::Test
+        Command::Run if invocation.watch => not_implemented(invocation.command, invocation.watch),
+        Command::Run => project::run(
+            Mode::Run,
+            invocation.manifest.as_deref(),
+            invocation.locked,
+            &invocation.build,
+            &mut reporter,
+            log,
+        ),
+        Command::Test
         | Command::Fmt
         | Command::OnlineDownload
         | Command::OnlineDiff
@@ -288,10 +296,9 @@ fn run_files(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
     }
 }
 
-fn not_implemented(command: Command, watch: bool) -> u8 {
+fn not_implemented(command: Command, _watch: bool) -> u8 {
     let (name, phase) = match command {
-        Command::Run if watch => ("stc run --watch", "phase 8"),
-        Command::Run => ("stc run", "phase 4"),
+        Command::Run => ("stc run --watch", "phase 8"),
         Command::Test => ("stc test", "phase 6"),
         Command::Fmt => ("stc fmt", "phase 7"),
         Command::OnlineDownload | Command::OnlineDiff => ("stc online", "phase 8"),

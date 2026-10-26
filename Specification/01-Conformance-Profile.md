@@ -68,8 +68,9 @@ once and roll back, and vtable-shape changes are rejected against an active base
 identity comparison and references to split aggregate values remain explicit diagnostics;
 pointer-to-object/interface conversions and `ADR` of objects stay rejected. The transient
 `STC-POINTER` extension is implemented. The
-manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; full task
-scheduling is M6 (M5 keeps one task per resource). `stc check <file>...` analyzes one in-memory
+manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; M6 phase 4
+implements cooperative multi-task scheduling (priorities, intervals, `SINGLE`, task guards, and
+host-owned run state). `stc check <file>...` analyzes one in-memory
 package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
 surface. Unsupported constructs are rejected with the diagnostics in
 [Grammar](Syntax/Grammar.md) §13 or `STC-E-CODEGEN-001` rather than silently accepted.
@@ -159,7 +160,7 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | THIS / SUPER | Implemented |
 | Assignment attempt (`?=`) | Implemented |
 | NAMESPACE / USING / qualified names | Implemented |
-| Configuration/resource/task/program configuration | Parsed and analysed; single-task execution in v1 |
+| Configuration/resource/task/program configuration | Parsed and analysed; cooperative multi-task scheduling implemented (M6 phase 4) |
 | VAR_ACCESS | Parsed; runtime binding staged |
 | Standard functions | Implemented (see §6) |
 | Standard function blocks | Implemented in ST stdlib (TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS) |

@@ -1807,6 +1807,8 @@ impl Context<'_> {
                 name: Symbol::new(u32::MAX),
                 name_text: SYNTHETIC_NAME.to_owned(),
                 resource: SYNTHETIC_NAME.to_owned(),
+                resource_index: 0,
+                task_index: 0,
                 single: Some(false),
                 interval_ns: None,
                 priority: None,

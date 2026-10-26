@@ -11,21 +11,18 @@ output goes to stdout.
 
 ### 1.1 Commands
 
-> **M4.5 status:** `stc parse <file>`, `stc check <file>...`, and the manifest-free
-> `stc build <file>...` bridge are implemented. `parse` is single-file and syntax-only; `check`
-> analyzes one or more files as one in-memory package; `build` emits `ir`, `obj`, `module`,
-> `exe`, `lib`, or `metadata` and accepts `--name`, `--emit`, `--out-dir`, `--target`,
-> `--clang`, `--runtime`, `--got-manifest`, `--cold`, `--rename`,
-> `--allow-untracked-removal`, `--relaxed`, `--message-format`, and `-v`. Semantic analysis is
-> skipped when parsing produced errors (D-070). `--message-format` supports `human` and `json`
-> (not `short`). Exit codes 0/1/2/3 follow §1.3; codegen-internal failures use 3. The project
-> manifest, `stc run`/`test`/`fmt`/`clean`/`metadata`/`compliance`, shared libraries, and the
-> user-facing `stc online` commands remain the v1 target and arrive in later milestones
-> (D-051, D-079, M6). M4.5 emits the loadable `module` with its binary/JSON manifest and
-> metadata, the thin `exe` launcher that loads the adjacent module pair, and the embedding `lib`
-> host archive; `exe` and `lib` may be emitted together, and the generated module stays separate
-> from both host artifacts. `--debug`/`--release` and their debug-info behavior are M6.5; M4.5
-> builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks.
+> **M6 phase 4 status (2026-10-26):** `stc new`, `check`, `build`, `run`, `clean`, `metadata`, and
+> `compliance` are implemented on `stc.toml` projects; the manifest-free `stc parse <file>`,
+> `stc check <file>...`, and `stc build <file>...` bridge is unchanged. `stc run` builds
+> `exe,module,metadata`, applies `[run]` defaults and the `--cycles`/`--cycle-time`/`--io`/
+> `--io-file`/`--state-file`/`--reset-retain`/`--no-retain` overrides, starts the launcher, and
+> returns its exit code. The I/O and retained-state backends behind those options arrive in phase
+> 5; the options are parsed and carried now. `stc test`, `fmt`, `online`, `rename`, and
+> `run --watch` remain later phases. `--message-format` supports `human`, `json`, and `short`;
+> exit codes follow §1.3 (a `stc run` trap exits 4, an interrupt 130). The loadable `module` with
+> its binary/JSON manifest and metadata, the thin `exe` launcher, and the embedding `lib` host
+> archive keep their M4.5 shapes. `--debug`/`--release` and their debug-info behavior are M6.5;
+> M6 builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks.
 
 | Command | Purpose |
 | --- | --- |
@@ -80,11 +77,12 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LOG`) >
 `stc.toml` > built-in defaults.
 
-The table describes the v1 target surface. M4.5 accepts the options listed in the status note
-above; `--manifest-path`, `--release`/`--debug`, `--io`/`--io-file`, `--state-file`,
-`--reset-retain`, `--no-retain`, `--debug-protocol`, `--color`, `-q`, `-D`/`-W`/`-A`,
-`--deny warnings`, `-vv`, and `--locked` are accepted only when their command or milestone
-lands (M6, except `--debug`/`--release` in M6.5).
+The table describes the v1 target surface. M6 phase 4 accepts `--manifest-path`, `--locked`,
+`--color`, `-q`, `-D`/`-W`/`-A`, `--deny warnings`, `-v`/`-vv`, `--debug`, and, for `stc run`,
+`--cycles`, `--cycle-time`, `--io`, `--io-file`, `--state-file`, `--reset-retain`, and
+`--no-retain`. The phase-5 I/O and retained-state behavior behind the last five options is not
+implemented yet. `--release`, `--debug-protocol`, and `run --watch` remain later milestones
+(`--release`/debug information in M6.5; the control channel in phase 8).
 
 ### 1.3 Exit codes
 

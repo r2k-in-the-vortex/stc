@@ -25,6 +25,10 @@ pub(crate) struct PlanTask {
     pub name_text: String,
     /// Resource name.
     pub resource: String,
+    /// Resource declaration index.
+    pub resource_index: usize,
+    /// Task declaration index within the resource.
+    pub task_index: usize,
     /// Folded `SINGLE`.
     pub single: Option<bool>,
     /// Folded interval.
@@ -69,6 +73,53 @@ pub(crate) struct Plan {
     pub programs: Vec<DefId>,
     /// Configuration-level `VAR_CONFIG` entries.
     pub config_inits: Vec<stc_hir::ConfigInitHir>,
+}
+
+impl Plan {
+    /// Returns instance indices in generated-cycle order (D-154, Runtime §1.3).
+    ///
+    /// Task-less instances run first in declaration order. Task-bound instances
+    /// follow in scheduler rank order: explicit priorities ascending, then
+    /// tasks without a priority, ties by resource declaration order then task
+    /// declaration order, and program declaration order within a task.
+    pub(crate) fn cycle_instances(&self) -> Vec<usize> {
+        let mut order = Vec::with_capacity(self.instances.len());
+        let mut seen = vec![false; self.instances.len()];
+        for (index, instance) in self.instances.iter().enumerate() {
+            if instance.task.is_none() {
+                order.push(index);
+                seen[index] = true;
+            }
+        }
+        let mut tasks: Vec<&PlanTask> = self.tasks.iter().collect();
+        tasks.sort_by_key(|task| {
+            (
+                task.priority.is_none(),
+                task.priority.unwrap_or(0),
+                task.resource_index,
+                task.task_index,
+            )
+        });
+        for task in tasks {
+            for (index, instance) in self.instances.iter().enumerate() {
+                if !seen[index]
+                    && instance.task == Some(task.name)
+                    && instance.resource == task.resource
+                {
+                    order.push(index);
+                    seen[index] = true;
+                }
+            }
+        }
+        // A task-bound instance always names a declared task; keep any
+        // unmatched instance reachable rather than silently dropping it.
+        for (index, visited) in seen.into_iter().enumerate() {
+            if !visited {
+                order.push(index);
+            }
+        }
+        order
+    }
 }
 
 /// One persistent leaf of a program type.
@@ -360,18 +411,16 @@ pub(crate) fn select_plan(hir: &HirCrate) -> Result<Plan, Vec<CodegenError>> {
     let mut instances = Vec::new();
     let mut tasks = Vec::new();
     let mut programs = BTreeSet::new();
-    for resource in &config.resources {
+    for (resource_index, resource) in config.resources.iter().enumerate() {
         let resource_name = hir.interner.text(resource.name).to_string();
-        if resource.tasks.len() > 1 {
-            let span = resource.tasks[1].span;
-            errors.push(CodegenError::unsupported(
-                codes::RUN_TASK,
-                "M4 executes at most one task per resource; task scheduling is M5".into(),
-                span,
+        for (task_index, task) in resource.tasks.iter().enumerate() {
+            tasks.push(plan_task(
+                hir,
+                &resource_name,
+                resource_index,
+                task_index,
+                task,
             ));
-        }
-        for task in &resource.tasks {
-            tasks.push(plan_task(hir, &resource_name, task));
         }
         for program in &resource.programs {
             if !matches!(
@@ -415,11 +464,19 @@ pub(crate) fn select_plan(hir: &HirCrate) -> Result<Plan, Vec<CodegenError>> {
     })
 }
 
-fn plan_task(hir: &HirCrate, resource: &str, task: &TaskHir) -> PlanTask {
+fn plan_task(
+    hir: &HirCrate,
+    resource: &str,
+    resource_index: usize,
+    task_index: usize,
+    task: &TaskHir,
+) -> PlanTask {
     PlanTask {
         name: task.name,
         name_text: hir.interner.text(task.name).to_string(),
         resource: resource.into(),
+        resource_index,
+        task_index,
         single: task.single_value,
         interval_ns: task.interval_ns,
         priority: task.priority_value,
@@ -976,4 +1033,86 @@ fn retain_path(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(
+        name: u32,
+        resource: &str,
+        resource_index: usize,
+        task_index: usize,
+        priority: Option<i128>,
+    ) -> PlanTask {
+        PlanTask {
+            name: Symbol::new(name),
+            name_text: format!("T{name}"),
+            resource: resource.into(),
+            resource_index,
+            task_index,
+            single: None,
+            interval_ns: None,
+            priority,
+            span: Span::empty(stc_span::FileId::new(0), 0),
+        }
+    }
+
+    fn instance(name: u32, resource: &str, task: Option<u32>) -> PlanInstance {
+        PlanInstance {
+            name: Symbol::new(name),
+            name_text: format!("P{name}"),
+            program: DefId::new(0),
+            resource: resource.into(),
+            task: task.map(Symbol::new),
+            bindings: Vec::new(),
+            global: format!("p{name}"),
+            span: Span::empty(stc_span::FileId::new(0), 0),
+        }
+    }
+
+    #[test]
+    fn cycle_order_is_unguarded_then_priority_rank() {
+        let plan = Plan {
+            configuration: Some("C".into()),
+            instances: vec![
+                instance(1, "R", Some(10)),
+                instance(2, "R", None),
+                instance(3, "R", Some(11)),
+                instance(4, "R", Some(12)),
+                instance(5, "R", Some(10)),
+            ],
+            tasks: vec![
+                // Declaration order is Low, None, High; priority rank is High,
+                // Low, None.
+                task(10, "R", 0, 0, Some(10)),
+                task(11, "R", 0, 1, None),
+                task(12, "R", 0, 2, Some(1)),
+            ],
+            programs: Vec::new(),
+            config_inits: Vec::new(),
+        };
+        assert_eq!(plan.cycle_instances(), vec![1, 3, 0, 4, 2]);
+    }
+
+    #[test]
+    fn cycle_order_ties_follow_resource_then_task_declaration() {
+        let plan = Plan {
+            configuration: Some("C".into()),
+            instances: vec![
+                instance(1, "R2", Some(20)),
+                instance(2, "R1", Some(10)),
+                instance(3, "R2", Some(21)),
+            ],
+            tasks: vec![
+                task(10, "R1", 0, 0, Some(1)),
+                task(20, "R2", 1, 0, Some(1)),
+                task(21, "R2", 1, 1, Some(1)),
+            ],
+            programs: Vec::new(),
+            config_inits: Vec::new(),
+        };
+        assert_eq!(plan.cycle_instances(), vec![1, 0, 2]);
+    }
 }

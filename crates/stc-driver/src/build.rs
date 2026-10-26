@@ -54,6 +54,25 @@ impl From<EmitKind> for Emit {
     }
 }
 
+/// Parsed `stc run` options and overrides.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RunRequest {
+    /// `--cycles`; `None` uses `[run].cycles`.
+    pub cycles: Option<u64>,
+    /// `--cycle-time`; `None` uses `[run].cycle-time`.
+    pub cycle_time_ns: Option<u64>,
+    /// `--io`.
+    pub io: Option<String>,
+    /// `--io-file`.
+    pub io_file: Option<String>,
+    /// `--state-file`.
+    pub state_file: Option<String>,
+    /// `--reset-retain`.
+    pub reset_retain: bool,
+    /// `--no-retain`.
+    pub no_retain: bool,
+}
+
 /// Parsed project build settings and CLI overrides.
 #[derive(Clone, Debug)]
 pub(crate) struct Request {
@@ -91,6 +110,8 @@ pub(crate) struct Request {
     pub manifest_clang: Option<String>,
     /// `[build].runtime`.
     pub manifest_runtime: Option<String>,
+    /// `stc run` options.
+    pub run: RunRequest,
 }
 
 impl Default for Request {
@@ -113,6 +134,7 @@ impl Default for Request {
             manifest_target: None,
             manifest_clang: None,
             manifest_runtime: None,
+            run: RunRequest::default(),
         }
     }
 }
@@ -695,6 +717,12 @@ fn exe_name(name: &str) -> String {
     } else {
         name.into()
     }
+}
+
+/// Returns the launcher path for a project artifact name and output directory.
+#[must_use]
+pub(crate) fn launcher_path(out_dir: &Path, name: &str) -> PathBuf {
+    out_dir.join(exe_name(name))
 }
 
 fn lib_name(name: &str, lib_type: LibType) -> String {

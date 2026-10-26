@@ -384,7 +384,7 @@ END_CONFIGURATION
 fn executable_runs_a_no_op_cycle() {
     let directory = TestDir::new("noop");
     build_executable(&directory, "noop", "noop");
-    for cycles in ["0", "3"] {
+    for cycles in ["1", "3"] {
         let output = Command::new(exe_path(&directory.path, "noop"))
             .args(["--cycles", cycles])
             .output()
@@ -403,6 +403,16 @@ fn executable_runs_a_no_op_cycle() {
             .expect("run executable");
         assert_eq!(output.status.code(), Some(2), "{argument} was accepted");
     }
+    let invalid = Command::new(exe_path(&directory.path, "noop"))
+        .args(["--cycles", "forever"])
+        .output()
+        .expect("run executable");
+    assert_eq!(invalid.status.code(), Some(2));
+    let invalid_io = Command::new(exe_path(&directory.path, "noop"))
+        .args(["--io", "disk"])
+        .output()
+        .expect("run executable");
+    assert_eq!(invalid_io.status.code(), Some(2));
 }
 
 #[test]
@@ -426,7 +436,7 @@ fn traps_are_fatal_and_reported() {
             .args(["--cycles", "1"])
             .output()
             .expect("run executable");
-        assert_eq!(output.status.code(), Some(70), "{source} did not trap");
+        assert_eq!(output.status.code(), Some(4), "{source} did not trap");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(needle), "{source}: {stderr}");
     }

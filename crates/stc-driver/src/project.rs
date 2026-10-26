@@ -5,6 +5,7 @@
 //! manifest; passing input files keeps the explicit manifest-free bridge in
 //! `main.rs`/`build.rs`.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use stc_diag::DiagnosticSink;
@@ -27,6 +28,8 @@ pub(crate) enum Mode {
     Build,
     /// Generate and print the metadata summary.
     Metadata,
+    /// Build the launcher, run it, and return its exit code.
+    Run,
 }
 
 struct SourceEntry {
@@ -190,6 +193,12 @@ pub(crate) fn run(
             .map(Emit::from)
             .collect();
     }
+    if mode == Mode::Run {
+        // `stc run` always builds the launcher pair and its metadata.
+        request.emit = [Emit::Exe, Emit::Module, Emit::Metadata]
+            .into_iter()
+            .collect();
+    }
     if request.emit.is_empty() {
         request.emit.insert(Emit::Module);
     }
@@ -231,7 +240,7 @@ pub(crate) fn run(
     };
 
     match mode {
-        Mode::Build => {
+        Mode::Build | Mode::Run => {
             let code = build::run_project(
                 &request,
                 &analysis.hir,
@@ -250,6 +259,25 @@ pub(crate) fn run(
             let code = diagnostic_exit(&diagnostics);
             if code != 0 {
                 return code;
+            }
+            if reporter.denied() {
+                return 1;
+            }
+            if mode == Mode::Run {
+                let out_dir = request
+                    .out_dir
+                    .clone()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("target/stc/debug"));
+                let launcher = build::launcher_path(&out_dir, &name);
+                return crate::run::launch(
+                    &launcher,
+                    &request.run,
+                    &root.manifest,
+                    &root.root_dir,
+                    reporter,
+                    log,
+                );
             }
         }
         Mode::Metadata => {

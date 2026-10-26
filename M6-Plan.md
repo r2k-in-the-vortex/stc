@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–3 complete (2026-10-26); phases 4–11 ready to start. M5 (phases 1–7 and 4b) is
+Status: Phases 0–4 complete (2026-10-26); phases 5–11 ready to start. M5 (phases 1–7 and 4b) is
 complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
 usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
@@ -178,7 +178,7 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0–3 are complete (2026-10-26); phases 4–11 are pending. Phase 0 fixed
+Phase status: phases 0–4 are complete (2026-10-26); phases 5–11 are pending. Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
 resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
@@ -187,7 +187,10 @@ identities in codegen/GOT artifacts and source fingerprints; the driver now comp
 projects. Phase 3 added the project CLI (`new`/`check`/`build`/`clean`/`metadata`/`compliance`),
 manifest build settings and toolchain precedence, human/short/JSON diagnostics with colors and
 lint levels, verbose phase timings, shared host libraries, and the baseline compatibility
-summary; the later verbs are parsed but return a usage error until their phase. Phases may
+summary; the later verbs are parsed but return a usage error until their phase. Phase 4 removed
+the one-task-per-resource restriction, added the cooperative host scheduler and guarded cycle,
+the rewritten launcher loop with mock clocks and stop signals, `stc run`, `stc_host_run`, and
+the host status surface. Phases may
 proceed in parallel only where the dependency direction allows (for example, Lean and the
 conformance harness can start once phase 0 fixes the vector and corpus contracts).
 
@@ -355,7 +358,7 @@ compatibility verdict, counts, warnings, and (with `-v`) per-record actions.
 Acceptance: `stc new/build/check/clean/metadata/compliance` work end-to-end on Windows; the
 manifest-free bridge still passes its existing tests.
 
-### Phase 4 — Configurations, tasks, and `stc run`
+### Phase 4 — Configurations, tasks, and `stc run` (complete 2026-10-26)
 
 - Remove the one-task-per-resource restriction in `stc-codegen::config`; project every task with
   its interval/priority/`SINGLE` and guard identity. Update the conformance profile and runtime
@@ -390,6 +393,27 @@ manifest-free bridge still passes its existing tests.
 Tests: multi-task ordering/priorities/intervals/`SINGLE`, latched clock for timers across tasks,
 task guard preservation across a warm swap, cold reset, run-loop cycle/timeout/signal/exit codes,
 mock clock, and `[run]` defaults.
+
+Status (2026-10-26): implemented. `stc-codegen::config` projects every task with its
+interval/priority/`SINGLE`/guard identity, removes the one-task-per-resource restriction, and
+orders the generated cycle with task-less instances first and task-bound instances in scheduler
+rank order (priority, resource/task declaration, then program declaration). The generated
+`stc_module_cycle` reads every task-bound instance's guard in that order and never initializes or
+clears a guard. The new `stc-runtime::scheduler` owns task state keyed by task `GotId` (interval
+deadline, `SINGLE` completion), reconciles it across compatible swaps, resets it on cold installs,
+and writes each `TaskGuard` value before every scan; `Host::cycle_at` runs one scan at an explicit
+latched time, and `Host::status` exposes active/pending/retired builds, cycles, last rejection,
+warnings, and per-task due/completed/deadline state. `Host::load` rejects a task without a guard
+as `STC-E-RUN-003`; a changed task schedule is rejected or requires a cold download. The shared
+`run` module drives both the rewritten launcher and `stc_host_run`: `--cycles` (absent or `0`
+runs until interrupted), `--cycle-time`, `--io`, `--io-file`, `--state-file`, `--reset-retain`,
+`--no-retain`, `--mock-clock`, `--status`, and `--module`; it sleeps to the cycle deadline, runs
+mock-clock scans without sleeping, installs Ctrl-C/Ctrl-Break handlers, and returns
+0/1/2/3/4/130 (a trap maps to 4; raw `stc_rt_trap` keeps 70 outside a host boundary). `stc run`
+builds `exe,module,metadata`, resolves `[run]` defaults and CLI overrides, starts the launcher,
+and returns its exit code. `stc_host_run` and `stc_host_options` add the embedding surface; the
+control endpoint is reserved for phase 8, and the I/O and retained-state paths are carried for
+phase 5. `--trace` remains a clear runtime option error.
 
 Acceptance: `stc run` executes a multi-task configuration deterministically on Windows; existing
 single-task tests keep passing.

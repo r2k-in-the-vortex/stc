@@ -1,7 +1,8 @@
 //! Command-line parsing for the driver.
 //!
-//! The parser recognizes the full M6 command surface; commands whose workflow
-//! lands in a later phase (run/test/fmt/online/rename) are parsed and
+//! The parser recognizes the full M6 command surface. `new`/`check`/`build`/
+//! `run`/`clean`/`metadata`/`compliance` are implemented; commands whose
+//! workflow lands in a later phase (test/fmt/online/rename) are parsed and
 //! validated now, then reported as not yet implemented by the dispatcher.
 
 use stc_manifest::LintLevel;
@@ -241,6 +242,42 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
                     .renames
                     .push(parse_rename(&other["--rename=".len()..])?);
             }
+            "--cycles" => {
+                build.run.cycles = Some(parse_cycles(&next_value(args, &mut index, "--cycles")?)?);
+            }
+            other if other.starts_with("--cycles=") => {
+                build.run.cycles = Some(parse_cycles(&other["--cycles=".len()..])?);
+            }
+            "--cycle-time" => {
+                build.run.cycle_time_ns = Some(parse_cycle_time(&next_value(
+                    args,
+                    &mut index,
+                    "--cycle-time",
+                )?)?);
+            }
+            other if other.starts_with("--cycle-time=") => {
+                build.run.cycle_time_ns = Some(parse_cycle_time(&other["--cycle-time=".len()..])?);
+            }
+            "--io" => {
+                build.run.io = Some(parse_io(&next_value(args, &mut index, "--io")?)?);
+            }
+            other if other.starts_with("--io=") => {
+                build.run.io = Some(parse_io(&other["--io=".len()..])?);
+            }
+            "--io-file" => {
+                build.run.io_file = Some(next_value(args, &mut index, "--io-file")?);
+            }
+            other if other.starts_with("--io-file=") => {
+                build.run.io_file = Some(other["--io-file=".len()..].to_owned());
+            }
+            "--state-file" => {
+                build.run.state_file = Some(next_value(args, &mut index, "--state-file")?);
+            }
+            other if other.starts_with("--state-file=") => {
+                build.run.state_file = Some(other["--state-file=".len()..].to_owned());
+            }
+            "--reset-retain" => build.run.reset_retain = true,
+            "--no-retain" => build.run.no_retain = true,
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
             }
@@ -317,14 +354,39 @@ fn validate(
         || !build.renames.is_empty()
         || build.allow_untracked_removal
         || build.debug;
-    if build_only && !matches!(command, Command::Build | Command::Metadata) {
-        return Err("build options are only valid with `stc build` or `stc metadata`".into());
+    if build_only && !matches!(command, Command::Build | Command::Metadata | Command::Run) {
+        return Err(
+            "build options are only valid with `stc build`, `stc metadata`, or `stc run`".into(),
+        );
+    }
+    if command == Command::Run && (build.name.is_some() || !build.emit.is_empty()) {
+        return Err(
+            "`stc run` builds `exe,module,metadata`; `--name`/`--emit` are not valid".into(),
+        );
+    }
+    let run_only = build.run.cycles.is_some()
+        || build.run.cycle_time_ns.is_some()
+        || build.run.io.is_some()
+        || build.run.io_file.is_some()
+        || build.run.state_file.is_some()
+        || build.run.reset_retain
+        || build.run.no_retain;
+    if run_only && command != Command::Run {
+        return Err(
+            "`--cycles`, `--cycle-time`, `--io`, and retain options are only valid with \
+                    `stc run`"
+                .into(),
+        );
     }
     if build.out_dir.is_some()
-        && !matches!(command, Command::Build | Command::Metadata | Command::Clean)
+        && !matches!(
+            command,
+            Command::Build | Command::Metadata | Command::Clean | Command::Run
+        )
     {
         return Err(
-            "`--out-dir` is only valid with `stc build`, `stc metadata`, or `stc clean`".into(),
+            "`--out-dir` is only valid with `stc build`, `stc metadata`, `stc clean`, or `stc run`"
+                .into(),
         );
     }
     if ast && command != Command::Parse {
@@ -437,6 +499,31 @@ fn parse_rename(value: &str) -> Result<(String, String), String> {
     Ok((old.to_owned(), new.to_owned()))
 }
 
+fn parse_cycles(value: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("invalid cycle count `{value}` (expected a non-negative integer)"))
+}
+
+fn parse_cycle_time(value: &str) -> Result<u64, String> {
+    stc_manifest::parse_duration(value)
+        .map(stc_manifest::DurationNs::as_nanos)
+        .ok_or_else(|| {
+            format!(
+                "invalid cycle time `{value}`; expected an integer and one of `ns`, `us`, `ms`, `s`, `m`, or `h`"
+            )
+        })
+}
+
+fn parse_io(value: &str) -> Result<String, String> {
+    match value {
+        "null" | "memory" | "file" => Ok(value.to_owned()),
+        other => Err(format!(
+            "unknown I/O backend `{other}` (expected `null`, `memory`, or `file`)"
+        )),
+    }
+}
+
 fn parse_emit(value: &str) -> Result<std::collections::BTreeSet<Emit>, String> {
     let mut emit = std::collections::BTreeSet::new();
     for part in value.split(',') {
@@ -510,7 +597,12 @@ fn print_help() {
          \x20 stc metadata [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20           [--message-format human|json] [-v|-vv]\n\
          \x20 stc compliance [--message-format human|json]\n\
-         \x20 stc run [--watch]      (M6 phase 4)\n\
+         \x20 stc run [--manifest-path <stc.toml|dir>] [--locked] [--cycles <n>]\n\
+         \x20         [--cycle-time <duration>] [--io null|memory|file]\n\
+         \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
+         \x20         [--no-retain] [--target <triple>] [--clang <path>]\n\
+         \x20         [--runtime <path>] [-v|-vv] [-q]\n\
+         \x20 stc run --watch        (M6 phase 8)\n\
          \x20 stc test               (M6 phase 6)\n\
          \x20 stc fmt [<path>...] [--check] (M6 phase 7)\n\
          \x20 stc online download|diff      (M6 phase 8)\n\

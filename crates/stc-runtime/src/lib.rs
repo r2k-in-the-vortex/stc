@@ -26,10 +26,16 @@
 //!   sidecar;
 //! - [`image`] validates image layouts and applies direct-variable remaps at
 //!   activation, preserving values by `GotId`;
+//! - [`scheduler`] owns cooperative task run state keyed by task `GotId` and
+//!   computes each scan's guards, deadlines, and `SINGLE` completion;
+//! - [`run`] is the shared launcher/embedding run loop (cycle count, cycle
+//!   deadline, mock clock, stop conditions, exit codes);
+//! - `signal` installs the Ctrl-C/Ctrl-Break stop handlers;
 //! - `trap_boundary` provides the non-local trap exit around module calls.
 //!
 //! Generated ABI 2 modules execute through [`stc_rt_execute`] (the thin
-//! launcher path) or the `stc_host_*` embedding exports. The legacy ABI 1
+//! launcher path) or the `stc_host_*` embedding exports, including
+//! [`stc_host_run`]. The legacy ABI 1
 //! helper symbols remain as host utilities for the process image, clock, and
 //! retained-state stubs; generated modules do not import them.
 //!
@@ -37,7 +43,7 @@
 //! unsafe operation is an FFI pointer access confined to this crate.
 
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_void};
+use std::os::raw::{c_char, c_int, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -52,6 +58,9 @@ pub mod loader;
 pub mod memory;
 pub mod migration;
 pub mod module_info;
+pub mod run;
+pub mod scheduler;
+mod signal;
 pub mod store;
 mod trap_boundary;
 
@@ -61,7 +70,8 @@ mod test_support;
 pub use catalog::{HostPlatform, PROFILE, SUPPORTED_FEATURES, ValidatedPair};
 pub use got::Got;
 pub use host::{
-    Candidate, CycleOutcome, GenerationPin, Host, HostWarning, LoadMode, LoadOutcome, ManifestDiff,
+    Candidate, CycleOutcome, GenerationPin, Host, HostStatus, HostWarning, LoadMode, LoadOutcome,
+    ManifestDiff,
 };
 pub use host_api::{ABI_VERSION, HOST_API, HostApi, TrapRecord};
 pub use image::{DirectRemap, MAX_IMAGE_BYTES};
@@ -69,6 +79,8 @@ pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
 pub use migration::{PlanDecision, validate_deployable, validate_plan};
 pub use module_info::{DirectBinding, ImageLayout, ModuleInfo};
+pub use run::{IoBackend, RunLoopError, RunOptions, run_loop};
+pub use scheduler::{TaskScheduler, TaskStatus};
 pub use store::{
     Deployment, Download, LayoutState, ManifestStore, RuntimeLayout, RuntimeLayoutEntry,
     StoredManifest,
@@ -77,8 +89,11 @@ pub use store::{
 /// Runtime ABI version (Runtime-and-Execution §2.2).
 pub const STC_RUNTIME_ABI: i32 = 2;
 
-/// Exit status used when a trap is raised.
+/// Exit status used when a trap is raised outside a host boundary.
 pub const STC_TRAP_EXIT_CODE: i32 = 70;
+
+/// Exit status for a trap during `stc run` (CLI-and-Manifest §1.3).
+pub const STC_RUN_TRAP_EXIT_CODE: i32 = 4;
 
 /// Trap codes (Runtime-and-Execution §2.3).
 const TRAP_OVERFLOW: i32 = 1;
@@ -157,9 +172,10 @@ pub extern "C" fn stc_abi_version() -> i32 {
 /// launcher's directory is used. The adjacent `<name>.stc-got.bin` manifest and
 /// `<name>.stc-meta.json` metadata are loaded automatically.
 ///
-/// Recognizes `--cycles N`. The scheduling-related options `--cycle-time`,
-/// `--io`, and `--trace` are rejected explicitly (exit 2) rather than silently
-/// ignored.
+/// Accepted options: `--cycles <n>` (zero runs until interrupted),
+/// `--cycle-time <duration>`, `--io null|memory|file`, `--io-file <path>`,
+/// `--state-file <path>`, `--reset-retain`, `--no-retain`,
+/// `--mock-clock <duration>`, `--status`, and `--module <path>`.
 ///
 /// # Safety
 ///
@@ -184,51 +200,81 @@ pub unsafe extern "C" fn stc_rt_execute(
     }
 }
 
-fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_char) -> i32 {
-    let args = collect_args(argc, argv);
-    let mut cycles: i64 = 1;
-    let mut module_argument: Option<String> = None;
+/// Parsed launcher arguments.
+struct LauncherOptions {
+    run: RunOptions,
+    module: Option<String>,
+}
+
+fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
+    let mut run = RunOptions::default();
+    let mut module = None;
     let mut index = usize::from(!args.is_empty());
     while index < args.len() {
-        match args[index].as_str() {
+        let argument = args[index].as_str();
+        let mut value = |option: &str| -> Result<String, String> {
+            index += 1;
+            args.get(index)
+                .cloned()
+                .ok_or_else(|| format!("`{option}` requires a value"))
+        };
+        match argument {
             "--cycles" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("stc: `--cycles` requires a value");
-                    return 2;
-                };
-                match value.parse::<i64>() {
-                    Ok(value) if value >= 0 => cycles = value,
-                    _ => {
-                        eprintln!("stc: invalid cycle count `{value}`");
-                        return 2;
-                    }
-                }
-                index += 1;
+                let text = value("--cycles")?;
+                run.cycles = text
+                    .parse::<u64>()
+                    .map_err(|_| format!("invalid cycle count `{text}`"))?;
             }
+            "--cycle-time" => {
+                let text = value("--cycle-time")?;
+                let ns = run::parse_duration_ns(&text)
+                    .ok_or_else(|| format!("invalid cycle time `{text}`"))?;
+                run.cycle_time_ns = Some(i64::try_from(ns).unwrap_or(i64::MAX));
+            }
+            "--io" => {
+                let text = value("--io")?;
+                run.io = IoBackend::parse(&text).ok_or_else(|| {
+                    format!("unknown I/O backend `{text}` (expected null, memory, or file)")
+                })?;
+            }
+            "--io-file" => {
+                run.io_file = Some(PathBuf::from(value("--io-file")?));
+            }
+            "--state-file" => {
+                run.state_file = Some(PathBuf::from(value("--state-file")?));
+            }
+            "--reset-retain" => run.reset_retain = true,
+            "--no-retain" => run.no_retain = true,
+            "--mock-clock" => {
+                let text = value("--mock-clock")?;
+                let ns = run::parse_duration_ns(&text)
+                    .ok_or_else(|| format!("invalid mock clock `{text}`"))?;
+                run.mock_clock_ns = Some(i64::try_from(ns).unwrap_or(i64::MAX));
+            }
+            "--status" => run.status = true,
             "--module" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("stc: `--module` requires a value");
-                    return 2;
-                };
-                module_argument = Some(value.clone());
-                index += 1;
+                module = Some(value("--module")?);
             }
-            "--cycle-time" | "--io" | "--trace" => {
-                eprintln!(
-                    "stc: runtime option `{}` is not supported in this build",
-                    args[index]
-                );
-                return 2;
+            "--trace" => {
+                return Err("runtime option `--trace` is not supported in this build".into());
             }
-            other => {
-                eprintln!("stc: unknown runtime option `{other}`");
-                return 2;
-            }
+            other => return Err(format!("unknown runtime option `{other}`")),
         }
         index += 1;
     }
+    Ok(LauncherOptions { run, module })
+}
 
-    let Some(module_argument) = module_argument.or_else(|| {
+fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_char) -> i32 {
+    let args = collect_args(argc, argv);
+    let options = match parse_launcher_args(&args) {
+        Ok(options) => options,
+        Err(message) => {
+            eprintln!("stc: {message}");
+            return 2;
+        }
+    };
+    let Some(module_argument) = options.module.or_else(|| {
         if module_path.is_null() {
             None
         } else {
@@ -267,29 +313,86 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
         );
         return if host_api::last_trap().is_some() {
             print_last_trap();
-            STC_TRAP_EXIT_CODE
+            STC_RUN_TRAP_EXIT_CODE
         } else {
             1
         };
     }
-    for _ in 0..cycles {
-        latch_cycle_clock();
-        if let Err(error) = host.cycle() {
-            if host_api::last_trap().is_some() {
-                print_last_trap();
-                let _ = host.shutdown();
-                return STC_TRAP_EXIT_CODE;
+    let outcome = run::run_loop(&mut host, &options.run);
+    match outcome {
+        Ok(_) => {
+            if options.run.status {
+                print_host_status(&host);
             }
-            eprintln!("stc: cycle failed: {}", error.message);
+            if let Err(error) = host.shutdown() {
+                eprintln!("stc: shutdown failed: {}", error.message);
+                return 1;
+            }
+            0
+        }
+        Err(error) => {
+            if options.run.status {
+                print_host_status(&host);
+            }
+            report_run_error(&error);
+            let code = error.exit_code();
             let _ = host.shutdown();
-            return 1;
+            code
         }
     }
-    if let Err(error) = host.shutdown() {
-        eprintln!("stc: shutdown failed: {}", error.message);
-        return 1;
+}
+
+fn report_run_error(error: &RunLoopError) {
+    if let RunLoopError::Cycle {
+        error: host_error,
+        trap,
+        ..
+    } = error
+    {
+        if *trap {
+            print_last_trap();
+        } else {
+            eprintln!("stc: cycle failed: {}", host_error.message);
+        }
     }
-    0
+}
+
+/// Prints the host status surface used by `stc run -v` and the control channel.
+fn print_host_status(host: &Host) {
+    let status = host.status();
+    match status.active_build_id {
+        Some(build) => eprintln!("stc: status: active {}", build.to_hex()),
+        None => eprintln!("stc: status: active none"),
+    }
+    if let Some(build) = status.pending_build_id {
+        eprintln!("stc: status: pending {}", build.to_hex());
+    }
+    if !status.retired_build_ids.is_empty() {
+        let retired = status
+            .retired_build_ids
+            .iter()
+            .map(|build| build.to_hex())
+            .collect::<Vec<_>>()
+            .join(",");
+        eprintln!("stc: status: retired {retired}");
+    }
+    eprintln!("stc: status: cycles {}", status.cycles);
+    for task in &status.tasks {
+        eprintln!(
+            "stc: status: task {} due={} completed={} deadline={}",
+            task.key,
+            u8::from(task.due),
+            u8::from(task.completed),
+            task.next_deadline_ns
+                .map_or_else(|| "none".into(), |value| value.to_string())
+        );
+    }
+    if let Some(rejection) = &status.last_rejection {
+        eprintln!("stc: status: last-rejection {rejection}");
+    }
+    for warning in &status.warnings {
+        eprintln!("stc: status: warning[{}] {}", warning.code, warning.message);
+    }
 }
 
 fn print_last_trap() {
@@ -395,13 +498,27 @@ pub(crate) fn image_area_address(area: u8, byte_offset: u64, bytes: u64) -> Opti
 }
 
 /// Latches the cycle clock for the next scan.
-pub(crate) fn latch_cycle_clock() {
+///
+/// A pending `set_cycle_time_ns` override wins over the live clock; the
+/// override is consumed by this call. Returns the value the module sees.
+pub(crate) fn latch_cycle_clock() -> i64 {
     let mut state = state();
     let now = state
         .pending_cycle_ns
         .take()
         .unwrap_or_else(monotonic_now_ns);
     state.cycle_now_ns = now;
+    now
+}
+
+/// Takes the next cycle's pending clock override, when one was set.
+pub(crate) fn take_pending_cycle_ns() -> Option<i64> {
+    state().pending_cycle_ns.take()
+}
+
+/// Sets the latched cycle time without consuming a pending override.
+pub(crate) fn set_cycle_now(ns: i64) {
+    state().cycle_now_ns = ns;
 }
 
 fn collect_args(argc: i32, argv: *const *const c_char) -> Vec<String> {
@@ -657,7 +774,6 @@ pub unsafe extern "C" fn stc_host_load_module(module_path: *const c_char, mode: 
 /// module is loaded.
 #[unsafe(no_mangle)]
 pub extern "C" fn stc_host_cycle() -> i32 {
-    latch_cycle_clock();
     let mut state = embedded();
     let Some(host) = state.host.as_mut() else {
         return 2;
@@ -686,6 +802,221 @@ pub extern "C" fn stc_host_shutdown() -> i32 {
             1
         }
     }
+}
+
+/// C-facing run options for [`stc_host_run`] (Runtime §1.2).
+///
+/// `struct_size` should be `sizeof(stc_host_options)`; zero accepts the current
+/// layout. A negative `cycle_time_ns` or `mock_clock_ns` selects the live clock
+/// and no mock clock. The control endpoint is reserved for M6 phase 8 and must
+/// be null in this release.
+#[repr(C)]
+pub struct StcHostOptions {
+    /// `sizeof(stc_host_options)`, or zero.
+    pub struct_size: u32,
+    /// Host ABI major version (2), or zero.
+    pub abi_version: u32,
+    /// Cycle count; zero runs until interrupted or `stop`.
+    pub cycles: u64,
+    /// Fixed cycle time in nanoseconds; negative selects none.
+    pub cycle_time_ns: i64,
+    /// I/O backend: -1 or 0 `null`, 1 `memory`, 2 `file`.
+    pub io_backend: i32,
+    /// Cold start: ignore existing retained state.
+    pub reset_retain: i32,
+    /// Disable retained-state load and save.
+    pub no_retain: i32,
+    /// Print the status summary at exit.
+    pub status: i32,
+    /// Initial mock-clock time in nanoseconds; negative selects the live clock.
+    pub mock_clock_ns: i64,
+    /// Module path, or null to run the already-loaded embedding host.
+    pub module_path: *const c_char,
+    /// File backend image path (M6 phase 5).
+    pub io_file: *const c_char,
+    /// Retained-state file (M6 phase 5).
+    pub state_file: *const c_char,
+    /// Control endpoint; reserved for M6 phase 8, must be null/empty.
+    pub control_endpoint: *const c_char,
+    /// Optional external stop flag; nonzero stops before the next scan.
+    pub stop: *const c_int,
+}
+
+impl Default for StcHostOptions {
+    fn default() -> Self {
+        Self {
+            struct_size: u32::try_from(std::mem::size_of::<Self>()).unwrap_or(u32::MAX),
+            abi_version: u32::try_from(STC_RUNTIME_ABI).unwrap_or(2),
+            cycles: 0,
+            cycle_time_ns: -1,
+            io_backend: -1,
+            reset_retain: 0,
+            no_retain: 0,
+            status: 0,
+            mock_clock_ns: -1,
+            module_path: std::ptr::null(),
+            io_file: std::ptr::null(),
+            state_file: std::ptr::null(),
+            control_endpoint: std::ptr::null(),
+            stop: std::ptr::null(),
+        }
+    }
+}
+
+/// Runs the embedding host loop with an options struct.
+///
+/// Loads `module_path` cold when it is non-null; otherwise runs the module
+/// already loaded through [`stc_host_load_module`]. The module stays loaded
+/// afterwards. Returns the run exit code (0, 1, 2, 3, 4, or 130).
+///
+/// # Safety
+///
+/// `options` must be null or point to a readable [`StcHostOptions`] whose
+/// pointer fields are null or NUL-terminated strings. The `stop` flag must stay
+/// readable for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stc_host_run(options: *const StcHostOptions) -> i32 {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: the caller contract is stated above.
+        unsafe { run_embedded(options) }
+    }));
+    match result {
+        Ok(code) => code,
+        Err(_) => {
+            eprintln!("stc: internal runtime panic");
+            3
+        }
+    }
+}
+
+/// # Safety
+///
+/// `options` must satisfy the [`stc_host_run`] contract.
+unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
+    if options.is_null() {
+        eprintln!("stc: `stc_host_run` requires an options struct");
+        return 2;
+    }
+    // SAFETY: the caller guarantees a readable options struct.
+    let options = unsafe { &*options };
+    let expected_size = u32::try_from(std::mem::size_of::<StcHostOptions>()).unwrap_or(u32::MAX);
+    if options.struct_size != 0 && options.struct_size != expected_size {
+        eprintln!(
+            "stc: `stc_host_run` options size {} does not match {expected_size}",
+            options.struct_size
+        );
+        return 2;
+    }
+    if options.abi_version != 0 && options.abi_version != STC_RUNTIME_ABI as u32 {
+        eprintln!(
+            "stc: `stc_host_run` requires host ABI {STC_RUNTIME_ABI}, found {}",
+            options.abi_version
+        );
+        return 2;
+    }
+    let io = match options.io_backend {
+        -1 | 0 => IoBackend::Null,
+        1 => IoBackend::Memory,
+        2 => IoBackend::File,
+        other => {
+            eprintln!("stc: unknown I/O backend {other}");
+            return 2;
+        }
+    };
+    // SAFETY: the caller contract requires readable NUL-terminated strings.
+    let control_endpoint = unsafe { c_text(options.control_endpoint) };
+    if control_endpoint
+        .as_deref()
+        .is_some_and(|text| !text.is_empty())
+    {
+        eprintln!("stc: the control endpoint is not implemented until M6 phase 8");
+        return 2;
+    }
+    let run = RunOptions {
+        cycles: options.cycles,
+        cycle_time_ns: (options.cycle_time_ns >= 0).then_some(options.cycle_time_ns),
+        io,
+        io_file: unsafe { c_text(options.io_file) }.map(PathBuf::from),
+        state_file: unsafe { c_text(options.state_file) }.map(PathBuf::from),
+        reset_retain: options.reset_retain != 0,
+        no_retain: options.no_retain != 0,
+        mock_clock_ns: (options.mock_clock_ns >= 0).then_some(options.mock_clock_ns),
+        status: options.status != 0,
+    };
+    let module_path = unsafe { c_text(options.module_path) };
+    let mut state = embedded();
+    if let Some(module_path) = module_path {
+        let platform = host_platform();
+        if state.host.is_none() {
+            state.host = Some(Host::new(platform.clone(), ManifestStore::memory()));
+        }
+        let resolved = resolve_module_path(&module_path);
+        let manifest = module_info::manifest_path(&resolved);
+        let candidate = match Candidate::open(&platform, &resolved, &manifest) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                eprintln!(
+                    "stc: cannot load module `{}`: {}",
+                    resolved.display(),
+                    error.message
+                );
+                return 1;
+            }
+        };
+        let metadata = candidate.info().map(|info| info.text.clone());
+        host_api::clear_last_trap();
+        let loaded = state
+            .host
+            .as_mut()
+            .expect("host created above")
+            .load(candidate, LoadMode::Cold);
+        if let Err(error) = loaded {
+            eprintln!(
+                "stc: cannot install module `{}`: {}",
+                resolved.display(),
+                error.message
+            );
+            return if host_api::last_trap().is_some() {
+                print_last_trap();
+                STC_RUN_TRAP_EXIT_CODE
+            } else {
+                1
+            };
+        }
+        state.metadata = metadata.and_then(|text| CString::new(text).ok());
+    }
+    let Some(host) = state.host.as_mut() else {
+        eprintln!("stc: `stc_host_run` has no loaded module");
+        return 2;
+    };
+    let outcome = run::run_loop_with_stop(host, &run, run::StopSource::External(options.stop));
+    if run.status {
+        print_host_status(host);
+    }
+    match outcome {
+        Ok(_) => 0,
+        Err(error) => {
+            report_run_error(&error);
+            error.exit_code()
+        }
+    }
+}
+
+/// Reads an optional NUL-terminated string argument.
+///
+/// # Safety
+///
+/// `pointer` must be null or point to a NUL-terminated string.
+unsafe fn c_text(pointer: *const c_char) -> Option<String> {
+    if pointer.is_null() {
+        return None;
+    }
+    // SAFETY: the caller guarantees a NUL-terminated string.
+    Some(
+        unsafe { CStr::from_ptr(pointer) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// Resolves an exported symbol in the active embedding-host module.
