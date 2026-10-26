@@ -1,6 +1,6 @@
 # Debug and Monitoring
 
-Status: Resolved specification (2026-10-24); M4.5 interface recorded, M6.5 implementation pending (2026-10-25)  
+Status: Resolved specification (2026-10-24); M4.5 interface recorded; M6/M6.5 boundary fixed at host ABI 2.2 service ID 12 (2026-10-26); M6.5 implementation pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -229,7 +229,11 @@ format 1 or the ABI 2 service signatures.
   change.
 - **Append-only host API.** ABI 2 services are appended within major 2 and gated by
   `struct_size`/minor version. Debug services can be added without breaking M4.5 modules; a
-  module only requires the services it uses.
+  module only requires the services it uses. M6 fixes the next append at 2.2, service ID 12
+  (`set_cycle_time_ns`, test builds only); M6.5 debug services therefore start at ID 13 and must
+  not change service 12 or any earlier signature (D-157). M6 adds no checkpoint hook, debug
+  information, or debug service, and its `stc run --watch` control channel is deployment/status
+  only — it is not this document's debug protocol (D-155).
 - **Trap records and boundary.** `TrapRecord { code, span_id, generation }` records the last
   module trap, and the non-local trap boundary turns a module trap into a failed generation (in
   the rollback window) or exit code 70. M6.5 can report trap state and stop/continue around it.
@@ -243,9 +247,10 @@ format 1 or the ABI 2 service signatures.
 ### 12.2 Not present (M6.5 work)
 
 - No checkpoint table or host-check call is emitted by codegen; `entry_flags` bit 6 and
-  `required_features` bit 4 stay clear in M4.5.
-- No DWARF/CodeView emission and no `--debug`/`--release` CLI options. M4.5 artifacts use the
-  default debug build form but contain no debug information.
+  `required_features` bit 4 stay clear in M4.5 and M6.
+- No DWARF/CodeView emission. M4.5 and M6 artifacts use the default debug build form but contain
+  no debug information. M6 parses `--debug`/`[build].debug` but does not emit debug information,
+  and rejects `--release` as a usage error until M6.5 implements it (D-158).
 - No typed read/write/force/watch API, write/force queue, or boundary application in the host
   API.
 - No debug session, local transport, authentication, authorization, rate limits, audit log,
@@ -256,8 +261,8 @@ format 1 or the ABI 2 service signatures.
 
 ### 12.3 Rules for M6.5
 
-- Add checkpoint and typed-access services as appended ABI 2.x entries; do not change the M4.5
-  service signatures or the descriptor format.
+- Add checkpoint and typed-access services as appended ABI 2.x entries starting after M6's
+  service ID 12; do not change the M4.5 service signatures, service 12, or the descriptor format.
 - Set `required_features` bit 4 and `entry_flags` bit 6 only when a module actually emits
   checkpoint hooks; release artifacts must not set them.
 - Keep `--release` artifacts hook-free and give debug/release builds distinct build IDs and

@@ -1,6 +1,6 @@
 # Architecture
 
-Status: M4.5 host/module model and M5 lowering implemented (2026-10-25); M6.5 debug/monitoring is next  
+Status: M4.5 host/module model and M5 lowering implemented (2026-10-25); M6 phase-0 contracts fixed (2026-10-26), M6 implementation is next; M6.5 debug/monitoring follows  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
 
@@ -582,14 +582,15 @@ global symbols. Host ABI 2.1 provides:
 | `io_image` / `io_size` | Process-image access |
 | `state_load` / `state_save` | Retained-state helpers |
 
-Reference resolution, typed variable access, string/math helpers, and tracing are later
-minor-version additions; they are not part of ABI 2.1 and M5 does not call them. Minor 1 appends
-no service: it fixes the inline TYPEINFO, VTABLE, and object-record layout that generated OOP code
-reads directly, so `?=`, interface upcasts, and virtual dispatch need no host call. The
-launch/embedding entry points (`stc_rt_execute`, `stc_host_*`) are host exports, not module
-imports. The exact table, service IDs, versions, and signatures are in
-[GOT Artifacts and Schemas](GOT-Artifacts.md) §8; the lifecycle is in
-[Online Change and GOT](Online-Change-and-GOT.md).
+Reference resolution, typed variable access, string/math helpers, tracing, and debug services are
+later minor-version additions; they are not part of ABI 2.1 and M5 does not call them. Minor 1
+appends no service: it fixes the inline TYPEINFO, VTABLE, and object-record layout that generated
+OOP code reads directly, so `?=`, interface upcasts, and virtual dispatch need no host call. M6
+fixes minor 2 as the single test-clock append (service ID 12, `set_cycle_time_ns`, test builds
+only) and adds no debug service or checkpoint hook (D-157/D-158). The launch/embedding entry
+points (`stc_rt_execute`, `stc_host_*`) are host exports, not module imports. The exact table,
+service IDs, versions, and signatures are in [GOT Artifacts and Schemas](GOT-Artifacts.md) §8; the
+lifecycle is in [Online Change and GOT](Online-Change-and-GOT.md).
 
 ## 8. Security and robustness
 

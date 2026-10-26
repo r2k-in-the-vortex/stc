@@ -1,7 +1,7 @@
 # stc Project Plan
 
 Status: M4.5 online-change foundation and M5 lowering (phases 1–7 and 4b) implemented
-(2026-10-25); M6 is next  
+(2026-10-25); M6 phase 0 contracts complete (2026-10-26), M6 implementation is next  
 Date: 2026-10-24  
 Profile: `stc-2013-oop-utf8-v1`  
 Standard reference: IEC 61131-3:2013 (Ed. 3.0), local copy under `Specification/Reference/`
@@ -305,8 +305,8 @@ Exit criteria:
 > verification, execution, and C-harness tests pass, including library mode, process-image
 > access, bindings, casts, short-circuit logic, and scalar retained-state round-trips. M5
 > constructs (FBs, OOP, aggregates, strings, references, standard functions) produce explicit
-> `STC-E-CODEGEN-001` diagnostics. File-backed retained state, the manifest, `stc run`, and
-> `stc test` remain M6; scheduling beyond one task per resource is M5.
+> `STC-E-CODEGEN-001` diagnostics. File-backed retained state, the manifest, `stc run`,
+> `stc test`, and the cooperative multi-task scheduler remain M6. M5 keeps one task per resource.
 
 ### M4.5 — Online-change foundation
 
@@ -571,7 +571,8 @@ Exit criteria:
 - Linux x86-64 and Linux AArch64 host support (M8, D-042), then further hosts only on demand.
 - Public CST/traversal API for IDE tools (v2/v3), building on the stable `SyntaxKind`.
 - Hardware I/O backends and schedules: EtherCAT, Modbus, MQTT.
-- Multi-task scheduler (cooperative or preemptive) and task stepping.
+- Preemptive/multi-threaded ST execution, task stepping, and off-thread candidate preparation;
+  M6 provides the cooperative single-cycle-thread scheduler.
 - User-visible `__NEW`/`__DELETE` as a separate v2 vendor extension with its own memory model.
 - Multi-root references to split persistent aggregates (v2): a place-descriptor form that names an
   aggregate's constituent per-field roots instead of one storage pointer, with host-side

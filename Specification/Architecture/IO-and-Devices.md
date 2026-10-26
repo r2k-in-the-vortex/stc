@@ -1,6 +1,6 @@
 # I/O and Device Linking
 
-Status: M4.5 scalar process image and online remap implemented (2026-10-25); device backends are M6  
+Status: M4.5 scalar process image and online remap implemented (2026-10-25); M6 phase-0 file-backend/device-metadata contract fixed (2026-10-26); device backends are M6  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Tokenization](../Syntax/Tokenization.md)
 
@@ -146,7 +146,8 @@ direction = "input"
 - `channels` is optional. If present, the compiler can validate a pragma/project binding's
   `channel` and `direction`; otherwise the runtime validates.
 - `[[io.bindings]]` is the project-level binding. It is optional; the `AT` pragma is the local
-  hint.
+  hint. An undeclared device/channel, an invalid direction, or a `variable` that does not resolve
+  is `STC-E-PROJECT-009`.
 - The compiler does not require a binding for every direct variable. Unbound variables remain
   plain process-image locations.
 
@@ -231,8 +232,13 @@ A runtime override may bind a variable that has no pragma, or rebind one that do
   the "no linking defined" behavior: inputs see type defaults, outputs do nothing externally.
 - `memory`: explicit input/output byte arrays for tests and host embedding. Unbound input
   locations still receive defaults unless the test writes them.
-- `file`: input image read from a file at startup, output image written at shutdown or each cycle
-  (implementation-defined; tests use memory).
+- `file`: the input image is read once at cold start; a missing input file is a cold start with
+  defaults plus a warning. The output image is written atomically at shutdown using
+  `<file>.tmp` in the same directory, so a failed replace leaves the previous file intact
+  (D-160). It is not read or written per cycle. `--io-file` overrides both paths; `stc run`
+  resolves a manifest-relative `[io].file` against the root package directory and a CLI
+  `--io-file` against the current directory before passing absolute paths to the launcher
+  (D-163). Tests use memory.
 - The runtime API exposes the process image (`stc_rt_io_image`) and an optional backend vtable.
 
 ### 6.2 v2 device backends (not designed yet)
@@ -251,8 +257,10 @@ fields are added to the language or compiler.
 
 - At cycle start, unbound input locations are reset to their type defaults, then bound inputs are
   read from their backends. Inputs are latched once before `stc_module_cycle` runs program code.
-- Outputs are published once at cycle end (after `stc_module_cycle`). Unbound outputs have no
-  sink and are discarded.
+  The host's task scheduler sets every task guard between the latch and the cycle, so all due
+  tasks share one input latch.
+- Outputs are published once at cycle end (after `stc_module_cycle`), after all due tasks have
+  run. Unbound outputs have no sink and are discarded.
 - The cycle time is latched at the same boundary (see Runtime §2.5); I/O latches and timer time
   share the cycle boundary.
 - A runtime backend may fail to read/write; it reports a trap/status to the host. Exact error

@@ -1,6 +1,6 @@
 # Testing and Verification
 
-Status: M4.5 and M5 implementation and test plan complete (2026-10-25); M6.5 suites are the target  
+Status: M4.5 and M5 implementation and test plan complete (2026-10-25); M6 phase-0 test-build and test-clock contracts fixed (2026-10-26); M6.5 suites are the target  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
@@ -90,13 +90,16 @@ Rules:
   assertions.
 - `{stc:test {"cycles": N}}` overrides the default cycle count; `[[test.case]]` in `stc.toml` can
   also override by POU name. The JSON payload may also carry `timeout` and `expect-trap`.
-  A conflict between the pragma and the manifest is an error.
-- Test POU names must be unique within the package being tested.
+  A conflict between the pragma and the manifest is `STC-E-PROJECT-008`.
+- Test POU names must be unique within the package being tested; a duplicate is
+  `STC-E-TEST-002`. A malformed test signature (function inputs/return, FB/program shape, or a
+  `PASSED` output that is not `BOOL`) is `STC-E-TEST-003`. A source that is both a project source
+  and a test source, or a test source outside the project, is `STC-E-TEST-004`.
 - Tests may live in the current package or in a separate test project that lists the code under
   test in `[dependencies]`. `stc test` compiles the dependencies but discovers and runs only test
   POUs in the current package.
-- Tests are compiled into a separate test binary; project `main`/executable code is not linked
-  into the test binary unless a test needs it.
+- Tests are compiled into test-only artifacts; v1 builds one artifact per test (§2.5). Project
+  `main`/executable code is not linked into a test artifact unless the test body needs it.
 - `stc build` (debug or release) does not load `[test].sources` and excludes `{stc:test}` POUs
   from semantic analysis/codegen. Normal source files are still parsed; syntax errors in a normal
   file are reported even if the file also contains test units. `stc test` includes test sources
@@ -120,7 +123,9 @@ END_FUNCTION
   sources listed in `[test].sources`.
 - Production builds (debug and release) exclude test-only units and their asserts before
   semantic analysis/codegen. A production POU using `STC_ASSERT` is `STC-E-ASSERT-001`; a
-  production POU referencing a test-only POU is `STC-E-TEST-001`.
+  production POU referencing a test-only POU is `STC-E-TEST-001`. `STC_ASSERT` in a context that
+  is neither a test-only unit nor a production POU body, or with an invalid argument form, is
+  `STC-E-ASSERT-002`.
 - Release artifacts contain no test POUs and no `stc_rt_assert` calls.
 - Equality helpers (`STC_ASSERT_EQ`) are future conveniences; comparison expressions are enough
   for v1.
@@ -128,26 +133,32 @@ END_FUNCTION
 
 ### 2.3 Runner behavior
 
-- Each test runs in a separate process. The runner passes `--test <name>` to the test binary.
+- Each test runs in a separate process with its own test artifact. The runner does not select a
+  test inside a shared binary; the artifact is built for one test (§2.5).
 - A fresh host and module are initialized per test; globals/persistent roots do not leak between
   tests. Tests that exercise online change explicitly opt into a shared long-lived host.
 - Default timeout: 5 s; per-test override via `[[test.case]] timeout`.
-- Mock clock starts at `0ns` by default; `mock-clock` sets it. Time is latched once at the start
+- Mock clock starts at `[test].mock-clock` (`0ns` by default). Time is latched once at the start
   of each `stc_module_cycle`; two timers in the same scan see the same value. Tests schedule the
-  next cycle's time through the test harness API:
+  next cycle's time through the test prelude:
 
   ```st
   STC_CLOCK_ADVANCE(T#10ms);
   ```
 
-  The harness API is a test-only prelude; it lowers to `stc_rt_set_cycle_time_ns` for the next
-  cycle. It does not change the time already latched in the current scan.
-- Default I/O backend is memory; tests can set input bytes with `STC_IO_SET_INPUT(...)` and read
-  outputs with `STC_IO_GET_OUTPUT(...)` (future helpers; v1 exposes them as runtime calls).
-- A test may declare expected traps via `[[test.case]] expect-trap = "STC_TRAP_DIV_ZERO"`; the runner
-  passes if the process exits with that trap code.
-- Output: human-readable by default, with one line per test and failure details; `--message-format
-  json` emits one object per test with `name`, `status`, `duration_ms`, `failures`.
+  It lowers to host ABI 2.2 service ID 12, `set_cycle_time_ns(int64_t)`, which sets the next
+  cycle's latched time and does not change the time already latched in the current scan (D-157).
+- Default I/O backend is memory; tests set input bytes with `STC_IO_SET_INPUT(...)` and read
+  outputs with `STC_IO_GET_OUTPUT(...)`, both lowered through the existing I/O services.
+- A test may declare expected traps via `[[test.case]] expect-trap = "STC_TRAP_DIV_ZERO"` (or the
+  `{stc:test}` payload); the runner passes if the test host reports that trap code and fails on
+  any other trap or on a timeout.
+- Assertions use the existing ABI 2 `assert` service; the test host records the failure and
+  continues instead of trapping.
+- Output: human-readable by default, with one line per test and failure details;
+  `--message-format json` emits the stable shape in
+  [CLI and Manifest](CLI-and-Manifest.md) §1.6 (`name`, `status`, `duration_ms`, `failures`,
+  `trap`).
 
 ### 2.4 Filters and options
 
@@ -155,11 +166,54 @@ END_FUNCTION
 stc test                     # all tests
 stc test Timer               # substring filter on POU name
 stc test --list              # list discovered tests
-stc test --no-run            # build the test binary only
+stc test --no-run            # build the test artifacts only
 stc test -- --nocapture      # pass through runtime output
 # tests run sequentially in v1; no --test-threads
 stc test --timeout 2s        # override the default
 ```
+
+### 2.5 Test build mode
+
+M6 phase 0 fixes the per-test build interface (D-157). `stc test` builds one test artifact per
+test case; the artifact is a normal ABI 2 module/manifest pair plus a test host, not the product
+`exe` and not a shared test registry.
+
+- **Body.** A function test gets a synthetic wrapper program that calls the function once and
+  asserts its `BOOL` result. An FB test gets a wrapper that instantiates the FB, calls it once per
+  scan, and exposes the optional `PASSED : BOOL`. A program test uses the program itself.
+- **Synthetic configuration.** Each artifact has one synthetic configuration, one resource, one
+  task, and one program instance. The task has no interval, priority, or `SINGLE`; the test host
+  sets its guard before each cycle, exactly as the scheduler would. The synthetic names are
+  reserved and are not visible to user code.
+- **Build policy.** Test builds are always cold-layout: they do not read or write the runtime's
+  active manifest store, do not use online change, do not load or save retained state, and are
+  excluded from `[build].emit`. Dependencies compile as production packages; only the current package's
+  test POUs are discovered and run.
+- **Runtime settings.** The I/O backend is `memory` unless `[test].io` overrides it; the mock
+  clock starts at `[test].mock-clock`; the host uses the existing I/O services, the existing
+  assert service (ID 11) with a recording sink, and the appended test-clock service (ID 12).
+- **Result protocol.** The test host prints exactly one result line to stdout:
+
+  ```json
+  {"kind":"stc-test-result","name":"TimerBlink","status":"pass","assertions":[],"trap":null,"cycles":25}
+  ```
+
+  `status` is `pass`, `fail`, or `trap`; `assertions` carries failures with
+  `message`/`file`/`line`/`column`; `trap` names the trap when the module trapped. The runner
+  adds `duration_ms`, maps a killed process to `timeout`, and emits the public JSON shape in
+  [CLI and Manifest](CLI-and-Manifest.md) §1.6. Test-body output is captured unless
+  `-- --nocapture`, so the result line stays parseable; a missing or malformed result line fails
+  the test as an internal test-host error.
+- **Isolation and ordering.** Each test runs in its own process, sequentially in v1. Discovery
+  order is package order then test name; artifact file names derive deterministically from the
+  package and test name.
+- **Exclusion and diagnostics.** Production builds parse `[test].sources` only for syntax errors
+  and exclude `{stc:test}` POUs before analysis/codegen. `STC_ASSERT` in production is
+  `STC-E-ASSERT-001`; a reference to a test-only POU is `STC-E-TEST-001`; invalid test
+  signatures, duplicates, and source conflicts use `STC-E-TEST-002/003/004`.
+- **Contract boundary.** No manifest/descriptor/state format changes; the only ABI addition is
+  service ID 12. Test artifacts never participate in a baseline or a swap, so they cannot affect
+  production identity or retained state.
 
 ## 3. Compiler tests
 

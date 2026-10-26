@@ -1,6 +1,6 @@
 # Runtime and Execution Model
 
-Status: M4.5 persistent host and ABI 2 module execution, including M5 OOP descriptors, implemented (2026-10-25)  
+Status: M4.5 persistent host and ABI 2 module execution, including M5 OOP descriptors, implemented (2026-10-25); M6 phase-0 scheduler and ABI 2.2 test-clock contracts fixed (2026-10-26)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 
@@ -66,7 +66,8 @@ pair it loads. The host:
 3. Initializes the process image, clock, GOT cells, and root allocator.
 4. Attaches the module and runs its preparation (cold start or online attach).
 5. Repeats until the cycle limit is reached or a stop signal is received:
-   - latch inputs into the input image,
+   - latch the cycle time and inputs into the input image,
+   - set each task's guard from the host scheduler (M6; §1.3),
    - apply queued debug writes/forces at the boundary,
    - check for a prepared candidate and switch generations if ready,
    - call `stc_module_cycle`,
@@ -111,22 +112,43 @@ goes through the typed generation-pinned API, and the cycle thread is the only S
 
 ### 1.3 Task model
 
-- The configuration declares resources, tasks, and program instances.
+- The configuration declares resources, tasks, and program instances. The compiler projects
+  every task with its `interval_ns`, `priority`, `SINGLE` flag, and guard identity into the
+  existing `TaskRecord`/instance records; no manifest format change is needed.
 - `stc_module_cycle` executes the selected configuration's programs according to the task
-  schedule.
-- **v1 implementation**: one task, one interval, programs executed in declaration order. A
-  configuration with multiple tasks or priorities is diagnosed with `STC-E-RUN-001` at build time
-  unless `--allow-multi-task` is given (which runs them sequentially in priority order for
-  testing only).
-- The HIR keeps the full task/program mapping, so a real scheduler can be added without changing
-  the language front end.
-- Task execution state (`SINGLE` completion, deadlines, per-task flags) is **host-owned and keyed
-  by task identity**. It is preserved across an online change when the task/resource topology is
-  unchanged and reset on a cold download.
-- `SINGLE` tasks (run once) execute on the first cycle and are marked complete. The completion
-  flag survives a compatible swap.
-- `INTERVAL` tasks execute when their deadline is reached; v1 checks deadlines once per scan. A
-  task/resource topology change requires a cold download; it is never introduced mid-schedule.
+  schedule. The generated cycle checks each task-bound instance's `TaskGuard` root and skips the
+  instance when the guard is clear; it does not initialize or clear guards. Task-less instances
+  are unguarded and run every scan.
+- **Scheduler order.** The compiler emits task-bound instances in scheduler rank order: tasks
+  with an explicit priority first, ascending; tasks without a priority after them; ties by
+  resource declaration order, then task declaration order; within a task, program declaration
+  order. Task-less instances run first, in declaration order. The host does not reorder
+  instances; it only decides which guards are set.
+- **Host state.** The host owns task run state keyed by task `GotId`: `SINGLE` completion and the
+  next interval deadline. The launcher/host loop latches the scan time at the boundary and the
+  scheduler reads it as `now = cycle_now_ns` (the same value the module sees); the scheduler then
+  computes each task's due state and writes the task's `TaskGuard` BOOL root. The guard root is
+  reached through the `SlotKind::Data` slot whose `got_id` equals the manifest task's
+  `guard_got_id`; the cell value is the root's storage address, so the write needs no GOT or
+  manifest format change. Every
+  scheduled task is projected with a guard; a manifest task without one is `STC-E-RUN-003`.
+- A task without an interval is due every scan. An interval task is due when
+  `now >= next_deadline_ns`; its first deadline is the first scan's latched time plus the
+  interval, and after a due scan the next deadline is `now + interval` (no catch-up). A `SINGLE`
+  task runs on its first due scan and is marked complete after that cycle returns normally; it
+  does not run again. All due tasks share one scan, one latched clock, one input latch, and one
+  output publish.
+- **Online change and cold download.** Task state survives a compatible swap by `GotId`. A task
+  record whose resource, name, `SINGLE`, interval, or priority changed is a topology change and
+  is rejected by the existing migration check (`STC-E-ONLINE-004`), so a cold download is
+  required. A cold install or cold download starts with no completion and deadlines computed
+  from the first scan's time. Task state is host memory, not a manifest field or state-file
+  content; guard roots are `TaskGuard` roots and are never retained.
+- The M4.5 one-task-per-resource restriction and its `--allow-multi-task` testing escape are
+  historical; M6 implements the scheduler above. Codegen keeps `STC-E-RUN-001/002` for genuinely
+  ambiguous or unsupported configurations, and the runtime uses `STC-E-RUN-003` for invalid run
+  options and runtime scheduling configuration. The HIR keeps the full task/program mapping, so
+  the schedule is checked in codegen and executed by the host.
 
 ## 2. Runtime library
 
@@ -151,9 +173,14 @@ goes through the typed generation-pinned API, and the cycle thread is the only S
 
 ### 2.2 ABI versioning
 
-- `STC_HOST_ABI_MAJOR = 2`, `STC_HOST_ABI_MINOR = 1` for v1's persistent host. Minor 1 appends
-  no service and changes no signature; it records the inline TYPEINFO, VTABLE, and object-record
-  layout of §2.6 that generated OOP code reads without a host call (D-151).
+- `STC_HOST_ABI_MAJOR = 2`; `STC_HOST_ABI_MINOR = 1` is implemented for v1's persistent host.
+  Minor 1 appends no service and changes no signature; it records the inline TYPEINFO, VTABLE,
+  and object-record layout of §2.6 that generated OOP code reads without a host call (D-151).
+- M6 phase 0 fixes the next minor: **2.2** appends exactly one service, ID 12,
+  `void (*set_cycle_time_ns)(int64_t ns)`, appended after `assert` in `stc_host_api`. It sets the
+  next cycle's latched time and does not change the current scan. Only test builds import it;
+  production modules keep required minor 2.1 (D-157). The table and service IDs are fixed in
+  [GOT Artifacts and Schemas](GOT-Artifacts.md) §8.
 - The runtime exposes `stc_abi_version()` and a host API struct with `abi_version` and
   `struct_size`. A module rejects a host whose struct is shorter than required.
 - Generated modules embed the expected ABI version in metadata and their descriptor; the loader
@@ -190,20 +217,24 @@ void stc_rt_state_configure(const char* path, int32_t policy, int32_t enabled);
 ```
 
 Generated modules do not import `stc_rt_*` symbols. They call traps, clocks, state, I/O, and
-allocation through the host API table (ABI 2.1) defined below and in
-[GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The flat `stc_rt_*` module ABI is M4 ABI 1 and
-is not loadable by the persistent host.
+allocation through the host API table (ABI 2.1 implemented; 2.2 appends service ID 12) defined
+below and in [GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The flat `stc_rt_*` module ABI is
+M4 ABI 1 and is not loadable by the persistent host. `stc_rt_set_cycle_time_ns` is a host-only
+export for the launcher and embedding hosts; generated test code advances the next cycle's time
+through service ID 12 instead.
 
 #### 2.3.1 Host API table
 
 The exact ABI is a versioned `stc_host_api` struct, fixed for ABI 2.1 in
-[GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The table is additive within major version 2:
-new services are appended and bump the minor version; a module rejects a host whose table is
-shorter than it requires. Modules receive the table in `stc_module_attach` and do not import
-platform symbols from the host executable. Minor 1 appends no service and adds no field: it
-records the inline OOP record layout of §2.6, so the minor gate rejects a 2.1 module on a 2.0
-host before generated code can read a record. Reference resolution, typed variable access,
-string/math helpers, and generation pin/unpin remain later minor-version extensions.
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §8, with the 2.2 append recorded there. The table
+is additive within major version 2: new services are appended and bump the minor version; a
+module rejects a host whose table is shorter than it requires. Modules receive the table in
+`stc_module_attach` and do not import platform symbols from the host executable. Minor 1 appends
+no service and adds no field: it records the inline OOP record layout of §2.6, so the minor gate
+rejects a 2.1 module on a 2.0 host before generated code can read a record. Minor 2 appends only
+the test-clock service (ID 12); a 2.2 test module is rejected by a 2.1 host, while a production
+2.1 module still runs on either. Reference resolution, typed variable access, string/math
+helpers, generation pin/unpin, and debug services remain later minor-version extensions.
 M4.5-generated code imports trap, I/O image/size, and the retained-state stubs. Clocks,
 transient alloc/free, and assert are in ABI 2.0 but unused by M4.5-generated code; M5/M6
 consumers add the corresponding import slots when they first emit those calls.
@@ -292,9 +323,10 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
   monotonic clock; the host can supply the next cycle's time before calling `stc_module_cycle`.
   The override is consumed by the next cycle.
 - Tests use a mock clock with the same semantics: the harness sets the next cycle time, calls
-  `stc_module_cycle`, and advances the mock clock between cycles. `STC_CLOCK_ADVANCE(T#10ms)`
-  schedules the next cycle's time; it does not change the time already latched in the current
-  scan.
+  `stc_module_cycle`, and advances the mock clock between cycles. The test prelude's
+  `STC_CLOCK_ADVANCE(T#10ms)` lowers to host ABI 2.2 service ID 12
+  (`set_cycle_time_ns(int64_t)`), which schedules the next cycle's latched time and does not
+  change the time already latched in the current scan (D-157).
 - `TIME`/`LTIME` are signed 64-bit nanoseconds. `TON`/`TOF`/`TP` compute elapsed time from
   `cycle_now_ns` and their captured start time. Arithmetic overflow traps.
 - Date/time functions use `cycle_now_ns` converted to the profile's epoch. Within a scan,
@@ -516,19 +548,27 @@ assignment copies the root's value; the destination root identity is preserved.
 
 ## 7. Test execution
 
-- `stc test` compiles the project plus test sources and links a test runner.
+- `stc test` compiles the project plus test sources into one test artifact per test and links a
+  test host. Each artifact is a cold-layout ABI 2 module/manifest pair with a synthetic
+  single-task configuration; test builds never use the project baseline or online change.
 - Each test runs in a separate process with a timeout (default 5 s) to isolate hangs and traps.
 - The runner provides:
   - a fresh host/module state per test,
-  - a mock clock,
-  - a memory I/O backend,
-  - assertion helpers that record failures without aborting immediately.
-- Test functions return `BOOL` (TRUE = pass) and may call `STC_ASSERT`.
+  - a mock clock starting at `[test].mock-clock` (default `0ns`),
+  - a memory I/O backend unless `[test].io` overrides it,
+  - assertion helpers that record failures without aborting immediately,
+  - no retained-state load or save.
+- Test functions return `BOOL` (TRUE = pass) and may call `STC_ASSERT`; assertions use the
+  existing ABI 2 `assert` service with a recording sink, and `STC_CLOCK_ADVANCE` uses the
+  appended ABI 2.2 service ID 12. `STC_IO_SET_INPUT`/`STC_IO_GET_OUTPUT` use the existing I/O
+  services.
 - Program/FB tests may run a configured number of cycles (`cycles = N` in the test metadata) and
   inspect outputs/globals.
-- Results are reported as human-readable text or JSON; exit code 0 if all tests pass.
+- Results are reported as human-readable text or the JSON shape in
+  [CLI and Manifest](CLI-and-Manifest.md) §1.6; exit code 0 if all tests pass.
 
-Detailed test discovery and pragma syntax are in [Testing](Testing-and-Verification.md).
+Detailed test discovery, pragma syntax, and the per-test artifact interface are in
+[Testing](Testing-and-Verification.md) §2.
 
 ## 8. Error handling policy
 

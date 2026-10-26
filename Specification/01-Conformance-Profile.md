@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25)
+Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 phase 0 fixes the project/package, test, scheduling, diagnostics, and ABI contracts (2026-10-26)
 
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
@@ -340,16 +340,16 @@ The following are deliberately chosen and must be documented and tested:
 | Parser recovery | Missing tokens are zero-width leaves with a diagnostic; a mismatched `END_*` reports both spans and is left for the enclosing construct (D-053) |
 | Statement classification | `x := y` is an assignment; a dereference on the left or `REF(...)`/`NULL` on the right is a reference assignment, finalized by the analyzer (D-055) |
 | Pragma duplicates | Duplicate `stc:io` is `STC-E-IO-003`; `stc:io` without `AT` is `STC-W-IO-002` (D-049) |
-| Task scheduling | Single task in v1; multiple tasks diagnosed as unsupported |
-| Execution artifacts | `module` is a loadable shared library paired with a GOT manifest; `exe` is a thin host launcher; `lib` embeds the host; host ABI 2 |
+| Task scheduling | Host-owned cooperative scheduler in M6; tasks share one scan, one latched clock, one input latch, and one output publish. Lower numeric priority is higher; an absent priority sorts after explicit priorities; ties follow resource/task declaration order. No interval = every scan; interval = first run after one interval, then `now + interval` with no catch-up; `SINGLE` runs once and completes; a task/resource topology change requires a cold download |
+| Execution artifacts | `module` is a loadable shared library paired with a GOT manifest; `exe` is a thin host launcher; `lib` embeds the host; host ABI 2 (2.1 implemented; M6 appends test-clock service ID 12 as 2.2, with no debug services) |
 | Persistent memory | Host-owned GOT cells and stable roots; per-field recursive roots; handle-based objects; runtime-owned descriptors |
 | References and pointers | Persistent-capable `REF_TO` uses place descriptors; pointer→`REF_TO` is runtime-validated and yields `NULL` on failure; `POINTER TO` is transient-only (`STC-POINTER`) |
 | Online change | Whole-module load/prepare, O(1) cycle-boundary activation, one-successful-cycle rollback, off-thread unload |
 | Baseline policy | Exact parent build ID + digest pairing + profile/target/ABI/layout match; missing/stale/invalid baseline forces a cold download |
 | Preservation | Matching `GotId`/type/layout/size roots preserved; new roots initialized; removed roots quarantined; no field-layout migration in v1 |
-| Debug builds | Debug information is the default; `--release` strips/optimises and omits debug hooks; debug/release build IDs and manifests differ |
+| Debug builds | M6 builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks; M6.5 adds debug information by default and `--release` stripping/optimisation with distinct build IDs and manifests |
 | Debug behavior | Typed read/write/force/watch, checkpoint breakpoints, stop-the-world stepping, call stacks; swaps end sessions; outputs may be held indefinitely; not a safety PLC |
-| Runtime threads | One cycle thread; one loader/prepare thread; lower-priority service/monitor threads; generation pinning for readers |
+| Runtime threads | One cycle thread and, in M6, one control/status thread for deployment/status; M6.5 adds service/monitor threads. Only the cycle thread executes ST; generation pinning for readers |
 
 ## 9. Project model (project feature, not an IEC claim)
 
@@ -357,15 +357,62 @@ The following are deliberately chosen and must be documented and tested:
   pinned by a committed `stc.lock` with `--locked` enforcement.
 - The dependency graph must be acyclic; packages compile topologically; duplicate canonical paths
   are deduplicated.
-- Package-aware namespaces: a package's root namespace is its manifest name (or dependency alias).
-  `INTERNAL` is package-private; `PRIVATE` is POU/class-private; top-level declarations are
-  public across packages by default.
+- Package-aware namespaces: a package's identity is its `[package].name`; a dependency alias sets
+  only the root namespace. Catalog keys, `GotId` scopes, and mangled symbols use the package
+  name, so an alias rename never changes identity. `INTERNAL` is package-private and compares
+  package identity; `PRIVATE` is POU/class-private; top-level declarations are public across
+  packages by default.
 - A separate test project is a normal package that depends on the code under test; `stc test`
   runs only the current package's test POUs.
 - No network access, registry, or version solving in v1; the lockfile pins the local path graph
   (A-009).
 
-## 10. Claim format
+## 10. Diagnostic families and codes
+
+Existing lexical, grammatical, semantic, codegen, I/O, retain, module, manifest, ABI, and
+online-change families stay in their owning specifications; this section indexes the codes
+added or fixed for the project system and M6. A code has one meaning; a code is never reused.
+The owning specification is normative if a summary here disagrees.
+
+| Code | Condition | Owner |
+| --- | --- | --- |
+| `STC-E-PROJECT-001` | `stc.toml` cannot be read or parsed | CLI and Manifest §2 |
+| `STC-E-PROJECT-002` | schema/type/unknown-key/invalid-value error; snake_case spellings are unknown keys | CLI and Manifest §2 |
+| `STC-E-PROJECT-003` | package name/version/language missing or invalid | CLI and Manifest §2 |
+| `STC-E-PROJECT-004` | source glob/path invalid, outside the project, ambiguous, or matching nothing | CLI and Manifest §2.3 |
+| `STC-E-PROJECT-005` | dependency path/alias/name invalid, missing `path`, or alias/name mismatch | CLI and Manifest §2.2 |
+| `STC-E-PROJECT-006` | dependency cycle or duplicate canonical package path | CLI and Manifest §2.2 |
+| `STC-E-PROJECT-007` | configuration selection missing or ambiguous | CLI and Manifest §2.2 |
+| `STC-E-PROJECT-008` | `{stc:test}`/`[[test.case]]` conflict or invalid test metadata | CLI and Manifest §2.4 |
+| `STC-E-PROJECT-009` | I/O device/channel/binding invalid | CLI and Manifest §2.2; I/O §3 |
+| `STC-E-PROJECT-010` | build/run/retain/online/debug setting invalid | CLI and Manifest §2.2 |
+| `STC-E-PROJECT-011` | lint configuration invalid, unknown code, or downgrades an error | CLI and Manifest §2.2 |
+| `STC-E-PROJECT-012` | `stc.renames.toml` cannot be read/parsed or has an invalid schema | CLI and Manifest §3.1 |
+| `STC-E-PROJECT-013` | rename history conflict, duplicate mapping, or cycle | CLI and Manifest §3.1 |
+| `STC-E-LOCK-001` | lockfile missing under `--locked` | CLI and Manifest §3 |
+| `STC-E-LOCK-002` | lockfile out of date | CLI and Manifest §3 |
+| `STC-E-LOCK-003` | lockfile malformed or unsupported schema | CLI and Manifest §3 |
+| `STC-E-ASSERT-001` | production POU uses `STC_ASSERT` | Testing and Verification §2.2 |
+| `STC-E-ASSERT-002` | `STC_ASSERT` used outside a test-only unit or with an invalid form | Testing and Verification §2.2 |
+| `STC-E-TEST-001` | production POU references a test-only POU | Testing and Verification §2.2 |
+| `STC-E-TEST-002` | duplicate test name or duplicate `[[test.case]]` entry | Testing and Verification §2.1 |
+| `STC-E-TEST-003` | invalid test signature (function inputs/return, FB/program shape, `PASSED` type) | Testing and Verification §2.1 |
+| `STC-E-TEST-004` | test-source conflict or invalid test-only reference | Testing and Verification §2.1 |
+| `STC-E-FMT-001` | syntax errors prevent formatting | CLI and Manifest §1.5 |
+| `STC-E-FMT-002` | file cannot be read or written | CLI and Manifest §1.5 |
+| `STC-E-ONLINE-007` | control channel unavailable or unauthorized | Online Change and GOT §10 |
+| `STC-E-ONLINE-008` | deploy rejected (incompatible candidate or prepare failure) | Online Change and GOT §8 |
+| `STC-E-ONLINE-009` | active manifest unavailable for download/diff | Online Change and GOT §7.4 |
+| `STC-E-RUN-003` | invalid `stc run` option or runtime scheduling configuration (for example a task without a guard); codegen configuration errors stay `STC-E-RUN-001/002` | Runtime and Execution §1.3 |
+| `STC-W-PROJECT-001` | setting parsed but not honored until a later milestone (for example `debug = false`) | CLI and Manifest §2.2 |
+| `STC-W-PROJECT-002` | rename history has no baseline; the new key receives a fresh `GotId` | CLI and Manifest §3.1 |
+| `STC-W-ONLINE-007` | compatibility-report warning not covered by an existing online code | CLI and Manifest §1.6 |
+
+`STC-W-ONLINE-002` remains the retained-initializer warning used by `stc-got`; it is not reused
+for compatibility reports. Existing `STC-E-RUN-RETAIN-*`, `STC-E-ONLINE-STATE-*`, and
+`STC-W-ONLINE-STATE-*` codes are unchanged.
+
+## 11. Claim format
 
 Any compliance statement produced by the project shall state:
 

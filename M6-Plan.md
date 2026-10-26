@@ -2,9 +2,9 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Draft for implementation review; no M6 code written yet. M5 (phases 1–7 and 4b) is
-complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
-usable v1 project tool.  
+Status: Phase 0 complete (2026-10-26); phases 1–11 ready to start; no M6 code written yet. M5
+(phases 1–7 and 4b) is complete and M6.5 is planned, so M6 is the bridge from the completed
+compiler/runtime surface to a usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
 [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §1–§6,
 [State and RETAIN](Specification/Architecture/State-and-Retain.md),
@@ -15,7 +15,8 @@ Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
 [Architecture](Specification/Architecture/Architecture.md) §2/§5,
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md),
 [Conformance Profile](Specification/01-Conformance-Profile.md), `M5-Plan.md`, `M6.5-Plan.md`, and
-Decisions D-051, D-060, D-068, D-071, D-079, D-084, D-085, D-087, D-108–D-110, D-134, and D-136.
+Decisions D-051, D-060, D-068, D-071, D-079, D-084, D-085, D-087, D-108–D-110, D-134, D-136, and
+D-153–D-164.
 
 M6 follows M5 and precedes M6.5. It turns the finished language/runtime surface into a project
 tool: `stc.toml`, local path dependencies, a committed lockfile, package-aware namespaces,
@@ -93,7 +94,7 @@ stc.toml graph
    -> stc-manifest (schema, sources, dependencies, lockfile)
    -> ordered packages
    -> lexer/parser per file -> one merged HIR with package-qualified namespaces
-   -> codegen -> module + manifest + metadata (unchanged ABI 2.1 formats)
+   -> codegen -> module + manifest + metadata (unchanged ABI 2 formats; 2.2 only for test builds)
    -> host: cycle thread | task scheduler | state/IO | control thread
 ```
 
@@ -177,31 +178,40 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: all phases are pending. Phase 0 must finish before code in phases 1–10; phases may
-proceed in parallel only where the dependency direction allows (for example, Lean and the
+Phase status: phase 0 is complete (2026-10-26) in D-153–D-164 and §14; phases 1–11 are pending.
+Phase 0 fixed the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary,
+and the test-build, scheduler, and rename-history interfaces, so phases 1–10 may start. Phases
+may proceed in parallel only where the dependency direction allows (for example, Lean and the
 conformance harness can start once phase 0 fixes the vector and corpus contracts).
 
 ## 6. Phase details
 
-### Phase 0 — Contracts and decision questions
+### Phase 0 — Contracts and decision questions (complete 2026-10-26)
 
-- Resolve Q6-1–Q6-15 below and record them as D-153 onward before implementing the affected part.
-- Fix the `stc.toml` spelling and schema: kebab-case keys as in
+- [x] Resolve Q6-1–Q6-15 and record them as D-153–D-163 (§13).
+- [x] Fix the `stc.toml` spelling and schema: canonical keys are kebab-case as in
   [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §2 (`opt-level`, `out-dir`,
   `lib-type`, `on-mismatch`, `module-dir`, `manifest-dir`, `max-retired-generations`,
   `cold-policy`, `allow-untracked-removal`, `force-sessions-end-on-swap`, `cycle-time`,
-  `default-cycles`, `mock-clock`, `expect-trap`, `input-bytes`, `output-bytes`). The README
-  example's snake_case keys are stale and are corrected in phase 11.
-- Fix new diagnostic families and JSON report shapes (see §8); add the codes to the conformance
-  profile/documentation index.
-- Fix the M6/M6.5 boundary: M6 keeps the ABI 2 major and the existing descriptor/manifest formats;
-  at most it appends the test-clock service (host ABI 2.2, Q6-15). It does not append debug
-  services or emit checkpoint hooks. The control channel is not the debug protocol.
-- Sketch the test-build mode, the task scheduler, and the `stc.renames.toml` history format; review
-  them with the existing GOT/state/IO contracts.
+  `default-cycles`, `mock-clock`, `expect-trap`, `input-bytes`, `output-bytes`). Snake_case
+  spellings are unknown keys, not aliases. The README example's snake_case keys are stale and
+  are corrected in phase 11.
+- [x] Fix new diagnostic families and JSON report shapes (§8,
+  [Conformance Profile](Specification/01-Conformance-Profile.md) §10, and
+  [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §1.6). Codes are unique
+  across the existing families; `STC-W-ONLINE-002` keeps its initializer meaning and the
+  compatibility-report warning is `STC-W-ONLINE-007`.
+- [x] Fix the M6/M6.5 boundary: M6 keeps the host ABI 2 major and the existing descriptor and
+  manifest formats; it appends only the test-clock service (host ABI 2.2, service ID 12,
+  `set_cycle_time_ns(int64_t)`, Q6-15). It does not append debug services or emit checkpoint
+  hooks. The control channel is deployment/status only, not the debug protocol (D-155/D-158).
+- [x] Sketch the test-build mode, the task scheduler, and the `stc.renames.toml` history format
+  in §14 and review them with the GOT, state, I/O, and ABI contracts. The sketches fix the
+  phase-1 schema extensions, phase-4 scheduler order, phase-6 test-artifact interface, and the
+  phase-8 rename-history file, so later phases do not reopen them.
 
 Acceptance: decisions recorded; no code; the phase-1 schema and the phase-8 workflow have stable
-interfaces.
+interfaces. Phase 0 also records D-164 for the applied contract fixes.
 
 ### Phase 1 — Project manifest, source discovery, and dependency graph
 
@@ -301,7 +311,7 @@ manifest-free bridge still passes its existing tests.
 - Remove the one-task-per-resource restriction in `stc-codegen::config`; project every task with
   its interval/priority/`SINGLE` and guard identity. Update the conformance profile and runtime
   docs for multi-task scheduling.
-- Host scheduler in `stc-runtime`:
+- Host scheduler in `stc-runtime` (§14.5):
   - task run state keyed by task `GotId` (interval deadline, `SINGLE` completion);
   - before each scan, set each task's `TaskGuard` root to run/skip;
   - tasks without an interval run every scan; interval tasks first run after one interval, then
@@ -311,8 +321,11 @@ manifest-free bridge still passes its existing tests.
   - due tasks run in one scan; inputs are latched once and outputs published once;
   - task state is preserved across a compatible swap by `GotId`; a task/resource topology change
     is rejected or cold; cold download resets completion/deadlines.
-- Generated `stc_module_cycle` runs instances whose task guard is set, in plan order; it no longer
-  clears `SINGLE` guards. Unbound instances continue to run every scan.
+- Generated `stc_module_cycle` runs instances whose task guard is set, in scheduler order; it no
+  longer clears `SINGLE` guards. The compiler emits task-bound instances in scheduler rank order
+  (priority, then resource/task declaration order, then program declaration order); task-less
+  instances run unguarded in declaration order before the scheduled instances. Unbound instances
+  continue to run every scan.
 - Rewrite the launcher loop: default cycles from `[run].cycles` (absent or `0` means until
   interrupted), `--cycles`, `--cycle-time`, `--io`, `--state-file`, `--reset-retain`, `--no-retain`,
   stop signals, and exit codes 0/1/2/3/4/130. Sleep to the next scan deadline when a cycle time is
@@ -394,11 +407,12 @@ backends match IO-and-Devices; online attach/cold behavior matches State-and-RET
   in test builds and excluded from production builds and release artifacts. A production POU that
   uses `STC_ASSERT` or references a test-only POU is an error (`STC-E-ASSERT-001`,
   `STC-E-TEST-001`).
-- Test prelude (test-only units only): `STC_ASSERT(condition, message)` lowers to the existing
-  assert service with the call-site span; the test host records failures and continues instead of
-  trapping. `STC_CLOCK_ADVANCE(T#...)` sets the next cycle's clock through the appended test-clock
-  service (Q6-15) or its reviewed equivalent; `STC_IO_SET_INPUT(...)`/`STC_IO_GET_OUTPUT(...)`
-  read/write the process image through the existing I/O services.
+- Test prelude (test-only units only, §14.4): `STC_ASSERT(condition, message)` lowers to host ABI
+  service ID 11 (`assert`) with the call-site span; the test host records failures and continues
+  instead of trapping. `STC_CLOCK_ADVANCE(T#...)` uses host ABI 2.2 service ID 12
+  (`set_cycle_time_ns(int64_t)`, Q6-15/D-157) to set the next cycle's latched time.
+  `STC_IO_SET_INPUT(...)`/`STC_IO_GET_OUTPUT(...)` read/write the process image through the
+  existing I/O services.
 - Build one test artifact per test case in v1 (a synthetic wrapper for function/FB tests, the
   test program for program tests), with a synthetic single-task configuration, no retained state,
   the memory I/O backend (unless `[test].io` overrides), a mock clock starting at
@@ -451,11 +465,12 @@ Acceptance: `stc fmt` followed by `stc fmt --check` succeeds on the examples and
   point so diff never executes a module.
 - **`stc rename`.** Resolve a qualified key in the current package, use sema resolutions to find
   the declaration and every reference, rewrite source files without touching comments/strings, and
-  record `old -> new` in a committed `stc.renames.toml` history. Builds merge CLI `--rename` with
-  the history; conflicts are errors; chains resolve oldest-first. `--dry-run` prints edits. The
-  history preserves identity only when a baseline is present; a cold build is warned that the new
-  key receives a fresh `GotId`. Renaming a dependency's declaration or a package name is out of
-  scope.
+  record `old -> new` in a committed `stc.renames.toml` history using the schema in §14.6 and
+  [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §3.1. Builds merge CLI
+  `--rename` with the history; conflicts are errors; chains resolve oldest-first. `--dry-run`
+  prints edits. The history preserves identity only when a baseline is present; a cold build is
+  warned with `STC-W-PROJECT-002` that the new key receives a fresh `GotId`. Renaming a
+  dependency's declaration or a package name is out of scope.
 - **`stc run --watch`.** Build against the host's active baseline, start the launcher with a
   local control endpoint, watch package sources/manifests, rebuild on change, and deploy the
   module/manifest pair. The control endpoint is a named pipe (Windows) or Unix socket (Linux),
@@ -560,42 +575,61 @@ Acceptance: `check_docs.py`, Markdown lint, and the link/profile checks pass; do
   builds), in deterministic order.
 - Double builds of the same graph/baseline remain byte-identical for module, IR, metadata,
   manifest, plan, and build IDs. New metadata is canonical JSON.
-- Host ABI stays major version 2; manifest/descriptor formats remain version 1. If Q6-15 selects
-  an appended service for `STC_CLOCK_ADVANCE`, M6 bumps the minor to 2.2 and appends only that
-  service; no existing service ID/signature changes and no debug services are added. `stc_host_run`
-  and its options struct are host exports (not module ABI) and are added in phase 4 for the
-  launcher/embedding host.
+- Host ABI stays major version 2; manifest/descriptor formats remain version 1. M6 bumps the
+  minor to 2.2 when phase 6 emits test builds and appends only service ID 12
+  (`set_cycle_time_ns(int64_t)`); no existing service ID/signature changes and no debug services
+  are added. Production modules keep required minor 2.1. `stc_host_run` and its options struct
+  are host exports (not module ABI) and are added in phase 4 for the launcher/embedding host.
 - Task scheduling state is host memory keyed by task `GotId`, not a manifest field; task records
   already carry the schedule and guard identity.
 
 ## 8. Diagnostics
 
-Existing families stay stable. New M6 families (exact numbers are confirmed in phase 0):
+Existing families stay stable. The M6 additions below are confirmed in phase 0 and indexed in
+[Conformance Profile](Specification/01-Conformance-Profile.md) §10; each keeps its owning
+specification as the normative definition.
 
 | Code | Meaning |
 | --- | --- |
-| `STC-E-PROJECT-001` | `stc.toml` cannot be read/parsed |
-| `STC-E-PROJECT-002` | schema/type/unknown-key/invalid-value error with suggestion |
-| `STC-E-PROJECT-003` | package name/version/language invalid |
-| `STC-E-PROJECT-004` | source glob/path invalid, outside the project, or no match |
-| `STC-E-PROJECT-005` | dependency path/alias/name invalid |
-| `STC-E-PROJECT-006` | dependency cycle or duplicate canonical package |
-| `STC-E-PROJECT-007` | configuration selection missing/ambiguous |
-| `STC-E-PROJECT-008` | test case/pragma conflict or invalid test metadata |
+| `STC-E-PROJECT-001` | `stc.toml` cannot be read or parsed (I/O, TOML syntax, duplicate key) |
+| `STC-E-PROJECT-002` | schema/type/unknown-key/invalid-value error with span and did-you-mean suggestion; snake_case spellings are unknown keys |
+| `STC-E-PROJECT-003` | package name/version/language missing or invalid |
+| `STC-E-PROJECT-004` | source glob/path invalid, outside the project, ambiguous, or matching nothing |
+| `STC-E-PROJECT-005` | dependency path/alias/name invalid, missing `path`, or alias/name mismatch |
+| `STC-E-PROJECT-006` | dependency cycle or duplicate canonical package path |
+| `STC-E-PROJECT-007` | configuration selection missing or ambiguous |
+| `STC-E-PROJECT-008` | `{stc:test}`/`[[test.case]]` conflict or invalid test metadata |
 | `STC-E-PROJECT-009` | I/O device/channel/binding invalid |
-| `STC-E-PROJECT-010` | build/run/retain/online setting invalid |
-| `STC-E-PROJECT-011` | lint configuration invalid or tries to downgrade an error |
-| `STC-E-LOCK-001/002/003` | lockfile missing under `--locked` / out of date / malformed |
-| `STC-E-ASSERT-001/002` | production `STC_ASSERT` / invalid test-only use |
-| `STC-E-TEST-002/003/004` | duplicate test name/case / invalid test signature / test-source conflict |
-| `STC-E-FMT-001/002` | syntax prevents formatting / file cannot be read or written |
-| `STC-E-ONLINE-007/008/009` | control channel unavailable/unauthorized / deploy rejected / active manifest unavailable |
-| `STC-E-RUN-003` | invalid run option or scheduling configuration |
+| `STC-E-PROJECT-010` | build/run/retain/online/debug setting invalid (enum, duration, range, or combination) |
+| `STC-E-PROJECT-011` | lint configuration invalid, unknown code, or tries to downgrade an error |
+| `STC-E-PROJECT-012` | `stc.renames.toml` cannot be read/parsed or has an invalid schema |
+| `STC-E-PROJECT-013` | rename history conflict, duplicate mapping, or cycle |
+| `STC-E-LOCK-001` | lockfile missing under `--locked` |
+| `STC-E-LOCK-002` | lockfile out of date (normal builds rewrite it; `--locked` fails) |
+| `STC-E-LOCK-003` | lockfile malformed or unsupported schema |
+| `STC-E-ASSERT-001` | production POU uses `STC_ASSERT` |
+| `STC-E-ASSERT-002` | `STC_ASSERT` used outside a test-only unit or with an invalid form |
+| `STC-E-TEST-001` | production POU references a test-only POU (existing code) |
+| `STC-E-TEST-002` | duplicate test name or duplicate `[[test.case]]` entry |
+| `STC-E-TEST-003` | invalid test signature: function inputs/return, FB/program shape, or `PASSED` type |
+| `STC-E-TEST-004` | test-source conflict: same file in project and test globs, outside-project test source, or invalid test-only reference |
+| `STC-E-FMT-001` | syntax errors prevent formatting |
+| `STC-E-FMT-002` | file cannot be read or written |
+| `STC-E-ONLINE-007` | control channel unavailable or unauthorized |
+| `STC-E-ONLINE-008` | deploy rejected (incompatible candidate or prepare failure) |
+| `STC-E-ONLINE-009` | active manifest unavailable for download/diff (missing or corrupt store) |
+| `STC-E-RUN-003` | invalid `stc run` option (cycle count/time, I/O, state, stop condition) or runtime scheduling configuration (for example a task without a guard); codegen configuration errors stay `STC-E-RUN-001/002` |
 | `STC-W-PROJECT-001` | setting parsed but not honored until a later milestone (for example `debug = false`) |
-| `STC-W-ONLINE-002` | compatibility report warning not covered by an existing online code |
+| `STC-W-PROJECT-002` | rename history has no baseline; the new key will receive a fresh `GotId` |
+| `STC-W-ONLINE-007` | compatibility-report warning not covered by an existing online code |
+
+`STC-W-ONLINE-002` remains the existing initializer warning; the compatibility-report generic
+warning was moved to `STC-W-ONLINE-007` in phase 0 to keep codes unique. Existing
+`STC-E-RUN-RETAIN-*`, `STC-E-ONLINE-STATE-*`, and `STC-W-ONLINE-STATE-*` codes are unchanged.
 
 Rules: one definition/call-site error explains one unsupported setting; no per-type/per-function
 diagnostic expansion. New compiler codes require a decision entry and a conformance/test mapping.
+A code is never reused for a different condition; a retired code stays documented.
 
 ## 9. Verification
 
@@ -625,7 +659,7 @@ diagnostic expansion. New compiler codes require a decision entry and a conforma
 | Rename history mistakes | Wrong `GotId` preservation | Explicit committed history, conflict errors, dry-run, chain tests, no heuristic matching |
 | Lean/vector drift | Proofs disconnected from implementation | Committed deterministic vectors, CI regeneration check, Rust reference tests, C-harness samples |
 | Traceability burden | CI red for documentation gaps | Automated scanning, corpus `rules` metadata, explicit not-implemented allowlist, phase-by-phase coverage |
-| Scope creep into M6.5 debug | Unstable ABI/security surface | Keep ABI 2.1, no debug info/hooks, separate control channel; M6.5 owns the debug protocol |
+| Scope creep into M6.5 debug | Unstable ABI/security surface | Keep ABI major 2 with only the 2.2 test-clock append, no debug info/hooks, separate control channel; M6.5 owns the debug protocol |
 
 ## 11. Definition of done
 
@@ -670,30 +704,227 @@ cargo run -p stc-driver -- run --watch
 cd lean && lake build && lake exe vectors
 ```
 
-## 13. Phase 0 decision questions
+## 13. Phase 0 decision questions (resolved 2026-10-26)
 
-These are resolved in phase 0 and recorded as decisions. Each has a proposed default so
-implementation can start without blocking if review agrees.
+All questions below were resolved on 2026-10-26 and recorded as decisions D-153–D-163; the
+resolution column is normative. The Q6-9 "emit `\n`" proposal was superseded in favor of the
+phase-7 preserve-encoding rule.
 
-| Question | Proposed default |
+| Question | Resolution |
 | --- | --- |
-| **Q6-1 — TOML parsing and diagnostics.** Use a span-aware TOML library, a typed model with serde, or a hand-written parser? | Use `toml_edit` with an explicit model and span-mapped `STC-E-PROJECT-*` diagnostics; add `fuzz_manifest`. |
-| **Q6-2 — Package identity vs. alias.** Does a dependency alias change catalog keys/`GotId`s? | Package identity is `[package].name`; the alias only sets the root namespace. `INTERNAL` compares package identity. |
-| **Q6-3 — Multi-package analysis.** Compile packages separately and link HIR, or merge into one HIR crate? | One merged HIR crate with per-package root namespaces and one analyzer pass; deterministic topological file order. |
-| **Q6-4 — Task scheduling ownership and semantics.** Generated scheduler or host scheduler? Interval/priority/first-run/no-catch-up rules? | Host-owned scheduler sets `TaskGuard` roots per scan; generated cycle runs guarded instances in plan order. Lower number = higher priority; absent priority sorts last; no interval = every scan; interval = first run after one interval then `now + interval`; `SINGLE` once; no catch-up; topology change cold. |
-| **Q6-5 — Watch/deploy control transport.** Named pipe/socket, nonce/ACL, and relationship to M6.5 debug. | Local-only named pipe (Windows) / Unix socket (Linux) with user-only permissions and a per-run nonce; deployment/status only; M6.5 has a separate authenticated debug protocol. |
-| **Q6-6 — Rename history.** Where is a source-aware rename's mapping persisted? | `stc.renames.toml` at the root package, committed; builds merge CLI `--rename` and history; conflicts error; chains oldest-first; `--dry-run` available. |
-| **Q6-7 — Test execution model.** One shared test module/registry or one artifact per test? | One test artifact per test in v1 (synthetic wrapper for function/FB tests, test program for program tests), one process per test; a shared registry is a later optimization. |
-| **Q6-8 — Debug/release boundary.** Should M6 honor `debug = false`/`--release`? | M6 parses the keys but builds the default unoptimised debug form without debug info/hooks; `debug = false` reports `STC-W-PROJECT-001`, and `--release` is a usage error until M6.5 implements stripping and debug/release identities. |
-| **Q6-9 — Formatter output.** Newline convention, blank-line handling, and semicolon insertion. | Emit `\n`, preserve blank lines/comments/line breaks, insert strict semicolons after relaxed block statements, no wrapping, no configuration; preserve BOM. |
-| **Q6-10 — File I/O backend.** When are input/output files read/written? | Input image read once at cold start; output image written atomically at shutdown; `--io-file` overrides; tests use memory; unbound inputs default each scan. |
-| **Q6-11 — Lean/vector contract.** Model scope, format, and Rust linkage. | Testing-and-Verification §5.2/§5.3 exactly; no Mathlib; committed deterministic vectors; a Rust `exact` reference module and C-harness samples. |
-| **Q6-12 — Traceability mechanism.** How are rules mapped to tests? | Conformance `.meta.toml` `rules`, test annotations/comments with `STC-*` IDs, an explicit not-implemented allowlist, and `cargo xtask traceability --check`. |
-| **Q6-13 — Host threading scope.** Does M6 prepare candidates off-thread? | M6 adds a control/status thread and queues deploy work; validation/prepare runs between cycles on the cycle thread to avoid re-entering ST. Off-thread prepare and jitter measurement are M7 hardening. |
-| **Q6-14 — State/I/O relative paths.** Project-relative paths at runtime. | `stc run` resolves project-relative paths and passes absolute options; a standalone launcher resolves relative paths against the module directory; embedding hosts set their own paths. |
-| **Q6-15 — Test-clock ABI.** How does generated test code advance the mock clock? | Append an ABI 2.2 `set_cycle_time_ns` service for the test prelude; the existing assert and I/O services cover the rest. No other M6 module service is appended. |
+| **Q6-1 — TOML parsing and diagnostics.** Use a span-aware TOML library, a typed model with serde, or a hand-written parser? | **Resolved (D-153):** `toml_edit` into an explicit model with span-mapped `STC-E-PROJECT-*` diagnostics and did-you-mean suggestions; `fuzz_manifest` seeds valid/invalid documents. |
+| **Q6-2 — Package identity vs. alias.** Does a dependency alias change catalog keys/`GotId`s? | **Resolved (D-153):** identity is `[package].name`; the alias sets only the root namespace; catalog keys, `GotId`s, and symbols use the package name, and `INTERNAL` compares package identity. |
+| **Q6-3 — Multi-package analysis.** Compile packages separately and link HIR, or merge into one HIR crate? | **Resolved (D-153):** one merged HIR crate with per-package root namespaces, globally unique `DefId`s, and one analyzer pass; deterministic topological package then lexicographic file order. |
+| **Q6-4 — Task scheduling ownership and semantics.** Generated scheduler or host scheduler? Interval/priority/first-run/no-catch-up rules? | **Resolved (D-154):** host-owned scheduler sets `TaskGuard` roots per scan; the generated cycle runs guarded instances in scheduler rank order (§14.5). Lower number = higher priority; absent priority sorts last; no interval = every scan; interval = first run after one interval, then `now + interval`; `SINGLE` once; no catch-up; topology change cold. |
+| **Q6-5 — Watch/deploy control transport.** Named pipe/socket, nonce/ACL, and relationship to M6.5 debug. | **Resolved (D-155):** local-only named pipe (Windows) / Unix socket (Linux) with user-only permissions and a per-run nonce; deployment/status only; separate from the M6.5 authenticated debug protocol. |
+| **Q6-6 — Rename history.** Where is a source-aware rename's mapping persisted? | **Resolved (D-156):** committed `stc.renames.toml` at the root package; builds merge CLI `--rename` and history; conflicts error; chains resolve oldest-first; `--dry-run` available; identity preservation requires a baseline. |
+| **Q6-7 — Test execution model.** One shared test module/registry or one artifact per test? | **Resolved (D-157):** one artifact per test in v1 (a synthetic wrapper for function/FB tests, the test program for program tests), one process per test, sequential runs; a shared registry is a later optimization. |
+| **Q6-8 — Debug/release boundary.** Should M6 honor `debug = false`/`--release`? | **Resolved (D-158):** parse the keys but build the unoptimised debug form without debug info/hooks; `debug = false` reports `STC-W-PROJECT-001`; `--release` is a usage error until M6.5. |
+| **Q6-9 — Formatter output.** Newline convention, blank-line handling, and semicolon insertion. | **Resolved (D-159):** preserve each file's line-ending encoding (CRLF stays CRLF, LF stays LF; inserted lines use the dominant ending; new files use LF) and BOM; preserve blank lines/comments/line breaks; insert strict semicolons after relaxed block statements; no wrapping or configuration. This supersedes the "emit `\n`" proposal. |
+| **Q6-10 — File I/O backend.** When are input/output files read/written? | **Resolved (D-160):** input image read once at cold start (missing file = defaults plus warning); output image written atomically at shutdown; `--io-file` overrides; tests use memory; unbound inputs default each scan. |
+| **Q6-11 — Lean/vector contract.** Model scope, format, and Rust linkage. | **Resolved (D-161):** Testing-and-Verification §5.2/§5.3 exactly; no Mathlib; committed deterministic vectors; a Rust `exact` reference module and C-harness samples; CI drift check. |
+| **Q6-12 — Traceability mechanism.** How are rules mapped to tests? | **Resolved (D-162):** conformance `.meta.toml` `rules`, test annotations/comments with `STC-*` IDs, an explicit not-implemented allowlist, and `cargo xtask traceability --check`. |
+| **Q6-13 — Host threading scope.** Does M6 prepare candidates off-thread? | **Resolved (D-155):** M6 adds a control/status thread and queues deploy work; validation/load/prepare runs between cycles on the cycle thread to avoid re-entering ST; off-thread prepare and jitter measurement remain M7. |
+| **Q6-14 — State/I/O relative paths.** Project-relative paths at runtime. | **Resolved (D-163):** `stc run` resolves manifest-relative paths and CLI paths to absolute options; a standalone launcher resolves relative paths against the module directory; embedding hosts set their own paths. |
+| **Q6-15 — Test-clock ABI.** How does generated test code advance the mock clock? | **Resolved (D-157):** append host ABI 2.2 service ID 12, `set_cycle_time_ns(int64_t)`, for the test prelude; it sets the next cycle's latched time; no other service and no debug services. |
 
-## 14. Post-M6 limitations
+## 14. Phase 0 interface contracts (2026-10-26, no code)
+
+These sketches are the stable interfaces phases 1–10 consume. Normative details live in the
+named specifications; this section records the cross-document decisions and the phase ordering.
+
+### 14.1 Manifest spelling and schema
+
+The canonical `stc.toml` spelling is kebab-case everywhere; snake_case is not an alias. The
+keys named in the phase-0 checklist are fixed as follows:
+
+| Table | Keys |
+| --- | --- |
+| top level | `schema` |
+| `[package]` | `name`, `version`, `language` |
+| `[dependencies]` | dependency alias entries with `path` and optional `package`; `version` is reserved |
+| `[project]` | `sources`, `stdlib`, `configuration` |
+| `[build]` | `opt-level`, `out-dir`, `lib-type`, `debug`, `syntax`, `emit`, `target`, `clang`, `runtime` |
+| `[io]` | `backend`, `file`, `input-bytes`, `output-bytes`, `marker-bytes` |
+| `[[io.devices]]` | `name`, `kind`, `config` |
+| `[[io.devices.channels]]` | `name`, `direction`, `width` |
+| `[[io.bindings]]` | `variable`, `device`, `channel`, `direction` |
+| `[retain]` | `enabled`, `file`, `on-mismatch` |
+| `[runtime]` | `module-dir`, `manifest-dir`, `max-retired-generations` |
+| `[online]` | `baseline`, `manifest`, `cold-policy`, `allow-untracked-removal` |
+| `[debug]` | `default`, `protocol`, `force-sessions-end-on-swap` |
+| `[run]` | `cycles`, `cycle-time` |
+| `[test]` | `sources`, `timeout`, `default-cycles`, `mock-clock`, `io` |
+| `[[test.case]]` | `name`, `cycles`, `timeout`, `expect-trap` |
+| `[lints]` | `warnings` and quoted `STC-*` codes |
+
+`[io]` image sizes, `[test].default-cycles`, and `[[test.case]].expect-trap` are
+part of the schema from phase 1 even where a later phase first exercises them.
+[CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §2 is normative; the README
+example's snake_case keys are corrected in phase 11.
+
+### 14.2 Diagnostics and JSON report shapes
+
+The M6 code table in §8 is the authoritative addition list; the complete index is
+[Conformance Profile](Specification/01-Conformance-Profile.md) §10. `STC-W-ONLINE-002` keeps its
+initializer meaning, and the compatibility-report generic warning is `STC-W-ONLINE-007`.
+`STC-E-PROJECT-012`/`013` cover rename-history parse/schema and conflict errors;
+`STC-E-TEST-001` stays the existing production-reference code.
+
+JSON shapes are fixed in
+[CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §1.6:
+
+- diagnostics: one object per line (existing shape, unchanged);
+- `stc test --message-format json`: one test-result object per line;
+- compatibility reports: one object with `verdict`, `counts`, `warnings`, `rejections`, and the
+  baseline/candidate build IDs; per-record `actions` only under `-v`;
+- `stc metadata` and `stc compliance`: one summary object each.
+
+### 14.3 M6/M6.5 ABI boundary
+
+- The host ABI major stays 2. M6 keeps descriptor format 1 and manifest/binary/JSON format 1.
+- M6 appends exactly one host service: ID 12, `void set_cycle_time_ns(int64_t ns)`, and bumps the
+  host minor from 2.1 to 2.2 when phase 6 emits test builds. It sets the next cycle's latched
+  time; it does not change the current scan. No existing service ID or signature changes.
+- Only test builds import service 12. Production modules keep required minor 2.1 and run on a 2.1
+  host; a test module requires 2.2 and is rejected by an older host.
+- M6 emits no checkpoint hooks, no debug information, no debug services, and no service/monitor
+  thread. The `stc run --watch` control channel supports deployment/status only and is not the
+  M6.5 debug protocol (D-155/D-158).
+- M6.5 appends debug services after ID 12 under the same major and owns `--release`, debug
+  information, checkpoint hooks, typed access, forcing, breakpoints, stepping, and sessions.
+
+### 14.4 Test-build mode (phase 6)
+
+**Discovery and build.** `stc test` discovers `{stc:test}` POUs in the current package plus
+`[test].sources` (Testing §2.1) and builds one test artifact per test case. A function test gets a
+synthetic wrapper `PROGRAM` that calls the function once and asserts its `BOOL` result; an FB test
+gets a wrapper that instantiates the FB, calls it once per scan, and exposes the optional
+`PASSED : BOOL`; a program test uses the program itself.
+
+**Synthetic configuration.** Each test artifact is a normal ABI 2 module/manifest pair built with
+a synthetic single-task configuration (configuration `__STC_TEST__`, resource `__STC_TEST_RES__`,
+task `__STC_TEST_TASK__`, one instance). These names are compiler-reserved; a user declaration
+with one of them is invalid test metadata. The task has no interval, priority, or `SINGLE`; the
+test host sets its guard before each cycle, exactly as the scheduler would. The build is always
+cold-layout: it never reads the project's active baseline, never writes the runtime's active
+manifest store, and never involves online change. Test builds are not deployable and are not part
+of `[build].emit`.
+
+**Runtime settings.** No retained state is loaded or saved; the I/O backend is `memory` unless
+`[test].io` overrides it; the mock clock starts at `[test].mock-clock` (default `0ns`), and the
+runner advances it cycle by cycle. The test host uses the existing assert service (ID 11), the
+appended test-clock service (ID 12), and the existing I/O services; no other ABI addition is
+needed.
+
+**Test host and result protocol.** `stc test` builds a test-only executable that links the
+runtime test-host support, loads its module, runs the requested cycle count, and prints exactly
+one structured result line to stdout:
+
+```json
+{"kind":"stc-test-result","name":"TimerBlink","status":"pass","assertions":[],"trap":null,"cycles":25}
+```
+
+`status` is `pass`, `fail`, or `trap`; `assertions` carries recorded failures with
+`message`/`file`/`line`/`column`; `trap` is the trap name when the module trapped. The parent
+adds `duration_ms`, maps a killed process to `timeout`, and emits the public report shape in
+CLI §1.6. Test-body output is captured unless `-- --nocapture`, so the result line stays
+parseable; a missing or malformed result line fails the test as an internal test-host error.
+Each test runs in its own process; tests run sequentially in v1.
+
+**Exclusion and errors.** Production builds parse test sources only for syntax errors and exclude
+`{stc:test}` POUs before analysis/codegen. A production POU using `STC_ASSERT` is
+`STC-E-ASSERT-001`; referencing a test-only POU is `STC-E-TEST-001`; invalid test signatures and
+duplicates use `STC-E-TEST-002/003/004`. Test-only units never appear in production artifacts.
+
+**Contract review.** GOT: a normal module/manifest with synthetic records; no format change.
+State: no state file and no retained roots. I/O: memory backend, no metadata change. ABI: only
+service ID 12. Determinism: artifact names derive from package and test name; the discovery order
+is package order then test name.
+
+### 14.5 Host task scheduler (phase 4)
+
+**Compiler plan order.** The compiler projects every task with its `interval_ns`, `priority`,
+`single`, and guard identity, and emits task-bound instances in scheduler rank order: explicit
+priorities first in ascending numeric order, then tasks without a priority; ties by resource
+declaration order, then task declaration order; within a task, program declaration order. The
+plan also emits task-less instances, which run unguarded in declaration order before the
+scheduled instances. The generated `stc_module_cycle` checks the task guard for every task-bound
+instance; it does not initialize or clear guards. This makes the priority rule observable inside
+one scan while keeping the host's job to due/skip only.
+
+**Host state.** The host keeps `TaskState { got_id, completed, next_deadline_ns }` per manifest
+task, keyed by task `GotId`. It resolves each task's guard from the manifest `guard_got_id` to
+the `SlotKind::Data` slot with that `GotId` and writes the bound `TaskGuard` BOOL root (`0`/`1`)
+before every scan; no manifest or GOT format change is needed.
+
+**Due rule.** At the scan boundary the launcher/host loop latches the scan time, and the
+scheduler reads it as `now = cycle_now_ns` (the same value the module will see). A task with no
+interval is due every scan. An interval task is due when `now >= next_deadline_ns`; its first
+deadline is `start_time + interval`, and after a due scan the deadline becomes `now + interval`
+(no catch-up).
+A `SINGLE` task runs on its first due scan and is then complete; completion is checked before the
+next scan. A task that is not due has its guard cleared.
+
+**Scan sequence.** Latch inputs, set every task guard, call `stc_module_cycle` once, publish
+outputs once. All due tasks therefore share one latched clock, one input latch, and one output
+publish. The host marks due `SINGLE` tasks complete only after the cycle returns normally.
+
+**Swap and cold.** `TaskState` survives a compatible online swap by `GotId`; the existing
+migration already rejects a changed task record (resource, name, `single`, `interval_ns`,
+`priority`) as `STC-E-ONLINE-004`, so the surviving state always matches the active schedule. A
+cold install or cold download starts with no completion and deadlines computed from the first
+scan's time.
+
+**State and I/O review.** Task state is host memory, not a manifest field and not part of the
+state file; guard roots are `TaskGuard` roots and are never retained. The scheduler runs between
+the input latch and output publish, so it does not change the existing state or I/O contracts.
+`stc run -v` and the control channel expose active/pending/retired build IDs, cycle count,
+per-task due/completed/deadline status, and the last rejection.
+
+### 14.6 `stc.renames.toml` (phase 8)
+
+The history is a committed TOML file at the root package directory:
+
+```toml
+schema = 1
+
+[[rename]]
+old = "Main.Speed"
+new = "Main.Rate"
+```
+
+- `schema` is required and currently `1`; unknown keys are errors (`STC-E-PROJECT-012`).
+- Each `[[rename]]` entry has non-empty `old` and `new`, exactly as they would be passed to
+  `--rename`; entries are ordered oldest first and the file is rewritten in that order.
+- A build merges history entries (oldest first) with CLI `--rename` entries (in command order)
+  and resolves chains by composition: `A -> B` followed by `B -> C` passes `A -> C` to the
+  identity engine. Duplicate `old` values with different `new` values, or a chain that revisits a
+  key, are `STC-E-PROJECT-013`.
+- `stc rename` rewrites only sema-resolved identifier tokens (declaration and references), leaves
+  comments and strings untouched, preserves formatting and file encoding, and appends the entry
+  only after a successful rewrite. `--dry-run` prints edits without writing source or history.
+- The history changes `GotId` matching only when a baseline is present; a cold build emits
+  `STC-W-PROJECT-002` and gives the new key a fresh `GotId`. Renaming a dependency's declaration,
+  a package name, or a key outside the current package is out of scope.
+- Contract review: the history feeds the existing `stc-got` rename maps; it does not change the
+  manifest format, the state file, or the module ABI.
+
+### 14.7 Cross-contract review
+
+- **GOT/online:** no descriptor, manifest, slot, root, or task-record format change; M6 only
+  consumes existing records. Test builds are cold and never touch the manifest store.
+- **State:** the state-file format is unchanged; scheduler and test state are host memory, and
+  test builds disable retention. The D-163 path rules make the state file absolute before the
+  launcher starts.
+- **I/O:** no metadata-shape change; the file backend follows D-160 (cold read, atomic shutdown
+  write), and test builds use memory unless `[test].io` overrides it.
+- **ABI:** only service ID 12 is appended; production modules remain 2.1-compatible, test modules
+  require 2.2, and M6.5 debug services start after 12.
+- **Determinism:** scheduler rank, synthetic test names, rename-history order, and the JSON report
+  shapes are deterministic inputs, so double builds remain byte-identical.
+
+## 15. Post-M6 limitations
 
 - Full debug/monitoring (DWARF/CodeView, checkpoint hooks, typed access, forcing, breakpoints,
   stepping, call stacks, debug sessions/protocol) remains M6.5.

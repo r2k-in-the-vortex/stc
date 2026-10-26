@@ -1,6 +1,6 @@
 # Online Change and GOT
 
-Status: Resolved specification (2026-10-24); implemented for the M4.5/M5 surface (2026-10-25)  
+Status: Resolved specification (2026-10-24); implemented for the M4.5/M5 surface (2026-10-25); M6 phase-0 control-channel, rename-history, and ABI 2.2 contracts fixed (2026-10-26)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -67,13 +67,15 @@ through the host service; that memory is freed when the version fails, retires, 
 
 | Thread | Responsibility |
 | --- | --- |
-| Cycle | Latches inputs, executes ST, publishes outputs; the only thread that executes ST or switches generations |
-| Loader/prepare | Loads the candidate module, validates it, prepares roots/state, and builds the temp GOT |
-| Service/monitor | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at lower priority |
+| Cycle | Latches inputs, sets task guards, executes ST, publishes outputs; the only thread that executes ST or switches generations |
+| Control/status (M6) | Accepts local deploy/status requests for `stc run --watch`; queues deploy work and publishes status; never executes ST |
+| Loader/prepare (M7 target) | Loads the candidate module, validates it, prepares roots/state, and builds the temp GOT. In M6 validation/load/prepare runs between cycles on the cycle thread; fully off-thread prepare remains M7 |
+| Service/monitor (M6.5) | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at lower priority |
 
-The loader and service threads never block the cycle with unbounded locks. They use generation
+The control and service threads never block the cycle with unbounded locks. They use generation
 pinning/epoch refcounts so a module cannot unload while a service reader holds a descriptor.
-Status publication uses lock-free counters, double-buffered snapshots, and bounded rings.
+Status publication uses lock-free counters, double-buffered snapshots, and bounded rings. The M6
+control channel is local deployment/status only and is not the M6.5 debug protocol (D-155).
 
 ### 2.3 Artifacts
 
@@ -275,7 +277,10 @@ file.
 `GotId`s are content-derived 128-bit identities from scope/name/kind, with collision checking.
 The manifest records lineage and tracked renames/moves. A build without the active baseline, or
 with a baseline that is not exactly current, is a cold-layout build and the runtime requires a
-cold download.
+cold download. `stc rename` persists its tracked mappings in the committed `stc.renames.toml`
+history ([CLI and Manifest](CLI-and-Manifest.md) §3.1); builds merge that history with CLI
+`--rename` entries before identity matching. The history changes only the rename maps, not the
+manifest format.
 
 ### 7.4 Storage, download, and security
 
@@ -378,15 +383,21 @@ removed field.
 The host exposes active/retired build IDs, catalog summary, compatibility state, quarantine list,
 and the last rejection. Diagnostics use stable `MODULE`, `MANIFEST`, `ABI`, and `ONLINE` families.
 Online-change load-time diagnostics are primary; source warnings are added only for constructs
-with no safe runtime rule.
+with no safe runtime rule. The M6 control/deploy additions are `STC-E-ONLINE-007` (control
+channel unavailable or unauthorized), `STC-E-ONLINE-008` (deploy rejected), and `STC-E-ONLINE-009`
+(active manifest unavailable for download/diff); the compatibility-report generic warning is
+`STC-W-ONLINE-007` (`STC-W-ONLINE-002` remains the initializer warning).
 
 ## 11. ABI and versioning
 
 Host ABI 2 is a versioned struct (`abi_version` plus `struct_size`, additive within a major).
 M4 code-linked artifacts and ABI 1 are not loadable. The module descriptor, manifest format, and
 runtime state layout are versioned together. A failed compatibility check rejects the candidate
-before activation. The exact ABI 2.1 table, service IDs, entry-point signatures, trap boundary,
-and module descriptor layout are fixed in [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8.
+before activation. The exact host API table, service IDs, entry-point signatures, trap boundary,
+and module descriptor layout are fixed in [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8;
+minor 1 is implemented, and M6 appends only service ID 12 (`set_cycle_time_ns(int64_t)`) as
+minor 2 for test builds. No debug service is added in M6; M6.5 debug services append after 12
+under the same major.
 
 ## 12. Definition of done
 

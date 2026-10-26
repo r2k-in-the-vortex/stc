@@ -116,7 +116,7 @@ specification continues to be written before implementation, as required below.
 | Document | Purpose |
 | --- | --- |
 | [Project Plan](Specification/00-Project-Plan.md) | Scope, milestones, risks, definition of done |
-| [Conformance Profile](Specification/01-Conformance-Profile.md) | Exactly what is implemented and claimed |
+| [Conformance Profile](Specification/01-Conformance-Profile.md) | Exactly what is implemented and claimed; stable diagnostic code index (§10) |
 | [Tokenization](Specification/Syntax/Tokenization.md) | Source model, tokens, literals, trivia |
 | [Grammar](Specification/Syntax/Grammar.md) | EBNF for the supported ST surface |
 | [UTF-8 Strings](Specification/UTF8-Strings.md) | `USTRING`/`UCHAR` extension, encoding, length, ABI |
@@ -270,7 +270,10 @@ unoptimised debug form and contain no DWARF/CodeView or checkpoint hooks yet.
 
 Cargo-like diagnostics (`file:line:col: error[STC-E-...]`), source snippets, notes, suggestions,
 and JSON output are implemented. Details:
-[CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md).
+[CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md). The stable diagnostic code
+index, including the M6 project/test/online target codes, is
+[Conformance Profile](Specification/01-Conformance-Profile.md) §10; JSON report shapes (test,
+compatibility, metadata, compliance) are in CLI and Manifest §1.6.
 
 ## Project manifest
 
@@ -427,7 +430,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-034 | Comparison precedence follows Annex A: relational binds tighter than equality. |
 | D-035 | Strict 2013 semicolon rules by default; relaxed syntax is opt-in. |
 | D-036 | v1 includes minimal `stc fmt` with one fixed style and `--check`. |
-| D-037 | v1 runs a single task per scan; the full task model is parsed/analysed. |
+| D-037 | v1 runs a single task per scan; the full task model is parsed/analysed. Superseded for M6 by D-154 (cooperative multi-task scheduling). |
 | D-038 | `stc test` runs test processes sequentially. |
 | D-039 | Lint levels live in `[lints]`; CLI flags override; errors cannot be downgraded. |
 | D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use is an error. |
@@ -469,7 +472,7 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 | A-014 | Comparison precedence? | Annex A split: relational binds tighter than equality; both left-associative. |
 | A-015 | Strict syntax mode? | Strict 2013 semicolons by default; `--relaxed` enables the superset. |
 | A-016 | Formatter in v1? | Minimal `stc fmt`, fixed style, `--check`; no configuration. |
-| A-017 | Multi-task scheduling in v1? | Single task per scan; full model parsed/analysed. |
+| A-017 | Multi-task scheduling in v1? | Single task through M5; M6 adds cooperative multi-task scheduling (D-154); preemptive/multi-threaded ST later. |
 | A-018 | Parallel test processes? | Sequential only in v1. |
 | A-019 | Lint configuration? | Manifest `[lints]` with per-code entries; CLI overrides. |
 | A-020 | `STC_ASSERT` in production builds? | Test-only; production builds exclude test units and asserts; production use is an error. |

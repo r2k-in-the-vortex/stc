@@ -1,9 +1,10 @@
 # GOT Artifacts and Schemas
 
-Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25)  
+Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25); M6 phase-0 host ABI 2.2 test-clock append fixed (2026-10-26)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: Normative formats for stable keys, `GotId`, the compiler catalog, the module descriptor,
-the persistent GOT manifest, the online-change plan, host ABI 2.1, and build IDs.
+the persistent GOT manifest, the online-change plan, host ABI 2 (2.1 implemented, 2.2 M6
+target), and build IDs.
 
 This document is the machine-readable companion to
 [Online Change and GOT](Online-Change-and-GOT.md). It fixes the bytes and identifiers that the
@@ -27,7 +28,7 @@ v1 layouts, and M4.5 simply leaves later record kinds empty.
 | Type-key/layout derivation | 1 | `STC_LAYOUT_V1` |
 | Module descriptor | 1 | `STC_DESCRIPTOR_V1` |
 | Loadable module (container contract) | 1 | `STC_MODULE_V1` |
-| Host API | 2.1 | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=1` |
+| Host API | 2.1 implemented; 2.2 M6 target | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=1` (M6: `2`) |
 | GOT manifest | 1 | `STC_MANIFEST_V1` |
 | Online-change plan | 1 | `STC_PLAN_V1` |
 | Build ID derivation | 1 | `STC_BUILD_V1` |
@@ -585,13 +586,13 @@ void stc_module_detach(uint64_t generation_id);
   generation switch; the host only switches at a cycle boundary, so values cached within one
   cycle are valid.
 
-## 8. Host API 2.1
+## 8. Host API 2 (2.1 implemented; 2.2 M6 target)
 
 ### 8.1 Table
 
 ```c
 typedef struct stc_host_api {
-    uint32_t abi_version;   /* (major << 16) | minor; 2.1 is 0x00020001 */
+    uint32_t abi_version;   /* (major << 16) | minor; 2.1 is 0x00020001, 2.2 is 0x00020002 */
     uint32_t struct_size;   /* bytes; modules reject a too-small table */
 
     void     (*trap)(int32_t code, uint32_t span_id);
@@ -605,6 +606,8 @@ typedef struct stc_host_api {
     int32_t  (*state_load)(uint8_t* buffer, int64_t len, int64_t layout_hash);
     int32_t  (*state_save)(const uint8_t* buffer, int64_t len, int64_t layout_hash);
     void     (*assert)(int32_t condition, int32_t code, uint32_t span_id);
+    /* Host ABI 2.2 (M6 test builds only; appended, not present in a 2.1 host): */
+    void     (*set_cycle_time_ns)(int64_t ns);
 } stc_host_api;
 ```
 
@@ -621,7 +624,7 @@ code uses import slots for every service it calls.
 
 ### 8.2 Services
 
-Service IDs are used by import slot records and are fixed for host ABI 2 (2.0 and 2.1):
+Service IDs are used by import slot records and are fixed for host ABI 2 (2.0–2.2):
 
 | ID | Field | Contract |
 | --- | --- | --- |
@@ -636,6 +639,7 @@ Service IDs are used by import slot records and are fixed for host ABI 2 (2.0 an
 | 9 | `state_load` | Loads retained bytes into a module buffer; returns `0` or a state status |
 | 10 | `state_save` | Saves retained bytes from a module buffer; returns `0` or a state status |
 | 11 | `assert` | Traps with `(code, span_id)` when `condition` is zero; otherwise returns |
+| 12 | `set_cycle_time_ns` | Host ABI 2.2/M6 test builds only: sets the next cycle's latched time; does not change the current scan |
 
 `alloc` blocks are zeroed, stable for the lifetime of the requesting module generation, and freed
 on failed prepare, retire, or unload. The host rejects an attempt to register a transient block
@@ -662,9 +666,15 @@ Minor 1 appends no service and changes no signature or struct prefix: it records
 TYPEINFO, VTABLE, and object-record layout fixed in §8.5, which generated code reads without a
 host call. The table shape, `struct_size` requirement, and service IDs are identical to 2.0, so
 the minor gate is what keeps a 2.0-only host from running OOP code built against the layout. A
-module built for 2.0 runs on a 2.1 host. A 2.1 module is rejected by a 2.0 host. A breaking
-change to a service signature or the struct prefix increments the major version. M4 ABI 1
-artifacts are not loadable.
+module built for 2.0 runs on a 2.1 host. A 2.1 module is rejected by a 2.0 host.
+
+Minor 2 (M6 phase 6) appends service ID 12, `set_cycle_time_ns(int64_t)`, after `assert`; the
+struct prefix and every existing signature and service ID are unchanged. Only test builds import
+it, so their descriptor requires minor 2 and a 2.1 host rejects them before attach. Production
+modules do not import service 12 and keep required minor 2.1, so they continue to run on a 2.1
+host. A breaking change to a service signature or the struct prefix increments the major version.
+M4 ABI 1 artifacts are not loadable. No M6 debug service exists; M6.5 debug services append after
+ID 12 under the same major.
 
 Module entry-point names and their meanings are part of module format 1, not of the host API
 minor version. Adding a new entry point requires a module format change; adding a host service
@@ -1446,7 +1456,9 @@ For the M4 scalar surface, the compiler populates:
 - **Types and descriptors:** both tables are empty for elementary scalar programs; named user
   types, vtables, and object/type descriptors appear in M5.
 - **Instances and tasks:** the selected or synthesized configuration, one resource, one task,
-  and the program instances it runs. Multi-task topologies remain rejected at build time.
+  and the program instances it runs. Multi-task topologies are rejected at build time in M4.5;
+  M6 removes that restriction and projects every task with its interval/priority/`SINGLE` and
+  guard (D-154). The task record layout is unchanged.
 - **Exports:** `{stc:export}` wrappers and their C names.
 - **Slots:** data, function, direct, and import slots as assigned in §6.2; descriptor slots are
   empty.
@@ -1540,7 +1552,8 @@ code lands.
 Phase 6 is implemented (2026-10-25) in `stc-runtime`. `loader` is the platform layer over
 `LoadLibraryW`/`GetProcAddress`/`FreeLibrary` and `dlopen`/`dlsym`/`dlclose`; it resolves the seven
 §7.3 entry points, copies the descriptor blob and function table, and treats load failures as
-non-fatal module errors. `host_api` is the static ABI 2.1 table described in §8.1: import cells
+non-fatal module errors. `host_api` is the static host API table described in §8.1 (2.1
+implemented; the 2.2 target appends ID 12): import cells
 are bound to the addresses of its fields, transient allocation and free route to the generation
 whose entry point is executing, process-image areas map to the configured image, and traps are
 recorded before the non-returning trap path. `store` keeps the committed baseline as an immutable
@@ -1654,6 +1667,12 @@ address, shadow contents are patched at activation, shape changes and removals t
 object or interface value can depend on are rejected with `STC-E-ONLINE-003`, and removed
 descriptors quarantine with their roots. The service table, `REQUIRED_SIZE`, and both artifact
 formats remain unchanged.
+
+M6 phase 0 (2026-10-26) fixes the next host minor at 2.2 and assigns service ID 12,
+`set_cycle_time_ns(int64_t)`, for the test prelude (D-157). It changes no descriptor, manifest,
+plan, note, or build-ID format, no existing service ID or signature, and no task record; the
+2.2 append is implemented in phase 6 and is imported only by test builds. No debug service or
+checkpoint hook is added in M6.
 
 ## 13. Related documents
 

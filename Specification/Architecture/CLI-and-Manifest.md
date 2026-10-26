@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); project manifest and M6 commands pending  
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 phase-0 project-manifest, diagnostic, report-shape, and rename-history contracts fixed (2026-10-26); project manifest and M6 commands pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -52,12 +52,12 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | --- | --- |
 | `--manifest-path <path>` | Use a specific `stc.toml` |
 | `--target <triple>` | Pass a target triple to clang; emit it in the IR |
-| `--release` | Optimised, stripped build; omits debug hooks and full debug info; distinct build ID/manifest. Debug is the default mode |
-| `--debug` | Force debug information and checkpoint hooks (default unless `--release`) |
+| `--release` | Optimised, stripped build; omits debug hooks and full debug info; distinct build ID/manifest. M6 rejects it as a usage error; M6.5 implements it. Debug is the default mode |
+| `--debug` | Force debug information and checkpoint hooks (default unless `--release`). M6 accepts it but always builds the unoptimised debug form without debug info or hooks (D-158) |
 | `--emit <list>` | Comma-separated `ir,obj,module,exe,lib,metadata`; `module` emits the loadable module and manifest pair; `exe` is a launcher and `lib` the embedding host library; the two may coexist; overrides manifest |
 | `--got-manifest <path>` | Build against the given persistent GOT manifest as the identity baseline |
 | `--cold` | Explicitly build without an online-change baseline (cold-layout build) |
-| `--rename <old=new>` | Record a tracked rename/move; repeatable, including field and package paths |
+| `--rename <old=new>` | Record a tracked rename/move; repeatable, including field/method/type/POU paths. Renaming a package name is out of scope (D-156) |
 | `--clang <path>` | clang executable |
 | `--runtime <path>` | Runtime host archive used when linking `exe`/`lib` |
 | `--out-dir <path>` | Artifact directory; M4.5 default `target/stc/debug`; the M6 project manifest uses `target/stc/<profile>` |
@@ -126,10 +126,17 @@ JSON format: one object per diagnostic on stdout, one per line:
 }
 ```
 
-- Error codes are stable; see the conformance profile and each spec.
+- Error codes are stable; see the conformance profile and each spec. The complete code index,
+  including the M6 `PROJECT`, `LOCK`, `ASSERT`, `TEST`, `FMT`, `RUN`, and `ONLINE` additions, is
+  [Conformance Profile](../01-Conformance-Profile.md) §10.
+- Project diagnostics use `STC-E-PROJECT-*` / `STC-W-PROJECT-*`; lockfile diagnostics use
+  `STC-E-LOCK-*`; test and assertion diagnostics use `STC-E-TEST-*` / `STC-E-ASSERT-*`;
+  formatter diagnostics use `STC-E-FMT-*`.
 - Online-change diagnostics use the `STC-E-MODULE-*`, `STC-E-MANIFEST-*`, `STC-E-ABI-*`, and
-  `STC-E-ONLINE-*` / `STC-W-ONLINE-*` families; debug diagnostics use `STC-E-DEBUG-*` and
-  `STC-W-DEBUG-*`.
+  `STC-E-ONLINE-*` / `STC-W-ONLINE-*` families; the M6 control-channel and deploy additions are
+  `STC-E-ONLINE-007/008/009` and the compatibility-report warning is `STC-W-ONLINE-007`
+  (`STC-W-ONLINE-002` remains the initializer warning). Debug diagnostics use `STC-E-DEBUG-*`
+  and `STC-W-DEBUG-*`.
 - Compiler panics are caught and reported as `STC-I-0001` with a bug-report note and the IR/source
   context. They never print a Rust backtrace by default (`RUST_BACKTRACE=1` for developers).
 
@@ -149,7 +156,102 @@ The v1 style is fixed:
 - idempotent: formatting an already-formatted file produces no change.
 
 No configuration, range formatting, or lint integration in v1. The formatter uses the lossless
-CST and never rewrites tokens it does not understand.
+CST and never rewrites tokens it does not understand. Syntax errors prevent formatting
+(`STC-E-FMT-001`); a file that cannot be read or written is `STC-E-FMT-002`.
+
+### 1.6 JSON report shapes
+
+These shapes are stable for v1. Required keys are listed; a compatible addition may append a
+key, but a required key's name, type, or meaning does not change. JSON goes to stdout; human
+logging stays on stderr.
+
+**Diagnostics.** One object per diagnostic per line, as in §1.4. This shape is unchanged.
+
+**Test results.** `stc test --message-format json` writes one object per test, in discovery
+order, after the test process exits:
+
+```json
+{
+  "name": "TimerBlink",
+  "status": "fail",
+  "duration_ms": 25,
+  "failures": [
+    { "message": "timer should complete", "file": "tests/timer.st", "line": 6, "column": 3 }
+  ],
+  "trap": null
+}
+```
+
+- `status` is `pass`, `fail`, `trap`, or `timeout`.
+- `duration_ms` is the wall-clock time spent in the test process.
+- `failures` contains one entry per recorded `STC_ASSERT` failure; `file`, `line`, and `column`
+  are omitted only when the call site has no source location.
+- `trap` is the trap name (for example `STC_TRAP_DIV_ZERO`) for `status = "trap"`, otherwise
+  `null`. An expected trap that matches `expect-trap` produces `pass`.
+
+**Compatibility report.** `stc build` and `stc online` write one object when a baseline is in
+use (human output is the default; `--message-format json` selects this shape):
+
+```json
+{
+  "verdict": "compatible",
+  "baseline_build_id": "0x…",
+  "candidate_build_id": "0x…",
+  "counts": { "preserved": 12, "allocated": 2, "dropped": 1, "retired": 1, "rejected": 0 },
+  "warnings": [ { "code": "STC-W-ONLINE-004", "message": "…" } ],
+  "rejections": []
+}
+```
+
+- `verdict` is `compatible`, `incompatible`, or `cold`; `baseline_build_id` is `null` for a cold
+  build with no baseline.
+- `counts` always contains all five counters, including zeros.
+- `warnings` and `rejections` contain stable `code`/`message` objects; rejection codes are
+  `STC-E-ONLINE-*`/`STC-E-MODULE-*`/`STC-E-MANIFEST-*`/`STC-E-ABI-*`.
+- `-v` additionally emits an `actions` array of `{ "got_id", "kind", "key" }` objects; without
+  `-v` the key is absent.
+- `stc online diff` exits 0 for `compatible`, 1 for `incompatible`, and 2 for usage/parse errors;
+  the object is printed in both human and JSON modes.
+
+**Metadata summary.** `stc metadata --message-format json` writes one object:
+
+```json
+{
+  "profile": "stc-2013-oop-utf8-v1",
+  "abi_version": 2,
+  "artifact": "motor-control",
+  "build_id": "0x…",
+  "configuration": "Main",
+  "target": "x86_64-pc-windows-msvc",
+  "tasks": [ { "name": "MainTask", "resource": "Cpu", "interval_ns": 1000000, "priority": 1, "single": false } ],
+  "exports": [ { "symbol": "stc_export_Main", "function": "stc_fn_…" } ],
+  "retain": { "enabled": true, "file": "motor.stcstate", "on_mismatch": "error" },
+  "io": { "backend": "null", "bindings": 1, "devices": 1 },
+  "artifacts": [ { "kind": "module", "file": "motor-control-<build-id>.dll" } ]
+}
+```
+
+The object is a summary; the sidecar in §4 remains the complete metadata. `on_mismatch` is a JSON
+field name; the manifest key is `on-mismatch`.
+
+**Compliance summary.** `stc compliance --message-format json` writes one object:
+
+```json
+{
+  "profile": "stc-2013-oop-utf8-v1",
+  "edition": "IEC 61131-3:2013",
+  "ed4_claimed": false,
+  "extensions": ["STC-UTF8", "STC-PRAGMA", "STC-TEST", "STC-POINTER"],
+  "runtime_capabilities": ["online-change", "got-manifest", "debug-monitoring"],
+  "features": { "lexical": "implemented", "oop": "implemented", "project-system": "planned" },
+  "safety": "not-a-safety-plc"
+}
+```
+
+`features` maps the conformance profile's feature categories to `implemented`, `partial`,
+`planned`, or `not-in-profile`; it is not a claim beyond
+[Conformance Profile](../01-Conformance-Profile.md). `safety` is a fixed string, and the human
+output includes the non-safety statement verbatim.
 
 ## 2. Project manifest: `stc.toml`
 
@@ -174,7 +276,7 @@ configuration = "Main"            # optional if exactly one CONFIGURATION exists
 [build]
 target = "x86_64-pc-windows-msvc" # optional; default = clang host
 opt-level = 2
-debug = true                      # debug is the default build mode
+debug = true                      # parsed; M6 always builds the debug form without debug info (D-158)
 syntax = "strict"                 # strict (default) | relaxed
 emit = ["module", "ir"]           # v1 online-change deployment; exe/ir/lib also available
 lib-type = "static"               # static | shared, used when emit includes "lib"
@@ -185,7 +287,9 @@ runtime = "target/debug/stc_runtime.lib"           # optional
 [io]
 backend = "null"                  # v1: null | memory | file
 file = "io.bin"                   # used when backend = "file"
-# input-bytes / output-bytes / marker-bytes are optional; the compiler computes them
+input-bytes = 16                  # optional; the compiler computes image sizes from AT declarations
+output-bytes = 16
+marker-bytes = 64
 
 [[io.devices]]
 name = "drive1"
@@ -214,9 +318,9 @@ manifest-dir = "runtime/manifests"
 max-retired-generations = 1
 
 [online]
-baseline = "active"                 # active | explicit path
-# manifest = "runtime/manifests/motor.stc-got.json"  # when baseline = explicit
-cold-policy = "require-confirmation"
+baseline = "active"                 # active | explicit
+# manifest = "runtime/manifests/motor.stc-got.json"  # required when baseline = "explicit"
+cold-policy = "require-confirmation"  # v1 value; confirmation is required before a cold download
 allow-untracked-removal = false
 
 [debug]
@@ -244,11 +348,18 @@ io = "memory"
 name = "TimerBlink"
 cycles = 25
 timeout = "2s"
+expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pass
 ```
 
 ### 2.2 Schema rules
 
 - `schema` is required and currently `1`. Unknown top-level keys are errors.
+- Every schema-defined key in `stc.toml` is kebab-case as shown in §2.1. Snake_case spellings
+  (`opt_level`, `out_dir`, `on_mismatch`, `module_dir`, `cold_policy`, `cycle_time`, `mock_clock`,
+  `expect_trap`, and so on) are unknown keys, not aliases; they produce `STC-E-PROJECT-002` with
+  a did-you-mean suggestion. Dependency alias keys are user package names and `[lints]` keys are
+  quoted `STC-*` codes, so those table keys are not schema keys. JSON field names in metadata are
+  separate and may use snake_case (for example `on_mismatch`).
 - `[package] name` is required, ASCII, matches `[A-Za-z_][A-Za-z0-9_-]*`, and is used for artifact
   names.
 - `[package] version` is required and semver-ish (not used for dependency resolution in v1).
@@ -256,11 +367,13 @@ timeout = "2s"
   new profile IDs; it does not silently change semantics.
 - `[dependencies]` entries are local path dependencies in v1:
   `name = { path = "../dir" }`. The key is the dependency alias; the dependency's
-  `[package] name` must match it unless an explicit alias is present. Paths are canonicalized;
-  packages are deduplicated by canonical path; cycles are errors. The graph is compiled in
-  topological order. A `version` key is reserved for a future registry (beyond v1) and is ignored
-  for path dependencies. The resolved graph is written to `stc.lock`; no network access or
-  registry in v1.
+  `[package] name` must match it unless an explicit alias is present. An explicit alias is
+  `alias = { path = "../dir", package = "real-name" }`: `alias` is the root namespace and
+  `package` is the dependency's `[package].name`, which remains the package identity for
+  catalog keys, `GotId`s, and symbols (D-153). Paths are canonicalized; packages are
+  deduplicated by canonical path; cycles are errors. The graph is compiled in topological order.
+  A `version` key is reserved for a future registry (beyond v1) and is ignored for path
+  dependencies. The resolved graph is written to `stc.lock`; no network access or registry in v1.
 - `[project] sources` is a list of globs relative to the manifest. All matching `.st` files are
   compiled as one package; file order is not semantic. Duplicate paths and paths outside the
   project root are errors unless explicitly allowed. Dependencies are separate packages with
@@ -271,8 +384,10 @@ timeout = "2s"
   exists, it is selected. If omitted and multiple exist, the build fails with a list.
 - `[build] target` is passed to clang and emitted as the IR triple.
 - `[build] opt-level` is `0|1|2|3|"s"`; maps to clang `-O` flags.
-- `[build] debug` controls full debug information and checkpoint hooks (default `true`).
-  `--release` overrides it with a stripped/optimised build and a distinct build ID/manifest.
+- `[build] debug` is parsed from phase 1. M6 always builds the unoptimised debug form without
+  DWARF/CodeView or checkpoint hooks; `debug = false` emits `STC-W-PROJECT-001`, and `--release`
+  is a usage error until M6.5 implements the stripped/optimised form and its distinct build
+  ID/manifest (D-158).
 - `[build] syntax` is `strict` (default) or `relaxed`. Strict requires the 2013 statement
   terminator rules; relaxed enables the documented omitted-semicolon-after-block superset.
   `--relaxed` overrides the manifest.
@@ -303,13 +418,17 @@ timeout = "2s"
   [State and RETAIN](State-and-Retain.md).
 - `[runtime]` sets the runtime module/manifest directories and the number of retired generations
   retained for rollback/grace (`max-retired-generations`, default 1).
-- `[online]` selects the build baseline (`active` or an explicit manifest path), the
-  cold-download policy (`require-confirmation` default), and whether untracked root removal is
-  allowed without a tracked rename (default false). `--got-manifest`, `--cold`,
-  `--allow-untracked-removal`, and `--rename` override it.
+- `[online].baseline` is `active` (the host's committed baseline) or `explicit`; when it is
+  `explicit`, `manifest` names the baseline path. `cold-policy` is `require-confirmation` in v1:
+  a cold download needs an explicit confirmation or the documented cold path.
+  `allow-untracked-removal` controls whether untracked root removal is allowed without a tracked
+  rename (default false). `--got-manifest`, `--cold`, `--allow-untracked-removal`, and `--rename`
+  override it.
 - `[debug]` controls the default debug mode, local protocol transport (`pipe` default, `socket`
   optional), and whether every online swap ends the debug session (default true). Debug remains a
-  local, authenticated capability; it is not a safety function.
+  local, authenticated capability; it is not a safety function. M6 parses the table but builds
+  the debug form without debug information; `default = false` emits `STC-W-PROJECT-001`, and the
+  protocol/session settings take effect in M6.5 (D-158).
 - `[lints]` sets project lint levels. `warnings` is the baseline (`warn` default, `deny`, or
   `allow`). Per-code keys are `"STC-W-*"`/`"STC-E-*"` with values `allow`, `warn`, or `deny`.
   Errors cannot be downgraded below `error`; a manifest that tries is invalid. Unknown codes are
@@ -365,10 +484,15 @@ timeout = "2s"
 
   `stc test` in that package compiles `motor-control` and the test sources but runs only the test
   POUs in `motor-tests`.
-- `cycles` overrides the test's default cycle count.
-- `timeout` is a duration string; the runner kills the test process on expiry.
-- `mock-clock` sets the initial mock time; tests can advance it via the test harness API.
-- `expect-trap` (future) records the expected trap code; a test that traps with that code passes.
+- `[test].default-cycles` is the cycle count for FB/program tests when neither the `{stc:test}`
+  payload nor `[[test.case]].cycles` sets one; the default is `1`.
+- `[[test.case]].cycles` overrides the test's default cycle count.
+- `timeout` is a duration string; the runner kills the test process on expiry. The default is 5 s.
+- `[test].mock-clock` sets the initial mock time; tests advance the next cycle's latched time with
+  `STC_CLOCK_ADVANCE` through host ABI 2.2 service ID 12 (D-157).
+- `[[test.case]].expect-trap` (M6) records the expected trap code; a test that traps with that
+  code passes, and any other trap fails it. The same key is accepted in the `{stc:test}` JSON
+  payload; a pragma/manifest conflict is `STC-E-PROJECT-008`.
 
 ## 3. Lockfile: `stc.lock`
 
@@ -402,13 +526,47 @@ Rules:
   parent manifest is recorded as the edge name; the package's own name is the `name` field.
 - The lockfile is a resolved graph, not a source of version requirements. A dependency without a
   `path` is an error in v1.
-- `--locked` fails if the lockfile is missing or would change (new/removed package, changed
-  version/path/edge). CI uses `--locked`.
+- `--locked` fails if the lockfile is missing (`STC-E-LOCK-001`) or would change
+  (`STC-E-LOCK-002`: new/removed package, changed version/path/edge). A malformed or unsupported
+  lockfile is `STC-E-LOCK-003`. CI uses `--locked`.
 - `stc clean` does not delete `stc.lock` or retained-state files. Deleting them is an explicit
   user action.
 - Local source contents are not hashed in v1; editing a path dependency's sources does not
   rewrite the lockfile. A content-hash field can be added later without changing the schema's
   package identity.
+
+### 3.1 Rename history: `stc.renames.toml`
+
+`stc rename` records tracked renames and moves in a committed `stc.renames.toml` at the root
+package directory. The file is optional; a missing file is an empty history. Builds read it to
+feed the existing `stc-got` rename maps, and `stc rename` appends to it after a successful source
+rewrite.
+
+```toml
+schema = 1
+
+[[rename]]
+old = "Main.Speed"
+new = "Main.Rate"
+```
+
+Rules:
+
+- `schema` is required and currently `1`; unknown keys are errors (`STC-E-PROJECT-012`).
+- Each `[[rename]]` entry has non-empty `old` and `new` strings in the same form accepted by
+  `--rename` (a GOT key or a field path); entries are stored oldest first.
+- Builds merge history entries oldest-first with CLI `--rename` entries in command order and
+  resolve chains by composition: `A -> B` followed by `B -> C` is passed to the identity engine
+  as `A -> C`. Duplicate `old` values with different `new` values, or a chain that revisits a
+  key, are `STC-E-PROJECT-013`.
+- `stc rename` rewrites only sema-resolved identifier tokens (the declaration and its references),
+  leaves comments and strings untouched, preserves formatting and file encoding, and appends the
+  entry only after the rewrite succeeds. `--dry-run` prints the edits and writes neither source
+  nor history.
+- Identity is preserved only when an online baseline is in use; a cold build emits
+  `STC-W-PROJECT-002` and the new key receives a fresh `GotId`. Renaming a dependency's
+  declaration, a package name, or a key outside the current package is out of scope.
+- The history does not change the manifest format, state file, or module ABI.
 
 ## 4. Artifact and metadata layout
 
@@ -476,8 +634,9 @@ target/stc/debug/                               M4.5 default (v1: target/stc/<pr
 ```
 
 The M4.5 schema above is what the driver writes. The v1 target adds package/device/`VAR_ACCESS`
-metadata and the `file`/`on_mismatch` retained-state policy in M6; these fields are not emitted
-by M4.5. `parent_build_id` is carried by the manifest lineage rather than the metadata sidecar.
+metadata and the `file`/`on-mismatch` retained-state policy (JSON field `on_mismatch`) in M6;
+these fields are not emitted by M4.5. `parent_build_id` is carried by the manifest lineage rather
+than the metadata sidecar.
 
 - `lib` is the embedding host library, not generated module code. In M4.5 it is a static host
   archive; shared host libraries (`lib-type = "shared"`) are M6. `exe` is a thin launcher and

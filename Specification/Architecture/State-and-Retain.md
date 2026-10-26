@@ -1,6 +1,6 @@
 # State and RETAIN Persistence
 
-Status: M4.5 scalar roots, M5 aggregate/string/FB leaves, and online preservation implemented (2026-10-25); file-backed state is M6  
+Status: M4.5 scalar roots, M5 aggregate/string/FB leaves, and online preservation implemented (2026-10-25); M6 phase-0 path/retain metadata contract fixed (2026-10-26); file-backed state is M6  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Architecture](Architecture.md), [Decisions](../Decisions.md)
 
@@ -186,6 +186,12 @@ CLI overrides:
 
 `stc clean` does not delete state files; they are user data.
 
+`stc run` resolves a manifest-relative `[retain].file` against the root package directory and a
+CLI `--state-file` against the current directory, then passes an absolute path to the launcher
+(D-163). A standalone launcher resolves a relative path against its module directory and
+documents that base; embedding hosts supply their own paths. The absolute path is what the
+atomic-save temporary file and replace use.
+
 ## 5. Generated ABI
 
 The generated module exports:
@@ -240,6 +246,9 @@ storage. The host owns path/atomicity/policy in that case.
 ```json
 {
   "retain": {
+    "enabled": true,
+    "file": "motor.stcstate",
+    "on_mismatch": "error",
     "size": 128,
     "layout_hash": "0x9f2c...",
     "leaves": [
@@ -253,9 +262,10 @@ storage. The host owns path/atomicity/policy in that case.
 - `leaves` is sorted by path/offset and is the human-readable form of the layout hash input.
 - The runtime uses `size`/`layout_hash` with the generated functions; it does not interpret leaf
   types. Root identities (`GotId`) live in the GOT manifest, not in the leaf list.
-- M4.5 emits `size`, `layout_hash`, and `leaves` for scalar programs; `file` and `on_mismatch`
-  are part of the M6 file-backed state policy. Aggregate/FB leaf paths such as
-  `Main.Timer.Elapsed` are M5.
+- M4.5 emits `size`, `layout_hash`, and `leaves` for scalar programs; `enabled`, `file`, and
+  `on_mismatch` are part of the M6 file-backed state policy and are emitted from phase 5.
+  Aggregate/FB leaf paths such as `Main.Timer.Elapsed` are M5. The JSON field names use
+  snake_case; the manifest keys remain kebab-case (`on-mismatch`).
 
 ## 7. Diagnostics
 
