@@ -3,8 +3,9 @@
 //! Only the out-dir tree is removed. `stc.lock` and retained-state files are
 //! never deleted: a state file that lives inside the out-dir is preserved and
 //! the directory is left in place holding it. Paths are made absolute and
-//! lexically normalized before the containment checks so `--out-dir .` cannot
-//! bypass the project-root guard.
+//! canonicalized (falling back to lexical normalization when they do not
+//! exist) before the containment checks, so a relative or aliased `--out-dir`
+//! cannot bypass the project-root guard.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -97,10 +98,12 @@ fn absolute(path: &Path) -> PathBuf {
     normalized
 }
 
-/// Strips the Windows verbatim prefix so canonical and working-directory paths
-/// compare consistently.
+/// Resolves `path` to its canonical form when it exists and strips the Windows
+/// verbatim prefix, so aliases such as 8.3 short names or junctions compare
+/// consistently with the working directory and the canonical project root.
 fn comparable(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy();
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let text = resolved.to_string_lossy();
     let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
     PathBuf::from(text)
 }

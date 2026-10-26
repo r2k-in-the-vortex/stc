@@ -319,7 +319,9 @@ impl Fixture {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let manifest_path = directory.join(format!("{name}.stc-got.bin"));
+        // The host derives the manifest name from the module file stem, which
+        // carries a `lib` prefix on Unix; use the same rule here.
+        let manifest_path = stc_runtime::module_info::manifest_path(&module_path);
         fs::write(&manifest_path, &artifacts.manifest_binary).expect("write manifest");
         Some(Self {
             module_path,

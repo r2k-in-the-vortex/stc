@@ -380,12 +380,17 @@ pub(crate) fn elapsed(start: Instant) -> String {
 /// Renders a resolved path for logs: no Windows verbatim prefix, and relative
 /// to the working directory when it is below it. Paths are otherwise printed
 /// as resolved.
+///
+/// Both sides are canonicalized first so aliases such as Windows 8.3 short
+/// names or junctions compare equal to the working directory.
 #[must_use]
 pub(crate) fn display_path(path: &std::path::Path) -> String {
-    let text = path.to_string_lossy();
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = resolved.to_string_lossy();
     let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
     let unbounded = std::path::Path::new(text);
     if let Ok(current) = std::env::current_dir() {
+        let current = std::fs::canonicalize(&current).unwrap_or(current);
         let current = current.to_string_lossy();
         let current = current.strip_prefix(r"\\?\").unwrap_or(&current);
         if let Ok(relative) = unbounded.strip_prefix(current)
