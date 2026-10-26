@@ -1,0 +1,710 @@
+# M6 Implementation Plan — Project System, CLI, and Verification Hardening
+
+Profile: `stc-2013-oop-utf8-v1`  
+Date: 2026-10-26  
+Status: Draft for implementation review; no M6 code written yet. M5 (phases 1–7 and 4b) is
+complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
+usable v1 project tool.  
+Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
+[CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §1–§6,
+[State and RETAIN](Specification/Architecture/State-and-Retain.md),
+[I/O and Devices](Specification/Architecture/IO-and-Devices.md),
+[Testing and Verification](Specification/Architecture/Testing-and-Verification.md),
+[Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md),
+[Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md),
+[Architecture](Specification/Architecture/Architecture.md) §2/§5,
+[GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md),
+[Conformance Profile](Specification/01-Conformance-Profile.md), `M5-Plan.md`, `M6.5-Plan.md`, and
+Decisions D-051, D-060, D-068, D-071, D-079, D-084, D-085, D-087, D-108–D-110, D-134, and D-136.
+
+M6 follows M5 and precedes M6.5. It turns the finished language/runtime surface into a project
+tool: `stc.toml`, local path dependencies, a committed lockfile, package-aware namespaces,
+configurations and task scheduling, file-backed retained state, I/O device/binding metadata,
+`stc run/test/fmt/clean/new`, the online-change developer workflow, Lean vectors, the conformance
+corpus, traceability, and the CI matrix. It does not implement debug/monitoring; DWARF/CodeView,
+checkpoint hooks, typed access, forcing, breakpoints, and the debug protocol remain M6.5.
+
+## 1. Objective
+
+Deliver the v1 user workflow on the M5 host/module model:
+
+- a complete `stc.toml` project schema, local path dependency graph, `stc.lock`, and
+  package-aware namespace/visibility rules;
+- configurations, resources, multiple tasks, priorities, intervals, `SINGLE`, and a deterministic
+  cooperative scheduler;
+- file-backed retained state with warm/cold restart and the online attach/cold-download policy;
+- I/O device-tree, project-binding, `VAR_ACCESS`, and input-default metadata plus the v1
+  `null`/`memory`/`file` runtime backends;
+- `stc new/check/build/run/test/fmt/clean/metadata/compliance` with JSON diagnostics, verbose
+  output, lint levels, colors, and stable exit codes;
+- a test-only unit/assertion/runner model with process isolation, timeouts, mock clocks, and
+  expected-trap support;
+- a minimal fixed-style formatter over the lossless CST;
+- the online-change workflow: build against the active baseline, deploy/reload online with
+  `stc run --watch`, review a compatibility report, `stc online download/diff`, source-aware
+  `stc rename`, and cold recovery from a missing/stale baseline;
+- Lean exact-function models, proofs, and committed vectors consumed by Rust tests;
+- a conformance corpus, UI diagnostic snapshots, traceability, `fuzz_manifest`, and active CI
+  jobs for unit/snapshot, conformance, execution, projects, fuzz-smoke, and Lean.
+
+## 2. Scope
+
+### 2.1 In scope
+
+| Area | Work |
+| --- | --- |
+| Project system | Full `stc.toml` schema, source discovery, local path dependency graph, `stc.lock`, `--locked`, package-aware namespaces and `INTERNAL` visibility |
+| CLI | `new`, `check`, `build`, `run`, `test`, `fmt`, `clean`, `metadata`, `compliance`, `online download/diff`, `rename`, `run --watch`; JSON/short diagnostics, `-v`/`-vv`, `-q`, color, lint levels |
+| Configurations | Configuration/resource/task selection; multi-task scheduling; intervals, priorities, `SINGLE`, cycle-latched clocks, mock clocks |
+| State | File-backed retained state, atomic save, warm/cold restart, mismatch policy, `--state-file`/`--reset-retain`/`--no-retain`, online attach vs. cold download |
+| I/O | Device tree/channels, project bindings, `{stc:io}` precedence, `VAR_ACCESS`, input defaults, `null`/`memory`/`file` backends, per-cycle latch/publish |
+| Build | Project defaults, `target/stc/<profile>`, `module`/`exe`/`lib`/`ir`/`obj`/`metadata`, shared host libraries, deterministic artifacts |
+| Tests | `{stc:test}` discovery, `STC_ASSERT`, test-only units, test prelude helpers, isolated runner, filters/list/no-run/timeouts/JSON, separate test project |
+| Format | Fixed style over the CST, `--check`, comments preserved, strict semicolons, idempotence |
+| Online workflow | Active-baseline builds, compatibility reports, `stc online download/diff`, `stc rename` history, `stc run --watch` local deploy control, cold recovery |
+| Verification | Lean models/proofs/vectors, Rust vector tests, conformance corpus, UI tests, traceability report, `fuzz_manifest`, CI matrix |
+| Docs | README, project plan, conformance profile, architecture/runtime/state/I/O/CLI/testing/online-change specs, decisions, this plan |
+
+### 2.2 Out of scope
+
+- Full debug/monitoring (M6.5): DWARF/CodeView, checkpoint hooks, typed access, watch/force,
+  breakpoints, stepping, call stacks, the debug session protocol and authentication, and the
+  manifest-assisted split-object view.
+- `--release`, stripped/optimised artifacts, debug/release build-ID separation, and debug
+  information emission. M6 parses the manifest keys and keeps the existing descriptor flags, but
+  builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks (M6.5).
+- Field-layout migration, resizing, `GotId`-keyed retained-state migration, and record/handle
+  migration across restarts.
+- Remote/network deployment, multi-user scheduling, a debugger UI, and a network package
+  registry/version solver.
+- Hardware I/O backends (EtherCAT, Modbus, MQTT), their schedules, and runtime override
+  configuration beyond the v1 backend selection.
+- Multi-threaded ST execution. M6 adds host control/service threads for deployment and status;
+  only the cycle thread executes ST.
+- Migrating the synthesized standard FB bodies to a textual `stdlib/` package. The package graph
+  makes that possible, but D-134's synthesized-HIR implementation remains v1 behavior.
+- `stc lsp`, `stc doc`, and a configurable/range formatter.
+- Native Linux AArch64 host support (M8). M6 CI keeps Windows x64 and Ubuntu x64.
+
+## 3. Architecture summary
+
+```text
+stc.toml graph
+   -> stc-manifest (schema, sources, dependencies, lockfile)
+   -> ordered packages
+   -> lexer/parser per file -> one merged HIR with package-qualified namespaces
+   -> codegen -> module + manifest + metadata (unchanged ABI 2.1 formats)
+   -> host: cycle thread | task scheduler | state/IO | control thread
+```
+
+- **One build, one merged HIR.** Packages are compiled together into one HIR crate with globally
+  unique `DefId`s. `Def.package` records the owning package; each package has a root namespace
+  derived from its manifest name (or dependency alias). Cross-package references resolve through
+  package-qualified names and `USING`; `INTERNAL` is checked against package identity, not alias.
+- **Package identity is stable.** Catalog keys and `GotId` scopes use the dependency's
+  `[package] name`, not its alias, so the same package keeps its identity when a parent renames an
+  alias. Mangled symbols and GOT keys include the package name.
+- **The host schedules tasks.** The manifest already carries `TaskRecord { single, interval_ns,
+  priority, guard_got_id }`. The host owns task run state keyed by task `GotId`; before each scan
+  it sets each task's host-owned `TaskGuard` root to "run this scan" or "skip", and the generated
+  `stc_module_cycle` runs the instances whose guard is set in plan order. `SINGLE` completion,
+  deadlines, and task topology preservation live in the host; a task/resource topology change
+  requires a cold download.
+- **State and I/O are host-owned.** The ABI 2 `state_load`/`state_save` services become real
+  file-backed services with atomic replace. The host applies input defaults and backend reads at
+  the scan boundary, runs due tasks, and publishes outputs once.
+- **Online deploy is a local control channel.** `stc run --watch` starts the launcher with a
+  local-only control endpoint (named pipe on Windows, Unix socket on Linux, nonce handshake) and
+  sends module/manifest pairs. The host queues the request, validates/loads/prepares the candidate
+  between cycles, and activates at the next boundary. Debug/monitoring has a separate, authenticated
+  protocol in M6.5; M6's control channel is for deployment/status only.
+- **Determinism is unchanged.** Package order is topological with deterministic tie-breaking;
+  source order is package order then lexicographic path; lockfiles use forward slashes and no
+  absolute paths; double builds remain byte-identical; all new metadata is canonical JSON.
+
+## 4. Exit criteria
+
+1. `stc new/build/check/run/test/clean` work end-to-end on Windows x64.
+2. The full `stc.toml` schema is implemented: package, sources, path dependencies, `stc.lock`,
+   `--locked`, build/run/retain/I/O/online/lint/test settings, and unknown-key diagnostics.
+3. Package-aware namespaces and `INTERNAL` visibility work across a dependency graph; a separate
+   test project can depend on the code under test.
+4. A configuration with multiple resources/tasks/intervals/priorities/`SINGLE` runs
+   deterministically; all timers in one scan see one latched cycle time; task state survives a
+   compatible swap and resets on cold download.
+5. File-backed retained state round-trips across restart; layout/profile/format mismatch,
+   corruption, atomic-save failure, `--reset-retain`, and `--no-retain` follow the documented
+   policy; online attach preserves matching roots and cold download applies defaults and only
+   compatible `RETAIN` values.
+6. `stc.toml` device trees, project bindings, `VAR_ACCESS`, and input defaults are emitted in
+   metadata; `null`/`memory`/`file` backends behave as specified; binding precedence is enforced;
+   unbound inputs receive defaults each cycle.
+7. `stc test` discovers `{stc:test}` units, compiles test-only sources, resolves test-only
+   `STC_ASSERT`, isolates each test in a process, supports cycles/timeouts/mock clock/I/O/trap
+   expectations/filters/list/no-run/JSON, and excludes test code from production artifacts (the
+   release bind M6.5 will build keeps the same exclusion).
+8. `stc fmt` is idempotent, preserves comments and line breaks, emits strict semicolons, supports
+   `--check`, and does not rewrite tokens it does not understand.
+9. A user can build against the active manifest, deploy/reload online, review the compatibility
+   report, download the active manifest, build a compatible change from it, and recover from a
+   missing/stale/cold baseline through the documented cold download.
+10. `stc rename` rewrites source and records a rename history that preserves `GotId`s across the
+    next build; tracked field/method/type/POU moves work.
+11. Lean models/proofs build without `sorry`/`admit`; `lake exe vectors` is deterministic and
+    committed; Rust vector tests and C-harness samples pass.
+12. The conformance corpus and UI snapshots cover implemented rule categories; the traceability
+    report shows every implemented normative rule has a test or an explicit "not implemented"
+    entry; CI runs unit/snapshot, conformance, execution, projects, fuzz-smoke, and Lean jobs on
+    the documented matrix.
+13. `stc new/build/check/run/test/clean`, the project manifest, `stc.lock`, state, I/O, online
+    workflow, and testing docs describe the implemented behavior truthfully; no M6.5 debug
+    capability is claimed.
+
+## 5. Work breakdown
+
+| Phase | Work | Acceptance |
+| --- | --- | --- |
+| 0 | Resolve the M6 decision questions; fix the manifest schema, diagnostics, JSON report shapes, and M6/M6.5 boundary | Reviewed decisions; stable names/codes |
+| 1 | `stc-manifest`: full `stc.toml`, source discovery, dependency graph, `stc.lock`, `--locked` | Schema/graph/lock/source tests; deterministic lockfile; `fuzz_manifest` |
+| 2 | Multi-package front end: package root namespaces, cross-package resolution, `INTERNAL`, configuration selection | Dependency projects resolve/build; access and alias tests |
+| 3 | Project CLI: `new/check/build/clean/metadata/compliance`, build settings, artifacts, JSON/verbose/lints/color | CLI integration for every verb and exit code; scaffold builds |
+| 4 | Configurations/tasks: host scheduler, guards, task state, `stc run`, mock clock, cycle-time, signals | Multi-task scheduling and run-loop tests; online task preservation |
+| 5 | Retained state and I/O: file-backed state, policies, device tree/bindings/VAR_ACCESS/defaults, backends | State round-trip/corruption/atomic tests; I/O metadata and backend tests |
+| 6 | `stc-test`: test build mode, `STC_ASSERT`, test prelude, process-isolated runner, filters/JSON | Function/FB/program tests; timeout/trap; production exclusion |
+| 7 | `stc-fmt`: fixed style, `--check`, comments, strict semicolons, idempotence | Formatter tests; CLI integration |
+| 8 | Online workflow: reports, `online download/diff`, `rename` history, `run --watch` control/deploy, cold recovery | End-to-end watch swap, download/rebuild, diff, rename, cold tests |
+| 9 | Lean: Lake project, exact models/proofs, vector generator, Rust/C-harness vector tests | `lake build` clean; vectors committed; tests pass |
+| 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
+| 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
+
+Phase status: all phases are pending. Phase 0 must finish before code in phases 1–10; phases may
+proceed in parallel only where the dependency direction allows (for example, Lean and the
+conformance harness can start once phase 0 fixes the vector and corpus contracts).
+
+## 6. Phase details
+
+### Phase 0 — Contracts and decision questions
+
+- Resolve Q6-1–Q6-15 below and record them as D-153 onward before implementing the affected part.
+- Fix the `stc.toml` spelling and schema: kebab-case keys as in
+  [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §2 (`opt-level`, `out-dir`,
+  `lib-type`, `on-mismatch`, `module-dir`, `manifest-dir`, `max-retired-generations`,
+  `cold-policy`, `allow-untracked-removal`, `force-sessions-end-on-swap`, `cycle-time`,
+  `default-cycles`, `mock-clock`, `expect-trap`, `input-bytes`, `output-bytes`). The README
+  example's snake_case keys are stale and are corrected in phase 11.
+- Fix new diagnostic families and JSON report shapes (see §8); add the codes to the conformance
+  profile/documentation index.
+- Fix the M6/M6.5 boundary: M6 keeps the ABI 2 major and the existing descriptor/manifest formats;
+  at most it appends the test-clock service (host ABI 2.2, Q6-15). It does not append debug
+  services or emit checkpoint hooks. The control channel is not the debug protocol.
+- Sketch the test-build mode, the task scheduler, and the `stc.renames.toml` history format; review
+  them with the existing GOT/state/IO contracts.
+
+Acceptance: decisions recorded; no code; the phase-1 schema and the phase-8 workflow have stable
+interfaces.
+
+### Phase 1 — Project manifest, source discovery, and dependency graph
+
+Add `crates/stc-manifest` (workspace member):
+
+- Parse `stc.toml` with a span-aware TOML reader (`toml_edit` is the proposed dependency) into an
+  explicit model; reject unknown keys with a "did you mean" suggestion; validate `schema = 1`,
+  `[package]` name/version/language, and all table types.
+- Implement source discovery from `[project].sources` and `[test].sources`: `*`, `**`, `?`, and
+  character classes; hidden directories and `target/` excluded; symlinked directories not
+  followed; symlinked files accepted only inside the project; a glob matching nothing is an
+  error; `.st` files only; deterministic path ordering.
+- Resolve `[dependencies]` local path entries: canonicalize, deduplicate by canonical path, reject
+  cycles, build a topological order, and support an explicit alias (`name = { path = "...",
+  package = "real-name" }`). A dependency without `path` is an error in v1. Package identity is
+  the dependency's `[package].name`; the alias is its root namespace.
+- Parse and validate `[project]`, `[build]`, `[io]`, `[[io.devices]]`,
+  `[[io.devices.channels]]`, `[[io.bindings]]`, `[retain]`, `[runtime]`, `[online]`, `[debug]`,
+  `[lints]`, `[run]`, `[test]`, and `[[test.case]]` against the documented schema.
+- Write/check `stc.lock`: schema 1, packages sorted by `(name, source)`, dependency lists sorted,
+  root `source = "root"`, dependency paths normalized forward-slash relative paths, no absolute
+  paths. `--locked` fails on a missing or changed lockfile; normal builds update it.
+- Define the graph API the driver consumes: ordered packages, each with manifest path, root
+  directory, sources, test sources, dependencies, alias/root namespace, and build settings.
+- Add `fuzz_manifest` to `fuzz/` and seed it with valid/invalid manifests.
+
+Tests: schema positives/negatives (unknown keys, wrong types, missing fields, bad names/versions),
+path containment and forward-slash rules, glob discovery (case, hidden, target, symlink, empty),
+dependency aliases/dedup/cycles, lockfile determinism and `--locked`, and manifest fuzz smoke.
+
+Acceptance: `stc-manifest` resolves a project graph and lockfile deterministically; no analyzer
+changes yet.
+
+### Phase 2 — Package-aware front end
+
+- Extend `stc_sema` with a multi-package entry point: the driver passes ordered package sessions
+  and the files belonging to each package. Allocate one `PackageInfo` and root namespace per
+  package, assign `Def.package` during collection, and keep `DefId`s globally unique.
+- Resolve cross-package names through package root namespaces, dependency aliases, and `USING`;
+  keep `PRIVATE` POU/class visibility and make `INTERNAL` package-private. Duplicate top-level
+  names in different packages are allowed; duplicates in one package remain errors.
+- Restrict `[project].configuration` to the root package's configurations (or the synthesized
+  `_DEFAULT` when none exists); dependency configurations are declarations, not build entries.
+  Support `[project].stdlib = false`: standard FB synthesis is suppressed, standard functions
+  remain, and the project's own definitions are unaffected.
+- Thread package names through `stc-codegen`/`stc-got`: catalog keys, `GotId` scopes, mangled
+  symbols, source paths (package-relative), and the source fingerprint (all package sources in
+  order) include the package graph. No new artifact format is introduced.
+- Driver: load the graph, lex/parse files in package-topological order, run the merged analysis,
+  and report package-qualified diagnostics. The manifest-free `stc <command> <file>...` bridge is
+  retained for tests and one-off checks, but project commands use `stc.toml`.
+
+Tests: cross-package function/FB/type/global references, alias-vs-name identity, `INTERNAL`
+rejection, duplicate names across packages, `USING` across packages, configuration selection,
+`stdlib = false`, deterministic file/package order, and a separate test project dependency.
+
+Acceptance: a two-package project builds a module whose GOT keys use package identities and whose
+cross-package calls resolve.
+
+### Phase 3 — Project CLI, build settings, and artifacts
+
+- Expand the driver parser: commands `new`, `check`, `build`, `run`, `test`, `fmt`, `clean`,
+  `metadata`, `compliance`, `online download`, `online diff`, `rename`, and the `run --watch`
+  flag. Keep `parse`; make file-based `check`/`build` the explicit manifest-free bridge.
+- Add `--manifest-path`, `--locked`, `--message-format human|json|short`, `--color auto|always|
+  never`, `-q`, `-v`/`-vv` (phase timings; `-vv` adds per-file phases, the exact clang command,
+  and retained IR paths), `-D`/`-W`/`-A`, `--deny warnings`, and the
+  manifest/CLI/environment precedence from CLI-and-Manifest §1.2.
+- Implement project defaults: default emit `module`, out-dir `target/stc/debug`, name from
+  `[package].name`, target/clang/runtime discovery with CLI > `STC_*` > manifest > defaults,
+  `[build].opt-level` to clang, `syntax`, `lib-type` (`static` or shared host library), and
+  source fingerprinting across packages. The manifest-free `stc build <file>...` bridge keeps its
+  M4.5 defaults (`ir`, sanitized file stem, `target/stc/debug`).
+- Implement `stc new` (scaffold `stc.toml`, `src/main.st`, `tests/smoke.st`, `.gitignore`),
+  `stc clean` (remove the configured out-dir; never remove `stc.lock` or state files),
+  `stc metadata` (human and JSON summary of configuration, ABI, tasks, exports, retain, I/O,
+  artifacts), and `stc compliance` (profile ID, feature matrix, extensions, runtime capabilities,
+  non-safety statement).
+- Emit `module`/`exe`/`lib`/`ir`/`obj`/`metadata` under the project defaults; add the shared host
+  library form for `lib-type = "shared"` (runtime `cdylib` or equivalent shared link) while
+  keeping generated code in the separate module.
+- Print the compatibility summary when a baseline is used: preserved/allocated/dropped/rejected
+  counts and warnings, with a stable JSON object.
+- Add the project-manifest diagnostics and lockfile diagnostics; `-D warnings`/`--deny warnings`
+  map warnings to errors without hiding the original code.
+
+Tests: every verb and exit code, `new` scaffold build/run/test, manifest defaults/overrides,
+target/clang/runtime precedence, `--locked`, out-dir containment, shared/static `lib`, short/JSON
+diagnostics, color off/on, `-q`, `-v`/`-vv`, lint overrides/unknown codes, and `metadata`/
+`compliance` shapes.
+
+Acceptance: `stc new/build/check/clean/metadata/compliance` work end-to-end on Windows; the
+manifest-free bridge still passes its existing tests.
+
+### Phase 4 — Configurations, tasks, and `stc run`
+
+- Remove the one-task-per-resource restriction in `stc-codegen::config`; project every task with
+  its interval/priority/`SINGLE` and guard identity. Update the conformance profile and runtime
+  docs for multi-task scheduling.
+- Host scheduler in `stc-runtime`:
+  - task run state keyed by task `GotId` (interval deadline, `SINGLE` completion);
+  - before each scan, set each task's `TaskGuard` root to run/skip;
+  - tasks without an interval run every scan; interval tasks first run after one interval, then
+    no catch-up (`next = now + interval`); `SINGLE` runs once and completes;
+  - priority: lower numeric value is higher priority; an absent priority sorts after explicit
+    priorities; ties by resource/task declaration order;
+  - due tasks run in one scan; inputs are latched once and outputs published once;
+  - task state is preserved across a compatible swap by `GotId`; a task/resource topology change
+    is rejected or cold; cold download resets completion/deadlines.
+- Generated `stc_module_cycle` runs instances whose task guard is set, in plan order; it no longer
+  clears `SINGLE` guards. Unbound instances continue to run every scan.
+- Rewrite the launcher loop: default cycles from `[run].cycles` (absent or `0` means until
+  interrupted), `--cycles`, `--cycle-time`, `--io`, `--state-file`, `--reset-retain`, `--no-retain`,
+  stop signals, and exit codes 0/1/2/3/4/130. Sleep to the next scan deadline when a cycle time is
+  configured; mock-clock runs advance deterministically without sleeping.
+- Implement `stc run`: build `exe,module` (and metadata), start the launcher, pass options, and
+  return its exit code. Keep `--watch` as a phase-8 workflow.
+- Add the embedding-host run surface the runtime spec defers to M6: `stc_host_run` and an options
+  struct carrying cycle count/time, I/O backend/paths, state policy, stop conditions, and the
+  optional control endpoint. The launcher and embedding hosts share one loop implementation.
+- Add a host status surface (active/pending/retired build IDs, cycles, last rejection, warnings)
+  for `stc run -v` and the control channel.
+
+Tests: multi-task ordering/priorities/intervals/`SINGLE`, latched clock for timers across tasks,
+task guard preservation across a warm swap, cold reset, run-loop cycle/timeout/signal/exit codes,
+mock clock, and `[run]` defaults.
+
+Acceptance: `stc run` executes a multi-task configuration deterministically on Windows; existing
+single-task tests keep passing.
+
+### Phase 5 — Retained state and I/O
+
+Retained state (`stc-runtime`, driver, metadata):
+
+- Implement a state module with the State-and-RETAIN §3 file format: magic, version, ABI, profile
+  hash, layout hash, payload length, payload, CRC32; little-endian; unknown versions rejected.
+- Wire the ABI 2 `state_load`/`state_save` services to the host's configured state file. Return
+  0/1/2/3/4/5 per the spec. Load before prepare; save atomically at normal shutdown.
+- Atomic save: `<state-file>.tmp` in the same directory, flush/sync, replace; a failed replace
+  leaves the previous file intact and reports `STC-E-RUN-RETAIN-003`.
+- Policy: `[retain].enabled`, `file`, `on-mismatch = "error" | "reset"`; `--state-file`,
+  `--reset-retain`, `--no-retain` overrides. `stc run` resolves project-relative paths to
+  absolute paths; a standalone launcher resolves a relative `file` against the module directory
+  and documents it.
+- Metadata carries `retain.enabled/file/on_mismatch` for the runtime; layout/size/hash/leaves stay
+  as today.
+- Online attach: no state load; matching roots preserved; the state file is not rewritten merely
+  because of a swap; normal shutdown save still applies. Cold download: stop/reinitialize,
+  defaults plus compatible `RETAIN` only, transients not preserved. Baseline problems select cold
+  download.
+- Tests: scalar/aggregate/string/FB round-trips, warm/cold, `NON_RETAIN`, layout change under both
+  policies, corrupt magic/version/length/CRC, atomic failure, `--no-retain`, `--reset-retain`,
+  online attach/cold, and layout-hash stability.
+
+I/O (`stc-codegen` metadata, `stc-runtime`, driver):
+
+- Emit the project device tree (`name`, opaque `kind`, opaque canonical `config`, optional
+  channels), project bindings, `VAR_ACCESS` declarations, effective binding source
+  (`runtime` is not compiler metadata; compiler emits `pragma` or `project`), `offset_bits`,
+  `width_bits`, `got_id`/`direct_id` where applicable, and `input_defaults_hex`/
+  `output_defaults_hex`.
+- Resolve `[[io.bindings]].variable` against HIR; validate declared devices/channels/directions;
+  apply precedence runtime override > project binding > pragma > raw address; emit
+  `STC-W-IO-003` when a project binding overrides a pragma; unknown `{stc:io}` devices stay
+  `STC-W-IO-001`.
+- Runtime backends: `null` (unbound inputs receive defaults each scan; outputs discarded),
+  `memory` (embedding/test input/output bytes), `file` (input image read at cold start, output
+  image written atomically at shutdown; `--io-file` overrides). `--io` overrides metadata.
+- Host applies input defaults for unbound locations at scan start and overlays bound values from
+  the backend; outputs publish after all due tasks. `%M` persists; `%I` writes remain rejected;
+  direct cells are rebound through the existing image path.
+- Emit `VAR_ACCESS` metadata for runtime clients; the runtime may expose the metadata text through
+  the existing metadata accessor.
+- Tests: metadata snapshots for devices/bindings/var-access/defaults; precedence and validation;
+  null/memory/file behavior; unbound defaults each cycle; `%M` persistence; online image
+  reconfiguration with the new metadata.
+
+Acceptance: state round-trips and the documented policies pass on Windows; I/O metadata and
+backends match IO-and-Devices; online attach/cold behavior matches State-and-RETAIN §4.1.1.
+
+### Phase 6 — Test runner
+
+- Add `crates/stc-test` (discovery/reporting/runner) and a codegen test-build mode.
+- Discovery: `{stc:test}` on `FUNCTION`, `FUNCTION_BLOCK`, and `PROGRAM`; test `FUNCTION` has no
+  inputs and returns `BOOL` and passes when it returns TRUE; `FUNCTION_BLOCK`/`PROGRAM` tests run
+  `cycles` scans, and an optional `PASSED : BOOL` output on an FB test must be TRUE at the end;
+  pragma payload `cycles`, `timeout`, `expect-trap`; `[[test.case]]` overrides by POU name;
+  conflicts are errors; duplicate test names in one package are errors.
+- Test-only units: `[test].sources` are parsed only for `stc test`; `{stc:test}` POUs are included
+  in test builds and excluded from production builds and release artifacts. A production POU that
+  uses `STC_ASSERT` or references a test-only POU is an error (`STC-E-ASSERT-001`,
+  `STC-E-TEST-001`).
+- Test prelude (test-only units only): `STC_ASSERT(condition, message)` lowers to the existing
+  assert service with the call-site span; the test host records failures and continues instead of
+  trapping. `STC_CLOCK_ADVANCE(T#...)` sets the next cycle's clock through the appended test-clock
+  service (Q6-15) or its reviewed equivalent; `STC_IO_SET_INPUT(...)`/`STC_IO_GET_OUTPUT(...)`
+  read/write the process image through the existing I/O services.
+- Build one test artifact per test case in v1 (a synthetic wrapper for function/FB tests, the
+  test program for program tests), with a synthetic single-task configuration, no retained state,
+  the memory I/O backend (unless `[test].io` overrides), a mock clock starting at
+  `[test].mock-clock` (default `0ns`), and the selected test body. This keeps process isolation and
+  trap semantics simple; a shared test registry can replace it later without changing the CLI.
+- Runner: each test in a separate process; default timeout 5 s; kill on expiry; parse the test
+  host's structured result (pass/fail/trap, assertions, duration); filters by substring;
+  `--list`, `--no-run`, `--timeout`, `-- --nocapture`; human and JSON (`name`, `status`,
+  `duration_ms`, `failures`) output. Tests run sequentially in v1.
+- Separate test project: `stc test` compiles dependencies but discovers/runs only the current
+  package's tests.
+- Tests: function/FB/program pass and fail, assertion collection, cycles/clock/timers, timeout,
+  expected trap, filters/list/no-run/JSON, duplicate/invalid declarations, production exclusion,
+  separate project, and no test code or assert calls in production artifacts.
+
+Acceptance: `stc test` runs the scaffold's smoke test and the suite end-to-end on Windows.
+
+### Phase 7 — Formatter
+
+- Add `crates/stc-fmt` over the lossless CST.
+- Fixed style: keywords uppercase; identifiers keep spelling; 2-space indentation; one statement
+  per line; one space around binary operators, after commas, and around `:=`/`=>`; no space before
+  a call's `(`; `name : TYPE`; `END_*` on its own line; strict semicolons in output even for
+  `--relaxed` input; comments preserved; existing line breaks preserved; no wrapping; no
+  configuration; idempotent.
+- `stc fmt [paths...] [--check]`; no paths formats the project sources; paths format the given
+  files (manifest-free); syntax errors prevent formatting (`STC-E-FMT-001`); unreadable/writable
+  files report `STC-E-FMT-002`. Preserve BOM/line-ending encoding when rewriting bytes.
+- Tests: idempotence, comment/trivia preservation, relaxed-to-strict semicolons, spacing,
+  indentation, CRLF/BOM, unknown tokens untouched, `--check` exit code, and a project format run.
+
+Acceptance: `stc fmt` followed by `stc fmt --check` succeeds on the examples and corpus.
+
+### Phase 8 — Online-change workflow
+
+- **Driver/runtime boundary.** The `stc online` commands, the control client, and `run --watch`
+  use the runtime's store/download/diff/control APIs. Add `stc-runtime` as a regular driver
+  dependency (it is currently a dev-dependency); the runtime keeps its one-way dependency on
+  `stc-got` only.
+- **Compatibility report.** `stc build` prints a human/JSON summary when a baseline is used:
+  verdict, preserved/allocated/dropped/retired counts, warnings, and rejection codes. `-v` adds
+  per-record actions. The report is derived from the existing plan/manifest data.
+- **`stc online download`.** Read the active manifest from the runtime store
+  (`[runtime].manifest-dir`, `--store`, or a live `--host` control request) and write the download
+  envelope (canonical JSON, optional binary, deployment/layout summary). Validate the store before
+  exporting; refuse to synthesize a baseline from a missing/corrupt store.
+- **`stc online diff`.** Compare a candidate `.stc-got.json`/`.bin` with the active baseline or an
+  explicit `--baseline`; print verdict/actions/diagnostics and exit 0 for compatible, 1 for
+  incompatible/rejected, 2 for usage/parse errors. Add a manifest-only runtime comparison entry
+  point so diff never executes a module.
+- **`stc rename`.** Resolve a qualified key in the current package, use sema resolutions to find
+  the declaration and every reference, rewrite source files without touching comments/strings, and
+  record `old -> new` in a committed `stc.renames.toml` history. Builds merge CLI `--rename` with
+  the history; conflicts are errors; chains resolve oldest-first. `--dry-run` prints edits. The
+  history preserves identity only when a baseline is present; a cold build is warned that the new
+  key receives a fresh `GotId`. Renaming a dependency's declaration or a package name is out of
+  scope.
+- **`stc run --watch`.** Build against the host's active baseline, start the launcher with a
+  local control endpoint, watch package sources/manifests, rebuild on change, and deploy the
+  module/manifest pair. The control endpoint is a named pipe (Windows) or Unix socket (Linux),
+  user-only, with a per-run nonce; it is not the M6.5 debug protocol. The host queues deploy
+  requests, loads/validates/prepares between cycles, replies with the compatibility report, and
+  activates at the next boundary. Build errors, incompatible changes, or prepare failures leave
+  the old generation active. On stale baseline, re-download and rebuild once. Ctrl-C stops the
+  host, saves state, and exits 130.
+- **State policy.** Online attach skips the state file; cold download applies the documented
+  restart policy; a missing/stale/corrupt baseline selects cold download. `stc run --watch`
+  reports which path it took.
+- **Threading scope.** M6 adds a host control/status thread and queues deploy work; preparation
+  runs between cycles on the cycle thread in v1 so ST is never re-entered. Fully off-thread
+  prepare with bounded jitter remains an M7 hardening item; the maintenance pause is measured and
+  documented. M6.5 may add service/monitor threads for debug on the same control boundary.
+- Tests: download/rebuild consumes the active baseline and reproduces identities; diff compatible/
+  incompatible; rename preserves values and `GotId`s across a build and a swap; watch deploys a
+  code-only change, add/remove/rename, and rejects an incompatible change; build failure and
+  prepare failure keep the old generation; stale/missing baseline cold recovery; control-channel
+  nonce/ACL and protocol-version rejection.
+
+Acceptance: the project-plan M6 online workflow exit criteria pass on Windows; the manifest-free
+baseline paths keep working.
+
+### Phase 9 — Lean vector integration
+
+- Create the Lake project (`lean/lakefile.lean`, pinned `lean/lean-toolchain` already exists) and
+  the exact modules from Testing-and-Verification §5.2: `Int`, `Bits`, `Conv`, `Select`, `Bool`,
+  and `Strings`, with named models, the properties that matter, and no `sorry`/`admit`.
+- Implement `Vectors/Gen.lean` and `VectorCli.lean`; `lake exe vectors` writes deterministic
+  `tests/vectors/exact/*.json` in the §5.3 format, records the model version/generator hash, and
+  is committed. CI regenerates and fails on drift.
+- Add a Rust exact-operation reference module and a vector test harness; add
+  `crates/stc-codegen/tests/lean_vectors.rs` that fails when an implemented exact function has no
+  vector or a vector mismatches. Add a constant-folding agreement test where the same operation
+  is folded in `stc-sema`, and a C-harness sample that executes selected vectors through generated
+  code (checked arithmetic, shifts/rotates, selection, string length).
+- Scope: exact integer arithmetic/overflow, bitwise, shifts/rotates, conversions, comparisons,
+  selection, boolean, and exact string character/UTF-8-byte length. Floating-point/transcendental
+  math remains test-based.
+- CI: activate the existing `lean` job; it checks `Stc/Exact`, rejects `sorry`/`admit`, runs
+  `lake build`, regenerates vectors, and fails on uncommitted drift.
+
+Acceptance: `lake build` and `lake exe vectors` pass; Rust vector tests pass; CI Lean job is
+active.
+
+### Phase 10 — Conformance, UI, traceability, fuzzing, and CI
+
+- **Conformance corpus.** Add `tests/conformance/<area>/<case>.st` plus `.meta.toml`
+  (`profile`, `kind = compile-pass|compile-fail|run-pass|run-fail|trap`, expected exit/stdout/
+  trap, `cycles`, `rules`). Areas: lexical, types, conversions/overloads, statements/control
+  flow, expression precedence, syntax modes, functions/FBs/programs, OOP, namespaces/USING,
+  configuration/tasks, I/O, retained state, strings, standard functions/FBs, traps/diagnostics,
+  and project/online cases. Every implemented rule category maps to at least one case.
+- **UI tests.** `tests/ui/*.st` with expected `.stderr` and `//~ ERROR CODE` annotations; the
+  harness invokes `stc check` and fails on missing/unexpected diagnostics or changed spans.
+- **Harness and xtask.** Add `crates/xtask` and a `.cargo/config.toml` alias; implement
+  `cargo xtask test --suite ui|conformance|execution|projects --locked` and
+  `cargo xtask traceability [--check]`. The conformance/UI/projects harnesses live in driver
+  integration tests and use the `stc` binary/exit codes.
+- **Traceability.** Scan `Specification/**/*.md` for `STC-*` rule IDs and the tests/corpus for
+  rule annotations; emit covered/uncovered/not-implemented; fail CI when an implemented normative
+  rule has no test. Add an explicit allowlist for rules marked "not implemented".
+- **Fuzzing.** Add `fuzz_manifest` for arbitrary TOML; keep the other targets; seed and cap input
+  size; no native module execution in fuzzers.
+- **CI.** Activate `ui`, `conformance`, `execution`, `lean`, and `fuzz-smoke`; fix the execution
+  detect flag; add a `projects` job (Windows + Ubuntu) that runs `stc new/build/check/run/test/
+  clean` and the online workflow; keep the `test` and `online` jobs and both hosts. CI uses
+  `--locked`, denies warnings, pins runner images, and prints clang versions.
+- Tests: the corpus/UI suites themselves, traceability report, fuzz smoke, and the project e2e.
+
+Acceptance: CI shows unit/snapshot, conformance, execution, projects, fuzz-smoke, and Lean proof
+jobs passing; the traceability report covers every implemented rule.
+
+### Phase 11 — Documentation and handover
+
+- Update README status, CLI list, project-manifest example (kebab-case), repo layout, CI table,
+  and decision summary.
+- Update the project plan's M6 status note, immediate next actions, and deliverables list (add
+  this plan); update the conformance profile status, implementation-defined choices (multi-task
+  scheduling, assertions, project model, state/IO), and out-of-scope list.
+- Update CLI-and-Manifest, State-and-RETAIN, I/O-and-Devices, Runtime-and-Execution,
+  Online-Change-and-GOT, Testing-and-Verification, Architecture, and GOT Artifacts for the
+  implemented behavior; remove stale "M6 pending" notes.
+- Record M6 decisions D-153 onward and the phase records; add the M6 completion note to this
+  plan; update the M6.5 handover boundary if the control/service-thread interface changed, and
+  the host ABI minor if Q6-15 appends the test-clock service.
+- Correct stale statements (for example, the conformance profile's "standard FBs implemented in
+  ST under stdlib/" versus D-134, and README snake_case keys) and ensure no TODO/TBD placeholders.
+
+Acceptance: `check_docs.py`, Markdown lint, and the link/profile checks pass; docs and code agree.
+
+## 7. Determinism and artifact compatibility
+
+- Package order: topological; ties sorted by package name then canonical path. File order:
+  package order, then lexicographic normalized path.
+- `stc.lock` is deterministic and uses forward slashes; no absolute paths; `stc clean` never
+  deletes it.
+- `GotId` scopes use the dependency's manifest name; aliases affect namespaces only. Mangled
+  symbols/catalog keys include the package name.
+- Source fingerprints include all production package sources (and test sources only in test
+  builds), in deterministic order.
+- Double builds of the same graph/baseline remain byte-identical for module, IR, metadata,
+  manifest, plan, and build IDs. New metadata is canonical JSON.
+- Host ABI stays major version 2; manifest/descriptor formats remain version 1. If Q6-15 selects
+  an appended service for `STC_CLOCK_ADVANCE`, M6 bumps the minor to 2.2 and appends only that
+  service; no existing service ID/signature changes and no debug services are added. `stc_host_run`
+  and its options struct are host exports (not module ABI) and are added in phase 4 for the
+  launcher/embedding host.
+- Task scheduling state is host memory keyed by task `GotId`, not a manifest field; task records
+  already carry the schedule and guard identity.
+
+## 8. Diagnostics
+
+Existing families stay stable. New M6 families (exact numbers are confirmed in phase 0):
+
+| Code | Meaning |
+| --- | --- |
+| `STC-E-PROJECT-001` | `stc.toml` cannot be read/parsed |
+| `STC-E-PROJECT-002` | schema/type/unknown-key/invalid-value error with suggestion |
+| `STC-E-PROJECT-003` | package name/version/language invalid |
+| `STC-E-PROJECT-004` | source glob/path invalid, outside the project, or no match |
+| `STC-E-PROJECT-005` | dependency path/alias/name invalid |
+| `STC-E-PROJECT-006` | dependency cycle or duplicate canonical package |
+| `STC-E-PROJECT-007` | configuration selection missing/ambiguous |
+| `STC-E-PROJECT-008` | test case/pragma conflict or invalid test metadata |
+| `STC-E-PROJECT-009` | I/O device/channel/binding invalid |
+| `STC-E-PROJECT-010` | build/run/retain/online setting invalid |
+| `STC-E-PROJECT-011` | lint configuration invalid or tries to downgrade an error |
+| `STC-E-LOCK-001/002/003` | lockfile missing under `--locked` / out of date / malformed |
+| `STC-E-ASSERT-001/002` | production `STC_ASSERT` / invalid test-only use |
+| `STC-E-TEST-002/003/004` | duplicate test name/case / invalid test signature / test-source conflict |
+| `STC-E-FMT-001/002` | syntax prevents formatting / file cannot be read or written |
+| `STC-E-ONLINE-007/008/009` | control channel unavailable/unauthorized / deploy rejected / active manifest unavailable |
+| `STC-E-RUN-003` | invalid run option or scheduling configuration |
+| `STC-W-PROJECT-001` | setting parsed but not honored until a later milestone (for example `debug = false`) |
+| `STC-W-ONLINE-002` | compatibility report warning not covered by an existing online code |
+
+Rules: one definition/call-site error explains one unsupported setting; no per-type/per-function
+diagnostic expansion. New compiler codes require a decision entry and a conformance/test mapping.
+
+## 9. Verification
+
+- `cargo test --workspace --locked` (including clang acceptance with `STC_REQUIRE_CLANG=1`).
+- `cargo xtask test --suite ui --locked`, `--suite conformance`, `--suite execution`,
+  `--suite projects`.
+- `cargo xtask traceability --check`.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`,
+  `cargo fmt --all --check`, `python tools/ci/check_docs.py`, Markdown lint.
+- `lake build` and `lake exe vectors` (committed-output check) in `lean/`.
+- `fuzz_manifest` plus the existing six targets for 60 s each with a 1 MiB cap.
+- End-to-end `stc new/build/check/run/test/clean`, a multi-task project, a state restart, an I/O
+  metadata project, a separate test project, an online watch swap, `online download/diff`, and a
+  tracked rename on Windows x64 and Ubuntu x64.
+
+## 10. Risks and mitigations
+
+| Risk | Impact | Mitigation |
+| --- | --- | --- |
+| Multi-package analyzer regressions | Wrong resolution or identity | One merged HIR with explicit package order; alias/name/INTERNAL tests; preserve the manifest-free bridge |
+| Task scheduling ambiguity | Nondeterministic scans/timers | Host-owned state keyed by task `GotId`; one latched clock; documented priority/interval/no-catch-up rules; mock-clock tests |
+| State-file corruption or loss | Failed starts or lost values | Existing magic/version/profile/layout hash + CRC; atomic replace; policy tests; `--reset-retain` escape hatch |
+| I/O metadata drift | Wrong bindings/defaults | Compiler emits canonical metadata; precedence tests; runtime override; online image reconfiguration tests |
+| Test runner hangs/flakes | CI instability | Per-test process isolation; default timeout; no silent retries; mock clock; sequential v1 |
+| Formatter edge cases | Source damage or churn | CST-based rewrite, idempotence/comment/round-trip tests, `--check`, no rewriting unknown tokens |
+| Watch/deploy control exposure | Unauthorized module load | Local-only transport, user-only ACL/socket permissions, per-run nonce, protocol versioning; separate from M6.5 debug auth |
+| Rename history mistakes | Wrong `GotId` preservation | Explicit committed history, conflict errors, dry-run, chain tests, no heuristic matching |
+| Lean/vector drift | Proofs disconnected from implementation | Committed deterministic vectors, CI regeneration check, Rust reference tests, C-harness samples |
+| Traceability burden | CI red for documentation gaps | Automated scanning, corpus `rules` metadata, explicit not-implemented allowlist, phase-by-phase coverage |
+| Scope creep into M6.5 debug | Unstable ABI/security surface | Keep ABI 2.1, no debug info/hooks, separate control channel; M6.5 owns the debug protocol |
+
+## 11. Definition of done
+
+- All §4 exit criteria pass on Windows x64; the documented Linux x64 CI jobs pass.
+- The project graph, package-aware analysis, configurations/tasks, state, I/O, test runner,
+  formatter, and online workflow are implemented and tested.
+- `stc new` produces a project that builds, runs, tests, and formats with the new CLI.
+- The active-manifest workflow works end-to-end: build, deploy/reload online, review the report,
+  download/rebuild, and cold recovery.
+- `stc rename` preserves `GotId`s and values through a subsequent build and swap.
+- Lean proofs and vectors, the conformance/UI corpus, traceability, and fuzz smoke are part of CI.
+- README, project plan, conformance profile, architecture/runtime/state/I/O/CLI/testing/online
+  specs, decisions, and this plan describe the implemented M6 surface truthfully.
+- No M6.5 debug/monitoring capability is claimed; the M6.5 boundary is unchanged except for the
+  control/service-thread interface recorded in the handover notes.
+
+## 12. Commands
+
+```sh
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all --check
+python tools/ci/check_docs.py
+npx --yes markdownlint-cli2@0.24.0 README.md "Specification/**/*.md" "*.md"
+
+cargo xtask test --suite ui --locked
+cargo xtask test --suite conformance --locked
+cargo xtask test --suite execution --locked
+cargo xtask test --suite projects --locked
+cargo xtask traceability --check
+
+cargo run -p stc-driver -- new examples/motor
+cargo run -p stc-driver -- build
+cargo run -p stc-driver -- run --cycles 10
+cargo run -p stc-driver -- test
+cargo run -p stc-driver -- fmt --check
+cargo run -p stc-driver -- online download --out motor.stc-got.json
+cargo run -p stc-driver -- online diff target/stc/debug/motor.stc-got.json
+cargo run -p stc-driver -- rename Main.Speed Main.Rate
+cargo run -p stc-driver -- run --watch
+
+cd lean && lake build && lake exe vectors
+```
+
+## 13. Phase 0 decision questions
+
+These are resolved in phase 0 and recorded as decisions. Each has a proposed default so
+implementation can start without blocking if review agrees.
+
+| Question | Proposed default |
+| --- | --- |
+| **Q6-1 — TOML parsing and diagnostics.** Use a span-aware TOML library, a typed model with serde, or a hand-written parser? | Use `toml_edit` with an explicit model and span-mapped `STC-E-PROJECT-*` diagnostics; add `fuzz_manifest`. |
+| **Q6-2 — Package identity vs. alias.** Does a dependency alias change catalog keys/`GotId`s? | Package identity is `[package].name`; the alias only sets the root namespace. `INTERNAL` compares package identity. |
+| **Q6-3 — Multi-package analysis.** Compile packages separately and link HIR, or merge into one HIR crate? | One merged HIR crate with per-package root namespaces and one analyzer pass; deterministic topological file order. |
+| **Q6-4 — Task scheduling ownership and semantics.** Generated scheduler or host scheduler? Interval/priority/first-run/no-catch-up rules? | Host-owned scheduler sets `TaskGuard` roots per scan; generated cycle runs guarded instances in plan order. Lower number = higher priority; absent priority sorts last; no interval = every scan; interval = first run after one interval then `now + interval`; `SINGLE` once; no catch-up; topology change cold. |
+| **Q6-5 — Watch/deploy control transport.** Named pipe/socket, nonce/ACL, and relationship to M6.5 debug. | Local-only named pipe (Windows) / Unix socket (Linux) with user-only permissions and a per-run nonce; deployment/status only; M6.5 has a separate authenticated debug protocol. |
+| **Q6-6 — Rename history.** Where is a source-aware rename's mapping persisted? | `stc.renames.toml` at the root package, committed; builds merge CLI `--rename` and history; conflicts error; chains oldest-first; `--dry-run` available. |
+| **Q6-7 — Test execution model.** One shared test module/registry or one artifact per test? | One test artifact per test in v1 (synthetic wrapper for function/FB tests, test program for program tests), one process per test; a shared registry is a later optimization. |
+| **Q6-8 — Debug/release boundary.** Should M6 honor `debug = false`/`--release`? | M6 parses the keys but builds the default unoptimised debug form without debug info/hooks; `debug = false` reports `STC-W-PROJECT-001`, and `--release` is a usage error until M6.5 implements stripping and debug/release identities. |
+| **Q6-9 — Formatter output.** Newline convention, blank-line handling, and semicolon insertion. | Emit `\n`, preserve blank lines/comments/line breaks, insert strict semicolons after relaxed block statements, no wrapping, no configuration; preserve BOM. |
+| **Q6-10 — File I/O backend.** When are input/output files read/written? | Input image read once at cold start; output image written atomically at shutdown; `--io-file` overrides; tests use memory; unbound inputs default each scan. |
+| **Q6-11 — Lean/vector contract.** Model scope, format, and Rust linkage. | Testing-and-Verification §5.2/§5.3 exactly; no Mathlib; committed deterministic vectors; a Rust `exact` reference module and C-harness samples. |
+| **Q6-12 — Traceability mechanism.** How are rules mapped to tests? | Conformance `.meta.toml` `rules`, test annotations/comments with `STC-*` IDs, an explicit not-implemented allowlist, and `cargo xtask traceability --check`. |
+| **Q6-13 — Host threading scope.** Does M6 prepare candidates off-thread? | M6 adds a control/status thread and queues deploy work; validation/prepare runs between cycles on the cycle thread to avoid re-entering ST. Off-thread prepare and jitter measurement are M7 hardening. |
+| **Q6-14 — State/I/O relative paths.** Project-relative paths at runtime. | `stc run` resolves project-relative paths and passes absolute options; a standalone launcher resolves relative paths against the module directory; embedding hosts set their own paths. |
+| **Q6-15 — Test-clock ABI.** How does generated test code advance the mock clock? | Append an ABI 2.2 `set_cycle_time_ns` service for the test prelude; the existing assert and I/O services cover the rest. No other M6 module service is appended. |
+
+## 14. Post-M6 limitations
+
+- Full debug/monitoring (DWARF/CodeView, checkpoint hooks, typed access, forcing, breakpoints,
+  stepping, call stacks, debug sessions/protocol) remains M6.5.
+- `--release`, stripped artifacts, and debug/release build-ID separation remain M6.5.
+- No field-layout migration, resizing, `GotId`-keyed state migration, or record/handle migration.
+- No network deployment, registry/version solving, package binary dependencies, or hardware I/O;
+  v1 uses local path dependencies and `null`/`memory`/`file` backends.
+- Multi-task execution is cooperative on one cycle thread; preemptive/multi-threaded ST is out of
+  scope. Off-thread candidate preparation and bounded maintenance jitter are M7 hardening.
+- Standard FB bodies remain synthesized HIR rather than a textual `stdlib/` package (D-134).
+- `stc fmt` is the minimal fixed style; no configuration, range formatting, or wrapping.
+- `stc test` runs sequentially and builds one artifact per test; a shared registry and parallel
+  execution are future work.
+- Host portability beyond the CI-tested Windows x64 and Ubuntu x64 matrix is M8.
