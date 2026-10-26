@@ -111,6 +111,7 @@ fn generate() -> (stc_codegen::Output, stc_sema::Analysis) {
             source_fingerprint: fingerprint,
             ..stc_codegen::ModuleBuildOptions::default()
         },
+        project: stc_codegen::ProjectOptions::default(),
     };
     let output = stc_codegen::generate(&analysis.hir, &options)
         .unwrap_or_else(|errors| panic!("codegen failed: {errors:#?}"));

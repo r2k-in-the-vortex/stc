@@ -5,14 +5,13 @@
 //! artifact names. The complete sidecar remains `<name>.stc-meta.json`.
 
 use stc_codegen::Json;
-use stc_manifest::Manifest;
 
 use crate::build::{self, Generated, Request};
 
 /// Prints the metadata summary.
-pub(crate) fn print(generated: &Generated, manifest: &Manifest, request: &Request, json: bool) {
+pub(crate) fn print(generated: &Generated, request: &Request, json: bool) {
     if json {
-        println!("{}", summary(generated, manifest, request).render());
+        println!("{}", summary(generated, request).render());
         return;
     }
     let metadata = &generated.output.metadata;
@@ -48,24 +47,22 @@ pub(crate) fn print(generated: &Generated, manifest: &Manifest, request: &Reques
     for export in &metadata.exports {
         println!("    {} -> {}", export.symbol, export.function);
     }
-    let state_file = state_file(manifest, metadata.artifact.as_str());
     println!(
         "  retain           {}, {}, on-mismatch {}",
-        if manifest.retain.enabled {
+        if metadata.retain.enabled {
             "enabled"
         } else {
             "disabled"
         },
-        state_file,
-        manifest.retain.on_mismatch.as_str()
+        metadata.retain.file,
+        metadata.retain.on_mismatch
     );
-    // Project bindings are resolved into module metadata in phase 5; until
-    // then count the declared bindings alongside the pragma bindings.
-    let bindings = metadata.io.bindings.len() + manifest.io.bindings.len();
     println!(
-        "  io               backend {}, {bindings} bindings, {} devices",
-        manifest.io.backend.as_str(),
-        manifest.io.devices.len()
+        "  io               backend {}, {} bindings, {} devices, {} var-access",
+        metadata.io.backend,
+        metadata.io.bindings.len(),
+        metadata.io.devices.len(),
+        metadata.io.var_access.len()
     );
     println!("  artifacts        {}", request.emit.len());
     for kind in &request.emit {
@@ -79,9 +76,8 @@ pub(crate) fn print(generated: &Generated, manifest: &Manifest, request: &Reques
     }
 }
 
-fn summary(generated: &Generated, manifest: &Manifest, request: &Request) -> Json {
+fn summary(generated: &Generated, request: &Request) -> Json {
     let metadata = &generated.output.metadata;
-    let state_file = state_file(manifest, metadata.artifact.as_str());
     let tasks = metadata
         .tasks
         .iter()
@@ -129,7 +125,6 @@ fn summary(generated: &Generated, manifest: &Manifest, request: &Request) -> Jso
             ])
         })
         .collect();
-    let bindings = metadata.io.bindings.len() + manifest.io.bindings.len();
     Json::object([
         ("profile".into(), Json::String(metadata.profile.into())),
         (
@@ -151,39 +146,32 @@ fn summary(generated: &Generated, manifest: &Manifest, request: &Request) -> Jso
         (
             "retain".into(),
             Json::object([
-                ("enabled".into(), Json::Bool(manifest.retain.enabled)),
-                ("file".into(), Json::String(state_file)),
+                ("enabled".into(), Json::Bool(metadata.retain.enabled)),
+                ("file".into(), Json::String(metadata.retain.file.clone())),
                 (
                     "on_mismatch".into(),
-                    Json::String(manifest.retain.on_mismatch.as_str().into()),
+                    Json::String(metadata.retain.on_mismatch.clone()),
                 ),
             ]),
         ),
         (
             "io".into(),
             Json::object([
-                (
-                    "backend".into(),
-                    Json::String(manifest.io.backend.as_str().into()),
-                ),
+                ("backend".into(), Json::String(metadata.io.backend.clone())),
                 (
                     "bindings".into(),
-                    Json::Number(i128::try_from(bindings).unwrap_or(i128::MAX)),
+                    Json::Number(i128::try_from(metadata.io.bindings.len()).unwrap_or(i128::MAX)),
                 ),
                 (
                     "devices".into(),
-                    Json::Number(i128::try_from(manifest.io.devices.len()).unwrap_or(i128::MAX)),
+                    Json::Number(i128::try_from(metadata.io.devices.len()).unwrap_or(i128::MAX)),
+                ),
+                (
+                    "var_access".into(),
+                    Json::Number(i128::try_from(metadata.io.var_access.len()).unwrap_or(i128::MAX)),
                 ),
             ]),
         ),
         ("artifacts".into(), Json::Array(artifacts)),
     ])
-}
-
-fn state_file(manifest: &Manifest, artifact: &str) -> String {
-    manifest
-        .retain
-        .file
-        .clone()
-        .unwrap_or_else(|| format!("{artifact}.stcstate"))
 }

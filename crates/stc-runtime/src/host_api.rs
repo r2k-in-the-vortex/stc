@@ -405,12 +405,14 @@ unsafe extern "C" fn service_io_size(area: u32) -> u64 {
     image_area(&mut crate::state(), area).1
 }
 
-unsafe extern "C" fn service_state_load(_buffer: *mut u8, _len: i64, _layout_hash: i64) -> i32 {
-    5
+unsafe extern "C" fn service_state_load(buffer: *mut u8, len: i64, layout_hash: i64) -> i32 {
+    // SAFETY: the generated module passes the ABI buffer contract.
+    unsafe { crate::state::service_load(buffer, len, layout_hash) }
 }
 
-unsafe extern "C" fn service_state_save(_buffer: *const u8, _len: i64, _layout_hash: i64) -> i32 {
-    5
+unsafe extern "C" fn service_state_save(buffer: *const u8, len: i64, layout_hash: i64) -> i32 {
+    // SAFETY: the generated module passes the ABI buffer contract.
+    unsafe { crate::state::service_save(buffer, len, layout_hash) }
 }
 
 unsafe extern "C" fn service_assert(condition: i32, code: i32, span_id: u32) {
@@ -586,6 +588,8 @@ mod tests {
 
     #[test]
     fn retained_state_services_report_disabled() {
+        let _lock = crate::test_support::state_guard();
+        crate::state::configure(crate::state::RetainConfig::default());
         // SAFETY: the state entries are installed and use the documented stub
         // signatures.
         unsafe {

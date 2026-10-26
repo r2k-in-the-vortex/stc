@@ -1,6 +1,6 @@
 # I/O and Device Linking
 
-Status: M4.5 scalar process image and online remap implemented (2026-10-25); M6 phase-0 file-backend/device-metadata contract fixed (2026-10-26); device backends are M6  
+Status: M4.5 scalar process image and online remap implemented (2026-10-25); M6 phase-5 device metadata and `null`/`memory`/`file` backends implemented (2026-10-26)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Tokenization](../Syntax/Tokenization.md)
 
@@ -34,8 +34,15 @@ EtherCAT, Modbus, and MQTT are planned for v2 and are noted here but not designe
 > services. Activation reconfigures the image or remaps direct cells by `GotId`, preserves `%M`
 > and same-address values, snapshots the image for rollback, and warns about moved variables.
 > The generated cycle does not reapply input defaults, so an embedding host can drive inputs
-> between cycles. The device tree, project bindings, `VAR_ACCESS` metadata, file/device
-> backends, and per-cycle backend precedence are M6.
+> between cycles.
+>
+> **M6 phase-5 status (2026-10-26):** device trees, channels, project bindings, `VAR_ACCESS`
+> metadata, effective binding fields (`source`, `direct_id`, device/channel/direction), and the
+> `retain` policy are emitted in metadata. Project bindings resolve against HIR with
+> runtime override > project > pragma > raw address precedence, `STC-E-PROJECT-009`,
+> `STC-W-IO-001`, and `STC-W-IO-003`. The host implements `null` (defaults every scan, outputs
+> discarded), `memory` (host-owned image bytes), and `file` (cold input read, atomic shutdown
+> output write) backends; inputs latch once per scan and outputs publish once after the cycle.
 >
 > **Online-change policy (resolved):** the host owns the process image. Each direct variable/
 > field has a per-generation GOT cell; a swap reconfigures the image, re-evaluates bindings,
@@ -284,6 +291,8 @@ fields are added to the language or compiler.
 | `STC-W-IO-001` | pragma names a device not declared in `stc.toml` |
 | `STC-W-IO-002` | `stc:io` on a declaration without `AT` |
 | `STC-W-IO-003` | project binding overrides a pragma hint (informational) |
+| `STC-W-IO-004` | the `file` backend input image is missing or unreadable; the run starts with defaults |
+| `STC-E-RUN-IO-001` | the `file` backend cannot write its output image at shutdown; the previous file is left intact |
 | `STC-E-ONLINE-IO-001` | a binding/direct-variable layout cannot be preserved across the proposed change; reject or cold |
 | `STC-W-ONLINE-IO-001` | a direct variable/field was remapped during online change |
 

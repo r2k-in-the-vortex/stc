@@ -14,6 +14,8 @@ use crate::codes;
 use crate::ir::IrType;
 use crate::layout::{self, ScalarKind};
 use crate::mangle;
+use crate::metadata::{DeviceMetadata, ProjectBinding, ProjectChannel};
+use crate::module::ModuleError;
 use crate::types::{RootSegment, StorageLayout, TypeCategory, TypeSystem};
 
 /// One task selected for execution/metadata.
@@ -60,6 +62,23 @@ pub(crate) struct PlanInstance {
     pub span: Span,
 }
 
+/// One `VAR_ACCESS` declaration selected for metadata.
+#[derive(Clone, Debug)]
+pub(crate) struct PlanVarAccess {
+    /// Access name.
+    pub name: String,
+    /// Resolved place.
+    pub place: PlaceHir,
+    /// Declared type.
+    pub ty: TyId,
+    /// `READ_ONLY` marker.
+    pub read_only: bool,
+    /// Declaration span.
+    pub span: Span,
+    /// Instance spelling for a program-level `VAR_ACCESS`.
+    pub instance_name: Option<String>,
+}
+
 /// The selected execution plan.
 #[derive(Clone, Debug)]
 pub(crate) struct Plan {
@@ -73,6 +92,8 @@ pub(crate) struct Plan {
     pub programs: Vec<DefId>,
     /// Configuration-level `VAR_CONFIG` entries.
     pub config_inits: Vec<stc_hir::ConfigInitHir>,
+    /// Configuration-, resource-, and program-level `VAR_ACCESS` entries.
+    pub var_access: Vec<PlanVarAccess>,
 }
 
 impl Plan {
@@ -203,14 +224,32 @@ pub(crate) struct IoBinding {
     pub start_bit: u64,
     /// Scalar kind.
     pub kind: ScalarKind,
-    /// Hint.
+    /// `{stc:io}` hint.
     pub hint: Option<IoHint>,
+    /// Effective device name.
+    pub device: Option<String>,
+    /// Effective channel.
+    pub channel: Option<ProjectChannel>,
+    /// Effective direction.
+    pub direction: Option<&'static str>,
     /// Source.
     pub source: &'static str,
     /// Initializer expression, when the declared leaf has one.
     pub init: Option<ExprId>,
     /// Owning declaration, when the binding comes from an `AT` declaration.
     pub target: Option<IoRootTarget>,
+}
+
+impl IoBinding {
+    /// Returns the effective binding fields implied by a `{stc:io}` hint.
+    fn apply_hint(&mut self) {
+        let Some(hint) = &self.hint else {
+            return;
+        };
+        self.device.clone_from(&hint.device);
+        self.channel = hint.channel.map(ProjectChannel::Index);
+        self.direction = hint.direction.map(stc_hir::IoDirection::as_str);
+    }
 }
 
 /// Process-image layout.
@@ -356,6 +395,7 @@ pub(crate) fn select_plan(hir: &HirCrate) -> Result<Plan, Vec<CodegenError>> {
                 // There is no interner mutation path in codegen; the synthetic
                 // instance name is carried as text and a reserved symbol ID.
                 let name = Symbol::new(u32::MAX);
+                let var_access = program_var_access(hir, *program, Some((name, "_default")));
                 Ok(Plan {
                     configuration: None,
                     instances: vec![PlanInstance {
@@ -371,6 +411,7 @@ pub(crate) fn select_plan(hir: &HirCrate) -> Result<Plan, Vec<CodegenError>> {
                     tasks: Vec::new(),
                     programs: vec![*program],
                     config_inits: Vec::new(),
+                    var_access,
                 })
             }
             _ => {
@@ -455,12 +496,64 @@ pub(crate) fn select_plan(hir: &HirCrate) -> Result<Plan, Vec<CodegenError>> {
     if !errors.is_empty() {
         return Err(errors);
     }
+    let mut var_access = Vec::new();
+    for access in &config.var_access {
+        var_access.extend(plan_var_access(hir, access, None));
+    }
+    for resource in &config.resources {
+        for access in &resource.var_access {
+            var_access.extend(plan_var_access(hir, access, None));
+        }
+    }
+    for instance in &instances {
+        for access in program_var_access(
+            hir,
+            instance.program,
+            Some((instance.name, &instance.name_text)),
+        ) {
+            var_access.push(access);
+        }
+    }
     Ok(Plan {
         configuration: configuration_name,
         instances,
         tasks,
         programs: programs.into_iter().collect(),
         config_inits: config.config_inits.clone(),
+        var_access,
+    })
+}
+
+/// Returns a program type's `VAR_ACCESS` entries with their instance context.
+fn program_var_access(
+    hir: &HirCrate,
+    program: DefId,
+    instance: Option<(Symbol, &str)>,
+) -> Vec<PlanVarAccess> {
+    let DefKind::Program { var_access, .. } = &hir.defs[program.index()].kind else {
+        return Vec::new();
+    };
+    var_access
+        .iter()
+        .filter_map(|access| plan_var_access(hir, access, instance))
+        .collect()
+}
+
+fn plan_var_access(
+    hir: &HirCrate,
+    access: &stc_hir::VarAccessHir,
+    instance: Option<(Symbol, &str)>,
+) -> Option<PlanVarAccess> {
+    let ExprKindHir::Place(place) = &hir.expr(access.place).kind else {
+        return None;
+    };
+    Some(PlanVarAccess {
+        name: hir.interner.text(access.name).to_string(),
+        place: place.clone(),
+        ty: access.ty,
+        read_only: access.read_only,
+        span: access.span,
+        instance_name: instance.map(|(_, name)| name.to_owned()),
     })
 }
 
@@ -639,19 +732,26 @@ pub(crate) fn image_layout(
         };
         match layout::scalar_kind_at(hir, *ty, address.span) {
             Ok(kind) => match layout::image_span(address, kind) {
-                Ok(span) => bindings.push(IoBinding {
-                    variable: def.name_text(&hir.interner).to_string(),
-                    address: layout::render_address(address),
-                    area: span.area,
-                    start_bit: span.start_bit,
-                    kind,
-                    hint: io.clone(),
-                    source: "pragma",
-                    init: *init,
-                    target: Some(IoRootTarget::Global(DefId::new(
-                        u32::try_from(index).unwrap_or(u32::MAX),
-                    ))),
-                }),
+                Ok(span) => {
+                    let mut binding = IoBinding {
+                        variable: def.name_text(&hir.interner).to_string(),
+                        address: layout::render_address(address),
+                        area: span.area,
+                        start_bit: span.start_bit,
+                        kind,
+                        hint: io.clone(),
+                        device: None,
+                        channel: None,
+                        direction: None,
+                        source: "pragma",
+                        init: *init,
+                        target: Some(IoRootTarget::Global(DefId::new(
+                            u32::try_from(index).unwrap_or(u32::MAX),
+                        ))),
+                    };
+                    binding.apply_hint();
+                    bindings.push(binding);
+                }
                 Err(error) => errors.push(error),
             },
             Err(error) => errors.push(error),
@@ -669,27 +769,34 @@ pub(crate) fn image_layout(
             };
             match layout::scalar_kind_at(hir, data.ty, data.span) {
                 Ok(kind) => match layout::image_span(address, kind) {
-                    Ok(span) => bindings.push(IoBinding {
-                        variable: format!(
-                            "{}.{}",
-                            instance.name_text,
-                            hir.interner.text(data.name)
-                        ),
-                        address: layout::render_address(address),
-                        area: span.area,
-                        start_bit: span.start_bit,
-                        kind,
-                        hint: data.io.clone(),
-                        source: "pragma",
-                        init: overrides
-                            .get(&(instance.name, *field))
-                            .copied()
-                            .or(data.init),
-                        target: Some(IoRootTarget::InstanceField {
-                            instance: instance.name,
-                            field: *field,
-                        }),
-                    }),
+                    Ok(span) => {
+                        let mut binding = IoBinding {
+                            variable: format!(
+                                "{}.{}",
+                                instance.name_text,
+                                hir.interner.text(data.name)
+                            ),
+                            address: layout::render_address(address),
+                            area: span.area,
+                            start_bit: span.start_bit,
+                            kind,
+                            hint: data.io.clone(),
+                            device: None,
+                            channel: None,
+                            direction: None,
+                            source: "pragma",
+                            init: overrides
+                                .get(&(instance.name, *field))
+                                .copied()
+                                .or(data.init),
+                            target: Some(IoRootTarget::InstanceField {
+                                instance: instance.name,
+                                field: *field,
+                            }),
+                        };
+                        binding.apply_hint();
+                        bindings.push(binding);
+                    }
                     Err(error) => errors.push(error),
                 },
                 Err(error) => errors.push(error),
@@ -747,6 +854,213 @@ pub(crate) fn image_layout(
     } else {
         Err(errors)
     }
+}
+
+/// Result of resolving project I/O bindings and validating pragma hints.
+#[derive(Default)]
+pub(crate) struct IoProjectResult {
+    /// Non-fatal diagnostics (`STC-W-IO-001`, `STC-W-IO-003`).
+    pub warnings: Vec<ModuleError>,
+    /// Binding errors (`STC-E-PROJECT-009`).
+    pub errors: Vec<CodegenError>,
+}
+
+/// Applies `[[io.bindings]]` over pragma hints and validates declared devices.
+///
+/// Precedence is runtime override (not compiler metadata) > project binding >
+/// `{stc:io}` pragma > raw address (IO §4). A project binding rewrites the
+/// binding's effective device/channel/direction and its metadata `source`.
+pub(crate) fn apply_project_bindings(
+    hir: &HirCrate,
+    image: &mut ImageLayout,
+    devices: &[DeviceMetadata],
+    bindings: &[ProjectBinding],
+) -> IoProjectResult {
+    let mut result = IoProjectResult::default();
+
+    // A pragma naming an undeclared device stays a warning: the runtime may
+    // add devices (IO §4).
+    for binding in &image.bindings {
+        let Some(hint) = &binding.hint else {
+            continue;
+        };
+        let Some(device) = &hint.device else {
+            continue;
+        };
+        if !devices.iter().any(|declared| declared.name == *device) {
+            result.warnings.push(ModuleError {
+                code: codes::W_IO_UNKNOWN_DEVICE,
+                severity: crate::module::Severity::Warning,
+                message: format!(
+                    "`stc:io` on `{}` names device `{device}`, which is not declared in stc.toml",
+                    binding.variable
+                ),
+                span: Some(hint.span),
+                got_id: None,
+                old_key: None,
+                new_key: None,
+            });
+        }
+    }
+
+    let span = Span::empty(stc_span::FileId::new(0), 0);
+    let mut bound = BTreeSet::new();
+    for project in bindings {
+        let Some(index) = image.bindings.iter().position(|candidate| {
+            binding_names(hir, candidate)
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&project.variable))
+        }) else {
+            result.errors.push(CodegenError::unsupported(
+                codes::PROJECT_IO,
+                format!(
+                    "I/O binding variable `{}` does not name a declared `AT` variable or field",
+                    project.variable
+                ),
+                span,
+            ));
+            continue;
+        };
+        if !bound.insert(index) {
+            result.errors.push(CodegenError::unsupported(
+                codes::PROJECT_IO,
+                format!(
+                    "I/O binding variable `{}` is bound more than once (paths are \
+                     case-insensitive)",
+                    project.variable
+                ),
+                span,
+            ));
+            continue;
+        }
+        let device = devices.iter().find(|device| device.name == project.device);
+        let Some(device) = device else {
+            result.errors.push(CodegenError::unsupported(
+                codes::PROJECT_IO,
+                format!(
+                    "I/O binding `{}` names undeclared device `{}`",
+                    project.variable, project.device
+                ),
+                span,
+            ));
+            continue;
+        };
+        if let Some(ProjectChannel::Name(name)) = &project.channel
+            && !device.channels.is_empty()
+            && !device.channels.iter().any(|channel| channel.name == *name)
+        {
+            result.errors.push(CodegenError::unsupported(
+                codes::PROJECT_IO,
+                format!(
+                    "I/O binding `{}` names undeclared channel `{name}` on device `{}`",
+                    project.variable, project.device
+                ),
+                span,
+            ));
+            continue;
+        }
+        if let (Some(ProjectChannel::Name(name)), Some(direction)) =
+            (&project.channel, project.direction.as_deref())
+            && let Some(channel) = device.channels.iter().find(|channel| channel.name == *name)
+            && channel.direction != "inout"
+            && direction != "inout"
+            && channel.direction != direction
+        {
+            result.errors.push(CodegenError::unsupported(
+                codes::PROJECT_IO,
+                format!(
+                    "I/O binding `{}` direction `{direction}` conflicts with channel `{name}` \
+                     direction `{}`",
+                    project.variable, channel.direction
+                ),
+                span,
+            ));
+            continue;
+        }
+
+        let target = &mut image.bindings[index];
+        if target.hint.is_some() {
+            result.warnings.push(ModuleError {
+                code: codes::W_PROJECT_OVERRIDES_HINT,
+                severity: crate::module::Severity::Warning,
+                message: format!(
+                    "project I/O binding for `{}` overrides its `stc:io` hint",
+                    target.variable
+                ),
+                span: target.hint.as_ref().map(|hint| hint.span).or(Some(span)),
+                got_id: None,
+                old_key: None,
+                new_key: None,
+            });
+        }
+        target.device = Some(project.device.clone());
+        target.channel.clone_from(&project.channel);
+        // A project binding that omits the direction keeps the pragma's
+        // direction; every explicitly supplied field wins.
+        if let Some(direction) = project.direction.as_deref() {
+            target.direction = Some(match direction {
+                "input" => "input",
+                "output" => "output",
+                _ => "inout",
+            });
+        }
+        target.source = "project";
+    }
+
+    result
+}
+
+/// Returns every source spelling a project binding may use for one variable.
+fn binding_names(hir: &HirCrate, binding: &IoBinding) -> Vec<String> {
+    let Some(target) = &binding.target else {
+        return vec![binding.variable.clone()];
+    };
+    let IoRootTarget::Global(def) = target else {
+        return vec![binding.variable.clone()];
+    };
+    let mut names = vec![binding.variable.clone()];
+    let path = namespace_path(hir, *def);
+    if path != binding.variable {
+        names.push(path.clone());
+    }
+    let package = &hir.defs[def.index()].package;
+    if let Some(info) = hir.packages.get(package.index()) {
+        for prefix in [&info.root_namespace, &info.name] {
+            if !prefix.is_empty()
+                && !path.starts_with(&format!("{prefix}."))
+                && !path.eq_ignore_ascii_case(prefix)
+            {
+                names.push(format!("{prefix}.{path}"));
+            }
+        }
+    }
+    names
+}
+
+/// Returns a definition's namespace-qualified source spelling.
+fn namespace_path(hir: &HirCrate, def: DefId) -> String {
+    let mut segments = Vec::new();
+    let mut current = Some(def);
+    while let Some(id) = current {
+        let data = &hir.defs[id.index()];
+        if id == def {
+            if let Some(name) = data.name {
+                segments.push(hir.interner.text(name).to_string());
+            }
+        } else if matches!(data.kind, DefKind::Namespace { .. }) {
+            // The package root namespace is implicit in source paths.
+            if data.parent.is_some()
+                && let Some(name) = data.name
+            {
+                segments.push(hir.interner.text(name).to_string());
+            }
+        } else {
+            break;
+        }
+        current = data.parent;
+    }
+    segments.reverse();
+    segments.join(".")
 }
 
 fn apply_defaults(hir: &HirCrate, image: &mut ImageLayout) {
@@ -1092,6 +1406,7 @@ mod tests {
             ],
             programs: Vec::new(),
             config_inits: Vec::new(),
+            var_access: Vec::new(),
         };
         assert_eq!(plan.cycle_instances(), vec![1, 3, 0, 4, 2]);
     }
@@ -1112,6 +1427,7 @@ mod tests {
             ],
             programs: Vec::new(),
             config_inits: Vec::new(),
+            var_access: Vec::new(),
         };
         assert_eq!(plan.cycle_instances(), vec![1, 0, 2]);
     }

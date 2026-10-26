@@ -495,6 +495,9 @@ fn emits_process_image_and_retain_layout() {
     assert_eq!(input.offset_bits, 10);
     assert_eq!(input.address, "IX1.2");
     assert_eq!(input.ty, "BOOL");
+    assert_eq!(input.source, "pragma");
+    assert_eq!(input.device.as_deref(), Some("rack"));
+    assert_eq!(input.direct_id, input.got_id);
     let hint = input.hint.as_ref().expect("io hint");
     assert_eq!(hint.device.as_deref(), Some("rack"));
     assert_eq!(hint.channel, Some(3));
@@ -507,6 +510,9 @@ fn emits_process_image_and_retain_layout() {
     assert_eq!(output_binding.offset_bits, 16);
 
     let retain = &output.metadata.retain;
+    assert!(retain.enabled);
+    assert_eq!(retain.file, "test.stcstate");
+    assert_eq!(retain.on_mismatch, "error");
     assert_eq!(retain.size, 8);
     let paths: Vec<_> = retain
         .leaves
@@ -518,6 +524,214 @@ fn emits_process_image_and_retain_layout() {
     assert_eq!(retain.leaves[1].offset, 4);
     assert_ne!(retain.layout_hash, 0);
     verify_with_clang("io_retain", &output.module);
+}
+
+const PROJECT_IO: &str = r#"
+VAR_GLOBAL
+  g AT %QW0 : WORD;
+END_VAR
+
+PROGRAM Main
+VAR
+  input AT %IX0.0 : BOOL {stc:io {"device":"hintdev","channel":1,"direction":"input"}};
+  output AT %QW1 : WORD;
+END_VAR
+VAR RETAIN
+  saved : DINT;
+END_VAR
+VAR_ACCESS
+  visible : input : BOOL READ_ONLY;
+END_VAR
+  output := 16#1234;
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+VAR_ACCESS
+  g_access : g : WORD READ_WRITE;
+END_VAR
+END_CONFIGURATION
+"#;
+
+fn project_options<'a>(
+    name: &'a str,
+    sources: &'a [String],
+    bindings: Vec<stc_codegen::ProjectBinding>,
+) -> stc_codegen::Options<'a> {
+    let mut options = options(name, Mode::Executable, sources);
+    options.project.io = stc_codegen::IoMetadataOptions {
+        backend: "file".into(),
+        file: Some("io.bin".into()),
+        devices: vec![stc_codegen::DeviceMetadata {
+            name: "drive1".into(),
+            kind: "ethercat".into(),
+            config: Some(stc_codegen::Json::object([
+                ("vendor".into(), stc_codegen::Json::String("0x1234".into())),
+                ("revision".into(), stc_codegen::Json::Number(3)),
+            ])),
+            channels: vec![
+                stc_codegen::ChannelMetadata {
+                    name: "DI5".into(),
+                    direction: "input".into(),
+                    width: 1,
+                },
+                stc_codegen::ChannelMetadata {
+                    name: "DO2".into(),
+                    direction: "output".into(),
+                    width: 16,
+                },
+            ],
+        }],
+        bindings,
+    };
+    options.project.retain = stc_codegen::RetainMetadataOptions {
+        enabled: false,
+        file: Some("state/app.stcstate".into()),
+        on_mismatch: "reset",
+    };
+    options
+}
+
+#[test]
+fn project_io_metadata_resolves_bindings_and_var_access() {
+    let sources = vec!["<test>".to_string()];
+    let options = project_options(
+        "project-io",
+        &sources,
+        vec![
+            stc_codegen::ProjectBinding {
+                variable: "inst.input".into(),
+                device: "drive1".into(),
+                channel: Some(stc_codegen::ProjectChannel::Name("DI5".into())),
+                direction: Some("input".into()),
+            },
+            stc_codegen::ProjectBinding {
+                variable: "inst.output".into(),
+                device: "drive1".into(),
+                channel: Some(stc_codegen::ProjectChannel::Name("DO2".into())),
+                direction: Some("output".into()),
+            },
+        ],
+    );
+    let output = stc_codegen::generate(&clean_hir(PROJECT_IO), &options).expect("codegen");
+    let io = &output.metadata.io;
+    assert_eq!(io.backend, "file");
+    assert_eq!(io.file.as_deref(), Some("io.bin"));
+    assert_eq!(io.devices.len(), 1);
+    assert_eq!(io.devices[0].name, "drive1");
+    assert_eq!(io.devices[0].kind, "ethercat");
+    assert_eq!(io.devices[0].channels.len(), 2);
+    assert!(io.devices[0].config.is_some());
+
+    let input = io
+        .bindings
+        .iter()
+        .find(|binding| binding.variable == "inst.input")
+        .expect("input binding");
+    assert_eq!(input.source, "project");
+    assert_eq!(input.device.as_deref(), Some("drive1"));
+    assert_eq!(input.channel, Some(stc_codegen::Json::String("DI5".into())));
+    assert_eq!(input.direction.as_deref(), Some("input"));
+    assert_eq!(
+        input.hint.as_ref().and_then(|hint| hint.device.as_deref()),
+        Some("hintdev"),
+        "the pragma hint stays in metadata"
+    );
+    assert_eq!(input.direct_id, input.got_id);
+    assert!(input.got_id.is_some());
+
+    let out = io
+        .bindings
+        .iter()
+        .find(|binding| binding.variable == "inst.output")
+        .expect("output binding");
+    assert_eq!(out.source, "project");
+    assert_eq!(out.direction.as_deref(), Some("output"));
+
+    let visible = io
+        .var_access
+        .iter()
+        .find(|access| access.name == "visible")
+        .expect("program VAR_ACCESS");
+    assert_eq!(visible.path, "inst.input");
+    assert_eq!(visible.ty, "BOOL");
+    assert!(visible.read_only);
+    assert_eq!(visible.area, Some('I'));
+    assert_eq!(visible.offset_bits, Some(0));
+    assert_eq!(visible.width_bits, Some(1));
+    let global = io
+        .var_access
+        .iter()
+        .find(|access| access.name == "g_access")
+        .expect("configuration VAR_ACCESS");
+    assert_eq!(global.path, "g");
+    assert_eq!(global.ty, "WORD");
+    assert!(!global.read_only);
+    assert_eq!(global.area, Some('Q'));
+    assert_eq!(global.width_bits, Some(16));
+
+    let retain = &output.metadata.retain;
+    assert!(!retain.enabled);
+    assert_eq!(retain.file, "state/app.stcstate");
+    assert_eq!(retain.on_mismatch, "reset");
+    assert_eq!(retain.size, 4);
+
+    let codes: Vec<&str> = output
+        .got
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect();
+    assert!(codes.contains(&"STC-W-IO-001"), "{codes:?}");
+    assert!(codes.contains(&"STC-W-IO-003"), "{codes:?}");
+}
+
+#[test]
+fn project_binding_errors_and_retain_hash_stability() {
+    let sources = vec!["<test>".to_string()];
+    let bad = project_options(
+        "bad-binding",
+        &sources,
+        vec![stc_codegen::ProjectBinding {
+            variable: "inst.missing".into(),
+            device: "drive1".into(),
+            channel: None,
+            direction: None,
+        }],
+    );
+    let errors = stc_codegen::generate(&clean_hir(PROJECT_IO), &bad).expect_err("unknown variable");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code() == "STC-E-PROJECT-009"),
+        "{errors:#?}"
+    );
+
+    let options = project_options("hash", &sources, Vec::new());
+    let hir = clean_hir(PROJECT_IO);
+    let first = stc_codegen::generate(&hir, &options).expect("first");
+    let second = stc_codegen::generate(&hir, &options).expect("second");
+    assert_eq!(
+        first.metadata.retain.layout_hash, second.metadata.retain.layout_hash,
+        "the layout hash is stable across identical builds"
+    );
+    assert_ne!(first.metadata.retain.layout_hash, 0);
+
+    let code_only = PROJECT_IO.replace("output := 16#1234;", "output := 16#5678;");
+    let code_change = stc_codegen::generate(&clean_hir(&code_only), &options).expect("code change");
+    assert_eq!(
+        first.metadata.retain.layout_hash, code_change.metadata.retain.layout_hash,
+        "a code-only change keeps the state layout"
+    );
+
+    let wider = PROJECT_IO.replace("saved : DINT", "saved : LINT");
+    let third = stc_codegen::generate(&clean_hir(&wider), &options).expect("wider");
+    assert_ne!(
+        first.metadata.retain.layout_hash, third.metadata.retain.layout_hash,
+        "a layout change changes the hash"
+    );
 }
 
 #[test]

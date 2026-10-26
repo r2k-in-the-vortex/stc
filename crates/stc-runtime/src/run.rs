@@ -61,8 +61,8 @@ pub struct RunOptions {
     pub cycles: u64,
     /// Fixed cycle time in nanoseconds; controls the loop deadline.
     pub cycle_time_ns: Option<i64>,
-    /// I/O backend selection.
-    pub io: IoBackend,
+    /// I/O backend override; `None` uses module metadata.
+    pub io: Option<IoBackend>,
     /// File backend image path (phase 5).
     pub io_file: Option<PathBuf>,
     /// Retained-state file (phase 5).

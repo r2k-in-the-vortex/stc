@@ -49,14 +49,29 @@ pub(crate) fn launch(
         args.push("--io-file".to_owned());
         args.push(path.to_string_lossy().into_owned());
     }
-    if let Some(path) = request.state_file.as_deref().map(absolute) {
+    // `stc run` resolves manifest-relative paths to absolute paths (D-163);
+    // a missing `[retain].file` keeps the metadata default
+    // `<artifact>.stcstate` in the module directory.
+    let state_file = request
+        .state_file
+        .as_deref()
+        .map(absolute)
+        .or_else(|| {
+            manifest
+                .retain
+                .file
+                .as_deref()
+                .map(|file| root_dir.join(file))
+        })
+        .filter(|_| manifest.retain.enabled && !request.no_retain);
+    if let Some(path) = state_file {
         args.push("--state-file".to_owned());
         args.push(path.to_string_lossy().into_owned());
     }
     if request.reset_retain {
         args.push("--reset-retain".to_owned());
     }
-    if request.no_retain {
+    if request.no_retain || !manifest.retain.enabled {
         args.push("--no-retain".to_owned());
     }
     if log.verbose() {

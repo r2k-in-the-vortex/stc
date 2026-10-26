@@ -20,7 +20,7 @@ use stc_diag::{DiagnosticSink, Severity};
 use stc_driver::toolchain::system_link_args;
 use stc_got::{Digest32, Manifest, PlanAction, PlanVerdict, Rename};
 use stc_hir::HirCrate;
-use stc_manifest::{EmitKind, LibType, OptLevel};
+use stc_manifest::{ChannelRef, ConfigValue, EmitKind, LibType, OptLevel};
 
 use crate::report::{Log, Reporter, display_path, elapsed};
 
@@ -73,6 +73,112 @@ pub(crate) struct RunRequest {
     pub no_retain: bool,
 }
 
+/// Project metadata settings copied from `stc.toml` into module metadata.
+#[derive(Clone, Debug)]
+pub(crate) struct ProjectSettings {
+    /// `[retain].enabled`.
+    pub retain_enabled: bool,
+    /// `[retain].file`.
+    pub retain_file: Option<String>,
+    /// `[retain].on-mismatch`.
+    pub retain_on_mismatch: &'static str,
+    /// `[io].backend`.
+    pub io_backend: String,
+    /// `[io].file`.
+    pub io_file: Option<String>,
+    /// Declared devices.
+    pub devices: Vec<stc_codegen::DeviceMetadata>,
+    /// Project bindings.
+    pub bindings: Vec<stc_codegen::ProjectBinding>,
+}
+
+impl Default for ProjectSettings {
+    fn default() -> Self {
+        Self {
+            retain_enabled: true,
+            retain_file: None,
+            retain_on_mismatch: "error",
+            io_backend: "null".into(),
+            io_file: None,
+            devices: Vec::new(),
+            bindings: Vec::new(),
+        }
+    }
+}
+
+impl ProjectSettings {
+    /// Builds the metadata settings from a parsed manifest.
+    pub(crate) fn from_manifest(manifest: &stc_manifest::Manifest) -> Self {
+        Self {
+            retain_enabled: manifest.retain.enabled,
+            retain_file: manifest.retain.file.clone(),
+            retain_on_mismatch: manifest.retain.on_mismatch.as_str(),
+            io_backend: manifest.io.backend.as_str().into(),
+            io_file: manifest.io.file.clone(),
+            devices: manifest
+                .io
+                .devices
+                .iter()
+                .map(|device| stc_codegen::DeviceMetadata {
+                    name: device.name.clone(),
+                    kind: device.kind.clone(),
+                    config: device.config.as_ref().map(config_json),
+                    channels: device
+                        .channels
+                        .iter()
+                        .map(|channel| stc_codegen::ChannelMetadata {
+                            name: channel.name.clone(),
+                            direction: channel.direction.as_str().into(),
+                            width: channel.width,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            bindings: manifest
+                .io
+                .bindings
+                .iter()
+                .map(|binding| stc_codegen::ProjectBinding {
+                    variable: binding.variable.clone(),
+                    device: binding.device.clone(),
+                    channel: binding.channel.as_ref().map(|channel| match channel {
+                        ChannelRef::Index(index) => stc_codegen::ProjectChannel::Index(*index),
+                        ChannelRef::Name(name) => stc_codegen::ProjectChannel::Name(name.clone()),
+                    }),
+                    direction: binding.direction.map(|direction| direction.as_str().into()),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Converts an opaque manifest TOML value into canonical metadata JSON.
+fn config_json(value: &ConfigValue) -> Json {
+    match value {
+        ConfigValue::String(value) => Json::String(value.clone()),
+        ConfigValue::Integer(value) => Json::Number(i128::from(*value)),
+        ConfigValue::Float(value) if value.is_finite() => Json::Float(*value),
+        // JSON has no NaN/infinity; keep the TOML spelling as a string so the
+        // opaque device configuration stays valid JSON.
+        ConfigValue::Float(value) => Json::String(if value.is_nan() {
+            "nan".into()
+        } else if value.is_sign_positive() {
+            "inf".into()
+        } else {
+            "-inf".into()
+        }),
+        ConfigValue::Boolean(value) => Json::Bool(*value),
+        ConfigValue::Datetime(value) => Json::String(value.clone()),
+        ConfigValue::Array(values) => Json::Array(values.iter().map(config_json).collect()),
+        ConfigValue::Table(values) => Json::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), config_json(value)))
+                .collect(),
+        ),
+    }
+}
+
 /// Parsed project build settings and CLI overrides.
 #[derive(Clone, Debug)]
 pub(crate) struct Request {
@@ -110,6 +216,8 @@ pub(crate) struct Request {
     pub manifest_clang: Option<String>,
     /// `[build].runtime`.
     pub manifest_runtime: Option<String>,
+    /// Project metadata settings.
+    pub project: ProjectSettings,
     /// `stc run` options.
     pub run: RunRequest,
 }
@@ -134,6 +242,7 @@ impl Default for Request {
             manifest_target: None,
             manifest_clang: None,
             manifest_runtime: None,
+            project: ProjectSettings::default(),
             run: RunRequest::default(),
         }
     }
@@ -348,12 +457,26 @@ fn generate(
             allow_untracked_removal: request.allow_untracked_removal,
             renames,
         },
+        project: stc_codegen::ProjectOptions {
+            retain: stc_codegen::RetainMetadataOptions {
+                enabled: request.project.retain_enabled,
+                file: request.project.retain_file.clone(),
+                on_mismatch: request.project.retain_on_mismatch,
+            },
+            io: stc_codegen::IoMetadataOptions {
+                backend: request.project.io_backend.clone(),
+                file: request.project.io_file.clone(),
+                devices: request.project.devices.clone(),
+                bindings: request.project.bindings.clone(),
+            },
+        },
     };
     let codegen_start = Instant::now();
     let output = match stc_codegen::generate(hir, &options) {
         Ok(output) => output,
         Err(errors) => {
             let mut internal = false;
+            let mut project = false;
             for error in errors {
                 match error {
                     stc_codegen::CodegenError::Unsupported {
@@ -361,13 +484,17 @@ fn generate(
                         message,
                         span,
                     } if span.start == 0 && span.end == 0 => {
+                        project |= code.starts_with("STC-E-PROJECT-");
                         reporter.plain(code, Severity::Error, &message);
                     }
                     stc_codegen::CodegenError::Unsupported {
                         code,
                         message,
                         span,
-                    } => diagnostics.error(code, message, span),
+                    } => {
+                        project |= code.starts_with("STC-E-PROJECT-");
+                        diagnostics.error(code, message, span);
+                    }
                     stc_codegen::CodegenError::Internal { message } => {
                         reporter.plain(
                             stc_codegen::codes::CODEGEN_INTERNAL,
@@ -378,7 +505,13 @@ fn generate(
                     }
                 }
             }
-            return Err(if internal { 3 } else { 1 });
+            return Err(if internal {
+                3
+            } else if project {
+                2
+            } else {
+                1
+            });
         }
     };
     log.info(format!("codegen {}", elapsed(codegen_start)));

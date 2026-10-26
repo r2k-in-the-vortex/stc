@@ -58,7 +58,7 @@ fn info(sizes: (u64, u64, u64), bindings: Vec<DirectBinding>) -> ModuleInfo {
         outputs_bytes: sizes.1,
         markers_bytes: sizes.2,
         bindings,
-        text: "{}".into(),
+        ..ModuleInfo::default()
     }
 }
 

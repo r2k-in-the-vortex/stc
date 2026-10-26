@@ -3,7 +3,7 @@ source_filename = "test"
 target triple = "x86_64-unknown-linux-gnu"
 
 ; globals
-@stc_metadata_json_data = private constant [1564 x i8] c"{\22abi_version\22:2,\22artifact\22:\22test\22,\22build_id\22:\220x6299e204cd4ea6d6e11e6599cc4c2228\22,\22compiler\22:\22stc 0.1.0\22,\22configuration\22:\22C\22,\22descriptor_digest\22:\220xf2aee9334fc4b38b0ed5b17d059215e9aaca440165a893821c494d35b53d8e58\22,\22exports\22:[{\22function\22:\22stc_fn__ROOT_n_TESTADD_9731bc2064eeb366\22,\22no_mangle\22:false,\22symbol\22:\22stc_export_TESTADD\22}],\22io\22:{\22backend\22:\22null\22,\22bindings\22:[],\22image\22:{\22inputs_bytes\22:0,\22markers_bytes\22:0,\22outputs_bytes\22:0},\22input_defaults_hex\22:\22\22,\22output_defaults_hex\22:\22\22},\22manifest\22:{\22digest\22:\220x4bb89281d7be595c8df2235be63d49f24eac3991a55bc5270218d50eb0595d26\22,\22format\22:1},\22mode\22:\22library\22,\22module\22:{\22file\22:\22\22,\22format\22:1},\22profile\22:\22stc-2013-oop-utf8-v1\22,\22programs\22:[{\22name\22:\22inst\22,\22program\22:\22Main\22,\22resource\22:\22R\22,\22task\22:null}],\22retain\22:{\22layout_hash\22:\220xcbf29ce484222325\22,\22leaves\22:[],\22size\22:0},\22spans\22:{\22entries\22:[{\22end\22:112,\22file\22:0,\22id\22:0,\22start\22:1},{\22end\22:51,\22file\22:0,\22id\22:1,\22start\22:50},{\22end\22:63,\22file\22:0,\22id\22:2,\22start\22:62},{\22end\22:89,\22file\22:0,\22id\22:3,\22start\22:82},{\22end\22:99,\22file\22:0,\22id\22:4,\22start\22:82},{\22end\22:94,\22file\22:0,\22id\22:5,\22start\22:93},{\22end\22:96,\22file\22:0,\22id\22:6,\22start\22:95},{\22end\22:98,\22file\22:0,\22id\22:7,\22start\22:97},{\22end\22:184,\22file\22:0,\22id\22:8,\22start\22:114},{\22end\22:134,\22file\22:0,\22id\22:9,\22start\22:133},{\22end\22:154,\22file\22:0,\22id\22:10,\22start\22:153},{\22end\22:172,\22file\22:0,\22id\22:11,\22start\22:153},{\22end\22:171,\22file\22:0,\22id\22:12,\22start\22:158},{\22end\22:167,\22file\22:0,\22id\22:13,\22start\22:166},{\22end\22:170,\22file\22:0,\22id\22:14,\22start\22:169},{\22end\22:273,\22file\22:0,\22id\22:15,\22start\22:186},{\22end\22:241,\22file\22:0,\22id\22:16,\22start\22:222}],\22files\22:[\22<test>\22]},\22target\22:\22x86_64-unknown-linux-gnu\22,\22tasks\22:[]}\00", align 1
+@stc_metadata_json_data = private constant [1665 x i8] c"{\22abi_version\22:2,\22artifact\22:\22test\22,\22build_id\22:\220x6299e204cd4ea6d6e11e6599cc4c2228\22,\22compiler\22:\22stc 0.1.0\22,\22configuration\22:\22C\22,\22descriptor_digest\22:\220xf2aee9334fc4b38b0ed5b17d059215e9aaca440165a893821c494d35b53d8e58\22,\22exports\22:[{\22function\22:\22stc_fn__ROOT_n_TESTADD_9731bc2064eeb366\22,\22no_mangle\22:false,\22symbol\22:\22stc_export_TESTADD\22}],\22io\22:{\22backend\22:\22null\22,\22bindings\22:[],\22devices\22:[],\22file\22:null,\22image\22:{\22inputs_bytes\22:0,\22markers_bytes\22:0,\22outputs_bytes\22:0},\22input_defaults_hex\22:\22\22,\22output_defaults_hex\22:\22\22,\22var_access\22:[]},\22manifest\22:{\22digest\22:\220x4bb89281d7be595c8df2235be63d49f24eac3991a55bc5270218d50eb0595d26\22,\22format\22:1},\22mode\22:\22library\22,\22module\22:{\22file\22:\22\22,\22format\22:1},\22profile\22:\22stc-2013-oop-utf8-v1\22,\22programs\22:[{\22name\22:\22inst\22,\22program\22:\22Main\22,\22resource\22:\22R\22,\22task\22:null}],\22retain\22:{\22enabled\22:true,\22file\22:\22test.stcstate\22,\22layout_hash\22:\220xfeee76fe0301e686\22,\22leaves\22:[],\22on_mismatch\22:\22error\22,\22size\22:0},\22spans\22:{\22entries\22:[{\22end\22:112,\22file\22:0,\22id\22:0,\22start\22:1},{\22end\22:51,\22file\22:0,\22id\22:1,\22start\22:50},{\22end\22:63,\22file\22:0,\22id\22:2,\22start\22:62},{\22end\22:89,\22file\22:0,\22id\22:3,\22start\22:82},{\22end\22:99,\22file\22:0,\22id\22:4,\22start\22:82},{\22end\22:94,\22file\22:0,\22id\22:5,\22start\22:93},{\22end\22:96,\22file\22:0,\22id\22:6,\22start\22:95},{\22end\22:98,\22file\22:0,\22id\22:7,\22start\22:97},{\22end\22:184,\22file\22:0,\22id\22:8,\22start\22:114},{\22end\22:134,\22file\22:0,\22id\22:9,\22start\22:133},{\22end\22:154,\22file\22:0,\22id\22:10,\22start\22:153},{\22end\22:172,\22file\22:0,\22id\22:11,\22start\22:153},{\22end\22:171,\22file\22:0,\22id\22:12,\22start\22:158},{\22end\22:167,\22file\22:0,\22id\22:13,\22start\22:166},{\22end\22:170,\22file\22:0,\22id\22:14,\22start\22:169},{\22end\22:273,\22file\22:0,\22id\22:15,\22start\22:186},{\22end\22:241,\22file\22:0,\22id\22:16,\22start\22:222}],\22files\22:[\22<test>\22]},\22target\22:\22x86_64-unknown-linux-gnu\22,\22tasks\22:[]}\00", align 1
 @stc_module_api = internal global ptr null
 @stc_module_descriptor_data = private constant [507 x i8] c"STCMOD\00\00\01\00\00\00\FB\01\00\00\0F\00\00\00\00\00\00\00\02\00\01\00\01\00\00\08\14\00\00\00stc-2013-oop-utf8-v1\09\00\00\00stc 0.1.0\18\00\00\00x86_64-unknown-linux-gnub\99\E2\04\CDN\A6\D6\E1\1Ee\99\CCL\22(K\B8\92\81\D7\BEY\5C\8D\F2#[\E6=I\F2N\AC9\91\A5[\C5'\02\18\D5\0E\B0Y]&\01\00\13\00\00\00\02\00\00\00\09\00\00\00\98z\8E\F0\81;%\98\EC\04>\BD\D6tK\08\19\00\00\00_ROOT::MAIN#BODY@()->VOID\08\00\00\00()->VOIDB\00\00\00\AF\05B\02\B1\DE\DF\8B~b\D3\F7\227\92|&\00\00\00_ROOT::TESTADD@(IN:DINT,IN:DINT)->DINT\17\00\00\00(IN:DINT,IN:DINT)->DINTA\00\00\00\00\00\00\00\01\00\18\B7\A5\CC\01\9E&!ci*K\FA\FEa\9A\01\00\00\00\01\00\8C\10#C\9C\EA\ACZ\D9T\0Ck\F9\A2\A0\A8\02\00\00\00\02\00\98z\8E\F0\81;%\98\EC\04>\BD\D6tK\08\03\00\00\00\02\00\AF\05B\02\B1\DE\DF\8B~b\D3\F7\227\92|\04\00\00\00\05\01\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\05\00\00\00\05\07\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\06\00\00\00\05\08\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\07\00\00\00\05\09\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\08\00\00\00\05\0A\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00", align 8
 @stc_module_function_table = internal constant [2 x ptr] [ptr @stc_prog__ROOT_n_MAIN_body, ptr @stc_fn__ROOT_n_TESTADD_9731bc2064eeb366], align 8
@@ -177,7 +177,7 @@ bb10:
   %t8 = getelementptr ptr, ptr %t0, i64 7
   %t9 = load ptr, ptr %t8, align 8
   %t10 = load ptr, ptr %t9, align 8
-  %t11 = call i32 %t10(ptr @stc_retain_buffer, i64 0, i64 -3750763034362895579)
+  %t11 = call i32 %t10(ptr @stc_retain_buffer, i64 0, i64 -76993310274492794)
   %t12 = icmp eq i32 %t11, 0
   br i1 %t12, label %bb12, label %bb13
 bb12:
@@ -206,7 +206,7 @@ bb5:
   %t4 = getelementptr ptr, ptr %t0, i64 8
   %t5 = load ptr, ptr %t4, align 8
   %t6 = load ptr, ptr %t5, align 8
-  %t7 = call i32 %t6(ptr @stc_retain_buffer, i64 0, i64 -3750763034362895579)
+  %t7 = call i32 %t6(ptr @stc_retain_buffer, i64 0, i64 -76993310274492794)
   ret i32 0
 }
 
@@ -229,7 +229,7 @@ bb1:
 
 define dso_local dllexport i64 @stc_retain_layout_hash() uwtable {
 bb0:
-  ret i64 -3750763034362895579
+  ret i64 -76993310274492794
 }
 
 define dso_local dllexport i32 @stc_retain_load(ptr %a0) uwtable {

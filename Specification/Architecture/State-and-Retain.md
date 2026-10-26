@@ -1,6 +1,6 @@
 # State and RETAIN Persistence
 
-Status: M4.5 scalar roots, M5 aggregate/string/FB leaves, and online preservation implemented (2026-10-25); M6 phase-0 path/retain metadata contract fixed (2026-10-26); file-backed state is M6  
+Status: M4.5 scalar roots, M5 aggregate/string/FB leaves, and online preservation implemented (2026-10-25); M6 phase-5 file-backed state and policy implemented (2026-10-26)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Architecture](Architecture.md), [Decisions](../Decisions.md)
 
@@ -23,10 +23,17 @@ the restart policy above. See [Online Change and GOT](Online-Change-and-GOT.md) 
 > program fields, `AT` excluded), emitted as metadata, and exposed through generated
 > `stc_retain_size/layout_hash/save/load`. Retained leaves are host-owned per-field roots.
 > `stc_init` calls the ABI 2 `state_load` service during prepare and restores on success;
-> shutdown saves through `state_save`. The runtime state services are stubs returning 5
-> (retention disabled) until M6. Online prepare preserves matching roots and initializes only
-> fresh roots; cold installs skip the retained-state file. Aggregate/string/FB leaves are M5;
-> the file-backed atomic format is M6.
+> shutdown saves through `state_save`. Online prepare preserves matching roots and initializes
+> only fresh roots; cold installs skip the retained-state file. Aggregate/string/FB leaves are
+> M5.
+>
+> **M6 phase-5 status (2026-10-26):** the ABI 2 state services are file-backed with the §3
+> format, CRC32 validation, `error`/`reset` mismatch policies, and atomic replace. The generated
+> layout hash covers the profile/ABI/size header and each leaf's stable root identity. `Host`
+> loads before cold prepare, saves only at the active generation's normal shutdown, and never
+> rewrites the file merely because of an online swap. `--state-file`, `--reset-retain`, and
+> `--no-retain` are resolved by `stc run`; a standalone launcher resolves relative metadata
+> paths against the module directory.
 >
 > **Online-change policy (resolved):** v1 preserves values in host memory across an online
 > change; it does not migrate retained leaves by `GotId` across restarts. The state-file format

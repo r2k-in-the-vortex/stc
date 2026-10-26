@@ -12,6 +12,8 @@ pub enum Json {
     Bool(bool),
     /// An integer number.
     Number(i128),
+    /// A floating-point number.
+    Float(f64),
     /// A string.
     String(String),
     /// An array.
@@ -50,6 +52,19 @@ impl Json {
             Self::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
             Self::Number(value) => {
                 let _ = write!(out, "{value}");
+            }
+            Self::Float(value) if !value.is_finite() => {
+                // JSON has no NaN/infinity.
+                out.push_str("null");
+            }
+            Self::Float(value) => {
+                // Rust's shortest round-trip formatting is deterministic and a
+                // valid JSON number.
+                let rendered = format!("{value}");
+                out.push_str(&rendered);
+                if !rendered.contains(['.', 'e', 'E']) {
+                    out.push_str(".0");
+                }
             }
             Self::String(value) => write_string(out, value),
             Self::Array(values) => {
@@ -164,13 +179,88 @@ pub struct IoBindingMetadata {
     pub width_bits: u64,
     /// Canonical type name.
     pub ty: String,
-    /// Persistent GOT identity of the direct root, when the binding is a
-    /// declared `AT` variable or field.
+    /// Persistent identity of the direct root, when the binding is a declared
+    /// `AT` variable or field. In v1 this is the same identity as `got_id`.
+    pub direct_id: Option<String>,
+    /// Per-generation GOT cell identity of the direct root.
     pub got_id: Option<String>,
+    /// Effective device, when a pragma or project binding applies.
+    pub device: Option<String>,
+    /// Effective channel: a number or a declared channel name.
+    pub channel: Option<Json>,
+    /// Effective direction spelling.
+    pub direction: Option<String>,
     /// `{stc:io}` hint fields.
     pub hint: Option<HintMetadata>,
     /// `pragma` or `project`.
     pub source: &'static str,
+}
+
+/// One declared project I/O device copied from `stc.toml`.
+#[derive(Clone, Debug)]
+pub struct DeviceMetadata {
+    /// Device name.
+    pub name: String,
+    /// Opaque, runtime-defined device kind.
+    pub kind: String,
+    /// Opaque canonical device configuration.
+    pub config: Option<Json>,
+    /// Optional channel descriptors.
+    pub channels: Vec<ChannelMetadata>,
+}
+
+/// One declared device channel.
+#[derive(Clone, Debug)]
+pub struct ChannelMetadata {
+    /// Channel name.
+    pub name: String,
+    /// `input`, `output`, or `inout`.
+    pub direction: String,
+    /// Channel width in bits.
+    pub width: u32,
+}
+
+/// A project binding channel reference.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProjectChannel {
+    /// Non-negative channel number.
+    Index(u32),
+    /// Declared channel name.
+    Name(String),
+}
+
+/// One `[[io.bindings]]` entry the compiler resolves against HIR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectBinding {
+    /// Fully qualified ST variable path.
+    pub variable: String,
+    /// Declared device name.
+    pub device: String,
+    /// Optional channel hint.
+    pub channel: Option<ProjectChannel>,
+    /// Optional direction (`input`, `output`, or `inout`).
+    pub direction: Option<String>,
+}
+
+/// One resolved `VAR_ACCESS` declaration.
+#[derive(Clone, Debug)]
+pub struct VarAccessMetadata {
+    /// Access name.
+    pub name: String,
+    /// Resolved variable path.
+    pub path: String,
+    /// Declared type spelling.
+    pub ty: String,
+    /// `READ_ONLY` marker.
+    pub read_only: bool,
+    /// Process-image area, for a direct access path.
+    pub area: Option<char>,
+    /// Address spelling without `%`, for a direct access path.
+    pub address: Option<String>,
+    /// Area-relative start bit, for a direct access path.
+    pub offset_bits: Option<u64>,
+    /// Access width in bits, for a direct access path.
+    pub width_bits: Option<u64>,
 }
 
 /// A `{stc:io}` hint as exposed in metadata.
@@ -187,6 +277,10 @@ pub struct HintMetadata {
 /// Process-image metadata.
 #[derive(Clone, Debug, Default)]
 pub struct IoMetadata {
+    /// Runtime backend selected by `[io].backend`.
+    pub backend: String,
+    /// File used by the `file` backend, relative to the project root.
+    pub file: Option<String>,
     /// Input image size.
     pub inputs_bytes: u64,
     /// Output image size.
@@ -197,8 +291,12 @@ pub struct IoMetadata {
     pub input_defaults_hex: String,
     /// Output defaults as lowercase hex.
     pub output_defaults_hex: String,
+    /// Declared devices in manifest order.
+    pub devices: Vec<DeviceMetadata>,
     /// Bindings sorted by area and offset.
     pub bindings: Vec<IoBindingMetadata>,
+    /// Resolved `VAR_ACCESS` declarations.
+    pub var_access: Vec<VarAccessMetadata>,
 }
 
 /// One retained scalar leaf.
@@ -217,6 +315,13 @@ pub struct RetainLeafMetadata {
 /// Retained-state metadata.
 #[derive(Clone, Debug, Default)]
 pub struct RetainMetadata {
+    /// Whether retained state is loaded and saved.
+    pub enabled: bool,
+    /// State file relative to the project root (or the module directory for a
+    /// standalone launcher).
+    pub file: String,
+    /// `error` or `reset`.
+    pub on_mismatch: String,
     /// Payload size.
     pub size: u64,
     /// FNV-1a layout hash.
@@ -414,6 +519,29 @@ fn io_json(io: &IoMetadata) -> Json {
             Json::Number(i128::from(io.outputs_bytes)),
         ),
     ]);
+    let devices = io
+        .devices
+        .iter()
+        .map(|device| {
+            let channels = device
+                .channels
+                .iter()
+                .map(|channel| {
+                    Json::object([
+                        ("direction".into(), Json::String(channel.direction.clone())),
+                        ("name".into(), Json::String(channel.name.clone())),
+                        ("width".into(), Json::Number(i128::from(channel.width))),
+                    ])
+                })
+                .collect();
+            Json::object([
+                ("config".into(), device.config.clone().unwrap_or(Json::Null)),
+                ("kind".into(), Json::String(device.kind.clone())),
+                ("name".into(), Json::String(device.name.clone())),
+                ("channels".into(), Json::Array(channels)),
+            ])
+        })
+        .collect();
     let bindings = io
         .bindings
         .iter()
@@ -435,6 +563,22 @@ fn io_json(io: &IoMetadata) -> Json {
                 ("address".into(), Json::String(binding.address.clone())),
                 ("area".into(), Json::String(binding.area.to_string())),
                 (
+                    "channel".into(),
+                    binding.channel.clone().unwrap_or(Json::Null),
+                ),
+                (
+                    "device".into(),
+                    binding.device.clone().map_or(Json::Null, Json::String),
+                ),
+                (
+                    "direct_id".into(),
+                    binding.direct_id.clone().map_or(Json::Null, Json::String),
+                ),
+                (
+                    "direction".into(),
+                    binding.direction.clone().map_or(Json::Null, Json::String),
+                ),
+                (
                     "got_id".into(),
                     binding.got_id.clone().map_or(Json::Null, Json::String),
                 ),
@@ -453,9 +597,48 @@ fn io_json(io: &IoMetadata) -> Json {
             ])
         })
         .collect();
+    let var_access = io
+        .var_access
+        .iter()
+        .map(|access| {
+            Json::object([
+                (
+                    "address".into(),
+                    access.address.clone().map_or(Json::Null, Json::String),
+                ),
+                (
+                    "area".into(),
+                    access
+                        .area
+                        .map_or(Json::Null, |area| Json::String(area.to_string())),
+                ),
+                ("name".into(), Json::String(access.name.clone())),
+                (
+                    "offset_bits".into(),
+                    access
+                        .offset_bits
+                        .map_or(Json::Null, |value| Json::Number(i128::from(value))),
+                ),
+                ("path".into(), Json::String(access.path.clone())),
+                ("read_only".into(), Json::Bool(access.read_only)),
+                ("type".into(), Json::String(access.ty.clone())),
+                (
+                    "width_bits".into(),
+                    access
+                        .width_bits
+                        .map_or(Json::Null, |value| Json::Number(i128::from(value))),
+                ),
+            ])
+        })
+        .collect();
     Json::object([
-        ("backend".into(), Json::String("null".into())),
+        ("backend".into(), Json::String(io.backend.clone())),
         ("bindings".into(), Json::Array(bindings)),
+        ("devices".into(), Json::Array(devices)),
+        (
+            "file".into(),
+            io.file.clone().map_or(Json::Null, Json::String),
+        ),
         ("image".into(), image),
         (
             "input_defaults_hex".into(),
@@ -465,11 +648,18 @@ fn io_json(io: &IoMetadata) -> Json {
             "output_defaults_hex".into(),
             Json::String(io.output_defaults_hex.clone()),
         ),
+        ("var_access".into(), Json::Array(var_access)),
     ])
 }
 
 fn retain_json(retain: &RetainMetadata) -> Json {
     Json::object([
+        ("enabled".into(), Json::Bool(retain.enabled)),
+        ("file".into(), Json::String(retain.file.clone())),
+        (
+            "on_mismatch".into(),
+            Json::String(retain.on_mismatch.clone()),
+        ),
         (
             "layout_hash".into(),
             Json::String(format!("0x{:016x}", retain.layout_hash)),

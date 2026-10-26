@@ -66,6 +66,7 @@ pub fn options<'a>(
         sources,
         source_paths: None,
         module: stc_codegen::ModuleBuildOptions::default(),
+        project: stc_codegen::ProjectOptions::default(),
     }
 }
 

@@ -2062,6 +2062,255 @@ fn untracked_removal_requires_an_explicit_policy() {
     assert!(!host.roots().contains(flag));
 }
 
+const IO_BACKENDS: &str = r#"
+PROGRAM Main
+VAR
+  input AT %IW0 : INT := 3;
+  output AT %QW0 : INT;
+  marker AT %MW0 : INT;
+END_VAR
+  output := input + 1;
+  marker := marker + 1;
+END_PROGRAM
+"#;
+
+#[test]
+fn io_backends_latch_defaults_and_publish_outputs() {
+    use stc_runtime::{Host, IoBackend, LoadMode, ManifestStore};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("io_backends");
+    let source = directory.source("io_backends", IO_BACKENDS);
+    build_ok(&directory, &source, "io_backends", &[]);
+    let platform = host_platform();
+
+    // The memory backend leaves host-supplied inputs in place and keeps the
+    // published output image readable.
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.configure_io(Some(IoBackend::Memory), None);
+    host.load(
+        open_candidate(&directory, "io_backends", &platform),
+        LoadMode::Cold,
+    )
+    .expect("cold install");
+    write_image(0, &5_i16.to_le_bytes());
+    host.cycle_at(0).expect("cycle");
+    assert_eq!(&image_bytes()[0..2], &5_i16.to_le_bytes());
+    assert_eq!(&image_bytes()[2..4], &6_i16.to_le_bytes());
+    write_image(0, &7_i16.to_le_bytes());
+    host.cycle_at(1).expect("cycle");
+    assert_eq!(&image_bytes()[2..4], &8_i16.to_le_bytes());
+    assert_eq!(&image_bytes()[4..6], &2_i16.to_le_bytes(), "%M persists");
+    host.shutdown().expect("shutdown");
+
+    // The null backend restores the declared input default every scan and
+    // discards unbound outputs.
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.configure_io(Some(IoBackend::Null), None);
+    host.load(
+        open_candidate(&directory, "io_backends", &platform),
+        LoadMode::Cold,
+    )
+    .expect("cold install");
+    write_image(0, &9_i16.to_le_bytes());
+    write_image(2, &9_i16.to_le_bytes());
+    host.cycle_at(0).expect("cycle");
+    assert_eq!(
+        &image_bytes()[0..2],
+        &3_i16.to_le_bytes(),
+        "the initializer is the unbound input default"
+    );
+    assert_eq!(
+        &image_bytes()[2..4],
+        &0_i16.to_le_bytes(),
+        "the null backend discards outputs"
+    );
+    assert_eq!(&image_bytes()[4..6], &1_i16.to_le_bytes());
+    host.cycle_at(1).expect("cycle");
+    assert_eq!(&image_bytes()[0..2], &3_i16.to_le_bytes());
+    assert_eq!(&image_bytes()[4..6], &2_i16.to_le_bytes());
+    host.shutdown().expect("shutdown");
+}
+
+const RETAIN_STATE_V1: &str = r#"
+VAR_GLOBAL RETAIN
+  Saved : DINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Saved := Saved + 1;
+END_PROGRAM
+"#;
+
+const RETAIN_STATE_V2: &str = r#"
+VAR_GLOBAL RETAIN
+  Saved : DINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Saved := Saved + 2;
+END_PROGRAM
+"#;
+
+const RETAIN_STATE_LONG: &str = r#"
+VAR_GLOBAL RETAIN
+  Saved : LINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  ticks : DINT;
+END_VAR
+  ticks := ticks + 1;
+  Saved := Saved + 1;
+END_PROGRAM
+"#;
+
+fn state_payload(path: &std::path::Path) -> Vec<u8> {
+    let bytes = std::fs::read(path).expect("state file");
+    assert_eq!(&bytes[0..8], b"STCRET01");
+    let length = u64::from_le_bytes(bytes[32..40].try_into().expect("length"));
+    bytes[40..40 + length as usize].to_vec()
+}
+
+#[test]
+fn state_is_saved_at_shutdown_and_loaded_on_cold_download() {
+    use stc_runtime::{Host, LoadMode, LoadOutcome, ManifestStore, MismatchPolicy, RetainConfig};
+
+    let Some(_) = clang() else {
+        return;
+    };
+    let _guard = host_guard();
+    let directory = TestDir::new("state_lifecycle");
+    let v1_source = directory.source("state_v1", RETAIN_STATE_V1);
+    build_ok(&directory, &v1_source, "state_v1", &[]);
+    let v1 = directory.manifest("state_v1");
+    let baseline = directory.path.join("state_v1.stc-got.bin");
+    let v2_source = directory.source("state_v2", RETAIN_STATE_V2);
+    build_ok(
+        &directory,
+        &v2_source,
+        "state_v2",
+        &["--got-manifest", baseline.to_str().unwrap()],
+    );
+    let v2 = directory.manifest("state_v2");
+    let long_source = directory.source("state_long", RETAIN_STATE_LONG);
+    build_ok(&directory, &long_source, "state_long", &["--cold"]);
+
+    let state_path = directory.path.join("host.stcstate");
+    let platform = host_platform();
+    let saved = root_id(&v1, "_ROOT::SAVED");
+
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.configure_retain(RetainConfig {
+        enabled: true,
+        file: Some(state_path.clone()),
+        policy: MismatchPolicy::Error,
+        reset: false,
+    });
+    host.load(
+        open_candidate(&directory, "state_v1", &platform),
+        LoadMode::Auto,
+    )
+    .expect("cold install");
+    host.cycle_at(0).expect("first cycle");
+    host.cycle_at(1).expect("second cycle");
+    assert_eq!(read_u32(&host, saved), 2);
+    assert!(
+        !state_path.exists(),
+        "a middleware swap does not write the state file"
+    );
+    host.shutdown().expect("shutdown saves state");
+    assert_eq!(&state_payload(&state_path)[..4], &2_u32.to_le_bytes());
+
+    // A new host cold-loads the saved value.
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.configure_retain(RetainConfig {
+        enabled: true,
+        file: Some(state_path.clone()),
+        policy: MismatchPolicy::Error,
+        reset: false,
+    });
+    host.load(
+        open_candidate(&directory, "state_v1", &platform),
+        LoadMode::Auto,
+    )
+    .expect("warm cold download");
+    assert_eq!(read_u32(&host, saved), 2, "cold download restores RETAIN");
+    host.cycle_at(2).expect("cycle");
+    assert_eq!(read_u32(&host, saved), 3);
+
+    // Online attach neither loads nor rewrites the state file.
+    let before = std::fs::read(&state_path).expect("state");
+    assert!(matches!(
+        host.load(
+            open_candidate(&directory, "state_v2", &platform),
+            LoadMode::Auto,
+        )
+        .expect("prepare"),
+        LoadOutcome::Prepared { .. }
+    ));
+    host.activate().expect("activate");
+    host.cycle_at(3).expect("post-swap cycle");
+    assert_eq!(read_u32(&host, saved), 5, "the v2 body adds two");
+    assert_eq!(
+        std::fs::read(&state_path).expect("state"),
+        before,
+        "the state file is not rewritten merely because of a swap"
+    );
+    host.shutdown().expect("shutdown");
+    assert_eq!(&state_payload(&state_path)[..4], &5_u32.to_le_bytes());
+
+    // A layout change under the error policy fails the cold download.
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.configure_retain(RetainConfig {
+        enabled: true,
+        file: Some(state_path.clone()),
+        policy: MismatchPolicy::Error,
+        reset: false,
+    });
+    let error = host
+        .load(
+            open_candidate(&directory, "state_long", &platform),
+            LoadMode::Cold,
+        )
+        .expect_err("layout mismatch");
+    assert_eq!(error.code, "STC-E-RUN-RETAIN-001");
+    assert!(host.active_build_id().is_none(), "nothing is installed");
+
+    // Under the reset policy the cold download starts from defaults.
+    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    host.configure_retain(RetainConfig {
+        enabled: true,
+        file: Some(state_path.clone()),
+        policy: MismatchPolicy::Reset,
+        reset: false,
+    });
+    host.load(
+        open_candidate(&directory, "state_long", &platform),
+        LoadMode::Cold,
+    )
+    .expect("reset policy");
+    let long_saved = root_id(&directory.manifest("state_long"), "_ROOT::SAVED");
+    host.cycle_at(0).expect("cycle");
+    let storage = host.root_storage(long_saved).expect("storage");
+    assert_eq!(i64::from_le_bytes(storage[..8].try_into().unwrap()), 1);
+    host.shutdown().expect("shutdown");
+    assert_eq!(state_payload(&state_path).len(), 8);
+    let _ = v2;
+}
+
 const DIRECT_REMAP_V1: &str = r#"
 VAR_GLOBAL
   Input AT %ID0 : DINT;
@@ -2116,6 +2365,9 @@ fn direct_variables_remap_across_a_real_online_change() {
 
     let platform = host_platform();
     let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    // This harness owns the input image, like a test host using the memory
+    // backend; the null backend would restore defaults every scan.
+    host.configure_io(Some(stc_runtime::IoBackend::Memory), None);
     host.load(
         open_candidate(&directory, "direct_v1", &platform),
         LoadMode::Auto,

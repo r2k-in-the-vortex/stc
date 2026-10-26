@@ -30,6 +30,10 @@
 //!   computes each scan's guards, deadlines, and `SINGLE` completion;
 //! - [`run`] is the shared launcher/embedding run loop (cycle count, cycle
 //!   deadline, mock clock, stop conditions, exit codes);
+//! - [`state`] owns the file-backed retained-state format, atomic save, and
+//!   the process-wide ABI 2 state services;
+//! - [`io`] owns the `null`/`memory`/`file` process-image backends and the
+//!   per-scan input latch/output publish;
 //! - `signal` installs the Ctrl-C/Ctrl-Break stop handlers;
 //! - `trap_boundary` provides the non-local trap exit around module calls.
 //!
@@ -54,6 +58,7 @@ pub mod got;
 pub mod host;
 pub mod host_api;
 pub mod image;
+pub mod io;
 pub mod loader;
 pub mod memory;
 pub mod migration;
@@ -61,6 +66,7 @@ pub mod module_info;
 pub mod run;
 pub mod scheduler;
 mod signal;
+pub mod state;
 pub mod store;
 mod trap_boundary;
 
@@ -75,12 +81,14 @@ pub use host::{
 };
 pub use host_api::{ABI_VERSION, HOST_API, HostApi, TrapRecord};
 pub use image::{DirectRemap, MAX_IMAGE_BYTES};
+pub use io::{IoNotice, IoRuntime};
 pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
 pub use migration::{PlanDecision, validate_deployable, validate_plan};
 pub use module_info::{DirectBinding, ImageLayout, ModuleInfo};
 pub use run::{IoBackend, RunLoopError, RunOptions, run_loop};
 pub use scheduler::{TaskScheduler, TaskStatus};
+pub use state::{LoadOutcome as StateLoadOutcome, MismatchPolicy, RetainConfig, StateFailure};
 pub use store::{
     Deployment, Download, LayoutState, ManifestStore, RuntimeLayout, RuntimeLayoutEntry,
     StoredManifest,
@@ -177,6 +185,11 @@ pub extern "C" fn stc_abi_version() -> i32 {
 /// `--state-file <path>`, `--reset-retain`, `--no-retain`,
 /// `--mock-clock <duration>`, `--status`, and `--module <path>`.
 ///
+/// A relative `--state-file`/`--io-file`, or a relative `retain.file`/
+/// `io.file` from the metadata sidecar, resolves against the module directory
+/// (D-163). `stc run` passes absolute paths instead. Without a metadata
+/// sidecar, retained state stays disabled.
+///
 /// # Safety
 ///
 /// `argv` must point to `argc` valid, NUL-terminated strings. `module_path`
@@ -233,9 +246,9 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
             }
             "--io" => {
                 let text = value("--io")?;
-                run.io = IoBackend::parse(&text).ok_or_else(|| {
+                run.io = Some(IoBackend::parse(&text).ok_or_else(|| {
                     format!("unknown I/O backend `{text}` (expected null, memory, or file)")
-                })?;
+                })?);
             }
             "--io-file" => {
                 run.io_file = Some(PathBuf::from(value("--io-file")?));
@@ -298,17 +311,20 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
         Ok(candidate) => candidate,
         Err(error) => {
             eprintln!(
-                "stc: cannot load module `{}`: {}",
+                "stc: cannot load module `{}`: {}: {}",
                 resolved.display(),
+                error.code,
                 error.message
             );
             return 1;
         }
     };
+    configure_run_services(&mut host, &options.run, &candidate);
     if let Err(error) = host.load(candidate, LoadMode::Cold) {
         eprintln!(
-            "stc: cannot install module `{}`: {}",
+            "stc: cannot install module `{}`: {}: {}",
             resolved.display(),
+            error.code,
             error.message
         );
         return if host_api::last_trap().is_some() {
@@ -325,7 +341,7 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
                 print_host_status(&host);
             }
             if let Err(error) = host.shutdown() {
-                eprintln!("stc: shutdown failed: {}", error.message);
+                eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
                 return 1;
             }
             0
@@ -336,9 +352,78 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
             }
             report_run_error(&error);
             let code = error.exit_code();
-            let _ = host.shutdown();
+            if let Err(error) = host.shutdown() {
+                eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
+            }
             code
         }
+    }
+}
+
+/// Configures retained state and the I/O backend for a launcher run.
+///
+/// CLI options win over metadata; relative paths resolve against the module
+/// directory (D-163). Metadata's `[retain]` policy is the effective fallback.
+fn configure_run_services(host: &mut Host, run: &RunOptions, candidate: &Candidate) {
+    let info = candidate.info();
+    let module_dir = candidate.module_dir();
+    let mut state_file = run
+        .state_file
+        .as_ref()
+        .map(|path| resolve_relative(module_dir, path));
+    if state_file.is_none() {
+        state_file = info
+            .and_then(|info| info.retain.file.as_deref())
+            .map(|file| module_dir.join(file));
+    }
+    let enabled =
+        info.is_some_and(|info| info.retain.enabled) && !run.no_retain && state_file.is_some();
+    let policy = info.map_or(MismatchPolicy::Error, |info| info.retain.policy);
+    host.configure_retain(RetainConfig {
+        enabled,
+        file: state_file.filter(|_| enabled),
+        policy,
+        reset: run.reset_retain,
+    });
+    let io_file = run
+        .io_file
+        .as_ref()
+        .map(|path| resolve_relative(module_dir, path));
+    host.configure_io(run.io, io_file);
+}
+
+fn resolve_relative(base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+/// Applies `stc_host_run` options to an embedding host.
+///
+/// An absent `state_file` leaves a configuration installed through
+/// [`stc_host_configure_retain`] alone; `no_retain` disables it.
+fn configure_embedding_services(host: &mut Host, run: &RunOptions) {
+    if run.no_retain || run.state_file.is_some() {
+        let file = run.state_file.as_deref().map(absolute_path);
+        host.configure_retain(RetainConfig {
+            enabled: !run.no_retain && file.is_some(),
+            file,
+            policy: MismatchPolicy::Error,
+            reset: run.reset_retain,
+        });
+    }
+    host.configure_io(run.io, run.io_file.as_deref().map(absolute_path));
+}
+
+fn absolute_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|directory| directory.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
     }
 }
 
@@ -352,7 +437,10 @@ fn report_run_error(error: &RunLoopError) {
         if *trap {
             print_last_trap();
         } else {
-            eprintln!("stc: cycle failed: {}", host_error.message);
+            eprintln!(
+                "stc: cycle failed: {}: {}",
+                host_error.code, host_error.message
+            );
         }
     }
 }
@@ -377,6 +465,25 @@ fn print_host_status(host: &Host) {
         eprintln!("stc: status: retired {retired}");
     }
     eprintln!("stc: status: cycles {}", status.cycles);
+    let io = host.io_runtime();
+    let io_file = io
+        .file()
+        .map_or_else(String::new, |file| format!(" file={}", file.display()));
+    eprintln!("stc: status: io {}{io_file}", io.backend().name());
+    let retain = host.retain_config();
+    eprintln!(
+        "stc: status: retain {} policy {}{}",
+        if retain.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        retain.policy.as_str(),
+        retain
+            .file
+            .as_deref()
+            .map_or_else(String::new, |file| format!(" file={}", file.display()))
+    );
     for task in &status.tasks {
         eprintln!(
             "stc: status: task {} due={} completed={} deadline={}",
@@ -666,21 +773,65 @@ pub fn image_write(offset: usize, bytes: &[u8]) -> bool {
     true
 }
 
-/// Retained-state load stub (5 = retention disabled until M6).
+/// Retained-state load using the configured state file (State §5).
+///
+/// Returns the ABI 2 `state_load` codes: 0 OK, 1 not found, 2 mismatch,
+/// 3 corrupt, 4 I/O error, 5 retention disabled.
+///
+/// # Safety
+///
+/// `buffer` must be null for `len == 0`, or point to `len` writable bytes.
 #[unsafe(no_mangle)]
-pub extern "C" fn stc_rt_state_load(_buffer: *mut u8, _len: i64, _layout_hash: i64) -> i32 {
-    5
+pub unsafe extern "C" fn stc_rt_state_load(buffer: *mut u8, len: i64, layout_hash: i64) -> i32 {
+    // SAFETY: the caller follows the ABI buffer contract.
+    unsafe { state::service_load(buffer, len, layout_hash) }
 }
 
-/// Retained-state save stub (5 = retention disabled until M6).
+/// Retained-state save using the configured state file (State §5).
+///
+/// # Safety
+///
+/// `buffer` must be null for `len == 0`, or point to `len` readable bytes.
 #[unsafe(no_mangle)]
-pub extern "C" fn stc_rt_state_save(_buffer: *const u8, _len: i64, _layout_hash: i64) -> i32 {
-    5
+pub unsafe extern "C" fn stc_rt_state_save(buffer: *const u8, len: i64, layout_hash: i64) -> i32 {
+    // SAFETY: the caller follows the ABI buffer contract.
+    unsafe { state::service_save(buffer, len, layout_hash) }
 }
 
-/// Retained-state configuration stub.
+/// Configures the legacy retained-state helpers.
+///
+/// `path` is an absolute file path (null disables the helpers), `policy` is
+/// 0 for `error` and 1 for `reset`, and `enabled` is nonzero to enable load
+/// and save. The ABI 2 host services are configured through [`Host`] instead.
+///
+/// # Safety
+///
+/// `path` must be null or point to a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub extern "C" fn stc_rt_state_configure(_path: *const c_char, _policy: i32, _enabled: i32) {}
+pub unsafe extern "C" fn stc_rt_state_configure(path: *const c_char, policy: i32, enabled: i32) {
+    let file = if path.is_null() {
+        None
+    } else {
+        // SAFETY: the caller guarantees a NUL-terminated string.
+        Some(PathBuf::from(
+            unsafe { CStr::from_ptr(path) }
+                .to_string_lossy()
+                .into_owned(),
+        ))
+    };
+    state::configure(RetainConfig {
+        enabled: enabled != 0 && file.is_some(),
+        file,
+        policy: if policy == 1 {
+            MismatchPolicy::Reset
+        } else {
+            MismatchPolicy::Error
+        },
+        reset: false,
+    });
+    // The legacy helpers are called outside a host generation.
+    state::allow_save(Some(0));
+}
 
 /// Load mode values for [`stc_host_load_module`].
 pub mod load_mode {
@@ -735,8 +886,9 @@ pub unsafe extern "C" fn stc_host_load_module(module_path: *const c_char, mode: 
         Ok(candidate) => candidate,
         Err(error) => {
             eprintln!(
-                "stc: cannot load module `{}`: {}",
+                "stc: cannot load module `{}`: {}: {}",
                 resolved.display(),
+                error.code,
                 error.message
             );
             return 1;
@@ -762,10 +914,77 @@ pub unsafe extern "C" fn stc_host_load_module(module_path: *const c_char, mode: 
             0
         }
         Err(error) => {
-            eprintln!("stc: cannot install module: {}", error.message);
+            eprintln!(
+                "stc: cannot install module: {}: {}",
+                error.code, error.message
+            );
             1
         }
     }
+}
+
+/// Selects the embedding host's process-image backend.
+///
+/// `backend` is `-1` (keep the module metadata's backend), `0` `null`, `1`
+/// `memory`, or `2` `file`. `file` is null to keep the metadata/default file.
+/// Returns `0` on success and `2` for an unknown backend. The setting applies
+/// to subsequent loads and the current host's next cycles.
+///
+/// # Safety
+///
+/// `file` must be null or point to a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stc_host_configure_io(backend: i32, file: *const c_char) -> i32 {
+    let backend = match backend {
+        -1 => None,
+        0 => Some(IoBackend::Null),
+        1 => Some(IoBackend::Memory),
+        2 => Some(IoBackend::File),
+        _ => return 2,
+    };
+    // SAFETY: the caller contract requires a NUL-terminated string.
+    let file = unsafe { c_text(file) }.map(|text| absolute_path(Path::new(&text)));
+    let mut state = embedded();
+    let host = state
+        .host
+        .get_or_insert_with(|| Host::new(host_platform(), ManifestStore::memory()));
+    host.configure_io(backend, file);
+    0
+}
+
+/// Configures the embedding host's retained state.
+///
+/// `path` is an absolute file path; null disables retention. `policy` is `0`
+/// for `error` and `1` for `reset`; `reset` is nonzero for a cold start.
+/// Returns `0` on success and `2` for an invalid policy.
+///
+/// # Safety
+///
+/// `path` must be null or point to a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stc_host_configure_retain(
+    path: *const c_char,
+    policy: i32,
+    reset: i32,
+) -> i32 {
+    let policy = match policy {
+        0 => MismatchPolicy::Error,
+        1 => MismatchPolicy::Reset,
+        _ => return 2,
+    };
+    // SAFETY: the caller contract requires a NUL-terminated string.
+    let file = unsafe { c_text(path) }.map(|text| absolute_path(Path::new(&text)));
+    let mut state = embedded();
+    let host = state
+        .host
+        .get_or_insert_with(|| Host::new(host_platform(), ManifestStore::memory()));
+    host.configure_retain(RetainConfig {
+        enabled: file.is_some(),
+        file,
+        policy,
+        reset: reset != 0,
+    });
+    0
 }
 
 /// Runs one cycle of the active embedding-host generation.
@@ -781,7 +1000,7 @@ pub extern "C" fn stc_host_cycle() -> i32 {
     match host.cycle() {
         Ok(_) => 0,
         Err(error) => {
-            eprintln!("stc: cycle failed: {}", error.message);
+            eprintln!("stc: cycle failed: {}: {}", error.code, error.message);
             1
         }
     }
@@ -798,7 +1017,7 @@ pub extern "C" fn stc_host_shutdown() -> i32 {
     match host.shutdown() {
         Ok(()) => 0,
         Err(error) => {
-            eprintln!("stc: shutdown failed: {}", error.message);
+            eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
             1
         }
     }
@@ -820,7 +1039,7 @@ pub struct StcHostOptions {
     pub cycles: u64,
     /// Fixed cycle time in nanoseconds; negative selects none.
     pub cycle_time_ns: i64,
-    /// I/O backend: -1 or 0 `null`, 1 `memory`, 2 `file`.
+    /// I/O backend: -1 uses module metadata, 0 `null`, 1 `memory`, 2 `file`.
     pub io_backend: i32,
     /// Cold start: ignore existing retained state.
     pub reset_retain: i32,
@@ -915,9 +1134,10 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
         return 2;
     }
     let io = match options.io_backend {
-        -1 | 0 => IoBackend::Null,
-        1 => IoBackend::Memory,
-        2 => IoBackend::File,
+        -1 => None,
+        0 => Some(IoBackend::Null),
+        1 => Some(IoBackend::Memory),
+        2 => Some(IoBackend::File),
         other => {
             eprintln!("stc: unknown I/O backend {other}");
             return 2;
@@ -944,20 +1164,23 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
         status: options.status != 0,
     };
     let module_path = unsafe { c_text(options.module_path) };
+    let loads_module = module_path.is_some();
     let mut state = embedded();
     if let Some(module_path) = module_path {
         let platform = host_platform();
         if state.host.is_none() {
             state.host = Some(Host::new(platform.clone(), ManifestStore::memory()));
         }
+        configure_embedding_services(state.host.as_mut().expect("host created above"), &run);
         let resolved = resolve_module_path(&module_path);
         let manifest = module_info::manifest_path(&resolved);
         let candidate = match Candidate::open(&platform, &resolved, &manifest) {
             Ok(candidate) => candidate,
             Err(error) => {
                 eprintln!(
-                    "stc: cannot load module `{}`: {}",
+                    "stc: cannot load module `{}`: {}: {}",
                     resolved.display(),
+                    error.code,
                     error.message
                 );
                 return 1;
@@ -972,8 +1195,9 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
             .load(candidate, LoadMode::Cold);
         if let Err(error) = loaded {
             eprintln!(
-                "stc: cannot install module `{}`: {}",
+                "stc: cannot install module `{}`: {}: {}",
                 resolved.display(),
+                error.code,
                 error.message
             );
             return if host_api::last_trap().is_some() {
@@ -989,6 +1213,9 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
         eprintln!("stc: `stc_host_run` has no loaded module");
         return 2;
     };
+    if !loads_module {
+        configure_embedding_services(host, &run);
+    }
     let outcome = run::run_loop_with_stop(host, &run, run::StopSource::External(options.stop));
     if run.status {
         print_host_status(host);
@@ -1131,5 +1358,37 @@ mod tests {
         assert_eq!(stc_rt_cycle_now_ns(), 1234);
         latch_cycle_clock();
         assert_eq!(stc_rt_cycle_now_ns(), 4321);
+    }
+
+    #[test]
+    fn legacy_state_helpers_use_the_configured_file() {
+        let _lock = test_support::state_guard();
+        let directory = std::env::temp_dir().join(format!(
+            "stc-legacy-state-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir_all(&directory).expect("temp directory");
+        let path = directory.join("legacy.stcstate");
+        let path_text = CString::new(path.to_string_lossy().as_bytes()).expect("path");
+        // SAFETY: the path is a live NUL-terminated string.
+        unsafe { stc_rt_state_configure(path_text.as_ptr(), 0, 1) };
+
+        let first = [1_u8, 2, 3, 4];
+        // SAFETY: the buffer is four readable bytes.
+        assert_eq!(unsafe { stc_rt_state_save(first.as_ptr(), 4, 9) }, 0);
+        let mut second = [0_u8; 4];
+        // SAFETY: the buffer is four writable bytes.
+        assert_eq!(unsafe { stc_rt_state_load(second.as_mut_ptr(), 4, 9) }, 0);
+        assert_eq!(second, first);
+
+        // A mismatched layout hash is rejected under the error policy.
+        assert_eq!(unsafe { stc_rt_state_load(second.as_mut_ptr(), 4, 10) }, 2);
+        // SAFETY: null disables the helpers.
+        unsafe { stc_rt_state_configure(std::ptr::null(), 0, 0) };
+        assert_eq!(unsafe { stc_rt_state_load(second.as_mut_ptr(), 4, 9) }, 5);
+        std::fs::remove_dir_all(&directory).expect("clean up");
     }
 }

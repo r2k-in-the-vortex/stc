@@ -4,12 +4,15 @@ typedef unsigned char u8;
 typedef unsigned long long u64;
 
 extern int stc_host_load_module(const char* path, int mode);
+extern int stc_host_configure_io(int backend, const char* file);
 extern int stc_host_cycle(void);
 extern int stc_host_shutdown(void);
 extern void stc_rt_io_image(u8** base, u64* len);
 
 int main(int argc, char** argv) {
   if (argc < 2) return 11;
+  /* The memory backend lets this harness drive the input image directly. */
+  if (stc_host_configure_io(1, 0) != 0) return 12;
   if (stc_host_load_module(argv[1], 0) != 0) return 10;
   u8* image = 0;
   u64 len = 0;

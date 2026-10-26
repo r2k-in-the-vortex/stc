@@ -12,7 +12,8 @@ use stc_got::Target;
 use stc_got::catalog::ImportService;
 use stc_got::model::DescriptorKind;
 use stc_hir::{
-    ArgDirection, DefId, DefKind, ExprId, HirCrate, ParamId, Symbol, TyId, VarSectionKind,
+    ArgDirection, DefId, DefKind, ExprId, ExprKindHir, HirCrate, ParamId, PlaceHir, Symbol, TyId,
+    VarSectionKind,
 };
 use stc_span::Span;
 
@@ -20,15 +21,16 @@ use crate::CodegenError;
 use crate::abi::{self, symbols};
 use crate::codes;
 use crate::config::{
-    self, ImageLayout, Plan, PlanInstance, ProgramLayout, RetainLayout, RetainPlace,
+    self, ImageLayout, Plan, PlanInstance, PlanVarAccess, ProgramLayout, RetainLayout, RetainPlace,
 };
 use crate::expr::{BodyInfo, FieldAccess};
 use crate::ir::{Function, GlobalDef, IrType, Module, SymbolAttrs, Value, c_string};
 use crate::layout::{self, ScalarKind};
 use crate::mangle;
 use crate::metadata::{
-    ExportMetadata, HintMetadata, IoBindingMetadata, ProgramMetadata,
-    RetainLeafMetadata as MetaRetainLeaf, SpanMetadata, SpanMetadataEntry, TaskMetadata,
+    DeviceMetadata, ExportMetadata, HintMetadata, IoBindingMetadata, ProgramMetadata,
+    ProjectChannel, RetainLeafMetadata as MetaRetainLeaf, SpanMetadata, SpanMetadataEntry,
+    TaskMetadata, VarAccessMetadata,
 };
 use crate::module::{FunctionTarget, ModuleArtifacts, RootTarget};
 use crate::stmt::LoopTarget;
@@ -104,8 +106,22 @@ pub(crate) fn generate(
         })
         .collect();
     let used_std = crate::types::used_standard_fbs(hir);
-    let image = config::image_layout(hir, &plan, &layouts)?;
-    let retain = config::retain_layout(hir, &plan, &layouts, &types)?;
+    let mut image = config::image_layout(hir, &plan, &layouts)?;
+    let mut retain = config::retain_layout(hir, &plan, &layouts, &types)?;
+    // The retained layout hash is the state-file contract, so it covers the
+    // profile/ABI/size header and each leaf's stable root identity (State §3.1).
+    retain.hash = retain_layout_hash(&retain, &got);
+    let project_io = config::apply_project_bindings(
+        hir,
+        &mut image,
+        &options.project.io.devices,
+        &options.project.io.bindings,
+    );
+    if !project_io.errors.is_empty() {
+        return Err(project_io.errors);
+    }
+    let mut got = got;
+    got.diagnostics.extend(project_io.warnings);
     let (span_ids, span_entries) = build_span_table(hir);
     let mut lowerer = Lowerer {
         hir,
@@ -162,6 +178,57 @@ pub(crate) fn generate(
         spans: lowerer.span_entries.clone(),
         got: lowerer.got.clone(),
     })
+}
+
+/// The language profile identifier embedded in metadata and state hashes.
+pub(crate) const PROFILE: &str = "stc-2013-oop-utf8-v1";
+
+/// Returns the GOT root target for a retained leaf.
+fn retain_root_target(place: &RetainPlace) -> RootTarget {
+    match place {
+        RetainPlace::Global(def) => RootTarget::Global(*def),
+        RetainPlace::GlobalLeaf { def, segments } => RootTarget::GlobalLeaf {
+            def: *def,
+            segments: segments.clone(),
+        },
+        RetainPlace::InstanceField { instance, field } => RootTarget::InstanceField {
+            instance: *instance,
+            field: *field,
+        },
+        RetainPlace::InstanceLeaf { instance, segments } => RootTarget::InstanceLeaf {
+            instance: *instance,
+            segments: segments.clone(),
+        },
+    }
+}
+
+/// Computes the documented retained-layout hash (State §3.1).
+///
+/// The hash covers the profile, host ABI major, payload size, and each leaf's
+/// path, stable root identity, type, offset, and size, so a layout change or a
+/// different root identity changes the warm-start contract.
+fn retain_layout_hash(retain: &RetainLayout, got: &ModuleArtifacts) -> u64 {
+    let mut hash = layout::FNV_OFFSET;
+    let header = format!(
+        "profile={PROFILE}\nabi={}\nsize={}\n",
+        abi::ABI_VERSION,
+        retain.size
+    );
+    hash = layout::fnv1a_update(hash, header.as_bytes());
+    for leaf in &retain.leaves {
+        let got_id = got
+            .root_got_id(&retain_root_target(&leaf.place))
+            .map_or_else(
+                || "0x00000000000000000000000000000000".into(),
+                |id| id.to_hex(),
+            );
+        let line = format!(
+            "leaf={}|{}|{}|{}|{}\n",
+            leaf.path, got_id, leaf.ty, leaf.offset, leaf.size
+        );
+        hash = layout::fnv1a_update(hash, line.as_bytes());
+    }
+    hash
 }
 
 impl Lowerer<'_> {
@@ -2180,6 +2247,106 @@ impl Lowerer<'_> {
         self.root_slot(&target)
     }
 
+    /// Resolves one `VAR_ACCESS` entry to its metadata record.
+    fn var_access_metadata(&self, access: &PlanVarAccess) -> VarAccessMetadata {
+        let instance = access.instance_name.as_deref();
+        let path = self
+            .render_place_path(&access.place, instance)
+            .unwrap_or_else(|| access.name.clone());
+        let mut metadata = VarAccessMetadata {
+            name: access.name.clone(),
+            path: path.clone(),
+            ty: self.hir.type_name(access.ty),
+            read_only: access.read_only,
+            area: None,
+            address: None,
+            offset_bits: None,
+            width_bits: None,
+        };
+        if let PlaceHir::Direct(address) = &access.place {
+            if let Ok(kind) = layout::scalar_kind_at(self.hir, access.ty, access.span)
+                && let Ok(span) = layout::image_span(address, kind)
+            {
+                metadata.area = Some(span.area.as_char());
+                metadata.address = Some(layout::render_address(address));
+                metadata.offset_bits = Some(span.start_bit);
+                metadata.width_bits = Some(kind.occupancy_bits());
+            }
+            return metadata;
+        }
+        if let Some(binding) = self
+            .image
+            .bindings
+            .iter()
+            .find(|binding| binding.variable.eq_ignore_ascii_case(&path))
+        {
+            metadata.area = Some(binding.area.as_char());
+            metadata.address = Some(binding.address.clone());
+            metadata.offset_bits = Some(binding.start_bit);
+            metadata.width_bits = Some(binding.kind.occupancy_bits());
+        }
+        metadata
+    }
+
+    /// Renders a resolved place as a dotted variable path.
+    fn render_place_path(&self, place: &PlaceHir, instance: Option<&str>) -> Option<String> {
+        match place {
+            PlaceHir::Global(def) => Some(self.qualified_path(*def)),
+            PlaceHir::This(def) => {
+                Some(instance.map_or_else(|| self.hir.def_name(*def).to_string(), str::to_owned))
+            }
+            PlaceHir::Field { base, field } => {
+                let ExprKindHir::Place(base) = &self.hir.expr(*base).kind else {
+                    return None;
+                };
+                let base = self.render_place_path(base, instance)?;
+                Some(format!("{base}.{}", self.field_name(*field)))
+            }
+            PlaceHir::InstanceField {
+                instance, fields, ..
+            } => {
+                let mut path = self.hir.interner.text(*instance).to_string();
+                for field in fields {
+                    path.push('.');
+                    path.push_str(self.field_name(*field));
+                }
+                Some(path)
+            }
+            PlaceHir::Direct(address) => Some(format!("%{}", layout::render_address(address))),
+            _ => None,
+        }
+    }
+
+    fn field_name(&self, field: stc_hir::FieldId) -> &str {
+        self.hir.interner.text(self.hir.field(field).name)
+    }
+
+    /// Returns a definition's namespace-qualified source spelling.
+    fn qualified_path(&self, def: DefId) -> String {
+        let mut segments = Vec::new();
+        let mut current = Some(def);
+        while let Some(id) = current {
+            let data = &self.hir.defs[id.index()];
+            if id == def {
+                if let Some(name) = data.name {
+                    segments.push(self.hir.interner.text(name).to_string());
+                }
+            } else if matches!(data.kind, DefKind::Namespace { .. }) {
+                // The package root namespace is implicit in source paths.
+                if data.parent.is_some()
+                    && let Some(name) = data.name
+                {
+                    segments.push(self.hir.interner.text(name).to_string());
+                }
+            } else {
+                break;
+            }
+            current = data.parent;
+        }
+        segments.reverse();
+        segments.join(".")
+    }
+
     fn build_metadata(&self) -> Metadata {
         let programs = self
             .plan
@@ -2228,7 +2395,16 @@ impl Lowerer<'_> {
                     offset_bits: binding.start_bit,
                     width_bits: binding.kind.occupancy_bits(),
                     ty: binding.kind.canonical_name(),
+                    direct_id: got_id.clone(),
                     got_id,
+                    device: binding.device.clone(),
+                    channel: binding.channel.as_ref().map(|channel| match channel {
+                        ProjectChannel::Index(index) => {
+                            crate::metadata::Json::Number(i128::from(*index))
+                        }
+                        ProjectChannel::Name(name) => crate::metadata::Json::String(name.clone()),
+                    }),
+                    direction: binding.direction.map(str::to_owned),
                     hint: binding.hint.as_ref().map(|hint| HintMetadata {
                         device: hint.device.clone(),
                         channel: hint.channel,
@@ -2237,6 +2413,13 @@ impl Lowerer<'_> {
                     source: binding.source,
                 }
             })
+            .collect();
+        let devices: Vec<DeviceMetadata> = self.options.project.io.devices.clone();
+        let var_access = self
+            .plan
+            .var_access
+            .iter()
+            .map(|access| self.var_access_metadata(access))
             .collect();
         let leaves = self
             .retain
@@ -2278,7 +2461,7 @@ impl Lowerer<'_> {
             })
             .collect();
         Metadata {
-            profile: "stc-2013-oop-utf8-v1",
+            profile: PROFILE,
             compiler: format!("stc {}", env!("CARGO_PKG_VERSION")),
             abi_version: i64::from(abi::ABI_VERSION),
             artifact: self.options.artifact_name.to_string(),
@@ -2292,14 +2475,30 @@ impl Lowerer<'_> {
             programs,
             tasks,
             io: crate::metadata::IoMetadata {
+                backend: self.options.project.io.backend.clone(),
+                file: self.options.project.io.file.clone().or_else(|| {
+                    (self.options.project.io.backend == "file")
+                        .then(|| format!("{}.stcio", self.options.artifact_name))
+                }),
                 inputs_bytes: self.image.inputs_bytes,
                 outputs_bytes: self.image.outputs_bytes,
                 markers_bytes: self.image.markers_bytes,
                 input_defaults_hex: hex(&self.image.input_defaults),
                 output_defaults_hex: hex(&self.image.output_defaults),
+                devices,
                 bindings,
+                var_access,
             },
             retain: crate::metadata::RetainMetadata {
+                enabled: self.options.project.retain.enabled,
+                file: self
+                    .options
+                    .project
+                    .retain
+                    .file
+                    .clone()
+                    .unwrap_or_else(|| format!("{}.stcstate", self.options.artifact_name)),
+                on_mismatch: self.options.project.retain.on_mismatch.to_owned(),
                 size: self.retain.size,
                 layout_hash: self.retain.hash,
                 leaves,

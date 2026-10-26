@@ -1,6 +1,6 @@
 # Runtime and Execution Model
 
-Status: M4.5 persistent host and ABI 2 module execution, including M5 OOP descriptors, implemented (2026-10-25); M6 phase-0 scheduler and ABI 2.2 test-clock contracts fixed (2026-10-26); M6 phase-4 cooperative task scheduler and run loop implemented (2026-10-26)  
+Status: M4.5 persistent host and ABI 2 module execution, including M5 OOP descriptors, implemented (2026-10-25); M6 phase-0 scheduler and ABI 2.2 test-clock contracts fixed (2026-10-26); M6 phase-4 cooperative task scheduler and run loop and phase-5 file-backed state and I/O backends implemented (2026-10-26)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 
@@ -32,9 +32,9 @@ module, executable, and embedding-library artifacts differ.
 > stop handlers, and returns 0/1/2/3/4/130; `stc run` builds `exe,module,metadata` and returns
 > the launcher's exit code.
 >
-> The runtime uses `std` and is the only crate permitted unsafe code (D-077). File-backed
-> retained state remains M6: the ABI 2 state services and the legacy `stc_rt_state_*` symbols
-> return 5 ("disabled"). `stc_rt_assert` remains available through the host API for the M6 test
+> The runtime uses `std` and is the only crate permitted unsafe code (D-077). The ABI 2 state
+> services and the legacy `stc_rt_state_*` symbols are file-backed from M6 phase 5.
+> `stc_rt_assert` remains available through the host API for the M6 test
 > runner and M5 hosted checks but is unused by M4.5-generated code. Full typed debug/monitoring
 > is M6.5; the interface it builds on is recorded in
 > [Debug and Monitoring](Debug-and-Monitoring.md) §12.
@@ -122,7 +122,7 @@ typedef struct {
     uint32_t abi_version;       /* host ABI major (2), or 0 */
     uint64_t cycles;            /* 0 = until interrupted or *stop */
     int64_t  cycle_time_ns;     /* negative = no fixed cycle time */
-    int32_t  io_backend;        /* -1/0 null, 1 memory, 2 file (phase 5) */
+    int32_t  io_backend;        /* -1 = metadata, 0 null, 1 memory, 2 file */
     int32_t  reset_retain;
     int32_t  no_retain;
     int32_t  status;            /* print the status summary at exit */
@@ -138,12 +138,18 @@ typedef struct {
 `stc_host_run` loads `module_path` cold when it is non-null and otherwise runs the module
 already loaded through `stc_host_load_module`. It shares one loop implementation with the
 launcher: the same latched clock, scheduler, cycle-time deadline, mock clock, status output, and
-0/1/2/3/4/130 exit codes. The control endpoint, I/O file image, and retained-state file are carried
-by the struct; the endpoint is rejected until phase 8 and the I/O/state paths take effect in
-phase 5.
+0/1/2/3/4/130 exit codes. The control endpoint is carried by the struct and rejected until
+phase 8; the I/O and retained-state paths configure the host before a cold load and apply to the
+final shutdown.
+
+Embedding hosts configure the process-image backend and retained state before loading a module
+with `stc_host_configure_io(backend, file)` (`-1` keeps the metadata backend, `0`/`1`/`2` select
+`null`/`memory`/`file`) and `stc_host_configure_retain(path, policy, reset)` (a null path
+disables retention). A `stc_host_run` options struct may configure the same values for the
+module it loads; an already-loaded module keeps the host's current configuration.
 
 The generated module remains a separate loadable artifact; M4.5 emits the embedding host as a
-static library, and shared host libraries are M6. `stc_host_load_module` takes mode `0` (cold),
+static library, and M6 adds the shared host-library form. `stc_host_load_module` takes mode `0` (cold),
 `1` (online prepare), or `2` (auto). The embedding host owns the loop, I/O, clock,
 GOT, root allocator, manifest store, loader/prepare thread, and service/monitor threads.
 `stc_module_cycle` is called only by the host's cycle thread; external callers must serialize
@@ -279,7 +285,7 @@ rejects a 2.1 module on a 2.0 host before generated code can read a record. Mino
 the test-clock service (ID 12); a 2.2 test module is rejected by a 2.1 host, while a production
 2.1 module still runs on either. Reference resolution, typed variable access, string/math
 helpers, generation pin/unpin, and debug services remain later minor-version extensions.
-M4.5-generated code imports trap, I/O image/size, and the retained-state stubs. Clocks,
+M4.5-generated code imports trap, I/O image/size, and the retained-state services. Clocks,
 transient alloc/free, and assert are in ABI 2.0 but unused by M4.5-generated code; M5/M6
 consumers add the corresponding import slots when they first emit those calls.
 

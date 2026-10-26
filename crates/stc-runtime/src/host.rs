@@ -20,7 +20,7 @@
 //! use.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -42,6 +42,7 @@ use crate::memory::{MemoryLimits, RootRegistry};
 use crate::migration::{self, PlanDecision, validate_plan};
 use crate::module_info::ModuleInfo;
 use crate::scheduler::{TaskScheduler, TaskStatus};
+use crate::state::RetainConfig;
 use crate::store::{
     Deployment, Download, LayoutState, ManifestStore, RuntimeLayout, RuntimeLayoutEntry,
     StoredManifest,
@@ -148,6 +149,7 @@ pub struct Candidate {
     module: LoadedModule,
     pair: ValidatedPair,
     info: Option<ModuleInfo>,
+    module_dir: PathBuf,
 }
 
 impl Candidate {
@@ -162,7 +164,14 @@ impl Candidate {
         let manifest_binary = crate::store::read_file_bounded(manifest_path, MAX_MANIFEST_BYTES)?;
         let module = LoadedModule::load(module_path)?;
         let info = ModuleInfo::read_beside(module_path)?;
-        Self::from_loaded_with_info(platform, module, manifest_binary, info)
+        let module_dir = module_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map_or_else(
+                || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                Path::to_path_buf,
+            );
+        Self::from_loaded_with_info_in(platform, module, manifest_binary, info, module_dir)
     }
 
     /// Loads a module and its manifest, using an explicit metadata sidecar.
@@ -178,7 +187,14 @@ impl Candidate {
     ) -> Result<Self> {
         let manifest_binary = crate::store::read_file_bounded(manifest_path, MAX_MANIFEST_BYTES)?;
         let module = LoadedModule::load(module_path)?;
-        Self::from_loaded_with_info(platform, module, manifest_binary, info)
+        let module_dir = module_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map_or_else(
+                || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                Path::to_path_buf,
+            );
+        Self::from_loaded_with_info_in(platform, module, manifest_binary, info, module_dir)
     }
 
     /// Validates an already loaded module against binary manifest bytes.
@@ -206,6 +222,23 @@ impl Candidate {
         manifest_binary: Vec<u8>,
         info: Option<ModuleInfo>,
     ) -> Result<Self> {
+        let module_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::from_loaded_with_info_in(platform, module, manifest_binary, info, module_dir)
+    }
+
+    /// Validates a loaded module with metadata and an explicit base directory
+    /// for relative I/O paths.
+    ///
+    /// # Errors
+    ///
+    /// Applies the same validation as [`Self::from_loaded`].
+    pub fn from_loaded_with_info_in(
+        platform: &HostPlatform,
+        module: LoadedModule,
+        manifest_binary: Vec<u8>,
+        info: Option<ModuleInfo>,
+        module_dir: PathBuf,
+    ) -> Result<Self> {
         let pair =
             ValidatedPair::from_bytes(platform, module.descriptor_bytes(), &manifest_binary)?;
         if module.function_addresses().len() != pair.descriptor.functions.len() {
@@ -228,13 +261,24 @@ impl Candidate {
                 ),
             ));
         }
-        Ok(Self { module, pair, info })
+        Ok(Self {
+            module,
+            pair,
+            info,
+            module_dir,
+        })
     }
 
     /// Returns the candidate metadata sidecar, when present.
     #[must_use]
     pub fn info(&self) -> Option<&ModuleInfo> {
         self.info.as_ref()
+    }
+
+    /// Returns the directory holding the module, used for relative I/O paths.
+    #[must_use]
+    pub fn module_dir(&self) -> &Path {
+        &self.module_dir
     }
 
     /// Returns the candidate manifest.
@@ -414,6 +458,8 @@ struct Pending {
     undo: RootUndo,
     descriptors: PreparedDescriptors,
     image: Option<PendingImage>,
+    /// Metadata applied to the I/O backend at activation.
+    io_info: Option<(ModuleInfo, PathBuf)>,
     warnings: Vec<HostWarning>,
     scheduler: TaskScheduler,
 }
@@ -482,6 +528,8 @@ pub struct Host {
     last_warnings: Vec<HostWarning>,
     last_rejection: Option<String>,
     scheduler: TaskScheduler,
+    retain: RetainConfig,
+    io: crate::io::IoRuntime,
 }
 
 impl Host {
@@ -509,6 +557,70 @@ impl Host {
             last_warnings: Vec::new(),
             last_rejection: None,
             scheduler: TaskScheduler::default(),
+            retain: RetainConfig::default(),
+            io: crate::io::IoRuntime::default(),
+        }
+    }
+
+    /// Overrides the process-image backend selected by metadata.
+    ///
+    /// CLI `--io`/`--io-file` values are explicit and survive online changes;
+    /// embedding hosts call this before loading a module.
+    pub fn configure_io(&mut self, backend: Option<crate::run::IoBackend>, file: Option<PathBuf>) {
+        self.io.configure(backend, file);
+    }
+
+    /// Returns the process-image backend state.
+    #[must_use]
+    pub fn io_runtime(&self) -> &crate::io::IoRuntime {
+        &self.io
+    }
+
+    /// Configures file-backed retained state for subsequent loads and the
+    /// final shutdown.
+    ///
+    /// The runtime's state service is process-wide; the most recently
+    /// configured host owns it. Embedding hosts supply absolute paths (D-163).
+    pub fn configure_retain(&mut self, config: RetainConfig) {
+        self.retain = config;
+        crate::state::configure(self.retain.clone());
+    }
+
+    /// Returns the effective retained-state configuration.
+    #[must_use]
+    pub fn retain_config(&self) -> &RetainConfig {
+        &self.retain
+    }
+
+    /// Installs the current configuration and permits (or forbids) saves.
+    fn install_state_service(&self, save_generation: Option<u64>) {
+        crate::state::configure(self.retain.clone());
+        crate::state::allow_save(save_generation);
+    }
+
+    /// Merges state-service notices into the host warning list.
+    fn collect_state_notices(&mut self) {
+        for notice in crate::state::take_notices() {
+            let warning = HostWarning {
+                code: notice.code,
+                message: notice.message,
+            };
+            if !self.last_warnings.contains(&warning) {
+                self.last_warnings.push(warning);
+            }
+        }
+    }
+
+    /// Merges I/O-backend notices into the host warning list.
+    fn collect_io_notices(&mut self) {
+        for notice in self.io.take_notices() {
+            let warning = HostWarning {
+                code: notice.code,
+                message: notice.message,
+            };
+            if !self.last_warnings.contains(&warning) {
+                self.last_warnings.push(warning);
+            }
         }
     }
 
@@ -763,9 +875,10 @@ impl Host {
     ///
     /// Cold installation uses this before preparing roots. The image contents
     /// are reset; the module applies input/output defaults in prepare.
-    fn apply_info(&mut self, info: &ModuleInfo) -> Result<()> {
+    fn apply_info(&mut self, info: &ModuleInfo, module_dir: &Path) -> Result<()> {
         crate::stc_rt_io_configure(info.inputs_bytes, info.outputs_bytes, info.markers_bytes);
         self.direct_bindings = direct_bindings_for(info)?;
+        self.io.apply_metadata(info, module_dir);
         Ok(())
     }
 
@@ -1130,6 +1243,12 @@ impl Host {
     }
 
     fn prepare_online(&mut self, candidate: Candidate) -> Result<LoadOutcome> {
+        // An online attach never reads the state file (State §4.1.1); the
+        // service is installed so a shutdown during the swap cannot save.
+        self.install_state_service(None);
+        let io_info = candidate
+            .info()
+            .map(|info| (info.clone(), candidate.module_dir().to_path_buf()));
         let image_plan = self.pending_image(&candidate);
         let warnings = self.change_warnings(&candidate);
         let direct = match &image_plan {
@@ -1254,11 +1373,16 @@ impl Host {
             &live,
         ) {
             Ok((generation, descriptors)) => {
+                if let Some(failure) = crate::state::take_failure() {
+                    undo.undo(&mut self.roots)?;
+                    return Err(Error::new(failure.code, failure.message));
+                }
                 self.pending = Some(Pending {
                     generation,
                     undo,
                     descriptors,
                     image: image_plan,
+                    io_info,
                     warnings,
                     scheduler,
                 });
@@ -1281,12 +1405,15 @@ impl Host {
         }
         let manifest = candidate.manifest().clone();
         let previous_bindings = self.direct_bindings.clone();
+        let previous_io = self.io.clone();
         let image = candidate.info().map(|_| crate::image_snapshot());
         let generation_id = allocate_generation();
         self.last_candidate = Some(generation_id);
+        self.install_state_service(None);
         let prepared = (|| -> Result<(Generation, RootRegistry, DescriptorRegistry, PreparedDescriptors, TaskScheduler)> {
             if let Some(info) = candidate.info() {
-                self.apply_info(info)?;
+                let module_dir = candidate.module_dir().to_path_buf();
+                self.apply_info(info, &module_dir)?;
             }
             let mut roots = RootRegistry::with_limits(self.roots.limits());
             for root in manifest
@@ -1309,6 +1436,10 @@ impl Host {
                 &mut descriptors,
                 &BTreeSet::new(),
             )?;
+            if let Some(failure) = crate::state::take_failure() {
+                return Err(Error::new(failure.code, failure.message));
+            }
+            self.io.cold_start();
             let scheduler = TaskScheduler::from_manifest(&generation.manifest)?;
             let stored = StoredManifest::new(generation.manifest.clone())?;
             self.store.install(stored)?;
@@ -1323,6 +1454,7 @@ impl Host {
                 } else {
                     self.direct_bindings = previous_bindings;
                 }
+                self.io = previous_io;
                 return Err(error);
             }
         };
@@ -1347,6 +1479,8 @@ impl Host {
         self.scheduler = scheduler;
         self.last_rollback = None;
         self.last_warnings.clear();
+        self.collect_state_notices();
+        self.collect_io_notices();
         // Retired generations still hold descriptor cell addresses from the
         // old registry; unload them before dropping its records.
         self.unload_retired();
@@ -1373,7 +1507,12 @@ impl Host {
         descriptors: &mut DescriptorRegistry,
         live: &BTreeSet<GotId>,
     ) -> Result<(Generation, PreparedDescriptors)> {
-        let Candidate { module, pair, info } = candidate;
+        let Candidate {
+            module,
+            pair,
+            info,
+            module_dir: _,
+        } = candidate;
         let manifest = pair.manifest;
         let manifest_digest = pair.manifest_digest;
         let slot_count = u32::try_from(manifest.slots.len())
@@ -1544,9 +1683,13 @@ impl Host {
             undo,
             descriptors,
             image: _,
+            io_info,
             warnings,
             scheduler,
         } = pending;
+        if let Some((info, module_dir)) = &io_info {
+            self.io.apply_metadata(info, module_dir);
+        }
         let generation = new_generation.id;
         let descriptor_activation = self.descriptors.activate(descriptors);
         self.rollback = Some(Rollback {
@@ -1613,6 +1756,9 @@ impl Host {
         let Some(generation_id) = self.active.as_ref().map(|generation| generation.id) else {
             return Err(prepare_error("no active generation"));
         };
+        // Inputs are latched once, then every due task runs against the same
+        // image; outputs publish after the cycle (IO §6.3).
+        self.io.latch_inputs();
         self.scheduler.begin_scan(now_ns);
         if let Err(error) = self.write_task_guards() {
             self.scheduler.finish_scan(false);
@@ -1655,6 +1801,7 @@ impl Host {
             }
             return Err(Error::new(codes::ONLINE_PREPARE, reason));
         }
+        self.io.publish_outputs();
         self.scheduler.finish_scan(true);
         if let Some(active) = self.active.as_mut() {
             active.cycles = active.cycles.saturating_add(1);
@@ -1729,6 +1876,9 @@ impl Host {
             return Err(prepare_error("no rollback window is open"));
         };
         self.descriptors.commit(rollback.descriptors);
+        // A retired generation shutting down during a swap must not rewrite
+        // the state file (State §4.1.1).
+        self.install_state_service(None);
         rollback.generation.shutdown();
         self.retired.push(rollback.generation);
         self.unload_retired();
@@ -1827,7 +1977,16 @@ impl Host {
     ///
     /// Reports a root-journal undo failure from a pending candidate.
     pub fn shutdown(&mut self) -> Result<()> {
-        let mut first_error = self.abort_pending().err();
+        // Only the active generation's normal shutdown may write the state
+        // file; retired generations shut down here without saving.
+        let save_generation = self.active.as_ref().map(|generation| generation.id);
+        self.install_state_service(save_generation);
+        let io_error = self.io.flush_output();
+        self.collect_io_notices();
+        let mut first_error = io_error.map(|message| Error::new("STC-E-RUN-IO-001", message));
+        if let Some(error) = self.abort_pending().err() {
+            first_error.get_or_insert(error);
+        }
         if self.rollback.is_some()
             && let Err(error) = self.rollback_internal("host shutdown")
         {
@@ -1840,6 +1999,14 @@ impl Host {
         for mut generation in self.retired.drain(..) {
             generation.shutdown();
             generation.detach();
+        }
+        let failure = crate::state::take_failure();
+        self.collect_state_notices();
+        if let Some(failure) = failure {
+            // The failure also appears as a notice; report it once as an error.
+            self.last_warnings
+                .retain(|warning| warning.code != failure.code);
+            first_error.get_or_insert(Error::new(failure.code, failure.message));
         }
         first_error.map_or(Ok(()), Err)
     }

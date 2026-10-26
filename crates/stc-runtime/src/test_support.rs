@@ -9,6 +9,14 @@ use stc_parser::{ParseOptions, parse};
 use stc_sema::analyze;
 use stc_span::FileId;
 
+/// Serializes tests that configure the process-wide retained-state service.
+pub fn state_guard() -> std::sync::MutexGuard<'static, ()> {
+    static STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    STATE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// A simple scalar program with persistent roots.
 pub const SIMPLE: &str = r#"
 VAR_GLOBAL

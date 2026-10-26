@@ -461,7 +461,7 @@ mod tests {
             outputs_bytes: layout.outputs_bytes,
             markers_bytes: layout.markers_bytes,
             bindings,
-            text: String::new(),
+            ..ModuleInfo::default()
         }
     }
 

@@ -36,7 +36,10 @@ use stc_hir::HirCrate;
 use stc_span::{FileId, Span};
 
 pub use launcher::generate_launcher;
-pub use metadata::{Json, Metadata};
+pub use metadata::{
+    ChannelMetadata, DeviceMetadata, Json, Metadata, ProjectBinding, ProjectChannel,
+    VarAccessMetadata,
+};
 pub use module::{
     FunctionTarget, ModuleArtifacts, ModuleError, ModuleOptions, RootTarget, Severity, SlotBinding,
 };
@@ -96,6 +99,61 @@ impl Default for ModuleBuildOptions<'_> {
     }
 }
 
+/// Retained-state policy copied into module metadata (State §6).
+#[derive(Clone, Debug)]
+pub struct RetainMetadataOptions {
+    /// Whether retained state is loaded and saved.
+    pub enabled: bool,
+    /// State file relative to the project root; `None` uses
+    /// `<artifact>.stcstate`.
+    pub file: Option<String>,
+    /// `error` or `reset`.
+    pub on_mismatch: &'static str,
+}
+
+impl Default for RetainMetadataOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            file: None,
+            on_mismatch: "error",
+        }
+    }
+}
+
+/// Project I/O metadata copied from `stc.toml` (IO §5).
+#[derive(Clone, Debug)]
+pub struct IoMetadataOptions {
+    /// Runtime backend (`null`, `memory`, or `file`).
+    pub backend: String,
+    /// File used by the `file` backend, relative to the project root.
+    pub file: Option<String>,
+    /// Declared devices.
+    pub devices: Vec<DeviceMetadata>,
+    /// Project bindings resolved against the HIR.
+    pub bindings: Vec<ProjectBinding>,
+}
+
+impl Default for IoMetadataOptions {
+    fn default() -> Self {
+        Self {
+            backend: "null".into(),
+            file: None,
+            devices: Vec::new(),
+            bindings: Vec::new(),
+        }
+    }
+}
+
+/// Project-level values that shape metadata but not the module projection.
+#[derive(Clone, Debug, Default)]
+pub struct ProjectOptions {
+    /// Retained-state policy.
+    pub retain: RetainMetadataOptions,
+    /// Project I/O metadata.
+    pub io: IoMetadataOptions,
+}
+
 /// Code generation options.
 #[derive(Clone, Debug)]
 pub struct Options<'a> {
@@ -120,6 +178,8 @@ pub struct Options<'a> {
     pub source_paths: Option<&'a [String]>,
     /// Module identity and baseline inputs.
     pub module: ModuleBuildOptions<'a>,
+    /// Project-level metadata settings.
+    pub project: ProjectOptions,
 }
 
 /// One harness-visible span-table entry.

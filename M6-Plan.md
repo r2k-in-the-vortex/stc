@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–4 complete (2026-10-26); phases 5–11 ready to start. M5 (phases 1–7 and 4b) is
+Status: Phases 0–5 complete (2026-10-26); phases 6–11 ready to start. M5 (phases 1–7 and 4b) is
 complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
 usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
@@ -178,7 +178,7 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0–4 are complete (2026-10-26); phases 5–11 are pending. Phase 0 fixed
+Phase status: phases 0–5 are complete (2026-10-26); phases 6–11 are pending. Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
 resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
@@ -190,7 +190,10 @@ lint levels, verbose phase timings, shared host libraries, and the baseline comp
 summary; the later verbs are parsed but return a usage error until their phase. Phase 4 removed
 the one-task-per-resource restriction, added the cooperative host scheduler and guarded cycle,
 the rewritten launcher loop with mock clocks and stop signals, `stc run`, `stc_host_run`, and
-the host status surface. Phases may
+the host status surface. Phase 5 added the `STCRET01` state file with CRC32 and atomic replace,
+host `state_load`/`state_save` wiring and the policy overrides, project device/binding/
+`VAR_ACCESS` metadata with `source`/`direct_id`/effective binding fields, and the `null`/
+`memory`/`file` host backends with per-scan input defaults and one output publish. Phases may
 proceed in parallel only where the dependency direction allows (for example, Lean and the
 conformance harness can start once phase 0 fixes the vector and corpus contracts).
 
@@ -465,6 +468,34 @@ I/O (`stc-codegen` metadata, `stc-runtime`, driver):
   null/memory/file behavior; unbound defaults each cycle; `%M` persistence; online image
   reconfiguration with the new metadata.
 
+Status (2026-10-26): implemented. The new `stc-runtime::state` module owns the `STCRET01`
+format (little-endian header, profile/layout hashes, CRC32), the ABI 2 result codes
+(0/1/2/3/4/5), `error`/`reset` mismatch policies, and atomic `<file>.tmp` saves with a
+replace-on-rename that leaves the previous file intact (`STC-E-RUN-RETAIN-003`). `Host`
+installs the effective `RetainConfig` before prepare, permits only the active generation's
+normal shutdown to save, refuses saves from retired generations during an online swap, records
+`STC-W-RUN-RETAIN-001/002`, and fails a cold load on `STC-E-RUN-RETAIN-001/002` under `error`.
+The generated retain layout hash now covers the documented profile/ABI/size header and each
+leaf's stable root identity, type, offset, and size. The driver resolves `[retain].file` and
+`[io].file` against the project root and CLI state/I/O paths against the current directory
+before launching; a standalone launcher or embedding host resolves relative metadata paths
+against the module directory. `stc-runtime::io` implements the `null`, `memory`, and `file`
+backends: inputs are latched once per scan (defaults for unbound locations, host bytes for
+`memory`, the cold-read image for `file`), unbound outputs are discarded or published once, `%M`
+persists, and the file backend writes its output image atomically at shutdown with a missing
+input reported as `STC-W-IO-004`. Codegen emits declared devices (opaque canonical config),
+channels, resolved project bindings with `source`, `direct_id`, `got_id`, and effective
+device/channel/direction, `VAR_ACCESS` paths/types/direct locations, and the `retain`
+`enabled`/`file`/`on_mismatch` policy; `STC-W-IO-001` and `STC-W-IO-003` are reported during
+code generation and unresolved project bindings are `STC-E-PROJECT-009`. `stc metadata` reports
+the resolved bindings/devices/`VAR_ACCESS` and the metadata `retain` policy, and `stc run`
+passes the resolved absolute paths and the retain overrides to the launcher. Tests cover the
+state format and codes, scalar/aggregate/string/FB round-trips, `NON_RETAIN`, warm/cold and
+layout-change policies, corruption, atomic failure, `--state-file`/`--reset-retain`/
+`--no-retain`, online attach/cold download, layout-hash stability, metadata resolution and
+precedence, and `null`/`memory`/`file` behavior including per-scan defaults and `%M`
+persistence.
+
 Acceptance: state round-trips and the documented policies pass on Windows; I/O metadata and
 backends match IO-and-Devices; online attach/cold behavior matches State-and-RETAIN §4.1.1.
 
@@ -692,6 +723,8 @@ specification as the normative definition.
 | `STC-E-ONLINE-008` | deploy rejected (incompatible candidate or prepare failure) |
 | `STC-E-ONLINE-009` | active manifest unavailable for download/diff (missing or corrupt store) |
 | `STC-E-RUN-003` | invalid `stc run` option (cycle count/time, I/O, state, stop condition) or runtime scheduling configuration (for example a task without a guard); codegen configuration errors stay `STC-E-RUN-001/002` |
+| `STC-E-RUN-IO-001` | the file I/O backend cannot write its output image at shutdown; the previous file is left intact |
+| `STC-W-IO-004` | the file I/O backend input image is missing or unreadable; the run starts with defaults |
 | `STC-W-PROJECT-001` | setting parsed but not honored until a later milestone (for example `debug = false`) |
 | `STC-W-PROJECT-002` | rename history has no baseline; the new key will receive a fresh `GotId` |
 | `STC-W-ONLINE-007` | compatibility-report warning not covered by an existing online code |

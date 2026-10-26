@@ -862,6 +862,115 @@ fn lint_levels_and_overrides() {
 }
 
 #[test]
+fn project_io_metadata_and_binding_validation() {
+    let project = TestDir::new("project-io");
+    project.write(
+        "app/stc.toml",
+        "schema = 1\n\
+         \n\
+         [package]\n\
+         name = \"ioapp\"\n\
+         version = \"0.1.0\"\n\
+         language = \"stc-2013-oop-utf8-v1\"\n\
+         \n\
+         [project]\n\
+         sources = [\"src/**/*.st\"]\n\
+         \n\
+         [io]\n\
+         backend = \"memory\"\n\
+         \n\
+         [[io.devices]]\n\
+         name = \"drive1\"\n\
+         kind = \"ethercat\"\n\
+         config = { vendor = \"0x1234\", revision = 3 }\n\
+         \n\
+         [[io.devices.channels]]\n\
+         name = \"DI5\"\n\
+         direction = \"input\"\n\
+         width = 1\n\
+         \n\
+         [[io.bindings]]\n\
+         variable = \"inst.input\"\n\
+         device = \"drive1\"\n\
+         channel = \"DI5\"\n\
+         direction = \"input\"\n\
+         \n\
+         [retain]\n\
+         file = \"state/app.stcstate\"\n\
+         on-mismatch = \"reset\"\n",
+    );
+    project.write(
+        "app/src/main.st",
+        "\
+PROGRAM Main
+VAR
+  input AT %IX0.0 : BOOL {stc:io {\"device\":\"hintdev\",\"channel\":1,\"direction\":\"input\"}};
+  output AT %QW0 : WORD;
+END_VAR
+VAR RETAIN
+  saved : DINT;
+END_VAR
+VAR_ACCESS
+  visible : input : BOOL READ_ONLY;
+END_VAR
+  output := 16#1234;
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+",
+    );
+    let output = project.run("app", &["build", "--emit", "metadata"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("STC-W-IO-003"),
+        "the project binding overrides the pragma: {}",
+        stderr(&output)
+    );
+    let metadata =
+        std::fs::read_to_string(project.path("app/target/stc/debug/ioapp.stc-meta.json"))
+            .expect("metadata sidecar");
+    for expected in [
+        "\"backend\": \"memory\"",
+        "\"source\": \"project\"",
+        "\"device\": \"drive1\"",
+        "\"channel\": \"DI5\"",
+        "\"var_access\": [",
+        "\"name\": \"visible\"",
+        "\"path\": \"inst.input\"",
+        "\"read_only\": true",
+        "\"revision\": 3",
+        "\"vendor\": \"0x1234\"",
+        "\"direct_id\": \"0x",
+        "\"got_id\": \"0x",
+        "\"enabled\": true",
+        "\"file\": \"state/app.stcstate\"",
+        "\"on_mismatch\": \"reset\"",
+    ] {
+        assert!(
+            metadata.contains(expected),
+            "missing {expected}:\n{metadata}"
+        );
+    }
+
+    // An unresolved project binding is STC-E-PROJECT-009 and exits 2.
+    let manifest = std::fs::read_to_string(project.path("app/stc.toml"))
+        .expect("manifest")
+        .replace("variable = \"inst.input\"", "variable = \"inst.missing\"");
+    std::fs::write(project.path("app/stc.toml"), manifest).expect("rewrite manifest");
+    let output = project.run("app", &["build", "--emit", "metadata"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("STC-E-PROJECT-009"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn metadata_summary_shapes() {
     let project = TestDir::new("metadata-shape");
     project.write(
@@ -934,7 +1043,9 @@ END_CONFIGURATION
         "{summary}"
     );
     assert!(
-        summary.contains("\"io\":{\"backend\":\"file\",\"bindings\":0,\"devices\":1}"),
+        summary.contains(
+            "\"io\":{\"backend\":\"file\",\"bindings\":0,\"devices\":1,\"var_access\":0}"
+        ),
         "{summary}"
     );
     assert!(summary.contains("\"artifacts\":[{"), "{summary}");

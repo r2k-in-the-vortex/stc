@@ -8,7 +8,8 @@ mod common;
 use std::ffi::CString;
 
 use stc_runtime::{
-    StcHostOptions, load_mode, stc_host_load_module, stc_host_run, stc_host_shutdown,
+    StcHostOptions, load_mode, stc_host_configure_io, stc_host_configure_retain,
+    stc_host_load_module, stc_host_run, stc_host_shutdown,
 };
 
 #[test]
@@ -63,6 +64,19 @@ fn embedding_host_run_honors_options_and_stop_conditions() {
     options.abi_version = 99;
     // SAFETY: the options struct is still readable.
     assert_eq!(unsafe { stc_host_run(&options) }, 2);
+    // Backend and retained-state configuration exports validate their input.
+    // SAFETY: the file pointers are null and no host generation is running.
+    assert_eq!(unsafe { stc_host_configure_io(1, std::ptr::null()) }, 0);
+    assert_eq!(unsafe { stc_host_configure_io(9, std::ptr::null()) }, 2);
+    assert_eq!(
+        unsafe { stc_host_configure_retain(std::ptr::null(), 0, 0) },
+        0
+    );
+    assert_eq!(
+        unsafe { stc_host_configure_retain(std::ptr::null(), 9, 0) },
+        2
+    );
+
     // SAFETY: no other test shares this process's embedding host.
     assert_eq!(stc_host_shutdown(), 0);
 }

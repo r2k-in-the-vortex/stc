@@ -16,3 +16,9 @@ pub const BUILD_OPTIONS: &str = "STC-E-BUILD-004";
 pub const RUN_TASK: &str = "STC-E-RUN-001";
 /// No runnable program/configuration, or ambiguous configuration.
 pub const RUN_PLAN: &str = "STC-E-RUN-002";
+/// Invalid I/O device, channel, or binding from `stc.toml`.
+pub const PROJECT_IO: &str = "STC-E-PROJECT-009";
+/// Project binding overrides a pragma hint.
+pub const W_PROJECT_OVERRIDES_HINT: &str = "STC-W-IO-003";
+/// Pragma names a device not declared in `stc.toml`.
+pub const W_IO_UNKNOWN_DEVICE: &str = "STC-W-IO-001";

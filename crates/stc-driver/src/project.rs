@@ -208,6 +208,7 @@ pub(crate) fn run(
     request.manifest_target = root.manifest.build.target.clone();
     request.manifest_clang = root.manifest.build.clang.clone();
     request.manifest_runtime = root.manifest.build.runtime.clone();
+    request.project = build::ProjectSettings::from_manifest(&root.manifest);
     if request.out_dir.is_none() {
         request.out_dir = Some(
             root.root_dir
@@ -300,7 +301,7 @@ pub(crate) fn run(
             };
             // Keep the summary the last stdout line in JSON mode.
             report_sink(&diagnostics, &sources, reporter, log);
-            metadata::print(&generated, &root.manifest, &request, reporter.is_json());
+            metadata::print(&generated, &request, reporter.is_json());
             let code = diagnostic_exit(&diagnostics);
             if code != 0 {
                 return code;

@@ -1088,7 +1088,7 @@ fn direct_info(artifacts: &stc_codegen::module::ModuleArtifacts, inputs: u64) ->
             offset_bits: 0,
             width_bits: 8,
         }],
-        text: "{}".into(),
+        ..ModuleInfo::default()
     }
 }
 
@@ -1139,7 +1139,7 @@ fn failed_cold_install_restores_the_process_image_and_direct_cells() {
         outputs_bytes: 0,
         markers_bytes: 0,
         bindings: Vec::new(),
-        text: "{}".into(),
+        ..ModuleInfo::default()
     };
     let candidate = Candidate::open_with_info(
         &platform,

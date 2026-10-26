@@ -68,6 +68,27 @@ impl ImageLayout {
     }
 }
 
+/// Retained-state policy from the metadata sidecar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetainInfo {
+    /// Whether retained state is loaded and saved.
+    pub enabled: bool,
+    /// State file as written by the compiler (project-relative).
+    pub file: Option<String>,
+    /// `error` or `reset`.
+    pub policy: crate::state::MismatchPolicy,
+}
+
+impl Default for RetainInfo {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            file: None,
+            policy: crate::state::MismatchPolicy::Error,
+        }
+    }
+}
+
 /// The runtime-relevant fields of the metadata sidecar.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModuleInfo {
@@ -79,8 +100,35 @@ pub struct ModuleInfo {
     pub markers_bytes: u64,
     /// Direct-variable bindings in metadata order.
     pub bindings: Vec<DirectBinding>,
+    /// I/O backend selected by the project.
+    pub backend: crate::run::IoBackend,
+    /// File used by the `file` backend, as written in `stc.toml`.
+    pub io_file: Option<String>,
+    /// Input-image defaults.
+    pub input_defaults: Vec<u8>,
+    /// Output-image defaults.
+    pub output_defaults: Vec<u8>,
+    /// Retained-state policy.
+    pub retain: RetainInfo,
     /// Raw metadata JSON, retained for the embedding host accessor.
     pub text: String,
+}
+
+impl Default for ModuleInfo {
+    fn default() -> Self {
+        Self {
+            inputs_bytes: 0,
+            outputs_bytes: 0,
+            markers_bytes: 0,
+            bindings: Vec::new(),
+            backend: crate::run::IoBackend::Null,
+            io_file: None,
+            input_defaults: Vec::new(),
+            output_defaults: Vec::new(),
+            retain: RetainInfo::default(),
+            text: String::new(),
+        }
+    }
 }
 
 impl ModuleInfo {
@@ -151,6 +199,75 @@ impl ModuleInfo {
         let inputs_bytes = number(image.get("inputs_bytes"), "inputs_bytes")?;
         let outputs_bytes = number(image.get("outputs_bytes"), "outputs_bytes")?;
         let markers_bytes = number(image.get("markers_bytes"), "markers_bytes")?;
+        let backend = match io.get("backend").and_then(Json::as_str) {
+            Some("null") | None => crate::run::IoBackend::Null,
+            Some("memory") => crate::run::IoBackend::Memory,
+            Some("file") => crate::run::IoBackend::File,
+            Some(other) => {
+                return Err(Error::new(
+                    codes::MODULE_INVALID,
+                    format!("module metadata has an unknown I/O backend `{other}`"),
+                ));
+            }
+        };
+        let io_file = match io.get("file") {
+            None | Some(Json::Null) => None,
+            Some(Json::String(value)) => Some(value.clone()),
+            Some(_) => return Err(metadata_error()),
+        };
+        let input_defaults = hex_bytes(
+            io.get("input_defaults_hex").and_then(Json::as_str),
+            "input_defaults_hex",
+        )?;
+        let output_defaults = hex_bytes(
+            io.get("output_defaults_hex").and_then(Json::as_str),
+            "output_defaults_hex",
+        )?;
+        if !input_defaults.is_empty() && input_defaults.len() as u64 != inputs_bytes {
+            return Err(Error::new(
+                codes::MODULE_INVALID,
+                format!(
+                    "module metadata input defaults are {} bytes but the input image is {inputs_bytes}",
+                    input_defaults.len()
+                ),
+            ));
+        }
+        if !output_defaults.is_empty() && output_defaults.len() as u64 != outputs_bytes {
+            return Err(Error::new(
+                codes::MODULE_INVALID,
+                format!(
+                    "module metadata output defaults are {} bytes but the output image is {outputs_bytes}",
+                    output_defaults.len()
+                ),
+            ));
+        }
+        let retain = match object.get("retain").and_then(Json::as_object) {
+            Some(retain) => {
+                let enabled = match retain.get("enabled") {
+                    None => true,
+                    Some(Json::Bool(value)) => *value,
+                    Some(_) => return Err(metadata_error()),
+                };
+                let file = match retain.get("file") {
+                    None | Some(Json::Null) => None,
+                    Some(Json::String(value)) => Some(value.clone()),
+                    Some(_) => return Err(metadata_error()),
+                };
+                let policy = match retain.get("on_mismatch").and_then(Json::as_str) {
+                    None => crate::state::MismatchPolicy::Error,
+                    Some(value) => {
+                        crate::state::MismatchPolicy::parse(value).ok_or_else(metadata_error)?
+                    }
+                };
+                RetainInfo {
+                    enabled,
+                    file,
+                    policy,
+                }
+            }
+            None if object.contains_key("retain") => return Err(metadata_error()),
+            None => RetainInfo::default(),
+        };
         let mut bindings = Vec::new();
         if let Some(values) = io.get("bindings").and_then(Json::as_array) {
             for value in values {
@@ -200,6 +317,11 @@ impl ModuleInfo {
             outputs_bytes,
             markers_bytes,
             bindings,
+            backend,
+            io_file,
+            input_defaults,
+            output_defaults,
+            retain,
             text: text.to_owned(),
         })
     }
@@ -231,6 +353,27 @@ fn metadata_error() -> Error {
         codes::MODULE_INVALID,
         "module metadata has an unexpected shape",
     )
+}
+
+fn hex_bytes(value: Option<&str>, field: &str) -> Result<Vec<u8>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    if value.len() % 2 != 0 {
+        return Err(Error::new(
+            codes::MODULE_INVALID,
+            format!("module metadata `io.{field}` has an odd number of hex digits"),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(value.len() / 2);
+    for pair in value.as_bytes().as_chunks::<2>().0 {
+        let text = std::str::from_utf8(pair).map_err(|_| metadata_error())?;
+        bytes.push(u8::from_str_radix(text, 16).map_err(|_| metadata_error())?);
+    }
+    Ok(bytes)
 }
 
 /// Returns the metadata sidecar path for a module.
@@ -327,6 +470,63 @@ mod tests {
             binding.width_bits, 8,
             "a missing width defaults to one byte"
         );
+    }
+
+    #[test]
+    fn parses_io_backend_defaults_and_retain_policy() {
+        let info = ModuleInfo::parse(
+            r#"{
+                "io": {
+                    "backend": "file",
+                    "file": "io.bin",
+                    "image": {
+                        "inputs_bytes": 2,
+                        "outputs_bytes": 2,
+                        "markers_bytes": 0
+                    },
+                    "input_defaults_hex": "0102",
+                    "output_defaults_hex": "0000",
+                    "bindings": []
+                },
+                "retain": {
+                    "enabled": false,
+                    "file": "state/app.stcstate",
+                    "on_mismatch": "reset",
+                    "size": 4,
+                    "layout_hash": "0x0000000000000001",
+                    "leaves": []
+                }
+            }"#,
+        )
+        .expect("metadata");
+        assert_eq!(info.backend, crate::run::IoBackend::File);
+        assert_eq!(info.io_file.as_deref(), Some("io.bin"));
+        assert_eq!(info.input_defaults, vec![1, 2]);
+        assert_eq!(info.output_defaults, vec![0, 0]);
+        assert!(!info.retain.enabled);
+        assert_eq!(info.retain.file.as_deref(), Some("state/app.stcstate"));
+        assert_eq!(info.retain.policy, crate::state::MismatchPolicy::Reset);
+    }
+
+    #[test]
+    fn rejects_invalid_io_and_retain_metadata() {
+        let cases = [
+            r#"{"io":{"backend":"disk","image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0}}}"#,
+            r#"{"io":{"image":{"inputs_bytes":1,"outputs_bytes":0,"markers_bytes":0},
+                "input_defaults_hex":"0000"}}"#,
+            r#"{"io":{"image":{"inputs_bytes":1,"outputs_bytes":0,"markers_bytes":0},
+                "input_defaults_hex":"0"}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0}},
+                "retain":{"on_mismatch":"reuse"}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0}},
+                "retain":{"enabled":"yes"}}"#,
+        ];
+        for text in cases {
+            assert!(
+                ModuleInfo::parse(text).is_err(),
+                "accepted malformed metadata: {text}"
+            );
+        }
     }
 
     #[test]
