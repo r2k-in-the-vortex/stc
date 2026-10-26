@@ -3,6 +3,11 @@
 //! The list mirrors the conformance profile's §10 index and the codes emitted
 //! by the compiler crates. It is sorted so lookup can use binary search.
 
+/// `stc.renames.toml` cannot be read/parsed or has an invalid schema.
+pub(crate) const RENAME_INVALID: &str = "STC-E-PROJECT-012";
+/// Rename history conflict, duplicate mapping, or cycle.
+pub(crate) const RENAME_CONFLICT: &str = "STC-E-PROJECT-013";
+
 /// Every diagnostic code defined by the profile.
 pub(crate) const KNOWN_CODES: &[&str] = &[
     "STC-E-ABI-001",

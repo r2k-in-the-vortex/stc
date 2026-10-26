@@ -12,8 +12,9 @@ use stc_got::catalog::root_kind_identity;
 use stc_got::error::{Error, Result, codes};
 use stc_got::keys::IdentityKind;
 use stc_got::{
-    ActionRecord, DescriptorRecord, ExportRecord, FunctionRecord, GotId, InstanceRecord, Manifest,
-    PlanAction, PlanVerdict, RootKind, RootRecord, Severity, TaskRecord, TypeRecord,
+    ActionRecord, DescriptorRecord, ExportRecord, FieldRecord, FunctionRecord, GotId,
+    InstanceRecord, Manifest, PlanAction, PlanVerdict, RootKind, RootRecord, Severity, TaskRecord,
+    TypeRecord,
 };
 
 /// The host's disposition for a validated plan.
@@ -296,7 +297,6 @@ fn compare_types(previous: &TypeRecord, current: &TypeRecord) -> Result<()> {
         ));
     }
     if previous.type_key != current.type_key
-        || previous.layout_hash != current.layout_hash
         || previous.size != current.size
         || previous.align != current.align
         || previous.base != current.base
@@ -310,7 +310,41 @@ fn compare_types(previous: &TypeRecord, current: &TypeRecord) -> Result<()> {
             ),
         ));
     }
+    // A tracked field rename changes field paths and therefore the type's
+    // field-list layout hash. The compiler classified this preserve against
+    // the baseline; the host verifies that the binary shape of every field is
+    // unchanged and ignores only the names and field identities.
+    if previous.layout_hash != current.layout_hash
+        && !fields_structurally_equal(&previous.fields, &current.fields)
+    {
+        return Err(Error::new(
+            codes::ONLINE_LAYOUT,
+            format!(
+                "type `{}` no longer matches the baseline layout",
+                current.key
+            ),
+        ));
+    }
     Ok(())
+}
+
+/// Compares field records by binary shape, ignoring paths and field ids.
+fn fields_structurally_equal(previous: &[FieldRecord], current: &[FieldRecord]) -> bool {
+    if previous.len() != current.len() {
+        return false;
+    }
+    let mut previous: Vec<&FieldRecord> = previous.iter().collect();
+    let mut current: Vec<&FieldRecord> = current.iter().collect();
+    previous.sort_by_key(|field| (field.offset, field.size, field.align));
+    current.sort_by_key(|field| (field.offset, field.size, field.align));
+    previous.iter().zip(&current).all(|(left, right)| {
+        left.type_key == right.type_key
+            && left.layout_hash == right.layout_hash
+            && left.offset == right.offset
+            && left.size == right.size
+            && left.align == right.align
+            && left.retention == right.retention
+    })
 }
 
 fn compare_descriptors(previous: &DescriptorRecord, current: &DescriptorRecord) -> Result<()> {
@@ -326,7 +360,6 @@ fn compare_descriptors(previous: &DescriptorRecord, current: &DescriptorRecord) 
         ));
     }
     if previous.type_key != current.type_key
-        || previous.layout_hash != current.layout_hash
         || previous.size != current.size
         || previous.align != current.align
     {
@@ -338,6 +371,17 @@ fn compare_descriptors(previous: &DescriptorRecord, current: &DescriptorRecord) 
             ),
         ));
     }
+    if previous.layout_hash != current.layout_hash && previous.owner_type.is_none() {
+        return Err(Error::new(
+            codes::ONLINE_LAYOUT,
+            format!(
+                "descriptor `{}` no longer matches the baseline layout",
+                current.key
+            ),
+        ));
+    }
+    // A tracked field rename changes the owner type's field-list layout hash;
+    // the owning type record carries the structural field check.
     Ok(())
 }
 

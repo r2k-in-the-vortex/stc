@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 phase-0 project-manifest, diagnostic, report-shape, and rename-history contracts fixed (2026-10-26); M6 phases 3–7 commands implemented (2026-10-26); `online`, `rename`, and `run --watch` pending  
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 phase-0 project-manifest, diagnostic, report-shape, and rename-history contracts fixed (2026-10-26); M6 phases 3–8 commands implemented (2026-10-26)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -40,8 +40,23 @@ output goes to stdout.
 > existing line breaks, the file's BOM, and each existing line break's encoding, uppercases
 > keywords, keeps identifier and literal spelling, emits two-space indentation and strict
 > semicolons (including after relaxed block statements), and is idempotent. Syntax errors prevent
-> formatting (`STC-E-FMT-001`); unreadable or unwritable files report `STC-E-FMT-002`. `online`,
-> `rename`, and `run --watch` remain later phases.
+> formatting (`STC-E-FMT-001`); unreadable or unwritable files report `STC-E-FMT-002`.
+>
+> **M6 phase 8 status (2026-10-26):** `stc rename`, `stc online download`, `stc online diff`, and
+> `stc run --watch` are implemented. `rename` resolves a dotted key in the root package through
+> sema resolutions, rewrites the declaration and references in place (comments and strings are
+> untouched; BOM and line endings are preserved), records the mapping in `stc.renames.toml`, and
+> supports `--dry-run`; builds merge that history with `--rename` (chains compose oldest-first,
+> conflicts are `STC-E-PROJECT-013`). `online download` reads `--store` or
+> `[runtime].manifest-dir` (or a live `--host` endpoint with `--nonce`), validates the active
+> manifest, and writes the canonical envelope (`--out`), an optional binary projection
+> (`--binary`), and the deployment/layout summary; a missing or corrupt store is
+> `STC-E-ONLINE-009`. `online diff <candidate> --baseline|--store|--host` prints the compatibility
+> report and exits 0/1/2. `run --watch` builds against the active baseline, launches the host with
+> a local user-only control endpoint, watches sources/manifests/history, deploys module/manifest
+> pairs online, reports each compatibility result, retries once on a stale baseline, keeps the old
+> generation on failure, and exits 130 on Ctrl-C. `--store` also selects the watch store, and
+> `--watch-timeout <duration>` bounds a run for automation.
 
 | Command | Purpose |
 | --- | --- |
@@ -100,12 +115,12 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LOG`) >
 `stc.toml` > built-in defaults.
 
-The table describes the v1 target surface. M6 phase 4 accepts `--manifest-path`, `--locked`,
+The table describes the v1 target surface. M6 implements `--manifest-path`, `--locked`,
 `--color`, `-q`, `-D`/`-W`/`-A`, `--deny warnings`, `-v`/`-vv`, `--debug`, and, for `stc run`,
 `--cycles`, `--cycle-time`, `--io`, `--io-file`, `--state-file`, `--reset-retain`, and
-`--no-retain`. The phase-5 I/O and retained-state behavior behind the last five options is not
-implemented yet. `--release`, `--debug-protocol`, and `run --watch` remain later milestones
-(`--release`/debug information in M6.5; the control channel in phase 8).
+`--no-retain`. `run --watch` adds `--store <dir>` and `--watch-timeout <duration>`; the online
+commands add `--out`, `--binary`, `--store`, `--host`, `--nonce`, and `--baseline`, and `rename`
+adds `--dry-run`. `--release`, debug information, and `--debug-protocol` remain M6.5 work.
 
 ### 1.3 Exit codes
 

@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–7 complete (2026-10-26); phases 8–11 ready to start. M5 (phases 1–7 and 4b) is
+Status: Phases 0–8 complete (2026-10-26); phases 9–11 ready to start. M5 (phases 1–7 and 4b) is
 complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
 usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
@@ -178,7 +178,7 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0–7 are complete (2026-10-26); phases 8–11 are pending. Phase 0 fixed
+Phase status: phases 0–8 are complete (2026-10-26); phases 9–11 are pending. Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
 resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
@@ -200,7 +200,17 @@ clocks, I/O, and human/JSON reports; production builds exclude test units and as
 Phase 7 added `crates/stc-fmt`, the fixed-style lossless-CST formatter, and `stc fmt`
 (`--check`, manifest-free paths, and root-package source formatting) with strict-semicolon
 insertion, preserved comments/blank lines/BOM/per-break line endings, and stable idempotent
-output.
+output. Phase 8 added the online-change workflow: `stc-runtime` is a regular driver dependency;
+`stc build` reads `[online].baseline = "active"` from `[runtime].manifest-dir` (or an explicit
+manifest) and merges `stc.renames.toml` with CLI `--rename` entries (chains composed, conflicts
+`STC-E-PROJECT-013`); `stc rename` rewrites sema-resolved declarations and references and appends
+the history; `stc online download` exports a validated store or live-host download envelope, and
+`stc online diff` uses the manifest-only runtime comparison; `stc run --watch` launches the host
+with a user-only named-pipe/Unix-socket control endpoint (versioned protocol, per-run nonce),
+watches sources/manifests/history, rebuilds against the active baseline, deploys, reports the
+compatibility result and prepare time, retries once on a stale baseline, keeps the old generation
+on build/deploy failure, and exits 130 on Ctrl-C. The host queues deploy/status/download/stop
+requests for the cycle thread and activates prepared candidates between scans.
 Phases may proceed in parallel only where the dependency direction allows (for example, Lean and
 the conformance harness can start once phase 0 fixes the vector and corpus contracts).
 
@@ -651,6 +661,35 @@ and test sources.
 
 Acceptance: the project-plan M6 online workflow exit criteria pass on Windows; the manifest-free
 baseline paths keep working.
+
+Status (2026-10-26): implemented. `stc-runtime` is a regular driver dependency; the driver uses
+`ManifestStore`, `Download`, `compare_manifests`, and the control client/server rather than
+reimplementing manifest or plan logic. Project builds resolve `[online].baseline = "active"` from
+`[runtime].manifest-dir` (a missing or corrupt store warns `STC-W-ONLINE-007` and selects a cold
+layout) or `[online].baseline = "explicit"`; the committed `stc.renames.toml` history is merged with
+CLI `--rename` entries, chains compose oldest-first, duplicate mappings and cycles are
+`STC-E-PROJECT-013`, and a cold build with renames warns `STC-W-PROJECT-002`. `stc rename` resolves
+a dotted key in the root package through sema resolutions, rewrites the declaration and every
+resolved reference (including `THIS`/`SUPER` members and qualified POU/type prefixes) in place,
+preserves BOM/line endings/comments/strings, supports `--dry-run`, and appends the history only
+after all writes succeed. `stc online download` validates the store (or requests the active
+envelope from a live endpoint with the per-run nonce), writes canonical JSON and an optional binary
+projection, and refuses a missing or corrupt store with `STC-E-ONLINE-009`; `stc online diff`
+compares a JSON/binary candidate with `--baseline`, the store, or a live host through the runtime's
+manifest-only entry point and exits 0/1/2. `stc run --watch` builds against the store's active
+manifest, launches the host with a user-only Windows named pipe or Unix socket, protocol version 1,
+and a per-run nonce, watches production/test sources, package manifests, the lockfile, and the
+rename history, debounces changes, rebuilds without relinking the running launcher, deploys the
+module/binary-manifest pair, prints the compatibility report and prepare time, retries once after a
+stale-baseline rejection, keeps the active generation on build/incompatible/prepare failure, and
+stops the host through the control channel on Ctrl-C (exit 130). The control thread queues
+deploy/status/download/stop requests; candidate load, validation, prepare, and activation run on
+the cycle thread between scans, so ST is never re-entered. Tests cover download/rebuild from the
+store, download and diff through a live host, diff compatible/incompatible/parse failures,
+rename identity and field/THIS rewrites with a baseline, chained history, values and `GotId`s
+across an online swap, history conflicts, BOM/CRLF preservation, watch code-only/rename/new-file
+deploys, build-failure recovery, Ctrl-C 130, and control nonce, protocol-version, user-only socket
+permission, concurrent clients, status, stop, and download messages.
 
 ### Phase 9 — Lean vector integration
 

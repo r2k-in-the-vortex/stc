@@ -1,10 +1,8 @@
 //! Command-line parsing for the driver.
 //!
-//! The parser recognizes the full M6 command surface.
-//! `new`/`check`/`build`/`run`/`test`/`fmt`/`clean`/`metadata`/`compliance`
-//! are implemented; commands whose workflow lands in a later phase
-//! (online/rename) are parsed and validated now, then reported as not yet
-//! implemented by the dispatcher.
+//! The parser recognizes the full M6 command surface. Online-change options
+//! select the runtime store, a live control host, an explicit diff baseline,
+//! and the rename/watch controls (`--dry-run`, `--watch-timeout`).
 
 use stc_manifest::LintLevel;
 
@@ -55,6 +53,23 @@ pub(crate) struct TestOptions {
     pub nocapture: bool,
 }
 
+/// Online-change command options.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OnlineOptions {
+    /// `--out`: download envelope output path; stdout when absent.
+    pub(crate) out: Option<String>,
+    /// `--binary`: optional binary manifest projection output path.
+    pub(crate) binary: Option<String>,
+    /// `--store`: runtime manifest-store directory.
+    pub(crate) store: Option<String>,
+    /// `--host`: live control endpoint.
+    pub(crate) host: Option<String>,
+    /// `--nonce`: live control nonce.
+    pub(crate) nonce: Option<String>,
+    /// `--baseline`: explicit diff baseline manifest.
+    pub(crate) baseline: Option<String>,
+}
+
 /// A parsed invocation.
 pub(crate) struct Invocation {
     /// Selected command.
@@ -81,6 +96,12 @@ pub(crate) struct Invocation {
     pub(crate) lints: LintOverrides,
     /// `run --watch`.
     pub(crate) watch: bool,
+    /// Optional `--watch-timeout` in nanoseconds.
+    pub(crate) watch_timeout_ns: Option<u64>,
+    /// `rename --dry-run`.
+    pub(crate) dry_run: bool,
+    /// Online-change options.
+    pub(crate) online: OnlineOptions,
     /// `fmt --check`.
     pub(crate) fmt_check: bool,
     /// Build settings and overrides.
@@ -151,6 +172,9 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     let mut locked = false;
     let mut lints = LintOverrides::default();
     let mut watch = false;
+    let mut watch_timeout_ns = None;
+    let mut dry_run = false;
+    let mut online = OnlineOptions::default();
     let mut fmt_check = false;
     let mut test = TestOptions::default();
     let mut paths = Vec::new();
@@ -171,6 +195,17 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             "--ast" => ast = true,
             "--locked" => locked = true,
             "--watch" => watch = true,
+            "--watch-timeout" => {
+                watch_timeout_ns = Some(parse_cycle_time(&next_value(
+                    args,
+                    &mut index,
+                    "--watch-timeout",
+                )?)?);
+            }
+            other if other.starts_with("--watch-timeout=") => {
+                watch_timeout_ns = Some(parse_cycle_time(&other["--watch-timeout=".len()..])?);
+            }
+            "--dry-run" => dry_run = true,
             "--check" => fmt_check = true,
             "--list" => test.list = true,
             "--no-run" => test.no_run = true,
@@ -262,6 +297,30 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             other if other.starts_with("--out-dir=") => {
                 build.out_dir = Some(other["--out-dir=".len()..].to_owned());
             }
+            "--out" => online.out = Some(next_value(args, &mut index, "--out")?),
+            other if other.starts_with("--out=") => {
+                online.out = Some(other["--out=".len()..].to_owned());
+            }
+            "--binary" => online.binary = Some(next_value(args, &mut index, "--binary")?),
+            other if other.starts_with("--binary=") => {
+                online.binary = Some(other["--binary=".len()..].to_owned());
+            }
+            "--store" => online.store = Some(next_value(args, &mut index, "--store")?),
+            other if other.starts_with("--store=") => {
+                online.store = Some(other["--store=".len()..].to_owned());
+            }
+            "--host" => online.host = Some(next_value(args, &mut index, "--host")?),
+            other if other.starts_with("--host=") => {
+                online.host = Some(other["--host=".len()..].to_owned());
+            }
+            "--nonce" => online.nonce = Some(next_value(args, &mut index, "--nonce")?),
+            other if other.starts_with("--nonce=") => {
+                online.nonce = Some(other["--nonce=".len()..].to_owned());
+            }
+            "--baseline" => online.baseline = Some(next_value(args, &mut index, "--baseline")?),
+            other if other.starts_with("--baseline=") => {
+                online.baseline = Some(other["--baseline=".len()..].to_owned());
+            }
             "--target" => build.target = Some(next_value(args, &mut index, "--target")?),
             other if other.starts_with("--target=") => {
                 build.target = Some(other["--target=".len()..].to_owned());
@@ -342,6 +401,9 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         relaxed,
         ast,
         watch,
+        watch_timeout_ns,
+        dry_run,
+        &online,
         fmt_check,
         &build,
         &test,
@@ -360,6 +422,9 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         locked,
         lints,
         watch,
+        watch_timeout_ns,
+        dry_run,
+        online,
         fmt_check,
         build,
         test,
@@ -391,6 +456,9 @@ fn validate(
     relaxed: bool,
     ast: bool,
     watch: bool,
+    watch_timeout_ns: Option<u64>,
+    dry_run: bool,
+    online: &OnlineOptions,
     fmt_check: bool,
     build: &Request,
     test: &TestOptions,
@@ -481,6 +549,41 @@ fn validate(
     if watch && command != Command::Run {
         return Err("`--watch` is only valid with `stc run`".into());
     }
+    if watch_timeout_ns.is_some() && !(command == Command::Run && watch) {
+        return Err("`--watch-timeout` requires `stc run --watch`".into());
+    }
+    if watch && build.cold {
+        return Err(
+            "`--cold` cannot be combined with `--watch`; the watcher deploys online".into(),
+        );
+    }
+    if dry_run && command != Command::Rename {
+        return Err("`--dry-run` is only valid with `stc rename`".into());
+    }
+    if online.out.is_some() && command != Command::OnlineDownload {
+        return Err("`--out` is only valid with `stc online download`".into());
+    }
+    if online.binary.is_some() && command != Command::OnlineDownload {
+        return Err("`--binary` is only valid with `stc online download`".into());
+    }
+    if online.baseline.is_some() && command != Command::OnlineDiff {
+        return Err("`--baseline` is only valid with `stc online diff`".into());
+    }
+    let online_command = matches!(command, Command::OnlineDownload | Command::OnlineDiff);
+    if online.host.is_some() && !online_command {
+        return Err("`--host` is only valid with `stc online download/diff`".into());
+    }
+    if online.nonce.is_some() && !online_command {
+        return Err("`--nonce` is only valid with `stc online download/diff`".into());
+    }
+    if online.store.is_some()
+        && !matches!(command, Command::OnlineDownload | Command::OnlineDiff)
+        && !(command == Command::Run && watch)
+    {
+        return Err(
+            "`--store` is only valid with `stc online download/diff` or `stc run --watch`".into(),
+        );
+    }
     if fmt_check && command != Command::Fmt {
         return Err("`--check` is only valid with `stc fmt`".into());
     }
@@ -540,20 +643,21 @@ fn validate(
     let allowed = match command {
         Command::Parse | Command::New => path_count == 1,
         Command::Rename => path_count == 2,
+        Command::OnlineDiff => path_count == 1,
         // Test positional arguments are substring filters.
         Command::Check | Command::Build | Command::Fmt | Command::Test => true,
         Command::Run
         | Command::Clean
         | Command::Metadata
         | Command::Compliance
-        | Command::OnlineDownload
-        | Command::OnlineDiff => path_count == 0,
+        | Command::OnlineDownload => path_count == 0,
     };
     if !allowed {
         return Err(match command {
             Command::Parse => "`stc parse` accepts exactly one input file".into(),
             Command::New => "`stc new` accepts exactly one project path".into(),
             Command::Rename => "`stc rename` accepts `<old> <new>`".into(),
+            Command::OnlineDiff => "`stc online diff` accepts one candidate manifest".into(),
             Command::Check | Command::Build | Command::Fmt | Command::Test => {
                 "unexpected positional arguments".into()
             }
@@ -688,7 +792,8 @@ fn print_help() {
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--target <triple>] [--clang <path>]\n\
          \x20         [--runtime <path>] [-v|-vv] [-q]\n\
-         \x20 stc run --watch        (M6 phase 8)\n\
+         \x20 stc run --watch [--store <dir>] [--watch-timeout <duration>]\n\
+         \x20         [--target <triple>] [--clang <path>] [--runtime <path>] [-v|-vv]\n\
          \x20 stc test [<filter>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20          [--list] [--no-run] [--timeout <duration>]\n\
          \x20          [--io null|memory|file] [--io-file <path>]\n\
@@ -697,8 +802,13 @@ fn print_help() {
          \x20          [-v|-vv] [-q] [-- --nocapture]\n\
          \x20 stc fmt [<path>...] [--check] [--manifest-path <stc.toml|dir>]\n\
          \x20         [--locked] [--message-format human|json|short] [-v|-vv] [-q]\n\
-         \x20 stc online download|diff      (M6 phase 8)\n\
-         \x20 stc rename <old> <new>        (M6 phase 8)\n\
+         \x20 stc online download [--out <path>] [--binary <path>] [--store <dir>]\n\
+         \x20         [--host <endpoint>] [--nonce <token>] [--manifest-path <stc.toml|dir>]\n\
+         \x20         [--locked] [--message-format human|json] [-v|-vv]\n\
+         \x20 stc online diff <candidate> [--baseline <path>] [--store <dir>]\n\
+         \x20         [--host <endpoint>] [--nonce <token>] [--manifest-path <stc.toml|dir>]\n\
+         \x20         [--locked] [--message-format human|json|short] [-v|-vv]\n\
+         \x20 stc rename <old> <new> [--dry-run] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20 stc --version\n\
          \x20 stc --help\n\
          \n\
@@ -718,7 +828,12 @@ fn print_help() {
          bridge keeps `--emit ir` and a sanitized file stem. `fmt` formats the\n\
          given files, or the root package's sources and test sources when no\n\
          paths are given, with the fixed lossless-CST style; `--check` writes\n\
-         nothing and exits 1 when a file would change.\n\
+         nothing and exits 1 when a file would change. `online download`\n\
+         exports the committed runtime manifest store as a canonical download\n\
+         envelope; `online diff` compares a candidate manifest with the active\n\
+         baseline (or `--baseline`) and exits 0 compatible, 1 incompatible,\n\
+         2 usage/parse. `rename` rewrites a sema-resolved declaration and its\n\
+         references and records the mapping in `stc.renames.toml`.\n\
          Exit codes: 0 success, 1 compile error, 2 usage/manifest/toolchain error,\n\
          3 internal error, 4 runtime trap, 130 interrupted.",
         env!("CARGO_PKG_VERSION")

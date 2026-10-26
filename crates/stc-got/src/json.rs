@@ -68,6 +68,52 @@ impl Json {
         out
     }
 
+    /// Renders one line with no insignificant whitespace.
+    ///
+    /// The control protocol frames one request or response per line.
+    #[must_use]
+    pub fn render_compact(&self) -> String {
+        let mut out = String::new();
+        self.write_compact(&mut out);
+        out
+    }
+
+    fn write_compact(&self, out: &mut String) {
+        match self {
+            Self::Array(values) => {
+                out.push('[');
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    value.write_compact(out);
+                }
+                out.push(']');
+            }
+            Self::Object(values) => {
+                out.push('{');
+                for (index, (key, value)) in values.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    write_string(out, key);
+                    out.push(':');
+                    value.write_compact(out);
+                }
+                out.push('}');
+            }
+            other => {
+                let mut rendered = String::new();
+                if let Self::Null = other {
+                    out.push_str("null");
+                    return;
+                }
+                other.write(&mut rendered, 0);
+                out.push_str(rendered.trim());
+            }
+        }
+    }
+
     /// Returns the object entries when this is an object.
     #[must_use]
     pub fn as_object(&self) -> Option<&BTreeMap<String, Json>> {

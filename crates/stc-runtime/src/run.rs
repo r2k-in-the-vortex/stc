@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use stc_got::error::Error;
 
 use crate::Host;
+use crate::control::{ControlServer, ControlSignal};
 
 /// I/O backend selected for a run.
 ///
@@ -156,6 +157,15 @@ pub(crate) fn run_loop_with_stop(
     options: &RunOptions,
     stop: StopSource,
 ) -> Result<u64, RunLoopError> {
+    run_loop_with_control(host, options, stop, None)
+}
+
+pub(crate) fn run_loop_with_control(
+    host: &mut Host,
+    options: &RunOptions,
+    stop: StopSource,
+    control: Option<&ControlServer>,
+) -> Result<u64, RunLoopError> {
     crate::signal::install_stop_handler();
     let period = options
         .cycle_time_ns
@@ -181,6 +191,13 @@ pub(crate) fn run_loop_with_stop(
             });
         }
         cycles += 1;
+        // Deploy work is prepared and activated between scans on the cycle
+        // thread, so ST is never re-entered (D-155).
+        if let Some(control) = control
+            && control.process(host) == ControlSignal::Stop
+        {
+            return Ok(cycles);
+        }
         if let Some(mock) = mock.as_mut() {
             *mock = now.saturating_add(options.cycle_time_ns.unwrap_or(0));
         } else if let Some(period) = period {

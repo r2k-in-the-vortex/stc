@@ -2,8 +2,9 @@
 //!
 //! `stc run` forces `exe,module,metadata` artifacts, resolves `[run]` defaults
 //! and CLI overrides, starts the launcher with inherited stdio, and returns the
-//! launcher's exit code (CLI-and-Manifest §1.3, Runtime §1.1, D-154). `--watch`
-//! remains the phase-8 workflow.
+//! launcher's exit code (CLI-and-Manifest §1.3, Runtime §1.1, D-154). The
+//! `--watch` workflow lives in [`crate::watch`] and reuses
+//! [`run_arguments`].
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,6 +24,40 @@ pub(crate) fn launch(
     reporter: &mut Reporter,
     log: Log,
 ) -> u8 {
+    let args = run_arguments(request, manifest, root_dir, log.verbose());
+    log.info(format!(
+        "run {}{}",
+        exe.display(),
+        if args.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", args.join(" "))
+        }
+    ));
+    match Command::new(exe).args(&args).status() {
+        Ok(status) => match status.code() {
+            Some(code) => u8::try_from(code).unwrap_or_else(|_| signal_exit_code(code)),
+            None => 130,
+        },
+        Err(error) => {
+            reporter.plain(
+                "STC-E-BUILD-002",
+                Severity::Error,
+                &format!("cannot start launcher `{}`: {error}", exe.display()),
+            );
+            1
+        }
+    }
+}
+
+/// Builds the launcher's run arguments from CLI overrides and `[run]`/`[io]`/
+/// `[retain]` defaults.
+pub(crate) fn run_arguments(
+    request: &RunRequest,
+    manifest: &Manifest,
+    root_dir: &Path,
+    verbose: bool,
+) -> Vec<String> {
     let mut args = Vec::new();
     let cycles = request.cycles.unwrap_or(manifest.run.cycles);
     args.push("--cycles".to_owned());
@@ -74,33 +109,10 @@ pub(crate) fn launch(
     if request.no_retain || !manifest.retain.enabled {
         args.push("--no-retain".to_owned());
     }
-    if log.verbose() {
+    if verbose {
         args.push("--status".to_owned());
     }
-
-    log.info(format!(
-        "run {}{}",
-        exe.display(),
-        if args.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", args.join(" "))
-        }
-    ));
-    match Command::new(exe).args(&args).status() {
-        Ok(status) => match status.code() {
-            Some(code) => u8::try_from(code).unwrap_or_else(|_| signal_exit_code(code)),
-            None => 130,
-        },
-        Err(error) => {
-            reporter.plain(
-                "STC-E-BUILD-002",
-                Severity::Error,
-                &format!("cannot start launcher `{}`: {error}", exe.display()),
-            );
-            1
-        }
-    }
+    args
 }
 
 /// Maps a Windows console-interrupt termination status to exit code 130.

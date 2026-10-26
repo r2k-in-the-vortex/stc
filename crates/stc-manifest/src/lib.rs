@@ -18,6 +18,7 @@ mod graph;
 mod lock;
 mod model;
 mod parse;
+mod renames;
 
 pub use graph::{
     LoadOptions, Package, PackageDependency, PackageId, ProjectError, ProjectGraph, load_project,
@@ -34,3 +35,7 @@ pub use model::{
 pub use parse::is_known_lint_code;
 pub use parse::parse_duration;
 pub use parse::{ParsedManifest, parse_manifest};
+pub use renames::{
+    RenameEntry, RenameHistory, RenameHistoryError, append_rename, load_rename_history,
+    merge_renames, parse_rename_history, render_rename_history,
+};

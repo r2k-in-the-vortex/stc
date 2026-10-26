@@ -2448,6 +2448,7 @@ impl Analyzer<'_> {
                         span,
                     );
                     ty = field_data.ty;
+                    self.record(segment.syntax(), crate::Res::Field(field));
                 }
                 if let Some(owner) = ctx.owner {
                     self.record(path.syntax(), crate::Res::Def(owner));
@@ -2488,6 +2489,7 @@ impl Analyzer<'_> {
                         span,
                     );
                     ty = field_data.ty;
+                    self.record(segment.syntax(), crate::Res::Field(field));
                 }
                 let _ = ty;
                 return expr;

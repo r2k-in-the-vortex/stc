@@ -185,6 +185,17 @@ pub(crate) fn run(
     }
 
     let mut request = request.clone();
+    if matches!(mode, Mode::Build | Mode::Run | Mode::Metadata) {
+        // Builds merge the committed rename history (oldest first) with CLI
+        // `--rename` entries; chains compose and conflicts are errors.
+        match crate::rename::merged_project_renames(&root.root_dir, &request.renames) {
+            Ok(renames) => request.renames = renames,
+            Err(error) => {
+                reporter.plain(error.code, stc_diag::Severity::Error, &error.message);
+                return 2;
+            }
+        }
+    }
     if request.emit.is_empty() {
         request.emit = root
             .manifest
@@ -218,6 +229,50 @@ pub(crate) fn run(
                 .to_string_lossy()
                 .into_owned(),
         );
+    }
+    if request.got_manifest.is_none() && !request.cold {
+        match root.manifest.online.baseline {
+            stc_manifest::Baseline::Explicit => {
+                let Some(path) = root.manifest.online.manifest.as_deref() else {
+                    reporter.plain(
+                        "STC-E-PROJECT-010",
+                        stc_diag::Severity::Error,
+                        "`[online].baseline = \"explicit\"` requires a `manifest` path",
+                    );
+                    return 2;
+                };
+                let path = root.root_dir.join(path);
+                if !path.is_file() {
+                    reporter.plain(
+                        "STC-E-ONLINE-009",
+                        stc_diag::Severity::Error,
+                        &format!(
+                            "the explicit online baseline `{}` does not exist",
+                            path.display()
+                        ),
+                    );
+                    return 2;
+                }
+                request.got_manifest = Some(path.to_string_lossy().into_owned());
+            }
+            stc_manifest::Baseline::Active => {
+                if let Some(dir) = &root.manifest.runtime.manifest_dir {
+                    let store = stc_runtime::store::ManifestStore::open(root.root_dir.join(dir));
+                    if let Some(problem) = store.problem() {
+                        reporter.plain(
+                            "STC-W-ONLINE-007",
+                            stc_diag::Severity::Warning,
+                            &format!(
+                                "the runtime store is invalid ({problem}); building a cold-layout candidate"
+                            ),
+                        );
+                    } else if let Some(path) = store.active_json_path() {
+                        log.info(format!("baseline {}", path.display()));
+                        request.got_manifest = Some(path.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
     }
     let name = request.name.clone().unwrap_or_else(|| root.name.clone());
     let source_files: Vec<String> = entries.iter().map(|entry| entry.path.clone()).collect();

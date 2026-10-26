@@ -593,6 +593,18 @@ impl ManifestStore {
         self.active.as_ref()
     }
 
+    /// Returns the canonical JSON path of the active baseline, when the store
+    /// is file-backed and has one.
+    #[must_use]
+    pub fn active_json_path(&self) -> Option<PathBuf> {
+        let root = self.root.as_ref()?;
+        let active = self.active.as_ref()?;
+        Some(
+            root.join(MANIFESTS_DIR)
+                .join(format!("{}.stc-got.json", active.build_id.to_hex_plain())),
+        )
+    }
+
     /// Returns why the stored baseline is unavailable, when it is invalid.
     #[must_use]
     pub fn problem(&self) -> Option<&str> {

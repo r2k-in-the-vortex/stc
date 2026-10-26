@@ -30,6 +30,10 @@
 //!   computes each scan's guards, deadlines, and `SINGLE` completion;
 //! - [`run`] is the shared launcher/embedding run loop (cycle count, cycle
 //!   deadline, mock clock, stop conditions, exit codes);
+//! - [`control`] is the local named-pipe/Unix-socket deploy/status channel
+//!   (protocol version, per-run nonce, user-only access) and queues work for
+//!   the cycle thread;
+//! - [`compare`] is the manifest-only `stc online diff` entry point;
 //! - [`state`] owns the file-backed retained-state format, atomic save, and
 //!   the process-wide ABI 2 state services;
 //! - [`io`] owns the `null`/`memory`/`file` process-image backends and the
@@ -53,6 +57,8 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod catalog;
+pub mod compare;
+pub mod control;
 pub mod descriptors;
 pub mod got;
 pub mod host;
@@ -65,7 +71,7 @@ pub mod migration;
 pub mod module_info;
 pub mod run;
 pub mod scheduler;
-mod signal;
+pub mod signal;
 pub mod state;
 pub mod store;
 mod test_host;
@@ -75,6 +81,11 @@ mod trap_boundary;
 mod test_support;
 
 pub use catalog::{HostPlatform, PROFILE, SUPPORTED_FEATURES, ValidatedPair};
+pub use compare::compare_manifests;
+pub use control::{
+    CONTROL_UNAVAILABLE, ControlClient, ControlOp, ControlRequest, ControlServer, ControlSignal,
+    DEPLOY_REJECTED, PROTOCOL_VERSION,
+};
 pub use got::Got;
 pub use host::{
     Candidate, CycleOutcome, GenerationPin, Host, HostStatus, HostWarning, LoadMode, LoadOutcome,
@@ -218,11 +229,17 @@ pub unsafe extern "C" fn stc_rt_execute(
 struct LauncherOptions {
     run: RunOptions,
     module: Option<String>,
+    control_endpoint: Option<String>,
+    control_nonce: Option<String>,
+    manifest_dir: Option<PathBuf>,
 }
 
 fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     let mut run = RunOptions::default();
     let mut module = None;
+    let mut control_endpoint = None;
+    let mut control_nonce = None;
+    let mut manifest_dir = None;
     let mut index = usize::from(!args.is_empty());
     while index < args.len() {
         let argument = args[index].as_str();
@@ -269,6 +286,15 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
             "--module" => {
                 module = Some(value("--module")?);
             }
+            "--control" => {
+                control_endpoint = Some(value("--control")?);
+            }
+            "--control-nonce" => {
+                control_nonce = Some(value("--control-nonce")?);
+            }
+            "--manifest-dir" => {
+                manifest_dir = Some(PathBuf::from(value("--manifest-dir")?));
+            }
             "--trace" => {
                 return Err("runtime option `--trace` is not supported in this build".into());
             }
@@ -276,7 +302,16 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
         }
         index += 1;
     }
-    Ok(LauncherOptions { run, module })
+    if control_endpoint.is_some() && control_nonce.is_none() {
+        return Err("`--control` requires `--control-nonce`".into());
+    }
+    Ok(LauncherOptions {
+        run,
+        module,
+        control_endpoint,
+        control_nonce,
+        manifest_dir,
+    })
 }
 
 fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_char) -> i32 {
@@ -306,7 +341,11 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
     let resolved = resolve_module_path(&module_argument);
     let platform = host_platform();
     let manifest = module_info::manifest_path(&resolved);
-    let mut host = Host::new(platform.clone(), ManifestStore::memory());
+    let store = match &options.manifest_dir {
+        Some(directory) => ManifestStore::open(directory.clone()),
+        None => ManifestStore::memory(),
+    };
+    let mut host = Host::new(platform.clone(), store);
     host_api::clear_last_trap();
     let candidate = match Candidate::open(&platform, &resolved, &manifest) {
         Ok(candidate) => candidate,
@@ -321,6 +360,17 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
         }
     };
     configure_run_services(&mut host, &options.run, &candidate);
+    let control = match (&options.control_endpoint, &options.control_nonce) {
+        (Some(endpoint), Some(nonce)) => match crate::control::ControlServer::bind(endpoint, nonce)
+        {
+            Ok(server) => Some(server),
+            Err(error) => {
+                eprintln!("stc: {}: {}", error.code, error.message);
+                return 2;
+            }
+        },
+        _ => None,
+    };
     if let Err(error) = host.load(candidate, LoadMode::Cold) {
         eprintln!(
             "stc: cannot install module `{}`: {}: {}",
@@ -335,7 +385,16 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
             1
         };
     }
-    let outcome = run::run_loop(&mut host, &options.run);
+    let outcome = if control.is_some() {
+        run::run_loop_with_control(
+            &mut host,
+            &options.run,
+            run::StopSource::None,
+            control.as_ref(),
+        )
+    } else {
+        run::run_loop(&mut host, &options.run)
+    };
     match outcome {
         Ok(_) => {
             if options.run.status {
@@ -1028,8 +1087,8 @@ pub extern "C" fn stc_host_shutdown() -> i32 {
 ///
 /// `struct_size` should be `sizeof(stc_host_options)`; zero accepts the current
 /// layout. A negative `cycle_time_ns` or `mock_clock_ns` selects the live clock
-/// and no mock clock. The control endpoint is reserved for M6 phase 8 and must
-/// be null in this release.
+/// and no mock clock. A non-empty `control_endpoint` requires the matching
+/// `control_nonce` and serves the local deploy/status channel.
 #[repr(C)]
 pub struct StcHostOptions {
     /// `sizeof(stc_host_options)`, or zero.
@@ -1056,10 +1115,12 @@ pub struct StcHostOptions {
     pub io_file: *const c_char,
     /// Retained-state file (M6 phase 5).
     pub state_file: *const c_char,
-    /// Control endpoint; reserved for M6 phase 8, must be null/empty.
+    /// Control endpoint (named pipe or Unix socket), or null/empty.
     pub control_endpoint: *const c_char,
     /// Optional external stop flag; nonzero stops before the next scan.
     pub stop: *const c_int,
+    /// Control-channel nonce required by a non-empty endpoint.
+    pub control_nonce: *const c_char,
 }
 
 impl Default for StcHostOptions {
@@ -1079,6 +1140,7 @@ impl Default for StcHostOptions {
             state_file: std::ptr::null(),
             control_endpoint: std::ptr::null(),
             stop: std::ptr::null(),
+            control_nonce: std::ptr::null(),
         }
     }
 }
@@ -1145,12 +1207,11 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
         }
     };
     // SAFETY: the caller contract requires readable NUL-terminated strings.
-    let control_endpoint = unsafe { c_text(options.control_endpoint) };
-    if control_endpoint
-        .as_deref()
-        .is_some_and(|text| !text.is_empty())
-    {
-        eprintln!("stc: the control endpoint is not implemented until M6 phase 8");
+    let control_endpoint =
+        unsafe { c_text(options.control_endpoint) }.filter(|text| !text.is_empty());
+    let control_nonce = unsafe { c_text(options.control_nonce) }.filter(|text| !text.is_empty());
+    if control_endpoint.is_some() && control_nonce.is_none() {
+        eprintln!("stc: a control endpoint requires a nonce");
         return 2;
     }
     let run = RunOptions {
@@ -1217,7 +1278,23 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
     if !loads_module {
         configure_embedding_services(host, &run);
     }
-    let outcome = run::run_loop_with_stop(host, &run, run::StopSource::External(options.stop));
+    let control = match (&control_endpoint, &control_nonce) {
+        (Some(endpoint), Some(nonce)) => match crate::control::ControlServer::bind(endpoint, nonce)
+        {
+            Ok(server) => Some(server),
+            Err(error) => {
+                eprintln!("stc: {}: {}", error.code, error.message);
+                return 2;
+            }
+        },
+        _ => None,
+    };
+    let outcome = run::run_loop_with_control(
+        host,
+        &run,
+        run::StopSource::External(options.stop),
+        control.as_ref(),
+    );
     if run.status {
         print_host_status(host);
     }

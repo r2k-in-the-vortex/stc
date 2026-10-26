@@ -723,14 +723,23 @@ pub fn build(
     }
 
     let mut types = Vec::new();
+    let mut renamed_types = BTreeSet::new();
     for (decl, assigned) in catalog.types.iter().zip(&type_assignments) {
         let resolved_base = resolve_type(&type_ids, decl.base.as_deref(), &decl.key)?;
         let mut resolved_interfaces = Vec::new();
         for interface in &decl.interfaces {
             resolved_interfaces.push(resolved_type(&type_ids, interface, &decl.key)?);
         }
-        let (action, reason, detail, warning) =
-            classify_type(decl, assigned, resolved_base, &resolved_interfaces);
+        let (action, reason, detail, warning) = classify_type(
+            decl,
+            assigned,
+            resolved_base,
+            &resolved_interfaces,
+            &options.renames,
+        );
+        if reason == "preserve.fields" {
+            renamed_types.insert(assigned.got_id);
+        }
         if let Some(diagnostic) = warning {
             diagnostics.push(diagnostic);
         }
@@ -815,7 +824,9 @@ pub fn build(
     let mut descriptors = Vec::new();
     for (decl, assigned) in catalog.descriptors.iter().zip(&descriptor_assignments) {
         let resolved_owner = resolve_type(&type_ids, decl.owner_type.as_deref(), &decl.key)?;
-        let (action, reason, detail, warning) = classify_descriptor(decl, assigned, resolved_owner);
+        let renamed_owner = resolved_owner.is_some_and(|owner| renamed_types.contains(&owner));
+        let (action, reason, detail, warning) =
+            classify_descriptor(decl, assigned, resolved_owner, renamed_owner);
         if let Some(diagnostic) = warning {
             diagnostics.push(diagnostic);
         }
@@ -1681,6 +1692,7 @@ fn classify_type(
     assigned: &Assigned,
     resolved_base: Option<GotId>,
     resolved_interfaces: &[GotId],
+    renames: &[Rename],
 ) -> Classification {
     let Some(BaselineInfo {
         shape:
@@ -1713,32 +1725,92 @@ fn classify_type(
         );
     }
     if type_key == &decl.type_key
-        && layout_hash == &decl.layout_hash
         && *size == decl.size
         && *align == decl.align
         && base == &resolved_base
         && interfaces.as_slice() == resolved_interfaces
     {
-        (
-            PlanAction::Preserve,
-            "preserve.exact",
-            "type layout matches".into(),
-            None,
-        )
-    } else {
-        (
-            PlanAction::Reject,
-            "reject.layout",
-            format!("type layout changed for `{}`", decl.key),
-            None,
-        )
+        if layout_hash == &decl.layout_hash {
+            return (
+                PlanAction::Preserve,
+                "preserve.exact",
+                "type layout matches".into(),
+                None,
+            );
+        }
+        if let BaselineShape::Type {
+            fields: baseline_fields,
+            ..
+        } = &assigned
+            .baseline
+            .as_ref()
+            .expect("baseline checked above")
+            .shape
+            && fields_match_under_renames(decl, baseline_fields, assigned, renames)
+        {
+            return (
+                PlanAction::Preserve,
+                "preserve.fields",
+                "type layout matches modulo tracked field renames".into(),
+                None,
+            );
+        }
     }
+    (
+        PlanAction::Reject,
+        "reject.layout",
+        format!("type layout changed for `{}`", decl.key),
+        None,
+    )
+}
+
+/// Compares a candidate type's field layout with the baseline, mapping renamed
+/// field paths back through the tracked rename map.
+fn fields_match_under_renames(
+    decl: &TypeDecl,
+    baseline_fields: &[FieldRecord],
+    assigned: &Assigned,
+    renames: &[Rename],
+) -> bool {
+    if decl.fields.len() != baseline_fields.len() {
+        return false;
+    }
+    let baseline_key = assigned
+        .baseline
+        .as_ref()
+        .map(|info| info.key.as_str())
+        .unwrap_or(decl.key.as_str());
+    for field in &decl.fields {
+        let full = format!("{}::{}", field.identity.package, field.identity.path);
+        let old_full = rename_candidate(&full, renames, true).unwrap_or_else(|| full.clone());
+        let old_path = old_full
+            .strip_prefix(&format!("{baseline_key}."))
+            .or_else(|| old_full.strip_prefix(&format!("{}.", decl.key)))
+            .unwrap_or(&field.path);
+        let Some(baseline) = baseline_fields
+            .iter()
+            .find(|candidate| candidate.path == old_path)
+        else {
+            return false;
+        };
+        if baseline.type_key != field.type_key
+            || baseline.layout_hash != field.layout_hash
+            || baseline.offset != field.offset
+            || baseline.size != field.size
+            || baseline.align != field.align
+            || baseline.retention != field.retention
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn classify_descriptor(
     decl: &DescriptorDecl,
     assigned: &Assigned,
     resolved_owner: Option<GotId>,
+    renamed_owner: bool,
 ) -> Classification {
     let Some(BaselineInfo {
         shape:
@@ -1771,21 +1843,30 @@ fn classify_descriptor(
             None,
         );
     }
-    if layout_hash == &decl.layout_hash && *size == decl.size && *align == decl.align {
-        (
-            PlanAction::Preserve,
-            "preserve.exact",
-            "descriptor layout matches".into(),
-            None,
-        )
-    } else {
-        (
-            PlanAction::Reject,
-            "reject.layout",
-            format!("descriptor layout changed for `{}`", decl.key),
-            None,
-        )
+    if *size == decl.size && *align == decl.align {
+        if layout_hash == &decl.layout_hash {
+            return (
+                PlanAction::Preserve,
+                "preserve.exact",
+                "descriptor layout matches".into(),
+                None,
+            );
+        }
+        if renamed_owner {
+            return (
+                PlanAction::Preserve,
+                "preserve.fields",
+                "descriptor layout matches modulo tracked field renames".into(),
+                None,
+            );
+        }
     }
+    (
+        PlanAction::Reject,
+        "reject.layout",
+        format!("descriptor layout changed for `{}`", decl.key),
+        None,
+    )
 }
 
 fn classify_instance(

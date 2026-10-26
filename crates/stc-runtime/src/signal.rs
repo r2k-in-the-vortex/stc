@@ -16,7 +16,7 @@ fn request_stop() {
 }
 
 /// Installs the process stop handlers once.
-pub(crate) fn install_stop_handler() {
+pub fn install_stop_handler() {
     INSTALL.call_once(|| {
         // SAFETY: the platform installers only register a signal/console
         // handler that performs an atomic store.
@@ -25,8 +25,44 @@ pub(crate) fn install_stop_handler() {
 }
 
 /// Returns `true` after a stop signal has been observed.
-pub(crate) fn stop_requested() -> bool {
+pub fn stop_requested() -> bool {
     STOP_REQUESTED.load(Ordering::Relaxed)
+}
+
+/// Sends an interrupt to one process.
+///
+/// On Unix this is `SIGINT`; on Windows it is a `CTRL_BREAK_EVENT` for a
+/// process created in its own process group. Returns `false` when the
+/// platform rejected the request.
+#[cfg(unix)]
+#[must_use]
+pub fn interrupt_process(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: `SIGINT` has no payload and the pid names the target process.
+    unsafe { platform::interrupt(pid) }
+}
+
+/// Sends an interrupt to one process.
+///
+/// On Unix this is `SIGINT`; on Windows it is a `CTRL_BREAK_EVENT` for a
+/// process created in its own process group. Returns `false` when the
+/// platform rejected the request.
+#[cfg(windows)]
+#[must_use]
+pub fn interrupt_process(pid: u32) -> bool {
+    // SAFETY: the target was created in its own process group.
+    unsafe { platform::interrupt(pid) }
+}
+
+/// Sends an interrupt to one process.
+///
+/// Not implemented on other hosts; always returns `false`.
+#[cfg(not(any(unix, windows)))]
+#[must_use]
+pub fn interrupt_process(_pid: u32) -> bool {
+    false
 }
 
 #[cfg(unix)]
@@ -40,6 +76,12 @@ mod platform {
 
     unsafe extern "C" {
         fn signal(signum: c_int, handler: Handler) -> usize;
+        fn kill(pid: c_int, signal: c_int) -> c_int;
+    }
+
+    pub(super) unsafe fn interrupt(pid: c_int) -> bool {
+        // SAFETY: `SIGINT` has no payload; the caller names the target process.
+        unsafe { kill(pid, SIGINT) == 0 }
     }
 
     extern "C" fn handler(_signal: c_int) {
@@ -62,6 +104,14 @@ mod platform {
 
     unsafe extern "system" {
         fn SetConsoleCtrlHandler(handler: Option<Handler>, add: i32) -> i32;
+        fn GenerateConsoleCtrlEvent(event: u32, group_id: u32) -> i32;
+    }
+
+    pub(super) unsafe fn interrupt(pid: u32) -> bool {
+        // CTRL_BREAK_EVENT targets a process group; `pid` is the group id of
+        // a process created with CREATE_NEW_PROCESS_GROUP.
+        // SAFETY: the caller supplies the group id for its own child.
+        unsafe { GenerateConsoleCtrlEvent(1, pid) != 0 }
     }
 
     extern "system" fn handler(_control: u32) -> i32 {

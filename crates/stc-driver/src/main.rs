@@ -1,25 +1,28 @@
 //! The `stc` command-line driver.
 //!
 //! M6 phase 3 implements `new`, `check`, `build`, `clean`, `metadata`, and
-//! `compliance`; phase 4 adds `run`, phase 6 adds `test`, and phase 7 adds
-//! `fmt`. The remaining M6 verbs are parsed and validated; their workflows
-//! land in later phases. The driver owns the exit-code contract,
-//! human/JSON/short diagnostics, colors, lint levels, and the panic boundary
-//! from CLI-and-Manifest §1.3–§1.4.
+//! `compliance`; phase 4 adds `run`, phase 6 adds `test`, phase 7 adds `fmt`,
+//! and phase 8 adds `rename`, `online download/diff`, and `run --watch`. The
+//! driver owns the exit-code contract, human/JSON/short diagnostics, colors,
+//! lint levels, and the panic boundary from CLI-and-Manifest §1.3–§1.4.
 
 #![forbid(unsafe_code)]
 
 mod build;
 mod clean;
 mod cli;
+mod compat;
 mod compliance;
 mod fmt;
 mod metadata;
 mod new;
+mod online;
 mod project;
+mod rename;
 mod report;
 mod run;
 mod test;
+mod watch;
 
 use std::any::Any;
 use std::ffi::OsString;
@@ -123,7 +126,15 @@ fn run(args: &[String]) -> ExitCode {
             log,
         ),
         Command::Compliance => compliance::run(invocation.format),
-        Command::Run if invocation.watch => not_implemented(invocation.command, invocation.watch),
+        Command::Run if invocation.watch => watch::run(
+            invocation.manifest.as_deref(),
+            invocation.locked,
+            &invocation.build,
+            invocation.online.store.as_deref(),
+            invocation.watch_timeout_ns,
+            &mut reporter,
+            log,
+        ),
         Command::Run => project::run(
             Mode::Run,
             invocation.manifest.as_deref(),
@@ -149,9 +160,31 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
-        Command::OnlineDownload | Command::OnlineDiff | Command::Rename => {
-            not_implemented(invocation.command, invocation.watch)
-        }
+        Command::OnlineDownload => online::download(
+            &invocation.online,
+            invocation.manifest.as_deref(),
+            invocation.locked,
+            &mut reporter,
+            log,
+        ),
+        Command::OnlineDiff => online::diff(
+            &invocation.online,
+            &invocation.paths[0],
+            invocation.manifest.as_deref(),
+            invocation.locked,
+            &mut reporter,
+            log,
+        ),
+        Command::Rename => rename::run(
+            &invocation.paths[0],
+            &invocation.paths[1],
+            invocation.dry_run,
+            invocation.manifest.as_deref(),
+            invocation.locked,
+            &invocation.build,
+            &mut reporter,
+            log,
+        ),
     };
     ExitCode::from(code)
 }
@@ -312,18 +345,6 @@ fn run_files(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
     } else {
         0
     }
-}
-
-fn not_implemented(command: Command, _watch: bool) -> u8 {
-    let (name, phase) = match command {
-        Command::Run => ("stc run --watch", "phase 8"),
-        Command::Test => ("stc test", "phase 6"),
-        Command::OnlineDownload | Command::OnlineDiff => ("stc online", "phase 8"),
-        Command::Rename => ("stc rename", "phase 8"),
-        _ => unreachable!("only phase-later commands are stubbed"),
-    };
-    eprintln!("stc: `{name}` is not implemented until M6 {phase}");
-    2
 }
 
 fn duration(value: Duration) -> String {
