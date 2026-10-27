@@ -1,10 +1,10 @@
 # GOT Artifacts and Schemas
 
-Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25); M6 host ABI 2.2 test-clock append and project/state/I/O integration implemented (2026-10-27); M6.5 debug additions pending  
+Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25); M6 host ABI 2.2 test-clock append and project/state/I/O integration implemented (2026-10-27); M6.5 phase 0 fixes debug service ID 13 at ABI 2.3, the checkpoint-table location, and the hook feature/entry bits (2026-10-27); M6.5 implementation pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: Normative formats for stable keys, `GotId`, the compiler catalog, the module descriptor,
-the persistent GOT manifest, the online-change plan, host ABI 2 (2.2 implemented;
-production modules require 2.1), and build IDs.
+the persistent GOT manifest, the online-change plan, host ABI 2 (2.2 implemented; 2.3 adds the
+debug service; production modules require 2.1), and build IDs.
 
 This document is the machine-readable companion to
 [Online Change and GOT](Online-Change-and-GOT.md). It fixes the bytes and identifiers that the
@@ -28,7 +28,7 @@ v1 layouts, and M4.5 simply leaves later record kinds empty.
 | Type-key/layout derivation | 1 | `STC_LAYOUT_V1` |
 | Module descriptor | 1 | `STC_DESCRIPTOR_V1` |
 | Loadable module (container contract) | 1 | `STC_MODULE_V1` |
-| Host API | 2.2 implemented (production modules require 2.1) | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=2` |
+| Host API | 2.2 implemented; 2.3 adds debug service 13 (M6.5, planned) | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=3` when service 13 is used |
 | GOT manifest | 1 | `STC_MANIFEST_V1` |
 | Online-change plan | 1 | `STC_PLAN_V1` |
 | Build ID derivation | 1 | `STC_BUILD_V1` |
@@ -438,7 +438,7 @@ descriptor_flags     u16   = 0
 descriptor_size      u32          total blob bytes, including this field
 required_features    u64          feature bit set the host must implement
 host_abi_major       u16   = 2
-host_abi_minor       u16   = 1
+host_abi_minor       u16   = 1   (minimum; 2 for test builds, 3 for debug hooks)
 module_format        u16   = 1
 endianness           u8    = 0   (0 = little, 1 = big)
 pointer_width        u8    = 8
@@ -464,9 +464,9 @@ nonzero values are invalid. `entry_flags` bits:
 | 1 | `stc_module_cycle` is callable |
 | 2 | `stc_module_shutdown` performs retained-state work |
 | 3 | `stc_module_detach` releases module-local resources |
-| 4 | Debug build form (the default non-`--release` artifact). M4.5 and M6 emit no debug information or checkpoint hooks; M6.5 adds them |
+| 4 | Debug build form (the default non-`--release` artifact). Set by M4.5, M6, and M6.5 debug-form builds; it does not by itself imply debug information or checkpoint hooks |
 | 5 | The module uses retained-state host services |
-| 6 | Debug hooks are active (M6.5; always clear in M4.5 and M6) |
+| 6 | Debug hooks are active; equals `required_features` bit 4 (M6.5; always clear in M4.5, M6, test, and release artifacts) |
 | 7–31 | Reserved, must be zero in format 1 |
 
 `FunctionRecord`:
@@ -516,13 +516,21 @@ every `Descriptor` slot's `GotId` appears in the manifest descriptor table.
 | 1 | Online-change plan present in the paired manifest |
 | 2 | OOP descriptors/vtables in use (M5 phase 4b) |
 | 3 | Place-descriptor references in use (M5 phase 4b) |
-| 4 | Debug checkpoint hooks in use (M6.5; not set by M4.5 or M6) |
+| 4 | Debug checkpoint hooks in use (M6.5). Set only when the module imports service 13 and emits at least one checkpoint; requires host minor 2.3; clear in test and release artifacts (D-177) |
 | 5–63 | Reserved; a host that does not implement a set bit rejects the module |
 
 M4.5 and M6 set bit 0 and bit 1. They do not set bit 4; the host does not require it. The
 `entry_flags` debug-build bit may be set by the default artifact form, but it conveys no
 debug-information or checkpoint capability until M6.5 sets the feature bit and emits the
 corresponding data.
+
+M6.5 sets bit 4 only when it emits at least one `debug_check` call; in that case it also sets
+`entry_flags` bit 6 and requires host minor 2.3. A descriptor with bit 4 and entry bit 6
+disagreeing is inconsistent and is rejected as `STC-E-MODULE-002`. Test builds and release
+artifacts clear both bits; test builds require minor 2.2 and release artifacts require 2.1. The
+checkpoint table itself is not a descriptor field: it lives in the metadata sidecar's `debug`
+object ([Debug and Monitoring](Debug-and-Monitoring.md) §16), which is paired by build ID and is
+not part of descriptor or manifest identity.
 
 ### 7.2 Descriptor digest
 
@@ -586,13 +594,13 @@ void stc_module_detach(uint64_t generation_id);
   generation switch; the host only switches at a cycle boundary, so values cached within one
   cycle are valid.
 
-## 8. Host API 2 (2.2 implemented; production modules require 2.1)
+## 8. Host API 2 (2.2 implemented; 2.3 adds the debug service; production modules require 2.1)
 
 ### 8.1 Table
 
 ```c
 typedef struct stc_host_api {
-    uint32_t abi_version;   /* (major << 16) | minor; 2.1 is 0x00020001, 2.2 is 0x00020002 */
+    uint32_t abi_version;   /* (major << 16) | minor; 2.1 is 0x00020001, 2.2 is 0x00020002, 2.3 is 0x00020003 */
     uint32_t struct_size;   /* bytes; modules reject a too-small table */
 
     void     (*trap)(int32_t code, uint32_t span_id);
@@ -608,6 +616,8 @@ typedef struct stc_host_api {
     void     (*assert)(int32_t condition, int32_t code, uint32_t span_id);
     /* Host ABI 2.2 (M6 test builds only; appended, not present in a 2.1 host): */
     void     (*set_cycle_time_ns)(int64_t ns);
+    /* Host ABI 2.3 (M6.5 debug hooks only; appended, not present in a 2.1/2.2 host): */
+    void     (*debug_check)(uint32_t checkpoint_id, uint32_t span_id);
 } stc_host_api;
 ```
 
@@ -624,7 +634,7 @@ code uses import slots for every service it calls.
 
 ### 8.2 Services
 
-Service IDs are used by import slot records and are fixed for host ABI 2 (2.0–2.2):
+Service IDs are used by import slot records and are fixed for host ABI 2 (2.0–2.3):
 
 | ID | Field | Contract |
 | --- | --- | --- |
@@ -640,6 +650,14 @@ Service IDs are used by import slot records and are fixed for host ABI 2 (2.0–
 | 10 | `state_save` | Saves retained bytes from a module buffer; returns `0` or a state status |
 | 11 | `assert` | Traps with `(code, span_id)` when `condition` is zero; otherwise returns |
 | 12 | `set_cycle_time_ns` | Host ABI 2.2/M6 test builds only: sets the next cycle's latched time; does not change the current scan |
+| 13 | `debug_check` | Host ABI 2.3/M6.5 debug hooks only: called at a checkpoint with `(checkpoint_id, span_id)`; returns normally, may block while the session is stopped, and is a no-op with no session (D-177) |
+
+Service 13 is the only debug service in v1 and is appended after service 12. Its signature is
+`void (*debug_check)(uint32_t checkpoint_id, uint32_t span_id)`. The host validates the
+checkpoint ID/span against the metadata sidecar's debug object; a mismatch reports
+`STC-E-DEBUG-016` and disables breakpoints but does not affect normal execution. A module that
+does not import service 13 requires no debug support and keeps its prior minor (2.1 production,
+2.2 test).
 
 `alloc` blocks are zeroed, stable for the lifetime of the requesting module generation, and freed
 on failed prepare, retire, or unload. The host rejects an attempt to register a transient block
@@ -673,8 +691,16 @@ struct prefix and every existing signature and service ID are unchanged. Only te
 it, so their descriptor requires minor 2 and a 2.1 host rejects them before attach. Production
 modules do not import service 12 and keep required minor 2.1, so they continue to run on a 2.1
 host. A breaking change to a service signature or the struct prefix increments the major version.
-M4 ABI 1 artifacts are not loadable. No M6 debug service exists; M6.5 debug services append after
-ID 12 under the same major.
+
+Minor 3 (M6.5) appends service ID 13, `debug_check(uint32_t checkpoint_id, uint32_t span_id)`,
+after service 12; the prefix, `struct_size` gate, and every existing signature and service ID are
+unchanged. Only debug builds that emit at least one checkpoint import it, so their descriptor
+requires minor 3 and a 2.1/2.2 host rejects them before attach. Test builds remain at minor 2;
+hook-free debug builds and release builds remain at 2.1 because they emit no hooks. M4 ABI 1
+artifacts are not loadable. No other debug service is added in v1; any later debug service
+appends after ID 13 under the same major.
+The checkpoint table and session protocol are not part of this table: see
+[Debug and Monitoring](Debug-and-Monitoring.md) §13–§16.
 
 Module entry-point names and their meanings are part of module format 1, not of the host API
 minor version. Adding a new entry point requires a module format change; adding a host service
@@ -1674,6 +1700,16 @@ plan, note, or build-ID format, no existing service ID or signature, and no task
 checkpoint hook is added in M6. The rest of M6 (manifest, state, I/O, scheduler, and online
 workflow) consumed the existing formats without change.
 
+M6.5 phase 0 (2026-10-27) fixes the next host minor at 2.3 and service ID 13, `debug_check`, for
+checkpoint hooks (D-173–D-179). It appends no entry point, descriptor field, manifest record, or
+format change; debug builds that emit hooks require minor 2.3, test builds stay at 2.2, and
+hook-free debug and release builds stay at 2.1. The checkpoint table is in the metadata sidecar's
+`debug` object, paired by build ID and excluded from descriptor/manifest identity and
+online-change compatibility; `required_features` bit 4 and `entry_flags` bit 6 are set only by
+hook-emitting debug builds. The debug protocol and session are specified in
+[Debug and Monitoring](Debug-and-Monitoring.md) §13–§14 and use no host API entry other than
+service 13.
+
 ## 13. Related documents
 
 - [Online Change and GOT](Online-Change-and-GOT.md) — host/module model, lifecycle, policy.
@@ -1682,4 +1718,5 @@ workflow) consumed the existing formats without change.
 - [CLI and Manifest](CLI-and-Manifest.md) — commands, options, artifact layout.
 - [State and RETAIN](State-and-Retain.md) — retained-state file and cold/warm policy.
 - [Testing and Verification](Testing-and-Verification.md) — hot-swap and manifest tests.
-- [Decisions](../Decisions.md) — D-113–D-127 and the prior online-change decisions.
+- [Decisions](../Decisions.md) — D-113–D-127, the prior online-change decisions, and M6.5
+  debug decisions D-173–D-179.

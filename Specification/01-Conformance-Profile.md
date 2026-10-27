@@ -350,14 +350,17 @@ The following are deliberately chosen and must be documented and tested:
 | Test runner | One cold test artifact per test with a synthetic single-task configuration; process-isolated and sequential; default 5 s timeout; memory I/O unless `[test].io` overrides; mock clock from `[test].mock-clock` |
 | Formatter | Fixed style over the lossless CST; comments, blank lines, and existing line breaks preserved; per-file BOM and line-ending encoding preserved; strict semicolons inserted; `--check`; idempotent |
 | Online workflow | Active-baseline builds, `stc online download/diff`, committed `stc.renames.toml` tracked renames, and `stc run --watch` over a local user-only deploy/status endpoint with a per-run nonce |
-| Execution artifacts | `module` is a loadable shared library paired with a GOT manifest; `exe` is a thin host launcher; `lib` embeds the host; host ABI 2.2 implemented (test-clock service ID 12; production modules require 2.1; no debug services) |
+| Execution artifacts | `module` is a loadable shared library paired with a GOT manifest; `exe` is a thin host launcher; `lib` embeds the host; host ABI 2.2 implemented (test-clock service ID 12; production modules require 2.1); M6.5 appends debug service ID 13 at minor 2.3 (implementation pending) |
 | Persistent memory | Host-owned GOT cells and stable roots; per-field recursive roots; handle-based objects; runtime-owned descriptors |
 | References and pointers | Persistent-capable `REF_TO` uses place descriptors; pointer→`REF_TO` is runtime-validated and yields `NULL` on failure; `POINTER TO` is transient-only (`STC-POINTER`) |
 | Online change | Whole-module load/prepare, O(1) cycle-boundary activation, one-successful-cycle rollback, off-thread unload |
 | Baseline policy | Exact parent build ID + digest pairing + profile/target/ABI/layout match; missing/stale/invalid baseline forces a cold download |
 | Preservation | Matching `GotId`/type/layout/size roots preserved; new roots initialized; removed roots quarantined; no field-layout migration in v1 |
-| Debug builds | M6 honors `[build].opt-level` (default 0) but emits no DWARF/CodeView or checkpoint hooks; M6.5 adds debug information by default and `--release` stripping/optimisation with distinct build IDs and manifests |
-| Debug behavior | Typed read/write/force/watch, checkpoint breakpoints, stop-the-world stepping, call stacks; swaps end sessions; outputs may be held indefinitely; not a safety PLC |
+| Debug builds | Debug is the default build form. M6.5 emits DWARF (ELF) or CodeView (MSVC) with deterministic paths/order and no timestamps; `--release` selects optimised, stripped, hook-free artifacts with distinct build IDs/manifests and default out-dir `target/stc/release`; debug stays `target/stc/debug` (D-178) |
+| Debug behavior | Typed read/write/force/watch, checkpoint breakpoints, stop-the-world stepping, call stacks with optimized-out reporting; writes/forces apply only at cycle boundaries; swaps and the pause bound end sessions and clear state; outputs may be held indefinitely; not a safety PLC (D-173–D-177) |
+| Debug protocol | Local-only `stc-debug/1` on a user-scoped pipe (default) or loopback socket (optional); newline-delimited JSON, per-run token, four scopes, audited protected access, rate limits, and bounded frames; separate from the M6 control channel (D-173, D-174) |
+| Debug checkpoints | Dense checkpoint table in the metadata sidecar, source-span bound, first-class host check service ID 13 at ABI 2.3; debug builds set `entry_flags` bit 4/bit 6 and `required_features` bit 4 when hooks are emitted; release and test builds are hook-free (D-177) |
+| Debug sessions | One session per host; start does not stop the cycle; a stop parks the cycle at a checkpoint and holds outputs; a five-minute default stop/idle bound, swap/disconnect/timeout teardown, force/breakpoint clearing, and explicit reconnect with no state migration (D-175) |
 | Runtime threads | One cycle thread and, in M6, one control/status thread for deployment/status; M6.5 adds service/monitor threads. Only the cycle thread executes ST; generation pinning for readers |
 
 ## 9. Project model (project feature, not an IEC claim)
@@ -379,8 +382,8 @@ The following are deliberately chosen and must be documented and tested:
 ## 10. Diagnostic families and codes
 
 Existing lexical, grammatical, semantic, codegen, I/O, retain, module, manifest, ABI, and
-online-change families stay in their owning specifications; this section indexes the codes
-added or fixed for the project system and M6. A code has one meaning; a code is never reused.
+online-change families stay in their owning specifications; this section indexes the codes added
+or fixed for the project system, M6, and M6.5. A code has one meaning; a code is never reused.
 The owning specification is normative if a summary here disagrees.
 
 | Code | Condition | Owner |
@@ -415,13 +418,50 @@ The owning specification is normative if a summary here disagrees.
 | `STC-E-RUN-003` | invalid `stc run` option or runtime scheduling configuration (for example a task without a guard); codegen configuration errors stay `STC-E-RUN-001/002` | Runtime and Execution §1.3 |
 | `STC-E-RUN-IO-001` | the file I/O backend cannot write its output image at shutdown | I/O and Devices §7 |
 | `STC-W-IO-004` | the file I/O backend input image is missing or unreadable; the run starts with defaults | I/O and Devices §7 |
-| `STC-W-PROJECT-001` | setting parsed but not honored until a later milestone (for example `debug = false`) | CLI and Manifest §2.2 |
+| `STC-W-PROJECT-001` | setting parsed but not honored until a later milestone (for example a configuration key reserved ahead of its milestone) | CLI and Manifest §2.2 |
 | `STC-W-PROJECT-002` | rename history has no baseline; the new key receives a fresh `GotId` | CLI and Manifest §3.1 |
 | `STC-W-ONLINE-007` | compatibility-report warning not covered by an existing online code | CLI and Manifest §1.6 |
 
 `STC-W-ONLINE-002` remains the retained-initializer warning used by `stc-got`; it is not reused
 for compatibility reports. Existing `STC-E-RUN-RETAIN-*`, `STC-E-ONLINE-STATE-*`, and
 `STC-W-ONLINE-STATE-*` codes are unchanged.
+
+### 10.1 Debug diagnostics (M6.5)
+
+The `DEBUG` family is reserved for the local debug protocol, session, typed access, checkpoint,
+and build rules of [Debug and Monitoring](Architecture/Debug-and-Monitoring.md) §13–§18. The
+codes are stable; the phase-0 design fixes them before implementation. Initial errors and
+warnings are `not-implemented` in the traceability allowlist until phases 3–8 add tests.
+
+| Code | Condition | Owner |
+| --- | --- | --- |
+| `STC-E-DEBUG-001` | debug service unavailable or disabled: no capable module/server, or policy disabled it | Debug and Monitoring §13.3, §18.1 |
+| `STC-E-DEBUG-002` | unsupported protocol version or wrong protocol/endpoint (including a control endpoint) | Debug and Monitoring §13.2, §18.1 |
+| `STC-E-DEBUG-003` | malformed/invalid request: unknown key/op/field/scope/kind, bad parameter, invalid request ID, raw-address field | Debug and Monitoring §13.2–§13.4 |
+| `STC-E-DEBUG-004` | oversized or unterminated frame; connection closes | Debug and Monitoring §13.2, §13.6 |
+| `STC-E-DEBUG-005` | authentication failed: missing/malformed/wrong token; connection closes and failures are limited | Debug and Monitoring §13.3 |
+| `STC-E-DEBUG-006` | authorization denied: scope not granted or write/force/protected read denied by policy | Debug and Monitoring §13.3 |
+| `STC-E-DEBUG-007` | invalid session state: no session, session already active, or operation before start | Debug and Monitoring §14.1, §14.2 |
+| `STC-E-DEBUG-008` | unknown target/path/`GotId`/frame/local/checkpoint/breakpoint/watch/stop ID | Debug and Monitoring §15.1, §15.8 |
+| `STC-E-DEBUG-009` | invalid target or value: type/shape/writability/range/enum/code point/capacity | Debug and Monitoring §15.5, §15.8 |
+| `STC-E-DEBUG-010` | stale generation/layout: expected generation/build/type/layout differs, removed target, or change during read | Debug and Monitoring §15.1–§15.3 |
+| `STC-E-DEBUG-011` | limit exceeded: queue, breakpoints, watches, aggregate leaves, response size, or backpressure | Debug and Monitoring §13.5 |
+| `STC-E-DEBUG-012` | request or watch rate limit exceeded | Debug and Monitoring §13.5 |
+| `STC-E-DEBUG-013` | request processing timeout; retry/reconciliation rules apply | Debug and Monitoring §13.5, §13.6 |
+| `STC-E-DEBUG-014` | breakpoint/step/pause unavailable: no hooks or no frame/checkpoint information | Debug and Monitoring §16.6, §16.8 |
+| `STC-E-DEBUG-015` | invalid step/continue, stale stop frame, or unsatisfiable step | Debug and Monitoring §14.4, §16.8 |
+| `STC-E-DEBUG-016` | invalid debug metadata: table/span/function/build-ID/flags/size or hook agreement | Debug and Monitoring §16.2, §16.7 |
+| `STC-E-DEBUG-017` | source/locals/stack debug information unavailable (stripped/optimized out) | Debug and Monitoring §15.2, §16.6 |
+| `STC-E-DEBUG-018` | stop or idle session bound exceeded; session ends, state clears, cycle resumes | Debug and Monitoring §14.3 |
+| `STC-E-DEBUG-019` | session ended by an online swap; reconnect against the new generation | Debug and Monitoring §14.5 |
+| `STC-E-DEBUG-020` | transport/endpoint failure: bind/listen/path/permission/symlink/unsupported transport | Debug and Monitoring §13.1 |
+| `STC-E-DEBUG-021` | audit unavailable: log cannot be created, secured, or appended; fail closed | Debug and Monitoring §13.3 |
+| `STC-E-DEBUG-022` | internal debug service error; session ends if state is untrusted | Debug and Monitoring §13.6, §18.1 |
+| `STC-W-DEBUG-001` | breakpoint unbound; reported, not moved | Debug and Monitoring §16.7 |
+| `STC-W-DEBUG-002` | frame/local optimized out or unavailable; not reconstructed | Debug and Monitoring §15.2, §16.8 |
+| `STC-W-DEBUG-003` | watch batch coalesced/dropped under rate/backpressure | Debug and Monitoring §15.7 |
+| `STC-W-DEBUG-004` | debug information or hooks unavailable; monitoring-only session | Debug and Monitoring §16.6 |
+| `STC-W-DEBUG-005` | forced retained value may be saved by normal shutdown; force table is not persisted | Debug and Monitoring §4, §14.7 |
 
 ## 11. Claim format
 
@@ -431,7 +471,9 @@ Any compliance statement produced by the project shall state:
 - the exact supported feature list (this document),
 - the project language extensions (`STC-UTF8`, `STC-PRAGMA`, `STC-TEST`, `STC-POINTER`),
 - the runtime capabilities (online change, GOT/manifest, debug/monitoring) separately from the
-  IEC language claim,
+  IEC language claim, including the debug protocol version (`stc-debug/1`), build mode
+  (`debug`/`release`), debug-information format (`dwarf`/`codeview`/`none`), and checkpoint-hook
+  capability,
 - the implementation-defined choices in §8,
 - that Ed. 4 conformance is not claimed,
 - that the project is not a safety PLC and assumes no safety responsibility.
