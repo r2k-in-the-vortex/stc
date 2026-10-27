@@ -107,7 +107,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -120,6 +120,7 @@ spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
 status = "planned"
+note = "In progress: see Specification/Verification/Plan-Phase0.md §19 for the current state and the open semantic questions."
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -132,6 +133,7 @@ spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
 status = "planned"
+note = "In progress: see Specification/Verification/Plan-Phase0.md §19 for the current state and the open semantic questions."
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -144,6 +146,7 @@ spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
 status = "planned"
+note = "In progress: see Specification/Verification/Plan-Phase0.md §19 for the current state and the open semantic questions."
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -155,7 +158,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -167,7 +170,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "depends on the Stc.Exact models; audited with #print axioms"
 
 [[records]]
@@ -179,7 +182,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Verification.Semantics.Interpreter"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -191,7 +194,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Verification.Semantics.Interpreter"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]

@@ -8,7 +8,12 @@ and semantics document skeleton are in place. P0.1 is complete (review approved 
 the token model, lossless CST contract, surface AST, `Derives` relation, coverage table, and
 `ast_span_wellformed` are in place. P0.2 is complete (2026-10-27): the typed HIR, declarative
 typing judgment, `checkCore`, conversion relation, HIR well-formedness, and the soundness and
-rejection-characterization theorems are in place. No dynamic semantics is defined yet.
+rejection-characterization theorems are in place. P0.3 is in progress (2026-10-27): the value and
+trap model, the small-step machine, the configuration typing, determinism, trap soundness, exact
+arithmetic agreement, and the sound/completeness results for the fuel interpreter are in place;
+`progress`, `preservation`, `type_soundness`, and initial-state typing remain. Work is paused for
+alignment with M6.5 and will be rechecked afterwards. The open semantic questions and the drift
+register are recorded in §19.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -878,3 +883,120 @@ P0.2 exit status: complete. `core_check_sound` is proved; `core_rejection_charac
 proved in place of completeness, with the `FOR` over-rejection recorded; HIR well-formedness is
 defined and preserved by the checker; and the conversion relation is characterized against the
 analyzer's core conversions. The exact-model behaviour link is carried into P0.3.
+
+## 19. P0.3 execution record — in progress
+
+Date: 2026-10-27. Status: **in progress, not complete.** The definitions and part of the soundness
+work are in place. The remaining proof work is paused so the core subset and the open semantic
+questions can be aligned with M6.5 and rechecked afterwards. This record is a status snapshot; it is
+not a completion claim.
+
+### 19.1 Deliverables
+
+| Deliverable | Location | State |
+| --- | --- | --- |
+| Values, traps, and exact operation wrappers | [Values.lean](../../lean/Stc/Sem/Values.lean) | Defined; operation well-formedness proved |
+| Small-step machine, configurations, `Step`/`Steps`/`Terminal`, cycle boundary | [Machine.lean](../../lean/Stc/Sem/Machine.lean) | Defined; `initState` models the initialization boundary |
+| Configuration typing (`StackTyped`, `ConfigTyped`) and projections | [Eval.lean](../../lean/Stc/Sem/Eval.lean) | Defined; runtime variable-lookup lemma proved |
+| `eval_deterministic` | `Stc.Sem.Eval` | Proved |
+| `trap_soundness` | `Stc.Sem.Eval` | Proved |
+| `checked_arith_traps_exactly` | `Stc.Sem.Eval` | Proved in the guarded form described in Q2 |
+| Fuel interpreter `runFuel`/`stcSem` | [Interpreter.lean](../../lean/Verification/Semantics/Interpreter.lean) | Defined; `interpreter_sound` and `interpreter_complete` proved |
+| `progress` | — | Not proved |
+| `preservation` | — | Not proved |
+| `type_soundness` | — | Not proved; depends on preservation |
+| Initial-state typing (`ConfigTyped u (initState u n)` from `HasType u`) | — | Not proved; needs context agreement for global initializers |
+| Source-semantics sections of [Semantics.md](Semantics.md) | — | Partially updated; completion waits for the proofs |
+
+### 19.2 Exit criteria assessment
+
+The P0.3 exit criteria are **not met**. `progress`, `preservation`, `type_soundness`, and
+initial-state typing are missing, and the semantics document still describes the dynamic semantics as
+future work in places. There is no `sorry` or `admit`; `lake build` and the local CI checks pass. The
+working tree is not committed as a completed sub-phase.
+
+### 19.3 Open questions
+
+These questions are deliberately open. They are recorded here so the alignment pass after M6.5 can
+resolve them with the updated compiler and specification in view.
+
+- **Q1 — Completion path.** Finish the current machine and `ConfigTyped` proofs, redesign the
+  configuration invariant to make preservation smaller, or descope `progress`, `preservation`, and
+  `type_soundness` with a written justification. The current definitions assume the first path.
+- **Q2 — Exact-model link.** `evalCast` and `evalStd` pass their results through the exact checked
+  wrapper, and `checked_arith_traps_exactly` is stated as the exact model followed by that guard.
+  The alternative is to prove that `Stc.Exact.IntType.convert` never succeeds out of range (and that
+  standard-function results fit), remove the guards, and state plain equality with `Stc.Exact`. The
+  guarded form is weaker than the conversion-half promise in §3.4 of the semantics document.
+- **Q3 — Character and `UCHAR` validity.** [UTF8-Strings.md](../UTF8-Strings.md) requires
+  `WCHAR_TO_UCHAR` to trap on lone surrogates and `UCHAR_TO_WCHAR` to trap above the BMP, and defines
+  `UCHAR` as a Unicode scalar. The current value model is layout-only: `Literal.WellFormed` checks
+  only that the payload fits 32 bits, and character conversions are integer layout conversions. The
+  choice is to model scalar validity and the conversion traps now, or to record the layout-only model
+  as a known gap for P0.6 dump validation and later string phases.
+- **Q4 — `FOR` runtime zero step.** [stmt.rs](../../crates/stc-codegen/src/stmt.rs) evaluates the
+  start, stop, and step expressions once; for signed control variables it uses the ascending bound
+  test only when `step > 0`, otherwise the descending test; unsigned loops always ascend. The current
+  machine uses the ascending test for `step ≥ 0`, so a non-constant step that evaluates to zero
+  diverges from emitted code. Constant zero steps are rejected by typing.
+- **Q5 — Initialization and cycle boundary.** Confirm the current model: all global initializers,
+  then program-field initializers, then the first cycle body, each in declaration order from zero
+  defaults; initializers may call functions and read other roots, with later roots reading zero;
+  `RETURN` in a program body ends the cycle; `cyclesLeft` runs the requested number of cycles with
+  program-field state persistent. [unit.rs](../../crates/stc-codegen/src/unit.rs) emits global
+  initializers before instance initializers in cold mode, which matches this order.
+- **Q6 — Negative signed exponent.** The runtime power helper traps `RANGE` for a negative signed
+  exponent, while constant evaluation rejects the expression at compile time. Confirm `RANGE` as the
+  dynamic trap code rather than `OVERFLOW` or a compile-time-only rejection.
+- **Q7 — Checkpoint policy.** Whether to commit the current compiling work as a work-in-progress
+  checkpoint or leave it uncommitted until P0.3 completes.
+
+Design decisions already taken and to document at completion (not open questions): the machine
+stores no typing annotations, and `StackTyped` types the AST carried by each continuation; `setVar`
+is total and an out-of-range write is a no-op unreachable from typed programs; conversions and
+standard functions pass results through the exact checked wrapper; a malformed standard-function
+call returns the default `BOOL` value and is unreachable from typed calls.
+
+### 19.4 Drift register
+
+Checked against the tree on 2026-10-27. These are recorded, not reconciled; the alignment pass after
+M6.5 rechecks them.
+
+| Area | Evidence | Current semantics | Resolution |
+| --- | --- | --- | --- |
+| `FOR` step evaluation and zero step | `lower_for` in `crates/stc-codegen/src/stmt.rs` | Start/stop/step once; zero takes the ascending test | Q4 |
+| Character conversions | `Specification/UTF8-Strings.md` §3.1 and the conversion table | Layout-only conversion; runs of surrogates preserved | Q3 |
+| Power trap code | `ensure_pow_helper` in `crates/stc-codegen/src/expr.rs`; `consteval.rs` | `RANGE` for a negative signed exponent | Q6 |
+| Initialization order | `emit_global_initializers`, `emit_instance_initializers` in `crates/stc-codegen/src/unit.rs` | Globals then program fields, declaration order, once | Q5 |
+
+### 19.5 Resumption plan
+
+After M6.5 lands, re-align the core subset, the HIR dump, and this plan with M6.5 (including ABI 2.3
+and any HIR changes; later-phase version drift is reconciled by the phase that consumes it, not
+treated as a merge blocker). Then recheck the drift register against the updated compiler and
+specification, resolve Q1–Q6, and finish the remaining work:
+
+1. `progress` and the supporting no-stuck lemmas (runtime lookup, loop-marker existence, frame
+   completion, call performance), using `ConfigTyped.lookupVar?_some`, the `StackTyped`
+   projections, and the `FramesShape` lemmas already present.
+2. `preservation` and the store-update lemmas for `FrameMatches`/`GlobalsTyped`, including the
+   callee-frame construction, loop markers, and the cycle reset.
+3. Initial-state typing from `HasType`, including context agreement between `Ctx.ofGlobals` and
+   `Ctx.ofProgram` for global initializers.
+4. `type_soundness`, then the registry and semantics-document updates, and the P0.3 review.
+
+The definitions in `Stc.Sem.Values`, `Stc.Sem.Machine`, and `Stc.Sem.Eval` are the starting point;
+the machine and typing design are not expected to change unless Q1 selects a redesign.
+
+### 19.6 Local evidence
+
+```text
+cd lean && lake build
+python tools/ci/check_verification_registry.py
+python tools/ci/check_docs.py
+python tools/ci/check_semantics_placeholder.py
+grep -rnwE 'sorry|admit' lean/Stc/Sem lean/Verification    # no matches
+```
+
+The registry marks the five proved P0.3 theorems as `proved`; `progress`, `preservation`, and
+`type_soundness` remain `planned` with a note pointing at this section.

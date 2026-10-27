@@ -8,9 +8,14 @@ Status: Skeleton approved 2026-10-27. P0.1 is complete (review approved 2026-10-
 model, lossless CST contract, surface AST, and `Derives` relation are defined, and
 `ast_span_wellformed` is proved. P0.2 is complete (2026-10-27): the typed HIR, the declarative
 typing judgment, the core checker `checkCore`, the conversion relation, HIR well-formedness, and
-the soundness and rejection-characterization theorems are defined and proved. P0.3–P0.5
-definitions and proofs are added in their sub-phases and reviewed in P0.7. The dynamic semantics
-is not yet defined, so this document does not yet make the full Phase 0 soundness claim.
+the soundness and rejection-characterization theorems are defined and proved. P0.3 is in progress
+(2026-10-27): the value and trap model, the small-step machine, the configuration typing, the
+determinism, trap-soundness, and guarded exact-arithmetic results, and the fuel interpreter's
+soundness and completeness are in place; `progress`, `preservation`, `type_soundness`, and
+initial-state typing remain. P0.4–P0.5 definitions and proofs are added in their sub-phases and
+reviewed in P0.7. The open P0.3 semantic questions and the drift register are recorded in
+[Plan-Phase0.md](Plan-Phase0.md) §19. This document does not yet make the full Phase 0 soundness
+claim.
 Charter: [Semantics Charter](Semantics-Charter.md)
 Plan: [Phase 0 Implementation Plan](Plan-Phase0.md) · [Verification Program Plan](Plan.md)
 
@@ -170,22 +175,29 @@ defined in P0.4 and is the precondition for the target soundness results.
 
 ### 4.1 Configurations and the source control stack
 
-P0.3 defines a configuration as the expression or statement being evaluated, a local store, a
-global root map, a call stack, and a structured control stack. Terminal states are values,
-halts, and traps. `EXIT` and `CONTINUE` target the innermost enclosing loop through the control
-stack; `RETURN` pops a call frame.
+P0.3 defines a configuration in `Stc.Sem.Machine`: persistent global roots, a stack of call
+frames, the running frame's focus (`expr`, `value`, `stmts`, `resume`, `returned`, `trapped`,
+or `halted`), and per-frame continuation stacks. A frame carries its parameters, locals,
+result variable, continuation stack, and loop context. `EXIT` and `CONTINUE` target the
+innermost loop marker in the continuation stack; `CONTINUE` in a `FOR` performs the checked
+increment and bound test. `RETURN` completes the current frame and delivers its result to the
+caller. The configuration-typing judgment `ConfigTyped` is defined in `Stc.Sem.Eval`; the
+progress and preservation proofs are not yet complete.
 
 ### 4.2 Source small-step relation `Step`
 
-P0.3 defines `Step` over configurations. The relation is the declarative reference for source
-soundness. It does not require termination; functions may be recursive.
+P0.3 defines `Step` as the graph of the total step function `Stc.Sem.step`, with a
+prefix-oriented reflexive-transitive closure `Steps`, and `Terminal` as `step u c = .halt`.
+The relation is the reference for source soundness and does not require termination; functions
+may be recursive. `eval_deterministic` is proved. `progress` and `preservation` are pending.
 
 ### 4.3 Recursive reference model `stcSem`
 
-P0.3 defines the fuel-based executable model `stcSem` over the same configuration type. The
-interpreter threads explicit state and encodes control flow as an explicit result
-(`continue`/`break`/`return`/`trap`), not as a host exception. `interpreter_sound` and
-`interpreter_complete` relate it to the reflexive-transitive closure of `Step`.
+P0.3 defines the fuel-based executable model `runFuel` and its entry `stcSem` in
+`Verification.Semantics.Interpreter`, over the same configuration type. The interpreter threads
+explicit state and encodes control flow in the continuation stack and the focus, not as a host
+exception. `interpreter_sound` (every reported result is reachable by `Steps` and terminal) and
+`interpreter_complete` (every terminating run is reproduced with enough fuel) are proved.
 
 ### 4.4 Target small-step relation `IRStep`
 
@@ -202,10 +214,13 @@ refinement target; the step relation remains the reference for progress and memo
 
 ### 4.6 Cycle and initialization boundary
 
-The source semantics covers one program and one sequential cycle. The target semantics covers
-the ABI 2 entry points and the cycle body; attach, prepare, activate, commit, rollback, and
-unload beyond the initialization boundary are Phase 8. The initialization boundary and its
-trusted assumptions are documented with the target semantics.
+The source semantics covers one program and one sequential cycle. `initState u cycles` models
+the initialization boundary: global roots and program fields start at their zero defaults, the
+first statement list runs global initializers, then program-field initializers, then the first
+cycle body in declaration order, and `completeFrame` ends a cycle, decrements `cyclesLeft`, and
+starts the next cycle from the persisted program frame. `RETURN` in a program body ends the
+cycle. The target semantics covers the ABI 2 entry points and the cycle body; attach, prepare,
+activate, commit, rollback, and unload beyond the initialization boundary are Phase 8.
 
 ## 5. Values, memory, GOT, traps, and undefined behavior
 
@@ -238,17 +253,23 @@ state on the fragment. This is a property of the modeled fragment, not a general
 ## 6. Exact arithmetic connection
 
 The source and target integer operations are defined against the existing `Stc.Exact` models.
-`checked_arith_traps_exactly` states that source checked arithmetic traps exactly on overflow or
-division by zero. `ir_checked_arith_refines_exact` states that the IR instruction sequence plus
-its trap path produces the same result or trap as the exact model. This bridge keeps the
-semantics and the proved exact functions on one definition of the scalar kernel.
+`checked_arith_traps_exactly` states that source checked arithmetic agrees with the `Stc.Exact`
+models, including checked conversions and the exact standard functions. `evalCast` and
+`evalStd` re-check their results with the exact checked wrapper; that guard is redundant for
+representable inputs but is not separately proved to be vacuous (open question Q2 in
+[Plan-Phase0.md](Plan-Phase0.md) §19). `ir_checked_arith_refines_exact` states that the IR
+instruction sequence plus its trap path produces the same result or trap as the exact model.
 
 ## 7. Theorem inventory and proof status
 
 The authoritative status of every entry is [`lean/verification-status.toml`](../../lean/verification-status.toml);
 `tools/ci/check_verification_registry.py` validates it and audits proved theorems. This section
-mirrors the registry at P0.2: the P0.1 and P0.2 entries are proved except `core_check_complete`,
-which is descoped with the reason recorded in the registry. The registry is regenerated into this section at P0.7.
+mirrors the registry at P0.3 in progress: the P0.1 and P0.2 entries are proved except
+`core_check_complete`, which is descoped with the reason recorded in the registry; the P0.3
+entries for determinism, trap soundness, guarded exact arithmetic, and the interpreter are
+proved, while `progress`, `preservation`, and `type_soundness` remain in progress. Open P0.3
+questions are recorded in [Plan-Phase0.md](Plan-Phase0.md) §19. The registry is regenerated
+into this section at P0.7.
 
 ### 7.1 Source soundness
 
@@ -260,12 +281,12 @@ which is descoped with the reason recorded in the registry. The registry is rege
 | `Stc.Sem.core_rejection_characterized` | `Stc.Sem.Typing` | P0.2 | proved |
 | `Stc.Sem.hir_wellformed` | `Stc.Sem.Typing` | P0.2 | proved |
 | `Stc.Sem.conversion_legal_iff` | `Stc.Sem.Typing` | P0.2 | proved |
-| `Stc.Sem.eval_deterministic` | `Stc.Sem.Eval` | P0.3 | planned |
-| `Stc.Sem.progress` | `Stc.Sem.Eval` | P0.3 | planned |
-| `Stc.Sem.preservation` | `Stc.Sem.Eval` | P0.3 | planned |
-| `Stc.Sem.type_soundness` | `Stc.Sem.Eval` | P0.3 | planned |
-| `Stc.Sem.trap_soundness` | `Stc.Sem.Eval` | P0.3 | planned |
-| `Stc.Sem.checked_arith_traps_exactly` | `Stc.Sem.Eval` | P0.3 | planned |
+| `Stc.Sem.eval_deterministic` | `Stc.Sem.Eval` | P0.3 | proved |
+| `Stc.Sem.progress` | `Stc.Sem.Eval` | P0.3 | in progress |
+| `Stc.Sem.preservation` | `Stc.Sem.Eval` | P0.3 | in progress |
+| `Stc.Sem.type_soundness` | `Stc.Sem.Eval` | P0.3 | in progress |
+| `Stc.Sem.trap_soundness` | `Stc.Sem.Eval` | P0.3 | proved |
+| `Stc.Sem.checked_arith_traps_exactly` | `Stc.Sem.Eval` | P0.3 | proved (guarded form, Q2) |
 
 ### 7.2 Target soundness
 
@@ -284,8 +305,8 @@ which is descoped with the reason recorded in the registry. The registry is rege
 
 | Theorem | Module | Sub-phase | Status |
 | --- | --- | --- | --- |
-| `Verification.Semantics.interpreter_sound` | `Verification.Semantics.Interpreter` | P0.3 | planned |
-| `Verification.Semantics.interpreter_complete` | `Verification.Semantics.Interpreter` | P0.3 | planned |
+| `Verification.Semantics.interpreter_sound` | `Verification.Semantics.Interpreter` | P0.3 | proved |
+| `Verification.Semantics.interpreter_complete` | `Verification.Semantics.Interpreter` | P0.3 | proved |
 | `Verification.Semantics.semantics_versioned` | `Verification.Semantics.Conformance` | P0.6 | planned |
 
 ### 7.4 Conformance evidence
@@ -336,6 +357,7 @@ construct is rejected.
 | 2026-10-27 | 1.0-draft | P0.0 | Created the skeleton; froze the core scope and exclusions in the charter |
 | 2026-10-27 | 1.0-draft | P0.1 | Defined tokens, trivia, spans, the lossless CST contract, the surface AST, and `Derives`; proved `ast_span_wellformed` and the root source-span lemmas; added the [Core Syntax Coverage](Core-Coverage.md) table |
 | 2026-10-27 | 1.0-draft | P0.2 | Defined the typed HIR, the declarative typing judgment, `checkCore`, `HirWellFormed`, and the conversion relation; proved `core_check_sound`, `core_rejection_characterized`, `hir_wellformed`, and `conversion_legal_iff`; descoped `core_check_complete` with the `FOR` over-rejection recorded |
+| 2026-10-27 | 1.0-draft | P0.3 (in progress) | Defined values and traps, the small-step machine, the configuration typing, and the fuel interpreter; proved `eval_deterministic`, `trap_soundness`, guarded `checked_arith_traps_exactly`, `interpreter_sound`, and `interpreter_complete`; `progress`, `preservation`, `type_soundness`, and initial-state typing remain; open questions Q1–Q7 and the drift register are recorded in Plan-Phase0.md §19 |
 
 ## 10. Rust/Lean interface
 
@@ -354,8 +376,8 @@ interpreted.
 
 `lake exe stc-sem` reads a dump and a case descriptor, runs the core evaluator, and writes a
 machine-readable result: values, traps, global snapshot, cycle count, and an optional trace. It
-is a verification tool, not a production interpreter; performance is not a goal. P0.6 builds it
-on the recursive model in §4.3.
+is a verification tool, not a production interpreter; performance is not a goal. P0.3 provides
+the fuel-based core (`runFuel`/`stcSem` in §4.3); P0.6 adds the dump and case front ends.
 
 ### 10.3 Conformance harness
 
