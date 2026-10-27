@@ -108,6 +108,7 @@ fn generate() -> (stc_codegen::Output, stc_sema::Analysis) {
         release: false,
         sources: &sources,
         source_paths: Some(&source_paths),
+        source_map: None,
         test_build: false,
         module: stc_codegen::ModuleBuildOptions {
             compiler_version: "stc test".into(),

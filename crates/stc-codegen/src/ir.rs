@@ -322,10 +322,25 @@ pub fn int_literal(value: i128, bits: u16) -> String {
 }
 
 #[derive(Clone, Debug)]
+struct Instruction {
+    text: String,
+    debug: Option<u32>,
+}
+
+impl Instruction {
+    fn render(&self) -> String {
+        match self.debug {
+            Some(debug) => format!("{}, !dbg !{debug}", self.text),
+            None => self.text.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct Block {
     label: String,
-    instructions: Vec<String>,
-    terminator: Option<String>,
+    instructions: Vec<Instruction>,
+    terminator: Option<Instruction>,
 }
 
 /// The stage of a tracked slot access.
@@ -391,6 +406,8 @@ pub struct Function {
     current: usize,
     temp_counter: u32,
     block_counter: u32,
+    debug_subprogram: Option<u32>,
+    debug_location: Option<u32>,
     pub(crate) facts: FunctionFacts,
 }
 
@@ -412,8 +429,41 @@ impl Function {
             current: 0,
             temp_counter: 0,
             block_counter: 0,
+            debug_subprogram: None,
+            debug_location: None,
             facts: FunctionFacts::default(),
         }
+    }
+
+    /// Attaches a `DISubprogram` to the definition.
+    pub(crate) fn set_debug_subprogram(&mut self, subprogram: Option<u32>) {
+        self.debug_subprogram = subprogram;
+    }
+
+    /// Returns the current `DISubprogram`, when debug metadata is enabled.
+    pub(crate) fn debug_subprogram(&self) -> Option<u32> {
+        self.debug_subprogram
+    }
+
+    /// Sets the location attached to subsequently emitted instructions.
+    pub(crate) fn set_debug_location(&mut self, location: Option<u32>) {
+        self.debug_location = location;
+    }
+
+    /// Returns the current instruction location.
+    pub(crate) fn debug_location(&self) -> Option<u32> {
+        self.debug_location
+    }
+
+    /// Emits an `llvm.dbg.declare` for a local storage pointer, bypassing the
+    /// call-fact hooks because the intrinsic is compiler metadata, not a user
+    /// call.
+    pub(crate) fn debug_declare(&mut self, variable: u32, storage: &Value) {
+        debug_assert_eq!(storage.ty, IrType::Ptr);
+        self.push(format!(
+            "call void @llvm.dbg.declare(metadata ptr {}, metadata !{variable}, metadata !DIExpression())",
+            storage.repr
+        ));
     }
 
     /// Returns the current block label.
@@ -498,7 +548,10 @@ impl Function {
             "block {} already terminated",
             block.label
         );
-        block.terminator = Some(instruction);
+        block.terminator = Some(Instruction {
+            text: instruction,
+            debug: self.debug_location,
+        });
     }
 
     fn push(&mut self, instruction: String) {
@@ -509,7 +562,10 @@ impl Function {
             "cannot emit into terminated block {}",
             block.label
         );
-        block.instructions.push(instruction);
+        block.instructions.push(Instruction {
+            text: instruction,
+            debug: self.debug_location,
+        });
     }
 
     /// Returns `true` when the current block has a terminator.
@@ -955,9 +1011,12 @@ impl Function {
             .map(|(ty, name)| format!("{} {name}", ty.render()))
             .collect::<Vec<_>>()
             .join(", ");
+        let debug = self
+            .debug_subprogram
+            .map_or_else(String::new, |debug| format!(" !dbg !{debug}"));
         let _ = writeln!(
             out,
-            "define {}{} @{}({params}) uwtable {{",
+            "define {}{} @{}({params}) uwtable{debug} {{",
             self.attrs.render(),
             self.ret.render(),
             self.name
@@ -965,10 +1024,10 @@ impl Function {
         for block in &self.blocks {
             let _ = writeln!(out, "{}:", block.label);
             for instruction in &block.instructions {
-                let _ = writeln!(out, "  {instruction}");
+                let _ = writeln!(out, "  {}", instruction.render());
             }
             if let Some(terminator) = &block.terminator {
-                let _ = writeln!(out, "  {terminator}");
+                let _ = writeln!(out, "  {}", terminator.render());
             }
         }
         out.push_str("}\n");
@@ -1033,6 +1092,9 @@ pub struct Module {
     pub declarations: BTreeMap<String, String>,
     /// Function definitions by symbol name.
     pub functions: BTreeMap<String, Function>,
+    /// Rendered debug metadata nodes, including the `!llvm.dbg.cu` and
+    /// `!llvm.module.flags` anchors. Present only for debug builds.
+    debug_metadata: Option<String>,
 }
 
 impl Module {
@@ -1120,6 +1182,11 @@ impl Module {
         self.functions.insert(function.name.clone(), function);
     }
 
+    /// Attaches rendered debug metadata, which is emitted after the functions.
+    pub(crate) fn set_debug_metadata(&mut self, metadata: String) {
+        self.debug_metadata = Some(metadata);
+    }
+
     /// Renders the whole module with a stable section order.
     #[must_use]
     pub fn render(&self) -> String {
@@ -1173,6 +1240,10 @@ impl Module {
                 out.push_str(&function.render());
                 out.push('\n');
             }
+        }
+        if let Some(metadata) = &self.debug_metadata {
+            out.push_str("; debug metadata\n");
+            out.push_str(metadata);
         }
         out
     }

@@ -39,6 +39,7 @@ impl Lowerer<'_> {
         loops: &mut Vec<LoopTarget>,
     ) -> Res<()> {
         let stmt = self.hir.stmt(id).clone();
+        self.set_debug_location(f, stmt.span);
         match stmt.kind {
             StmtKindHir::Assign { place, value } => {
                 let value = self.lower_expr(f, info, value)?;

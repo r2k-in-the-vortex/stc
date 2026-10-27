@@ -322,6 +322,7 @@ fn run_files(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
             &request,
             &analysis.hir,
             &paths,
+            &sources,
             &mut diagnostics,
             reporter,
             log,

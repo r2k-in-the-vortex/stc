@@ -160,6 +160,7 @@ impl Lowerer<'_> {
         values: &mut Vec<Value>,
     ) -> Res<()> {
         let expr = self.hir.expr(id).clone();
+        self.set_debug_location(f, expr.span);
         match expr.kind {
             ExprKindHir::Literal(literal) => {
                 let value = self.lower_literal(f, expr.ty, &literal.value, expr.span)?;
@@ -271,6 +272,7 @@ impl Lowerer<'_> {
         values: &mut Vec<Value>,
     ) -> Res<()> {
         let expr = self.hir.expr(id).clone();
+        self.set_debug_location(f, expr.span);
         let ExprKindHir::Binary { op, lhs: _, rhs } = expr.kind else {
             return Err(CodegenError::internal("short-circuit task on a non-binary"));
         };
@@ -307,6 +309,7 @@ impl Lowerer<'_> {
         values: &mut Vec<Value>,
     ) -> Res<()> {
         let expr = self.hir.expr(id).clone();
+        self.set_debug_location(f, expr.span);
         match expr.kind {
             ExprKindHir::Binary { op, lhs, rhs } => {
                 let rhs_value = values

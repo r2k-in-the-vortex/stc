@@ -388,6 +388,7 @@ pub(crate) fn run(
             &artifact,
             &source_files,
             Some(&source_paths),
+            &sources,
             fingerprint,
             &mut diagnostics,
             reporter,

@@ -13,6 +13,7 @@ pub mod abi;
 mod call;
 pub mod codes;
 mod config;
+mod debug;
 pub mod exact;
 mod expr;
 pub mod ir;
@@ -34,7 +35,7 @@ use std::fmt;
 
 use stc_got::{Digest32, Endianness, Manifest, Rename, Target};
 use stc_hir::HirCrate;
-use stc_span::{FileId, Span};
+use stc_span::{FileId, SourceMap, Span};
 
 pub use launcher::{generate_launcher, generate_test_launcher};
 pub use metadata::{
@@ -169,7 +170,10 @@ pub struct Options<'a> {
     pub artifact_name: &'a str,
     /// Optional target triple emitted into the module.
     pub target: Option<&'a str>,
-    /// Debug flag; M4 has no debug info yet.
+    /// Emit deterministic DWARF/CodeView debug metadata. When true,
+    /// [`Options::source_map`] supplies the file text and real source
+    /// locations. M6.5 phase 1 keeps the CLI default off; phase 2 owns the
+    /// debug/release split.
     pub debug: bool,
     /// Whether metadata is requested (`--emit=metadata`).
     pub emit_metadata: bool,
@@ -184,6 +188,9 @@ pub struct Options<'a> {
     /// Explicit package-relative source paths in `FileId` order. When absent,
     /// `sources` is reduced to package-relative paths.
     pub source_paths: Option<&'a [String]>,
+    /// Source text used to turn spans into real line/column locations. Debug
+    /// metadata is emitted only when this is present and `debug` is true.
+    pub source_map: Option<&'a SourceMap>,
     /// Module identity and baseline inputs.
     pub module: ModuleBuildOptions<'a>,
     /// Project-level metadata settings.
