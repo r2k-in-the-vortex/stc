@@ -75,26 +75,6 @@ status = "not-implemented"
 reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
 
 [[rule]]
-id = "STC-E-DEBUG-008"
-status = "not-implemented"
-reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
-
-[[rule]]
-id = "STC-E-DEBUG-009"
-status = "not-implemented"
-reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
-
-[[rule]]
-id = "STC-E-DEBUG-010"
-status = "not-implemented"
-reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
-
-[[rule]]
-id = "STC-E-DEBUG-011"
-status = "not-implemented"
-reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
-
-[[rule]]
 id = "STC-E-DEBUG-012"
 status = "not-implemented"
 reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
@@ -106,11 +86,6 @@ reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug
 
 [[rule]]
 id = "STC-E-DEBUG-014"
-status = "not-implemented"
-reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
-
-[[rule]]
-id = "STC-E-DEBUG-015"
 status = "not-implemented"
 reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
 
@@ -151,16 +126,6 @@ reason = "M6.5 debug diagnostics are fixed but not implemented yet (D-179, Debug
 
 [[rule]]
 id = "STC-W-DEBUG-001"
-status = "not-implemented"
-reason = "M6.5 debug warnings are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
-
-[[rule]]
-id = "STC-W-DEBUG-002"
-status = "not-implemented"
-reason = "M6.5 debug warnings are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
-
-[[rule]]
-id = "STC-W-DEBUG-003"
 status = "not-implemented"
 reason = "M6.5 debug warnings are fixed but not implemented yet (D-179, Debug and Monitoring §18); implementation phases 3–8."
 
