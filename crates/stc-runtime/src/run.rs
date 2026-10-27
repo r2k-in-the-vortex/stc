@@ -184,6 +184,9 @@ pub(crate) fn run_loop_with_control(
         let started = Instant::now();
         if let Err(error) = host.cycle_at(now) {
             let trap = crate::host_api::last_trap().is_some();
+            if trap {
+                let _ = host.debug_target_exited();
+            }
             return Err(RunLoopError::Cycle {
                 cycles,
                 error,

@@ -350,6 +350,9 @@ pub struct DebugRead {
     pub atomic: bool,
     /// Whether every leaf came from the reported generation and cycle.
     pub consistent: bool,
+    /// Whether the target reads protected data (`RETAIN`/`PERSISTENT` root or
+    /// an `AT` direct variable) requiring an audited `observe` read.
+    pub protected: bool,
     /// Canonical type key.
     pub type_key: String,
     /// Typed value.
@@ -693,6 +696,8 @@ pub enum DebugEndReason {
     ColdInstall,
     /// The host shut down.
     Shutdown,
+    /// The target trapped or exited while the host remained alive.
+    TargetExit,
     /// A session ended or disconnected.
     SessionEnd,
 }
@@ -703,7 +708,7 @@ impl DebugEndReason {
     pub const fn audit_event(self) -> &'static str {
         match self {
             Self::Swap | Self::Rollback | Self::ColdInstall => "swap-end",
-            Self::Shutdown | Self::SessionEnd => "session-end",
+            Self::Shutdown | Self::TargetExit | Self::SessionEnd => "session-end",
         }
     }
 }
@@ -824,6 +829,8 @@ pub enum DebugEvent {
     Read(ReadCompletion),
     /// One coalesced watch batch.
     Batch(DebugBatch),
+    /// One completed write/force queue result for an active session.
+    Queue(DebugQueueResult),
     /// An asynchronous command failure.
     Error(DebugError),
 }
@@ -844,6 +851,111 @@ struct BusState {
     next_request: u64,
     next_watch: u64,
     dropped_watch_batch: bool,
+    session: Option<String>,
+    snapshot: Option<DebugSnapshot>,
+    end_notice: Option<DebugEndNotice>,
+}
+
+/// A small snapshot of engine-owned debug state, published by the cycle
+/// thread for the service thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DebugSnapshot {
+    pub(crate) generation: u64,
+    pub(crate) build_id: GotId,
+    pub(crate) cycle: u64,
+    pub(crate) mode: String,
+    pub(crate) hooks: bool,
+    pub(crate) debug_info: String,
+    pub(crate) checkpoints: bool,
+    pub(crate) stepping: bool,
+    pub(crate) metadata_error: Option<String>,
+    pub(crate) queued_writes: usize,
+    pub(crate) active_forces: usize,
+    pub(crate) watches: usize,
+    pub(crate) breakpoints: usize,
+}
+
+/// A teardown signal generated on the cycle thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DebugEndNotice {
+    pub(crate) reason: &'static str,
+    pub(crate) code: Option<&'static str>,
+    pub(crate) generation: u64,
+    pub(crate) build_id: GotId,
+    pub(crate) cycle: u64,
+}
+
+/// A synchronous reply slot completed by the cycle thread.
+pub(crate) struct Reply<T> {
+    value: Mutex<Option<T>>,
+    ready: std::sync::Condvar,
+}
+
+impl<T> Reply<T> {
+    fn new() -> Self {
+        Self {
+            value: Mutex::new(None),
+            ready: std::sync::Condvar::new(),
+        }
+    }
+
+    fn set(&self, value: T) {
+        let mut slot = self
+            .value
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = Some(value);
+        self.ready.notify_all();
+    }
+
+    /// Waits for the cycle thread to complete the reply.
+    #[must_use]
+    pub(crate) fn wait(&self, deadline: std::time::Instant) -> Option<T> {
+        let mut slot = self
+            .value
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            if let Some(value) = slot.take() {
+                return Some(value);
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let (next, _) = self
+                .ready
+                .wait_timeout(slot, deadline.saturating_duration_since(now))
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slot = next;
+        }
+    }
+}
+
+/// One registered watch target list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WatchInfo {
+    pub(crate) watch_id: WatchId,
+    pub(crate) targets: Vec<DebugTarget>,
+    pub(crate) resolved: Vec<String>,
+    pub(crate) interval_ns: i64,
+    /// Whether any resolved target reads `RETAIN`/`PERSISTENT` or `AT` data.
+    pub(crate) protected: bool,
+}
+
+/// The manifest projection returned by `manifest.get`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ManifestReply {
+    pub(crate) format: &'static str,
+    pub(crate) digest: String,
+    pub(crate) data: ManifestData,
+}
+
+/// JSON or binary manifest data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ManifestData {
+    Json(String),
+    Binary(Vec<u8>),
 }
 
 enum DebugCommand {
@@ -851,12 +963,47 @@ enum DebugCommand {
         request: ReadRequestId,
         target: DebugReadRequest,
     },
+    ReadWait {
+        target: DebugReadRequest,
+        reply: Arc<Reply<std::result::Result<DebugRead, DebugFailure>>>,
+    },
+    WriteWait {
+        kind: DebugWriteKind,
+        target: DebugWriteRequest,
+        reply: Arc<Reply<std::result::Result<DebugQueueId, DebugFailure>>>,
+    },
+    ReleaseWait {
+        target: DebugTarget,
+        reply: Arc<Reply<std::result::Result<bool, DebugFailure>>>,
+    },
+    ReleaseAllWait {
+        reply: Arc<Reply<std::result::Result<usize, DebugFailure>>>,
+    },
     AddWatch {
         watch: WatchId,
         spec: WatchSpec,
     },
+    AddWatchWait {
+        targets: Vec<DebugTarget>,
+        interval_ns: i64,
+        reply: Arc<Reply<std::result::Result<WatchInfo, DebugFailure>>>,
+    },
     RemoveWatch {
         watch: WatchId,
+    },
+    RemoveWatchWait {
+        watch: WatchId,
+        reply: Arc<Reply<Option<WatchInfo>>>,
+    },
+    ListWatchesWait {
+        reply: Arc<Reply<Vec<WatchInfo>>>,
+    },
+    ClearSessionWait {
+        reply: Arc<Reply<std::result::Result<(), DebugFailure>>>,
+    },
+    ManifestWait {
+        binary: bool,
+        reply: Arc<Reply<std::result::Result<ManifestReply, DebugFailure>>>,
     },
 }
 
@@ -932,6 +1079,158 @@ impl DebugService {
         Ok(())
     }
 
+    pub(crate) fn submit_read_wait(
+        &self,
+        request: DebugReadRequest,
+    ) -> Result<Arc<Reply<std::result::Result<DebugRead, DebugFailure>>>> {
+        validate_request(&request)?;
+        let reply = Arc::new(Reply::new());
+        self.push_command(DebugCommand::ReadWait {
+            target: request,
+            reply: Arc::clone(&reply),
+        })?;
+        Ok(reply)
+    }
+
+    pub(crate) fn submit_write_wait(
+        &self,
+        kind: DebugWriteKind,
+        request: DebugWriteRequest,
+    ) -> Result<Arc<Reply<std::result::Result<DebugQueueId, DebugFailure>>>> {
+        let reply = Arc::new(Reply::new());
+        self.push_command(DebugCommand::WriteWait {
+            kind,
+            target: request,
+            reply: Arc::clone(&reply),
+        })?;
+        Ok(reply)
+    }
+
+    pub(crate) fn submit_release_wait(
+        &self,
+        target: DebugTarget,
+    ) -> Result<Arc<Reply<std::result::Result<bool, DebugFailure>>>> {
+        validate_request(&DebugReadRequest::new(target.clone()))?;
+        let reply = Arc::new(Reply::new());
+        self.push_command(DebugCommand::ReleaseWait {
+            target,
+            reply: Arc::clone(&reply),
+        })?;
+        Ok(reply)
+    }
+
+    pub(crate) fn submit_release_all_wait(
+        &self,
+    ) -> Result<Arc<Reply<std::result::Result<usize, DebugFailure>>>> {
+        let reply = Arc::new(Reply::new());
+        self.push_command(DebugCommand::ReleaseAllWait {
+            reply: Arc::clone(&reply),
+        })?;
+        Ok(reply)
+    }
+
+    pub(crate) fn submit_watch_add_wait(
+        &self,
+        targets: Vec<DebugTarget>,
+        interval_ns: i64,
+    ) -> Result<Arc<Reply<std::result::Result<WatchInfo, DebugFailure>>>> {
+        if targets.is_empty() || targets.len() > MAX_WATCHES {
+            return Err(debug_limit(format!(
+                "a watch needs between 1 and {MAX_WATCHES} targets"
+            )));
+        }
+        for target in &targets {
+            validate_watch_target(target)?;
+        }
+        if interval_ns < MIN_WATCH_INTERVAL_NS {
+            return Err(debug_limit(format!(
+                "the watch interval must be at least {} ms",
+                MIN_WATCH_INTERVAL_NS / 1_000_000
+            )));
+        }
+        let reply = Arc::new(Reply::new());
+        self.push_command(DebugCommand::AddWatchWait {
+            targets,
+            interval_ns,
+            reply: Arc::clone(&reply),
+        })?;
+        Ok(reply)
+    }
+
+    pub(crate) fn submit_watch_remove_wait(
+        &self,
+        watch: WatchId,
+    ) -> Result<Arc<Reply<Option<WatchInfo>>>> {
+        let reply = Arc::new(Reply::new());
+        self.push_command(DebugCommand::RemoveWatchWait {
+            watch,
+            reply: Arc::clone(&reply),
+        })?;
+        Ok(reply)
+    }
+
+    pub(crate) fn submit_watch_list_wait(&self) -> Result<Arc<Reply<Vec<WatchInfo>>>> {
+        let reply = Arc::new(Reply::new());
+        self.push_command(DebugCommand::ListWatchesWait {
+            reply: Arc::clone(&reply),
+        })?;
+        Ok(reply)
+    }
+
+    pub(crate) fn submit_clear_session_wait(
+        &self,
+    ) -> Result<Arc<Reply<std::result::Result<(), DebugFailure>>>> {
+        let reply = Arc::new(Reply::new());
+        self.push_command(DebugCommand::ClearSessionWait {
+            reply: Arc::clone(&reply),
+        })?;
+        Ok(reply)
+    }
+
+    pub(crate) fn submit_manifest_wait(
+        &self,
+        binary: bool,
+    ) -> Result<Arc<Reply<std::result::Result<ManifestReply, DebugFailure>>>> {
+        let reply = Arc::new(Reply::new());
+        self.push_command(DebugCommand::ManifestWait {
+            binary,
+            reply: Arc::clone(&reply),
+        })?;
+        Ok(reply)
+    }
+
+    fn push_command(&self, command: DebugCommand) -> Result<()> {
+        let mut state = lock_bus(&self.bus);
+        if state.commands.len() >= MAX_DEBUG_COMMANDS {
+            return Err(debug_limit("the debug command queue is full"));
+        }
+        state.commands.push_back(command);
+        Ok(())
+    }
+
+    /// Binds the authenticated session identity used by engine audit records.
+    pub(crate) fn set_session(&self, session: Option<String>) {
+        lock_bus(&self.bus).session = session;
+    }
+
+    /// Returns the current engine session identity.
+    #[must_use]
+    pub(crate) fn session(&self) -> Option<String> {
+        lock_bus(&self.bus).session.clone()
+    }
+
+    /// Returns the latest published engine snapshot.
+    #[must_use]
+    pub(crate) fn snapshot(&self) -> Option<DebugSnapshot> {
+        lock_bus(&self.bus).snapshot.clone()
+    }
+
+    /// Takes the latest teardown notice generated on the cycle thread.
+    #[must_use]
+    pub(crate) fn take_end_notice(&self) -> Option<DebugEndNotice> {
+        lock_bus(&self.bus).end_notice.take()
+    }
+
     /// Drains every queued event in order.
     #[must_use]
     pub fn drain_events(&self) -> Vec<DebugEvent> {
@@ -948,9 +1247,27 @@ impl DebugService {
 }
 
 struct ActiveWatch {
-    target: DebugTarget,
+    targets: Vec<DebugTarget>,
+    resolved: Vec<String>,
     interval_ns: i64,
     next_due_ns: i64,
+    protected: bool,
+}
+
+impl ActiveWatch {
+    fn points(&self) -> usize {
+        self.targets.len()
+    }
+
+    fn info(&self, watch_id: WatchId) -> WatchInfo {
+        WatchInfo {
+            watch_id,
+            targets: self.targets.clone(),
+            resolved: self.resolved.clone(),
+            interval_ns: self.interval_ns,
+            protected: self.protected,
+        }
+    }
 }
 
 /// One write or force validated and encoded at enqueue.
@@ -1017,12 +1334,19 @@ impl DebugEngine {
     }
 
     pub(crate) fn watch_count(&self) -> usize {
-        self.watches.len()
+        self.watches.values().map(ActiveWatch::points).sum()
+    }
+
+    pub(crate) fn watch_list(&self) -> Vec<WatchInfo> {
+        self.watches
+            .iter()
+            .map(|(id, watch)| watch.info(*id))
+            .collect()
     }
 
     pub(crate) fn add_watch(&mut self, spec: WatchSpec) -> Result<WatchId> {
         validate_watch_spec(&spec)?;
-        if self.watches.len() >= MAX_WATCHES {
+        if self.watch_count() >= MAX_WATCHES {
             return Err(debug_limit(format!(
                 "the watch limit of {MAX_WATCHES} is reached"
             )));
@@ -1035,16 +1359,69 @@ impl DebugEngine {
         self.watches.insert(
             watch,
             ActiveWatch {
-                target: spec.target,
+                targets: vec![spec.target.clone()],
+                resolved: vec![display_target(&spec.target)],
                 interval_ns: spec.interval_ns,
                 next_due_ns: i64::MIN,
+                protected: false,
             },
         );
         Ok(watch)
     }
 
-    pub(crate) fn remove_watch(&mut self, watch: WatchId) -> bool {
-        self.watches.remove(&watch).is_some()
+    fn add_watch_targets(
+        &mut self,
+        targets: Vec<DebugTarget>,
+        interval_ns: i64,
+        source: &DebugSource<'_>,
+    ) -> Result<WatchInfo> {
+        let points = self.watch_count();
+        if points.saturating_add(targets.len()) > MAX_WATCHES {
+            return Err(debug_limit(format!(
+                "the watch limit of {MAX_WATCHES} points is reached"
+            )));
+        }
+        if targets.is_empty() {
+            return Err(debug_limit("a watch needs at least one target"));
+        }
+        if interval_ns < MIN_WATCH_INTERVAL_NS {
+            return Err(debug_limit(format!(
+                "the watch interval must be at least {} ms",
+                MIN_WATCH_INTERVAL_NS / 1_000_000
+            )));
+        }
+        let watch = {
+            let mut state = lock_bus(&self.bus);
+            state.next_watch = state.next_watch.saturating_add(1).max(1);
+            WatchId(state.next_watch)
+        };
+        let resolved = targets
+            .iter()
+            .map(|target| {
+                resolve_target(source.manifest, target).map_or_else(
+                    |_| display_target(target),
+                    |resolved| resolved.canonical_key,
+                )
+            })
+            .collect();
+        let protected = targets.iter().any(|target| {
+            resolve_target(source.manifest, target)
+                .is_ok_and(|resolved| protected_resolved(source.manifest, &resolved))
+        });
+        let active = ActiveWatch {
+            targets,
+            resolved,
+            interval_ns,
+            next_due_ns: i64::MIN,
+            protected,
+        };
+        let info = active.info(watch);
+        self.watches.insert(watch, active);
+        Ok(info)
+    }
+
+    pub(crate) fn remove_watch(&mut self, watch: WatchId) -> Option<WatchInfo> {
+        self.watches.remove(&watch).map(|active| active.info(watch))
     }
 
     pub(crate) fn set_audit_sink(&mut self, sink: Option<Box<dyn AuditSink>>) {
@@ -1262,6 +1639,42 @@ impl DebugEngine {
         if let Err(failure) = self.append_audit(event) {
             audit_error = Some(failure);
         }
+        let notice = match reason {
+            DebugEndReason::Swap | DebugEndReason::Rollback | DebugEndReason::ColdInstall => {
+                Some(DebugEndNotice {
+                    reason: "swap",
+                    code: Some(codes::DEBUG_SWAP),
+                    generation: generation.unwrap_or(0),
+                    build_id: build.unwrap_or(GotId::ZERO),
+                    cycle: cycle.unwrap_or(0),
+                })
+            }
+            DebugEndReason::Shutdown => Some(DebugEndNotice {
+                reason: "shutdown",
+                code: None,
+                generation: generation.unwrap_or(0),
+                build_id: build.unwrap_or(GotId::ZERO),
+                cycle: cycle.unwrap_or(0),
+            }),
+            DebugEndReason::TargetExit => Some(DebugEndNotice {
+                reason: "target-exited",
+                code: None,
+                generation: generation.unwrap_or(0),
+                build_id: build.unwrap_or(GotId::ZERO),
+                cycle: cycle.unwrap_or(0),
+            }),
+            DebugEndReason::SessionEnd => None,
+        };
+        {
+            let mut state = lock_bus(&self.bus);
+            state.session = None;
+            // No command submitted before the end may be applied against a
+            // later generation or a later session.
+            state.commands.clear();
+            if notice.is_some() {
+                state.end_notice = notice;
+            }
+        }
         if let Some(error) = audit_error {
             return Err(error);
         }
@@ -1272,6 +1685,9 @@ impl DebugEngine {
         if self.results.len() >= MAX_DEBUG_QUEUE_RESULTS {
             self.results.pop_front();
         }
+        if lock_bus(&self.bus).session.is_some() {
+            self.push_event(DebugEvent::Queue(result.clone()));
+        }
         self.results.push_back(result);
     }
 
@@ -1279,6 +1695,19 @@ impl DebugEngine {
         let Some(sink) = self.audit.as_mut() else {
             return Ok(());
         };
+        {
+            let state = lock_bus(&self.bus);
+            if event.session.is_none() {
+                event.session.clone_from(&state.session);
+            }
+            if state.session.is_some() {
+                if event.scope.is_none() {
+                    event.scope = audit_scope(event.event).map(str::to_owned);
+                }
+                event.monotonic_ns = crate::transport::monotonic_ns();
+                event.local_date_ns = crate::transport::local_date_ns();
+            }
+        }
         self.audit_seq = self.audit_seq.saturating_add(1).max(1);
         event.seq = self.audit_seq;
         sink.record(&event).map_err(|error| {
@@ -1565,6 +1994,58 @@ impl DebugEngine {
                     self.push_event(DebugEvent::Read(ReadCompletion { request, result }));
                     emitted += 1;
                 }
+                DebugCommand::ReadWait { target, reply } => {
+                    let result = match source.as_ref() {
+                        Some(source) => read_request(source, &target).map_err(DebugFailure::from),
+                        None => Err(DebugFailure::new(
+                            codes::DEBUG_STALE,
+                            "no active generation is available for a typed read",
+                        )),
+                    };
+                    reply.set(result);
+                }
+                DebugCommand::WriteWait {
+                    kind,
+                    target,
+                    reply,
+                } => {
+                    let result = match source.as_ref() {
+                        Some(source) => match prepare_write(source, &target, kind) {
+                            Ok(prepared) => self.enqueue(prepared).map_err(DebugFailure::from),
+                            Err(error) => {
+                                let _ = self.audit_request_error(
+                                    kind,
+                                    &target.target,
+                                    Some(&target.value),
+                                    &error,
+                                    Some((source.generation, source.build_id, source.cycle)),
+                                );
+                                Err(DebugFailure::from(error))
+                            }
+                        },
+                        None => Err(DebugFailure::new(
+                            codes::DEBUG_STALE,
+                            "no active generation is available for a write",
+                        )),
+                    };
+                    reply.set(result);
+                }
+                DebugCommand::ReleaseWait { target, reply } => {
+                    let result = match source.as_ref() {
+                        Some(source) => resolve_root_id(source, &target)
+                            .and_then(|got_id| self.release_force(got_id))
+                            .map_err(DebugFailure::from),
+                        None => Err(DebugFailure::new(
+                            codes::DEBUG_STALE,
+                            "no active generation is available for a release",
+                        )),
+                    };
+                    reply.set(result);
+                }
+                DebugCommand::ReleaseAllWait { reply } => {
+                    let result = self.release_all_forces().map_err(DebugFailure::from);
+                    reply.set(result);
+                }
                 DebugCommand::AddWatch { watch, spec } => {
                     if source.is_none() {
                         self.push_event(DebugEvent::Error(DebugError {
@@ -1573,7 +2054,7 @@ impl DebugEngine {
                             request: None,
                             watch: Some(watch),
                         }));
-                    } else if self.watches.len() >= MAX_WATCHES {
+                    } else if self.watch_count() >= MAX_WATCHES {
                         self.push_event(DebugEvent::Error(DebugError {
                             code: codes::DEBUG_LIMIT,
                             message: format!("the watch limit of {MAX_WATCHES} is reached"),
@@ -1584,69 +2065,126 @@ impl DebugEngine {
                         self.watches.insert(
                             watch,
                             ActiveWatch {
-                                target: spec.target,
+                                targets: vec![spec.target.clone()],
+                                resolved: vec![display_target(&spec.target)],
                                 interval_ns: spec.interval_ns,
                                 next_due_ns: now_ns.saturating_add(spec.interval_ns),
+                                protected: false,
                             },
                         );
                     }
                     emitted += 1;
                 }
+                DebugCommand::AddWatchWait {
+                    targets,
+                    interval_ns,
+                    reply,
+                } => {
+                    let result = match source.as_ref() {
+                        Some(source) => self
+                            .add_watch_targets(targets, interval_ns, source)
+                            .map_err(DebugFailure::from),
+                        None => Err(DebugFailure::new(
+                            codes::DEBUG_STALE,
+                            "no active generation is available for a watch",
+                        )),
+                    };
+                    reply.set(result);
+                }
                 DebugCommand::RemoveWatch { watch } => {
                     self.watches.remove(&watch);
                 }
+                DebugCommand::RemoveWatchWait { watch, reply } => {
+                    reply.set(self.remove_watch(watch));
+                }
+                DebugCommand::ListWatchesWait { reply } => {
+                    reply.set(self.watch_list());
+                }
+                DebugCommand::ClearSessionWait { reply } => {
+                    let (generation, build, cycle) =
+                        source.as_ref().map_or((None, None, None), |source| {
+                            (
+                                Some(source.generation),
+                                Some(source.build_id),
+                                Some(source.cycle),
+                            )
+                        });
+                    let result = self
+                        .end_state(DebugEndReason::SessionEnd, generation, build, cycle)
+                        .map_err(DebugFailure::from);
+                    reply.set(result);
+                }
+                DebugCommand::ManifestWait { binary, reply } => {
+                    let result = match source.as_ref() {
+                        Some(source) => manifest_reply(source, binary).map_err(DebugFailure::from),
+                        None => Err(DebugFailure::new(
+                            codes::DEBUG_STALE,
+                            "no active manifest is available",
+                        )),
+                    };
+                    reply.set(result);
+                }
             }
+        }
+
+        if let Some(source) = source.as_ref() {
+            let snapshot = self.snapshot(source);
+            lock_bus(&self.bus).snapshot = Some(snapshot);
+        } else {
+            lock_bus(&self.bus).snapshot = None;
         }
 
         let Some(source) = source.as_ref() else {
             return emitted;
         };
-        let due: Vec<(WatchId, DebugTarget)> = self
+        let due: Vec<(WatchId, Vec<DebugTarget>)> = self
             .watches
             .iter()
             .filter(|(_, watch)| now_ns >= watch.next_due_ns)
-            .map(|(id, watch)| (*id, watch.target.clone()))
+            .map(|(id, watch)| (*id, watch.targets.clone()))
             .collect();
         if due.is_empty() {
             return emitted;
         }
-        let mut values = Vec::with_capacity(due.len());
-        for (watch_id, target) in due {
-            let request = DebugReadRequest::new(target.clone());
-            let result = read_request(source, &request);
-            let (atomic, consistent, result) = match result {
-                Ok(read) => (
-                    read.atomic,
-                    read.consistent,
-                    WatchResult::Available(TypedValue {
-                        type_key: read.type_key,
-                        value: read.value,
-                    }),
-                ),
-                Err(error) => {
-                    let failure = DebugFailure::from(error);
-                    let warning = unavailable_warning(&failure);
-                    (
-                        false,
-                        false,
-                        WatchResult::Unavailable {
-                            type_key: None,
-                            error: Some(failure),
-                            warning,
-                        },
-                    )
-                }
-            };
-            values.push(WatchValue {
-                watch_id,
-                target,
-                generation: source.generation,
-                build_id: source.build_id,
-                cycle: source.cycle,
-                atomic,
-                consistent,
-                result,
-            });
+        let mut values = Vec::new();
+        for (watch_id, targets) in due {
+            for target in targets {
+                let request = DebugReadRequest::new(target.clone());
+                let result = read_request(source, &request);
+                let (atomic, consistent, result) = match result {
+                    Ok(read) => (
+                        read.atomic,
+                        read.consistent,
+                        WatchResult::Available(TypedValue {
+                            type_key: read.type_key,
+                            value: read.value,
+                        }),
+                    ),
+                    Err(error) => {
+                        let failure = DebugFailure::from(error);
+                        let warning = unavailable_warning(&failure);
+                        (
+                            false,
+                            false,
+                            WatchResult::Unavailable {
+                                type_key: None,
+                                error: Some(failure),
+                                warning,
+                            },
+                        )
+                    }
+                };
+                values.push(WatchValue {
+                    watch_id,
+                    target,
+                    generation: source.generation,
+                    build_id: source.build_id,
+                    cycle: source.cycle,
+                    atomic,
+                    consistent,
+                    result,
+                });
+            }
             if let Some(watch) = self.watches.get_mut(&watch_id) {
                 // Missed periods coalesce into this one batch; the next due
                 // point starts from the boundary that observed it.
@@ -1664,9 +2202,91 @@ impl DebugEngine {
         emitted
     }
 
+    fn snapshot(&self, source: &DebugSource<'_>) -> DebugSnapshot {
+        DebugSnapshot {
+            generation: source.generation,
+            build_id: source.build_id,
+            cycle: source.cycle,
+            mode: source.mode.to_owned(),
+            hooks: source.debug_hooks && source.metadata_error.is_none(),
+            debug_info: source.debug_info.unwrap_or("none").to_owned(),
+            checkpoints: source.checkpoints && source.metadata_error.is_none(),
+            stepping: false,
+            metadata_error: source.metadata_error.map(str::to_owned),
+            queued_writes: self.queue.len(),
+            active_forces: self.forces.len(),
+            watches: self.watch_count(),
+            breakpoints: 0,
+        }
+    }
+
     fn push_event(&self, event: DebugEvent) {
         let mut state = lock_bus(&self.bus);
         push_event(&mut state, event);
+    }
+}
+
+fn display_target(target: &DebugTarget) -> String {
+    audit_target_key(target)
+}
+
+fn validate_watch_target(target: &DebugTarget) -> Result<()> {
+    match normalize_target(target)? {
+        NormalizedTarget::Local { .. } => Err(Error::new(
+            codes::DEBUG_STOP,
+            "locals are not watchable: a stopped frame is immutable",
+        )),
+        NormalizedTarget::Path(_) | NormalizedTarget::GotId(_) => Ok(()),
+    }
+}
+
+fn audit_scope(event: &str) -> Option<&'static str> {
+    match event {
+        "write" => Some("write"),
+        "force" | "force-release" => Some("force"),
+        "read-protected" | "manifest-export" => Some("observe"),
+        _ => None,
+    }
+}
+
+const MAX_MANIFEST_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+fn manifest_reply(source: &DebugSource<'_>, binary: bool) -> Result<ManifestReply> {
+    let digest = source.manifest_digest.to_hex();
+    if binary {
+        let bytes = source.manifest_binary.ok_or_else(|| {
+            Error::new(
+                codes::DEBUG_STALE,
+                "no active binary manifest projection is available",
+            )
+        })?;
+        if bytes.len() > MAX_MANIFEST_RESPONSE_BYTES {
+            return Err(debug_limit(format!(
+                "the binary manifest exceeds the {MAX_MANIFEST_RESPONSE_BYTES}-byte response limit"
+            )));
+        }
+        Ok(ManifestReply {
+            format: "binary",
+            digest,
+            data: ManifestData::Binary(bytes.to_vec()),
+        })
+    } else {
+        let json = source.manifest_json.ok_or_else(|| {
+            Error::new(
+                codes::DEBUG_STALE,
+                "no active canonical JSON manifest is available",
+            )
+        })?;
+        if json.len() > MAX_MANIFEST_RESPONSE_BYTES {
+            return Err(debug_limit(format!(
+                "the manifest exceeds the {MAX_MANIFEST_RESPONSE_BYTES}-byte response limit"
+            )));
+        }
+        Ok(ManifestReply {
+            format: "json",
+            digest,
+            data: ManifestData::Json(json.to_owned()),
+        })
     }
 }
 
@@ -1692,6 +2312,7 @@ const fn debug_end_detail(reason: DebugEndReason) -> &'static str {
         DebugEndReason::Rollback => "rollback",
         DebugEndReason::ColdInstall => "cold_install",
         DebugEndReason::Shutdown => "shutdown",
+        DebugEndReason::TargetExit => "target_exit",
         DebugEndReason::SessionEnd => "session_end",
     }
 }
@@ -1704,6 +2325,14 @@ pub(crate) struct DebugSource<'a> {
     pub(crate) generation: u64,
     pub(crate) build_id: GotId,
     pub(crate) cycle: u64,
+    pub(crate) mode: &'a str,
+    pub(crate) debug_hooks: bool,
+    pub(crate) debug_info: Option<&'a str>,
+    pub(crate) checkpoints: bool,
+    pub(crate) metadata_error: Option<&'a str>,
+    pub(crate) manifest_digest: stc_got::digest::Digest32,
+    pub(crate) manifest_json: Option<&'a str>,
+    pub(crate) manifest_binary: Option<&'a [u8]>,
 }
 
 fn lock_bus(bus: &DebugBus) -> MutexGuard<'_, BusState> {
@@ -1808,6 +2437,9 @@ fn event_bytes(event: &DebugEvent) -> usize {
                     .iter()
                     .map(|warning| warning.message.len() + 16)
                     .sum::<usize>()
+        }
+        DebugEvent::Queue(result) => {
+            160 + result.operation.name().len() + result.message.as_ref().map_or(0, String::len)
         }
         DebugEvent::Error(error) => 96 + error.message.len(),
     }
@@ -3222,6 +3854,7 @@ pub(crate) fn read_request(
             let resolved = resolve_target(source.manifest, &request.target)?;
             check_generation_build(source, request)?;
             check_type_layout(&resolved, request)?;
+            let protected = protected_resolved(source.manifest, &resolved);
             let typed = match &resolved.shape {
                 ResolvedShape::Root(root) => {
                     let bytes = root_bytes(source, root)?;
@@ -3253,6 +3886,7 @@ pub(crate) fn read_request(
                 cycle: source.cycle,
                 atomic: resolved.atomic,
                 consistent: true,
+                protected,
                 type_key: typed.type_key,
                 value: typed.value,
             })
@@ -3356,9 +3990,29 @@ fn read_local(
         cycle: frame.cycle,
         atomic: local.atomic,
         consistent: true,
+        protected: false,
         type_key: local.value.type_key.clone(),
         value: local.value.value.clone(),
     })
+}
+
+fn protected_resolved(manifest: &Manifest, resolved: &Resolved) -> bool {
+    match &resolved.shape {
+        ResolvedShape::Root(root) => protected_root(root),
+        ResolvedShape::Aggregate(_) => {
+            let prefix = format!("{}.", resolved.canonical_key);
+            manifest.roots.iter().any(|root| {
+                protected_root(root)
+                    && (root.key == resolved.canonical_key
+                        || root.key.starts_with(&prefix)
+                        || root.key.eq_ignore_ascii_case(&resolved.canonical_key))
+            })
+        }
+    }
+}
+
+fn protected_root(root: &RootRecord) -> bool {
+    root.retention == Retention::Retain || root.root_kind == RootKind::Direct
 }
 
 fn root_bytes(source: &DebugSource<'_>, root: &RootRecord) -> Result<Vec<u8>> {
@@ -5058,7 +5712,7 @@ pub(crate) fn resolve_root_id(source: &DebugSource<'_>, target: &DebugTarget) ->
     }
 }
 
-fn typed_value_json(value: &TypedValue) -> Json {
+pub(crate) fn typed_value_json(value: &TypedValue) -> Json {
     Json::object([
         ("type".into(), Json::string(value.type_key.clone())),
         ("value".into(), debug_value_json(&value.value)),
@@ -5067,7 +5721,7 @@ fn typed_value_json(value: &TypedValue) -> Json {
 
 /// Encodes a REAL per Debug and Monitoring §15.5: finite values are JSON
 /// numbers and non-finite values use the canonical `NaN`/`INF`/`-INF` strings.
-fn real_value_json(value: f64) -> Json {
+pub(crate) fn real_value_json(value: f64) -> Json {
     if value.is_nan() {
         return Json::string("NaN");
     }
@@ -5085,7 +5739,7 @@ fn real_value_json(value: f64) -> Json {
     Json::NumberLiteral(token)
 }
 
-fn debug_value_json(value: &DebugValue) -> Json {
+pub(crate) fn debug_value_json(value: &DebugValue) -> Json {
     match value {
         DebugValue::Bool(value) => Json::Bool(*value),
         DebugValue::Decimal(text) => Json::string(text.clone()),
@@ -5192,6 +5846,239 @@ fn debug_value_json(value: &DebugValue) -> Json {
             ("code".into(), Json::string(warning.code)),
         ]),
     }
+}
+
+/// Decodes the §15.5 typed value envelope supplied by a write or force.
+pub(crate) fn typed_value_from_json(value: &Json) -> Result<TypedValue> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| Error::new(codes::DEBUG_REQUEST, "a typed value must be a JSON object"))?;
+    require_keys(object, &["type", "value"], "typed value")?;
+    require_allowed_keys(object, &["type", "value"], "typed value")?;
+    let type_key = object
+        .get("type")
+        .and_then(Json::as_str)
+        .ok_or_else(|| Error::new(codes::DEBUG_REQUEST, "the typed value has no string type"))?;
+    let value = object
+        .get("value")
+        .ok_or_else(|| Error::new(codes::DEBUG_REQUEST, "the typed value has no value"))?;
+    Ok(TypedValue::new(type_key, debug_value_from_json(value, 0)?))
+}
+
+fn debug_value_from_json(value: &Json, depth: usize) -> Result<DebugValue> {
+    if depth > MAX_DECODE_DEPTH {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            "the typed value nesting depth exceeds the limit",
+        ));
+    }
+    match value {
+        Json::Bool(value) => Ok(DebugValue::Bool(*value)),
+        Json::String(text) if text == "NaN" => Ok(DebugValue::Real(f64::NAN)),
+        Json::String(text) if text == "INF" => Ok(DebugValue::Real(f64::INFINITY)),
+        Json::String(text) if text == "-INF" => Ok(DebugValue::Real(f64::NEG_INFINITY)),
+        Json::String(text) => Ok(DebugValue::Decimal(text.clone())),
+        Json::Number(value) => Ok(DebugValue::Real(*value as f64)),
+        Json::NumberLiteral(text) => {
+            let parsed = text.parse::<f64>().map_err(|_| {
+                Error::new(
+                    codes::DEBUG_TYPE,
+                    format!("`{text}` is not a finite REAL value"),
+                )
+            })?;
+            if !parsed.is_finite() {
+                return Err(Error::new(
+                    codes::DEBUG_TYPE,
+                    format!("`{text}` is not a finite REAL value"),
+                ));
+            }
+            Ok(DebugValue::Real(parsed))
+        }
+        Json::Object(object) => {
+            if object.contains_key("units") {
+                require_keys(object, &["length", "units"], "string value")?;
+                let length = object
+                    .get("length")
+                    .and_then(Json::as_number)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or_else(|| {
+                        Error::new(codes::DEBUG_REQUEST, "the string length is not a u32")
+                    })?;
+                let units = object
+                    .get("units")
+                    .and_then(Json::as_array)
+                    .ok_or_else(|| {
+                        Error::new(codes::DEBUG_REQUEST, "the string units are missing")
+                    })?
+                    .iter()
+                    .map(|unit| {
+                        unit.as_number()
+                            .and_then(|value| u32::try_from(value).ok())
+                            .ok_or_else(|| {
+                                Error::new(
+                                    codes::DEBUG_REQUEST,
+                                    "a string unit is not a valid code point",
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<u32>>>()?;
+                let text = units
+                    .iter()
+                    .map(|unit| char::from_u32(*unit))
+                    .collect::<Option<String>>();
+                return Ok(DebugValue::String(StringValue {
+                    capacity: length,
+                    length: u32::try_from(units.len()).unwrap_or(u32::MAX),
+                    units,
+                    text,
+                }));
+            }
+            if object.contains_key("elements") {
+                require_keys(object, &["elements"], "array value")?;
+                let elements =
+                    object
+                        .get("elements")
+                        .and_then(Json::as_array)
+                        .ok_or_else(|| {
+                            Error::new(codes::DEBUG_REQUEST, "the array elements are missing")
+                        })?;
+                return Ok(DebugValue::Array(
+                    elements
+                        .iter()
+                        .map(typed_value_from_json)
+                        .collect::<Result<Vec<_>>>()?,
+                ));
+            }
+            if object.contains_key("aggregate") {
+                require_keys(
+                    object,
+                    &["aggregate", "atomic", "fields"],
+                    "aggregate value",
+                )?;
+                let fields = parse_named_values(object.get("fields"))?;
+                return Ok(DebugValue::Aggregate(fields));
+            }
+            if object.contains_key("bytes") && object.len() == 1 {
+                return Err(Error::new(
+                    codes::DEBUG_TYPE,
+                    "OVERLAP values are read-only and cannot be written",
+                ));
+            }
+            if object.get("available").and_then(Json::as_bool) == Some(false) {
+                return Err(Error::new(
+                    codes::DEBUG_TYPE,
+                    "an unavailable value cannot be written",
+                ));
+            }
+            if object.contains_key("present") && object.contains_key("identity") {
+                let allowed = ["identity", "present", "target_type"];
+                require_allowed_keys(object, &allowed, "reference value")?;
+                let identity = optional_string(object.get("identity"), "identity")?;
+                let present = object
+                    .get("present")
+                    .and_then(Json::as_bool)
+                    .ok_or_else(|| {
+                        Error::new(codes::DEBUG_REQUEST, "the reference presence is missing")
+                    })?;
+                let target_type = optional_string(object.get("target_type"), "target_type")?;
+                return Ok(DebugValue::Reference {
+                    identity,
+                    present,
+                    target_type,
+                });
+            }
+            if object.contains_key("class")
+                || object.contains_key("interface")
+                || object.contains_key("fields")
+            {
+                let allowed = ["class", "fields", "identity", "interface"];
+                require_allowed_keys(object, &allowed, "object value")?;
+                return Ok(DebugValue::Object {
+                    identity: optional_string(object.get("identity"), "identity")?,
+                    present: true,
+                    class: optional_string(object.get("class"), "class")?,
+                    interface: optional_string(object.get("interface"), "interface")?,
+                    fields: parse_named_values(object.get("fields"))?,
+                });
+            }
+            Err(Error::new(
+                codes::DEBUG_REQUEST,
+                "the value object does not match a typed value shape",
+            ))
+        }
+        _ => Err(Error::new(
+            codes::DEBUG_REQUEST,
+            "the typed value is not a scalar, string, array, aggregate, object, or reference",
+        )),
+    }
+}
+
+fn parse_named_values(value: Option<&Json>) -> Result<Vec<NamedValue>> {
+    let array = value
+        .and_then(Json::as_array)
+        .ok_or_else(|| Error::new(codes::DEBUG_REQUEST, "the named value list is missing"))?;
+    array
+        .iter()
+        .map(|entry| {
+            let object = entry.as_object().ok_or_else(|| {
+                Error::new(codes::DEBUG_REQUEST, "a named value entry is not an object")
+            })?;
+            require_keys(object, &["name", "value"], "named value")?;
+            let name = object
+                .get("name")
+                .and_then(Json::as_str)
+                .ok_or_else(|| Error::new(codes::DEBUG_REQUEST, "a named value has no name"))?;
+            Ok(NamedValue {
+                name: name.to_owned(),
+                value: typed_value_from_json(object.get("value").ok_or_else(|| {
+                    Error::new(codes::DEBUG_REQUEST, "a named value has no value")
+                })?)?,
+            })
+        })
+        .collect()
+}
+
+fn optional_string(value: Option<&Json>, name: &str) -> Result<Option<String>> {
+    match value {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(Error::new(
+            codes::DEBUG_REQUEST,
+            format!("the `{name}` field must be a string or null"),
+        )),
+    }
+}
+
+pub(crate) fn require_keys(
+    object: &BTreeMap<String, Json>,
+    required: &[&str],
+    what: &str,
+) -> Result<()> {
+    for key in required {
+        if !object.contains_key(*key) {
+            return Err(Error::new(
+                codes::DEBUG_REQUEST,
+                format!("the {what} is missing `{key}`"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn require_allowed_keys(
+    object: &BTreeMap<String, Json>,
+    allowed: &[&str],
+    what: &str,
+) -> Result<()> {
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(Error::new(
+                codes::DEBUG_REQUEST,
+                format!("the {what} has an unknown key `{key}`"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn decode_type_value(
@@ -5972,7 +6859,7 @@ fn identity_hash(domain: &str, parts: &[&[u8]]) -> String {
     out
 }
 
-fn base64_encode(bytes: &[u8]) -> String {
+pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {

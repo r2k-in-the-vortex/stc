@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use stc_got::GotId;
+use stc_got::Manifest;
 use stc_got::error::{Error, Result, codes};
 use stc_got::json::{self, Json};
 
@@ -137,6 +138,209 @@ impl Default for ModuleInfo {
             text: String::new(),
         }
     }
+}
+
+/// The validated debug capability of one generation's metadata sidecar.
+///
+/// The object is validated per build (Debug and Monitoring §16.2/§16.7). A
+/// validation failure never prevents module loading; it disables debug
+/// features and is reported at `session.start` as `STC-E-DEBUG-016`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DebugMetadataReport {
+    /// `debug` or `release`, from the descriptor debug-build bit.
+    pub(crate) mode: &'static str,
+    /// Descriptor hook capability with a valid checkpoint table.
+    pub(crate) hooks: bool,
+    /// `dwarf`, `codeview`, or `none`.
+    pub(crate) info: &'static str,
+    /// Whether a valid non-empty checkpoint table is available.
+    pub(crate) checkpoints: bool,
+    /// Validation failure detail, without host paths or token material.
+    pub(crate) error: Option<String>,
+}
+
+const MAX_CHECKPOINTS: usize = 1_000_000;
+const MAX_DEBUG_OBJECT_BYTES: usize = 64 * 1024 * 1024;
+const CHECKPOINT_FLAG_MASK: u32 = 0x0F;
+const DEBUG_OBJECT_KEYS: [&str; 5] = ["build_id", "checkpoints", "format", "hooks", "info"];
+const CHECKPOINT_KEYS: [&str; 6] = ["column", "flags", "function", "id", "line", "span"];
+
+/// Validates the additive `debug` object against its descriptor and manifest.
+pub(crate) fn debug_metadata(
+    info: Option<&ModuleInfo>,
+    manifest: &Manifest,
+    debug_build: bool,
+    hooks_bit: bool,
+) -> DebugMetadataReport {
+    let mut report = DebugMetadataReport {
+        mode: if debug_build { "debug" } else { "release" },
+        hooks: false,
+        info: "none",
+        checkpoints: false,
+        error: None,
+    };
+    let Some(info) = info else {
+        if hooks_bit {
+            report.error = Some(
+                "the descriptor requires debug hooks but the metadata sidecar is missing".into(),
+            );
+        }
+        return report;
+    };
+    let Some(debug) = info.debug.as_ref() else {
+        if hooks_bit {
+            report.error = Some(
+                "the descriptor requires debug hooks but the sidecar has no debug object".into(),
+            );
+        }
+        return report;
+    };
+    if info.text.len() > MAX_DEBUG_OBJECT_BYTES {
+        report.error = Some(format!(
+            "the debug object exceeds the {MAX_DEBUG_OBJECT_BYTES}-byte limit"
+        ));
+        return report;
+    }
+    let Some(object) = debug.as_object() else {
+        report.error = Some("the debug object is not a JSON object".into());
+        return report;
+    };
+    if object.len() != DEBUG_OBJECT_KEYS.len()
+        || DEBUG_OBJECT_KEYS
+            .iter()
+            .any(|key| !object.contains_key(*key))
+    {
+        return invalid(report, "the debug object does not have the format-1 keys");
+    }
+    if object.get("format").and_then(Json::as_number) != Some(1) {
+        return invalid(report, "the debug object format is not 1");
+    }
+    let build_id = object
+        .get("build_id")
+        .and_then(Json::as_str)
+        .and_then(|text| GotId::parse(text).ok());
+    if build_id != Some(manifest.header.build_id) {
+        return invalid(
+            report,
+            "the debug object build_id does not match the manifest build identity",
+        );
+    }
+    let Some(hooks) = object.get("hooks").and_then(Json::as_bool) else {
+        return invalid(report, "the debug object hooks field is not a boolean");
+    };
+    let Some(info_name) = object.get("info").and_then(Json::as_str) else {
+        return invalid(report, "the debug object info field is not a string");
+    };
+    let info_name = match info_name {
+        "dwarf" => "dwarf",
+        "codeview" => "codeview",
+        "none" => "none",
+        _ => return invalid(report, "the debug object info field is invalid"),
+    };
+    if hooks != hooks_bit {
+        return invalid(
+            report,
+            "the debug object hooks field disagrees with the descriptor",
+        );
+    }
+    if hooks == (info_name == "none") {
+        return invalid(report, "the debug object hooks and info fields disagree");
+    }
+    let Some(checkpoints) = object.get("checkpoints").and_then(Json::as_array) else {
+        return invalid(report, "the debug object checkpoints field is not an array");
+    };
+    if checkpoints.len() > MAX_CHECKPOINTS {
+        return invalid(
+            report,
+            "the debug object checkpoint count exceeds the limit",
+        );
+    }
+    if hooks && checkpoints.is_empty() {
+        return invalid(
+            report,
+            "the debug object declares hooks but has no checkpoints",
+        );
+    }
+    if !hooks && !checkpoints.is_empty() {
+        return invalid(
+            report,
+            "the debug object has checkpoints but does not declare hooks",
+        );
+    }
+    let span_count = span_entry_count(info);
+    let functions = manifest
+        .functions
+        .iter()
+        .map(|function| function.got_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    for (index, checkpoint) in checkpoints.iter().enumerate() {
+        let Some(checkpoint) = checkpoint.as_object() else {
+            return invalid(report, "a checkpoint entry is not a JSON object");
+        };
+        if checkpoint.len() != CHECKPOINT_KEYS.len()
+            || CHECKPOINT_KEYS
+                .iter()
+                .any(|key| !checkpoint.contains_key(*key))
+        {
+            return invalid(report, "a checkpoint entry does not have the format-1 keys");
+        }
+        let number = |name: &str| checkpoint.get(name).and_then(Json::as_number);
+        let id = number("id").and_then(|value| u32::try_from(value).ok());
+        if id != Some(u32::try_from(index + 1).unwrap_or(u32::MAX)) {
+            return invalid(report, "checkpoint IDs are not dense and sorted from 1");
+        }
+        let flags = number("flags").and_then(|value| u32::try_from(value).ok());
+        if flags.is_none_or(|flags| flags & !CHECKPOINT_FLAG_MASK != 0) {
+            return invalid(report, "a checkpoint flag has reserved bits set");
+        }
+        if number("line")
+            .and_then(|value| u32::try_from(value).ok())
+            .is_none_or(|value| value == 0)
+            || number("column")
+                .and_then(|value| u32::try_from(value).ok())
+                .is_none_or(|value| value == 0)
+        {
+            return invalid(
+                report,
+                "a checkpoint line or column is not a 1-based coordinate",
+            );
+        }
+        let span = number("span").and_then(|value| usize::try_from(value).ok());
+        if span.is_none_or(|span| span >= span_count) {
+            return invalid(report, "a checkpoint names an invalid span index");
+        }
+        let function = checkpoint
+            .get("function")
+            .and_then(Json::as_str)
+            .and_then(|text| GotId::parse(text).ok());
+        let Some(function) = function else {
+            return invalid(report, "a checkpoint function is not a GotId");
+        };
+        if !functions.contains(&function) {
+            return invalid(report, "a checkpoint names an unknown manifest function");
+        }
+    }
+    report.hooks = hooks;
+    report.info = info_name;
+    report.checkpoints = !checkpoints.is_empty();
+    report
+}
+
+fn span_entry_count(info: &ModuleInfo) -> usize {
+    let Ok(root) = json::parse(&info.text) else {
+        return 0;
+    };
+    root.as_object()
+        .and_then(|object| object.get("spans"))
+        .and_then(Json::as_object)
+        .and_then(|spans| spans.get("entries"))
+        .and_then(Json::as_array)
+        .map_or(0, <[Json]>::len)
+}
+
+fn invalid(mut report: DebugMetadataReport, message: &str) -> DebugMetadataReport {
+    report.error = Some(message.to_owned());
+    report
 }
 
 impl ModuleInfo {

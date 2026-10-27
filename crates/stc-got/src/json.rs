@@ -260,6 +260,32 @@ pub fn parse(text: &str) -> Result<Json> {
         text,
         position: 0,
         depth: 0,
+        finite_reals: false,
+    };
+    let value = parser.value()?;
+    parser.skip_whitespace();
+    if parser.position != text.len() {
+        return Err(parser.error("trailing characters after the JSON value"));
+    }
+    Ok(value)
+}
+
+/// Parses JSON text for the debug and control protocols.
+///
+/// This is the strict parser plus finite non-integer numbers, which are
+/// returned as [`Json::NumberLiteral`]. Duplicate object keys, leading
+/// zeroes, and non-finite numeric tokens are still rejected.
+///
+/// # Errors
+///
+/// Rejects malformed syntax, duplicate object keys, non-finite numbers, and
+/// nesting deeper than 64 levels.
+pub fn parse_protocol(text: &str) -> Result<Json> {
+    let mut parser = Parser {
+        text,
+        position: 0,
+        depth: 0,
+        finite_reals: true,
     };
     let value = parser.value()?;
     parser.skip_whitespace();
@@ -273,6 +299,7 @@ struct Parser<'a> {
     text: &'a str,
     position: usize,
     depth: usize,
+    finite_reals: bool,
 }
 
 impl Parser<'_> {
@@ -527,13 +554,59 @@ impl Parser<'_> {
                 self.bump();
             }
         }
+        let mut fractional = false;
+        if self.peek() == Some('.') {
+            fractional = true;
+            self.bump();
+            let mut digits = 0;
+            while self
+                .peek()
+                .is_some_and(|character| character.is_ascii_digit())
+            {
+                self.bump();
+                digits += 1;
+            }
+            if digits == 0 {
+                return Err(self.error("a fraction must contain a digit"));
+            }
+        }
         if self
             .peek()
-            .is_some_and(|character| matches!(character, '.' | 'e' | 'E'))
+            .is_some_and(|character| matches!(character, 'e' | 'E'))
         {
-            return Err(self.error("only integer numbers are permitted"));
+            fractional = true;
+            self.bump();
+            if self
+                .peek()
+                .is_some_and(|character| matches!(character, '+' | '-'))
+            {
+                self.bump();
+            }
+            let mut digits = 0;
+            while self
+                .peek()
+                .is_some_and(|character| character.is_ascii_digit())
+            {
+                self.bump();
+                digits += 1;
+            }
+            if digits == 0 {
+                return Err(self.error("an exponent must contain a digit"));
+            }
         }
         let text = &self.text[start..self.position];
+        if fractional {
+            if !self.finite_reals {
+                return Err(self.error("only integer numbers are permitted"));
+            }
+            let Ok(value) = text.parse::<f64>() else {
+                return Err(self.error("invalid number"));
+            };
+            if !value.is_finite() {
+                return Err(self.error("numbers must be finite"));
+            }
+            return Ok(Json::NumberLiteral(text.to_owned()));
+        }
         text.parse::<i128>()
             .map(Json::Number)
             .map_err(|_| self.error("integer does not fit in 128 bits"))
@@ -608,5 +681,23 @@ mod tests {
             parse("\"\\uD83D\\uDE00\"").unwrap(),
             Json::String("😀".into())
         );
+    }
+
+    #[test]
+    fn protocol_parser_accepts_finite_real_numbers() {
+        assert_eq!(
+            parse_protocol("{\"a\":1.5,\"b\":-2e3,\"c\":0.0}").unwrap(),
+            object(&[
+                ("a", Json::NumberLiteral("1.5".into())),
+                ("b", Json::NumberLiteral("-2e3".into())),
+                ("c", Json::NumberLiteral("0.0".into())),
+            ])
+        );
+        assert_eq!(parse_protocol("1").unwrap(), Json::Number(1));
+        assert!(parse_protocol("1e999").is_err());
+        assert!(parse_protocol("01.5").is_err());
+        assert!(parse_protocol("1.").is_err());
+        assert!(parse_protocol("1e").is_err());
+        assert!(parse("1.5").is_err());
     }
 }

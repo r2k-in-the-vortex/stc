@@ -181,6 +181,32 @@ pub fn artifacts_with(source: &str, name: &str, baseline: Manifest, cold: bool) 
     )
 }
 
+/// Build-shape flags used by debug capability tests.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BuildFlags {
+    /// Optimised, stripped build (`release` debug mode).
+    pub release: bool,
+    /// Test build (test-clock service, ABI minor 2).
+    pub test_build: bool,
+    /// Descriptor debug checkpoint hooks (ABI 2.3, service 13).
+    pub debug_hooks: bool,
+}
+
+/// Builds artifacts with explicit build-shape flags and no baseline.
+#[must_use]
+pub fn artifacts_with_flags(source: &str, name: &str, flags: BuildFlags) -> ModuleArtifacts {
+    build_flags(
+        source,
+        name,
+        None,
+        false,
+        Vec::new(),
+        false,
+        target(),
+        flags,
+    )
+}
+
 /// Builds artifacts with a baseline, renames, and the untracked-removal policy.
 #[must_use]
 pub fn artifacts_with_renames(
@@ -212,6 +238,29 @@ fn build(
     allow_untracked_removal: bool,
     target: Target,
 ) -> ModuleArtifacts {
+    build_flags(
+        source,
+        name,
+        baseline,
+        cold,
+        renames,
+        allow_untracked_removal,
+        target,
+        BuildFlags::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_flags(
+    source: &str,
+    name: &str,
+    baseline: Option<Manifest>,
+    cold: bool,
+    renames: Vec<Rename>,
+    allow_untracked_removal: bool,
+    target: Target,
+    flags: BuildFlags,
+) -> ModuleArtifacts {
     let hir = clean_hir(source);
     let sources = vec![format!("{name}.st")];
     let fingerprint = source_fingerprint(&[(format!("{name}.st"), source.as_bytes().to_vec())])
@@ -221,6 +270,9 @@ fn build(
     options.cold = cold;
     options.renames = renames;
     options.allow_untracked_removal = allow_untracked_removal;
+    options.release = flags.release;
+    options.test_build = flags.test_build;
+    options.debug_hooks = flags.debug_hooks;
     project(&hir, &sources, &options)
         .unwrap_or_else(|errors| panic!("module projection failed: {errors:#?}"))
 }

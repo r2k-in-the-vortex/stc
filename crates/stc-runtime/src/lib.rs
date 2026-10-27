@@ -62,6 +62,7 @@ pub mod catalog;
 pub mod compare;
 pub mod control;
 pub mod debug;
+pub mod debug_server;
 pub mod descriptors;
 pub mod got;
 pub mod host;
@@ -78,6 +79,7 @@ pub mod signal;
 pub mod state;
 pub mod store;
 mod test_host;
+pub mod transport;
 mod trap_boundary;
 
 #[cfg(test)]
@@ -98,6 +100,10 @@ pub use debug::{
     MIN_WATCH_INTERVAL_NS, NamedValue, ReadCompletion, ReadRequestId, StopFrame, StoppedLocal,
     StringValue, TypedValue, WatchId, WatchResult, WatchSpec, WatchValue,
 };
+pub use debug_server::{
+    DEBUG_PROTOCOL, DebugClient, DebugClientError, DebugEndpointFile, DebugServer,
+    DebugServerConfig, DebugServerInfo, MAX_MESSAGE_BYTES, MAX_REQUEST_BYTES,
+};
 pub use got::Got;
 pub use host::{
     Candidate, CycleOutcome, GenerationPin, Host, HostStatus, HostWarning, LoadMode, LoadOutcome,
@@ -117,6 +123,7 @@ pub use store::{
     Deployment, Download, LayoutState, ManifestStore, RuntimeLayout, RuntimeLayoutEntry,
     StoredManifest,
 };
+pub use transport::TransportKind;
 
 /// Runtime ABI version (Runtime-and-Execution §2.2).
 pub const STC_RUNTIME_ABI: i32 = 2;
@@ -1133,6 +1140,14 @@ pub struct StcHostOptions {
     pub stop: *const c_int,
     /// Control-channel nonce required by a non-empty endpoint.
     pub control_nonce: *const c_char,
+    /// Local debug endpoint file, or null. Appended in M6.5 (ABI 2.3).
+    pub debug_endpoint: *const c_char,
+    /// Grant the `write` scope to debug sessions.
+    pub debug_allow_write: i32,
+    /// Grant the `force` scope to debug sessions.
+    pub debug_allow_force: i32,
+    /// Idle session bound in nanoseconds; zero selects five minutes.
+    pub debug_session_timeout_ns: i64,
 }
 
 impl Default for StcHostOptions {
@@ -1153,6 +1168,10 @@ impl Default for StcHostOptions {
             control_endpoint: std::ptr::null(),
             stop: std::ptr::null(),
             control_nonce: std::ptr::null(),
+            debug_endpoint: std::ptr::null(),
+            debug_allow_write: 0,
+            debug_allow_force: 0,
+            debug_session_timeout_ns: 0,
         }
     }
 }
@@ -1194,7 +1213,13 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
     // SAFETY: the caller guarantees a readable options struct.
     let options = unsafe { &*options };
     let expected_size = u32::try_from(std::mem::size_of::<StcHostOptions>()).unwrap_or(u32::MAX);
-    if options.struct_size != 0 && options.struct_size != expected_size {
+    let legacy_size =
+        u32::try_from(std::mem::offset_of!(StcHostOptions, debug_endpoint)).unwrap_or(u32::MAX);
+    let current_layout = options.struct_size == 0 || options.struct_size == expected_size;
+    if options.struct_size != 0
+        && options.struct_size != expected_size
+        && options.struct_size != legacy_size
+    {
         eprintln!(
             "stc: `stc_host_run` options size {} does not match {expected_size}",
             options.struct_size
@@ -1226,6 +1251,22 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
         eprintln!("stc: a control endpoint requires a nonce");
         return 2;
     }
+    let debug_endpoint = if current_layout {
+        unsafe { c_text(options.debug_endpoint) }.filter(|text| !text.is_empty())
+    } else {
+        None
+    };
+    let debug_allow_write = current_layout && options.debug_allow_write != 0;
+    let debug_allow_force = current_layout && options.debug_allow_force != 0;
+    if current_layout && options.debug_session_timeout_ns < 0 {
+        eprintln!("stc: a negative debug session timeout is invalid");
+        return 2;
+    }
+    let debug_session_timeout_ns = if current_layout {
+        options.debug_session_timeout_ns
+    } else {
+        0
+    };
     let run = RunOptions {
         cycles: options.cycles,
         cycle_time_ns: (options.cycle_time_ns >= 0).then_some(options.cycle_time_ns),
@@ -1289,6 +1330,28 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
     };
     if !loads_module {
         configure_embedding_services(host, &run);
+    }
+    if let Some(endpoint) = debug_endpoint {
+        // A previous run of the same embedding host may still own a server;
+        // its endpoint file describes the previous generation and must not be
+        // reused. Stopping it ends any session without touching the module.
+        if host.debug_server_info().is_some() {
+            host.stop_debug_server();
+        }
+        let mut config = DebugServerConfig::new(
+            PathBuf::from(endpoint),
+            crate::transport::TransportKind::Pipe,
+        );
+        config.allow_write = debug_allow_write;
+        config.allow_force = debug_allow_force;
+        if debug_session_timeout_ns > 0 {
+            config.session_timeout =
+                std::time::Duration::from_nanos(debug_session_timeout_ns.unsigned_abs());
+        }
+        if let Err(error) = host.start_debug_server(&config) {
+            eprintln!("stc: {}: {}", error.code, error.message);
+            return 2;
+        }
     }
     let control = match (&control_endpoint, &control_nonce) {
         (Some(endpoint), Some(nonce)) => match crate::control::ControlServer::bind(endpoint, nonce)
