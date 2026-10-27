@@ -104,7 +104,7 @@ fn lib_path(directory: &Path, name: &str) -> PathBuf {
     if cfg!(windows) {
         directory.join(format!("{name}.lib"))
     } else {
-        directory.join(format!("lib{name}.a"))
+        directory.join(format!("{name}.a"))
     }
 }
 
