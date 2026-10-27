@@ -33,6 +33,7 @@ use stc_got::{
 };
 
 use crate::catalog::{HostPlatform, ValidatedPair};
+use crate::debug::{DebugEngine, DebugRead, DebugReadRequest, DebugService, WatchId, WatchSpec};
 use crate::descriptors::{DescriptorActivation, DescriptorRegistry, PreparedDescriptors};
 use crate::got::Got;
 use crate::host_api;
@@ -530,6 +531,7 @@ pub struct Host {
     scheduler: TaskScheduler,
     retain: RetainConfig,
     io: crate::io::IoRuntime,
+    debug: DebugEngine,
 }
 
 impl Host {
@@ -559,6 +561,7 @@ impl Host {
             scheduler: TaskScheduler::default(),
             retain: RetainConfig::default(),
             io: crate::io::IoRuntime::default(),
+            debug: DebugEngine::new(),
         }
     }
 
@@ -788,6 +791,122 @@ impl Host {
     #[must_use]
     pub fn roots(&self) -> &RootRegistry {
         &self.roots
+    }
+
+    /// Reads one typed debug target from the active generation.
+    ///
+    /// The read pins the active generation for the duration of the copy,
+    /// resolves the target against the active manifest, and never takes a lock
+    /// held by the module cycle. It is the synchronous embedding/test path;
+    /// service threads submit requests through [`DebugService`] and drain the
+    /// results after [`Host::debug_pump_at`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the stable debug codes from Debug and Monitoring §15.8:
+    /// unknown target, wrong type/shape, stale generation/build/type/layout,
+    /// stop-frame failure, or a read limit.
+    pub fn debug_read(&self, request: DebugReadRequest) -> Result<DebugRead> {
+        crate::debug::validate_request(&request)?;
+        let pin = self.pin_active().ok_or_else(|| {
+            Error::new(
+                codes::DEBUG_STALE,
+                "no active generation is available for a typed read",
+            )
+        })?;
+        let active = self.active.as_ref().ok_or_else(|| {
+            Error::new(
+                codes::DEBUG_STALE,
+                "no active generation is available for a typed read",
+            )
+        })?;
+        let source = crate::debug::DebugSource {
+            target: &self.platform.target,
+            manifest: &active.manifest,
+            roots: &self.roots,
+            info: active.info.as_ref(),
+            generation: active.id,
+            build_id: active.manifest.header.build_id,
+            cycle: active.cycles,
+        };
+        let read = crate::debug::read_request(&source, &request);
+        drop(pin);
+        read
+    }
+
+    /// Returns a `Send + Sync` service facade.
+    ///
+    /// Phase 5 drives this facade from its protocol service thread. The facade
+    /// only queues commands and drains events; the cycle thread applies them at
+    /// [`Host::debug_pump_at`]. This is the documented handoff in M6.5.
+    #[must_use]
+    pub fn debug_service(&self) -> DebugService {
+        self.debug.service()
+    }
+
+    /// Adds a watch applied immediately on this host's thread.
+    ///
+    /// Tests and embedding hosts use this path. Service clients use
+    /// [`DebugService::add_watch`] so the command is applied by the cycle
+    /// thread.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a local target, an interval below 50 ms, or the 256-watch
+    /// limit.
+    pub fn debug_add_watch(&mut self, spec: WatchSpec) -> Result<WatchId> {
+        self.debug.add_watch(spec)
+    }
+
+    /// Removes a watch.
+    pub fn debug_remove_watch(&mut self, watch: WatchId) -> bool {
+        self.debug.remove_watch(watch)
+    }
+
+    /// Returns the number of active watches.
+    #[must_use]
+    pub fn debug_watch_count(&self) -> usize {
+        self.debug.watch_count()
+    }
+
+    /// Applies queued debug commands and emits due watch batches at a cycle
+    /// boundary.
+    ///
+    /// The host holds a generation pin across the copy. A generation change
+    /// ends every watch before commands for the new generation are applied.
+    /// Returns the number of events emitted.
+    pub fn debug_pump_at(&mut self, now_ns: i64) -> usize {
+        let pin = self.pin_active();
+        let target = &self.platform.target;
+        let active = self.active.as_ref();
+        let manifest = active.map(|generation| &generation.manifest);
+        let info = active.and_then(|generation| generation.info.as_ref());
+        let generation = active.map(|generation| generation.id);
+        let build_id = active.map(|generation| generation.manifest.header.build_id);
+        let cycle = active.map(|generation| generation.cycles);
+        let source = match (manifest, generation, build_id, cycle) {
+            (Some(manifest), Some(generation), Some(build_id), Some(cycle)) => {
+                Some(crate::debug::DebugSource {
+                    target,
+                    manifest,
+                    roots: &self.roots,
+                    info,
+                    generation,
+                    build_id,
+                    cycle,
+                })
+            }
+            _ => None,
+        };
+        let count = self.debug.pump(now_ns, source);
+        drop(pin);
+        count
+    }
+
+    /// Drains queued debug events in order.
+    #[must_use]
+    pub fn debug_drain_events(&mut self) -> Vec<crate::debug::DebugEvent> {
+        self.debug.drain_events()
     }
 
     /// Returns one root's storage bytes.
@@ -1476,6 +1595,7 @@ impl Host {
         }
         self.roots = roots;
         self.active = Some(generation);
+        self.debug.end_watches();
         self.scheduler = scheduler;
         self.last_rollback = None;
         self.last_warnings.clear();
@@ -1701,6 +1821,7 @@ impl Host {
             scheduler: std::mem::replace(&mut self.scheduler, scheduler),
         });
         self.active = Some(new_generation);
+        self.debug.end_watches();
         self.last_warnings = warnings;
         Ok(generation)
     }
@@ -1756,6 +1877,10 @@ impl Host {
         let Some(generation_id) = self.active.as_ref().map(|generation| generation.id) else {
             return Err(prepare_error("no active generation"));
         };
+        // Debug service work is applied at the boundary, before inputs are
+        // latched. The engine pins the active generation, copies only from
+        // immutable root storage, and never holds a cycle lock.
+        self.debug_pump_at(now_ns);
         // Inputs are latched once, then every due task runs against the same
         // image; outputs publish after the cycle (IO §6.3).
         self.io.latch_inputs();
@@ -1920,6 +2045,7 @@ impl Host {
         } = rollback;
         let restored = restored_generation.id;
         self.active = Some(restored_generation);
+        self.debug.end_watches();
         self.scheduler = scheduler;
         if let Some(image) = image {
             image::restore(&image.snapshot);
@@ -1996,6 +2122,7 @@ impl Host {
             active.shutdown();
             self.retired.push(active);
         }
+        self.debug.end_watches();
         for mut generation in self.retired.drain(..) {
             generation.shutdown();
             generation.detach();
