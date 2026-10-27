@@ -43,11 +43,17 @@ pub(crate) fn run(
     let root = graph.root_package();
     let root_dir = root.root_dir.clone();
     let name = root.name.clone();
-    let out_dir = request
-        .out_dir
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root_dir.join(&root.manifest.build.out_dir));
+    let mode = crate::project::select_mode(request, &root.manifest);
+    let out_dir = request.out_dir.as_ref().map_or_else(
+        || {
+            if root.manifest.build.out_dir_explicit {
+                root_dir.join(&root.manifest.build.out_dir)
+            } else {
+                root_dir.join(crate::build::default_out_dir(mode))
+            }
+        },
+        PathBuf::from,
+    );
     let store_dir = store_directory(store, &root.manifest.runtime.manifest_dir, &root_dir);
     log.status(format!("watch store {}", store_dir.display()));
 
@@ -69,6 +75,7 @@ pub(crate) fn run(
         &name,
         locked,
         request,
+        mode,
         &out_dir,
         &baseline_dir,
         &store_dir,
@@ -187,6 +194,7 @@ pub(crate) fn run(
             &name,
             locked,
             request,
+            mode,
             &out_dir,
             &baseline_dir,
             &store_dir,
@@ -204,6 +212,7 @@ pub(crate) fn run(
                             &name,
                             locked,
                             request,
+                            mode,
                             &out_dir,
                             &baseline_dir,
                             &store_dir,
@@ -262,6 +271,7 @@ fn build_once(
     name: &str,
     locked: bool,
     request: &Request,
+    mode: crate::build::BuildMode,
     out_dir: &Path,
     baseline_dir: &Path,
     store_dir: &Path,
@@ -320,6 +330,11 @@ fn build_once(
         "--out-dir",
     ]);
     command.arg(out_dir);
+    command.arg(if mode.is_release() {
+        "--release"
+    } else {
+        "--debug"
+    });
     if let Some(path) = &got_manifest {
         command.arg("--got-manifest").arg(path);
     }

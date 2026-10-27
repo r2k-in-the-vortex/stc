@@ -39,8 +39,8 @@ use stc_span::{FileId, SourceMap, Span};
 
 pub use launcher::{generate_launcher, generate_test_launcher};
 pub use metadata::{
-    ChannelMetadata, DeviceMetadata, Json, Metadata, ProjectBinding, ProjectChannel,
-    VarAccessMetadata,
+    ChannelMetadata, DebugCheckpointMetadata, DebugMetadata, DeviceMetadata, Json, Metadata,
+    ProjectBinding, ProjectChannel, VarAccessMetadata,
 };
 pub use module::{
     FunctionTarget, ModuleArtifacts, ModuleError, ModuleOptions, RootTarget, Severity, SlotBinding,
@@ -353,8 +353,9 @@ pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<Cod
     module_options.allow_untracked_removal = options.module.allow_untracked_removal;
     module_options.renames = options.module.renames.clone();
     module_options.test_build = options.test_build;
+    module_options.debug_hooks = options.debug && !options.release && !options.test_build;
     let got = module::project(hir, options.sources, &module_options).map_err(project_errors)?;
-    unit::generate(hir, options, &target, got)
+    unit::generate(hir, options, &target, got, &module_options, options.sources)
 }
 
 fn project_errors(errors: Vec<ModuleError>) -> Vec<CodegenError> {

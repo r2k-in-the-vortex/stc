@@ -12,12 +12,13 @@ use std::path::{Component, Path, PathBuf};
 
 use stc_manifest::{LoadOptions, load_project};
 
+use crate::build::{self, Request};
 use crate::report::{Log, Reporter, display_path};
 
 /// Removes the project's configured output directory.
 pub(crate) fn run(
     manifest: Option<&str>,
-    out_dir_override: Option<&str>,
+    request: &Request,
     locked: bool,
     reporter: &mut Reporter,
     log: Log,
@@ -32,9 +33,11 @@ pub(crate) fn run(
     reporter.diagnostics(&graph.warnings, &graph.sources);
     let root = graph.root_package();
     let root_dir = comparable(&root.root_dir);
-    let configured = match out_dir_override {
-        Some(value) => PathBuf::from(value),
-        None => root.root_dir.join(&root.manifest.build.out_dir),
+    let mode = crate::project::select_mode(request, &root.manifest);
+    let configured = match (&request.out_dir, root.manifest.build.out_dir_explicit) {
+        (Some(value), _) => PathBuf::from(value),
+        (None, true) => root.root_dir.join(&root.manifest.build.out_dir),
+        (None, false) => root.root_dir.join(build::default_out_dir(mode)),
     };
     let out_dir = comparable(&absolute(&configured));
     if root_dir.starts_with(&out_dir) {

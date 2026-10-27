@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use stc_got::catalog::ImportService;
 use stc_got::descriptor::{Descriptor, DescriptorFunction, entry_flag, function_flag};
 use stc_got::manifest::{
-    FEATURE_DESCRIPTORS, FEATURE_HOST_ABI, FEATURE_ONLINE_PLAN, FEATURE_PLACES,
+    FEATURE_DEBUG_HOOKS, FEATURE_DESCRIPTORS, FEATURE_HOST_ABI, FEATURE_ONLINE_PLAN, FEATURE_PLACES,
 };
 use stc_got::model::{DescriptorKind, Retention, RootKind, SourceLocation};
 use stc_got::{
@@ -374,6 +374,9 @@ pub struct ModuleOptions<'a> {
     /// Whether this is a test build: import the test-clock service and record
     /// host ABI minor 2.
     pub test_build: bool,
+    /// Whether debug checkpoint hooks are expected: import service 13, require
+    /// host ABI minor 3, and set the descriptor hook bits.
+    pub debug_hooks: bool,
 }
 
 impl<'a> ModuleOptions<'a> {
@@ -398,6 +401,7 @@ impl<'a> ModuleOptions<'a> {
             allow_untracked_removal: false,
             renames: Vec::new(),
             test_build: false,
+            debug_hooks: false,
         }
     }
 }
@@ -589,6 +593,7 @@ pub fn project(
         types: &types,
         used_std: &used_std,
         test_build: options.test_build,
+        debug_hooks: options.debug_hooks,
     };
     let built = context.build_catalog().map_err(|error| vec![error])?;
 
@@ -602,7 +607,12 @@ pub fn project(
     input.generator_flags = base_generator_flags(options);
     input.required_features =
         FEATURE_HOST_ABI | FEATURE_ONLINE_PLAN | FEATURE_DESCRIPTORS | FEATURE_PLACES;
-    input.host_abi_minor = if options.test_build {
+    if options.debug_hooks {
+        input.required_features |= FEATURE_DEBUG_HOOKS;
+    }
+    input.host_abi_minor = if options.debug_hooks {
+        stc_got::DEBUG_ABI_MINOR
+    } else if options.test_build {
         stc_got::TEST_ABI_MINOR
     } else {
         stc_got::PRODUCTION_ABI_MINOR
@@ -826,6 +836,9 @@ fn build_descriptor(
     if !options.release {
         entry_flags |= entry_flag::DEBUG_BUILD;
     }
+    if options.debug_hooks {
+        entry_flags |= entry_flag::DEBUG_HOOKS;
+    }
     let mut descriptor = Descriptor::new(manifest.header.build_id);
     descriptor.required_features = manifest.header.required_features;
     descriptor.host_abi_major = manifest.header.host_abi_major;
@@ -851,6 +864,7 @@ struct Context<'a> {
     types: &'a TypeSystem<'a>,
     used_std: &'a BTreeSet<DefId>,
     test_build: bool,
+    debug_hooks: bool,
 }
 
 impl Context<'_> {
@@ -874,7 +888,12 @@ impl Context<'_> {
         self.add_instances(&package, &mut catalog)?;
         self.add_tasks(&package, &mut catalog)?;
         self.add_exports(&mut catalog)?;
-        catalog.imports = default_imports(self.retain, !self.used_std.is_empty(), self.test_build);
+        catalog.imports = default_imports(
+            self.retain,
+            !self.used_std.is_empty(),
+            self.test_build,
+            self.debug_hooks,
+        );
         Ok(BuiltCatalog {
             catalog,
             root_targets,
@@ -2117,7 +2136,12 @@ fn instance_path(configuration: &str, resource: &str, instance: &str) -> String 
     )
 }
 
-fn default_imports(_retain: &RetainLayout, clock: bool, test_build: bool) -> Vec<ImportService> {
+fn default_imports(
+    _retain: &RetainLayout,
+    clock: bool,
+    test_build: bool,
+    debug_hooks: bool,
+) -> Vec<ImportService> {
     let mut imports = vec![
         ImportService::Trap,
         ImportService::IoImage,
@@ -2137,6 +2161,9 @@ fn default_imports(_retain: &RetainLayout, clock: bool, test_build: bool) -> Vec
         }
         imports.push(ImportService::Assert);
         imports.push(ImportService::SetCycleTimeNs);
+    }
+    if debug_hooks {
+        imports.push(ImportService::DebugCheck);
     }
     imports
 }

@@ -32,6 +32,31 @@ pub(crate) enum Mode {
     Run,
 }
 
+/// Resolves the build mode from CLI flags, then an explicit `[build].debug`,
+/// then an explicit `[debug].default`, then the debug default
+/// (Debug and Monitoring §17.1). The manifest parser already rejects explicit
+/// settings that disagree.
+pub(crate) fn select_mode(
+    request: &Request,
+    manifest: &stc_manifest::Manifest,
+) -> build::BuildMode {
+    if let Some(mode) = request.mode_override {
+        return mode;
+    }
+    let debug = if manifest.build.debug_explicit {
+        manifest.build.debug
+    } else if manifest.debug.default_explicit {
+        manifest.debug.default
+    } else {
+        true
+    };
+    if debug {
+        build::BuildMode::Debug
+    } else {
+        build::BuildMode::Release
+    }
+}
+
 struct SourceEntry {
     package: usize,
     path: String,
@@ -57,6 +82,7 @@ pub(crate) fn run(
         }
     };
     let root = graph.root_package();
+    let build_mode = select_mode(request, &root.manifest);
     reporter.merge_manifest_lints(&root.manifest.lints);
     reporter.diagnostics(&graph.warnings, &graph.sources);
     log.info(format!("manifest {manifest_input}"));
@@ -216,20 +242,24 @@ pub(crate) fn run(
         request.emit.insert(Emit::Module);
     }
     request.relaxed = relaxed;
+    request.apply_mode(build_mode);
     request.opt_level = root.manifest.build.opt_level;
+    request.opt_level_explicit = root.manifest.build.opt_level_explicit;
     request.lib_type = root.manifest.build.lib_type;
     request.manifest_target = root.manifest.build.target.clone();
     request.manifest_clang = root.manifest.build.clang.clone();
     request.manifest_runtime = root.manifest.build.runtime.clone();
     request.project = build::ProjectSettings::from_manifest(&root.manifest);
+    let manifest_out_dir_explicit = root.manifest.build.out_dir_explicit;
     if request.out_dir.is_none() {
-        request.out_dir = Some(
-            root.root_dir
-                .join(&root.manifest.build.out_dir)
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let configured = if manifest_out_dir_explicit {
+            root.root_dir.join(&root.manifest.build.out_dir)
+        } else {
+            root.root_dir.join(build::default_out_dir(build_mode))
+        };
+        request.out_dir = Some(configured.to_string_lossy().into_owned());
     }
+    request.out_dir_explicit |= manifest_out_dir_explicit;
     if request.got_manifest.is_none() && !request.cold {
         match root.manifest.online.baseline {
             stc_manifest::Baseline::Explicit => {
@@ -323,11 +353,10 @@ pub(crate) fn run(
                 return 1;
             }
             if mode == Mode::Run {
-                let out_dir = request
-                    .out_dir
-                    .clone()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("target/stc/debug"));
+                let out_dir = request.out_dir.clone().map_or_else(
+                    || PathBuf::from(build::default_out_dir(build_mode)),
+                    PathBuf::from,
+                );
                 let launcher = build::launcher_path(&out_dir, &name);
                 return crate::run::launch(
                     &launcher,

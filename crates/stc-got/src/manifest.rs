@@ -35,6 +35,8 @@ pub const FEATURE_ONLINE_PLAN: u64 = 1 << 1;
 pub const FEATURE_DESCRIPTORS: u64 = 1 << 2;
 /// Feature bit: place-descriptor references are in use (M5).
 pub const FEATURE_PLACES: u64 = 1 << 3;
+/// Feature bit: debug checkpoint hooks are in use (M6.5).
+pub const FEATURE_DEBUG_HOOKS: u64 = 1 << 4;
 /// Feature bits defined by manifest/module format 1.
 pub const FEATURE_MASK: u64 = 0b1_1111;
 
@@ -920,7 +922,7 @@ impl Manifest {
             }
             match slot.kind {
                 SlotKind::Import => {
-                    if slot.service == 0 || slot.service > 12 {
+                    if crate::catalog::ImportService::from_id(slot.service).is_none() {
                         return Err(Error::manifest(format!(
                             "import slot service ID {} is outside the ABI 2 service table",
                             slot.service

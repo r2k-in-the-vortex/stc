@@ -17,14 +17,16 @@ use stc_got::{Descriptor, Digest32, HOST_ABI_MAJOR, HOST_ABI_MINOR, MODULE_FORMA
 /// The only language profile M4.5 accepts.
 pub const PROFILE: &str = "stc-2013-oop-utf8-v1";
 
-/// Feature bits implemented by an M5 host.
+/// Feature bits implemented by an M6.5 host.
 ///
 /// ABI 2.1 hosts implement the inline TYPEINFO/VTABLE/object-record layout
-/// (D-147–D-151) and place-descriptor references.
+/// (D-147–D-151) and place-descriptor references. ABI 2.3 adds the debug
+/// checkpoint hook feature.
 pub const SUPPORTED_FEATURES: u64 = stc_got::descriptor::feature::HOST_ABI
     | stc_got::descriptor::feature::ONLINE_PLAN
     | stc_got::descriptor::feature::DESCRIPTORS
-    | stc_got::descriptor::feature::PLACES;
+    | stc_got::descriptor::feature::PLACES
+    | stc_got::descriptor::feature::DEBUG_HOOKS;
 
 /// The host's profile, target, ABI range, and implemented feature bits.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -464,23 +466,125 @@ mod tests {
 
     #[test]
     fn rejects_feature_bits_the_host_lacks() {
-        let artifacts = artifacts(test_support::SIMPLE, "simple");
-        let mut descriptor = artifacts.descriptor.clone();
-        let mut manifest = artifacts.manifest.clone();
-        descriptor.required_features |= stc_got::descriptor::feature::DEBUG_HOOKS;
-        manifest.header.required_features = descriptor.required_features;
-        let (descriptor_bytes, manifest_bytes) =
-            reseal_pair(&mut descriptor, &mut manifest).expect("reseal");
-
-        let error =
-            ValidatedPair::from_bytes(&platform(), &descriptor_bytes, &manifest_bytes).unwrap_err();
+        let artifacts = artifacts(test_support::OOP, "oop");
+        let required = artifacts.manifest.header.required_features;
+        assert_ne!(
+            required & stc_got::descriptor::feature::DESCRIPTORS,
+            0,
+            "the OOP fixture requires descriptor support"
+        );
+        let limited = platform().with_supported_features(
+            SUPPORTED_FEATURES & !stc_got::descriptor::feature::DESCRIPTORS,
+        );
+        let error = ValidatedPair::from_bytes(
+            &limited,
+            &artifacts.descriptor_bytes,
+            &artifacts.manifest_binary,
+        )
+        .unwrap_err();
         assert_eq!(error.code, codes::MODULE_INVALID);
 
-        let debug_host = platform().with_supported_features(
-            SUPPORTED_FEATURES | stc_got::descriptor::feature::DEBUG_HOOKS,
+        ValidatedPair::from_bytes(
+            &platform(),
+            &artifacts.descriptor_bytes,
+            &artifacts.manifest_binary,
+        )
+        .expect("a host implementing the feature accepts the module");
+    }
+
+    #[test]
+    fn debug_hook_modules_require_a_host_abi_2_3() {
+        let artifacts = test_support::hook_artifacts(test_support::SIMPLE, "debug");
+        assert_eq!(artifacts.descriptor.host_abi_minor, 3);
+        assert_eq!(
+            artifacts.descriptor.required_features & stc_got::descriptor::feature::DEBUG_HOOKS,
+            stc_got::descriptor::feature::DEBUG_HOOKS
         );
-        ValidatedPair::from_bytes(&debug_host, &descriptor_bytes, &manifest_bytes)
-            .expect("a host implementing the feature accepts the module");
+        assert_eq!(
+            artifacts.descriptor.entry_flags & stc_got::descriptor::entry_flag::DEBUG_HOOKS,
+            stc_got::descriptor::entry_flag::DEBUG_HOOKS
+        );
+        assert!(
+            artifacts
+                .descriptor
+                .slots
+                .iter()
+                .any(|slot| slot.kind == stc_got::SlotKind::Import && slot.service == 13),
+            "the checkpoint hook import is present"
+        );
+
+        let old_host = HostPlatform::new(
+            PROFILE,
+            platform().target,
+            HOST_ABI_MAJOR,
+            stc_got::TEST_ABI_MINOR,
+        );
+        let error = ValidatedPair::from_bytes(
+            &old_host,
+            &artifacts.descriptor_bytes,
+            &artifacts.manifest_binary,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, codes::ABI_MISMATCH);
+        assert!(error.message.contains("minor 3"), "{}", error.message);
+
+        ValidatedPair::from_bytes(
+            &platform(),
+            &artifacts.descriptor_bytes,
+            &artifacts.manifest_binary,
+        )
+        .expect("an ABI 2.3 host accepts a hook module");
+    }
+
+    #[test]
+    fn debug_hook_bits_must_agree() {
+        let artifacts = test_support::hook_artifacts(test_support::SIMPLE, "debug");
+        let mut descriptor = artifacts.descriptor.clone();
+        descriptor.entry_flags &= !stc_got::descriptor::entry_flag::DEBUG_HOOKS;
+        let error = descriptor.validate().unwrap_err();
+        assert_eq!(error.code, codes::MODULE_TARGET);
+        assert!(
+            error.message.contains("hook bits disagree"),
+            "{}",
+            error.message
+        );
+
+        let mut descriptor = artifacts.descriptor;
+        descriptor.required_features &= !stc_got::descriptor::feature::DEBUG_HOOKS;
+        let error = descriptor.validate().unwrap_err();
+        assert_eq!(error.code, codes::MODULE_TARGET);
+        assert!(
+            error.message.contains("hook bits disagree"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn abi_2_3_host_loads_older_module_minors() {
+        let production = artifacts(test_support::SIMPLE, "production");
+        assert_eq!(
+            production.descriptor.host_abi_minor,
+            stc_got::PRODUCTION_ABI_MINOR
+        );
+        ValidatedPair::from_bytes(
+            &platform(),
+            &production.descriptor_bytes,
+            &production.manifest_binary,
+        )
+        .expect("a 2.3 host accepts a production module");
+
+        let test_build = test_support::test_artifacts(test_support::SIMPLE, "test");
+        assert_eq!(
+            test_build.descriptor.host_abi_minor,
+            stc_got::TEST_ABI_MINOR
+        );
+        ValidatedPair::from_bytes(
+            &platform(),
+            &test_build.descriptor_bytes,
+            &test_build.manifest_binary,
+        )
+        .expect("a 2.3 host accepts a test module");
     }
 
     #[test]

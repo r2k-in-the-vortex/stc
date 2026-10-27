@@ -27,9 +27,9 @@ pub const HOST_ABI_MAJOR: u16 = 2;
 ///
 /// Minor 1 (host ABI 2.1) records the inline TYPEINFO, VTABLE, and
 /// object-record layout generated code reads directly. Minor 2 (host ABI 2.2)
-/// appends the test-clock service (ID 12, `set_cycle_time_ns`); only test
-/// builds require it, so production modules keep [`PRODUCTION_ABI_MINOR`].
-pub const HOST_ABI_MINOR: u16 = 2;
+/// appends the test-clock service (ID 12, `set_cycle_time_ns`). Minor 3 (host
+/// ABI 2.3) appends the debug checkpoint service (ID 13, `debug_check`).
+pub const HOST_ABI_MINOR: u16 = 3;
 
 /// Host ABI minor version required by production modules.
 ///
@@ -38,6 +38,9 @@ pub const PRODUCTION_ABI_MINOR: u16 = 1;
 
 /// Host ABI minor version required by test-build modules.
 pub const TEST_ABI_MINOR: u16 = 2;
+
+/// Host ABI minor version required by modules with debug checkpoint hooks.
+pub const DEBUG_ABI_MINOR: u16 = 3;
 /// Descriptor digest domain string.
 pub const DESCRIPTOR_DOMAIN: &str = "stc:descriptor:v1";
 /// Byte offset of `descriptor_size` in the encoded header.
@@ -423,6 +426,32 @@ impl Descriptor {
                 ),
             ));
         }
+        let feature_hooks = self.required_features & feature::DEBUG_HOOKS != 0;
+        let entry_hooks = self.entry_flags & entry_flag::DEBUG_HOOKS != 0;
+        if feature_hooks != entry_hooks {
+            return Err(Error::new(
+                codes::MODULE_TARGET,
+                "descriptor debug checkpoint hook bits disagree between required_features and entry_flags",
+            ));
+        }
+        let imports_debug_check = self.slots.iter().any(|slot| {
+            slot.kind == SlotKind::Import
+                && slot.service == crate::catalog::ImportService::DebugCheck.id()
+        });
+        if feature_hooks != imports_debug_check {
+            return Err(Error::new(
+                codes::MODULE_TARGET,
+                "descriptor debug checkpoint feature bit does not match the debug_check import",
+            ));
+        }
+        if feature_hooks && self.host_abi_minor < DEBUG_ABI_MINOR {
+            return Err(Error::new(
+                codes::MODULE_TARGET,
+                format!(
+                    "descriptor debug checkpoint hooks require host ABI minor {DEBUG_ABI_MINOR}"
+                ),
+            ));
+        }
         if self.build_id.is_zero() {
             return Err(Error::new(
                 codes::MODULE_INVALID,
@@ -519,7 +548,9 @@ impl Descriptor {
             }
             match slot.kind {
                 SlotKind::Import => {
-                    if slot.service == 0 || slot.service > 12 {
+                    if slot.service == 0
+                        || crate::catalog::ImportService::from_id(slot.service).is_none()
+                    {
                         return Err(Error::new(
                             codes::MODULE_INVALID,
                             format!(
@@ -731,7 +762,8 @@ mod tests {
         assert_eq!(HOST_ABI_MAJOR, 2);
         assert_eq!(PRODUCTION_ABI_MINOR, 1);
         assert_eq!(TEST_ABI_MINOR, 2);
-        assert_eq!(HOST_ABI_MINOR, 2);
+        assert_eq!(DEBUG_ABI_MINOR, 3);
+        assert_eq!(HOST_ABI_MINOR, 3);
         let descriptor = Descriptor::new(GotId::from_bytes([0x11; 16]));
         assert_eq!(descriptor.host_abi_major, 2);
         assert_eq!(descriptor.host_abi_minor, PRODUCTION_ABI_MINOR);

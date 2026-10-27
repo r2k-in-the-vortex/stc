@@ -92,13 +92,25 @@ pub fn target() -> Target {
 /// Builds artifacts without a baseline.
 #[must_use]
 pub fn artifacts(source: &str, name: &str) -> ModuleArtifacts {
-    build(source, name, None, false, Vec::new(), false)
+    build(source, name, None, false, Vec::new(), false, false)
+}
+
+/// Builds debug artifacts that import the checkpoint hook (ABI 2.3).
+#[must_use]
+pub fn hook_artifacts(source: &str, name: &str) -> ModuleArtifacts {
+    build(source, name, None, false, Vec::new(), false, true)
+}
+
+/// Builds test artifacts that import the test-clock service (ABI 2.2).
+#[must_use]
+pub fn test_artifacts(source: &str, name: &str) -> ModuleArtifacts {
+    build_test(source, name)
 }
 
 /// Builds artifacts with an optional baseline.
 #[must_use]
 pub fn artifacts_with(source: &str, name: &str, baseline: Manifest, cold: bool) -> ModuleArtifacts {
-    build(source, name, Some(baseline), cold, Vec::new(), false)
+    build(source, name, Some(baseline), cold, Vec::new(), false, false)
 }
 
 /// Builds artifacts with a baseline, renames, and the untracked-removal policy.
@@ -118,6 +130,7 @@ pub fn artifacts_with_renames(
         cold,
         renames,
         allow_untracked_removal,
+        false,
     )
 }
 
@@ -128,6 +141,7 @@ fn build(
     cold: bool,
     renames: Vec<Rename>,
     allow_untracked_removal: bool,
+    debug_hooks: bool,
 ) -> ModuleArtifacts {
     let hir = clean_hir(source);
     let sources = vec![format!("{name}.st")];
@@ -138,6 +152,18 @@ fn build(
     options.cold = cold;
     options.renames = renames;
     options.allow_untracked_removal = allow_untracked_removal;
+    options.debug_hooks = debug_hooks;
+    project(&hir, &sources, &options)
+        .unwrap_or_else(|errors| panic!("module projection failed: {errors:#?}"))
+}
+
+fn build_test(source: &str, name: &str) -> ModuleArtifacts {
+    let hir = clean_hir(source);
+    let sources = vec![format!("{name}.st")];
+    let fingerprint = source_fingerprint(&[(format!("{name}.st"), source.as_bytes().to_vec())])
+        .expect("source fingerprint");
+    let mut options = ModuleOptions::new(target(), name, "stc 0.1.0", fingerprint);
+    options.test_build = true;
     project(&hir, &sources, &options)
         .unwrap_or_else(|errors| panic!("module projection failed: {errors:#?}"))
 }

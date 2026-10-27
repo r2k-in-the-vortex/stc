@@ -181,6 +181,41 @@ fn config_json(value: &ConfigValue) -> Json {
     }
 }
 
+/// The selected debug/release build form (Debug and Monitoring §17).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuildMode {
+    /// Debug form: debug information and checkpoint hooks.
+    Debug,
+    /// Optimised, stripped, hook-free form.
+    Release,
+}
+
+impl BuildMode {
+    /// Returns the mode spelling used by diagnostics and metadata summaries.
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Release => "release",
+        }
+    }
+
+    /// Returns whether this is the release form.
+    #[must_use]
+    pub(crate) const fn is_release(self) -> bool {
+        matches!(self, Self::Release)
+    }
+}
+
+/// Returns the default out-dir for a build mode, relative to the project root.
+#[must_use]
+pub(crate) const fn default_out_dir(mode: BuildMode) -> &'static str {
+    match mode {
+        BuildMode::Debug => "target/stc/debug",
+        BuildMode::Release => "target/stc/release",
+    }
+}
+
 /// Parsed project build settings and CLI overrides.
 #[derive(Clone, Debug)]
 pub(crate) struct Request {
@@ -190,6 +225,10 @@ pub(crate) struct Request {
     pub emit: BTreeSet<Emit>,
     /// `--out-dir`.
     pub out_dir: Option<String>,
+    /// Whether the out-dir came from `--out-dir` or `[build].out-dir`, as
+    /// opposed to the mode default. Explicit directories are used verbatim
+    /// and may not mix debug and release artifacts.
+    pub out_dir_explicit: bool,
     /// `--target`.
     pub target: Option<String>,
     /// `--clang`.
@@ -206,14 +245,21 @@ pub(crate) struct Request {
     pub allow_untracked_removal: bool,
     /// `--relaxed` or `[build].syntax = "relaxed"`.
     pub relaxed: bool,
-    /// `--debug` was requested. M6.5 phase 1 uses it only to emit debug
-    /// information; phase 2 owns the debug/release build split.
+    /// An explicit CLI mode (`--debug`/`--release`), before manifest
+    /// precedence is applied.
+    pub mode_override: Option<BuildMode>,
+    /// Resolved debug form: debug information and checkpoint hooks.
     pub debug: bool,
+    /// Resolved release form: optimised, stripped, and hook-free.
+    pub release: bool,
     /// Whether this is a test build (`stc test`): emit the test-host launcher
     /// and the host ABI 2.2 test-clock import.
     pub test_build: bool,
-    /// `[build].opt-level`.
+    /// Effective `[build].opt-level`.
     pub opt_level: OptLevel,
+    /// Whether `[build].opt-level` was explicitly present; absent levels use
+    /// the mode default (0 for debug, 2 for release).
+    pub opt_level_explicit: bool,
     /// `[build].lib-type`.
     pub lib_type: LibType,
     /// `[build].target`.
@@ -228,12 +274,22 @@ pub(crate) struct Request {
     pub run: RunRequest,
 }
 
+impl Request {
+    /// Records the selected mode as the resolved debug/release flags.
+    pub(crate) fn apply_mode(&mut self, mode: BuildMode) {
+        self.mode_override = Some(mode);
+        self.debug = !mode.is_release();
+        self.release = mode.is_release();
+    }
+}
+
 impl Default for Request {
     fn default() -> Self {
         Self {
             name: None,
             emit: BTreeSet::new(),
             out_dir: None,
+            out_dir_explicit: false,
             target: None,
             clang: None,
             runtime: None,
@@ -242,9 +298,12 @@ impl Default for Request {
             renames: Vec::new(),
             allow_untracked_removal: false,
             relaxed: false,
+            mode_override: None,
             debug: false,
+            release: false,
             test_build: false,
             opt_level: OptLevel::O0,
+            opt_level_explicit: false,
             lib_type: LibType::Static,
             manifest_target: None,
             manifest_clang: None,
@@ -427,12 +486,14 @@ pub(crate) fn generate(
     reporter: &mut Reporter,
     log: Log,
 ) -> Result<Generated, u8> {
-    let out_dir = PathBuf::from(
-        request
-            .out_dir
-            .clone()
-            .unwrap_or_else(|| "target/stc/debug".into()),
-    );
+    let out_dir = PathBuf::from(request.out_dir.clone().unwrap_or_else(|| {
+        default_out_dir(if request.release {
+            BuildMode::Release
+        } else {
+            BuildMode::Debug
+        })
+        .into()
+    }));
     let target = effective_target(request);
     let target_triple = target.clone().unwrap_or_else(stc_codegen::host_triple);
     let baseline = match &request.got_manifest {
@@ -477,7 +538,7 @@ pub(crate) fn generate(
         emit_metadata: request.emit.contains(&Emit::Metadata),
         mode,
         relaxed: request.relaxed,
-        release: false,
+        release: request.release,
         sources,
         source_paths,
         source_map: Some(source_map),
@@ -608,8 +669,26 @@ pub(crate) fn emit(
             ),
         );
     }
+    if request.out_dir_explicit
+        && let Some(existing) = existing_build_modes(out_dir)
+            .into_iter()
+            .find(|release| *release != request.release)
+    {
+        let existing = if existing { "release" } else { "debug" };
+        reporter.plain(
+            "STC-E-PROJECT-010",
+            Severity::Error,
+            &format!(
+                "out-dir `{}` contains {existing} artifacts; debug and release builds must use \
+                 distinct output directories",
+                out_dir.display()
+            ),
+        );
+        return 2;
+    }
     let target_triple = &generated.target_triple;
     let output = &generated.output;
+    let opt_level = effective_opt_level(request);
 
     let needs_ir = emit.iter().any(|kind| {
         matches!(
@@ -704,7 +783,7 @@ pub(crate) fn emit(
         &generated.target_triple,
         pic,
         request.debug,
-        request.opt_level,
+        opt_level,
         log,
     ) {
         return build_failure(reporter, &message, &ir_path);
@@ -732,11 +811,16 @@ pub(crate) fn emit(
         ) {
             return build_failure(reporter, &message, &ir_path);
         }
+        if request.release
+            && let Err(message) = strip_release_artifact(&clang, &module_path, log)
+        {
+            return toolchain_error(reporter, "STC-E-BUILD-001", &message);
+        }
         clang_time += start.elapsed();
     }
     if emit.contains(&Emit::Lib) {
         let kind = RuntimeKind::from(request.lib_type);
-        let runtime = match find_runtime(request, kind) {
+        let runtime = match find_runtime(request, kind, request.release) {
             Ok(runtime) => runtime,
             Err(message) => return toolchain_error(reporter, "STC-E-BUILD-003", &message),
         };
@@ -750,9 +834,14 @@ pub(crate) fn emit(
                 ),
             );
         }
+        if request.release
+            && let Err(message) = strip_release_artifact(&clang, &library_path, log)
+        {
+            return toolchain_error(reporter, "STC-E-BUILD-001", &message);
+        }
     }
     if emit.contains(&Emit::Exe) {
-        let runtime = match find_runtime(request, RuntimeKind::Static) {
+        let runtime = match find_runtime(request, RuntimeKind::Static, request.release) {
             Ok(runtime) => runtime,
             Err(message) => return toolchain_error(reporter, "STC-E-BUILD-003", &message),
         };
@@ -787,7 +876,7 @@ pub(crate) fn emit(
             &generated.target_triple,
             false,
             false,
-            request.opt_level,
+            opt_level,
             log,
         ) {
             return build_failure(reporter, &message, &launcher_ir_path);
@@ -802,6 +891,11 @@ pub(crate) fn emit(
             log,
         ) {
             return build_failure(reporter, &message, &launcher_ir_path);
+        }
+        if request.release
+            && let Err(message) = strip_release_artifact(&clang, &exe_path, log)
+        {
+            return toolchain_error(reporter, "STC-E-BUILD-001", &message);
         }
         clang_time += start.elapsed();
     }
@@ -839,6 +933,175 @@ pub(crate) const fn emit_kind(kind: Emit) -> &'static str {
         Emit::Lib => "lib",
         Emit::Metadata => "metadata",
     }
+}
+
+fn effective_opt_level(request: &Request) -> OptLevel {
+    if request.opt_level_explicit {
+        request.opt_level
+    } else if request.release {
+        OptLevel::O2
+    } else {
+        OptLevel::O0
+    }
+}
+
+/// Finds every paired manifest in an explicit out-dir and returns the build
+/// form each records (`true` for release). Malformed or unrelated JSON is
+/// ignored; this check only guards against a supported debug set being
+/// overwritten by a release set, or the reverse.
+fn existing_build_modes(out_dir: &Path) -> Vec<bool> {
+    let Ok(entries) = std::fs::read_dir(out_dir) else {
+        return Vec::new();
+    };
+    let mut modes = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !path.is_file() {
+            continue;
+        }
+        if name.ends_with(".stc-got.json") {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(manifest) = Manifest::decode_json(&text) else {
+                continue;
+            };
+            modes.push(manifest.header.generator_flags & (1 << 1) != 0);
+        } else if name.ends_with(".stc-meta.json") {
+            // Emit sets that contain metadata but no paired manifest still
+            // identify their mode: every debug-form sidecar carries the
+            // additive debug object, and release sidecars never do.
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(root) = stc_got::json::parse(&text) else {
+                continue;
+            };
+            let Some(object) = root.as_object() else {
+                continue;
+            };
+            modes.push(!object.contains_key("debug"));
+        }
+    }
+    modes
+}
+
+/// Removes DWARF/CodeView debug sections from a release artifact.
+///
+/// The compiler already emits release objects without `-g`; stripping also
+/// removes debug information contributed by the runtime host archive and any
+/// corresponding CodeView records. Debug-sidecars are not produced for
+/// release, and `--strip-debug` preserves the build-ID note, descriptor,
+/// manifest metadata, and symbols.
+fn strip_release_artifact(clang: &str, artifact: &Path, log: Log) -> Result<(), String> {
+    if is_archive(artifact) {
+        // `llvm-objcopy` does not support archive containers, and the static
+        // embedding host library is copied from the runtime toolchain rather
+        // than generated from this build. The module and executable are still
+        // stripped; build the runtime archive without debug information when
+        // packaging it as a release embedding library.
+        log.info(format!(
+            "skip stripping runtime archive {}",
+            artifact.display()
+        ));
+        return Ok(());
+    }
+    let tool = find_objcopy(clang)?;
+    let mut command = Command::new(&tool);
+    command.arg("--strip-debug").arg(artifact);
+    run_tool(&mut command, log).map_err(|error| {
+        format!(
+            "cannot strip debug information from `{}`: {error}",
+            artifact.display()
+        )
+    })
+}
+
+fn is_archive(path: &Path) -> bool {
+    use std::io::Read;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0_u8; 8];
+    file.read_exact(&mut magic).is_ok() && &magic == b"!<arch>\n"
+}
+
+fn find_objcopy(clang: &str) -> Result<String, String> {
+    for directory in clang_directories(clang) {
+        for name in ["llvm-objcopy.exe", "llvm-objcopy", "objcopy.exe", "objcopy"] {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return Ok(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    for name in ["llvm-objcopy", "objcopy"] {
+        if Command::new(name)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            return Ok(name.into());
+        }
+    }
+    Err("release builds require `llvm-objcopy` or `objcopy` beside clang or on PATH".into())
+}
+
+/// Returns the directories that may contain the clang toolchain's binary
+/// utilities. A bare `clang` is resolved through `PATH`; the canonical path is
+/// also considered so a `/usr/bin/clang` symlink finds its sibling
+/// `llvm-objcopy`.
+fn clang_directories(clang: &str) -> Vec<PathBuf> {
+    let configured = Path::new(clang);
+    let resolved = if configured
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+    {
+        Some(configured.to_path_buf())
+    } else {
+        let name = configured
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or(clang);
+        executable_on_path(name)
+    };
+    let mut directories = Vec::new();
+    if let Some(path) = resolved {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            directories.push(parent.to_path_buf());
+        }
+        if let Ok(canonical) = path.canonicalize()
+            && let Some(parent) = canonical.parent()
+            && !directories.iter().any(|directory| directory == parent)
+        {
+            directories.push(parent.to_path_buf());
+        }
+    }
+    directories
+}
+
+fn executable_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let extensions: &[&str] = if cfg!(windows) {
+        &[".exe", ".cmd", ".bat", ".com", ""]
+    } else {
+        &[""]
+    };
+    for directory in std::env::split_paths(&path) {
+        for extension in extensions {
+            let candidate = directory.join(format!("{name}{extension}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 fn read_baseline(path: &Path) -> Result<Manifest, String> {
@@ -1002,7 +1265,7 @@ impl RuntimeKind {
     }
 }
 
-fn find_runtime(request: &Request, kind: RuntimeKind) -> Result<PathBuf, String> {
+fn find_runtime(request: &Request, kind: RuntimeKind, release: bool) -> Result<PathBuf, String> {
     let file_name = kind.file_name();
     if let Some(required) = request
         .runtime
@@ -1026,8 +1289,13 @@ fn find_runtime(request: &Request, kind: RuntimeKind) -> Result<PathBuf, String>
         candidates.push(directory.join(file_name));
     }
     if let Ok(current) = std::env::current_dir() {
-        candidates.push(current.join("target/debug").join(file_name));
-        candidates.push(current.join("target/release").join(file_name));
+        if release {
+            candidates.push(current.join("target/release").join(file_name));
+            candidates.push(current.join("target/debug").join(file_name));
+        } else {
+            candidates.push(current.join("target/debug").join(file_name));
+            candidates.push(current.join("target/release").join(file_name));
+        }
     }
     for candidate in candidates {
         if candidate.is_file() {
