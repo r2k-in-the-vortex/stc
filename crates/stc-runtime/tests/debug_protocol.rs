@@ -2139,41 +2139,60 @@ fn request_rate_limit_closes_after_twenty_rate_errors() {
     let start = read_stream_message(&mut reader).expect("session.start response");
     assert_eq!(text(&start, "status"), "ok");
 
-    let rate_errors = std::thread::scope(|scope| {
-        let writer = scope.spawn(move || {
-            // Deliberately pipeline far more than the 200-request burst so the
-            // breaker trips even when the server refills while it works.
-            for id in 2..=2001_u64 {
+    // Read each small batch before sending the next. A batch is smaller than
+    // the twenty-error breaker, and every earlier batch was error-free, so the
+    // connection is still open while the first E-012 responses are read. That
+    // avoids the Linux RST that can discard queued responses when a flood
+    // makes the server close with unread input in its socket.
+    let mut rate_errors = 0_u64;
+    let mut next_id = 2_u64;
+    for _ in 0..40 {
+        for id in next_id..next_id + 19 {
+            assert!(
+                send_stream_frame(&mut stream, id, &token, "exec.continue", obj([])),
+                "rate batch write"
+            );
+        }
+        let _ = stream.flush();
+        for _ in 0..19 {
+            let message = read_stream_message(&mut reader).expect("rate batch response");
+            assert_eq!(message_kind(&message), Some("response"));
+            if message
+                .as_object()
+                .and_then(|object| object.get("error"))
+                .and_then(Json::as_object)
+                .and_then(|error| error.get("code"))
+                .and_then(Json::as_str)
+                == Some(codes::DEBUG_RATE)
+            {
+                rate_errors += 1;
+            }
+        }
+        next_id += 19;
+        if rate_errors > 0 {
+            break;
+        }
+    }
+    assert!(rate_errors >= 1, "the burst limit was exceeded");
+
+    // Once an E-012 has been observed, flood far past the breaker. This close
+    // may reset the socket before the final responses are read, so the limit
+    // and teardown assertions below use the audit log.
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(|| {
+            for id in next_id..next_id + 2000 {
                 if !send_stream_frame(&mut stream, id, &token, "exec.continue", obj([])) {
                     break;
                 }
             }
             let _ = stream.flush();
         });
-        let handle = scope.spawn(move || {
-            let mut rate_errors = 0_u64;
-            while let Some(message) = read_stream_message(&mut reader) {
-                if message_kind(&message) == Some("response")
-                    && message
-                        .as_object()
-                        .and_then(|object| object.get("error"))
-                        .and_then(Json::as_object)
-                        .and_then(|error| error.get("code"))
-                        .and_then(Json::as_str)
-                        == Some(codes::DEBUG_RATE)
-                {
-                    rate_errors += 1;
-                }
-            }
-            rate_errors
-        });
+        let handle = scope.spawn(|| while read_stream_message(&mut reader).is_some() {});
         pump_until_finished(&mut setup.host, &handle, "rate flood");
-        let rate_errors = handle.join().expect("rate reader");
+        handle.join().expect("rate reader");
         writer.join().expect("rate writer");
-        rate_errors
     });
     settle(&mut setup.host, 50);
-    assert!(rate_errors >= 1, "the burst limit was exceeded");
     let events = setup.audit();
     assert!(events.iter().any(|event| {
         text(event, "event") == "transport-error"
