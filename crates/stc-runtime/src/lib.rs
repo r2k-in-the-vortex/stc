@@ -18,7 +18,7 @@
 //! - [`migration`] validates an online-change plan against the active baseline;
 //! - [`loader`] maps a native module and copies its descriptor and function
 //!   table;
-//! - [`host_api`] provides the ABI 2.2 service table;
+//! - [`host_api`] provides the ABI 2.3 service table;
 //! - [`store`] persists the committed manifest baseline and builds downloads;
 //! - [`host`] owns the load/prepare/activate/commit/rollback/unload state
 //!   machine and the generation-bound root and GOT state;
@@ -43,7 +43,9 @@
 //!
 //! Generated ABI 2 modules execute through [`stc_rt_execute`] (the thin
 //! launcher path) or the `stc_host_*` embedding exports, including
-//! [`stc_host_run`]. The legacy ABI 1
+//! [`stc_host_run`]. Host ABI 2.3 appends the `debug_check` service (ID 13) for
+//! debug builds with checkpoint hooks; it is a lock-free no-op without a debug
+//! session and is the phase-6 breakpoint hook point. The legacy ABI 1
 //! helper symbols remain as host utilities for the process image, clock, and
 //! retained-state stubs; generated modules do not import them.
 //!

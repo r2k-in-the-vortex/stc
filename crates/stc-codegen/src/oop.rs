@@ -158,6 +158,7 @@ impl Lowerer<'_> {
         }
         let body = base.unwrap_or(def);
         let slot = self.function_slot(FunctionTarget::FbBody(body))?;
+        self.record_checkpoint(f, span, crate::unit::checkpoint_flags::CALL);
         let callee = Self::slot_storage(f, info, slot);
         f.call_ptr(IrType::Void, &callee, &[record, table, info.slots.clone()]);
         for arg in args {

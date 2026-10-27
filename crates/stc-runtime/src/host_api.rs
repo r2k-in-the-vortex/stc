@@ -1,16 +1,17 @@
-//! Host ABI 2.2 service table.
+//! Host ABI 2.3 service table.
 //!
 //! GOT Artifacts §8 fixes the table layout: version and size followed by trap,
 //! clocks, transient allocation, process-image access, retained-state stubs,
-//! assert, and the test-clock service. Import cells hold the service entry
-//! point itself, so generated code reads and calls a service exactly like a
-//! function cell.
+//! assert, the test-clock service, and the debug checkpoint hook. Import cells
+//! hold the service entry point itself, so generated code reads and calls a
+//! service exactly like a function cell.
 //!
 //! Minor 1 adds no service. It records the inline TYPEINFO, VTABLE, and
 //! object-record layout of §8.5 that generated code reads directly; the table
 //! shape is unchanged, so a 2.0 host rejects a 2.1 module by minor version
 //! before the layout can be used. Minor 2 appends the test-clock service
-//! (ID 12); only test builds import it.
+//! (ID 12); only test builds import it. Minor 3 appends the debug checkpoint
+//! hook (ID 13); debug builds with at least one checkpoint import it.
 //!
 //! The table is a read-only static. Service implementations route transient
 //! allocation and free to the generation whose entry point is currently
@@ -27,7 +28,7 @@ use stc_got::error::{Error, Result, codes};
 use crate::memory::TransientAllocator;
 
 /// Host ABI version word: `(major << 16) | minor` (GOT Artifacts §8.1).
-pub const ABI_VERSION: u32 = (2 << 16) | 2;
+pub const ABI_VERSION: u32 = (2 << 16) | 3;
 
 /// Service IDs used by import slots (GOT Artifacts §8.2).
 pub mod service {
@@ -55,6 +56,8 @@ pub mod service {
     pub const ASSERT: u8 = 11;
     /// Next-cycle clock override (test builds).
     pub const SET_CYCLE_TIME_NS: u8 = 12;
+    /// Debug checkpoint hook (debug builds with checkpoints).
+    pub const DEBUG_CHECK: u8 = 13;
 }
 
 /// Trap function signature.
@@ -81,12 +84,14 @@ pub type StateSaveFn = unsafe extern "C" fn(*const u8, i64, i64) -> i32;
 pub type AssertFn = unsafe extern "C" fn(i32, i32, u32);
 /// Next-cycle clock override signature.
 pub type SetCycleTimeFn = unsafe extern "C" fn(i64);
+/// Debug checkpoint hook signature.
+pub type DebugCheckFn = unsafe extern "C" fn(u32, u32);
 
-/// The host API 2.2 table (GOT Artifacts §8.1).
+/// The host API 2.3 table (GOT Artifacts §8.1).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct HostApi {
-    /// `(major << 16) | minor`; 2.2 is `0x0002_0002`.
+    /// `(major << 16) | minor`; 2.3 is `0x0002_0003`.
     pub abi_version: u32,
     /// Size of this table in bytes.
     pub struct_size: u32,
@@ -114,6 +119,8 @@ pub struct HostApi {
     pub assert: Option<AssertFn>,
     /// Sets the next cycle's latched time (host ABI 2.2).
     pub set_cycle_time_ns: Option<SetCycleTimeFn>,
+    /// Debug checkpoint hook (host ABI 2.3).
+    pub debug_check: Option<DebugCheckFn>,
 }
 
 /// The process-wide host API table passed to every attached module.
@@ -132,6 +139,7 @@ pub static HOST_API: HostApi = HostApi {
     state_save: Some(service_state_save),
     assert: Some(service_assert),
     set_cycle_time_ns: Some(service_set_cycle_time_ns),
+    debug_check: Some(service_debug_check),
 };
 
 /// Returns the table pointer passed to `stc_module_attach`.
@@ -159,6 +167,7 @@ pub fn service_address(service: u8) -> Option<usize> {
         service::STATE_SAVE => HOST_API.state_save.map(|function| function as usize),
         service::ASSERT => HOST_API.assert.map(|function| function as usize),
         service::SET_CYCLE_TIME_NS => HOST_API.set_cycle_time_ns.map(|function| function as usize),
+        service::DEBUG_CHECK => HOST_API.debug_check.map(|function| function as usize),
         _ => None,
     }
 }
@@ -475,6 +484,15 @@ unsafe extern "C" fn service_set_cycle_time_ns(ns: i64) {
     crate::stc_rt_set_cycle_time_ns(ns);
 }
 
+/// Debug checkpoint hook (host ABI 2.3).
+///
+/// Phase 2 installs the ABI slot only: without a debug session the call is a
+/// no-op and observes nothing. The service must stay callable on the cycle
+/// thread, so it holds no lock and performs no allocation. Phase 6 replaces
+/// this body with breakpoint matching, validation, and stop/park handling
+/// driven by the session state.
+unsafe extern "C" fn service_debug_check(_checkpoint_id: u32, _span_id: u32) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,8 +508,8 @@ mod tests {
     }
 
     #[test]
-    fn table_has_the_abi_2_2_shape() {
-        assert_eq!(HOST_API.abi_version, 0x0002_0002);
+    fn table_has_the_abi_2_3_shape() {
+        assert_eq!(HOST_API.abi_version, 0x0002_0003);
         assert_eq!(
             ABI_VERSION,
             (u32::from(stc_got::HOST_ABI_MAJOR) << 16) | u32::from(stc_got::HOST_ABI_MINOR)
@@ -512,22 +530,38 @@ mod tests {
         assert!(HOST_API.state_save.is_some());
         assert!(HOST_API.assert.is_some());
         assert!(HOST_API.set_cycle_time_ns.is_some());
+        assert!(HOST_API.debug_check.is_some());
     }
 
     #[test]
     fn every_service_id_has_a_distinct_entry_point() {
         let mut addresses = Vec::new();
-        for id in 1..=12 {
+        for id in 1..=13 {
             let address = service_address(id).expect("service address");
             assert!(!addresses.contains(&address), "duplicate address for {id}");
             addresses.push(address);
         }
         assert_eq!(service_address(0), None);
-        assert_eq!(service_address(13), None);
+        assert_eq!(service_address(14), None);
         assert_eq!(
             service_address(service::TRAP),
             Some(HOST_API.trap.expect("trap") as usize)
         );
+    }
+
+    #[test]
+    fn debug_check_is_a_lock_free_no_op_without_a_session() {
+        let check = HOST_API.debug_check.expect("debug_check");
+        assert_eq!(service::DEBUG_CHECK, 13);
+        assert_eq!(service_address(service::DEBUG_CHECK), Some(check as usize));
+        // SAFETY: the table entry has the documented ABI signature and the
+        // phase-2 body only reads its arguments.
+        unsafe {
+            check(1, 2);
+            check(u32::MAX, u32::MAX);
+        }
+        assert!(last_trap().is_none());
+        assert_eq!(current_generation(), 0, "the hook takes no host state");
     }
 
     #[test]

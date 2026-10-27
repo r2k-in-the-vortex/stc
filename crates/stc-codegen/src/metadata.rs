@@ -363,6 +363,38 @@ pub struct SpanMetadata {
     pub entries: Vec<SpanMetadataEntry>,
 }
 
+/// One checkpoint-table entry (Debug and Monitoring §16.2).
+#[derive(Clone, Debug)]
+pub struct DebugCheckpointMetadata {
+    /// Dense ID, 1..N.
+    pub id: u32,
+    /// Span-table index.
+    pub span: u32,
+    /// Function `GotId` (`0x…`).
+    pub function: String,
+    /// 1-based source line.
+    pub line: u32,
+    /// 1-based source column.
+    pub column: u32,
+    /// Statement/block/call/back-edge flags.
+    pub flags: u32,
+}
+
+/// The additive sidecar `debug` object, format 1.
+#[derive(Clone, Debug)]
+pub struct DebugMetadata {
+    /// Paired build identity (`0x…`).
+    pub build_id: String,
+    /// Debug object format.
+    pub format: i64,
+    /// Whether service 13 is imported and at least one checkpoint exists.
+    pub hooks: bool,
+    /// `dwarf`, `codeview`, or `none`.
+    pub info: &'static str,
+    /// Entries sorted by ID.
+    pub checkpoints: Vec<DebugCheckpointMetadata>,
+}
+
 /// The complete metadata document.
 #[derive(Clone, Debug)]
 pub struct Metadata {
@@ -401,6 +433,8 @@ pub struct Metadata {
     pub exports: Vec<ExportMetadata>,
     /// Span table.
     pub spans: SpanMetadata,
+    /// Debug checkpoint table; absent for release builds.
+    pub debug: Option<DebugMetadata>,
 }
 
 impl Metadata {
@@ -477,6 +511,9 @@ impl Metadata {
         );
         root.insert("retain".into(), retain_json(&self.retain));
         root.insert("spans".into(), spans_json(&self.spans));
+        if let Some(debug) = &self.debug {
+            root.insert("debug".into(), debug_json(debug));
+        }
         root.insert(
             "tasks".into(),
             Json::Array(
@@ -682,6 +719,42 @@ fn retain_json(retain: &RetainMetadata) -> Json {
             ),
         ),
         ("size".into(), Json::Number(i128::from(retain.size))),
+    ])
+}
+
+/// Maximum serialized size of the additive `debug` object.
+pub(crate) const DEBUG_OBJECT_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Returns the compact serialized size of a debug object.
+pub(crate) fn debug_object_len(debug: &DebugMetadata) -> usize {
+    debug_json(debug).render().len()
+}
+
+fn debug_json(debug: &DebugMetadata) -> Json {
+    Json::object([
+        ("build_id".into(), Json::String(debug.build_id.clone())),
+        (
+            "checkpoints".into(),
+            Json::Array(
+                debug
+                    .checkpoints
+                    .iter()
+                    .map(|checkpoint| {
+                        Json::object([
+                            ("column".into(), Json::Number(i128::from(checkpoint.column))),
+                            ("flags".into(), Json::Number(i128::from(checkpoint.flags))),
+                            ("function".into(), Json::String(checkpoint.function.clone())),
+                            ("id".into(), Json::Number(i128::from(checkpoint.id))),
+                            ("line".into(), Json::Number(i128::from(checkpoint.line))),
+                            ("span".into(), Json::Number(i128::from(checkpoint.span))),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        ("format".into(), Json::Number(i128::from(debug.format))),
+        ("hooks".into(), Json::Bool(debug.hooks)),
+        ("info".into(), Json::String(debug.info.into())),
     ])
 }
 

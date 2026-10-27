@@ -76,7 +76,11 @@ fn run(args: &[String]) -> ExitCode {
         Ok(Some(invocation)) => invocation,
         Ok(None) => return ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("stc: {message}");
+            if let Some(rest) = message.strip_prefix("STC-E-PROJECT-010: ") {
+                eprintln!("error[STC-E-PROJECT-010]: {rest}");
+            } else {
+                eprintln!("stc: {message}");
+            }
             eprintln!("try `stc --help` for usage");
             return ExitCode::from(2);
         }
@@ -120,7 +124,7 @@ fn run(args: &[String]) -> ExitCode {
         Command::New => new::run(&invocation.paths[0], log),
         Command::Clean => clean::run(
             invocation.manifest.as_deref(),
-            invocation.build.out_dir.as_deref(),
+            &invocation.build,
             invocation.locked,
             &mut reporter,
             log,
@@ -315,6 +319,8 @@ fn run_files(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
         && let Some(analysis) = &analysis
     {
         let mut request = invocation.build.clone();
+        let mode = request.mode_override.unwrap_or(build::BuildMode::Debug);
+        request.apply_mode(mode);
         if request.emit.is_empty() {
             request.emit.insert(Emit::Ir);
         }

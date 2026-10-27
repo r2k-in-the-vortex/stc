@@ -312,12 +312,17 @@ pub(crate) fn run(
             .into_iter()
             .collect();
         test_request.test_build = true;
+        // `stc test` always builds the hook-free debug form, regardless of
+        // `[build].debug`, `[debug].default`, or `--debug`.
+        test_request.apply_mode(crate::build::BuildMode::Debug);
+        test_request.out_dir_explicit = false;
         test_request.cold = true;
         test_request.got_manifest = None;
         test_request.renames.clear();
         test_request.allow_untracked_removal = false;
         test_request.relaxed = relaxed;
         test_request.opt_level = root.manifest.build.opt_level;
+        test_request.opt_level_explicit = root.manifest.build.opt_level_explicit;
         test_request.lib_type = root.manifest.build.lib_type;
         test_request.manifest_target = root.manifest.build.target.clone();
         test_request.manifest_clang = root.manifest.build.clang.clone();

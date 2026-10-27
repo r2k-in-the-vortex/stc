@@ -125,8 +125,15 @@ pub struct BuildSettings {
     pub out_dir: String,
     /// Static or shared host library when `lib` is emitted.
     pub lib_type: LibType,
-    /// Parsed debug setting; M6 still builds the debug form (D-158).
+    /// Parsed debug setting; the build-mode precedence uses the explicit
+    /// marker below.
     pub debug: bool,
+    /// Whether `[build].debug` was present, as opposed to defaulted.
+    pub debug_explicit: bool,
+    /// Whether `[build].opt-level` was present, as opposed to defaulted.
+    pub opt_level_explicit: bool,
+    /// Whether `[build].out-dir` was present, as opposed to defaulted.
+    pub out_dir_explicit: bool,
     /// Statement terminator mode.
     pub syntax: SyntaxMode,
     /// Non-empty artifact kinds, in canonical order.
@@ -146,6 +153,9 @@ impl Default for BuildSettings {
             out_dir: "target/stc/debug".to_owned(),
             lib_type: LibType::Static,
             debug: true,
+            debug_explicit: false,
+            opt_level_explicit: false,
+            out_dir_explicit: false,
             syntax: SyntaxMode::Strict,
             emit: vec![EmitKind::Module],
             target: None,
@@ -497,6 +507,8 @@ impl ColdPolicy {
 pub struct DebugSettings {
     /// Default debug mode.
     pub default: bool,
+    /// Whether `[debug].default` was present, as opposed to defaulted.
+    pub default_explicit: bool,
     /// Local transport for the M6.5 debug session.
     pub protocol: DebugProtocol,
     /// Whether an online swap ends debug sessions.
@@ -507,6 +519,7 @@ impl Default for DebugSettings {
     fn default() -> Self {
         Self {
             default: true,
+            default_explicit: false,
             protocol: DebugProtocol::Pipe,
             force_sessions_end_on_swap: true,
         }

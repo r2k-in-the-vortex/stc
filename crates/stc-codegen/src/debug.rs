@@ -66,9 +66,10 @@ pub(crate) struct DebugInfo<'a> {
 
 impl<'a> DebugInfo<'a> {
     /// Builds the fixed metadata skeleton, or returns `None` when debug output
-    /// is disabled or no source text is available.
+    /// is disabled (including every release build) or no source text is
+    /// available.
     pub(crate) fn new(options: &'a Options<'a>, target: &Target) -> Option<Self> {
-        if !options.debug {
+        if !options.debug || options.release {
             return None;
         }
         let source_map = options.source_map?;

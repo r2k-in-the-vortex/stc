@@ -368,6 +368,7 @@ impl Lowerer<'_> {
                 None => IrType::Void,
             }
         };
+        self.record_checkpoint(f, span, crate::unit::checkpoint_flags::CALL);
         let returned = match target {
             CallTarget::Cell(target) => {
                 let slot = self.function_slot(target)?;

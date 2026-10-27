@@ -28,11 +28,11 @@ use crate::ir::{Function, GlobalDef, IrType, Module, SymbolAttrs, Value, c_strin
 use crate::layout::{self, ScalarKind};
 use crate::mangle;
 use crate::metadata::{
-    DeviceMetadata, ExportMetadata, HintMetadata, IoBindingMetadata, ProgramMetadata,
-    ProjectChannel, RetainLeafMetadata as MetaRetainLeaf, SpanMetadata, SpanMetadataEntry,
-    TaskMetadata, VarAccessMetadata,
+    DebugCheckpointMetadata, DebugMetadata, DeviceMetadata, ExportMetadata, HintMetadata,
+    IoBindingMetadata, ProgramMetadata, ProjectChannel, RetainLeafMetadata as MetaRetainLeaf,
+    SpanMetadata, SpanMetadataEntry, TaskMetadata, VarAccessMetadata,
 };
-use crate::module::{FunctionTarget, ModuleArtifacts, RootTarget};
+use crate::module::{FunctionTarget, ModuleArtifacts, ModuleOptions, RootTarget};
 use crate::stmt::LoopTarget;
 use crate::verify::{self, Contract, DescriptorSpec, FunctionTableSpec};
 use crate::{Metadata, Options, Output, SpanEntry};
@@ -63,8 +63,45 @@ pub(crate) struct Lowerer<'a> {
     pub current_slots: Option<Value>,
     pub span_ids: BTreeMap<Span, u32>,
     pub span_entries: Vec<SpanEntry>,
+    /// GOT import slot for service 13, when this build may emit hooks.
+    checkpoint_slot: Option<u32>,
+    /// User body currently being lowered; generated bodies have no target and
+    /// therefore contribute no checkpoints.
+    checkpoint_function: Option<FunctionTarget>,
+    checkpoints: Vec<CheckpointSite>,
+    checkpoint_ordinal: u64,
+    collect_checkpoints: bool,
     pub errors: Vec<CodegenError>,
     seen_errors: BTreeSet<String>,
+}
+
+/// Checkpoint `flags` bits (Debug and Monitoring §16.2).
+pub(crate) mod checkpoint_flags {
+    /// Statement entry.
+    pub(crate) const STATEMENT: u32 = 1 << 0;
+    /// First statement of a block.
+    pub(crate) const BLOCK: u32 = 1 << 1;
+    /// Call site.
+    pub(crate) const CALL: u32 = 1 << 2;
+    /// Loop back-edge.
+    pub(crate) const BACK_EDGE: u32 = 1 << 3;
+}
+
+#[derive(Clone, Debug)]
+struct CheckpointSite {
+    id: u32,
+    function: stc_got::GotId,
+    symbol: String,
+    span: Span,
+    span_id: u32,
+    flags: u32,
+    line: u32,
+    column: u32,
+    debug_location: Option<u32>,
+    block: usize,
+    instruction: usize,
+    ordinal: u64,
+    slots: Value,
 }
 
 /// One callable parameter's implementation ABI.
@@ -83,6 +120,8 @@ pub(crate) fn generate(
     options: &Options<'_>,
     target: &Target,
     got: ModuleArtifacts,
+    module_options: &ModuleOptions<'_>,
+    sources: &[String],
 ) -> Result<Output, Vec<CodegenError>> {
     let plan = config::select_plan(hir)?;
     let types = crate::types::TypeSystem::new(hir, target)
@@ -125,6 +164,9 @@ pub(crate) fn generate(
     got.diagnostics.extend(project_io.warnings);
     let (span_ids, span_entries) = build_span_table(hir);
     let debug = crate::debug::DebugInfo::new(options, target);
+    let checkpoint_slot = got.import_slot(ImportService::DebugCheck);
+    let collect_checkpoints =
+        options.debug && !options.release && !options.test_build && checkpoint_slot.is_some();
     let mut lowerer = Lowerer {
         hir,
         options,
@@ -147,6 +189,11 @@ pub(crate) fn generate(
         current_slots: None,
         span_ids,
         span_entries,
+        checkpoint_slot,
+        checkpoint_function: None,
+        checkpoints: Vec::new(),
+        checkpoint_ordinal: 0,
+        collect_checkpoints,
         errors: Vec::new(),
         seen_errors: BTreeSet::new(),
     };
@@ -162,10 +209,45 @@ pub(crate) fn generate(
     if let Err(error) = lowerer.finalize_debug() {
         lowerer.push_error(error);
     }
+    if let Err(error) = lowerer.finalize_checkpoints() {
+        lowerer.push_error(error);
+    }
+    if lowerer.collect_checkpoints && lowerer.checkpoints.is_empty() {
+        // A debug build with no eligible site is hook-free: re-project the GOT
+        // without service 13 so the descriptor, manifest, and required host
+        // minor agree with the empty checkpoint table.
+        let mut hookless = module_options.clone();
+        hookless.debug_hooks = false;
+        match crate::module::project(hir, sources, &hookless) {
+            Ok(final_got) => lowerer.got = final_got,
+            Err(errors) => {
+                return Err(errors
+                    .into_iter()
+                    .map(|error| CodegenError::Unsupported {
+                        code: error.code,
+                        message: error.message,
+                        span: error
+                            .span
+                            .unwrap_or_else(|| Span::empty(stc_span::FileId::new(0), 0)),
+                    })
+                    .collect());
+            }
+        }
+        lowerer.checkpoint_slot = None;
+    }
+    lowerer.emit_final_entry_points();
+    lowerer.emit_module_data();
     if !lowerer.errors.is_empty() {
         return Err(lowerer.errors);
     }
     let metadata = lowerer.build_metadata();
+    if let Some(debug) = &metadata.debug
+        && crate::metadata::debug_object_len(debug) > crate::metadata::DEBUG_OBJECT_LIMIT
+    {
+        return Err(vec![CodegenError::internal(
+            "the debug object exceeds the 64 MiB checkpoint-table limit",
+        )]);
+    }
     if let Err(message) = lowerer.module.check() {
         return Err(vec![CodegenError::internal(message)]);
     }
@@ -250,6 +332,161 @@ impl Lowerer<'_> {
 
     pub(crate) fn span_id(&self, span: Span) -> u32 {
         self.span_ids.get(&span).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn checkpoint_collection_enabled(&self) -> bool {
+        self.collect_checkpoints
+    }
+
+    /// Records one checkpoint at the current program point.
+    ///
+    /// The host call is inserted after lowering, once unreachable blocks have
+    /// been excluded and dense IDs have been assigned.
+    pub(crate) fn record_checkpoint(&mut self, f: &Function, span: Span, flags: u32) {
+        if !self.collect_checkpoints {
+            return;
+        }
+        if span.start == span.end {
+            return;
+        }
+        let Some(function) = self.checkpoint_function else {
+            return;
+        };
+        let Some(got_id) = self.got.function_got_id(function) else {
+            return;
+        };
+        let span_id = self.span_id(span);
+        if span_id == 0 {
+            return;
+        }
+        let Some(source_map) = self.options.source_map else {
+            return;
+        };
+        let location = source_map.location(span);
+        if location.line == 0 || location.column == 0 {
+            return;
+        }
+        let Some(slots) = self.current_slots.clone() else {
+            return;
+        };
+        let ordinal = self.checkpoint_ordinal;
+        self.checkpoint_ordinal += 1;
+        self.checkpoints.push(CheckpointSite {
+            id: 0,
+            function: got_id,
+            symbol: f.name.clone(),
+            span,
+            span_id,
+            flags,
+            line: location.line,
+            column: location.column,
+            debug_location: f.debug_location(),
+            block: f.current_block_index(),
+            instruction: f.current_instruction_count(),
+            ordinal,
+            slots,
+        });
+    }
+
+    fn finalize_checkpoints(&mut self) -> Result<(), CodegenError> {
+        if self.checkpoints.is_empty() {
+            return Ok(());
+        }
+        let mut reachability: BTreeMap<String, Vec<bool>> = BTreeMap::new();
+        for site in &self.checkpoints {
+            if !reachability.contains_key(&site.symbol) {
+                let reachable = self
+                    .module
+                    .functions
+                    .get(&site.symbol)
+                    .map_or_else(Vec::new, Function::reachable_blocks);
+                reachability.insert(site.symbol.clone(), reachable);
+            }
+        }
+        let mut sites = std::mem::take(&mut self.checkpoints)
+            .into_iter()
+            .filter(|site| {
+                reachability
+                    .get(&site.symbol)
+                    .and_then(|blocks| blocks.get(site.block))
+                    .copied()
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        if sites.is_empty() {
+            return Ok(());
+        }
+        sites.sort_by(|left, right| {
+            left.function
+                .cmp(&right.function)
+                .then(left.span.start.cmp(&right.span.start))
+                .then(left.span.end.cmp(&right.span.end))
+                .then(left.flags.cmp(&right.flags))
+                .then(left.ordinal.cmp(&right.ordinal))
+        });
+        for (index, site) in sites.iter_mut().enumerate() {
+            site.id = u32::try_from(index + 1).map_err(|_| {
+                CodegenError::internal("more than u32::MAX debug checkpoints in one build")
+            })?;
+        }
+        if sites.len() > 1_000_000 {
+            return Err(CodegenError::internal(
+                "the debug checkpoint table exceeds the 1,000,000 entry limit",
+            ));
+        }
+        let slot = self.checkpoint_slot.ok_or_else(|| {
+            CodegenError::internal("checkpoint sites were collected without a debug_check slot")
+        })?;
+        let mut insertions: BTreeMap<(String, usize), Vec<CheckpointSite>> = BTreeMap::new();
+        for site in &sites {
+            insertions
+                .entry((site.symbol.clone(), site.block))
+                .or_default()
+                .push(site.clone());
+        }
+        for ((symbol, block), mut group) in insertions {
+            group.sort_by(|left, right| {
+                right
+                    .instruction
+                    .cmp(&left.instruction)
+                    .then(right.id.cmp(&left.id))
+            });
+            let function = self.module.functions.get_mut(&symbol).ok_or_else(|| {
+                CodegenError::internal(format!("checkpoint function `{symbol}` is not defined"))
+            })?;
+            for site in group {
+                let entry = function.temp(IrType::Ptr);
+                let cell = function.temp(IrType::Ptr);
+                let target = function.temp(IrType::Ptr);
+                let instructions = vec![
+                    (
+                        format!(
+                            "{} = getelementptr ptr, ptr {}, i64 {slot}",
+                            entry.repr, site.slots.repr
+                        ),
+                        site.debug_location,
+                    ),
+                    (
+                        format!("{} = load ptr, ptr {}, align 8", cell.repr, entry.repr),
+                        site.debug_location,
+                    ),
+                    (
+                        format!("{} = load ptr, ptr {}, align 8", target.repr, cell.repr),
+                        site.debug_location,
+                    ),
+                    (
+                        format!(
+                            "call void {}(i32 {}, i32 {})",
+                            target.repr, site.id, site.span_id
+                        ),
+                        site.debug_location,
+                    ),
+                ];
+                function.insert_instructions(block, site.instruction, instructions);
+            }
+        }
+        self.checkpoints = sites;
+        Ok(())
     }
 
     fn build_symbols(&mut self) {
@@ -430,7 +667,6 @@ impl Lowerer<'_> {
                 "void @llvm.dbg.declare(metadata, metadata, metadata)",
             );
         }
-        self.emit_module_data();
         self.emit_user_functions();
         self.emit_fb_bodies();
         self.emit_methods();
@@ -441,9 +677,16 @@ impl Lowerer<'_> {
         self.emit_shutdown();
         self.emit_retain_functions();
         self.emit_export_wrappers();
+        self.emit_detach();
+        // `emit_attach`, the module accessors, and the embedded metadata symbol
+        // are emitted after checkpoint finalisation: they depend on the final
+        // hook state and on the checkpoint table that may have been filtered
+        // away by the hookless re-projection.
+    }
+
+    fn emit_final_entry_points(&mut self) {
         self.emit_module_accessors();
         self.emit_attach();
-        self.emit_detach();
         self.add_metadata_symbol();
     }
 
@@ -676,6 +919,9 @@ impl Lowerer<'_> {
         }
         self.lower_result_objects(&mut f, &mut info, def, result)?;
         let previous = self.current_slots.replace(slots);
+        let previous_checkpoint = self
+            .checkpoint_function
+            .replace(FunctionTarget::Function(def));
         let result = (|| -> Result<(), CodegenError> {
             self.lower_locals(&mut f, &mut info, &body.locals)?;
             let mut loops: Vec<LoopTarget> = Vec::new();
@@ -696,6 +942,7 @@ impl Lowerer<'_> {
             self.module.add_function(f);
             Ok(())
         })();
+        self.checkpoint_function = previous_checkpoint;
         self.current_slots = previous;
         result
     }
@@ -959,6 +1206,9 @@ impl Lowerer<'_> {
         let debug_name = self.debug_function_name(def);
         self.begin_debug_function(&mut f, def, debug_name, None, &[], &body.locals, body.span)?;
         let previous = self.current_slots.replace(slots);
+        let previous_checkpoint = self
+            .checkpoint_function
+            .replace(FunctionTarget::FbBody(def));
         let result = (|| -> Result<(), CodegenError> {
             self.lower_locals(&mut f, &mut info, &body.locals)?;
             let mut loops: Vec<LoopTarget> = Vec::new();
@@ -972,6 +1222,7 @@ impl Lowerer<'_> {
             self.module.add_function(f);
             Ok(())
         })();
+        self.checkpoint_function = previous_checkpoint;
         self.current_slots = previous;
         result
     }
@@ -1101,6 +1352,9 @@ impl Lowerer<'_> {
         }
         self.lower_result_objects(&mut f, &mut info, def, result)?;
         let previous = self.current_slots.replace(slots);
+        let previous_checkpoint = self
+            .checkpoint_function
+            .replace(FunctionTarget::Method(def));
         let result = (|| -> Result<(), CodegenError> {
             self.lower_locals(&mut f, &mut info, &body.locals)?;
             let mut loops: Vec<LoopTarget> = Vec::new();
@@ -1121,6 +1375,7 @@ impl Lowerer<'_> {
             self.module.add_function(f);
             Ok(())
         })();
+        self.checkpoint_function = previous_checkpoint;
         self.current_slots = previous;
         result
     }
@@ -1282,6 +1537,9 @@ impl Lowerer<'_> {
             )?;
         }
         let previous = self.current_slots.replace(slots);
+        let previous_checkpoint = self
+            .checkpoint_function
+            .replace(FunctionTarget::ProgramBody(program));
         let result = (|| -> Result<(), CodegenError> {
             if let Some(body) = &body {
                 self.lower_locals(&mut f, &mut info, &body.locals)?;
@@ -1297,6 +1555,7 @@ impl Lowerer<'_> {
             self.module.add_function(f);
             Ok(())
         })();
+        self.checkpoint_function = previous_checkpoint;
         self.current_slots = previous;
         result
     }
@@ -2160,7 +2419,9 @@ impl Lowerer<'_> {
             i64::try_from(abi::host_api::STRUCT_SIZE_OFFSET).unwrap_or(4),
         );
         let size = f.load(IrType::Int(32), &size_pointer, Some(4));
-        let required_size = if self.options.test_build {
+        let required_size = if self.checkpoint_slot.is_some() {
+            abi::host_api::REQUIRED_SIZE_DEBUG_HOOKS
+        } else if self.options.test_build {
             abi::host_api::REQUIRED_SIZE_TEST
         } else {
             abi::host_api::REQUIRED_SIZE
@@ -2520,6 +2781,36 @@ impl Lowerer<'_> {
                 end: entry.end,
             })
             .collect();
+        let debug = ((self.options.debug && !self.options.release) || self.options.test_build)
+            .then(|| {
+                let info = if self.debug_enabled() {
+                    if self.target.triple.contains("msvc") {
+                        "codeview"
+                    } else {
+                        "dwarf"
+                    }
+                } else {
+                    "none"
+                };
+                DebugMetadata {
+                    build_id: self.got.manifest.header.build_id.to_hex(),
+                    format: 1,
+                    hooks: !self.checkpoints.is_empty(),
+                    info,
+                    checkpoints: self
+                        .checkpoints
+                        .iter()
+                        .map(|site| DebugCheckpointMetadata {
+                            id: site.id,
+                            span: site.span_id,
+                            function: site.function.to_hex(),
+                            line: site.line,
+                            column: site.column,
+                            flags: site.flags,
+                        })
+                        .collect(),
+                }
+            });
         Metadata {
             profile: PROFILE,
             compiler: format!("stc {}", env!("CARGO_PKG_VERSION")),
@@ -2571,6 +2862,7 @@ impl Lowerer<'_> {
                 },
                 entries: span_entries,
             },
+            debug,
         }
     }
 }

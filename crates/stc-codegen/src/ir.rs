@@ -568,6 +568,76 @@ impl Function {
         });
     }
 
+    /// Returns the index of the block currently being emitted.
+    #[must_use]
+    pub fn current_block_index(&self) -> usize {
+        self.current
+    }
+
+    /// Returns the number of instructions emitted in the current block.
+    #[must_use]
+    pub fn current_instruction_count(&self) -> usize {
+        self.blocks
+            .get(self.current)
+            .map_or(0, |block| block.instructions.len())
+    }
+
+    /// Inserts instructions before `index` in `block`.
+    ///
+    /// Debug checkpoint calls are collected during lowering and inserted
+    /// afterwards, so unreachable sites can be filtered without leaving calls
+    /// behind.
+    pub(crate) fn insert_instructions(
+        &mut self,
+        block: usize,
+        index: usize,
+        instructions: Vec<(String, Option<u32>)>,
+    ) {
+        let target = &mut self.blocks[block];
+        assert!(
+            index <= target.instructions.len(),
+            "instruction insertion index out of bounds"
+        );
+        let inserted = instructions
+            .into_iter()
+            .map(|(text, debug)| Instruction { text, debug })
+            .collect::<Vec<_>>();
+        target.instructions.splice(index..index, inserted);
+    }
+
+    /// Computes basic-block reachability from the entry block.
+    ///
+    /// Checkpoint eligibility excludes unreachable sites. Branch targets are
+    /// read from the rendered terminators (`br`, conditional `br`, and
+    /// `switch` all spell targets as `label %…`).
+    #[must_use]
+    pub(crate) fn reachable_blocks(&self) -> Vec<bool> {
+        let mut labels = BTreeMap::new();
+        for (index, block) in self.blocks.iter().enumerate() {
+            labels.insert(block.label.clone(), index);
+        }
+        let mut reachable = vec![false; self.blocks.len()];
+        if self.blocks.is_empty() {
+            return reachable;
+        }
+        reachable[0] = true;
+        let mut work = vec![0_usize];
+        while let Some(index) = work.pop() {
+            let Some(terminator) = &self.blocks[index].terminator else {
+                continue;
+            };
+            for target in terminator_targets(&terminator.text) {
+                if let Some(&target_index) = labels.get(target)
+                    && !reachable[target_index]
+                {
+                    reachable[target_index] = true;
+                    work.push(target_index);
+                }
+            }
+        }
+        reachable
+    }
+
     /// Returns `true` when the current block has a terminator.
     #[must_use]
     pub fn is_terminated(&self) -> bool {
@@ -1060,6 +1130,24 @@ impl Function {
         }
         Ok(())
     }
+}
+
+fn terminator_targets(text: &str) -> Vec<&str> {
+    let mut targets = Vec::new();
+    let mut rest = text;
+    while let Some(position) = rest.find("label %") {
+        rest = &rest[position + "label %".len()..];
+        let end = rest
+            .find(|character: char| {
+                !(character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-'))
+            })
+            .unwrap_or(rest.len());
+        if end > 0 {
+            targets.push(&rest[..end]);
+            rest = &rest[end..];
+        }
+    }
+    targets
 }
 
 /// One module-level global.

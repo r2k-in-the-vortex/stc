@@ -758,12 +758,7 @@ fn feature_bits_reject_oop_modules_on_older_hosts() {
     .expect_err("a host without descriptors rejects the module");
     assert_eq!(error.code, stc_got::codes::MODULE_INVALID);
 
-    let abi_20 = HostPlatform::new(
-        PROFILE,
-        common::target(),
-        HOST_ABI_MAJOR,
-        HOST_ABI_MINOR - 2,
-    );
+    let abi_20 = HostPlatform::new(PROFILE, common::target(), HOST_ABI_MAJOR, 0);
     let error = stc_runtime::ValidatedPair::from_bytes(
         &abi_20,
         &artifacts.descriptor_bytes,
