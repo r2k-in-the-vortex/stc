@@ -843,4 +843,116 @@ END_FUNCTION
     assert_eq!(code(&directory.run(&["build", "--timeout", "1s"])), 2);
     assert_eq!(code(&directory.run(&["check", "--list"])), 2);
     assert_eq!(code(&directory.run(&["test", "--", "--unknown"])), 2);
+    for arguments in [
+        ["test", "--release"].as_slice(),
+        ["test", "--debug-server"].as_slice(),
+        ["test", "--debug-protocol", "pipe"].as_slice(),
+    ] {
+        let output = directory.run(arguments);
+        assert_eq!(code(&output), 2, "{arguments:?}\n{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("STC-E-PROJECT-010"),
+            "{arguments:?}\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+fn find_file_in(root: &Path, suffix: &str) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_file_in(&path, suffix) {
+                return Some(found);
+            }
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(suffix))
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn find_file(root: &Path, suffix: &str) -> PathBuf {
+    find_file_in(root, suffix).unwrap_or_else(|| panic!("no `{suffix}` under `{}`", root.display()))
+}
+
+#[test]
+fn test_builds_stay_hook_free_at_abi_2_2() {
+    let Some(_clang) = clang() else {
+        return;
+    };
+    let directory = TestDir::new("hook-free");
+    directory.manifest("");
+    directory.write(
+        "src/main.st",
+        "PROGRAM Main
+VAR n : DINT; END_VAR
+  n := n + 1;
+END_PROGRAM
+",
+    );
+    directory.write(
+        "tests/smoke.st",
+        "{stc:test}
+FUNCTION Smoke : BOOL
+  Smoke := TRUE;
+END_FUNCTION
+",
+    );
+    let output = directory.run_test(&["--no-run"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let root = directory.path.join("target/stc/test");
+    let metadata_path = find_file(&root, ".stc-meta.json");
+    let text = std::fs::read_to_string(&metadata_path).expect("test metadata");
+    let metadata: serde_json::Value = serde_json::from_str(&text).expect("parse test metadata");
+    let debug = metadata["debug"].as_object().expect("test debug object");
+    assert_eq!(debug["hooks"], false);
+    assert_eq!(debug["format"], 1);
+    assert!(
+        debug["checkpoints"].as_array().is_some_and(Vec::is_empty),
+        "test builds have no checkpoint table: {debug:?}"
+    );
+    assert_ne!(debug["info"], "none", "test builds keep debug info");
+
+    let directory_path = metadata_path.parent().expect("artifact directory");
+    let module = directory_path.join(
+        metadata["module"]["file"]
+            .as_str()
+            .expect("test module file"),
+    );
+    let manifest_path = find_file(directory_path, ".stc-got.bin");
+    let platform = stc_runtime::HostPlatform::new(
+        stc_runtime::PROFILE,
+        stc_codegen::resolve_target(Some(&stc_codegen::host_triple())),
+        stc_got::HOST_ABI_MAJOR,
+        stc_got::HOST_ABI_MINOR,
+    );
+    let candidate = stc_runtime::Candidate::open(&platform, &module, &manifest_path)
+        .unwrap_or_else(|error| panic!("test candidate: {error}"));
+    let descriptor = candidate.descriptor();
+    assert_eq!(descriptor.host_abi_minor, 2);
+    assert_ne!(
+        descriptor.entry_flags & stc_got::descriptor::entry_flag::DEBUG_BUILD,
+        0
+    );
+    assert_eq!(
+        descriptor.entry_flags & stc_got::descriptor::entry_flag::DEBUG_HOOKS,
+        0
+    );
+    assert_eq!(
+        descriptor.required_features & stc_got::descriptor::feature::DEBUG_HOOKS,
+        0
+    );
+    assert!(
+        !descriptor
+            .slots
+            .iter()
+            .any(|slot| { slot.service == stc_got::ImportService::DebugCheck.id() }),
+        "test builds do not import service 13"
+    );
 }

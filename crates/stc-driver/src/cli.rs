@@ -6,7 +6,7 @@
 
 use stc_manifest::LintLevel;
 
-use crate::build::{Emit, Request};
+use crate::build::{BuildMode, Emit, Request};
 use crate::report::{ColorChoice, Format, LintOverrides};
 
 /// A driver command.
@@ -238,12 +238,44 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             "-q" | "--quiet" => quiet = true,
             "-v" | "--verbose" => verbosity = verbosity.max(1),
             "-vv" => verbosity = 2,
-            "--debug" => build.debug = true,
-            "--release" => {
+            "--debug" => select_build_mode(&mut build, BuildMode::Debug)?,
+            "--release" => select_build_mode(&mut build, BuildMode::Release)?,
+            "--debug-server" => {
+                if command == Command::Test {
+                    return Err(
+                        "STC-E-PROJECT-010: `stc test` always builds the hook-free debug form and \
+                         rejects `--debug-server`"
+                            .into(),
+                    );
+                }
                 return Err(
-                    "`--release` is not supported until M6.5; M6 builds the unoptimised debug form"
-                        .into(),
+                    "`--debug-server` is not available until the M6.5 debug session phase".into(),
                 );
+            }
+            "--debug-protocol" => {
+                let value = next_value(args, &mut index, "--debug-protocol")?;
+                if command == Command::Test {
+                    return Err(
+                        "STC-E-PROJECT-010: `stc test` always builds the hook-free debug form and \
+                         rejects `--debug-protocol`"
+                            .into(),
+                    );
+                }
+                return Err(format!(
+                    "`--debug-protocol {value}` is not available until the M6.5 debug session phase"
+                ));
+            }
+            other if other.starts_with("--debug-protocol=") => {
+                if command == Command::Test {
+                    return Err(
+                        "STC-E-PROJECT-010: `stc test` always builds the hook-free debug form and \
+                         rejects `--debug-protocol`"
+                            .into(),
+                    );
+                }
+                return Err(format!(
+                    "`{other}` is not available until the M6.5 debug session phase"
+                ));
             }
             "--cold" => build.cold = true,
             "--allow-untracked-removal" => build.allow_untracked_removal = true,
@@ -293,9 +325,13 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             other if other.starts_with("--emit=") => {
                 build.emit = parse_emit(&other["--emit=".len()..])?;
             }
-            "--out-dir" => build.out_dir = Some(next_value(args, &mut index, "--out-dir")?),
+            "--out-dir" => {
+                build.out_dir = Some(next_value(args, &mut index, "--out-dir")?);
+                build.out_dir_explicit = true;
+            }
             other if other.starts_with("--out-dir=") => {
                 build.out_dir = Some(other["--out-dir=".len()..].to_owned());
+                build.out_dir_explicit = true;
             }
             "--out" => online.out = Some(next_value(args, &mut index, "--out")?),
             other if other.starts_with("--out=") => {
@@ -431,6 +467,20 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     }))
 }
 
+fn select_build_mode(request: &mut Request, mode: BuildMode) -> Result<(), String> {
+    if let Some(previous) = request.mode_override
+        && previous != mode
+    {
+        return Err(
+            "STC-E-PROJECT-010: `--debug` and `--release` are mutually exclusive; select one build \
+             mode"
+                .into(),
+        );
+    }
+    request.mode_override = Some(mode);
+    Ok(())
+}
+
 fn is_attached_lint(argument: &str) -> bool {
     argument.len() > 2
         && matches!(argument.as_bytes()[0], b'-')
@@ -471,8 +521,7 @@ fn validate(
         || build.got_manifest.is_some()
         || build.cold
         || !build.renames.is_empty()
-        || build.allow_untracked_removal
-        || build.debug;
+        || build.allow_untracked_removal;
     if build_only
         && !matches!(
             command,
@@ -484,7 +533,32 @@ fn validate(
                 .into(),
         );
     }
+    if build.mode_override.is_some()
+        && !matches!(
+            command,
+            Command::Build
+                | Command::Metadata
+                | Command::Run
+                | Command::Test
+                | Command::Clean
+                | Command::OnlineDownload
+                | Command::OnlineDiff
+        )
+    {
+        return Err(
+            "`--debug` and `--release` are only valid with `stc build`, `stc metadata`, `stc run`, \
+             `stc test`, `stc clean`, or `stc online`"
+                .into(),
+        );
+    }
     if command == Command::Test {
+        if build.mode_override == Some(BuildMode::Release) {
+            return Err(
+                "STC-E-PROJECT-010: `stc test` always builds the hook-free debug form and rejects \
+                 `--release`"
+                    .into(),
+            );
+        }
         if build.name.is_some() || !build.emit.is_empty() {
             return Err(
                 "`stc test` builds one test artifact per test; `--name`/`--emit` are not valid"
@@ -778,16 +852,19 @@ fn print_help() {
          \x20 stc check [<file>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20           [--relaxed] [--message-format human|json|short] [-v|-vv] [-q]\n\
          \x20 stc build [<file>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
+         \x20           [--debug|--release]\n\
          \x20           [--name <name>] [--emit ir,obj,module,exe,lib,metadata]\n\
          \x20           [--out-dir <dir>] [--target <triple>] [--clang <path>]\n\
          \x20           [--runtime <path>] [--got-manifest <path>] [--cold]\n\
          \x20           [--rename old=new]... [--allow-untracked-removal]\n\
          \x20           [--relaxed] [--message-format human|json|short] [-v|-vv] [-q]\n\
          \x20 stc clean [--manifest-path <stc.toml|dir>] [--out-dir <dir>] [--locked]\n\
+         \x20           [--debug|--release]\n\
          \x20 stc metadata [--manifest-path <stc.toml|dir>] [--locked]\n\
-         \x20           [--message-format human|json] [-v|-vv]\n\
+         \x20           [--debug|--release] [--message-format human|json] [-v|-vv]\n\
          \x20 stc compliance [--message-format human|json]\n\
          \x20 stc run [--manifest-path <stc.toml|dir>] [--locked] [--cycles <n>]\n\
+         \x20         [--debug|--release]\n\
          \x20         [--cycle-time <duration>] [--io null|memory|file]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--target <triple>] [--clang <path>]\n\
@@ -804,10 +881,11 @@ fn print_help() {
          \x20         [--locked] [--message-format human|json|short] [-v|-vv] [-q]\n\
          \x20 stc online download [--out <path>] [--binary <path>] [--store <dir>]\n\
          \x20         [--host <endpoint>] [--nonce <token>] [--manifest-path <stc.toml|dir>]\n\
-         \x20         [--locked] [--message-format human|json] [-v|-vv]\n\
+         \x20         [--locked] [--debug|--release] [--message-format human|json] [-v|-vv]\n\
          \x20 stc online diff <candidate> [--baseline <path>] [--store <dir>]\n\
          \x20         [--host <endpoint>] [--nonce <token>] [--manifest-path <stc.toml|dir>]\n\
-         \x20         [--locked] [--message-format human|json|short] [-v|-vv]\n\
+         \x20         [--locked] [--debug|--release]\n\
+         \x20         [--message-format human|json|short] [-v|-vv]\n\
          \x20 stc rename <old> <new> [--dry-run] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20 stc --version\n\
          \x20 stc --help\n\
@@ -824,8 +902,13 @@ fn print_help() {
          `clean`, and `metadata` load `stc.toml`, compile the package graph in\n\
          dependency order, and report package-qualified diagnostics. The\n\
          file-based form is the explicit manifest-free bridge. Project builds\n\
-         default to `--emit module` and `target/stc/debug`; the manifest-free\n\
-         bridge keeps `--emit ir` and a sanitized file stem. `fmt` formats the\n\
+         default to `--emit module`, the debug build form, and\n\
+         `target/stc/debug`. `--release` selects optimized, stripped,\n\
+         hook-free artifacts in `target/stc/release`; `--debug` forces the\n\
+         debug form. The CLI flags override `[build].debug`, which overrides\n\
+         `[debug].default`. `stc test` always builds the hook-free debug form\n\
+         and rejects `--release`, `--debug-server`, and `--debug-protocol`.\n\
+         The manifest-free bridge keeps `--emit ir` and a sanitized file stem. `fmt` formats the\n\
          given files, or the root package's sources and test sources when no\n\
          paths are given, with the fixed lossless-CST style; `--check` writes\n\
          nothing and exits 1 when a file would change. `online download`\n\
@@ -838,4 +921,67 @@ fn print_help() {
          3 internal error, 4 runtime trap, 130 interrupted.",
         env!("CARGO_PKG_VERSION")
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invocation(args: &[&str]) -> Invocation {
+        let args = args
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        parse(&args)
+            .unwrap_or_else(|error| panic!("parse failed: {error}"))
+            .expect("not a help/version invocation")
+    }
+
+    #[test]
+    fn online_commands_accept_both_build_modes() {
+        assert_eq!(
+            invocation(&["online", "download", "--release"])
+                .build
+                .mode_override,
+            Some(BuildMode::Release)
+        );
+        assert_eq!(
+            invocation(&["online", "diff", "candidate.json", "--debug"])
+                .build
+                .mode_override,
+            Some(BuildMode::Debug)
+        );
+    }
+
+    #[test]
+    fn debug_and_release_flags_conflict() {
+        let args = ["build", "--debug", "--release"]
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        let error = match parse(&args) {
+            Ok(_) => panic!("both modes must fail"),
+            Err(error) => error,
+        };
+        assert!(error.starts_with("STC-E-PROJECT-010: "), "{error}");
+    }
+
+    #[test]
+    fn test_rejects_release_and_debug_session_flags() {
+        for args in [
+            ["test", "--release"].as_slice(),
+            ["test", "--debug-server"].as_slice(),
+            ["test", "--debug-protocol", "pipe"].as_slice(),
+        ] {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            let error = match parse(&args) {
+                Ok(_) => panic!("`stc test` must reject the flag"),
+                Err(error) => error,
+            };
+            assert!(error.starts_with("STC-E-PROJECT-010: "), "{error}");
+        }
+    }
 }

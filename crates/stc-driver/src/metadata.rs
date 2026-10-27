@@ -74,6 +74,35 @@ pub(crate) fn print(generated: &Generated, request: &Request, json: bool) {
         );
         println!("    {:<8} {file}", build::emit_kind(*kind));
     }
+    println!("  build mode       {}", build_mode(request));
+    println!("  debug info       {}", debug_info(generated));
+    println!("  debug hooks      {}", debug_hooks(generated));
+}
+
+fn build_mode(request: &Request) -> &'static str {
+    if request.release {
+        build::BuildMode::Release.as_str()
+    } else {
+        build::BuildMode::Debug.as_str()
+    }
+}
+
+fn debug_info(generated: &Generated) -> &'static str {
+    generated
+        .output
+        .metadata
+        .debug
+        .as_ref()
+        .map_or("none", |debug| debug.info)
+}
+
+fn debug_hooks(generated: &Generated) -> bool {
+    generated
+        .output
+        .metadata
+        .debug
+        .as_ref()
+        .is_some_and(|debug| debug.hooks)
 }
 
 fn summary(generated: &Generated, request: &Request) -> Json {
@@ -173,5 +202,14 @@ fn summary(generated: &Generated, request: &Request) -> Json {
             ]),
         ),
         ("artifacts".into(), Json::Array(artifacts)),
+        (
+            "build_mode".into(),
+            Json::String(build_mode(request).into()),
+        ),
+        (
+            "debug_info".into(),
+            Json::String(debug_info(generated).into()),
+        ),
+        ("debug_hooks".into(), Json::Bool(debug_hooks(generated))),
     ])
 }

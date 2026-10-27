@@ -357,7 +357,7 @@ fn validate_slot_table(slots: &[SlotRecord]) -> Result<()> {
         }
         match slot.kind {
             SlotKind::Import => {
-                if slot.service == 0 || slot.service > 12 {
+                if slot.service == 0 || slot.service > 13 {
                     return Err(Error::new(
                         codes::MODULE_INVALID,
                         format!(
@@ -498,7 +498,7 @@ mod tests {
             vec![slot(0, SlotKind::Data, 1, 1)],
             vec![slot(0, SlotKind::Data, 0, 0)],
             vec![slot(0, SlotKind::Import, 0, 0)],
-            vec![slot(0, SlotKind::Import, 13, 0)],
+            vec![slot(0, SlotKind::Import, 14, 0)],
             vec![import_with_id],
             vec![
                 slot(0, SlotKind::Import, 8, 0),
@@ -508,6 +508,13 @@ mod tests {
         for slots in cases {
             assert!(Got::new(&slots).is_err(), "accepted {slots:?}");
         }
+    }
+
+    #[test]
+    fn accepts_the_debug_check_import_service() {
+        let slots = [slot(0, SlotKind::Import, 13, 0)];
+        let got = Got::new(&slots).expect("the ABI 2.3 debug_check import is valid");
+        assert_eq!(got.slot_count(), 1);
     }
 
     #[test]

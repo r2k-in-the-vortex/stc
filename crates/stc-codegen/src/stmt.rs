@@ -24,9 +24,41 @@ impl Lowerer<'_> {
         stmts: &[StmtId],
         loops: &mut Vec<LoopTarget>,
     ) -> Res<()> {
-        for stmt in stmts {
+        self.lower_stmts_inner(f, info, stmts, loops, false)
+    }
+
+    /// Lowers a control-flow block body. Its first executable statement is a
+    /// checkpoint-eligible block entry (Debug and Monitoring §16.3).
+    pub(crate) fn lower_block_stmts(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        stmts: &[StmtId],
+        loops: &mut Vec<LoopTarget>,
+    ) -> Res<()> {
+        self.lower_stmts_inner(f, info, stmts, loops, true)
+    }
+
+    fn lower_stmts_inner(
+        &mut self,
+        f: &mut Function,
+        info: &BodyInfo,
+        stmts: &[StmtId],
+        loops: &mut Vec<LoopTarget>,
+        block_entry: bool,
+    ) -> Res<()> {
+        let first_executable = stmts
+            .iter()
+            .position(|stmt| !matches!(self.hir.stmt(*stmt).kind, StmtKindHir::Empty));
+        for (index, stmt) in stmts.iter().enumerate() {
             f.ensure_open();
-            self.lower_stmt(f, info, *stmt, loops)?;
+            self.lower_stmt(
+                f,
+                info,
+                *stmt,
+                loops,
+                block_entry && Some(index) == first_executable,
+            )?;
         }
         Ok(())
     }
@@ -37,9 +69,17 @@ impl Lowerer<'_> {
         info: &BodyInfo,
         id: StmtId,
         loops: &mut Vec<LoopTarget>,
+        block_entry: bool,
     ) -> Res<()> {
         let stmt = self.hir.stmt(id).clone();
         self.set_debug_location(f, stmt.span);
+        if !matches!(stmt.kind, StmtKindHir::Empty) {
+            let mut flags = crate::unit::checkpoint_flags::STATEMENT;
+            if block_entry {
+                flags |= crate::unit::checkpoint_flags::BLOCK;
+            }
+            self.record_checkpoint(f, stmt.span, flags);
+        }
         match stmt.kind {
             StmtKindHir::Assign { place, value } => {
                 let value = self.lower_expr(f, info, value)?;
@@ -63,8 +103,12 @@ impl Lowerer<'_> {
                 step,
                 body,
             } => self.lower_for(f, info, var, start, end, step, &body, stmt.span, loops),
-            StmtKindHir::While { cond, body } => self.lower_while(f, info, cond, &body, loops),
-            StmtKindHir::Repeat { body, cond } => self.lower_repeat(f, info, &body, cond, loops),
+            StmtKindHir::While { cond, body } => {
+                self.lower_while(f, info, cond, &body, stmt.span, loops)
+            }
+            StmtKindHir::Repeat { body, cond } => {
+                self.lower_repeat(f, info, &body, cond, stmt.span, loops)
+            }
             StmtKindHir::Exit => {
                 let Some(target) = loops.last() else {
                     return Err(CodegenError::internal("`EXIT` outside a loop"));
@@ -100,7 +144,7 @@ impl Lowerer<'_> {
     ) -> Res<()> {
         let end = f.next_block_label();
         if arms.is_empty() {
-            self.lower_stmts(f, info, else_body, loops)?;
+            self.lower_block_stmts(f, info, else_body, loops)?;
         } else {
             for (condition, body) in arms {
                 let body_label = f.next_block_label();
@@ -108,13 +152,13 @@ impl Lowerer<'_> {
                 let condition = self.lower_condition(f, info, *condition)?;
                 f.cond_branch(&condition, &body_label, &next_label);
                 f.start_block(&body_label);
-                self.lower_stmts(f, info, body, loops)?;
+                self.lower_block_stmts(f, info, body, loops)?;
                 if !f.is_terminated() {
                     f.branch(&end);
                 }
                 f.start_block(&next_label);
             }
-            self.lower_stmts(f, info, else_body, loops)?;
+            self.lower_block_stmts(f, info, else_body, loops)?;
         }
         if !f.is_terminated() {
             f.branch(&end);
@@ -170,13 +214,13 @@ impl Lowerer<'_> {
                 .ok_or_else(|| CodegenError::internal("CASE arm without a usable label"))?;
             f.cond_branch(&condition, &body_label, &next_label);
             f.start_block(&body_label);
-            self.lower_stmts(f, info, &arm.body, loops)?;
+            self.lower_block_stmts(f, info, &arm.body, loops)?;
             if !f.is_terminated() {
                 f.branch(&end);
             }
             f.start_block(&next_label);
         }
-        self.lower_stmts(f, info, else_body, loops)?;
+        self.lower_block_stmts(f, info, else_body, loops)?;
         if !f.is_terminated() {
             f.branch(&end);
         }
@@ -240,7 +284,7 @@ impl Lowerer<'_> {
             break_label: exit.clone(),
             continue_label: increment.clone(),
         });
-        self.lower_stmts(f, info, body, loops)?;
+        self.lower_block_stmts(f, info, body, loops)?;
         loops.pop();
         if !f.is_terminated() {
             f.branch(&increment);
@@ -250,6 +294,7 @@ impl Lowerer<'_> {
         let current = self.read_place(f, info, var)?;
         let next = self.checked_increment(f, kind, &current, &step_value, span)?;
         self.write_place(f, info, var, next)?;
+        self.record_checkpoint(f, span, crate::unit::checkpoint_flags::BACK_EDGE);
         f.branch(&header);
         f.start_block(&exit);
         Ok(())
@@ -300,9 +345,13 @@ impl Lowerer<'_> {
         info: &BodyInfo,
         cond: ExprId,
         body: &[StmtId],
+        span: Span,
         loops: &mut Vec<LoopTarget>,
     ) -> Res<()> {
         let condition_label = f.next_block_label();
+        let back_edge = self
+            .checkpoint_collection_enabled()
+            .then(|| f.next_block_label());
         let body_label = f.next_block_label();
         let exit = f.next_block_label();
         f.branch(&condition_label);
@@ -312,11 +361,16 @@ impl Lowerer<'_> {
         f.start_block(&body_label);
         loops.push(LoopTarget {
             break_label: exit.clone(),
-            continue_label: condition_label.clone(),
+            continue_label: back_edge.clone().unwrap_or_else(|| condition_label.clone()),
         });
-        self.lower_stmts(f, info, body, loops)?;
+        self.lower_block_stmts(f, info, body, loops)?;
         loops.pop();
         if !f.is_terminated() {
+            f.branch(back_edge.as_ref().unwrap_or(&condition_label));
+        }
+        if let Some(back_edge) = back_edge {
+            f.start_block(&back_edge);
+            self.record_checkpoint(f, span, crate::unit::checkpoint_flags::BACK_EDGE);
             f.branch(&condition_label);
         }
         f.start_block(&exit);
@@ -329,10 +383,14 @@ impl Lowerer<'_> {
         info: &BodyInfo,
         body: &[StmtId],
         cond: ExprId,
+        span: Span,
         loops: &mut Vec<LoopTarget>,
     ) -> Res<()> {
         let body_label = f.next_block_label();
         let condition_label = f.next_block_label();
+        let back_edge = self
+            .checkpoint_collection_enabled()
+            .then(|| f.next_block_label());
         let exit = f.next_block_label();
         f.branch(&body_label);
         f.start_block(&body_label);
@@ -340,14 +398,19 @@ impl Lowerer<'_> {
             break_label: exit.clone(),
             continue_label: condition_label.clone(),
         });
-        self.lower_stmts(f, info, body, loops)?;
+        self.lower_block_stmts(f, info, body, loops)?;
         loops.pop();
         if !f.is_terminated() {
             f.branch(&condition_label);
         }
         f.start_block(&condition_label);
         let condition = self.lower_condition(f, info, cond)?;
-        f.cond_branch(&condition, &exit, &body_label);
+        f.cond_branch(&condition, &exit, back_edge.as_ref().unwrap_or(&body_label));
+        if let Some(back_edge) = back_edge {
+            f.start_block(&back_edge);
+            self.record_checkpoint(f, span, crate::unit::checkpoint_flags::BACK_EDGE);
+            f.branch(&body_label);
+        }
         f.start_block(&exit);
         Ok(())
     }

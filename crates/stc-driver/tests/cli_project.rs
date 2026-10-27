@@ -213,6 +213,15 @@ VAR x : DINT; END_VAR
 END_PROGRAM
 ";
 
+const WARNING_PROGRAM: &str = "\
+PROGRAM Main
+VAR
+  counter : DINT;
+END_VAR
+  counter := 8#10;
+END_PROGRAM
+";
+
 #[test]
 fn new_scaffolds_a_buildable_project() {
     let project = TestDir::new("new-scaffold");
@@ -561,6 +570,25 @@ fn shared_and_static_host_libraries() {
             .is_file()
     );
 
+    let output = project.run(
+        "app",
+        &[
+            "build",
+            "--release",
+            "--clang",
+            clang,
+            "--runtime",
+            static_library.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        project
+            .path(&format!("app/target/stc/release/{static_name}"))
+            .is_file(),
+        "release static host libraries copy the runtime archive"
+    );
+
     std::fs::write(
         project.path("app/stc.toml"),
         app_manifest("app", "emit = [\"lib\"]\nlib-type = \"shared\""),
@@ -589,20 +617,41 @@ fn shared_and_static_host_libraries() {
             .path(&format!("app/target/stc/debug/{shared_name}"))
             .is_file()
     );
-    // Generated code stays in the separate module artifact.
-    let has_module = std::fs::read_dir(project.path("app/target/stc/debug"))
-        .expect("out-dir")
-        .flatten()
-        .any(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            name.starts_with("app-")
-                && (name.ends_with(".dll") || name.ends_with(".so"))
-                && name.len() > "app-.dll".len()
-        });
-    assert!(
-        has_module,
-        "the loadable module is emitted next to the host library"
+
+    let output = project.run(
+        "app",
+        &[
+            "build",
+            "--release",
+            "--clang",
+            clang,
+            "--runtime",
+            shared_library.to_str().unwrap(),
+        ],
     );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        project
+            .path(&format!("app/target/stc/release/{shared_name}"))
+            .is_file()
+    );
+
+    // Generated code stays in the separate module artifact.
+    for mode in ["debug", "release"] {
+        let has_module = std::fs::read_dir(project.path(&format!("app/target/stc/{mode}")))
+            .expect("out-dir")
+            .flatten()
+            .any(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with("app-")
+                    && (name.ends_with(".dll") || name.ends_with(".so"))
+                    && name.len() > "app-.dll".len()
+            });
+        assert!(
+            has_module,
+            "the loadable module is emitted next to the {mode} host library"
+        );
+    }
 }
 
 #[test]
@@ -684,11 +733,13 @@ fn quiet_and_verbose_output() {
     let default = project.run("app", &["check"]);
     assert_eq!(default.status.code(), Some(0));
     assert!(
-        stderr(&default).contains("STC-W-PROJECT-001"),
-        "{}",
+        stderr(&default).is_empty(),
+        "`[build].debug = false` is a supported mode, not a warning:\n{}",
         stderr(&default)
     );
 
+    // A manifest that selects nothing uses the debug default.
+    project.write("app/stc.toml", &app_manifest("app", ""));
     let quiet = project.run("app", &["check", "-q"]);
     assert_eq!(quiet.status.code(), Some(0));
     assert!(stderr(&quiet).is_empty(), "{}", stderr(&quiet));
@@ -703,7 +754,7 @@ fn quiet_and_verbose_output() {
     ] {
         assert!(text.contains(expected), "missing `{expected}` in:\n{text}");
     }
-    assert!(text.contains("STC-W-PROJECT-001"), "{text}");
+    assert!(!text.contains("STC-W-PROJECT-001"), "{text}");
 
     let trace = project.run("app", &["check", "-vv"]);
     let text = stderr(&trace);
@@ -717,7 +768,7 @@ fn quiet_and_verbose_output() {
         stderr(&quiet_verbose)
     );
 
-    let build = project.run("app", &["build", "--emit", "ir", "-v"]);
+    let build = project.run("app", &["build", "--emit", "ir,metadata", "-v"]);
     assert_eq!(build.status.code(), Some(0), "{}", stderr(&build));
     let text = stderr(&build);
     assert!(text.contains("[stc] codegen"), "{text}");
@@ -727,12 +778,35 @@ fn quiet_and_verbose_output() {
     let text = stderr(&build_trace);
     assert!(text.contains("[stc] ir target/stc/debug/app.ll"), "{text}");
 
-    // M6.5 phase 1 emits debug metadata only when `--debug` is explicit; the
-    // default build and its artifacts stay byte-identical to M6.
+    // M6.5 phase 2 makes debug the default build form.
     let default_ir = std::fs::read_to_string(project.path("app/target/stc/debug/app.ll"))
         .expect("read default IR");
-    assert!(!default_ir.contains("!llvm.dbg"), "{default_ir}");
-    assert!(!default_ir.contains("!dbg"), "{default_ir}");
+    assert!(default_ir.contains("!llvm.dbg.cu"), "{default_ir}");
+    assert!(default_ir.contains("!DISubprogram"), "{default_ir}");
+    let default_meta =
+        std::fs::read_to_string(project.path("app/target/stc/debug/app.stc-meta.json"))
+            .expect("read default metadata");
+    assert!(default_meta.contains("\"debug\":"), "{default_meta}");
+    assert!(default_meta.contains("\"hooks\": true"), "{default_meta}");
+
+    let release = project.run(
+        "app",
+        &["build", "--release", "--emit", "ir,metadata", "-vv"],
+    );
+    assert_eq!(release.status.code(), Some(0), "{}", stderr(&release));
+    let text = stderr(&release);
+    assert!(
+        text.contains("[stc] ir target/stc/release/app.ll"),
+        "{text}"
+    );
+    let release_ir = std::fs::read_to_string(project.path("app/target/stc/release/app.ll"))
+        .expect("read release IR");
+    assert!(!release_ir.contains("!llvm.dbg"), "{release_ir}");
+    assert!(!release_ir.contains("!dbg"), "{release_ir}");
+    let release_meta =
+        std::fs::read_to_string(project.path("app/target/stc/release/app.stc-meta.json"))
+            .expect("read release metadata");
+    assert!(!release_meta.contains("\"debug\":"), "{release_meta}");
 
     if let Some(clang) = clang() {
         let output = project.run("app", &["build", "--emit", "obj", "-vv", "--clang", clang]);
@@ -842,12 +916,12 @@ fn project_emits_obj_exe_and_opt_levels() {
 fn lint_levels_and_overrides() {
     let project = TestDir::new("lints");
     project.write("app/stc.toml", &app_manifest("app", "debug = false"));
-    project.write("app/src/main.st", SCAFFOLD_PROGRAM);
+    project.write("app/src/main.st", WARNING_PROGRAM);
 
     let denied = project.run("app", &["check", "-D", "warnings"]);
     assert_eq!(denied.status.code(), Some(1), "{}", stderr(&denied));
     assert!(
-        stderr(&denied).contains("error[STC-W-PROJECT-001]"),
+        stderr(&denied).contains("error[STC-W-LEX-008]"),
         "{}",
         stderr(&denied)
     );
@@ -857,11 +931,11 @@ fn lint_levels_and_overrides() {
 
     let allowed = project.run("app", &["check", "-A", "warnings"]);
     assert_eq!(allowed.status.code(), Some(0), "{}", stderr(&allowed));
-    assert!(!stderr(&allowed).contains("STC-W-PROJECT-001"));
+    assert!(!stderr(&allowed).contains("STC-W-LEX-008"));
 
-    let code_deny = project.run("app", &["check", "-D", "STC-W-PROJECT-001"]);
+    let code_deny = project.run("app", &["check", "-D", "STC-W-LEX-008"]);
     assert_eq!(code_deny.status.code(), Some(1), "{}", stderr(&code_deny));
-    assert!(stderr(&code_deny).contains("STC-W-PROJECT-001"));
+    assert!(stderr(&code_deny).contains("STC-W-LEX-008"));
 
     let unknown = project.run("app", &["check", "-D", "NOT-A-CODE"]);
     assert_eq!(unknown.status.code(), Some(2), "{}", stderr(&unknown));
@@ -871,19 +945,19 @@ fn lint_levels_and_overrides() {
 
     // Manifest levels apply below CLI overrides.
     let mut manifest = app_manifest("app", "debug = false");
-    manifest.push_str("\n[lints]\n\"STC-W-PROJECT-001\" = \"deny\"\n");
+    manifest.push_str("\n[lints]\n\"STC-W-LEX-008\" = \"deny\"\n");
     project.write("app/stc.toml", &manifest);
     let output = project.run("app", &["check"]);
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("error[STC-W-PROJECT-001]"),
+        stderr(&output).contains("error[STC-W-LEX-008]"),
         "{}",
         stderr(&output)
     );
 
-    let output = project.run("app", &["check", "-A", "STC-W-PROJECT-001"]);
+    let output = project.run("app", &["check", "-A", "STC-W-LEX-008"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert!(!stderr(&output).contains("STC-W-PROJECT-001"));
+    assert!(!stderr(&output).contains("STC-W-LEX-008"));
 }
 
 #[test]
@@ -1191,7 +1265,6 @@ fn unimplemented_verbs_and_usage_errors() {
         vec!["online", "download"],
         vec!["online", "diff"],
         vec!["rename", "A", "B"],
-        vec!["build", "--release"],
         vec!["unknown-command"],
         vec!["check", "bad.st", "--locked"],
         vec!["metadata", "extra"],

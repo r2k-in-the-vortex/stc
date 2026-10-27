@@ -530,18 +530,44 @@ fn dependencies_are_validated() {
 }
 
 #[test]
-fn debug_false_emits_the_documented_warning() {
-    let build_debug = parse_ok(&FULL.replace("debug = true", "debug = false"));
-    assert!(build_debug.warnings.iter().any(|warning| {
-        warning.code == "STC-W-PROJECT-001" && warning.message.contains("debug = false")
-    }));
-    let debug_default = parse_ok(&FULL.replace("default = true", "default = false"));
-    assert!(
-        debug_default
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "STC-W-PROJECT-001")
+fn debug_settings_record_explicit_values_without_obsolete_warnings() {
+    let build_only = parse_ok(&FULL.replace("default = true\n", ""));
+    assert!(build_only.warnings.is_empty());
+    assert!(build_only.manifest.build.debug);
+    assert!(build_only.manifest.build.debug_explicit);
+    assert!(build_only.manifest.debug.default);
+    assert!(!build_only.manifest.debug.default_explicit);
+
+    let default_only = parse_ok(&FULL.replace("debug = true\n", ""));
+    assert!(default_only.warnings.is_empty());
+    assert!(default_only.manifest.build.debug);
+    assert!(!default_only.manifest.build.debug_explicit);
+    assert!(default_only.manifest.debug.default);
+    assert!(default_only.manifest.debug.default_explicit);
+
+    let explicit_false = parse_ok(
+        &FULL
+            .replace("debug = true", "debug = false")
+            .replace("default = true", "default = false"),
     );
+    assert!(explicit_false.warnings.is_empty());
+    assert!(!explicit_false.manifest.build.debug);
+    assert!(explicit_false.manifest.build.debug_explicit);
+    assert!(!explicit_false.manifest.debug.default);
+    assert!(explicit_false.manifest.debug.default_explicit);
+}
+
+#[test]
+fn conflicting_explicit_debug_settings_are_rejected() {
+    let conflicted = FULL.replace("debug = true", "debug = false");
+    assert_code(&parse_err(&conflicted), "STC-E-PROJECT-010");
+
+    let agreeing = FULL
+        .replace("debug = true", "debug = false")
+        .replace("default = true", "default = false");
+    let parsed = parse_ok(&agreeing);
+    assert!(!parsed.manifest.build.debug);
+    assert!(!parsed.manifest.debug.default);
 }
 
 #[test]

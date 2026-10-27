@@ -105,7 +105,7 @@ const SUGGESTION_KEY_LIMIT: usize = 64;
 pub struct ParsedManifest {
     /// The validated model.
     pub manifest: Manifest,
-    /// Warnings emitted while parsing (for example `debug = false`).
+    /// Warnings emitted while parsing.
     pub warnings: Vec<Diagnostic>,
 }
 
@@ -209,11 +209,6 @@ impl Parser {
             .push(Diagnostic::error(code, message, span));
     }
 
-    fn warning(&mut self, code: &'static str, message: impl Into<String>, span: Span) {
-        self.diagnostics
-            .push(Diagnostic::warning(code, message, span));
-    }
-
     fn parse_root(&mut self, table: &dyn TableLike) -> Manifest {
         self.check_unknown(table, "top-level", TOP_LEVEL_KEYS);
         let schema = self.parse_schema(table);
@@ -226,6 +221,18 @@ impl Parser {
         let runtime = self.parse_runtime(table);
         let online = self.parse_online(table);
         let debug = self.parse_debug(table);
+        if build.debug_explicit && debug.default_explicit && build.debug != debug.default {
+            let span = table
+                .get("build")
+                .and_then(Item::as_table_like)
+                .and_then(|build| build.get("debug").and_then(|_| build.key("debug")))
+                .map_or_else(|| self.span(None), |key| self.key_span(key));
+            self.error(
+                "STC-E-PROJECT-010",
+                "`[build].debug` and `[debug].default` disagree; set one of them or pass `--debug`/`--release`",
+                span,
+            );
+        }
         let lints = self.parse_lints(table);
         let run = self.parse_run(table);
         let test = self.parse_test(table);
@@ -538,18 +545,20 @@ impl Parser {
         self.check_unknown(build, "[build]", BUILD_KEYS);
         if let Some(value) = build.get("opt-level") {
             settings.opt_level = self.parse_opt_level(value).unwrap_or(OptLevel::O0);
+            settings.opt_level_explicit = true;
         }
-        if let Some(value) = build.get("out-dir")
-            && let Some(path) = self.expect_nonempty_string(value, "STC-E-PROJECT-010", "out-dir")
-        {
-            if let Some(reason) = relative_path_problem(&path) {
-                self.error(
-                    "STC-E-PROJECT-010",
-                    format!("invalid `out-dir` `{path}`: {reason}"),
-                    self.item_span(value),
-                );
+        if let Some(value) = build.get("out-dir") {
+            settings.out_dir_explicit = true;
+            if let Some(path) = self.expect_nonempty_string(value, "STC-E-PROJECT-010", "out-dir") {
+                if let Some(reason) = relative_path_problem(&path) {
+                    self.error(
+                        "STC-E-PROJECT-010",
+                        format!("invalid `out-dir` `{path}`: {reason}"),
+                        self.item_span(value),
+                    );
+                }
+                settings.out_dir = path;
             }
-            settings.out_dir = path;
         }
         if let Some(value) = build.get("lib-type") {
             settings.lib_type = match value.as_str() {
@@ -573,13 +582,7 @@ impl Parser {
         }
         if let Some(value) = build.get("debug") {
             settings.debug = self.expect_bool(value, "STC-E-PROJECT-002", "debug");
-            if !settings.debug {
-                self.warning(
-                    "STC-W-PROJECT-001",
-                    "`debug = false` is parsed but M6 builds the unoptimised debug form without debug information",
-                    self.item_span(value),
-                );
-            }
+            settings.debug_explicit = true;
         }
         if let Some(value) = build.get("syntax") {
             settings.syntax = match value.as_str() {
@@ -1222,13 +1225,7 @@ impl Parser {
         self.check_unknown(debug, "[debug]", DEBUG_KEYS);
         if let Some(value) = debug.get("default") {
             settings.default = self.expect_bool(value, "STC-E-PROJECT-002", "default");
-            if !settings.default {
-                self.warning(
-                    "STC-W-PROJECT-001",
-                    "`[debug].default = false` is parsed but debug information and checkpoint hooks arrive in M6.5",
-                    self.item_span(value),
-                );
-            }
+            settings.default_explicit = true;
         }
         if let Some(value) = debug.get("protocol") {
             match value.as_str() {

@@ -278,6 +278,8 @@ pub enum ImportService {
     Assert = 11,
     /// `set_cycle_time_ns` (host ABI 2.2, test builds only).
     SetCycleTimeNs = 12,
+    /// `debug_check` (host ABI 2.3, debug checkpoint hooks).
+    DebugCheck = 13,
 }
 
 impl ImportService {
@@ -303,6 +305,7 @@ impl ImportService {
             10 => Some(Self::StateSave),
             11 => Some(Self::Assert),
             12 => Some(Self::SetCycleTimeNs),
+            13 => Some(Self::DebugCheck),
             _ => None,
         }
     }
@@ -323,6 +326,7 @@ impl ImportService {
             Self::StateSave => "state_save",
             Self::Assert => "assert",
             Self::SetCycleTimeNs => "set_cycle_time_ns",
+            Self::DebugCheck => "debug_check",
         }
     }
 }

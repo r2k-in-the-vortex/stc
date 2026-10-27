@@ -60,10 +60,12 @@ pub mod module {
 /// VTABLE, and object-record layout that generated code reads directly
 /// (GOT Artifacts §8.5, Runtime and Execution §2.6). Minor 2 (host ABI 2.2)
 /// appends the test-clock service (ID 12) after assert; only test builds
-/// import it and therefore require the larger table prefix.
+/// import it and therefore require the larger table prefix. Minor 3 (host ABI
+/// 2.3) appends the debug checkpoint service (ID 13); debug builds with at
+/// least one checkpoint import it.
 pub mod host_api {
-    /// `(major << 16) | minor` for ABI 2.2.
-    pub const ABI_VERSION: u32 = (2 << 16) | 2;
+    /// `(major << 16) | minor` for ABI 2.3.
+    pub const ABI_VERSION: u32 = (2 << 16) | 3;
     /// Offset of `abi_version` in `stc_host_api`.
     pub const ABI_VERSION_OFFSET: u64 = 0;
     /// Offset of `struct_size` in `stc_host_api`.
@@ -74,6 +76,9 @@ pub mod host_api {
     /// Required prefix length for a test-build module: version, size, and the
     /// twelve ABI 2.2 service pointers.
     pub const REQUIRED_SIZE_TEST: u64 = 8 + 12 * 8;
+    /// Required prefix length for a debug build with checkpoints: version,
+    /// size, and the thirteen ABI 2.3 service pointers.
+    pub const REQUIRED_SIZE_DEBUG_HOOKS: u64 = 8 + 13 * 8;
 }
 
 /// Built-in unit symbols.
@@ -127,8 +132,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_abi_is_2_2_with_the_test_clock_appended() {
-        assert_eq!(host_api::ABI_VERSION, 0x0002_0002);
+    fn host_abi_is_2_3_with_the_debug_check_appended() {
+        assert_eq!(host_api::ABI_VERSION, 0x0002_0003);
         assert_eq!(
             host_api::ABI_VERSION >> 16,
             u32::from(stc_got::HOST_ABI_MAJOR)
@@ -138,9 +143,11 @@ mod tests {
             u32::from(stc_got::HOST_ABI_MINOR)
         );
         // Production modules keep the ABI 2.1 prefix; test builds append the
-        // twelfth service pointer.
+        // twelfth service pointer; debug builds with checkpoints append the
+        // thirteenth.
         assert_eq!(host_api::REQUIRED_SIZE, 8 + 11 * 8);
         assert_eq!(host_api::REQUIRED_SIZE_TEST, 8 + 12 * 8);
+        assert_eq!(host_api::REQUIRED_SIZE_DEBUG_HOOKS, 8 + 13 * 8);
         // Metadata records the ABI major version.
         assert_eq!(ABI_VERSION, i32::from(stc_got::HOST_ABI_MAJOR));
     }

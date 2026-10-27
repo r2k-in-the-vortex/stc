@@ -110,6 +110,13 @@ pub struct ModuleInfo {
     pub output_defaults: Vec<u8>,
     /// Retained-state policy.
     pub retain: RetainInfo,
+    /// Raw additive `debug` object, when the sidecar carries one.
+    ///
+    /// The table is validated by a debug session, not by ordinary module
+    /// loading: a release or hook-free module without the object loads
+    /// normally, and a malformed object cannot prevent the module from
+    /// running.
+    pub debug: Option<Json>,
     /// Raw metadata JSON, retained for the embedding host accessor.
     pub text: String,
 }
@@ -126,6 +133,7 @@ impl Default for ModuleInfo {
             input_defaults: Vec::new(),
             output_defaults: Vec::new(),
             retain: RetainInfo::default(),
+            debug: None,
             text: String::new(),
         }
     }
@@ -176,6 +184,7 @@ impl ModuleInfo {
             )
         })?;
         let object = root.as_object().ok_or_else(metadata_error)?;
+        let debug = object.get("debug").cloned();
         let io = object
             .get("io")
             .and_then(Json::as_object)
@@ -322,6 +331,7 @@ impl ModuleInfo {
             input_defaults,
             output_defaults,
             retain,
+            debug,
             text: text.to_owned(),
         })
     }
@@ -506,6 +516,53 @@ mod tests {
         assert!(!info.retain.enabled);
         assert_eq!(info.retain.file.as_deref(), Some("state/app.stcstate"));
         assert_eq!(info.retain.policy, crate::state::MismatchPolicy::Reset);
+    }
+
+    #[test]
+    fn reads_the_additive_debug_object_without_requiring_it() {
+        let text = r#"{
+            "io": {"image": {"inputs_bytes": 0, "outputs_bytes": 0, "markers_bytes": 0}},
+            "debug": {
+                "build_id": "0x11111111111111111111111111111111",
+                "checkpoints": [{
+                    "column": 3,
+                    "flags": 1,
+                    "function": "0x22222222222222222222222222222222",
+                    "id": 1,
+                    "line": 6,
+                    "span": 12
+                }],
+                "format": 1,
+                "hooks": true,
+                "info": "dwarf"
+            }
+        }"#;
+        let info = ModuleInfo::parse(text).expect("metadata with a debug object");
+        let debug = info
+            .debug
+            .as_ref()
+            .and_then(Json::as_object)
+            .expect("debug");
+        assert_eq!(debug.get("hooks"), Some(&Json::Bool(true)));
+        let checkpoints = debug
+            .get("checkpoints")
+            .and_then(Json::as_array)
+            .expect("checkpoints");
+        assert_eq!(checkpoints.len(), 1);
+
+        let without = ModuleInfo::parse(
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0}}}"#,
+        )
+        .expect("metadata without debug");
+        assert!(without.debug.is_none());
+
+        // The object is opaque to ordinary loading; session.start validates it.
+        let opaque = ModuleInfo::parse(
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0}},
+                "debug":"not-an-object"}"#,
+        )
+        .expect("opaque debug object");
+        assert_eq!(opaque.debug, Some(Json::String("not-an-object".into())));
     }
 
     #[test]
