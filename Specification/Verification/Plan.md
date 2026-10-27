@@ -2,8 +2,9 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-27
-Status: Draft for review. Phase 0 has not started; no verification claim beyond the existing
-exact-function models is made by this document.
+Status: Draft for review. Phase 0 is in progress: P0.0 is complete (review approved 2026-10-27)
+and P0.1 is next; no verification claim beyond the existing exact-function models is made by this
+document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
 [GOT Artifacts and Schemas](../Architecture/GOT-Artifacts.md),

@@ -333,6 +333,33 @@ jobs:
             echo "::error::sorry/admit found in Stc/Exact"
             exit 1
           fi
+      - name: Reject sorry/admit in Phase 0 modules
+        working-directory: lean
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths=(
+            Stc/Syntax
+            Stc/Grammar
+            Stc/Hir
+            Stc/Sem
+            Stc/Codegen
+            Verification
+          )
+          for path in "${paths[@]}"; do
+            if [ ! -e "$path" ]; then
+              echo "::error::Phase 0 module path $path is missing"
+              exit 1
+            fi
+            if grep -rnwE 'sorry|admit' "$path"; then
+              echo "::error::sorry/admit found in $path"
+              exit 1
+            fi
+          done
+      - name: Check the Phase 0 verification registry and axioms
+        run: python3 tools/ci/check_verification_registry.py
+      - name: Check the fail-closed semantics-conformance placeholder
+        run: python3 tools/ci/check_semantics_placeholder.py
       - name: Regenerate exact-function vectors and check they are committed
         if: hashFiles('lean/VectorCli.lean') != ''
         working-directory: lean

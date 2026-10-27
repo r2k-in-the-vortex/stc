@@ -2,8 +2,10 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-27
-Status: Draft for review. Phase 0 decisions P0-D1 through P0-D10 are resolved (2026-10-27);
-no Phase 0 implementation has started.
+Status: Draft for review. Phase 0 decisions P0-D1 through P0-D10 are resolved (2026-10-27).
+P0.0 is complete (review approved 2026-10-27): the charter, module skeleton, registry, CI checks,
+and semantics document skeleton are in place. P0.1 has not started; no source or target semantics
+is defined yet.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -749,3 +751,33 @@ Phase 0 is done when:
 6. Build `stc-sem` against a small hand-written core dump before the full conformance harness.
 7. Add the core corpus and run the first conformance report.
 8. Schedule the P0.7 review once the source and target soundness theorems are proved.
+
+## 16. P0.0 execution record
+
+Date: 2026-10-27.
+
+| Deliverable | Location | State |
+| --- | --- | --- |
+| Scope freeze, claim, TCB, versioning, exclusion register, decision confirmation | [Semantics Charter](Semantics-Charter.md) | Approved 2026-10-27 |
+| Semantics document skeleton | [Semantics.md](Semantics.md) | Approved 2026-10-27 |
+| Lean module skeletons | `lean/Stc/Syntax`, `Stc/Grammar`, `Stc/Hir`, `Stc/Sem`, `Stc/Codegen`, `lean/Verification/Semantics` | `lake build` passes |
+| Theorem registry | `lean/verification-status.toml` | 24 inventory records, all `planned` |
+| Registry validation and axiom audit | `tools/ci/check_verification_registry.py` | CI check active |
+| Fail-closed conformance placeholder | `lake exe semantics-conformance` | Exits 3 while the corpus is empty |
+| Placeholder check | `tools/ci/check_semantics_placeholder.py` | CI check active |
+| No-`sorry`/`admit` and axiom checks | `.github/workflows/ci.yml` (`lean` job) | CI check active |
+| Required-document coverage | `tools/ci/check_docs.py` | Includes the Phase 0 plan, charter, and semantics document |
+
+Local evidence:
+
+```text
+cd lean && lake build
+cd lean && lake exe semantics-conformance            # exit 3: no corpus cases (fail-closed)
+python tools/ci/check_verification_registry.py       # 24 records: 24 planned
+python tools/ci/check_semantics_placeholder.py       # placeholder fails closed as required
+python tools/ci/check_docs.py
+```
+
+P0.0 exit status: complete. The technical exit criteria pass, and the reviewer approved the
+charter, the exclusion register, and the [Semantics.md](Semantics.md) skeleton on 2026-10-27.
+P0.1 starts against the frozen scope.

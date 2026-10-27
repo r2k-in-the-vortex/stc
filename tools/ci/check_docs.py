@@ -44,6 +44,10 @@ REQUIRED_DOCUMENTS = (
     "Specification/Architecture/Online-Change-and-GOT.md",
     "Specification/Architecture/GOT-Artifacts.md",
     "Specification/Architecture/Debug-and-Monitoring.md",
+    "Specification/Verification/Plan.md",
+    "Specification/Verification/Plan-Phase0.md",
+    "Specification/Verification/Semantics-Charter.md",
+    "Specification/Verification/Semantics.md",
     "Specification/Decisions.md",
     "Specification/UTF8-Strings.md",
 )
