@@ -6,9 +6,11 @@ Semantics version: `1.0-draft` (frozen at `1.0` in P0.7)
 HIR dump format version: `0.1-draft` (frozen with the core dump in P0.6)
 Status: Skeleton approved 2026-10-27. P0.1 is complete (review approved 2026-10-27): the token
 model, lossless CST contract, surface AST, and `Derives` relation are defined, and
-`ast_span_wellformed` is proved. P0.2–P0.5 definitions and proofs are added in their sub-phases and reviewed in P0.7. The
-dynamic semantics is not yet defined, so this document does not yet make the Phase 0 soundness
-claim.
+`ast_span_wellformed` is proved. P0.2 is complete (2026-10-27): the typed HIR, the declarative
+typing judgment, the core checker `checkCore`, the conversion relation, HIR well-formedness, and
+the soundness and rejection-characterization theorems are defined and proved. P0.3–P0.5
+definitions and proofs are added in their sub-phases and reviewed in P0.7. The dynamic semantics
+is not yet defined, so this document does not yet make the full Phase 0 soundness claim.
 Charter: [Semantics Charter](Semantics-Charter.md)
 Plan: [Phase 0 Implementation Plan](Plan-Phase0.md) · [Verification Program Plan](Plan.md)
 
@@ -63,10 +65,18 @@ parser-soundness proof; it is not part of the P0.1 exit gate.
 
 ### 2.4 Typed HIR
 
-P0.2 defines the typed HIR in `Stc.Hir.Types` and `Stc.Hir.Core`: types, places, expressions,
-statements, declarations, and programs. It aligns with the Rust `stc-hir` structures and the
-typed views in [AST, CST, and HIR](../AST/AST.md), but the Lean family is the semantic
-reference.
+P0.2 defines the typed HIR in `Stc.Hir.Types` and `Stc.Hir.Core`: canonical `Ty` values
+(`BOOL`, signed/unsigned integers, bit strings, and character layouts), typed literals, places,
+expressions, statements, declarations, and a `HirUnit` with globals, functions, and exactly one
+program. HIR is resolved and lowered: variables are `VarId` indices, callees are function or
+standard-function targets, implicit conversions are explicit `Cast` nodes, call arguments are in
+formal-parameter order, and `CASE` labels are folded constant integers. The family aligns with
+the Rust `stc-hir` structures and the typed views in [AST, CST, and HIR](../AST/AST.md), but the
+Lean family is the semantic reference. The dump alignment and canonical names are P0.6.
+
+`Ty.layout` maps each core type to its `Stc.Exact.IntType` layout: `BOOL` is the one-bit
+unsigned layout, integers carry their signedness, bit strings are unsigned, and `CHAR`/`WCHAR`/
+`UCHAR` are 8/16/32-bit unsigned layouts. `Ty.isCore` fixes the frozen widths.
 
 ### 2.5 HIR-to-IR mapping and the covered fragment
 
@@ -79,36 +89,82 @@ the in-memory fragment.
 
 ### 3.1 Types, values, and widths
 
-P0.2 defines the core type and value families and their widths. `BOOL` is a one-bit unsigned
-layout, an `i8` in memory and an `i1` normalized with `icmp ne 0` in SSA. Integer and bit-string
-operations reuse the existing `Stc.Exact` models, including checked overflow, truncating
-division, masked shift and rotate counts, and conversion rules. `CHAR`, `WCHAR`, and `UCHAR` are
-unsigned integer layouts; `UCHAR` is a 32-bit Unicode scalar.
+P0.2 defines the canonical `Ty` family and its widths. `BOOL` is a one-bit unsigned layout, an
+`i8` in memory and an `i1` normalized with `icmp ne 0` in SSA. Integer and bit-string operations
+reuse the existing `Stc.Exact` models, including checked overflow, truncating division, masked
+shift and rotate counts, and conversion rules. `CHAR`, `WCHAR`, and `UCHAR` are unsigned integer
+layouts; `UCHAR` is a 32-bit Unicode scalar. Literals are typed HIR values with an integer
+payload; `Literal.WellFormed` requires the payload to fit the literal's core type.
+
+HIR typing is monomorphic. The declarative operator rules require arithmetic operands to be the
+same integer type, bitwise operands to be the same `BOOL`/bit-string type, and comparison
+operands to be the same type; comparisons produce `BOOL`. Assignment, argument passing, and
+initializers require exact type equality because lowering has already inserted the source
+analyzer's implicit conversions as explicit `Cast` nodes. The exact standard functions are
+`ABS`, `SEL`, `MIN`, `MAX`, `LIMIT`, and `MUX`; arithmetic, bitwise, and comparison standard
+functions are represented by the operator nodes.
 
 ### 3.2 Declarative typing judgment `HasType`
 
-P0.2 defines `HasType` for expressions, statements, places, declarations, and programs,
-including assignment, conditions, calls, conversions, and the exact standard functions. The
-judgment is intentionally small and is reviewed against the specification rather than inferred
-from the Rust analyzer.
+P0.2 defines the judgment over the lowered HIR in `Stc.Sem.Typing`:
+
+- `ExprHasType ctx e T` synthesizes an expression's type;
+- `CallHasType ctx callee args result` types direct function and standard-function calls;
+- `StmtHasType ctx depth controlled s` types statements, tracking loop depth and the active
+  `FOR` control variables;
+- `GlobalTyped`, `FunctionTyped`, `ProgramTyped`, and whole-unit `HasType p env` cover
+  declarations, initializers, and bodies.
+
+`CASE` requires an integer selector, label bounds that fit the selector type, ordered ranges,
+distinct labels, and no overlap between distinct labels. `FOR` requires an integer control
+variable that is not already controlled, matching start/stop/step types, a non-zero constant
+step, and a body that does not assign the control variable. `EXIT` and `CONTINUE` require an
+enclosing loop. `RETURN` is available in functions and cycle bodies.
+
+Deliberate differences from the Rust analyzer, recorded for P0.6: HIR is post-lowering, so
+the checker does not re-insert implicit conversions; `CASE` selectors are restricted to integer
+types (the analyzer also accepts character, bit-string, and enum selectors); and the P0.2
+checker over-rejects `FOR` (see §3.3).
 
 ### 3.3 Core checker `checkCore`
 
-P0.2 defines the algorithmic checker `checkCore` and proves `core_check_sound`. It proves
-`core_check_complete` where the checker is intended to be complete, and
-`core_rejection_characterized` for the over-rejection that remains deliberate. Known differences
-from the Rust analyzer's diagnostics are recorded with a reason.
+`checkCore : HirUnit → Except Rejection Env` checks declaration types, global and local
+initializers, and every body, and returns the declaration-derived environment. `Rejection`
+carries the named rule and the exact failing construct and context.
+
+Proved:
+
+- `core_check_sound`: `checkCore p = .ok env → HasType p env`.
+- `core_rejection_characterized`: `checkCore p = .error r → FailsRule r`, where `FailsRule`
+  states the named rule's failure condition for the construct carried by `r`.
+- `hir_wellformed`: `checkCore p = .ok env → HirWellFormed p`.
+
+`core_check_complete` is deliberately descoped and registered as such. The P0.2 checker
+over-rejects `FOR` with the named rule `StmtRule.forUnsupported`; the declarative judgment still
+defines `FOR`, and P0.6's interpreter consumes the judgment. Full completeness is deferred to
+Phase 2, where lowering connects the source checker to this judgment. Label validity is
+characterized by the checker's label-problem function; the success path is proved equivalent to
+`CaseLabelsValid` by `checkCaseLabels_sound`.
 
 ### 3.4 Conversions
 
-P0.2 defines the core conversion relation and proves `conversion_legal_iff`: the relation
-accepts exactly the conversions specified for the included types, using the `Stc.Exact`
-conversion model.
+`ConversionLegal` accepts exactly the conversions the analyzer's `can_convert` accepts for the
+core scalar types: identity; integer-to-integer; bit-string-to-bit-string; character-to-
+character; integer/bit-string cross-conversions; and `BOOL` to/from integers and bit strings.
+Character-to-integer conversions are excluded. `conversion_legal_iff` proves the relation is
+decided by `conversionLegalB`, the checker's executable form. `ImplicitConversion` records the
+smaller source-level assignability relation the lowering must realize, and
+`implicit_conversion_legal` proves it is contained in `ConversionLegal`. The behavioural
+agreement between legal conversions and `Stc.Exact.IntType.convert` (success with a destination
+value or a `RANGE` trap) is the conversion half of P0.3's `checked_arith_traps_exactly`.
 
 ### 3.5 Well-formedness
 
-P0.2 defines `hir_wellformed` and proves that accepted HIR satisfies it. Target well-formedness
-`WellFormed` is defined in P0.4 and is the precondition for the target soundness results.
+`HirWellFormed` requires every declared global, parameter, local, and result type to be a core
+type. `hir_wellformed` proves accepted HIR satisfies it. Expression- and statement-level
+restrictions (literal representability, cast legality, bound identifiers, loop depth, `CASE`
+labels, `FOR` control) are part of the typing judgment. Target well-formedness `WellFormed` is
+defined in P0.4 and is the precondition for the target soundness results.
 
 ## 4. Dynamic semantics
 
@@ -191,19 +247,19 @@ semantics and the proved exact functions on one definition of the scalar kernel.
 
 The authoritative status of every entry is [`lean/verification-status.toml`](../../lean/verification-status.toml);
 `tools/ci/check_verification_registry.py` validates it and audits proved theorems. This section
-mirrors the registry at P0.1: `ast_span_wellformed` is proved; the remaining entries are
-`planned`. The registry is regenerated into this section at P0.7.
+mirrors the registry at P0.2: the P0.1 and P0.2 entries are proved except `core_check_complete`,
+which is descoped with the reason recorded in the registry. The registry is regenerated into this section at P0.7.
 
 ### 7.1 Source soundness
 
 | Theorem | Module | Sub-phase | Status |
 | --- | --- | --- | --- |
 | `Stc.Syntax.ast_span_wellformed` | `Stc.Syntax.Ast` | P0.1 | proved |
-| `Stc.Sem.core_check_sound` | `Stc.Sem.Typing` | P0.2 | planned |
-| `Stc.Sem.core_check_complete` | `Stc.Sem.Typing` | P0.2 | planned |
-| `Stc.Sem.core_rejection_characterized` | `Stc.Sem.Typing` | P0.2 | planned |
-| `Stc.Sem.hir_wellformed` | `Stc.Sem.Typing` | P0.2 | planned |
-| `Stc.Sem.conversion_legal_iff` | `Stc.Sem.Typing` | P0.2 | planned |
+| `Stc.Sem.core_check_sound` | `Stc.Sem.Typing` | P0.2 | proved |
+| `Stc.Sem.core_check_complete` | `Stc.Sem.Typing` | P0.2 | descoped (see registry) |
+| `Stc.Sem.core_rejection_characterized` | `Stc.Sem.Typing` | P0.2 | proved |
+| `Stc.Sem.hir_wellformed` | `Stc.Sem.Typing` | P0.2 | proved |
+| `Stc.Sem.conversion_legal_iff` | `Stc.Sem.Typing` | P0.2 | proved |
 | `Stc.Sem.eval_deterministic` | `Stc.Sem.Eval` | P0.3 | planned |
 | `Stc.Sem.progress` | `Stc.Sem.Eval` | P0.3 | planned |
 | `Stc.Sem.preservation` | `Stc.Sem.Eval` | P0.3 | planned |
@@ -279,6 +335,7 @@ construct is rejected.
 | --- | --- | --- | --- |
 | 2026-10-27 | 1.0-draft | P0.0 | Created the skeleton; froze the core scope and exclusions in the charter |
 | 2026-10-27 | 1.0-draft | P0.1 | Defined tokens, trivia, spans, the lossless CST contract, the surface AST, and `Derives`; proved `ast_span_wellformed` and the root source-span lemmas; added the [Core Syntax Coverage](Core-Coverage.md) table |
+| 2026-10-27 | 1.0-draft | P0.2 | Defined the typed HIR, the declarative typing judgment, `checkCore`, `HirWellFormed`, and the conversion relation; proved `core_check_sound`, `core_rejection_characterized`, `hir_wellformed`, and `conversion_legal_iff`; descoped `core_check_complete` with the `FOR` over-rejection recorded |
 
 ## 10. Rust/Lean interface
 

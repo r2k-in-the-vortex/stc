@@ -46,7 +46,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Typing"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -58,8 +58,9 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Typing"
 owner = "verification"
-status = "planned"
+status = "descoped"
 tcb = "core Lean kernel; audited with #print axioms"
+note = "P0.2 proves core_rejection_characterized instead. The P0.2 checker deliberately over-rejects FOR (StmtRule.forUnsupported) and is not complete for the declarative judgment; completeness is deferred to Phase 2, where HIR lowering connects the source checker to this judgment."
 
 [[records]]
 id = "P0-T04"
@@ -70,7 +71,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Typing"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -82,7 +83,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Typing"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -94,7 +95,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Typing"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]

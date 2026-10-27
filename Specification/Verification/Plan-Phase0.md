@@ -6,8 +6,9 @@ Status: Draft for review. Phase 0 decisions P0-D1 through P0-D10 are resolved (2
 P0.0 is complete (review approved 2026-10-27): the charter, module skeleton, registry, CI checks,
 and semantics document skeleton are in place. P0.1 is complete (review approved 2026-10-27):
 the token model, lossless CST contract, surface AST, `Derives` relation, coverage table, and
-`ast_span_wellformed` are in place. P0.2 has not started; no HIR, typing judgment, or dynamic
-semantics is defined yet.
+`ast_span_wellformed` are in place. P0.2 is complete (2026-10-27): the typed HIR, declarative
+typing judgment, `checkCore`, conversion relation, HIR well-formedness, and the soundness and
+rejection-characterization theorems are in place. No dynamic semantics is defined yet.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -819,3 +820,61 @@ python tools/ci/check_docs.py                           # 22 required documents,
 P0.1 exit status: complete. The technical exit criteria pass: the core surface AST and grammar
 relation cover every included production in §3.3, the coverage table is approved, and no
 parser-correctness claim is made. P0.2 starts against these definitions.
+
+## 18. P0.2 execution record
+
+Date: 2026-10-27.
+
+| Deliverable | Location | State |
+| --- | --- | --- |
+| Canonical core types, layouts, literals, and variable identifiers | `lean/Stc/Hir/Types.lean` | Defined; `Ty.ofElementary`, `Ty.layout`, `Ty.isCore`, `Literal.WellFormed` |
+| Typed HIR syntax for expressions, places, statements, declarations, and units | `lean/Stc/Hir/Core.lean` | Defined; `HirUnit` has globals, functions, and one program |
+| Typing contexts, environments, operator and standard-function typing | `lean/Stc/Sem/Typing.lean` | Defined; `Ctx`, `Env`, `ExprHasType`, `CallHasType`, `StdFnHasType` |
+| Statement and whole-unit declarative judgment | `lean/Stc/Sem/Typing.lean` | Defined; `StmtHasType`, `HasType` |
+| Core conversion relation and characterization | `lean/Stc/Sem/Typing.lean` | `ConversionLegal`, `conversion_legal_iff`, `ImplicitConversion` |
+| Algorithmic checker and structured rejection | `lean/Stc/Sem/Typing.lean` | `checkCore : HirUnit → Except Rejection Env`; named `ExprRule`, `StmtRule`, `CaseLabelProblem` |
+| Soundness | `Stc.Sem.core_check_sound` | Proved; no non-standard axioms |
+| Rejection characterization | `Stc.Sem.core_rejection_characterized` | Proved; `FailsRule` states the named rule failure carried by each rejection |
+| HIR well-formedness | `Stc.Sem.hir_wellformed` | Proved; accepted HIR has core declared types |
+| Completeness | `Stc.Sem.core_check_complete` | **Descoped** with the reason recorded in the registry: the P0.2 checker deliberately over-rejects `FOR` (`StmtRule.forUnsupported`); completeness is deferred to Phase 2 |
+| Semantics document updates | [Semantics.md](Semantics.md) §2.4, §3.1–3.5, §7.1, §9.3 | Updated for P0.2 |
+| Registry entries | `lean/verification-status.toml` (`P0-T02`, `P0-T04`, `P0-T05`, `P0-T06`) | Proved; `P0-T03` descoped |
+
+Design notes:
+
+- HIR is the lowered form. Variables are `VarId` indices, callees are resolved, call arguments
+  are in formal-parameter order, implicit conversions are explicit `Cast` nodes, and `CASE`
+  labels are folded integers. The checker therefore requires exact type equality for
+  assignment, argument passing, and initializers. This is a deliberate difference from the Rust
+  analyzer, which inserts implicit conversions during type checking; lowering owns that step.
+- `CASE` selectors are restricted to integer types, as §3.3 specifies. The Rust analyzer also
+  accepts character, bit-string, and enum selectors; the restriction is recorded for P0.6.
+- The exact standard functions are `ABS`, `SEL`, `MIN`, `MAX`, `LIMIT`, and `MUX`. Arithmetic,
+  bitwise, and comparison standard-function forms are represented by operator nodes. Other
+  standard functions are excluded until Phase 6.
+- `FOR` is fully defined by `StmtHasType.forLoop`, but the P0.2 checker rejects it with the
+  named `StmtRule.forUnsupported` rule. This is the explicit over-rejection that
+  `core_rejection_characterized` records in place of completeness. The P0.6 interpreter consumes
+  the declarative judgment, not `checkCore`.
+- Label validity is characterized by the checker's label-problem function; the success path is
+  proved equivalent to `CaseLabelsValid` by `checkCaseLabels_sound`.
+- The behavioural agreement between `ConversionLegal` and `Stc.Exact.IntType.convert` (a
+  destination value or a `RANGE` trap) is stated with P0.3's
+  `checked_arith_traps_exactly`, where the dynamic semantics supplies the values.
+
+Local evidence:
+
+```text
+cd lean && lake build                                   # 34 jobs
+cd lean && #print axioms Stc.Sem.core_check_sound        # no axioms
+cd lean && #print axioms Stc.Sem.core_rejection_characterized
+cd lean && #print axioms Stc.Sem.hir_wellformed
+cd lean && #print axioms Stc.Sem.conversion_legal_iff
+python tools/ci/check_verification_registry.py          # 24 records: 5 proved, 1 descoped, 18 planned
+python tools/ci/check_docs.py
+```
+
+P0.2 exit status: complete. `core_check_sound` is proved; `core_rejection_characterized` is
+proved in place of completeness, with the `FOR` over-rejection recorded; HIR well-formedness is
+defined and preserved by the checker; and the conversion relation is characterized against the
+analyzer's core conversions. The exact-model behaviour link is carried into P0.3.
