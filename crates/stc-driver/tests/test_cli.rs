@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
