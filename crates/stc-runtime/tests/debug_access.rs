@@ -59,6 +59,7 @@ VAR_GLOBAL
   gtime : TIME;
   gbig : LINT;
   gword : WORD;
+  gpoints : ARRAY[0..1] OF Point;
 END_VAR
 
 FUNCTION_BLOCK MyCounter
@@ -83,6 +84,7 @@ VAR
   inner : Point;
   str : STRING[4];
   arr : ARRAY[1..2] OF DINT;
+  points : ARRAY[1..2] OF Point;
 END_VAR
   ticks := ticks + 1;
 END_PROGRAM
@@ -553,9 +555,38 @@ fn reads_split_aggregates_objects_interfaces_references_and_overlap() {
         vec!["5", "6"]
     );
 
-    let unsupported = read_path(&host, "MAIN.INNER").expect_err("untyped parent");
-    assert_eq!(unsupported.code, codes::DEBUG_UNKNOWN);
-    assert!(unsupported.message.contains("manifest format 1"));
+    let parent = read_path(&host, "MAIN.INNER").expect("typed parent aggregate");
+    let DebugValue::Aggregate(fields) = &parent.value else {
+        panic!("parent got {:?}", parent.value);
+    };
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].name, "X");
+    assert_eq!(decimal_value(&fields[0].value), "20");
+    assert_eq!(fields[1].name, "Y");
+    assert_eq!(fields[1].value.value, DebugValue::Bool(true));
+
+    let whole = read_path(&host, "MAIN").expect("whole-program aggregate");
+    assert_eq!(whole.type_key, "MAIN");
+    let DebugValue::Aggregate(fields) = &whole.value else {
+        panic!("program got {:?}", whole.value);
+    };
+    assert!(fields.iter().any(|field| field.name == "INNER"));
+    assert!(fields.iter().any(|field| field.name == "ARR"));
+    let points = read_path(&host, "MAIN.POINTS").expect("program array of aggregates");
+    let DebugValue::Array(values) = &points.value else {
+        panic!("program points");
+    };
+    assert_eq!(values.len(), 2);
+    assert!(matches!(values[0].value, DebugValue::Aggregate(_)));
+
+    let global_points = read_path(&host, "GPOINTS").expect("global array of aggregates");
+    let DebugValue::Array(values) = &global_points.value else {
+        panic!("global points");
+    };
+    assert_eq!(values.len(), 2);
+    assert!(matches!(values[0].value, DebugValue::Aggregate(_)));
+    let element = read_path(&host, "GPOINTS.E1").expect("aggregate array element");
+    assert!(matches!(element.value, DebugValue::Aggregate(_)));
 }
 
 #[test]

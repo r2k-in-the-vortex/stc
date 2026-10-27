@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 implementation pending  
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); session/protocol, breakpoints, split presentation, and the CLI remain
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -742,7 +742,7 @@ target/stc/release/                             default release out-dir (same la
     "input_defaults_hex": "0000…",
     "output_defaults_hex": "0000…"
   },
-  "manifest": { "digest": "0x…", "format": 1 },
+  "manifest": { "digest": "0x…", "format": 2 },
   "mode": "executable",
   "module": { "file": "motor-control-<build-id>.dll", "format": 1 },
   "profile": "stc-2013-oop-utf8-v1",
@@ -773,7 +773,9 @@ target/stc/release/                             default release out-dir (same la
 
 The driver writes the schema above. M6 adds package/device/`VAR_ACCESS` metadata and the
 `file`/`on-mismatch` retained-state policy (JSON field `on_mismatch`); these fields are absent
-from M4.5 artifacts. M6.5 adds the optional `debug` object: it is present in debug-form artifacts
+from M4.5 artifacts. The `manifest.format` value is the paired GOT manifest's outer format: M6.5
+phase 4 emits 2, while the module and descriptor formats in this sidecar remain 1 and the
+metadata schema itself is unchanged (D-180). M6.5 adds the optional `debug` object: it is present in debug-form artifacts
 (with `hooks` true or false and a possibly empty checkpoint array) and absent from release
 artifacts. The object is paired with the module/manifest by `build_id` but is not part of build-ID
 derivation, manifest identity, or online-change compatibility; it is validated per build

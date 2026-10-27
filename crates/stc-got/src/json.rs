@@ -3,6 +3,9 @@
 //! The writer is deterministic: objects are emitted with sorted keys, two-space
 //! indentation, LF line endings, and exactly one trailing LF. The parser is
 //! strict: integers only, no duplicate object keys, and standard JSON escapes.
+//! [`Json::NumberLiteral`] carries a finite non-integer token for audit and
+//! protocol envelopes; artifact projections never use it, and the parser
+//! rejects it.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -18,6 +21,12 @@ pub enum Json {
     Bool(bool),
     /// An integer number.
     Number(i128),
+    /// A finite non-integer JSON number token.
+    ///
+    /// This is only for audit and protocol envelopes. The manifest projection
+    /// never emits it, and [`parse`] rejects a non-integer token. The caller
+    /// supplies a valid JSON number spelling (for example `1.5`).
+    NumberLiteral(String),
     /// A string.
     String(String),
     /// An array.
@@ -172,6 +181,7 @@ impl Json {
             Self::Number(value) => {
                 let _ = write!(out, "{value}");
             }
+            Self::NumberLiteral(value) => out.push_str(value),
             Self::String(value) => write_string(out, value),
             Self::Array(values) => {
                 if values.is_empty() {

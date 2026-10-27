@@ -1131,3 +1131,123 @@ fn symbol_bindings_match_the_descriptor_function_order() {
             .all(|binding| binding.symbol.is_some())
     );
 }
+
+/// M6.5 phase 4: manifest format 2 carries enum/subrange metadata and the
+/// parent aggregate shapes needed by typed debug reads.
+const METADATA: &str = r#"
+TYPE
+  Color : (Red, Blue := 5, Green);
+  Small : INT(0..10);
+  Point : STRUCT
+    x : DINT;
+    y : BOOL;
+  END_STRUCT;
+END_TYPE
+
+VAR_GLOBAL
+  gcolor : Color;
+  gsmall : Small;
+  gpoint : Point;
+END_VAR
+
+PROGRAM Main
+VAR
+  arr : ARRAY[1..2] OF Point;
+END_VAR
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn manifest_format_two_projects_type_metadata_and_aggregate_shapes() {
+    let artifacts = project_source(METADATA, "metadata");
+    let manifest = &artifacts.manifest;
+    assert!(artifacts.is_deployable());
+
+    let color = manifest
+        .type_metadata
+        .iter()
+        .find(|record| {
+            manifest
+                .types
+                .iter()
+                .any(|ty| ty.got_id == record.type_id && ty.key.ends_with("COLOR"))
+        })
+        .expect("Color metadata");
+    let names: Vec<&str> = color
+        .enum_members
+        .iter()
+        .map(|member| member.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["RED", "BLUE", "GREEN"]);
+    assert_eq!(color.enum_members[1].value, 5);
+
+    let small = manifest
+        .type_metadata
+        .iter()
+        .find(|record| {
+            manifest
+                .types
+                .iter()
+                .any(|ty| ty.got_id == record.type_id && ty.key.ends_with("SMALL"))
+        })
+        .expect("Small metadata")
+        .subrange
+        .expect("subrange bounds");
+    assert_eq!((small.lower, small.upper), (0, 10));
+
+    let mut sorted = manifest.type_metadata.clone();
+    sorted.sort_by_key(|record| record.type_id);
+    assert_eq!(sorted, manifest.type_metadata);
+
+    let program = manifest
+        .aggregates
+        .iter()
+        .find(|aggregate| aggregate.kind == stc_got::AggregateKind::Program)
+        .expect("program aggregate");
+    assert_eq!(program.path, "MAIN");
+    assert!(program.qualifier.is_some());
+    assert_eq!(program.shape_key, "MAIN");
+    let fields: Vec<&str> = program
+        .fields
+        .iter()
+        .map(|field| field.path.as_str())
+        .collect();
+    assert_eq!(fields, vec!["ARR"]);
+    assert!(!program.layout_hash.is_zero());
+    let type_aggregate = manifest
+        .aggregates
+        .iter()
+        .find(|aggregate| aggregate.kind == stc_got::AggregateKind::Type)
+        .expect("type aggregate");
+    assert_eq!(type_aggregate.path, "GPOINT");
+    assert!(type_aggregate.qualifier.is_none());
+    assert!(type_aggregate.fields.is_empty());
+
+    let mut canonical = manifest.aggregates.clone();
+    canonical.sort_by(|left, right| {
+        (
+            left.package.as_str(),
+            left.path.as_str(),
+            left.qualifier.as_deref(),
+        )
+            .cmp(&(
+                right.package.as_str(),
+                right.path.as_str(),
+                right.qualifier.as_deref(),
+            ))
+    });
+    assert_eq!(canonical, manifest.aggregates);
+
+    let decoded = stc_got::Manifest::decode_binary(&artifacts.manifest_binary)
+        .expect("binary manifest round trip");
+    assert_eq!(&decoded, manifest);
+    let parsed =
+        stc_got::Manifest::decode_json(&artifacts.manifest_json).expect("JSON manifest round trip");
+    assert_eq!(&parsed, manifest);
+}

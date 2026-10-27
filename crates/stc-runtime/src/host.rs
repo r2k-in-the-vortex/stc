@@ -33,7 +33,11 @@ use stc_got::{
 };
 
 use crate::catalog::{HostPlatform, ValidatedPair};
-use crate::debug::{DebugEngine, DebugRead, DebugReadRequest, DebugService, WatchId, WatchSpec};
+use crate::debug::{
+    AuditSink, DebugEndReason, DebugEngine, DebugQueueId, DebugQueueResult, DebugRead,
+    DebugReadRequest, DebugService, DebugTarget, DebugWriteKind, DebugWriteRequest, WatchId,
+    WatchSpec,
+};
 use crate::descriptors::{DescriptorActivation, DescriptorRegistry, PreparedDescriptors};
 use crate::got::Got;
 use crate::host_api;
@@ -834,6 +838,180 @@ impl Host {
         read
     }
 
+    /// Enqueues one typed write for the next cycle boundary.
+    ///
+    /// The target, type, shape, range, encoding, permission-relevant root
+    /// kind, and queue capacity are validated before enqueue. Storage changes
+    /// only when the cycle thread applies the entry at
+    /// [`Host::cycle_at`].
+    ///
+    /// # Errors
+    ///
+    /// Returns Debug and Monitoring §15.8 codes: unknown or non-writable target
+    /// (`STC-E-DEBUG-008`/`STC-E-DEBUG-009`), stale generation/build/type/
+    /// layout (`STC-E-DEBUG-010`), or a full queue (`STC-E-DEBUG-011`).
+    pub fn debug_enqueue_write(&mut self, request: DebugWriteRequest) -> Result<DebugQueueId> {
+        self.debug_enqueue_write_kind(request, DebugWriteKind::Write)
+    }
+
+    /// Enqueues one persistent force for the next cycle boundary.
+    ///
+    /// A second force for the same `GotId` replaces the active value. The
+    /// force is applied every boundary until released or until debug state
+    /// ends. A force on a `RETAIN` root reports `STC-W-DEBUG-005` in its
+    /// queue result; force state is never written to the state file.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation and queue-limit codes as
+    /// [`Host::debug_enqueue_write`].
+    pub fn debug_enqueue_force(&mut self, request: DebugWriteRequest) -> Result<DebugQueueId> {
+        self.debug_enqueue_write_kind(request, DebugWriteKind::Force)
+    }
+
+    fn debug_enqueue_write_kind(
+        &mut self,
+        request: DebugWriteRequest,
+        kind: DebugWriteKind,
+    ) -> Result<DebugQueueId> {
+        let pin = self.pin_active();
+        let context = self
+            .active
+            .as_ref()
+            .map(|active| (active.id, active.manifest.header.build_id, active.cycles));
+        let prepared = if let Some(active) = self.active.as_ref() {
+            let source = crate::debug::DebugSource {
+                target: &self.platform.target,
+                manifest: &active.manifest,
+                roots: &self.roots,
+                info: active.info.as_ref(),
+                generation: active.id,
+                build_id: active.manifest.header.build_id,
+                cycle: active.cycles,
+            };
+            crate::debug::prepare_write(&source, &request, kind)
+        } else {
+            Err(Error::new(
+                codes::DEBUG_STALE,
+                "no active generation is available for a typed write",
+            ))
+        };
+        let result = match prepared {
+            Ok(prepared) => self.debug.enqueue(prepared),
+            Err(error) => {
+                self.debug.audit_request_error(
+                    kind,
+                    &request.target,
+                    Some(&request.value),
+                    &error,
+                    context,
+                )?;
+                Err(error)
+            }
+        };
+        drop(pin);
+        result
+    }
+
+    /// Releases the active force for a target at the next boundary.
+    ///
+    /// Returns `true` when a force existed and was released. The target is
+    /// resolved by stable key or `GotId`; releases are never retargeted.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown target or an audit append failure.
+    pub fn debug_release_force(&mut self, target: DebugTarget) -> Result<bool> {
+        let pin = self.pin_active();
+        let resolved = if let Some(active) = self.active.as_ref() {
+            let source = crate::debug::DebugSource {
+                target: &self.platform.target,
+                manifest: &active.manifest,
+                roots: &self.roots,
+                info: active.info.as_ref(),
+                generation: active.id,
+                build_id: active.manifest.header.build_id,
+                cycle: active.cycles,
+            };
+            crate::debug::resolve_root_id(&source, &target)
+        } else {
+            Err(Error::new(
+                codes::DEBUG_STALE,
+                "no active generation is available to resolve a force release",
+            ))
+        };
+        let result = match resolved {
+            Ok(got_id) => self.debug.release_force(got_id),
+            Err(error) => Err(error),
+        };
+        drop(pin);
+        result
+    }
+
+    /// Releases every active force immediately.
+    ///
+    /// Returns the number released. `var.release-all` is effective at the next
+    /// boundary; a release while stopped takes effect when the cycle resumes.
+    ///
+    /// # Errors
+    ///
+    /// Reports an audit append failure. Forces released before the failure
+    /// remain released.
+    pub fn debug_release_all_forces(&mut self) -> Result<usize> {
+        self.debug.release_all_forces()
+    }
+
+    /// Returns the number of queued writes and forces not yet applied.
+    #[must_use]
+    pub fn debug_queued_count(&self) -> usize {
+        self.debug.queued_count()
+    }
+
+    /// Returns the number of active forces.
+    #[must_use]
+    pub fn debug_force_count(&self) -> usize {
+        self.debug.active_force_count()
+    }
+
+    /// Drains completed queue results in completion order.
+    #[must_use]
+    pub fn debug_take_queue_results(&mut self) -> Vec<DebugQueueResult> {
+        self.debug.take_results()
+    }
+
+    /// Installs or removes the fail-closed audit sink.
+    ///
+    /// Phase 5 supplies the JSONL file sink. A sink append error refuses
+    /// audited writes and forces with `STC-E-DEBUG-021`. Installing a sink
+    /// starts its sequence at 1.
+    pub fn debug_set_audit_sink(&mut self, sink: Option<Box<dyn AuditSink>>) {
+        self.debug.set_audit_sink(sink);
+    }
+
+    /// Clears all watches, queued writes, and active forces immediately.
+    ///
+    /// Phase 5 calls this at session end or disconnect. Activation, rollback,
+    /// cold install, and shutdown call the same transition with their own
+    /// reasons. Queued entries are reported as rejected queue results and are
+    /// never migrated to another generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-DEBUG-021` when a termination audit append fails. All
+    /// debug state is still cleared.
+    pub fn debug_clear_session_state(&mut self, reason: DebugEndReason) -> Result<()> {
+        let context = self
+            .active
+            .as_ref()
+            .map(|active| (active.id, active.manifest.header.build_id, active.cycles));
+        self.debug.end_state(
+            reason,
+            context.map(|(generation, _, _)| generation),
+            context.map(|(_, build, _)| build),
+            context.map(|(_, _, cycle)| cycle),
+        )
+    }
+
     /// Returns a `Send + Sync` service facade.
     ///
     /// Phase 5 drives this facade from its protocol service thread. The facade
@@ -867,6 +1045,42 @@ impl Host {
     #[must_use]
     pub fn debug_watch_count(&self) -> usize {
         self.debug.watch_count()
+    }
+
+    fn debug_apply_input_forces(&mut self) {
+        let Some(active) = self.active.as_ref() else {
+            return;
+        };
+        let generation = active.id;
+        let build = active.manifest.header.build_id;
+        let cycle = active.cycles;
+        self.debug.apply_input_forces(
+            &active.manifest,
+            &self.platform.target,
+            active.info.as_ref(),
+            &mut self.roots,
+            generation,
+            build,
+            cycle,
+        );
+    }
+
+    fn debug_apply_queue_and_forces(&mut self) {
+        let Some(active) = self.active.as_ref() else {
+            return;
+        };
+        let generation = active.id;
+        let build = active.manifest.header.build_id;
+        let cycle = active.cycles;
+        self.debug.apply_boundary(
+            &active.manifest,
+            &self.platform.target,
+            active.info.as_ref(),
+            &mut self.roots,
+            generation,
+            build,
+            cycle,
+        );
     }
 
     /// Applies queued debug commands and emits due watch batches at a cycle
@@ -1589,13 +1803,28 @@ impl Host {
             old.shutdown();
             self.retired.push(old);
         }
+        let previous_debug = self.active.as_ref().map(|previous| {
+            (
+                previous.id,
+                previous.manifest.header.build_id,
+                previous.cycles,
+            )
+        });
         if let Some(mut old) = self.active.take() {
             old.shutdown();
             self.retired.push(old);
         }
         self.roots = roots;
+        let new_build = generation.manifest.header.build_id;
+        let new_cycle = generation.cycles;
+        let previous_debug = previous_debug.or(Some((generation_id, new_build, new_cycle)));
         self.active = Some(generation);
-        self.debug.end_watches();
+        let _ = self.debug.end_state(
+            DebugEndReason::ColdInstall,
+            previous_debug.map(|(generation, _, _)| generation),
+            previous_debug.map(|(_, build, _)| build),
+            previous_debug.map(|(_, _, cycle)| cycle),
+        );
         self.scheduler = scheduler;
         self.last_rollback = None;
         self.last_warnings.clear();
@@ -1811,6 +2040,9 @@ impl Host {
             self.io.apply_metadata(info, module_dir);
         }
         let generation = new_generation.id;
+        let previous_generation = previous.id;
+        let previous_build = previous.manifest.header.build_id;
+        let previous_cycle = previous.cycles;
         let descriptor_activation = self.descriptors.activate(descriptors);
         self.rollback = Some(Rollback {
             generation: previous,
@@ -1821,7 +2053,12 @@ impl Host {
             scheduler: std::mem::replace(&mut self.scheduler, scheduler),
         });
         self.active = Some(new_generation);
-        self.debug.end_watches();
+        let _ = self.debug.end_state(
+            DebugEndReason::Swap,
+            Some(previous_generation),
+            Some(previous_build),
+            Some(previous_cycle),
+        );
         self.last_warnings = warnings;
         Ok(generation)
     }
@@ -1884,6 +2121,7 @@ impl Host {
         // Inputs are latched once, then every due task runs against the same
         // image; outputs publish after the cycle (IO §6.3).
         self.io.latch_inputs();
+        self.debug_apply_input_forces();
         self.scheduler.begin_scan(now_ns);
         if let Err(error) = self.write_task_guards() {
             self.scheduler.finish_scan(false);
@@ -1926,6 +2164,10 @@ impl Host {
             }
             return Err(Error::new(codes::ONLINE_PREPARE, reason));
         }
+        // Debug writes follow the module's normal ST writes in queue order;
+        // active forces then win over those writes. Both are complete before
+        // outputs publish, so an output write/force is visible this cycle.
+        self.debug_apply_queue_and_forces();
         self.io.publish_outputs();
         self.scheduler.finish_scan(true);
         if let Some(active) = self.active.as_mut() {
@@ -2033,6 +2275,11 @@ impl Host {
         let Some(mut candidate) = self.active.take() else {
             return Err(prepare_error("no active generation to roll back"));
         };
+        // Queued debug state belongs to the candidate session that is ending;
+        // reject it against that generation rather than migrating it.
+        let candidate_generation = candidate.id;
+        let candidate_build = candidate.manifest.header.build_id;
+        let candidate_cycle = candidate.cycles;
         candidate.detach();
         drop(candidate);
         let Rollback {
@@ -2045,7 +2292,12 @@ impl Host {
         } = rollback;
         let restored = restored_generation.id;
         self.active = Some(restored_generation);
-        self.debug.end_watches();
+        let _ = self.debug.end_state(
+            DebugEndReason::Rollback,
+            Some(candidate_generation),
+            Some(candidate_build),
+            Some(candidate_cycle),
+        );
         self.scheduler = scheduler;
         if let Some(image) = image {
             image::restore(&image.snapshot);
@@ -2103,13 +2355,32 @@ impl Host {
     ///
     /// Reports a root-journal undo failure from a pending candidate.
     pub fn shutdown(&mut self) -> Result<()> {
+        // Host shutdown ends debug state before the normal state-save policy.
         // Only the active generation's normal shutdown may write the state
-        // file; retired generations shut down here without saving.
+        // file; retired generations shut down here without saving. A forced
+        // RETAIN value may be saved, but the force table never is.
+        let debug_context = self.active.as_ref().map(|generation| {
+            (
+                generation.id,
+                generation.manifest.header.build_id,
+                generation.cycles,
+            )
+        });
+        let debug_error = self
+            .debug
+            .end_state(
+                DebugEndReason::Shutdown,
+                debug_context.map(|(generation, _, _)| generation),
+                debug_context.map(|(_, build, _)| build),
+                debug_context.map(|(_, _, cycle)| cycle),
+            )
+            .err();
         let save_generation = self.active.as_ref().map(|generation| generation.id);
         self.install_state_service(save_generation);
         let io_error = self.io.flush_output();
         self.collect_io_notices();
-        let mut first_error = io_error.map(|message| Error::new("STC-E-RUN-IO-001", message));
+        let mut first_error =
+            debug_error.or_else(|| io_error.map(|message| Error::new("STC-E-RUN-IO-001", message)));
         if let Some(error) = self.abort_pending().err() {
             first_error.get_or_insert(error);
         }
@@ -2122,7 +2393,6 @@ impl Host {
             active.shutdown();
             self.retired.push(active);
         }
-        self.debug.end_watches();
         for mut generation in self.retired.drain(..) {
             generation.shutdown();
             generation.detach();

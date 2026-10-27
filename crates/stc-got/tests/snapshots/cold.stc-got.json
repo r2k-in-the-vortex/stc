@@ -1,5 +1,6 @@
 {
   "body": {
+    "aggregates": [],
     "descriptors": [],
     "exports": [
       {
@@ -43,8 +44,8 @@
     ],
     "header": {
       "active_configuration": "",
-      "build_id": "0x7fa6954be0c5a10e43e2ad79adc99260",
-      "catalog_digest": "0xb1200c5cc531908f3f3edbddf530520e9a71d37ab60d9d109e19963b3ad06935",
+      "build_id": "0x638d603511b356d6470b89a8264b0f5a",
+      "catalog_digest": "0x674b2da87d58c2a9e418fa92c1161f8e8f78780cc47c828447aa612a24becfb0",
       "compiler_version": "stc 0.1.0",
       "descriptor_digest": "0x1111111111111111111111111111111111111111111111111111111111111111",
       "endianness": 0,
@@ -368,9 +369,10 @@
         "source": null
       }
     ],
+    "type_metadata": [],
     "types": []
   },
-  "digest": "0x250defd642146aec8624b291219c6221ffe22e674f5c3e9186f8eb4fca20a614",
+  "digest": "0x0403789798103ff9a853b2aaff9d2852e4c388845791bfa674f586feaf8407e1",
   "flags": 0,
-  "format": 1
+  "format": 2
 }

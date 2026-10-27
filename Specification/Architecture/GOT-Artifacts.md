@@ -413,15 +413,19 @@ non-canonical table is invalid even if its bindings happen to work.
 
 ```text
 catalog_digest = SHA-256(
-  "stc:catalog:v1\0" ||
+  "stc:catalog:v2\0" ||
   roots_section_payload || functions_section_payload || types_section_payload ||
   descriptors_section_payload || instances_section_payload || tasks_section_payload ||
-  exports_section_payload || slots_section_payload)[0..32]
+  exports_section_payload || slots_section_payload ||
+  type_metadata_section_payload || aggregates_section_payload)[0..32]
 ```
 
 Each `*_section_payload` is the encoded payload defined in §9.2, without its section tag and
 length. The digest covers source locations because they are fields of the records. It does not
-cover the manifest header, plan, or history.
+cover the manifest header, plan, or history. The format-2 type-metadata and aggregate payloads
+are covered too, so a changed enum member, subrange bound, aggregate shape, or aggregate field
+layout changes the catalog digest and therefore the build ID even when every root layout is
+unchanged (D-180).
 
 ## 7. Module descriptor format 1
 
@@ -447,7 +451,7 @@ compiler_version     string       compiler package version, ASCII
 target_triple        string       resolved target triple
 build_id             id128
 manifest_digest      digest32
-manifest_format      u16   = 1
+manifest_format      u16   = 2
 entry_flags          u32
 function_count       u32
 slot_count           u32
@@ -456,7 +460,9 @@ slots                list<SlotRecord>
 ```
 
 `descriptor_size` must equal the blob length exactly. `descriptor_flags` is zero in format 1;
-nonzero values are invalid. `entry_flags` bits:
+nonzero values are invalid. `manifest_format` is the outer format of the paired manifest:
+descriptor format 1 accepts manifest format 2 only (D-180). An old host that expects 1 rejects
+the pair rather than reinterpreting the manifest. `entry_flags` bits:
 
 | Bit | Meaning |
 | --- | --- |
@@ -935,7 +941,7 @@ or modified by generated code. A hidden record whose TYPEINFO `leaf_count` does 
 root size is invalid, and a live record or interface value makes a descriptor shape change
 reject the swap (D-151).
 
-## 9. GOT manifest format 1
+## 9. GOT manifest format 2
 
 ### 9.1 Files and outer header
 
@@ -943,21 +949,25 @@ The binary manifest is `<name>.stc-got.bin`. Its outer header is:
 
 ```text
 magic        [8]u8 = "STCGOT\0\0"
-format       u16   = 1
+format       u16   = 2
 flags        u16   = 0
 body_length  u64
 digest       digest32
 body         [body_length]u8
 ```
 
-`flags` is zero in format 1; nonzero values are invalid. `body` is the concatenation of the
-sections in §9.3. `digest` is defined in §9.5. Bytes after `body_length` are invalid.
+`flags` is zero in format 2; nonzero values are invalid. `body` is the concatenation of the
+sections in §9.3. `digest` is defined in §9.4. Bytes after `body_length` are invalid. A manifest
+whose outer `format` is not 2 is rejected with a version error; format-1 manifests are never
+upgraded, reinterpreted, or partially read. The descriptor's `manifest_format` must be 2, while
+the descriptor, module, state, and host ABI formats remain 1 and 2 respectively (D-180).
 
 The JSON manifest is `<name>.stc-got.json`:
 
 ```json
 {
   "body": {
+    "aggregates": [],
     "descriptors": [],
     "exports": [],
     "functions": [],
@@ -968,11 +978,12 @@ The JSON manifest is `<name>.stc-got.json`:
     "roots": [],
     "slots": [],
     "tasks": [],
+    "type_metadata": [],
     "types": []
   },
   "digest": "0x…",
   "flags": 0,
-  "format": 1
+  "format": 2
 }
 ```
 
@@ -1122,6 +1133,66 @@ source          option<SourceLocation>
 Field records are sorted by `(offset, path)`. Type records are sorted by `(key, got_id)`.
 M4.5 emits no type records for the elementary scalar surface.
 
+`EnumMemberRecord`:
+
+```text
+name   string      normalized member identifier
+value  i128        little-endian 16-byte integer value
+```
+
+`SubrangeBounds`:
+
+```text
+lower  i128        inclusive lower bound
+upper  i128        inclusive upper bound
+```
+
+`TypeMetadataRecord`:
+
+```text
+type_id       id128
+enum_members  list<EnumMemberRecord>   sorted by (value, name)
+subrange      option<SubrangeBounds>
+```
+
+`EnumMemberRecord` is encoded as `string(name) || i128(value)`; the list header is a `u32`
+count. `TypeMetadataRecord` is encoded as `id128(type_id) || u32(enum_members.count) ||
+members... || option_tag || [SubrangeBounds]`. `subrange` is present only for a subrange type and
+`enum_members` is empty for it; an enum has a member set and no bounds. The section contains
+exactly one record for every `Enum` or `Subrange` type record and no record for another kind.
+Records are sorted by `type_id` ascending bytes. Enum members and subrange bounds are canonical
+input matter: they normalize identifier spelling and preserve the declared integer values.
+
+`AggregateFieldRecord`:
+
+```text
+path         string   top-level program field path, normalized
+type_key     string   declared canonical type key
+layout_hash  id128    declared type's target layout hash
+```
+
+`AggregateRecord`:
+
+```text
+package      string
+path         string
+qualifier    option<string>
+kind         enum { Type=1, Program=2 }
+shape_key    string
+layout_hash  id128
+fields       list<AggregateFieldRecord>   sorted by path
+```
+
+`AggregateRecord` is encoded as `string(package) || string(path) || option_tag ||
+[string(qualifier)] || u8(kind) || string(shape_key) || id128(layout_hash) ||
+u32(fields.count) || [string(path) || string(type_key) || id128(layout_hash)]...`.
+A `Type` aggregate names a declared named type in `shape_key`, has no qualifier, and has no
+fields; its split roots are the roots under `package::path`. A `Program` aggregate names the
+program path in `shape_key`, carries the instance qualifier, and lists its top-level fields in
+canonical path order; each field must have at least one root under
+`package::path.field#qualifier`. The aggregate layout hash is the declared target layout hash
+and is nonzero. Aggregates are sorted by `(package, path, qualifier-presence, qualifier)`.
+
 `DescriptorRecord`:
 
 ```text
@@ -1261,6 +1332,8 @@ independently.
 | 9 | Slots | `list<SlotRecord>` | Yes |
 | 10 | Plan | `Plan` | Yes when feature bit 1 is set |
 | 11 | History | `History` | Yes |
+| 12 | TypeMetadata | `list<TypeMetadataRecord>` | Yes |
+| 13 | Aggregates | `list<AggregateRecord>` | Yes |
 
 Sections appear in ascending tag order. An artifact missing a required section is invalid.
 Empty tables are present with count zero. Table ordering:
@@ -1275,7 +1348,9 @@ Empty tables are present with count zero. Table ordering:
 - slots: canonical slot order from §6.2;
 - plan actions: `got_id` ascending bytes;
 - plan diagnostics: `(code, got_id-present, got_id, old_key, new_key, message)` ascending;
-- history: `(retired_build_id, got_id)` ascending.
+- history: `(retired_build_id, got_id)` ascending;
+- type metadata: `type_id` ascending bytes;
+- aggregates: `(package, path, qualifier-presence, qualifier)` ascending.
 
 `previous_keys` are ordered oldest first, contain no duplicates, and never contain the current
 key. They are the tracked rename/move history of one identity.
@@ -1286,7 +1361,7 @@ directly and makes reordering tampering detectable.
 ### 9.4 Manifest digest
 
 ```text
-manifest_digest = SHA-256("stc:manifest:v1\0" || body)[0..32]
+manifest_digest = SHA-256("stc:manifest:v2\0" || body)[0..32]
 ```
 
 `body` is the exact concatenation of the sections (tag, length, payload) in §9.3. The digest
@@ -1297,8 +1372,8 @@ does not include the outer header's magic, format, flags, body length, or digest
 
 A manifest is accepted only when all of the following hold:
 
-1. The outer magic, format, and flags match; `body_length` exactly covers the body; the digest
-   matches.
+1. The outer magic matches, `format` is exactly 2, `flags` is zero, `body_length` exactly covers
+   the body, and the digest matches.
 2. The required sections are present exactly once, in ascending tag order, with lengths that do
    not exceed the body.
 3. The header profile, target triple, endianness, pointer width, module format, and host ABI
@@ -1322,7 +1397,14 @@ A manifest is accepted only when all of the following hold:
     verdict is terminal and is never applied.
 11. History entries are a subset of retired/dropped identities, carry nonzero build/manifest
     identities, and are canonically ordered.
-12. The artifact paired with a module satisfies §11.4.
+12. Type metadata and aggregate records satisfy §9.2: metadata exists exactly for every
+    `Enum`/`Subrange` type, enum members are normalized, unique, and sorted by `(value, name)`,
+    subrange bounds satisfy `lower <= upper`, and only the matching member set or bounds is
+    present. Aggregate package/path/qualifier spelling is normalized, layout hashes are nonzero,
+    type shapes have no qualifier or fields and have split roots, program shapes match their
+    instance's program type and have at least one root for every listed top-level field, and
+    both tables are canonically ordered.
+13. The artifact paired with a module satisfies §11.4, including `manifest_format = 2`.
 
 Manifest data is untrusted. Validation never executes or interprets manifest text, never follows
 a path from it, and never allocates from an unchecked count. A malformed, stale, tampered,
@@ -1424,7 +1506,7 @@ before computing the build ID.
 | `descriptor_digest` | §7.2 |
 | `manifest_digest` | §9.4 |
 | `source_fingerprint` | §11.1 |
-| `catalog_digest` | §6.3 |
+| `catalog_digest` | §6.3 (roots, functions, types, descriptors, instances, tasks, exports, slots, type metadata, and aggregates) |
 | `plan_digest` | First 32 bytes of SHA-256 over `"stc:plan:v1\0"` and the plan payload |
 
 The module file name is `<name>-<build_id-hex>.dll` or `.so`, where `<build_id-hex>` is the 32
@@ -1440,7 +1522,8 @@ A module and manifest are a valid pair when:
 1. The descriptor's `manifest_digest` equals the computed manifest digest.
 2. The manifest header's `descriptor_digest` equals the descriptor digest (§7.2).
 3. The descriptor and manifest have equal `build_id`, profile, target, endianness, pointer width,
-   module format, and host ABI.
+   module format, and host ABI, and the descriptor's `manifest_format` equals the manifest's
+   outer format (2 for this version).
 4. The descriptor's function set equals the manifest's function set (`GotId`, key, signature,
    and flags), and the descriptor's slot records equal the manifest's slot records exactly
    (`slot`, `kind`, `service`, `got_id`); every `Descriptor` slot resolves to a descriptor
@@ -1449,7 +1532,9 @@ A module and manifest are a valid pair when:
    the descriptor size, counts, and feature bits validate.
 
 The host performs this check before attach. A mismatch is `STC-E-MANIFEST-001` or
-`STC-E-MODULE-001` and selects the cold-download path; the active generation is untouched.
+`STC-E-MODULE-001` and selects the cold-download path; the active generation is untouched. A
+format-1 manifest or a descriptor that pairs format 1 with the current host likewise fails the
+pairing/version check and selects cold download; it is never upgraded in place.
 
 The pairing binds the descriptor, its function/slot tables, and the manifest. It does not hash
 the complete platform image, because loaders may rewrite headers and modules are trusted native
@@ -1461,9 +1546,11 @@ boundary.
 
 After pairing, the host compares the manifest's `parent_build_id` and `parent_manifest_digest`
 with the active generation's build ID and manifest digest. An exact match permits an online
-attempt. A missing parent, a mismatch, a missing/stale/corrupt active manifest, or a target/ABI
-mismatch permits only a cold download. Coincidentally equal `GotId`s never authorize an online
-change without the exact parent pair.
+attempt. A missing parent, a mismatch, a missing/stale/corrupt active manifest, a format-1 or
+otherwise undecodable manifest, or a target/ABI mismatch permits only a cold download.
+Coincidentally equal `GotId`s never authorize an online change without the exact parent pair.
+These rules are formatter agnostic: the persisted active manifest may be binary or JSON, and
+both projections must decode to the same format-2 value.
 
 ## 12. M4.5 population and conformance
 
@@ -1651,7 +1738,9 @@ activation contract in §8. D-126 records the phase choices.
 
 Phase 10 is the documentation and handover pass (2026-10-25). The schema text is unchanged:
 format 1 remains what M4.5 emits, M5 extends the existing record tables without a format bump,
-and the M4.5 implementation follows these formats exactly. The phase clarifies the debug flags
+and the M4.5 implementation follows these formats exactly. (M6.5 phase 4 later raised only
+the GOT manifest to format 2; the descriptor, module, and record tables remain format 1,
+D-180.) The phase clarifies the debug flags
 (§7.1): M4.5's default artifact form may set the entry-flag debug bit but emits no debug
 information or checkpoint hooks, and the debug-checkpoint required-feature bit stays clear until
 M6.5. D-127 records the pass; the M6.5 boundary is in
@@ -1709,6 +1798,20 @@ online-change compatibility; `required_features` bit 4 and `entry_flags` bit 6 a
 hook-emitting debug builds. The debug protocol and session are specified in
 [Debug and Monitoring](Debug-and-Monitoring.md) §13–§14 and use no host API entry other than
 service 13.
+
+M6.5 phase 4 (2026-10-27) raised only the GOT manifest to format 2 (D-180). The new
+`TypeMetadata` (§9.3 tag 12) and `Aggregates` (§9.3 tag 13) sections carry enum member sets,
+subrange bounds, and split-storage shape records; both are required in every format-2 manifest
+and are part of `catalog_digest` and the build ID. The descriptor, module, state, metadata
+sidecar, and host ABI formats are unchanged; the descriptor's `manifest_format` field is 2 and
+pairs only with a format-2 manifest. `stc-codegen` projects the new records deterministically
+(type metadata by type identity, aggregates by package/path/qualifier, program fields by path),
+`stc-got` validates and round-trips both binary and canonical-JSON projections, and the host
+rejects format-1 manifests through the normal version/pairing path. Fuzz seeds now include a
+valid format-2 binary and JSON manifest; the older format-1 seeds remain explicit negative
+inputs. The runtime uses the metadata for enum/subrange write validation and for whole-program
+and array-of-aggregate shape resolution; see [Debug and Monitoring](Debug-and-Monitoring.md)
+§15.
 
 ## 13. Related documents
 

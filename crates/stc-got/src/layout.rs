@@ -910,6 +910,42 @@ pub fn layout_hash(target: &Target, ty: &TypeKey, layout_bytes: &[u8]) -> GotId 
     GotId::from_bytes(truncated)
 }
 
+/// Computes the target layout hash of an aggregate shape.
+///
+/// Program shapes have no declared `TypeRecord`, so their identity is the
+/// instance program path plus the declared top-level field types and layouts.
+/// Type shapes use their declared canonical type key and may omit fields.
+#[must_use]
+pub fn aggregate_layout_hash(
+    target: &Target,
+    package: &str,
+    shape_key: &str,
+    fields: &[(String, String, GotId)],
+) -> GotId {
+    let endian = [target.endianness.tag()];
+    let width = [target.pointer_width];
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(package.len() as u64).to_le_bytes());
+    payload.extend_from_slice(package.as_bytes());
+    payload.extend_from_slice(&(shape_key.len() as u64).to_le_bytes());
+    payload.extend_from_slice(shape_key.as_bytes());
+    payload.extend_from_slice(&(fields.len() as u64).to_le_bytes());
+    for (path, type_key, layout_hash) in fields {
+        payload.extend_from_slice(&(path.len() as u64).to_le_bytes());
+        payload.extend_from_slice(path.as_bytes());
+        payload.extend_from_slice(&(type_key.len() as u64).to_le_bytes());
+        payload.extend_from_slice(type_key.as_bytes());
+        payload.extend_from_slice(layout_hash.as_bytes());
+    }
+    let digest = domain_hash(
+        "stc:aggregate:v1",
+        &[target.triple.as_bytes(), &endian, &width, &payload],
+    );
+    let mut truncated = [0_u8; 16];
+    truncated.copy_from_slice(&digest[..16]);
+    GotId::from_bytes(truncated)
+}
+
 /// Computes the layout hash of an elementary type.
 ///
 /// Returns `None` for types that require a compiler-supplied layout.

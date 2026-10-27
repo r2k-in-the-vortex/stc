@@ -113,6 +113,14 @@ tagged_enum! {
 }
 
 tagged_enum! {
+    /// How an aggregate shape is described.
+    pub enum AggregateKind {
+        Type = 1 => "type",
+        Program = 2 => "program",
+    }
+}
+
+tagged_enum! {
     /// The kind of a runtime descriptor.
     pub enum DescriptorKind {
         TypeInfo = 1 => "type_info",
@@ -332,6 +340,69 @@ pub struct TypeRecord {
     pub fields: Vec<FieldRecord>,
     /// Source declaration.
     pub source: Option<SourceLocation>,
+}
+
+/// One enum member in the format-2 type metadata section.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnumMemberRecord {
+    /// Normalized member name.
+    pub name: String,
+    /// Integer member value.
+    pub value: i128,
+}
+
+/// Subrange bounds in the format-2 type metadata section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SubrangeBounds {
+    /// Inclusive lower bound.
+    pub lower: i128,
+    /// Inclusive upper bound.
+    pub upper: i128,
+}
+
+/// Type metadata that the format-1 type table does not carry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypeMetadataRecord {
+    /// Identity of the named type record this metadata belongs to.
+    pub type_id: GotId,
+    /// Enum member set, sorted by `(value, name)`.
+    pub enum_members: Vec<EnumMemberRecord>,
+    /// Subrange bounds.
+    pub subrange: Option<SubrangeBounds>,
+}
+
+/// One top-level field of a program aggregate shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AggregateFieldRecord {
+    /// Top-level field path, normalized.
+    pub path: String,
+    /// Declared canonical type key.
+    pub type_key: String,
+    /// Target layout hash of the declared type.
+    pub layout_hash: GotId,
+}
+
+/// One aggregate shape used to resolve split storage.
+///
+/// A `type` shape names the declared type at `path`. A `program` shape lists
+/// the top-level fields of one configured program instance; its `shape_key`
+/// is the program path from the instance record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AggregateRecord {
+    /// Package name.
+    pub package: String,
+    /// Package-relative aggregate path.
+    pub path: String,
+    /// Instance qualifier for a program shape.
+    pub qualifier: Option<String>,
+    /// Shape kind.
+    pub kind: AggregateKind,
+    /// Declared type key (`type`) or program path (`program`).
+    pub shape_key: String,
+    /// Target layout hash.
+    pub layout_hash: GotId,
+    /// Top-level fields, sorted by path; empty for a `type` shape.
+    pub fields: Vec<AggregateFieldRecord>,
 }
 
 /// One runtime descriptor or vtable.
@@ -638,6 +709,7 @@ tagged_impl!(Retention);
 tagged_impl!(InitializerKind);
 tagged_impl!(FunctionKind);
 tagged_impl!(TypeKind);
+tagged_impl!(AggregateKind);
 tagged_impl!(DescriptorKind);
 tagged_impl!(SlotKind);
 tagged_impl!(PlanVerdict);
@@ -944,6 +1016,103 @@ impl Decode for TypeRecord {
             vtable_shape,
             fields,
             source,
+        })
+    }
+}
+
+impl Encode for SubrangeBounds {
+    fn encode(&self, out: &mut Encoder) -> Result<()> {
+        out.i128(self.lower);
+        out.i128(self.upper);
+        Ok(())
+    }
+}
+
+impl Decode for SubrangeBounds {
+    fn decode(input: &mut Decoder<'_>) -> Result<Self> {
+        Ok(Self {
+            lower: input.i128()?,
+            upper: input.i128()?,
+        })
+    }
+}
+
+impl Encode for TypeMetadataRecord {
+    fn encode(&self, out: &mut Encoder) -> Result<()> {
+        out.id128(self.type_id);
+        out.list_header(self.enum_members.len())?;
+        for member in &self.enum_members {
+            out.string(&member.name)?;
+            out.i128(member.value);
+        }
+        encode_option(out, &self.subrange)?;
+        Ok(())
+    }
+}
+
+impl Decode for TypeMetadataRecord {
+    fn decode(input: &mut Decoder<'_>) -> Result<Self> {
+        let type_id = input.id128()?;
+        let count = input.count(1)?;
+        let mut enum_members = Vec::new();
+        for _ in 0..count {
+            enum_members.push(EnumMemberRecord {
+                name: input.string()?,
+                value: input.i128()?,
+            });
+        }
+        let subrange = decode_option(input)?;
+        Ok(Self {
+            type_id,
+            enum_members,
+            subrange,
+        })
+    }
+}
+
+impl Encode for AggregateRecord {
+    fn encode(&self, out: &mut Encoder) -> Result<()> {
+        out.string(&self.package)?;
+        out.string(&self.path)?;
+        encode_option(out, &self.qualifier)?;
+        encode_enum(out, self.kind);
+        out.string(&self.shape_key)?;
+        out.id128(self.layout_hash);
+        out.list_header(self.fields.len())?;
+        for field in &self.fields {
+            out.string(&field.path)?;
+            out.string(&field.type_key)?;
+            out.id128(field.layout_hash);
+        }
+        Ok(())
+    }
+}
+
+impl Decode for AggregateRecord {
+    fn decode(input: &mut Decoder<'_>) -> Result<Self> {
+        let package = input.string()?;
+        let path = input.string()?;
+        let qualifier = decode_option(input)?;
+        let kind = decode_enum(input, "aggregate kind")?;
+        let shape_key = input.string()?;
+        let layout_hash = input.id128()?;
+        let count = input.count(1)?;
+        let mut fields = Vec::new();
+        for _ in 0..count {
+            fields.push(AggregateFieldRecord {
+                path: input.string()?,
+                type_key: input.string()?,
+                layout_hash: input.id128()?,
+            });
+        }
+        Ok(Self {
+            package,
+            path,
+            qualifier,
+            kind,
+            shape_key,
+            layout_hash,
+            fields,
         })
     }
 }

@@ -1,0 +1,301 @@
+{
+  "body": {
+    "aggregates": [
+      {
+        "fields": [
+          {
+            "layout_hash": "0xfd22c654deff0509ba8d236283dc7e65",
+            "path": "COUNTER",
+            "type_key": "DINT"
+          },
+          {
+            "layout_hash": "0xdb07b81571f332a49c7dfe04de257640",
+            "path": "FLAG",
+            "type_key": "BOOL"
+          }
+        ],
+        "kind": "program",
+        "layout_hash": "0x747403a93e5b33c0cc38bf990c8bbae7",
+        "package": "_ROOT",
+        "path": "MAIN",
+        "qualifier": "_DEFAULT/_DEFAULT/_DEFAULT",
+        "shape_key": "MAIN"
+      }
+    ],
+    "descriptors": [],
+    "exports": [],
+    "functions": [
+      {
+        "export_name": null,
+        "flags": 66,
+        "function_kind": "program_body",
+        "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+        "key": "_ROOT::MAIN#BODY@()->VOID",
+        "owner_type": null,
+        "previous_keys": [],
+        "signature_key": "()->VOID",
+        "slot": 3,
+        "source": {
+          "end": 119,
+          "file": "golden.st",
+          "package": "_ROOT",
+          "start": 1
+        },
+        "vtable_slot": null
+      }
+    ],
+    "header": {
+      "active_configuration": "",
+      "build_id": "0xcdd295af4f9ce89b85e54f3dba84c3c3",
+      "catalog_digest": "0x587e0fcd1078d1ac3609fb163860d3e135ef1f3370f497ac9a450c30b2681788",
+      "compiler_version": "stc 0.1.0",
+      "descriptor_digest": "0x50a527ac430c702a432cad0afb36424977f05137ade70fa3f704f95bb3702d1a",
+      "endianness": 0,
+      "generator_flags": 65,
+      "host_abi_major": 2,
+      "host_abi_minor": 1,
+      "module_format": 1,
+      "module_name": "golden",
+      "parent_build_id": null,
+      "parent_manifest_digest": null,
+      "plan_digest": "0xebb0f4d2f1ae49a39a06ec87fa873312bd375f493251f23fe5c353aba1b95f4a",
+      "pointer_width": 8,
+      "profile": "stc-2013-oop-utf8-v1",
+      "required_features": 15,
+      "source_fingerprint": "0x839c3ffa94d4904af6130585a082d3713627571f6a9d882879e78dfb9832bd51",
+      "target_triple": "x86_64-unknown-linux-gnu"
+    },
+    "history": {
+      "retired": []
+    },
+    "instances": [
+      {
+        "configuration": "_DEFAULT",
+        "got_id": "0x4df36adc1bef4dc7593750376810e96b",
+        "instance_path": "_DEFAULT/_DEFAULT/_DEFAULT",
+        "key": "_ROOT::_DEFAULT/_DEFAULT/_DEFAULT",
+        "previous_keys": [],
+        "program_type": null,
+        "program_type_key": "MAIN",
+        "resource": "_DEFAULT",
+        "source": {
+          "end": 119,
+          "file": "golden.st",
+          "package": "_ROOT",
+          "start": 1
+        },
+        "task_key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT"
+      }
+    ],
+    "plan": {
+      "actions": [
+        {
+          "action": "allocate",
+          "detail": "new instance",
+          "got_id": "0x4df36adc1bef4dc7593750376810e96b",
+          "key": "_ROOT::_DEFAULT/_DEFAULT/_DEFAULT",
+          "kind": 5,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0x8195c164b164f12a4f8a21c3c6991d45",
+          "key": "_ROOT::MAIN.FLAG#_DEFAULT/_DEFAULT/_DEFAULT",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new task",
+          "got_id": "0x8f9c2c412b036923364e4c6453370c3a",
+          "key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT",
+          "kind": 6,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new callable",
+          "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+          "key": "_ROOT::MAIN#BODY@()->VOID",
+          "kind": 2,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0xe762cf8b40949ac377635356eaeabe62",
+          "key": "_ROOT::MAIN.COUNTER#_DEFAULT/_DEFAULT/_DEFAULT",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        },
+        {
+          "action": "allocate",
+          "detail": "new persistent root",
+          "got_id": "0xf730376fa6d046accb367ab2421ec08c",
+          "key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT.GUARD",
+          "kind": 1,
+          "old_key": null,
+          "reason_code": "allocate.new"
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "STC-W-MANIFEST-001",
+          "got_id": null,
+          "message": "no baseline manifest; the build uses a cold layout",
+          "new_key": null,
+          "old_key": null,
+          "severity": "warning"
+        }
+      ],
+      "parent_build_id": null,
+      "parent_manifest_digest": null,
+      "verdict": "cold"
+    },
+    "roots": [
+      {
+        "align": 4,
+        "field_path": "COUNTER",
+        "got_id": "0xe762cf8b40949ac377635356eaeabe62",
+        "initializer": "zero",
+        "initializer_digest": null,
+        "key": "_ROOT::MAIN.COUNTER#_DEFAULT/_DEFAULT/_DEFAULT",
+        "layout_hash": "0xfd22c654deff0509ba8d236283dc7e65",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "program_field",
+        "size": 4,
+        "slot": 1,
+        "source": {
+          "end": 27,
+          "file": "golden.st",
+          "package": "_ROOT",
+          "start": 20
+        },
+        "type_key": "DINT"
+      },
+      {
+        "align": 1,
+        "field_path": "FLAG",
+        "got_id": "0x8195c164b164f12a4f8a21c3c6991d45",
+        "initializer": "zero",
+        "initializer_digest": null,
+        "key": "_ROOT::MAIN.FLAG#_DEFAULT/_DEFAULT/_DEFAULT",
+        "layout_hash": "0xdb07b81571f332a49c7dfe04de257640",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "program_field",
+        "size": 1,
+        "slot": 0,
+        "source": {
+          "end": 42,
+          "file": "golden.st",
+          "package": "_ROOT",
+          "start": 38
+        },
+        "type_key": "BOOL"
+      },
+      {
+        "align": 1,
+        "field_path": "",
+        "got_id": "0xf730376fa6d046accb367ab2421ec08c",
+        "initializer": "constant",
+        "initializer_digest": "0x45458a6d6d93d8c9925ac3cfe66dbab649778ecaff37d941b62e105e0cccc487",
+        "key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT.GUARD",
+        "layout_hash": "0xdb07b81571f332a49c7dfe04de257640",
+        "owner_type": null,
+        "previous_keys": [],
+        "retention": "none",
+        "root_kind": "task_guard",
+        "size": 1,
+        "slot": 2,
+        "source": null,
+        "type_key": "BOOL"
+      }
+    ],
+    "slots": [
+      {
+        "got_id": "0x8195c164b164f12a4f8a21c3c6991d45",
+        "kind": "data",
+        "service": 0,
+        "slot": 0
+      },
+      {
+        "got_id": "0xe762cf8b40949ac377635356eaeabe62",
+        "kind": "data",
+        "service": 0,
+        "slot": 1
+      },
+      {
+        "got_id": "0xf730376fa6d046accb367ab2421ec08c",
+        "kind": "data",
+        "service": 0,
+        "slot": 2
+      },
+      {
+        "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+        "kind": "function",
+        "service": 0,
+        "slot": 3
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 1,
+        "slot": 4
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 7,
+        "slot": 5
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 8,
+        "slot": 6
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 9,
+        "slot": 7
+      },
+      {
+        "got_id": "0x00000000000000000000000000000000",
+        "kind": "import",
+        "service": 10,
+        "slot": 8
+      }
+    ],
+    "tasks": [
+      {
+        "configuration": "_DEFAULT",
+        "got_id": "0x8f9c2c412b036923364e4c6453370c3a",
+        "guard_got_id": "0xf730376fa6d046accb367ab2421ec08c",
+        "interval_ns": null,
+        "key": "_ROOT::_DEFAULT/_DEFAULT#_DEFAULT",
+        "name": "_DEFAULT",
+        "previous_keys": [],
+        "priority": null,
+        "resource": "_DEFAULT",
+        "single": false,
+        "source": null
+      }
+    ],
+    "type_metadata": [],
+    "types": []
+  },
+  "digest": "0x6810fcff6bc361887ff25fb52b0c665f6d98f59c99ae739873a651c8b01dee30",
+  "flags": 0,
+  "format": 2
+}

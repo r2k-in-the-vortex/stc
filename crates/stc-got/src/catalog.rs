@@ -8,7 +8,8 @@ use crate::digest::{Digest32, GotId};
 use crate::error::{Error, Result};
 use crate::keys::IdentityKind;
 use crate::model::{
-    DescriptorKind, FunctionKind, InitializerKind, Retention, RootKind, SourceLocation, TypeKind,
+    AggregateKind, DescriptorKind, FunctionKind, InitializerKind, Retention, RootKind,
+    SourceLocation, TypeKind,
 };
 use crate::sha256::Sha256;
 
@@ -157,8 +158,60 @@ pub struct TypeDecl {
     pub vtable_shape: Option<GotId>,
     /// Fields in declaration order.
     pub fields: Vec<FieldDecl>,
+    /// Enum members for debug and write validation, sorted by `(value, name)`.
+    pub enum_members: Vec<EnumMemberDecl>,
+    /// Subrange bounds for write validation.
+    pub subrange: Option<SubrangeDecl>,
     /// Source declaration.
     pub source: Option<SourceLocation>,
+}
+
+/// One enum member declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnumMemberDecl {
+    /// Normalized member name.
+    pub name: String,
+    /// Integer member value.
+    pub value: i128,
+}
+
+/// Subrange bounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SubrangeDecl {
+    /// Inclusive lower bound.
+    pub lower: i128,
+    /// Inclusive upper bound.
+    pub upper: i128,
+}
+
+/// One aggregate shape declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AggregateDecl {
+    /// Package name.
+    pub package: String,
+    /// Package-relative aggregate path.
+    pub path: String,
+    /// Instance qualifier for a program shape.
+    pub qualifier: Option<String>,
+    /// Shape kind.
+    pub kind: AggregateKind,
+    /// Declared type key (`type`) or program path (`program`).
+    pub shape_key: String,
+    /// Target layout hash.
+    pub layout_hash: GotId,
+    /// Top-level program fields, sorted by path.
+    pub fields: Vec<AggregateFieldDecl>,
+}
+
+/// One top-level field of a program aggregate shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AggregateFieldDecl {
+    /// Top-level field path.
+    pub path: String,
+    /// Declared canonical type key.
+    pub type_key: String,
+    /// Target layout hash.
+    pub layout_hash: GotId,
 }
 
 /// One descriptor declaration.
@@ -350,6 +403,8 @@ pub struct Catalog {
     pub exports: Vec<ExportDecl>,
     /// Host services used by generated code.
     pub imports: Vec<ImportService>,
+    /// Aggregate shapes used to resolve split storage for debug reads/writes.
+    pub aggregates: Vec<AggregateDecl>,
 }
 
 impl Catalog {
@@ -423,6 +478,77 @@ impl Catalog {
             crate::layout::TypeKey::parse(&ty.type_key).map_err(|error| {
                 Error::manifest(format!("type `{}` type key: {}", ty.key, error.message))
             })?;
+            match ty.type_kind {
+                TypeKind::Enum => {
+                    if ty.subrange.is_some() {
+                        return Err(Error::manifest(format!(
+                            "enum type `{}` has subrange bounds",
+                            ty.key
+                        )));
+                    }
+                    let mut names = std::collections::BTreeSet::new();
+                    let mut previous: Option<(i128, &str)> = None;
+                    for member in &ty.enum_members {
+                        let normalized =
+                            crate::keys::normalize_ident(&member.name).map_err(|error| {
+                                Error::manifest(format!(
+                                    "enum type `{}` member name: {}",
+                                    ty.key, error.message
+                                ))
+                            })?;
+                        if normalized != member.name {
+                            return Err(Error::manifest(format!(
+                                "enum type `{}` member name `{}` is not normalized",
+                                ty.key, member.name
+                            )));
+                        }
+                        if !names.insert(member.name.as_str()) {
+                            return Err(Error::manifest(format!(
+                                "enum type `{}` has duplicate member `{}`",
+                                ty.key, member.name
+                            )));
+                        }
+                        let entry = (member.value, member.name.as_str());
+                        if let Some(previous) = previous
+                            && entry <= previous
+                        {
+                            return Err(Error::manifest(format!(
+                                "enum type `{}` members are not in canonical order",
+                                ty.key
+                            )));
+                        }
+                        previous = Some(entry);
+                    }
+                }
+                TypeKind::Subrange => {
+                    if !ty.enum_members.is_empty() {
+                        return Err(Error::manifest(format!(
+                            "subrange type `{}` has enum members",
+                            ty.key
+                        )));
+                    }
+                    let Some(bounds) = ty.subrange else {
+                        return Err(Error::manifest(format!(
+                            "subrange type `{}` has no bounds",
+                            ty.key
+                        )));
+                    };
+                    if bounds.lower > bounds.upper {
+                        return Err(Error::manifest(format!(
+                            "subrange type `{}` lower bound exceeds its upper bound",
+                            ty.key
+                        )));
+                    }
+                }
+                _ => {
+                    if !ty.enum_members.is_empty() || ty.subrange.is_some() {
+                        return Err(Error::manifest(format!(
+                            "type `{}` has debug metadata that does not match its kind",
+                            ty.key
+                        )));
+                    }
+                }
+            }
             let mut field_keys = std::collections::BTreeSet::new();
             for field in &ty.fields {
                 if field.identity.kind != IdentityKind::Field {
@@ -491,6 +617,100 @@ impl Catalog {
                     export.key, error.message
                 ))
             })?;
+        }
+        let mut previous_aggregate: Option<(&str, &str, Option<&str>)> = None;
+        for aggregate in &self.aggregates {
+            if crate::keys::normalize_package(&aggregate.package)
+                .map_err(|error| Error::manifest(format!("aggregate package: {}", error.message)))?
+                != aggregate.package
+            {
+                return Err(Error::manifest(format!(
+                    "aggregate package `{}` is not normalized",
+                    aggregate.package
+                )));
+            }
+            if crate::keys::normalize_name_path(&aggregate.path)
+                .map_err(|error| Error::manifest(format!("aggregate path: {}", error.message)))?
+                != aggregate.path
+            {
+                return Err(Error::manifest(format!(
+                    "aggregate path `{}` is not normalized",
+                    aggregate.path
+                )));
+            }
+            if aggregate.layout_hash.is_zero() {
+                return Err(Error::manifest(format!(
+                    "aggregate `{}::{}` has a zero layout hash",
+                    aggregate.package, aggregate.path
+                )));
+            }
+            let key = (
+                aggregate.package.as_str(),
+                aggregate.path.as_str(),
+                aggregate.qualifier.as_deref(),
+            );
+            if let Some(previous) = previous_aggregate
+                && key <= previous
+            {
+                return Err(Error::manifest(
+                    "aggregate declarations are not in canonical order",
+                ));
+            }
+            previous_aggregate = Some(key);
+            match aggregate.kind {
+                AggregateKind::Type => {
+                    if aggregate.qualifier.is_some() || !aggregate.fields.is_empty() {
+                        return Err(Error::manifest(format!(
+                            "type aggregate `{}::{}` has program-only metadata",
+                            aggregate.package, aggregate.path
+                        )));
+                    }
+                    crate::layout::TypeKey::parse(&aggregate.shape_key).map_err(|error| {
+                        Error::manifest(format!(
+                            "type aggregate `{}::{}` shape key: {}",
+                            aggregate.package, aggregate.path, error.message
+                        ))
+                    })?;
+                }
+                AggregateKind::Program => {
+                    if aggregate.qualifier.is_none() {
+                        return Err(Error::manifest(format!(
+                            "program aggregate `{}::{}` has no instance qualifier",
+                            aggregate.package, aggregate.path
+                        )));
+                    }
+                    let mut previous_path: Option<&str> = None;
+                    for field in &aggregate.fields {
+                        crate::keys::normalize_ident(&field.path).map_err(|error| {
+                            Error::manifest(format!(
+                                "program aggregate `{}::{}` field: {}",
+                                aggregate.package, aggregate.path, error.message
+                            ))
+                        })?;
+                        if let Some(previous) = previous_path
+                            && field.path.as_str() <= previous
+                        {
+                            return Err(Error::manifest(format!(
+                                "program aggregate `{}::{}` fields are not in canonical order",
+                                aggregate.package, aggregate.path
+                            )));
+                        }
+                        previous_path = Some(field.path.as_str());
+                        crate::layout::TypeKey::parse(&field.type_key).map_err(|error| {
+                            Error::manifest(format!(
+                                "program aggregate `{}::{}` field `{}` type key: {}",
+                                aggregate.package, aggregate.path, field.path, error.message
+                            ))
+                        })?;
+                        if field.layout_hash.is_zero() {
+                            return Err(Error::manifest(format!(
+                                "program aggregate `{}::{}` field `{}` has a zero layout hash",
+                                aggregate.package, aggregate.path, field.path
+                            )));
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }

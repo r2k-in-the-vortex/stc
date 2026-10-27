@@ -1,5 +1,27 @@
 {
   "body": {
+    "aggregates": [
+      {
+        "fields": [
+          {
+            "layout_hash": "0xfd22c654deff0509ba8d236283dc7e65",
+            "path": "COUNTER",
+            "type_key": "DINT"
+          },
+          {
+            "layout_hash": "0xdb07b81571f332a49c7dfe04de257640",
+            "path": "FLAG",
+            "type_key": "BOOL"
+          }
+        ],
+        "kind": "program",
+        "layout_hash": "0x747403a93e5b33c0cc38bf990c8bbae7",
+        "package": "_ROOT",
+        "path": "MAIN",
+        "qualifier": "_DEFAULT/_DEFAULT/_DEFAULT",
+        "shape_key": "MAIN"
+      }
+    ],
     "descriptors": [],
     "exports": [],
     "functions": [
@@ -24,10 +46,10 @@
     ],
     "header": {
       "active_configuration": "",
-      "build_id": "0x3a2b33b578be275fce19dc8b2b257642",
-      "catalog_digest": "0xda906c55f4f7bfcdffb1da1e288ba02b5faa5bc5965be0436ac619ee3b5f198f",
+      "build_id": "0xcdd295af4f9ce89b85e54f3dba84c3c3",
+      "catalog_digest": "0x587e0fcd1078d1ac3609fb163860d3e135ef1f3370f497ac9a450c30b2681788",
       "compiler_version": "stc 0.1.0",
-      "descriptor_digest": "0xf4532eac5f4f8c48f4fbd6d8276371206673c1d14489e3a38034a03ea5562b38",
+      "descriptor_digest": "0x50a527ac430c702a432cad0afb36424977f05137ade70fa3f704f95bb3702d1a",
       "endianness": 0,
       "generator_flags": 65,
       "host_abi_major": 2,
@@ -270,9 +292,10 @@
         "source": null
       }
     ],
+    "type_metadata": [],
     "types": []
   },
-  "digest": "0xa1a1845a82e5cef54315aff21041569631be069e0985b055574dedd63dfae51b",
+  "digest": "0x6810fcff6bc361887ff25fb52b0c665f6d98f59c99ae739873a651c8b01dee30",
   "flags": 0,
-  "format": 1
+  "format": 2
 }

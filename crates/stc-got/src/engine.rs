@@ -14,10 +14,11 @@ use crate::keys::IdentityKind;
 use crate::layout::Target;
 use crate::manifest::{FEATURE_HOST_ABI, FEATURE_ONLINE_PLAN, Manifest};
 use crate::model::{
-    ActionRecord, DescriptorKind, DescriptorRecord, ExportRecord, FieldRecord, FunctionRecord,
-    Header, History, InstanceRecord, Plan, PlanAction, PlanDiagnostic, PlanVerdict, RetiredCause,
-    RetiredRecord, RootKind, RootRecord, SlotKind, SlotRecord, TaskRecord, TypeRecord,
-    compare_plan_diagnostics,
+    ActionRecord, AggregateFieldRecord, AggregateRecord, DescriptorKind, DescriptorRecord,
+    EnumMemberRecord, ExportRecord, FieldRecord, FunctionRecord, Header, History, InstanceRecord,
+    Plan, PlanAction, PlanDiagnostic, PlanVerdict, RetiredCause, RetiredRecord, RootKind,
+    RootRecord, SlotKind, SlotRecord, SubrangeBounds, TaskRecord, TypeKind, TypeMetadataRecord,
+    TypeRecord, compare_plan_diagnostics,
 };
 use crate::sha256::{domain_hash, sha256};
 use crate::wire::Encoder;
@@ -723,6 +724,7 @@ pub fn build(
     }
 
     let mut types = Vec::new();
+    let mut type_metadata = Vec::new();
     let mut renamed_types = BTreeSet::new();
     for (decl, assigned) in catalog.types.iter().zip(&type_assignments) {
         let resolved_base = resolve_type(&type_ids, decl.base.as_deref(), &decl.key)?;
@@ -819,7 +821,62 @@ pub fn build(
             fields,
             source: decl.source.clone(),
         });
+        if matches!(decl.type_kind, TypeKind::Enum | TypeKind::Subrange) {
+            let mut enum_members: Vec<EnumMemberRecord> = decl
+                .enum_members
+                .iter()
+                .map(|member| EnumMemberRecord {
+                    name: member.name.clone(),
+                    value: member.value,
+                })
+                .collect();
+            enum_members.sort_by(|left, right| {
+                (left.value, left.name.as_str()).cmp(&(right.value, right.name.as_str()))
+            });
+            type_metadata.push(TypeMetadataRecord {
+                type_id: assigned.got_id,
+                enum_members,
+                subrange: decl.subrange.map(|bounds| SubrangeBounds {
+                    lower: bounds.lower,
+                    upper: bounds.upper,
+                }),
+            });
+        }
     }
+    type_metadata.sort_by_key(|record| record.type_id);
+
+    let mut aggregates = Vec::new();
+    for decl in &catalog.aggregates {
+        aggregates.push(AggregateRecord {
+            package: decl.package.clone(),
+            path: decl.path.clone(),
+            qualifier: decl.qualifier.clone(),
+            kind: decl.kind,
+            shape_key: decl.shape_key.clone(),
+            layout_hash: decl.layout_hash,
+            fields: decl
+                .fields
+                .iter()
+                .map(|field| AggregateFieldRecord {
+                    path: field.path.clone(),
+                    type_key: field.type_key.clone(),
+                    layout_hash: field.layout_hash,
+                })
+                .collect(),
+        });
+    }
+    aggregates.sort_by(|left, right| {
+        (
+            left.package.as_str(),
+            left.path.as_str(),
+            left.qualifier.as_deref(),
+        )
+            .cmp(&(
+                right.package.as_str(),
+                right.path.as_str(),
+                right.qualifier.as_deref(),
+            ))
+    });
 
     let mut descriptors = Vec::new();
     for (decl, assigned) in catalog.descriptors.iter().zip(&descriptor_assignments) {
@@ -1269,6 +1326,8 @@ pub fn build(
         slots,
         plan,
         history,
+        type_metadata,
+        aggregates,
     };
     let catalog_digest = manifest.catalog_digest().map_err(BuildError::from_error)?;
     let plan_digest = manifest.plan_digest().map_err(BuildError::from_error)?;
@@ -1310,7 +1369,7 @@ fn validate_input(input: &BuildInput) -> std::result::Result<(), BuildError> {
     if input.target.pointer_width != 8 {
         return Err(BuildError::single(Diagnostic::error(
             codes::MANIFEST_INVALID,
-            "format 1 supports 8-byte pointers only",
+            "the artifact format supports 8-byte pointers only",
         )));
     }
     if input.descriptor_digest.is_zero() {

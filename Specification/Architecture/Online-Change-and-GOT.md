@@ -25,7 +25,10 @@ and place-descriptor references are M5 extensions of the same model. M6 implemen
 user-facing `stc online download/diff` and `stc run --watch` workflow and the local
 control/status thread. Candidate validation, load, and prepare run between cycles on the cycle
 thread; fully off-thread prepare remains M7. The Rust `Host` API also drives online
-prepare/activation directly.
+prepare/activation directly. M6.5 phase 4 raised the GOT manifest and its binary/JSON
+projections to format 2 to carry enum, subrange, and split-aggregate metadata (D-180); the
+descriptor, module, state, metadata sidecar, and host ABI formats are unchanged, and a format-1
+manifest is rejected rather than upgraded.
 
 ## 1. Terms
 
@@ -275,6 +278,8 @@ ordering, and digest derivations are normative in
 - layout records: per-field paths, offsets, sizes, type keys, array/string/`OVERLAP` shape;
 - function/method/FB-body/standard-FB records;
 - type/descriptor/vtable records;
+- format-2 type metadata: enum member sets and subrange bounds;
+- format-2 aggregate shapes for split parent resolution (type and configured-program shapes);
 - instance/task/export records;
 - current slot mappings and cell kinds;
 - online-change plan and compatibility classification;
@@ -293,6 +298,14 @@ cold download. `stc rename` persists its tracked mappings in the committed `stc.
 history ([CLI and Manifest](CLI-and-Manifest.md) §3.1); builds merge that history with CLI
 `--rename` entries before identity matching. The history changes only the rename maps, not the
 manifest format.
+
+Manifest format 2 covers the type metadata and aggregate shapes in the catalog digest and build
+ID. A metadata change that leaves every identity and root layout unchanged can still be an
+online candidate against an exact format-2 parent, but the candidate's build ID differs and the
+runtime loads the new metadata as part of the candidate manifest; it is never merged into the
+active manifest. A format-1 manifest has no such metadata, so it is rejected at decode and the
+only permitted path is cold download. An active manifest persisted in either projection must
+decode to the same format-2 value before it can serve as a baseline.
 
 ### 7.4 Storage, download, and security
 
@@ -411,9 +424,14 @@ channel unavailable or unauthorized), `STC-E-ONLINE-008` (deploy rejected), and 
 
 Host ABI 2 is a versioned struct (`abi_version` plus `struct_size`, additive within a major).
 M4 code-linked artifacts and ABI 1 are not loadable. The module descriptor, manifest format, and
-runtime state layout are versioned together. A failed compatibility check rejects the candidate
-before activation. The exact host API table, service IDs, entry-point signatures, trap boundary,
-and module descriptor layout are fixed in [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8;
+runtime state layout are versioned separately: descriptor/module format 1 and state layout v1 are
+unchanged, while the GOT manifest and its binary/JSON projections are format 2 from M6.5 phase 4
+(D-180). A descriptor's `manifest_format` field must equal the paired manifest's outer format, so
+a format-1 descriptor/manifest pair is rejected on the cold-download path instead of being
+reinterpreted. Type metadata and aggregate records are part of the catalog digest and build ID.
+A failed compatibility check rejects the candidate before activation. The exact host API table,
+service IDs, entry-point signatures, trap boundary, and module descriptor layout are fixed in
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8;
 minor 1 is implemented, and M6 appends only service ID 12 (`set_cycle_time_ns(int64_t)`) as
 minor 2 for test builds. No debug service is added in M6. M6.5 appends service ID 13
 (`debug_check(uint32_t checkpoint_id, uint32_t span_id)`) as minor 3; module-facing debug support

@@ -39,9 +39,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use stc_got::Manifest;
 use stc_got::digest::GotId;
 use stc_got::error::{Error, Result, codes};
+use stc_got::json::Json;
 use stc_got::keys::{normalize_ident, normalize_package};
 use stc_got::layout::{ArrayBound, StringKind, Target, TypeKey, elementary_layout};
-use stc_got::model::{FieldRecord, PlanAction, RootKind, RootRecord, TypeKind, TypeRecord};
+use stc_got::model::{
+    AggregateFieldRecord, AggregateKind, AggregateRecord, PlanAction, Retention, RootKind,
+    RootRecord, TypeKind, TypeMetadataRecord, TypeRecord,
+};
 use stc_got::sha256::domain_hash;
 
 /// Maximum number of active watch targets.
@@ -52,6 +56,14 @@ pub const MIN_WATCH_INTERVAL_NS: i64 = 50_000_000;
 pub const MAX_WATCH_BATCHES: usize = 64;
 /// Maximum approximate byte size of the event queue.
 pub const MAX_EVENT_BYTES: usize = 1024 * 1024;
+/// Maximum queued writes and forces, including active forces.
+pub const MAX_DEBUG_QUEUE_ENTRIES: usize = 1024;
+/// Maximum approximate byte size of queued writes and active forces.
+pub const MAX_DEBUG_QUEUE_BYTES: usize = 1024 * 1024;
+/// Maximum audit value size before truncation.
+pub const MAX_AUDIT_VALUE_BYTES: usize = 4096;
+/// Maximum completed queue results retained for the embedding host.
+pub const MAX_DEBUG_QUEUE_RESULTS: usize = 1024;
 
 const MAX_DEBUG_COMMANDS: usize = 1024;
 const MAX_DECODE_DEPTH: usize = 64;
@@ -373,6 +385,329 @@ impl From<Error> for DebugFailure {
     }
 }
 
+/// Whether a queued debug operation is a one-shot write or a persistent force.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DebugWriteKind {
+    /// Applied once at the next boundary.
+    Write,
+    /// Applied at every boundary until released.
+    Force,
+}
+
+impl DebugWriteKind {
+    /// Returns the protocol spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Write => "write",
+            Self::Force => "force",
+        }
+    }
+}
+
+/// One typed write or force request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugWriteRequest {
+    /// Target root to write.
+    pub target: DebugTarget,
+    /// Typed value to encode.
+    pub value: TypedValue,
+    /// Expected active generation, when known.
+    pub expected_generation: Option<u64>,
+    /// Expected active build, when known.
+    pub expected_build_id: Option<GotId>,
+    /// Expected root type key, when known.
+    pub expected_type_key: Option<String>,
+    /// Expected root layout hash, when known.
+    pub expected_layout_hash: Option<GotId>,
+}
+
+impl DebugWriteRequest {
+    /// Creates a request with no expectations.
+    #[must_use]
+    pub fn new(target: DebugTarget, value: TypedValue) -> Self {
+        Self {
+            target,
+            value,
+            expected_generation: None,
+            expected_build_id: None,
+            expected_type_key: None,
+            expected_layout_hash: None,
+        }
+    }
+
+    /// Attaches an expected generation.
+    #[must_use]
+    pub fn with_generation(mut self, generation: u64) -> Self {
+        self.expected_generation = Some(generation);
+        self
+    }
+
+    /// Attaches an expected build.
+    #[must_use]
+    pub fn with_build(mut self, build_id: GotId) -> Self {
+        self.expected_build_id = Some(build_id);
+        self
+    }
+
+    /// Attaches an expected root type key.
+    #[must_use]
+    pub fn with_type_key(mut self, type_key: impl Into<String>) -> Self {
+        self.expected_type_key = Some(type_key.into());
+        self
+    }
+
+    /// Attaches an expected root layout hash.
+    #[must_use]
+    pub fn with_layout_hash(mut self, layout_hash: GotId) -> Self {
+        self.expected_layout_hash = Some(layout_hash);
+        self
+    }
+}
+
+/// Server-assigned identity for one queued write or force.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DebugQueueId(pub u64);
+
+/// Final outcome of one queued write or force.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugQueueOutcome {
+    /// The operation modified storage at its boundary.
+    Applied,
+    /// The operation was revalidated and rejected without retargeting.
+    Rejected,
+}
+
+impl DebugQueueOutcome {
+    /// Returns the protocol spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+/// One completed write/force queue result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugQueueResult {
+    /// Queue identity assigned at enqueue.
+    pub queue_id: DebugQueueId,
+    /// Operation kind.
+    pub operation: DebugWriteKind,
+    /// Applied or rejected.
+    pub outcome: DebugQueueOutcome,
+    /// Generation observed at the boundary.
+    pub generation: Option<u64>,
+    /// Build observed at the boundary.
+    pub build_id: Option<GotId>,
+    /// Completed-cycle count at the boundary.
+    pub cycle: u64,
+    /// Rejection code, when rejected.
+    pub code: Option<&'static str>,
+    /// Rejection message, when rejected.
+    pub message: Option<String>,
+    /// Non-fatal warning, such as a force on a `RETAIN` root.
+    pub warning: Option<DebugWarning>,
+}
+
+/// Audit record outcome (Debug and Monitoring §13.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditOutcome {
+    /// The operation was accepted or completed.
+    Ok,
+    /// Host policy denied the operation.
+    Denied,
+    /// The operation failed before it could be applied.
+    Error,
+}
+
+impl AuditOutcome {
+    /// Returns the protocol spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Denied => "denied",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// Audit target description.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuditTarget {
+    /// Stable package key path or local path, never an address.
+    pub key: String,
+    /// `root`, `local`, or `path`.
+    pub kind: String,
+}
+
+/// One format-1 debug audit event.
+///
+/// Phase 4 owns the data model and fail-closed sink; phase 5 owns the JSONL
+/// file, session identity, wall-clock timestamps, and append lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuditEvent {
+    /// Audit format, always `1`.
+    pub format: u8,
+    /// Per-log sequence starting at 1.
+    pub seq: u64,
+    /// Host monotonic clock; phase 4 records `0` until phase 5 wires the clock.
+    pub monotonic_ns: u64,
+    /// Host local date; `0` when unavailable.
+    pub local_date_ns: i64,
+    /// Session identity, null before phase 5.
+    pub session: Option<String>,
+    /// Event name from the closed §13.3 set.
+    pub event: &'static str,
+    /// Outcome.
+    pub outcome: AuditOutcome,
+    /// Granted scope, when applicable.
+    pub scope: Option<String>,
+    /// Target, when applicable.
+    pub target: Option<AuditTarget>,
+    /// Typed value payload, when applicable.
+    pub value: Option<Json>,
+    /// Generation, when applicable.
+    pub generation: Option<u64>,
+    /// Build identity, when applicable.
+    pub build: Option<GotId>,
+    /// Completed-cycle count, when applicable.
+    pub cycle: Option<u64>,
+    /// Event-specific object.
+    pub detail: Json,
+}
+
+impl AuditEvent {
+    /// Creates an event with an empty detail object.
+    #[must_use]
+    pub fn new(event: &'static str, outcome: AuditOutcome) -> Self {
+        Self {
+            format: 1,
+            seq: 0,
+            monotonic_ns: 0,
+            local_date_ns: 0,
+            session: None,
+            event,
+            outcome,
+            scope: None,
+            target: None,
+            value: None,
+            generation: None,
+            build: None,
+            cycle: None,
+            detail: Json::Object(std::collections::BTreeMap::new()),
+        }
+    }
+
+    /// Returns the format-1 JSON object.
+    ///
+    /// Values larger than [`MAX_AUDIT_VALUE_BYTES`] are replaced by
+    /// `{"truncated":true,"size":N}` as §13.3 requires.
+    #[must_use]
+    pub fn to_json(&self) -> Json {
+        let value = self.value.as_ref().map(|value| {
+            let size = value.render_compact().len();
+            if size > MAX_AUDIT_VALUE_BYTES {
+                Json::object([
+                    ("truncated".into(), Json::Bool(true)),
+                    (
+                        "size".into(),
+                        Json::unsigned(u64::try_from(size).unwrap_or(u64::MAX)),
+                    ),
+                ])
+            } else {
+                value.clone()
+            }
+        });
+        let target = self.target.as_ref().map(|target| {
+            Json::object([
+                ("key".into(), Json::string(target.key.clone())),
+                ("kind".into(), Json::string(target.kind.clone())),
+            ])
+        });
+        Json::object([
+            (
+                "build_id".into(),
+                self.build
+                    .map_or(Json::Null, |build| Json::string(build.to_hex())),
+            ),
+            (
+                "cycle".into(),
+                self.cycle.map_or(Json::Null, Json::unsigned),
+            ),
+            ("detail".into(), self.detail.clone()),
+            ("event".into(), Json::string(self.event)),
+            ("format".into(), Json::unsigned(u64::from(self.format))),
+            (
+                "generation".into(),
+                self.generation.map_or(Json::Null, Json::unsigned),
+            ),
+            ("local_date_ns".into(), Json::signed(self.local_date_ns)),
+            ("monotonic_ns".into(), Json::unsigned(self.monotonic_ns)),
+            ("outcome".into(), Json::string(self.outcome.name())),
+            (
+                "scope".into(),
+                self.scope
+                    .as_ref()
+                    .map_or(Json::Null, |scope| Json::string(scope.clone())),
+            ),
+            ("seq".into(), Json::unsigned(self.seq)),
+            (
+                "session".into(),
+                self.session
+                    .as_ref()
+                    .map_or(Json::Null, |session| Json::string(session.clone())),
+            ),
+            ("target".into(), target.unwrap_or(Json::Null)),
+            ("value".into(), value.unwrap_or(Json::Null)),
+        ])
+    }
+
+    /// Returns the compact one-line JSON record.
+    #[must_use]
+    pub fn to_json_line(&self) -> String {
+        self.to_json().render_compact()
+    }
+}
+
+/// Fail-closed audit destination.
+///
+/// Phase 5 supplies a JSONL file implementation. A sink error refuses the
+/// audited operation with [`codes::DEBUG_AUDIT`].
+pub trait AuditSink: Send {
+    /// Appends one event. Returning an error refuses the audited operation.
+    fn record(&mut self, event: &AuditEvent) -> Result<()>;
+}
+
+/// Why debug state ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugEndReason {
+    /// An online change was activated.
+    Swap,
+    /// The change was rolled back.
+    Rollback,
+    /// A cold install replaced the active generation.
+    ColdInstall,
+    /// The host shut down.
+    Shutdown,
+    /// A session ended or disconnected.
+    SessionEnd,
+}
+
+impl DebugEndReason {
+    /// Audit event name for the transition.
+    #[must_use]
+    pub const fn audit_event(self) -> &'static str {
+        match self {
+            Self::Swap | Self::Rollback | Self::ColdInstall => "swap-end",
+            Self::Shutdown | Self::SessionEnd => "session-end",
+        }
+    }
+}
+
 /// Request identity allocated by a [`DebugService`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReadRequestId(pub u64);
@@ -618,11 +953,44 @@ struct ActiveWatch {
     next_due_ns: i64,
 }
 
+/// One write or force validated and encoded at enqueue.
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedWrite {
+    kind: DebugWriteKind,
+    got_id: GotId,
+    generation: u64,
+    build_id: GotId,
+    cycle: u64,
+    target_key: String,
+    type_key: String,
+    layout_hash: GotId,
+    expected_generation: Option<u64>,
+    expected_build_id: Option<GotId>,
+    expected_type_key: Option<String>,
+    expected_layout_hash: Option<GotId>,
+    bytes: Vec<u8>,
+    value: TypedValue,
+    warning: Option<DebugWarning>,
+    queue_bytes: usize,
+}
+
+#[derive(Clone, Debug)]
+struct QueuedWrite {
+    queue_id: DebugQueueId,
+    prepared: PreparedWrite,
+}
+
 /// Boundary-serviced debug state owned by [`crate::Host`].
 pub(crate) struct DebugEngine {
     bus: Arc<DebugBus>,
     watches: BTreeMap<WatchId, ActiveWatch>,
     last_generation: Option<u64>,
+    audit: Option<Box<dyn AuditSink>>,
+    audit_seq: u64,
+    next_queue: u64,
+    queue: VecDeque<QueuedWrite>,
+    forces: BTreeMap<GotId, PreparedWrite>,
+    results: VecDeque<DebugQueueResult>,
 }
 
 impl DebugEngine {
@@ -633,6 +1001,12 @@ impl DebugEngine {
             }),
             watches: BTreeMap::new(),
             last_generation: None,
+            audit: None,
+            audit_seq: 0,
+            next_queue: 0,
+            queue: VecDeque::new(),
+            forces: BTreeMap::new(),
+            results: VecDeque::new(),
         }
     }
 
@@ -644,11 +1018,6 @@ impl DebugEngine {
 
     pub(crate) fn watch_count(&self) -> usize {
         self.watches.len()
-    }
-
-    /// Ends every watch immediately at a generation transition.
-    pub(crate) fn end_watches(&mut self) {
-        self.watches.clear();
     }
 
     pub(crate) fn add_watch(&mut self, spec: WatchSpec) -> Result<WatchId> {
@@ -676,6 +1045,485 @@ impl DebugEngine {
 
     pub(crate) fn remove_watch(&mut self, watch: WatchId) -> bool {
         self.watches.remove(&watch).is_some()
+    }
+
+    pub(crate) fn set_audit_sink(&mut self, sink: Option<Box<dyn AuditSink>>) {
+        self.audit = sink;
+        self.audit_seq = 0;
+    }
+
+    pub(crate) fn queued_count(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub(crate) fn active_force_count(&self) -> usize {
+        self.forces.len()
+    }
+
+    pub(crate) fn take_results(&mut self) -> Vec<DebugQueueResult> {
+        self.results.drain(..).collect()
+    }
+
+    pub(crate) fn enqueue(&mut self, prepared: PreparedWrite) -> Result<DebugQueueId> {
+        let count = self.queue.len().saturating_add(self.forces.len());
+        if count >= MAX_DEBUG_QUEUE_ENTRIES {
+            let error = debug_limit(format!(
+                "the write/force queue limit of {MAX_DEBUG_QUEUE_ENTRIES} is reached"
+            ));
+            self.audit_prepared(
+                &prepared,
+                AuditOutcome::Denied,
+                None,
+                Some(&error),
+                None,
+                "queue_limit",
+            )?;
+            return Err(error);
+        }
+        let queued_bytes = self
+            .queue
+            .iter()
+            .map(|entry| entry.prepared.queue_bytes)
+            .sum::<usize>()
+            .saturating_add(
+                self.forces
+                    .values()
+                    .map(|force| force.queue_bytes)
+                    .sum::<usize>(),
+            );
+        if queued_bytes
+            .saturating_add(prepared.queue_bytes)
+            .gt(&MAX_DEBUG_QUEUE_BYTES)
+        {
+            let error = debug_limit(format!(
+                "the write/force queue byte limit of {MAX_DEBUG_QUEUE_BYTES} is reached"
+            ));
+            self.audit_prepared(
+                &prepared,
+                AuditOutcome::Denied,
+                None,
+                Some(&error),
+                None,
+                "queue_limit",
+            )?;
+            return Err(error);
+        }
+        self.next_queue = self.next_queue.saturating_add(1).max(1);
+        let queue_id = DebugQueueId(self.next_queue);
+        self.audit_prepared(
+            &prepared,
+            AuditOutcome::Ok,
+            None,
+            None,
+            Some(queue_id),
+            "queued",
+        )?;
+        self.queue.push_back(QueuedWrite { queue_id, prepared });
+        Ok(queue_id)
+    }
+
+    pub(crate) fn audit_request_error(
+        &mut self,
+        kind: DebugWriteKind,
+        target: &DebugTarget,
+        value: Option<&TypedValue>,
+        error: &Error,
+        context: Option<(u64, GotId, u64)>,
+    ) -> Result<()> {
+        let mut event = AuditEvent::new(kind.name(), AuditOutcome::Error);
+        event.target = Some(AuditTarget {
+            key: audit_target_key(target),
+            kind: audit_target_kind(target).to_owned(),
+        });
+        event.value = value.map(typed_value_json);
+        event.generation = context.map(|(generation, _, _)| generation);
+        event.build = context.map(|(_, build, _)| build);
+        event.cycle = context.map(|(_, _, cycle)| cycle);
+        event.detail = Json::object([
+            ("code".into(), Json::string(error.code)),
+            ("message".into(), Json::string(error.message.clone())),
+            ("status".into(), Json::string("rejected")),
+        ]);
+        self.append_audit(event)
+    }
+
+    pub(crate) fn release_force(&mut self, got_id: GotId) -> Result<bool> {
+        let Some(force) = self.forces.get(&got_id) else {
+            return Ok(false);
+        };
+        let mut event = AuditEvent::new("force-release", AuditOutcome::Ok);
+        event.target = Some(AuditTarget {
+            key: force.target_key.clone(),
+            kind: "root".into(),
+        });
+        event.value = Some(typed_value_json(&force.value));
+        event.generation = Some(force.generation);
+        event.build = Some(force.build_id);
+        event.cycle = Some(force.cycle);
+        event.detail = Json::object([
+            ("status".into(), Json::string("released")),
+            ("reason".into(), Json::string("request")),
+        ]);
+        self.append_audit(event)?;
+        self.forces.remove(&got_id);
+        Ok(true)
+    }
+
+    pub(crate) fn release_all_forces(&mut self) -> Result<usize> {
+        let ids: Vec<GotId> = self.forces.keys().copied().collect();
+        let mut released = 0;
+        for got_id in ids {
+            if self.release_force(got_id)? {
+                released += 1;
+            }
+        }
+        Ok(released)
+    }
+
+    /// Ends watches, queued writes, and active forces at a generation or
+    /// session boundary. The state is always cleared, even when an audit
+    /// append fails; the audit failure is returned to the caller.
+    pub(crate) fn end_state(
+        &mut self,
+        reason: DebugEndReason,
+        generation: Option<u64>,
+        build: Option<GotId>,
+        cycle: Option<u64>,
+    ) -> Result<()> {
+        let mut audit_error = None;
+        self.watches.clear();
+        self.last_generation = None;
+        let queued = self.queue.drain(..).collect::<Vec<_>>();
+        for entry in &queued {
+            self.push_result(DebugQueueResult {
+                queue_id: entry.queue_id,
+                operation: entry.prepared.kind,
+                outcome: DebugQueueOutcome::Rejected,
+                generation,
+                build_id: build,
+                cycle: cycle.unwrap_or(0),
+                code: Some(codes::DEBUG_STALE),
+                message: Some(format!(
+                    "queued {} was discarded because debug state ended",
+                    entry.prepared.kind.name()
+                )),
+                warning: entry.prepared.warning.clone(),
+            });
+            let error = Error::new(
+                codes::DEBUG_STALE,
+                "debug state ended before the queued write was applied",
+            );
+            if let Err(failure) = self.audit_prepared_boundary(
+                &entry.prepared,
+                AuditOutcome::Error,
+                Some(&error),
+                Some(entry.queue_id),
+                "discarded",
+                generation,
+                build,
+                cycle,
+            ) {
+                audit_error = Some(failure);
+            }
+        }
+        let force_ids: Vec<GotId> = self.forces.keys().copied().collect();
+        for got_id in force_ids {
+            let force = self.forces.remove(&got_id);
+            if let Some(force) = force {
+                let mut event = AuditEvent::new("force-release", AuditOutcome::Ok);
+                event.target = Some(AuditTarget {
+                    key: force.target_key.clone(),
+                    kind: "root".into(),
+                });
+                event.value = Some(typed_value_json(&force.value));
+                event.generation = generation;
+                event.build = build;
+                event.cycle = cycle;
+                event.detail = Json::object([
+                    ("status".into(), Json::string("released")),
+                    ("reason".into(), Json::string(debug_end_detail(reason))),
+                ]);
+                if let Err(failure) = self.append_audit(event) {
+                    audit_error = Some(failure);
+                }
+            }
+        }
+        let mut event = AuditEvent::new(reason.audit_event(), AuditOutcome::Ok);
+        event.generation = generation;
+        event.build = build;
+        event.cycle = cycle;
+        event.detail = Json::object([
+            ("reason".into(), Json::string(debug_end_detail(reason))),
+            (
+                "queued_writes".into(),
+                Json::unsigned(u64::try_from(queued.len()).unwrap_or(u64::MAX)),
+            ),
+        ]);
+        if let Err(failure) = self.append_audit(event) {
+            audit_error = Some(failure);
+        }
+        if let Some(error) = audit_error {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn push_result(&mut self, result: DebugQueueResult) {
+        if self.results.len() >= MAX_DEBUG_QUEUE_RESULTS {
+            self.results.pop_front();
+        }
+        self.results.push_back(result);
+    }
+
+    fn append_audit(&mut self, mut event: AuditEvent) -> Result<()> {
+        let Some(sink) = self.audit.as_mut() else {
+            return Ok(());
+        };
+        self.audit_seq = self.audit_seq.saturating_add(1).max(1);
+        event.seq = self.audit_seq;
+        sink.record(&event).map_err(|error| {
+            Error::new(
+                codes::DEBUG_AUDIT,
+                format!("debug audit append failed: {}", error.message),
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn audit_prepared(
+        &mut self,
+        prepared: &PreparedWrite,
+        outcome: AuditOutcome,
+        error: Option<&Error>,
+        append_error: Option<&Error>,
+        queue_id: Option<DebugQueueId>,
+        status: &str,
+    ) -> Result<()> {
+        self.audit_prepared_boundary(
+            prepared,
+            outcome,
+            error.or(append_error),
+            queue_id,
+            status,
+            Some(prepared.generation),
+            Some(prepared.build_id),
+            Some(prepared.cycle),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn audit_prepared_boundary(
+        &mut self,
+        prepared: &PreparedWrite,
+        outcome: AuditOutcome,
+        error: Option<&Error>,
+        queue_id: Option<DebugQueueId>,
+        status: &str,
+        generation: Option<u64>,
+        build: Option<GotId>,
+        cycle: Option<u64>,
+    ) -> Result<()> {
+        let mut event = AuditEvent::new(prepared.kind.name(), outcome);
+        event.target = Some(AuditTarget {
+            key: prepared.target_key.clone(),
+            kind: "root".into(),
+        });
+        event.value = Some(typed_value_json(&prepared.value));
+        event.generation = generation;
+        event.build = build;
+        event.cycle = cycle;
+        let mut detail = BTreeMap::new();
+        if let Some(queue_id) = queue_id {
+            detail.insert("queue_id".into(), Json::unsigned(queue_id.0));
+        }
+        if let Some(error) = error {
+            detail.insert("code".into(), Json::string(error.code));
+            detail.insert("message".into(), Json::string(error.message.clone()));
+        }
+        if let Some(warning) = &prepared.warning {
+            detail.insert("warning".into(), Json::string(warning.code));
+        }
+        detail.insert("status".into(), Json::string(status));
+        event.detail = Json::Object(detail);
+        self.append_audit(event)
+    }
+
+    /// Applies queued writes in queue order, then active forces in ascending
+    /// identity order. Every entry is revalidated against the current
+    /// manifest and rotated with the new generation's layout; a stale entry is
+    /// rejected and never retargeted.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_boundary(
+        &mut self,
+        manifest: &Manifest,
+        target: &Target,
+        info: Option<&crate::ModuleInfo>,
+        roots: &mut crate::RootRegistry,
+        generation: u64,
+        build: GotId,
+        cycle: u64,
+    ) {
+        let queued: Vec<QueuedWrite> = self.queue.drain(..).collect();
+        for entry in queued {
+            match revalidate_prepared(&entry.prepared, manifest, target, info, generation, build) {
+                Ok(root) => match root {
+                    Some(root) => {
+                        match write_root_bytes(info, roots, root, &entry.prepared.bytes) {
+                            Ok(()) => {
+                                if entry.prepared.kind == DebugWriteKind::Force {
+                                    self.forces
+                                        .insert(entry.prepared.got_id, entry.prepared.clone());
+                                }
+                                self.push_result(DebugQueueResult {
+                                    queue_id: entry.queue_id,
+                                    operation: entry.prepared.kind,
+                                    outcome: DebugQueueOutcome::Applied,
+                                    generation: Some(generation),
+                                    build_id: Some(build),
+                                    cycle,
+                                    code: None,
+                                    message: None,
+                                    warning: entry.prepared.warning.clone(),
+                                });
+                            }
+                            Err(error) => {
+                                self.reject_queued(&entry, &error, generation, build, cycle);
+                            }
+                        }
+                    }
+                    None => {
+                        let error = Error::new(
+                            codes::DEBUG_STALE,
+                            "the target root was removed before the write could be applied",
+                        );
+                        self.reject_queued(&entry, &error, generation, build, cycle);
+                    }
+                },
+                Err(error) => {
+                    self.reject_queued(&entry, &error, generation, build, cycle);
+                }
+            }
+        }
+
+        let force_ids: Vec<GotId> = self.forces.keys().copied().collect();
+        for got_id in force_ids {
+            let Some(force) = self.forces.get(&got_id).cloned() else {
+                continue;
+            };
+            let result = revalidate_prepared(&force, manifest, target, info, generation, build)
+                .and_then(|root| match root {
+                    Some(root) => write_root_bytes(info, roots, root, &force.bytes),
+                    None => Err(Error::new(
+                        codes::DEBUG_STALE,
+                        "the force target root was removed",
+                    )),
+                });
+            if let Err(error) = result {
+                self.forces.remove(&got_id);
+                self.audit_active_rejection(&force, &error, generation, build, cycle);
+            }
+        }
+    }
+
+    /// Substitutes active direct input forces after the backend latch.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_input_forces(
+        &mut self,
+        manifest: &Manifest,
+        target: &Target,
+        info: Option<&crate::ModuleInfo>,
+        roots: &mut crate::RootRegistry,
+        generation: u64,
+        build: GotId,
+        cycle: u64,
+    ) {
+        let Some(info) = info else {
+            return;
+        };
+        let force_ids: Vec<GotId> = self.forces.keys().copied().collect();
+        for got_id in force_ids {
+            let Some(force) = self.forces.get(&got_id).cloned() else {
+                continue;
+            };
+            let result =
+                revalidate_prepared(&force, manifest, target, Some(info), generation, build)
+                    .and_then(|root| match root {
+                        Some(root) if root.root_kind == RootKind::Direct => {
+                            let binding = validate_direct_binding(info, root)?;
+                            if binding.area == 1 {
+                                write_root_bytes(Some(info), roots, root, &force.bytes)
+                            } else {
+                                Ok(())
+                            }
+                        }
+                        _ => Ok(()),
+                    });
+            if let Err(error) = result {
+                self.forces.remove(&got_id);
+                self.audit_active_rejection(&force, &error, generation, build, cycle);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reject_queued(
+        &mut self,
+        entry: &QueuedWrite,
+        error: &Error,
+        generation: u64,
+        build: GotId,
+        cycle: u64,
+    ) {
+        self.push_result(DebugQueueResult {
+            queue_id: entry.queue_id,
+            operation: entry.prepared.kind,
+            outcome: DebugQueueOutcome::Rejected,
+            generation: Some(generation),
+            build_id: Some(build),
+            cycle,
+            code: Some(error.code),
+            message: Some(error.message.clone()),
+            warning: entry.prepared.warning.clone(),
+        });
+        if let Err(audit_error) = self.audit_prepared_boundary(
+            &entry.prepared,
+            AuditOutcome::Error,
+            Some(error),
+            Some(entry.queue_id),
+            "rejected",
+            Some(generation),
+            Some(build),
+            Some(cycle),
+        ) {
+            // The queue entry is already rejected and no storage was changed.
+            // Fail closed; the append failure is the operator-visible problem.
+            let _ = audit_error;
+        }
+    }
+
+    fn audit_active_rejection(
+        &mut self,
+        force: &PreparedWrite,
+        error: &Error,
+        generation: u64,
+        build: GotId,
+        cycle: u64,
+    ) {
+        let mut event = AuditEvent::new("force", AuditOutcome::Error);
+        event.target = Some(AuditTarget {
+            key: force.target_key.clone(),
+            kind: "root".into(),
+        });
+        event.value = Some(typed_value_json(&force.value));
+        event.generation = Some(generation);
+        event.build = Some(build);
+        event.cycle = Some(cycle);
+        event.detail = Json::object([
+            ("code".into(), Json::string(error.code)),
+            ("message".into(), Json::string(error.message.clone())),
+            ("status".into(), Json::string("rejected")),
+        ]);
+        let _ = self.append_audit(event);
     }
 
     pub(crate) fn drain_events(&mut self) -> Vec<DebugEvent> {
@@ -819,6 +1667,32 @@ impl DebugEngine {
     fn push_event(&self, event: DebugEvent) {
         let mut state = lock_bus(&self.bus);
         push_event(&mut state, event);
+    }
+}
+
+fn audit_target_key(target: &DebugTarget) -> String {
+    match target {
+        DebugTarget::Path(path) => path.clone(),
+        DebugTarget::GotId(got_id) => got_id.to_hex(),
+        DebugTarget::Local { frame, path } => format!("{frame}::{path}"),
+    }
+}
+
+fn audit_target_kind(target: &DebugTarget) -> &'static str {
+    match target {
+        DebugTarget::Path(_) => "path",
+        DebugTarget::GotId(_) => "root",
+        DebugTarget::Local { .. } => "local",
+    }
+}
+
+const fn debug_end_detail(reason: DebugEndReason) -> &'static str {
+    match reason {
+        DebugEndReason::Swap => "swap",
+        DebugEndReason::Rollback => "rollback",
+        DebugEndReason::ColdInstall => "cold_install",
+        DebugEndReason::Shutdown => "shutdown",
+        DebugEndReason::SessionEnd => "session_end",
     }
 }
 
@@ -1282,11 +2156,52 @@ enum ResolvedShape {
 }
 
 #[derive(Clone, Debug)]
+enum AggregateTargetKind {
+    Record {
+        ty: TypeRecord,
+    },
+    Program {
+        fields: Vec<AggregateFieldRecord>,
+        shape_key: String,
+        layout_hash: GotId,
+    },
+    Array {
+        ty: TypeKey,
+        layout_hash: GotId,
+    },
+}
+
+#[derive(Clone, Debug)]
 struct AggregateTarget {
-    ty: TypeRecord,
+    kind: AggregateTargetKind,
     package: String,
     path: String,
     qualifier: Option<String>,
+}
+
+impl AggregateTarget {
+    fn record(&self) -> Option<&TypeRecord> {
+        match &self.kind {
+            AggregateTargetKind::Record { ty } => Some(ty),
+            AggregateTargetKind::Program { .. } | AggregateTargetKind::Array { .. } => None,
+        }
+    }
+
+    fn type_key(&self) -> String {
+        match &self.kind {
+            AggregateTargetKind::Record { ty } => ty.type_key.clone(),
+            AggregateTargetKind::Program { shape_key, .. } => shape_key.clone(),
+            AggregateTargetKind::Array { ty, .. } => ty.render(),
+        }
+    }
+
+    fn layout_hash(&self) -> GotId {
+        match &self.kind {
+            AggregateTargetKind::Record { ty } => ty.layout_hash,
+            AggregateTargetKind::Program { layout_hash, .. }
+            | AggregateTargetKind::Array { layout_hash, .. } => *layout_hash,
+        }
+    }
 }
 
 fn resolve_target(manifest: &Manifest, target: &DebugTarget) -> Result<Resolved> {
@@ -1436,8 +2351,8 @@ fn resolved_aggregate(aggregate: AggregateTarget) -> Result<Resolved> {
             &aggregate.path,
             aggregate.qualifier.as_deref(),
         ),
-        type_key: aggregate.ty.type_key.clone(),
-        layout_hash: aggregate.ty.layout_hash,
+        type_key: aggregate.type_key(),
+        layout_hash: aggregate.layout_hash(),
         atomic: false,
         shape: ResolvedShape::Aggregate(aggregate),
     })
@@ -1696,12 +2611,16 @@ fn build_aggregate(
         ) {
             let ty = hidden_type(manifest, root, marker)?;
             return Ok(AggregateTarget {
-                ty,
+                kind: AggregateTargetKind::Record { ty },
                 package,
                 path: query.path.clone(),
                 qualifier: group.qualifier.clone(),
             });
         }
+    }
+
+    if let Some(target) = build_manifest_aggregate(manifest, group, query)? {
+        return Ok(target);
     }
 
     let mut candidate: Option<TypeRecord> = None;
@@ -1731,7 +2650,7 @@ fn build_aggregate(
             return Err(Error::new(
                 codes::DEBUG_UNKNOWN,
                 format!(
-                    "debug path `{}` names an array-of-aggregate storage whose parent shape is not in manifest format 1; read a field leaf instead",
+                    "debug path `{}` names an array-of-aggregate storage whose parent shape is not described by the active manifest; read a field leaf instead",
                     query.path
                 ),
             ));
@@ -1759,16 +2678,293 @@ fn build_aggregate(
         return Err(Error::new(
             codes::DEBUG_UNKNOWN,
             format!(
-                "debug path `{}` has split roots but manifest format 1 does not identify its aggregate type",
+                "debug path `{}` has split roots but the active manifest does not identify its aggregate shape",
                 query.path
             ),
         ));
     };
     Ok(AggregateTarget {
-        ty,
+        kind: AggregateTargetKind::Record { ty },
         package,
         path: query.path.clone(),
         qualifier: group.qualifier.clone(),
+    })
+}
+
+fn build_manifest_aggregate(
+    manifest: &Manifest,
+    group: &Group<'_>,
+    query: &TargetQuery,
+) -> Result<Option<AggregateTarget>> {
+    let prefix = format!("{}.", query.path);
+    let mut shapes: Vec<&AggregateRecord> = manifest
+        .aggregates
+        .iter()
+        .filter(|shape| {
+            shape.package == group.package
+                && shape.qualifier == group.qualifier
+                && (shape.path == query.path
+                    || query.path.starts_with(&format!("{}.", shape.path))
+                    || shape.path.starts_with(&prefix))
+        })
+        .collect();
+    if shapes.is_empty() {
+        return Ok(None);
+    }
+    // Prefer the exact matching shape, otherwise the longest declared prefix.
+    shapes.sort_by_key(|shape| {
+        (
+            shape.path != query.path,
+            std::cmp::Reverse(shape.path.len()),
+            shape.path.clone(),
+        )
+    });
+    let shape = shapes[0];
+    if shape.path != query.path && !query.path.starts_with(&format!("{}.", shape.path)) {
+        return Ok(None);
+    }
+    if shape.path == query.path {
+        let kind = if shape.kind == AggregateKind::Program {
+            AggregateTargetKind::Program {
+                fields: shape.fields.clone(),
+                shape_key: shape.shape_key.clone(),
+                layout_hash: shape.layout_hash,
+            }
+        } else {
+            let ty = TypeKey::parse(&shape.shape_key).map_err(|error| {
+                Error::new(
+                    codes::DEBUG_TYPE,
+                    format!(
+                        "aggregate `{}::{}` has an invalid shape key: {}",
+                        shape.package, shape.path, error.message
+                    ),
+                )
+            })?;
+            match &ty {
+                TypeKey::Named(got_id) => {
+                    let Some(record) = type_by_id(manifest, *got_id) else {
+                        return Err(Error::new(
+                            codes::DEBUG_TYPE,
+                            format!(
+                                "aggregate `{}::{}` names type {} with no type record",
+                                shape.package,
+                                shape.path,
+                                got_id.to_hex()
+                            ),
+                        ));
+                    };
+                    match record.type_kind {
+                        TypeKind::Struct
+                        | TypeKind::FunctionBlock
+                        | TypeKind::Class
+                        | TypeKind::Interface => AggregateTargetKind::Record { ty: record.clone() },
+                        TypeKind::Enum | TypeKind::Subrange | TypeKind::Alias => return Ok(None),
+                    }
+                }
+                TypeKey::Array { .. } => AggregateTargetKind::Array {
+                    ty,
+                    layout_hash: shape.layout_hash,
+                },
+                _ => return Ok(None),
+            }
+        };
+        return Ok(Some(AggregateTarget {
+            kind,
+            package: shape.package.clone(),
+            path: shape.path.clone(),
+            qualifier: shape.qualifier.clone(),
+        }));
+    }
+
+    let remainder = query
+        .path
+        .strip_prefix(&shape.path)
+        .and_then(|text| text.strip_prefix('.'))
+        .ok_or_else(|| Error::new(codes::DEBUG_UNKNOWN, "invalid aggregate shape prefix"))?;
+    let mut segments = remainder.split('.');
+    let mut path = shape.path.clone();
+    let (mut ty, mut layout_hash) = if shape.kind == AggregateKind::Program {
+        let Some(segment) = segments.next() else {
+            return Ok(None);
+        };
+        let Some(field) = shape
+            .fields
+            .iter()
+            .find(|field| field.path == segment || field.path.starts_with(&format!("{segment}.")))
+        else {
+            return Err(Error::new(
+                codes::DEBUG_UNKNOWN,
+                format!(
+                    "program `{}` has no field `{segment}` for this debug path",
+                    shape.shape_key
+                ),
+            ));
+        };
+        if field.path != segment {
+            return Err(Error::new(
+                codes::DEBUG_UNKNOWN,
+                format!(
+                    "program field path `{}` is flattened; the intermediate aggregate type cannot be resolved",
+                    field.path
+                ),
+            ));
+        }
+        path.push('.');
+        path.push_str(segment);
+        let ty = TypeKey::parse(&field.type_key).map_err(|error| {
+            Error::new(
+                codes::DEBUG_TYPE,
+                format!(
+                    "program `{}` field `{segment}` has an invalid type key: {}",
+                    shape.shape_key, error.message
+                ),
+            )
+        })?;
+        (ty, field.layout_hash)
+    } else {
+        let ty = TypeKey::parse(&shape.shape_key).map_err(|error| {
+            Error::new(
+                codes::DEBUG_TYPE,
+                format!(
+                    "aggregate `{}::{}` has an invalid shape key: {}",
+                    shape.package, shape.path, error.message
+                ),
+            )
+        })?;
+        (ty, shape.layout_hash)
+    };
+    for segment in segments {
+        path.push('.');
+        path.push_str(segment);
+        let (next, next_layout) = descend_shape(manifest, &ty, segment, layout_hash, &path)?;
+        ty = next;
+        layout_hash = next_layout;
+    }
+    let Some(target) = target_from_key(manifest, shape, ty, &path, layout_hash) else {
+        return Err(Error::new(
+            codes::DEBUG_UNKNOWN,
+            format!(
+                "debug path `{}` does not name an aggregate shape",
+                query.path
+            ),
+        ));
+    };
+    Ok(Some(target))
+}
+
+fn descend_shape(
+    manifest: &Manifest,
+    ty: &TypeKey,
+    segment: &str,
+    layout_hash: GotId,
+    path: &str,
+) -> Result<(TypeKey, GotId)> {
+    match ty {
+        TypeKey::Array { element, .. } => {
+            if !is_element_segment(segment) {
+                return Err(Error::new(
+                    codes::DEBUG_UNKNOWN,
+                    format!("debug path `{path}` must enter an array with an `E<index>` segment"),
+                ));
+            }
+            let layout = match element.as_ref() {
+                TypeKey::Named(got_id) => type_by_id(manifest, *got_id).map(|ty| ty.layout_hash),
+                TypeKey::Array { .. } => Some(GotId::ZERO),
+                _ => None,
+            }
+            .unwrap_or(layout_hash);
+            Ok(((**element).clone(), layout))
+        }
+        TypeKey::Named(got_id) => {
+            let Some(record) = type_by_id(manifest, *got_id) else {
+                return Err(Error::new(
+                    codes::DEBUG_TYPE,
+                    format!("type {} has no manifest type record", got_id.to_hex()),
+                ));
+            };
+            if !matches!(
+                record.type_kind,
+                TypeKind::Struct | TypeKind::FunctionBlock | TypeKind::Class | TypeKind::Interface
+            ) {
+                return Err(Error::new(
+                    codes::DEBUG_UNKNOWN,
+                    format!(
+                        "type `{}` is not an aggregate for debug path `{path}`",
+                        record.type_key
+                    ),
+                ));
+            }
+            let Some(field) = record.fields.iter().find(|field| {
+                field.path == segment || field.path.starts_with(&format!("{segment}."))
+            }) else {
+                return Err(Error::new(
+                    codes::DEBUG_UNKNOWN,
+                    format!(
+                        "type `{}` has no field `{segment}` for this debug path",
+                        record.type_key
+                    ),
+                ));
+            };
+            if field.path != segment {
+                return Err(Error::new(
+                    codes::DEBUG_UNKNOWN,
+                    format!(
+                        "manifest field path `{}` is flattened; the intermediate aggregate type cannot be resolved",
+                        field.path
+                    ),
+                ));
+            }
+            let field_ty = TypeKey::parse(&field.type_key).map_err(|error| {
+                Error::new(
+                    codes::DEBUG_TYPE,
+                    format!(
+                        "field `{}` of `{}` has an invalid type key: {}",
+                        field.path, record.type_key, error.message
+                    ),
+                )
+            })?;
+            Ok((field_ty, field.layout_hash))
+        }
+        _ => Err(Error::new(
+            codes::DEBUG_UNKNOWN,
+            format!("debug path `{path}` descends into a non-aggregate type"),
+        )),
+    }
+}
+
+fn target_from_key(
+    manifest: &Manifest,
+    shape: &AggregateRecord,
+    ty: TypeKey,
+    path: &str,
+    layout_hash: GotId,
+) -> Option<AggregateTarget> {
+    let kind = match &ty {
+        TypeKey::Named(got_id) => {
+            let record = type_by_id(manifest, *got_id)?;
+            match record.type_kind {
+                TypeKind::Struct
+                | TypeKind::FunctionBlock
+                | TypeKind::Class
+                | TypeKind::Interface => AggregateTargetKind::Record { ty: record.clone() },
+                TypeKind::Enum | TypeKind::Subrange | TypeKind::Alias => return None,
+            }
+        }
+        TypeKey::Array { .. } => {
+            // A nested array reached through another array has no declared layout
+            // hash in the manifest; reject it rather than report a fabricated one.
+            if layout_hash == GotId::ZERO {
+                return None;
+            }
+            AggregateTargetKind::Array { ty, layout_hash }
+        }
+        _ => return None,
+    };
+    Some(AggregateTarget {
+        kind,
+        package: shape.package.clone(),
+        path: path.to_owned(),
+        qualifier: shape.qualifier.clone(),
     })
 }
 
@@ -1803,7 +2999,7 @@ fn traverse_fields(manifest: &Manifest, owner: &TypeRecord, remainder: &str) -> 
         return Err(Error::new(
             codes::DEBUG_UNKNOWN,
             format!(
-                "debug path enters array element `{segment}`, whose aggregate parent shape is not in manifest format 1"
+                "debug path enters array element `{segment}`, whose aggregate parent shape is not described by the active manifest"
             ),
         ));
     }
@@ -2301,83 +3497,119 @@ fn root_bytes(source: &DebugSource<'_>, root: &RootRecord) -> Result<Vec<u8>> {
 }
 
 fn decode_aggregate(source: &DebugSource<'_>, aggregate: &AggregateTarget) -> Result<TypedValue> {
-    let ty = &aggregate.ty;
-    let mut fields = Vec::with_capacity(ty.fields.len());
-    for field in &ty.fields {
-        fields.push(decode_aggregate_field(source, aggregate, field)?);
-    }
-    match ty.type_kind {
-        TypeKind::Class => {
-            let (identity, present) = object_identity(source, aggregate)?;
+    match &aggregate.kind {
+        AggregateTargetKind::Record { ty } => {
+            let mut fields = Vec::with_capacity(ty.fields.len());
+            for field in &ty.fields {
+                fields.push(decode_aggregate_field_spec(
+                    source,
+                    aggregate,
+                    &field.path,
+                    &field.type_key,
+                    field.layout_hash,
+                )?);
+            }
+            match ty.type_kind {
+                TypeKind::Class => {
+                    let (identity, present) = object_identity(source, aggregate)?;
+                    Ok(TypedValue {
+                        type_key: ty.type_key.clone(),
+                        value: DebugValue::Object {
+                            identity,
+                            present,
+                            class: Some(ty.type_key.clone()),
+                            interface: None,
+                            fields,
+                        },
+                    })
+                }
+                TypeKind::Struct | TypeKind::FunctionBlock => Ok(TypedValue {
+                    type_key: ty.type_key.clone(),
+                    value: DebugValue::Aggregate(fields),
+                }),
+                TypeKind::Interface => Ok(TypedValue {
+                    type_key: ty.type_key.clone(),
+                    value: DebugValue::Object {
+                        identity: None,
+                        present: false,
+                        class: None,
+                        interface: Some(ty.type_key.clone()),
+                        fields: Vec::new(),
+                    },
+                }),
+                TypeKind::Enum | TypeKind::Subrange | TypeKind::Alias => Err(Error::new(
+                    codes::DEBUG_UNKNOWN,
+                    format!("type `{}` is not a split aggregate object", ty.type_key),
+                )),
+            }
+        }
+        AggregateTargetKind::Program {
+            fields, shape_key, ..
+        } => {
+            let mut decoded = Vec::with_capacity(fields.len());
+            for field in fields {
+                decoded.push(decode_aggregate_field_spec(
+                    source,
+                    aggregate,
+                    &field.path,
+                    &field.type_key,
+                    field.layout_hash,
+                )?);
+            }
             Ok(TypedValue {
-                type_key: ty.type_key.clone(),
-                value: DebugValue::Object {
-                    identity,
-                    present,
-                    class: Some(ty.type_key.clone()),
-                    interface: None,
-                    fields,
-                },
+                type_key: shape_key.clone(),
+                value: DebugValue::Aggregate(decoded),
             })
         }
-        TypeKind::Struct | TypeKind::FunctionBlock => Ok(TypedValue {
-            type_key: ty.type_key.clone(),
-            value: DebugValue::Aggregate(fields),
-        }),
-        TypeKind::Interface => Ok(TypedValue {
-            type_key: ty.type_key.clone(),
-            value: DebugValue::Object {
-                identity: None,
-                present: false,
-                class: None,
-                interface: Some(ty.type_key.clone()),
-                fields: Vec::new(),
-            },
-        }),
-        TypeKind::Enum | TypeKind::Subrange | TypeKind::Alias => Err(Error::new(
-            codes::DEBUG_UNKNOWN,
-            format!("type `{}` is not a split aggregate object", ty.type_key),
-        )),
+        AggregateTargetKind::Array { ty, .. } => {
+            let type_key = ty.render();
+            match decode_split_array_path(source, aggregate, &aggregate.path, &type_key, ty)? {
+                Some(value) => Ok(value),
+                None => Ok(unavailable_typed(type_key)),
+            }
+        }
     }
 }
 
-fn decode_aggregate_field(
+fn decode_aggregate_field_spec(
     source: &DebugSource<'_>,
     aggregate: &AggregateTarget,
-    field: &FieldRecord,
+    field_path_segment: &str,
+    field_type_key: &str,
+    field_layout_hash: GotId,
 ) -> Result<NamedValue> {
-    let field_path = format!("{}.{}", aggregate.path, field.path);
+    let field_path = format!("{}.{}", aggregate.path, field_path_segment);
     if let Some(root) = find_field_root(
         source.manifest,
         &aggregate.package,
         &field_path,
         aggregate.qualifier.as_deref(),
     ) {
-        if root.type_key != field.type_key {
+        if root.type_key != field_type_key {
             return Err(Error::new(
                 codes::DEBUG_TYPE,
                 format!(
-                    "root `{}` has type `{}` but field `{}` declares `{}`",
-                    root.key, root.type_key, field.path, field.type_key
+                    "root `{}` has type `{}` but field `{}` declares `{field_type_key}`",
+                    root.key, root.type_key, field_path_segment
                 ),
             ));
         }
-        if root.layout_hash != field.layout_hash {
+        if root.layout_hash != field_layout_hash {
             return Err(Error::new(
                 codes::DEBUG_STALE,
                 format!(
-                    "root `{}` layout does not match field `{}`",
-                    root.key, field.path
+                    "root `{}` layout does not match field `{field_path_segment}`",
+                    root.key
                 ),
             ));
         }
         let bytes = root_bytes(source, root)?;
-        let ty = TypeKey::parse(&field.type_key).map_err(|error| {
+        let ty = TypeKey::parse(field_type_key).map_err(|error| {
             Error::new(
                 codes::DEBUG_TYPE,
                 format!(
-                    "field `{}` has an invalid type key: {}",
-                    field.path, error.message
+                    "field `{field_path_segment}` has an invalid type key: {}",
+                    error.message
                 ),
             )
         })?;
@@ -2385,22 +3617,22 @@ fn decode_aggregate_field(
             source.manifest,
             source.target,
             &ty,
-            &field.type_key,
+            field_type_key,
             &bytes,
             source.generation,
         )?;
         return Ok(NamedValue {
-            name: field.path.clone(),
+            name: field_path_segment.to_owned(),
             value,
         });
     }
 
-    let ty = TypeKey::parse(&field.type_key).map_err(|error| {
+    let ty = TypeKey::parse(field_type_key).map_err(|error| {
         Error::new(
             codes::DEBUG_TYPE,
             format!(
-                "field `{}` has an invalid type key: {}",
-                field.path, error.message
+                "field `{field_path_segment}` has an invalid type key: {}",
+                error.message
             ),
         )
     })?;
@@ -2408,55 +3640,58 @@ fn decode_aggregate_field(
         TypeKey::Named(got_id) => {
             let Some(record) = type_by_id(source.manifest, *got_id) else {
                 return Ok(NamedValue {
-                    name: field.path.clone(),
-                    value: unavailable_value(field.type_key.clone()),
+                    name: field_path_segment.to_owned(),
+                    value: unavailable_value(field_type_key.to_owned()),
                 });
             };
             match record.type_kind {
                 TypeKind::Struct | TypeKind::FunctionBlock | TypeKind::Class => {
                     let child = AggregateTarget {
-                        ty: record.clone(),
+                        kind: AggregateTargetKind::Record { ty: record.clone() },
                         package: aggregate.package.clone(),
                         path: field_path,
                         qualifier: aggregate.qualifier.clone(),
                     };
                     let value = decode_aggregate(source, &child)?;
                     Ok(NamedValue {
-                        name: field.path.clone(),
+                        name: field_path_segment.to_owned(),
                         value,
                     })
                 }
                 TypeKind::Interface => Ok(NamedValue {
-                    name: field.path.clone(),
-                    value: unavailable_value(field.type_key.clone()),
+                    name: field_path_segment.to_owned(),
+                    value: unavailable_value(field_type_key.to_owned()),
                 }),
                 TypeKind::Enum | TypeKind::Subrange | TypeKind::Alias => Ok(NamedValue {
-                    name: field.path.clone(),
-                    value: unavailable_value(field.type_key.clone()),
+                    name: field_path_segment.to_owned(),
+                    value: unavailable_value(field_type_key.to_owned()),
                 }),
             }
         }
-        TypeKey::Array { .. } => match decode_split_array(source, aggregate, field, &ty)? {
-            Some(value) => Ok(NamedValue {
-                name: field.path.clone(),
-                value,
-            }),
-            None => Ok(NamedValue {
-                name: field.path.clone(),
-                value: unavailable_value(field.type_key.clone()),
-            }),
-        },
+        TypeKey::Array { .. } => {
+            match decode_split_array_path(source, aggregate, &field_path, field_type_key, &ty)? {
+                Some(value) => Ok(NamedValue {
+                    name: field_path_segment.to_owned(),
+                    value,
+                }),
+                None => Ok(NamedValue {
+                    name: field_path_segment.to_owned(),
+                    value: unavailable_value(field_type_key.to_owned()),
+                }),
+            }
+        }
         _ => Ok(NamedValue {
-            name: field.path.clone(),
-            value: unavailable_value(field.type_key.clone()),
+            name: field_path_segment.to_owned(),
+            value: unavailable_value(field_type_key.to_owned()),
         }),
     }
 }
 
-fn decode_split_array(
+fn decode_split_array_path(
     source: &DebugSource<'_>,
     aggregate: &AggregateTarget,
-    field: &FieldRecord,
+    base_path: &str,
+    type_key: &str,
     ty: &TypeKey,
 ) -> Result<Option<TypedValue>> {
     let TypeKey::Array {
@@ -2467,16 +3702,13 @@ fn decode_split_array(
     else {
         return Err(Error::new(
             codes::DEBUG_TYPE,
-            format!(
-                "split array field `{}` has a conformant or invalid bound",
-                field.path
-            ),
+            format!("split array `{base_path}` has a conformant or invalid bound"),
         ));
     };
     if upper < lower {
         return Err(Error::new(
             codes::DEBUG_TYPE,
-            format!("split array field `{}` has inverted bounds", field.path),
+            format!("split array `{base_path}` has inverted bounds"),
         ));
     }
     let count = u128::try_from(*upper - *lower)
@@ -2485,19 +3717,15 @@ fn decode_split_array(
         .ok_or_else(|| {
             Error::new(
                 codes::DEBUG_LIMIT,
-                format!("split array field `{}` is too large", field.path),
+                format!("split array `{base_path}` is too large"),
             )
         })?;
     if count > 1_000_000 {
         return Err(Error::new(
             codes::DEBUG_LIMIT,
-            format!(
-                "split array field `{}` has more than one million elements",
-                field.path
-            ),
+            format!("split array `{base_path}` has more than one million elements"),
         ));
     }
-    let base_path = format!("{}.{}", aggregate.path, field.path);
     let mut values = Vec::with_capacity(usize::try_from(count).unwrap_or(usize::MAX));
     let mut any = false;
     for index in 0..count {
@@ -2505,8 +3733,12 @@ fn decode_split_array(
         let present = source.manifest.roots.iter().any(|root| {
             parse_key(&root.key).is_some_and(|parsed| {
                 parsed.package == aggregate.package
-                    && (parsed.path == child_path
-                        || parsed.path.starts_with(&format!("{child_path}.")))
+                    && parsed.path.starts_with(&format!("{child_path}."))
+                    || (parsed.path == child_path
+                        && match &parsed.qualifier {
+                            None => true,
+                            Some(qualifier) => is_hidden_qualifier(qualifier),
+                        })
             })
         });
         if !present {
@@ -2546,13 +3778,32 @@ fn decode_split_array(
                     values.push(unavailable_typed(element.render()));
                     continue;
                 };
-                let child = AggregateTarget {
-                    ty: record.clone(),
-                    package: aggregate.package.clone(),
-                    path: child_path,
-                    qualifier: aggregate.qualifier.clone(),
-                };
-                values.push(decode_aggregate(source, &child)?);
+                match record.type_kind {
+                    TypeKind::Struct | TypeKind::FunctionBlock | TypeKind::Class => {
+                        let child = AggregateTarget {
+                            kind: AggregateTargetKind::Record { ty: record.clone() },
+                            package: aggregate.package.clone(),
+                            path: child_path,
+                            qualifier: aggregate.qualifier.clone(),
+                        };
+                        values.push(decode_aggregate(source, &child)?);
+                    }
+                    TypeKind::Interface | TypeKind::Enum | TypeKind::Subrange | TypeKind::Alias => {
+                        values.push(unavailable_typed(element.render()));
+                    }
+                }
+            }
+            TypeKey::Array { .. } => {
+                match decode_split_array_path(
+                    source,
+                    aggregate,
+                    &child_path,
+                    &element.render(),
+                    element,
+                )? {
+                    Some(value) => values.push(value),
+                    None => values.push(unavailable_typed(element.render())),
+                }
             }
             _ => values.push(unavailable_typed(element.render())),
         }
@@ -2561,7 +3812,7 @@ fn decode_split_array(
         return Ok(None);
     }
     Ok(Some(TypedValue {
-        type_key: field.type_key.clone(),
+        type_key: type_key.to_owned(),
         value: DebugValue::Array(values),
     }))
 }
@@ -2596,6 +3847,9 @@ fn object_identity(
     ) else {
         return Ok((None, false));
     };
+    let Some(record) = aggregate.record() else {
+        return Ok((None, false));
+    };
     let ty = TypeKey::parse(&root.type_key).map_err(|error| {
         Error::new(
             codes::DEBUG_TYPE,
@@ -2608,22 +3862,22 @@ fn object_identity(
     let bytes = root_bytes(source, root)?;
     match ty {
         TypeKey::PtrTo(inner) => {
-            verify_object_target(&inner, &aggregate.ty, &root.key)?;
+            verify_object_target(&inner, record, &root.key)?;
             let (identity, present) = pointer_identity(
                 &bytes,
                 source.target.pointer_width,
                 source.target.endianness,
-                &aggregate.ty.type_key,
+                &record.type_key,
                 source.generation,
             )?;
             Ok((identity, present))
         }
         TypeKey::RefTo(inner) => {
-            verify_object_target(&inner, &aggregate.ty, &root.key)?;
+            verify_object_target(&inner, record, &root.key)?;
             let (identity, present) = reference_identity(
                 &bytes,
                 source.target.endianness,
-                &aggregate.ty.type_key,
+                &record.type_key,
                 source.generation,
             )?;
             Ok((identity, present))
@@ -2648,6 +3902,1296 @@ fn verify_object_target(inner: &TypeKey, ty: &TypeRecord, root_key: &str) -> Res
         ));
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn revalidate_prepared<'a>(
+    prepared: &PreparedWrite,
+    manifest: &'a Manifest,
+    target: &Target,
+    info: Option<&crate::ModuleInfo>,
+    generation: u64,
+    build: GotId,
+) -> Result<Option<&'a RootRecord>> {
+    if prepared.generation != generation
+        || prepared
+            .expected_generation
+            .is_some_and(|expected| expected != generation)
+    {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "queued {} for root `{}` belongs to generation {}, not the active generation {generation}",
+                prepared.kind.name(),
+                prepared.target_key,
+                prepared.generation
+            ),
+        ));
+    }
+    if prepared.build_id != build
+        || prepared
+            .expected_build_id
+            .is_some_and(|expected| expected != build)
+    {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "queued {} for root `{}` belongs to a different build",
+                prepared.kind.name(),
+                prepared.target_key
+            ),
+        ));
+    }
+    let Some(root) = manifest
+        .roots
+        .iter()
+        .find(|root| root.got_id == prepared.got_id)
+    else {
+        return Ok(None);
+    };
+    if root.key != prepared.target_key
+        || root.type_key != prepared.type_key
+        || root.layout_hash != prepared.layout_hash
+    {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "queued {} target `{}` was removed or its type/layout changed; it is never retargeted",
+                prepared.kind.name(),
+                prepared.target_key
+            ),
+        ));
+    }
+    if prepared
+        .expected_type_key
+        .as_deref()
+        .is_some_and(|expected| expected != root.type_key)
+    {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "root `{}` no longer has the expected type",
+                prepared.target_key
+            ),
+        ));
+    }
+    if prepared
+        .expected_layout_hash
+        .is_some_and(|expected| expected != root.layout_hash)
+    {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "root `{}` no longer has the expected layout",
+                prepared.target_key
+            ),
+        ));
+    }
+    if root.root_kind == RootKind::TaskGuard {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("task-guard root `{}` is not writable", root.key),
+        ));
+    }
+    let ty = TypeKey::parse(&root.type_key).map_err(|error| {
+        Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "root `{}` has an invalid type key: {}",
+                root.key, error.message
+            ),
+        )
+    })?;
+    validate_writable_type(manifest, &ty, 0)?;
+    let layout = type_layout(manifest, target, &ty)?;
+    if layout.size != root.size || u64::try_from(prepared.bytes.len()).ok() != Some(root.size) {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "root `{}` storage changed shape before the write",
+                prepared.target_key
+            ),
+        ));
+    }
+    if root.root_kind == RootKind::Direct {
+        let Some(info) = info else {
+            return Err(Error::new(
+                codes::DEBUG_STALE,
+                format!(
+                    "direct root `{}` has no active process-image metadata",
+                    prepared.target_key
+                ),
+            ));
+        };
+        validate_direct_binding(info, root)?;
+    }
+    Ok(Some(root))
+}
+
+pub(crate) fn prepare_write(
+    source: &DebugSource<'_>,
+    request: &DebugWriteRequest,
+    kind: DebugWriteKind,
+) -> Result<PreparedWrite> {
+    if matches!(request.target, DebugTarget::Local { .. }) {
+        return Err(Error::new(
+            codes::DEBUG_UNKNOWN,
+            "locals and parameters are not writable debug targets",
+        ));
+    }
+    let resolved = resolve_target(source.manifest, &request.target)?;
+    let ResolvedShape::Root(root) = resolved.shape else {
+        return Err(Error::new(
+            codes::DEBUG_UNKNOWN,
+            "only a root scalar, string, enum, subrange, or single-root array is writable",
+        ));
+    };
+    if root.root_kind == RootKind::TaskGuard {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("task-guard root `{}` is not writable", root.key),
+        ));
+    }
+    if root.root_kind != RootKind::Direct && source.roots.get(root.got_id).is_none() {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!("root `{}` has no active storage", root.key),
+        ));
+    }
+    if request
+        .expected_generation
+        .is_some_and(|generation| generation != source.generation)
+    {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "target `{}` is from generation {}, not the active generation {}",
+                resolved.canonical_key,
+                request.expected_generation.unwrap_or(source.generation),
+                source.generation
+            ),
+        ));
+    }
+    if request
+        .expected_build_id
+        .is_some_and(|build| build != source.build_id)
+    {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "target `{}` is from a different build",
+                resolved.canonical_key
+            ),
+        ));
+    }
+    if request
+        .expected_type_key
+        .as_deref()
+        .is_some_and(|type_key| type_key != root.type_key)
+    {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "target `{}` has type `{}`, not the expected type",
+                root.key, root.type_key
+            ),
+        ));
+    }
+    if request
+        .expected_layout_hash
+        .is_some_and(|layout| layout != root.layout_hash)
+    {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!("target `{}` has a different layout", root.key),
+        ));
+    }
+    if request.value.type_key != root.type_key {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "value type `{}` does not match target type `{}`; no implicit conversion is performed",
+                request.value.type_key, root.type_key
+            ),
+        ));
+    }
+    let ty = TypeKey::parse(&root.type_key).map_err(|error| {
+        Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "target `{}` has an invalid type key: {}",
+                root.key, error.message
+            ),
+        )
+    })?;
+    validate_writable_type(source.manifest, &ty, 0)?;
+    let layout = type_layout(source.manifest, source.target, &ty)?;
+    if layout.size != root.size {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "target `{}` has {} bytes but its type layout is {} bytes",
+                root.key, root.size, layout.size
+            ),
+        ));
+    }
+    if root.root_kind == RootKind::Direct {
+        let Some(info) = source.info else {
+            return Err(Error::new(
+                codes::DEBUG_STALE,
+                format!(
+                    "direct root `{}` has no active process-image metadata",
+                    root.key
+                ),
+            ));
+        };
+        validate_direct_binding(info, &root)?;
+    }
+    let bytes = encode_type_value(
+        source.manifest,
+        source.target,
+        &ty,
+        &root.type_key,
+        &request.value,
+        layout.size,
+    )?;
+    if u64::try_from(bytes.len()).ok() != Some(root.size) {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("encoded target `{}` has the wrong size", root.key),
+        ));
+    }
+    let warning =
+        (kind == DebugWriteKind::Force && root.retention == Retention::Retain).then(|| {
+            DebugWarning {
+                code: codes::W_DEBUG_RETAIN,
+                message: format!(
+                    "force on retained root `{}` is not saved to the state file",
+                    root.key
+                ),
+            }
+        });
+    let queue_bytes = bytes
+        .len()
+        .saturating_add(root.key.len())
+        .saturating_add(root.type_key.len())
+        .saturating_add(128);
+    Ok(PreparedWrite {
+        kind,
+        got_id: root.got_id,
+        generation: source.generation,
+        build_id: source.build_id,
+        cycle: source.cycle,
+        target_key: resolved.canonical_key,
+        type_key: root.type_key.clone(),
+        layout_hash: root.layout_hash,
+        expected_generation: request.expected_generation,
+        expected_build_id: request.expected_build_id,
+        expected_type_key: request.expected_type_key.clone(),
+        expected_layout_hash: request.expected_layout_hash,
+        bytes,
+        value: request.value.clone(),
+        warning,
+        queue_bytes,
+    })
+}
+
+fn validate_writable_type(manifest: &Manifest, ty: &TypeKey, depth: usize) -> Result<()> {
+    if depth > MAX_DECODE_DEPTH {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            "writable type nesting exceeds the decoder limit",
+        ));
+    }
+    match ty {
+        TypeKey::RefTo(_) | TypeKey::PtrTo(_) => Err(Error::new(
+            codes::DEBUG_TYPE,
+            "reference and pointer identities are not writable",
+        )),
+        TypeKey::Void => Err(Error::new(codes::DEBUG_TYPE, "`VOID` is not writable")),
+        TypeKey::Named(got_id) => {
+            let Some(record) = type_by_id(manifest, *got_id) else {
+                return Err(Error::new(
+                    codes::DEBUG_TYPE,
+                    format!("type {} has no manifest type record", got_id.to_hex()),
+                ));
+            };
+            match record.type_kind {
+                TypeKind::Enum | TypeKind::Subrange => Ok(()),
+                TypeKind::Alias => {
+                    let Some(base) = record.base else {
+                        return Err(Error::new(
+                            codes::DEBUG_TYPE,
+                            format!("alias `{}` has no base type", record.type_key),
+                        ));
+                    };
+                    let Some(base_record) = type_by_id(manifest, base) else {
+                        return Err(Error::new(
+                            codes::DEBUG_TYPE,
+                            format!(
+                                "alias `{}` names base {} with no type record",
+                                record.type_key,
+                                base.to_hex()
+                            ),
+                        ));
+                    };
+                    let base_key = TypeKey::parse(&base_record.type_key).map_err(|error| {
+                        Error::new(
+                            codes::DEBUG_TYPE,
+                            format!(
+                                "alias base type `{}` is invalid: {}",
+                                base_record.type_key, error.message
+                            ),
+                        )
+                    })?;
+                    validate_writable_type(manifest, &base_key, depth + 1)
+                }
+                TypeKind::Struct
+                | TypeKind::FunctionBlock
+                | TypeKind::Class
+                | TypeKind::Interface => Err(Error::new(
+                    codes::DEBUG_TYPE,
+                    format!(
+                        "aggregate type `{}` is not a writable root; write its leaves",
+                        record.type_key
+                    ),
+                )),
+            }
+        }
+        TypeKey::Array { element, .. } => {
+            if matches!(
+                element.as_ref(),
+                TypeKey::Named(got_id)
+                    if type_by_id(manifest, *got_id).is_some_and(|record| matches!(
+                        record.type_kind,
+                        TypeKind::Struct | TypeKind::FunctionBlock | TypeKind::Class | TypeKind::Interface
+                    ))
+            ) {
+                return Err(Error::new(
+                    codes::DEBUG_TYPE,
+                    "arrays of aggregates are not writable; write their leaves",
+                ));
+            }
+            validate_writable_type(manifest, element, depth + 1)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn encode_type_value(
+    manifest: &Manifest,
+    target: &Target,
+    ty: &TypeKey,
+    type_key: &str,
+    value: &TypedValue,
+    size: u64,
+) -> Result<Vec<u8>> {
+    let size = usize::try_from(size).map_err(|_| {
+        Error::new(
+            codes::DEBUG_LIMIT,
+            format!("target `{type_key}` is too large to write"),
+        )
+    })?;
+    let mut bytes = vec![0_u8; size];
+    encode_value_into(
+        manifest,
+        target,
+        ty,
+        value,
+        Some(type_key),
+        &mut bytes,
+        0,
+        0,
+    )?;
+    Ok(bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_value_into(
+    manifest: &Manifest,
+    target: &Target,
+    ty: &TypeKey,
+    value: &TypedValue,
+    expected_type_key: Option<&str>,
+    out: &mut [u8],
+    offset: usize,
+    depth: usize,
+) -> Result<()> {
+    if depth > MAX_DECODE_DEPTH {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            "write value nesting exceeds the decoder limit",
+        ));
+    }
+    if let Some(expected) = expected_type_key
+        && value.type_key != expected
+    {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "value type `{}` does not match declared type `{expected}`",
+                value.type_key
+            ),
+        ));
+    }
+    let layout = type_layout(manifest, target, ty)?;
+    let end = offset
+        .checked_add(usize::try_from(layout.size).unwrap_or(usize::MAX))
+        .ok_or_else(|| Error::new(codes::DEBUG_LIMIT, "write offset overflows"))?;
+    if end > out.len() {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("write for `{}` lies outside its storage", ty.render()),
+        ));
+    }
+    match ty {
+        TypeKey::Bool => {
+            let DebugValue::Bool(value) = &value.value else {
+                return Err(type_mismatch(&value.type_key, "BOOL"));
+            };
+            out[offset] = u8::from(*value);
+            Ok(())
+        }
+        TypeKey::Sint
+        | TypeKey::Int
+        | TypeKey::Dint
+        | TypeKey::Lint
+        | TypeKey::Time
+        | TypeKey::Ltime
+        | TypeKey::Date
+        | TypeKey::Ldate
+        | TypeKey::Tod
+        | TypeKey::Ltod
+        | TypeKey::Dt
+        | TypeKey::Ldt => encode_signed(
+            &value.value,
+            &value.type_key,
+            integer_storage_size(layout.size)?,
+            target.endianness,
+            out,
+            offset,
+        ),
+        TypeKey::Usint
+        | TypeKey::Uint
+        | TypeKey::Udint
+        | TypeKey::Ulint
+        | TypeKey::Byte
+        | TypeKey::Word
+        | TypeKey::Dword
+        | TypeKey::Lword
+        | TypeKey::Char
+        | TypeKey::Wchar
+        | TypeKey::Uchar => encode_unsigned(
+            &value.value,
+            &value.type_key,
+            integer_storage_size(layout.size)?,
+            target.endianness,
+            out,
+            offset,
+        ),
+        TypeKey::Real => {
+            let DebugValue::Real(value) = &value.value else {
+                return Err(type_mismatch(&value.type_key, "REAL"));
+            };
+            write_integer(
+                u128::from((*value as f32).to_bits()),
+                4,
+                target.endianness,
+                out,
+                offset,
+            );
+            Ok(())
+        }
+        TypeKey::Lreal => {
+            let DebugValue::Real(value) = &value.value else {
+                return Err(type_mismatch(&value.type_key, "LREAL"));
+            };
+            write_integer(
+                u128::from(value.to_bits()),
+                8,
+                target.endianness,
+                out,
+                offset,
+            );
+            Ok(())
+        }
+        TypeKey::String { kind, capacity } => encode_string(
+            &value.value,
+            &value.type_key,
+            *kind,
+            *capacity,
+            target.endianness,
+            out,
+            offset,
+            layout.size,
+        ),
+        TypeKey::Array {
+            lower,
+            upper,
+            element,
+        } => encode_array(
+            manifest,
+            target,
+            value,
+            &value.type_key,
+            *lower,
+            *upper,
+            element,
+            out,
+            offset,
+            layout.size,
+            depth,
+        ),
+        TypeKey::Named(got_id) => {
+            let Some(record) = type_by_id(manifest, *got_id) else {
+                return Err(Error::new(
+                    codes::DEBUG_TYPE,
+                    format!("type {} has no manifest type record", got_id.to_hex()),
+                ));
+            };
+            match record.type_kind {
+                TypeKind::Enum => {
+                    encode_enum(manifest, record, value, target, out, offset, layout.size)
+                }
+                TypeKind::Subrange => {
+                    encode_subrange(manifest, record, value, target, out, offset, layout.size)
+                }
+                TypeKind::Alias => {
+                    let Some(base) = record.base else {
+                        return Err(Error::new(
+                            codes::DEBUG_TYPE,
+                            format!("alias `{}` has no base type", record.type_key),
+                        ));
+                    };
+                    let Some(base_record) = type_by_id(manifest, base) else {
+                        return Err(Error::new(
+                            codes::DEBUG_TYPE,
+                            format!(
+                                "alias `{}` names base {} with no type record",
+                                record.type_key,
+                                base.to_hex()
+                            ),
+                        ));
+                    };
+                    let base_key = TypeKey::parse(&base_record.type_key).map_err(|error| {
+                        Error::new(
+                            codes::DEBUG_TYPE,
+                            format!(
+                                "alias base type `{}` is invalid: {}",
+                                base_record.type_key, error.message
+                            ),
+                        )
+                    })?;
+                    encode_value_into(
+                        manifest,
+                        target,
+                        &base_key,
+                        value,
+                        None,
+                        out,
+                        offset,
+                        depth + 1,
+                    )
+                }
+                TypeKind::Struct
+                | TypeKind::FunctionBlock
+                | TypeKind::Class
+                | TypeKind::Interface => Err(Error::new(
+                    codes::DEBUG_TYPE,
+                    format!(
+                        "aggregate type `{}` is not a writable root",
+                        record.type_key
+                    ),
+                )),
+            }
+        }
+        TypeKey::RefTo(_) | TypeKey::PtrTo(_) => Err(Error::new(
+            codes::DEBUG_TYPE,
+            "reference and pointer identities are not writable",
+        )),
+        TypeKey::Void => Err(Error::new(codes::DEBUG_TYPE, "`VOID` is not writable")),
+    }
+}
+
+fn integer_storage_size(size: u64) -> Result<usize> {
+    match size {
+        1 | 2 | 4 | 8 => usize::try_from(size)
+            .map_err(|_| Error::new(codes::DEBUG_TYPE, "integer storage width is invalid")),
+        _ => Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("`{size}`-byte integers are not supported"),
+        )),
+    }
+}
+
+fn type_mismatch(actual: &str, expected: &str) -> Error {
+    Error::new(
+        codes::DEBUG_TYPE,
+        format!("value type `{actual}` is not compatible with `{expected}`"),
+    )
+}
+
+fn integer_decimal<'a>(value: &'a DebugValue, type_key: &str) -> Result<&'a str> {
+    let DebugValue::Decimal(text) = value else {
+        return Err(type_mismatch(type_key, "an integer"));
+    };
+    Ok(text)
+}
+
+fn encode_signed(
+    value: &DebugValue,
+    type_key: &str,
+    size: usize,
+    endianness: stc_got::layout::Endianness,
+    out: &mut [u8],
+    offset: usize,
+) -> Result<()> {
+    let text = integer_decimal(value, type_key)?;
+    let parsed = text.parse::<i128>().map_err(|_| {
+        Error::new(
+            codes::DEBUG_TYPE,
+            format!("`{text}` is not a decimal integer for `{type_key}`"),
+        )
+    })?;
+    let bits = size * 8;
+    let minimum = -(1_i128 << (bits - 1));
+    let maximum = (1_i128 << (bits - 1)) - 1;
+    if parsed < minimum || parsed > maximum {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("`{parsed}` is outside the range of `{type_key}`"),
+        ));
+    }
+    write_integer(parsed as u128, size, endianness, out, offset);
+    Ok(())
+}
+
+fn encode_unsigned(
+    value: &DebugValue,
+    type_key: &str,
+    size: usize,
+    endianness: stc_got::layout::Endianness,
+    out: &mut [u8],
+    offset: usize,
+) -> Result<()> {
+    let text = integer_decimal(value, type_key)?;
+    let parsed = text.parse::<i128>().map_err(|_| {
+        Error::new(
+            codes::DEBUG_TYPE,
+            format!("`{text}` is not a decimal integer for `{type_key}`"),
+        )
+    })?;
+    let maximum = (1_i128 << (size * 8)) - 1;
+    if parsed < 0 || parsed > maximum {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("`{parsed}` is outside the range of `{type_key}`"),
+        ));
+    }
+    write_integer(parsed as u128, size, endianness, out, offset);
+    Ok(())
+}
+
+fn write_integer(
+    value: u128,
+    size: usize,
+    endianness: stc_got::layout::Endianness,
+    out: &mut [u8],
+    offset: usize,
+) {
+    let raw = value.to_le_bytes();
+    if endianness == stc_got::layout::Endianness::Little {
+        out[offset..offset + size].copy_from_slice(&raw[..size]);
+    } else {
+        for index in 0..size {
+            out[offset + index] = raw[size - 1 - index];
+        }
+    }
+}
+
+fn type_metadata(manifest: &Manifest, got_id: GotId) -> Option<&TypeMetadataRecord> {
+    manifest
+        .type_metadata
+        .iter()
+        .find(|metadata| metadata.type_id == got_id)
+}
+
+fn encode_enum(
+    manifest: &Manifest,
+    record: &TypeRecord,
+    value: &TypedValue,
+    target: &Target,
+    out: &mut [u8],
+    offset: usize,
+    size: u64,
+) -> Result<()> {
+    let text = integer_decimal(&value.value, &record.type_key)?;
+    let parsed = text.parse::<i128>().map_err(|_| {
+        Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "`{text}` is not a decimal enum value for `{}`",
+                record.type_key
+            ),
+        )
+    })?;
+    let Some(metadata) = type_metadata(manifest, record.got_id) else {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "enum `{}` has no member metadata; membership cannot be validated",
+                record.type_key
+            ),
+        ));
+    };
+    if !metadata
+        .enum_members
+        .iter()
+        .any(|member| member.value == parsed)
+    {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("`{parsed}` is not a member of enum `{}`", record.type_key),
+        ));
+    }
+    encode_signed(
+        &value.value,
+        &record.type_key,
+        integer_storage_size(size)?,
+        target.endianness,
+        out,
+        offset,
+    )
+}
+
+fn encode_subrange(
+    manifest: &Manifest,
+    record: &TypeRecord,
+    value: &TypedValue,
+    target: &Target,
+    out: &mut [u8],
+    offset: usize,
+    size: u64,
+) -> Result<()> {
+    let text = integer_decimal(&value.value, &record.type_key)?;
+    let parsed = text.parse::<i128>().map_err(|_| {
+        Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "`{text}` is not a decimal subrange value for `{}`",
+                record.type_key
+            ),
+        )
+    })?;
+    let Some(metadata) = type_metadata(manifest, record.got_id) else {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "subrange `{}` has no bounds metadata; range cannot be validated",
+                record.type_key
+            ),
+        ));
+    };
+    let Some(bounds) = metadata.subrange else {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "subrange `{}` has no bounds metadata; range cannot be validated",
+                record.type_key
+            ),
+        ));
+    };
+    if parsed < bounds.lower || parsed > bounds.upper {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "`{parsed}` is outside the bounds {}..={} of `{}`",
+                bounds.lower, bounds.upper, record.type_key
+            ),
+        ));
+    }
+    encode_signed(
+        &value.value,
+        &record.type_key,
+        integer_storage_size(size)?,
+        target.endianness,
+        out,
+        offset,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_string(
+    value: &DebugValue,
+    type_key: &str,
+    kind: StringKind,
+    capacity: u32,
+    endianness: stc_got::layout::Endianness,
+    out: &mut [u8],
+    offset: usize,
+    size: u64,
+) -> Result<()> {
+    let DebugValue::String(string) = value else {
+        return Err(type_mismatch(
+            type_key,
+            &format!("a {} string", kind.keyword()),
+        ));
+    };
+    if string.capacity != capacity {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "string value capacity {} does not match `{type_key}` capacity {capacity}",
+                string.capacity
+            ),
+        ));
+    }
+    let capacity = usize::try_from(capacity).map_err(|_| {
+        Error::new(
+            codes::DEBUG_LIMIT,
+            format!("`{type_key}` capacity is too large"),
+        )
+    })?;
+    let unit_size = usize::from(kind.unit_bytes());
+    let needed = 4_usize
+        .checked_add(capacity.saturating_mul(unit_size))
+        .ok_or_else(|| Error::new(codes::DEBUG_LIMIT, format!("`{type_key}` size overflows")))?;
+    let storage = usize::try_from(size)
+        .map_err(|_| Error::new(codes::DEBUG_LIMIT, format!("`{type_key}` is too large")))?;
+    if needed > storage {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("`{type_key}` layout is shorter than its string header"),
+        ));
+    }
+    if string.units.len() > capacity {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "string value has {} units but `{type_key}` capacity is {capacity}",
+                string.units.len()
+            ),
+        ));
+    }
+    let length = i32::try_from(string.units.len()).map_err(|_| {
+        Error::new(
+            codes::DEBUG_TYPE,
+            format!("string value for `{type_key}` is too long"),
+        )
+    })?;
+    write_integer(u128::from(length as u32), 4, endianness, out, offset);
+    for (index, unit) in string.units.iter().enumerate() {
+        let valid = match kind {
+            StringKind::Sbcs => *unit <= u32::from(u8::MAX),
+            StringKind::Dbcs => *unit <= u32::from(u16::MAX),
+            StringKind::Unicode => *unit <= 0x10_FFFF && !(0xD800..=0xDFFF).contains(unit),
+        };
+        if !valid {
+            return Err(Error::new(
+                codes::DEBUG_TYPE,
+                format!(
+                    "string unit {unit:#x} is not representable in `{}`",
+                    type_key
+                ),
+            ));
+        }
+        let unit_offset = offset + 4 + index * unit_size;
+        write_integer(u128::from(*unit), unit_size, endianness, out, unit_offset);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_array(
+    manifest: &Manifest,
+    target: &Target,
+    value: &TypedValue,
+    type_key: &str,
+    lower: ArrayBound,
+    upper: ArrayBound,
+    element: &TypeKey,
+    out: &mut [u8],
+    offset: usize,
+    size: u64,
+    depth: usize,
+) -> Result<()> {
+    let (ArrayBound::Value(lower), ArrayBound::Value(upper)) = (lower, upper) else {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("`{type_key}` has a conformant bound and is not writable"),
+        ));
+    };
+    if upper < lower {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!("`{type_key}` has inverted array bounds"),
+        ));
+    }
+    let count = u128::try_from(upper - lower)
+        .ok()
+        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| Error::new(codes::DEBUG_LIMIT, format!("`{type_key}` is too large")))?;
+    if count > 1_000_000 {
+        return Err(Error::new(
+            codes::DEBUG_LIMIT,
+            format!("`{type_key}` has more than one million elements"),
+        ));
+    }
+    let DebugValue::Array(values) = &value.value else {
+        return Err(type_mismatch(type_key, "an array"));
+    };
+    if values.len() != usize::try_from(count).unwrap_or(usize::MAX) {
+        return Err(Error::new(
+            codes::DEBUG_TYPE,
+            format!(
+                "array value has {} elements but `{type_key}` has {count}",
+                values.len()
+            ),
+        ));
+    }
+    let element_layout = type_layout(manifest, target, element)?;
+    let stride = round_up(element_layout.size, u64::from(element_layout.align));
+    let storage = usize::try_from(size)
+        .map_err(|_| Error::new(codes::DEBUG_LIMIT, format!("`{type_key}` is too large")))?;
+    let element_key = element.render();
+    for (index, element_value) in values.iter().enumerate() {
+        let element_offset = u128::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(u128::from(stride)))
+            .and_then(|offset| usize::try_from(offset).ok())
+            .ok_or_else(|| {
+                Error::new(codes::DEBUG_LIMIT, format!("`{type_key}` offset overflows"))
+            })?;
+        if element_offset > storage {
+            return Err(Error::new(
+                codes::DEBUG_TYPE,
+                format!("`{type_key}` element {index} lies outside its storage"),
+            ));
+        }
+        encode_value_into(
+            manifest,
+            target,
+            element,
+            element_value,
+            Some(&element_key),
+            out,
+            offset + element_offset,
+            depth + 1,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_direct_binding<'a>(
+    info: &'a crate::ModuleInfo,
+    root: &RootRecord,
+) -> Result<&'a crate::module_info::DirectBinding> {
+    let Some(binding) = info.binding(root.got_id) else {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "direct root `{}` has no active process-image binding",
+                root.key
+            ),
+        ));
+    };
+    let Some(layout) = info.image_layout().area(binding.area) else {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!("direct root `{}` names an invalid image area", root.key),
+        ));
+    };
+    let byte_offset = binding.offset_bits / 8;
+    let width_bytes = binding.width_bits.div_ceil(8).max(1);
+    if binding.width_bits == 1 {
+        if root.size != 1 {
+            return Err(Error::new(
+                codes::DEBUG_TYPE,
+                format!(
+                    "one-bit direct root `{}` has a {}-byte value",
+                    root.key, root.size
+                ),
+            ));
+        }
+        if byte_offset.checked_add(1).is_none_or(|end| end > layout.1) {
+            return Err(Error::new(
+                codes::DEBUG_STALE,
+                format!(
+                    "direct root `{}` storage does not fit its process-image binding",
+                    root.key
+                ),
+            ));
+        }
+    } else {
+        if width_bytes != root.size {
+            return Err(Error::new(
+                codes::DEBUG_TYPE,
+                format!(
+                    "direct root `{}` has {} bytes but its binding is {width_bytes} bytes",
+                    root.key, root.size
+                ),
+            ));
+        }
+        if binding.width_bits % 8 != 0 {
+            return Err(Error::new(
+                codes::DEBUG_TYPE,
+                format!(
+                    "direct root `{}` has a non-byte-aligned multi-byte binding",
+                    root.key
+                ),
+            ));
+        }
+        if byte_offset
+            .checked_add(width_bytes)
+            .is_none_or(|end| end > layout.1)
+        {
+            return Err(Error::new(
+                codes::DEBUG_STALE,
+                format!(
+                    "direct root `{}` storage does not fit its process-image binding",
+                    root.key
+                ),
+            ));
+        }
+    }
+    Ok(binding)
+}
+
+fn write_root_bytes(
+    info: Option<&crate::ModuleInfo>,
+    roots: &mut crate::RootRegistry,
+    root: &RootRecord,
+    bytes: &[u8],
+) -> Result<()> {
+    if root.root_kind == RootKind::Direct {
+        let Some(info) = info else {
+            return Err(Error::new(
+                codes::DEBUG_STALE,
+                format!(
+                    "direct root `{}` has no active process-image metadata",
+                    root.key
+                ),
+            ));
+        };
+        let binding = validate_direct_binding(info, root)?;
+        let Some(layout) = info.image_layout().area(binding.area) else {
+            return Err(Error::new(
+                codes::DEBUG_STALE,
+                format!("direct root `{}` names an invalid image area", root.key),
+            ));
+        };
+        let byte_offset = binding.offset_bits / 8;
+        let absolute = layout
+            .0
+            .checked_add(byte_offset)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .ok_or_else(|| {
+                Error::new(
+                    codes::DEBUG_STALE,
+                    format!("direct root `{}` process-image offset overflows", root.key),
+                )
+            })?;
+        if binding.width_bits == 1 {
+            let mut byte = [0_u8; 1];
+            if crate::image_read(absolute, &mut byte) != 1 {
+                return Err(Error::new(
+                    codes::DEBUG_STALE,
+                    format!("direct root `{}` is outside the process image", root.key),
+                ));
+            }
+            let bit = u8::try_from(binding.offset_bits % 8).unwrap_or(0);
+            let mask = 1_u8 << bit;
+            if bytes.first().is_some_and(|value| *value != 0) {
+                byte[0] |= mask;
+            } else {
+                byte[0] &= !mask;
+            }
+            if !crate::image_write(absolute, &byte) {
+                return Err(Error::new(
+                    codes::DEBUG_STALE,
+                    format!("direct root `{}` is outside the process image", root.key),
+                ));
+            }
+        } else if !crate::image_write(absolute, bytes) {
+            return Err(Error::new(
+                codes::DEBUG_STALE,
+                format!("direct root `{}` is outside the process image", root.key),
+            ));
+        }
+        return Ok(());
+    }
+    let Some(active) = roots.get_mut(root.got_id) else {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!("root `{}` has no active storage", root.key),
+        ));
+    };
+    if active.storage().len() != bytes.len() {
+        return Err(Error::new(
+            codes::DEBUG_STALE,
+            format!(
+                "root `{}` storage is {} bytes but the queued value is {} bytes",
+                root.key,
+                active.storage().len(),
+                bytes.len()
+            ),
+        ));
+    }
+    active.storage_mut().copy_from_slice(bytes);
+    Ok(())
+}
+
+pub(crate) fn resolve_root_id(source: &DebugSource<'_>, target: &DebugTarget) -> Result<GotId> {
+    if matches!(target, DebugTarget::Local { .. }) {
+        return Err(Error::new(
+            codes::DEBUG_UNKNOWN,
+            "locals and parameters cannot carry a force",
+        ));
+    }
+    let resolved = resolve_target(source.manifest, target)?;
+    match resolved.shape {
+        ResolvedShape::Root(root) => Ok(root.got_id),
+        ResolvedShape::Aggregate(_) => Err(Error::new(
+            codes::DEBUG_UNKNOWN,
+            "aggregates cannot carry a force; target one of their writable roots",
+        )),
+    }
+}
+
+fn typed_value_json(value: &TypedValue) -> Json {
+    Json::object([
+        ("type".into(), Json::string(value.type_key.clone())),
+        ("value".into(), debug_value_json(&value.value)),
+    ])
+}
+
+/// Encodes a REAL per Debug and Monitoring §15.5: finite values are JSON
+/// numbers and non-finite values use the canonical `NaN`/`INF`/`-INF` strings.
+fn real_value_json(value: f64) -> Json {
+    if value.is_nan() {
+        return Json::string("NaN");
+    }
+    if value == f64::INFINITY {
+        return Json::string("INF");
+    }
+    if value == f64::NEG_INFINITY {
+        return Json::string("-INF");
+    }
+    let token = if value == 0.0 {
+        "0".to_owned()
+    } else {
+        value.to_string()
+    };
+    Json::NumberLiteral(token)
+}
+
+fn debug_value_json(value: &DebugValue) -> Json {
+    match value {
+        DebugValue::Bool(value) => Json::Bool(*value),
+        DebugValue::Decimal(text) => Json::string(text.clone()),
+        DebugValue::Real(value) => real_value_json(*value),
+        DebugValue::String(string) => Json::object([
+            ("length".into(), Json::unsigned(u64::from(string.length))),
+            (
+                "units".into(),
+                Json::Array(
+                    string
+                        .units
+                        .iter()
+                        .map(|unit| Json::unsigned(u64::from(*unit)))
+                        .collect(),
+                ),
+            ),
+        ]),
+        DebugValue::Array(values) => Json::object([(
+            "elements".into(),
+            Json::Array(values.iter().map(typed_value_json).collect()),
+        )]),
+        DebugValue::Aggregate(fields) => Json::object([
+            ("aggregate".into(), Json::Bool(true)),
+            ("atomic".into(), Json::Bool(false)),
+            (
+                "fields".into(),
+                Json::Array(
+                    fields
+                        .iter()
+                        .map(|field| {
+                            Json::object([
+                                ("name".into(), Json::string(field.name.clone())),
+                                ("value".into(), typed_value_json(&field.value)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+        ]),
+        DebugValue::Object {
+            identity,
+            class,
+            interface,
+            fields,
+            ..
+        } => Json::object([
+            (
+                "class".into(),
+                class
+                    .as_ref()
+                    .map_or(Json::Null, |text| Json::string(text.clone())),
+            ),
+            (
+                "fields".into(),
+                Json::Array(
+                    fields
+                        .iter()
+                        .map(|field| {
+                            Json::object([
+                                ("name".into(), Json::string(field.name.clone())),
+                                ("value".into(), typed_value_json(&field.value)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+            (
+                "identity".into(),
+                identity
+                    .as_ref()
+                    .map_or(Json::Null, |id| Json::string(id.clone())),
+            ),
+            (
+                "interface".into(),
+                interface
+                    .as_ref()
+                    .map_or(Json::Null, |text| Json::string(text.clone())),
+            ),
+        ]),
+        DebugValue::Reference {
+            identity,
+            present,
+            target_type,
+        } => Json::object([
+            (
+                "identity".into(),
+                identity
+                    .as_ref()
+                    .map_or(Json::Null, |id| Json::string(id.clone())),
+            ),
+            ("present".into(), Json::Bool(*present)),
+            (
+                "target_type".into(),
+                target_type
+                    .as_ref()
+                    .map_or(Json::Null, |text| Json::string(text.clone())),
+            ),
+        ]),
+        DebugValue::Overlap { base64, .. } => {
+            Json::object([("bytes".into(), Json::string(base64.clone()))])
+        }
+        DebugValue::Unavailable { warning } => Json::object([
+            ("available".into(), Json::Bool(false)),
+            ("code".into(), Json::string(warning.code)),
+        ]),
+    }
 }
 
 fn decode_type_value(
@@ -3556,6 +6100,8 @@ mod tests {
             roots,
             functions: Vec::new(),
             types,
+            type_metadata: Vec::new(),
+            aggregates: Vec::new(),
             descriptors: Vec::new(),
             instances: Vec::new(),
             tasks: Vec::new(),
@@ -3944,7 +6490,15 @@ mod tests {
             &query("P"),
         )
         .expect("aggregate");
-        assert_eq!(aggregate.ty.type_kind, TypeKind::Struct);
+        assert!(matches!(
+            aggregate.kind,
+            AggregateTargetKind::Record {
+                ty: TypeRecord {
+                    type_kind: TypeKind::Struct,
+                    ..
+                }
+            }
+        ));
         let resolved = resolved_aggregate(aggregate).expect("resolved");
         assert!(!resolved.atomic);
         let request = DebugReadRequest::new(DebugTarget::path("P"));

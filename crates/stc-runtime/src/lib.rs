@@ -90,8 +90,11 @@ pub use control::{
     DEPLOY_REJECTED, PROTOCOL_VERSION,
 };
 pub use debug::{
-    DebugBatch, DebugError, DebugEvent, DebugFailure, DebugRead, DebugReadRequest, DebugService,
-    DebugTarget, DebugValue, DebugWarning, MAX_EVENT_BYTES, MAX_WATCH_BATCHES, MAX_WATCHES,
+    AuditEvent, AuditOutcome, AuditSink, AuditTarget, DebugBatch, DebugEndReason, DebugError,
+    DebugEvent, DebugFailure, DebugQueueId, DebugQueueOutcome, DebugQueueResult, DebugRead,
+    DebugReadRequest, DebugService, DebugTarget, DebugValue, DebugWarning, DebugWriteKind,
+    DebugWriteRequest, MAX_AUDIT_VALUE_BYTES, MAX_DEBUG_QUEUE_BYTES, MAX_DEBUG_QUEUE_ENTRIES,
+    MAX_DEBUG_QUEUE_RESULTS, MAX_EVENT_BYTES, MAX_WATCH_BATCHES, MAX_WATCHES,
     MIN_WATCH_INTERVAL_NS, NamedValue, ReadCompletion, ReadRequestId, StopFrame, StoppedLocal,
     StringValue, TypedValue, WatchId, WatchResult, WatchSpec, WatchValue,
 };
