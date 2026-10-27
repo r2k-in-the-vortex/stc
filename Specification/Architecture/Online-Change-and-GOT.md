@@ -1,6 +1,6 @@
 # Online Change and GOT
 
-Status: Resolved specification (2026-10-24); implemented for the M4.5/M5 surface (2026-10-25) and the M6 online workflow and control channel (2026-10-27); M6.5 debug/monitoring pending  
+Status: Resolved specification (2026-10-24); implemented for the M4.5/M5 surface (2026-10-25) and the M6 online workflow and control channel (2026-10-27); M6.5 phase 0 fixes the debug protocol, session, access, checkpoint, and build contracts (2026-10-27); M6.5 debug/monitoring pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -78,6 +78,14 @@ The control and service threads never block the cycle with unbounded locks. They
 pinning/epoch refcounts so a module cannot unload while a service reader holds a descriptor.
 Status publication uses lock-free counters, double-buffered snapshots, and bounded rings. The M6
 control channel is local deployment/status only and is not the M6.5 debug protocol (D-155).
+
+The M6.5 service/monitor thread hosts at most one debug session per host (D-175). While the session
+is stopped the cycle is parked in host service ID 13 with the last output image held; the
+session's connection still serves typed reads, watches, and status, and accepts queued
+writes/forces, but a second session/connection is rejected with `STC-E-DEBUG-007` and activation
+is deferred until the session ends. Debug reads pin the active generation and do not lock the
+cycle; writes and forces are queued for the cycle boundary and are never applied from the service
+thread (§10, Debug and Monitoring §13–§16).
 
 ### 2.3 Artifacts
 
@@ -381,8 +389,15 @@ by the host resolver.
 
 M6.5 service/monitor threads use typed path/`GotId` access, not raw memory. Reads are generation-pinned
 and do not lock the cycle. Writes and forcing are queued for cycle-boundary application. A write
-queued across a swap is rejected or retried against the new generation; it must not target a
-removed field.
+queued across a swap does not migrate: the swap ends the session and discards it. A write that is
+re-resolved at a boundary against a removed field or changed layout is rejected with
+`STC-E-DEBUG-010` and is never retargeted to removed storage.
+
+Every generation swap ends the debug session with `STC-E-DEBUG-019`: breakpoints, watches, queued
+writes, and forces are cleared, and a pending activation aborts any stop. The cycle resumes on the
+new generation; the client reconnects explicitly and re-binds targets against the new build. Debug
+pins delay unload only until released; they never prevent or roll back a committed swap. A swap
+while stopped does not preserve the stopped frame, locals, or stack.
 
 The host exposes active/retired build IDs, catalog summary, compatibility state, quarantine list,
 and the last rejection. Diagnostics use stable `MODULE`, `MANIFEST`, `ABI`, and `ONLINE` families.
@@ -400,8 +415,11 @@ runtime state layout are versioned together. A failed compatibility check reject
 before activation. The exact host API table, service IDs, entry-point signatures, trap boundary,
 and module descriptor layout are fixed in [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8;
 minor 1 is implemented, and M6 appends only service ID 12 (`set_cycle_time_ns(int64_t)`) as
-minor 2 for test builds. No debug service is added in M6; M6.5 debug services append after 12
-under the same major.
+minor 2 for test builds. No debug service is added in M6. M6.5 appends service ID 13
+(`debug_check(uint32_t checkpoint_id, uint32_t span_id)`) as minor 3; module-facing debug support
+is limited to that service and the checkpoint table lives in the metadata sidecar, not in the
+module or descriptor (D-177). Hook-emitting debug modules require minor 3, test builds remain
+minor 2 and hook-free, and hook-free debug/release modules require minor 1.
 
 ## 12. Definition of done
 
@@ -415,6 +433,10 @@ under the same major.
 - Double builds produce byte-identical modules and manifests; the active manifest can be
   downloaded and used as the next build baseline.
 - Hot-swap, manifest, cold-download, rollback, and descriptor tests run in CI on both hosts.
+- Debug reads and boundary-queued writes/forces respect generation pins; a swap ends the session
+  with `STC-E-DEBUG-019` and leaves no force, watch, breakpoint, or queued write behind; the
+  debug protocol, checkpoint table, and minor-3 service pass the protocol/ABI tests in the debug
+  CI job.
 
 ## 13. Non-goals and safety
 
@@ -422,7 +444,9 @@ under the same major.
 - No field-layout migration, resizing, or pointer translation in v1.
 - No network deployment protocol, multi-user scheduling, or remote UI in v1.
 - No safety claim. `stc` is not a safety PLC and is not responsible for safety in any way.
-  Debug sessions may hold outputs indefinitely; no automatic fail-safe is provided.
+  Debug sessions may hold outputs indefinitely and forced values may be saved on a normal
+  shutdown when they override a `RETAIN` root (`STC-W-DEBUG-005`); no automatic fail-safe is
+  provided, and all forces are cleared at session end or swap.
 
 ## 14. Related documents
 

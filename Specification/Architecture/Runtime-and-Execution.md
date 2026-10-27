@@ -131,8 +131,13 @@ typedef struct {
     const char* io_file;
     const char* state_file;
     const char* control_endpoint; /* local named pipe/socket, or null */
-    const char* control_nonce;    /* per-run nonce when control_endpoint is set */
     const int32_t* stop;        /* nonzero stops before the next scan */
+    const char* control_nonce;    /* per-run nonce when control_endpoint is set */
+    /* M6.5 (ABI 2.3), appended; ignored by a shorter struct */
+    const char* debug_endpoint;   /* local debug endpoint file, or null */
+    int32_t  debug_allow_write;   /* grant the debug write scope */
+    int32_t  debug_allow_force;   /* grant the debug force scope */
+    int64_t  debug_session_timeout_ns; /* 0 = [debug].session-timeout default */
 } stc_host_options;
 ```
 
@@ -142,6 +147,13 @@ launcher: the same latched clock, scheduler, cycle-time deadline, mock clock, st
 0/1/2/3/4/130 exit codes. A non-empty control endpoint requires the matching per-run nonce and
 serves the local deploy/status channel; the I/O and retained-state paths configure the host
 before a cold load and apply to the final shutdown.
+
+The four debug fields are appended and `struct_size`-gated; an older embedding host that passes a
+shorter struct gets no debug server. A non-null `debug_endpoint` starts the local debug service
+and writes the endpoint file there; it is a separate endpoint, token, and protocol from
+`control_endpoint` (D-155, D-173). `debug_allow_write`/`debug_allow_force` grant the corresponding
+scopes; `debug_session_timeout_ns` of 0 selects the manifest/default five-minute bound. An
+embedding host that does not set `debug_endpoint` never starts the service.
 
 Embedding hosts configure the process-image backend and retained state before loading a module
 with `stc_host_configure_io(backend, file)` (`-1` keeps the metadata backend, `0`/`1`/`2` select
@@ -226,15 +238,20 @@ only ST executor.
 
 ### 2.2 ABI versioning
 
-- `STC_HOST_ABI_MAJOR = 2`; the v1 persistent host implements minor **2** (2.2). Minor 1
-  appends no service and changes no signature; it records the inline TYPEINFO, VTABLE, and
-  object-record layout of §2.6 that generated OOP code reads without a host call (D-151). M6
-  phase 6 implements minor 2.
+- `STC_HOST_ABI_MAJOR = 2`; the v1 persistent host implements minor **2** (2.2).
+  Minor 1 appends no service and changes no signature; it records the inline TYPEINFO, VTABLE,
+  and object-record layout of §2.6 that generated OOP code reads without a host call (D-151). M6
+  phase 6 implements minor 2. M6.5 appends minor 3 for the debug checkpoint service.
 - Minor **2.2** appends exactly one service, ID 12, `void (*set_cycle_time_ns)(int64_t ns)`,
   after `assert` in `stc_host_api`. It sets the next cycle's latched time and does not change the
   current scan; `STC_CLOCK_ADVANCE` lowers to `set(cycle_now_ns() + duration)`. Only test builds
   import it; production modules keep required minor 2.1 (D-157). The table and service IDs are
   fixed in [GOT Artifacts and Schemas](GOT-Artifacts.md) §8.
+- Minor **2.3** (M6.5, planned) appends exactly one service, ID 13,
+  `void (*debug_check)(uint32_t checkpoint_id, uint32_t span_id)`, after service 12. Only debug
+  builds that emit checkpoint hooks import it; they require minor 2.3. Test builds remain at 2.2;
+  hook-free debug and release builds remain at 2.1 (D-177). The checkpoint table itself is in the
+  metadata sidecar, not the host API.
 - The runtime exposes `stc_abi_version()` and a host API struct with `abi_version` and
   `struct_size`. A module rejects a host whose struct is shorter than required.
 - Generated modules embed the expected ABI version in metadata and their descriptor; the loader
@@ -271,12 +288,13 @@ void stc_rt_state_configure(const char* path, int32_t policy, int32_t enabled);
 ```
 
 Generated modules do not import `stc_rt_*` symbols. They call traps, clocks, state, I/O, and
-allocation through the host API table (ABI 2.2 implemented; production modules require 2.1 and
-test modules 2.2) defined below and in [GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The
-flat `stc_rt_*` module ABI is M4 ABI 1 and is not loadable by the persistent host.
-`stc_rt_set_cycle_time_ns` is a host-only export for the launcher and embedding hosts; generated
-test code advances the next cycle's time through service ID 12 instead. `stc_rt_test_main` is
-the test-host entry point linked by a generated test launcher; production modules never call it.
+allocation through the host API table (ABI 2.2 implemented; production modules require 2.1, test
+modules 2.2, and debug-hook modules 2.3) defined below and in
+[GOT Artifacts and Schemas](GOT-Artifacts.md) §8. The flat `stc_rt_*` module ABI is M4 ABI 1 and
+is not loadable by the persistent host. `stc_rt_set_cycle_time_ns` is a host-only export for the
+launcher and embedding hosts; generated test code advances the next cycle's time through service
+ID 12 instead. `stc_rt_test_main` is the test-host entry point linked by a generated test
+launcher; production modules never call it.
 
 #### 2.3.1 Host API table
 
@@ -288,8 +306,10 @@ module rejects a host whose table is shorter than it requires. Modules receive t
 no service and adds no field: it records the inline OOP record layout of §2.6, so the minor gate
 rejects a 2.1 module on a 2.0 host before generated code can read a record. Minor 2 appends only
 the test-clock service (ID 12); a 2.2 test module is rejected by a 2.1 host, while a production
-2.1 module still runs on either. Reference resolution, typed variable access, string/math
-helpers, generation pin/unpin, and debug services remain later minor-version extensions.
+2.1 module still runs on either. Minor 3 (M6.5) appends only the debug checkpoint service (ID 13);
+only hook-emitting debug builds import it and require 2.3. Reference resolution, typed variable
+access, string/math helpers, and generation pin/unpin are host-side M6.5 capabilities and need no
+new module-facing service; the debug protocol and typed access do not use the host API table.
 M4.5-generated code imports trap, I/O image/size, and the retained-state services. Clocks,
 transient alloc/free, and assert are in ABI 2.0 but unused by M4.5-generated code; M5/M6
 consumers add the corresponding import slots when they first emit those calls.
@@ -370,8 +390,13 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
   and converts to nanoseconds; the ST-visible semantics are identical on every host (D-042).
 - The clock remains continuous across an online change. The host latches the next cycle's time
   normally; the swap does not reset or re-latch it, so timers observe elapsed wall/monotonic time.
-- The watchdog is paused or extended with a documented bound during prepare/activation and while
-  a debugger has the cycle stopped. If the bound is exceeded, the normal watchdog policy resumes.
+- When a watchdog exists, it is paused or extended with a documented bound during
+  prepare/activation and while a debugger has the cycle stopped. The debug stop/idle bound is
+  `[debug].session-timeout` (default five minutes); on expiry the session ends with
+  `STC-E-DEBUG-018`, forces and breakpoints are cleared, and the cycle resumes with a fresh
+  deadline ([Debug and Monitoring](Debug-and-Monitoring.md) §14.3). If a bound is exceeded, the
+  normal watchdog policy resumes. M6 has no watchdog implementation; M6.5 phase 6 implements the
+  host-side stop budget, and a future watchdog consults it (D-175).
 - In executable mode, the runtime latches the host monotonic clock at the start of each cycle.
   `--cycle-time` controls the loop deadline but does not change the value latched for the scan.
 - In library mode, the host owns the loop. By default `stc_module_cycle` latches the live
@@ -645,12 +670,15 @@ Detailed test discovery, pragma syntax, and the per-test artifact interface are 
 | Missing/invalid/stale manifest baseline | Cold download; no merge or partial recovery |
 | Candidate prepare failure | Discard temp GOT/module; active generation continues |
 | Trap in the rollback window | Restore the previous generation; record the failure |
-| Debug session / forced value | Documented hold/force behavior; not a safety function |
-| Service request for a removed field/generation | Reject or retry against the active generation; never target removed storage |
+| Debug session stop / forced value | The stop/idle bound (`[debug].session-timeout`, default 5 min) ends the session with `STC-E-DEBUG-018`, clears state, and resumes with a fresh deadline; forced values are held until release/session end/swap; not a safety function |
+| Debug read/write/force for a removed field or stale generation | Reads pin the generation; a removed/stale/layout-changed target is `STC-E-DEBUG-010` and is never retargeted; queued writes/forces are rejected at the boundary; every swap ends the session (`STC-E-DEBUG-019`) |
+| Debug protocol/authentication failure | Reject or close the connection; no cycle effect; audit the failure; `STC-E-DEBUG-*` |
+| Debug metadata/checkpoint mismatch | Refuse breakpoints/stepping; the module keeps running; `STC-E-DEBUG-016` |
 
 ## 9. Open runtime questions
 
-None as of 2026-10-24. The online-change host/GOT/manifest/debug architecture is resolved in
+None as of 2026-10-27. The online-change host/GOT/manifest/debug architecture is resolved in
 [Online Change and GOT](Online-Change-and-GOT.md),
-[Debug and Monitoring](Debug-and-Monitoring.md), and `update_plan_got.md` §13.0. New runtime
-questions are appended here or in [Decisions](../Decisions.md).
+[Debug and Monitoring](Debug-and-Monitoring.md), and `update_plan_got.md` §13.0; the M6.5
+protocol, session, access, checkpoint, and build contracts are recorded as D-173–D-179. New
+runtime questions are appended here or in [Decisions](../Decisions.md).

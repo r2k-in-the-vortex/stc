@@ -21,6 +21,7 @@ use stc_driver::toolchain::system_link_args;
 use stc_got::{Digest32, Manifest, Rename};
 use stc_hir::HirCrate;
 use stc_manifest::{ChannelRef, ConfigValue, EmitKind, LibType, OptLevel};
+use stc_span::SourceMap;
 
 use crate::compat::CompatibilityReport;
 use crate::report::{Log, Reporter, display_path, elapsed};
@@ -205,7 +206,8 @@ pub(crate) struct Request {
     pub allow_untracked_removal: bool,
     /// `--relaxed` or `[build].syntax = "relaxed"`.
     pub relaxed: bool,
-    /// `--debug` was accepted; M6 always builds the unoptimised debug form.
+    /// `--debug` was requested. M6.5 phase 1 uses it only to emit debug
+    /// information; phase 2 owns the debug/release build split.
     pub debug: bool,
     /// Whether this is a test build (`stc test`): emit the test-host launcher
     /// and the host ABI 2.2 test-clock import.
@@ -270,6 +272,7 @@ pub(crate) fn run(
     request: &Request,
     hir: &HirCrate,
     paths: &[String],
+    source_map: &SourceMap,
     diagnostics: &mut DiagnosticSink,
     reporter: &mut Reporter,
     log: Log,
@@ -307,6 +310,7 @@ pub(crate) fn run(
         name,
         &sources,
         None,
+        source_map,
         fingerprint,
         diagnostics,
         reporter,
@@ -322,6 +326,7 @@ pub(crate) fn run_project(
     name: &str,
     sources: &[String],
     source_paths: &[String],
+    source_map: &SourceMap,
     fingerprint: Digest32,
     diagnostics: &mut DiagnosticSink,
     reporter: &mut Reporter,
@@ -336,6 +341,7 @@ pub(crate) fn run_project(
         name.to_owned(),
         sources,
         Some(source_paths),
+        source_map,
         fingerprint,
         diagnostics,
         reporter,
@@ -351,6 +357,7 @@ pub(crate) fn generate_project(
     name: &str,
     sources: &[String],
     source_paths: &[String],
+    source_map: &SourceMap,
     fingerprint: Digest32,
     diagnostics: &mut DiagnosticSink,
     reporter: &mut Reporter,
@@ -368,6 +375,7 @@ pub(crate) fn generate_project(
         name,
         sources,
         Some(source_paths),
+        source_map,
         fingerprint,
         diagnostics,
         reporter,
@@ -382,6 +390,7 @@ fn finish(
     name: String,
     sources: &[String],
     source_paths: Option<&[String]>,
+    source_map: &SourceMap,
     fingerprint: Digest32,
     diagnostics: &mut DiagnosticSink,
     reporter: &mut Reporter,
@@ -393,6 +402,7 @@ fn finish(
         &name,
         sources,
         source_paths,
+        source_map,
         fingerprint,
         diagnostics,
         reporter,
@@ -411,6 +421,7 @@ pub(crate) fn generate(
     name: &str,
     sources: &[String],
     source_paths: Option<&[String]>,
+    source_map: &SourceMap,
     fingerprint: Digest32,
     diagnostics: &mut DiagnosticSink,
     reporter: &mut Reporter,
@@ -469,6 +480,7 @@ pub(crate) fn generate(
         release: false,
         sources,
         source_paths,
+        source_map: Some(source_map),
         module: stc_codegen::ModuleBuildOptions {
             compiler_version: format!("stc {}", env!("CARGO_PKG_VERSION")),
             source_fingerprint: fingerprint,
@@ -689,7 +701,9 @@ pub(crate) fn emit(
         &ir_path,
         &object_path,
         effective_target(request).as_deref(),
+        &generated.target_triple,
         pic,
+        request.debug,
         request.opt_level,
         log,
     ) {
@@ -770,6 +784,8 @@ pub(crate) fn emit(
             &launcher_ir_path,
             &launcher_object,
             effective_target(request).as_deref(),
+            &generated.target_triple,
+            false,
             false,
             request.opt_level,
             log,
@@ -1033,12 +1049,15 @@ fn environment(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_ir(
     clang: &str,
     ir: &Path,
     object: &Path,
     target: Option<&str>,
+    target_triple: &str,
     pic: bool,
+    debug: bool,
     opt_level: OptLevel,
     log: Log,
 ) -> Result<(), String> {
@@ -1055,6 +1074,23 @@ fn compile_ir(
         command.arg("-fPIC");
     }
     command.arg(opt_level.clang_flag());
+    if debug {
+        command.arg("-g");
+        // Keep compilation-directory and object-name metadata relative so the
+        // same inputs produce byte-identical objects in any output directory.
+        command.arg("-fdebug-compilation-dir=.");
+        if target_triple.contains("windows") && target_triple.contains("msvc") {
+            command.args(["-gcodeview", "-gno-codeview-command-line"]);
+            let object_name = object
+                .file_name()
+                .map_or_else(|| "stc.o".into(), |name| name.to_string_lossy());
+            command
+                .arg("-Xclang")
+                .arg(format!("-object-file-name={object_name}"));
+        } else {
+            command.arg("-gdwarf-5");
+        }
+    }
     run_tool(&mut command, log)
 }
 

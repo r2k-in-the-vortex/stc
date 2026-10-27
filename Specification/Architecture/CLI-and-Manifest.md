@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 debug/release options pending  
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 implementation pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -35,6 +35,11 @@ output goes to stdout.
 > archive keep their M4.5 shapes, and `lib-type = "shared"` selects the shared host library.
 > `--debug`/`--release` and their debug-info behavior are M6.5; M6 honors `[build].opt-level` but
 > emits no DWARF/CodeView or checkpoint hooks.
+>
+> **M6.5 phase 0 status (2026-10-27):** the `stc debug` command, `--release`, debug information,
+> checkpoint hooks, `--debug-protocol`, and the `[debug]` session policy are fixed in §1.7 and
+> §2.2. Implementation is phases 1–10; the M6 behavior above remains current until those phases
+> land.
 
 | Command | Purpose |
 | --- | --- |
@@ -44,14 +49,14 @@ output goes to stdout.
 | `stc run` | Build an executable and run it |
 | `stc test` | Build and run the built-in test suite; includes test-only units |
 | `stc fmt [paths...]` | Format sources with the fixed style; `--check` for CI |
-| `stc clean` | Remove the configured artifact directory (`target/stc/debug` by default); never `stc.lock` or state files |
-| `stc metadata` | Print the selected configuration, ABI version, exports, and artifact layout |
+| `stc clean` | Remove the current mode's artifact directory (debug default `target/stc/debug`, release `target/stc/release`); never `stc.lock` or state files |
+| `stc metadata` | Print the selected configuration, ABI version, build mode, debug summary, exports, and artifact layout |
 | `stc compliance` | Print the profile ID and supported feature matrix |
 | `stc online download` | Export the active manifest, layout summary, and controller/deployment identifier |
 | `stc online diff` | Compare a candidate manifest with the active baseline and print compatibility |
 | `stc rename` | Source-aware tracked rename that preserves `GotId` history |
 | `stc run --watch` | Watch sources, rebuild, and deploy an online change |
-| `stc debug` | Start a local authenticated debug/monitoring session (M6.5) |
+| `stc debug` | Build and launch a local authenticated debug session, or attach with `--attach` (M6.5; §1.7) |
 
 Future commands (not v1): `stc lsp`, `stc doc`.
 
@@ -61,22 +66,22 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | --- | --- |
 | `--manifest-path <path>` | Use a specific `stc.toml` |
 | `--target <triple>` | Pass a target triple to clang; emit it in the IR |
-| `--release` | Optimised, stripped build; omits debug hooks and full debug info; distinct build ID/manifest. M6 rejects it as a usage error; M6.5 implements it. Debug is the default mode |
-| `--debug` | Force debug information and checkpoint hooks (default unless `--release`). M6 accepts it but emits no debug info or hooks; `[build].opt-level` still applies (D-158) |
+| `--release` | Optimised, stripped build; omits debug hooks and full debug info; distinct build ID/manifest; default out-dir `target/stc/release`. M6.5 implements it; debug is the default mode (D-178) |
+| `--debug` | Force the debug form with debug information and checkpoint hooks (default unless `--release`); `[build].opt-level` still applies (D-178) |
 | `--emit <list>` | Comma-separated `ir,obj,module,exe,lib,metadata`; `module` emits the loadable module and manifest pair; `exe` is a launcher and `lib` the embedding host library; the two may coexist; overrides manifest |
 | `--got-manifest <path>` | Build against the given persistent GOT manifest as the identity baseline |
 | `--cold` | Explicitly build without an online-change baseline (cold-layout build) |
 | `--rename <old=new>` | Record a tracked rename/move; repeatable, including field/method/type/POU paths. Renaming a package name is out of scope (D-156) |
 | `--clang <path>` | clang executable |
 | `--runtime <path>` | Runtime host archive used when linking `exe`/`lib` |
-| `--out-dir <path>` | Artifact directory; default `target/stc/debug` for both the manifest-free bridge and project builds; `[build].out-dir` overrides the project default |
+| `--out-dir <path>` | Artifact directory; default `target/stc/debug` (debug) or `target/stc/release` (release); an explicit value is used verbatim for both modes; `[build].out-dir` overrides the project default |
 | `--io <backend>` | Override `[io].backend` for `run`/`test` (`null`, `memory`, `file`) |
 | `--io-file <path>` | File used by the file backend |
 | `--relaxed` | Accept the documented semicolon-relaxation syntax superset |
 | `--state-file <path>` | Retained-state file for this run |
 | `--reset-retain` | Cold start: ignore existing state, overwrite on shutdown |
 | `--no-retain` | Disable retained-state load and save |
-| `--debug-protocol <kind>` | Local debug transport (`pipe` default, `socket` optional) |
+| `--debug-protocol <kind>` | Local debug transport (`pipe` default, `socket` optional) for `stc debug` and `stc run --debug-server`; overrides `[debug].protocol` |
 | `--allow-untracked-removal` | Permit removing/renaming a root without a tracked rename; otherwise diagnose and require `--cold` |
 | `--message-format <fmt>` | `human` (default), `json`, `short` |
 | `--color <when>` | `auto`, `always`, `never` |
@@ -98,7 +103,8 @@ The table describes the v1 target surface. M6 implemented `--manifest-path`, `--
 `--cycles`, `--cycle-time`, `--io`, `--io-file`, `--state-file`, `--reset-retain`, and
 `--no-retain`. `run --watch` adds `--store <dir>` and `--watch-timeout <duration>`; the online
 commands add `--out`, `--binary`, `--store`, `--host`, `--nonce`, and `--baseline`, and `rename`
-adds `--dry-run`. `--release`, debug information, and `--debug-protocol` remain M6.5 work.
+adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `stc debug` /
+`--debug-server` surface are M6.5 work; §1.7 fixes the contract.
 
 ### 1.3 Exit codes
 
@@ -141,16 +147,17 @@ JSON format: one object per diagnostic on stdout, one per line:
 ```
 
 - Error codes are stable; see the conformance profile and each spec. The complete code index,
-  including the M6 `PROJECT`, `LOCK`, `ASSERT`, `TEST`, `FMT`, `RUN`, and `ONLINE` additions, is
-  [Conformance Profile](../01-Conformance-Profile.md) §10.
+  including the M6 `PROJECT`, `LOCK`, `ASSERT`, `TEST`, `FMT`, `RUN`, and `ONLINE` additions and
+  the M6.5 `DEBUG` family, is [Conformance Profile](../01-Conformance-Profile.md) §10.
 - Project diagnostics use `STC-E-PROJECT-*` / `STC-W-PROJECT-*`; lockfile diagnostics use
   `STC-E-LOCK-*`; test and assertion diagnostics use `STC-E-TEST-*` / `STC-E-ASSERT-*`;
   formatter diagnostics use `STC-E-FMT-*`.
 - Online-change diagnostics use the `STC-E-MODULE-*`, `STC-E-MANIFEST-*`, `STC-E-ABI-*`, and
   `STC-E-ONLINE-*` / `STC-W-ONLINE-*` families; the M6 control-channel and deploy additions are
   `STC-E-ONLINE-007/008/009` and the compatibility-report warning is `STC-W-ONLINE-007`
-  (`STC-W-ONLINE-002` remains the initializer warning). Debug diagnostics use `STC-E-DEBUG-*`
-  and `STC-W-DEBUG-*`.
+  (`STC-W-ONLINE-002` remains the initializer warning). Debug diagnostics use the
+  `STC-E-DEBUG-*` / `STC-W-DEBUG-*` families indexed in §10.1; invalid debug settings in
+  `stc.toml` use `STC-E-PROJECT-010`.
 - Compiler panics are caught and reported as `STC-I-0001` with a bug-report note and the IR/source
   context. They never print a Rust backtrace by default (`RUST_BACKTRACE=1` for developers).
 
@@ -241,12 +248,17 @@ use (human output is the default; `--message-format json` selects this shape):
   "exports": [ { "symbol": "stc_export_Main", "function": "stc_fn_…" } ],
   "retain": { "enabled": true, "file": "motor.stcstate", "on_mismatch": "error" },
   "io": { "backend": "null", "bindings": 1, "devices": 1, "var_access": 1 },
-  "artifacts": [ { "kind": "module", "file": "motor-control-<build-id>.dll" } ]
+  "artifacts": [ { "kind": "module", "file": "motor-control-<build-id>.dll" } ],
+  "build_mode": "debug",
+  "debug_info": "dwarf",
+  "debug_hooks": true
 }
 ```
 
 The object is a summary; the sidecar in §4 remains the complete metadata. `on_mismatch` is a JSON
-field name; the manifest key is `on-mismatch`.
+field name; the manifest key is `on-mismatch`. `build_mode` is `debug` or `release`; `debug_info`
+is `dwarf`, `codeview`, or `none`; `debug_hooks` is the checkpoint-hook capability. The sidecar's
+`debug` object (§4) is authoritative for the checkpoint table.
 
 **Compliance summary.** `stc compliance --message-format json` writes one object:
 
@@ -275,6 +287,73 @@ field name; the manifest key is `on-mismatch`.
 [Conformance Profile](../01-Conformance-Profile.md). `safety` is a fixed string, and the human
 output includes the non-safety statement verbatim.
 
+### 1.7 Debug command and server options
+
+`stc debug` is the M6.5 session entry point. It builds and launches the project in debug mode by
+default, opens the local debug endpoint, starts one authenticated session, and attaches the CLI.
+`--attach <endpoint-file>` connects to an already-running host instead of launching. The wire
+protocol is fixed in [Debug and Monitoring](Debug-and-Monitoring.md) §13–§18; this section fixes
+the command surface.
+
+**`stc debug` options.**
+
+| Option | Meaning |
+| --- | --- |
+| `--attach <endpoint-file>` | Attach to a running host; incompatible with build/launch options. |
+| `--endpoint <path>` | Endpoint file to create in launch mode (default a per-run path under the out-dir). |
+| `--batch <file>` | Run request objects from a JSON-lines file, or `-` for stdin, and print responses/events as JSON lines; implies `--message-format json`. |
+| `--break <file>:<line>[:<column>]` | Add an initial source breakpoint; repeatable. |
+| `--watch <target>` | Add an initial watch target; repeatable. |
+| `--allow-write` | Launch the server with the `write` scope and request it. |
+| `--allow-force` | Launch the server with the `force` scope and request it. |
+| `--session-timeout <duration>` | Launch-mode stop/idle bound; defaults to `[debug].session-timeout`. |
+| `--debug-protocol <kind>` | Launch transport (`pipe` or `socket`); overrides `[debug].protocol`. |
+| `--debug` / `--release` | Build-mode selection; `stc debug` defaults to debug. |
+
+Launch mode also accepts the `stc run` run options (`--cycles`, `--cycle-time`, `--io`,
+`--io-file`, `--state-file`, `--reset-retain`, `--no-retain`, `--mock-clock`) and the common
+build/project options. `--attach` cannot be combined with build, launch, or server-grant options;
+a combination is a usage error (exit 2).
+
+Targets for `--watch` and the interactive commands are a normalized stable key path (for example
+`MAIN.COUNTER`) or `0x` + 32 hex `GotId`. A source spelling is resolved through the local
+metadata where available; locals are addressed only through the stopped-frame commands. A bad
+target fails the command with `STC-E-DEBUG-008`.
+
+The batch file contains one object per line with `op` and `params`; the CLI adds `kind`,
+`protocol`, `id`, and `token`, writes responses and events to stdout in arrival order, and stops
+at `session-ended`. The batch file is a client-side automation format; the wire schema remains
+the normative one.
+
+Interactive commands (phase 8) are `continue`, `pause`, `step`, `next`, `finish`, `break`,
+`clear`, `print`, `set`, `force`, `release`, `release-all`, `watch`, `unwatch`, `stack`, `frame`,
+and `quit`. They map to the wire operations and add no protocol semantics.
+
+**Launch versus attach.** Launch mode owns the target: on `quit` or EOF it stops the session,
+clears forces and breakpoints, shuts the host down, and returns 0 on a clean shutdown, 4 on a
+target trap, and 130 on interrupt. Attach mode stops the session (clearing state), detaches, and
+leaves the host running; it returns 0 on a clean detach. A session ended by a swap, a timeout, or
+a protocol error is reported with its `STC-E-DEBUG-*` code and exits 2. The CLI never prints the
+token; the endpoint path is printed on stderr in launch and server modes. The non-safety notice is
+printed at session start and included in `--help`; a stopped or forced controller may hold outputs
+indefinitely and the project is not a safety PLC.
+
+**`stc run --debug-server`.** `stc run` gains:
+
+| Option | Meaning |
+| --- | --- |
+| `--debug-server` | Start the local debug service after the host is running. |
+| `--debug-endpoint <path>` | Endpoint file to write (default a per-run path under the out-dir). |
+| `--allow-write` | Grant the `write` scope. |
+| `--allow-force` | Grant the `force` scope. |
+| `--session-timeout <duration>` | Stop/idle bound; defaults to `[debug].session-timeout`. |
+
+`--debug-server` is valid for debug and release modules; a release module yields a
+monitoring-only session (`STC-W-DEBUG-004`). `stc test` rejects `--release`, `--debug-server`,
+`--debug-protocol`, and the server-grant options. `stc run --watch` and `--debug-server` may
+coexist: the M6 control endpoint and the M6.5 debug endpoint have different names, tokens,
+protocols, and messages (D-155, D-173).
+
 ## 2. Project manifest: `stc.toml`
 
 ### 2.1 Example
@@ -298,11 +377,11 @@ configuration = "Main"            # optional if exactly one CONFIGURATION exists
 [build]
 target = "x86_64-pc-windows-msvc" # optional; default = clang host
 opt-level = 2
-debug = true                      # parsed; M6 always builds the debug form without debug info (D-158)
+debug = true                      # debug form (default); --release selects the release form (D-178)
 syntax = "strict"                 # strict (default) | relaxed
 emit = ["module", "ir"]           # v1 online-change deployment; exe/ir/lib also available
 lib-type = "static"               # static | shared, used when emit includes "lib"
-out-dir = "target/stc"
+# out-dir = "target/stc/debug"    # optional; default is target/stc/debug or target/stc/release
 clang = "C:\\Program Files\\LLVM\\bin\\clang.exe"  # optional
 runtime = "target/debug/stc_runtime.lib"           # optional
 
@@ -348,7 +427,10 @@ allow-untracked-removal = false
 [debug]
 default = true
 protocol = "pipe"                   # pipe | socket (local only)
-force-sessions-end-on-swap = true
+force-sessions-end-on-swap = true   # must be true in v1
+session-timeout = "5m"              # continuous stop/idle bound; M6.5
+allow-write = false                 # grant the write scope; M6.5
+allow-force = false                 # grant the force scope; M6.5
 
 [lints]
 warnings = "warn"           # warn | deny | allow (baseline for warning diagnostics)
@@ -405,11 +487,13 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
 - `[project] configuration` selects one `CONFIGURATION` declaration. If omitted and exactly one
   exists, it is selected. If omitted and multiple exist, the build fails with a list.
 - `[build] target` is passed to clang and emitted as the IR triple.
-- `[build] opt-level` is `0|1|2|3|"s"`; maps to clang `-O` flags.
-- `[build] debug` is parsed from phase 1. M6 honors `[build].opt-level` but emits no
-  DWARF/CodeView or checkpoint hooks; `debug = false` emits `STC-W-PROJECT-001`, and `--release`
-  is a usage error until M6.5 implements the stripped/optimised form and its distinct build
-  ID/manifest (D-158).
+- `[build] opt-level` is `0|1|2|3|"s"`; maps to clang `-O` flags. When the key is absent, debug
+  builds default to 0 and release builds to 2 (D-178).
+- `[build] debug` selects the default build mode (default `true`). It is the canonical key and
+  must agree with an explicitly present `[debug].default`; a disagreement is
+  `STC-E-PROJECT-010`. `--debug`/`--release` override both. Debug builds emit DWARF/CodeView and
+  checkpoint hooks; release builds are optimised, stripped, and hook-free with distinct build IDs
+  and manifests (D-178).
 - `[build] syntax` is `strict` (default) or `relaxed`. Strict requires the 2013 statement
   terminator rules; relaxed enables the documented omitted-semicolon-after-block superset.
   `--relaxed` overrides the manifest.
@@ -418,7 +502,9 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   host library; generated code stays in the separate module, and `exe` and `lib` may coexist.
 - `[build] lib-type` selects static or shared library output.
 - `[build] out-dir` is relative to the manifest and must stay inside the project unless the user
-  passes `--out-dir`.
+  passes `--out-dir`. The default is `target/stc/debug` (debug) or `target/stc/release`
+  (release). An explicit out-dir is used verbatim for both modes; building both modes into one
+  explicit directory is not a supported layout because manifest/metadata names collide (D-178).
 - `[io]` is optional. `backend` is `null`, `memory`, or `file` in v1; hardware backend names are
   runtime-defined in v2. `file` names the file used by the file backend.
   `input-bytes`/`output-bytes`/`marker-bytes` are optional; the compiler computes them from `AT`
@@ -446,11 +532,16 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   `allow-untracked-removal` controls whether untracked root removal is allowed without a tracked
   rename (default false). `--got-manifest`, `--cold`, `--allow-untracked-removal`, and `--rename`
   override it.
-- `[debug]` controls the default debug mode, local protocol transport (`pipe` default, `socket`
-  optional), and whether every online swap ends the debug session (default true). Debug remains a
-  local, authenticated capability; it is not a safety function. M6 parses the table but builds
-  the debug form without debug information; `default = false` emits `STC-W-PROJECT-001`, and the
-  protocol/session settings take effect in M6.5 (D-158).
+- `[debug]` controls the default build mode (`default`), local transport (`protocol`, `pipe`
+  default or `socket`), the swap teardown policy (`force-sessions-end-on-swap`, which must be
+  `true` in v1), the stop/idle bound (`session-timeout`, a duration string, default `5m`), and
+  the default write/force grants (`allow-write`, `allow-force`, both false). `[debug].default`
+  must agree with an explicitly present `[build].debug`; a disagreement or
+  `force-sessions-end-on-swap = false` is `STC-E-PROJECT-010`. `session-timeout` must be a
+  positive duration and must not exceed 24 hours; `allow-write`/`allow-force` are booleans.
+  These settings are runtime/session policy and do not affect the build ID or manifest identity.
+  `stc test` ignores them and always builds the hook-free debug form. Debug remains a local,
+  authenticated capability; it is not a safety function (D-173–D-179).
 - `[lints]` sets project lint levels. `warnings` is the baseline (`warn` default, `deny`, or
   `allow`). Per-code keys are `"STC-W-*"`/`"STC-E-*"` with values `allow`, `warn`, or `deny`.
   Errors cannot be downgraded below `error`; a manifest that tries is invalid. Unknown codes are
@@ -604,7 +695,7 @@ Rules:
 ## 4. Artifact and metadata layout
 
 ```text
-target/stc/debug/                               default out-dir (project and bridge)
+target/stc/debug/                               default debug out-dir (project and bridge)
   <name>.ll
   <name>.o
   <name>.exe                                     thin host launcher (exe)
@@ -615,6 +706,8 @@ target/stc/debug/                               default out-dir (project and bri
   <name>.stc-got.json                           canonical GOT manifest
   <name>.stc-got.bin                            compact runtime manifest
   build.log
+
+target/stc/release/                             default release out-dir (same layout; stripped)
 ```
 
 `<name>.stc-meta.json`:
@@ -627,6 +720,15 @@ target/stc/debug/                               default out-dir (project and bri
   "compiler": "stc 0.1.0",
   "configuration": "Main",
   "descriptor_digest": "0x…",
+  "debug": {
+    "build_id": "0x…",
+    "checkpoints": [
+      { "column": 3, "flags": 1, "function": "0x…", "id": 1, "line": 6, "span": 12 }
+    ],
+    "format": 1,
+    "hooks": true,
+    "info": "dwarf"
+  },
   "exports": [
     { "function": "stc_fn_…", "no_mangle": false, "symbol": "stc_export_Main" }
   ],
@@ -671,8 +773,11 @@ target/stc/debug/                               default out-dir (project and bri
 
 The driver writes the schema above. M6 adds package/device/`VAR_ACCESS` metadata and the
 `file`/`on-mismatch` retained-state policy (JSON field `on_mismatch`); these fields are absent
-from M4.5 artifacts. `parent_build_id` is carried by the manifest lineage rather
-than the metadata sidecar.
+from M4.5 artifacts. M6.5 adds the optional `debug` object: it is present in debug-form artifacts
+(with `hooks` true or false and a possibly empty checkpoint array) and absent from release
+artifacts. The object is paired with the module/manifest by `build_id` but is not part of build-ID
+derivation, manifest identity, or online-change compatibility; it is validated per build
+(D-177). `parent_build_id` is carried by the manifest lineage rather than the metadata sidecar.
 
 - `lib` is the embedding host library, not generated module code. `lib-type = "shared"` selects
   the shared host library; the default is a static host archive. `exe` is a thin launcher and
@@ -680,7 +785,15 @@ than the metadata sidecar.
   `exe` and `lib` may be emitted together.
 - The metadata is consumed by the runtime and by embedding hosts.
 - It contains no timestamps or absolute paths, so builds are reproducible.
-- The span table is optional in library mode if the host does not need diagnostics.
+- The span table is optional in library mode if the host does not need diagnostics. A debug
+  artifact that emits checkpoint hooks includes the span table entries its checkpoints reference;
+  a checkpoint with an invalid span index is `STC-E-DEBUG-016`.
+- The `debug` object is the checkpoint table defined in
+  [Debug and Monitoring](Debug-and-Monitoring.md) §16: `build_id`, `format`, `hooks`, `info`, and
+  the dense `checkpoints` array (`id`, `span`, `function`, `line`, `column`, `flags`). It is
+  emitted only for debug-form artifacts; release artifacts have no `debug` key.
+- Release artifacts use the same layout under the release default out-dir, with debug information
+  stripped and no `debug` object. Debug and release sets never mix in one directory.
 - `build_id` is content-derived; the online-change parent identity is carried by the GOT
   manifest lineage, not the metadata sidecar. The module/manifest digest pair is validated by
   the host before activation. The exact build-ID, descriptor, manifest, and pairing rules are in
@@ -736,6 +849,8 @@ contains secrets; paths are printed as written by the user.
 
 ## 7. Open CLI/manifest questions
 
-None as of 2026-10-24. The online-change CLI/tables/manifest schema is resolved in
-[Online Change and GOT](Online-Change-and-GOT.md) and `update_plan_got.md` §13.0. New
-CLI/manifest questions are appended here or in [Decisions](../Decisions.md).
+None as of 2026-10-27. The M6.5 debug/release CLI, protocol, and `[debug]` schema were resolved
+in §1.7, §2.2, §4, and [Decisions](../Decisions.md) D-173–D-179. The online-change
+CLI/tables/manifest schema is resolved in [Online Change and GOT](Online-Change-and-GOT.md) and
+`update_plan_got.md` §13.0. New CLI/manifest questions are appended here or in
+[Decisions](../Decisions.md).

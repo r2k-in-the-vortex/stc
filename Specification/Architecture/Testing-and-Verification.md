@@ -1,6 +1,6 @@
 # Testing and Verification
 
-Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 debug suites are the target  
+Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixes the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are the implementation target (2026-10-27)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
@@ -382,9 +382,28 @@ arbitrary module code.
 
 `tests/debug` covers typed reads/writes/forces/watches, removed-field rejection across a swap,
 breakpoint binding/unbinding, step/continue, call-stack and optimized-out reporting, DWARF/
-CodeView inspection, watchdog pause/resume, force teardown, session authentication/audit, and
-the rule that every online swap ends the debug session. Debug/release tests assert that release
-artifacts contain no debug hooks and have distinct build IDs/manifests.
+CodeView inspection, the stop/idle session bound (pause expiry, state clearing, and resume with a
+fresh deadline), force teardown, session authentication/audit, and the rule that every online swap
+ends the debug session. Debug/release tests assert that release artifacts contain no debug hooks
+and have distinct build IDs/manifests.
+
+The M6.5 debug suite also covers the externally fixed contracts of D-173–D-179:
+
+- protocol framing, version negotiation, request IDs, error objects, size limits, timeouts, rate
+  limits, and unknown-key rejection against `stc-debug/1`;
+- token authentication, the four scopes (`observe`, `control`, `write`, `force`), protected-data
+  auditing, fail-closed behavior when the audit log is unavailable, and the absence of any raw
+  memory operation;
+- one-session enforcement, stop output hold, disconnect/timeout/reconnect behavior, and
+  teardown on swap;
+- checkpoint-table encoding, dense IDs, source-span binding, service ID 13 at ABI minor 3, the
+  entry-flag/required-feature agreement, release/test hook-free builds, and
+  `STC-E-MODULE-002` on mismatch;
+- default debug vs `--release` out-dirs, build-ID/manifest distinctness, deterministic
+  DWARF/CodeView paths/order (no timestamps), sidecar naming, and `STC-E-PROJECT-010` for
+  conflicting debug settings;
+- traceability allowlist status for the `STC-*-DEBUG-*` family until phases 3–8 implement the
+  corresponding behavior.
 
 ## 5. Lean verification
 

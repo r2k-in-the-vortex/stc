@@ -45,6 +45,7 @@ pub(crate) struct Lowerer<'a> {
     pub target: Target,
     pub got: ModuleArtifacts,
     pub types: crate::types::TypeSystem<'a>,
+    pub debug: Option<crate::debug::DebugInfo<'a>>,
     pub layouts: BTreeMap<DefId, ProgramLayout>,
     pub objects: BTreeMap<DefId, config::ObjectLayout>,
     /// Leaf-ordinal map per class/FB type, keyed by root segments.
@@ -123,6 +124,7 @@ pub(crate) fn generate(
     let mut got = got;
     got.diagnostics.extend(project_io.warnings);
     let (span_ids, span_entries) = build_span_table(hir);
+    let debug = crate::debug::DebugInfo::new(options, target);
     let mut lowerer = Lowerer {
         hir,
         options,
@@ -134,6 +136,7 @@ pub(crate) fn generate(
         object_ordinal_map,
         used_std,
         types,
+        debug,
         plan,
         image,
         retain,
@@ -153,6 +156,12 @@ pub(crate) fn generate(
         return Err(lowerer.errors);
     }
     lowerer.emit();
+    if !lowerer.errors.is_empty() {
+        return Err(lowerer.errors);
+    }
+    if let Err(error) = lowerer.finalize_debug() {
+        lowerer.push_error(error);
+    }
     if !lowerer.errors.is_empty() {
         return Err(lowerer.errors);
     }
@@ -415,6 +424,12 @@ impl Lowerer<'_> {
     }
 
     fn emit(&mut self) {
+        if self.debug_enabled() {
+            self.module.declare(
+                "llvm.dbg.declare",
+                "void @llvm.dbg.declare(metadata, metadata, metadata)",
+            );
+        }
         self.emit_module_data();
         self.emit_user_functions();
         self.emit_fb_bodies();
@@ -618,6 +633,16 @@ impl Lowerer<'_> {
         let ret_ty = result_abi.clone().unwrap_or(IrType::Void);
         let mut f = Function::new(symbol, SymbolAttrs::internal(), ret_ty, fn_params);
         f.start_fresh_block();
+        let debug_name = self.debug_function_name(def);
+        self.begin_debug_function(
+            &mut f,
+            def,
+            debug_name,
+            result,
+            &params,
+            &body.locals,
+            body.span,
+        )?;
         let slots = f.param_value(slots_index);
         let mut info = BodyInfo {
             params: BTreeMap::new(),
@@ -631,6 +656,7 @@ impl Lowerer<'_> {
             return_label: f.next_block_label(),
         };
         self.bind_abi_params(&mut f, &mut info, &param_data, 0);
+        self.declare_debug_params(&mut f, &params, &info);
         if aggregate_result {
             let pointer = f.param_value(sret_index.expect("aggregate result has sret"));
             let storage = self
@@ -717,6 +743,7 @@ impl Lowerer<'_> {
             };
             let slot = f.alloca(storage_type.clone());
             info.locals.insert(*local, slot.clone());
+            self.declare_debug_local(f, *local, &slot);
             f.store(&Value::zero(storage_type.clone()), &slot, None);
             if has_class {
                 self.allocate_object_tree(
@@ -928,9 +955,11 @@ impl Lowerer<'_> {
             handle: Some(f.param_value(0)),
             return_label: f.next_block_label(),
         };
+        let body = self.hir.bodies[body_id.index()].clone();
+        let debug_name = self.debug_function_name(def);
+        self.begin_debug_function(&mut f, def, debug_name, None, &[], &body.locals, body.span)?;
         let previous = self.current_slots.replace(slots);
         let result = (|| -> Result<(), CodegenError> {
-            let body = self.hir.bodies[body_id.index()].clone();
             self.lower_locals(&mut f, &mut info, &body.locals)?;
             let mut loops: Vec<LoopTarget> = Vec::new();
             self.lower_stmts(&mut f, &info, &body.stmts, &mut loops)?;
@@ -1040,7 +1069,19 @@ impl Lowerer<'_> {
             handle: Some(f.param_value(0)),
             return_label: f.next_block_label(),
         };
+        let body = self.hir.bodies[body_id.index()].clone();
+        let debug_name = self.debug_function_name(def);
+        self.begin_debug_function(
+            &mut f,
+            def,
+            debug_name,
+            result,
+            &params,
+            &body.locals,
+            body.span,
+        )?;
         self.bind_abi_params(&mut f, &mut info, &param_data, 2);
+        self.declare_debug_params(&mut f, &params, &info);
         if aggregate_result {
             let pointer = f.param_value(sret_index.expect("aggregate result has sret"));
             let storage = self
@@ -1061,7 +1102,6 @@ impl Lowerer<'_> {
         self.lower_result_objects(&mut f, &mut info, def, result)?;
         let previous = self.current_slots.replace(slots);
         let result = (|| -> Result<(), CodegenError> {
-            let body = self.hir.bodies[body_id.index()].clone();
             self.lower_locals(&mut f, &mut info, &body.locals)?;
             let mut loops: Vec<LoopTarget> = Vec::new();
             self.lower_stmts(&mut f, &info, &body.stmts, &mut loops)?;
@@ -1212,6 +1252,7 @@ impl Lowerer<'_> {
             .iter()
             .filter_map(|leaf| leaf.at.clone().map(|at| (leaf.segments.clone(), at)))
             .collect();
+        let body = body.map(|body_id| self.hir.bodies[body_id.index()].clone());
         let slots = f.param_value(1);
         let mut info = BodyInfo {
             params: BTreeMap::new(),
@@ -1228,10 +1269,21 @@ impl Lowerer<'_> {
             handle: None,
             return_label: f.next_block_label(),
         };
+        if let Some(body) = &body {
+            let debug_name = self.debug_function_name(program);
+            self.begin_debug_function(
+                &mut f,
+                program,
+                debug_name,
+                None,
+                &[],
+                &body.locals,
+                body.span,
+            )?;
+        }
         let previous = self.current_slots.replace(slots);
         let result = (|| -> Result<(), CodegenError> {
-            if let Some(body_id) = body {
-                let body = self.hir.bodies[body_id.index()].clone();
+            if let Some(body) = &body {
                 self.lower_locals(&mut f, &mut info, &body.locals)?;
                 let mut loops: Vec<LoopTarget> = Vec::new();
                 self.lower_stmts(&mut f, &info, &body.stmts, &mut loops)?;
@@ -2325,12 +2377,12 @@ impl Lowerer<'_> {
         }
     }
 
-    fn field_name(&self, field: stc_hir::FieldId) -> &str {
+    pub(crate) fn field_name(&self, field: stc_hir::FieldId) -> &str {
         self.hir.interner.text(self.hir.field(field).name)
     }
 
     /// Returns a definition's namespace-qualified source spelling.
-    fn qualified_path(&self, def: DefId) -> String {
+    pub(crate) fn qualified_path(&self, def: DefId) -> String {
         let mut segments = Vec::new();
         let mut current = Some(def);
         while let Some(id) = current {

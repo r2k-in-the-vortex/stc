@@ -727,6 +727,13 @@ fn quiet_and_verbose_output() {
     let text = stderr(&build_trace);
     assert!(text.contains("[stc] ir target/stc/debug/app.ll"), "{text}");
 
+    // M6.5 phase 1 emits debug metadata only when `--debug` is explicit; the
+    // default build and its artifacts stay byte-identical to M6.
+    let default_ir = std::fs::read_to_string(project.path("app/target/stc/debug/app.ll"))
+        .expect("read default IR");
+    assert!(!default_ir.contains("!llvm.dbg"), "{default_ir}");
+    assert!(!default_ir.contains("!dbg"), "{default_ir}");
+
     if let Some(clang) = clang() {
         let output = project.run("app", &["build", "--emit", "obj", "-vv", "--clang", clang]);
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -734,12 +741,30 @@ fn quiet_and_verbose_output() {
         assert!(text.contains("+ "), "{text}");
         assert!(text.contains("clang"), "{text}");
 
-        // A CLI `--debug` is accepted; M6 still builds the debug form.
+        // `--debug` emits DWARF on Linux and CodeView on Windows.
         let output = project.run(
             "app",
-            &["build", "--emit", "obj", "--debug", "--clang", clang],
+            &["build", "--emit", "ir,obj", "--debug", "--clang", clang],
         );
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let debug_ir = std::fs::read_to_string(project.path("app/target/stc/debug/app.ll"))
+            .expect("read debug IR");
+        assert!(debug_ir.contains("!llvm.dbg.cu"), "{debug_ir}");
+        assert!(debug_ir.contains("!DISubprogram"), "{debug_ir}");
+        assert!(debug_ir.contains("!DILocation"), "{debug_ir}");
+        assert!(!debug_ir.contains("line: 0"), "{debug_ir}");
+        let object =
+            std::fs::read(project.path("app/target/stc/debug/app.o")).expect("read debug object");
+        let marker: &[u8] = if cfg!(windows) {
+            b".debug$S"
+        } else {
+            b".debug_info"
+        };
+        assert!(
+            object.windows(marker.len()).any(|window| window == marker),
+            "debug object is missing {}",
+            String::from_utf8_lossy(marker)
+        );
     }
 
     // Errors still print under `-q`.
