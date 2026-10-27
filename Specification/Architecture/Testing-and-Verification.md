@@ -487,6 +487,7 @@ lean/
 | `fmt` | `cargo fmt --all --check` |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | `test` | `cargo test --workspace --locked` on Windows x64 and Ubuntu x64; Linux AArch64 after basic development (D-042) |
+| `coverage` | `cargo llvm-cov --workspace --locked` on Ubuntu x64; job summary, LCOV/JSON/HTML artifacts, and the `badges`-branch badge on `main` |
 | `ui` | diagnostic snapshots on Windows x64 and Ubuntu x64 |
 | `conformance` | conformance corpus on Windows x64 and Ubuntu x64 |
 | `execution` | compile/run tests on Windows x64 and Ubuntu x64 |
@@ -506,7 +507,12 @@ exist, so the skeleton never reports a pass for a job that did not run. The `onl
 GOT identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
 launcher/embedding artifact suites; the `projects` job runs `new/check/build/run/test/fmt/clean`
 and the rename/download/diff/watch workflow; the `traceability` job checks every implemented rule
-has test evidence. The M6 UI, conformance, execution, projects, traceability, Lean, and fuzz-smoke
+has test evidence. The `coverage` job runs the workspace tests under LLVM instrumentation, reports
+totals and the lowest-coverage files, uploads the LCOV/JSON/HTML reports, and publishes the README
+coverage badge to the `badges` branch on `main`; it is reporting-only, and the `test` job remains
+the pass/fail gate.
+Line coverage is a reporting metric; rule coverage remains the semantic traceability check in §7.
+The M6 UI, conformance, execution, projects, traceability, Lean, and fuzz-smoke
 jobs are active on the documented matrix.
 
 ### 6.2 Matrix

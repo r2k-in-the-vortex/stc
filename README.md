@@ -1,6 +1,7 @@
 # stc — Structured Text Compiler
 
 [![CI](https://github.com/r2k-in-the-vortex/stc/actions/workflows/ci.yml/badge.svg)](https://github.com/r2k-in-the-vortex/stc/actions/workflows/ci.yml)
+[![Coverage](https://raw.githubusercontent.com/r2k-in-the-vortex/stc/badges/coverage.svg)](https://github.com/r2k-in-the-vortex/stc/actions/workflows/ci.yml)
 
 `stc` compiles IEC 61131-3 Structured Text to textual LLVM IR. `clang` takes the IR from there to
 x86-64 or any other target clang supports.
@@ -381,6 +382,7 @@ schema details are in
 ```text
 stc/
   .github/workflows/         GitHub Actions CI
+  .vscode/                   rust-analyzer test explorer and coverage tasks
   .markdownlint-cli2.jsonc   Markdown lint configuration
   M4.5-Plan.md               online-change foundation plan (complete)
   M5-Plan.md                 structs/OOP/standard-library plan (complete)
@@ -390,6 +392,8 @@ stc/
   update_plan_got.md         resolved online-change planning record
   tools/ci/check_docs.py     specification, link, and profile checks
   tools/ci/check_local.py    local CI parity checks (docs, lint, tests, fuzz)
+  tools/ci/coverage_badge.py LCOV line-coverage badge generator
+  tools/ci/coverage_summary.py Markdown summary from the llvm-cov JSON report
   tools/ci/traceability-allowlist.toml  explicit not-implemented rules
   Cargo.toml                 workspace manifest
   rust-toolchain.toml        pinned Rust toolchain
@@ -436,17 +440,23 @@ on pull requests.
 
 - `docs` runs from M0: required-document checks, relative-link validation, profile consistency,
   reference-PDF exclusion (`tools/ci/check_docs.py`), and Markdown lint.
-- `fmt`, `clippy`, `test`, `online`, `ui`, `conformance`, `execution`, `projects`, `traceability`,
-  `lean`, `fuzz-smoke`, and `cross-target` are active for the present tree. `test`, `online`,
-  `ui`, `conformance`, `execution`, and `projects` run on both Windows Server 2025 x64 and
-  Ubuntu 24.04 x64; the host-independent jobs (`fmt`, `clippy`, `traceability`, `lean`,
-  `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The `test` and `online` jobs set
-  `STC_REQUIRE_CLANG=1`; the execution tests build `stc-runtime` and link C harnesses with the
-  same toolchain discovery as `stc build`. The `online` job runs the GOT identity,
-  descriptor/manifest projection, host lifecycle, online-change CLI, and launcher/embedding
-  artifact suites. The `projects` job runs the end-to-end `new/check/build/run/test/fmt/clean`
-  workflow and the rename/download/diff/watch online workflow. The `traceability` job runs
-  `cargo xtask traceability --check`. `fuzz-smoke` caps each input at one MiB.
+- `fmt`, `clippy`, `test`, `coverage`, `online`, `ui`, `conformance`, `execution`, `projects`,
+  `traceability`, `lean`, `fuzz-smoke`, and `cross-target` are active for the present tree.
+  `test`, `online`, `ui`, `conformance`, `execution`, and `projects` run on both Windows Server
+  2025 x64 and Ubuntu 24.04 x64; the host-independent jobs (`fmt`, `clippy`, `coverage`,
+  `traceability`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The `test` and
+  `online` jobs set `STC_REQUIRE_CLANG=1`; the execution tests build `stc-runtime` and link C
+  harnesses with the same toolchain discovery as `stc build`. The `online` job runs the GOT
+  identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
+  launcher/embedding artifact suites. The `projects` job runs the end-to-end
+  `new/check/build/run/test/fmt/clean` workflow and the rename/download/diff/watch online
+  workflow. The `traceability` job runs `cargo xtask traceability --check`. `fuzz-smoke` caps
+  each input at one MiB.
+- `coverage` runs the workspace tests under `cargo llvm-cov` with clang required, writes line,
+  region, and function totals plus the lowest-coverage files to the job summary, uploads
+  `lcov.info`, `summary.json`, and the HTML report as artifacts, and on `main` publishes
+  `coverage.svg`/`coverage.json` to the `badges` branch that the README badge reads. It is a
+  reporting job: the `test` job remains the pass/fail gate.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`) so `-latest` migrations do not change
   the matrix silently.
 - Suite jobs call `cargo xtask test --suite <name> --locked`; the UI, conformance, execution, and
@@ -597,6 +607,22 @@ python tools/ci/check_local.py
 `cargo clippy --workspace` do not compile it; the local script does. Pass
 `--skip-markdownlint` or `--skip-fuzz` when Node.js or the fuzz workspace is
 unavailable, and `--fail-fast` to stop at the first failing check.
+
+Line coverage uses `cargo-llvm-cov`. The pinned toolchain already includes
+`llvm-tools-preview`; install the subcommand once, then run the same command as CI:
+
+```sh
+cargo install cargo-llvm-cov --locked
+cargo llvm-cov --workspace --locked --lcov --output-path target/lcov.info
+cargo llvm-cov report --html
+```
+
+The HTML report is `target/llvm-cov/html/index.html`. In VS Code,
+`.vscode/settings.json` enables the rust-analyzer Test Explorer (reload the window once after
+pulling this change), which populates the Testing panel, and points the Coverage Gutters
+extension at `target/lcov.info`. The
+`Rust: coverage` task runs the lcov command and then regenerates the HTML report from the same
+data; coverage is generated by that task rather than by the Testing panel's run buttons.
 
 `stc parse` prints a lossless CST dump (and the typed AST dump with `--ast`). `stc check` accepts
 one or more files, builds one in-memory package, and reports lexical, syntax, and semantic

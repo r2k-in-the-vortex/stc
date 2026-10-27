@@ -1,3 +1,5 @@
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -6,48 +8,8 @@ fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_stc")
 }
 
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root")
-        .to_path_buf()
-}
-
 fn runtime_artifact() -> PathBuf {
-    static CACHE: OnceLock<PathBuf> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let output = Command::new(cargo)
-                .args(["build", "-p", "stc-runtime", "--locked"])
-                .current_dir(workspace_root())
-                .output()
-                .expect("run cargo build -p stc-runtime");
-            assert!(
-                output.status.success(),
-                "failed to build stc-runtime:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let exe = std::env::current_exe().expect("test executable");
-            let profile = exe
-                .parent()
-                .and_then(Path::parent)
-                .expect("target profile directory");
-            let name = if cfg!(windows) {
-                "stc_runtime.lib"
-            } else {
-                "libstc_runtime.a"
-            };
-            let artifact = profile.join(name);
-            assert!(
-                artifact.is_file(),
-                "runtime artifact missing at {}",
-                artifact.display()
-            );
-            artifact
-        })
-        .clone()
+    common::runtime_static()
 }
 
 fn clang() -> Option<&'static str> {
@@ -1206,7 +1168,16 @@ fn cross_target_object_emission_is_supported() {
 
 #[test]
 fn runtime_is_discovered_beside_the_driver() {
-    let _ = runtime_artifact();
+    // The test harness builds the runtime uninstrumented in a separate target
+    // directory (C harnesses cannot link the profiling runtime), so place that
+    // artifact beside the driver the way a normal `cargo build -p stc-runtime`
+    // would.
+    let runtime = runtime_artifact();
+    let beside_driver = Path::new(binary())
+        .parent()
+        .expect("driver directory")
+        .join(runtime.file_name().expect("runtime file name"));
+    std::fs::copy(&runtime, &beside_driver).expect("copy the runtime beside the driver");
     let directory = TestDir::new("discovery");
     let source = directory.write_source("noop", NOOP);
     let output = run_stc(&[

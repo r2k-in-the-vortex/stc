@@ -3,6 +3,7 @@
 # Rust build artifacts
 /target/
 **/*.rs.bk
+*.profraw
 
 # Lean build artifacts
 /lean/.lake/

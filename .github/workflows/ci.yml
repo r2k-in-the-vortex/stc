@@ -149,6 +149,82 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace --locked
 
+  # Coverage runs the same workspace tests under LLVM instrumentation. The
+  # per-file summary is written to the job summary and the lcov/HTML reports
+  # are uploaded. On main, the generated badge is also pushed to the `badges`
+  # branch that the README links to; only this job requests write access.
+  coverage:
+    name: Rust coverage
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # `cargo llvm-cov clean` removes the instrumented target directory,
+          # so only the registry cache is useful here.
+          cache-targets: false
+      - name: Clean previous coverage data
+        run: cargo llvm-cov clean --workspace
+      - name: Run workspace tests with coverage
+        run: cargo llvm-cov --workspace --locked --lcov --output-path target/lcov.info
+      - name: Write coverage summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo llvm-cov report --json --summary-only --output-path target/summary.json
+          python3 tools/ci/coverage_summary.py target/summary.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Build HTML report
+        run: cargo llvm-cov report --html
+      - name: Build coverage badge
+        run: |
+          python3 tools/ci/coverage_badge.py target/lcov.info \
+            --svg target/coverage.svg \
+            --json target/coverage.json
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: |
+            target/lcov.info
+            target/summary.json
+            target/llvm-cov/html
+          if-no-files-found: error
+      - name: Publish coverage badge
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          badge_dir="$RUNNER_TEMP/coverage-badge"
+          mkdir -p "$badge_dir"
+          cp target/coverage.svg target/coverage.json "$badge_dir/"
+          cd "$badge_dir"
+          git init -q
+          git checkout -q -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add coverage.svg coverage.json
+          git commit -q -m "Update coverage badge"
+          git push --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
+
   # The online-change suite gets an explicit job so a hot-swap or manifest
   # regression is visible even when the workspace job reports an unrelated
   # failure. It runs the GOT, descriptor/manifest projection, host lifecycle,
