@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–8 complete (2026-10-26); phases 9–11 ready to start. M5 (phases 1–7 and 4b) is
+Status: Phases 0–9 complete (2026-10-27); phases 10–11 ready to start. M5 (phases 1–7 and 4b) is
 complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
 usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
@@ -178,7 +178,7 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0–8 are complete (2026-10-26); phases 9–11 are pending. Phase 0 fixed
+Phase status: phases 0–9 are complete (2026-10-27); phases 10–11 are pending. Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
 resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
@@ -210,7 +210,22 @@ with a user-only named-pipe/Unix-socket control endpoint (versioned protocol, pe
 watches sources/manifests/history, rebuilds against the active baseline, deploys, reports the
 compatibility result and prepare time, retries once on a stale baseline, keeps the old generation
 on build/deploy failure, and exits 130 on Ctrl-C. The host queues deploy/status/download/stop
-requests for the cycle thread and activates prepared candidates between scans.
+requests for the cycle thread and activates prepared candidates between scans. Phase 9 added the
+Lake project under `lean/` with the `Stc.Exact.Int/Bits/Conv/Select/Bool/Strings` models and their
+range/overflow/round-trip proofs (no `sorry`/`admit`), the deterministic `Stc.Vectors.Gen`
+generator and `lake exe vectors` entry point, 30 committed `tests/vectors/exact/*.json` files
+recording the format/model versions and an FNV-1a generator digest, the `stc_codegen::exact`
+reference module, `crates/stc-codegen/tests/lean_vectors.rs` (registry coverage, per-case model
+agreement, digest check, and a constant-folding agreement run over the foldable operations), and
+the `crates/stc-driver/tests/exact_vectors_cli.rs` C-harness sample that executes arithmetic,
+shifts/rotates, selection, and string lengths through generated code and checks an overflow trap
+through a module cycle. Vectors group one operation across its type instantiations with a per-case
+`type` field (the conversion file carries the full 16-by-16 `X_TO_Y` matrix); the registry requires
+every implemented operation/type pair. The agreement run surfaced and fixed three latent
+implementation bugs: sub-64-bit `SHL`/`SHR` emitted mismatched LLVM operand types, `SEL` fetched the
+selector type from `IN0`, and constant folding evaluated integer arithmetic on the REAL path and
+accepted `MIN DIV/MOD -1` where generated code traps. The CI `lean` job is active through the
+existing `lean/lakefile.lean` detection and regenerates the vectors to fail on drift.
 Phases may proceed in parallel only where the dependency direction allows (for example, Lean and
 the conformance harness can start once phase 0 fixes the vector and corpus contracts).
 
@@ -709,6 +724,38 @@ permission, concurrent clients, status, stop, and download messages.
   math remains test-based.
 - CI: activate the existing `lean` job; it checks `Stc/Exact`, rejects `sorry`/`admit`, runs
   `lake build`, regenerates vectors, and fails on uncommitted drift.
+
+Status (2026-10-27): implemented. The `lean/` Lake project builds `Stc.Exact.Int` (checked
+add/sub/mul/neg/div/mod/abs with `Trap` results and range/overflow/round-trip theorems),
+`Stc.Exact.Bits` (AND/OR/XOR/NOT, logical shifts, rotates over `Nat` bit patterns with range and
+identity theorems), `Stc.Exact.Conv` (sign/zero extension, bit-pattern reinterpretation, checked
+narrowing, and BOOL's test-against-zero rule, with narrowing/round-trip/fits theorems),
+`Stc.Exact.Select` (SEL/MIN/MAX/LIMIT/MUX with bound and selection theorems), `Stc.Exact.Bool`
+(standard boolean identities and De Morgan), and `Stc.Exact.Strings` (LEN/LEN_MAX/LEN_CODE_UNIT
+over SBCS/UTF-16/UTF-8 with length-range theorems) without `sorry`/`admit` and without Mathlib.
+`Stc.Vectors.Gen` renders a minimal deterministic JSON tree, groups one operation across its IEC
+type instantiations with a per-case `type` field, and records the format version (`version: 1`), the
+Lean model version (`model_version: 1`), and an FNV-1a 64 digest of the canonical case text
+(`generator`); `VectorCli.lean` (`lake exe vectors`) writes the 30 committed
+`tests/vectors/exact/*.json` files, and rerunning it is byte-identical. The conversion vector file
+covers the full 16-by-16 ordered `X_TO_Y` matrix over BOOL, the integer types, the bit strings, and
+CHAR/WCHAR/UCHAR. `stc_codegen::exact` mirrors the implementation's exact semantics (checked
+arithmetic with i128 overflow detection, truncating division with the `MIN/-1` trap, masked
+shifts/rotates, the codegen conversion rules including `v != 0` for BOOL targets, comparisons,
+selection, and the string-length units) and exposes the exact-function registry and required type
+matrix. `crates/stc-codegen/tests/lean_vectors.rs` requires every registered operation file and
+type/kind/pair, validates every case against the model, verifies the generator digest, and folds the
+same arithmetic/bitwise/comparison/conversion cases through `stc-sema`; the folding run exposed and
+fixed three implementation bugs: `SHL`/`SHR` emitted a 64-bit shift count against narrower LLVM
+operands (an internal compiler error), `SEL` read the selector type from `IN0` instead of `G`, and
+constant folding evaluated integer arithmetic as REAL and accepted `MIN DIV/MOD -1` where generated
+code traps. `crates/stc-driver/tests/exact_vectors_cli.rs` generates wrappers from the vectors,
+builds the library, and runs `tests/harness/exact_vectors.c` over the non-trapping arithmetic,
+shift/rotate, SEL, and LEN/LEN_CODE_UNIT cases; a second module checks that checked overflow traps
+through `stc_host_cycle`. The CI `lean` job is active via the existing `lean/lakefile.lean`
+detection: it builds the package, rejects `sorry`/`admit` under `Stc/Exact`, regenerates the
+vectors, and fails on uncommitted drift. Floating-point and transcendental math remain vector- and
+tolerance-tested outside the Lean models.
 
 Acceptance: `lake build` and `lake exe vectors` pass; Rust vector tests pass; CI Lean job is
 active.

@@ -1,0 +1,26 @@
+{
+  "function": "MUX",
+  "version": 1,
+  "model_version": 1,
+  "generator": "0x422f675a9a292d7c",
+  "cases": [
+    {"default": -2147483648, "k": 0, "result": -2147483648, "type": "DINT", "values": [-2147483648,2147483647]},
+    {"default": -2147483648, "k": 1, "result": 2147483647, "type": "DINT", "values": [-2147483648,2147483647]},
+    {"default": -2147483648, "k": 2, "result": -2147483648, "type": "DINT", "values": [-2147483648,2147483647]},
+    {"default": -2147483648, "k": -1, "result": -2147483648, "type": "DINT", "values": [-2147483648,2147483647]},
+    {"default": -2147483648, "k": 0, "result": -2147483648, "type": "DINT", "values": []},
+    {"default": -2147483648, "k": 0, "result": -2147483648, "type": "DINT", "values": [-2147483648]},
+    {"default": 0, "k": 0, "result": 0, "type": "UDINT", "values": [0,4294967295]},
+    {"default": 0, "k": 1, "result": 4294967295, "type": "UDINT", "values": [0,4294967295]},
+    {"default": 0, "k": 2, "result": 0, "type": "UDINT", "values": [0,4294967295]},
+    {"default": 0, "k": -1, "result": 0, "type": "UDINT", "values": [0,4294967295]},
+    {"default": 0, "k": 0, "result": 0, "type": "UDINT", "values": []},
+    {"default": 0, "k": 0, "result": 0, "type": "UDINT", "values": [0]},
+    {"default": 0, "k": 0, "result": 0, "type": "LWORD", "values": [0,18446744073709551615]},
+    {"default": 0, "k": 1, "result": 18446744073709551615, "type": "LWORD", "values": [0,18446744073709551615]},
+    {"default": 0, "k": 2, "result": 0, "type": "LWORD", "values": [0,18446744073709551615]},
+    {"default": 0, "k": -1, "result": 0, "type": "LWORD", "values": [0,18446744073709551615]},
+    {"default": 0, "k": 0, "result": 0, "type": "LWORD", "values": []},
+    {"default": 0, "k": 0, "result": 0, "type": "LWORD", "values": [0]}
+  ]
+}

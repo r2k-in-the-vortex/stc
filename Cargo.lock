@@ -100,6 +100,7 @@ dependencies = [
 name = "stc-codegen"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "stc-diag",
  "stc-got",
  "stc-hir",
@@ -120,6 +121,7 @@ dependencies = [
 name = "stc-driver"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "stc-codegen",
  "stc-diag",
  "stc-fmt",

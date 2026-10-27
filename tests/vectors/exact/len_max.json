@@ -1,0 +1,20 @@
+{
+  "function": "LEN_MAX",
+  "version": 1,
+  "model_version": 1,
+  "generator": "0x3e1eb750e1a12177",
+  "cases": [
+    {"capacity": 1, "kind": "SBCS", "result": 1},
+    {"capacity": 80, "kind": "SBCS", "result": 80},
+    {"capacity": 255, "kind": "SBCS", "result": 255},
+    {"capacity": 65535, "kind": "SBCS", "result": 65535},
+    {"capacity": 1, "kind": "DBCS", "result": 1},
+    {"capacity": 80, "kind": "DBCS", "result": 80},
+    {"capacity": 255, "kind": "DBCS", "result": 255},
+    {"capacity": 65535, "kind": "DBCS", "result": 65535},
+    {"capacity": 1, "kind": "UNICODE", "result": 1},
+    {"capacity": 80, "kind": "UNICODE", "result": 80},
+    {"capacity": 255, "kind": "UNICODE", "result": 255},
+    {"capacity": 65535, "kind": "UNICODE", "result": 65535}
+  ]
+}

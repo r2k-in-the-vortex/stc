@@ -529,7 +529,13 @@ impl Analyzer<'_> {
         let rhs = int_value(&rhs_value);
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Power => {
-                if let (Some(a), Some(b)) = (real_value(&lhs_value), real_value(&rhs_value)) {
+                // Integer operands stay on the exact integer path; only an
+                // actual REAL operand promotes the expression to REAL.
+                let real_operand = matches!(lhs_value, ConstValue::Real(_))
+                    || matches!(rhs_value, ConstValue::Real(_));
+                if real_operand
+                    && let (Some(a), Some(b)) = (real_value(&lhs_value), real_value(&rhs_value))
+                {
                     let ty = if matches!(
                         self.hir.types.get(self.scalar_base(lhs_ty)),
                         Ty::Real(RealTy::LReal)
@@ -600,6 +606,14 @@ impl Analyzer<'_> {
                             );
                             return None;
                         }
+                        if self.int_division_overflows(ty, a, b) {
+                            self.error(
+                                crate::codes::CONST_FAILURE,
+                                "constant arithmetic overflow",
+                                span,
+                            );
+                            return None;
+                        }
                         a.checked_div(b)
                     }
                     BinOp::Mod => {
@@ -607,6 +621,14 @@ impl Analyzer<'_> {
                             self.error(
                                 crate::codes::CONST_FAILURE,
                                 "division by zero in constant expression",
+                                span,
+                            );
+                            return None;
+                        }
+                        if self.int_division_overflows(ty, a, b) {
+                            self.error(
+                                crate::codes::CONST_FAILURE,
+                                "constant arithmetic overflow",
                                 span,
                             );
                             return None;
@@ -721,6 +743,21 @@ impl Analyzer<'_> {
         )
     }
 
+    /// Returns whether signed `DIV`/`MOD` of `a` by `b` overflows the type.
+    ///
+    /// The most-negative value divided (or taken remainder) by `-1` has no
+    /// representable result at the type's width, so code generation traps
+    /// before the hardware instruction; constant folding must agree.
+    fn int_division_overflows(&self, ty: TyId, a: i128, b: i128) -> bool {
+        if b != -1 {
+            return false;
+        }
+        let Ty::Int(int) = self.hir.types.get(self.scalar_base(ty)) else {
+            return false;
+        };
+        int.signed && a == -(1_i128 << (int.width - 1))
+    }
+
     fn promote_int(&self, lhs: TyId, rhs: TyId) -> TyId {
         let lhs = self.scalar_base(lhs);
         let rhs = self.scalar_base(rhs);
@@ -794,7 +831,7 @@ impl Analyzer<'_> {
             );
             return None;
         }
-        let converted = self.convert_const(to, value, call.token_span())?;
+        let converted = self.convert_const(from, to, value, call.token_span())?;
         Some((to, converted))
     }
 
@@ -863,7 +900,13 @@ impl Analyzer<'_> {
         })
     }
 
-    fn convert_const(&mut self, to: TyId, value: ConstValue, span: Span) -> Option<ConstValue> {
+    fn convert_const(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        value: ConstValue,
+        span: Span,
+    ) -> Option<ConstValue> {
         let base = self.scalar_base(to);
         let target = self.hir.types.get(base).clone();
         let int_value = match &value {
@@ -872,30 +915,27 @@ impl Analyzer<'_> {
             ConstValue::Bool(value) => Some(i128::from(u8::from(*value))),
             _ => None,
         };
+        let source = self.const_int_layout(from);
         match target {
             Ty::Int(int) => {
                 let value = int_value?;
-                if !fits_int(value, int.signed, int.width) {
-                    self.error(
-                        crate::codes::CONST_FAILURE,
-                        "conversion result is out of range",
-                        span,
-                    );
-                    return None;
-                }
+                let value = self.convert_int_const(source, (int.signed, int.width), value, span)?;
                 Some(ConstValue::Int(value))
             }
             Ty::BitString(width) => {
                 let value = int_value?;
-                if !fits_int(value, false, width) {
-                    self.error(
-                        crate::codes::CONST_FAILURE,
-                        "conversion result is out of range",
-                        span,
-                    );
-                    return None;
-                }
+                let value = self.convert_int_const(source, (false, width), value, span)?;
                 Some(ConstValue::Int(value))
+            }
+            Ty::Char(kind) => {
+                let value = int_value?;
+                let width = match kind {
+                    CharTy::Char => 8,
+                    CharTy::WChar => 16,
+                    CharTy::UChar => 32,
+                };
+                let value = self.convert_int_const(source, (false, width), value, span)?;
+                Some(ConstValue::Char(u32::try_from(value).ok()?))
             }
             Ty::Real(_) => match value {
                 ConstValue::Int(value) | ConstValue::Enum { value, .. } => {
@@ -904,15 +944,9 @@ impl Analyzer<'_> {
                 ConstValue::Real(value) => Some(ConstValue::Real(value)),
                 other => Some(other),
             },
-            Ty::Char(_) => match value {
-                ConstValue::Int(value) => Some(ConstValue::Char(u32::try_from(value).ok()?)),
-                ConstValue::Char(value) => Some(ConstValue::Char(value)),
-                other => Some(other),
-            },
-            Ty::Bool => match value {
-                ConstValue::Bool(value) => Some(ConstValue::Bool(value)),
-                ConstValue::Int(value) => Some(ConstValue::Bool(value != 0)),
-                other => Some(other),
+            Ty::Bool => match int_value {
+                Some(value) => Some(ConstValue::Bool(value != 0)),
+                None => Some(value),
             },
             Ty::Time(_) => match value {
                 ConstValue::Time(value) => Some(ConstValue::Time(value)),
@@ -942,6 +976,84 @@ impl Analyzer<'_> {
                 other => Some(other),
             },
             _ => Some(value),
+        }
+    }
+
+    /// Returns the signedness and width of a scalar type's integer layout.
+    ///
+    /// `BOOL`, character types, and bit strings are unsigned; `TIME` is a
+    /// signed 64-bit count. Types without an exact integer layout return
+    /// `None`.
+    fn const_int_layout(&self, ty: TyId) -> Option<(bool, u8)> {
+        match self.hir.types.get(self.scalar_base(ty)) {
+            Ty::Int(int) => Some((int.signed, int.width)),
+            Ty::BitString(width) => Some((false, *width)),
+            Ty::Bool => Some((false, 1)),
+            Ty::Char(CharTy::Char) => Some((false, 8)),
+            Ty::Char(CharTy::WChar) => Some((false, 16)),
+            Ty::Char(CharTy::UChar) => Some((false, 32)),
+            Ty::Time(_) => Some((true, 64)),
+            _ => None,
+        }
+    }
+
+    /// Converts an integer constant to another integer/bit layout.
+    ///
+    /// This mirrors code generation (`cast_value`/`int_convert`): widening
+    /// sign- or zero-extends the source bit pattern, equal widths reinterpret
+    /// it in the target type, and narrowing reports `STC-E-CONST-002` unless
+    /// the value is representable. Function-style conversion folding must agree
+    /// with the runtime, so a same-width signed-to-unsigned conversion keeps
+    /// the bit pattern instead of rejecting the negative value.
+    fn convert_int_const(
+        &mut self,
+        source: Option<(bool, u8)>,
+        target: (bool, u8),
+        value: i128,
+        span: Span,
+    ) -> Option<i128> {
+        let (target_signed, target_width) = target;
+        let Some((source_signed, source_width)) = source else {
+            // No exact integer layout (for example a REAL or date source):
+            // keep the historical value-based check.
+            if fits_int(value, target_signed, target_width) {
+                return Some(value);
+            }
+            self.error(
+                crate::codes::CONST_FAILURE,
+                "conversion result is out of range",
+                span,
+            );
+            return None;
+        };
+        let source_modulus = 1_i128 << source_width;
+        let bits = value.rem_euclid(source_modulus);
+        let reinterpret = |bits: i128| -> i128 {
+            if target_signed && bits >= (1_i128 << (target_width - 1)) {
+                bits - (1_i128 << target_width)
+            } else {
+                bits
+            }
+        };
+        if source_width < target_width {
+            let extended = if source_signed && value < 0 {
+                bits + (1_i128 << target_width) - source_modulus
+            } else {
+                bits
+            };
+            Some(reinterpret(extended))
+        } else if source_width > target_width {
+            if !fits_int(value, target_signed, target_width) {
+                self.error(
+                    crate::codes::CONST_FAILURE,
+                    "conversion result is out of range",
+                    span,
+                );
+                return None;
+            }
+            Some(value)
+        } else {
+            Some(reinterpret(bits))
         }
     }
 

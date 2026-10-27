@@ -3771,7 +3771,7 @@ impl Lowerer<'_> {
                 Ok(f.select(&above, mx, &low))
             }
             StdFnKind::Sel => {
-                let facts = facts_of(self, 1)?;
+                let facts = facts_of(self, 0)?;
                 let condition = if facts.scalar() == Some(crate::layout::ScalarKind::Bool) {
                     supplied[0].clone()
                 } else {
@@ -4633,11 +4633,24 @@ impl Lowerer<'_> {
         } else {
             f.emit_value_cast("zext", &count, IrType::Int(64))
         };
+        let ty = IrType::Int(width);
         match kind {
-            StdFnKind::Shl => Ok(f.binop("shl", value, &count)),
-            StdFnKind::Shr => Ok(f.binop("lshr", value, &count)),
+            StdFnKind::Shl | StdFnKind::Shr => {
+                // LLVM shift operands must match the shifted value's type. The
+                // count is already masked to `width - 1`, so narrowing it to
+                // the value width loses nothing.
+                let count = if count.ty == ty {
+                    count
+                } else {
+                    f.emit_value_cast("trunc", &count, ty.clone())
+                };
+                Ok(if kind == StdFnKind::Shl {
+                    f.binop("shl", value, &count)
+                } else {
+                    f.binop("lshr", value, &count)
+                })
+            }
             StdFnKind::Rol | StdFnKind::Ror => {
-                let ty = IrType::Int(width);
                 let name = if kind == StdFnKind::Rol {
                     format!("llvm.fshl.i{width}")
                 } else {

@@ -28,5 +28,8 @@ stc-span = { path = "../stc-span" }
 stc-syntax = { path = "../stc-syntax" }
 stc-test = { path = "../stc-test" }
 
+[dev-dependencies]
+serde_json = "1.0"
+
 [lints]
 workspace = true

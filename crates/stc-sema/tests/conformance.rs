@@ -1911,3 +1911,82 @@ END_PROGRAM
         stc_sema::codes::TEST_REFERENCE,
     );
 }
+
+/// Returns the folded initializer of the single `CONSTANT` global.
+fn folded_constant(source: &str) -> stc_hir::ConstValue {
+    let (analysis, sink) = common::analyze_source(source);
+    assert!(
+        !sink.has_errors(),
+        "unexpected errors for:\n{source}\n{:#?}",
+        sink.diagnostics()
+    );
+    let hir = &analysis.hir;
+    for def in &hir.defs {
+        if let stc_hir::DefKind::Global {
+            constant: true,
+            init: Some(init),
+            ..
+        } = &def.kind
+        {
+            let stc_hir::ExprKindHir::Literal(literal) = &hir.expr(*init).kind else {
+                panic!("folded initializer is not a literal:\n{source}");
+            };
+            return literal.value.clone();
+        }
+    }
+    panic!("no folded constant in:\n{source}");
+}
+
+#[test]
+fn integer_constant_arithmetic_stays_integer() {
+    let value = folded_constant(
+        "VAR_GLOBAL CONSTANT
+  C : DINT := DINT#2 + DINT#3;
+END_VAR
+",
+    );
+    assert_eq!(value, stc_hir::ConstValue::Int(5));
+}
+
+#[test]
+fn constant_division_overflow_matches_generated_code() {
+    common::assert_error(
+        "VAR_GLOBAL CONSTANT
+  C : SINT := SINT#-128 MOD SINT#-1;
+END_VAR
+",
+        stc_sema::codes::CONST_FAILURE,
+    );
+    common::assert_error(
+        "VAR_GLOBAL CONSTANT
+  C : SINT := SINT#-128 / SINT#-1;
+END_VAR
+",
+        stc_sema::codes::CONST_FAILURE,
+    );
+}
+
+#[test]
+fn constant_conversions_follow_bit_pattern_rules() {
+    let value = folded_constant(
+        "VAR_GLOBAL CONSTANT
+  C : UDINT := DINT_TO_UDINT(DINT#-1);
+END_VAR
+",
+    );
+    assert_eq!(value, stc_hir::ConstValue::Int(4_294_967_295));
+    let value = folded_constant(
+        "VAR_GLOBAL CONSTANT
+  C : UINT := SINT_TO_UINT(SINT#-1);
+END_VAR
+",
+    );
+    assert_eq!(value, stc_hir::ConstValue::Int(65_535));
+    common::assert_error(
+        "VAR_GLOBAL CONSTANT
+  C : USINT := DINT_TO_USINT(DINT#300);
+END_VAR
+",
+        stc_sema::codes::CONST_FAILURE,
+    );
+}

@@ -1,0 +1,22 @@
+{
+  "function": "LEN_CODE_UNIT",
+  "version": 1,
+  "model_version": 1,
+  "generator": "0xca7359220c9ffed1",
+  "cases": [
+    {"kind": "SBCS", "result": 0, "s": ""},
+    {"kind": "SBCS", "result": 1, "s": "A"},
+    {"kind": "SBCS", "result": 5, "s": "hello"},
+    {"kind": "SBCS", "result": 6, "s": "ABCXYZ"},
+    {"kind": "DBCS", "result": 0, "s": ""},
+    {"kind": "DBCS", "result": 5, "s": "hello"},
+    {"kind": "DBCS", "result": 5, "s": "héllo"},
+    {"kind": "DBCS", "result": 2, "s": "😀"},
+    {"kind": "DBCS", "result": 5, "s": "a€😀z"},
+    {"kind": "UNICODE", "result": 0, "s": ""},
+    {"kind": "UNICODE", "result": 5, "s": "hello"},
+    {"kind": "UNICODE", "result": 6, "s": "héllo"},
+    {"kind": "UNICODE", "result": 4, "s": "😀"},
+    {"kind": "UNICODE", "result": 9, "s": "a€😀z"}
+  ]
+}
