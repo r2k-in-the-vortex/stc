@@ -185,6 +185,9 @@ any phase and still have a true, published claim.
 
 ### Phase 0 — Formal semantics foundation and soundness
 
+Detailed execution plan: [Plan-Phase0.md](Plan-Phase0.md). Its decisions P0-D1 through P0-D10
+are resolved.
+
 **Goal.** Deliver a standalone, machine-checked formal semantics of the stc core language and
 the emitted IR fragment, with the soundness results that make the semantics trustworthy. This
 phase does not depend on the Rust bridge or on a codegen correctness proof. It gives the project
@@ -219,12 +222,14 @@ it preserves.
   evaluation relation for the core HIR subset: scalar
   types, expressions, assignments, control flow, functions, programs, GOT globals, and traps.
   Define the core subset boundary explicitly. Aggregates, strings, OOP, references, and the
-  standard library are later phases.
+  standard function-block library are later phases; the exact standard functions are part of
+  the core.
 - `Stc.Codegen.Ir`: the `IRFrag` syntax and the `WellFormed` predicate for the emitted IR
   fragment. This is the target syntax that Phase 5's checker and Phase 7's simulation consume.
-- `Stc.Codegen.Semantics`: an operational semantics for `IRFrag`: integer and floating
-  operations, memory, GOT cell loads and stores, indirect calls, descriptor/vtable dispatch,
-  traps, and the host ABI boundary, for the same core subset.
+- `Stc.Codegen.Semantics`: an operational semantics for `IRFrag`: integer operations, memory,
+  GOT cell loads and stores, indirect calls, traps, and the host ABI boundary, for the same core
+  subset. Floating-point operations, descriptor/vtable dispatch, and the process image are later
+  phases.
 - A reference interpreter for the core HIR subset, executable in Lean and usable as an oracle.
 - A semantics-conformance harness: run the Lean reference interpreter and the Rust compiler's
   observable behavior over the existing conformance and execution corpus, and record agreement.
@@ -286,8 +291,11 @@ components until Phase 1 and Phase 2 connect it.
 
 **Bridge.** Phase 0 uses no Aeneas/Charon and does not require a Rust refinement. The Lean
 semantics is the reference; the Rust compiler is compared through the conformance harness. The
-implementation bridge is Phase 1, and the exact/constant-evaluation refinement is Phase 2. This
-keeps Phase 0 standalone and prevents toolchain work from blocking the semantics deliverable.
+implementation bridge is Phase 1, and the exact/constant-evaluation refinement is Phase 2. Phase
+0 does produce the recursive reference models and loop-shaped step relations that Phase 1 uses
+as refinement targets, and proves them equivalent; it does not perform the Rust-loop equivalence
+proof itself. This keeps Phase 0 standalone and prevents toolchain work from blocking the
+semantics deliverable.
 
 **Risks.** The formal semantics may drift from the Rust implementation; the core subset may be
 too small to be useful; progress and preservation are awkward for an imperative PLC language
@@ -1028,8 +1036,9 @@ The program is done when:
 ## 14. Immediate next steps
 
 1. Review this plan and resolve D-V1 through D-V10.
-2. Start Phase 0: create `Stc.Syntax`, `Stc.Hir`, `Stc.Sem`, `Stc.Codegen.Ir`, and
-   `Stc.Codegen.Semantics`; write the semantics document and fix the core subset boundary.
+2. Start Phase 0 by following [Plan-Phase0.md](Plan-Phase0.md): create `Stc.Syntax`, `Stc.Hir`,
+   `Stc.Sem`, `Stc.Codegen.Ir`, and `Stc.Codegen.Semantics`; write the semantics document and
+   fix the core subset boundary.
 3. Build `lake exe stc-sem` and `lake exe semantics-conformance`; run the core subset of the
    conformance and execution corpus and commit the report.
 4. Run the Phase 1 bridge spike in parallel: Aeneas/Charon on `exact.rs`, `keys.rs`, and one
