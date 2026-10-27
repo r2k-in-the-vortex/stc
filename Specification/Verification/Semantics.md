@@ -4,8 +4,11 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-27
 Semantics version: `1.0-draft` (frozen at `1.0` in P0.7)
 HIR dump format version: `0.1-draft` (frozen with the core dump in P0.6)
-Status: Skeleton approved 2026-10-27. Definitions and proofs are added in P0.1–P0.5 and reviewed
-in P0.7. Nothing in this document is a current verification claim.
+Status: Skeleton approved 2026-10-27. P0.1 is complete (review approved 2026-10-27): the token
+model, lossless CST contract, surface AST, and `Derives` relation are defined, and
+`ast_span_wellformed` is proved. P0.2–P0.5 definitions and proofs are added in their sub-phases and reviewed in P0.7. The
+dynamic semantics is not yet defined, so this document does not yet make the Phase 0 soundness
+claim.
 Charter: [Semantics Charter](Semantics-Charter.md)
 Plan: [Phase 0 Implementation Plan](Plan-Phase0.md) · [Verification Program Plan](Plan.md)
 
@@ -31,19 +34,32 @@ Excluded constructs are rejected by the reference tools and never interpreted si
 P0.1 defines the token and trivia model, span coverage, and the lossless CST contract in
 `Stc.Syntax.Tokens` and `Stc.Syntax.Cst`, following
 [Tokenization](../Syntax/Tokenization.md). The contract states that token and trivia spans cover
-the source exactly, in order, with no gaps or overlaps.
+the source exactly, in order, with no gaps or overlaps. `Cst.leaves` lists the leaf spans,
+`CoversFrom` is the ordered gap-free coverage relation, `Lossless` is `CoversFrom 0 sourceLength`,
+and `Cst.WellFormedNodes` records that every node span contains its children. The full
+production-to-definition map is the [Core Syntax Coverage](Core-Coverage.md) table.
 
 ### 2.2 Surface AST and the `Derives` relation
 
 P0.1 defines the surface AST in `Stc.Syntax.Ast` and the declarative relation
-`Derives : Grammar → Ast → Prop` in `Stc.Grammar.Derives`, mirroring the core productions in
+`Derives : Cst → Ast → Prop` in `Stc.Grammar.Derives`, mirroring the core productions in
 [Grammar](../Syntax/Grammar.md). Every core production receives a constructor or relation rule;
-the P0.1 coverage table maps productions to Lean rules.
+the [Core Syntax Coverage](Core-Coverage.md) table maps productions to Lean rules. `Derives`
+consumes the trivia-free projection `Cst.stripTrivia`; the helper relations `ListRel`, `ListRel1`,
+`OptionalNode`, `CommaSeparated`, `StatementListRel`, and `DerivesChained` cover repetition,
+optionality, comma lists, semicolon-terminated statement lists, and left-associative operator
+chains.
 
 ### 2.3 AST-to-CST and source-span mapping
 
 P0.1 defines the AST↔CST mapping and the source-span mapping used by Phase 4's parser
-contracts. `ast_span_wellformed` is the structural result for the AST side.
+contracts. `MapsTo` relates a full CST to an AST through `Cst.stripTrivia`; `MapsToWithSpan` adds
+root-span equality. `Derives.unit_span_eq` proves a derived source unit carries the source-file
+node's span, `Derives.unit_span_wellFormed` proves that span is well formed,
+`Derives.unit_span_bounded` proves it lies within the declared source file and length, and
+`ast_span_wellformed` proves every descendant of a span-nested AST node is span-nested and
+contained in the root. The per-node `Derives`-to-CST containment lemma is left to Phase 4's
+parser-soundness proof; it is not part of the P0.1 exit gate.
 
 ### 2.4 Typed HIR
 
@@ -175,13 +191,14 @@ semantics and the proved exact functions on one definition of the scalar kernel.
 
 The authoritative status of every entry is [`lean/verification-status.toml`](../../lean/verification-status.toml);
 `tools/ci/check_verification_registry.py` validates it and audits proved theorems. This section
-mirrors the registry at P0.0 and is regenerated from it at P0.7. All entries are `planned`.
+mirrors the registry at P0.1: `ast_span_wellformed` is proved; the remaining entries are
+`planned`. The registry is regenerated into this section at P0.7.
 
 ### 7.1 Source soundness
 
 | Theorem | Module | Sub-phase | Status |
 | --- | --- | --- | --- |
-| `Stc.Syntax.ast_span_wellformed` | `Stc.Syntax.Ast` | P0.1 | planned |
+| `Stc.Syntax.ast_span_wellformed` | `Stc.Syntax.Ast` | P0.1 | proved |
 | `Stc.Sem.core_check_sound` | `Stc.Sem.Typing` | P0.2 | planned |
 | `Stc.Sem.core_check_complete` | `Stc.Sem.Typing` | P0.2 | planned |
 | `Stc.Sem.core_rejection_characterized` | `Stc.Sem.Typing` | P0.2 | planned |
@@ -261,6 +278,7 @@ construct is rejected.
 | Date | Version | Phase | Change |
 | --- | --- | --- | --- |
 | 2026-10-27 | 1.0-draft | P0.0 | Created the skeleton; froze the core scope and exclusions in the charter |
+| 2026-10-27 | 1.0-draft | P0.1 | Defined tokens, trivia, spans, the lossless CST contract, the surface AST, and `Derives`; proved `ast_span_wellformed` and the root source-span lemmas; added the [Core Syntax Coverage](Core-Coverage.md) table |
 
 ## 10. Rust/Lean interface
 
@@ -301,6 +319,7 @@ exclusion is a Phase 0 exit failure. The triage log is part of `Phase0-Report.md
 ## 11. References
 
 - [Semantics Charter](Semantics-Charter.md)
+- [Core Syntax Coverage](Core-Coverage.md)
 - [Phase 0 Implementation Plan](Plan-Phase0.md)
 - [Verification Program Plan](Plan.md)
 - [Testing and Verification](../Architecture/Testing-and-Verification.md)

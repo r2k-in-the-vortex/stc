@@ -4,8 +4,10 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-27
 Status: Draft for review. Phase 0 decisions P0-D1 through P0-D10 are resolved (2026-10-27).
 P0.0 is complete (review approved 2026-10-27): the charter, module skeleton, registry, CI checks,
-and semantics document skeleton are in place. P0.1 has not started; no source or target semantics
-is defined yet.
+and semantics document skeleton are in place. P0.1 is complete (review approved 2026-10-27):
+the token model, lossless CST contract, surface AST, `Derives` relation, coverage table, and
+`ast_span_wellformed` are in place. P0.2 has not started; no HIR, typing judgment, or dynamic
+semantics is defined yet.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -168,6 +170,7 @@ Specification/Verification/
   Plan.md            authoritative program plan
   Plan-Phase0.md     this document
   Semantics.md       reviewed semantics reference (Phase 0 deliverable)
+  Core-Coverage.md   core production-to-definition coverage (P0.1)
   Phase0-Report.md   results, conformance report, gaps, handoff
 
 tests/verification/semantics/
@@ -747,7 +750,8 @@ Phase 0 is done when:
 2. Freeze §3.3 and §3.4 and open the registry entries.
 3. Create the Lean module skeleton and CI checks from P0.0.
 4. Write the `Semantics.md` skeleton and the core grammar/AST mapping table.
-5. Start P0.1 and P0.2; prototype the HIR dump in parallel once P0.2's types are stable.
+5. P0.1 is complete; start P0.2 and prototype the HIR dump in parallel once P0.2's types are
+   stable.
 6. Build `stc-sem` against a small hand-written core dump before the full conformance harness.
 7. Add the core corpus and run the first conformance report.
 8. Schedule the P0.7 review once the source and target soundness theorems are proved.
@@ -780,4 +784,38 @@ python tools/ci/check_docs.py
 
 P0.0 exit status: complete. The technical exit criteria pass, and the reviewer approved the
 charter, the exclusion register, and the [Semantics.md](Semantics.md) skeleton on 2026-10-27.
-P0.1 starts against the frozen scope.
+
+## 17. P0.1 execution record
+
+Date: 2026-10-27.
+
+| Deliverable | Location | State |
+| --- | --- | --- |
+| Token, trivia, keyword, punctuation, and span model | `lean/Stc/Syntax/Tokens.lean` | Defined; token-span lemmas proved |
+| Lossless CST contract and coverage predicates | `lean/Stc/Syntax/Cst.lean` | Defined; coverage and node-span lemmas proved |
+| Surface AST for core declarations, expressions, statements, and programs | `lean/Stc/Syntax/Ast.lean` | Defined; `Ast.SpansNested` and `ast_span_wellformed` proved |
+| Declarative grammar relation | `lean/Stc/Grammar/Derives.lean` | `Derives : Cst → Ast → Prop` with every core production rule; helpers for lists, options, comma lists, statement lists, and operator chains |
+| AST↔CST and source-span mapping | `Stc.Grammar.MapsTo`, `MapsToWithSpan`, `Derives.unit_span_eq`, `Derives.unit_span_wellFormed`, `Derives.unit_span_bounded` | Defined and root lemmas proved |
+| Production-to-definition coverage table | [Core-Coverage.md](Core-Coverage.md) | Approved 2026-10-27 |
+| Checked derivation smoke test | `lean/Stc/Grammar/Examples.lean` | A complete `PROGRAM` derivation builds |
+| Registry entry | `lean/verification-status.toml` (`P0-T01`) | `Stc.Syntax.ast_span_wellformed` proved; no axioms |
+| Semantics document updates | [Semantics.md](Semantics.md) §2.1–2.3, §7.1, §9.3 | Updated for P0.1 |
+
+Design note: the plan names `Derives : Grammar → Ast → Prop` or an equivalent indexed relation.
+P0.1 uses the CST as the grammar carrier: `Cst` nodes are tagged with production names, so a
+separate duplicate grammar tree adds no information. `Derives` matches the significant (trivia-free)
+CST and is mapped from a full CST by `MapsTo`; the coverage table is the production index.
+
+Local evidence:
+
+```text
+cd lean && lake build                                   # 34 jobs, including Stc.Grammar.Examples
+cd lean && lake env lean ...                            # type-checked during development
+cd lean && #print axioms Stc.Syntax.ast_span_wellformed # does not depend on any axioms
+python tools/ci/check_verification_registry.py          # 24 records: 1 proved, 23 planned
+python tools/ci/check_docs.py                           # 22 required documents, Core-Coverage.md included
+```
+
+P0.1 exit status: complete. The technical exit criteria pass: the core surface AST and grammar
+relation cover every included production in §3.3, the coverage table is approved, and no
+parser-correctness claim is made. P0.2 starts against these definitions.

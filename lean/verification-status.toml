@@ -34,7 +34,7 @@ level = "S"
 spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Syntax.Ast"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
