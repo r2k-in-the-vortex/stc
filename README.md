@@ -617,7 +617,8 @@ cargo llvm-cov --workspace --locked --lcov --output-path target/lcov.info
 cargo llvm-cov report --html
 ```
 
-The HTML report is `target/llvm-cov/html/index.html`. In VS Code,
+The HTML report is `target/llvm-cov/html/index.html`. The pinned toolchain includes `rust-src`,
+so rust-analyzer can load the standard library. In VS Code,
 `.vscode/settings.json` enables the rust-analyzer Test Explorer (reload the window once after
 pulling this change), which populates the Testing panel, and points the Coverage Gutters
 extension at `target/lcov.info`. The
