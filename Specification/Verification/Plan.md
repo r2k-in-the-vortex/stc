@@ -935,9 +935,10 @@ turn it into the registry.
 | End-to-end subset | 9 | V4 | `pipeline_correct` | Not started |
 
 Not planned: full LLVM/LLVM optimizer/backend semantics, floating-point transcendental
-semantics (remains test-based under D-006), the TOML parser and project CLI (unless a security
-property demands it), diagnostics rendering, and the operating system, filesystem, I/O devices,
-and hardware.
+semantics (remains test-based under D-006), debug information and the debug subsystem (the
+verified path is the release build, which excludes debug state by contract), the TOML parser and
+project CLI (unless a security property demands it), diagnostics rendering, and the operating
+system, filesystem, I/O devices, and hardware.
 
 ## 9. Proof engineering and CI
 
@@ -997,6 +998,13 @@ and hardware.
   documented; a separate cost model can be added later if the claim becomes contractual.
 - Proving completeness where the type checker is intentionally incomplete; the program proves
   soundness plus a characterized rejection class.
+- Debug information and the debug subsystem for v1: DWARF/CodeView contents, the `stc-debug/1`
+  protocol, sessions, typed access, forcing, checkpoint binding, and the host debug service.
+  The v1 verified path is the release build, which by contract (D-178) is optimised, stripped,
+  hook-free, carries no `debug` sidecar object, and does not import host service 13. Release
+  artifacts therefore contain no debug state for the modeled IR fragment, runtime, or ABI to
+  describe. Debug builds are outside the v1 verification boundary; the exclusion is revisited
+  only if the release contract stops excluding debug state.
 
 ## 12. Open decisions
 

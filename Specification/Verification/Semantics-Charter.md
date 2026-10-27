@@ -133,10 +133,11 @@ Included in Phase 0:
 | References and parameter modes | References, pointers, `VAR_OUTPUT`, `VAR_IN_OUT`, aliasing | Phase 6 source; Phase 5/7 IR |
 | Tasks and scheduling | Multiple tasks, task configuration, cycle scheduling policy | Phase 6 source; Phase 8 runtime |
 | Standard function blocks | Timers, counters, edge detection, and the rest of the standard FB library | Phase 6 source; Phase 8 runtime |
-| I/O, retained state, and online change | `AT` bindings, `RETAIN`, persistent image, swap, rollback, unload, debug sessions | Phase 6 source; Phase 8 runtime |
+| I/O, retained state, and online change | `AT` bindings, `RETAIN`, persistent image, swap, rollback, unload | Phase 6 source; Phase 8 runtime |
 | Additional traps | Bounds, null reference, conversion-to-real, and traps that depend on excluded types | Phase 6 source; Phase 7 target |
 | Target floating point and general values | `float`, `double`, vectors, `fadd`/`fsub`/`fmul`/`fdiv`/`frem` | Phase 5 syntax; Phase 7 semantics |
-| Advanced target instructions | Atomics, volatile access, `invoke`/`landingpad`, dynamic `alloca`, descriptor/vtable/TYPEINFO blobs, process image, string data, debug metadata | Phase 5 syntax; Phase 7 semantics; Phase 8 runtime |
+| Advanced target instructions | Atomics, volatile access, `invoke`/`landingpad`, dynamic `alloca`, descriptor/vtable/TYPEINFO blobs, process image, string data | Phase 5 syntax; Phase 7 semantics; Phase 8 runtime |
+| Debug and monitoring | DWARF/CodeView contents, `stc-debug/1`, sessions, typed access, forcing, checkpoint hooks and metadata, host service 13 | Not planned for v1 verification: the verified release build excludes debug state by contract (D-178); see [Plan](Plan.md) §11 |
 | Full host lifecycle | Attach/prepare/activate/commit/rollback/unload beyond the initialization boundary | Phase 8 |
 | General LLVM model | Poison/`undef` generality, provenance, optimizer behaviour, general pointer arithmetic | Not planned; a non-goal of the program |
 | Printer and parser proof | Textual IR printing and parsing round-trip | Phase 5 |
