@@ -1,0 +1,4 @@
+tests/ui/lex_invalid_escape.st:5:12: error[STC-E-LEX-005]: unknown escape sequence `$q`
+  |
+5 |   s := 'bad$qescape'; //~ ERROR STC-E-LEX-005
+  |            ^^

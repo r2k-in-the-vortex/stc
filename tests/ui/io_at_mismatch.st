@@ -1,0 +1,7 @@
+PROGRAM P
+VAR
+  flag AT %IX0.0 : DINT; //~ ERROR STC-E-IO-001
+  x : DINT;
+END_VAR
+  x := 1;
+END_PROGRAM

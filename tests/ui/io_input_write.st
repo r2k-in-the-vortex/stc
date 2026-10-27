@@ -1,0 +1,6 @@
+PROGRAM P
+VAR
+  flag AT %IX0.0 : BOOL;
+END_VAR
+  flag := TRUE; //~ ERROR STC-E-IO-002
+END_PROGRAM

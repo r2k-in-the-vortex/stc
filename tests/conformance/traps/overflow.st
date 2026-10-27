@@ -1,0 +1,7 @@
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+  x := 2147483647;
+  x := x + 1;
+END_PROGRAM

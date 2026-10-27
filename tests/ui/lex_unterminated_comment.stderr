@@ -1,0 +1,23 @@
+tests/ui/lex_unterminated_comment.st:2:1: error[STC-E-LEX-006]: unterminated block comment
+  |
+2 | (* unterminated block comment //~ ERROR STC-E-LEX-006 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-111
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/ui/lex_unterminated_comment.st:2:154: error[STC-E-GRAM-105]: malformed token
+  |
+2 | (* unterminated block comment //~ ERROR STC-E-LEX-006 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-111
+  |                                                                                                                                                          ^
+tests/ui/lex_unterminated_comment.st:2:154: error[STC-E-GRAM-105]: expected an assignment (`:=`) or a call statement
+  |
+2 | (* unterminated block comment //~ ERROR STC-E-LEX-006 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-111
+  |                                                                                                                                                          ^
+tests/ui/lex_unterminated_comment.st:2:154: error[STC-E-GRAM-107]: expected `;` after statement
+  |
+2 | (* unterminated block comment //~ ERROR STC-E-LEX-006 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-111
+  |                                                                                                                                                          ^
+tests/ui/lex_unterminated_comment.st:2:154: error[STC-E-GRAM-111]: missing `END_PROGRAM` terminator
+  |
+2 | (* unterminated block comment //~ ERROR STC-E-LEX-006 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-111
+  |                                                                                                                                                          ^
+  |
+1 | PROGRAM P
+  | ^^^^^^^ `END_PROGRAM` starts here

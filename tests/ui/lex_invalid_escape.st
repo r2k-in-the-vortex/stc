@@ -1,0 +1,6 @@
+PROGRAM P
+VAR
+  s : STRING;
+END_VAR
+  s := 'bad$qescape'; //~ ERROR STC-E-LEX-005
+END_PROGRAM

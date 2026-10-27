@@ -1,0 +1,9 @@
+VAR_GLOBAL
+  seed : DINT;
+END_VAR
+PROGRAM P
+VAR
+  x : DINT := seed; //~ ERROR STC-E-CONST-001
+END_VAR
+  x := 1;
+END_PROGRAM

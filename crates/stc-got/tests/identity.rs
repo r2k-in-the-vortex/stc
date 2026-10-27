@@ -252,6 +252,17 @@ fn changed_layout() -> Catalog {
     catalog
 }
 
+fn changed_direct_layout() -> Catalog {
+    let mut catalog = catalog();
+    let index = catalog
+        .roots
+        .iter()
+        .position(|root| root.identity.path == "MAIN.INPUT")
+        .unwrap();
+    catalog.roots[index] = root_direct("MAIN.INPUT", Some("MAIN/R1/INST"), TypeKey::Dint);
+    catalog
+}
+
 fn without_export() -> Catalog {
     let mut catalog = catalog();
     catalog.exports.clear();
@@ -456,6 +467,26 @@ fn layout_change_is_rejected_by_default() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == codes::ONLINE_LAYOUT)
+    );
+}
+
+#[test]
+fn a_direct_root_with_a_changed_type_is_remapped_with_a_warning() {
+    let first = cold();
+    let options = BuildOptions {
+        baseline: Some(&first.manifest),
+        ..BuildOptions::default()
+    };
+    let second = build(&changed_direct_layout(), &input(), &options).expect("plan build");
+    assert_eq!(second.verdict(), PlanVerdict::OnlineCandidate);
+    assert!(second.is_deployable());
+    assert!(
+        second
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == codes::W_ONLINE_DIRECT),
+        "{:#?}",
+        second.diagnostics
     );
 }
 

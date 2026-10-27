@@ -1,0 +1,7 @@
+PROGRAM P
+VAR
+  x : DINT;
+  x : DINT; //~ ERROR STC-E-NAME-003
+END_VAR
+  x := 1;
+END_PROGRAM

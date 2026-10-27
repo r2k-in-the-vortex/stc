@@ -1,0 +1,15 @@
+schema = 1
+
+[package]
+name = "basic"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+
+[build]
+emit = ["module"]
+
+[run]
+cycles = 1

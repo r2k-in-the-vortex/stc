@@ -1,0 +1,5 @@
+PROGRAM Main
+VAR RETAIN
+  counter : DINT := 1;
+END_VAR
+END_PROGRAM

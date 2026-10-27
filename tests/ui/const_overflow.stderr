@@ -1,0 +1,4 @@
+tests/ui/const_overflow.st:2:17: error[STC-E-CONST-002]: constant arithmetic overflow
+  |
+2 |   big : DINT := 2147483647 + 1; //~ ERROR STC-E-CONST-002
+  |                 ^^^^^^^^^^^^^^

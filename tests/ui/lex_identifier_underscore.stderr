@@ -1,0 +1,8 @@
+tests/ui/lex_identifier_underscore.st:3:3: error[STC-E-LEX-003]: invalid underscore placement in identifier `__x`; only single embedded underscores are allowed
+  |
+3 |   __x : DINT; //~ ERROR STC-E-LEX-003
+  |   ^^^
+tests/ui/lex_identifier_underscore.st:5:3: error[STC-E-LEX-003]: invalid underscore placement in identifier `__x`; only single embedded underscores are allowed
+  |
+5 |   __x := 1; //~ ERROR STC-E-LEX-003
+  |   ^^^

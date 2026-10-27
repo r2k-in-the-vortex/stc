@@ -1,0 +1,4 @@
+tests/ui/gram_unexpected_token.st:5:8: error[STC-E-GRAM-105]: expected an expression
+  |
+5 |   x := ; //~ ERROR STC-E-GRAM-105
+  |        ^

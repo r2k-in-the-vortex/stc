@@ -1,0 +1,4 @@
+tests/ui/const_not_constant.st:6:15: error[STC-E-CONST-001]: name is not a constant
+  |
+6 |   x : DINT := seed; //~ ERROR STC-E-CONST-001
+  |               ^^^^

@@ -1,0 +1,13 @@
+profile = "stc-2013-oop-utf8-v1"
+kind = "run-pass"
+cycles = 1
+expected_exit = 0
+rules = [
+  "STC-GRAM-009",
+  "STC-GRAM-010",
+  "STC-GRAM-011",
+  "STC-GRAM-012",
+  "STC-GRAM-013",
+  "STC-GRAM-014",
+  "STC-GRAM-015",
+]

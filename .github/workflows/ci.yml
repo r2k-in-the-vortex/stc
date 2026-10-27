@@ -35,6 +35,7 @@ jobs:
       ui: ${{ steps.flags.outputs.ui }}
       conformance: ${{ steps.flags.outputs.conformance }}
       execution: ${{ steps.flags.outputs.execution }}
+      projects: ${{ steps.flags.outputs.projects }}
       cross_target: ${{ steps.flags.outputs.cross_target }}
     steps:
       - uses: actions/checkout@v5
@@ -58,7 +59,17 @@ jobs:
           if [ -d crates/xtask ] || [ -d tools/xtask ]; then emit xtask true; else emit xtask false; fi
           if [ -d tests/ui ]; then emit ui true; else emit ui false; fi
           if [ -d tests/conformance ]; then emit conformance true; else emit conformance false; fi
-          if [ -d tests/execution ]; then emit execution true; else emit execution false; fi
+          # The execution suite is the driver integration test, not a corpus directory.
+          if [ -f crates/stc-driver/tests/execution.rs ]; then
+            emit execution true
+          else
+            emit execution false
+          fi
+          if [ -f crates/stc-driver/tests/projects.rs ]; then
+            emit projects true
+          else
+            emit projects false
+          fi
           if [ -f tests/cross-target/smoke.ll ]; then emit cross_target true; else emit cross_target false; fi
 
   docs:
@@ -213,6 +224,7 @@ jobs:
     timeout-minutes: 30
     env:
       RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
     steps:
       - uses: actions/checkout@v5
       - name: Print toolchain versions
@@ -236,6 +248,7 @@ jobs:
     timeout-minutes: 30
     env:
       RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
     steps:
       - uses: actions/checkout@v5
       - name: Print toolchain versions
@@ -246,6 +259,49 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run execution tests
         run: cargo xtask test --suite execution --locked
+
+  projects:
+    name: Projects (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true' && needs.detect.outputs.xtask == 'true' && needs.detect.outputs.projects == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the end-to-end project workflow
+        run: cargo xtask test --suite projects --locked
+
+  traceability:
+    name: Rule traceability
+    needs: detect
+    if: needs.detect.outputs.rust == 'true' && needs.detect.outputs.xtask == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Check that every implemented rule has test evidence
+        run: cargo run --locked -p xtask -- traceability --check
 
   lean:
     name: Lean proofs

@@ -1,0 +1,6 @@
+PROGRAM P
+VAR
+  u : USTRING[4];
+END_VAR
+  u := U#'bad${D800}scalar'; //~ ERROR STC-E-LEX-009
+END_PROGRAM

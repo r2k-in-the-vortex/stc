@@ -1,0 +1,4 @@
+tests/ui/reserved_pointer_keyword.st:4:3: error[STC-E-GRAM-105]: expected a variable declaration
+  |
+4 |   POINTER : DINT; //~ ERROR STC-E-GRAM-105
+  |   ^^^^^^^

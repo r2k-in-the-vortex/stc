@@ -1,0 +1,7 @@
+PROGRAM P
+VAR
+  flag : BOOL;
+  n : DINT;
+END_VAR
+  flag := n; //~ ERROR STC-E-TYPE-012
+END_PROGRAM

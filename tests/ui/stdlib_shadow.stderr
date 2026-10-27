@@ -1,0 +1,6 @@
+tests/ui/stdlib_shadow.st:1:1: warning[STC-W-NAME-002]: `ABS` shadows a standard name
+  |
+1 | FUNCTION ABS : DINT //~ WARNING STC-W-NAME-002
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: the user declaration takes precedence in this scope

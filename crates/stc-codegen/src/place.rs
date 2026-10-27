@@ -2741,6 +2741,24 @@ impl Lowerer<'_> {
             let PlaceStep::Index(index) = step else {
                 unreachable!("field steps were rejected above");
             };
+            if let TypeCategory::String { capacity, .. } = self.types.category(ty)?.clone() {
+                let dim = ArrayDim {
+                    lower: 1,
+                    upper: i128::from(capacity),
+                    length: u64::from(capacity),
+                };
+                let delta = self.bounds_checked_index(f, info, *index, &dim, path.span)?;
+                let pointee = self.types.llvm_storage(ty)?.render();
+                resolved.pointer = f.gep(
+                    &pointee,
+                    &resolved.pointer,
+                    &["i64 0".into(), "i32 1".into(), format!("i64 {delta}")],
+                    true,
+                );
+                ty = self.types.string_char_ty(ty)?;
+                dimension = 0;
+                continue;
+            }
             let dim = self.array_dim_at(ty, dimension)?;
             let delta = self.bounds_checked_index(f, info, *index, &dim, path.span)?;
             let pointee = self.array_tail_type(ty, dimension)?;

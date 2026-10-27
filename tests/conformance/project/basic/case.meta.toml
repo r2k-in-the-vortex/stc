@@ -1,0 +1,5 @@
+profile = "stc-2013-oop-utf8-v1"
+kind = "run-pass"
+cycles = 1
+expected_exit = 0
+rules = ["STC-GRAM-001"]

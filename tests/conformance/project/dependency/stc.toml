@@ -1,0 +1,18 @@
+schema = 1
+
+[package]
+name = "app"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+
+[dependencies]
+dep = { path = "dep" }
+
+[build]
+emit = ["module"]
+
+[run]
+cycles = 1

@@ -1,0 +1,40 @@
+# Traceability allowlist.
+#
+# `cargo xtask traceability --check` fails when an `STC-*` ID found in
+# `Specification/**/*.md` has no evidence in the tests or conformance corpus.
+# Each entry below records why a rule is exempt. Keep the list small and
+# update or remove entries when the rule is implemented or the spec changes.
+#
+# status = "not-implemented": a normative rule that the implementation does
+# not provide yet. The associated reason names the milestone or decision.
+# status = "example": an identifier in prose that is not a defined rule.
+
+[[rule]]
+id = "STC-E-ONLINE-STATE-001"
+status = "not-implemented"
+reason = "Per-field retained-state reset policy during online change is not implemented; v1 preserves host memory and rejects layout changes (State and RETAIN §7)."
+
+[[rule]]
+id = "STC-W-ONLINE-STATE-001"
+status = "not-implemented"
+reason = "Per-field retained-state reset policy during online change is not implemented; v1 preserves host memory and rejects layout changes (State and RETAIN §7)."
+
+[[rule]]
+id = "STC-W-ONLINE-004"
+status = "not-implemented"
+reason = "The stale-reference quarantine warning has a reserved code but no emission path; v1 quarantines removed roots silently (Online Change and GOT §8)."
+
+[[rule]]
+id = "STC-W-RUN-001"
+status = "not-implemented"
+reason = "Direct variables in function/FB bodies are rejected as STC-E-IO-001 rather than accepted with this deprecation warning (Runtime and Execution §2.4)."
+
+[[rule]]
+id = "STC-RUN-006"
+status = "example"
+reason = "Illustrative identifier in the project plan (§7, rule ID format); no rule with this number is defined."
+
+[[rule]]
+id = "STC-TYPE-031"
+status = "example"
+reason = "Illustrative identifier in the project plan (§7, rule ID format); no rule with this number is defined."

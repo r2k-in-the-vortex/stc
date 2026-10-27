@@ -5,6 +5,7 @@
 *.md text eol=lf
 *.st text eol=lf
 *.snap text eol=lf
+*.stderr text eol=lf
 *.ll text eol=lf
 *.json text eol=lf
 *.hex text eol=lf

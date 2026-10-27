@@ -1,0 +1,6 @@
+FUNCTION Twice : DINT
+VAR_INPUT
+  a : DINT;
+END_VAR
+  Twice := 2 * a;
+END_FUNCTION

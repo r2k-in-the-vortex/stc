@@ -1,0 +1,6 @@
+PROGRAM P
+VAR
+  x : DINT;
+END_VAR
+  STC_ASSERT(x = 0, 'production assert'); //~ ERROR STC-E-ASSERT-001
+END_PROGRAM

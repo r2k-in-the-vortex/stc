@@ -1,0 +1,6 @@
+profile = "stc-2013-oop-utf8-v1"
+kind = "compile-fail"
+compile = "build"
+expected_exit = 1
+expected_stderr_contains = ["STC-E-RUN-001"]
+rules = ["STC-E-RUN-001"]

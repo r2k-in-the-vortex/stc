@@ -1,0 +1,5 @@
+PROGRAM P
+VAR
+  s : STRING;
+END_VAR
+  s := 'unterminated; //~ ERROR STC-E-LEX-004 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-111

@@ -1,0 +1,4 @@
+tests/ui/assert_production.st:5:3: error[STC-E-ASSERT-001]: `STC_ASSERT` is a test-only assertion and is not available in production builds
+  |
+5 |   STC_ASSERT(x = 0, 'production assert'); //~ ERROR STC-E-ASSERT-001
+  |   ^^^^^^^^^^

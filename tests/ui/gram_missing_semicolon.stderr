@@ -1,0 +1,4 @@
+tests/ui/gram_missing_semicolon.st:6:1: error[STC-E-GRAM-107]: expected `;` after statement
+  |
+6 | END_PROGRAM //~ ERROR STC-E-GRAM-107
+  | ^^^^^^^^^^^

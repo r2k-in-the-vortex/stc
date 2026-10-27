@@ -1,0 +1,8 @@
+profile = "stc-2013-oop-utf8-v1"
+kind = "run-fail"
+cycles = 1
+state_file = true
+corrupt_state = true
+expected_exit = 1
+expected_stderr_contains = ["STC-E-RUN-RETAIN-002"]
+rules = ["STC-E-RUN-RETAIN-002"]

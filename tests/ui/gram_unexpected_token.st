@@ -1,0 +1,6 @@
+PROGRAM P
+VAR
+  x : DINT;
+END_VAR
+  x := ; //~ ERROR STC-E-GRAM-105
+END_PROGRAM

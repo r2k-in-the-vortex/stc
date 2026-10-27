@@ -1,0 +1,4 @@
+tests/ui/io_input_write.st:5:3: error[STC-E-IO-002]: `%I` inputs are read-only
+  |
+5 |   flag := TRUE; //~ ERROR STC-E-IO-002
+  |   ^^^^^^^^^^^^^

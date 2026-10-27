@@ -1,0 +1,4 @@
+tests/ui/lex_invalid_utf8_escape.st:5:14: error[STC-E-LEX-009]: escape denotes invalid Unicode scalar U+D800
+  |
+5 |   u := U#'bad${D800}scalar'; //~ ERROR STC-E-LEX-009
+  |              ^^^^^^^

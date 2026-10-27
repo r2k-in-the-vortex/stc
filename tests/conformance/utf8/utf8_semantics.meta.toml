@@ -1,0 +1,14 @@
+profile = "stc-2013-oop-utf8-v1"
+kind = "run-pass"
+cycles = 1
+expected_exit = 0
+rules = [
+  "STC-UTF8-001",
+  "STC-UTF8-002",
+  "STC-UTF8-003",
+  "STC-UTF8-005",
+  "STC-UTF8-006",
+  "STC-UTF8-007",
+  "STC-UTF8-009",
+  "STC-UTF8-010",
+]

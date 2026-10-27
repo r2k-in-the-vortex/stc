@@ -1,0 +1,6 @@
+tests/ui/io_at_mismatch.st:3:11: error[STC-E-IO-001]: `AT` address size does not match declared type DINT
+  |
+3 |   flag AT %IX0.0 : DINT; //~ ERROR STC-E-IO-001
+  |           ^^^^^^
+  |
+  = note: expected a `D` address

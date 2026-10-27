@@ -1,0 +1,7 @@
+profile = "stc-2013-oop-utf8-v1"
+kind = "run-pass"
+cycles = 1
+runs = 2
+state_file = true
+expected_exit = 0
+rules = ["STC-W-RUN-RETAIN-001"]

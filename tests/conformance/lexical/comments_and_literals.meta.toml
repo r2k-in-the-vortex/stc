@@ -1,0 +1,19 @@
+profile = "stc-2013-oop-utf8-v1"
+kind = "compile-pass"
+rules = [
+  "STC-LEX-004",
+  "STC-LEX-010",
+  "STC-LEX-011",
+  "STC-LEX-017",
+  "STC-LEX-018",
+  "STC-LEX-020",
+  "STC-LEX-022",
+  "STC-LEX-024",
+  "STC-LEX-025",
+  "STC-LEX-027",
+  "STC-LEX-030",
+  "STC-LEX-038",
+  "STC-LEX-040",
+  "STC-LEX-047",
+  "STC-LEX-048",
+]

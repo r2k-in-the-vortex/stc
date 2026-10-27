@@ -1,0 +1,4 @@
+tests/ui/retain_temp.st:3:3: error[STC-E-RETAIN-002]: `RETAIN` is not valid on this declaration
+  |
+3 |   y : DINT; //~ ERROR STC-E-RETAIN-002
+  |   ^

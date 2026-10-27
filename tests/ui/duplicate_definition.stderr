@@ -1,0 +1,7 @@
+tests/ui/duplicate_definition.st:4:3: error[STC-E-NAME-003]: duplicate definition of `x`
+  |
+4 |   x : DINT; //~ ERROR STC-E-NAME-003
+  |   ^
+  |
+3 |   x : DINT;
+  |   ^ previous definition is here

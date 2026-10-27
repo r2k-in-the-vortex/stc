@@ -1,0 +1,24 @@
+tests/ui/lex_invalid_character.st:5:10: error[STC-E-LEX-002]: invalid character '~' (U+007E)
+  |
+5 |   x := 1 ~ 2; //~ ERROR STC-E-LEX-002 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-107
+  |          ^
+tests/ui/lex_invalid_character.st:5:10: error[STC-E-GRAM-107]: expected `;` after statement
+  |
+5 |   x := 1 ~ 2; //~ ERROR STC-E-LEX-002 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-107
+  |          ^
+tests/ui/lex_invalid_character.st:5:10: error[STC-E-GRAM-105]: malformed token
+  |
+5 |   x := 1 ~ 2; //~ ERROR STC-E-LEX-002 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-107
+  |          ^
+tests/ui/lex_invalid_character.st:5:12: error[STC-E-GRAM-105]: expected an assignment (`:=`) or a call statement
+  |
+5 |   x := 1 ~ 2; //~ ERROR STC-E-LEX-002 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-107
+  |            ^
+tests/ui/lex_invalid_character.st:5:12: error[STC-E-GRAM-107]: expected `;` after statement
+  |
+5 |   x := 1 ~ 2; //~ ERROR STC-E-LEX-002 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-107
+  |            ^
+tests/ui/lex_invalid_character.st:5:13: error[STC-E-GRAM-105]: expected an assignment (`:=`) or a call statement
+  |
+5 |   x := 1 ~ 2; //~ ERROR STC-E-LEX-002 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-107
+  |             ^

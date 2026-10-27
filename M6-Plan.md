@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–9 complete (2026-10-27); phases 10–11 ready to start. M5 (phases 1–7 and 4b) is
+Status: Phases 0–10 complete (2026-10-27); phase 11 ready to start. M5 (phases 1–7 and 4b) is
 complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
 usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
@@ -178,7 +178,7 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0–9 are complete (2026-10-27); phases 10–11 are pending. Phase 0 fixed
+Phase status: phases 0–10 are complete (2026-10-27); phase 11 is pending. Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
 resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
@@ -787,6 +787,39 @@ active.
 
 Acceptance: CI shows unit/snapshot, conformance, execution, projects, fuzz-smoke, and Lean proof
 jobs passing; the traceability report covers every implemented rule.
+
+Status (2026-10-27): implemented. `tests/conformance` contains 29 cases across 17 areas (lexical,
+types, conversions, statements, expression precedence, syntax modes, POU, OOP, namespaces, I/O,
+state, strings, UTF-8, standard library, traps, configuration, and project/dependency cases),
+each with a `.meta.toml` recording its profile, kind, expected exit/stdout/trap, cycles, and
+`rules`; the harness in `crates/stc-driver/tests/conformance.rs` builds textual IR or an
+executable, runs projects through the project CLI (copying each project to a temporary tree), and
+verifies exit codes, trap names, stdout, stderr substrings, retained-state runs, and corrupt-state
+failure. `tests/ui` contains 25 diagnostic snapshots with rustc-style `//~ ERROR`/`//~ WARNING`
+line annotations and committed `.stderr` renders; the harness in `crates/stc-driver/tests/ui.rs`
+invokes `stc check` with workspace-relative paths, enforces annotation/actual-line agreement and
+the full render, and regenerates snapshots under `STC_UPDATE_SNAPSHOTS=1`. `crates/xtask` plus
+the `.cargo/config.toml` alias implement `cargo xtask test --suite ui|conformance|execution|
+projects [--locked]` (execution runs the execution and exact-vector C-harness suites) and
+`cargo xtask traceability [--check]`; the projects suite in
+`crates/stc-driver/tests/projects.rs` runs `new/check/build/run/test/fmt/clean`, the file-backend
+write failure, and an invalid active-store cold build, and the same suite target runs the
+`online_cli` rename/download/diff/watch workflow. Traceability scans
+`Specification/**/*.md` for rule IDs and resolves evidence in integration tests, unit-test
+sections, UI annotations, and conformance metadata, including shared `codes::CONSTANT` references;
+the explicit allowlist (`tools/ci/traceability-allowlist.toml`) records four not-implemented rules
+(the per-field online retain-reset codes, the stale-reference warning, and the direct-variable
+deprecation warning) and two illustrative IDs from the project plan; the report now shows 191
+covered, 0 uncovered. CI's `detect` job now recognizes the execution driver test and the projects
+suite, and active `ui`, `conformance`, `execution`, `projects`, `traceability`, `lean`, and
+`fuzz-smoke` jobs run on the documented matrix with `--locked`, denied warnings, pinned runner
+images, and clang versions printed. `fuzz_manifest` (arbitrary TOML, no filesystem or execution)
+and the six artifact/compiler targets remain seeded under `fuzz/seeds`; the smoke job builds every
+target and runs each for 60 s with `-max_len=1048576`. The pass also fixed a latent codegen defect exposed by the
+corpus: UTF-8 string indexing through the dynamic single-root path treated `USTRING` as an array
+(`STC-E-CODEGEN-002`). The identity tests and the projects suite now directly exercise the
+previously untested `STC-W-ONLINE-003` direct-root remap warning and the `STC-E-RUN-IO-001`
+file-backend write failure.
 
 ### Phase 11 — Documentation and handover
 

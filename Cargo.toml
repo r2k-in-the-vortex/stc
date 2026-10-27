@@ -15,6 +15,7 @@ members = [
     "crates/stc-test",
     "crates/stc-fmt",
     "crates/stc-driver",
+    "crates/xtask",
 ]
 exclude = ["fuzz"]
 

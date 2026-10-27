@@ -1,0 +1,4 @@
+tests/ui/oop_bad_override.st:7:1: error[STC-E-OOP-002]: `OVERRIDE` has no matching base method
+  |
+7 | METHOD PUBLIC OVERRIDE Missing : DINT //~ ERROR STC-E-OOP-002
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

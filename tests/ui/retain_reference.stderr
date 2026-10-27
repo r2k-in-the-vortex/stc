@@ -1,0 +1,4 @@
+tests/ui/retain_reference.st:6:3: error[STC-E-RETAIN-001]: retained variables cannot contain references, interfaces, or pointers
+  |
+6 |   r : REF_TO DINT; //~ ERROR STC-E-RETAIN-001
+  |   ^

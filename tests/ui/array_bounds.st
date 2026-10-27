@@ -1,0 +1,7 @@
+PROGRAM P
+VAR
+  a : ARRAY[1..3] OF DINT;
+  x : DINT;
+END_VAR
+  x := a[4]; //~ ERROR STC-E-ARRAY-001
+END_PROGRAM

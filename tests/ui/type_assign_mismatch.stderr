@@ -1,0 +1,4 @@
+tests/ui/type_assign_mismatch.st:6:11: error[STC-E-TYPE-012]: cannot convert `DINT` to `BOOL`
+  |
+6 |   flag := n; //~ ERROR STC-E-TYPE-012
+  |           ^

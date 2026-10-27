@@ -1,0 +1,6 @@
+tests/ui/name_unknown_suggestion.st:5:14: error[STC-E-NAME-001]: unknown name `counte`
+  |
+5 |   counter := counte; //~ ERROR STC-E-NAME-001
+  |              ^^^^^^
+  |
+  = help: did you mean `counter`?: `counter`

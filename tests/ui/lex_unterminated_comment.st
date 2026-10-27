@@ -1,0 +1,2 @@
+PROGRAM P
+(* unterminated block comment //~ ERROR STC-E-LEX-006 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-105 //~ ERROR STC-E-GRAM-107 //~ ERROR STC-E-GRAM-111

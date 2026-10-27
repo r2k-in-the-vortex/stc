@@ -1,0 +1,8 @@
+tests/ui/lex_malformed_literal.st:5:8: error[STC-E-LEX-008]: malformed base-16 literal
+  |
+5 |   x := 16#GG; //~ ERROR STC-E-LEX-008 //~ ERROR STC-E-GRAM-105
+  |        ^^^^^
+tests/ui/lex_malformed_literal.st:5:8: error[STC-E-GRAM-105]: malformed token
+  |
+5 |   x := 16#GG; //~ ERROR STC-E-LEX-008 //~ ERROR STC-E-GRAM-105
+  |        ^^^^^
