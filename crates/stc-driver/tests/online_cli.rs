@@ -799,7 +799,7 @@ fn watch_rebuilds_and_deploys_a_code_change() {
         eprintln!("note: clang not found; skipping watch test");
         return;
     };
-    let _runtime = runtime_artifact();
+    let runtime = runtime_artifact();
     let project = TestDir::new("watch");
     project.write(
         "stc.toml",
@@ -816,6 +816,8 @@ fn watch_rebuilds_and_deploys_a_code_change() {
             "20s",
             "--clang",
             clang,
+            "--runtime",
+            runtime.to_str().unwrap(),
             "--store",
             store_dir.to_str().unwrap(),
         ])
@@ -902,7 +904,7 @@ fn watch_stops_on_an_interrupt_with_exit_code_130() {
         eprintln!("note: clang not found; skipping watch interrupt test");
         return;
     };
-    let _runtime = runtime_artifact();
+    let runtime = runtime_artifact();
     let project = TestDir::new("watch-interrupt");
     project.write(
         "stc.toml",
@@ -919,6 +921,8 @@ fn watch_stops_on_an_interrupt_with_exit_code_130() {
             "30s",
             "--clang",
             clang,
+            "--runtime",
+            runtime.to_str().unwrap(),
             "--store",
             store_dir.to_str().unwrap(),
         ])
@@ -959,7 +963,7 @@ fn watch_keeps_the_old_generation_on_a_build_error() {
         eprintln!("note: clang not found; skipping watch failure test");
         return;
     };
-    let _runtime = runtime_artifact();
+    let runtime = runtime_artifact();
     let project = TestDir::new("watch-failure");
     project.write(
         "stc.toml",
@@ -975,6 +979,8 @@ fn watch_keeps_the_old_generation_on_a_build_error() {
             "18s",
             "--clang",
             clang,
+            "--runtime",
+            runtime.to_str().unwrap(),
             "--store",
             store_dir.to_str().unwrap(),
         ])
