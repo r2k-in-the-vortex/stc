@@ -1,6 +1,6 @@
 # Testing and Verification
 
-Status: M4.5 and M5 implementation and test plan complete (2026-10-25); M6 phase-0 test-build and test-clock contracts fixed (2026-10-26); M6 phase 6 test runner implemented (2026-10-26); M6.5 suites are the target  
+Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 debug suites are the target  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
@@ -28,6 +28,16 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 > kills on expiry, parses the one-line result, and supports filters, `--list`, `--no-run`,
 > expected traps, `-- --nocapture`, and human/JSON reports. Production builds exclude test units
 > and assert calls.
+>
+> **M6 phase 10 status (2026-10-27):** the conformance corpus, UI snapshots, `xtask`, rule
+> traceability, fuzz smoke, and the CI matrix are active. `tests/conformance` has 29 cases in 17
+> areas with `.meta.toml` rule annotations; `tests/ui` has 25 diagnostic snapshots with
+> `//~ ERROR`/`//~ WARNING` line annotations and committed `.stderr` renders;
+> `crates/xtask` implements `cargo xtask test --suite ui|conformance|execution|projects` and
+> `cargo xtask traceability --check`; `fuzz_manifest` and the six artifact/compiler targets are
+> seeded; and the `ui`, `conformance`, `execution`, `projects`, `traceability`, `lean`, and
+> `fuzz-smoke` jobs run on the documented matrix. The phase also exposed and fixed a UTF-8
+> dynamic-index codegen defect (`STC-E-CODEGEN-002`).
 
 ## 1. Layers of testing
 
@@ -40,19 +50,20 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | IR generation | Deterministic IR, ABI, structure, clang verification, snapshots | `crates/stc-codegen/tests` |
 | Execution | Generated executables, library harnesses, traps, process image | `crates/stc-driver/tests` |
 | Conformance | Profile feature matrix and edge cases | `tests/conformance` |
-| Standard library | Functions and FBs | `tests/stdlib` |
+| Standard library | Functions and FBs | `crates/stc-codegen/tests`, `crates/stc-driver/tests/execution.rs`, `tests/conformance/stdlib` |
 | Pragmas | JSON payload parsing, balanced braces, non-nesting, validation, precedence | `crates/stc-parser/tests`, `tests/ui` |
-| I/O metadata | Process-image layout, `AT` type checks, binding hints/overrides, unbound defaults | `tests/io` |
-| State/retain | Warm/cold restart, layout hash, CRC/corruption, atomic write, mismatch policy | `tests/state` |
-| Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `crates/stc-runtime/tests`, `crates/stc-driver/tests` |
+| I/O metadata | Process-image layout, `AT` type checks, binding hints/overrides, unbound defaults | `crates/stc-codegen/tests`, `crates/stc-driver/tests/state_io_cli.rs`, `tests/conformance/io` |
+| State/retain | Warm/cold restart, layout hash, CRC/corruption, atomic write, mismatch policy | `crates/stc-runtime/tests`, `crates/stc-driver/tests/state_io_cli.rs`, `tests/conformance/state` |
+| Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `crates/stc-runtime/tests`, `crates/stc-driver/tests/online_cli.rs` |
 | GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, corrupt/manifest fuzzing | `crates/stc-got/tests`, `crates/stc-codegen/tests`, `crates/stc-driver/tests` |
-| Descriptors/OOP | Runtime descriptors, vtable cells, handle preservation, interface nullability, place descriptors | `tests/oop`, `tests/online` |
-| Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `tests/debug` |
+| Descriptors/OOP | Runtime descriptors, vtable cells, handle preservation, interface nullability, place descriptors | `crates/stc-runtime/tests/descriptor_lifecycle.rs`, `crates/stc-codegen/tests`, `tests/conformance/oop` |
+| Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `tests/debug` (M6.5 target) |
 | Real-time boundary | Switch latency, maintenance jitter, service-thread contention, generation pinning | `crates/stc-runtime/tests` |
-| Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests` |
+| Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests`, `crates/stc-driver/tests/fmt_cli.rs` |
 | Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
 | Lean | Exact-function models and proofs | `lean/`, `tests/vectors` |
-| CLI/manifest | Verbs, exit codes, JSON, configuration, dependency graph, `stc.lock`/`--locked` | `tests/cli` |
+| CLI/manifest | Verbs, exit codes, JSON, configuration, dependency graph, `stc.lock`/`--locked` | `crates/stc-manifest/tests`, `crates/stc-driver/tests/cli_project.rs`, `project_cli.rs` |
+| Project workflow | `new/check/build/run/test/fmt/clean` end-to-end, rename/download/diff/watch | `crates/stc-driver/tests/projects.rs`, `online_cli.rs` |
 | Fuzzing | Robustness of lexer/parser/analyzer/codegen | `fuzz/` |
 | Cross-target | IR/object emission for targets other than host | CI |
 | Host portability | Full workspace tests and end-to-end CLI on Linux x86-64 and Linux AArch64 | CI |
@@ -253,8 +264,8 @@ M1 and M2 use an equivalent hand-rolled harness: `STC_UPDATE_SNAPSHOTS=1` regene
 snapshots, matching the lexer's workflow. The parser corpus is `crates/stc-parser/tests/corpus`
 and its snapshots are `crates/stc-parser/tests/snapshots`; a traceability test maps every
 Grammar §2–§10 production and every `STC-GRAM-*`/`STC-E-GRAM-*` code to named positive and
-negative tests. `tests/ui` plus `xtask` remains deferred to M6 (see Architecture §3.2), so M2
-parser diagnostics live in `crates/stc-parser/tests` and `crates/stc-driver/tests`.
+negative tests. `tests/ui` and `xtask` are implemented (M6), and the UI harness uses the same
+annotation/`STC_UPDATE_SNAPSHOTS=1` workflow.
 
 ### 3.2 UI tests
 
@@ -289,7 +300,7 @@ Targets:
 - `fuzz_module_descriptor`: arbitrary descriptor/metadata bytes -> accepted/rejected cleanly, no
   panic; no native loading in the fuzz target.
 
-`fuzz_manifest` follows the project `stc.toml` parser in M6. The other six targets are
+`fuzz_manifest` targets the M6 `stc.toml`/lockfile parser. The other six targets are
 implemented. `fuzz_got_manifest` and `fuzz_module_descriptor` validate artifact bytes only; they
 never map, load, or execute native module code. Committed seeds under `fuzz/seeds/` provide a
 compiler-produced class/interface manifest and descriptor blob plus decodable malformed
@@ -310,6 +321,7 @@ expected_exit = 0
 expected_stdout = "..."
 expected_trap = "STC_TRAP_OVERFLOW"
 cycles = 1
+rules = ["STC-GRAM-003"]
 ```
 
 Areas:
@@ -328,7 +340,9 @@ Areas:
 - I/O (`AT`, process image, pragma hints, project bindings, unbound defaults),
 - retained state (warm/cold restart, layout changes, corruption, atomic save),
 - strings (STRING/WSTRING/USTRING),
+- the UTF-8 extension (lexing, length, indexing, conversions, supplementary scalars),
 - standard functions/FBs,
+- project (manifest, lockfile, local dependencies, project CLI),
 - traps and diagnostics.
 
 Every implemented rule ID must map to at least one case. A generated traceability report lists
@@ -424,18 +438,26 @@ lean/
 
 ```json
 {
-  "function": "ADD_DINT",
+  "function": "ADD",
   "version": 1,
+  "model_version": 1,
+  "generator": "0x75d79f07d61818dc",
   "cases": [
-    { "a": 2147483647, "b": 1, "result": "overflow" },
-    { "a": -7, "b": 3, "result": -4 }
+    { "a": 127, "b": 1, "result": "overflow", "type": "SINT" },
+    { "a": -7, "b": 3, "result": -4, "type": "SINT" }
   ]
 }
 ```
 
+- One file per operation groups the operation across its IEC type instantiations; every case
+  carries a `type` field. The conversion file carries the full 16-by-16 ordered `X_TO_Y` matrix
+  over BOOL, the integer types, the bit strings, and CHAR/WCHAR/UCHAR, with `from`/`to`/`value`
+  case fields.
 - Values are decimal strings for widths > 64 bits, integers otherwise.
-- Every vector file records the Lean model version and the generator hash.
-- Rust tests fail if a vector is missing for an implemented exact function.
+- Every vector file records the format version, the Lean model version, and an FNV-1a 64 digest
+  of the canonical case text (`generator`); the 30 committed files under `tests/vectors/exact/`
+  are regenerated by `lake exe vectors`.
+- Rust tests fail if a vector is missing for an implemented exact function or type pairing.
 
 ## 6. CI
 
@@ -449,8 +471,10 @@ lean/
 | `ui` | diagnostic snapshots on Windows x64 and Ubuntu x64 |
 | `conformance` | conformance corpus on Windows x64 and Ubuntu x64 |
 | `execution` | compile/run tests on Windows x64 and Ubuntu x64 |
+| `projects` | end-to-end project and online workflow on Windows x64 and Ubuntu x64 |
 | `online` | hot-swap/manifest/cold-download suite on Windows x64 and Ubuntu x64 |
-| `debug` | typed debug, breakpoint/step, DWARF/CodeView, swap-teardown suite |
+| `traceability` | `cargo xtask traceability --check` on Ubuntu x64 |
+| `debug` | M6.5 target: typed debug, breakpoint/step, DWARF/CodeView, swap-teardown suite |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
 | `cross-target` | `clang --target=aarch64-... -c` smoke (IR/object) |
@@ -459,16 +483,19 @@ lean/
 The workflow is `.github/workflows/ci.yml`; the documentation checks are implemented in
 `tools/ci/check_docs.py`. The `docs` job runs from M0. Jobs that need the Rust workspace, suite
 harnesses, Lean project, fuzz targets, or cross-target IR fixtures stay skipped until those inputs
-exist, so the skeleton never reports a pass for a job that did not run. The M4.5 `online` job runs
-the GOT identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
-launcher/embedding artifact suites on both Windows x64 and Ubuntu x64.
+exist, so the skeleton never reports a pass for a job that did not run. The `online` job runs the
+GOT identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
+launcher/embedding artifact suites; the `projects` job runs `new/check/build/run/test/fmt/clean`
+and the rename/download/diff/watch workflow; the `traceability` job checks every implemented rule
+has test evidence. The M6 UI, conformance, execution, projects, traceability, Lean, and fuzz-smoke
+jobs are active on the documented matrix.
 
 ### 6.2 Matrix
 
 - Primary: Windows x64, `x86_64-pc-windows-msvc`; the development host is Windows 11 and CI uses
   GitHub's `windows-2025` runner. Pinned clang/LLVM 23.1.4.
 - Secondary: Ubuntu 24.04 (`ubuntu-24.04`), `x86_64-unknown-linux-gnu` — workspace tests,
-  diagnostic snapshots, conformance corpus, execution tests, and end-to-end CLI.
+  diagnostic snapshots, conformance corpus, execution tests, project workflow, and end-to-end CLI.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`); `-latest` labels are not used, so
   image migrations do not silently change the matrix.
 - Host portability (after basic development, D-042): native or emulated Linux AArch64
@@ -490,10 +517,14 @@ launcher/embedding artifact suites on both Windows x64 and Ubuntu x64.
 
 - Every rule ID (`STC-*`) appears in at least one test name, test annotation, or conformance
   metadata.
-- `cargo xtask traceability` scans the spec and tests and emits a report:
+- `cargo xtask traceability` scans `Specification/**/*.md` and the tests/corpus and emits a
+  report:
   - covered rules,
   - rules marked "not implemented",
   - rules with no test (CI failure if the rule is normative and implemented).
+- Evidence is resolved in integration-test names and `STC-*` comments, unit-test sections, UI
+  annotations, and conformance `rules` metadata, including shared `codes::CONSTANT` references.
+  `tools/ci/traceability-allowlist.toml` records the explicit not-implemented rules.
 - Coverage is semantic, not line-based: a rule is covered by a named test, not by hitting a line.
 
 ## 8. Manual and exploratory testing

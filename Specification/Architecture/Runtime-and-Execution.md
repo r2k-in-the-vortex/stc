@@ -1,6 +1,6 @@
 # Runtime and Execution Model
 
-Status: M4.5 persistent host and ABI 2 module execution, including M5 OOP descriptors, implemented (2026-10-25); M6 phase-0 scheduler and ABI 2.2 test-clock contracts fixed (2026-10-26); M6 phase-4 cooperative task scheduler and run loop and phase-5 file-backed state and I/O backends implemented (2026-10-26)  
+Status: M4.5 persistent host and ABI 2 module execution, M5 OOP descriptors, and M6 scheduler, run loop, file-backed state, I/O, and control-channel work implemented (2026-10-27); M6.5 debug/monitoring pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 
@@ -87,10 +87,10 @@ pair it loads. The host:
    - mark due `SINGLE` tasks complete and advance interval deadlines after a successful scan,
    - check the watchdog and service queues.
 
-   The phase-4 launcher cold-installs the adjacent pair and runs the host scheduler and cycle
-   loop. Background loading/preparation, queued debug writes/forces, and service threads are
-   later work. Online prepare/activation is driven through the Rust `Host` API and the embedding
-   host.
+   The launcher cold-installs the adjacent pair and runs the host scheduler and cycle loop.
+   Online prepare/activation is driven through the local deploy/status control channel
+   (`stc run --watch`), the Rust `Host` API, and the embedding host. Validation, load, and
+   prepare run between cycles on the cycle thread; fully off-thread prepare remains M7.
 6. Runs shutdown, saves retained state (phase 5), and unloads generations.
 7. Returns exit code `0` on normal completion, `1` for a load or cycle failure, `2` for an
    invalid runtime option, `3` for an internal panic, `4` for a trap, and `130` when
@@ -130,7 +130,8 @@ typedef struct {
     const char* module_path;    /* null = run the already-loaded module */
     const char* io_file;
     const char* state_file;
-    const char* control_endpoint; /* reserved: M6 phase 8; must be null */
+    const char* control_endpoint; /* local named pipe/socket, or null */
+    const char* control_nonce;    /* per-run nonce when control_endpoint is set */
     const int32_t* stop;        /* nonzero stops before the next scan */
 } stc_host_options;
 ```
@@ -138,9 +139,9 @@ typedef struct {
 `stc_host_run` loads `module_path` cold when it is non-null and otherwise runs the module
 already loaded through `stc_host_load_module`. It shares one loop implementation with the
 launcher: the same latched clock, scheduler, cycle-time deadline, mock clock, status output, and
-0/1/2/3/4/130 exit codes. The control endpoint is carried by the struct and rejected until
-phase 8; the I/O and retained-state paths configure the host before a cold load and apply to the
-final shutdown.
+0/1/2/3/4/130 exit codes. A non-empty control endpoint requires the matching per-run nonce and
+serves the local deploy/status channel; the I/O and retained-state paths configure the host
+before a cold load and apply to the final shutdown.
 
 Embedding hosts configure the process-image backend and retained state before loading a module
 with `stc_host_configure_io(backend, file)` (`-1` keeps the metadata backend, `0`/`1`/`2` select
@@ -148,13 +149,15 @@ with `stc_host_configure_io(backend, file)` (`-1` keeps the metadata backend, `0
 disables retention). A `stc_host_run` options struct may configure the same values for the
 module it loads; an already-loaded module keeps the host's current configuration.
 
-The generated module remains a separate loadable artifact; M4.5 emits the embedding host as a
-static library, and M6 adds the shared host-library form. `stc_host_load_module` takes mode `0` (cold),
-`1` (online prepare), or `2` (auto). The embedding host owns the loop, I/O, clock,
-GOT, root allocator, manifest store, loader/prepare thread, and service/monitor threads.
+The generated module remains a separate loadable artifact; M6 emits the embedding host as a
+static library or, with `lib-type = "shared"`, a shared host library. `stc_host_load_module`
+takes mode `0` (cold), `1` (online prepare), or `2` (auto).
 `stc_module_cycle` is called only by the host's cycle thread; external callers must serialize
-all host API calls. The runtime is not a general-purpose thread-safe library: service access
-goes through the typed generation-pinned API, and the cycle thread is the only ST executor.
+all host API calls. The embedding host owns the loop, I/O, clock, GOT, root allocator, manifest
+store, and control; M6 runs candidate validation/load/prepare between cycles on the cycle thread,
+and M6.5 adds the service/monitor threads. The runtime is not a general-purpose thread-safe
+library: service access goes through the typed generation-pinned API, and the cycle thread is the
+only ST executor.
 
 ### 1.3 Task model
 
@@ -205,8 +208,8 @@ goes through the typed generation-pinned API, and the cycle thread is the only S
 ### 2.1 Implementation
 
 - `crates/stc-runtime` is a Rust crate built as `staticlib` (the embedding/host artifact) with
-  an `rlib` target for Rust integration tests. It is the persistent host as well as the
-  embedding library. Shared host libraries are M6.
+  an `rlib` target for Rust integration tests, and as a shared host library when
+  `lib-type = "shared"` is selected. It is the persistent host as well as the embedding library.
 - It exposes a C ABI (`extern "C"`, `#[no_mangle]`, `#[repr(C)]`) through a versioned host API
   table, not a flat set of mandatory exported symbols.
 - No Rust types cross the ABI except `u8`/`i32`/`i64`/`f32`/`f64`/pointers/opaque handles.
@@ -216,8 +219,8 @@ goes through the typed generation-pinned API, and the cycle thread is the only S
 - Panics are caught at the ABI boundary and converted to `stc_rt_trap` where possible; the
   compiler-generated code does not rely on unwinding.
 - The host owns the GOT cell table, root allocator, module loader, manifest store, swap
-  controller, process image, retained state, and service/monitor threads. Module code owns only
-  code and version-local read-only data.
+  controller, process image, retained state, and the M6 control/status thread; M6.5 adds the
+  service/monitor threads. Module code owns only code and version-local read-only data.
 - Host state is protected by a control lock used only by host control paths, never held across
   ST execution. Service readers use generation pinning/epoch refcounts.
 
@@ -492,21 +495,22 @@ Categories and ownership:
 
 ### 3.2 Standard function blocks
 
-These are implemented in ST under `stdlib/` and compiled with the user project:
+The standard FB bodies are synthesized as production HIR in the reserved `STC_STD` scope and
+compiled into each module; there is no textual `stdlib/` package (D-134):
 
 `SR`, `RS`, `R_TRIG`, `F_TRIG`, `CTU`, `CTD`, `CTUD`, `TP`, `TON`, `TOF`.
 
-- The stdlib is injected as a prelude; its POUs live in a reserved namespace (`STC_STD`) and are
+- The standard FB types are injected as a prelude; their definitions live in `STC_STD` and are
   compiled into each module with stable GOT keys. The host does not require a separately loaded
   stdlib module in v1.
 - User code can use the standard names directly; the analyzer resolves them after local/global
   scopes, so a user-defined `TON` shadows the stdlib (with a warning).
-- The stdlib depends only on `stc_rt_cycle_now_ns()` and exact arithmetic. It must not read the
-  live monotonic clock.
+- The synthesized bodies depend only on the latched `cycle_now_ns` service and exact arithmetic.
+  They must not read the live monotonic clock.
 - All timers in one scan use the same latched cycle time, so two `TON`/`TOF`/`TP` instances
   evaluated in the same cycle cannot produce different elapsed times (D-027).
-- Timer behavior is defined in `Specification/Stdlib/Timers.md` (future document) and tested with
-  a mock clock and deterministic step sequences.
+- Timer behavior is defined by the synthesized bodies and tested with a mock clock and
+  deterministic step sequences (D-134/D-140).
 
 ### 3.3 Prelude and name collisions
 

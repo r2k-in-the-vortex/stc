@@ -1,6 +1,6 @@
 # Online Change and GOT
 
-Status: Resolved specification (2026-10-24); implemented for the M4.5/M5 surface (2026-10-25); M6 phase-0 control-channel, rename-history, and ABI 2.2 contracts fixed (2026-10-26)  
+Status: Resolved specification (2026-10-24); implemented for the M4.5/M5 surface (2026-10-25) and the M6 online workflow and control channel (2026-10-27); M6.5 debug/monitoring pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -21,9 +21,11 @@ load/prepare/activate/commit/rollback/unload state machine, generation pins, pro
 reconfiguration and direct-cell remap, and the thin launcher/embedding host artifacts for the
 M4 scalar surface. The byte formats and host API are fixed by
 [GOT Artifacts and Schemas](GOT-Artifacts.md); aggregate/FB roots, OOP descriptors and vtables,
-and place-descriptor references are M5 extensions of the same model. The user-facing
-`stc online` commands and the background loader/service threads are M6; the Rust `Host` API
-drives online prepare/activation today.
+and place-descriptor references are M5 extensions of the same model. M6 implements the
+user-facing `stc online download/diff` and `stc run --watch` workflow and the local
+control/status thread. Candidate validation, load, and prepare run between cycles on the cycle
+thread; fully off-thread prepare remains M7. The Rust `Host` API also drives online
+prepare/activation directly.
 
 ## 1. Terms
 
@@ -57,7 +59,7 @@ The host owns:
 - module loading, descriptors, manifests, and the active baseline;
 - task and configuration state;
 - the export registry;
-- diagnostics, counters, and service/monitor threads;
+- diagnostics, counters, and (M6.5) service/monitor threads;
 - the debug/monitoring protocol.
 
 The module owns only code and version-local read-only data. It may allocate transient memory
@@ -84,7 +86,7 @@ control channel is local deployment/status only and is not the M6.5 debug protoc
 | `module` | Loadable code, module descriptor, entry points, embedded metadata, no persistent storage |
 | `manifest` | Canonical JSON (`.stc-got.json`) plus compact binary (`.stc-got.bin`), generated from one model |
 | `exe` | Thin host launcher that loads an adjacent module and manifest |
-| `lib` | Embedding host library; generated code remains in the separate module (M4.5: static host archive) |
+| `lib` | Embedding host library (static archive or shared library); generated code remains in the separate module |
 
 A module and its manifest are a pair. The module descriptor is a small binding structure for code
 addresses, sizes, entry points, and the paired digest. The manifest is the identity/history
@@ -190,7 +192,7 @@ function IDs include the signature.
 | Loaded | Platform loader mapped the module; descriptor not yet trusted |
 | Validated | Descriptor, ABI, target, metadata, and manifest pairing passed |
 | Attached | Module received the host API table and its GOT context |
-| Prepared | Candidate roots/state prepared on the loader thread; temp GOT built |
+| Prepared | Candidate roots/state prepared and temp GOT built (M6: between cycles on the cycle thread; M7 target: loader thread) |
 | Active | Module is the current generation at a cycle boundary |
 | Retired | Replaced, inside the rollback/grace window |
 | Unloaded | Platform unload completed off-thread |
@@ -203,10 +205,12 @@ attached. Load failures and rejected modules are non-fatal to the host.
 
 ### 5.3 Prepare
 
-The loader thread loads the candidate, validates it, checks the manifest baseline, allocates new
-roots, copies preserved values under the preservation rules, builds the temp GOT, and records the
-candidate plan. Prepared code may run initialization logic on the loader thread with its own temp
-GOT context, but must not publish outputs or mutate the active generation.
+The host loads the candidate, validates it, checks the manifest baseline, allocates new roots,
+copies preserved values under the preservation rules, builds the temp GOT, and records the
+candidate plan. In M6 this work runs between cycles on the cycle thread so ST is never
+re-entered; fully off-thread loader/prepare remains an M7 hardening item. Prepared code may run
+initialization logic with its own temp GOT context but must not publish outputs or mutate the
+active generation.
 
 ## 6. Activation, commit, rollback, unload
 
@@ -375,7 +379,7 @@ by the host resolver.
 
 ## 10. Threads, services, and diagnostics
 
-Service/monitor threads use typed path/`GotId` access, not raw memory. Reads are generation-pinned
+M6.5 service/monitor threads use typed path/`GotId` access, not raw memory. Reads are generation-pinned
 and do not lock the cycle. Writes and forcing are queued for cycle-boundary application. A write
 queued across a swap is rejected or retried against the new generation; it must not target a
 removed field.
@@ -405,7 +409,8 @@ under the same major.
   Linux with preserved compatible state.
 - An incompatible change is rejected or requires an explicit reset; a missing/stale/corrupt
   baseline forces a tested cold download.
-- The cycle-boundary switch is O(1); prepare, copy, and unload are off-thread; jitter is bounded.
+- The cycle-boundary switch is O(1); activation and unload are off-thread, M6 prepares the
+  candidate between cycles, and bounded maintenance jitter is an M7 hardening item.
 - Generated code contains no persistent raw pointers and no module-owned persistent storage.
 - Double builds produce byte-identical modules and manifests; the active manifest can be
   downloaded and used as the next build baseline.

@@ -11,9 +11,9 @@ use crate::report::Format;
 const EDITION: &str = "IEC 61131-3:2013";
 const SAFETY: &str = "This project is not a safety PLC and assumes no safety responsibility.";
 const EXTENSIONS: [&str; 4] = ["STC-UTF8", "STC-PRAGMA", "STC-TEST", "STC-POINTER"];
-const RUNTIME_CAPABILITIES: [&str; 2] = ["online-change", "got-manifest"];
+const RUNTIME_CAPABILITIES: [&str; 3] = ["online-change", "got-manifest", "debug-monitoring"];
 
-/// Feature categories and their implementation status at M6 phase 3.
+/// Feature categories and their implementation status at M6 completion.
 const FEATURES: [(&str, &str); 19] = [
     ("structured-text", "implemented"),
     ("lexical", "implemented"),
@@ -25,13 +25,13 @@ const FEATURES: [(&str, &str); 19] = [
     ("utf8-strings", "implemented"),
     ("standard-functions", "implemented"),
     ("standard-fbs", "implemented"),
-    ("configurations", "partial"),
-    ("io-devices", "planned"),
-    ("retained-state", "partial"),
-    ("project-system", "partial"),
-    ("test-runner", "planned"),
-    ("formatter", "planned"),
-    ("online-change", "partial"),
+    ("configurations", "implemented"),
+    ("io-devices", "implemented"),
+    ("retained-state", "implemented"),
+    ("project-system", "implemented"),
+    ("test-runner", "implemented"),
+    ("formatter", "implemented"),
+    ("online-change", "implemented"),
     ("debug-monitoring", "planned"),
     ("ed4-features", "not-in-profile"),
 ];

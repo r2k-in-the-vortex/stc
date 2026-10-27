@@ -1,6 +1,6 @@
 # Architecture
 
-Status: M4.5 host/module model and M5 lowering implemented (2026-10-25); M6 phase-0 contracts fixed (2026-10-26), M6 implementation is next; M6.5 debug/monitoring follows  
+Status: M4.5 host/module model, M5 lowering, and M6 project system/CLI/verification hardening implemented (2026-10-27); M6.5 debug/monitoring is next  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
 
@@ -51,13 +51,14 @@ stc/
     stc-hir/                 arenas, DefId/HirId, types, HIR nodes
     stc-sema/                name resolution, type checking, const eval, lowering
     stc-codegen/             IR builder, GOT/manifest model, ABI, mangling, module emission
+    stc-got/                 stable keys, GotId, catalog, manifest/plan and descriptor codecs
     stc-manifest/            stc.toml schema, local dependency graph, source discovery
     stc-runtime/             persistent host, loader/GOT/root allocator, staticlib/rlib
-    stc-test/                test discovery, runner, reporting
+    stc-test/                test discovery, wrapper generation, runner, reporting
     stc-driver/              CLI binary `stc`
-  stdlib/                    standard function blocks in ST
+    xtask/                   `cargo xtask test --suite ...` and `traceability`
   lean/                      Lake project for exact-function models/proofs
-  tests/                     conformance, UI, codegen, execution, projects
+  tests/                     conformance corpus, UI snapshots, committed vectors, cross-target fixtures
   examples/
   Specification/
 ```
@@ -68,10 +69,10 @@ Crate dependency direction is acyclic:
 stc-span <- stc-diag
 stc-span <- stc-lexer <- stc-syntax <- stc-parser
 stc-span <- stc-hir <- stc-sema <- stc-parser
-stc-hir <- stc-codegen
-stc-manifest <- stc-driver
-stc-test <- stc-driver
-stc-runtime is built independently and linked by the driver
+stc-hir <- stc-codegen <- stc-got
+stc-got <- stc-runtime
+stc-manifest <- stc-test
+stc-codegen, stc-fmt, stc-got, stc-hir, stc-manifest, stc-runtime, stc-sema, stc-test <- stc-driver
 ```
 
 `stc-codegen` must not depend on `stc-parser` or `stc-syntax`; it consumes HIR only. The GOT
@@ -399,11 +400,13 @@ storage and must not retain the pointer beyond the call.
   ```
 
   `stc_rt_execute` resolves the adjacent module, owns the cold-install and cycle loop, cycle
-  limit, latched time base, error reporting, and the host state machine. M4.5's launcher is
-  cold-install only; signal handling and the background online-change controller are M6.
+  limit, latched time base, error reporting, and the host state machine. M6's launcher installs
+  stop handlers, supports mock-clock runs and the state/I/O options, and can start the local
+  deployment/status control endpoint for `stc run --watch`.
 - Library mode exports the host embedding entry points; `{stc:export}` wrappers are served
   through the host export registry for the active module, which remains a separate loadable
-  artifact. The embedding host owns the loop, I/O backend, manifest store, and debug services.
+  artifact. The embedding host owns the loop, I/O backend, and manifest store; M6.5 adds the
+  debug services.
 
 ### 4.10 Name mangling
 
@@ -430,7 +433,7 @@ signature hash is a stable 64-bit FNV-1a of the canonical type string, not a ran
 
 - Debug information is the default v1 build output; `--release` selects the optional stripped,
   optimised mode. Debug and release builds have distinct build IDs and manifests. This is the
-  M6.5 target; M4.5 emits no DWARF/CodeView or checkpoints (see
+  M6.5 target; M6 also emits no DWARF/CodeView or checkpoints (see
   [Debug and Monitoring](Debug-and-Monitoring.md) §12).
 - Codegen emits full DWARF/CodeView variable/type/location information through clang, plus a
   checkpoint table and host check calls for breakpoints. It does not patch machine code.
@@ -516,13 +519,14 @@ project targets IR syntax accepted by LLVM 15 and later.
 | Artifact | Command shape |
 | --- | --- |
 | IR only | `stc build --emit=ir` writes `<name>.ll`; no clang call |
-| Object | `clang --target=<triple> -x ir <name>.ll -c -o <name>.o [-fPIC] -O0` |
+| Object | `clang --target=<triple> -x ir <name>.ll -c -o <name>.o [-fPIC] -O<level>` (`[build].opt-level`, default 0) |
 | Module | `clang --target=<triple> <name>.o -shared -o <name>-<build-id>.dll/.so` (Windows adds `/Brepro`); the paired manifest and metadata are written by the compiler |
 | Launcher | `clang --target=<triple> <name>-launcher.o <runtime_staticlib> -o <name>.exe`; loads the adjacent module pair |
-| Embedding library | copy the runtime staticlib to `<name>.lib`/`.a`; generated code stays in the separate module |
+| Embedding library | copy the runtime staticlib to `<name>.lib`/`.a`, or the runtime shared library when `lib-type = "shared"`; generated code stays in the separate module |
 
-- M4.5 compiles at `-O0` without debug information. Optimisation levels, `-g`, and `--release`
-  are M6.5; the generated module and manifest remain separate artifacts in every mode.
+- Project builds pass `[build].opt-level` to clang and emit no debug information. `-g`,
+  `--release`, and debug/release identities remain M6.5; the generated module and manifest remain
+  separate artifacts in every mode.
 - The runtime staticlib is built with the toolchain that matches the target C ABI: the MSVC
   toolchain for `*-pc-windows-msvc` and the GNU toolchain for `*-unknown-linux-gnu`.
 - On Windows MSVC targets, clang uses `link.exe` or `lld-link`. On Linux targets it uses the
@@ -609,7 +613,7 @@ host exports, not module imports. The exact table, service IDs, versions, and si
 - Downloaded GOT manifests are untrusted parsed data: validate every field and digest,
   access-control export because layout data reveals program structure, and never execute manifest
   content. Descriptor/manifest parsers are fuzz targets.
-- Debug/monitoring access is authenticated and audited; the standard API is typed, not raw
+- M6.5 debug/monitoring access is authenticated and audited; the standard API is typed, not raw
   memory.
 
 ## 9. Open architecture questions

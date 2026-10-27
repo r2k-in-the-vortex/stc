@@ -1,6 +1,6 @@
 # GOT Artifacts and Schemas
 
-Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25); M6 phase-6 host ABI 2.2 test-clock append implemented (2026-10-26)  
+Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25); M6 host ABI 2.2 test-clock append and project/state/I/O integration implemented (2026-10-27); M6.5 debug additions pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: Normative formats for stable keys, `GotId`, the compiler catalog, the module descriptor,
 the persistent GOT manifest, the online-change plan, host ABI 2 (2.2 implemented;
@@ -464,9 +464,9 @@ nonzero values are invalid. `entry_flags` bits:
 | 1 | `stc_module_cycle` is callable |
 | 2 | `stc_module_shutdown` performs retained-state work |
 | 3 | `stc_module_detach` releases module-local resources |
-| 4 | Debug build form (the default non-`--release` artifact). M4.5 emits no debug information or checkpoint hooks; M6.5 adds them |
+| 4 | Debug build form (the default non-`--release` artifact). M4.5 and M6 emit no debug information or checkpoint hooks; M6.5 adds them |
 | 5 | The module uses retained-state host services |
-| 6 | Debug hooks are active (M6.5; always clear in M4.5) |
+| 6 | Debug hooks are active (M6.5; always clear in M4.5 and M6) |
 | 7–31 | Reserved, must be zero in format 1 |
 
 `FunctionRecord`:
@@ -516,11 +516,11 @@ every `Descriptor` slot's `GotId` appears in the manifest descriptor table.
 | 1 | Online-change plan present in the paired manifest |
 | 2 | OOP descriptors/vtables in use (M5 phase 4b) |
 | 3 | Place-descriptor references in use (M5 phase 4b) |
-| 4 | Debug checkpoint hooks in use (M6.5; not set by M4.5) |
+| 4 | Debug checkpoint hooks in use (M6.5; not set by M4.5 or M6) |
 | 5–63 | Reserved; a host that does not implement a set bit rejects the module |
 
-M4.5 sets bit 0 and bit 1. It does not set bit 4; the host does not require it. The
-`entry_flags` debug-build bit may be set by M4.5's default artifact form, but it conveys no
+M4.5 and M6 set bit 0 and bit 1. They do not set bit 4; the host does not require it. The
+`entry_flags` debug-build bit may be set by the default artifact form, but it conveys no
 debug-information or checkpoint capability until M6.5 sets the feature bit and emits the
 corresponding data.
 
@@ -647,11 +647,11 @@ as a persistent root. `free` accepts only pointers returned by `alloc` in the sa
 
 `io_image` areas are process-image areas, not direct-variable cells. Direct cells are separately
 resolved by the host per generation. Retained-state status values follow
-[State and RETAIN](State-and-Retain.md); M4.5's file-backed state remains M6, so the M4.5 host
-returns the documented "disabled" status.
+[State and RETAIN](State-and-Retain.md); the M6 host implements the file-backed services and
+returns the documented status values.
 
-The `assert` entry exists for the M6 test runner and M5 hosted checks. M4.5 codegen does not emit
-assertions in production artifacts.
+The `assert` entry is used by the M6 test runner and M5 hosted checks; production codegen does
+not emit assertions.
 
 ### 8.3 Compatibility
 
@@ -1667,11 +1667,12 @@ object or interface value can depend on are rejected with `STC-E-ONLINE-003`, an
 descriptors quarantine with their roots. The service table, `REQUIRED_SIZE`, and both artifact
 formats remain unchanged.
 
-M6 phase 0 (2026-10-26) fixes the next host minor at 2.2 and assigns service ID 12,
-`set_cycle_time_ns(int64_t)`, for the test prelude (D-157). It changes no descriptor, manifest,
+M6 phase 0 (2026-10-26) fixed the next host minor at 2.2 and assigned service ID 12,
+`set_cycle_time_ns(int64_t)`, for the test prelude (D-157). It changed no descriptor, manifest,
 plan, note, or build-ID format, no existing service ID or signature, and no task record; the
 2.2 append is implemented in phase 6 and is imported only by test builds. No debug service or
-checkpoint hook is added in M6.
+checkpoint hook is added in M6. The rest of M6 (manifest, state, I/O, scheduler, and online
+workflow) consumed the existing formats without change.
 
 ## 13. Related documents
 

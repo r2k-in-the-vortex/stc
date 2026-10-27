@@ -1,6 +1,6 @@
 # State and RETAIN Persistence
 
-Status: M4.5 scalar roots, M5 aggregate/string/FB leaves, and online preservation implemented (2026-10-25); M6 phase-5 file-backed state and policy implemented (2026-10-26)  
+Status: M4.5 scalar roots, M5 aggregate/string/FB leaves, online preservation, and M6 file-backed state and policy implemented (2026-10-27)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Architecture](Architecture.md), [Decisions](../Decisions.md)
 
@@ -269,8 +269,8 @@ storage. The host owns path/atomicity/policy in that case.
 - `leaves` is sorted by path/offset and is the human-readable form of the layout hash input.
 - The runtime uses `size`/`layout_hash` with the generated functions; it does not interpret leaf
   types. Root identities (`GotId`) live in the GOT manifest, not in the leaf list.
-- M4.5 emits `size`, `layout_hash`, and `leaves` for scalar programs; `enabled`, `file`, and
-  `on_mismatch` are part of the M6 file-backed state policy and are emitted from phase 5.
+- M6 emits `size`, `layout_hash`, `leaves`, `enabled`, `file`, and `on_mismatch`; the metadata
+  describes the file-backed state policy implemented in `stc-runtime::state`.
   Aggregate/FB leaf paths such as `Main.Timer.Elapsed` are M5. The JSON field names use
   snake_case; the manifest keys remain kebab-case (`on-mismatch`).
 

@@ -1074,11 +1074,16 @@ fn compliance_summary_shapes() {
     assert!(text.contains("\"edition\":\"IEC 61131-3:2013\""), "{text}");
     assert!(text.contains("\"ed4_claimed\":false"), "{text}");
     assert!(
-        text.contains("\"runtime_capabilities\":[\"online-change\",\"got-manifest\"]"),
+        text.contains(
+            "\"runtime_capabilities\":[\"online-change\",\"got-manifest\",\"debug-monitoring\"]"
+        ),
         "{text}"
     );
     assert!(text.contains("\"safety\":\"not-a-safety-plc\""), "{text}");
-    assert!(text.contains("\"project-system\":\"partial\""), "{text}");
+    assert!(
+        text.contains("\"project-system\":\"implemented\""),
+        "{text}"
+    );
     assert!(text.contains("\"debug-monitoring\":\"planned\""), "{text}");
     assert!(text.contains("\"extensions\":[\"STC-UTF8\""), "{text}");
 

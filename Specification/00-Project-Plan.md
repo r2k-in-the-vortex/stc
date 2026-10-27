@@ -1,7 +1,8 @@
 # stc Project Plan
 
-Status: M4.5 online-change foundation and M5 lowering (phases 1–7 and 4b) implemented
-(2026-10-25); M6 phase 0 contracts complete (2026-10-26), M6 implementation is next  
+Status: M4.5 online-change foundation, M5 lowering (phases 1–7 and 4b), and M6 project system,
+CLI, and verification hardening (phases 0–11) implemented (2026-10-27); M6.5 debug/monitoring is
+next  
 Date: 2026-10-24  
 Profile: `stc-2013-oop-utf8-v1`  
 Standard reference: IEC 61131-3:2013 (Ed. 3.0), local copy under `Specification/Reference/`
@@ -81,8 +82,8 @@ is specified in
   v1; a registry/version solver is a later extension (A-009).
 - Formal verification of IEEE-754 transcendental functions. These remain test-based.
 - Multi-threaded ST task execution in v1 (architecture must not preclude it). The host runtime
-  itself has a cycle thread, a loader/prepare thread, and lower-priority service/monitor
-  threads; only the cycle thread executes ST code.
+  has a cycle thread and, in M6, a control/status thread; fully off-thread loader/prepare (M7)
+  and service/monitor threads (M6.5) are later work. Only the cycle thread executes ST code.
 - `PERSISTENT` (not a 2013 keyword) and periodic/checkpointed state saves. v1 persists retained
   variables at normal shutdown; crash-time saves are a later extension.
 - Native Linux host support during initial development. Linux x86-64 and Linux AArch64 host
@@ -101,7 +102,7 @@ is specified in
 | Target selection | Host by default; `--target <triple>` passed to `clang` |
 | Source encoding | UTF-8 (optional BOM), case-insensitive language keywords/identifiers |
 | Project dependencies | Local path dependencies plus committed `stc.lock` in v1; package graph is acyclic; `--locked` enforced; registry/version solver later (A-009) |
-| Standard FBs / time | ST stdlib; host clock latched once at `stc_module_cycle` entry and shared by all timers in that scan (A-010) |
+| Standard FBs / time | Standard FB bodies are synthesized HIR in `STC_STD` (D-134); the host clock is latched once at `stc_module_cycle` entry and shared by all timers in that scan (A-010) |
 | I/O | Runtime-owned linking; compiler emits process-image/device/binding metadata; `{stc:io}` JSON hints; v1 null/memory/file; EtherCAT/Modbus/MQTT v2 (A-011) |
 | Retained state | File-backed, versioned, layout-hashed, CRC-checked, atomic save; warm/cold restart; v1 saves at shutdown (A-012) |
 | Standard text | Local IEC 61131-3:2013 PDF only; not committed or redistributed |
@@ -109,15 +110,16 @@ is specified in
 | Lean scope | Proofs for exact discrete functions cover the Lean model; Rust is tested against generated vectors (A-006); float/transcendental math is test-based |
 | Execution model | Persistent host runtime plus a loadable whole-program module (DLL/so); no per-function patching, no code-linked deployment path for online change |
 | Persistent memory | Host-owned GOT roots with stable storage; per-field roots and handle-based objects; generated code accesses cells through the GOT |
-| Online change | Whole-module load/prepare on a background thread; O(1) activation at a cycle boundary; one-successful-cycle rollback window; off-thread unload |
+| Online change | Whole-module load/prepare, O(1) activation at a cycle boundary, one-successful-cycle rollback window, and off-thread unload; M6 validates/loads/prepares between cycles on the cycle thread, and fully off-thread prepare is M7 |
 | Identity baseline | Persistent GOT manifest (canonical JSON + compact binary) paired with every module; missing/stale/invalid baseline forces a cold download |
 | Runtime ABI | Host ABI 2; M4 code-linked artifacts are not loadable; module descriptor + manifest are versioned together |
 | Debug and monitoring | Full typed debug in v1; debug information is the default build output; `--release` is the optional stripped/optimised mode; swaps end debug sessions |
 | Safety | Not a safety PLC and not responsible for safety in any way; no automatic fail-safe; debug may hold outputs indefinitely |
 
 Assumption: the compiler host runs a single compilation job at a time. The generated runtime is
-single-threaded for ST execution; the host adds a loader/prepare thread and lower-priority
-service/monitor threads that never execute ST and never block the cycle.
+single-threaded for ST execution; M6 adds a control/status thread that never executes ST and
+never blocks the cycle. Fully off-thread candidate preparation (M7) and service/monitor threads
+(M6.5) are later work.
 
 Host-specific code is confined to the driver and runtime. The front end, HIR, and IR builder are
 portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 port is additive
@@ -150,28 +152,40 @@ portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 por
   breakpoints, stepping, call stack, debug protocol/security, DWARF/CodeView, swap interaction.
 - `Specification/Decisions.md` — decision log and open questions.
 - `M4.5-Plan.md` — online-change foundation implementation plan.
+- `M5-Plan.md` — FBs, OOP, aggregates, and UTF-8 strings implementation plan.
+- `M6-Plan.md` — project system, CLI, and verification hardening implementation plan.
 - `M6.5-Plan.md` — debug/monitoring implementation plan.
 - This plan.
 
 ### 5.2 Implementation
 
 - Rust workspace under `crates/`.
-- `crates/stc-runtime` — persistent host runtime with a C ABI: cycle loop, GOT, root
-  allocator, module loader, manifest store, swap controller, state, I/O, and debug services;
-  also the `staticlib` (with an `rlib` for Rust integration tests) used by embedding hosts.
+- `crates/stc-runtime` — persistent host runtime with a C ABI: cycle loop, scheduler, GOT, root
+  allocator, module loader, manifest store, swap controller, control/status thread, state, and
+  I/O; debug services follow in M6.5. Also the `staticlib` (with an `rlib` for Rust integration
+  tests) used by embedding hosts.
+- `crates/stc-manifest` — `stc.toml` schema, source discovery, local dependency graph, and
+  `stc.lock`.
+- `crates/stc-test` — `{stc:test}` discovery, wrapper generation, and the process-isolated
+  runner; `crates/stc-fmt` — the fixed-style formatter over the lossless CST.
 - Loadable `module` artifacts (`.dll`/`.so`) generated from ST, each paired with a GOT
-  manifest; `exe` is a thin host launcher for an adjacent module.
-- `stdlib/` — standard function blocks written in ST (dogfooding the compiler).
+  manifest; `exe` is a thin host launcher for an adjacent module; `lib` is the embedding host
+  library, static or shared.
+- Standard library — the 2013 standard functions lower inline or through runtime helpers, and
+  the standard FB bodies are synthesized HIR in the reserved `STC_STD` scope (D-134); there is
+  no textual `stdlib/` package.
 - `lean/` — Lake project for exact-function models, proofs, and vector generation.
-- `tests/` — compiler, conformance, codegen, execution, and end-to-end tests.
+- `tests/` — conformance corpus, UI snapshots, committed Lean vectors, and cross-target fixtures;
+  crate integration tests cover the compiler, runtime, and end-to-end project workflow.
 - `examples/` — small ST projects.
-- `tools/xtask` or `crates/xtask` — build/test automation (runtime build, clang discovery,
-  vector regeneration).
+- `crates/xtask` — CI suite selection (`cargo xtask test --suite ...`) and rule traceability
+  (`cargo xtask traceability`); vector regeneration is `lake exe vectors` in `lean/`.
 
 ### 5.3 Documentation
 
 - Updated top-level `README.md` with the confirmed profile, decisions, and question log.
-- `examples/README.md` and a short user guide once the CLI exists.
+- The CLI's `--help` output and the architecture specifications are the current user guide; a
+  dedicated user guide and expanded examples are post-v1 documentation work.
 
 ## 6. Architecture at a glance
 
@@ -306,7 +320,8 @@ Exit criteria:
 > access, bindings, casts, short-circuit logic, and scalar retained-state round-trips. M5
 > constructs (FBs, OOP, aggregates, strings, references, standard functions) produce explicit
 > `STC-E-CODEGEN-001` diagnostics. File-backed retained state, the manifest, `stc run`,
-> `stc test`, and the cooperative multi-task scheduler remain M6. M5 keeps one task per resource.
+> `stc test`, and the cooperative multi-task scheduler were delivered in M6. M5 kept one task
+> per resource.
 
 ### M4.5 — Online-change foundation
 
@@ -320,7 +335,7 @@ baseline rules; tracked rename/move maps; preserve/allocate/drop; compatibility 
 and diagnostics; the cold-download path; CLI `--emit=module`, `--got-manifest`, `--cold`, and
 `--rename`; a thin `exe` launcher and an embedding `lib` host with generated code in the separate
 module (the two emit kinds may be combined); and the host API/export path for manifest
-download/diff. The user-facing `stc online download/diff` commands remain M6.
+download/diff. The user-facing `stc online download/diff` commands were delivered in M6.
 
 Exit criteria:
 
@@ -411,6 +426,27 @@ Exit criteria:
 - CI runs unit, snapshot, conformance, execution, fuzz-smoke, and Lean proof jobs.
 - Traceability report shows every implemented rule has a test.
 
+> **M6 status (2026-10-27):** phases 0–11 are complete. Phase 0 fixed the kebab-case `stc.toml`
+> schema, diagnostic/report shapes, the host ABI 2.2 test-clock append, and the M6/M6.5 boundary
+> (D-153–D-164). Phase 1 added `crates/stc-manifest` with schema, source discovery, the path
+> dependency graph, `stc.lock`, and `--locked`; phase 2 added package-aware namespaces,
+> `INTERNAL` visibility, and merged multi-package analysis; phase 3 added the project CLI
+> (`new`/`check`/`build`/`clean`/`metadata`/`compliance`), build settings, artifacts, and
+> human/short/JSON diagnostics. Phase 4 added cooperative multi-task scheduling, `stc run`, the
+> rewritten launcher, mock clocks, and `stc_host_run` (D-165). Phase 5 added the `STCRET01`
+> state file, mismatch policies, atomic saves, device/binding/`VAR_ACCESS` metadata, and the
+> `null`/`memory`/`file` backends (D-166). Phase 6 added `crates/stc-test`, test-build mode,
+> the test prelude, ABI 2.2 service 12, and the process-isolated runner (D-167). Phase 7 added
+> `crates/stc-fmt` and `stc fmt` (D-168). Phase 8 added the online workflow: active-baseline
+> builds, compatibility reports, `online download/diff`, source-aware `rename` with
+> `stc.renames.toml`, and `run --watch` with the local control channel (D-169). Phase 9 added
+> the Lake exact models/proofs, the deterministic vector generator, 30 committed vector files,
+> the Rust reference harness, and the C-harness samples (D-170). Phase 10 added the conformance
+> corpus, UI snapshots, `xtask`, traceability, `fuzz_manifest`, and the active CI matrix
+> (D-171). Phase 11 completed the documentation and handover pass (D-172). All M6 exit criteria
+> pass on Windows x64 and the documented Ubuntu x64 CI jobs; the M6.5 debug/monitoring surface
+> remains unimplemented.
+
 ### M6.5 — Full debug and monitoring
 
 Deliverables: typed read/write/watch of persistent and local variables, forcing applied at cycle
@@ -476,7 +512,7 @@ Exit criteria:
 | Cross-target | `clang --target` smoke tests on IR/object emission (execution where available) |
 | Online change | Hot-swap suite across attach/prepare/activate/commit/rollback/unload; incompatible-change rejection; cold-download recovery; double-build determinism |
 | GOT/manifest | Identity/rename/move, exact-parent, download/consume, byte-identical manifests, corrupt/malformed parser fuzzing, quarantine/reset policy |
-| Real-time boundary | O(1) switch measurement, bounded maintenance jitter, loader/prepare off-thread, service-thread contention and generation pinning |
+| Real-time boundary | O(1) switch measurement, bounded maintenance jitter (M7 target), between-cycle candidate preparation in M6, service-thread contention and generation pinning |
 | Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap/session teardown, debug/release separation |
 | Host portability | Full workspace tests and end-to-end CLI on Linux x86-64 and Linux AArch64 |
 
@@ -546,19 +582,21 @@ Exit criteria:
 
 ## 12. Immediate next actions
 
-1. All planning questions Q-001 through Q-212 are resolved (A-005 through A-030); the
-   online-change architecture is recorded in
+1. M6 (project system, CLI, and verification hardening) is complete (2026-10-27); its phase
+   records are D-153–D-172 and `M6-Plan.md`. M6.5 (debug and monitoring) is the next
+   milestone; the boundary it builds on is in
+   [Debug and Monitoring](Architecture/Debug-and-Monitoring.md) §12 and `M6.5-Plan.md`.
+2. Do not claim debug/monitoring, `--release`, DWARF/CodeView, checkpoint hooks, typed access,
+   forcing, breakpoints, stepping, or the debug protocol until M6.5 implements them; M6 artifacts
+   honor `[build].opt-level` (default 0) but contain no debug information. M6.5 debug services
+   start at host ABI service ID 13, after M6's test-clock service 12.
+3. All planning questions Q-001 through Q-212 are resolved (A-005 through A-030, Q6-1–Q6-15);
+   the online-change architecture is recorded in
    [Online Change and GOT](Architecture/Online-Change-and-GOT.md), and the resolved question log
    is in `update_plan_got.md` §13.0.
-2. The `update_plan_got.md` §12 documentation checklist is applied: architecture, runtime, state,
-   I/O, CLI, testing, AST/HIR, conformance, decisions, README, M4/M4.5 notes, and the M5 handover
-   reflect the implemented host/module model.
-3. `M4.5-Plan.md` is complete through phase 10 and `M6.5-Plan.md` is written; the M5 handover
-   addendum is final, and the artifact schemas are fixed in
-   [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md).
-4. M4.5 and M5 are implemented on the host/module model; do not reintroduce the old
-   direct-reference or contiguous-object model, and do not reintroduce module-owned state or
-   descriptors (Q-090/Q-091/Q-095).
+4. Keep the implemented host/module contracts: do not reintroduce the old direct-reference or
+   contiguous-object model, and do not reintroduce module-owned state or descriptors
+   (Q-090/Q-091/Q-095).
 5. Keep host-specific operations (paths, clock, linker discovery, module loading, atomic
    replace) behind a platform layer; Linux x86-64/AArch64 host support follows basic development
    (M8, D-042).

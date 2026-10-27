@@ -11,4 +11,5 @@ rules = [
   "STC-UTF8-007",
   "STC-UTF8-009",
   "STC-UTF8-010",
+  "STC-E-CODEGEN-002",
 ]

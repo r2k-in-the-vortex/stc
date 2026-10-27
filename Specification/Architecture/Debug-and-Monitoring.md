@@ -1,6 +1,6 @@
 # Debug and Monitoring
 
-Status: Resolved specification (2026-10-24); M4.5 interface recorded; M6/M6.5 boundary fixed at host ABI 2.2 service ID 12 (2026-10-26); M6.5 implementation pending  
+Status: Resolved specification (2026-10-24); M4.5 interface recorded; M6 complete with the M6.5 boundary at host ABI 2.2 service ID 12 (2026-10-27); M6.5 implementation pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -202,9 +202,9 @@ debug-info errors. Online-change diagnostics use their own `MODULE`/`MANIFEST`/`
 - [Testing and Verification](Testing-and-Verification.md) — debug test levels.
 - [CLI and Manifest](CLI-and-Manifest.md) — debug CLI and `[debug]` table.
 
-## 12. M4.5 interface notes (2026-10-25)
+## 12. M4.5/M6 interface notes (2026-10-27)
 
-M4.5 does not implement the debugger. It fixes the host/module substrate and leaves the debug
+M4.5 and M6 do not implement the debugger. They fix the host/module substrate and leave the debug
 surface to M6.5. This section records the boundary so M6.5 can build on it without changing
 format 1 or the ABI 2 service signatures.
 
@@ -220,16 +220,16 @@ format 1 or the ABI 2 service signatures.
 - **Generation pinning.** `Host::pin_active()` and `Host::pin(generation)` return a
   `GenerationPin`; the pin keeps a retired generation and its module loaded, and a cold install
   fails while any pin is held. This is the epoch/refcount primitive for typed reads, watch
-  snapshots, and debug-info lifetime. M4.5 has no service thread yet, so pins are used by tests
-  and embedding hosts.
+  snapshots, and debug-info lifetime. M4.5 and M6 have no service/monitor thread yet, so pins are
+  used by tests, embedding hosts, and the control/status snapshot.
 - **Descriptor feature gates.** The module descriptor has `entry_flags` bit 4 (debug build form)
   and bit 6 (debug hooks active), plus `required_features` bit 4 (debug checkpoint hooks). M4.5
   sets the debug-build form bit but neither debug-hook bit, and it requires no host debug
   support, so M6.5 can introduce checkpoints behind the feature bit without a descriptor format
   change.
 - **Append-only host API.** ABI 2 services are appended within major 2 and gated by
-  `struct_size`/minor version. Debug services can be added without breaking M4.5 modules; a
-  module only requires the services it uses. M6 fixes the next append at 2.2, service ID 12
+  `struct_size`/minor version. Debug services can be added without breaking M4.5/M6 modules; a
+  module only requires the services it uses. M6 fixed the next append at 2.2, service ID 12
   (`set_cycle_time_ns`, test builds only); M6.5 debug services therefore start at ID 13 and must
   not change service 12 or any earlier signature (D-157). M6 adds no checkpoint hook, debug
   information, or debug service, and its `stc run --watch` control channel is deployment/status
@@ -262,7 +262,8 @@ format 1 or the ABI 2 service signatures.
 ### 12.3 Rules for M6.5
 
 - Add checkpoint and typed-access services as appended ABI 2.x entries starting after M6's
-  service ID 12; do not change the M4.5 service signatures, service 12, or the descriptor format.
+  service ID 12; do not change any existing service signature, service 12, or the descriptor
+  format.
 - Set `required_features` bit 4 and `entry_flags` bit 6 only when a module actually emits
   checkpoint hooks; release artifacts must not set them.
 - Keep `--release` artifacts hook-free and give debug/release builds distinct build IDs and

@@ -7,20 +7,25 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M5 lowering is in progress on the M4.5 online-change foundation.** The repository contains the source-map
-and diagnostic crates, the full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST,
-typed AST views, strict pragma JSON), `stc-parser` (full ST grammar, Annex A precedence, error
-recovery, unsupported-construct diagnostics), `stc-hir` (arenas, stable IDs, interner, canonical
-types, resolved bodies, `{stc:io}` hints, export names, folded task values), `stc-sema`
-(collection, namespaces/`USING`, name resolution, type checking, constant evaluation,
-initializers, access control, OOP, references, I/O and retention checks, HIR lowering),
-`stc-codegen` (deterministic textual LLVM IR for the elementary scalar subset, the GOT module IR
-builder and verifier, and the catalog/descriptor/manifest projection), `stc-got` (stable keys,
-`GotId`, catalog, manifest/plan and descriptor codecs), and `stc-runtime` (persistent host with
-the GOT, root allocator, loader, manifest store, swap state machine, ABI 2 services, cycle loop,
-process image, traps, and retained-state stubs). The driver provides `stc parse`, `stc check`,
-and the `stc build <file>...` bridge with `--emit=ir,obj,module,exe,lib,metadata`; clang lowers
-and links `module`, `executable` (thin launcher), and embedding-library artifacts.
+**M6 (project system, CLI, and verification hardening) is complete (2026-10-27); M6.5
+(debug/monitoring) is next.** The repository contains the source-map and diagnostic crates, the
+full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST views, strict pragma
+JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery, unsupported-construct
+diagnostics), `stc-hir` (arenas, stable IDs, interner, canonical types, resolved bodies,
+`{stc:io}` hints, export names, folded task values), `stc-sema` (collection, namespaces/`USING`,
+name resolution, type checking, constant evaluation, initializers, access control, OOP,
+references, I/O and retention checks, HIR lowering), `stc-codegen` (deterministic textual LLVM
+IR, the GOT module IR builder and verifier, and the catalog/descriptor/manifest projection),
+`stc-got` (stable keys, `GotId`, catalog, manifest/plan and descriptor codecs), `stc-manifest`
+(`stc.toml`, source discovery, local dependency graph, `stc.lock`), `stc-test` (test discovery
+and the process-isolated runner), `stc-fmt` (the fixed-style formatter), and `stc-runtime`
+(persistent host with the GOT, root allocator, loader, manifest store, swap state machine,
+control/status thread, scheduler, ABI 2.2 services, cycle loop, process image, state, and I/O
+backends). The driver provides the M6 CLI (`new`, `check`, `build`, `run`, `test`, `fmt`,
+`clean`, `metadata`, `compliance`, `online download/diff`, `rename`, and `run --watch`), the
+manifest-free `stc parse`/`check`/`build <file>...` bridge, and `--emit=ir,obj,module,exe,lib,
+metadata`; clang lowers and links `module`, `executable` (thin launcher), and embedding-library
+artifacts.
 
 The online-change architecture is **resolved** (2026-10-24): the v1 runtime is a persistent host
 plus loadable whole-program modules, persistent memory is host-owned and accessed through a
@@ -102,11 +107,13 @@ while descriptor, record, and per-pair vtable addresses stay stable, activation 
 preserved pair to the new method cells, fresh object records and handles initialize once and
 roll back, vtable-shape changes are rejected against an active baseline, and committed OOP fuzz
 seeds cover malformed TYPEINFO/VTABLE/interface-map inputs. Interface identity comparison
-remains a diagnostic. The project
-manifest, the project CLI, `stc run`, `stc test`, file-backed retained state, I/O device
-bindings, and cooperative multi-task scheduling are implemented (M6 phases 1-6). `stc fmt`, the
-online-change workflow, Lean vectors, the conformance/UI/traceability pass, and the CI matrix
-remain phases 7-11. The persistent host, loadable modules, GOT roots, manifests, swap protocol,
+remains a diagnostic. M6 is complete (2026-10-27, phases 0–11): the `stc.toml` project manifest,
+dependency graph and `stc.lock`, package-aware analysis, the project CLI, cooperative multi-task
+scheduling and `stc run`, file-backed retained state, I/O device metadata with the
+`null`/`memory`/`file` backends, the test runner, the formatter, the online-change workflow
+(`rename`, `online download/diff`, `run --watch`), Lean vectors, the conformance/UI/traceability
+corpus, `fuzz_manifest`, and the CI matrix are implemented. Full debug/monitoring remains M6.5.
+The persistent host, loadable modules, GOT roots, manifests, swap protocol,
 and process-image remap are implemented and shared by the M5 lowering. Parser and semantic snapshots, IR snapshots, clang verification, execution
 and C-harness tests, a committed
 corpus, traceability tables, deterministic property tests, a 20k-term deep-chain test, and
@@ -123,7 +130,7 @@ specification continues to be written before implementation, as required below.
 | [UTF-8 Strings](Specification/UTF8-Strings.md) | `USTRING`/`UCHAR` extension, encoding, length, ABI |
 | [AST/CST/HIR](Specification/AST/AST.md) | Syntax tree and typed middle-end design |
 | [Architecture](Specification/Architecture/Architecture.md) | Pipeline, crates, LLVM IR, ABI |
-| [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) | Execution model, runtime, stdlib |
+| [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) | Execution model, runtime, standard functions/FBs |
 | [I/O and Devices](Specification/Architecture/IO-and-Devices.md) | Process image, AT linking, device model, JSON pragma hints |
 | [State and RETAIN](Specification/Architecture/State-and-Retain.md) | File-backed retained state, warm/cold restart, layout hash |
 | [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) | Commands, diagnostics, `stc.toml` |
@@ -159,11 +166,11 @@ test runner, and inspectable artifacts.
 | Online change | Whole-module load/prepare, O(1) cycle-boundary activation, one-cycle rollback, off-thread unload; exact-baseline online change or cold download |
 | Persistent memory | Host-owned GOT roots and stable storage; per-field roots, handle-based objects, runtime descriptors |
 | Identity baseline | Persistent GOT manifest (canonical JSON + compact binary) paired with every module; tracked renames/moves; runtime export/download |
-| Debug/monitoring | Full typed debug in v1; debug info by default; `--release` optional; every swap ends the debug session |
+| Debug/monitoring | Full typed debug in v1 (M6.5); debug info by default; `--release` optional; every swap ends the debug session |
 | Safety | Not a safety PLC and not responsible for safety in any way; debug may hold outputs indefinitely |
 | UTF-8 strings | Project extension: `USTRING`, `UCHAR`, `U#'...'`, `USTRING#'...'`, `${HEX}` escapes; `USTRING[n]` stores `n` characters as 32-bit scalars (4 bytes each, static) |
 | Strings | 2013 `STRING`/`WSTRING`/`CHAR`/`WCHAR` plus the UTF-8 extension |
-| Standard library | 2013 standard functions and FBs (`TON`, `TOF`, `TP`, counters, edge, bistable, strings, math); FBs in ST, clock latched once per scan |
+| Standard library | 2013 standard functions and FBs (`TON`, `TOF`, `TP`, counters, edge, bistable, strings, math); FB bodies are synthesized HIR in `STC_STD` (D-134), clock latched once per scan |
 | Projects | `stc.toml` packages, local path dependencies, `stc.lock`, dependency graph, package-aware namespaces |
 | Testing | `{stc:test}` POUs; tests may live in a separate test project that depends on the code under test |
 | I/O | Runtime-owned linking; TwinCAT-like device tree in `stc.toml`; `{stc:io {...}}` hints on `AT`; unbound inputs use type defaults, unbound outputs do nothing |
@@ -194,16 +201,16 @@ ST source (UTF-8)
 stc build --emit=ir                 # <name>.ll
 stc build --emit=ir,obj             # .ll + .o
 stc build --emit=exe                # thin launcher + adjacent module pair
-stc build --emit=lib                # embedding host archive + separate module
+stc build --emit=lib                # embedding host library + separate module
 stc build --emit=metadata           # <name>.stc-meta.json
 stc build --emit=module             # loadable module + GOT manifest
 ```
 
-- M4 defaults to `ir`; `stc build --emit=ir` stops after IR. The v1 target default becomes
-  `module` (with its paired manifest) for online-change deployments; `exe` is a thin host
-  launcher for an adjacent module, and `lib` is the embedding host library with generated code
-  kept in the separate module. M4.5 allows `exe` and `lib` in one build; the shared host library
-  form is M6.
+- The manifest-free `stc build` defaults to `ir`; project builds default to `module` (with its
+  paired manifest) for online-change deployments. `exe` is a thin host launcher for an adjacent
+  module, and `lib` is the embedding host library with generated code kept in the separate
+  module; `lib-type = "shared"` selects the shared host-library form. The two emit kinds may be
+  combined.
 - A module is paired with `<name>.stc-got.json` (canonical tooling/download) and
   `<name>.stc-got.bin` (compact runtime projection). `--got-manifest <file>` selects the build
   baseline; `--cold` explicitly requests a cold-layout build; `--rename old=new` records a
@@ -241,7 +248,7 @@ the Rust implementation is validated against the generated vectors (A-006). Floa
 transcendentals and platform libm behavior are not proved; they are tested against high-precision
 reference vectors.
 
-## CLI (M4 subset implemented)
+## CLI (M6 implemented)
 
 ```text
 stc new <path>          scaffold a project
@@ -253,22 +260,25 @@ stc fmt                 format sources with the fixed style; --check for CI
 stc clean               remove the artifact directory
 stc metadata            print configuration, ABI, exports, layout
 stc compliance          print the profile and feature matrix
-stc online download     export the active manifest and layout summary (M6)
-stc online diff         compare a candidate manifest with the active baseline (M6)
-stc rename              source-aware tracked rename (M6)
-stc run --watch         watch, rebuild, and deploy online (M6)
+stc online download     export the active manifest and layout summary
+stc online diff         compare a candidate manifest with the active baseline
+stc rename              source-aware tracked rename
+stc run --watch         watch, rebuild, and deploy online
 stc debug               start a local debug/monitoring session (M6.5)
 ```
 
-M4.5 implements `stc parse`, `stc check`, and `stc build` (with `--name`, `--emit`, `--out-dir`,
-`--target`, `--clang`, `--runtime`, `--relaxed`, `--message-format`, `-v`, `--got-manifest`,
-`--cold`, `--rename`, and `--allow-untracked-removal`). M6 phases 1-6 add the project manifest
-and lockfile, `stc new`, `stc check/build/run/test/clean/metadata/compliance`, verbose `-vv`,
-color control, and warnings-as-errors; `stc fmt`, `online`, `rename`, and `run --watch` remain
-phases 7-8. M4.5 adds `--emit=module`, the thin `exe` launcher, the embedding `lib` host, and
-the online-change foundation. The `--debug` and `--release` options and debug-info emission are
-M6.5; M6 artifacts are always built in the
-unoptimised debug form and contain no DWARF/CodeView or checkpoint hooks yet.
+M6 implements the project workflow: `stc new/check/build/run/test/fmt/clean/metadata/compliance`,
+`stc online download/diff`, `stc rename`, and `stc run --watch`, together with the `stc.toml`
+manifest, a committed `stc.lock`, `--locked`, human/short/JSON diagnostics, `--color`, `-q`,
+`-v`/`-vv`, lint levels, `--deny warnings`, the file-backed state and I/O options, and the
+`--watch`/`--store`/`--host`/`--nonce`/`--baseline`/`--dry-run` options. The manifest-free
+`stc parse`, `stc check <file>...`, and `stc build <file>...` bridge remains for tests and one-off
+checks, with `--name`, `--emit`, `--out-dir`, `--target`, `--clang`, `--runtime`, `--relaxed`,
+`--message-format`, `-v`, `--got-manifest`, `--cold`, `--rename`, and
+`--allow-untracked-removal`. M4.5 added `--emit=module`, the thin `exe` launcher, and the
+embedding `lib` host; M6 adds `lib-type = "shared"`. The `--debug` and `--release` options and
+debug-info emission are M6.5; M6 honors `[build].opt-level` (default `0`) and contains no
+DWARF/CodeView or checkpoint hooks yet.
 
 Cargo-like diagnostics (`file:line:col: error[STC-E-...]`), source snippets, notes, suggestions,
 and JSON output are implemented. Details:
@@ -299,28 +309,61 @@ configuration = "Main"
 
 [build]
 target = "x86_64-pc-windows-msvc"   # optional; default = clang host
-opt-level = 2
-debug = true
-emit = ["exe", "ir"]
+opt-level = 0
+debug = true                        # parsed; M6 builds the debug form without debug info (D-158)
+emit = ["module", "exe", "metadata"]
+out-dir = "target/stc/debug"
+lib-type = "static"                 # static | shared, used when emit includes "lib"
+
+[io]
+backend = "null"                    # null | memory | file
+file = "io.bin"
+
+[[io.devices]]
+name = "drive1"
+kind = "ethercat"
+config = { vendor = "0x1234", revision = 3 }
+
+  [[io.devices.channels]]
+  name = "DI5"
+  direction = "input"
+  width = 1
+
+[[io.bindings]]
+variable = "Main.Start"
+device = "drive1"
+channel = "DI5"
+direction = "input"
+
+[retain]
+enabled = true
+file = "motor.stcstate"
+on-mismatch = "error"               # error | reset
+
+[runtime]
+module-dir = "target/stc/runtime/modules"
+manifest-dir = "target/stc/runtime/manifests"
+max-retired-generations = 1
+
+[run]
+cycles = 0                          # 0 = until interrupted
 
 [test]
 sources = ["tests/**/*.st"]
 timeout = "5s"
-
-[runtime]
-module_dir = "runtime/modules"
-manifest_dir = "runtime/manifests"
-max_retired_generations = 1
+default-cycles = 1
+mock-clock = "0ns"
+io = "memory"
 
 [online]
-baseline = "active"          # exact current baseline; missing/stale -> cold
-cold_policy = "require-confirmation"
-allow_untracked_removal = false
+baseline = "active"                 # active | explicit
+cold-policy = "require-confirmation"
+allow-untracked-removal = false
 
 [debug]
-default = true               # debug info is the default build output
+default = true
 protocol = "local"
-force_sessions_end_on_swap = true
+force-sessions-end-on-swap = true
 ```
 
 Local path dependencies are resolved into an acyclic package graph and pinned by a committed
@@ -340,11 +383,14 @@ stc/
   .github/workflows/         GitHub Actions CI
   .markdownlint-cli2.jsonc   Markdown lint configuration
   M4.5-Plan.md               online-change foundation plan (complete)
+  M5-Plan.md                 structs/OOP/standard-library plan (complete)
+  M6-Plan.md                 project system, CLI, and verification plan (complete)
   M6.5-Plan.md               debug/monitoring plan
   handover_to_M5.md          M4.5 handover and M5 opening contract
   update_plan_got.md         resolved online-change planning record
   tools/ci/check_docs.py     specification, link, and profile checks
   tools/ci/check_local.py    local CI parity checks (docs, lint, tests, fuzz)
+  tools/ci/traceability-allowlist.toml  explicit not-implemented rules
   Cargo.toml                 workspace manifest
   rust-toolchain.toml        pinned Rust toolchain
   crates/
@@ -358,18 +404,26 @@ stc/
     stc-sema/                name resolution, type checking, constant eval, lowering
     stc-codegen/             textual LLVM IR, GOT module builder, catalog/manifest projection
     stc-got/                 stable keys, GotId, catalog, GOT manifest/plan and descriptor codecs
-    stc-manifest/            stc.toml schema, dependency graph, source discovery
-    stc-runtime/             persistent host: GOT, roots, loader, swap, ABI 2 services, C ABI
-    stc-test/                test discovery and runner
+    stc-manifest/            stc.toml schema, dependency graph, source discovery, stc.lock
+    stc-runtime/             persistent host: GOT, roots, loader, swap, scheduler, ABI 2 services, C ABI
+    stc-test/                test discovery, wrapper generation, process-isolated runner
     stc-driver/              CLI binary `stc`
-  fuzz/                      cargo-fuzz workspace; lexer/parser/analyzer/codegen/manifest/descriptor targets
-  stdlib/                    standard function blocks in ST
+    xtask/                   `cargo xtask test --suite ...` and `traceability`
+  fuzz/                      cargo-fuzz workspace; lexer/parser/analyzer/codegen/manifest/got/descriptor targets
   lean/                      Lake project: exact models, proofs, vector generator
-  tests/                     conformance, UI, codegen, execution, projects
+  tests/
+    conformance/             corpus with per-case .meta.toml rule annotations
+    ui/                      diagnostic snapshots
+    vectors/exact/           committed Lean-generated vectors
+    cross-target/            AArch64 IR smoke fixture
   examples/                  small ST projects
   Specification/             this specification set
     Reference/               local IEC 61131-3:2013 PDF (gitignored)
 ```
+
+There is no textual `stdlib/` package: the standard function blocks are synthesized HIR in the
+reserved `STC_STD` scope (D-134), and the standard functions lower inline or through runtime
+helpers.
 
 The M0 baseline was reviewed before the workspace was created at M1. The real source tree is
 `crates/`; the lexer tests and snapshots live under `crates/stc-lexer/tests/`, and `fuzz/` is a
@@ -382,18 +436,21 @@ on pull requests.
 
 - `docs` runs from M0: required-document checks, relative-link validation, profile consistency,
   reference-PDF exclusion (`tools/ci/check_docs.py`), and Markdown lint.
-- `fmt`, `clippy`, `test`, `online`, `ui`, `conformance`, `execution`, `lean`, `fuzz-smoke`, and
-  `cross-target` activate when their inputs exist. `test`, `online`, `ui`, `conformance`, and
-  `execution` run on both Windows Server 2025 x64 and Ubuntu 24.04 x64; the host-independent
-  jobs (`fmt`, `clippy`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The `test`
-  and `online` jobs set `STC_REQUIRE_CLANG=1`; the execution tests build `stc-runtime` and link
-  C harnesses with the same toolchain discovery as `stc build`. The `online` job runs the GOT
-  identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
-  launcher/embedding artifact suites. `fuzz-smoke` caps each input at one MiB.
+- `fmt`, `clippy`, `test`, `online`, `ui`, `conformance`, `execution`, `projects`, `traceability`,
+  `lean`, `fuzz-smoke`, and `cross-target` are active for the present tree. `test`, `online`,
+  `ui`, `conformance`, `execution`, and `projects` run on both Windows Server 2025 x64 and
+  Ubuntu 24.04 x64; the host-independent jobs (`fmt`, `clippy`, `traceability`, `lean`,
+  `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The `test` and `online` jobs set
+  `STC_REQUIRE_CLANG=1`; the execution tests build `stc-runtime` and link C harnesses with the
+  same toolchain discovery as `stc build`. The `online` job runs the GOT identity,
+  descriptor/manifest projection, host lifecycle, online-change CLI, and launcher/embedding
+  artifact suites. The `projects` job runs the end-to-end `new/check/build/run/test/fmt/clean`
+  workflow and the rename/download/diff/watch online workflow. The `traceability` job runs
+  `cargo xtask traceability --check`. `fuzz-smoke` caps each input at one MiB.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`) so `-latest` migrations do not change
   the matrix silently.
-- Suite jobs call `cargo xtask test --suite <name> --locked`; the UI, conformance, and execution
-  jobs activate with both the suite directory and `xtask`.
+- Suite jobs call `cargo xtask test --suite <name> --locked`; the UI, conformance, execution, and
+  projects jobs activate with both the suite directory and `xtask`.
 - Every job prints the clang version; builds use `--locked`; warnings are denied.
 
 The job definitions and matrix follow [Testing and Verification](Specification/Architecture/Testing-and-Verification.md) §6.
@@ -414,8 +471,8 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-008 | ST only; no LD/FBD/SFC/IL and no AX preprocessor. |
 | D-009 | Specification is original; IEC PDF is local and not redistributed. |
 | D-010 | Rust workspace under `crates/`; spec under `Specification/`. |
-| D-011 | v1 runtime is single-task; full config is parsed/analysed. |
-| D-012 | Standard FBs in ST; standard functions in the runtime. |
+| D-011 | v1 runtime is single-task; full config is parsed/analysed. Superseded by D-154 (cooperative multi-task scheduling). |
+| D-012 | Standard FBs in ST; standard functions in the runtime. Superseded by D-134: FB bodies are synthesized HIR in `STC_STD`. |
 | D-013 | Runtime ABI: `stc_init`/`stc_cycle`/`stc_shutdown` + `stc_rt_*`. Superseded by D-094/ABI 2 (`stc_module_*` + host API). |
 | D-014 | Strings are length-prefixed fixed-capacity values; `USTRING` uses 4-byte scalars; default 255 characters. |
 | D-015 | Overflow, divide-by-zero, bounds, invalid conversions trap. |
@@ -450,6 +507,8 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-125 | M4.5 phase 8 completes the scalar compatibility/preservation policy: online activation reconfigures the process image or remaps direct cells in place, preserves values by `GotId`, and snapshots the image for rollback; moved variables and quarantined roots are exposed as runtime warnings; `reset_quarantine` is the explicit reset primitive while `Reset`/`Migrate` plans remain rejected; cold installs reinitialize roots and the image, and online prepare initializes only fresh roots; and compiler-produced modules cover initializer/state preservation, tracked rename, untracked-removal policy, type-change rejection with a cold reset, and direct-variable remap. |
 | D-126 | M4.5 phase 9 completes test and CI coverage: `fuzz_got_manifest` and `fuzz_module_descriptor` decode untrusted artifacts without loading native code; end-to-end double builds are byte-identical after adding content-derived Windows PE timestamps (`/Brepro`); combined `exe,lib` output is loaded by both the launcher and an embedding C harness; malformed baselines, invalid options, metadata sidecars, and concurrent generation pins are covered; an ignored measurement records 500 ns/1 µs activation at 16/1024 roots against 1.7 ms/86 ms prepare; and CI adds an explicit Windows/Linux online-change job plus one-MiB fuzz input caps; this closes the M4.5 verification gap on both hosts and records the O(1) switch evidence. |
 | D-127 | M4.5 phase 10 closes the milestone with a documentation and handover pass: the README, project plan, conformance profile, architecture/runtime/state/I/O/CLI/testing/debug specifications, plan, and decision log describe the implemented host/module model; `handover_to_M5.md` records the implemented contracts, M5 extension points, and open M5 decisions; and `Debug-and-Monitoring.md` §12 records the M4.5 boundary for M6.5. The debug-build entry flag is clarified: M4.5 marks its default non-release artifact form but emits no debug information or checkpoint hooks, and the M6.5 required-feature bit stays clear. This keeps the documentation truthful at the milestone boundary and prevents M5/M6.5 from reintroducing the retired direct-reference model or assuming debug hooks that do not exist yet. |
+| D-153–D-164 | M6 phase 0 fixes the project/package model (kebab-case `stc.toml`, package identity, lockfile), the cooperative host scheduler, the local deploy/status control channel, tracked-rename history, per-test artifacts and the host ABI 2.2 test clock, the debug/release boundary, the formatter style, the file I/O lifecycle, the Lean/vector contract, traceability annotations, runtime path resolution, and the applied diagnostic/report-shape contracts. Details in `Specification/Decisions.md` and `M6-Plan.md` §13–§14. |
+| D-165–D-172 | M6 phases 4–11 record the implementation details: run-loop exit codes and failed-scan scheduling, the `STCRET01` state file and I/O backends, the test-host result protocol and lexable synthetic names, formatter encoding preservation, the online download/diff/rename/watch workflow, the Lean vector format and the three codegen defects it exposed, the conformance/UI/traceability/CI pass, and the completion documentation pass. |
 
 ## Question log
 
@@ -468,7 +527,7 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 | A-007 | How much variable-length array support? | Conformant parameters only (`VAR_IN_OUT`, FB params); no dynamic locals/globals/returns. |
 | A-008 | How are tests declared and organised? | `{stc:test}` on POUs; separate test projects are supported; dependency system is v1. |
 | A-009 | Dependency system scope? | Local path dependencies plus a committed `stc.lock`; no registry/version solver in v1. |
-| A-010 | Standard FBs and time source? | FBs in ST stdlib; Rust clock latched once per scan cycle. |
+| A-010 | Standard FBs and time source? | Standard FB bodies are synthesized HIR in `STC_STD` (D-134); the Rust clock is latched once per scan cycle. |
 | A-011 | How is I/O linked? | Runtime-owned; TwinCAT-like device tree; `{stc:io}` JSON hints; unbound inputs default, outputs do nothing. |
 | A-012 | RETAIN persistence in v1? | File-backed state with layout hash, CRC, atomic save; warm/cold restart. |
 | A-013 | Unicode identifiers? | ASCII-only; UTF-8 only in comments and strings. |
@@ -496,11 +555,22 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 (A-005 through A-030). The detailed online-change disposition is in `update_plan_got.md`
 §13.0. New questions will be added here one at a time.
 
-## Building and running (M4.5)
+## Building and running (M6)
 
 ```sh
-cargo test --workspace --locked
-cargo build -p stc-runtime
+cargo run -p stc-driver -- new examples/motor
+cargo run -p stc-driver -- check  --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- build  --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- run    --manifest-path examples/motor/stc.toml --cycles 10
+cargo run -p stc-driver -- test   --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- fmt    --manifest-path examples/motor/stc.toml --check
+cargo run -p stc-driver -- metadata --manifest-path examples/motor/stc.toml --message-format json
+cargo run -p stc-driver -- online download --manifest-path examples/motor/stc.toml --out motor.stc-got.json
+cargo run -p stc-driver -- online diff examples/motor/target/stc/debug/motor-control.stc-got.json --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- rename Main.Speed Main.Rate --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- run --watch --manifest-path examples/motor/stc.toml
+
+# Manifest-free bridge and the other artifact forms
 cargo run -p stc-driver -- parse path/to/file.st
 cargo run -p stc-driver -- check path/to/file.st path/to/other.st
 cargo run -p stc-driver -- build examples/hello.st --emit=ir
@@ -508,6 +578,12 @@ cargo run -p stc-driver -- build examples/hello.st --emit=module,metadata
 cargo run -p stc-driver -- build examples/hello.st --emit=module --got-manifest active.stc-got.json
 cargo run -p stc-driver -- build examples/hello.st --emit=exe,lib,metadata --runtime target/debug/stc_runtime.lib
 ```
+
+`stc new` writes a project that builds, runs, tests, and formats with the commands above; the
+generated `stc.lock` is committed, and `--locked` makes a stale graph an error. `stc run` builds
+`exe,module,metadata` under `target/stc/debug` by default, and `stc test` writes one cold test
+artifact per test under `target/stc/test`. `stc run --watch` needs a local control endpoint and
+is intended for interactive deployment.
 
 Before pushing, run the same checks as the CI matrix (formatting, clippy, the
 workspace tests with clang required, specification/link checks, Markdown lint, and a

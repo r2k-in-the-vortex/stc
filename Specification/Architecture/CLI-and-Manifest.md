@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 phase-0 project-manifest, diagnostic, report-shape, and rename-history contracts fixed (2026-10-26); M6 phases 3–8 commands implemented (2026-10-26)  
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 debug/release options pending  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -11,52 +11,30 @@ output goes to stdout.
 
 ### 1.1 Commands
 
-> **M6 phase 4 status (2026-10-26):** `stc new`, `check`, `build`, `run`, `clean`, `metadata`, and
-> `compliance` are implemented on `stc.toml` projects; the manifest-free `stc parse <file>`,
-> `stc check <file>...`, and `stc build <file>...` bridge is unchanged. `stc run` builds
-> `exe,module,metadata`, applies `[run]` defaults and the `--cycles`/`--cycle-time`/`--io`/
-> `--io-file`/`--state-file`/`--reset-retain`/`--no-retain` overrides, starts the launcher, and
-> returns its exit code. The I/O and retained-state backends behind those options arrive in phase
-> 5; the options are parsed and carried now. `stc fmt`, `online`, `rename`, and
-> `run --watch` remain later phases. `--message-format` supports `human`, `json`, and `short`;
-> exit codes follow §1.3 (a `stc run` trap exits 4, an interrupt 130). The loadable `module` with
-> its binary/JSON manifest and metadata, the thin `exe` launcher, and the embedding `lib` host
-> archive keep their M4.5 shapes. `--debug`/`--release` and their debug-info behavior are M6.5;
-> M6 builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks.
->
-> **M6 phase 6 status (2026-10-26):** `stc test` is implemented. It compiles the project's
-> production sources and the root package's `[test].sources`, discovers `{stc:test}` POUs in the
-> current package, builds one cold test artifact per test under `target/stc/test/<artifact>`, and
-> runs each in its own test-host process sequentially. It supports substring filters, `--list`,
-> `--no-run`, `--timeout`, `--io`/`--io-file`, `--out-dir`, `--target`, `--clang`, `--runtime`,
-> `--relaxed`, `-- --nocapture`, and human/JSON results. Test builds never read a baseline, never
-> touch the runtime store or retained state, and are not part of `[build].emit`. `stc fmt`,
-> `online`, `rename`, and `run --watch` remain later phases. `--message-format` supports `human`,
-> `json`, and `short`; exit codes follow §1.3 (a test that traps unexpectedly exits 4).
->
-> **M6 phase 7 status (2026-10-26):** `stc fmt` is implemented. Without paths it formats the root
-> package's production and test sources discovered through `stc.toml`; explicit paths format those
-> files without loading a manifest. It supports `--check`, preserves comments, blank lines,
-> existing line breaks, the file's BOM, and each existing line break's encoding, uppercases
-> keywords, keeps identifier and literal spelling, emits two-space indentation and strict
-> semicolons (including after relaxed block statements), and is idempotent. Syntax errors prevent
-> formatting (`STC-E-FMT-001`); unreadable or unwritable files report `STC-E-FMT-002`.
->
-> **M6 phase 8 status (2026-10-26):** `stc rename`, `stc online download`, `stc online diff`, and
-> `stc run --watch` are implemented. `rename` resolves a dotted key in the root package through
-> sema resolutions, rewrites the declaration and references in place (comments and strings are
-> untouched; BOM and line endings are preserved), records the mapping in `stc.renames.toml`, and
-> supports `--dry-run`; builds merge that history with `--rename` (chains compose oldest-first,
-> conflicts are `STC-E-PROJECT-013`). `online download` reads `--store` or
-> `[runtime].manifest-dir` (or a live `--host` endpoint with `--nonce`), validates the active
-> manifest, and writes the canonical envelope (`--out`), an optional binary projection
-> (`--binary`), and the deployment/layout summary; a missing or corrupt store is
-> `STC-E-ONLINE-009`. `online diff <candidate> --baseline|--store|--host` prints the compatibility
-> report and exits 0/1/2. `run --watch` builds against the active baseline, launches the host with
-> a local user-only control endpoint, watches sources/manifests/history, deploys module/manifest
-> pairs online, reports each compatibility result, retries once on a stale baseline, keeps the old
-> generation on failure, and exits 130 on Ctrl-C. `--store` also selects the watch store, and
-> `--watch-timeout <duration>` bounds a run for automation.
+> **M6 status (2026-10-27):** all M6 commands are implemented on `stc.toml` projects. `new`,
+> `check`, `build`, `run`, `test`, `fmt`, `clean`, `metadata`, and `compliance` provide the
+> project workflow; `rename`, `online download`, `online diff`, and `run --watch` provide the
+> online-change workflow. The manifest-free `stc parse <file>`, `stc check <file>...`, and
+> `stc build <file>...` bridge is unchanged. `stc run` builds `exe,module,metadata`, applies
+> `[run]` defaults and the `--cycles`/`--cycle-time`/`--io`/`--io-file`/`--state-file`/
+> `--reset-retain`/`--no-retain` overrides, starts the launcher, and returns its exit code.
+> `stc test` builds one cold test artifact per test under `target/stc/test/<artifact>` and runs
+> each in its own process; `stc fmt` formats the root package or explicit files. `stc rename`
+> resolves a dotted key through sema, rewrites the declaration and references, and records the
+> mapping in `stc.renames.toml`; builds merge that history with `--rename` (chains compose
+> oldest-first, conflicts are `STC-E-PROJECT-013`). `online download` reads `--store`,
+> `[runtime].manifest-dir`, or a live `--host` endpoint and writes the canonical envelope;
+> `online diff` compares a JSON/binary candidate with `--baseline`, the store, or a live host and
+> exits 0/1/2. `run --watch` builds against the active baseline, launches the host with a local
+> user-only control endpoint, watches sources/manifests/history, deploys module/manifest pairs,
+> reports each compatibility result, retries once on a stale baseline, keeps the old generation
+> on failure, and exits 130 on Ctrl-C. `--store` also selects the watch store, and
+> `--watch-timeout <duration>` bounds a run for automation. `--message-format` supports
+> `human`, `json`, and `short`; exit codes follow §1.3. The loadable `module` with its
+> binary/JSON manifest and metadata, the thin `exe` launcher, and the embedding `lib` host
+> archive keep their M4.5 shapes, and `lib-type = "shared"` selects the shared host library.
+> `--debug`/`--release` and their debug-info behavior are M6.5; M6 honors `[build].opt-level` but
+> emits no DWARF/CodeView or checkpoint hooks.
 
 | Command | Purpose |
 | --- | --- |
@@ -66,13 +44,13 @@ output goes to stdout.
 | `stc run` | Build an executable and run it |
 | `stc test` | Build and run the built-in test suite; includes test-only units |
 | `stc fmt [paths...]` | Format sources with the fixed style; `--check` for CI |
-| `stc clean` | Remove the project's `target/stc` directory |
+| `stc clean` | Remove the configured artifact directory (`target/stc/debug` by default); never `stc.lock` or state files |
 | `stc metadata` | Print the selected configuration, ABI version, exports, and artifact layout |
 | `stc compliance` | Print the profile ID and supported feature matrix |
 | `stc online download` | Export the active manifest, layout summary, and controller/deployment identifier |
 | `stc online diff` | Compare a candidate manifest with the active baseline and print compatibility |
-| `stc rename` | Source-aware tracked rename that preserves `GotId` history (M6) |
-| `stc run --watch` | Watch sources, rebuild, and deploy an online change (M6) |
+| `stc rename` | Source-aware tracked rename that preserves `GotId` history |
+| `stc run --watch` | Watch sources, rebuild, and deploy an online change |
 | `stc debug` | Start a local authenticated debug/monitoring session (M6.5) |
 
 Future commands (not v1): `stc lsp`, `stc doc`.
@@ -84,14 +62,14 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--manifest-path <path>` | Use a specific `stc.toml` |
 | `--target <triple>` | Pass a target triple to clang; emit it in the IR |
 | `--release` | Optimised, stripped build; omits debug hooks and full debug info; distinct build ID/manifest. M6 rejects it as a usage error; M6.5 implements it. Debug is the default mode |
-| `--debug` | Force debug information and checkpoint hooks (default unless `--release`). M6 accepts it but always builds the unoptimised debug form without debug info or hooks (D-158) |
+| `--debug` | Force debug information and checkpoint hooks (default unless `--release`). M6 accepts it but emits no debug info or hooks; `[build].opt-level` still applies (D-158) |
 | `--emit <list>` | Comma-separated `ir,obj,module,exe,lib,metadata`; `module` emits the loadable module and manifest pair; `exe` is a launcher and `lib` the embedding host library; the two may coexist; overrides manifest |
 | `--got-manifest <path>` | Build against the given persistent GOT manifest as the identity baseline |
 | `--cold` | Explicitly build without an online-change baseline (cold-layout build) |
 | `--rename <old=new>` | Record a tracked rename/move; repeatable, including field/method/type/POU paths. Renaming a package name is out of scope (D-156) |
 | `--clang <path>` | clang executable |
 | `--runtime <path>` | Runtime host archive used when linking `exe`/`lib` |
-| `--out-dir <path>` | Artifact directory; M4.5 default `target/stc/debug`; the M6 project manifest uses `target/stc/<profile>` |
+| `--out-dir <path>` | Artifact directory; default `target/stc/debug` for both the manifest-free bridge and project builds; `[build].out-dir` overrides the project default |
 | `--io <backend>` | Override `[io].backend` for `run`/`test` (`null`, `memory`, `file`) |
 | `--io-file <path>` | File used by the file backend |
 | `--relaxed` | Accept the documented semicolon-relaxation syntax superset |
@@ -115,7 +93,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LOG`) >
 `stc.toml` > built-in defaults.
 
-The table describes the v1 target surface. M6 implements `--manifest-path`, `--locked`,
+The table describes the v1 target surface. M6 implemented `--manifest-path`, `--locked`,
 `--color`, `-q`, `-D`/`-W`/`-A`, `--deny warnings`, `-v`/`-vv`, `--debug`, and, for `stc run`,
 `--cycles`, `--cycle-time`, `--io`, `--io-file`, `--state-file`, `--reset-retain`, and
 `--no-retain`. `run --watch` adds `--store <dir>` and `--watch-timeout <duration>`; the online
@@ -262,7 +240,7 @@ use (human output is the default; `--message-format json` selects this shape):
   "tasks": [ { "name": "MainTask", "resource": "Cpu", "interval_ns": 1000000, "priority": 1, "single": false } ],
   "exports": [ { "symbol": "stc_export_Main", "function": "stc_fn_…" } ],
   "retain": { "enabled": true, "file": "motor.stcstate", "on_mismatch": "error" },
-  "io": { "backend": "null", "bindings": 1, "devices": 1 },
+  "io": { "backend": "null", "bindings": 1, "devices": 1, "var_access": 1 },
   "artifacts": [ { "kind": "module", "file": "motor-control-<build-id>.dll" } ]
 }
 ```
@@ -279,7 +257,15 @@ field name; the manifest key is `on-mismatch`.
   "ed4_claimed": false,
   "extensions": ["STC-UTF8", "STC-PRAGMA", "STC-TEST", "STC-POINTER"],
   "runtime_capabilities": ["online-change", "got-manifest", "debug-monitoring"],
-  "features": { "lexical": "implemented", "oop": "implemented", "project-system": "planned" },
+  "features": {
+    "lexical": "implemented",
+    "oop": "implemented",
+    "project-system": "implemented",
+    "test-runner": "implemented",
+    "formatter": "implemented",
+    "online-change": "implemented",
+    "debug-monitoring": "planned"
+  },
   "safety": "not-a-safety-plc"
 }
 ```
@@ -420,7 +406,7 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   exists, it is selected. If omitted and multiple exist, the build fails with a list.
 - `[build] target` is passed to clang and emitted as the IR triple.
 - `[build] opt-level` is `0|1|2|3|"s"`; maps to clang `-O` flags.
-- `[build] debug` is parsed from phase 1. M6 always builds the unoptimised debug form without
+- `[build] debug` is parsed from phase 1. M6 honors `[build].opt-level` but emits no
   DWARF/CodeView or checkpoint hooks; `debug = false` emits `STC-W-PROJECT-001`, and `--release`
   is a usage error until M6.5 implements the stripped/optimised form and its distinct build
   ID/manifest (D-158).
@@ -618,12 +604,12 @@ Rules:
 ## 4. Artifact and metadata layout
 
 ```text
-target/stc/debug/                               M4.5 default (v1: target/stc/<profile>/)
+target/stc/debug/                               default out-dir (project and bridge)
   <name>.ll
   <name>.o
   <name>.exe                                     thin host launcher (exe)
   <name>-launcher.ll | <name>-launcher.o         launcher IR/object when `exe`
-  <name>.lib | <name>.a                          embedding host archive (lib)
+  <name>.lib | <name>.a | <name>.dll/.so         embedding host library (lib; static or shared)
   <name>-<build-id>.dll | <name>-<build-id>.so  loadable module (module)
   <name>.stc-meta.json
   <name>.stc-got.json                           canonical GOT manifest
@@ -662,6 +648,9 @@ target/stc/debug/                               M4.5 default (v1: target/stc/<pr
     { "name": "main_instance", "program": "Main", "resource": "Cpu", "task": "MainTask" }
   ],
   "retain": {
+    "enabled": true,
+    "file": "motor.stcstate",
+    "on_mismatch": "error",
     "layout_hash": "0x…",
     "leaves": [
       { "offset": 0, "path": "Main.Counter", "size": 4, "type": "DINT" }
@@ -680,13 +669,13 @@ target/stc/debug/                               M4.5 default (v1: target/stc/<pr
 }
 ```
 
-The M4.5 schema above is what the driver writes. The v1 target adds package/device/`VAR_ACCESS`
-metadata and the `file`/`on-mismatch` retained-state policy (JSON field `on_mismatch`) in M6;
-these fields are not emitted by M4.5. `parent_build_id` is carried by the manifest lineage rather
+The driver writes the schema above. M6 adds package/device/`VAR_ACCESS` metadata and the
+`file`/`on-mismatch` retained-state policy (JSON field `on_mismatch`); these fields are absent
+from M4.5 artifacts. `parent_build_id` is carried by the manifest lineage rather
 than the metadata sidecar.
 
-- `lib` is the embedding host library, not generated module code. In M4.5 it is a static host
-  archive; shared host libraries (`lib-type = "shared"`) are M6. `exe` is a thin launcher and
+- `lib` is the embedding host library, not generated module code. `lib-type = "shared"` selects
+  the shared host library; the default is a static host archive. `exe` is a thin launcher and
   emits the adjacent module pair. The generated module and manifest remain separate artifacts;
   `exe` and `lib` may be emitted together.
 - The metadata is consumed by the runtime and by embedding hosts.
@@ -739,7 +728,7 @@ END_FUNCTION
 [stc] sources 3 files, 812 lines
 [stc] lex 3.1ms  parse 5.4ms  resolve 2.2ms  typeck 4.8ms  ir 1.9ms
 [stc] clang 12.1ms
-[stc] artifacts target/stc/stc-2013-oop-utf8-v1/motor-control.exe
+[stc] artifacts target/stc/debug/motor-control.exe
 ```
 
 `-vv` adds per-file phases, the exact clang command line, and retained IR paths. The log never

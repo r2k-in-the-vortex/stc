@@ -1,6 +1,6 @@
 # I/O and Device Linking
 
-Status: M4.5 scalar process image and online remap implemented (2026-10-25); M6 phase-5 device metadata and `null`/`memory`/`file` backends implemented (2026-10-26)  
+Status: M4.5 scalar process image and online remap, M5 aggregate leaves, and M6 device metadata plus `null`/`memory`/`file` backends implemented (2026-10-27)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Tokenization](../Syntax/Tokenization.md)
 

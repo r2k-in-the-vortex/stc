@@ -2,9 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-26  
-Status: Phases 0–10 complete (2026-10-27); phase 11 ready to start. M5 (phases 1–7 and 4b) is
-complete and M6.5 is planned, so M6 is the bridge from the completed compiler/runtime surface to a
-usable v1 project tool.  
+Status: Complete (2026-10-27); phases 0–11 complete. M5 (phases 1–7 and 4b) is complete, M6.5 is planned, and M6 bridges the completed compiler/runtime surface to a usable v1 project tool.  
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
 [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) §1–§6,
 [State and RETAIN](Specification/Architecture/State-and-Retain.md),
@@ -15,8 +13,8 @@ Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 M6,
 [Architecture](Specification/Architecture/Architecture.md) §2/§5,
 [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md),
 [Conformance Profile](Specification/01-Conformance-Profile.md), `M5-Plan.md`, `M6.5-Plan.md`, and
-Decisions D-051, D-060, D-068, D-071, D-079, D-084, D-085, D-087, D-108–D-110, D-134, D-136, and
-D-153–D-164.
+Decisions D-051, D-060, D-068, D-071, D-079, D-084, D-085, D-087, D-108–D-110, D-134, D-136,
+D-153–D-164, and the phase records D-165–D-172.
 
 M6 follows M5 and precedes M6.5. It turns the finished language/runtime surface into a project
 tool: `stc.toml`, local path dependencies, a committed lockfile, package-aware namespaces,
@@ -73,15 +71,16 @@ Deliver the v1 user workflow on the M5 host/module model:
   manifest-assisted split-object view.
 - `--release`, stripped/optimised artifacts, debug/release build-ID separation, and debug
   information emission. M6 parses the manifest keys and keeps the existing descriptor flags, but
-  builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks (M6.5).
+  builds the debug form (honoring `[build].opt-level`, default 0) without DWARF/CodeView or
+  checkpoint hooks (M6.5).
 - Field-layout migration, resizing, `GotId`-keyed retained-state migration, and record/handle
   migration across restarts.
 - Remote/network deployment, multi-user scheduling, a debugger UI, and a network package
   registry/version solver.
 - Hardware I/O backends (EtherCAT, Modbus, MQTT), their schedules, and runtime override
   configuration beyond the v1 backend selection.
-- Multi-threaded ST execution. M6 adds host control/service threads for deployment and status;
-  only the cycle thread executes ST.
+- Multi-threaded ST execution. M6 adds one host control/status thread for deployment and status;
+  service/monitor threads are M6.5, and only the cycle thread executes ST.
 - Migrating the synthesized standard FB bodies to a textual `stdlib/` package. The package graph
   makes that possible, but D-134's synthesized-HIR implementation remains v1 behavior.
 - `stc lsp`, `stc doc`, and a configurable/range formatter.
@@ -178,7 +177,7 @@ stc.toml graph
 | 10 | Conformance/UI/traceability/`fuzz_manifest`/xtask/CI matrix | CI jobs active; traceability report complete |
 | 11 | Documentation and M6.5 handover notes | Specs/README/plan/decisions consistent; checks pass |
 
-Phase status: phases 0–10 are complete (2026-10-27); phase 11 is pending. Phase 0 fixed
+Phase status: phases 0–11 are complete (2026-10-27). Phase 0 fixed
 the manifest spelling, diagnostic families, JSON report shapes, M6/M6.5 boundary, and the
 test-build, scheduler, and rename-history interfaces. Phase 1 added `crates/stc-manifest`, the
 resolved project graph and lockfile API, and `fuzz_manifest`. Phase 2 added the merged
@@ -809,8 +808,9 @@ write failure, and an invalid active-store cold build, and the same suite target
 sections, UI annotations, and conformance metadata, including shared `codes::CONSTANT` references;
 the explicit allowlist (`tools/ci/traceability-allowlist.toml`) records four not-implemented rules
 (the per-field online retain-reset codes, the stale-reference warning, and the direct-variable
-deprecation warning) and two illustrative IDs from the project plan; the report now shows 191
-covered, 0 uncovered. CI's `detect` job now recognizes the execution driver test and the projects
+deprecation warning) and two illustrative IDs from the project plan; the report shows every
+implemented rule covered (192 covered, 0 uncovered at M6 completion). CI's `detect` job now
+recognizes the execution driver test and the projects
 suite, and active `ui`, `conformance`, `execution`, `projects`, `traceability`, `lean`, and
 `fuzz-smoke` jobs run on the documented matrix with `--locked`, denied warnings, pinned runner
 images, and clang versions printed. `fuzz_manifest` (arbitrary TOML, no filesystem or execution)
@@ -819,23 +819,34 @@ target and runs each for 60 s with `-max_len=1048576`. The pass also fixed a lat
 corpus: UTF-8 string indexing through the dynamic single-root path treated `USTRING` as an array
 (`STC-E-CODEGEN-002`). The identity tests and the projects suite now directly exercise the
 previously untested `STC-W-ONLINE-003` direct-root remap warning and the `STC-E-RUN-IO-001`
-file-backend write failure.
+file-backend write failure. Phase 11 completed the documentation and handover pass: README,
+project plan, conformance profile, architecture/CLI/state/I/O/runtime/online/testing/GOT specs,
+decisions, this plan, and the M6.5 boundary describe the implemented M6 surface, the stale
+`stdlib/` and snake_case statements are corrected, and the document/link/profile/Markdown checks
+pass.
 
-### Phase 11 — Documentation and handover
+### Phase 11 — Documentation and handover (complete 2026-10-27)
 
-- Update README status, CLI list, project-manifest example (kebab-case), repo layout, CI table,
-  and decision summary.
-- Update the project plan's M6 status note, immediate next actions, and deliverables list (add
+- [x] Update README status, CLI list, project-manifest example (kebab-case), repo layout, CI
+  table, and decision summary.
+- [x] Update the project plan's M6 status note, immediate next actions, and deliverables list (add
   this plan); update the conformance profile status, implementation-defined choices (multi-task
   scheduling, assertions, project model, state/IO), and out-of-scope list.
-- Update CLI-and-Manifest, State-and-RETAIN, I/O-and-Devices, Runtime-and-Execution,
+- [x] Update CLI-and-Manifest, State-and-RETAIN, I/O-and-Devices, Runtime-and-Execution,
   Online-Change-and-GOT, Testing-and-Verification, Architecture, and GOT Artifacts for the
   implemented behavior; remove stale "M6 pending" notes.
-- Record M6 decisions D-153 onward and the phase records; add the M6 completion note to this
+- [x] Record M6 decisions D-153 onward and the phase records; add the M6 completion note to this
   plan; update the M6.5 handover boundary if the control/service-thread interface changed, and
   the host ABI minor if Q6-15 appends the test-clock service.
-- Correct stale statements (for example, the conformance profile's "standard FBs implemented in
-  ST under stdlib/" versus D-134, and README snake_case keys) and ensure no TODO/TBD placeholders.
+- [x] Correct stale statements (for example, the conformance profile's "standard FBs implemented in
+  ST under stdlib/" versus D-134, and README snake_case keys) and ensure no placeholder markers.
+
+Status (2026-10-27): complete. The M6 control/status-thread boundary did not change the M6.5
+contract: M6 added the control/status thread and kept candidate validation/load/prepare on the
+cycle thread, and the host ABI minor is 2.2 with service ID 12 as fixed in phase 0. The M6.5
+plan's boundary note is updated to record M6 as complete. The host ABI major stays 2, descriptor
+and manifest format 1 are unchanged, and `--release`, debug information, checkpoint hooks, typed
+access, forcing, breakpoints, stepping, and the debug protocol remain M6.5 work.
 
 Acceptance: `check_docs.py`, Markdown lint, and the link/profile checks pass; docs and code agree.
 
@@ -952,7 +963,7 @@ A code is never reused for a different condition; a retired code stays documente
 - README, project plan, conformance profile, architecture/runtime/state/I/O/CLI/testing/online
   specs, decisions, and this plan describe the implemented M6 surface truthfully.
 - No M6.5 debug/monitoring capability is claimed; the M6.5 boundary is unchanged except for the
-  control/service-thread interface recorded in the handover notes.
+  control/status-thread interface recorded in the handover notes.
 
 ## 12. Commands
 
@@ -970,14 +981,14 @@ cargo xtask test --suite projects --locked
 cargo xtask traceability --check
 
 cargo run -p stc-driver -- new examples/motor
-cargo run -p stc-driver -- build
-cargo run -p stc-driver -- run --cycles 10
-cargo run -p stc-driver -- test
-cargo run -p stc-driver -- fmt --check
-cargo run -p stc-driver -- online download --out motor.stc-got.json
-cargo run -p stc-driver -- online diff target/stc/debug/motor.stc-got.json
-cargo run -p stc-driver -- rename Main.Speed Main.Rate
-cargo run -p stc-driver -- run --watch
+cargo run -p stc-driver -- build --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- run --manifest-path examples/motor/stc.toml --cycles 10
+cargo run -p stc-driver -- test --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- fmt --manifest-path examples/motor/stc.toml --check
+cargo run -p stc-driver -- online download --manifest-path examples/motor/stc.toml --out motor.stc-got.json
+cargo run -p stc-driver -- online diff examples/motor/target/stc/debug/motor-control.stc-got.json --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- rename Main.Speed Main.Rate --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- run --watch --manifest-path examples/motor/stc.toml
 
 cd lean && lake build && lake exe vectors
 ```
@@ -997,7 +1008,7 @@ phase-7 preserve-encoding rule.
 | **Q6-5 — Watch/deploy control transport.** Named pipe/socket, nonce/ACL, and relationship to M6.5 debug. | **Resolved (D-155):** local-only named pipe (Windows) / Unix socket (Linux) with user-only permissions and a per-run nonce; deployment/status only; separate from the M6.5 authenticated debug protocol. |
 | **Q6-6 — Rename history.** Where is a source-aware rename's mapping persisted? | **Resolved (D-156):** committed `stc.renames.toml` at the root package; builds merge CLI `--rename` and history; conflicts error; chains resolve oldest-first; `--dry-run` available; identity preservation requires a baseline. |
 | **Q6-7 — Test execution model.** One shared test module/registry or one artifact per test? | **Resolved (D-157):** one artifact per test in v1 (a synthetic wrapper for function/FB tests, the test program for program tests), one process per test, sequential runs; a shared registry is a later optimization. |
-| **Q6-8 — Debug/release boundary.** Should M6 honor `debug = false`/`--release`? | **Resolved (D-158):** parse the keys but build the unoptimised debug form without debug info/hooks; `debug = false` reports `STC-W-PROJECT-001`; `--release` is a usage error until M6.5. |
+| **Q6-8 — Debug/release boundary.** Should M6 honor `debug = false`/`--release`? | **Resolved (D-158):** parse the keys but build the debug form (honoring `[build].opt-level`, default 0) without debug info/hooks; `debug = false` reports `STC-W-PROJECT-001`; `--release` is a usage error until M6.5. |
 | **Q6-9 — Formatter output.** Newline convention, blank-line handling, and semicolon insertion. | **Resolved (D-159):** preserve each file's line-ending encoding (CRLF stays CRLF, LF stays LF; inserted lines use the dominant ending; new files use LF) and BOM; preserve blank lines/comments/line breaks; insert strict semicolons after relaxed block statements; no wrapping or configuration. This supersedes the "emit `\n`" proposal. |
 | **Q6-10 — File I/O backend.** When are input/output files read/written? | **Resolved (D-160):** input image read once at cold start (missing file = defaults plus warning); output image written atomically at shutdown; `--io-file` overrides; tests use memory; unbound inputs default each scan. |
 | **Q6-11 — Lean/vector contract.** Model scope, format, and Rust linkage. | **Resolved (D-161):** Testing-and-Verification §5.2/§5.3 exactly; no Mathlib; committed deterministic vectors; a Rust `exact` reference module and C-harness samples; CI drift check. |
@@ -1071,6 +1082,11 @@ JSON shapes are fixed in
   M6.5 debug protocol (D-155/D-158).
 - M6.5 appends debug services after ID 12 under the same major and owns `--release`, debug
   information, checkpoint hooks, typed access, forcing, breakpoints, stepping, and sessions.
+
+Completion note (2026-10-27): implemented as fixed. Phase 6 appended only service ID 12; phases
+4–10 added no other host service, descriptor/manifest/state/plan field, or debug hook. M6 runs
+the control/status thread, keeps candidate validation/load/prepare on the cycle thread, and adds
+no service/monitor thread, so the M6.5 boundary stands unchanged.
 
 ### 14.4 Test-build mode (phase 6)
 

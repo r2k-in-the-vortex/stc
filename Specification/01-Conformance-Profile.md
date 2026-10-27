@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, and M4.5 online-change foundation complete; M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 phase 0 fixes the project/package, test, scheduling, diagnostics, and ABI contracts (2026-10-26)
+Status: Target profile; M3 front end, M4 scalar codegen, M4.5 online-change foundation, M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 project system, CLI, scheduler, state, I/O, test runner, formatter, online workflow, Lean vectors, conformance corpus, and CI complete (2026-10-27); M6.5 debug/monitoring pending
 
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
@@ -67,12 +67,13 @@ patches the preserved pair to the new method cells, fresh object records and han
 once and roll back, and vtable-shape changes are rejected against an active baseline. Interface
 identity comparison and references to split aggregate values remain explicit diagnostics;
 pointer-to-object/interface conversions and `ADR` of objects stay rejected. The transient
-`STC-POINTER` extension is implemented. The
-manifest, `stc run`, `stc test`, and file-backed retained state arrive in M6; M6 phase 4
-implements cooperative multi-task scheduling (priorities, intervals, `SINGLE`, task guards, and
-host-owned run state). `stc check <file>...` analyzes one in-memory
-package; a project manifest arrives in M6. The statuses in §3–§4 describe the v1 target
-surface. Unsupported constructs are rejected with the diagnostics in
+`STC-POINTER` extension is implemented. M6 is complete (2026-10-27): the `stc.toml` project
+manifest and lockfile, package-aware namespaces, `stc run`, `stc test`, file-backed retained
+state, I/O device/binding metadata and backends, the formatter, and the online-change workflow
+(`rename`, `online download/diff`, `run --watch`) are implemented; M6 also implements cooperative
+multi-task scheduling (priorities, intervals, `SINGLE`, task guards, and host-owned run state).
+`stc check <file>...` remains the manifest-free single-package bridge. The statuses in §3–§4
+describe the v1 target surface. Unsupported constructs are rejected with the diagnostics in
 [Grammar](Syntax/Grammar.md) §13 or `STC-E-CODEGEN-001` rather than silently accepted.
 The online-change/GOT/manifest/debug architecture is resolved and the M4.5 foundation is
 implemented. M4.5 phases 0–10 are complete (2026-10-25):
@@ -160,10 +161,10 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | THIS / SUPER | Implemented |
 | Assignment attempt (`?=`) | Implemented |
 | NAMESPACE / USING / qualified names | Implemented |
-| Configuration/resource/task/program configuration | Parsed and analysed; cooperative multi-task scheduling implemented (M6 phase 4) |
-| VAR_ACCESS | Parsed; runtime binding staged |
+| Configuration/resource/task/program configuration | Implemented; cooperative multi-task scheduling and host-owned task state (M6) |
+| VAR_ACCESS | Implemented; paths/types/direct locations emitted in metadata (M6) |
 | Standard functions | Implemented (see §6) |
-| Standard function blocks | Implemented in ST stdlib (TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS) |
+| Standard function blocks | Implemented as synthesized HIR in `STC_STD` (TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS), not textual `stdlib/` sources (D-134) |
 | Ed. 4 properties, mutex, semaphore, ASSERT | Not in profile |
 
 ### 4.3 Variable declarations
@@ -265,7 +266,8 @@ The 2013 standard function categories implemented:
 
 `SR`, `RS`, `R_TRIG`, `F_TRIG`, `CTU`, `CTD`, `CTUD`, `TP`, `TON`, `TOF`.
 
-These are implemented in ST under `stdlib/` and compiled with the user project. Their timing
+These are synthesized as production HIR in the reserved `STC_STD` scope (D-134) and compiled
+with the user project. Their timing
 behavior uses a single cycle time latched at `stc_module_cycle` entry, so all timers in one scan see the
 same time; tests use a mock clock with the same semantics.
 
@@ -285,10 +287,12 @@ same time; tests use a mock clock with the same semantics.
 - Communication model, remote variables, and `VAR_ACCESS` network binding.
 - Graphics languages and SFC.
 - Vendor pragmas and the AX preprocessor.
-- Multi-threaded ST task scheduling in v1. The host may run loader and service threads, but only
-  the cycle thread executes ST.
+- Multi-threaded ST task scheduling in v1. The host has a cycle thread and, in M6, a
+  control/status thread; later milestones may add loader and service threads, but only the cycle
+  thread executes ST.
 - Human-machine interface and the IEC communication model. Online change and debug/monitoring are
-  provided as project runtime capabilities in v1, not as IEC conformance features.
+  provided as project runtime capabilities in v1; online change is implemented, while
+  debug/monitoring is the M6.5 milestone and is not claimed until it is implemented.
 - Safety functions, safety certification, automatic fail-safe outputs, or a safety watchdog. The
   project is not a safety PLC and assumes no safety responsibility.
 - Field-layout migration, resizing, and pointer translation in v1. Per-field add/remove/rename
@@ -342,13 +346,17 @@ The following are deliberately chosen and must be documented and tested:
 | Statement classification | `x := y` is an assignment; a dereference on the left or `REF(...)`/`NULL` on the right is a reference assignment, finalized by the analyzer (D-055) |
 | Pragma duplicates | Duplicate `stc:io` is `STC-E-IO-003`; `stc:io` without `AT` is `STC-W-IO-002` (D-049) |
 | Task scheduling | Host-owned cooperative scheduler in M6; tasks share one scan, one latched clock, one input latch, and one output publish. Lower numeric priority is higher; an absent priority sorts after explicit priorities; ties follow resource/task declaration order. No interval = every scan; interval = first run after one interval, then `now + interval` with no catch-up; `SINGLE` runs once and completes; a task/resource topology change requires a cold download |
+| Project model | `stc.toml` packages with local path dependencies, deterministic topological order, a committed `stc.lock`, and `--locked`; package identity is `[package].name`, an alias sets only the root namespace, and `INTERNAL` is package-private |
+| Test runner | One cold test artifact per test with a synthetic single-task configuration; process-isolated and sequential; default 5 s timeout; memory I/O unless `[test].io` overrides; mock clock from `[test].mock-clock` |
+| Formatter | Fixed style over the lossless CST; comments, blank lines, and existing line breaks preserved; per-file BOM and line-ending encoding preserved; strict semicolons inserted; `--check`; idempotent |
+| Online workflow | Active-baseline builds, `stc online download/diff`, committed `stc.renames.toml` tracked renames, and `stc run --watch` over a local user-only deploy/status endpoint with a per-run nonce |
 | Execution artifacts | `module` is a loadable shared library paired with a GOT manifest; `exe` is a thin host launcher; `lib` embeds the host; host ABI 2.2 implemented (test-clock service ID 12; production modules require 2.1; no debug services) |
 | Persistent memory | Host-owned GOT cells and stable roots; per-field recursive roots; handle-based objects; runtime-owned descriptors |
 | References and pointers | Persistent-capable `REF_TO` uses place descriptors; pointer→`REF_TO` is runtime-validated and yields `NULL` on failure; `POINTER TO` is transient-only (`STC-POINTER`) |
 | Online change | Whole-module load/prepare, O(1) cycle-boundary activation, one-successful-cycle rollback, off-thread unload |
 | Baseline policy | Exact parent build ID + digest pairing + profile/target/ABI/layout match; missing/stale/invalid baseline forces a cold download |
 | Preservation | Matching `GotId`/type/layout/size roots preserved; new roots initialized; removed roots quarantined; no field-layout migration in v1 |
-| Debug builds | M6 builds the unoptimised debug form without DWARF/CodeView or checkpoint hooks; M6.5 adds debug information by default and `--release` stripping/optimisation with distinct build IDs and manifests |
+| Debug builds | M6 honors `[build].opt-level` (default 0) but emits no DWARF/CodeView or checkpoint hooks; M6.5 adds debug information by default and `--release` stripping/optimisation with distinct build IDs and manifests |
 | Debug behavior | Typed read/write/force/watch, checkpoint breakpoints, stop-the-world stepping, call stacks; swaps end sessions; outputs may be held indefinitely; not a safety PLC |
 | Runtime threads | One cycle thread and, in M6, one control/status thread for deployment/status; M6.5 adds service/monitor threads. Only the cycle thread executes ST; generation pinning for readers |
 
