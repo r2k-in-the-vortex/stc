@@ -213,6 +213,7 @@ fn catalog() -> Catalog {
         instances: vec![instance_decl()],
         tasks: vec![task_decl()],
         exports: vec![export_decl()],
+        aggregates: Vec::new(),
         imports: vec![
             ImportService::Trap,
             ImportService::CycleNowNs,

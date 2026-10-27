@@ -61,6 +61,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod catalog;
 pub mod compare;
 pub mod control;
+pub mod debug;
 pub mod descriptors;
 pub mod got;
 pub mod host;
@@ -87,6 +88,15 @@ pub use compare::compare_manifests;
 pub use control::{
     CONTROL_UNAVAILABLE, ControlClient, ControlOp, ControlRequest, ControlServer, ControlSignal,
     DEPLOY_REJECTED, PROTOCOL_VERSION,
+};
+pub use debug::{
+    AuditEvent, AuditOutcome, AuditSink, AuditTarget, DebugBatch, DebugEndReason, DebugError,
+    DebugEvent, DebugFailure, DebugQueueId, DebugQueueOutcome, DebugQueueResult, DebugRead,
+    DebugReadRequest, DebugService, DebugTarget, DebugValue, DebugWarning, DebugWriteKind,
+    DebugWriteRequest, MAX_AUDIT_VALUE_BYTES, MAX_DEBUG_QUEUE_BYTES, MAX_DEBUG_QUEUE_ENTRIES,
+    MAX_DEBUG_QUEUE_RESULTS, MAX_EVENT_BYTES, MAX_WATCH_BATCHES, MAX_WATCHES,
+    MIN_WATCH_INTERVAL_NS, NamedValue, ReadCompletion, ReadRequestId, StopFrame, StoppedLocal,
+    StringValue, TypedValue, WatchId, WatchResult, WatchSpec, WatchValue,
 };
 pub use got::Got;
 pub use host::{

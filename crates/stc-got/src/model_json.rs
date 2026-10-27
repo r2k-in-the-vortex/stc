@@ -6,10 +6,12 @@ use crate::digest::{Digest32, GotId};
 use crate::error::{Error, Result, Severity};
 use crate::json::Json;
 use crate::model::{
-    ActionRecord, DescriptorKind, DescriptorRecord, ExportRecord, FieldRecord, FunctionKind,
-    FunctionRecord, Header, History, InitializerKind, InstanceRecord, Plan, PlanAction,
-    PlanDiagnostic, PlanVerdict, Retention, RetiredCause, RetiredRecord, RootKind, RootRecord,
-    SlotKind, SlotRecord, SourceLocation, TaskRecord, TypeKind, TypeRecord,
+    ActionRecord, AggregateFieldRecord, AggregateKind, AggregateRecord, DescriptorKind,
+    DescriptorRecord, EnumMemberRecord, ExportRecord, FieldRecord, FunctionKind, FunctionRecord,
+    Header, History, InitializerKind, InstanceRecord, Plan, PlanAction, PlanDiagnostic,
+    PlanVerdict, Retention, RetiredCause, RetiredRecord, RootKind, RootRecord, SlotKind,
+    SlotRecord, SourceLocation, SubrangeBounds, TaskRecord, TypeKind, TypeMetadataRecord,
+    TypeRecord,
 };
 
 fn object<'a>(value: &'a Json, what: &str) -> Result<&'a BTreeMap<String, Json>> {
@@ -769,6 +771,213 @@ impl TypeRecord {
             vtable_shape: optional_id(object, "vtable_shape", "type record")?,
             fields,
             source: source_from_json(object, "source", "type record")?,
+        })
+    }
+}
+
+impl EnumMemberRecord {
+    /// Projects the member to JSON.
+    #[must_use]
+    pub fn to_json(&self) -> Json {
+        Json::object([
+            ("name".into(), Json::string(self.name.clone())),
+            ("value".into(), Json::Number(self.value)),
+        ])
+    }
+
+    /// Parses a member object.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown or malformed fields.
+    pub fn from_json(value: &Json) -> Result<Self> {
+        let object = object(value, "enum member")?;
+        check_unknown(object, &["name", "value"], "enum member")?;
+        Ok(Self {
+            name: string(object, "name", "enum member")?,
+            value: number(object, "value", "enum member")?,
+        })
+    }
+}
+
+impl SubrangeBounds {
+    /// Projects the bounds to JSON.
+    #[must_use]
+    pub fn to_json(self) -> Json {
+        Json::object([
+            ("lower".into(), Json::Number(self.lower)),
+            ("upper".into(), Json::Number(self.upper)),
+        ])
+    }
+
+    /// Parses a bounds object.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown or malformed fields.
+    pub fn from_json(value: &Json) -> Result<Self> {
+        let object = object(value, "subrange")?;
+        check_unknown(object, &["lower", "upper"], "subrange")?;
+        Ok(Self {
+            lower: number(object, "lower", "subrange")?,
+            upper: number(object, "upper", "subrange")?,
+        })
+    }
+}
+
+impl TypeMetadataRecord {
+    /// Projects the metadata record to JSON.
+    #[must_use]
+    pub fn to_json(&self) -> Json {
+        Json::object([
+            (
+                "enum_members".into(),
+                Json::Array(
+                    self.enum_members
+                        .iter()
+                        .map(EnumMemberRecord::to_json)
+                        .collect(),
+                ),
+            ),
+            (
+                "subrange".into(),
+                Json::optional(self.subrange.map(SubrangeBounds::to_json)),
+            ),
+            ("type_id".into(), Json::string(self.type_id.to_hex())),
+        ])
+    }
+
+    /// Parses a metadata record.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown or malformed fields.
+    pub fn from_json(value: &Json) -> Result<Self> {
+        let object = object(value, "type metadata")?;
+        check_unknown(
+            object,
+            &["enum_members", "subrange", "type_id"],
+            "type metadata",
+        )?;
+        let mut enum_members = Vec::new();
+        for member in array(object, "enum_members", "type metadata")? {
+            enum_members.push(EnumMemberRecord::from_json(member)?);
+        }
+        let subrange_value = get(object, "subrange", "type metadata")?;
+        let subrange = if subrange_value.is_null() {
+            None
+        } else {
+            Some(SubrangeBounds::from_json(subrange_value)?)
+        };
+        Ok(Self {
+            type_id: id_value(object, "type_id", "type metadata")?,
+            enum_members,
+            subrange,
+        })
+    }
+}
+
+impl AggregateFieldRecord {
+    /// Projects the field to JSON.
+    #[must_use]
+    pub fn to_json(&self) -> Json {
+        Json::object([
+            (
+                "layout_hash".into(),
+                Json::string(self.layout_hash.to_hex()),
+            ),
+            ("path".into(), Json::string(self.path.clone())),
+            ("type_key".into(), Json::string(self.type_key.clone())),
+        ])
+    }
+
+    /// Parses a field object.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown or malformed fields.
+    pub fn from_json(value: &Json) -> Result<Self> {
+        let object = object(value, "aggregate field")?;
+        check_unknown(
+            object,
+            &["layout_hash", "path", "type_key"],
+            "aggregate field",
+        )?;
+        Ok(Self {
+            path: string(object, "path", "aggregate field")?,
+            type_key: string(object, "type_key", "aggregate field")?,
+            layout_hash: id_value(object, "layout_hash", "aggregate field")?,
+        })
+    }
+}
+
+impl AggregateRecord {
+    /// Projects the aggregate shape to JSON.
+    #[must_use]
+    pub fn to_json(&self) -> Json {
+        Json::object([
+            (
+                "fields".into(),
+                Json::Array(
+                    self.fields
+                        .iter()
+                        .map(AggregateFieldRecord::to_json)
+                        .collect(),
+                ),
+            ),
+            ("kind".into(), Json::string(self.kind.name())),
+            (
+                "layout_hash".into(),
+                Json::string(self.layout_hash.to_hex()),
+            ),
+            ("package".into(), Json::string(self.package.clone())),
+            ("path".into(), Json::string(self.path.clone())),
+            (
+                "qualifier".into(),
+                Json::optional(self.qualifier.clone().map(Json::string)),
+            ),
+            ("shape_key".into(), Json::string(self.shape_key.clone())),
+        ])
+    }
+
+    /// Parses an aggregate shape.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown or malformed fields.
+    pub fn from_json(value: &Json) -> Result<Self> {
+        let object = object(value, "aggregate")?;
+        check_unknown(
+            object,
+            &[
+                "fields",
+                "kind",
+                "layout_hash",
+                "package",
+                "path",
+                "qualifier",
+                "shape_key",
+            ],
+            "aggregate",
+        )?;
+        let mut fields = Vec::new();
+        for field in array(object, "fields", "aggregate")? {
+            fields.push(AggregateFieldRecord::from_json(field)?);
+        }
+        Ok(Self {
+            package: string(object, "package", "aggregate")?,
+            path: string(object, "path", "aggregate")?,
+            qualifier: optional_string(object, "qualifier", "aggregate")?,
+            kind: enum_value(
+                object,
+                "kind",
+                "aggregate",
+                AggregateKind::from_name,
+                "type or program",
+            )?,
+            shape_key: string(object, "shape_key", "aggregate")?,
+            layout_hash: id_value(object, "layout_hash", "aggregate")?,
+            fields,
         })
     }
 }

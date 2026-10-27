@@ -20,13 +20,14 @@ use stc_got::manifest::{
 };
 use stc_got::model::{DescriptorKind, Retention, RootKind, SourceLocation};
 use stc_got::{
-    BuildInput, BuildOptions, Catalog, DescriptorDecl, Digest32, ExportDecl, FieldDecl,
-    FunctionDecl, FunctionKind, GotId, Identity, IdentityKind, InitializerKind, InstanceDecl,
-    Manifest, Rename, RootDecl, Signature, Target, TaskDecl, TypeDecl, TypeKey,
-    descriptor_identity_key, direct_root_key, export_identity_key, expression_initializer_digest,
-    field_identity_key, field_root_key, function_key, global_root_key, hidden_root_key,
-    initializer_digest, instance_identity_key, normalize_ident, normalize_package,
-    program_body_key, task_guard_root_key, task_identity_key, type_identity_key,
+    AggregateDecl, AggregateFieldDecl, AggregateKind, BuildInput, BuildOptions, Catalog,
+    DescriptorDecl, Digest32, EnumMemberDecl, ExportDecl, FieldDecl, FunctionDecl, FunctionKind,
+    GotId, Identity, IdentityKind, InitializerKind, InstanceDecl, Manifest, Rename, RootDecl,
+    Signature, SubrangeDecl, Target, TaskDecl, TypeDecl, TypeKey, descriptor_identity_key,
+    direct_root_key, export_identity_key, expression_initializer_digest, field_identity_key,
+    field_root_key, function_key, global_root_key, hidden_root_key, initializer_digest,
+    instance_identity_key, normalize_ident, normalize_package, program_body_key,
+    task_guard_root_key, task_identity_key, type_identity_key,
 };
 use stc_hir::{
     ArgDirection, CalleeHir, ConstValue, DefId, DefKind, ExprId, ExprKindHir, FieldId, HirCrate,
@@ -894,6 +895,18 @@ impl Context<'_> {
             self.test_build,
             self.debug_hooks,
         );
+        catalog.aggregates.sort_by(|left, right| {
+            (
+                left.package.as_str(),
+                left.path.as_str(),
+                left.qualifier.as_deref(),
+            )
+                .cmp(&(
+                    right.package.as_str(),
+                    right.path.as_str(),
+                    right.qualifier.as_deref(),
+                ))
+        });
         Ok(BuiltCatalog {
             catalog,
             root_targets,
@@ -982,6 +995,19 @@ impl Context<'_> {
                 .types
                 .storage_plan(*ty, *retain)
                 .map_err(|error| ModuleError::from(error.with_span(def.span)))?;
+            if plan.leaves.iter().any(|leaf| !leaf.segments.is_empty()) || !plan.objects.is_empty()
+            {
+                let (layout_hash, _, _) = self.layout(*ty, def.span)?;
+                catalog.aggregates.push(AggregateDecl {
+                    package: def_package.clone(),
+                    path: path.clone(),
+                    qualifier: None,
+                    kind: AggregateKind::Type,
+                    shape_key: self.got_type_key(*ty, def.span)?,
+                    layout_hash,
+                    fields: Vec::new(),
+                });
+            }
             for leaf in &plan.leaves {
                 let leaf_segments = self.segment_text(&leaf.segments)?;
                 let leaf_path = join_root_path(&path, &leaf_segments);
@@ -1116,8 +1142,18 @@ impl Context<'_> {
             let instance_path =
                 instance_path(&configuration, &instance.resource, &instance.name_text);
             let fields = fields.clone();
+            let mut aggregate_fields = Vec::new();
             for field in fields {
                 let data = self.hir.field(field).clone();
+                let field_name = normalize_ident(self.hir.interner.text(data.name))
+                    .map_err(|error| map_error(error, Some(data.span)))?;
+                let field_type_key = self.got_type_key(data.ty, data.span)?;
+                let (field_layout_hash, _, _) = self.layout(data.ty, data.span)?;
+                aggregate_fields.push(AggregateFieldDecl {
+                    path: field_name.clone(),
+                    type_key: field_type_key,
+                    layout_hash: field_layout_hash,
+                });
                 if matches!(
                     data.section,
                     stc_hir::VarSectionKind::InOut
@@ -1133,8 +1169,6 @@ impl Context<'_> {
                         data.span,
                     )));
                 }
-                let field_name = normalize_ident(self.hir.interner.text(data.name))
-                    .map_err(|error| map_error(error, Some(data.span)))?;
                 let root_path = format!("{program_path}.{field_name}");
                 let source = self.source_location(&package, data.span);
                 let override_init = overrides
@@ -1320,6 +1354,34 @@ impl Context<'_> {
                         handle,
                     });
                 }
+            }
+            if !aggregate_fields.is_empty() {
+                aggregate_fields.sort_by(|left, right| left.path.cmp(&right.path));
+                let hash_fields: Vec<(String, String, GotId)> = aggregate_fields
+                    .iter()
+                    .map(|field| {
+                        (
+                            field.path.clone(),
+                            field.type_key.clone(),
+                            field.layout_hash,
+                        )
+                    })
+                    .collect();
+                let layout_hash = stc_got::layout::aggregate_layout_hash(
+                    self.types.target(),
+                    &package,
+                    &program_path,
+                    &hash_fields,
+                );
+                catalog.aggregates.push(AggregateDecl {
+                    package,
+                    path: program_path.clone(),
+                    qualifier: Some(instance_path),
+                    kind: AggregateKind::Program,
+                    shape_key: program_path,
+                    layout_hash,
+                    fields: aggregate_fields,
+                });
             }
         }
         Ok(())
@@ -2004,6 +2066,20 @@ impl Context<'_> {
             }
             let identity =
                 Identity::new(IdentityKind::Type, &named.package, named.path.clone(), "");
+            let mut enum_members = Vec::new();
+            for value in &named.enum_values {
+                enum_members.push(EnumMemberDecl {
+                    name: normalize_ident(self.hir.interner.text(value.name))
+                        .map_err(|error| map_error(error, Some(value.span)))?,
+                    value: value.value,
+                });
+            }
+            enum_members.sort_by(|left, right| {
+                (left.value, left.name.as_str()).cmp(&(right.value, right.name.as_str()))
+            });
+            let subrange = named
+                .subrange
+                .map(|(lower, upper)| SubrangeDecl { lower, upper });
             catalog.types.push(TypeDecl {
                 identity,
                 key: type_identity_key(&named.package, &named.path)
@@ -2017,6 +2093,8 @@ impl Context<'_> {
                 interfaces,
                 vtable_shape: named.vtable_shape,
                 fields,
+                enum_members,
+                subrange,
                 source: self.source_location(&named.package, self.hir.defs[named.def.index()].span),
             });
         }

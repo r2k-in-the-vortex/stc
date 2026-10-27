@@ -216,7 +216,8 @@ and debug-information errors. Online-change diagnostics use their own
 
 M4.5 and M6 do not implement the debugger. They fix the host/module substrate and leave the debug
 surface to M6.5. This section records the boundary so M6.5 can build on it without changing
-format 1 or the ABI 2 service signatures.
+the descriptor or module format 1 or the ABI 2 service signatures; the GOT manifest was later
+raised to format 2 by M6.5 phase 4 (D-180).
 
 ### 12.1 Available now
 
@@ -419,7 +420,10 @@ authorization. Authentication precedes every operation, including `session.start
   `monotonic_ns` is the host monotonic clock; `local_date_ns` is the host local-date clock or 0
   when it is unavailable. Paths are relative or package keys, never absolute host paths. For
   protected reads and `manifest.get`, `value` is null. Values larger than 4 KiB are recorded as
-  `{"truncated":true,"size":<bytes>}`. Audit events are `server-start`, `server-stop`,
+  `{"truncated":true,"size":<bytes>}`. A write/force `value` is the §15.5 typed envelope,
+  including typed element envelopes for arrays and aggregates; finite `REAL`/`LREAL` values are
+  JSON numbers and non-finite values use the canonical strings. Audit events are
+  `server-start`, `server-stop`,
   `connect`, `disconnect`, `auth-fail`, `session-start`, `session-end`, `read-protected`,
   `manifest-export`, `write`, `force`, `force-release`, `breakpoint-set`, `breakpoint-clear`,
   `stop`, `resume`, `step`, `swap-end`, `timeout`, `policy-deny`, and `transport-error`.
@@ -709,6 +713,13 @@ pointer expression is not a target. An unknown target is `STC-E-DEBUG-008`; a ta
 in an expected generation but is removed or has a changed layout is `STC-E-DEBUG-010`. A removed
 field is never silently retargeted to a same-named field in another instance.
 
+Enum membership, subrange bounds, and split-storage parent shapes come from the manifest-format-2
+`type_metadata` and `aggregates` records (GOT Artifacts §9). The host rejects a format-1 manifest
+at load, so a resolved writable enum or subrange always has its declared member set or bounds,
+and a whole-program instance or array-of-aggregate parent resolves through an aggregate record
+instead of being guessed. A target absent from the type/root/aggregate tables remains
+`STC-E-DEBUG-008`. No resolution path accepts a raw address, offset, or pointer expression.
+
 ### 15.2 Reads and consistency
 
 - The service thread pins the active generation (`Host::pin_active`), resolves the target, copies
@@ -717,10 +728,12 @@ field is never silently retargeted to a same-named field in another instance.
 - A scalar root, enum, subrange, time/date value, single-root string, or single-root scalar array
   is copied as one unit and reported `atomic:true`. An `OVERLAP` root is copied as its declared
   bytes.
-- A split aggregate, multi-root object, interface, or reference is resolved leaf by leaf. Each
-  leaf carries its own generation; the result is `consistent:false` if any leaf was copied from a
-  different cycle than the reported cycle. The debugger labels this view manifest-assisted
-  (§6.2); it is not a raw struct dump.
+- A split aggregate, multi-root object, interface, or reference is resolved leaf by leaf. A
+  whole-program instance aggregate and an array-of-aggregate element resolve their parent shape
+  through the format-2 aggregate records; their fields are still copied individually and the
+  value is not presented as one atomic struct. Each leaf carries its own generation; the result
+  is `consistent:false` if any leaf was copied from a different cycle than the reported cycle.
+  The debugger labels this view manifest-assisted (§6.2); it is not a raw struct dump.
 - Locals and parameters are read only from the current stopped-frame snapshot. They are never
   read from a running frame. A stale `stop_id` is `STC-E-DEBUG-015`; an unavailable or
   optimized-out local is reported with `available:false` and `STC-W-DEBUG-002`, not
@@ -743,7 +756,15 @@ A write request:
 - is applied in queue order; multiple writes are not a transaction and may be observed
   individually by a subsequent read;
 - never targets a local, parameter, class/interface identity, `REF_TO`/`POINTER` identity, or a
-  field that has no persistent root of its own.
+  field that has no persistent root of its own. A field with its own manifest root is an ordinary
+  scalar target; a field reached only through a split parent is not writable as a parent value;
+- is limited with the force queue to 1024 entries or 1 MiB; over either limit is
+  `STC-E-DEBUG-011` at enqueue, never backpressure on the cycle thread;
+- must match the target's exact declared type. An actual value type mismatch is
+  `STC-E-DEBUG-009`; an expected generation/build/type/layout mismatch is `STC-E-DEBUG-010`.
+  Enum membership and subrange bounds are checked from the format-2 metadata, and arrays/strings
+  must match their declared count, element type, capacity, and unit range. There is no implicit
+  conversion.
 
 A write queued while stopped remains queued until the cycle resumes and reaches the boundary. A
 write to an input is overwritten by the next input latch unless an active force holds it. A write
@@ -768,9 +789,12 @@ A force is a write that is re-applied at every boundary until released. Rules:
 - releasing is effective at the next boundary; a release while stopped takes effect when the
   cycle resumes;
 - session end, disconnect, timeout, swap, and host shutdown clear all forces. Forces are never
-  written to the state file and never restored;
+  written to the state file and never restored. A host-level clear releases every active force
+  and discards every queued write/force even when no session is attached; queued entries produce
+  rejected queue results with `STC-E-DEBUG-010` and are never migrated to another generation;
 - every force and release is audited with target, typed value, scope, generation, and cycle. A
-  force on a `RETAIN`/`PERSISTENT` root carries `STC-W-DEBUG-005`.
+  force on a `RETAIN`/`PERSISTENT` root carries `STC-W-DEBUG-005`. Releasing a target that has no
+  active force is a successful no-op.
 
 ### 15.5 Value and identity encoding
 
@@ -792,18 +816,21 @@ supplied and matches.
 | Split aggregate | `{"aggregate":true,"atomic":false,"fields":[{"name":...,"value":...}]}` |
 | Optimized-out/unavailable | `{"available":false,"code":"STC-W-DEBUG-002"}` |
 
-Strings are validated for capacity and valid code points; an out-of-range integer, invalid enum,
-negative subrange value, or over-capacity string is `STC-E-DEBUG-009`. There is no implicit
-conversion between types. A 64-bit integer is transported as a decimal string so no precision is
-lost. A reference/pointer identity is stable only within the active generation; it is not an
-address and cannot be dereferenced. A class/interface value is never written or forced; only its
-scalar fields are individually writable if the manifest marks them as persistent roots.
+Strings are validated for capacity and valid code points; an out-of-range integer, invalid enum
+value, out-of-bounds subrange value, wrong element count, or over-capacity string is
+`STC-E-DEBUG-009`. There is no implicit conversion between types. A 64-bit integer is transported
+as a decimal string so no precision is lost. A reference/pointer identity is stable only within
+the active generation; it is not an address and cannot be dereferenced. A class/interface value
+is never written or forced; only its scalar fields are individually writable if the manifest
+marks them as persistent roots. The artifact JSON projection is integer-only and is never used
+for audit or protocol values; a finite `REAL`/`LREAL` audit value is written as a JSON number
+token and non-finite values as `NaN`, `INF`, or `-INF`.
 
 ### 15.6 Boundary application order
 
 At each completed scan boundary the host performs, in order:
 
-1. latch backend inputs, substituting active input forces;
+1. latch backend inputs, substituting active input forces after the latch;
 2. evaluate task guards and execute the module cycle (normal ST writes);
 3. apply queued debug writes in queue order;
 4. apply active forces in ascending `GotId` order;
@@ -857,8 +884,10 @@ retargeted.
 The checkpoint table is emitted in the `<name>.stc-meta.json` metadata sidecar under a `debug`
 object. It is **not** a new module export, a descriptor field, a manifest section, or a member of
 the loadable module's data. The loadable module contains only the per-site call immediates passed
-to service 13. This preserves descriptor format 1, manifest/binary/JSON format 1, the seven
-module entry points, and all existing ABI signatures (D-177).
+to service 13. This preserves descriptor format 1, the seven module entry points, and all
+existing ABI signatures (D-177). The GOT manifest and its binary/JSON projections are format 2
+from M6.5 phase 4 (D-180); that manifest change is independent of the checkpoint table and does
+not change the descriptor or module format.
 
 The metadata sidecar is already part of the module artifact set: the host reads it for the
 process-image layout and direct bindings. The debug object is paired with the module/manifest by
@@ -1104,7 +1133,9 @@ sections are not inputs to the build ID.
 - `stc metadata` appends `build_mode` (`debug`/`release`), `debug_info`
   (`dwarf`/`codeview`/`none`), and `debug_hooks` (boolean) to its summary; the sidecar remains
   authoritative for the checkpoint table.
-- The artifact/report formats remain format 1; no new required manifest section is added.
+- The descriptor, module, metadata-sidecar, and report formats remain format 1. The GOT manifest
+  is format 2 from M6.5 phase 4 (D-180) and carries the required type-metadata and aggregate
+  sections; the audit object itself remains format 1.
 
 ### 17.7 Test and hook-free builds
 

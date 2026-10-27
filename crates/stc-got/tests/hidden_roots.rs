@@ -217,6 +217,8 @@ fn descriptors_get_slots_and_are_preserved_by_key() {
             interfaces: Vec::new(),
             vtable_shape: Some(GotId::from_bytes([0x61; 16])),
             fields: Vec::new(),
+            enum_members: Vec::new(),
+            subrange: None,
             source: None,
         }],
         descriptors: ["TYPEINFO", "VTABLE"]

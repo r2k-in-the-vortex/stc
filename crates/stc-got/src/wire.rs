@@ -73,6 +73,11 @@ impl Encoder {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
+    /// Writes a little-endian `i128`.
+    pub fn i128(&mut self, value: i128) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
     /// Writes the strict boolean encoding.
     pub fn bool(&mut self, value: bool) {
         self.bytes.push(u8::from(value));
@@ -208,6 +213,18 @@ impl<'a> Decoder<'a> {
         let mut array = [0_u8; 8];
         array.copy_from_slice(bytes);
         Ok(i64::from_le_bytes(array))
+    }
+
+    /// Reads a little-endian `i128`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects truncated input.
+    pub fn i128(&mut self) -> Result<i128> {
+        let bytes = self.take(16)?;
+        let mut array = [0_u8; 16];
+        array.copy_from_slice(bytes);
+        Ok(i128::from_le_bytes(array))
     }
 
     /// Reads the strict boolean encoding.

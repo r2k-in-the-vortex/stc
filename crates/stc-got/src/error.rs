@@ -51,6 +51,24 @@ pub mod codes {
     pub const W_ONLINE_STALE_BASELINE: &str = "STC-W-ONLINE-005";
     /// Manifest missing or invalid; cold download required.
     pub const W_ONLINE_MISSING: &str = "STC-W-ONLINE-006";
+    /// Unknown debug path, `GotId`, local, frame, or watch identity.
+    pub const DEBUG_UNKNOWN: &str = "STC-E-DEBUG-008";
+    /// Wrong debug type, shape, range, code point, or capacity.
+    pub const DEBUG_TYPE: &str = "STC-E-DEBUG-009";
+    /// Stale debug target, generation/build/layout mismatch, or removed target.
+    pub const DEBUG_STALE: &str = "STC-E-DEBUG-010";
+    /// Debug queue, watch, leaf, event, or response limit exceeded.
+    pub const DEBUG_LIMIT: &str = "STC-E-DEBUG-011";
+    /// Invalid, stale, or unavailable stop frame.
+    pub const DEBUG_STOP: &str = "STC-E-DEBUG-015";
+    /// Debug audit sink unavailable or an append failed.
+    pub const DEBUG_AUDIT: &str = "STC-E-DEBUG-021";
+    /// A debug value is unavailable and was not reconstructed.
+    pub const W_DEBUG_UNAVAILABLE: &str = "STC-W-DEBUG-002";
+    /// A watch batch was dropped because the event queue was full.
+    pub const W_DEBUG_WATCH_DROPPED: &str = "STC-W-DEBUG-003";
+    /// A force targets a `RETAIN` root that normal shutdown may save.
+    pub const W_DEBUG_RETAIN: &str = "STC-W-DEBUG-005";
     /// Invalid run option or runtime scheduling configuration.
     pub const RUN_OPTION: &str = "STC-E-RUN-003";
     /// No baseline manifest; build uses a cold layout.

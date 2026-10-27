@@ -6,12 +6,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::digest::{Digest32, GotId};
 use crate::error::{Error, Result};
 use crate::json::{self, Json};
-use crate::keys::{IdentityKind, validate_key};
+use crate::keys::{
+    IdentityKind, normalize_ident, normalize_instance_path, normalize_name_path, normalize_package,
+    validate_key,
+};
 use crate::layout::{Signature, TypeKey};
 use crate::model::{
-    Decode, DescriptorRecord, Encode, ExportRecord, FunctionRecord, Header, History,
-    InstanceRecord, Plan, PlanAction, PlanVerdict, RootKind, RootRecord, SlotKind, SlotRecord,
-    TaskRecord, TypeRecord, compare_plan_diagnostics, encode_records,
+    AggregateKind, AggregateRecord, Decode, DescriptorRecord, Encode, ExportRecord, FunctionRecord,
+    Header, History, InstanceRecord, Plan, PlanAction, PlanVerdict, RootKind, RootRecord, SlotKind,
+    SlotRecord, TaskRecord, TypeKind, TypeMetadataRecord, TypeRecord, compare_plan_diagnostics,
+    encode_records,
 };
 use crate::sha256::domain_hash;
 use crate::wire::{Decoder, Encoder};
@@ -19,11 +23,11 @@ use crate::wire::{Decoder, Encoder};
 /// The binary manifest magic.
 pub const MANIFEST_MAGIC: [u8; 8] = *b"STCGOT\0\0";
 /// The supported manifest format.
-pub const MANIFEST_FORMAT: u16 = 1;
+pub const MANIFEST_FORMAT: u16 = 2;
 /// The manifest digest domain.
-pub const MANIFEST_DOMAIN: &str = "stc:manifest:v1";
+pub const MANIFEST_DOMAIN: &str = "stc:manifest:v2";
 /// The catalog digest domain.
-pub const CATALOG_DOMAIN: &str = "stc:catalog:v1";
+pub const CATALOG_DOMAIN: &str = "stc:catalog:v2";
 /// The plan digest domain.
 pub const PLAN_DOMAIN: &str = "stc:plan:v1";
 
@@ -37,7 +41,7 @@ pub const FEATURE_DESCRIPTORS: u64 = 1 << 2;
 pub const FEATURE_PLACES: u64 = 1 << 3;
 /// Feature bit: debug checkpoint hooks are in use (M6.5).
 pub const FEATURE_DEBUG_HOOKS: u64 = 1 << 4;
-/// Feature bits defined by manifest/module format 1.
+/// Feature bits defined by the current manifest and module formats.
 pub const FEATURE_MASK: u64 = 0b1_1111;
 
 /// Section tags.
@@ -64,6 +68,10 @@ pub mod section {
     pub const PLAN: u16 = 10;
     /// History.
     pub const HISTORY: u16 = 11;
+    /// Debug type metadata (format 2).
+    pub const TYPE_METADATA: u16 = 12;
+    /// Aggregate shapes (format 2).
+    pub const AGGREGATES: u16 = 13;
 }
 
 /// The complete manifest body.
@@ -91,6 +99,10 @@ pub struct Manifest {
     pub plan: Plan,
     /// Build history.
     pub history: History,
+    /// Debug type metadata (format 2).
+    pub type_metadata: Vec<TypeMetadataRecord>,
+    /// Aggregate shapes (format 2).
+    pub aggregates: Vec<AggregateRecord>,
 }
 
 impl Manifest {
@@ -138,6 +150,8 @@ impl Manifest {
             (section::SLOTS, encode_records(&self.slots)?),
             (section::PLAN, plan.into_bytes()),
             (section::HISTORY, history.into_bytes()),
+            (section::TYPE_METADATA, encode_records(&self.type_metadata)?),
+            (section::AGGREGATES, encode_records(&self.aggregates)?),
         ])
     }
 
@@ -155,6 +169,8 @@ impl Manifest {
         let tasks = encode_records(&self.tasks)?;
         let exports = encode_records(&self.exports)?;
         let slots = encode_records(&self.slots)?;
+        let type_metadata = encode_records(&self.type_metadata)?;
+        let aggregates = encode_records(&self.aggregates)?;
         Ok(Digest32::from_bytes(domain_hash(
             CATALOG_DOMAIN,
             &[
@@ -166,6 +182,8 @@ impl Manifest {
                 &tasks,
                 &exports,
                 &slots,
+                &type_metadata,
+                &aggregates,
             ],
         )))
     }
@@ -235,7 +253,7 @@ impl Manifest {
         }
         let flags = input.u16()?;
         if flags != 0 {
-            return Err(Error::manifest("manifest flags must be zero in format 1"));
+            return Err(Error::manifest("manifest flags must be zero in format 2"));
         }
         let body_length = input.u64()?;
         let body_length = usize::try_from(body_length)
@@ -251,7 +269,7 @@ impl Manifest {
             )));
         }
 
-        let mut payloads: [Option<&[u8]>; 12] = [None; 12];
+        let mut payloads: [Option<&[u8]>; 14] = [None; 14];
         let mut contents = Decoder::new(body);
         let mut last_tag = 0_u16;
         while !contents.is_empty() {
@@ -269,7 +287,7 @@ impl Manifest {
                     "unknown critical manifest section {tag:#06x}"
                 )));
             }
-            if (1..=11).contains(&tag) {
+            if (1..=13).contains(&tag) {
                 payloads[tag as usize] = Some(payload);
             }
         }
@@ -294,6 +312,8 @@ impl Manifest {
             slots: decode_payload(payloads[section::SLOTS as usize].unwrap())?,
             plan: decode_record::<Plan>(payloads[section::PLAN as usize].unwrap())?,
             history: decode_record::<History>(payloads[section::HISTORY as usize].unwrap())?,
+            type_metadata: decode_payload(payloads[section::TYPE_METADATA as usize].unwrap())?,
+            aggregates: decode_payload(payloads[section::AGGREGATES as usize].unwrap())?,
         };
         manifest.validate()?;
         Ok(manifest)
@@ -355,6 +375,24 @@ impl Manifest {
                 "types".into(),
                 Json::Array(self.types.iter().map(TypeRecord::to_json).collect()),
             ),
+            (
+                "type_metadata".into(),
+                Json::Array(
+                    self.type_metadata
+                        .iter()
+                        .map(TypeMetadataRecord::to_json)
+                        .collect(),
+                ),
+            ),
+            (
+                "aggregates".into(),
+                Json::Array(
+                    self.aggregates
+                        .iter()
+                        .map(AggregateRecord::to_json)
+                        .collect(),
+                ),
+            ),
         ]);
         Ok(Json::object([
             ("body".into(), body),
@@ -384,7 +422,7 @@ impl Manifest {
         }
         let flags = number(root, "flags", "manifest")?;
         if flags != 0 {
-            return Err(Error::manifest("manifest flags must be zero in format 1"));
+            return Err(Error::manifest("manifest flags must be zero in format 2"));
         }
         let digest_text = string(root, "digest", "manifest")?;
         let digest = Digest32::parse(&digest_text)?;
@@ -405,7 +443,9 @@ impl Manifest {
                 "roots",
                 "slots",
                 "tasks",
+                "type_metadata",
                 "types",
+                "aggregates",
             ],
             "manifest body",
         )?;
@@ -420,6 +460,8 @@ impl Manifest {
         let slots = array_records(body, "slots", SlotRecord::from_json)?;
         let plan = Plan::from_json(body.get("plan").unwrap())?;
         let history = History::from_json(body.get("history").unwrap())?;
+        let type_metadata = array_records(body, "type_metadata", TypeMetadataRecord::from_json)?;
+        let aggregates = array_records(body, "aggregates", AggregateRecord::from_json)?;
         let manifest = Self {
             header,
             roots,
@@ -432,6 +474,8 @@ impl Manifest {
             slots,
             plan,
             history,
+            type_metadata,
+            aggregates,
         };
         let computed = manifest.digest()?;
         if computed != digest {
@@ -494,7 +538,7 @@ impl Manifest {
         Ok(())
     }
 
-    /// Validates the manifest body against format 1.
+    /// Validates the manifest body against the current manifest format.
     ///
     /// # Errors
     ///
@@ -561,8 +605,31 @@ impl Manifest {
             },
             "history",
         )?;
+        validate_table_order(
+            &self.type_metadata,
+            |left, right| left.type_id.cmp(&right.type_id),
+            "type metadata",
+        )?;
+        validate_table_order(
+            &self.aggregates,
+            |left, right| {
+                (
+                    left.package.as_str(),
+                    left.path.as_str(),
+                    left.qualifier.as_deref(),
+                )
+                    .cmp(&(
+                        right.package.as_str(),
+                        right.path.as_str(),
+                        right.qualifier.as_deref(),
+                    ))
+            },
+            "aggregates",
+        )?;
 
         let active = self.validate_records()?;
+        self.validate_type_metadata()?;
+        self.validate_aggregates()?;
         self.validate_slots()?;
         self.validate_plan(&active)?;
         self.validate_history()?;
@@ -584,6 +651,302 @@ impl Manifest {
         Ok(())
     }
 
+    fn validate_type_metadata(&self) -> Result<()> {
+        let mut seen = BTreeSet::new();
+        for record in &self.type_metadata {
+            let Some(ty) = self.types.iter().find(|ty| ty.got_id == record.type_id) else {
+                return Err(Error::manifest(format!(
+                    "type metadata references missing type {}",
+                    record.type_id.to_hex()
+                )));
+            };
+            if !seen.insert(record.type_id) {
+                return Err(Error::manifest(format!(
+                    "duplicate type metadata for {}",
+                    record.type_id.to_hex()
+                )));
+            }
+            match ty.type_kind {
+                TypeKind::Enum => {
+                    if record.subrange.is_some() {
+                        return Err(Error::manifest(format!(
+                            "enum type `{}` has subrange bounds",
+                            ty.key
+                        )));
+                    }
+                    let mut names = BTreeSet::new();
+                    let mut previous: Option<(i128, &str)> = None;
+                    for member in &record.enum_members {
+                        let normalized = normalize_ident(&member.name).map_err(|error| {
+                            Error::manifest(format!(
+                                "enum type `{}` member name: {}",
+                                ty.key, error.message
+                            ))
+                        })?;
+                        if normalized != member.name {
+                            return Err(Error::manifest(format!(
+                                "enum type `{}` member name `{}` is not normalized",
+                                ty.key, member.name
+                            )));
+                        }
+                        if !names.insert(member.name.as_str()) {
+                            return Err(Error::manifest(format!(
+                                "enum type `{}` has duplicate member `{}`",
+                                ty.key, member.name
+                            )));
+                        }
+                        let key = (member.value, member.name.as_str());
+                        if let Some(previous) = previous
+                            && key <= previous
+                        {
+                            return Err(Error::manifest(format!(
+                                "enum type `{}` members are not in canonical order",
+                                ty.key
+                            )));
+                        }
+                        previous = Some(key);
+                    }
+                }
+                TypeKind::Subrange => {
+                    if !record.enum_members.is_empty() {
+                        return Err(Error::manifest(format!(
+                            "subrange type `{}` has enum members",
+                            ty.key
+                        )));
+                    }
+                    let Some(bounds) = record.subrange else {
+                        return Err(Error::manifest(format!(
+                            "subrange type `{}` has no bounds",
+                            ty.key
+                        )));
+                    };
+                    if bounds.lower > bounds.upper {
+                        return Err(Error::manifest(format!(
+                            "subrange type `{}` lower bound exceeds its upper bound",
+                            ty.key
+                        )));
+                    }
+                }
+                _ => {
+                    return Err(Error::manifest(format!(
+                        "type `{}` must not have debug type metadata",
+                        ty.key
+                    )));
+                }
+            }
+        }
+        for ty in &self.types {
+            if matches!(ty.type_kind, TypeKind::Enum | TypeKind::Subrange)
+                && !seen.contains(&ty.got_id)
+            {
+                return Err(Error::manifest(format!(
+                    "type `{}` is missing debug type metadata",
+                    ty.key
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_aggregates(&self) -> Result<()> {
+        for aggregate in &self.aggregates {
+            let package = normalize_package(&aggregate.package).map_err(|error| {
+                Error::manifest(format!("aggregate package: {}", error.message))
+            })?;
+            if package != aggregate.package {
+                return Err(Error::manifest(format!(
+                    "aggregate package `{}` is not normalized",
+                    aggregate.package
+                )));
+            }
+            let path = normalize_name_path(&aggregate.path)
+                .map_err(|error| Error::manifest(format!("aggregate path: {}", error.message)))?;
+            if path != aggregate.path {
+                return Err(Error::manifest(format!(
+                    "aggregate path `{}` is not normalized",
+                    aggregate.path
+                )));
+            }
+            if aggregate.layout_hash.is_zero() {
+                return Err(Error::manifest(format!(
+                    "aggregate `{}::{}` has a zero layout hash",
+                    aggregate.package, aggregate.path
+                )));
+            }
+            match aggregate.kind {
+                AggregateKind::Type => {
+                    if aggregate.qualifier.is_some() {
+                        return Err(Error::manifest(format!(
+                            "type aggregate `{}::{}` must not have an instance qualifier",
+                            aggregate.package, aggregate.path
+                        )));
+                    }
+                    if !aggregate.fields.is_empty() {
+                        return Err(Error::manifest(format!(
+                            "type aggregate `{}::{}` must not carry program fields",
+                            aggregate.package, aggregate.path
+                        )));
+                    }
+                    TypeKey::parse(&aggregate.shape_key).map_err(|error| {
+                        Error::manifest(format!(
+                            "type aggregate `{}::{}` shape key: {}",
+                            aggregate.package, aggregate.path, error.message
+                        ))
+                    })?;
+                    if !self.root_under(&aggregate.package, &aggregate.path, None, true) {
+                        return Err(Error::manifest(format!(
+                            "type aggregate `{}::{}` has no split roots",
+                            aggregate.package, aggregate.path
+                        )));
+                    }
+                }
+                AggregateKind::Program => {
+                    let Some(qualifier) = &aggregate.qualifier else {
+                        return Err(Error::manifest(format!(
+                            "program aggregate `{}::{}` has no instance qualifier",
+                            aggregate.package, aggregate.path
+                        )));
+                    };
+                    if normalize_instance_path(qualifier).map_err(|error| {
+                        Error::manifest(format!("aggregate qualifier: {}", error.message))
+                    })? != *qualifier
+                    {
+                        return Err(Error::manifest(format!(
+                            "aggregate qualifier `{qualifier}` is not normalized"
+                        )));
+                    }
+                    let instance = self
+                        .instances
+                        .iter()
+                        .find(|instance| instance.instance_path == *qualifier)
+                        .ok_or_else(|| {
+                            Error::manifest(format!(
+                                "program aggregate `{}::{}#{qualifier}` references a missing instance",
+                                aggregate.package, aggregate.path
+                            ))
+                        })?;
+                    if instance.program_type_key != aggregate.shape_key {
+                        return Err(Error::manifest(format!(
+                            "program aggregate `{}::{}#{qualifier}` shape key does not match its instance program type",
+                            aggregate.package, aggregate.path
+                        )));
+                    }
+                    if !self.root_under(&aggregate.package, &aggregate.path, Some(qualifier), true)
+                    {
+                        return Err(Error::manifest(format!(
+                            "program aggregate `{}::{}#{qualifier}` has no roots",
+                            aggregate.package, aggregate.path
+                        )));
+                    }
+                    let mut previous: Option<&str> = None;
+                    for field in &aggregate.fields {
+                        if field.path.is_empty() || field.path.contains('.') {
+                            return Err(Error::manifest(format!(
+                                "program aggregate `{}::{}#{qualifier}` field `{}` is not a top-level field path",
+                                aggregate.package, aggregate.path, field.path
+                            )));
+                        }
+                        let normalized = normalize_ident(&field.path).map_err(|error| {
+                            Error::manifest(format!(
+                                "program aggregate `{}::{}#{qualifier}` field: {}",
+                                aggregate.package, aggregate.path, error.message
+                            ))
+                        })?;
+                        if normalized != field.path {
+                            return Err(Error::manifest(format!(
+                                "program aggregate `{}::{}#{qualifier}` field `{}` is not normalized",
+                                aggregate.package, aggregate.path, field.path
+                            )));
+                        }
+                        if let Some(previous) = previous
+                            && field.path.as_str() <= previous
+                        {
+                            return Err(Error::manifest(format!(
+                                "program aggregate `{}::{}#{qualifier}` fields are not in canonical order",
+                                aggregate.package, aggregate.path
+                            )));
+                        }
+                        previous = Some(field.path.as_str());
+                        TypeKey::parse(&field.type_key).map_err(|error| {
+                            Error::manifest(format!(
+                                "program aggregate `{}::{}#{qualifier}` field `{}` type key: {}",
+                                aggregate.package, aggregate.path, field.path, error.message
+                            ))
+                        })?;
+                        if field.layout_hash.is_zero() {
+                            return Err(Error::manifest(format!(
+                                "program aggregate `{}::{}#{qualifier}` field `{}` has a zero layout hash",
+                                aggregate.package, aggregate.path, field.path
+                            )));
+                        }
+                        let field_path = format!("{}.{}", aggregate.path, field.path);
+                        let found = self.roots.iter().any(|root| {
+                            let Some((key_package, key_path, key_qualifier)) =
+                                split_root_key(&root.key)
+                            else {
+                                return false;
+                            };
+                            if key_package != aggregate.package {
+                                return false;
+                            }
+                            if key_path != field_path
+                                && !key_path.strip_prefix(&format!("{field_path}.")).is_some()
+                            {
+                                return false;
+                            }
+                            key_qualifier.is_some_and(|value| {
+                                value == qualifier
+                                    || value
+                                        .strip_suffix("/HANDLE")
+                                        .or_else(|| value.strip_suffix("/OBJREC"))
+                                        == Some(qualifier)
+                            })
+                        });
+                        if !found {
+                            return Err(Error::manifest(format!(
+                                "program aggregate `{}::{}#{qualifier}` field `{}` has no roots",
+                                aggregate.package, aggregate.path, field.path
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn root_under(
+        &self,
+        package: &str,
+        path: &str,
+        qualifier: Option<&str>,
+        descendants: bool,
+    ) -> bool {
+        self.roots.iter().any(|root| {
+            let Some((key_package, key_path, key_qualifier)) = split_root_key(&root.key) else {
+                return false;
+            };
+            if key_package != package {
+                return false;
+            }
+            if key_path != path
+                && !(descendants && key_path.strip_prefix(&format!("{path}.")).is_some())
+            {
+                return false;
+            }
+            match qualifier {
+                Some(qualifier) => key_qualifier.is_some_and(|value| {
+                    value == qualifier
+                        || value
+                            .strip_suffix("/HANDLE")
+                            .or_else(|| value.strip_suffix("/OBJREC"))
+                            == Some(qualifier)
+                }),
+                None => true,
+            }
+        })
+    }
+
     fn validate_header(&self) -> Result<()> {
         let header = &self.header;
         if header.profile.is_empty() {
@@ -600,7 +963,7 @@ impl Manifest {
         }
         if header.pointer_width != 8 {
             return Err(Error::manifest(
-                "header pointer_width must be 8 for format 1",
+                "header pointer_width must be 8 for manifest format 2",
             ));
         }
         if header.generator_flags & !0x7F != 0 {
@@ -1189,6 +1552,18 @@ fn decode_record<T: Decode>(payload: &[u8]) -> Result<T> {
     let value = T::decode(&mut input)?;
     input.finish()?;
     Ok(value)
+}
+
+fn split_root_key(key: &str) -> Option<(&str, &str, Option<&str>)> {
+    let (package, rest) = key.split_once("::")?;
+    let (path, qualifier) = match rest.split_once('#') {
+        Some((path, qualifier)) => (path, Some(qualifier)),
+        None => (rest, None),
+    };
+    if package.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some((package, path, qualifier))
 }
 
 fn validate_table_order<T>(

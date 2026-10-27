@@ -2,7 +2,8 @@
 //! emission/consumption for the M4.5 online-change foundation.
 //!
 //! The formats implemented here are normative in
-//! `Specification/Architecture/GOT-Artifacts.md` (phase 1, format 1). This
+//! `Specification/Architecture/GOT-Artifacts.md`: descriptor and module format
+//! 1, and the GOT manifest format 2 from M6.5 phase 4 (D-180). This
 //! crate is the compiler identity layer: it derives `GotId`s, matches a
 //! catalog against a baseline manifest, applies tracked rename/move maps,
 //! classifies preserve/allocate/drop, assigns canonical slots, and emits the
@@ -25,9 +26,9 @@ pub mod sha256;
 pub mod wire;
 
 pub use catalog::{
-    Catalog, DescriptorDecl, ExportDecl, FieldDecl, FunctionDecl, Identity, ImportService,
-    InstanceDecl, RootDecl, TaskDecl, TypeDecl, expression_initializer_digest, initializer_digest,
-    root_kind_identity,
+    AggregateDecl, AggregateFieldDecl, Catalog, DescriptorDecl, EnumMemberDecl, ExportDecl,
+    FieldDecl, FunctionDecl, Identity, ImportService, InstanceDecl, RootDecl, SubrangeDecl,
+    TaskDecl, TypeDecl, expression_initializer_digest, initializer_digest, root_kind_identity,
 };
 pub use descriptor::{
     DEBUG_ABI_MINOR, DESCRIPTOR_FORMAT, DESCRIPTOR_MAGIC, Descriptor, DescriptorFunction,
@@ -49,6 +50,7 @@ pub use layout::{
     Target, TypeKey, elementary_layout, elementary_layout_hash, layout_hash,
 };
 pub use manifest::{MANIFEST_FORMAT, MANIFEST_MAGIC, Manifest};
+pub use model::AggregateKind;
 pub use model::{
     ActionRecord, Decode, DescriptorKind, DescriptorRecord, Encode, ExportRecord, FieldRecord,
     FunctionKind, FunctionRecord, Header, History, InitializerKind, InstanceRecord, Plan,
