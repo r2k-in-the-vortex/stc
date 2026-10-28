@@ -1,6 +1,6 @@
 # Online Change and GOT
 
-Status: Resolved specification (2026-10-24); implemented for the M4.5/M5 surface (2026-10-25) and the M6 online workflow and control channel (2026-10-27); M6.5 phase 0 fixes the debug protocol, session, access, checkpoint, and build contracts (2026-10-27); M6.5 debug/monitoring pending  
+Status: Resolved specification (2026-10-24); implemented for the M4.5/M5 surface (2026-10-25) and the M6 online workflow and control channel (2026-10-27); M6.5 phase 0 fixes the debug protocol, session, access, checkpoint, and build contracts (2026-10-27); M6.5 debug/monitoring complete (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -62,7 +62,7 @@ The host owns:
 - module loading, descriptors, manifests, and the active baseline;
 - task and configuration state;
 - the export registry;
-- diagnostics, counters, and (M6.5) service/monitor threads;
+- diagnostics, counters, and the M6.5 service/monitor thread class;
 - the debug/monitoring protocol.
 
 The module owns only code and version-local read-only data. It may allocate transient memory
@@ -75,7 +75,7 @@ through the host service; that memory is freed when the version fails, retires, 
 | Cycle | Latches inputs, sets task guards, executes ST, publishes outputs; the only thread that executes ST or switches generations |
 | Control/status (M6) | Accepts local deploy/status requests for `stc run --watch`; queues deploy work and publishes status; never executes ST |
 | Loader/prepare (M7 target) | Loads the candidate module, validates it, prepares roots/state, and builds the temp GOT. In M6 validation/load/prepare runs between cycles on the cycle thread; fully off-thread prepare remains M7 |
-| Service/monitor (M6.5) | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at lower priority |
+| Service/monitor (M6.5) | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at lower priority; implemented by the local debug server thread class |
 
 The control and service threads never block the cycle with unbounded locks. They use generation
 pinning/epoch refcounts so a module cannot unload while a service reader holds a descriptor.
@@ -400,9 +400,10 @@ by the host resolver.
 
 ## 10. Threads, services, and diagnostics
 
-M6.5 service/monitor threads use typed path/`GotId` access, not raw memory. Reads are generation-pinned
-and do not lock the cycle. Writes and forcing are queued for cycle-boundary application. A write
-queued across a swap does not migrate: the swap ends the session and discards it. A write that is
+M6.5 service/monitor threads use typed path/`GotId` access, not raw memory. Reads are
+generation-pinned and do not lock the cycle. Writes and forcing are queued for cycle-boundary
+application. A write queued across a swap does not migrate: the swap ends the session and
+discards it. A write that is
 re-resolved at a boundary against a removed field or changed layout is rejected with
 `STC-E-DEBUG-010` and is never retargeted to removed storage.
 
@@ -433,7 +434,7 @@ A failed compatibility check rejects the candidate before activation. The exact 
 service IDs, entry-point signatures, trap boundary, and module descriptor layout are fixed in
 [GOT Artifacts and Schemas](GOT-Artifacts.md) §7–§8;
 minor 1 is implemented, and M6 appends only service ID 12 (`set_cycle_time_ns(int64_t)`) as
-minor 2 for test builds. No debug service is added in M6. M6.5 appends service ID 13
+minor 2 for test builds. No debug service was added in M6; M6.5 appended service ID 13
 (`debug_check(uint32_t checkpoint_id, uint32_t span_id)`) as minor 3; module-facing debug support
 is limited to that service and the checkpoint table lives in the metadata sidecar, not in the
 module or descriptor (D-177). Hook-emitting debug modules require minor 3, test builds remain

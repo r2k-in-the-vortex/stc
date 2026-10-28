@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, M4.5 online-change foundation, M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 project system, CLI, scheduler, state, I/O, test runner, formatter, online workflow, Lean vectors, conformance corpus, and CI complete (2026-10-27); M6.5 debug/monitoring pending
+Status: Target profile; M3 front end, M4 scalar codegen, M4.5 online-change foundation, M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 project system, CLI, scheduler, state, I/O, test runner, formatter, online workflow, Lean vectors, conformance corpus, and CI complete (2026-10-27); M6.5 debug/monitoring complete (2026-10-28)
 
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
@@ -90,7 +90,10 @@ library, and aggregate retained state, including an online change preserving FB,
 interface, class-handle, and descriptor state; phase 4b.4 implements interface values, upcasts,
 and dispatch, phase 4b.5 implements assignment attempts, object references, and
 `REF_TO`-to-interface, and phase 4b.6 verifies the phase end to end. Full debug/monitoring is
-M6.5.
+implemented in M6.5 (2026-10-28): typed read/write/force/watch, checkpoint breakpoints,
+stop-the-world stepping, call stacks, DWARF/CodeView by default, the local authenticated
+`stc-debug/1` session, and debug/release build separation are claimed as v1 runtime
+capabilities (D-173–D-183).
 
 ## 2. Input languages
 
@@ -287,12 +290,12 @@ same time; tests use a mock clock with the same semantics.
 - Communication model, remote variables, and `VAR_ACCESS` network binding.
 - Graphics languages and SFC.
 - Vendor pragmas and the AX preprocessor.
-- Multi-threaded ST task scheduling in v1. The host has a cycle thread and, in M6, a
-  control/status thread; later milestones may add loader and service threads, but only the cycle
-  thread executes ST.
+- Multi-threaded ST task scheduling in v1. The host has a cycle thread, a control/status thread,
+  and the M6.5 service/monitor thread class; later milestones may add loader threads, but only
+  the cycle thread executes ST.
 - Human-machine interface and the IEC communication model. Online change and debug/monitoring are
-  provided as project runtime capabilities in v1; online change is implemented, while
-  debug/monitoring is the M6.5 milestone and is not claimed until it is implemented.
+  provided as project runtime capabilities in v1; both are implemented, debug/monitoring in
+  M6.5.
 - Safety functions, safety certification, automatic fail-safe outputs, or a safety watchdog. The
   project is not a safety PLC and assumes no safety responsibility.
 - Field-layout migration, resizing, and pointer translation in v1. Per-field add/remove/rename
@@ -350,7 +353,7 @@ The following are deliberately chosen and must be documented and tested:
 | Test runner | One cold test artifact per test with a synthetic single-task configuration; process-isolated and sequential; default 5 s timeout; memory I/O unless `[test].io` overrides; mock clock from `[test].mock-clock` |
 | Formatter | Fixed style over the lossless CST; comments, blank lines, and existing line breaks preserved; per-file BOM and line-ending encoding preserved; strict semicolons inserted; `--check`; idempotent |
 | Online workflow | Active-baseline builds, `stc online download/diff`, committed `stc.renames.toml` tracked renames, and `stc run --watch` over a local user-only deploy/status endpoint with a per-run nonce |
-| Execution artifacts | `module` is a loadable shared library paired with a GOT manifest; `exe` is a thin host launcher; `lib` embeds the host; host ABI 2.2 implemented (test-clock service ID 12; production modules require 2.1); M6.5 appends debug service ID 13 at minor 2.3 (implementation pending) |
+| Execution artifacts | `module` is a loadable shared library paired with a GOT manifest; `exe` is a thin host launcher; `lib` embeds the host; host ABI 2.3 implemented (test-clock service ID 12 at 2.2; debug checkpoint service ID 13 at 2.3; production modules require 2.1) |
 | Persistent memory | Host-owned GOT cells and stable roots; per-field recursive roots; handle-based objects; runtime-owned descriptors |
 | References and pointers | Persistent-capable `REF_TO` uses place descriptors; pointer→`REF_TO` is runtime-validated and yields `NULL` on failure; `POINTER TO` is transient-only (`STC-POINTER`) |
 | Online change | Whole-module load/prepare, O(1) cycle-boundary activation, one-successful-cycle rollback, off-thread unload |
@@ -361,7 +364,7 @@ The following are deliberately chosen and must be documented and tested:
 | Debug protocol | Local-only `stc-debug/1` on a user-scoped pipe (default) or loopback socket (optional); newline-delimited JSON, per-run token, four scopes, audited protected access, rate limits, and bounded frames; separate from the M6 control channel (D-173, D-174) |
 | Debug checkpoints | Dense checkpoint table in the metadata sidecar, source-span bound, first-class host check service ID 13 at ABI 2.3; debug builds set `entry_flags` bit 4/bit 6 and `required_features` bit 4 when hooks are emitted; release and test builds are hook-free (D-177) |
 | Debug sessions | One session per host; start does not stop the cycle; a stop parks the cycle at a checkpoint and holds outputs; a five-minute default stop/idle bound, swap/disconnect/timeout teardown, force/breakpoint clearing, and explicit reconnect with no state migration (D-175) |
-| Runtime threads | One cycle thread and, in M6, one control/status thread for deployment/status; M6.5 adds service/monitor threads. Only the cycle thread executes ST; generation pinning for readers |
+| Runtime threads | One cycle thread, one control/status thread for deployment/status, and the M6.5 service/monitor thread class for typed access, debug/monitoring, diagnostics, and manifest export. Only the cycle thread executes ST; readers use generation pinning and at most one debug session runs per host |
 
 ## 9. Project model (project feature, not an IEC claim)
 
@@ -430,8 +433,10 @@ for compatibility reports. Existing `STC-E-RUN-RETAIN-*`, `STC-E-ONLINE-STATE-*`
 
 The `DEBUG` family is reserved for the local debug protocol, session, typed access, checkpoint,
 and build rules of [Debug and Monitoring](Architecture/Debug-and-Monitoring.md) §13–§18. The
-codes are stable; the phase-0 design fixes them before implementation. Initial errors and
-warnings are `not-implemented` in the traceability allowlist until phases 3–8 add tests.
+codes are stable, implemented, and covered by the debug suite; no debug rule remains in the
+traceability allowlist. The four allowlisted rules are non-debug
+(`STC-E-ONLINE-STATE-001`, `STC-W-ONLINE-STATE-001`, `STC-W-ONLINE-004`, and
+`STC-W-RUN-001`).
 
 | Code | Condition | Owner |
 | --- | --- | --- |

@@ -831,6 +831,17 @@ fn launch_interactive_reports_session_status_and_never_prints_the_token() {
         text_file(&stderr_path),
         text_file(&stdout_path)
     );
+    // The endpoint line is written to stderr during launch; wait for it rather
+    // than racing the first response against the stderr flush.
+    assert!(
+        wait_file_contains(
+            &stderr_path,
+            "stc: debug endpoint ",
+            Duration::from_secs(30)
+        ),
+        "the endpoint path was not printed on stderr:\n{}",
+        text_file(&stderr_path)
+    );
     let started = text_file(&stderr_path);
     let endpoint = endpoint_path_in(&started).expect("endpoint path on stderr");
     let token = endpoint_token(&endpoint);

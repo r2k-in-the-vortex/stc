@@ -1,10 +1,10 @@
 # GOT Artifacts and Schemas
 
-Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25); M6 host ABI 2.2 test-clock append and project/state/I/O integration implemented (2026-10-27); M6.5 phase 0 fixes debug service ID 13 at ABI 2.3, the checkpoint-table location, and the hook feature/entry bits (2026-10-27); M6.5 implementation pending  
+Status: Format 1 and the M5 OOP descriptor/interface records implemented (2026-10-25); M6 host ABI 2.2 test-clock append and project/state/I/O integration implemented (2026-10-27); M6.5 phase 0 fixes debug service ID 13 at ABI 2.3, the checkpoint-table location, and the hook feature/entry bits (2026-10-27); M6.5 implementation complete with the GOT manifest at format 2 and host ABI 2.3 (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: Normative formats for stable keys, `GotId`, the compiler catalog, the module descriptor,
-the persistent GOT manifest, the online-change plan, host ABI 2 (2.2 implemented; 2.3 adds the
-debug service; production modules require 2.1), and build IDs.
+the persistent GOT manifest, the online-change plan, host ABI 2 (2.3 implemented; production
+modules require 2.1), and build IDs.
 
 This document is the machine-readable companion to
 [Online Change and GOT](Online-Change-and-GOT.md). It fixes the bytes and identifiers that the
@@ -28,8 +28,10 @@ v1 layouts, and M4.5 simply leaves later record kinds empty.
 | Type-key/layout derivation | 1 | `STC_LAYOUT_V1` |
 | Module descriptor | 1 | `STC_DESCRIPTOR_V1` |
 | Loadable module (container contract) | 1 | `STC_MODULE_V1` |
-| Host API | 2.2 implemented; 2.3 adds debug service 13 (M6.5, planned) | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=3` when service 13 is used |
-| GOT manifest | 1 | `STC_MANIFEST_V1` |
+| Host API | 2.3 implemented; 2.2 adds test service 12, 2.3 adds debug service 13 | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=3` |
+| GOT manifest | 2 | `MANIFEST_FORMAT = 2`; digest domain `stc:manifest:v2` |
+| Metadata-sidecar debug object | 1 | debug object format 1 (D-177) |
+| Stopped-frame sidecar | 1 | `<name>.stc-frames.json` format-1 JSON (D-181) |
 | Online-change plan | 1 | `STC_PLAN_V1` |
 | Build ID derivation | 1 | `STC_BUILD_V1` |
 
@@ -472,7 +474,7 @@ the pair rather than reinterpreting the manifest. `entry_flags` bits:
 | 3 | `stc_module_detach` releases module-local resources |
 | 4 | Debug build form (the default non-`--release` artifact). Set by M4.5, M6, and M6.5 debug-form builds; it does not by itself imply debug information or checkpoint hooks |
 | 5 | The module uses retained-state host services |
-| 6 | Debug hooks are active; equals `required_features` bit 4 (M6.5; always clear in M4.5, M6, test, and release artifacts) |
+| 6 | Debug hooks are active; equals `required_features` bit 4 (implemented in M6.5; always clear in M4.5, M6, test, and release artifacts) |
 | 7–31 | Reserved, must be zero in format 1 |
 
 `FunctionRecord`:
@@ -522,12 +524,12 @@ every `Descriptor` slot's `GotId` appears in the manifest descriptor table.
 | 1 | Online-change plan present in the paired manifest |
 | 2 | OOP descriptors/vtables in use (M5 phase 4b) |
 | 3 | Place-descriptor references in use (M5 phase 4b) |
-| 4 | Debug checkpoint hooks in use (M6.5). Set only when the module imports service 13 and emits at least one checkpoint; requires host minor 2.3; clear in test and release artifacts (D-177) |
+| 4 | Debug checkpoint hooks in use (implemented in M6.5). Set only when the module imports service 13 and emits at least one checkpoint; requires host minor 2.3; clear in test and release artifacts (D-177) |
 | 5–63 | Reserved; a host that does not implement a set bit rejects the module |
 
 M4.5 and M6 set bit 0 and bit 1. They do not set bit 4; the host does not require it. The
-`entry_flags` debug-build bit may be set by the default artifact form, but it conveys no
-debug-information or checkpoint capability until M6.5 sets the feature bit and emits the
+`entry_flags` debug-build bit may be set by the default artifact form, but before M6.5 it
+conveyed no debug-information or checkpoint capability; M6.5 sets the feature bit and emits the
 corresponding data.
 
 M6.5 sets bit 4 only when it emits at least one `debug_check` call; in that case it also sets
@@ -600,7 +602,7 @@ void stc_module_detach(uint64_t generation_id);
   generation switch; the host only switches at a cycle boundary, so values cached within one
   cycle are valid.
 
-## 8. Host API 2 (2.2 implemented; 2.3 adds the debug service; production modules require 2.1)
+## 8. Host API 2 (2.3 implemented; production modules require 2.1)
 
 ### 8.1 Table
 
@@ -698,8 +700,9 @@ it, so their descriptor requires minor 2 and a 2.1 host rejects them before atta
 modules do not import service 12 and keep required minor 2.1, so they continue to run on a 2.1
 host. A breaking change to a service signature or the struct prefix increments the major version.
 
-Minor 3 (M6.5) appends service ID 13, `debug_check(uint32_t checkpoint_id, uint32_t span_id)`,
-after service 12; the prefix, `struct_size` gate, and every existing signature and service ID are
+Minor 3 (implemented in M6.5) appends service ID 13,
+`debug_check(uint32_t checkpoint_id, uint32_t span_id)`, after service 12; the prefix,
+`struct_size` gate, and every existing signature and service ID are
 unchanged. Only debug builds that emit at least one checkpoint import it, so their descriptor
 requires minor 3 and a 2.1/2.2 host rejects them before attach. Test builds remain at minor 2;
 hook-free debug builds and release builds remain at 2.1 because they emit no hooks. M4 ABI 1
@@ -1813,6 +1816,15 @@ inputs. The runtime uses the metadata for enum/subrange write validation and for
 and array-of-aggregate shape resolution; see [Debug and Monitoring](Debug-and-Monitoring.md)
 §15.
 
+M6.5 phases 5–10 (2026-10-28) complete the debug surface without a further format change. The
+debug session protocol, typed access, write/force queue, audit, breakpoints/stepping, the
+stopped-frame sidecar (`<name>.stc-frames.json`, format 1, D-181), the split-object `view` key
+(D-182), and the `stc debug` CLI are layered on service ID 13 and the metadata-sidecar debug
+object. Phase 9 added the Windows/Linux `debug` CI job, the twelve-target/115-test suite, and
+the informational overhead measurement; phase 10 completed the documentation and M7 handover
+(D-183). The §1 inventory records the resulting state: manifest format 2, host ABI 2.3, and
+format-1 descriptor, module, state, metadata-sidecar, debug-object, and frame-sidecar formats.
+
 ## 13. Related documents
 
 - [Online Change and GOT](Online-Change-and-GOT.md) — host/module model, lifecycle, policy.
@@ -1822,4 +1834,6 @@ and array-of-aggregate shape resolution; see [Debug and Monitoring](Debug-and-Mo
 - [State and RETAIN](State-and-Retain.md) — retained-state file and cold/warm policy.
 - [Testing and Verification](Testing-and-Verification.md) — hot-swap and manifest tests.
 - [Decisions](../Decisions.md) — D-113–D-127, the prior online-change decisions, and M6.5
-  debug decisions D-173–D-179.
+  debug decisions D-173–D-183.
+- `handover_to_M7.md` — M6.5 state at handover, the contracts M7 must preserve, and the recorded
+  limitations.

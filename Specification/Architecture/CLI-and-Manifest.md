@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); the `stc debug` CLI remains
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28)
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -33,13 +33,17 @@ output goes to stdout.
 > `human`, `json`, and `short`; exit codes follow §1.3. The loadable `module` with its
 > binary/JSON manifest and metadata, the thin `exe` launcher, and the embedding `lib` host
 > archive keep their M4.5 shapes, and `lib-type = "shared"` selects the shared host library.
-> `--debug`/`--release` and their debug-info behavior are M6.5; M6 honors `[build].opt-level` but
-> emits no DWARF/CodeView or checkpoint hooks.
+> M6.5 adds `--debug`/`--release`, debug information, checkpoint hooks, and the `stc debug` and
+> `stc run --debug-server` surface; `--debug` is the default form and `--release` is the
+> optimised, stripped, hook-free form (D-178).
 >
 > **M6.5 phase 0 status (2026-10-27):** the `stc debug` command, `--release`, debug information,
 > checkpoint hooks, `--debug-protocol`, and the `[debug]` session policy are fixed in §1.7 and
-> §2.2. Implementation is phases 1–10; the M6 behavior above remains current until those phases
-> land.
+> §2.2.
+>
+> **M6.5 status (2026-10-28):** phases 0–10 are implemented. The `stc debug`, `--debug`,
+> `--release`, debug-information, checkpoint, `--debug-protocol`, and `[debug]` contracts are in
+> place; the M6 behavior above is historical.
 
 | Command | Purpose |
 | --- | --- |
@@ -56,7 +60,7 @@ output goes to stdout.
 | `stc online diff` | Compare a candidate manifest with the active baseline and print compatibility |
 | `stc rename` | Source-aware tracked rename that preserves `GotId` history |
 | `stc run --watch` | Watch sources, rebuild, and deploy an online change |
-| `stc debug` | Build and launch a local authenticated debug session, or attach with `--attach` (M6.5; §1.7) |
+| `stc debug` | Build and launch a local authenticated debug session, or attach with `--attach` (§1.7) |
 
 Future commands (not v1): `stc lsp`, `stc doc`.
 
@@ -104,7 +108,7 @@ The table describes the v1 target surface. M6 implemented `--manifest-path`, `--
 `--no-retain`. `run --watch` adds `--store <dir>` and `--watch-timeout <duration>`; the online
 commands add `--out`, `--binary`, `--store`, `--host`, `--nonce`, and `--baseline`, and `rename`
 adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `stc debug` /
-`--debug-server` surface are M6.5 work; §1.7 fixes the contract.
+`--debug-server` surface are implemented in M6.5; §1.7 fixes the contract.
 
 ### 1.3 Exit codes
 
@@ -289,8 +293,9 @@ output includes the non-safety statement verbatim.
 
 ### 1.7 Debug command and server options
 
-`stc debug` is the M6.5 session entry point. It builds and launches the project in debug mode by
-default, opens the local debug endpoint, starts one authenticated session, and attaches the CLI.
+`stc debug` is the v1 session entry point (implemented in M6.5). It builds and launches the
+project in debug mode by default, opens the local debug endpoint, starts one authenticated
+session, and attaches the CLI.
 `--attach <endpoint-file>` connects to an already-running host instead of launching. The wire
 protocol is fixed in [Debug and Monitoring](Debug-and-Monitoring.md) §13–§18; this section fixes
 the command surface.
@@ -431,9 +436,9 @@ allow-untracked-removal = false
 default = true
 protocol = "pipe"                   # pipe | socket (local only)
 force-sessions-end-on-swap = true   # must be true in v1
-session-timeout = "5m"              # continuous stop/idle bound; M6.5
-allow-write = false                 # grant the write scope; M6.5
-allow-force = false                 # grant the force scope; M6.5
+session-timeout = "5m"              # continuous stop/idle bound (implemented, M6.5)
+allow-write = false                 # grant the write scope (implemented, M6.5)
+allow-force = false                 # grant the force scope (implemented, M6.5)
 
 [lints]
 warnings = "warn"           # warn | deny | allow (baseline for warning diagnostics)
@@ -776,13 +781,13 @@ target/stc/release/                             default release out-dir (same la
 
 The driver writes the schema above. M6 adds package/device/`VAR_ACCESS` metadata and the
 `file`/`on-mismatch` retained-state policy (JSON field `on_mismatch`); these fields are absent
-from M4.5 artifacts. The `manifest.format` value is the paired GOT manifest's outer format: M6.5
-phase 4 emits 2, while the module and descriptor formats in this sidecar remain 1 and the
-metadata schema itself is unchanged (D-180). M6.5 adds the optional `debug` object: it is present in debug-form artifacts
-(with `hooks` true or false and a possibly empty checkpoint array) and absent from release
-artifacts. The object is paired with the module/manifest by `build_id` but is not part of build-ID
-derivation, manifest identity, or online-change compatibility; it is validated per build
-(D-177). `parent_build_id` is carried by the manifest lineage rather than the metadata sidecar.
+from M4.5 artifacts. The `manifest.format` value is the paired GOT manifest's outer format:
+format 2 is emitted from M6.5 phase 4 onward, while the module and descriptor formats in this
+sidecar remain 1 and the metadata schema itself is unchanged (D-180). Debug-form artifacts carry
+the optional `debug` object (with `hooks` true or false and a possibly empty checkpoint array);
+release artifacts omit it. The object is paired with the module/manifest by `build_id` but is
+not part of build-ID derivation, manifest identity, or online-change compatibility; it is
+validated per build (D-177). `parent_build_id` is carried by the manifest lineage rather than the metadata sidecar.
 
 - `lib` is the embedding host library, not generated module code. `lib-type = "shared"` selects
   the shared host library; the default is a static host archive. `exe` is a thin launcher and
@@ -854,8 +859,8 @@ contains secrets; paths are printed as written by the user.
 
 ## 7. Open CLI/manifest questions
 
-None as of 2026-10-27. The M6.5 debug/release CLI, protocol, and `[debug]` schema were resolved
-in §1.7, §2.2, §4, and [Decisions](../Decisions.md) D-173–D-179. The online-change
+None as of 2026-10-28. The M6.5 debug/release CLI, protocol, and `[debug]` schema were resolved
+in §1.7, §2.2, §4, and [Decisions](../Decisions.md) D-173–D-183. The online-change
 CLI/tables/manifest schema is resolved in [Online Change and GOT](Online-Change-and-GOT.md) and
 `update_plan_got.md` §13.0. New CLI/manifest questions are appended here or in
 [Decisions](../Decisions.md).

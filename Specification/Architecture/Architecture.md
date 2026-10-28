@@ -1,6 +1,7 @@
 # Architecture
 
-Status: M4.5 host/module model, M5 lowering, and M6 project system/CLI/verification hardening implemented (2026-10-27); M6.5 debug/monitoring is next  
+Status: M4.5 host/module model, M5 lowering, M6 project system/CLI/verification hardening, and
+M6.5 debug/monitoring implemented (2026-10-28); M7 release candidate is next  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
 
@@ -405,8 +406,8 @@ storage and must not retain the pointer beyond the call.
   deployment/status control endpoint for `stc run --watch`.
 - Library mode exports the host embedding entry points; `{stc:export}` wrappers are served
   through the host export registry for the active module, which remains a separate loadable
-  artifact. The embedding host owns the loop, I/O backend, and manifest store; M6.5 adds the
-  debug services.
+  artifact. The embedding host owns the loop, I/O backend, and manifest store; M6.5 implements
+  the debug services.
 
 ### 4.10 Name mangling
 
@@ -432,8 +433,8 @@ signature hash is a stable 64-bit FNV-1a of the canonical type string, not a ran
 ### 4.11 Debug information
 
 - Debug information is the default v1 build output; `--release` selects the optional stripped,
-  optimised mode. Debug and release builds have distinct build IDs and manifests. This is the
-  M6.5 target; M6 also emits no DWARF/CodeView or checkpoints (see
+  optimised mode. Debug and release builds have distinct build IDs and manifests. M6.5
+  implements this surface; M6 and earlier emitted no DWARF/CodeView or checkpoints (see
   [Debug and Monitoring](Debug-and-Monitoring.md) §12).
 - Codegen emits full DWARF/CodeView variable/type/location information through clang, plus a
   checkpoint table and host check calls for breakpoints. It does not patch machine code.
@@ -524,9 +525,10 @@ project targets IR syntax accepted by LLVM 15 and later.
 | Launcher | `clang --target=<triple> <name>-launcher.o <runtime_staticlib> -o <name>.exe`; loads the adjacent module pair |
 | Embedding library | copy the runtime staticlib to `<name>.lib`/`.a`, or the runtime shared library when `lib-type = "shared"`; generated code stays in the separate module |
 
-- Project builds pass `[build].opt-level` to clang and emit no debug information. `-g`,
-  `--release`, and debug/release identities remain M6.5; the generated module and manifest remain
-  separate artifacts in every mode.
+- Project builds pass `[build].opt-level` to clang; debug is the default form and emits
+  DWARF/CodeView, while `--release` selects the optimised, stripped, hook-free form with its own
+  build ID and manifest (D-178). The generated module and manifest remain separate artifacts in
+  every mode.
 - The runtime staticlib is built with the toolchain that matches the target C ABI: the MSVC
   toolchain for `*-pc-windows-msvc` and the GNU toolchain for `*-unknown-linux-gnu`.
 - On Windows MSVC targets, clang uses `link.exe` or `lld-link`. On Linux targets it uses the
@@ -613,8 +615,8 @@ host exports, not module imports. The exact table, service IDs, versions, and si
 - Downloaded GOT manifests are untrusted parsed data: validate every field and digest,
   access-control export because layout data reveals program structure, and never execute manifest
   content. Descriptor/manifest parsers are fuzz targets.
-- M6.5 debug/monitoring access is authenticated and audited; the standard API is typed, not raw
-  memory.
+- Debug/monitoring access (M6.5) is local, authenticated, and audited; the standard API is typed,
+  not raw memory.
 
 ## 9. Open architecture questions
 

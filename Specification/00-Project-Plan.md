@@ -1,8 +1,8 @@
 # stc Project Plan
 
-Status: M4.5 online-change foundation, M5 lowering (phases 1–7 and 4b), and M6 project system,
-CLI, and verification hardening (phases 0–11) implemented (2026-10-27); M6.5 debug/monitoring is
-next  
+Status: M4.5 online-change foundation, M5 lowering (phases 1–7 and 4b), M6 project system,
+CLI, and verification hardening (phases 0–11), and M6.5 debug/monitoring (phases 0–10)
+implemented (2026-10-28); M7 release candidate is next  
 Date: 2026-10-24  
 Profile: `stc-2013-oop-utf8-v1`  
 Standard reference: IEC 61131-3:2013 (Ed. 3.0), local copy under `Specification/Reference/`
@@ -82,8 +82,8 @@ is specified in
   v1; a registry/version solver is a later extension (A-009).
 - Formal verification of IEEE-754 transcendental functions. These remain test-based.
 - Multi-threaded ST task execution in v1 (architecture must not preclude it). The host runtime
-  has a cycle thread and, in M6, a control/status thread; fully off-thread loader/prepare (M7)
-  and service/monitor threads (M6.5) are later work. Only the cycle thread executes ST code.
+  has a cycle thread, an M6 control/status thread, and M6.5 service/monitor threads; fully
+  off-thread loader/prepare is M7. Only the cycle thread executes ST code.
 - `PERSISTENT` (not a 2013 keyword) and periodic/checkpointed state saves. v1 persists retained
   variables at normal shutdown; crash-time saves are a later extension.
 - Native Linux host support during initial development. Linux x86-64 and Linux AArch64 host
@@ -117,9 +117,9 @@ is specified in
 | Safety | Not a safety PLC and not responsible for safety in any way; no automatic fail-safe; debug may hold outputs indefinitely |
 
 Assumption: the compiler host runs a single compilation job at a time. The generated runtime is
-single-threaded for ST execution; M6 adds a control/status thread that never executes ST and
-never blocks the cycle. Fully off-thread candidate preparation (M7) and service/monitor threads
-(M6.5) are later work.
+single-threaded for ST execution; M6 adds a control/status thread and M6.5 adds service/monitor
+threads, none of which execute ST or block the cycle. Fully off-thread candidate preparation is
+M7 work.
 
 Host-specific code is confined to the driver and runtime. The front end, HIR, and IR builder are
 portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 port is additive
@@ -162,8 +162,8 @@ portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 por
 - Rust workspace under `crates/`.
 - `crates/stc-runtime` — persistent host runtime with a C ABI: cycle loop, scheduler, GOT, root
   allocator, module loader, manifest store, swap controller, control/status thread, state, and
-  I/O; debug services follow in M6.5. Also the `staticlib` (with an `rlib` for Rust integration
-  tests) used by embedding hosts.
+  I/O; debug services are implemented in M6.5. Also the `staticlib` (with an `rlib` for Rust
+  integration tests) used by embedding hosts.
 - `crates/stc-manifest` — `stc.toml` schema, source discovery, local dependency graph, and
   `stc.lock`.
 - `crates/stc-test` — `{stc:test}` discovery, wrapper generation, and the process-isolated
@@ -444,8 +444,7 @@ Exit criteria:
 > the Rust reference harness, and the C-harness samples (D-170). Phase 10 added the conformance
 > corpus, UI snapshots, `xtask`, traceability, `fuzz_manifest`, and the active CI matrix
 > (D-171). Phase 11 completed the documentation and handover pass (D-172). All M6 exit criteria
-> pass on Windows x64 and the documented Ubuntu x64 CI jobs; the M6.5 debug/monitoring surface
-> remains unimplemented.
+> pass on Windows x64 and the documented Ubuntu x64 CI jobs.
 
 ### M6.5 — Full debug and monitoring
 
@@ -465,7 +464,25 @@ Exit criteria:
 - Debug hooks are absent from `--release` artifacts; measured cycle overhead with debug disabled
   is documented.
 
+> **M6.5 status (2026-10-28):** phases 0–10 are complete and all exit criteria pass on Windows
+> x64 and the documented Ubuntu x64 CI jobs. Phase 0 fixed the protocol, session, access,
+> checkpoint, and build contracts (D-173–D-179, `M6.5-Plan.md`); phases 1–8 implemented
+> DWARF/CodeView, the checkpoint table and host service 13 at ABI 2.3, typed read/write/force/
+> watch, the debug session protocol with audit and the stop/idle bound, breakpoints/stepping/
+> call stacks with the stopped-frame sidecar, the manifest-assisted split view, and the
+> `stc debug`/`stc run --debug-server` CLI with swap teardown. Phase 4 raised only the GOT
+> manifest to format 2 (D-180); descriptor, module, state, metadata-sidecar, frame-sidecar, and
+> host-ABI formats are otherwise unchanged from M6. Phase 9 added the Windows/Linux `debug` CI
+> job, the twelve-target debug suite (115 tests), the informational overhead measurement, and
+> the exit-criteria sweep; phase 10 closed the documentation and M7 handover (D-183). The exit
+> criterion that names a watchdog is satisfied by the documented stop/idle budget: M6 has no
+> watchdog implementation, and the M6.5 session bound (`[debug].session-timeout`, default five
+> minutes) ends the session and resumes the cycle with a fresh deadline. M7 (release candidate)
+> is next.
+
 ### M7 — Release candidate
+
+M6.5 is complete; M7 is the next milestone.
 
 Deliverables: performance pass, cross-target smoke tests via `clang --target`, packaging,
 examples, release notes, known-limitations list, manifest/online-change hardening, debug and
@@ -582,14 +599,17 @@ Exit criteria:
 
 ## 12. Immediate next actions
 
-1. M6 (project system, CLI, and verification hardening) is complete (2026-10-27); its phase
-   records are D-153–D-172 and `M6-Plan.md`. M6.5 (debug and monitoring) is the next
-   milestone; the boundary it builds on is in
-   [Debug and Monitoring](Architecture/Debug-and-Monitoring.md) §12 and `M6.5-Plan.md`.
-2. Do not claim debug/monitoring, `--release`, DWARF/CodeView, checkpoint hooks, typed access,
-   forcing, breakpoints, stepping, or the debug protocol until M6.5 implements them; M6 artifacts
-   honor `[build].opt-level` (default 0) but contain no debug information. M6.5 debug services
-   start at host ABI service ID 13, after M6's test-clock service 12.
+1. M6.5 (debug and monitoring) is complete (2026-10-28); its phase records are D-173–D-183,
+   `M6.5-Plan.md`, and `handover_to_M7.md`. M7 (release candidate) is the next milestone:
+   performance pass, cross-target smoke tests, packaging, examples, release notes, the
+   known-limitations list, manifest/online-change hardening, debug/monitoring hardening, and the
+   documented non-safety stance.
+2. Keep the implemented debug contracts: debug is the default build form; `--release` is
+   optimised, stripped, and hook-free with distinct build IDs/manifests; checkpoint hooks use
+   host ABI service ID 13 at minor 2.3; the debug protocol is local-only `stc-debug/1`, separate
+   from the M6 control channel; every swap ends the session; and forcing is boundary-applied,
+   audited, and never a safety function. M7 hardening must not weaken the non-safety stance or
+   add raw-memory access.
 3. All planning questions Q-001 through Q-212 are resolved (A-005 through A-030, Q6-1–Q6-15);
    the online-change architecture is recorded in
    [Online Change and GOT](Architecture/Online-Change-and-GOT.md), and the resolved question log

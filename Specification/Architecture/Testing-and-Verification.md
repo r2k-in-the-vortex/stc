@@ -1,6 +1,6 @@
 # Testing and Verification
 
-Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixes the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are the implementation target (2026-10-27)  
+Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixed the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are implemented and active (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
@@ -38,6 +38,14 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 > seeded; and the `ui`, `conformance`, `execution`, `projects`, `traceability`, `lean`, and
 > `fuzz-smoke` jobs run on the documented matrix. The phase also exposed and fixed a UTF-8
 > dynamic-index codegen defect (`STC-E-CODEGEN-002`).
+>
+> **M6.5 status (2026-10-28):** the debug/monitoring surface is implemented and the debug suite is
+> active. `cargo xtask test --suite debug` runs twelve targets (115 tests) on Windows and Linux;
+> the `debug` CI job preflights `llvm-readobj`/`readelf` and runs the suite with
+> `STC_REQUIRE_CLANG=1`; the ignored `debug_overhead` test and the opt-in `Debug overhead`
+> workflow record the informational measurement. Phase 9 passed the full workspace, clippy,
+> formatting, and traceability checks, and phase 10 closed the documentation and M7 handover
+> (D-183).
 
 ## 1. Layers of testing
 
@@ -57,7 +65,7 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `crates/stc-runtime/tests`, `crates/stc-driver/tests/online_cli.rs` |
 | GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, corrupt/manifest fuzzing | `crates/stc-got/tests`, `crates/stc-codegen/tests`, `crates/stc-driver/tests` |
 | Descriptors/OOP | Runtime descriptors, vtable cells, handle preservation, interface nullability, place descriptors | `crates/stc-runtime/tests/descriptor_lifecycle.rs`, `crates/stc-codegen/tests`, `tests/conformance/oop` |
-| Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `tests/debug` (M6.5 target) |
+| Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `cargo xtask test --suite debug` (twelve targets) |
 | Real-time boundary | Switch latency, maintenance jitter, service-thread contention, generation pinning | `crates/stc-runtime/tests` |
 | Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests`, `crates/stc-driver/tests/fmt_cli.rs` |
 | Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
@@ -380,7 +388,7 @@ arbitrary module code.
 
 ### 4.2 Debug and monitoring suite
 
-`cargo xtask test --suite debug` runs the M6.5 debug suite: the twelve integration targets that
+`cargo xtask test --suite debug` runs the debug suite: the twelve integration targets that
 cover typed reads/writes/forces/watches, removed-field rejection across a swap, breakpoint
 binding/unbinding, step/continue, call-stack and optimized-out reporting, DWARF/CodeView
 inspection, the stop/idle session bound (pause expiry, state clearing, and resume with a fresh
@@ -405,7 +413,7 @@ through the real build pipeline and records ns/cycle; the opt-in `Debug overhead
 the same measurement on both hosts. The measured numbers are recorded in the M6.5 plan and are
 not a CI timing gate.
 
-The M6.5 debug suite also covers the externally fixed contracts of D-173–D-179:
+The debug suite also covers the externally fixed contracts of D-173–D-179:
 
 - protocol framing, version negotiation, request IDs, error objects, size limits, timeouts, rate
   limits, and unknown-key rejection against `stc-debug/1`;
@@ -531,7 +539,7 @@ coverage badge to the `badges` branch on `main`; it is reporting-only, and the `
 the pass/fail gate.
 Line coverage is a reporting metric; rule coverage remains the semantic traceability check in §7.
 The M6 UI, conformance, execution, projects, traceability, Lean, and fuzz-smoke
-jobs are active on the documented matrix. The M6.5 `debug` job runs the debug suite on both
+jobs are active on the documented matrix. The `debug` job runs the debug suite on both
 hosts and, on a manual `workflow_dispatch`, also prints the informational overhead measurement
 described in §4.2; it never gates on timing.
 
