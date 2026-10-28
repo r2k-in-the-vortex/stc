@@ -324,6 +324,42 @@ fn modules_expose_2_3_hooks_in_debug_and_2_1_without_hooks_in_release() {
         "the build identity survives stripping and differs from debug"
     );
 
+    let debug_object =
+        std::fs::read(project.path("app/target/stc/debug/app.o")).expect("debug object");
+    assert!(
+        contains(&debug_object, debug_marker()),
+        "debug objects keep DWARF or CodeView"
+    );
+    // On ELF the linked module keeps DWARF. On MSVC targets the object carries
+    // `.debug$S`/`.debug$T`, but the current lld-link invocation (no `/DEBUG`)
+    // neither copies CodeView into the DLL nor emits a PDB; that phase-2
+    // limitation is recorded in the M6.5 plan and is not changed here.
+    if !cfg!(windows) {
+        let debug_module = std::fs::read(project.path(&format!(
+            "app/target/stc/debug/{}",
+            debug_metadata["module"]["file"]
+                .as_str()
+                .expect("debug module file")
+        )))
+        .expect("debug module");
+        assert!(
+            contains(&debug_module, debug_marker()),
+            "ELF debug modules keep DWARF"
+        );
+    }
+    assert!(
+        project
+            .path("app/target/stc/debug/app.stc-frames.json")
+            .is_file(),
+        "a hook-bearing debug build writes the stopped-frame sidecar"
+    );
+    assert!(
+        !project
+            .path("app/target/stc/release/app.stc-frames.json")
+            .exists(),
+        "release builds write no stopped-frame sidecar"
+    );
+
     let release_object =
         std::fs::read(project.path("app/target/stc/release/app.o")).expect("release object");
     assert!(

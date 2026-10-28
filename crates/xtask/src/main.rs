@@ -1,10 +1,11 @@
 //! Repository tasks: suite selection for CI and the rule traceability report.
 //!
-//! `cargo xtask test --suite <name> [--locked]` runs one driver integration
-//! suite. `cargo xtask traceability [--check]` maps `STC-*` rule IDs found in
-//! `Specification/**/*.md` to evidence in the tests and conformance corpus.
-//! The traceability allowlist (`tools/ci/traceability-allowlist.toml`) records
-//! rules that are not implemented and IDs that are examples, not rules.
+//! `cargo xtask test --suite <name> [--locked]` runs one integration suite,
+//! which is one or more package/test-target pairs. `cargo xtask traceability
+//! [--check]` maps `STC-*` rule IDs found in `Specification/**/*.md` to
+//! evidence in the tests and conformance corpus. The traceability allowlist
+//! (`tools/ci/traceability-allowlist.toml`) records rules that are not
+//! implemented and IDs that are examples, not rules.
 
 #![forbid(unsafe_code)]
 
@@ -42,8 +43,41 @@ fn run(args: &[String]) -> Result<(), String> {
 
 fn usage() -> &'static str {
     "usage:\n  \
-     cargo xtask test --suite ui|conformance|execution|projects [--locked] [-- <args>]\n  \
+     cargo xtask test --suite ui|conformance|execution|projects|debug [--locked] [-- <args>]\n  \
      cargo xtask traceability [--check]"
+}
+
+/// One test target: a workspace package and an integration test file.
+type SuiteTarget = (&'static str, &'static str);
+
+fn suite_targets(suite: &str) -> Option<&'static [SuiteTarget]> {
+    match suite {
+        "ui" => Some(&[("stc-driver", "ui")]),
+        "conformance" => Some(&[("stc-driver", "conformance")]),
+        "execution" => Some(&[
+            ("stc-driver", "execution"),
+            ("stc-driver", "exact_vectors_cli"),
+        ]),
+        "projects" => Some(&[("stc-driver", "projects"), ("stc-driver", "online_cli")]),
+        // The full debug matrix: typed access/write/watch, stop/step/stack,
+        // protocol/auth/audit, CLI launch/attach/swap, release hook absence,
+        // frame sidecars, checkpoint and debug-info generation.
+        "debug" => Some(&[
+            ("stc-runtime", "debug_access"),
+            ("stc-runtime", "debug_write"),
+            ("stc-runtime", "debug_stop"),
+            ("stc-runtime", "debug_view"),
+            ("stc-runtime", "debug_protocol"),
+            ("stc-driver", "debug_cli"),
+            ("stc-driver", "debug_release"),
+            ("stc-driver", "frames"),
+            ("stc-codegen", "debug_info"),
+            ("stc-codegen", "checkpoints"),
+            ("stc-codegen", "frames"),
+            ("stc-got", "metadata_v2"),
+        ]),
+        _ => None,
+    }
 }
 
 fn workspace_root() -> PathBuf {
@@ -82,29 +116,24 @@ fn test(args: &[String]) -> Result<(), String> {
         index += 1;
     }
     let suite = suite.ok_or_else(|| "`cargo xtask test` needs `--suite <name>`".to_owned())?;
-    let tests: &[&str] = match suite.as_str() {
-        "ui" => &["ui"],
-        "conformance" => &["conformance"],
-        "execution" => &["execution", "exact_vectors_cli"],
-        "projects" => &["projects", "online_cli"],
-        other => {
-            return Err(format!(
-                "unknown suite `{other}` (expected `ui`, `conformance`, `execution`, or `projects`)"
-            ));
-        }
-    };
-    for test in tests {
+    let targets = suite_targets(&suite).ok_or_else(|| {
+        format!(
+            "unknown suite `{suite}` (expected `ui`, `conformance`, `execution`, `projects`, \
+             or `debug`)"
+        )
+    })?;
+    for (package, test) in targets {
         let mut command = Command::new(cargo());
         command
             .current_dir(workspace_root())
-            .args(["test", "-p", "stc-driver", "--test", test]);
+            .args(["test", "-p", package, "--test", test]);
         if locked {
             command.arg("--locked");
         }
         if !passthrough.is_empty() {
             command.arg("--").args(&passthrough);
         }
-        eprintln!("xtask: cargo test -p stc-driver --test {test}");
+        eprintln!("xtask: cargo test -p {package} --test {test}");
         let status = command
             .status()
             .map_err(|error| format!("cannot run cargo: {error}"))?;

@@ -37,6 +37,7 @@ jobs:
       - conformance
       - execution
       - projects
+      - debug
       - traceability
       - lean
       - fuzz-smoke
@@ -392,6 +393,67 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run the end-to-end project workflow
         run: cargo xtask test --suite projects --locked
+
+  # The debug suites get an explicit Windows/Linux job so a platform-specific
+  # regression in debug information, checkpoint hooks, stop/step/stack, the
+  # protocol, or the CLI is visible even when the workspace job reports an
+  # unrelated failure. `cargo xtask test --suite debug` runs the same targets
+  # locally: typed access/write/watch, stop/step/stack, protocol/auth/audit,
+  # CLI launch/attach/swap, release hook absence, frame sidecars, and
+  # checkpoint and debug-info generation.
+  debug:
+    name: Debug suites (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      # The suites must not silently skip their object-content assertions.
+      # Windows needs llvm-readobj for CodeView; Linux needs readelf because
+      # the DWARF line-table check is guarded on it even under
+      # STC_REQUIRE_CLANG.
+      - name: Require the platform debug inspection tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang --version | head -n 1
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            command -v llvm-readobj >/dev/null || {
+              echo "::error::llvm-readobj is required for the CodeView assertions"
+              exit 1
+            }
+            llvm-readobj --version | head -n 1
+          else
+            command -v readelf >/dev/null || {
+              echo "::error::readelf is required for the DWARF line-table assertions"
+              exit 1
+            }
+            readelf --version | head -n 1
+          fi
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the debug matrix
+        run: cargo xtask test --suite debug --locked
+      # Manual dispatches also record the debug overhead numbers on both hosts.
+      # The test is ignored on push/PR runs, so CI never pays for the timing and
+      # never gates on it; only the artifact preconditions are assertions.
+      - name: Measure debug overhead (informational)
+        if: github.event_name == 'workflow_dispatch'
+        run: >-
+          cargo test -p stc-driver --test debug_overhead --locked --
+          --ignored --nocapture
 
   traceability:
     name: Rule traceability

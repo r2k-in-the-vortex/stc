@@ -1,0 +1,39 @@
+name: Debug overhead
+
+# Measurement only: the numbers are recorded on M6.5 and must never gate a
+# build. Dispatch this workflow when the debug overhead needs fresh Windows
+# and Linux figures; read them from the job log (`gh run view --log`).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  measure:
+    name: Debug overhead (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Measure debug overhead
+        run: >-
+          cargo test -p stc-driver --test debug_overhead --locked --
+          --ignored --nocapture

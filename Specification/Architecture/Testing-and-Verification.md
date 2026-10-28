@@ -380,12 +380,30 @@ arbitrary module code.
 
 ### 4.2 Debug and monitoring suite
 
-`tests/debug` covers typed reads/writes/forces/watches, removed-field rejection across a swap,
-breakpoint binding/unbinding, step/continue, call-stack and optimized-out reporting, DWARF/
-CodeView inspection, the stop/idle session bound (pause expiry, state clearing, and resume with a
-fresh deadline), force teardown, session authentication/audit, and the rule that every online swap
-ends the debug session. Debug/release tests assert that release artifacts contain no debug hooks
-and have distinct build IDs/manifests.
+`cargo xtask test --suite debug` runs the M6.5 debug suite: the twelve integration targets that
+cover typed reads/writes/forces/watches, removed-field rejection across a swap, breakpoint
+binding/unbinding, step/continue, call-stack and optimized-out reporting, DWARF/CodeView
+inspection, the stop/idle session bound (pause expiry, state clearing, and resume with a fresh
+deadline), force teardown, session authentication/audit, and the rule that every online swap ends
+the debug session. Debug/release tests assert that release artifacts contain no debug hooks and
+have distinct build IDs/manifests. The target mapping is:
+
+| Package | Test targets |
+| --- | --- |
+| `stc-runtime` | `debug_access`, `debug_write`, `debug_stop`, `debug_view`, `debug_protocol` |
+| `stc-driver` | `debug_cli`, `debug_release`, `frames` |
+| `stc-codegen` | `debug_info`, `checkpoints`, `frames` |
+| `stc-got` | `metadata_v2` |
+
+The `debug` CI job runs that suite on `windows-2025` and `ubuntu-24.04` with
+`STC_REQUIRE_CLANG=1`; it preflights the platform inspection tools (`llvm-readobj` on Windows,
+`readelf` on Linux) so a missing tool fails the job instead of skipping an assertion.
+Debug-disabled overhead is measured by the ignored
+`crates/stc-driver/tests/debug_overhead.rs` test (`cargo test -p stc-driver --test debug_overhead
+-- --ignored --nocapture`), which compares release, hook-free debug, and hook-bearing debug builds
+through the real build pipeline and records ns/cycle; the opt-in `Debug overhead` workflow runs
+the same measurement on both hosts. The measured numbers are recorded in the M6.5 plan and are
+not a CI timing gate.
 
 The M6.5 debug suite also covers the externally fixed contracts of D-173–D-179:
 
@@ -402,8 +420,8 @@ The M6.5 debug suite also covers the externally fixed contracts of D-173–D-179
 - default debug vs `--release` out-dirs, build-ID/manifest distinctness, deterministic
   DWARF/CodeView paths/order (no timestamps), sidecar naming, and `STC-E-PROJECT-010` for
   conflicting debug settings;
-- traceability allowlist status for the `STC-*-DEBUG-*` family until phases 3–8 implement the
-  corresponding behavior.
+- traceability status for the `STC-*-DEBUG-*` family: every implemented debug rule has test
+  evidence, and the allowlist no longer carries any debug ID.
 
 ## 5. Lean verification
 
@@ -494,7 +512,7 @@ lean/
 | `projects` | end-to-end project and online workflow on Windows x64 and Ubuntu x64 |
 | `online` | hot-swap/manifest/cold-download suite on Windows x64 and Ubuntu x64 |
 | `traceability` | `cargo xtask traceability --check` on Ubuntu x64 |
-| `debug` | M6.5 target: typed debug, breakpoint/step, DWARF/CodeView, swap-teardown suite |
+| `debug` | `cargo xtask test --suite debug` on Windows x64 and Ubuntu x64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
 | `cross-target` | `clang --target=aarch64-... -c` smoke (IR/object) |
@@ -513,7 +531,9 @@ coverage badge to the `badges` branch on `main`; it is reporting-only, and the `
 the pass/fail gate.
 Line coverage is a reporting metric; rule coverage remains the semantic traceability check in §7.
 The M6 UI, conformance, execution, projects, traceability, Lean, and fuzz-smoke
-jobs are active on the documented matrix.
+jobs are active on the documented matrix. The M6.5 `debug` job runs the debug suite on both
+hosts and, on a manual `workflow_dispatch`, also prints the informational overhead measurement
+described in §4.2; it never gates on timing.
 
 ### 6.2 Matrix
 
