@@ -1371,6 +1371,12 @@ fn compile_ir(
         command.arg("-fPIC");
     }
     command.arg(opt_level.clang_flag());
+    if target_triple.contains("windows") {
+        // LLVM stamps COFF objects with the wall-clock time when incremental
+        // linker compatibility is enabled. Disable it so identical inputs
+        // produce byte-identical objects in any output directory.
+        command.arg("-mno-incremental-linker-compatible");
+    }
     if debug {
         command.arg("-g");
         // Keep compilation-directory and object-name metadata relative so the

@@ -471,6 +471,11 @@ fn compile_object(
         .arg(&ir)
         .args(["-c", "-o"])
         .arg(&object);
+    if target_triple.contains("windows") {
+        // Match the driver: disable the COFF object wall-clock timestamp so
+        // identical inputs produce identical objects.
+        command.arg("-mno-incremental-linker-compatible");
+    }
     if debug {
         command.args(["-g", "-fdebug-compilation-dir=."]);
         if target_triple.contains("windows") {
@@ -539,6 +544,13 @@ fn debug_objects_are_deterministic_and_inspectable() {
         first_bytes, second_bytes,
         "debug objects must not depend on the output directory"
     );
+    if target_triple.contains("windows") {
+        assert_eq!(
+            &first_bytes[4..8],
+            &[0, 0, 0, 0],
+            "COFF objects must not carry a wall-clock timestamp"
+        );
+    }
     for path in [&first_dir, &second_dir] {
         let bytes = path.to_string_lossy();
         assert!(

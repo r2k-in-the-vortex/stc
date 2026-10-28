@@ -330,6 +330,13 @@ fn modules_expose_2_3_hooks_in_debug_and_2_1_without_hooks_in_release() {
         contains(&debug_object, debug_marker()),
         "debug objects keep DWARF or CodeView"
     );
+    if cfg!(windows) {
+        assert_eq!(
+            &debug_object[4..8],
+            &[0, 0, 0, 0],
+            "COFF objects must not carry a wall-clock timestamp"
+        );
+    }
     // On ELF the linked module keeps DWARF. On MSVC targets the object carries
     // `.debug$S`/`.debug$T`, but the current lld-link invocation (no `/DEBUG`)
     // neither copies CodeView into the DLL nor emits a PDB; that phase-2
