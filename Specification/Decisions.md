@@ -645,6 +645,15 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-197 | `RELEASE-CHECKLIST.md` names the project maintainer as owner and records the artifacts, commands, both-host evidence, hashes, documentation, and sign-off date. Sign-off requires recorded evidence for every item; unverified items are marked unsupported. | One named owner and an explicit artifact list make the release decision auditable. |
 | D-198 | Flaky process or timing tests are bugs. A failure is reproduced and diagnosed before a deadline or wait is changed; logs and the failing run are recorded. | Prevents the debug and CLI suites from passing by widening timeouts rather than fixing races. |
 | D-199 | The four non-debug traceability allowlist entries (`STC-E-ONLINE-STATE-001`, `STC-W-ONLINE-STATE-001`, `STC-W-ONLINE-004`, `STC-W-RUN-001`) remain documented as not-implemented v1 policy. No debug rule is allowlisted. | Closing them would change state/I/O behaviour, which M7 does not do; documenting them in the known-limitations list keeps traceability truthful. |
+| D-200 | M8's supported native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`). macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported. | The project plan names the Linux hosts; naming the exact triples keeps the support matrix testable and prevents silent claims. |
+| D-201 | Host-specific operations are confined to `stc-runtime` platform modules (loader, transport, signal, state replace, service priority) and the `stc-driver` toolchain/build/link/run layer. `stc-lexer`, `stc-parser`, `stc-sema`, `stc-codegen`, `stc-got`, and the manifest model carry no OS-behaviour branches; path case/extension semantics live in one manifest host module and host target resolution in one codegen host module. `cargo xtask host-audit --check` enforces the allowlist. | D-042 requires a platform layer; an executable audit is the only way to keep the boundary from drifting. |
+| D-202 | AArch64 debug parity uses the existing format-1 frame rule: CFA `fp+16`, saved frame pointer at `CFA-16`, return address at `CFA-8`, with x29 as the frame pointer. The service-13 trampoline captures x29, sp, and x30; DWARF extraction accepts `DW_OP_reg29 (x29)`. No stopped-frame, runtime, or ABI contract changes. | AArch64 uses the same physical frame layout, so the port is capture and extraction work rather than a new contract. |
+| D-203 | Linux atomic writes create the temporary file user-only (mode 0600) for state files, sync the file, rename over the target, then sync the parent directory. Windows keeps `MoveFileEx` with `WRITE_THROUGH`. I/O output files keep ordinary permissions but use the same durability sequence. A failed replace leaves the previous file intact. | State files are runtime-private user data; parent-directory sync is required for rename durability after power loss. |
+| D-204 | Control-server and debug-server accept/handler threads run at below-normal OS priority on Windows (`THREAD_PRIORITY_BELOW_NORMAL`) and Linux (nice +10, best-effort). The cycle thread keeps the process default priority. v1 does not pin CPU affinity. | Service threads must not compete with the cycle thread; affinity pinning conflicts with container cpusets and is a deployment decision, not a runtime default. |
+| D-205 | CI adds the `ubuntu-24.04-arm` hosted runner to the native test, online, UI, conformance, execution, projects, debug, cross-target, and package matrices. Runner labels stay pinned; host-independent jobs remain on `ubuntu-24.04`. | The exit criteria require native AArch64 evidence; pinned labels prevent silent image migration. |
+| D-206 | Packaging produces one archive per native host triple. `package.json.debug_contract` is `object-codeview` on Windows MSVC and `dwarf` on Linux GNU. No combined archive and no timestamps. | The debug backend is host-visible metadata; a Windows-only label on a Linux package is false. |
+| D-207 | The Unix debug endpoint and audit file remain user-only on both Linux architectures: 0600 files in a 0700 directory, symlinks refused, endpoint/socket/audit removed on stop. Container and headless hosts use the same path rules with no shared-directory fallback. | Security behaviour must not depend on architecture or environment; a fallback would silently weaken the endpoint. |
+| D-208 | M8 makes no format, ABI, protocol, language, or version change. `stc` remains `1.0.0-rc.1`; M8 completes the host-portability scope of the release candidate. | The milestone is a portability pass; identity churn would invalidate M7 evidence without a contract reason. |
 
 D-118 was reviewed and approved on 2026-10-24; the four clarifications stand as recorded and phase 2
 is approved. Phase 3 is complete for review and D-119 records its IR-level choices. Phase 4 is
@@ -728,7 +737,23 @@ protocol, or language contract changes; the affected documents are `M7-Plan.md`,
 (`RELEASE-NOTES.md`, `USER-GUIDE.md`, `KNOWN-LIMITATIONS.md`, `NON-SAFETY.md`,
 `RELEASE-CHECKLIST.md`, `Specification/Verification/Performance.md`), and `handover_to_M8.md`.
 
-D-094 through D-187 affect
+M8 phase 0 (2026-10-28) fixes the native-host boundary in D-200–D-208: the three supported host
+triples, the platform-layer confinement and `cargo xtask host-audit` enforcement, AArch64 debug
+parity with the existing `fp+16` frame rule, Linux state-file permissions and parent-directory
+sync, below-normal service-thread priority without affinity pinning, the pinned
+`ubuntu-24.04-arm` CI matrix, per-architecture packaging with a host-derived `debug_contract`,
+and the unchanged Unix endpoint-security rules. No format, ABI, protocol, language, or version
+change; the affected documents are `M8-Plan.md`,
+[Architecture](Architecture/Architecture.md),
+[Runtime and Execution](Architecture/Runtime-and-Execution.md),
+[State and RETAIN](Architecture/State-and-Retain.md),
+[Debug and Monitoring](Architecture/Debug-and-Monitoring.md),
+[CLI and Manifest](Architecture/CLI-and-Manifest.md),
+[Testing and Verification](Architecture/Testing-and-Verification.md), the
+[Conformance Profile](01-Conformance-Profile.md), `README.md`, `USER-GUIDE.md`,
+`KNOWN-LIMITATIONS.md`, `RELEASE-NOTES.md`, and `handover_to_M8.md`.
+
+D-094 through D-208 affect
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),
 [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md),
 [Debug and Monitoring](Architecture/Debug-and-Monitoring.md),
