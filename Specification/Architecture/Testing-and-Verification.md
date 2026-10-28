@@ -1,6 +1,6 @@
 # Testing and Verification
 
-Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixes the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are the implementation target (2026-10-27)  
+Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixed the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are implemented and active (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
@@ -38,6 +38,14 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 > seeded; and the `ui`, `conformance`, `execution`, `projects`, `traceability`, `lean`, and
 > `fuzz-smoke` jobs run on the documented matrix. The phase also exposed and fixed a UTF-8
 > dynamic-index codegen defect (`STC-E-CODEGEN-002`).
+>
+> **M6.5 status (2026-10-28):** the debug/monitoring surface is implemented and the debug suite is
+> active. `cargo xtask test --suite debug` runs twelve targets (115 tests) on Windows and Linux;
+> the `debug` CI job preflights `llvm-readobj`/`readelf` and runs the suite with
+> `STC_REQUIRE_CLANG=1`; the ignored `debug_overhead` test and the opt-in `Debug overhead`
+> workflow record the informational measurement. Phase 9 passed the full workspace, clippy,
+> formatting, and traceability checks, and phase 10 closed the documentation and M7 handover
+> (D-183).
 
 ## 1. Layers of testing
 
@@ -57,7 +65,7 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `crates/stc-runtime/tests`, `crates/stc-driver/tests/online_cli.rs` |
 | GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, corrupt/manifest fuzzing | `crates/stc-got/tests`, `crates/stc-codegen/tests`, `crates/stc-driver/tests` |
 | Descriptors/OOP | Runtime descriptors, vtable cells, handle preservation, interface nullability, place descriptors | `crates/stc-runtime/tests/descriptor_lifecycle.rs`, `crates/stc-codegen/tests`, `tests/conformance/oop` |
-| Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `tests/debug` (M6.5 target) |
+| Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `cargo xtask test --suite debug` (twelve targets) |
 | Real-time boundary | Switch latency, maintenance jitter, service-thread contention, generation pinning | `crates/stc-runtime/tests` |
 | Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests`, `crates/stc-driver/tests/fmt_cli.rs` |
 | Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
@@ -380,14 +388,32 @@ arbitrary module code.
 
 ### 4.2 Debug and monitoring suite
 
-`tests/debug` covers typed reads/writes/forces/watches, removed-field rejection across a swap,
-breakpoint binding/unbinding, step/continue, call-stack and optimized-out reporting, DWARF/
-CodeView inspection, the stop/idle session bound (pause expiry, state clearing, and resume with a
-fresh deadline), force teardown, session authentication/audit, and the rule that every online swap
-ends the debug session. Debug/release tests assert that release artifacts contain no debug hooks
-and have distinct build IDs/manifests.
+`cargo xtask test --suite debug` runs the debug suite: the twelve integration targets that
+cover typed reads/writes/forces/watches, removed-field rejection across a swap, breakpoint
+binding/unbinding, step/continue, call-stack and optimized-out reporting, DWARF/CodeView
+inspection, the stop/idle session bound (pause expiry, state clearing, and resume with a fresh
+deadline), force teardown, session authentication/audit, and the rule that every online swap ends
+the debug session. Debug/release tests assert that release artifacts contain no debug hooks and
+have distinct build IDs/manifests. The target mapping is:
 
-The M6.5 debug suite also covers the externally fixed contracts of D-173–D-179:
+| Package | Test targets |
+| --- | --- |
+| `stc-runtime` | `debug_access`, `debug_write`, `debug_stop`, `debug_view`, `debug_protocol` |
+| `stc-driver` | `debug_cli`, `debug_release`, `frames` |
+| `stc-codegen` | `debug_info`, `checkpoints`, `frames` |
+| `stc-got` | `metadata_v2` |
+
+The `debug` CI job runs that suite on `windows-2025` and `ubuntu-24.04` with
+`STC_REQUIRE_CLANG=1`; it preflights the platform inspection tools (`llvm-readobj` on Windows,
+`readelf` on Linux) so a missing tool fails the job instead of skipping an assertion.
+Debug-disabled overhead is measured by the ignored
+`crates/stc-driver/tests/debug_overhead.rs` test (`cargo test -p stc-driver --test debug_overhead
+-- --ignored --nocapture`), which compares release, hook-free debug, and hook-bearing debug builds
+through the real build pipeline and records ns/cycle; the opt-in `Debug overhead` workflow runs
+the same measurement on both hosts. The measured numbers are recorded in the M6.5 plan and are
+not a CI timing gate.
+
+The debug suite also covers the externally fixed contracts of D-173–D-179:
 
 - protocol framing, version negotiation, request IDs, error objects, size limits, timeouts, rate
   limits, and unknown-key rejection against `stc-debug/1`;
@@ -402,8 +428,8 @@ The M6.5 debug suite also covers the externally fixed contracts of D-173–D-179
 - default debug vs `--release` out-dirs, build-ID/manifest distinctness, deterministic
   DWARF/CodeView paths/order (no timestamps), sidecar naming, and `STC-E-PROJECT-010` for
   conflicting debug settings;
-- traceability allowlist status for the `STC-*-DEBUG-*` family until phases 3–8 implement the
-  corresponding behavior.
+- traceability status for the `STC-*-DEBUG-*` family: every implemented debug rule has test
+  evidence, and the allowlist no longer carries any debug ID.
 
 ## 5. Lean verification
 
@@ -494,7 +520,7 @@ lean/
 | `projects` | end-to-end project and online workflow on Windows x64 and Ubuntu x64 |
 | `online` | hot-swap/manifest/cold-download suite on Windows x64 and Ubuntu x64 |
 | `traceability` | `cargo xtask traceability --check` on Ubuntu x64 |
-| `debug` | M6.5 target: typed debug, breakpoint/step, DWARF/CodeView, swap-teardown suite |
+| `debug` | `cargo xtask test --suite debug` on Windows x64 and Ubuntu x64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
 | `cross-target` | `clang --target=aarch64-... -c` smoke (IR/object) |
@@ -513,14 +539,17 @@ coverage badge to the `badges` branch on `main`; it is reporting-only, and the `
 the pass/fail gate.
 Line coverage is a reporting metric; rule coverage remains the semantic traceability check in §7.
 The M6 UI, conformance, execution, projects, traceability, Lean, and fuzz-smoke
-jobs are active on the documented matrix.
+jobs are active on the documented matrix. The `debug` job runs the debug suite on both
+hosts and, on a manual `workflow_dispatch`, also prints the informational overhead measurement
+described in §4.2; it never gates on timing.
 
 ### 6.2 Matrix
 
 - Primary: Windows x64, `x86_64-pc-windows-msvc`; the development host is Windows 11 and CI uses
   GitHub's `windows-2025` runner. Pinned clang/LLVM 23.1.4.
 - Secondary: Ubuntu 24.04 (`ubuntu-24.04`), `x86_64-unknown-linux-gnu` — workspace tests,
-  diagnostic snapshots, conformance corpus, execution tests, project workflow, and end-to-end CLI.
+  diagnostic snapshots, conformance corpus, execution tests, project workflow, end-to-end CLI,
+  and the debug suite.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`); `-latest` labels are not used, so
   image migrations do not silently change the matrix.
 - Host portability (after basic development, D-042): native or emulated Linux AArch64

@@ -513,6 +513,12 @@ pub struct DebugSettings {
     pub protocol: DebugProtocol,
     /// Whether an online swap ends debug sessions.
     pub force_sessions_end_on_swap: bool,
+    /// Default continuous stop/idle session bound.
+    pub session_timeout: DurationNs,
+    /// Default `write` scope grant for a launched debug service.
+    pub allow_write: bool,
+    /// Default `force` scope grant for a launched debug service.
+    pub allow_force: bool,
 }
 
 impl Default for DebugSettings {
@@ -522,6 +528,9 @@ impl Default for DebugSettings {
             default_explicit: false,
             protocol: DebugProtocol::Pipe,
             force_sessions_end_on_swap: true,
+            session_timeout: DurationNs(300_000_000_000),
+            allow_write: false,
+            allow_force: false,
         }
     }
 }

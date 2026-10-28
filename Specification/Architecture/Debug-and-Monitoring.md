@@ -1,6 +1,6 @@
 # Debug and Monitoring
 
-Status: Resolved specification (2026-10-24); M4.5 interface recorded; M6 complete with the M6.5 boundary at host ABI 2.2 service ID 12 (2026-10-27); M6.5 phase 0 fixes the protocol, session, access, checkpoint, and build contracts (2026-10-27); M6.5 implementation pending  
+Status: Resolved specification (2026-10-24); M4.5 interface recorded; M6 complete with the M6.5 boundary at host ABI 2.2 service ID 12 (2026-10-27); M6.5 phase 0 fixes the protocol, session, access, checkpoint, and build contracts (2026-10-27); M6.5 implementation complete (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -8,8 +8,8 @@ This document specifies typed variable access, monitoring, forcing, breakpoints,
 stacks, debug information, the local debug protocol, and the interaction between debug sessions
 and online change. It complements
 [Online Change and GOT](Online-Change-and-GOT.md) and
-[Runtime and Execution](Runtime-and-Execution.md). The full debugger is the M6.5 milestone; the
-resolved rationale is in `update_plan_got.md`.
+[Runtime and Execution](Runtime-and-Execution.md). The full debugger is implemented in M6.5; the
+resolved rationale is in `update_plan_got.md`, and the phase decisions are D-173–D-183.
 
 ## 1. Scope and safety stance
 
@@ -100,10 +100,10 @@ Forcing overrides a variable's value at the cycle boundary until explicitly rele
 
 ### 5.1 Breakpoints
 
-Breakpoints are source-level locations resolved to compiler-emitted checkpoints. In M6.5, codegen
-will emit a checkpoint table and a call to a host check at each eligible statement/block
-boundary; M4.5 does not emit either. The host does not patch machine code and does not require
-writable text pages. A breakpoint:
+Breakpoints are source-level locations resolved to compiler-emitted checkpoints. Codegen (from
+M6.5) emits a checkpoint table and a call to a host check at each eligible statement/block
+boundary; M4.5 and M6 did not emit either. The host does not patch machine code and does not
+require writable text pages. A breakpoint:
 
 - is set/cleared by source location or checkpoint ID;
 - is matched against the active generation's table;
@@ -136,8 +136,8 @@ than inventing values. `SUPER`/interface dispatch reports the dynamic function i
 
 Debug information is the default build output. `--release` selects the optional stripped and
 optimised mode. Debug and release builds have distinct build IDs and manifests. Debug hooks and
-checkpoint calls are absent from release artifacts. This is the M6.5 target; M4.5 emits no debug
-information and does not accept `--debug`/`--release` (§12).
+checkpoint calls are absent from release artifacts. M6.5 implements this; M4.5 and M6 emitted
+no debug information and rejected `--release` (§12 records that historical boundary).
 
 - Debug: full DWARF/CodeView, checkpoint table, frame information, and typed location metadata.
 - Release: optimised code, no debug hooks, optionally a sidecar symbol file; the sidecar does not
@@ -153,7 +153,10 @@ or moved to the sidecar.
 The debugger may present an object/aggregate as split fields by combining DWARF/CodeView with the
 manifest's per-field layout records. This view shows the runtime's actual per-field roots and
 handles; it does not claim that the object is contiguous memory. The debugger must label the view
-as manifest-assisted so a user does not mistake it for a raw struct dump.
+as manifest-assisted so a user does not mistake it for a raw struct dump. The host produces this
+view from the same typed read that returns the value (`var.read` and `frame.read`), and both the
+JSON and text presentations are deterministic and contain no address, absolute path, or
+timestamp.
 
 ### 6.3 Active generation and swap
 
@@ -214,12 +217,19 @@ and debug-information errors. Online-change diagnostics use their own
 
 ## 12. M4.5/M6 interface notes (2026-10-27)
 
+**Completion note (2026-10-28):** M6.5 implements the surface described in §5–§10 and
+§13–§18. This section is kept as the historical M4.5/M6 boundary record; §12.1–§12.3
+describe the pre-M6.5 state and the rules M6.5 followed, not current gaps. The GOT manifest was
+raised to format 2 by M6.5 phase 4 (D-180); descriptor, module, state, and metadata-sidecar
+formats remain 1, the metadata sidecar gains only the optional `debug` object, M6.5 adds the
+format-1 stopped-frame sidecar, and the host ABI appends service 13 at minor 2.3.
+
 M4.5 and M6 do not implement the debugger. They fix the host/module substrate and leave the debug
 surface to M6.5. This section records the boundary so M6.5 can build on it without changing
 the descriptor or module format 1 or the ABI 2 service signatures; the GOT manifest was later
 raised to format 2 by M6.5 phase 4 (D-180).
 
-### 12.1 Available now
+### 12.1 Available before M6.5 (historical)
 
 - **Identity, layout, and storage.** Every persistent root, function, instance, task, and export
   has a stable `GotId`, normalized key, and kind-specific identity (type/layout/signature) in the
@@ -255,7 +265,7 @@ raised to format 2 by M6.5 phase 4 (D-180).
 - **Direct variables.** The metadata bindings, `Host::warnings`, and `image::DirectRemap`
   identify direct variables that moved during an online change for the split-object view.
 
-### 12.2 Not present (M6.5 work)
+### 12.2 Not present before M6.5 (historical)
 
 - No checkpoint table or host-check call is emitted by codegen; `entry_flags` bit 6 and
   `required_features` bit 4 stay clear in M4.5 and M6.
@@ -270,7 +280,7 @@ raised to format 2 by M6.5 phase 4 (D-180).
 - No service/monitor thread driving typed access or watch streams.
 - No manifest-assisted split-object presentation; the manifest data it needs is available.
 
-### 12.3 Rules for M6.5
+### 12.3 Rules for M6.5 (historical; followed)
 
 - Add the checkpoint host check as an appended ABI 2.x entry starting after M6's service ID 12;
   typed access, reference resolution, and generation pins are host-side and need no new
@@ -288,11 +298,11 @@ raised to format 2 by M6.5 phase 4 (D-180).
 
 ## 13. Debug protocol
 
-This section fixes the M6.5 wire contract. The debug service is separate from the M6
-control/status channel (D-155): a control endpoint, token, or message is never accepted as a
-debug endpoint, and the debug service performs no deployment or status operation. The protocol
-is local-only; remote debugging remains a non-goal (§10). The externally binding choices are
-recorded as D-173–D-179.
+This section fixes the v1 debug wire contract implemented in M6.5. The debug service is separate
+from the M6 control/status channel (D-155): a control endpoint, token, or message is never
+accepted as a debug endpoint, and the debug service performs no deployment or status operation.
+The protocol is local-only; remote debugging remains a non-goal (§10). The externally binding
+choices are recorded as D-173–D-179.
 
 ### 13.1 Transport and endpoint
 
@@ -441,7 +451,7 @@ The operation set is closed for `stc-debug/1`. An unknown operation is `STC-E-DE
 | `session.start` | token | `session`, `capabilities`, `generation`, `build_id`, `cycle`, `mode`, optional `warnings` |
 | `session.status` | any | state, session, generation, `build_id`, cycle, stop information, queue/force/breakpoint/watch counts, `pause_remaining_ms` |
 | `session.stop` | any | `ended:true`; the response is sent, then the connection closes |
-| `var.read` | `observe` | typed value plus generation, `build_id`, cycle, `consistent`, `atomic`, `stopped` |
+| `var.read` | `observe` | typed value plus generation, `build_id`, cycle, `consistent`, `atomic`, `stopped`, and an optional `view` (§15.5) |
 | `var.write` | `write` | `status:"queued"`, `queue_id` |
 | `var.force` | `force` | `status:"queued"`, `queue_id` |
 | `var.release` | `force` | `released:true`, `effective:"next-boundary"` |
@@ -456,7 +466,7 @@ The operation set is closed for `stc-debug/1`. An unknown operation is `STC-E-DE
 | `exec.step` | `control` | `status:"stepping"`, `stop_id`, `mode` |
 | `exec.pause` | `control` | `status:"pause-requested"` or `"stopped"` |
 | `stack.list` | `observe` | `frames:[...]`, `truncated` |
-| `frame.read` | `observe` | typed local/parameter value or availability reason |
+| `frame.read` | `observe` | typed local/parameter value or availability reason, plus an optional `view` (§15.5) |
 | `manifest.get` | `observe` | `format`, `digest`, and JSON data or base64 binary data |
 
 Request parameters:
@@ -470,7 +480,8 @@ Request parameters:
   `{"target":<target>,"expected_generation":3,"expected_build_id":"0x...","range":{"start":0,"count":16}}`.
   `expected_*` are optional; when supplied they must match (`STC-E-DEBUG-010` otherwise).
   `range` is valid only for a single-root string, `WSTRING`/`USTRING` unit array, or single-root
-  array.
+  array. A read without `range` carries the whole-value `view`; a sliced read omits `view` so the
+  presentation cannot disagree with the sliced `value`.
 - `var.write`/`var.force`:
   `{"target":<target>,"value":<typed value>,"expected_generation":3,"expected_build_id":"0x...","expected_type":"DINT","expected_layout":"0x..."}`.
   Expected fields are optional and checked before enqueue and again at application.
@@ -734,6 +745,15 @@ instead of being guessed. A target absent from the type/root/aggregate tables re
   value is not presented as one atomic struct. Each leaf carries its own generation; the result
   is `consistent:false` if any leaf was copied from a different cycle than the reported cycle.
   The debugger labels this view manifest-assisted (§6.2); it is not a raw struct dump.
+- Every unsliced read also returns the presentation `view` (§15.5). A live split target marks
+  each node `manifest_assisted:true` and `contiguous:false`; a field with its own manifest root
+  carries that root's `GotId`, key, and root kind, and a class, FB, interface, reference, or
+  pointer node carries opaque identity metadata and hidden `HANDLE`/`OBJREC` roots instead of a
+  raw handle value. A single-root target is one contiguous copy and is marked
+  `contiguous:true, manifest_assisted:false`, so callers can distinguish it from split storage.
+  A stopped-local view comes from one immutable snapshot copy: it is marked
+  `origin:"stop_snapshot"`, `contiguous:true`, and has no live roots. Unavailable leaves stay
+  `available:false` with `STC-W-DEBUG-002`; the view never invents a root, handle, or value.
 - Locals and parameters are read only from the current stopped-frame snapshot. They are never
   read from a running frame. A stale `stop_id` is `STC-E-DEBUG-015`; an unavailable or
   optimized-out local is reported with `available:false` and `STC-W-DEBUG-002`, not
@@ -825,6 +845,39 @@ is never written or forced; only its scalar fields are individually writable if 
 marks them as persistent roots. The artifact JSON projection is integer-only and is never used
 for audit or protocol values; a finite `REAL`/`LREAL` audit value is written as a JSON number
 token and non-finite values as `NaN`, `INF`, or `-INF`.
+
+#### 15.5.1 Manifest-assisted view (D-182)
+
+`var.read` and `frame.read` add one optional `view` key; this is an additive result extension,
+not a new operation, and every pre-existing key keeps its meaning. The view is omitted when the
+request supplies `range`. It describes the same copy as `value`:
+
+| Key | Meaning |
+| --- | --- |
+| `target` | normalized request target; for `frame.read`, `"<frame>:<name>"` |
+| `resolved_key` | canonical manifest key, or the normalized local path |
+| `generation`, `build_id`, `cycle` | tags of the copy |
+| `origin` | `"live"` (root/aggregate storage) or `"stop_snapshot"` (immutable captured local) |
+| `atomic`, `consistent` | read-level tags, unchanged from the typed result |
+| `manifest_assisted`, `contiguous` | storage labels of the root node |
+| `view` | root node (below) |
+
+A node carries `kind` (`scalar`, `overlap`, `aggregate`, `program`, `array`, `class`,
+`function_block`, `interface`, `reference`, `unavailable`), `type` (canonical type key),
+`layout_hash` (hex, or `null` when the manifest has none), `available`, `manifest_assisted`,
+`contiguous`, `atomic`, `consistent`, optional `root`, optional `identity`, `fields`, and
+`elements`. `root` is `{got_id,key,kind,marker}` for a persistent backing root; `marker` is
+`"HANDLE"` or `"OBJREC"` for a hidden object root and `null` otherwise. `identity` is
+`{kind,identity,present,class,interface,target_type,roots}` with the same opaque identity as the
+typed value and no raw handle or address. Fields are ordered by the manifest/type declaration and
+elements by declared index; a field object adds its `name` and normalized `path`. Composite kinds
+represent their content only through `fields`/`elements`; `scalar`, `overlap`, `reference`, and
+`unavailable` nodes also carry the typed `value`. Split nodes carry `manifest_assisted:true` and
+`contiguous:false`; a single-root or snapshot node is `contiguous:true` with
+`manifest_assisted:false`. Unavailable nodes leave `available:false`, carry the `STC-W-DEBUG-002`
+warning in `value`, and are not assigned roots. The JSON object is key-sorted, and the text
+presentation escapes control characters, so repeated rendering of one view is byte-identical and
+safe for a terminal.
 
 ### 15.6 Boundary application order
 

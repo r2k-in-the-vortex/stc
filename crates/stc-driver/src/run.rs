@@ -13,18 +13,26 @@ use stc_diag::Severity;
 use stc_manifest::Manifest;
 
 use crate::build::RunRequest;
+use crate::cli::DebugOptions;
 use crate::report::{Log, Reporter};
 
 /// Launches a built project executable with the resolved run options.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn launch(
     exe: &Path,
     request: &RunRequest,
+    debug: &DebugOptions,
     manifest: &Manifest,
     root_dir: &Path,
+    out_dir: &Path,
     reporter: &mut Reporter,
     log: Log,
 ) -> u8 {
-    let args = run_arguments(request, manifest, root_dir, log.verbose());
+    let mut args = run_arguments(request, manifest, root_dir, log.verbose());
+    if debug.server {
+        let (debug_args, _) = crate::debug::server_arguments(debug, manifest, out_dir);
+        args.extend(debug_args);
+    }
     log.info(format!(
         "run {}{}",
         exe.display(),
@@ -108,6 +116,10 @@ pub(crate) fn run_arguments(
     }
     if request.no_retain || !manifest.retain.enabled {
         args.push("--no-retain".to_owned());
+    }
+    if let Some(ns) = request.mock_clock_ns {
+        args.push("--mock-clock".to_owned());
+        args.push(format!("{ns}ns"));
     }
     if verbose {
         args.push("--status".to_owned());

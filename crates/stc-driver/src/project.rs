@@ -30,6 +30,8 @@ pub(crate) enum Mode {
     Metadata,
     /// Build the launcher, run it, and return its exit code.
     Run,
+    /// Build the launcher and own a local debug session.
+    Debug,
 }
 
 /// Resolves the build mode from CLI flags, then an explicit `[build].debug`,
@@ -65,11 +67,13 @@ struct SourceEntry {
 }
 
 /// Runs a project command.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     mode: Mode,
     manifest: Option<&str>,
     locked: bool,
     request: &Request,
+    debug: &crate::cli::DebugOptions,
     reporter: &mut Reporter,
     log: Log,
 ) -> u8 {
@@ -82,7 +86,12 @@ pub(crate) fn run(
         }
     };
     let root = graph.root_package();
-    let build_mode = select_mode(request, &root.manifest);
+    let mut build_mode = select_mode(request, &root.manifest);
+    if mode == Mode::Debug && request.mode_override.is_none() {
+        // `stc debug` defaults to the debug form regardless of `[build].debug`;
+        // `--release` explicitly selects the monitoring-only release form.
+        build_mode = build::BuildMode::Debug;
+    }
     reporter.merge_manifest_lints(&root.manifest.lints);
     reporter.diagnostics(&graph.warnings, &graph.sources);
     log.info(format!("manifest {manifest_input}"));
@@ -211,7 +220,7 @@ pub(crate) fn run(
     }
 
     let mut request = request.clone();
-    if matches!(mode, Mode::Build | Mode::Run | Mode::Metadata) {
+    if matches!(mode, Mode::Build | Mode::Run | Mode::Debug | Mode::Metadata) {
         // Builds merge the committed rename history (oldest first) with CLI
         // `--rename` entries; chains compose and conflicts are errors.
         match crate::rename::merged_project_renames(&root.root_dir, &request.renames) {
@@ -232,8 +241,9 @@ pub(crate) fn run(
             .map(Emit::from)
             .collect();
     }
-    if mode == Mode::Run {
-        // `stc run` always builds the launcher pair and its metadata.
+    if mode == Mode::Run || mode == Mode::Debug {
+        // `stc run` and `stc debug` always build the launcher pair and its
+        // metadata.
         request.emit = [Emit::Exe, Emit::Module, Emit::Metadata]
             .into_iter()
             .collect();
@@ -328,7 +338,7 @@ pub(crate) fn run(
     };
 
     match mode {
-        Mode::Build | Mode::Run => {
+        Mode::Build | Mode::Run | Mode::Debug => {
             let code = build::run_project(
                 &request,
                 &analysis.hir,
@@ -352,17 +362,31 @@ pub(crate) fn run(
             if reporter.denied() {
                 return 1;
             }
-            if mode == Mode::Run {
+            if mode == Mode::Run || mode == Mode::Debug {
                 let out_dir = request.out_dir.clone().map_or_else(
                     || PathBuf::from(build::default_out_dir(build_mode)),
                     PathBuf::from,
                 );
                 let launcher = build::launcher_path(&out_dir, &name);
+                if mode == Mode::Debug {
+                    return crate::debug::launch(
+                        &launcher,
+                        &out_dir,
+                        &request.run,
+                        debug,
+                        &root.manifest,
+                        &root.root_dir,
+                        reporter,
+                        log,
+                    );
+                }
                 return crate::run::launch(
                     &launcher,
                     &request.run,
+                    debug,
                     &root.manifest,
                     &root.root_dir,
+                    &out_dir,
                     reporter,
                     log,
                 );

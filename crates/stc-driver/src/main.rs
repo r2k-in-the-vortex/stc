@@ -13,6 +13,7 @@ mod clean;
 mod cli;
 mod compat;
 mod compliance;
+mod debug;
 mod fmt;
 mod frames;
 mod metadata;
@@ -107,6 +108,7 @@ fn run(args: &[String]) -> ExitCode {
                     invocation.manifest.as_deref(),
                     invocation.locked,
                     &invocation.build,
+                    &invocation.debug,
                     &mut reporter,
                     log,
                 )
@@ -119,6 +121,7 @@ fn run(args: &[String]) -> ExitCode {
             invocation.manifest.as_deref(),
             invocation.locked,
             &invocation.build,
+            &invocation.debug,
             &mut reporter,
             log,
         ),
@@ -135,6 +138,7 @@ fn run(args: &[String]) -> ExitCode {
             invocation.manifest.as_deref(),
             invocation.locked,
             &invocation.build,
+            &invocation.debug,
             invocation.online.store.as_deref(),
             invocation.watch_timeout_ns,
             &mut reporter,
@@ -145,6 +149,19 @@ fn run(args: &[String]) -> ExitCode {
             invocation.manifest.as_deref(),
             invocation.locked,
             &invocation.build,
+            &invocation.debug,
+            &mut reporter,
+            log,
+        ),
+        Command::Debug if invocation.debug.attach.is_some() => {
+            crate::debug::attach(&invocation.debug, &mut reporter, log)
+        }
+        Command::Debug => project::run(
+            Mode::Debug,
+            invocation.manifest.as_deref(),
+            invocation.locked,
+            &invocation.build,
+            &invocation.debug,
             &mut reporter,
             log,
         ),

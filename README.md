@@ -8,8 +8,9 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M6 (project system, CLI, and verification hardening) is complete (2026-10-27); M6.5
-(debug/monitoring) is next.** The repository contains the source-map and diagnostic crates, the
+**M6.5 (debug and monitoring) is complete (2026-10-28); M7 (release candidate) is next.** M6
+(project system, CLI, and verification hardening) is complete (2026-10-27). The repository
+contains the source-map and diagnostic crates, the
 full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST views, strict pragma
 JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery, unsupported-construct
 diagnostics), `stc-hir` (arenas, stable IDs, interner, canonical types, resolved bodies,
@@ -64,7 +65,7 @@ online-change job on Windows and Ubuntu. Phase 10 closes the milestone's documen
 specification set, plan, decision log, and M5 handover describe the implemented host/module
 model, [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md) §12 records
 the boundary M6.5 builds on, and the M5 handover addendum records the contracts M5 must extend.
-The foundation milestone is M4.5 before M5; full debug/monitoring is M6.5.
+The foundation milestone is M4.5 before M5; M6.5 implements full typed debug and monitoring.
 
 M5 phases 1–7 extend that model with structs, enums, subranges, static arrays,
 `STRING`/`WSTRING`/`USTRING`, references and output/in-out parameters, transient pointers
@@ -113,7 +114,16 @@ dependency graph and `stc.lock`, package-aware analysis, the project CLI, cooper
 scheduling and `stc run`, file-backed retained state, I/O device metadata with the
 `null`/`memory`/`file` backends, the test runner, the formatter, the online-change workflow
 (`rename`, `online download/diff`, `run --watch`), Lean vectors, the conformance/UI/traceability
-corpus, `fuzz_manifest`, and the CI matrix are implemented. Full debug/monitoring remains M6.5.
+corpus, `fuzz_manifest`, and the CI matrix are implemented. M6.5 is complete (2026-10-28,
+phases 0–10): debug is the default build mode with DWARF/CodeView, a checkpoint table, forced
+frame pointers, and a stopped-frame sidecar; `--release` is the distinct optimised, stripped,
+hook-free mode; the host provides typed read/write/force/watch, breakpoints, stop-the-world
+stepping, call stacks, the manifest-assisted split-object view, and a local authenticated
+`stc-debug/1` session protocol with audit, a five-minute default stop/idle bound, and swap
+teardown; and the `stc debug` CLI and `stc run --debug-server` expose it. Debug hooks add one
+host service (ID 13 at host ABI 2.3) and are absent from release and test artifacts.
+Debug-disabled overhead is measured on Windows and Linux and recorded in
+[M6.5-Plan.md](M6.5-Plan.md); it is not a CI gate.
 The persistent host, loadable modules, GOT roots, manifests, swap protocol,
 and process-image remap are implemented and shared by the M5 lowering. Parser and semantic snapshots, IR snapshots, clang verification, execution
 and C-harness tests, a committed
@@ -121,6 +131,17 @@ corpus, traceability tables, deterministic property tests, a 20k-term deep-chain
 `fuzz_lexer`, `fuzz_parser`, `fuzz_analyzer`, `fuzz_codegen`, `fuzz_got_manifest`, and
 `fuzz_module_descriptor` targets are in place. The
 specification continues to be written before implementation, as required below.
+
+**Known M6.5 limitations.** Windows debug DLLs carry no CodeView and produce no PDB because the
+current `lld-link` invocation omits `/DEBUG` (the CodeView assertion runs against the object);
+stack unwinding and typed locals are limited to the stopped-frame table on x86-64, with
+optimized-out values reported honestly and AArch64 frame rules deferred; a release embedding
+static archive is copied from the runtime toolchain and not stripped by the driver; format-1
+manifests require the documented cold download rather than migration; debug is local-only with
+no remote/network or raw-memory API, one session per host, bounded watches/events, and a
+five-minute default stop/idle bound. `stc` is not a safety PLC: debug may hold outputs
+indefinitely, and no fail-safe, output timeout, or interlock is provided. The full list with
+file references is in [handover_to_M7.md](handover_to_M7.md).
 
 | Document | Purpose |
 | --- | --- |
@@ -167,7 +188,7 @@ test runner, and inspectable artifacts.
 | Online change | Whole-module load/prepare, O(1) cycle-boundary activation, one-cycle rollback, off-thread unload; exact-baseline online change or cold download |
 | Persistent memory | Host-owned GOT roots and stable storage; per-field roots, handle-based objects, runtime descriptors |
 | Identity baseline | Persistent GOT manifest (canonical JSON + compact binary) paired with every module; tracked renames/moves; runtime export/download |
-| Debug/monitoring | Full typed debug in v1 (M6.5); debug info by default; `--release` optional; every swap ends the debug session |
+| Debug/monitoring | Full typed debug implemented (M6.5): typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView by default; `--release` stripped/hook-free; local authenticated `stc-debug/1`; every swap ends the debug session |
 | Safety | Not a safety PLC and not responsible for safety in any way; debug may hold outputs indefinitely |
 | UTF-8 strings | Project extension: `USTRING`, `UCHAR`, `U#'...'`, `USTRING#'...'`, `${HEX}` escapes; `USTRING[n]` stores `n` characters as 32-bit scalars (4 bytes each, static) |
 | Strings | 2013 `STRING`/`WSTRING`/`CHAR`/`WCHAR` plus the UTF-8 extension |
@@ -265,7 +286,7 @@ stc online download     export the active manifest and layout summary
 stc online diff         compare a candidate manifest with the active baseline
 stc rename              source-aware tracked rename
 stc run --watch         watch, rebuild, and deploy online
-stc debug               start a local debug/monitoring session (M6.5)
+stc debug               start a local debug/monitoring session
 ```
 
 M6 implements the project workflow: `stc new/check/build/run/test/fmt/clean/metadata/compliance`,
@@ -277,9 +298,10 @@ manifest, a committed `stc.lock`, `--locked`, human/short/JSON diagnostics, `--c
 checks, with `--name`, `--emit`, `--out-dir`, `--target`, `--clang`, `--runtime`, `--relaxed`,
 `--message-format`, `-v`, `--got-manifest`, `--cold`, `--rename`, and
 `--allow-untracked-removal`. M4.5 added `--emit=module`, the thin `exe` launcher, and the
-embedding `lib` host; M6 adds `lib-type = "shared"`. The `--debug` and `--release` options and
-debug-info emission are M6.5; M6 honors `[build].opt-level` (default `0`) and contains no
-DWARF/CodeView or checkpoint hooks yet.
+embedding `lib` host; M6 adds `lib-type = "shared"`. M6.5 adds `stc debug`, `--debug` and
+`--release`, debug information, checkpoint hooks, and `stc run --debug-server`; debug is the
+default form, and `--release` is the optimised, stripped, hook-free form with its own build ID
+and manifest (D-178).
 
 Cargo-like diagnostics (`file:line:col: error[STC-E-...]`), source snippets, notes, suggestions,
 and JSON output are implemented. Details:
@@ -387,8 +409,9 @@ stc/
   M4.5-Plan.md               online-change foundation plan (complete)
   M5-Plan.md                 structs/OOP/standard-library plan (complete)
   M6-Plan.md                 project system, CLI, and verification plan (complete)
-  M6.5-Plan.md               debug/monitoring plan
+  M6.5-Plan.md               debug/monitoring plan (complete)
   handover_to_M5.md          M4.5 handover and M5 opening contract
+  handover_to_M7.md          M6.5 handover and M7 opening contract
   update_plan_got.md         resolved online-change planning record
   tools/ci/check_docs.py     specification, link, and profile checks
   tools/ci/check_local.py    local CI parity checks (docs, lint, tests, fuzz)
@@ -441,17 +464,20 @@ on pull requests.
 - `docs` runs from M0: required-document checks, relative-link validation, profile consistency,
   reference-PDF exclusion (`tools/ci/check_docs.py`), and Markdown lint.
 - `fmt`, `clippy`, `test`, `coverage`, `online`, `ui`, `conformance`, `execution`, `projects`,
-  `traceability`, `lean`, `fuzz-smoke`, and `cross-target` are active for the present tree.
-  `test`, `online`, `ui`, `conformance`, `execution`, and `projects` run on both Windows Server
-  2025 x64 and Ubuntu 24.04 x64; the host-independent jobs (`fmt`, `clippy`, `coverage`,
-  `traceability`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The `test` and
-  `online` jobs set `STC_REQUIRE_CLANG=1`; the execution tests build `stc-runtime` and link C
-  harnesses with the same toolchain discovery as `stc build`. The `online` job runs the GOT
-  identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
+  `debug`, `traceability`, `lean`, `fuzz-smoke`, and `cross-target` are active for the present
+  tree. `test`, `online`, `ui`, `conformance`, `execution`, `projects`, and `debug` run on both
+  Windows Server 2025 x64 and Ubuntu 24.04 x64; the host-independent jobs (`fmt`, `clippy`,
+  `coverage`, `traceability`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The
+  `test` and `online` jobs set `STC_REQUIRE_CLANG=1`; the execution tests build `stc-runtime`
+  and link C harnesses with the same toolchain discovery as `stc build`. The `online` job runs
+  the GOT identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
   launcher/embedding artifact suites. The `projects` job runs the end-to-end
   `new/check/build/run/test/fmt/clean` workflow and the rename/download/diff/watch online
-  workflow. The `traceability` job runs `cargo xtask traceability --check`. `fuzz-smoke` caps
-  each input at one MiB.
+  workflow. The `debug` job runs `cargo xtask test --suite debug` with `STC_REQUIRE_CLANG=1`,
+  preflights `llvm-readobj`/`readelf` so object-content assertions cannot silently skip, and
+  records the informational overhead measurement only on manual dispatch; the opt-in
+  `Debug overhead` workflow runs the same measurement on both hosts. The `traceability` job
+  runs `cargo xtask traceability --check`. `fuzz-smoke` caps each input at one MiB.
 - `coverage` runs the workspace tests under `cargo llvm-cov` with clang required, writes line,
   region, and function totals plus the lowest-coverage files to the job summary, uploads
   `lcov.info`, `summary.json`, and the HTML report as artifacts, and on `main` publishes
@@ -519,6 +545,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-127 | M4.5 phase 10 closes the milestone with a documentation and handover pass: the README, project plan, conformance profile, architecture/runtime/state/I/O/CLI/testing/debug specifications, plan, and decision log describe the implemented host/module model; `handover_to_M5.md` records the implemented contracts, M5 extension points, and open M5 decisions; and `Debug-and-Monitoring.md` §12 records the M4.5 boundary for M6.5. The debug-build entry flag is clarified: M4.5 marks its default non-release artifact form but emits no debug information or checkpoint hooks, and the M6.5 required-feature bit stays clear. This keeps the documentation truthful at the milestone boundary and prevents M5/M6.5 from reintroducing the retired direct-reference model or assuming debug hooks that do not exist yet. |
 | D-153–D-164 | M6 phase 0 fixes the project/package model (kebab-case `stc.toml`, package identity, lockfile), the cooperative host scheduler, the local deploy/status control channel, tracked-rename history, per-test artifacts and the host ABI 2.2 test clock, the debug/release boundary, the formatter style, the file I/O lifecycle, the Lean/vector contract, traceability annotations, runtime path resolution, and the applied diagnostic/report-shape contracts. Details in `Specification/Decisions.md` and `M6-Plan.md` §13–§14. |
 | D-165–D-172 | M6 phases 4–11 record the implementation details: run-loop exit codes and failed-scan scheduling, the `STCRET01` state file and I/O backends, the test-host result protocol and lexable synthetic names, formatter encoding preservation, the online download/diff/rename/watch workflow, the Lean vector format and the three codegen defects it exposed, the conformance/UI/traceability/CI pass, and the completion documentation pass. |
+| D-173–D-183 | M6.5 debug and monitoring: the local `stc-debug/1` protocol and four scopes, one session per host with the stop/idle bound, typed read/write/force/watch and checkpoint-hook rules, debug-by-default with a stripped hook-free `--release`, the format-2 manifest extension, the stopped-frame sidecar, the split-object `view` key, and the phase-10 documentation/M7 handover pass. Details in `Specification/Decisions.md` and `M6.5-Plan.md`. |
 
 ## Question log
 
@@ -565,13 +592,16 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 (A-005 through A-030). The detailed online-change disposition is in `update_plan_got.md`
 §13.0. New questions will be added here one at a time.
 
-## Building and running (M6)
+## Building and running (M6.5)
 
 ```sh
 cargo run -p stc-driver -- new examples/motor
 cargo run -p stc-driver -- check  --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- build  --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- build  --release --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- run    --manifest-path examples/motor/stc.toml --cycles 10
+cargo run -p stc-driver -- run    --debug-server --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- debug  --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- test   --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- fmt    --manifest-path examples/motor/stc.toml --check
 cargo run -p stc-driver -- metadata --manifest-path examples/motor/stc.toml --message-format json
@@ -583,17 +613,24 @@ cargo run -p stc-driver -- run --watch --manifest-path examples/motor/stc.toml
 # Manifest-free bridge and the other artifact forms
 cargo run -p stc-driver -- parse path/to/file.st
 cargo run -p stc-driver -- check path/to/file.st path/to/other.st
-cargo run -p stc-driver -- build examples/hello.st --emit=ir
-cargo run -p stc-driver -- build examples/hello.st --emit=module,metadata
-cargo run -p stc-driver -- build examples/hello.st --emit=module --got-manifest active.stc-got.json
-cargo run -p stc-driver -- build examples/hello.st --emit=exe,lib,metadata --runtime target/debug/stc_runtime.lib
+cargo run -p stc-driver -- build examples/hello/src/main.st --emit=ir
+cargo run -p stc-driver -- build examples/hello/src/main.st --emit=module,metadata
+cargo run -p stc-driver -- build examples/hello/src/main.st --emit=module --got-manifest active.stc-got.json
+cargo run -p stc-driver -- build examples/hello/src/main.st --emit=exe,lib,metadata --runtime target/debug/stc_runtime.lib
 ```
 
 `stc new` writes a project that builds, runs, tests, and formats with the commands above; the
 generated `stc.lock` is committed, and `--locked` makes a stale graph an error. `stc run` builds
 `exe,module,metadata` under `target/stc/debug` by default, and `stc test` writes one cold test
-artifact per test under `target/stc/test`. `stc run --watch` needs a local control endpoint and
-is intended for interactive deployment.
+artifact per test under `target/stc/test`. `stc build --release` selects the optimised,
+stripped, hook-free form and `target/stc/release`; `stc debug` builds the debug form and launches
+the authenticated local session. `stc run --watch` needs a local control endpoint and is intended
+for interactive deployment.
+
+[`examples/hello`](examples/hello/README.md) is the small starter project: it demonstrates
+constants, scalar variables, control flow, a function, a function block, a standard timer, and a
+task configuration, with an isolated test suite and a committed `stc.lock`. Its README lists the
+workflow commands, and the `projects` CI suite checks, builds, tests, and format-checks it.
 
 Before pushing, run the same checks as the CI matrix (formatting, clippy, the
 workspace tests with clang required, specification/link checks, Markdown lint, and a

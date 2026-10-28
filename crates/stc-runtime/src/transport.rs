@@ -485,6 +485,33 @@ impl ClientConnection {
             Self::Tcp(stream) => stream.set_write_timeout(timeout),
         }
     }
+
+    /// Reports whether the connection already has data or has reached EOF.
+    ///
+    /// This never blocks, so a client can poll for spontaneous events between
+    /// requests even where the platform has no per-read timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the platform probe fails.
+    pub fn poll_readable(&mut self) -> io::Result<bool> {
+        match self {
+            Self::Platform(connection) => connection.poll_readable(),
+            Self::Tcp(stream) => poll_tcp(stream),
+        }
+    }
+}
+
+fn poll_tcp(stream: &std::net::TcpStream) -> io::Result<bool> {
+    stream.set_nonblocking(true)?;
+    let mut byte = [0_u8; 1];
+    let result = match stream.peek(&mut byte) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
+        Err(error) => Err(error),
+    };
+    stream.set_nonblocking(false)?;
+    result
 }
 
 impl Read for ClientConnection {
@@ -651,6 +678,46 @@ mod platform {
         stream: UnixStream,
     }
 
+    /// Reports whether the socket has data or has reached EOF.
+    ///
+    /// `UnixStream::peek` is still unstable, so use a zero-timeout `poll(2)` on
+    /// the raw descriptor. The probe never consumes data.
+    fn socket_readable(stream: &UnixStream) -> io::Result<bool> {
+        use std::os::unix::io::AsRawFd;
+
+        #[repr(C)]
+        struct PollFd {
+            fd: std::ffi::c_int,
+            events: std::ffi::c_short,
+            revents: std::ffi::c_short,
+        }
+        // `nfds_t` is `unsigned long` on Linux and `unsigned int` on macOS/BSD.
+        #[cfg(target_os = "macos")]
+        type PollNfds = std::ffi::c_uint;
+        #[cfg(not(target_os = "macos"))]
+        type PollNfds = std::ffi::c_ulong;
+        unsafe extern "C" {
+            fn poll(fds: *mut PollFd, nfds: PollNfds, timeout: std::ffi::c_int) -> std::ffi::c_int;
+        }
+        const POLLIN: std::ffi::c_short = 0x001;
+        const POLLERR: std::ffi::c_short = 0x008;
+        const POLLHUP: std::ffi::c_short = 0x010;
+        const POLLNVAL: std::ffi::c_short = 0x020;
+        let mut descriptor = PollFd {
+            fd: stream.as_raw_fd(),
+            events: POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` is one initialized `pollfd`-shaped record and
+        // `nfds` is 1, so the call reads and writes only that record. The
+        // timeout is zero, so it does not block.
+        let ready = unsafe { poll(&mut descriptor, 1, 0) };
+        if ready < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(ready > 0 && descriptor.revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL) != 0)
+    }
+
     impl ClientConnection {
         pub(super) fn connect(endpoint: &str) -> io::Result<Self> {
             let stream = UnixStream::connect(endpoint)?;
@@ -665,6 +732,10 @@ mod platform {
 
         pub(super) fn set_write_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
             self.stream.set_write_timeout(timeout)
+        }
+
+        pub(super) fn poll_readable(&mut self) -> io::Result<bool> {
+            socket_readable(&self.stream)
         }
     }
 
@@ -754,7 +825,7 @@ mod platform {
     use std::fs::File;
     use std::io::{self, Read, Write};
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::{FromRawHandle, RawHandle};
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1138,6 +1209,26 @@ mod platform {
 
         pub(super) fn set_write_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
             Ok(())
+        }
+
+        pub(super) fn poll_readable(&mut self) -> io::Result<bool> {
+            let mut available = 0_u32;
+            // SAFETY: the file handle is live and the out pointer is valid.
+            let ok = unsafe {
+                PeekNamedPipe(
+                    self.file.as_raw_handle().cast::<c_void>(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                // A broken pipe is treated as readable so the caller sees EOF.
+                return Ok(true);
+            }
+            Ok(available > 0)
         }
     }
 

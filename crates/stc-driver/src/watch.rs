@@ -19,6 +19,7 @@ use stc_runtime::control::ControlClient;
 use stc_runtime::store::ManifestStore;
 
 use crate::build::Request;
+use crate::cli::DebugOptions;
 use crate::compat::CompatibilityReport;
 use crate::report::{Log, Reporter};
 use crate::run as run_util;
@@ -29,6 +30,7 @@ pub(crate) fn run(
     manifest: Option<&str>,
     locked: bool,
     request: &Request,
+    debug: &DebugOptions,
     store: Option<&str>,
     timeout_ns: Option<u64>,
     reporter: &mut Reporter,
@@ -101,6 +103,10 @@ pub(crate) fn run(
         .arg(&nonce)
         .arg("--manifest-dir")
         .arg(&store_dir);
+    if debug.server {
+        let (debug_args, _) = crate::debug::server_arguments(debug, &root.manifest, &out_dir);
+        command.args(debug_args);
+    }
     let mut child = match command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
