@@ -1084,12 +1084,12 @@ fn strip_archive(clang: &str, archive: &Path, log: Log) -> Result<(), String> {
         extract.arg("x").arg(archive).current_dir(&directory);
         run_tool(&mut extract, log)
             .map_err(|error| format!("cannot extract `{}`: {error}", archive.display()))?;
-        let mut objects: Vec<PathBuf> = std::fs::read_dir(&directory)
+        let mut candidates: Vec<PathBuf> = std::fs::read_dir(&directory)
             .map_err(|error| format!("cannot read `{}`: {error}", directory.display()))?
             .map(|entry| entry.map(|entry| entry.path()))
             .collect::<Result<_, _>>()
             .map_err(|error| error.to_string())?;
-        objects.retain(|member| {
+        candidates.retain(|member| {
             member.is_file()
                 && member
                     .extension()
@@ -1097,21 +1097,19 @@ fn strip_archive(clang: &str, archive: &Path, log: Log) -> Result<(), String> {
                     .is_some_and(|extension| {
                         extension.eq_ignore_ascii_case("o") || extension.eq_ignore_ascii_case("obj")
                     })
-                // Rust staticlibs include LLVM bitcode members on Linux.
-                // They have no object sections and GNU ar cannot read them;
-                // leave those members in the archive untouched.
-                && !is_bitcode(member)
+                // Strip only members we can positively identify as native
+                // objects. Rust staticlibs also carry LLVM bitcode, import
+                // libraries, and other members that some `ar` cannot rewrite.
+                && is_native_object(member)
         });
-        objects.sort();
-        if objects.is_empty() {
+        candidates.sort();
+        if candidates.is_empty() {
             return Err(format!(
-                "archive `{}` contains no object members",
+                "archive `{}` contains no native object members",
                 archive.display()
             ));
         }
-        // Rust staticlibs also embed import-library members, which are not
-        // object files and carry no debug information; they stay untouched.
-        for member in &objects {
+        for member in &candidates {
             let mut command = Command::new(&objcopy);
             command.arg("--strip-debug").arg(member);
             run_tool(&mut command, log).map_err(|error| {
@@ -1120,6 +1118,18 @@ fn strip_archive(clang: &str, archive: &Path, log: Log) -> Result<(), String> {
                     member.display()
                 )
             })?;
+        }
+        // A member whose format did not survive stripping is left in the
+        // original archive untouched rather than handed to `ar`.
+        let objects: Vec<PathBuf> = candidates
+            .into_iter()
+            .filter(|member| is_native_object(member))
+            .collect();
+        if objects.is_empty() {
+            return Err(format!(
+                "archive `{}` lost every native object member during stripping",
+                archive.display()
+            ));
         }
         // A Rust staticlib has hundreds of members; on Windows pass them
         // through a response file so the command line stays below the limit.
@@ -1156,8 +1166,40 @@ fn strip_archive(clang: &str, archive: &Path, log: Log) -> Result<(), String> {
         // `r` replaces the named object members in place, preserving every
         // other member and its index; `D` zeroes the new members' timestamps.
         replace.current_dir(&directory);
-        run_tool(&mut replace, log)
-            .map_err(|error| format!("cannot update `{}`: {error}", archive.display()))?;
+        if let Err(error) = run_tool(&mut replace, log) {
+            // Include the format of any member named in the tool error so a
+            // platform-specific archive failure is diagnosable from the log.
+            let mut message = format!("cannot update `{}`: {error}", archive.display());
+            for member in &objects {
+                let Some(name) = member.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if !error.contains(name) {
+                    continue;
+                }
+                match std::fs::read(member) {
+                    Ok(bytes) => {
+                        let magic = bytes
+                            .get(..8)
+                            .map(|magic| {
+                                magic
+                                    .iter()
+                                    .map(|byte| format!("{byte:02x}"))
+                                    .collect::<String>()
+                            })
+                            .unwrap_or_default();
+                        message.push_str(&format!(
+                            "\n  member `{name}`: {} bytes, magic {magic}",
+                            bytes.len()
+                        ));
+                    }
+                    Err(read) => {
+                        message.push_str(&format!("\n  member `{name}`: {read}"));
+                    }
+                }
+            }
+            return Err(message);
+        }
         log.detail(format!("stripped archive {}", archive.display()));
         Ok(())
     })();
@@ -1199,8 +1241,10 @@ fn is_archive(path: &Path) -> bool {
     file.read_exact(&mut magic).is_ok() && &magic == b"!<arch>\n"
 }
 
-/// Returns whether a file is raw or wrapped LLVM bitcode.
-fn is_bitcode(path: &Path) -> bool {
+/// Returns whether a file starts with a native object format header
+/// (ELF, COFF, or Mach-O). LLVM bitcode, import libraries, and other archive
+/// members are not rewritten.
+fn is_native_object(path: &Path) -> bool {
     use std::io::Read;
 
     let Ok(mut file) = std::fs::File::open(path) else {
@@ -1210,7 +1254,36 @@ fn is_bitcode(path: &Path) -> bool {
     if file.read_exact(&mut magic).is_err() {
         return false;
     }
-    magic == *b"BC\xc0\xde" || magic == [0xde, 0xc0, 0x17, 0x0b]
+    if magic == *b"\x7fELF" {
+        return true;
+    }
+    if matches!(
+        magic,
+        [0xcf, 0xfa, 0xed, 0xfe]
+            | [0xfe, 0xed, 0xfa, 0xcf]
+            | [0xce, 0xfa, 0xed, 0xfe]
+            | [0xca, 0xfe, 0xba, 0xbe]
+            | [0xbe, 0xba, 0xfe, 0xca]
+    ) {
+        return true;
+    }
+    let machine = u16::from_le_bytes([magic[0], magic[1]]);
+    matches!(
+        machine,
+        0x014c
+            | 0x0162
+            | 0x0166
+            | 0x0168
+            | 0x01c0
+            | 0x01c2
+            | 0x01c4
+            | 0x01f0
+            | 0x01f1
+            | 0x0200
+            | 0x8664
+            | 0xaa64
+            | 0xa641
+    )
 }
 
 fn find_objcopy(clang: &str) -> Result<String, String> {

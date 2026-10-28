@@ -325,7 +325,7 @@ fn strip_runtime_archive(root: &Path, lib_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(&directory)
         .map_err(|error| format!("cannot create `{}`: {error}", directory.display()))?;
     run_checked(&ar, &["x", &archive.to_string_lossy()], &directory)?;
-    let mut objects = Vec::new();
+    let mut candidates = Vec::new();
     let mut entries: Vec<_> = fs::read_dir(&directory)
         .map_err(|error| format!("cannot read `{}`: {error}", directory.display()))?
         .collect::<Result<_, _>>()
@@ -342,10 +342,9 @@ fn strip_runtime_archive(root: &Path, lib_dir: &Path) -> Result<(), String> {
             .is_some_and(|extension| {
                 extension.eq_ignore_ascii_case("o") || extension.eq_ignore_ascii_case("obj")
             });
-        if !is_object || is_bitcode(&path) {
-            // Import-library members (Windows API-set DLLs) and Linux LLVM
-            // bitcode members are not native objects, carry no object debug
-            // sections, and cannot be rewritten by every `ar`; leave them.
+        if !is_object || !is_native_object(&path) {
+            // Import-library members, LLVM bitcode, and other non-object
+            // members carry no native sections and are not rewritten.
             continue;
         }
         run_checked(
@@ -353,16 +352,20 @@ fn strip_runtime_archive(root: &Path, lib_dir: &Path) -> Result<(), String> {
             &["--strip-debug", &path.to_string_lossy()],
             &directory,
         )?;
-        objects.push(
-            path.file_name()
-                .ok_or_else(|| format!("archive member `{}` has no name", path.display()))?
-                .to_string_lossy()
-                .into_owned(),
-        );
+        candidates.push(path);
     }
+    let objects: Vec<String> = candidates
+        .into_iter()
+        .filter(|path| is_native_object(path))
+        .map(|path| {
+            path.file_name()
+                .ok_or_else(|| format!("archive member `{}` has no name", path.display()))
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .collect::<Result<_, _>>()?;
     if objects.is_empty() {
         return Err(format!(
-            "runtime archive `{}` has no objects",
+            "runtime archive `{}` has no native objects",
             archive.display()
         ));
     }
@@ -557,7 +560,7 @@ fn verify_package(
     }
     for object in &objects {
         let path = check_dir.join(object);
-        if is_bitcode(&path) {
+        if !is_native_object(&path) {
             continue;
         }
         check_no_debug_sections(&path)?;
@@ -584,9 +587,9 @@ fn find_tool(candidates: &[&str]) -> Result<String, String> {
     ))
 }
 
-/// Returns whether a file is raw or wrapped LLVM bitcode. Rust staticlibs
-/// include bitcode members on Linux; they have no sections to inspect.
-fn is_bitcode(path: &Path) -> bool {
+/// Returns whether a file starts with a native object header (ELF, COFF, or
+/// Mach-O). Other archive members are not rewritten or section-inspected.
+fn is_native_object(path: &Path) -> bool {
     let Ok(bytes) = fs::read(path) else {
         return false;
     };
@@ -596,7 +599,36 @@ fn is_bitcode(path: &Path) -> bool {
     else {
         return false;
     };
-    magic == *b"BC\xc0\xde" || magic == [0xde, 0xc0, 0x17, 0x0b]
+    if magic == *b"\x7fELF" {
+        return true;
+    }
+    if matches!(
+        magic,
+        [0xcf, 0xfa, 0xed, 0xfe]
+            | [0xfe, 0xed, 0xfa, 0xcf]
+            | [0xce, 0xfa, 0xed, 0xfe]
+            | [0xca, 0xfe, 0xba, 0xbe]
+            | [0xbe, 0xba, 0xfe, 0xca]
+    ) {
+        return true;
+    }
+    let machine = u16::from_le_bytes([magic[0], magic[1]]);
+    matches!(
+        machine,
+        0x014c
+            | 0x0162
+            | 0x0166
+            | 0x0168
+            | 0x01c0
+            | 0x01c2
+            | 0x01c4
+            | 0x01f0
+            | 0x01f1
+            | 0x0200
+            | 0x8664
+            | 0xaa64
+            | 0xa641
+    )
 }
 
 fn check_no_debug_sections(file: &Path) -> Result<(), String> {
