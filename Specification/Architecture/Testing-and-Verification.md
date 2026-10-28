@@ -540,7 +540,8 @@ described in §4.2; it never gates on timing.
 - Primary: Windows x64, `x86_64-pc-windows-msvc`; the development host is Windows 11 and CI uses
   GitHub's `windows-2025` runner. Pinned clang/LLVM 23.1.4.
 - Secondary: Ubuntu 24.04 (`ubuntu-24.04`), `x86_64-unknown-linux-gnu` — workspace tests,
-  diagnostic snapshots, conformance corpus, execution tests, project workflow, and end-to-end CLI.
+  diagnostic snapshots, conformance corpus, execution tests, project workflow, end-to-end CLI,
+  and the debug suite.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`); `-latest` labels are not used, so
   image migrations do not silently change the matrix.
 - Host portability (after basic development, D-042): native or emulated Linux AArch64
