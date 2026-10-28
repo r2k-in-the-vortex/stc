@@ -1714,6 +1714,17 @@ fn var_read_write_force_release_and_queue_results() {
     assert!(!boolean(&read, "stopped"));
     assert!(!read.render_compact().contains("address"));
 
+    // D-182: every unsliced read carries the additive manifest-assisted view.
+    let view = field(&read, "view");
+    assert_eq!(text(view, "target"), "G_DINT");
+    assert_eq!(text(view, "origin"), "live");
+    assert!(!boolean(view, "manifest_assisted"));
+    assert!(boolean(view, "contiguous"));
+    let node = field(view, "view");
+    assert_eq!(text(node, "kind"), "scalar");
+    assert_eq!(text(field(node, "root"), "key"), "_ROOT::G_DINT");
+    assert_eq!(field(node, "value").as_str(), Some("7"));
+
     let range = call_ok_pumped(
         &mut setup.host,
         &mut client,
@@ -1727,12 +1738,36 @@ fn var_read_write_force_release_and_queue_results() {
         ]),
     )
     .expect("array range");
+    let range_object = range.as_object().expect("range result");
+    assert!(
+        !range_object.contains_key("view"),
+        "a sliced read must omit the whole-value view"
+    );
     let elements = field(field(field(&range, "value"), "value"), "elements")
         .as_array()
         .expect("elements");
     assert_eq!(elements.len(), 2);
     assert_eq!(text(&elements[0], "value"), "2");
     assert_eq!(text(&elements[1], "value"), "3");
+
+    // A split aggregate carries per-field roots in the same additive key.
+    let point = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "var.read",
+        obj([("target", target_path("G_POINT"))]),
+    )
+    .expect("split aggregate read");
+    let view = field(&point, "view");
+    assert!(boolean(view, "manifest_assisted"));
+    assert!(!boolean(view, "contiguous"));
+    let node = field(view, "view");
+    assert_eq!(text(node, "kind"), "aggregate");
+    assert!(boolean(node, "available"));
+    let fields = field(node, "fields").as_array().expect("fields");
+    assert_eq!(text(&fields[0], "name"), "X");
+    assert_eq!(text(field(&fields[0], "root"), "key"), "_ROOT::G_POINT.X");
+    assert_eq!(text(&fields[1], "name"), "Y");
     let range_error = call_ok_pumped(
         &mut setup.host,
         &mut client,

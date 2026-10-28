@@ -153,7 +153,10 @@ or moved to the sidecar.
 The debugger may present an object/aggregate as split fields by combining DWARF/CodeView with the
 manifest's per-field layout records. This view shows the runtime's actual per-field roots and
 handles; it does not claim that the object is contiguous memory. The debugger must label the view
-as manifest-assisted so a user does not mistake it for a raw struct dump.
+as manifest-assisted so a user does not mistake it for a raw struct dump. The host produces this
+view from the same typed read that returns the value (`var.read` and `frame.read`), and both the
+JSON and text presentations are deterministic and contain no address, absolute path, or
+timestamp.
 
 ### 6.3 Active generation and swap
 
@@ -441,7 +444,7 @@ The operation set is closed for `stc-debug/1`. An unknown operation is `STC-E-DE
 | `session.start` | token | `session`, `capabilities`, `generation`, `build_id`, `cycle`, `mode`, optional `warnings` |
 | `session.status` | any | state, session, generation, `build_id`, cycle, stop information, queue/force/breakpoint/watch counts, `pause_remaining_ms` |
 | `session.stop` | any | `ended:true`; the response is sent, then the connection closes |
-| `var.read` | `observe` | typed value plus generation, `build_id`, cycle, `consistent`, `atomic`, `stopped` |
+| `var.read` | `observe` | typed value plus generation, `build_id`, cycle, `consistent`, `atomic`, `stopped`, and an optional `view` (§15.5) |
 | `var.write` | `write` | `status:"queued"`, `queue_id` |
 | `var.force` | `force` | `status:"queued"`, `queue_id` |
 | `var.release` | `force` | `released:true`, `effective:"next-boundary"` |
@@ -456,7 +459,7 @@ The operation set is closed for `stc-debug/1`. An unknown operation is `STC-E-DE
 | `exec.step` | `control` | `status:"stepping"`, `stop_id`, `mode` |
 | `exec.pause` | `control` | `status:"pause-requested"` or `"stopped"` |
 | `stack.list` | `observe` | `frames:[...]`, `truncated` |
-| `frame.read` | `observe` | typed local/parameter value or availability reason |
+| `frame.read` | `observe` | typed local/parameter value or availability reason, plus an optional `view` (§15.5) |
 | `manifest.get` | `observe` | `format`, `digest`, and JSON data or base64 binary data |
 
 Request parameters:
@@ -470,7 +473,8 @@ Request parameters:
   `{"target":<target>,"expected_generation":3,"expected_build_id":"0x...","range":{"start":0,"count":16}}`.
   `expected_*` are optional; when supplied they must match (`STC-E-DEBUG-010` otherwise).
   `range` is valid only for a single-root string, `WSTRING`/`USTRING` unit array, or single-root
-  array.
+  array. A read without `range` carries the whole-value `view`; a sliced read omits `view` so the
+  presentation cannot disagree with the sliced `value`.
 - `var.write`/`var.force`:
   `{"target":<target>,"value":<typed value>,"expected_generation":3,"expected_build_id":"0x...","expected_type":"DINT","expected_layout":"0x..."}`.
   Expected fields are optional and checked before enqueue and again at application.
@@ -734,6 +738,15 @@ instead of being guessed. A target absent from the type/root/aggregate tables re
   value is not presented as one atomic struct. Each leaf carries its own generation; the result
   is `consistent:false` if any leaf was copied from a different cycle than the reported cycle.
   The debugger labels this view manifest-assisted (§6.2); it is not a raw struct dump.
+- Every unsliced read also returns the presentation `view` (§15.5). A live split target marks
+  each node `manifest_assisted:true` and `contiguous:false`; a field with its own manifest root
+  carries that root's `GotId`, key, and root kind, and a class, FB, interface, reference, or
+  pointer node carries opaque identity metadata and hidden `HANDLE`/`OBJREC` roots instead of a
+  raw handle value. A single-root target is one contiguous copy and is marked
+  `contiguous:true, manifest_assisted:false`, so callers can distinguish it from split storage.
+  A stopped-local view comes from one immutable snapshot copy: it is marked
+  `origin:"stop_snapshot"`, `contiguous:true`, and has no live roots. Unavailable leaves stay
+  `available:false` with `STC-W-DEBUG-002`; the view never invents a root, handle, or value.
 - Locals and parameters are read only from the current stopped-frame snapshot. They are never
   read from a running frame. A stale `stop_id` is `STC-E-DEBUG-015`; an unavailable or
   optimized-out local is reported with `available:false` and `STC-W-DEBUG-002`, not
@@ -825,6 +838,39 @@ is never written or forced; only its scalar fields are individually writable if 
 marks them as persistent roots. The artifact JSON projection is integer-only and is never used
 for audit or protocol values; a finite `REAL`/`LREAL` audit value is written as a JSON number
 token and non-finite values as `NaN`, `INF`, or `-INF`.
+
+#### 15.5.1 Manifest-assisted view (D-182)
+
+`var.read` and `frame.read` add one optional `view` key; this is an additive result extension,
+not a new operation, and every pre-existing key keeps its meaning. The view is omitted when the
+request supplies `range`. It describes the same copy as `value`:
+
+| Key | Meaning |
+| --- | --- |
+| `target` | normalized request target; for `frame.read`, `"<frame>:<name>"` |
+| `resolved_key` | canonical manifest key, or the normalized local path |
+| `generation`, `build_id`, `cycle` | tags of the copy |
+| `origin` | `"live"` (root/aggregate storage) or `"stop_snapshot"` (immutable captured local) |
+| `atomic`, `consistent` | read-level tags, unchanged from the typed result |
+| `manifest_assisted`, `contiguous` | storage labels of the root node |
+| `view` | root node (below) |
+
+A node carries `kind` (`scalar`, `overlap`, `aggregate`, `program`, `array`, `class`,
+`function_block`, `interface`, `reference`, `unavailable`), `type` (canonical type key),
+`layout_hash` (hex, or `null` when the manifest has none), `available`, `manifest_assisted`,
+`contiguous`, `atomic`, `consistent`, optional `root`, optional `identity`, `fields`, and
+`elements`. `root` is `{got_id,key,kind,marker}` for a persistent backing root; `marker` is
+`"HANDLE"` or `"OBJREC"` for a hidden object root and `null` otherwise. `identity` is
+`{kind,identity,present,class,interface,target_type,roots}` with the same opaque identity as the
+typed value and no raw handle or address. Fields are ordered by the manifest/type declaration and
+elements by declared index; a field object adds its `name` and normalized `path`. Composite kinds
+represent their content only through `fields`/`elements`; `scalar`, `overlap`, `reference`, and
+`unavailable` nodes also carry the typed `value`. Split nodes carry `manifest_assisted:true` and
+`contiguous:false`; a single-root or snapshot node is `contiguous:true` with
+`manifest_assisted:false`. Unavailable nodes leave `available:false`, carry the `STC-W-DEBUG-002`
+warning in `value`, and are not assigned roots. The JSON object is key-sorted, and the text
+presentation escapes control characters, so repeated rendering of one view is byte-identical and
+safe for a terminal.
 
 ### 15.6 Boundary application order
 

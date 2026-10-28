@@ -27,6 +27,7 @@ use crate::debug::{
     DebugWarning, DebugWriteKind, DebugWriteRequest, MAX_WATCHES, MIN_WATCH_INTERVAL_NS, WatchId,
     WatchInfo, WatchResult, base64_encode, typed_value_from_json, typed_value_json,
 };
+use crate::debug_view::view_json;
 use crate::stop::{
     BreakpointInfo, BreakpointTarget, PauseOutcome, SessionStop, SourcePosition, StepMode,
     StopEvent,
@@ -2502,6 +2503,7 @@ impl Handler {
         data.insert("generation".into(), Json::unsigned(view.generation));
         data.insert("build_id".into(), Json::string(view.build_id.to_hex()));
         data.insert("cycle".into(), Json::unsigned(view.cycle));
+        data.insert("view".into(), view_json(&view.view));
         let warnings = warning.map_or_else(Vec::new, |warning: DebugWarning| {
             vec![warning_json(warning.code, warning.message, Json::Null)]
         });
@@ -3008,7 +3010,7 @@ fn slice_value(
     }
 }
 
-fn read_result(read: &DebugRead, value: DebugValue, stopped: bool) -> Json {
+fn read_result(read: &DebugRead, value: DebugValue, stopped: bool, include_view: bool) -> Json {
     let mut object = BTreeMap::new();
     object.insert("value".into(), {
         let typed = crate::debug::TypedValue {
@@ -3023,6 +3025,9 @@ fn read_result(read: &DebugRead, value: DebugValue, stopped: bool) -> Json {
     object.insert("consistent".into(), Json::Bool(read.consistent));
     object.insert("atomic".into(), Json::Bool(read.atomic));
     object.insert("stopped".into(), Json::Bool(stopped));
+    if include_view && let Some(view) = &read.view {
+        object.insert("view".into(), view_json(view));
+    }
     Json::Object(object)
 }
 
@@ -3034,6 +3039,11 @@ impl Handler {
     ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
         let request = parse_read(params)?;
         let range = parse_range(params)?;
+        let request = if range.is_none() {
+            request.with_view()
+        } else {
+            request
+        };
         let reply = self
             .shared
             .service
@@ -3060,7 +3070,10 @@ impl Handler {
             .session_stop
             .as_ref()
             .is_some_and(|session| session.status().stop.is_some());
-        Ok((read_result(&read, value, stopped), Vec::new()))
+        Ok((
+            read_result(&read, value, stopped, range.is_none()),
+            Vec::new(),
+        ))
     }
 
     fn var_write(

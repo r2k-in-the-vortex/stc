@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); session/protocol, breakpoints, split presentation, and the CLI remain
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); the `stc debug` CLI remains
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -327,7 +327,10 @@ the normative one.
 
 Interactive commands (phase 8) are `continue`, `pause`, `step`, `next`, `finish`, `break`,
 `clear`, `print`, `set`, `force`, `release`, `release-all`, `watch`, `unwatch`, `stack`, `frame`,
-and `quit`. They map to the wire operations and add no protocol semantics.
+and `quit`. They map to the wire operations and add no protocol semantics. `print` and `frame`
+present the optional `view` result from Debug and Monitoring §15.5: the text names the view
+manifest-assisted, shows per-field runtime roots/handles rather than a raw struct dump, and never
+prints an address, absolute path, or timestamp.
 
 **Launch versus attach.** Launch mode owns the target: on `quit` or EOF it stops the session,
 clears forces and breakpoints, shuts the host down, and returns 0 on a clean shutdown, 4 on a

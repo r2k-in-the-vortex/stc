@@ -562,6 +562,14 @@ fn breakpoint_stop_reports_frames_and_typed_locals() {
         assert_eq!(text(value, "type"), "DINT");
         assert_eq!(text(value, "value"), "11");
         assert_eq!(number(&local, "cycle"), 1);
+        let view = field(&local, "view");
+        assert_eq!(text(view, "origin"), "stop_snapshot");
+        assert!(!boolean(view, "manifest_assisted"));
+        assert!(boolean(view, "contiguous"));
+        let node = field(view, "view");
+        assert_eq!(text(node, "kind"), "scalar");
+        assert!(boolean(node, "available"));
+        assert!(field(node, "root").as_object().is_none());
 
         let caller_local = client
             .call_ok(
@@ -587,6 +595,14 @@ fn breakpoint_stop_reports_frames_and_typed_locals() {
         assert!(!boolean(&unavailable, "available"));
         assert_eq!(
             text(field(field(&unavailable, "value"), "value"), "code"),
+            codes::W_DEBUG_UNAVAILABLE
+        );
+        let view = field(&unavailable, "view");
+        let node = field(view, "view");
+        assert_eq!(text(node, "kind"), "unavailable");
+        assert!(!boolean(node, "available"));
+        assert_eq!(
+            text(field(node, "value"), "code"),
             codes::W_DEBUG_UNAVAILABLE
         );
 

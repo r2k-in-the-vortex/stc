@@ -63,6 +63,7 @@ pub mod compare;
 pub mod control;
 pub mod debug;
 pub mod debug_server;
+pub mod debug_view;
 pub mod descriptors;
 mod frames;
 pub mod got;
@@ -105,6 +106,10 @@ pub use debug::{
 pub use debug_server::{
     DEBUG_PROTOCOL, DebugClient, DebugClientError, DebugEndpointFile, DebugServer,
     DebugServerConfig, DebugServerInfo, MAX_MESSAGE_BYTES, MAX_REQUEST_BYTES,
+};
+pub use debug_view::{
+    IdentityKind, SplitView, ViewField, ViewIdentity, ViewKind, ViewNode, ViewOrigin, ViewRoot,
+    escape_text, node_json, render_text, view_json,
 };
 pub use got::Got;
 pub use host::{

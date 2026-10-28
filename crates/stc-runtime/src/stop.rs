@@ -64,6 +64,7 @@ pub(crate) struct DebugTables {
     pub(crate) frames: Option<Arc<FrameTable>>,
     pub(crate) frames_error: Option<String>,
     pub(crate) stepping: bool,
+    pub(crate) manifest: Manifest,
     pointer_width: u8,
 }
 
@@ -86,7 +87,7 @@ impl DebugTables {
         checkpoints: Vec<DebugCheckpointRecord>,
         frames: Option<Arc<FrameTable>>,
         frames_error: Option<String>,
-        _manifest: &Manifest,
+        manifest: &Manifest,
         functions: &BTreeMap<GotId, usize>,
         target: &Target,
     ) -> Self {
@@ -105,6 +106,7 @@ impl DebugTables {
             frames: None,
             frames_error,
             stepping: false,
+            manifest: manifest.clone(),
             pointer_width: target.pointer_width,
         };
         let Some(table) = frames else {
@@ -383,6 +385,7 @@ pub(crate) struct LocalView {
     pub(crate) generation: u64,
     pub(crate) build_id: GotId,
     pub(crate) cycle: u64,
+    pub(crate) view: crate::debug_view::SplitView,
 }
 
 /// A stop snapshot summary for `session.status`.
@@ -832,12 +835,29 @@ impl SessionStop {
                         .unwrap_or_else(|| "the local is unavailable".into()),
                 },
             });
+        let typed = TypedValue {
+            type_key: local.type_key.clone(),
+            value: value.clone(),
+        };
+        let atomic = local.value.is_some()
+            && crate::debug::type_is_single_root(&self.tables.manifest, &local.type_key);
+        let view = crate::debug::snapshot_view(
+            &self.tables.manifest,
+            &typed,
+            format!("{frame}:{name}"),
+            name.to_owned(),
+            self.generation,
+            self.build_id,
+            stop.cycle,
+            atomic,
+        );
         Ok(LocalView {
             type_key: local.type_key.clone(),
             value,
             generation: self.generation,
             build_id: self.build_id,
             cycle: stop.cycle,
+            view,
         })
     }
 
@@ -1652,6 +1672,50 @@ mod tests {
         }
     }
 
+    fn empty_manifest() -> Manifest {
+        Manifest {
+            header: stc_got::Header {
+                profile: "test".into(),
+                compiler_version: "test".into(),
+                target_triple: "x86_64-unknown-linux-gnu".into(),
+                module_name: "stop-test".into(),
+                active_configuration: String::new(),
+                endianness: 0,
+                pointer_width: 8,
+                module_format: 1,
+                host_abi_major: 1,
+                host_abi_minor: 0,
+                generator_flags: 0,
+                required_features: 0,
+                build_id: GotId::ZERO,
+                parent_build_id: None,
+                parent_manifest_digest: None,
+                descriptor_digest: Digest32::ZERO,
+                source_fingerprint: Digest32::ZERO,
+                catalog_digest: Digest32::ZERO,
+                plan_digest: Digest32::ZERO,
+            },
+            roots: Vec::new(),
+            functions: Vec::new(),
+            types: Vec::new(),
+            descriptors: Vec::new(),
+            instances: Vec::new(),
+            tasks: Vec::new(),
+            exports: Vec::new(),
+            slots: Vec::new(),
+            plan: stc_got::Plan {
+                verdict: stc_got::PlanVerdict::OnlineCandidate,
+                parent_build_id: None,
+                parent_manifest_digest: None,
+                actions: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            history: stc_got::History::default(),
+            type_metadata: Vec::new(),
+            aggregates: Vec::new(),
+        }
+    }
+
     fn tables_for(records: Vec<DebugCheckpointRecord>) -> DebugTables {
         let mut checkpoint_ranges: BTreeMap<GotId, (u32, u32)> = BTreeMap::new();
         for record in &records {
@@ -1668,6 +1732,7 @@ mod tests {
             frames: None,
             frames_error: None,
             stepping: false,
+            manifest: empty_manifest(),
             pointer_width: 8,
         }
     }

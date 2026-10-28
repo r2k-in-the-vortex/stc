@@ -48,6 +48,10 @@ use stc_got::model::{
 };
 use stc_got::sha256::domain_hash;
 
+use crate::debug_view::{
+    IdentityKind, SplitView, ViewField, ViewIdentity, ViewKind, ViewNode, ViewOrigin, ViewRoot,
+};
+
 /// Maximum number of active watch targets.
 pub const MAX_WATCHES: usize = 256;
 /// Minimum watch interval in nanoseconds.
@@ -168,6 +172,8 @@ pub struct DebugReadRequest {
     pub expected_layout_hash: Option<GotId>,
     /// Stop snapshot for a local target.
     pub stop_frame: Option<StopFrame>,
+    /// Whether to build the manifest-assisted split-object view.
+    pub include_view: bool,
 }
 
 impl DebugReadRequest {
@@ -181,6 +187,7 @@ impl DebugReadRequest {
             expected_type_key: None,
             expected_layout_hash: None,
             stop_frame: None,
+            include_view: false,
         }
     }
 
@@ -216,6 +223,13 @@ impl DebugReadRequest {
     #[must_use]
     pub fn with_stop_frame(mut self, frame: StopFrame) -> Self {
         self.stop_frame = Some(frame);
+        self
+    }
+
+    /// Requests the manifest-assisted split-object view.
+    #[must_use]
+    pub fn with_view(mut self) -> Self {
+        self.include_view = true;
         self
     }
 }
@@ -357,6 +371,8 @@ pub struct DebugRead {
     pub type_key: String,
     /// Typed value.
     pub value: DebugValue,
+    /// Manifest-assisted split-object view, when requested.
+    pub view: Option<Box<SplitView>>,
 }
 
 /// A readable debug failure.
@@ -2446,6 +2462,7 @@ fn event_bytes(event: &DebugEvent) -> usize {
                         type_key: read.type_key.clone(),
                         value: read.value.clone(),
                     })
+                    + read.view.as_ref().map_or(0, |view| view.estimated_bytes())
             }
             Err(error) => 96 + error.message.len(),
         },
@@ -3909,6 +3926,9 @@ pub(crate) fn read_request(
                 }
                 ResolvedShape::Aggregate(aggregate) => decode_aggregate(source, aggregate)?,
             };
+            let view = request
+                .include_view
+                .then(|| Box::new(build_live_view(source, &resolved, &typed, &request.target)));
             Ok(DebugRead {
                 target: request.target.clone(),
                 resolved_key: resolved.canonical_key,
@@ -3920,6 +3940,7 @@ pub(crate) fn read_request(
                 protected,
                 type_key: typed.type_key,
                 value: typed.value,
+                view,
             })
         }
     }
@@ -4013,6 +4034,18 @@ fn read_local(
             "stopped locals do not carry a layout hash",
         ));
     }
+    let view = request.include_view.then(|| {
+        Box::new(snapshot_view(
+            source.manifest,
+            &local.value,
+            view_target(&request.target),
+            path.to_owned(),
+            frame.generation,
+            frame.build_id,
+            frame.cycle,
+            local.atomic,
+        ))
+    });
     Ok(DebugRead {
         target: request.target.clone(),
         resolved_key: path.to_owned(),
@@ -4024,6 +4057,7 @@ fn read_local(
         protected: false,
         type_key: local.value.type_key.clone(),
         value: local.value.value.clone(),
+        view,
     })
 }
 
@@ -4587,6 +4621,758 @@ fn verify_object_target(inner: &TypeKey, ty: &TypeRecord, root_key: &str) -> Res
         ));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Manifest-assisted split-object view
+// ---------------------------------------------------------------------------
+
+/// Builds the presentation view for one successful live read.
+///
+/// The decoded value drives the nodes, so a view can never disagree with the
+/// typed read. Manifest type/aggregate records and root records supply the
+/// split metadata; no storage is read a second time and no address is exposed.
+fn build_live_view(
+    source: &DebugSource<'_>,
+    resolved: &Resolved,
+    typed: &TypedValue,
+    target: &DebugTarget,
+) -> SplitView {
+    let node = match &resolved.shape {
+        ResolvedShape::Root(root) => {
+            let ty = TypeKey::parse(&root.type_key).ok();
+            let base = parse_key(&root.key)
+                .map_or_else(|| root.key.clone(), |parsed| parsed.path.to_owned());
+            contiguous_view_node(
+                source.manifest,
+                ty.as_ref(),
+                &root.type_key,
+                root.layout_hash,
+                &typed.value,
+                Some(view_root(root, None)),
+                resolved.atomic,
+                &base,
+            )
+        }
+        ResolvedShape::Aggregate(aggregate) => {
+            aggregate_view_node(source.manifest, aggregate, &typed.value)
+        }
+    };
+    SplitView {
+        target: view_target(target),
+        resolved_key: resolved.canonical_key.clone(),
+        generation: source.generation,
+        build_id: source.build_id,
+        cycle: source.cycle,
+        origin: ViewOrigin::Live,
+        atomic: resolved.atomic,
+        consistent: true,
+        manifest_assisted: node.manifest_assisted,
+        contiguous: node.contiguous,
+        node,
+    }
+}
+
+/// Builds a stop-snapshot view. The snapshot is one bounded contiguous copy,
+/// so fields are described as contiguous snapshot data with no live roots.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn snapshot_view(
+    manifest: &Manifest,
+    typed: &TypedValue,
+    target: String,
+    resolved_key: String,
+    generation: u64,
+    build_id: GotId,
+    cycle: u64,
+    atomic: bool,
+) -> SplitView {
+    let ty = TypeKey::parse(&typed.type_key).ok();
+    let layout = record_layout(manifest, ty.as_ref());
+    let node = contiguous_view_node(
+        manifest,
+        ty.as_ref(),
+        &typed.type_key,
+        layout,
+        &typed.value,
+        None,
+        atomic,
+        &resolved_key,
+    );
+    SplitView {
+        target,
+        resolved_key,
+        generation,
+        build_id,
+        cycle,
+        origin: ViewOrigin::StopSnapshot,
+        atomic,
+        consistent: true,
+        manifest_assisted: node.manifest_assisted,
+        contiguous: node.contiguous,
+        node,
+    }
+}
+
+fn view_target(target: &DebugTarget) -> String {
+    match target {
+        DebugTarget::Path(path) => path.clone(),
+        DebugTarget::GotId(got_id) => got_id.to_hex(),
+        DebugTarget::Local { frame, path } => format!("{frame}:{path}"),
+    }
+}
+
+/// Returns whether a stopped-local type is one atomic single-root copy.
+pub(crate) fn type_is_single_root(manifest: &Manifest, type_key: &str) -> bool {
+    TypeKey::parse(type_key).is_ok_and(|ty| is_single_root_type(manifest, &ty, 0))
+}
+
+fn view_root(root: &RootRecord, marker: Option<&str>) -> ViewRoot {
+    ViewRoot {
+        got_id: root.got_id,
+        key: root.key.clone(),
+        kind: root.root_kind,
+        marker: marker.map(str::to_owned),
+    }
+}
+
+fn hidden_view_roots(
+    manifest: &Manifest,
+    package: &str,
+    path: &str,
+    qualifier: Option<&str>,
+) -> Vec<ViewRoot> {
+    let mut roots = Vec::new();
+    for marker in ["HANDLE", "OBJREC"] {
+        if let Some(root) = find_hidden_root(manifest, package, path, qualifier, marker) {
+            roots.push(view_root(root, Some(marker)));
+        }
+    }
+    roots
+}
+
+fn record_layout(manifest: &Manifest, ty: Option<&TypeKey>) -> GotId {
+    match ty {
+        Some(TypeKey::Named(got_id)) => {
+            type_by_id(manifest, *got_id).map_or(GotId::ZERO, |ty| ty.layout_hash)
+        }
+        _ => GotId::ZERO,
+    }
+}
+
+fn element_type_layout(manifest: &Manifest, element: &TypeKey) -> GotId {
+    match element {
+        TypeKey::Named(got_id) => {
+            type_by_id(manifest, *got_id).map_or(GotId::ZERO, |ty| ty.layout_hash)
+        }
+        _ => GotId::ZERO,
+    }
+}
+
+fn unavailable_view_node(
+    type_key: &str,
+    layout_hash: GotId,
+    warning: &DebugWarning,
+    manifest_assisted: bool,
+    root: Option<ViewRoot>,
+) -> ViewNode {
+    ViewNode {
+        kind: ViewKind::Unavailable,
+        type_key: type_key.to_owned(),
+        layout_hash,
+        value: DebugValue::Unavailable {
+            warning: warning.clone(),
+        },
+        available: false,
+        manifest_assisted,
+        contiguous: false,
+        atomic: false,
+        consistent: true,
+        root,
+        identity: None,
+        fields: Vec::new(),
+        elements: Vec::new(),
+    }
+}
+
+fn leaf_view_kind(value: &DebugValue) -> ViewKind {
+    match value {
+        DebugValue::Overlap { .. } => ViewKind::Overlap,
+        DebugValue::Array(_) => ViewKind::Array,
+        DebugValue::Aggregate(_) => ViewKind::Aggregate,
+        DebugValue::Object {
+            class, interface, ..
+        } => {
+            if class.is_some() {
+                ViewKind::Class
+            } else if interface.is_some() {
+                ViewKind::Interface
+            } else {
+                ViewKind::FunctionBlock
+            }
+        }
+        DebugValue::Reference { .. } => ViewKind::Reference,
+        DebugValue::Unavailable { .. } => ViewKind::Unavailable,
+        DebugValue::Bool(_)
+        | DebugValue::Decimal(_)
+        | DebugValue::Real(_)
+        | DebugValue::String(_) => ViewKind::Scalar,
+    }
+}
+
+fn identity_for_value(
+    value: &DebugValue,
+    ty: Option<&TypeKey>,
+    roots: Vec<ViewRoot>,
+) -> Option<ViewIdentity> {
+    match value {
+        DebugValue::Object {
+            identity,
+            present,
+            class,
+            interface,
+            ..
+        } => {
+            let kind = if class.is_some() {
+                IdentityKind::Class
+            } else if interface.is_some() {
+                IdentityKind::Interface
+            } else {
+                IdentityKind::FunctionBlock
+            };
+            Some(ViewIdentity {
+                kind,
+                identity: identity.clone(),
+                present: *present,
+                class: class.clone(),
+                interface: interface.clone(),
+                target_type: None,
+                roots,
+            })
+        }
+        DebugValue::Reference {
+            identity,
+            present,
+            target_type,
+        } => Some(ViewIdentity {
+            kind: if matches!(ty, Some(TypeKey::PtrTo(_))) {
+                IdentityKind::Pointer
+            } else {
+                IdentityKind::Reference
+            },
+            identity: identity.clone(),
+            present: *present,
+            class: None,
+            interface: None,
+            target_type: target_type.clone(),
+            roots,
+        }),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn contiguous_view_node(
+    manifest: &Manifest,
+    ty: Option<&TypeKey>,
+    type_key: &str,
+    layout_hash: GotId,
+    value: &DebugValue,
+    root: Option<ViewRoot>,
+    atomic: bool,
+    base_path: &str,
+) -> ViewNode {
+    if let DebugValue::Unavailable { warning } = value {
+        return unavailable_view_node(type_key, layout_hash, warning, false, None);
+    }
+    let record = ty.and_then(|ty| match ty {
+        TypeKey::Named(got_id) => type_by_id(manifest, *got_id),
+        _ => None,
+    });
+    let kind = match value {
+        DebugValue::Aggregate(_) => match record.map(|record| record.type_kind) {
+            Some(TypeKind::FunctionBlock) => ViewKind::FunctionBlock,
+            Some(TypeKind::Class) => ViewKind::Class,
+            Some(TypeKind::Interface) => ViewKind::Interface,
+            _ => ViewKind::Aggregate,
+        },
+        other => leaf_view_kind(other),
+    };
+    let identity = identity_for_value(value, ty, Vec::new());
+    let mut fields = Vec::new();
+    let mut elements = Vec::new();
+    match value {
+        DebugValue::Aggregate(values) | DebugValue::Object { fields: values, .. } => {
+            fields = contiguous_fields(manifest, record, base_path, values, atomic);
+        }
+        DebugValue::Array(values) => {
+            let element = match ty {
+                Some(TypeKey::Array { element, .. }) => Some(element.as_ref()),
+                _ => None,
+            };
+            let element_type_key = element.map_or_else(String::new, TypeKey::render);
+            let element_layout = element.map_or(GotId::ZERO, |element| {
+                element_type_layout(manifest, element)
+            });
+            for (index, value) in values.iter().enumerate() {
+                let child_path = format!("{base_path}.E{index}");
+                let child_type = if value.type_key == element_type_key {
+                    element_type_key.as_str()
+                } else {
+                    value.type_key.as_str()
+                };
+                let child_layout = if child_type == element_type_key {
+                    element_layout
+                } else {
+                    GotId::ZERO
+                };
+                elements.push(contiguous_view_node(
+                    manifest,
+                    element,
+                    child_type,
+                    child_layout,
+                    &value.value,
+                    None,
+                    atomic,
+                    &child_path,
+                ));
+            }
+        }
+        _ => {}
+    }
+    ViewNode {
+        kind,
+        type_key: type_key.to_owned(),
+        layout_hash,
+        value: value.clone(),
+        available: true,
+        manifest_assisted: false,
+        contiguous: true,
+        atomic,
+        consistent: true,
+        root,
+        identity,
+        fields,
+        elements,
+    }
+}
+
+fn contiguous_fields(
+    manifest: &Manifest,
+    record: Option<&TypeRecord>,
+    base_path: &str,
+    values: &[NamedValue],
+    atomic: bool,
+) -> Vec<ViewField> {
+    let mut fields = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        let declared = record.and_then(|record| {
+            record
+                .fields
+                .iter()
+                .find(|field| field.path == value.name)
+                .or_else(|| record.fields.get(index))
+        });
+        let type_key = declared.map_or(value.value.type_key.as_str(), |field| {
+            field.type_key.as_str()
+        });
+        let layout_hash = declared.map_or(GotId::ZERO, |field| field.layout_hash);
+        let path = format!("{base_path}.{}", value.name);
+        let child_ty = TypeKey::parse(type_key).ok();
+        let view = contiguous_view_node(
+            manifest,
+            child_ty.as_ref(),
+            type_key,
+            layout_hash,
+            &value.value.value,
+            None,
+            atomic,
+            &path,
+        );
+        fields.push(ViewField {
+            name: value.name.clone(),
+            path,
+            view,
+        });
+    }
+    fields
+}
+
+fn aggregate_view_node(
+    manifest: &Manifest,
+    aggregate: &AggregateTarget,
+    value: &DebugValue,
+) -> ViewNode {
+    match &aggregate.kind {
+        AggregateTargetKind::Record { ty } => split_record_view_node(
+            manifest,
+            &aggregate.package,
+            &aggregate.path,
+            aggregate.qualifier.as_deref(),
+            ty,
+            value,
+        ),
+        AggregateTargetKind::Program {
+            fields,
+            shape_key,
+            layout_hash,
+        } => {
+            if let DebugValue::Unavailable { warning } = value {
+                return unavailable_view_node(shape_key, *layout_hash, warning, true, None);
+            }
+            let values: &[NamedValue] = match value {
+                DebugValue::Aggregate(values) => values,
+                _ => &[],
+            };
+            let declared: Vec<FieldDecl<'_>> = fields
+                .iter()
+                .map(|field| FieldDecl {
+                    path: &field.path,
+                    type_key: &field.type_key,
+                    layout_hash: field.layout_hash,
+                })
+                .collect();
+            let fields = split_fields(
+                manifest,
+                &aggregate.package,
+                &aggregate.path,
+                aggregate.qualifier.as_deref(),
+                &declared,
+                values,
+            );
+            ViewNode {
+                kind: ViewKind::Program,
+                type_key: shape_key.clone(),
+                layout_hash: *layout_hash,
+                value: value.clone(),
+                available: true,
+                manifest_assisted: true,
+                contiguous: false,
+                atomic: false,
+                consistent: true,
+                root: None,
+                identity: None,
+                fields,
+                elements: Vec::new(),
+            }
+        }
+        AggregateTargetKind::Array { ty, layout_hash } => split_array_view_node(
+            manifest,
+            &aggregate.package,
+            &aggregate.path,
+            aggregate.qualifier.as_deref(),
+            ty,
+            *layout_hash,
+            value,
+        ),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FieldDecl<'a> {
+    path: &'a str,
+    type_key: &'a str,
+    layout_hash: GotId,
+}
+
+fn split_record_view_node(
+    manifest: &Manifest,
+    package: &str,
+    path: &str,
+    qualifier: Option<&str>,
+    record: &TypeRecord,
+    value: &DebugValue,
+) -> ViewNode {
+    if let DebugValue::Unavailable { warning } = value {
+        return unavailable_view_node(&record.type_key, record.layout_hash, warning, true, None);
+    }
+    let values: &[NamedValue] = match value {
+        DebugValue::Aggregate(values) | DebugValue::Object { fields: values, .. } => values,
+        _ => &[],
+    };
+    let declared: Vec<FieldDecl<'_>> = record
+        .fields
+        .iter()
+        .map(|field| FieldDecl {
+            path: &field.path,
+            type_key: &field.type_key,
+            layout_hash: field.layout_hash,
+        })
+        .collect();
+    let fields = split_fields(manifest, package, path, qualifier, &declared, values);
+    let kind = match record.type_kind {
+        TypeKind::Struct => ViewKind::Aggregate,
+        TypeKind::FunctionBlock => ViewKind::FunctionBlock,
+        TypeKind::Class => ViewKind::Class,
+        TypeKind::Interface => ViewKind::Interface,
+        TypeKind::Enum | TypeKind::Subrange | TypeKind::Alias => ViewKind::Scalar,
+    };
+    let identity = match record.type_kind {
+        TypeKind::Struct => None,
+        TypeKind::FunctionBlock => Some(ViewIdentity {
+            kind: IdentityKind::FunctionBlock,
+            identity: None,
+            present: true,
+            class: None,
+            interface: None,
+            target_type: None,
+            roots: hidden_view_roots(manifest, package, path, qualifier),
+        }),
+        TypeKind::Class => {
+            let (identity, present, roots) = match value {
+                DebugValue::Object {
+                    identity, present, ..
+                } => (
+                    identity.clone(),
+                    *present,
+                    hidden_view_roots(manifest, package, path, qualifier),
+                ),
+                _ => (
+                    None,
+                    false,
+                    hidden_view_roots(manifest, package, path, qualifier),
+                ),
+            };
+            Some(ViewIdentity {
+                kind: IdentityKind::Class,
+                identity,
+                present,
+                class: Some(record.type_key.clone()),
+                interface: None,
+                target_type: None,
+                roots,
+            })
+        }
+        TypeKind::Interface => {
+            let (identity, present) = match value {
+                DebugValue::Object {
+                    identity, present, ..
+                } => (identity.clone(), *present),
+                _ => (None, false),
+            };
+            Some(ViewIdentity {
+                kind: IdentityKind::Interface,
+                identity,
+                present,
+                class: None,
+                interface: Some(record.type_key.clone()),
+                target_type: None,
+                roots: Vec::new(),
+            })
+        }
+        TypeKind::Enum | TypeKind::Subrange | TypeKind::Alias => None,
+    };
+    ViewNode {
+        kind,
+        type_key: record.type_key.clone(),
+        layout_hash: record.layout_hash,
+        value: value.clone(),
+        available: true,
+        manifest_assisted: true,
+        contiguous: false,
+        atomic: false,
+        consistent: true,
+        root: None,
+        identity,
+        fields,
+        elements: Vec::new(),
+    }
+}
+
+fn split_fields(
+    manifest: &Manifest,
+    package: &str,
+    base_path: &str,
+    qualifier: Option<&str>,
+    declared: &[FieldDecl<'_>],
+    values: &[NamedValue],
+) -> Vec<ViewField> {
+    let mut fields = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        let decl = declared
+            .get(index)
+            .filter(|field| field.path == value.name)
+            .or_else(|| declared.iter().find(|field| field.path == value.name));
+        let (name, type_key, layout_hash) = decl.map_or(
+            (
+                value.name.as_str(),
+                value.value.type_key.as_str(),
+                GotId::ZERO,
+            ),
+            |field| (field.path, field.type_key, field.layout_hash),
+        );
+        let path = format!("{base_path}.{name}");
+        let root = find_field_root(manifest, package, &path, qualifier);
+        let node = if let Some(root) = root {
+            let root_ty = TypeKey::parse(&root.type_key).ok();
+            let atomic = root_ty
+                .as_ref()
+                .is_some_and(|ty| is_single_root_type(manifest, ty, 0));
+            contiguous_view_node(
+                manifest,
+                root_ty.as_ref(),
+                &root.type_key,
+                root.layout_hash,
+                &value.value.value,
+                Some(view_root(root, None)),
+                atomic,
+                &path,
+            )
+        } else {
+            let ty = TypeKey::parse(type_key).ok();
+            split_view_node(
+                manifest,
+                package,
+                &path,
+                qualifier,
+                ty.as_ref(),
+                type_key,
+                layout_hash,
+                &value.value.value,
+            )
+        };
+        fields.push(ViewField {
+            name: name.to_owned(),
+            path,
+            view: node,
+        });
+    }
+    fields
+}
+
+#[allow(clippy::too_many_arguments)]
+fn split_view_node(
+    manifest: &Manifest,
+    package: &str,
+    path: &str,
+    qualifier: Option<&str>,
+    ty: Option<&TypeKey>,
+    type_key: &str,
+    layout_hash: GotId,
+    value: &DebugValue,
+) -> ViewNode {
+    if let DebugValue::Unavailable { warning } = value {
+        return unavailable_view_node(type_key, layout_hash, warning, true, None);
+    }
+    match ty {
+        Some(TypeKey::Named(got_id)) => match type_by_id(manifest, *got_id) {
+            Some(record)
+                if matches!(
+                    record.type_kind,
+                    TypeKind::Struct
+                        | TypeKind::FunctionBlock
+                        | TypeKind::Class
+                        | TypeKind::Interface
+                ) =>
+            {
+                split_record_view_node(manifest, package, path, qualifier, record, value)
+            }
+            _ => split_leaf_view_node(type_key, layout_hash, ty, value),
+        },
+        Some(array @ TypeKey::Array { .. }) => split_array_view_node(
+            manifest,
+            package,
+            path,
+            qualifier,
+            array,
+            layout_hash,
+            value,
+        ),
+        _ => split_leaf_view_node(type_key, layout_hash, ty, value),
+    }
+}
+
+fn split_leaf_view_node(
+    type_key: &str,
+    layout_hash: GotId,
+    ty: Option<&TypeKey>,
+    value: &DebugValue,
+) -> ViewNode {
+    ViewNode {
+        kind: leaf_view_kind(value),
+        type_key: type_key.to_owned(),
+        layout_hash,
+        value: value.clone(),
+        available: true,
+        manifest_assisted: true,
+        contiguous: false,
+        atomic: false,
+        consistent: true,
+        root: None,
+        identity: identity_for_value(value, ty, Vec::new()),
+        fields: Vec::new(),
+        elements: Vec::new(),
+    }
+}
+
+fn split_array_view_node(
+    manifest: &Manifest,
+    package: &str,
+    base_path: &str,
+    qualifier: Option<&str>,
+    ty: &TypeKey,
+    layout_hash: GotId,
+    value: &DebugValue,
+) -> ViewNode {
+    let type_key = ty.render();
+    if let DebugValue::Unavailable { warning } = value {
+        return unavailable_view_node(&type_key, layout_hash, warning, true, None);
+    }
+    let TypeKey::Array { element, .. } = ty else {
+        return split_leaf_view_node(&type_key, layout_hash, Some(ty), value);
+    };
+    let element = element.as_ref();
+    let values = match value {
+        DebugValue::Array(values) => values.as_slice(),
+        _ => &[],
+    };
+    let element_type_key = element.render();
+    let element_layout = element_type_layout(manifest, element);
+    let mut elements = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        let child_path = format!("{base_path}.E{index}");
+        if let Some(root) = find_field_root(manifest, package, &child_path, qualifier) {
+            let root_ty = TypeKey::parse(&root.type_key).ok();
+            let atomic = root_ty
+                .as_ref()
+                .is_some_and(|ty| is_single_root_type(manifest, ty, 0));
+            elements.push(contiguous_view_node(
+                manifest,
+                root_ty.as_ref(),
+                &root.type_key,
+                root.layout_hash,
+                &value.value,
+                Some(view_root(root, None)),
+                atomic,
+                &child_path,
+            ));
+        } else {
+            elements.push(split_view_node(
+                manifest,
+                package,
+                &child_path,
+                qualifier,
+                Some(element),
+                &element_type_key,
+                element_layout,
+                &value.value,
+            ));
+        }
+    }
+    ViewNode {
+        kind: ViewKind::Array,
+        type_key,
+        layout_hash,
+        value: value.clone(),
+        available: true,
+        manifest_assisted: true,
+        contiguous: false,
+        atomic: false,
+        consistent: true,
+        root: None,
+        identity: None,
+        fields: Vec::new(),
+        elements,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
