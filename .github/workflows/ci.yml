@@ -23,6 +23,39 @@ jobs:
   # The specification is written before the compiler. This job reports which
   # parts of the tree exist so the code-backed jobs can stay skipped until
   # their workspace, suite, or tool is added.
+  ci:
+    name: CI
+    needs:
+      - detect
+      - docs
+      - fmt
+      - clippy
+      - test
+      - coverage
+      - online
+      - ui
+      - conformance
+      - execution
+      - projects
+      - traceability
+      - lean
+      - fuzz-smoke
+      - cross-target
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail if any needed job failed or was cancelled
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed="${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
+          if [ "$failed" = "true" ]; then
+            echo "::error::One or more required jobs failed or were cancelled"
+            exit 1
+          fi
+          echo "All required jobs passed or were skipped."
+
   detect:
     name: Detect project state
     runs-on: ubuntu-24.04
