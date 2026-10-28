@@ -369,7 +369,7 @@ the run log. CI runs are never silently skipped or narrowed to make a phase pass
 | Phase | State | Commit | CI run |
 | --- | --- | --- | --- |
 | 0 — host contract and decisions | Complete (2026-10-28) | `857fb20` | Local checks |
-| 1 — host abstraction audit | Pending | | |
+| 1 — host abstraction audit | Complete (2026-10-28) | `252af75` | `40784925474` |
 | 2 — Linux x86-64 verification | Pending | | |
 | 3 — Linux AArch64 native build | Pending | | |
 | 4 — AArch64 debug parity | Pending | | |
