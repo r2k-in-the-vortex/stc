@@ -485,6 +485,33 @@ impl ClientConnection {
             Self::Tcp(stream) => stream.set_write_timeout(timeout),
         }
     }
+
+    /// Reports whether the connection already has data or has reached EOF.
+    ///
+    /// This never blocks, so a client can poll for spontaneous events between
+    /// requests even where the platform has no per-read timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the platform probe fails.
+    pub fn poll_readable(&mut self) -> io::Result<bool> {
+        match self {
+            Self::Platform(connection) => connection.poll_readable(),
+            Self::Tcp(stream) => poll_tcp(stream),
+        }
+    }
+}
+
+fn poll_tcp(stream: &std::net::TcpStream) -> io::Result<bool> {
+    stream.set_nonblocking(true)?;
+    let mut byte = [0_u8; 1];
+    let result = match stream.peek(&mut byte) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
+        Err(error) => Err(error),
+    };
+    stream.set_nonblocking(false)?;
+    result
 }
 
 impl Read for ClientConnection {
@@ -666,6 +693,18 @@ mod platform {
         pub(super) fn set_write_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
             self.stream.set_write_timeout(timeout)
         }
+
+        pub(super) fn poll_readable(&mut self) -> io::Result<bool> {
+            self.stream.set_nonblocking(true)?;
+            let mut byte = [0_u8; 1];
+            let result = match self.stream.peek(&mut byte) {
+                Ok(_) => Ok(true),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
+                Err(error) => Err(error),
+            };
+            self.stream.set_nonblocking(false)?;
+            result
+        }
     }
 
     impl Read for ClientConnection {
@@ -754,7 +793,7 @@ mod platform {
     use std::fs::File;
     use std::io::{self, Read, Write};
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::{FromRawHandle, RawHandle};
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1138,6 +1177,26 @@ mod platform {
 
         pub(super) fn set_write_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
             Ok(())
+        }
+
+        pub(super) fn poll_readable(&mut self) -> io::Result<bool> {
+            let mut available = 0_u32;
+            // SAFETY: the file handle is live and the out pointer is valid.
+            let ok = unsafe {
+                PeekNamedPipe(
+                    self.file.as_raw_handle().cast::<c_void>(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                // A broken pipe is treated as readable so the caller sees EOF.
+                return Ok(true);
+            }
+            Ok(available > 0)
         }
     }
 

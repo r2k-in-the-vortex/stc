@@ -16,10 +16,11 @@
 use std::fmt::Write as _;
 
 use stc_got::digest::GotId;
+use stc_got::error::codes;
 use stc_got::json::Json;
 use stc_got::model::RootKind;
 
-use crate::debug::{DebugValue, debug_value_json};
+use crate::debug::{DebugValue, DebugWarning, debug_value_json};
 
 /// The storage kind a node describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,6 +453,215 @@ pub fn render_text(view: &SplitView) -> String {
     );
     render_node(&mut out, &view.node, None, 0);
     out
+}
+
+/// Decodes one additive wire `view` object and renders it with
+/// [`render_text`].
+///
+/// Returns `None` when the value is not a view object, so a caller can fall
+/// back to the typed `value`. The decoded model is presentation-only: an
+/// unavailable or overlap node is reconstructed as far as the wire form
+/// carries it, and the text renderer never invents a value.
+#[must_use]
+pub fn render_view_json(value: &Json) -> Option<String> {
+    decode_view(value).map(|view| render_text(&view))
+}
+
+fn decode_view(value: &Json) -> Option<SplitView> {
+    let object = value.as_object()?;
+    let target = object.get("target").and_then(Json::as_str)?.to_owned();
+    let resolved_key = object
+        .get("resolved_key")
+        .and_then(Json::as_str)?
+        .to_owned();
+    let generation = u64::try_from(object.get("generation").and_then(Json::as_number)?).ok()?;
+    let build_id = GotId::parse(object.get("build_id").and_then(Json::as_str)?).ok()?;
+    let cycle = u64::try_from(object.get("cycle").and_then(Json::as_number)?).ok()?;
+    let origin = view_origin_from_name(object.get("origin").and_then(Json::as_str)?)?;
+    let boolean = |key: &str| object.get(key).and_then(Json::as_bool);
+    Some(SplitView {
+        target,
+        resolved_key,
+        generation,
+        build_id,
+        cycle,
+        origin,
+        atomic: boolean("atomic")?,
+        consistent: boolean("consistent")?,
+        manifest_assisted: boolean("manifest_assisted")?,
+        contiguous: boolean("contiguous")?,
+        node: decode_node(object.get("view")?)?,
+    })
+}
+
+fn decode_node(value: &Json) -> Option<ViewNode> {
+    let object = value.as_object()?;
+    let kind = view_kind_from_name(object.get("kind").and_then(Json::as_str)?)?;
+    let type_key = object.get("type").and_then(Json::as_str)?.to_owned();
+    let layout_hash = match object.get("layout_hash")? {
+        Json::Null => GotId::ZERO,
+        Json::String(text) => GotId::parse(text).ok()?,
+        _ => return None,
+    };
+    let boolean = |key: &str| object.get(key).and_then(Json::as_bool);
+    let fields = object
+        .get("fields")?
+        .as_array()?
+        .iter()
+        .map(|field| {
+            let object = field.as_object()?;
+            Some(ViewField {
+                name: object.get("name").and_then(Json::as_str)?.to_owned(),
+                path: object.get("path").and_then(Json::as_str)?.to_owned(),
+                view: decode_node(field)?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(ViewNode {
+        kind,
+        type_key,
+        layout_hash,
+        value: match object.get("value") {
+            Some(value) => decode_node_value(value)?,
+            // Composite nodes carry no `value`; the renderer uses the kind.
+            None => DebugValue::Aggregate(Vec::new()),
+        },
+        available: boolean("available")?,
+        manifest_assisted: boolean("manifest_assisted")?,
+        contiguous: boolean("contiguous")?,
+        atomic: boolean("atomic")?,
+        consistent: boolean("consistent")?,
+        root: match object.get("root")? {
+            Json::Null => None,
+            other => Some(decode_root(other)?),
+        },
+        identity: match object.get("identity")? {
+            Json::Null => None,
+            other => Some(decode_identity(other)?),
+        },
+        elements: object
+            .get("elements")?
+            .as_array()?
+            .iter()
+            .map(decode_node)
+            .collect::<Option<Vec<_>>>()?,
+        fields,
+    })
+}
+
+fn decode_node_value(value: &Json) -> Option<DebugValue> {
+    if let Json::Object(object) = value {
+        if object.get("available").and_then(Json::as_bool) == Some(false) {
+            let code = object.get("code").and_then(Json::as_str)?;
+            return Some(DebugValue::Unavailable {
+                warning: DebugWarning {
+                    code: warning_code(code),
+                    message: "the value is unavailable".into(),
+                },
+            });
+        }
+        if let Some(base64) = object.get("bytes").and_then(Json::as_str) {
+            // The text renderer prints the encoded bytes; decoding the payload
+            // would add nothing to the presentation surface.
+            let padding = base64
+                .bytes()
+                .rev()
+                .take_while(|byte| *byte == b'=')
+                .count();
+            let length = base64.len().saturating_div(4).saturating_mul(3) - padding;
+            return Some(DebugValue::Overlap {
+                bytes: vec![0; length],
+                base64: base64.to_owned(),
+            });
+        }
+    }
+    crate::debug::debug_value_from_json(value, 0).ok()
+}
+
+fn warning_code(code: &str) -> &'static str {
+    if code == codes::W_DEBUG_UNBOUND {
+        codes::W_DEBUG_UNBOUND
+    } else if code == codes::W_DEBUG_WATCH_DROPPED {
+        codes::W_DEBUG_WATCH_DROPPED
+    } else if code == codes::W_DEBUG_MONITORING_ONLY {
+        codes::W_DEBUG_MONITORING_ONLY
+    } else if code == codes::W_DEBUG_RETAIN {
+        codes::W_DEBUG_RETAIN
+    } else {
+        codes::W_DEBUG_UNAVAILABLE
+    }
+}
+
+fn decode_root(value: &Json) -> Option<ViewRoot> {
+    let object = value.as_object()?;
+    Some(ViewRoot {
+        got_id: GotId::parse(object.get("got_id").and_then(Json::as_str)?).ok()?,
+        key: object.get("key").and_then(Json::as_str)?.to_owned(),
+        kind: RootKind::from_name(object.get("kind").and_then(Json::as_str)?)?,
+        marker: match object.get("marker")? {
+            Json::Null => None,
+            Json::String(text) => Some(text.clone()),
+            _ => return None,
+        },
+    })
+}
+
+fn decode_identity(value: &Json) -> Option<ViewIdentity> {
+    let object = value.as_object()?;
+    let optional = |key: &str| match object.get(key) {
+        None | Some(Json::Null) => Some(None),
+        Some(Json::String(text)) => Some(Some(text.clone())),
+        Some(_) => None,
+    };
+    Some(ViewIdentity {
+        kind: identity_kind_from_name(object.get("kind").and_then(Json::as_str)?)?,
+        identity: optional("identity")?,
+        present: object.get("present").and_then(Json::as_bool)?,
+        class: optional("class")?,
+        interface: optional("interface")?,
+        target_type: optional("target_type")?,
+        roots: object
+            .get("roots")?
+            .as_array()?
+            .iter()
+            .map(decode_root)
+            .collect::<Option<Vec<_>>>()?,
+    })
+}
+
+fn view_kind_from_name(name: &str) -> Option<ViewKind> {
+    Some(match name {
+        "scalar" => ViewKind::Scalar,
+        "overlap" => ViewKind::Overlap,
+        "aggregate" => ViewKind::Aggregate,
+        "program" => ViewKind::Program,
+        "array" => ViewKind::Array,
+        "class" => ViewKind::Class,
+        "function_block" => ViewKind::FunctionBlock,
+        "interface" => ViewKind::Interface,
+        "reference" => ViewKind::Reference,
+        "unavailable" => ViewKind::Unavailable,
+        _ => return None,
+    })
+}
+
+fn view_origin_from_name(name: &str) -> Option<ViewOrigin> {
+    Some(match name {
+        "live" => ViewOrigin::Live,
+        "stop_snapshot" => ViewOrigin::StopSnapshot,
+        _ => return None,
+    })
+}
+
+fn identity_kind_from_name(name: &str) -> Option<IdentityKind> {
+    Some(match name {
+        "class" => IdentityKind::Class,
+        "function_block" => IdentityKind::FunctionBlock,
+        "interface" => IdentityKind::Interface,
+        "pointer" => IdentityKind::Pointer,
+        "reference" => IdentityKind::Reference,
+        _ => return None,
+    })
 }
 
 fn render_node(out: &mut String, node: &ViewNode, label: Option<(&str, &str)>, depth: usize) {

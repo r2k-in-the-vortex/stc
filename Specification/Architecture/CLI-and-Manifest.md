@@ -276,7 +276,7 @@ is `dwarf`, `codeview`, or `none`; `debug_hooks` is the checkpoint-hook capabili
     "test-runner": "implemented",
     "formatter": "implemented",
     "online-change": "implemented",
-    "debug-monitoring": "planned"
+    "debug-monitoring": "implemented"
   },
   "safety": "not-a-safety-plc"
 }

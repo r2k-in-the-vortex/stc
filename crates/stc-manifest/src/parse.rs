@@ -72,7 +72,16 @@ const ONLINE_KEYS: &[&str] = &[
     "cold-policy",
     "allow-untracked-removal",
 ];
-const DEBUG_KEYS: &[&str] = &["default", "protocol", "force-sessions-end-on-swap"];
+const DEBUG_KEYS: &[&str] = &[
+    "default",
+    "protocol",
+    "force-sessions-end-on-swap",
+    "session-timeout",
+    "allow-write",
+    "allow-force",
+];
+/// The v1 upper bound for `[debug].session-timeout` (24 hours).
+const MAX_DEBUG_SESSION_TIMEOUT_NS: u64 = 24 * 3_600_000_000_000;
 const RUN_KEYS: &[&str] = &["cycles", "cycle-time"];
 const TEST_KEYS: &[&str] = &[
     "sources",
@@ -1248,6 +1257,39 @@ impl Parser {
         if let Some(value) = debug.get("force-sessions-end-on-swap") {
             settings.force_sessions_end_on_swap =
                 self.expect_bool(value, "STC-E-PROJECT-002", "force-sessions-end-on-swap");
+            if !settings.force_sessions_end_on_swap {
+                self.error(
+                    "STC-E-PROJECT-010",
+                    "`[debug].force-sessions-end-on-swap` must be true in v1",
+                    self.item_span(value),
+                );
+            }
+        }
+        if let Some(value) = debug.get("session-timeout")
+            && let Some(timeout) =
+                self.parse_duration_setting(value, "STC-E-PROJECT-010", "session-timeout")
+        {
+            if timeout.as_nanos() == 0 {
+                self.error(
+                    "STC-E-PROJECT-010",
+                    "invalid `session-timeout` 0ns; expected a positive duration",
+                    self.item_span(value),
+                );
+            } else if timeout.as_nanos() > MAX_DEBUG_SESSION_TIMEOUT_NS {
+                self.error(
+                    "STC-E-PROJECT-010",
+                    "`session-timeout` must not exceed 24 hours",
+                    self.item_span(value),
+                );
+            } else {
+                settings.session_timeout = timeout;
+            }
+        }
+        if let Some(value) = debug.get("allow-write") {
+            settings.allow_write = self.expect_bool(value, "STC-E-PROJECT-002", "allow-write");
+        }
+        if let Some(value) = debug.get("allow-force") {
+            settings.allow_force = self.expect_bool(value, "STC-E-PROJECT-002", "allow-force");
         }
         settings
     }

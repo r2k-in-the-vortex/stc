@@ -1011,7 +1011,7 @@ impl Handler {
                 return;
             }
             if self.shared.shutdown.load(Ordering::Acquire) {
-                let plan = self.close_plan("shutdown", None, true, false);
+                let plan = self.shutdown_plan();
                 self.finish(connection, plan);
                 return;
             }
@@ -1057,7 +1057,7 @@ impl Handler {
             match connection.read(&mut chunk) {
                 Ok(0) => {
                     let plan = if self.shared.shutdown.load(Ordering::Acquire) {
-                        self.close_plan("shutdown", None, true, false)
+                        self.shutdown_plan()
                     } else {
                         ClosePlan::new("disconnect", None, false, true)
                     };
@@ -1078,7 +1078,7 @@ impl Handler {
                 }
                 Err(error) if peer_closed(&error) => {
                     let plan = if self.shared.shutdown.load(Ordering::Acquire) {
-                        self.close_plan("shutdown", None, true, false)
+                        self.shutdown_plan()
                     } else {
                         ClosePlan::new("disconnect", None, false, true)
                     };
@@ -1108,6 +1108,24 @@ impl Handler {
         clear: bool,
     ) -> ClosePlan {
         ClosePlan::new(reason, code, event && self.session.is_some(), clear)
+    }
+
+    /// Chooses the plan for a host-initiated shutdown.
+    ///
+    /// A target trap or other teardown may have queued its notice just before
+    /// host shutdown. That reason wins over the transport-level shutdown so the
+    /// client can distinguish a target exit from an operator shutdown.
+    fn shutdown_plan(&mut self) -> ClosePlan {
+        if self.session.is_some()
+            && let Some(notice) = self.shared.service.take_end_notice()
+        {
+            return ClosePlan::new(notice.reason, notice.code, true, false).with_tags(
+                notice.generation,
+                notice.build_id,
+                notice.cycle,
+            );
+        }
+        self.close_plan("shutdown", None, true, false)
     }
 
     fn poll_session(&mut self, connection: &mut Connection) -> Option<ClosePlan> {
@@ -3560,6 +3578,82 @@ impl DebugClient {
             }
             return Ok(message);
         }
+    }
+
+    /// Sends a request and returns every message read, in arrival order.
+    ///
+    /// The vector holds interleaved events and the response. A closed
+    /// connection before the response yields the messages read so far. For
+    /// `session.stop` the final `session-ended` event is collected too.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport error or a protocol error for an unexpected
+    /// response id.
+    pub fn call_messages(&mut self, op: &str, params: Json) -> std::io::Result<Vec<Json>> {
+        self.next_id = self.next_id.saturating_add(1).max(1);
+        let id = self.next_id;
+        let request = json_object([
+            ("kind", Json::string("request")),
+            ("protocol", Json::string(DEBUG_PROTOCOL)),
+            ("id", Json::unsigned(id)),
+            ("token", Json::string(self.token.clone())),
+            ("op", Json::string(op)),
+            ("params", params),
+        ]);
+        self.write(&request)?;
+        let mut messages = Vec::new();
+        let mut answered = false;
+        loop {
+            let Some(message) = self.read_message()? else {
+                return Ok(messages);
+            };
+            if message_kind(&message) == Some("event") {
+                let session_ended = message
+                    .as_object()
+                    .and_then(|object| object.get("event"))
+                    .and_then(Json::as_str)
+                    == Some("session-ended");
+                messages.push(message);
+                if session_ended || (answered && op != "session.stop") {
+                    return Ok(messages);
+                }
+                continue;
+            }
+            if message
+                .as_object()
+                .and_then(|object| object.get("id"))
+                .and_then(Json::as_number)
+                != Some(i128::from(id))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "the debug server returned an unexpected response id",
+                ));
+            }
+            messages.push(message);
+            answered = true;
+            if op != "session.stop" {
+                return Ok(messages);
+            }
+            // `session.stop` sends its response before the final
+            // `session-ended` event; keep reading so batch output includes it.
+        }
+    }
+
+    /// Reads one message only when the transport already has data.
+    ///
+    /// Returns `None` when the connection is idle. This is how an interactive
+    /// client notices a spontaneous `session-ended` event between requests.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport error or an invalid frame error.
+    pub fn poll_message(&mut self) -> std::io::Result<Option<Json>> {
+        if !self.connection.poll_readable()? {
+            return Ok(None);
+        }
+        self.read_message()
     }
 
     /// Sends a request and returns `result`, or the server error.

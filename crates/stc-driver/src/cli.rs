@@ -4,7 +4,7 @@
 //! select the runtime store, a live control host, an explicit diff baseline,
 //! and the rename/watch controls (`--dry-run`, `--watch-timeout`).
 
-use stc_manifest::LintLevel;
+use stc_manifest::{DebugProtocol, LintLevel};
 
 use crate::build::{BuildMode, Emit, Request};
 use crate::report::{ColorChoice, Format, LintOverrides};
@@ -22,6 +22,8 @@ pub(crate) enum Command {
     New,
     /// Build and execute a project.
     Run,
+    /// Build and run a project under a debug session, or attach to one.
+    Debug,
     /// Build and run the test suite.
     Test,
     /// Format sources.
@@ -70,6 +72,33 @@ pub(crate) struct OnlineOptions {
     pub(crate) baseline: Option<String>,
 }
 
+/// Debug-session options shared by `stc debug` and `stc run --debug-server`.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DebugOptions {
+    /// `stc debug --attach <endpoint-file>`.
+    pub(crate) attach: Option<String>,
+    /// `stc debug --endpoint <path>`.
+    pub(crate) endpoint: Option<String>,
+    /// `stc debug --batch <file>|-`.
+    pub(crate) batch: Option<String>,
+    /// Initial `--break <file>:<line>[:<column>]` entries.
+    pub(crate) breaks: Vec<String>,
+    /// Initial `--watch <target>` entries.
+    pub(crate) watches: Vec<String>,
+    /// `--allow-write`.
+    pub(crate) allow_write: bool,
+    /// `--allow-force`.
+    pub(crate) allow_force: bool,
+    /// `--session-timeout` in nanoseconds.
+    pub(crate) session_timeout_ns: Option<u64>,
+    /// `--debug-protocol`.
+    pub(crate) protocol: Option<DebugProtocol>,
+    /// `stc run --debug-server`.
+    pub(crate) server: bool,
+    /// `stc run --debug-endpoint <path>`.
+    pub(crate) server_endpoint: Option<String>,
+}
+
 /// A parsed invocation.
 pub(crate) struct Invocation {
     /// Selected command.
@@ -108,6 +137,8 @@ pub(crate) struct Invocation {
     pub(crate) build: Request,
     /// `stc test` options.
     pub(crate) test: TestOptions,
+    /// Debug-session options.
+    pub(crate) debug: DebugOptions,
 }
 
 /// Parses argv.
@@ -137,6 +168,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         "build" => Command::Build,
         "new" => Command::New,
         "run" => Command::Run,
+        "debug" => Command::Debug,
         "test" => Command::Test,
         "fmt" => Command::Fmt,
         "clean" => Command::Clean,
@@ -177,6 +209,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     let mut online = OnlineOptions::default();
     let mut fmt_check = false;
     let mut test = TestOptions::default();
+    let mut debug = DebugOptions::default();
     let mut paths = Vec::new();
     let mut build = Request::default();
 
@@ -194,6 +227,12 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             "--relaxed" => relaxed = true,
             "--ast" => ast = true,
             "--locked" => locked = true,
+            "--watch" if command == Command::Debug => {
+                debug.watches.push(next_value(args, &mut index, "--watch")?);
+            }
+            other if command == Command::Debug && other.starts_with("--watch=") => {
+                debug.watches.push(other["--watch=".len()..].to_owned());
+            }
             "--watch" => watch = true,
             "--watch-timeout" => {
                 watch_timeout_ns = Some(parse_cycle_time(&next_value(
@@ -240,42 +279,59 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             "-vv" => verbosity = 2,
             "--debug" => select_build_mode(&mut build, BuildMode::Debug)?,
             "--release" => select_build_mode(&mut build, BuildMode::Release)?,
-            "--debug-server" => {
-                if command == Command::Test {
-                    return Err(
-                        "STC-E-PROJECT-010: `stc test` always builds the hook-free debug form and \
-                         rejects `--debug-server`"
-                            .into(),
-                    );
-                }
-                return Err(
-                    "`--debug-server` is not available until the M6.5 debug session phase".into(),
-                );
+            "--debug-server" => debug.server = true,
+            "--debug-endpoint" => {
+                debug.server_endpoint = Some(next_value(args, &mut index, "--debug-endpoint")?);
+            }
+            other if other.starts_with("--debug-endpoint=") => {
+                debug.server_endpoint = Some(other["--debug-endpoint=".len()..].to_owned());
             }
             "--debug-protocol" => {
-                let value = next_value(args, &mut index, "--debug-protocol")?;
-                if command == Command::Test {
-                    return Err(
-                        "STC-E-PROJECT-010: `stc test` always builds the hook-free debug form and \
-                         rejects `--debug-protocol`"
-                            .into(),
-                    );
-                }
-                return Err(format!(
-                    "`--debug-protocol {value}` is not available until the M6.5 debug session phase"
-                ));
+                debug.protocol = Some(parse_debug_protocol(&next_value(
+                    args,
+                    &mut index,
+                    "--debug-protocol",
+                )?)?);
             }
             other if other.starts_with("--debug-protocol=") => {
-                if command == Command::Test {
-                    return Err(
-                        "STC-E-PROJECT-010: `stc test` always builds the hook-free debug form and \
-                         rejects `--debug-protocol`"
-                            .into(),
-                    );
-                }
-                return Err(format!(
-                    "`{other}` is not available until the M6.5 debug session phase"
-                ));
+                debug.protocol = Some(parse_debug_protocol(&other["--debug-protocol=".len()..])?);
+            }
+            "--attach" => {
+                debug.attach = Some(next_value(args, &mut index, "--attach")?);
+            }
+            other if other.starts_with("--attach=") => {
+                debug.attach = Some(other["--attach=".len()..].to_owned());
+            }
+            "--endpoint" => {
+                debug.endpoint = Some(next_value(args, &mut index, "--endpoint")?);
+            }
+            other if other.starts_with("--endpoint=") => {
+                debug.endpoint = Some(other["--endpoint=".len()..].to_owned());
+            }
+            "--batch" => {
+                debug.batch = Some(next_value(args, &mut index, "--batch")?);
+            }
+            other if other.starts_with("--batch=") => {
+                debug.batch = Some(other["--batch=".len()..].to_owned());
+            }
+            "--break" => {
+                debug.breaks.push(next_value(args, &mut index, "--break")?);
+            }
+            other if other.starts_with("--break=") => {
+                debug.breaks.push(other["--break=".len()..].to_owned());
+            }
+            "--allow-write" => debug.allow_write = true,
+            "--allow-force" => debug.allow_force = true,
+            "--session-timeout" => {
+                debug.session_timeout_ns = Some(parse_debug_timeout(&next_value(
+                    args,
+                    &mut index,
+                    "--session-timeout",
+                )?)?);
+            }
+            other if other.starts_with("--session-timeout=") => {
+                debug.session_timeout_ns =
+                    Some(parse_debug_timeout(&other["--session-timeout=".len()..])?);
             }
             "--cold" => build.cold = true,
             "--allow-untracked-removal" => build.allow_untracked_removal = true,
@@ -420,6 +476,16 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             }
             "--reset-retain" => build.run.reset_retain = true,
             "--no-retain" => build.run.no_retain = true,
+            "--mock-clock" => {
+                build.run.mock_clock_ns = Some(parse_cycle_time(&next_value(
+                    args,
+                    &mut index,
+                    "--mock-clock",
+                )?)?);
+            }
+            other if other.starts_with("--mock-clock=") => {
+                build.run.mock_clock_ns = Some(parse_cycle_time(&other["--mock-clock=".len()..])?);
+            }
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
             }
@@ -443,7 +509,17 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         fmt_check,
         &build,
         &test,
+        format,
+        &debug,
     )?;
+    for spec in &debug.breaks {
+        parse_break_spec(spec)?;
+    }
+    if command == Command::Debug && debug.batch.is_some() {
+        // The batch file is a client-side automation format; its output is
+        // always one JSON object per line (CLI-and-Manifest §1.7).
+        format = Format::Json;
+    }
 
     Ok(Some(Invocation {
         command,
@@ -464,6 +540,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         fmt_check,
         build,
         test,
+        debug,
     }))
 }
 
@@ -512,7 +589,116 @@ fn validate(
     fmt_check: bool,
     build: &Request,
     test: &TestOptions,
+    format: Format,
+    debug: &DebugOptions,
 ) -> Result<(), String> {
+    let debug_command_only = debug.attach.is_some()
+        || debug.endpoint.is_some()
+        || debug.batch.is_some()
+        || !debug.breaks.is_empty()
+        || !debug.watches.is_empty();
+    let debug_server = debug.server
+        || debug.server_endpoint.is_some()
+        || debug.protocol.is_some()
+        || debug.allow_write
+        || debug.allow_force
+        || debug.session_timeout_ns.is_some();
+    if command == Command::Test && debug_server {
+        return Err(
+            "STC-E-PROJECT-010: `stc test` always builds the hook-free debug form and rejects \
+             `--release`, `--debug-server`, `--debug-protocol`, and the server-grant options"
+                .into(),
+        );
+    }
+    if command == Command::Test && debug_command_only {
+        return Err(
+            "STC-E-PROJECT-010: `stc test` does not run debug sessions; the `stc debug` options are \
+             not valid"
+                .into(),
+        );
+    }
+    if command == Command::Run {
+        if debug_command_only {
+            return Err(
+                "`--attach`, `--endpoint`, `--batch`, `--break`, and `--watch <target>` are only \
+                 valid with `stc debug`"
+                    .into(),
+            );
+        }
+        if !debug.server
+            && (debug.server_endpoint.is_some()
+                || debug.protocol.is_some()
+                || debug.allow_write
+                || debug.allow_force
+                || debug.session_timeout_ns.is_some())
+        {
+            return Err(
+                "`--debug-endpoint`, `--allow-write`, `--allow-force`, `--session-timeout`, and \
+                 `--debug-protocol` require `stc run --debug-server`"
+                    .into(),
+            );
+        }
+    }
+    if command == Command::Debug {
+        if debug.server || debug.server_endpoint.is_some() {
+            return Err(
+                "`--debug-server` and `--debug-endpoint` are only valid with `stc run`".into(),
+            );
+        }
+        if debug.attach.is_some() {
+            let build_option = build.mode_override.is_some()
+                || build.name.is_some()
+                || !build.emit.is_empty()
+                || build.target.is_some()
+                || build.clang.is_some()
+                || build.runtime.is_some()
+                || build.got_manifest.is_some()
+                || build.cold
+                || !build.renames.is_empty()
+                || build.allow_untracked_removal
+                || build.out_dir.is_some()
+                || manifest.is_some()
+                || locked
+                || relaxed;
+            let launch_option = debug.endpoint.is_some()
+                || debug.allow_write
+                || debug.allow_force
+                || debug.session_timeout_ns.is_some()
+                || debug.protocol.is_some()
+                || build.run.cycles.is_some()
+                || build.run.cycle_time_ns.is_some()
+                || build.run.io.is_some()
+                || build.run.io_file.is_some()
+                || build.run.state_file.is_some()
+                || build.run.reset_retain
+                || build.run.no_retain
+                || build.run.mock_clock_ns.is_some();
+            if build_option || launch_option {
+                return Err(
+                    "STC-E-PROJECT-010: `--attach` cannot be combined with build, launch, or \
+                     server-grant options"
+                        .into(),
+                );
+            }
+        }
+        if format == Format::Short {
+            return Err("`stc debug` supports `--message-format human` or `json`".into());
+        }
+    }
+    if debug_command_only && !matches!(command, Command::Debug | Command::Run) {
+        return Err(
+            "`--attach`, `--endpoint`, `--batch`, `--break`, and `--watch <target>` are only valid \
+             with `stc debug`"
+                .into(),
+        );
+    }
+    if debug_server && !matches!(command, Command::Debug | Command::Run) {
+        return Err(
+            "`--debug-server`, `--debug-endpoint`, `--debug-protocol`, and the debug server grants \
+             are only valid with `stc run --debug-server`"
+                .into(),
+        );
+    }
     let build_only = build.name.is_some()
         || !build.emit.is_empty()
         || build.target.is_some()
@@ -525,11 +711,12 @@ fn validate(
     if build_only
         && !matches!(
             command,
-            Command::Build | Command::Metadata | Command::Run | Command::Test
+            Command::Build | Command::Metadata | Command::Run | Command::Test | Command::Debug
         )
     {
         return Err(
-            "build options are only valid with `stc build`, `stc metadata`, `stc run`, or `stc test`"
+            "build options are only valid with `stc build`, `stc metadata`, `stc run`, `stc test`, \
+             or `stc debug`"
                 .into(),
         );
     }
@@ -543,11 +730,12 @@ fn validate(
                 | Command::Clean
                 | Command::OnlineDownload
                 | Command::OnlineDiff
+                | Command::Debug
         )
     {
         return Err(
             "`--debug` and `--release` are only valid with `stc build`, `stc metadata`, `stc run`, \
-             `stc test`, `stc clean`, or `stc online`"
+             `stc test`, `stc clean`, `stc online`, or `stc debug`"
                 .into(),
         );
     }
@@ -582,21 +770,30 @@ fn validate(
             "`stc run` builds `exe,module,metadata`; `--name`/`--emit` are not valid".into(),
         );
     }
+    if command == Command::Debug && (build.name.is_some() || !build.emit.is_empty()) {
+        return Err(
+            "`stc debug` builds the launcher and module; `--name`/`--emit` are not valid".into(),
+        );
+    }
     let run_only = build.run.cycles.is_some()
         || build.run.cycle_time_ns.is_some()
         || build.run.state_file.is_some()
         || build.run.reset_retain
-        || build.run.no_retain;
-    if run_only && command != Command::Run {
+        || build.run.no_retain
+        || build.run.mock_clock_ns.is_some();
+    if run_only && !matches!(command, Command::Run | Command::Debug) {
         return Err(
-            "`--cycles`, `--cycle-time`, `--state-file`, and the retain options are only valid \
-             with `stc run`"
+            "`--cycles`, `--cycle-time`, `--state-file`, `--mock-clock`, and the retain options \
+             are only valid with `stc run` or `stc debug`"
                 .into(),
         );
     }
     let io_override = build.run.io.is_some() || build.run.io_file.is_some();
-    if io_override && !matches!(command, Command::Run | Command::Test) {
-        return Err("`--io` and `--io-file` are only valid with `stc run` or `stc test`".into());
+    if io_override && !matches!(command, Command::Run | Command::Test | Command::Debug) {
+        return Err(
+            "`--io` and `--io-file` are only valid with `stc run`, `stc test`, or `stc debug`"
+                .into(),
+        );
     }
     if (test.list || test.no_run || test.timeout_ns.is_some() || test.nocapture)
         && command != Command::Test
@@ -609,11 +806,17 @@ fn validate(
     if build.out_dir.is_some()
         && !matches!(
             command,
-            Command::Build | Command::Metadata | Command::Clean | Command::Run | Command::Test
+            Command::Build
+                | Command::Metadata
+                | Command::Clean
+                | Command::Run
+                | Command::Test
+                | Command::Debug
         )
     {
         return Err(
-            "`--out-dir` is only valid with `stc build`, `stc metadata`, `stc clean`, `stc run`, or `stc test`"
+            "`--out-dir` is only valid with `stc build`, `stc metadata`, `stc clean`, `stc run`, \
+             `stc test`, or `stc debug`"
                 .into(),
         );
     }
@@ -664,10 +867,17 @@ fn validate(
     if relaxed
         && !matches!(
             command,
-            Command::Parse | Command::Check | Command::Build | Command::Metadata | Command::Test
+            Command::Parse
+                | Command::Check
+                | Command::Build
+                | Command::Metadata
+                | Command::Test
+                | Command::Debug
         )
     {
-        return Err("`--relaxed` is only valid with parse, check, build, metadata, or test".into());
+        return Err(
+            "`--relaxed` is only valid with parse, check, build, metadata, test, or debug".into(),
+        );
     }
     if manifest.is_some() {
         if !matches!(
@@ -682,6 +892,7 @@ fn validate(
                 | Command::OnlineDownload
                 | Command::OnlineDiff
                 | Command::Rename
+                | Command::Debug
         ) {
             return Err("`--manifest-path` is not valid with this command".into());
         }
@@ -702,6 +913,7 @@ fn validate(
                 | Command::OnlineDownload
                 | Command::OnlineDiff
                 | Command::Rename
+                | Command::Debug
         )
     {
         return Err("`--locked` is not valid with this command".into());
@@ -724,7 +936,8 @@ fn validate(
         | Command::Clean
         | Command::Metadata
         | Command::Compliance
-        | Command::OnlineDownload => path_count == 0,
+        | Command::OnlineDownload
+        | Command::Debug => path_count == 0,
     };
     if !allowed {
         return Err(match command {
@@ -779,6 +992,76 @@ fn parse_cycle_time(value: &str) -> Result<u64, String> {
         })
 }
 
+fn parse_debug_protocol(value: &str) -> Result<DebugProtocol, String> {
+    match value {
+        "pipe" => Ok(DebugProtocol::Pipe),
+        "socket" => Ok(DebugProtocol::Socket),
+        other => Err(format!(
+            "unsupported debug protocol `{other}` (expected `pipe` or `socket`)"
+        )),
+    }
+}
+
+fn parse_debug_timeout(value: &str) -> Result<u64, String> {
+    const MAX_SESSION_TIMEOUT_NS: u64 = 24 * 3_600 * 1_000_000_000;
+    let ns = stc_manifest::parse_duration(value)
+        .map(stc_manifest::DurationNs::as_nanos)
+        .ok_or_else(|| {
+            format!(
+                "STC-E-PROJECT-010: invalid session timeout `{value}`; expected an integer and one \
+                 of `ns`, `us`, `ms`, `s`, `m`, or `h`"
+            )
+        })?;
+    if ns == 0 || ns > MAX_SESSION_TIMEOUT_NS {
+        return Err(
+            "STC-E-PROJECT-010: `--session-timeout` must be positive and at most 24 hours".into(),
+        );
+    }
+    Ok(ns)
+}
+
+/// Parses `--break <file>:<line>[:<column>]` into its three fields.
+pub(crate) fn parse_break_spec(value: &str) -> Result<(String, u32, u32), String> {
+    let mut rest = value;
+    let mut tail = Vec::new();
+    for _ in 0..2 {
+        let Some((head, number)) = rest.rsplit_once(':') else {
+            break;
+        };
+        if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+            break;
+        }
+        tail.push(number);
+        rest = head;
+    }
+    let (file, line, column) = match tail.as_slice() {
+        [line] => (rest, *line, "0"),
+        [column, line] => (rest, *line, *column),
+        _ => {
+            return Err(format!(
+                "`--break` expects `<file>:<line>[:<column>]`, found `{value}`"
+            ));
+        }
+    };
+    if file.is_empty() {
+        return Err(format!(
+            "`--break` expects `<file>:<line>[:<column>]`, found `{value}`"
+        ));
+    }
+    let line = line.parse::<u32>().map_err(|_| {
+        format!("`--break` line and column must be positive integers, found `{value}`")
+    })?;
+    let column = column.parse::<u32>().map_err(|_| {
+        format!("`--break` line and column must be positive integers, found `{value}`")
+    })?;
+    if line == 0 {
+        return Err(format!(
+            "`--break` line and column must be positive integers, found `{value}`"
+        ));
+    }
+    Ok((file.to_owned(), line, column))
+}
+
 fn parse_io(value: &str) -> Result<String, String> {
     match value {
         "null" | "memory" | "file" => Ok(value.to_owned()),
@@ -831,6 +1114,7 @@ fn command_name(command: Command) -> &'static str {
         Command::Build => "build",
         Command::New => "new",
         Command::Run => "run",
+        Command::Debug => "debug",
         Command::Test => "test",
         Command::Fmt => "fmt",
         Command::Clean => "clean",
@@ -867,10 +1151,22 @@ fn print_help() {
          \x20         [--debug|--release]\n\
          \x20         [--cycle-time <duration>] [--io null|memory|file]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
-         \x20         [--no-retain] [--target <triple>] [--clang <path>]\n\
-         \x20         [--runtime <path>] [-v|-vv] [-q]\n\
+         \x20         [--no-retain] [--mock-clock <duration>] [--target <triple>]\n\
+         \x20         [--clang <path>] [--runtime <path>] [-v|-vv] [-q]\n\
+         \x20 stc run --debug-server [--debug-endpoint <path>] [--allow-write]\n\
+         \x20         [--allow-force] [--session-timeout <duration>]\n\
+         \x20         [--debug-protocol pipe|socket]\n\
          \x20 stc run --watch [--store <dir>] [--watch-timeout <duration>]\n\
          \x20         [--target <triple>] [--clang <path>] [--runtime <path>] [-v|-vv]\n\
+         \x20 stc debug [--attach <endpoint-file>] [--endpoint <path>]\n\
+         \x20         [--batch <file>|-] [--break <file>:<line>[:<column>]]...\n\
+         \x20         [--watch <target>]... [--allow-write] [--allow-force]\n\
+         \x20         [--session-timeout <duration>] [--debug-protocol pipe|socket]\n\
+         \x20         [--debug|--release] [--manifest-path <stc.toml|dir>] [--locked]\n\
+         \x20         [--cycles <n>] [--cycle-time <duration>] [--io null|memory|file]\n\
+         \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
+         \x20         [--no-retain] [--mock-clock <duration>]\n\
+         \x20         [--message-format human|json] [-v|-vv] [-q]\n\
          \x20 stc test [<filter>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20          [--list] [--no-run] [--timeout <duration>]\n\
          \x20          [--io null|memory|file] [--io-file <path>]\n\
@@ -907,7 +1203,14 @@ fn print_help() {
          hook-free artifacts in `target/stc/release`; `--debug` forces the\n\
          debug form. The CLI flags override `[build].debug`, which overrides\n\
          `[debug].default`. `stc test` always builds the hook-free debug form\n\
-         and rejects `--release`, `--debug-server`, and `--debug-protocol`.\n\
+         and rejects `--release`, `--debug-server`, `--debug-protocol`, and the\n\
+         server-grant options. `stc debug` builds and launches a local\n\
+         authenticated debug session (or attaches with `--attach`), prints the\n\
+         endpoint path on stderr, and never prints the session token. `stc run\n\
+         --debug-server` starts the same local service beside the run loop.\n\
+         Debug sessions are availability and operability features, not safety\n\
+         functions: a stopped or forced controller may hold outputs\n\
+         indefinitely, and the project is not a safety PLC.\n\
          The manifest-free bridge keeps `--emit ir` and a sanitized file stem. `fmt` formats the\n\
          given files, or the root package's sources and test sources when no\n\
          paths are given, with the fixed lossless-CST style; `--check` writes\n\

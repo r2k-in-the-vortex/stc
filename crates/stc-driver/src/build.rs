@@ -73,6 +73,8 @@ pub(crate) struct RunRequest {
     pub reset_retain: bool,
     /// `--no-retain`.
     pub no_retain: bool,
+    /// `--mock-clock`; advances without sleeping when present.
+    pub mock_clock_ns: Option<u64>,
 }
 
 /// Project metadata settings copied from `stc.toml` into module metadata.

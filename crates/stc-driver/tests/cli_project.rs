@@ -1142,7 +1142,10 @@ fn compliance_summary_shapes() {
         text.contains("\"project-system\":\"implemented\""),
         "{text}"
     );
-    assert!(text.contains("\"debug-monitoring\":\"planned\""), "{text}");
+    assert!(
+        text.contains("\"debug-monitoring\":\"implemented\""),
+        "{text}"
+    );
     assert!(text.contains("\"extensions\":[\"STC-UTF8\""), "{text}");
 
     let human = project.run(".", &["compliance"]);

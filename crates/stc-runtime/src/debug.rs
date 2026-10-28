@@ -1701,11 +1701,15 @@ impl DebugEngine {
         };
         {
             let mut state = lock_bus(&self.bus);
+            // A later teardown (for example host shutdown after a target trap)
+            // must not replace the notice that already ended the session, or
+            // the client would see `shutdown` instead of `target-exited`.
+            let had_session = state.session.is_some();
             state.session = None;
             // No command submitted before the end may be applied against a
             // later generation or a later session.
             state.commands.clear();
-            if notice.is_some() {
+            if notice.is_some() && had_session {
                 state.end_notice = notice;
             }
         }
@@ -6682,7 +6686,8 @@ pub(crate) fn typed_value_from_json(value: &Json) -> Result<TypedValue> {
     Ok(TypedValue::new(type_key, debug_value_from_json(value, 0)?))
 }
 
-fn debug_value_from_json(value: &Json, depth: usize) -> Result<DebugValue> {
+/// Decodes a §15.5 debug value from its wire JSON shape.
+pub(crate) fn debug_value_from_json(value: &Json, depth: usize) -> Result<DebugValue> {
     if depth > MAX_DECODE_DEPTH {
         return Err(Error::new(
             codes::DEBUG_TYPE,

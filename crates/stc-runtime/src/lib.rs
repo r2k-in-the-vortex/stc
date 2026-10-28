@@ -109,7 +109,7 @@ pub use debug_server::{
 };
 pub use debug_view::{
     IdentityKind, SplitView, ViewField, ViewIdentity, ViewKind, ViewNode, ViewOrigin, ViewRoot,
-    escape_text, node_json, render_text, view_json,
+    escape_text, node_json, render_text, render_view_json, view_json,
 };
 pub use got::Got;
 pub use host::{
@@ -258,6 +258,11 @@ struct LauncherOptions {
     control_endpoint: Option<String>,
     control_nonce: Option<String>,
     manifest_dir: Option<PathBuf>,
+    debug_endpoint: Option<PathBuf>,
+    debug_protocol: crate::transport::TransportKind,
+    debug_allow_write: bool,
+    debug_allow_force: bool,
+    debug_session_timeout_ns: Option<u64>,
 }
 
 fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
@@ -266,6 +271,11 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     let mut control_endpoint = None;
     let mut control_nonce = None;
     let mut manifest_dir = None;
+    let mut debug_endpoint = None;
+    let mut debug_protocol = crate::transport::TransportKind::Pipe;
+    let mut debug_allow_write = false;
+    let mut debug_allow_force = false;
+    let mut debug_session_timeout_ns = None;
     let mut index = usize::from(!args.is_empty());
     while index < args.len() {
         let argument = args[index].as_str();
@@ -321,6 +331,27 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
             "--manifest-dir" => {
                 manifest_dir = Some(PathBuf::from(value("--manifest-dir")?));
             }
+            "--debug-endpoint" => {
+                debug_endpoint = Some(PathBuf::from(value("--debug-endpoint")?));
+            }
+            "--debug-protocol" => {
+                let text = value("--debug-protocol")?;
+                debug_protocol =
+                    crate::transport::TransportKind::parse(&text).ok_or_else(|| {
+                        format!("unknown debug transport `{text}` (expected pipe or socket)")
+                    })?;
+            }
+            "--debug-allow-write" => debug_allow_write = true,
+            "--debug-allow-force" => debug_allow_force = true,
+            "--debug-session-timeout" => {
+                let text = value("--debug-session-timeout")?;
+                let ns = run::parse_duration_ns(&text)
+                    .ok_or_else(|| format!("invalid debug session timeout `{text}`"))?;
+                if ns == 0 {
+                    return Err("the debug session timeout must be positive".into());
+                }
+                debug_session_timeout_ns = Some(ns);
+            }
             "--trace" => {
                 return Err("runtime option `--trace` is not supported in this build".into());
             }
@@ -331,12 +362,26 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     if control_endpoint.is_some() && control_nonce.is_none() {
         return Err("`--control` requires `--control-nonce`".into());
     }
+    if debug_allow_write && debug_endpoint.is_none() {
+        return Err("`--debug-allow-write` requires `--debug-endpoint`".into());
+    }
+    if debug_allow_force && debug_endpoint.is_none() {
+        return Err("`--debug-allow-force` requires `--debug-endpoint`".into());
+    }
+    if debug_session_timeout_ns.is_some() && debug_endpoint.is_none() {
+        return Err("`--debug-session-timeout` requires `--debug-endpoint`".into());
+    }
     Ok(LauncherOptions {
         run,
         module,
         control_endpoint,
         control_nonce,
         manifest_dir,
+        debug_endpoint,
+        debug_protocol,
+        debug_allow_write,
+        debug_allow_force,
+        debug_session_timeout_ns,
     })
 }
 
@@ -410,6 +455,29 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
         } else {
             1
         };
+    }
+    if let Some(endpoint) = options.debug_endpoint.as_deref() {
+        let mut config = DebugServerConfig::new(endpoint.to_path_buf(), options.debug_protocol);
+        config.allow_write = options.debug_allow_write;
+        config.allow_force = options.debug_allow_force;
+        if let Some(ns) = options.debug_session_timeout_ns {
+            config.session_timeout = std::time::Duration::from_nanos(ns);
+        }
+        match host.start_debug_server(&config) {
+            Ok(info) => {
+                // Only the endpoint file and audit paths are published; the
+                // token stays in the endpoint file and is never printed.
+                eprintln!("stc: debug endpoint {}", info.endpoint_file.display());
+                eprintln!("stc: debug audit {}", info.audit_log.display());
+            }
+            Err(error) => {
+                eprintln!("stc: {}: {}", error.code, error.message);
+                if let Err(error) = host.shutdown() {
+                    eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
+                }
+                return 2;
+            }
+        }
     }
     let outcome = if control.is_some() {
         run::run_loop_with_control(

@@ -32,7 +32,7 @@ const FEATURES: [(&str, &str); 19] = [
     ("test-runner", "implemented"),
     ("formatter", "implemented"),
     ("online-change", "implemented"),
-    ("debug-monitoring", "planned"),
+    ("debug-monitoring", "implemented"),
     ("ed4-features", "not-in-profile"),
 ];
 

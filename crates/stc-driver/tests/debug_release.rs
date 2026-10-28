@@ -568,17 +568,33 @@ fn clean_selects_the_release_or_debug_directory() {
 }
 
 #[test]
-fn debug_session_flags_remain_unimplemented_for_build_and_run() {
+fn debug_session_flags_are_rejected_by_non_session_commands() {
     let project = scaffold("sessionflags", "[build]\n");
     for arguments in [
         ["build", "--debug-server"].as_slice(),
         ["build", "--debug-protocol", "pipe"].as_slice(),
-        ["run", "--debug-server"].as_slice(),
+        ["build", "--allow-write"].as_slice(),
     ] {
         let output = project.run("app", arguments);
         assert_eq!(code(&output), 2, "{arguments:?}\n{}", stderr(&output));
         assert!(
-            stderr(&output).contains("not available until the M6.5 debug session phase"),
+            stderr(&output).contains("only valid with `stc run --debug-server`"),
+            "{arguments:?}\n{}",
+            stderr(&output)
+        );
+    }
+    // `stc test` always builds the hook-free debug form and never runs a
+    // server or a session (CLI-and-Manifest §1.7).
+    for arguments in [
+        ["test", "--debug-server"].as_slice(),
+        ["test", "--allow-force"].as_slice(),
+        ["test", "--session-timeout", "1s"].as_slice(),
+        ["test", "--break", "src/main.st:3"].as_slice(),
+    ] {
+        let output = project.run("app", arguments);
+        assert_eq!(code(&output), 2, "{arguments:?}\n{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("STC-E-PROJECT-010"),
             "{arguments:?}\n{}",
             stderr(&output)
         );
