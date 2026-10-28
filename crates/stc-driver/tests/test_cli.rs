@@ -2,6 +2,8 @@
 //! process isolation, timeouts, traps, filters, JSON, and production
 //! exclusion.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -9,14 +11,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn stc() -> &'static str {
     env!("CARGO_BIN_EXE_stc")
-}
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root")
-        .to_path_buf()
 }
 
 fn clang() -> Option<&'static str> {
@@ -41,35 +35,7 @@ fn clang() -> Option<&'static str> {
 }
 
 fn runtime_artifact() -> PathBuf {
-    static CACHE: OnceLock<PathBuf> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let output = Command::new(cargo)
-                .args(["build", "-p", "stc-runtime", "--locked"])
-                .current_dir(workspace_root())
-                .output()
-                .expect("run cargo build -p stc-runtime");
-            assert!(
-                output.status.success(),
-                "failed to build stc-runtime:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let profile = std::env::current_exe()
-                .ok()
-                .as_deref()
-                .and_then(Path::parent)
-                .and_then(Path::parent)
-                .expect("target profile directory")
-                .to_path_buf();
-            let name = if cfg!(windows) {
-                "stc_runtime.lib"
-            } else {
-                "libstc_runtime.a"
-            };
-            profile.join(name)
-        })
-        .clone()
+    common::runtime_static()
 }
 
 struct TestDir {

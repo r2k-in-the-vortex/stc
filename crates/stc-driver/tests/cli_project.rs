@@ -2,6 +2,8 @@
 //! (M6 phase 3): project defaults, toolchain precedence, formats, colors,
 //! lint levels, exit codes, and shared host libraries.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -108,51 +110,8 @@ fn scaffold(project: &TestDir, name: &str) {
 
 /// Builds the runtime static/shared pair once and returns their paths.
 fn runtime_pair() -> Option<(PathBuf, PathBuf)> {
-    static CACHE: OnceLock<Option<(PathBuf, PathBuf)>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            clang()?;
-            let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()?
-                .parent()?
-                .to_path_buf();
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let output = Command::new(cargo)
-                .args(["build", "-p", "stc-runtime", "--locked"])
-                .current_dir(&workspace)
-                .output()
-                .expect("run cargo build -p stc-runtime");
-            assert!(
-                output.status.success(),
-                "failed to build stc-runtime:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let profile = std::env::current_exe()
-                .ok()?
-                .parent()?
-                .parent()?
-                .to_path_buf();
-            let static_name = if cfg!(windows) {
-                "stc_runtime.lib"
-            } else {
-                "libstc_runtime.a"
-            };
-            let shared_name = if cfg!(windows) {
-                "stc_runtime.dll"
-            } else if cfg!(target_os = "macos") {
-                "libstc_runtime.dylib"
-            } else {
-                "libstc_runtime.so"
-            };
-            let static_library = profile.join(static_name);
-            let shared_library = profile.join(shared_name);
-            if static_library.is_file() && shared_library.is_file() {
-                Some((static_library, shared_library))
-            } else {
-                None
-            }
-        })
-        .clone()
+    clang()?;
+    common::runtime_pair()
 }
 
 fn host_triple() -> &'static str {

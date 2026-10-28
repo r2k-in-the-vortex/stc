@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Rust: coverage (lcov)",
+      "type": "shell",
+      "command": "cargo llvm-cov --workspace --locked --lcov --output-path target/lcov.info",
+      "options": {
+        "env": {
+          "STC_REQUIRE_CLANG": "1"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Rust: coverage (HTML)",
+      "type": "shell",
+      "command": "cargo llvm-cov report --html",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Rust: coverage",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Rust: coverage (lcov)", "Rust: coverage (HTML)"],
+      "problemMatcher": []
+    }
+  ]
+}

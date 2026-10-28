@@ -1,0 +1,318 @@
+# Phase 0 verification registry (Plan-Phase0.md §7).
+#
+# This checked-in table is the single source of truth for the Phase 0 theorem
+# inventory and its proof status. The full registry tooling and generated
+# status matrix are Phase 1 work; `tools/ci/check_verification_registry.py`
+# validates this table, resolves proved entries against the Lean environment,
+# and audits their axioms. Later phases extend the table; they do not rename
+# or silently redefine an existing entry.
+#
+# Fields:
+#   id       stable registry key
+#   kind     theorem | evidence | definition
+#   name     fully qualified Lean name (or artifact name for evidence)
+#   phase    P0.0 through P0.7
+#   level    claim ladder: S, V0..V4
+#   spec     repository path plus a section anchor
+#   module   Lean module that holds the declaration
+#   owner    accountable verification owner
+#   status   planned | proved | tested | descoped
+#   tcb      trust-boundary note
+#   note     optional free text; required when status is "descoped"
+
+schema_version = 1
+profile = "stc-2013-oop-utf8-v1"
+semantics_version = "1.0-draft"
+dump_format_version = "0.1-draft"
+
+[[records]]
+id = "P0-T01"
+kind = "theorem"
+name = "Stc.Syntax.ast_span_wellformed"
+phase = "P0.1"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Syntax.Ast"
+owner = "verification"
+status = "proved"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T02"
+kind = "theorem"
+name = "Stc.Sem.core_check_sound"
+phase = "P0.2"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Typing"
+owner = "verification"
+status = "proved"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T03"
+kind = "theorem"
+name = "Stc.Sem.core_check_complete"
+phase = "P0.2"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Typing"
+owner = "verification"
+status = "descoped"
+tcb = "core Lean kernel; audited with #print axioms"
+note = "P0.2 proves core_rejection_characterized instead. The P0.2 checker deliberately over-rejects FOR (StmtRule.forUnsupported) and is not complete for the declarative judgment; completeness is deferred to Phase 2, where HIR lowering connects the source checker to this judgment."
+
+[[records]]
+id = "P0-T04"
+kind = "theorem"
+name = "Stc.Sem.core_rejection_characterized"
+phase = "P0.2"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Typing"
+owner = "verification"
+status = "proved"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T05"
+kind = "theorem"
+name = "Stc.Sem.hir_wellformed"
+phase = "P0.2"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Typing"
+owner = "verification"
+status = "proved"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T06"
+kind = "theorem"
+name = "Stc.Sem.conversion_legal_iff"
+phase = "P0.2"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Typing"
+owner = "verification"
+status = "proved"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T07"
+kind = "theorem"
+name = "Stc.Sem.eval_deterministic"
+phase = "P0.3"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Eval"
+owner = "verification"
+status = "proved"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T08"
+kind = "theorem"
+name = "Stc.Sem.progress"
+phase = "P0.3"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Eval"
+owner = "verification"
+status = "planned"
+note = "In progress: see Specification/Verification/Plan-Phase0.md §19 for the current state and the open semantic questions."
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T09"
+kind = "theorem"
+name = "Stc.Sem.preservation"
+phase = "P0.3"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Eval"
+owner = "verification"
+status = "planned"
+note = "In progress: see Specification/Verification/Plan-Phase0.md §19 for the current state and the open semantic questions."
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T10"
+kind = "theorem"
+name = "Stc.Sem.type_soundness"
+phase = "P0.3"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Eval"
+owner = "verification"
+status = "planned"
+note = "In progress: see Specification/Verification/Plan-Phase0.md §19 for the current state and the open semantic questions."
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T11"
+kind = "theorem"
+name = "Stc.Sem.trap_soundness"
+phase = "P0.3"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Eval"
+owner = "verification"
+status = "proved"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T12"
+kind = "theorem"
+name = "Stc.Sem.checked_arith_traps_exactly"
+phase = "P0.3"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Sem.Eval"
+owner = "verification"
+status = "proved"
+tcb = "depends on the Stc.Exact models; audited with #print axioms"
+
+[[records]]
+id = "P0-T13"
+kind = "theorem"
+name = "Verification.Semantics.interpreter_sound"
+phase = "P0.3"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Verification.Semantics.Interpreter"
+owner = "verification"
+status = "proved"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T14"
+kind = "theorem"
+name = "Verification.Semantics.interpreter_complete"
+phase = "P0.3"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Verification.Semantics.Interpreter"
+owner = "verification"
+status = "proved"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T15"
+kind = "theorem"
+name = "Stc.Codegen.ir_deterministic"
+phase = "P0.5"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Codegen.Semantics"
+owner = "verification"
+status = "planned"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T16"
+kind = "theorem"
+name = "Stc.Codegen.ir_progress"
+phase = "P0.5"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Codegen.Semantics"
+owner = "verification"
+status = "planned"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T17"
+kind = "theorem"
+name = "Stc.Codegen.ir_memory_safe"
+phase = "P0.5"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Codegen.Semantics"
+owner = "verification"
+status = "planned"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T18"
+kind = "theorem"
+name = "Stc.Codegen.ir_got_sound"
+phase = "P0.5"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Codegen.Semantics"
+owner = "verification"
+status = "planned"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T19"
+kind = "theorem"
+name = "Stc.Codegen.ir_trap_sound"
+phase = "P0.5"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Codegen.Semantics"
+owner = "verification"
+status = "planned"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T20"
+kind = "theorem"
+name = "Stc.Codegen.ir_checked_arith_refines_exact"
+phase = "P0.5"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Codegen.Semantics"
+owner = "verification"
+status = "planned"
+tcb = "depends on the Stc.Exact models; audited with #print axioms"
+
+[[records]]
+id = "P0-T21"
+kind = "theorem"
+name = "Stc.Codegen.ir_recursive_model_equiv"
+phase = "P0.5"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Codegen.Semantics"
+owner = "verification"
+status = "planned"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T22"
+kind = "theorem"
+name = "Stc.Codegen.ir_no_ub"
+phase = "P0.5"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#7-theorem-inventory"
+module = "Stc.Codegen.Semantics"
+owner = "verification"
+status = "planned"
+tcb = "core Lean kernel; audited with #print axioms"
+
+[[records]]
+id = "P0-T23"
+kind = "evidence"
+name = "Verification.Semantics.semantics_conformance"
+phase = "P0.6"
+level = "V0"
+spec = "Specification/Verification/Plan-Phase0.md#93-conformance-harness"
+module = "Verification.Semantics.Conformance"
+owner = "verification"
+status = "planned"
+tcb = "differential evidence, not a refinement proof"
+
+[[records]]
+id = "P0-T24"
+kind = "theorem"
+name = "Verification.Semantics.semantics_versioned"
+phase = "P0.6"
+level = "S"
+spec = "Specification/Verification/Plan-Phase0.md#35-semantics-versioning"
+module = "Verification.Semantics.Conformance"
+owner = "verification"
+status = "planned"
+tcb = "report and dump metadata; checked by the harness"

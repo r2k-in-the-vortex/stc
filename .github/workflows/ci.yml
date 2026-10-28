@@ -23,6 +23,39 @@ jobs:
   # The specification is written before the compiler. This job reports which
   # parts of the tree exist so the code-backed jobs can stay skipped until
   # their workspace, suite, or tool is added.
+  ci:
+    name: CI
+    needs:
+      - detect
+      - docs
+      - fmt
+      - clippy
+      - test
+      - coverage
+      - online
+      - ui
+      - conformance
+      - execution
+      - projects
+      - traceability
+      - lean
+      - fuzz-smoke
+      - cross-target
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail if any needed job failed or was cancelled
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed="${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
+          if [ "$failed" = "true" ]; then
+            echo "::error::One or more required jobs failed or were cancelled"
+            exit 1
+          fi
+          echo "All required jobs passed or were skipped."
+
   detect:
     name: Detect project state
     runs-on: ubuntu-24.04
@@ -148,6 +181,82 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run workspace tests
         run: cargo test --workspace --locked
+
+  # Coverage runs the same workspace tests under LLVM instrumentation. The
+  # per-file summary is written to the job summary and the lcov/HTML reports
+  # are uploaded. On main, the generated badge is also pushed to the `badges`
+  # branch that the README links to; only this job requests write access.
+  coverage:
+    name: Rust coverage
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # `cargo llvm-cov clean` removes the instrumented target directory,
+          # so only the registry cache is useful here.
+          cache-targets: false
+      - name: Clean previous coverage data
+        run: cargo llvm-cov clean --workspace
+      - name: Run workspace tests with coverage
+        run: cargo llvm-cov --workspace --locked --lcov --output-path target/lcov.info
+      - name: Write coverage summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo llvm-cov report --json --summary-only --output-path target/summary.json
+          python3 tools/ci/coverage_summary.py target/summary.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Build HTML report
+        run: cargo llvm-cov report --html
+      - name: Build coverage badge
+        run: |
+          python3 tools/ci/coverage_badge.py target/lcov.info \
+            --svg target/coverage.svg \
+            --json target/coverage.json
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: |
+            target/lcov.info
+            target/summary.json
+            target/llvm-cov/html
+          if-no-files-found: error
+      - name: Publish coverage badge
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          badge_dir="$RUNNER_TEMP/coverage-badge"
+          mkdir -p "$badge_dir"
+          cp target/coverage.svg target/coverage.json "$badge_dir/"
+          cd "$badge_dir"
+          git init -q
+          git checkout -q -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add coverage.svg coverage.json
+          git commit -q -m "Update coverage badge"
+          git push --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
 
   # The online-change suite gets an explicit job so a hot-swap or manifest
   # regression is visible even when the workspace job reports an unrelated
@@ -333,6 +442,33 @@ jobs:
             echo "::error::sorry/admit found in Stc/Exact"
             exit 1
           fi
+      - name: Reject sorry/admit in Phase 0 modules
+        working-directory: lean
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths=(
+            Stc/Syntax
+            Stc/Grammar
+            Stc/Hir
+            Stc/Sem
+            Stc/Codegen
+            Verification
+          )
+          for path in "${paths[@]}"; do
+            if [ ! -e "$path" ]; then
+              echo "::error::Phase 0 module path $path is missing"
+              exit 1
+            fi
+            if grep -rnwE 'sorry|admit' "$path"; then
+              echo "::error::sorry/admit found in $path"
+              exit 1
+            fi
+          done
+      - name: Check the Phase 0 verification registry and axioms
+        run: python3 tools/ci/check_verification_registry.py
+      - name: Check the fail-closed semantics-conformance placeholder
+        run: python3 tools/ci/check_semantics_placeholder.py
       - name: Regenerate exact-function vectors and check they are committed
         if: hashFiles('lean/VectorCli.lean') != ''
         working-directory: lean

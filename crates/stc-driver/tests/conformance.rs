@@ -20,6 +20,8 @@
 //! it with `--cycles`. Run kinds need clang; without it they are skipped
 //! unless `STC_REQUIRE_CLANG=1`.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -68,40 +70,7 @@ fn clang() -> Option<&'static str> {
 }
 
 fn runtime_artifact() -> PathBuf {
-    static CACHE: OnceLock<PathBuf> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let output = Command::new(cargo)
-                .args(["build", "-p", "stc-runtime", "--locked"])
-                .current_dir(workspace_root())
-                .output()
-                .expect("run cargo build -p stc-runtime");
-            assert!(
-                output.status.success(),
-                "failed to build stc-runtime:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let profile = std::env::current_exe()
-                .expect("test executable")
-                .parent()
-                .and_then(Path::parent)
-                .expect("target profile directory")
-                .to_path_buf();
-            let name = if cfg!(windows) {
-                "stc_runtime.lib"
-            } else {
-                "libstc_runtime.a"
-            };
-            let artifact = profile.join(name);
-            assert!(
-                artifact.is_file(),
-                "runtime artifact missing at {}",
-                artifact.display()
-            );
-            artifact
-        })
-        .clone()
+    common::runtime_static()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

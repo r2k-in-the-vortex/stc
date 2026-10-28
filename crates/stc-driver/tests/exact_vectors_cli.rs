@@ -5,6 +5,8 @@
 //! runs `tests/harness/exact_vectors.c` against the generated module. It also
 //! checks that checked arithmetic traps through a real module cycle.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -24,35 +26,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn runtime_artifact() -> PathBuf {
-    static CACHE: OnceLock<PathBuf> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let output = Command::new(cargo)
-                .args(["build", "-p", "stc-runtime", "--locked"])
-                .current_dir(workspace_root())
-                .output()
-                .expect("run cargo build -p stc-runtime");
-            assert!(
-                output.status.success(),
-                "failed to build stc-runtime:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let exe = std::env::current_exe().expect("test executable");
-            let profile = exe
-                .parent()
-                .and_then(Path::parent)
-                .expect("target profile directory");
-            let name = if cfg!(windows) {
-                "stc_runtime.lib"
-            } else {
-                "libstc_runtime.a"
-            };
-            let artifact = profile.join(name);
-            assert!(artifact.is_file(), "runtime artifact missing");
-            artifact
-        })
-        .clone()
+    common::runtime_static()
 }
 
 fn clang() -> Option<&'static str> {
