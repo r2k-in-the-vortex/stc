@@ -189,6 +189,8 @@ spelling, and OS-specific FFI. Classify each as:
   (rbp)`; reject functions without a frame pointer (they are reported as optimized-out callers).
 - Keep `DW_OP_fbreg` local offsets, the `fp+16` CFA, `saved_fp = -16`, and
   `return_address = -8`; add unit tests using AArch64 `readelf` text.
+- Compile AArch64 modules and fixtures with `-mbranch-protection=none`: pointer authentication
+  would sign the saved link register, and the format-1 walk needs the raw caller address.
 - Machine-check the AArch64 prologue layout in a codegen/CI test: compile a debug fixture with
   `clang --target=aarch64-unknown-linux-gnu -gdwarf-5 -O0` and assert frame extraction succeeds
   on an x86-64 or AArch64 host.
@@ -366,7 +368,7 @@ the run log. CI runs are never silently skipped or narrowed to make a phase pass
 
 | Phase | State | Commit | CI run |
 | --- | --- | --- | --- |
-| 0 — host contract and decisions | Complete (2026-10-28) | `M8` phase-0 commit | Local checks |
+| 0 — host contract and decisions | Complete (2026-10-28) | `857fb20` | Local checks |
 | 1 — host abstraction audit | Pending | | |
 | 2 — Linux x86-64 verification | Pending | | |
 | 3 — Linux AArch64 native build | Pending | | |

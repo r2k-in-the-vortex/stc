@@ -15,9 +15,10 @@ use std::process::Command;
 
 use stc_codegen::{FrameFunctionHint, Json};
 
-/// x86-64 frame layout shared by Windows and Linux debug builds: the prologue
-/// pushes `rbp`, so the canonical frame address is `rbp + 16`, the saved frame
-/// pointer sits at `CFA - 16`, and the return address at `CFA - 8`.
+/// Frame layout shared by x86-64 and AArch64 debug builds (D-202): the
+/// prologue saves the frame pointer and return address below it, so the
+/// canonical frame address is `fp + 16`, the saved frame pointer sits at
+/// `CFA - 16`, and the return address at `CFA - 8`.
 const CFA: &str = "fp+16";
 const SAVED_FP: i128 = -16;
 const RETURN_ADDRESS: i128 = -8;
@@ -52,7 +53,10 @@ enum Format {
 /// frame rules, the backend tool is unavailable, or it yields no usable
 /// function.
 pub(crate) fn extract(request: &ExtractRequest<'_>) -> Option<String> {
-    if request.pointer_width != 8 || !request.target_triple.starts_with("x86_64-") {
+    if request.pointer_width != 8
+        || !(request.target_triple.starts_with("x86_64-")
+            || request.target_triple.starts_with("aarch64-"))
+    {
         return None;
     }
     let format = if request.target_triple.contains("windows") {
@@ -393,7 +397,10 @@ fn parse_dwarf(text: &str) -> BTreeMap<String, BackendFunction> {
                     function.code_size = parse_hex(value.trim()).unwrap_or(0);
                 }
             } else if attribute.starts_with("DW_AT_frame_base") {
-                function.frame_pointer = attribute.contains("DW_OP_reg6 (rbp)");
+                // x86-64 names rbp (DWARF register 6); AArch64 names x29
+                // (DWARF register 29). Both use the same frame offsets.
+                function.frame_pointer = attribute.contains("DW_OP_reg6 (rbp)")
+                    || attribute.contains("DW_OP_reg29 (x29)");
             }
         } else if let Some(local) = &mut local {
             if attribute.starts_with("DW_AT_name") {
@@ -540,6 +547,28 @@ mod tests {
         let functions = parse_dwarf(text);
         let function = functions.get("stc_add").expect("function");
         assert_eq!(function.code_size, 0x1A);
+        assert!(function.frame_pointer);
+        assert_eq!(function.locals.get("A"), Some(&-4));
+        assert_eq!(function.locals.get("X"), Some(&-12));
+    }
+
+    #[test]
+    fn dwarf_extracts_aarch64_frame_pointer_locals() {
+        let text = r#" <1><23>: Abbrev Number: 2 (DW_TAG_subprogram)
+    <25>   DW_AT_high_pc     : (data4) 0x28
+    <29>   DW_AT_frame_base  : (exprloc) 1 byte block: 9d 	(DW_OP_reg29 (x29))
+    <2b>   DW_AT_linkage_name: (strx1) (offset: 0x3): stc_inner
+ <2><33>: Abbrev Number: 3 (DW_TAG_formal_parameter)
+    <34>   DW_AT_location    : (exprloc) 2 byte block: 91 7c 	(DW_OP_fbreg: -4)
+    <37>   DW_AT_name        : (strx1) (offset: 0x6): a
+ <2><49>: Abbrev Number: 4 (DW_TAG_variable)
+    <4a>   DW_AT_location    : (exprloc) 2 byte block: 91 74 	(DW_OP_fbreg: -12)
+    <4d>   DW_AT_name        : (strx1) (offset: 0x8): x
+ <2><54>: Abbrev Number: 0
+"#;
+        let functions = parse_dwarf(text);
+        let function = functions.get("stc_inner").expect("function");
+        assert_eq!(function.code_size, 0x28);
         assert!(function.frame_pointer);
         assert_eq!(function.locals.get("A"), Some(&-4));
         assert_eq!(function.locals.get("X"), Some(&-12));

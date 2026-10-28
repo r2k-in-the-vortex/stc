@@ -1178,3 +1178,33 @@ fn failed_cold_install_restores_the_process_image_and_direct_cells() {
         .expect("direct layout entry");
     assert_eq!(entry.storage, Some(restored as usize));
 }
+
+/// Reports whether `/proc/self/maps` still contains a mapping for `path`.
+#[cfg(target_os = "linux")]
+fn module_is_mapped(path: &std::path::Path) -> bool {
+    let text = fs::read_to_string("/proc/self/maps").expect("read /proc/self/maps");
+    let path = path.to_string_lossy();
+    text.lines().any(|line| line.ends_with(path.as_ref()))
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn shutdown_unloads_the_shared_library() {
+    let artifacts = common::artifacts(common::SIMPLE, "simple");
+    let Some(fixture) = fixture("unload-mapping", artifacts) else {
+        return;
+    };
+    let module = fs::canonicalize(&fixture.module_path).expect("canonical module path");
+    let mut host = in_memory_host();
+    cold_install(&mut host, &fixture);
+    assert!(
+        module_is_mapped(&module),
+        "the loaded module is mapped at {}",
+        module.display()
+    );
+    host.shutdown().expect("shutdown");
+    assert!(
+        !module_is_mapped(&module),
+        "shutdown unloads the module mapping (dlclose)"
+    );
+}

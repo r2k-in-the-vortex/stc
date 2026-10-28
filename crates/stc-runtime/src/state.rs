@@ -377,7 +377,7 @@ pub fn save(path: &Path, payload: &[u8], layout_hash: u64) -> Result<(), String>
         ));
     }
     let bytes = encode(payload, layout_hash);
-    write_atomically(path, &bytes)
+    write_private_atomically(path, &bytes)
         .map_err(|error| format!("cannot write state file `{}`: {error}", path.display()))
 }
 
@@ -390,6 +390,23 @@ pub fn save(path: &Path, payload: &[u8], layout_hash: u64) -> Result<(), String>
 ///
 /// Reports the create/write/sync/flush or replace failure.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    write_file_atomically(path, bytes, false)
+}
+
+/// Writes a runtime-private file atomically.
+///
+/// On Unix the temporary file is mode 0600 and the parent directory is synced
+/// after the rename, so a power loss cannot resurrect the old file with the
+/// new bytes missing (D-203). On Windows the replace is write-through.
+///
+/// # Errors
+///
+/// Reports the create/write/sync/flush or replace failure.
+pub fn write_private_atomically(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    write_file_atomically(path, bytes, true)
+}
+
+fn write_file_atomically(path: &Path, bytes: &[u8], private: bool) -> Result<(), std::io::Error> {
     let temporary = temporary_path(path);
     let result = (|| -> std::io::Result<()> {
         if let Some(parent) = path.parent()
@@ -397,17 +414,53 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error>
         {
             std::fs::create_dir_all(parent)?;
         }
-        let mut file = File::create(&temporary)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::PermissionsExt;
+            // The create mode is masked by the process umask; set the exact
+            // user-only mode before writing any state.
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        let _ = private;
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;
         drop(file);
-        replace_file(&temporary, path)
+        replace_file(&temporary, path)?;
+        sync_parent(path)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+/// Syncs the directory that holds `path` after a rename (Unix).
+///
+/// Windows' `MoveFileEx` with `WRITE_THROUGH` already covers the rename, and
+/// directories cannot be opened as ordinary files there.
+#[cfg(unix)]
+fn sync_parent(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Returns `<path>.tmp` in the same directory.
@@ -690,6 +743,48 @@ mod tests {
         ));
         std::fs::create_dir_all(&path).expect("create temp directory");
         path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_state_is_user_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = temp_dir("private");
+        let path = directory.join("app.stcstate");
+        save(&path, &payload(), 7).expect("save");
+        let mode = std::fs::metadata(&path)
+            .expect("state metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "state files are user-only (D-203)");
+        assert!(
+            !temporary_path(&path).exists(),
+            "the temporary file is renamed, not left behind"
+        );
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_replace_keeps_the_target_and_removes_the_temporary() {
+        let directory = temp_dir("failed-replace");
+        let path = directory.join("app.stcstate");
+        // A non-empty directory cannot be replaced by a file; the rename
+        // fails after the temporary file has been written and synced.
+        std::fs::create_dir_all(path.join("child")).expect("target directory");
+        let error = save(&path, &payload(), 7).expect_err("replace must fail");
+        assert!(
+            error.contains("cannot write state file"),
+            "unexpected error: {error}"
+        );
+        assert!(path.is_dir(), "the previous target is intact");
+        assert!(
+            !temporary_path(&path).exists(),
+            "the failed temporary file is removed"
+        );
+        std::fs::remove_dir_all(&directory).expect("clean up");
     }
 
     #[test]

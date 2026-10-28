@@ -198,35 +198,15 @@ fn is_hidden(name: &OsStr) -> bool {
 }
 
 fn is_target(name: &OsStr) -> bool {
-    let name = name.to_string_lossy();
-    if cfg!(windows) {
-        name.eq_ignore_ascii_case("target")
-    } else {
-        name == "target"
-    }
+    crate::host::is_target_dir(name)
 }
 
 fn is_excluded(path: &Path, exclusions: &[PathBuf]) -> bool {
-    exclusions.iter().any(|exclusion| {
-        if path == exclusion {
-            return true;
-        }
-        cfg!(windows)
-            && path
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&exclusion.to_string_lossy())
-    })
+    crate::host::is_excluded(path, exclusions)
 }
 
 fn has_st_extension(path: &Path) -> bool {
-    let Some(extension) = path.extension().and_then(OsStr::to_str) else {
-        return false;
-    };
-    if cfg!(windows) {
-        extension.eq_ignore_ascii_case("st")
-    } else {
-        extension == "st"
-    }
+    crate::host::has_st_extension(path)
 }
 
 fn relative_spelling(root: &Path, path: &Path) -> String {

@@ -474,6 +474,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check that every implemented rule has test evidence
         run: cargo run --locked -p xtask -- traceability --check
+      - name: Check that host-specific code stays in the platform layer
+        run: cargo run --locked -p xtask -- host-audit --check
 
   lean:
     name: Lean proofs

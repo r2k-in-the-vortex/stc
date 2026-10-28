@@ -34,6 +34,7 @@ fn run(args: &[String]) -> Result<(), String> {
         "test" => test(rest),
         "traceability" => traceability(rest),
         "package" => package(rest),
+        "host-audit" => host_audit(rest),
         "--help" | "-h" | "help" => {
             println!("{}", usage());
             Ok(())
@@ -46,7 +47,8 @@ fn usage() -> &'static str {
     "usage:\n  \
      cargo xtask test --suite ui|conformance|execution|projects|debug|cross-target [--locked] [-- <args>]\n  \
      cargo xtask package [--out <dir>]\n  \
-     cargo xtask traceability [--check]"
+     cargo xtask traceability [--check]\n  \
+     cargo xtask host-audit [--check]"
 }
 
 /// One test target: a workspace package and an integration test file.
@@ -159,6 +161,211 @@ fn test(args: &[String]) -> Result<(), String> {
 
 fn cargo() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())
+}
+
+/// Files that may contain operating-system conditionals.
+///
+/// Every entry is a workspace-relative path and a reason. The portable
+/// compiler crates and the module/manifest model may only name their single
+/// host module; the runtime and driver list every platform-layer file (D-201).
+/// The audit also fails on a stale entry so the list cannot drift.
+const HOST_AUDIT_ALLOWLIST: &str = "tools/ci/host-allowlist.txt";
+
+/// Crates whose implementation must not branch on the host operating system.
+const PORTABLE_CRATES: [&str; 6] = [
+    "stc-lexer",
+    "stc-parser",
+    "stc-sema",
+    "stc-codegen",
+    "stc-got",
+    "stc-manifest",
+];
+
+/// Crates that own a platform layer; branches are allowed only in listed files.
+const HOST_LAYER_CRATES: [&str; 3] = ["stc-runtime", "stc-driver", "xtask"];
+
+/// One source line that names a host-specific condition.
+#[derive(Debug)]
+struct HostHit {
+    line: usize,
+    pattern: String,
+}
+
+/// Checks that host-specific code stays inside the allowlisted files.
+fn host_audit(args: &[String]) -> Result<(), String> {
+    for argument in args {
+        match argument.as_str() {
+            "--check" => {}
+            other => {
+                return Err(format!("unknown `cargo xtask host-audit` option `{other}`"));
+            }
+        }
+    }
+    let root = workspace_root();
+    let allowlist = load_host_allowlist(&root.join(HOST_AUDIT_ALLOWLIST))?;
+    let mut hits: BTreeMap<String, Vec<HostHit>> = BTreeMap::new();
+    for name in PORTABLE_CRATES.into_iter().chain(HOST_LAYER_CRATES) {
+        let directory = root.join("crates").join(name).join("src");
+        if !directory.is_dir() {
+            continue;
+        }
+        let mut files = Vec::new();
+        collect_rust_files(&directory, &mut files)?;
+        for path in files {
+            let relative = path
+                .strip_prefix(&root)
+                .map_err(|_| format!("`{}` is outside the workspace", path.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text = fs::read_to_string(&path)
+                .map_err(|error| format!("cannot read `{}`: {error}", path.display()))?;
+            let file_hits = host_hits(&text);
+            if !file_hits.is_empty() {
+                hits.insert(relative, file_hits);
+            }
+        }
+    }
+    let mut findings = Vec::new();
+    for (path, file_hits) in &hits {
+        if !allowlist.contains_key(path) {
+            for hit in file_hits {
+                findings.push(format!(
+                    "{path}:{}: `{}` is not allowlisted",
+                    hit.line, hit.pattern
+                ));
+            }
+        }
+    }
+    for path in allowlist.keys() {
+        if !hits.contains_key(path) {
+            findings.push(format!(
+                "{HOST_AUDIT_ALLOWLIST}: `{path}` has no host-specific line; remove the stale entry"
+            ));
+        }
+    }
+    if !findings.is_empty() {
+        for finding in &findings {
+            eprintln!("host-audit: {finding}");
+        }
+        return Err(format!(
+            "{} host-specific source line(s) are outside the allowlist",
+            findings.len()
+        ));
+    }
+    let lines: usize = hits.values().map(Vec::len).sum();
+    println!(
+        "host-audit: {lines} host-specific line(s) in {} allowlisted file(s)",
+        hits.len()
+    );
+    Ok(())
+}
+
+fn load_host_allowlist(path: &Path) -> Result<BTreeMap<String, String>, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|error| format!("cannot read `{}`: {error}", path.display()))?;
+    let mut entries = BTreeMap::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((entry, reason)) = line.split_once('|') else {
+            return Err(format!(
+                "{}:{}: expected `<path> | <reason>`",
+                path.display(),
+                index + 1
+            ));
+        };
+        let entry = entry.trim().replace('\\', "/");
+        let reason = reason.trim();
+        if entry.is_empty() || reason.is_empty() {
+            return Err(format!(
+                "{}:{}: the path and reason must be non-empty",
+                path.display(),
+                index + 1
+            ));
+        }
+        entries.insert(entry, reason.to_owned());
+    }
+    Ok(entries)
+}
+
+fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("cannot read `{}`: {error}", directory.display()))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("cannot read `{}`: {error}", directory.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust_files(&path, files)?;
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Returns the host-specific lines of one source file.
+///
+/// A line is a hit when it starts a `cfg` predicate naming an operating
+/// system or architecture (including a multi-line predicate), or names a
+/// platform module directly. Comment-only lines are ignored.
+fn host_hits(text: &str) -> Vec<HostHit> {
+    let mut hits = Vec::new();
+    let mut lines = text.lines().enumerate();
+    while let Some((index, line)) = lines.next() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        if let Some(start) = cfg_start(line) {
+            // `cfg` predicates can span lines; read until the parentheses
+            // balance so `#[cfg(all(\n target_os = ...))]` is not missed.
+            let mut block = line[start..].to_owned();
+            let mut depth = paren_balance(&block);
+            while depth > 0 {
+                let Some((_, next)) = lines.next() else {
+                    break;
+                };
+                block.push('\n');
+                block.push_str(next);
+                depth += paren_balance(next);
+            }
+            if let Some(predicate) = ["windows", "unix", "target_os", "target_arch"]
+                .into_iter()
+                .find(|predicate| block.contains(predicate))
+            {
+                hits.push(HostHit {
+                    line: index + 1,
+                    pattern: predicate.to_owned(),
+                });
+            }
+            continue;
+        }
+        if let Some(path) = ["std::os::windows", "std::os::unix", "std::env::consts"]
+            .into_iter()
+            .find(|path| line.contains(path))
+        {
+            hits.push(HostHit {
+                line: index + 1,
+                pattern: path.to_owned(),
+            });
+        }
+    }
+    hits
+}
+
+fn cfg_start(line: &str) -> Option<usize> {
+    line.find("cfg(").or_else(|| line.find("cfg!("))
+}
+
+fn paren_balance(text: &str) -> i32 {
+    text.chars().fold(0, |depth, character| match character {
+        '(' => depth + 1,
+        ')' => depth - 1,
+        _ => depth,
+    })
 }
 
 /// Names of the documentation files shipped in every release package.
@@ -453,7 +660,14 @@ fn render_package_json(version: &str, host: &str, artifacts: &[String]) -> Strin
         json.push_str(&format!("    \"{artifact}\"{comma}\n"));
     }
     json.push_str("  ],\n");
-    json.push_str("  \"debug_contract\": \"object-codeview\",\n");
+    // The debug backend is host-visible metadata (D-206): Windows MSVC emits
+    // object-level CodeView and Linux GNU emits DWARF.
+    let debug_contract = if cfg!(windows) {
+        "object-codeview"
+    } else {
+        "dwarf"
+    };
+    json.push_str(&format!("  \"debug_contract\": \"{debug_contract}\",\n"));
     json.push_str("  \"formats\": {\n");
     json.push_str(&format!("    \"catalog\": {},\n", stc_got::MANIFEST_FORMAT));
     json.push_str("    \"debug_object\": 1,\n");
@@ -1057,4 +1271,64 @@ fn is_rule_id(token: &str) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_audit_flags_operating_system_predicates() {
+        let text = "\
+#[cfg(windows)]
+fn a() {}
+#[cfg(all(target_arch = \"aarch64\", target_os = \"linux\"))]
+fn b() {}
+use std::os::unix::fs::PermissionsExt;
+// cfg(windows) in a comment is not a branch
+";
+        let hits = host_hits(text);
+        assert_eq!(hits.len(), 3, "{hits:?}");
+        assert_eq!(hits[0].line, 1);
+        assert_eq!(hits[1].line, 3);
+        assert_eq!(hits[2].line, 5);
+    }
+
+    #[test]
+    fn host_audit_reads_multiline_predicates() {
+        let text = "\
+#[cfg(not(any(
+    target_arch = \"x86_64\",
+    all(target_arch = \"aarch64\", target_os = \"linux\")
+)))]
+fn a() {}
+";
+        let hits = host_hits(text);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].line, 1);
+    }
+
+    #[test]
+    fn host_audit_ignores_unrelated_cfg_and_ports() {
+        let text = "\
+#[cfg(test)]
+mod tests {}
+#[cfg(feature = \"x\")]
+fn c() {}
+let ports: u16 = 80;
+";
+        assert!(host_hits(text).is_empty());
+    }
+
+    #[test]
+    fn package_json_names_the_host_debug_contract() {
+        let json = render_package_json("1.0.0-rc.1", "host-triple", &["bin/stc".into()]);
+        let expected = if cfg!(windows) {
+            "\"debug_contract\": \"object-codeview\""
+        } else {
+            "\"debug_contract\": \"dwarf\""
+        };
+        assert!(json.contains(expected), "{json}");
+        assert!(json.contains("\"host\": \"host-triple\""), "{json}");
+    }
 }

@@ -1611,6 +1611,13 @@ fn compile_ir(
         // produce byte-identical objects in any output directory.
         command.arg("-mno-incremental-linker-compatible");
     }
+    if target_triple.starts_with("aarch64-") {
+        // The format-1 frame walk compares saved link registers with manifest
+        // code ranges. Pointer authentication would sign those saved values
+        // and make caller frames unrecognizable; generated code does not rely
+        // on PAC/BTI, so emit without branch protection (D-202).
+        command.arg("-mbranch-protection=none");
+    }
     if debug {
         command.arg("-g");
         // Keep compilation-directory and object-name metadata relative so the

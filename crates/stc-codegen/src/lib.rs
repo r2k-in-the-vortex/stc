@@ -16,6 +16,7 @@ mod config;
 mod debug;
 pub mod exact;
 mod expr;
+mod host;
 pub mod ir;
 mod launcher;
 mod layout;
@@ -424,13 +425,5 @@ pub fn resolve_target(target: Option<&str>) -> Target {
 /// Returns the host target triple used when `--target` is omitted.
 #[must_use]
 pub fn host_triple() -> String {
-    if cfg!(all(windows, target_env = "msvc")) {
-        "x86_64-pc-windows-msvc".into()
-    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        "x86_64-unknown-linux-gnu".into()
-    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        "aarch64-unknown-linux-gnu".into()
-    } else {
-        "x86_64-unknown-linux-gnu".into()
-    }
+    host::host_triple()
 }

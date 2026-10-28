@@ -441,6 +441,11 @@ fn compile(
     } else {
         command.arg("-fPIC");
     }
+    if cfg!(target_arch = "aarch64") {
+        // Keep saved link registers unsigned so the format-1 frame walk can
+        // match caller addresses to the synthetic sidecar (D-202).
+        command.arg("-mbranch-protection=none");
+    }
     command.arg("-o").arg(&module_path).arg(&source_path);
     let output = command.output().expect("run clang");
     assert!(

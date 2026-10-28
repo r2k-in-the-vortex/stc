@@ -5,7 +5,7 @@
 //! §2.3). Patterns are always relative and always use `/`.
 
 /// Whether path comparison ignores ASCII case on this host.
-pub(crate) const CASE_INSENSITIVE: bool = cfg!(windows);
+pub(crate) use crate::host::CASE_INSENSITIVE_PATHS as CASE_INSENSITIVE;
 
 /// A compiled source glob.
 #[derive(Clone, Debug)]

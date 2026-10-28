@@ -629,6 +629,7 @@ impl DebugServer {
         let shutdown = Arc::clone(&self.shutdown);
         let handlers = Arc::clone(&self.handlers);
         self.accept = Some(std::thread::spawn(move || {
+            crate::priority::lower_service_priority();
             while !shutdown.load(Ordering::Acquire) {
                 let Some(connection) = listener.accept(&shutdown) else {
                     if shutdown.load(Ordering::Acquire) {
@@ -651,6 +652,7 @@ impl DebugServer {
                     .saturating_add(1);
                 let shared = Arc::clone(&shared);
                 let handle = std::thread::spawn(move || {
+                    crate::priority::lower_service_priority();
                     run_connection(shared, connection, connection_id);
                 });
                 lock(&handlers).push(handle);

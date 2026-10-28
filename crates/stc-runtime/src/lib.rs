@@ -75,6 +75,7 @@ pub mod loader;
 pub mod memory;
 pub mod migration;
 pub mod module_info;
+mod priority;
 pub mod run;
 pub mod scheduler;
 pub mod signal;
