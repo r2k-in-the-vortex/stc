@@ -14,6 +14,7 @@ mod cli;
 mod compat;
 mod compliance;
 mod fmt;
+mod frames;
 mod metadata;
 mod new;
 mod online;

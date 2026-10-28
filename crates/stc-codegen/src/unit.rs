@@ -71,6 +71,8 @@ pub(crate) struct Lowerer<'a> {
     checkpoints: Vec<CheckpointSite>,
     checkpoint_ordinal: u64,
     collect_checkpoints: bool,
+    /// Identity/type hints for the additive frame sidecar (D-181).
+    pub(crate) frame_hints: Vec<crate::FrameFunctionHint>,
     pub errors: Vec<CodegenError>,
     seen_errors: BTreeSet<String>,
 }
@@ -194,6 +196,7 @@ pub(crate) fn generate(
         checkpoints: Vec::new(),
         checkpoint_ordinal: 0,
         collect_checkpoints,
+        frame_hints: Vec::new(),
         errors: Vec::new(),
         seen_errors: BTreeSet::new(),
     };
@@ -212,10 +215,28 @@ pub(crate) fn generate(
     if let Err(error) = lowerer.finalize_checkpoints() {
         lowerer.push_error(error);
     }
+    {
+        let mut ranges: BTreeMap<stc_got::GotId, (u32, u32)> = BTreeMap::new();
+        for site in &lowerer.checkpoints {
+            let range = ranges.entry(site.function).or_insert((site.id, site.id));
+            range.0 = range.0.min(site.id);
+            range.1 = range.1.max(site.id);
+        }
+        for hint in &mut lowerer.frame_hints {
+            if let Some((first, last)) = ranges.get(&hint.function) {
+                for local in &mut hint.locals {
+                    local.first = *first;
+                    local.last = *last;
+                }
+            }
+        }
+    }
     if lowerer.collect_checkpoints && lowerer.checkpoints.is_empty() {
         // A debug build with no eligible site is hook-free: re-project the GOT
         // without service 13 so the descriptor, manifest, and required host
-        // minor agree with the empty checkpoint table.
+        // minor agree with the empty checkpoint table, and omit the frame
+        // sidecar (D-181).
+        lowerer.frame_hints.clear();
         let mut hookless = module_options.clone();
         hookless.debug_hooks = false;
         match crate::module::project(hir, sources, &hookless) {
@@ -263,11 +284,14 @@ pub(crate) fn generate(
             .collect());
     }
     let rendered = lowerer.module.render();
+    let mut frames = lowerer.frame_hints.clone();
+    frames.sort_by_key(|frame| frame.function);
     Ok(Output {
         module: rendered,
         metadata,
         spans: lowerer.span_entries.clone(),
         got: lowerer.got.clone(),
+        frames,
     })
 }
 

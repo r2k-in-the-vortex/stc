@@ -38,6 +38,7 @@ use crate::debug::{
     DebugReadRequest, DebugService, DebugTarget, DebugWriteKind, DebugWriteRequest, WatchId,
     WatchSpec,
 };
+use crate::debug_server::{DebugServer, DebugServerConfig, DebugServerInfo, InitialDebugState};
 use crate::descriptors::{DescriptorActivation, DescriptorRegistry, PreparedDescriptors};
 use crate::got::Got;
 use crate::host_api;
@@ -153,7 +154,10 @@ pub struct HostWarning {
 pub struct Candidate {
     module: LoadedModule,
     pair: ValidatedPair,
+    manifest_binary: Vec<u8>,
     info: Option<ModuleInfo>,
+    frames: Option<Arc<crate::frames::FrameTable>>,
+    frames_error: Option<String>,
     module_dir: PathBuf,
 }
 
@@ -169,6 +173,7 @@ impl Candidate {
         let manifest_binary = crate::store::read_file_bounded(manifest_path, MAX_MANIFEST_BYTES)?;
         let module = LoadedModule::load(module_path)?;
         let info = ModuleInfo::read_beside(module_path)?;
+        let frames = crate::frames::read(&crate::module_info::frames_path(module_path));
         let module_dir = module_path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -176,7 +181,7 @@ impl Candidate {
                 || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 Path::to_path_buf,
             );
-        Self::from_loaded_with_info_in(platform, module, manifest_binary, info, module_dir)
+        Self::from_loaded_full(platform, module, manifest_binary, info, module_dir, frames)
     }
 
     /// Loads a module and its manifest, using an explicit metadata sidecar.
@@ -192,6 +197,7 @@ impl Candidate {
     ) -> Result<Self> {
         let manifest_binary = crate::store::read_file_bounded(manifest_path, MAX_MANIFEST_BYTES)?;
         let module = LoadedModule::load(module_path)?;
+        let frames = crate::frames::read(&crate::module_info::frames_path(module_path));
         let module_dir = module_path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -199,7 +205,7 @@ impl Candidate {
                 || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 Path::to_path_buf,
             );
-        Self::from_loaded_with_info_in(platform, module, manifest_binary, info, module_dir)
+        Self::from_loaded_full(platform, module, manifest_binary, info, module_dir, frames)
     }
 
     /// Validates an already loaded module against binary manifest bytes.
@@ -244,6 +250,24 @@ impl Candidate {
         info: Option<ModuleInfo>,
         module_dir: PathBuf,
     ) -> Result<Self> {
+        Self::from_loaded_full(
+            platform,
+            module,
+            manifest_binary,
+            info,
+            module_dir,
+            crate::frames::FramesSource::Missing,
+        )
+    }
+
+    fn from_loaded_full(
+        platform: &HostPlatform,
+        module: LoadedModule,
+        manifest_binary: Vec<u8>,
+        info: Option<ModuleInfo>,
+        module_dir: PathBuf,
+        frames: crate::frames::FramesSource,
+    ) -> Result<Self> {
         let pair =
             ValidatedPair::from_bytes(platform, module.descriptor_bytes(), &manifest_binary)?;
         if module.function_addresses().len() != pair.descriptor.functions.len() {
@@ -256,6 +280,24 @@ impl Candidate {
                 ),
             ));
         }
+        let (frames, frames_error) = match frames {
+            crate::frames::FramesSource::Missing => (None, None),
+            crate::frames::FramesSource::Unreadable(error) => (None, Some(error)),
+            crate::frames::FramesSource::Bytes(bytes) => match std::str::from_utf8(&bytes) {
+                Ok(text) => match crate::frames::parse(
+                    text,
+                    pair.manifest.header.build_id,
+                    &platform.target,
+                ) {
+                    Ok(table) => (Some(Arc::new(table)), None),
+                    Err(error) => (None, Some(error)),
+                },
+                Err(_) => (
+                    None,
+                    Some("the stopped-frame sidecar is not valid UTF-8".to_owned()),
+                ),
+            },
+        };
         let required = entry_flag::PREPARE_INITIALIZES | entry_flag::CYCLE_CALLABLE;
         if pair.descriptor.entry_flags & required != required {
             return Err(Error::new(
@@ -269,7 +311,10 @@ impl Candidate {
         Ok(Self {
             module,
             pair,
+            manifest_binary,
             info,
+            frames,
+            frames_error,
             module_dir,
         })
     }
@@ -316,8 +361,16 @@ struct Generation {
     module: LoadedModule,
     got: Got,
     manifest: Manifest,
+    manifest_binary: Vec<u8>,
+    manifest_json: String,
     manifest_digest: Digest32,
     info: Option<ModuleInfo>,
+    debug_mode: &'static str,
+    debug_hooks: bool,
+    debug_info: &'static str,
+    debug_checkpoints: bool,
+    debug_metadata_error: Option<String>,
+    debug_tables: Option<Arc<crate::stop::DebugTables>>,
     pins: Arc<AtomicUsize>,
     attached: bool,
     shutdown_done: bool,
@@ -325,21 +378,34 @@ struct Generation {
 }
 
 impl Generation {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         id: u64,
         module: LoadedModule,
         got: Got,
         manifest: Manifest,
+        manifest_binary: Vec<u8>,
+        manifest_json: String,
         manifest_digest: Digest32,
         info: Option<ModuleInfo>,
+        debug: crate::module_info::DebugMetadataReport,
+        debug_tables: Option<Arc<crate::stop::DebugTables>>,
     ) -> Self {
         Self {
             id,
             module,
             got,
             manifest,
+            manifest_binary,
+            manifest_json,
             manifest_digest,
             info,
+            debug_mode: debug.mode,
+            debug_hooks: debug.hooks,
+            debug_info: debug.info,
+            debug_checkpoints: debug.checkpoints,
+            debug_metadata_error: debug.error,
+            debug_tables,
             pins: Arc::new(AtomicUsize::new(0)),
             attached: false,
             shutdown_done: false,
@@ -380,6 +446,32 @@ impl Drop for Generation {
     fn drop(&mut self) {
         self.detach();
         host_api::withdraw_generation(self.id);
+    }
+}
+
+fn debug_source<'a>(
+    target: &'a stc_got::layout::Target,
+    manifest: &'a Manifest,
+    roots: &'a RootRegistry,
+    active: &'a Generation,
+) -> crate::debug::DebugSource<'a> {
+    crate::debug::DebugSource {
+        target,
+        manifest,
+        roots,
+        info: active.info.as_ref(),
+        generation: active.id,
+        build_id: active.manifest.header.build_id,
+        cycle: active.cycles,
+        mode: active.debug_mode,
+        debug_hooks: active.debug_hooks,
+        debug_info: Some(active.debug_info),
+        checkpoints: active.debug_checkpoints,
+        metadata_error: active.debug_metadata_error.as_deref(),
+        tables: active.debug_tables.clone(),
+        manifest_digest: active.manifest_digest,
+        manifest_json: Some(active.manifest_json.as_str()),
+        manifest_binary: Some(active.manifest_binary.as_slice()),
     }
 }
 
@@ -536,6 +628,7 @@ pub struct Host {
     retain: RetainConfig,
     io: crate::io::IoRuntime,
     debug: DebugEngine,
+    debug_server: Option<DebugServer>,
 }
 
 impl Host {
@@ -566,6 +659,7 @@ impl Host {
             retain: RetainConfig::default(),
             io: crate::io::IoRuntime::default(),
             debug: DebugEngine::new(),
+            debug_server: None,
         }
     }
 
@@ -824,15 +918,7 @@ impl Host {
                 "no active generation is available for a typed read",
             )
         })?;
-        let source = crate::debug::DebugSource {
-            target: &self.platform.target,
-            manifest: &active.manifest,
-            roots: &self.roots,
-            info: active.info.as_ref(),
-            generation: active.id,
-            build_id: active.manifest.header.build_id,
-            cycle: active.cycles,
-        };
+        let source = debug_source(&self.platform.target, &active.manifest, &self.roots, active);
         let read = crate::debug::read_request(&source, &request);
         drop(pin);
         read
@@ -880,15 +966,7 @@ impl Host {
             .as_ref()
             .map(|active| (active.id, active.manifest.header.build_id, active.cycles));
         let prepared = if let Some(active) = self.active.as_ref() {
-            let source = crate::debug::DebugSource {
-                target: &self.platform.target,
-                manifest: &active.manifest,
-                roots: &self.roots,
-                info: active.info.as_ref(),
-                generation: active.id,
-                build_id: active.manifest.header.build_id,
-                cycle: active.cycles,
-            };
+            let source = debug_source(&self.platform.target, &active.manifest, &self.roots, active);
             crate::debug::prepare_write(&source, &request, kind)
         } else {
             Err(Error::new(
@@ -924,15 +1002,7 @@ impl Host {
     pub fn debug_release_force(&mut self, target: DebugTarget) -> Result<bool> {
         let pin = self.pin_active();
         let resolved = if let Some(active) = self.active.as_ref() {
-            let source = crate::debug::DebugSource {
-                target: &self.platform.target,
-                manifest: &active.manifest,
-                roots: &self.roots,
-                info: active.info.as_ref(),
-                generation: active.id,
-                build_id: active.manifest.header.build_id,
-                cycle: active.cycles,
-            };
+            let source = debug_source(&self.platform.target, &active.manifest, &self.roots, active);
             crate::debug::resolve_root_id(&source, &target)
         } else {
             Err(Error::new(
@@ -1004,12 +1074,41 @@ impl Host {
             .active
             .as_ref()
             .map(|active| (active.id, active.manifest.header.build_id, active.cycles));
-        self.debug.end_state(
+        let result = self.debug.end_state(
             reason,
             context.map(|(generation, _, _)| generation),
             context.map(|(_, build, _)| build),
             context.map(|(_, _, cycle)| cycle),
-        )
+        );
+        crate::stop::abort_session();
+        result
+    }
+
+    /// Ends an active debug session because the target trapped or exited.
+    ///
+    /// The host remains alive; the connection thread emits `session-ended`
+    /// with `reason:"target-exited"` and then closes. A no-op without a session.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-DEBUG-021` when the termination audit append fails; all
+    /// debug state is still cleared.
+    pub fn debug_target_exited(&mut self) -> Result<()> {
+        if self.debug.service().session().is_none() {
+            return Ok(());
+        }
+        let context = self
+            .active
+            .as_ref()
+            .map(|active| (active.id, active.manifest.header.build_id, active.cycles));
+        let result = self.debug.end_state(
+            DebugEndReason::TargetExit,
+            context.map(|(generation, _, _)| generation),
+            context.map(|(_, build, _)| build),
+            context.map(|(_, _, cycle)| cycle),
+        );
+        crate::stop::abort_session();
+        result
     }
 
     /// Returns a `Send + Sync` service facade.
@@ -1020,6 +1119,102 @@ impl Host {
     #[must_use]
     pub fn debug_service(&self) -> DebugService {
         self.debug.service()
+    }
+
+    /// Starts the local `stc-debug/1` service on this host.
+    ///
+    /// The server binds its local transport, creates the user-only audit log,
+    /// and atomically writes the endpoint file before it accepts connections.
+    /// The cycle thread must call [`Host::debug_pump_at`] for commands, watches,
+    /// and teardown notices to be serviced; the runtime loop and the test host
+    /// already do. This is the embedding-host API used by `stc_host_run`;
+    /// phase 8 owns the CLI.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-DEBUG-001` when no generation is active, `STC-E-DEBUG-020`
+    /// when the endpoint or transport cannot be secured, and `STC-E-DEBUG-021`
+    /// when the audit log cannot be created or written.
+    pub fn start_debug_server(&mut self, config: &DebugServerConfig) -> Result<DebugServerInfo> {
+        if self.debug_server.is_some() {
+            return Err(Error::new(
+                codes::DEBUG_TRANSPORT,
+                "a debug server is already running on this host",
+            ));
+        }
+        let Some(active) = self.active.as_ref() else {
+            return Err(Error::new(
+                codes::DEBUG_UNAVAILABLE,
+                "no active generation is available for a debug session",
+            ));
+        };
+        let initial = InitialDebugState {
+            generation: active.id,
+            build_id: active.manifest.header.build_id,
+            cycle: active.cycles,
+            mode: active.debug_mode.to_owned(),
+        };
+        // Publish the first snapshot before the first connection can start a
+        // session, so session.start observes real capabilities.
+        self.debug_pump_at(0);
+        let service = self.debug.service();
+        let mut server = DebugServer::prepare(config, initial, service)?;
+        self.debug.set_audit_sink(Some(server.audit_sink()));
+        server.launch();
+        let info = server.info();
+        self.debug_server = Some(server);
+        Ok(info)
+    }
+
+    /// Stops the local debug service and clears its session state.
+    ///
+    /// Removing a running server ends any active session, clears watches,
+    /// forces, and queued writes, closes the endpoint file, and detaches the
+    /// audit sink. Calling this without a server is a no-op.
+    pub fn stop_debug_server(&mut self) {
+        let Some(mut server) = self.debug_server.take() else {
+            return;
+        };
+        let had_session = self.debug.service().session().is_some();
+        if had_session {
+            // End the engine state while the audit sink is still attached so
+            // the `session-end` record precedes `server-stop` in the log.
+            let _ = self.debug_clear_session_state(DebugEndReason::SessionEnd);
+        }
+        server.stop();
+        self.debug.set_audit_sink(None);
+    }
+
+    /// Returns the running debug server description, without the token.
+    #[must_use]
+    pub fn debug_server_info(&self) -> Option<DebugServerInfo> {
+        self.debug_server.as_ref().map(DebugServer::info)
+    }
+
+    /// Atomically refreshes the endpoint file at an activation or rollback.
+    fn refresh_debug_endpoint(&mut self) {
+        let Some(active) = self.active.as_ref() else {
+            return;
+        };
+        let (generation, build_id, mode) = (
+            active.id,
+            active.manifest.header.build_id,
+            active.debug_mode,
+        );
+        if let Some(server) = self.debug_server.as_mut()
+            && server.refresh(generation, build_id, mode).is_err()
+        {
+            // An endpoint refresh failure must not block activation; the old
+            // file describes the old generation and is rejected by the
+            // expected_generation/build checks.
+            self.last_warnings.push(HostWarning {
+                code: codes::DEBUG_TRANSPORT,
+                message: format!(
+                    "cannot refresh the debug endpoint file: {}",
+                    crate::transport::display_name(server.endpoint_file())
+                ),
+            });
+        }
     }
 
     /// Adds a watch applied immediately on this host's thread.
@@ -1038,7 +1233,7 @@ impl Host {
 
     /// Removes a watch.
     pub fn debug_remove_watch(&mut self, watch: WatchId) -> bool {
-        self.debug.remove_watch(watch)
+        self.debug.remove_watch(watch).is_some()
     }
 
     /// Returns the number of active watches.
@@ -1093,25 +1288,8 @@ impl Host {
         let pin = self.pin_active();
         let target = &self.platform.target;
         let active = self.active.as_ref();
-        let manifest = active.map(|generation| &generation.manifest);
-        let info = active.and_then(|generation| generation.info.as_ref());
-        let generation = active.map(|generation| generation.id);
-        let build_id = active.map(|generation| generation.manifest.header.build_id);
-        let cycle = active.map(|generation| generation.cycles);
-        let source = match (manifest, generation, build_id, cycle) {
-            (Some(manifest), Some(generation), Some(build_id), Some(cycle)) => {
-                Some(crate::debug::DebugSource {
-                    target,
-                    manifest,
-                    roots: &self.roots,
-                    info,
-                    generation,
-                    build_id,
-                    cycle,
-                })
-            }
-            _ => None,
-        };
+        let source = active
+            .map(|generation| debug_source(target, &generation.manifest, &self.roots, generation));
         let count = self.debug.pump(now_ns, source);
         drop(pin);
         count
@@ -1704,6 +1882,7 @@ impl Host {
             &direct,
             &mut self.descriptors,
             &live,
+            &self.platform.target,
         ) {
             Ok((generation, descriptors)) => {
                 if let Some(failure) = crate::state::take_failure() {
@@ -1768,6 +1947,7 @@ impl Host {
                 &direct,
                 &mut descriptors,
                 &BTreeSet::new(),
+                &self.platform.target,
             )?;
             if let Some(failure) = crate::state::take_failure() {
                 return Err(Error::new(failure.code, failure.message));
@@ -1825,6 +2005,7 @@ impl Host {
             previous_debug.map(|(_, build, _)| build),
             previous_debug.map(|(_, _, cycle)| cycle),
         );
+        crate::stop::abort_session();
         self.scheduler = scheduler;
         self.last_rollback = None;
         self.last_warnings.clear();
@@ -1834,6 +2015,10 @@ impl Host {
         // old registry; unload them before dropping its records.
         self.unload_retired();
         self.descriptors = descriptors;
+        self.refresh_debug_endpoint();
+        // Publish the new generation's snapshot before any protocol request can
+        // start a session against a stale generation description.
+        self.debug_pump_at(0);
         Ok(LoadOutcome::ColdInstalled {
             generation: generation_id,
         })
@@ -1855,13 +2040,26 @@ impl Host {
         direct: &BTreeMap<GotId, usize>,
         descriptors: &mut DescriptorRegistry,
         live: &BTreeSet<GotId>,
+        target: &stc_got::layout::Target,
     ) -> Result<(Generation, PreparedDescriptors)> {
         let Candidate {
             module,
             pair,
+            manifest_binary,
             info,
+            frames,
+            frames_error,
             module_dir: _,
         } = candidate;
+        let debug_build = pair.descriptor.entry_flags & entry_flag::DEBUG_BUILD != 0;
+        let debug_hooks = pair.descriptor.entry_flags & entry_flag::DEBUG_HOOKS != 0;
+        let debug = crate::module_info::debug_metadata(
+            info.as_ref(),
+            &pair.manifest,
+            debug_build,
+            debug_hooks,
+        );
+        let manifest_json = pair.manifest.to_json_text()?;
         let manifest = pair.manifest;
         let manifest_digest = pair.manifest_digest;
         let slot_count = u32::try_from(manifest.slots.len())
@@ -1881,6 +2079,18 @@ impl Host {
                 functions.insert(function.got_id, *address as usize);
             }
             got.bind_functions(&functions)?;
+            let tables = if debug.checkpoints {
+                Some(Arc::new(crate::stop::DebugTables::new(
+                    debug.records.clone(),
+                    frames,
+                    frames_error,
+                    &manifest,
+                    &functions,
+                    target,
+                )))
+            } else {
+                None
+            };
             let function_cells = function_cell_addresses(&manifest, &got)?;
             let prepared = descriptors.prepare(&manifest, live, &function_cells)?;
 
@@ -1895,8 +2105,18 @@ impl Host {
                     ));
                 }
 
-                let mut generation =
-                    Generation::new(generation_id, module, got, manifest, manifest_digest, info);
+                let mut generation = Generation::new(
+                    generation_id,
+                    module,
+                    got,
+                    manifest,
+                    manifest_binary,
+                    manifest_json,
+                    manifest_digest,
+                    info,
+                    debug,
+                    tables,
+                );
                 let mask = if mode == 0 {
                     Vec::new()
                 } else {
@@ -2059,7 +2279,13 @@ impl Host {
             Some(previous_build),
             Some(previous_cycle),
         );
+        // A stop is synchronous with the cycle thread, so activation normally
+        // cannot run while parked. Wake any defensively installed session so
+        // service 13 never keeps a retired generation alive.
+        crate::stop::abort_session();
         self.last_warnings = warnings;
+        self.refresh_debug_endpoint();
+        self.debug_pump_at(0);
         Ok(generation)
     }
 
@@ -2129,6 +2355,31 @@ impl Host {
         }
         let outcome = {
             let generation = self.active.as_ref().expect("checked above");
+            // The parked debug hook needs the cycle thread's own view of the
+            // generation and the engine while service 13 is blocked inside
+            // the module call. The context holds raw pointers into these
+            // borrowed fields for exactly this call; the guard is dropped
+            // before any other host field is used again.
+            let pump_info = crate::stop::CyclePumpInfo {
+                target: &self.platform.target,
+                manifest: &generation.manifest,
+                roots: &self.roots,
+                info: generation.info.as_ref(),
+                generation: generation.id,
+                build_id: generation.manifest.header.build_id,
+                stop_cycle: generation.cycles.saturating_add(1),
+                mode: generation.debug_mode,
+                debug_hooks: generation.debug_hooks,
+                debug_info: generation.debug_info,
+                checkpoints: generation.debug_checkpoints,
+                metadata_error: &generation.debug_metadata_error,
+                tables: generation.debug_tables.clone(),
+                manifest_digest: generation.manifest_digest,
+                manifest_json: generation.manifest_json.as_str(),
+                manifest_binary: generation.manifest_binary.as_slice(),
+            };
+            let pump = crate::stop::CyclePump::new(pump_info, &mut self.debug);
+            let _pump_guard = crate::stop::CyclePumpGuard::enter(&pump);
             let _guard = host_api::enter_generation(generation_id);
             let outcome =
                 crate::trap_boundary::with_boundary(|| generation.module.cycle(generation_id));
@@ -2298,6 +2549,7 @@ impl Host {
             Some(candidate_build),
             Some(candidate_cycle),
         );
+        crate::stop::abort_session();
         self.scheduler = scheduler;
         if let Some(image) = image {
             image::restore(&image.snapshot);
@@ -2307,6 +2559,8 @@ impl Host {
         self.descriptors.rollback(descriptors);
         self.last_rollback = Some(reason.to_owned());
         undo.undo(&mut self.roots)?;
+        self.refresh_debug_endpoint();
+        self.debug_pump_at(0);
         Ok(restored)
     }
 
@@ -2375,6 +2629,8 @@ impl Host {
                 debug_context.map(|(_, _, cycle)| cycle),
             )
             .err();
+        crate::stop::abort_session();
+        self.stop_debug_server();
         let save_generation = self.active.as_ref().map(|generation| generation.id);
         self.install_state_service(save_generation);
         let io_error = self.io.flush_output();

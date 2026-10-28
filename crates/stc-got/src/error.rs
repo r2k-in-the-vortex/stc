@@ -51,6 +51,20 @@ pub mod codes {
     pub const W_ONLINE_STALE_BASELINE: &str = "STC-W-ONLINE-005";
     /// Manifest missing or invalid; cold download required.
     pub const W_ONLINE_MISSING: &str = "STC-W-ONLINE-006";
+    /// Debug service unavailable, disabled, or without a capable module.
+    pub const DEBUG_UNAVAILABLE: &str = "STC-E-DEBUG-001";
+    /// Unsupported protocol version or the wrong endpoint.
+    pub const DEBUG_PROTOCOL: &str = "STC-E-DEBUG-002";
+    /// Malformed or invalid debug request.
+    pub const DEBUG_REQUEST: &str = "STC-E-DEBUG-003";
+    /// Oversized or unterminated debug frame.
+    pub const DEBUG_FRAME: &str = "STC-E-DEBUG-004";
+    /// Debug authentication failed.
+    pub const DEBUG_AUTH: &str = "STC-E-DEBUG-005";
+    /// Debug authorization denied.
+    pub const DEBUG_AUTHORIZATION: &str = "STC-E-DEBUG-006";
+    /// Invalid debug session state.
+    pub const DEBUG_SESSION: &str = "STC-E-DEBUG-007";
     /// Unknown debug path, `GotId`, local, frame, or watch identity.
     pub const DEBUG_UNKNOWN: &str = "STC-E-DEBUG-008";
     /// Wrong debug type, shape, range, code point, or capacity.
@@ -59,14 +73,36 @@ pub mod codes {
     pub const DEBUG_STALE: &str = "STC-E-DEBUG-010";
     /// Debug queue, watch, leaf, event, or response limit exceeded.
     pub const DEBUG_LIMIT: &str = "STC-E-DEBUG-011";
+    /// Debug request or watch rate limit exceeded.
+    pub const DEBUG_RATE: &str = "STC-E-DEBUG-012";
+    /// Debug request timeout.
+    pub const DEBUG_TIMEOUT: &str = "STC-E-DEBUG-013";
+    /// Breakpoint/step/pause unavailable without debug hooks or frame data.
+    pub const DEBUG_NO_HOOKS: &str = "STC-E-DEBUG-014";
     /// Invalid, stale, or unavailable stop frame.
     pub const DEBUG_STOP: &str = "STC-E-DEBUG-015";
+    /// Invalid debug metadata.
+    pub const DEBUG_METADATA: &str = "STC-E-DEBUG-016";
+    /// Debug information unavailable for the requested source, frame, or local.
+    pub const DEBUG_INFO: &str = "STC-E-DEBUG-017";
+    /// Debug session stop or idle bound exceeded.
+    pub const DEBUG_SESSION_TIMEOUT: &str = "STC-E-DEBUG-018";
+    /// Debug session ended by an online swap.
+    pub const DEBUG_SWAP: &str = "STC-E-DEBUG-019";
+    /// Debug transport or endpoint failure.
+    pub const DEBUG_TRANSPORT: &str = "STC-E-DEBUG-020";
     /// Debug audit sink unavailable or an append failed.
     pub const DEBUG_AUDIT: &str = "STC-E-DEBUG-021";
+    /// Internal debug service error.
+    pub const DEBUG_INTERNAL: &str = "STC-E-DEBUG-022";
+    /// A breakpoint is unbound at its source location.
+    pub const W_DEBUG_UNBOUND: &str = "STC-W-DEBUG-001";
     /// A debug value is unavailable and was not reconstructed.
     pub const W_DEBUG_UNAVAILABLE: &str = "STC-W-DEBUG-002";
     /// A watch batch was dropped because the event queue was full.
     pub const W_DEBUG_WATCH_DROPPED: &str = "STC-W-DEBUG-003";
+    /// Debug information or hooks are unavailable; the session is monitoring-only.
+    pub const W_DEBUG_MONITORING_ONLY: &str = "STC-W-DEBUG-004";
     /// A force targets a `RETAIN` root that normal shutdown may save.
     pub const W_DEBUG_RETAIN: &str = "STC-W-DEBUG-005";
     /// Invalid run option or runtime scheduling configuration.
