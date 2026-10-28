@@ -772,11 +772,11 @@ stc-<version>-<host-triple>/
 - Runtime discovery checks, in order: `--runtime`, `STC_RUNTIME`, `[build].runtime`, a file beside
   the executable, `<exe>/lib`, `<exe>/../lib`, and the workspace `target/{release,debug}` fallback.
   The `bin`/`lib` package layout therefore works without environment variables.
-- Static archives are unpacked, object members are stripped with `llvm-objcopy --strip-debug`, and
-  the stripped objects replace the originals with `llvm-ar rD`; every import-library member and
-  symbol-table entry is preserved. The shared host library is stripped directly. `package.json`
-  and the package are written only after the archive, shared library, module, and executable
-  checks pass.
+- Static archives are unpacked, native object members are stripped with
+  `llvm-objcopy --strip-debug`, and the stripped objects replace the originals with `llvm-ar rD`;
+  every import-library or LLVM-bitcode member and symbol-table entry is preserved. The shared host
+  library is stripped directly. `package.json` and the package are written only after the archive,
+  shared library, module, and executable checks pass.
 - The package is an archive, not an installer; there is no package-manager integration in v1.
 
 `<name>.stc-meta.json`:

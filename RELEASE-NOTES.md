@@ -25,11 +25,11 @@ with online change, retained state, I/O backends, and typed debug/monitoring.
   `--locked`, writes the `bin`/`lib`/`docs` layout, a deterministic
   `package.json`, and a sorted `SHA256SUMS`. The packaged layout resolves the
   runtime without environment variables.
-- **Debug-free release archives.** Static archives are unpacked, every object
-  is stripped of DWARF/CodeView, and the stripped objects replace the originals
-  in place so duplicate import-library members and the symbol table survive;
-  the shared host library is stripped too. Modules and executables are
-  stripped.
+- **Debug-free release archives.** Static archives are unpacked, every native
+  object is stripped of DWARF/CodeView, and the stripped objects replace the
+  originals in place so duplicate import-library members and the symbol table
+  survive; LLVM bitcode members are left untouched. The shared host library is
+  stripped too. Modules and executables are stripped.
 - **Cross-target smoke matrix.** Release IR and driver object emission are
   tested for x86-64 and AArch64 Linux, AArch64 big-endian, x86-64/AArch64
   macOS, x86-64/AArch64 Windows MSVC, RISC-V 64 ELF, and Thumbv7E-M.

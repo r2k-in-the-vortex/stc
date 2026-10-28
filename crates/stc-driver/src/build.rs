@@ -1097,6 +1097,10 @@ fn strip_archive(clang: &str, archive: &Path, log: Log) -> Result<(), String> {
                     .is_some_and(|extension| {
                         extension.eq_ignore_ascii_case("o") || extension.eq_ignore_ascii_case("obj")
                     })
+                // Rust staticlibs include LLVM bitcode members on Linux.
+                // They have no object sections and GNU ar cannot read them;
+                // leave those members in the archive untouched.
+                && !is_bitcode(member)
         });
         objects.sort();
         if objects.is_empty() {
@@ -1193,6 +1197,20 @@ fn is_archive(path: &Path) -> bool {
     };
     let mut magic = [0_u8; 8];
     file.read_exact(&mut magic).is_ok() && &magic == b"!<arch>\n"
+}
+
+/// Returns whether a file is raw or wrapped LLVM bitcode.
+fn is_bitcode(path: &Path) -> bool {
+    use std::io::Read;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0_u8; 4];
+    if file.read_exact(&mut magic).is_err() {
+        return false;
+    }
+    magic == *b"BC\xc0\xde" || magic == [0xde, 0xc0, 0x17, 0x0b]
 }
 
 fn find_objcopy(clang: &str) -> Result<String, String> {

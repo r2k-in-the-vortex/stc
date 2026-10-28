@@ -342,9 +342,10 @@ fn strip_runtime_archive(root: &Path, lib_dir: &Path) -> Result<(), String> {
             .is_some_and(|extension| {
                 extension.eq_ignore_ascii_case("o") || extension.eq_ignore_ascii_case("obj")
             });
-        if !is_object {
-            // Import-library members (Windows API-set DLLs) are not objects
-            // and carry no debug information; leave every copy in place.
+        if !is_object || is_bitcode(&path) {
+            // Import-library members (Windows API-set DLLs) and Linux LLVM
+            // bitcode members are not native objects, carry no object debug
+            // sections, and cannot be rewritten by every `ar`; leave them.
             continue;
         }
         run_checked(
@@ -555,7 +556,11 @@ fn verify_package(
         ));
     }
     for object in &objects {
-        check_no_debug_sections(&check_dir.join(object))?;
+        let path = check_dir.join(object);
+        if is_bitcode(&path) {
+            continue;
+        }
+        check_no_debug_sections(&path)?;
     }
     for name in &runtime_names()[1..] {
         check_no_debug_sections(&package_dir.join("lib").join(name))?;
@@ -577,6 +582,21 @@ fn find_tool(candidates: &[&str]) -> Result<String, String> {
         "none of the required tools ({}) was found; install the LLVM toolchain",
         candidates.join(", ")
     ))
+}
+
+/// Returns whether a file is raw or wrapped LLVM bitcode. Rust staticlibs
+/// include bitcode members on Linux; they have no sections to inspect.
+fn is_bitcode(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    let Some(magic) = bytes
+        .get(..4)
+        .and_then(|slice| <[u8; 4]>::try_from(slice).ok())
+    else {
+        return false;
+    };
+    magic == *b"BC\xc0\xde" || magic == [0xde, 0xc0, 0x17, 0x0b]
 }
 
 fn check_no_debug_sections(file: &Path) -> Result<(), String> {
