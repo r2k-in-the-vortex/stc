@@ -6,7 +6,7 @@
 mod common;
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
@@ -423,7 +423,12 @@ fn start_fake_server(listener: TcpListener) -> std::thread::JoinHandle<()> {
         });
         writeln!(stream, "{response}").expect("write response");
         stream.flush().expect("flush response");
-        std::thread::sleep(Duration::from_millis(150));
+        // End the session in reply to the first command. Sending the event
+        // only when the client is waiting on a request makes the teardown
+        // deterministic under parallel test load instead of depending on
+        // idle polling timing.
+        line.clear();
+        reader.read_line(&mut line).expect("read command");
         let event = serde_json::json!({
             "kind": "event",
             "protocol": "stc-debug/1",
@@ -435,6 +440,11 @@ fn start_fake_server(listener: TcpListener) -> std::thread::JoinHandle<()> {
         });
         let _ = writeln!(stream, "{event}");
         let _ = stream.flush();
+        // Wait for the client to close first so a reset cannot discard the
+        // event before the client reads it.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut sink = [0_u8; 64];
+        while matches!(stream.read(&mut sink), Ok(count) if count > 0) {}
     })
 }
 
@@ -499,7 +509,11 @@ fn protocol_error_teardown_reports_e022_without_replaying() {
     write_fake_endpoint(&endpoint, &address, &token, &audit);
     let server = start_fake_server(listener);
 
-    let (mut child, _stdin) = spawn_attach(&endpoint, &project, "protocol");
+    let (mut child, mut stdin) = spawn_attach(&endpoint, &project, "protocol");
+    stdin
+        .write_all(b"watch MAIN.TICKS 100\n")
+        .expect("write command");
+    stdin.flush().expect("flush command");
     let status = wait_exit(&mut child, Duration::from_secs(20));
     server.join().expect("fake server");
     let text = format!(

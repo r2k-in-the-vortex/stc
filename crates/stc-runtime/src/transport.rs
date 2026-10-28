@@ -678,6 +678,46 @@ mod platform {
         stream: UnixStream,
     }
 
+    /// Reports whether the socket has data or has reached EOF.
+    ///
+    /// `UnixStream::peek` is still unstable, so use a zero-timeout `poll(2)` on
+    /// the raw descriptor. The probe never consumes data.
+    fn socket_readable(stream: &UnixStream) -> io::Result<bool> {
+        use std::os::unix::io::AsRawFd;
+
+        #[repr(C)]
+        struct PollFd {
+            fd: std::ffi::c_int,
+            events: std::ffi::c_short,
+            revents: std::ffi::c_short,
+        }
+        // `nfds_t` is `unsigned long` on Linux and `unsigned int` on macOS/BSD.
+        #[cfg(target_os = "macos")]
+        type PollNfds = std::ffi::c_uint;
+        #[cfg(not(target_os = "macos"))]
+        type PollNfds = std::ffi::c_ulong;
+        unsafe extern "C" {
+            fn poll(fds: *mut PollFd, nfds: PollNfds, timeout: std::ffi::c_int) -> std::ffi::c_int;
+        }
+        const POLLIN: std::ffi::c_short = 0x001;
+        const POLLERR: std::ffi::c_short = 0x008;
+        const POLLHUP: std::ffi::c_short = 0x010;
+        const POLLNVAL: std::ffi::c_short = 0x020;
+        let mut descriptor = PollFd {
+            fd: stream.as_raw_fd(),
+            events: POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` is one initialized `pollfd`-shaped record and
+        // `nfds` is 1, so the call reads and writes only that record. The
+        // timeout is zero, so it does not block.
+        let ready = unsafe { poll(&mut descriptor, 1, 0) };
+        if ready < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(ready > 0 && descriptor.revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL) != 0)
+    }
+
     impl ClientConnection {
         pub(super) fn connect(endpoint: &str) -> io::Result<Self> {
             let stream = UnixStream::connect(endpoint)?;
@@ -695,15 +735,7 @@ mod platform {
         }
 
         pub(super) fn poll_readable(&mut self) -> io::Result<bool> {
-            self.stream.set_nonblocking(true)?;
-            let mut byte = [0_u8; 1];
-            let result = match self.stream.peek(&mut byte) {
-                Ok(_) => Ok(true),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
-                Err(error) => Err(error),
-            };
-            self.stream.set_nonblocking(false)?;
-            result
+            socket_readable(&self.stream)
         }
     }
 
