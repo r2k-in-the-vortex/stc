@@ -38,6 +38,8 @@ use stc_runtime::{
     TransportKind,
 };
 
+mod common;
+
 /// Independent timed runs per variant; the best run is reported and the
 /// median is printed for noise context. Shared runners can migrate the thread
 /// to a different core mid-run, so best-of is the primary figure.
@@ -314,7 +316,13 @@ fn build_debug(project: &TestDir) -> Built {
 }
 
 fn build_hookfree(project: &TestDir) -> Built {
-    let output = project.run(&["test", "--no-run"]);
+    // `stc test --no-run` links the test host, so it needs the static runtime
+    // archive. Build it into the shared test-runtime directory like the other
+    // driver suites instead of relying on an artifact beside the driver, which
+    // a clean CI target directory does not contain.
+    let runtime = common::runtime_static();
+    let runtime = runtime.to_string_lossy().into_owned();
+    let output = project.run(&["test", "--no-run", "--runtime", &runtime]);
     assert_eq!(output.status.code(), Some(0), "{}", combined(&output));
     Built::read(&project.path("target/stc/test/bench-Bench"), "bench-Bench")
 }
