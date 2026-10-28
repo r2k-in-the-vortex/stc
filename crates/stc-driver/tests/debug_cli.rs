@@ -223,13 +223,6 @@ fn wait_file_contains(path: &Path, needle: &str, deadline: Duration) -> bool {
     false
 }
 
-fn endpoint_path_in(stderr: &str) -> Option<PathBuf> {
-    stderr.lines().find_map(|line| {
-        line.strip_prefix("stc: debug endpoint ")
-            .map(|path| PathBuf::from(path.trim()))
-    })
-}
-
 fn endpoint_token(path: &Path) -> String {
     DebugEndpointFile::read(path)
         .expect("read endpoint file")
@@ -804,9 +797,16 @@ fn launch_interactive_reports_session_status_and_never_prints_the_token() {
     let err = File::create(project.path("interactive.stderr")).expect("stderr file");
     let runtime = runtime_artifact();
     let runtime_text = runtime.to_string_lossy().into_owned();
+    // The host and the CLI both print the endpoint to the inherited stderr,
+    // and the format machinery writes each line in several pieces. Locate the
+    // endpoint file directly instead of parsing the interleaved stream.
+    let endpoint = project.path("interactive.endpoint.json");
+    let endpoint_text = endpoint.to_string_lossy().into_owned();
     let mut child = Command::new(stc())
         .args([
             "debug",
+            "--endpoint",
+            &endpoint_text,
             "--message-format",
             "json",
             "--cycles",
@@ -847,8 +847,17 @@ fn launch_interactive_reports_session_status_and_never_prints_the_token() {
         "the endpoint path was not printed on stderr:\n{}",
         text_file(&stderr_path)
     );
+    let endpoint_name = endpoint
+        .file_name()
+        .expect("endpoint file name")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        wait_file_contains(&stderr_path, &endpoint_name, Duration::from_secs(30)),
+        "the endpoint path is printed on stderr:\n{}",
+        text_file(&stderr_path)
+    );
     let started = text_file(&stderr_path);
-    let endpoint = endpoint_path_in(&started).expect("endpoint path on stderr");
     let token = endpoint_token(&endpoint);
     assert_eq!(token.len(), 64, "the endpoint token is 64 hex characters");
     assert!(

@@ -629,6 +629,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-184 | `stc clean` (issue #3) removes every generated artifact tree: with no selector it removes `target/stc/debug`, `target/stc/release`, `target/stc/test`, and an explicit `[build].out-dir`; `--debug`, `--release`, or `--test` narrows it to one tree, and `--out-dir` selects exactly the given directory. It preserves `stc.lock`, every retained-state file (`*.stcstate`), an explicit `[retain].file`, and the runtime module/manifest store (`[runtime].module-dir`, `[runtime].manifest-dir`, or the default `target/stc/runtime`); a preserved entry keeps its parent directories in place, and a target that contains the project root is refused. | A plain clean that leaves release and test artifacts behind is a surprising partial clean; defaulting to all generated trees matches compiler convention while keeping the mode selectors for narrow use, and preserving the runtime store avoids deleting an active deployment that happens to live under an artifact directory. |
 | D-185 | Windows COFF objects are compiled with `-mno-incremental-linker-compatible` (the flag clang-cl uses for `/Brepro`), so LLVM does not stamp the COFF header with the wall-clock time. Driver object artifacts and the debug-object determinism test are byte-identical across output directories and across second boundaries, matching D-178's no-timestamp rule and the existing `/Brepro` link handling (D-126); the codegen test asserts the zero timestamp and the driver debug test checks a built object. | The Windows debug suite flaked when the two clang invocations straddled a second boundary (CI run 40733363364); zeroing the header timestamp makes the reproducibility contract true instead of timing-dependent. |
 | D-186 | The Windows user-only security descriptor used for debug endpoint/audit files and the debug pipe keeps its descriptor, ACL, and token buffers in `Box` allocations, so the `SECURITY_ATTRIBUTES` descriptor pointer and the descriptor's internal ACL pointer stay valid when `UserSecurity` moves. The buffers were previously inline, leaving both pointers aimed at `UserSecurity::new`'s dead stack frame; when that frame was overwritten, `CreateFileW`/`CreateNamedPipeW` failed intermittently with `ERROR_REVISION_MISMATCH` (1305). A Windows unit test clobbers the old frame and checks the descriptor revision. | The Windows debug suite failed at `start_debug_server` (CI run 40744761639) because the security descriptor was read from dead stack memory; stable buffer addresses make endpoint creation deterministic without changing the ACL's meaning. |
+| D-187 | The interactive debug CLI test passes an explicit `--endpoint` and reads the endpoint file directly instead of parsing the endpoint path out of stderr. The host and the CLI both print the endpoint to the inherited stderr, and each line is written in several `write_fmt` pieces, so the lines can interleave; a substring search could match mid-line while the strict line-prefix parse returned no path. The test still asserts that the endpoint line and file name are printed. | Removed a Windows-only test race that failed the workspace job (CI run 40747849546) while the debug suite passed; no product behavior changes. |
 
 D-118 was reviewed and approved on 2026-10-24; the four clarifications stand as recorded and phase 2
 is approved. Phase 3 is complete for review and D-119 records its IR-level choices. Phase 4 is
@@ -695,9 +696,11 @@ no artifact, manifest, state, or ABI format is touched. D-185 fixes the Windows 
 that surfaced in CI while reviewing that change: COFF objects no longer carry a wall-clock
 timestamp, so the debug-object determinism check is timing-independent. D-186 fixes the separate
 Windows-only debug-endpoint failure: the user-only security descriptor's buffers now have stable
-addresses instead of pointing into a returned stack frame.
+addresses instead of pointing into a returned stack frame. D-187 removes the remaining
+interactive-launch test race by reading a known endpoint file instead of parsing the shared stderr
+stream.
 
-D-094 through D-186 affect
+D-094 through D-187 affect
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),
 [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md),
 [Debug and Monitoring](Architecture/Debug-and-Monitoring.md),
