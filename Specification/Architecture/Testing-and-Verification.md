@@ -525,19 +525,19 @@ lean/
 | --- | --- |
 | `fmt` | `cargo fmt --all --check` |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
-| `test` | `cargo test --workspace --locked` on Windows x64 and Ubuntu 24.04 x64, both full native hosts; Linux AArch64 after basic development (D-042) |
+| `test` | `cargo test --workspace --locked` on Windows x64, Ubuntu 24.04 x64, and Ubuntu 24.04 ARM64, all native hosts |
 | `coverage` | `cargo llvm-cov --workspace --locked` on Ubuntu x64; job summary, LCOV/JSON/HTML artifacts, and the `badges`-branch badge on `main` |
-| `ui` | diagnostic snapshots on Windows x64 and Ubuntu x64 |
-| `conformance` | conformance corpus on Windows x64 and Ubuntu x64 |
-| `execution` | compile/run tests on Windows x64 and Ubuntu x64 |
-| `projects` | end-to-end project and online workflow plus `manifest_hardening` and `examples` on Windows x64 and Ubuntu x64 |
-| `online` | hot-swap/manifest/cold-download suite on Windows x64 and Ubuntu x64 |
+| `ui` | diagnostic snapshots on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
+| `conformance` | conformance corpus on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
+| `execution` | compile/run tests on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
+| `projects` | end-to-end project and online workflow plus `manifest_hardening` and `examples` on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
+| `online` | hot-swap/manifest/cold-download suite on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
 | `package` | `cargo xtask package --locked`, checksum verification, and the unpacked `new/build/build --release/run/test` exercise on Windows x64 and Ubuntu x64; uploads the package |
 | `traceability` | `cargo xtask traceability --check` and `cargo xtask host-audit --check` on Ubuntu x64 |
 | `debug` | `cargo xtask test --suite debug` on Windows x64 and Ubuntu x64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
-| `cross-target` | `cargo xtask test --suite cross-target` on Windows x64 and Ubuntu x64: nine-triple IR/object matrix, header checks, and exe/lib rejection; also assembles the checked-in AArch64 smoke module |
+| `cross-target` | `cargo xtask test --suite cross-target` on Windows x64, Ubuntu x64, and Ubuntu ARM64: nine-triple IR/object matrix, header checks, and exe/lib rejection; also assembles the checked-in AArch64 smoke module |
 | `docs` | required-document, spec link, and profile checks; Markdown lint |
 
 The workflow is `.github/workflows/ci.yml`; the documentation checks are implemented in
@@ -572,8 +572,9 @@ SIGINT and the test runner kills a timed-out child (`online_cli`, `test_cli`); a
 `stc`, `libstc_runtime.a`, `libstc_runtime.so`, `<module>-<build>.so`, `<name>.a`, and
 `lib<name>.so` (`package`, `cli_project`, `module_cli`, `execution`); and metadata, the build
 manifest, and the package record the host triple (`cli_project`, `module_cli`, and the `package`
-job). Linux AArch64 is not yet a native host: it remains cross-emitted only until the phase-3
-native ARM64 jobs.
+job). Linux AArch64 is a native host from M8 phase 3: the `test`, `ui`, `conformance`,
+`execution`, `projects`, `online`, and `cross-target` jobs run on `ubuntu-24.04-arm`, while the
+`debug` suite and the release package remain x86-64-only jobs until M8 phases 4 and 7.
 
 ### 6.2 Matrix
 
@@ -583,14 +584,16 @@ native ARM64 jobs.
   native host for the workspace and every suite: workspace tests, diagnostic snapshots,
   conformance corpus, execution tests, project workflow, end-to-end CLI, online-change and debug
   suites, cross-target smoke, traceability with the host audit, docs, and the release package.
-  Linux x86-64 is supported natively from M8 phase 2; the deferred "after basic development"
-  qualifier (D-042) now applies only to AArch64.
-- Runner images are pinned (`windows-2025`, `ubuntu-24.04`); `-latest` labels are not used, so
-  image migrations do not silently change the matrix.
-- Host portability (after basic development, D-042): native or emulated Linux AArch64
-  (`aarch64-unknown-linux-gnu`) host jobs. Emulation is a smoke gate; release sign-off uses
-  native ARM64 runners. Further `aarch64` cross-target object emission remains in the
-  `cross-target` job.
+  Linux x86-64 is supported natively from M8 phase 2.
+- Secondary, fully native: Ubuntu 24.04 ARM64 (`ubuntu-24.04-arm`), `aarch64-unknown-linux-gnu` —
+  from M8 phase 3 it runs the workspace tests, diagnostic snapshots, conformance corpus,
+  execution tests, project workflow, online-change suite, and cross-target smoke natively. The
+  debug suite and the release package join in M8 phases 4 and 7.
+- Runner images are pinned (`windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm`); `-latest` labels
+  are not used, so image migrations do not silently change the matrix.
+- Host portability (D-042): native Linux AArch64 host jobs run on `ubuntu-24.04-arm` from M8
+  phase 3 for the suites listed above. Further `aarch64` cross-target object emission remains
+  in the `cross-target` job.
 - Rust toolchain pinned in `rust-toolchain.toml`; Lean pinned in `lean/lean-toolchain`.
 - CI builds with `--locked`; a changed lockfile without a manifest change fails the job.
 - CI caches cargo and Lake builds; the clang version is printed in every job.

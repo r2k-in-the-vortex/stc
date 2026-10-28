@@ -343,6 +343,14 @@ fn cross_target_executable_and_library_are_rejected() {
     }
     let directory = TestDir::new("reject");
     directory.write("main.st", SOURCE);
+    // The requested target must be foreign to the host: an AArch64 Linux
+    // target is the native target on an AArch64 Linux host, where linking
+    // legitimately succeeds. Keep the same expectations either way.
+    let foreign = if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "x86_64-unknown-linux-gnu"
+    } else {
+        "aarch64-unknown-linux-gnu"
+    };
     for (emit, message) in [
         ("exe", "cross-target executables are not supported"),
         ("lib", "cross-target embedding libraries are not supported"),
@@ -354,7 +362,7 @@ fn cross_target_executable_and_library_are_rejected() {
                 "main.st",
                 &format!("--emit={emit}"),
                 "--target",
-                "aarch64-unknown-linux-gnu",
+                foreign,
                 "--name",
                 "cross",
                 "--out-dir",
