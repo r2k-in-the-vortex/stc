@@ -279,7 +279,7 @@ stc build               emit IR/objects/module/executable/library
 stc run                 build and run an executable
 stc test                build and run the built-in test suite
 stc fmt                 format sources with the fixed style; --check for CI
-stc clean               remove the artifact directory
+stc clean               remove generated debug, release, and test artifacts
 stc metadata            print configuration, ABI, exports, layout
 stc compliance          print the profile and feature matrix
 stc online download     export the active manifest and layout summary
@@ -624,8 +624,11 @@ generated `stc.lock` is committed, and `--locked` makes a stale graph an error. 
 `exe,module,metadata` under `target/stc/debug` by default, and `stc test` writes one cold test
 artifact per test under `target/stc/test`. `stc build --release` selects the optimised,
 stripped, hook-free form and `target/stc/release`; `stc debug` builds the debug form and launches
-the authenticated local session. `stc run --watch` needs a local control endpoint and is intended
-for interactive deployment.
+the authenticated local session. `stc clean` removes all generated trees
+(`target/stc/debug`, `target/stc/release`, `target/stc/test`, and an explicit `[build].out-dir`)
+and preserves `stc.lock`, retained-state files, and the runtime module/manifest store; `--debug`,
+`--release`, or `--test` narrows it to one tree, and `--out-dir` selects exactly that directory.
+`stc run --watch` needs a local control endpoint and is intended for interactive deployment.
 
 [`examples/hello`](examples/hello/README.md) is the small starter project: it demonstrates
 constants, scalar variables, control flow, a function, a function block, a standard timer, and a

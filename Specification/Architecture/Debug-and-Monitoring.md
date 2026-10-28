@@ -1175,8 +1175,9 @@ default build mode; it does not enable a runtime server. A runtime server is ena
 
 `stc debug` defaults to debug and accepts `--release` for a monitoring-only session. `stc test`
 always builds the hook-free debug form and rejects `--release`. `stc build`, `stc run`,
-`stc online`, and `stc debug` accept both modes; `stc clean --release` removes the release
-default directory.
+`stc online`, and `stc debug` accept both modes; `stc clean` removes both mode directories and the
+test tree by default, and `stc clean --release` removes just the release default directory
+(D-184).
 
 ### 17.2 Release semantics
 
@@ -1249,8 +1250,10 @@ sections are not inputs to the build ID.
   `target/stc/release`. `[build].out-dir` and `--out-dir` override the default verbatim for both
   modes. Building both modes into one explicit directory is not a supported layout because the
   manifest/metadata names collide; use distinct directories.
-- `stc clean` removes the current mode's directory (`target/stc/debug` by default;
-  `target/stc/release` with `--release`), or the configured out-dir.
+- `stc clean` removes the debug, release, and test trees and an explicit `[build].out-dir` by
+  default; `--debug`, `--release`, or `--test` narrows it to one tree, and `--out-dir` selects
+  exactly one directory. It preserves `stc.lock`, retained-state files, and the runtime
+  module/manifest store (D-184).
 - `stc metadata` appends `build_mode` (`debug`/`release`), `debug_info`
   (`dwarf`/`codeview`/`none`), and `debug_hooks` (boolean) to its summary; the sidecar remains
   authoritative for the checkpoint table.

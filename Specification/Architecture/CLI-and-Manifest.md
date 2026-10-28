@@ -53,7 +53,7 @@ output goes to stdout.
 | `stc run` | Build an executable and run it |
 | `stc test` | Build and run the built-in test suite; includes test-only units |
 | `stc fmt [paths...]` | Format sources with the fixed style; `--check` for CI |
-| `stc clean` | Remove the current mode's artifact directory (debug default `target/stc/debug`, release `target/stc/release`); never `stc.lock` or state files |
+| `stc clean` | Remove generated artifact directories: debug (`target/stc/debug`), release (`target/stc/release`), test (`target/stc/test`), and an explicit `[build].out-dir`; `--debug`, `--release`, or `--test` narrows the command to one tree, and `--out-dir` selects exactly one directory. Never `stc.lock`, retained-state files, or the runtime module/manifest store |
 | `stc metadata` | Print the selected configuration, ABI version, build mode, debug summary, exports, and artifact layout |
 | `stc compliance` | Print the profile ID and supported feature matrix |
 | `stc online download` | Export the active manifest, layout summary, and controller/deployment identifier |
@@ -78,7 +78,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--rename <old=new>` | Record a tracked rename/move; repeatable, including field/method/type/POU paths. Renaming a package name is out of scope (D-156) |
 | `--clang <path>` | clang executable |
 | `--runtime <path>` | Runtime host archive used when linking `exe`/`lib` |
-| `--out-dir <path>` | Artifact directory; default `target/stc/debug` (debug) or `target/stc/release` (release); an explicit value is used verbatim for both modes; `[build].out-dir` overrides the project default |
+| `--out-dir <path>` | Artifact directory; default `target/stc/debug` (debug) or `target/stc/release` (release); an explicit value is used verbatim for both modes; `[build].out-dir` overrides the project default; for `stc clean`, selects exactly the given directory |
 | `--io <backend>` | Override `[io].backend` for `run`/`test` (`null`, `memory`, `file`) |
 | `--io-file <path>` | File used by the file backend |
 | `--relaxed` | Accept the documented semicolon-relaxation syntax superset |
@@ -95,6 +95,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--deny warnings` | Equivalent to `-D warnings` |
 | `--locked` | Require `stc.lock` to match the manifest/dependency graph; fail instead of updating it |
 | `--list` | `stc test`: list discovered tests without building |
+| `--test` | `stc clean`: remove only the test artifact tree (`target/stc/test`, or the `--out-dir` root) |
 | `--no-run` | `stc test`: build test artifacts without executing them |
 | `--timeout <duration>` | `stc test`: override the per-test timeout (default 5 s) |
 | `-- --nocapture` | `stc test`: forward test-host output instead of only reporting results |
@@ -662,7 +663,8 @@ Rules:
   (`STC-E-LOCK-002`: new/removed package, changed version/path/edge). A malformed or unsupported
   lockfile is `STC-E-LOCK-003`. CI uses `--locked`.
 - `stc clean` does not delete `stc.lock` or retained-state files. Deleting them is an explicit
-  user action.
+  user action. It also preserves the runtime module/manifest store (including the default
+  `target/stc/runtime`) when a removed artifact tree contains it.
 - Local source contents are not hashed in v1; editing a path dependency's sources does not
   rewrite the lockfile. A content-hash field can be added later without changing the schema's
   package identity.
@@ -716,7 +718,31 @@ target/stc/debug/                               default debug out-dir (project a
   build.log
 
 target/stc/release/                             default release out-dir (same layout; stripped)
+
+target/stc/test/<artifact>/                     per-test artifact (stc test; hook-free debug form)
+  <artifact>.ll
+  <artifact>.o
+  <artifact>.exe | <artifact>                    thin host launcher (exe)
+  <artifact>-launcher.ll | <artifact>-launcher.o
+  <artifact>-<build-id>.dll | <artifact>-<build-id>.so
+  <artifact>.stc-meta.json
+  <artifact>.stc-got.json
+  <artifact>.stc-got.bin
+
+target/stc/runtime/                             default runtime store (`stc run --watch`)
+  modules/                                      runtime module generations (when configured)
+  manifests/                                    active/retired GOT manifests
 ```
+
+`stc clean` removes the debug, release, and test trees and an explicit `[build].out-dir`. It
+preserves `stc.lock`, every retained-state file (`*.stcstate`), an explicit `[retain].file`, and
+the runtime module/manifest store (`[runtime].module-dir`, `[runtime].manifest-dir`, or the
+default `target/stc/runtime`); a preserved entry keeps its parent directories in place. With no
+selector, clean covers the three generated trees and the explicit out-dir; `--debug`, `--release`,
+or `--test` narrows the command to one, and `--out-dir` selects exactly the given directory.
+Cleaning a directory that contains the project root is refused. A runtime store selected only by a
+`stc run --watch --store` CLI override is not discoverable by clean; keep it outside the generated
+trees or delete it explicitly.
 
 `<name>.stc-meta.json`:
 

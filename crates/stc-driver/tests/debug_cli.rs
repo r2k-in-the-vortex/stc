@@ -25,6 +25,11 @@ fn stc() -> &'static str {
     env!("CARGO_BIN_EXE_stc")
 }
 
+/// Waits that include a project build and host launch. A loaded Windows CI
+/// runner can be several times slower than a local machine, so these waits
+/// need a larger budget than protocol-only waits.
+const BUILD_AND_LAUNCH_TIMEOUT: Duration = Duration::from_secs(600);
+
 fn clang() -> Option<&'static str> {
     static CLANG: OnceLock<Option<&'static str>> = OnceLock::new();
     CLANG
@@ -216,13 +221,6 @@ fn wait_file_contains(path: &Path, needle: &str, deadline: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(20));
     }
     false
-}
-
-fn endpoint_path_in(stderr: &str) -> Option<PathBuf> {
-    stderr.lines().find_map(|line| {
-        line.strip_prefix("stc: debug endpoint ")
-            .map(|path| PathBuf::from(path.trim()))
-    })
 }
 
 fn endpoint_token(path: &Path) -> String {
@@ -799,9 +797,16 @@ fn launch_interactive_reports_session_status_and_never_prints_the_token() {
     let err = File::create(project.path("interactive.stderr")).expect("stderr file");
     let runtime = runtime_artifact();
     let runtime_text = runtime.to_string_lossy().into_owned();
+    // The host and the CLI both print the endpoint to the inherited stderr,
+    // and the format machinery writes each line in several pieces. Locate the
+    // endpoint file directly instead of parsing the interleaved stream.
+    let endpoint = project.path("interactive.endpoint.json");
+    let endpoint_text = endpoint.to_string_lossy().into_owned();
     let mut child = Command::new(stc())
         .args([
             "debug",
+            "--endpoint",
+            &endpoint_text,
             "--message-format",
             "json",
             "--cycles",
@@ -825,7 +830,7 @@ fn launch_interactive_reports_session_status_and_never_prints_the_token() {
         wait_file_contains(
             &stdout_path,
             "\"kind\":\"response\"",
-            Duration::from_secs(60)
+            BUILD_AND_LAUNCH_TIMEOUT
         ),
         "no debug session started:\n{}\n{}",
         text_file(&stderr_path),
@@ -842,8 +847,17 @@ fn launch_interactive_reports_session_status_and_never_prints_the_token() {
         "the endpoint path was not printed on stderr:\n{}",
         text_file(&stderr_path)
     );
+    let endpoint_name = endpoint
+        .file_name()
+        .expect("endpoint file name")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        wait_file_contains(&stderr_path, &endpoint_name, Duration::from_secs(30)),
+        "the endpoint path is printed on stderr:\n{}",
+        text_file(&stderr_path)
+    );
     let started = text_file(&stderr_path);
-    let endpoint = endpoint_path_in(&started).expect("endpoint path on stderr");
     let token = endpoint_token(&endpoint);
     assert_eq!(token.len(), 64, "the endpoint token is 64 hex characters");
     assert!(
@@ -916,7 +930,7 @@ fn launch_reports_the_target_trap_exit_code() {
         .expect("spawn debug");
     // Keep stdin open so the session does not end on EOF before the trap.
     let stdin = child.stdin.take().expect("piped stdin");
-    let status = wait_exit(&mut child, Duration::from_secs(60));
+    let status = wait_exit(&mut child, BUILD_AND_LAUNCH_TIMEOUT);
     drop(stdin);
     let text = format!(
         "{}\n{}",
@@ -967,7 +981,7 @@ fn run_debug_server_accepts_attach_and_release_is_monitoring_only() {
         .spawn()
         .expect("spawn run");
     assert!(
-        wait_endpoint(&endpoint, &mut run, Duration::from_secs(180)),
+        wait_endpoint(&endpoint, &mut run, BUILD_AND_LAUNCH_TIMEOUT),
         "no debug endpoint; run output:\n{}\n{}",
         text_file(&project.path("run.stdout")),
         text_file(&project.path("run.stderr"))

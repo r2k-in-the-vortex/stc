@@ -884,7 +884,11 @@ mod platform {
             Self([0; N])
         }
 
-        fn as_mut(&mut self) -> *mut c_void {
+        fn as_ptr(&self) -> *const c_void {
+            self.0.as_ptr().cast()
+        }
+
+        fn as_raw_mut(&mut self) -> *mut c_void {
             self.0.as_mut_ptr().cast()
         }
     }
@@ -1030,16 +1034,22 @@ mod platform {
     }
 
     /// A user-only security descriptor and its ACL.
+    ///
+    /// The buffers are boxed so their addresses stay stable when this value
+    /// moves: the security descriptor stores a pointer to the ACL, and
+    /// `attributes` stores a pointer to the descriptor. Keeping them inline
+    /// left both pointers aimed at dead stack memory after `new` returned,
+    /// which intermittently failed with `ERROR_REVISION_MISMATCH` (1305).
     struct UserSecurity {
-        _descriptor: Aligned<64>,
-        _acl: Aligned<256>,
-        _token: Aligned<1024>,
+        _descriptor: Box<Aligned<64>>,
+        _acl: Box<Aligned<256>>,
+        _token: Box<Aligned<1024>>,
         attributes: SecurityAttributes,
     }
 
     impl UserSecurity {
         fn new() -> Option<Self> {
-            let mut token = Aligned::<1024>::new();
+            let mut token = Box::new(Aligned::<1024>::new());
             let mut token_handle: Handle = std::ptr::null_mut();
             // SAFETY: the handles and buffers are valid for these calls; the
             // access mask, class, and lengths are fixed Windows contract values.
@@ -1051,7 +1061,7 @@ mod platform {
                 let _ = GetTokenInformation(
                     token_handle,
                     TOKEN_USER,
-                    token.as_mut(),
+                    token.as_raw_mut(),
                     1024,
                     &mut needed,
                 );
@@ -1060,7 +1070,7 @@ mod platform {
                     || GetTokenInformation(
                         token_handle,
                         TOKEN_USER,
-                        token.as_mut(),
+                        token.as_raw_mut(),
                         1024,
                         &mut needed,
                     ) == 0
@@ -1071,20 +1081,23 @@ mod platform {
                 CloseHandle(token_handle);
             }
             // TOKEN_USER starts with SID_AND_ATTRIBUTES { PSID Sid; DWORD }.
-            let sid = unsafe { *token.0.as_ptr().cast::<*mut c_void>() };
+            let sid = unsafe { *token.as_ptr().cast::<*mut c_void>() };
             if sid.is_null() {
                 return None;
             }
-            let mut descriptor = Aligned::<64>::new();
-            let mut acl = Aligned::<256>::new();
+            let mut descriptor = Box::new(Aligned::<64>::new());
+            let mut acl = Box::new(Aligned::<256>::new());
             // SAFETY: the buffers meet the documented minimum sizes and the
             // SID came from the current process token.
             unsafe {
-                if InitializeSecurityDescriptor(descriptor.as_mut(), SECURITY_DESCRIPTOR_REVISION)
-                    == 0
-                    || InitializeAcl(acl.as_mut(), 256, ACL_REVISION) == 0
-                    || AddAccessAllowedAce(acl.as_mut(), ACL_REVISION, GENERIC_ALL, sid) == 0
-                    || SetSecurityDescriptorDacl(descriptor.as_mut(), 1, acl.as_mut(), 0) == 0
+                if InitializeSecurityDescriptor(
+                    descriptor.as_raw_mut(),
+                    SECURITY_DESCRIPTOR_REVISION,
+                ) == 0
+                    || InitializeAcl(acl.as_raw_mut(), 256, ACL_REVISION) == 0
+                    || AddAccessAllowedAce(acl.as_raw_mut(), ACL_REVISION, GENERIC_ALL, sid) == 0
+                    || SetSecurityDescriptorDacl(descriptor.as_raw_mut(), 1, acl.as_raw_mut(), 0)
+                        == 0
                 {
                     return None;
                 }
@@ -1092,7 +1105,7 @@ mod platform {
             Some(Self {
                 attributes: SecurityAttributes {
                     n_length: u32::try_from(std::mem::size_of::<SecurityAttributes>()).ok()?,
-                    security_descriptor: descriptor.as_mut(),
+                    security_descriptor: descriptor.as_raw_mut(),
                     inherit_handle: 0,
                 },
                 _descriptor: descriptor,
@@ -1460,6 +1473,29 @@ mod platform {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Overwrites the stack frame `UserSecurity::new` used, so a pointer
+        /// into that frame cannot read back the descriptor it wrote.
+        #[inline(never)]
+        fn clobber_stack() {
+            let mut bytes = [0xAA_u8; 8192];
+            std::hint::black_box(&mut bytes);
+        }
+
+        #[test]
+        fn user_security_descriptor_survives_the_return() {
+            let security = UserSecurity::new().expect("user-only security descriptor");
+            clobber_stack();
+            // SAFETY: `security` owns the boxed descriptor for the duration of
+            // the read.
+            let revision = unsafe { *security.attributes.security_descriptor.cast::<u8>() };
+            assert_eq!(u32::from(revision), SECURITY_DESCRIPTOR_REVISION);
         }
     }
 }

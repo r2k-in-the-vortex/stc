@@ -1252,6 +1252,15 @@ fn clean_preserves_lockfile_and_state() {
     let out_dir = project.path("app/target/stc/debug");
     std::fs::write(out_dir.join("junk.txt"), "junk").expect("write junk");
     std::fs::write(out_dir.join("app.stcstate"), "state").expect("write state");
+    let release_dir = project.path("app/target/stc/release");
+    std::fs::create_dir_all(release_dir.join("nested")).expect("create release dir");
+    std::fs::write(release_dir.join("nested/junk.txt"), "junk").expect("write junk");
+    let test_dir = project.path("app/target/stc/test/case-A");
+    std::fs::create_dir_all(&test_dir).expect("create test dir");
+    std::fs::write(test_dir.join("junk.txt"), "junk").expect("write junk");
+    let store = project.path("app/target/stc/runtime/manifests");
+    std::fs::create_dir_all(&store).expect("create runtime store");
+    std::fs::write(store.join("active.json"), "{}").expect("write store record");
 
     let output = project.run("app", &["clean"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -1260,6 +1269,15 @@ fn clean_preserves_lockfile_and_state() {
     assert!(
         out_dir.join("app.stcstate").is_file(),
         "state files are kept"
+    );
+    assert!(!release_dir.exists(), "the release tree is removed");
+    assert!(
+        !project.path("app/target/stc/test").exists(),
+        "the test tree is removed"
+    );
+    assert!(
+        store.join("active.json").is_file(),
+        "the runtime manifest store is kept"
     );
     assert!(project.path("app/stc.lock").is_file(), "stc.lock is kept");
 
@@ -1310,4 +1328,74 @@ fn clean_preserves_lockfile_and_state() {
     let output = project.run("app", &["clean"]);
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
     assert!(project.path("app/stc.toml").is_file());
+}
+
+#[test]
+fn clean_covers_test_and_configured_out_dirs() {
+    let project = TestDir::new("clean-all");
+    project.write("app/stc.toml", &app_manifest("app", "out-dir = \"dist\"\n"));
+    project.write("app/src/main.st", SCAFFOLD_PROGRAM);
+    let output = project.run("app", &["build"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(project.path("app/dist/app.ll").is_file());
+
+    // Test output ignores `[build].out-dir`; keep all trees so the selectors
+    // have something to remove.
+    for (path, file) in [
+        ("app/target/stc/debug/junk", "junk"),
+        ("app/target/stc/release/junk", "junk"),
+        ("app/target/stc/test/case-A/junk", "junk"),
+    ] {
+        let path = project.write(path, file);
+        assert!(path.is_file());
+    }
+    std::fs::create_dir_all(project.path("app/target/stc/runtime")).expect("create store");
+
+    let output = project.run("app", &["clean", "--test"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        !project.path("app/target/stc/test").exists(),
+        "`clean --test` removes the test tree"
+    );
+    assert!(project.path("app/target/stc/debug").is_dir());
+    assert!(project.path("app/target/stc/release").is_dir());
+    assert!(project.path("app/dist").is_dir());
+
+    let output = project.run("app", &["clean"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(!project.path("app/target/stc/debug").exists());
+    assert!(!project.path("app/target/stc/release").exists());
+    assert!(!project.path("app/target/stc/test").exists());
+    assert!(
+        !project.path("app/dist").exists(),
+        "the configured out-dir is removed"
+    );
+    assert!(
+        project.path("app/target/stc/runtime").is_dir(),
+        "the default runtime store is kept"
+    );
+    assert!(project.path("app/stc.lock").is_file(), "stc.lock is kept");
+
+    // An explicit out-dir that contains the runtime store keeps the store.
+    let store = project.write("app/target/stc/runtime/manifests/active.json", "{}");
+    project.write("app/target/stc/debug/junk", "junk");
+    let output = project.run("app", &["clean", "--out-dir", "target"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(!project.path("app/target/stc/debug").exists());
+    assert!(store.is_file(), "the active manifest store is kept");
+
+    // A configured manifest-dir under an artifact tree is preserved too.
+    project.write(
+        "app/stc.toml",
+        &app_manifest(
+            "app",
+            "out-dir = \"dist\"\n\n[runtime]\nmanifest-dir = \"target/stc/debug/store\"\n",
+        ),
+    );
+    let store = project.write("app/target/stc/debug/store/manifests/active.json", "{}");
+    project.write("app/target/stc/debug/junk", "junk");
+    let output = project.run("app", &["clean"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(!project.path("app/target/stc/debug/junk").exists());
+    assert!(store.is_file(), "the configured manifest store is kept");
 }

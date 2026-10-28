@@ -129,6 +129,7 @@ fn run(args: &[String]) -> ExitCode {
         Command::Clean => clean::run(
             invocation.manifest.as_deref(),
             &invocation.build,
+            invocation.clean_test,
             invocation.locked,
             &mut reporter,
             log,
