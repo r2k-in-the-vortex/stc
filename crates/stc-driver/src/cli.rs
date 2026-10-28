@@ -133,6 +133,8 @@ pub(crate) struct Invocation {
     pub(crate) online: OnlineOptions,
     /// `fmt --check`.
     pub(crate) fmt_check: bool,
+    /// `clean --test`: remove only the test artifact tree.
+    pub(crate) clean_test: bool,
     /// Build settings and overrides.
     pub(crate) build: Request,
     /// `stc test` options.
@@ -208,6 +210,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     let mut dry_run = false;
     let mut online = OnlineOptions::default();
     let mut fmt_check = false;
+    let mut clean_test = false;
     let mut test = TestOptions::default();
     let mut debug = DebugOptions::default();
     let mut paths = Vec::new();
@@ -246,6 +249,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             }
             "--dry-run" => dry_run = true,
             "--check" => fmt_check = true,
+            "--test" => clean_test = true,
             "--list" => test.list = true,
             "--no-run" => test.no_run = true,
             "--timeout" => {
@@ -507,6 +511,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         dry_run,
         &online,
         fmt_check,
+        clean_test,
         &build,
         &test,
         format,
@@ -538,6 +543,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         dry_run,
         online,
         fmt_check,
+        clean_test,
         build,
         test,
         debug,
@@ -587,6 +593,7 @@ fn validate(
     dry_run: bool,
     online: &OnlineOptions,
     fmt_check: bool,
+    clean_test: bool,
     build: &Request,
     test: &TestOptions,
     format: Format,
@@ -863,6 +870,15 @@ fn validate(
     }
     if fmt_check && command != Command::Fmt {
         return Err("`--check` is only valid with `stc fmt`".into());
+    }
+    if clean_test && command != Command::Clean {
+        return Err("`--test` is only valid with `stc clean`".into());
+    }
+    if clean_test && build.mode_override.is_some() {
+        return Err(
+            "STC-E-PROJECT-010: `stc clean --test` cannot be combined with `--debug` or `--release`"
+                .into(),
+        );
     }
     if relaxed
         && !matches!(
@@ -1143,7 +1159,7 @@ fn print_help() {
          \x20           [--rename old=new]... [--allow-untracked-removal]\n\
          \x20           [--relaxed] [--message-format human|json|short] [-v|-vv] [-q]\n\
          \x20 stc clean [--manifest-path <stc.toml|dir>] [--out-dir <dir>] [--locked]\n\
-         \x20           [--debug|--release]\n\
+         \x20           [--debug|--release|--test]\n\
          \x20 stc metadata [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20           [--debug|--release] [--message-format human|json] [-v|-vv]\n\
          \x20 stc compliance [--message-format human|json]\n\
@@ -1201,7 +1217,12 @@ fn print_help() {
          default to `--emit module`, the debug build form, and\n\
          `target/stc/debug`. `--release` selects optimized, stripped,\n\
          hook-free artifacts in `target/stc/release`; `--debug` forces the\n\
-         debug form. The CLI flags override `[build].debug`, which overrides\n\
+         debug form. `stc clean` removes the debug, release, and test\n\
+         artifact trees and an explicit `[build].out-dir`; `--debug`,\n\
+         `--release`, or `--test` narrows it to one tree, and `--out-dir`\n\
+         selects exactly the given directory. It preserves `stc.lock`,\n\
+         retained-state files, and the runtime module/manifest store.\n\
+         The CLI flags override `[build].debug`, which overrides\n\
          `[debug].default`. `stc test` always builds the hook-free debug form\n\
          and rejects `--release`, `--debug-server`, `--debug-protocol`, and the\n\
          server-grant options. `stc debug` builds and launches a local\n\
@@ -1264,6 +1285,30 @@ mod tests {
             .collect::<Vec<_>>();
         let error = match parse(&args) {
             Ok(_) => panic!("both modes must fail"),
+            Err(error) => error,
+        };
+        assert!(error.starts_with("STC-E-PROJECT-010: "), "{error}");
+    }
+
+    #[test]
+    fn clean_accepts_only_the_test_selector() {
+        assert!(invocation(&["clean", "--test"]).clean_test);
+        let args = ["build", "--test"]
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        let error = match parse(&args) {
+            Ok(_) => panic!("`--test` is only a clean selector"),
+            Err(error) => error,
+        };
+        assert!(error.contains("only valid with `stc clean`"), "{error}");
+
+        let args = ["clean", "--test", "--release"]
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        let error = match parse(&args) {
+            Ok(_) => panic!("`--test` conflicts with mode flags"),
             Err(error) => error,
         };
         assert!(error.starts_with("STC-E-PROJECT-010: "), "{error}");

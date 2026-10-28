@@ -575,12 +575,24 @@ fn explicit_out_dirs_are_verbatim_and_reject_mixed_modes() {
 }
 
 #[test]
-fn clean_selects_the_release_or_debug_directory() {
+fn clean_selects_the_release_debug_or_test_directory() {
     let project = scaffold("cleanmode", "[build]\n");
     let debug = project.run("app", &["build", "--emit", "metadata"]);
     assert_eq!(code(&debug), 0, "{}", stderr(&debug));
     let release = project.run("app", &["build", "--release", "--emit", "metadata"]);
     assert_eq!(code(&release), 0, "{}", stderr(&release));
+    let test_artifact = project.path("app/target/stc/test/case-A");
+    std::fs::create_dir_all(&test_artifact).expect("create test artifact directory");
+    std::fs::write(test_artifact.join("junk"), "junk").expect("write test artifact");
+    assert!(project.path("app/target/stc/debug").is_dir());
+    assert!(project.path("app/target/stc/release").is_dir());
+
+    let clean_test = project.run("app", &["clean", "--test"]);
+    assert_eq!(code(&clean_test), 0, "{}", stderr(&clean_test));
+    assert!(
+        !project.path("app/target/stc/test").exists(),
+        "`clean --test` removes only the test directory"
+    );
     assert!(project.path("app/target/stc/debug").is_dir());
     assert!(project.path("app/target/stc/release").is_dir());
 
@@ -595,11 +607,22 @@ fn clean_selects_the_release_or_debug_directory() {
         "the debug directory survives"
     );
 
-    let clean_debug = project.run("app", &["clean"]);
-    assert_eq!(code(&clean_debug), 0, "{}", stderr(&clean_debug));
+    // A default clean removes every generated tree, including trees that were
+    // not touched by a selector.
+    let release = project.run("app", &["build", "--release", "--emit", "metadata"]);
+    assert_eq!(code(&release), 0, "{}", stderr(&release));
+    std::fs::create_dir_all(&test_artifact).expect("recreate test artifact directory");
+    let clean_all = project.run("app", &["clean"]);
+    assert_eq!(code(&clean_all), 0, "{}", stderr(&clean_all));
     assert!(
         !project.path("app/target/stc/debug").exists(),
         "the default clean mode removes the debug directory"
+    );
+    assert!(!project.path("app/target/stc/release").exists());
+    assert!(!project.path("app/target/stc/test").exists());
+    assert!(
+        project.path("app/stc.lock").is_file(),
+        "clean preserves stc.lock"
     );
 }
 

@@ -187,6 +187,11 @@ fn new_project_runs_the_v1_workflow() {
     let run = directory.run_with_runtime("app", &["run", "--cycles", "3"]);
     assert_success(&run, "stc run");
 
+    assert_success(
+        &directory.run("app", &["build", "--release", "--emit", "ir"]),
+        "stc build --release",
+    );
+
     let test = directory.run_with_runtime("app", &["test"]);
     assert_success(&test, "stc test");
 
@@ -199,6 +204,14 @@ fn new_project_runs_the_v1_workflow() {
     assert!(
         !directory.path("app/target/stc/debug").exists(),
         "clean removes the configured out-dir"
+    );
+    assert!(
+        !directory.path("app/target/stc/release").exists(),
+        "clean removes the release tree"
+    );
+    assert!(
+        !directory.path("app/target/stc/test").exists(),
+        "clean removes the test tree"
     );
     assert!(
         directory.path("app/stc.lock").is_file(),
