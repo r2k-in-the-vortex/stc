@@ -765,7 +765,7 @@ fn release_embedding_archive_is_debug_free() {
     let library = if cfg!(windows) {
         "app/target/stc/release/app.lib"
     } else {
-        "app/target/stc/release/libapp.a"
+        "app/target/stc/release/app.a"
     };
     let archive = project.path(library);
     assert!(archive.is_file(), "missing embedding archive `{library}`");
