@@ -1183,6 +1183,10 @@ impl Lowerer<'_> {
         let Some((def_file, def_line)) = self.debug_def_file_line(def) else {
             return Ok(());
         };
+        if self.checkpoint_collection_enabled() {
+            // The frame sidecar needs a reliable saved-frame-pointer chain.
+            f.set_debug_frames();
+        }
         let scope_line = self
             .debug_span_file_line(body_span)
             .map_or(def_line, |(_, line)| line);
@@ -1201,6 +1205,7 @@ impl Lowerer<'_> {
             .subroutine_type(result_ty, &param_types);
         let subprogram = self.debug.as_mut().expect("debug is enabled").reserve();
         let mut variable_ids = Vec::new();
+        let mut frame_locals = Vec::new();
         for (index, param) in params.iter().enumerate() {
             let data = self.hir.param(*param).clone();
             let Some(type_id) = self.debug_type(data.ty)? else {
@@ -1210,6 +1215,9 @@ impl Lowerer<'_> {
                 continue;
             };
             let name = self.hir.interner.text(data.name).to_string();
+            if self.checkpoint_collection_enabled() {
+                self.push_frame_hint(&mut frame_locals, &name, data.ty, true, data.span)?;
+            }
             let arg = u32::try_from(index).ok().map(|index| index + 1);
             let variable = self
                 .debug
@@ -1235,6 +1243,9 @@ impl Lowerer<'_> {
                 continue;
             };
             let name = self.hir.interner.text(data.name).to_string();
+            if self.checkpoint_collection_enabled() {
+                self.push_frame_hint(&mut frame_locals, &name, data.ty, false, data.span)?;
+            }
             let variable = self
                 .debug
                 .as_mut()
@@ -1275,6 +1286,50 @@ impl Lowerer<'_> {
             .as_mut()
             .and_then(|debug| debug.location(def_span, subprogram));
         f.set_debug_location(location);
+        if self.checkpoint_collection_enabled() {
+            let target = match &self.hir.defs[def.index()].kind {
+                DefKind::Function { .. } => Some(crate::module::FunctionTarget::Function(def)),
+                DefKind::FunctionBlock { .. } => Some(crate::module::FunctionTarget::FbBody(def)),
+                DefKind::Method { .. } => Some(crate::module::FunctionTarget::Method(def)),
+                DefKind::Program { .. } => Some(crate::module::FunctionTarget::ProgramBody(def)),
+                _ => None,
+            };
+            if let Some(got_id) = target.and_then(|target| self.got.function_got_id(target)) {
+                self.frame_hints.push(crate::FrameFunctionHint {
+                    function: got_id,
+                    symbol: f.name.clone(),
+                    locals: frame_locals,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Records one front-end parameter or local hint for the frame sidecar.
+    fn push_frame_hint(
+        &self,
+        hints: &mut Vec<crate::FrameLocalHint>,
+        name: &str,
+        ty: TyId,
+        parameter: bool,
+        span: Span,
+    ) -> Res<()> {
+        let facts = self.types.facts(ty)?;
+        if facts.layout.size == 0 {
+            return Ok(());
+        }
+        let size = u32::try_from(facts.layout.size).map_err(|_| {
+            CodegenError::internal("a frame local exceeds the 32-bit byte-size limit")
+        })?;
+        hints.push(crate::FrameLocalHint {
+            name: name.to_ascii_uppercase(),
+            type_key: facts.key.clone(),
+            size,
+            parameter,
+            declaration: span.start,
+            first: 0,
+            last: 0,
+        });
         Ok(())
     }
 

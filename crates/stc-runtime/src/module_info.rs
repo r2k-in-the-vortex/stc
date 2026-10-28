@@ -140,6 +140,29 @@ impl Default for ModuleInfo {
     }
 }
 
+/// One validated debug checkpoint from the metadata sidecar.
+///
+/// The record keeps the source binding data needed to resolve source
+/// breakpoints and to report a stop: the manifest function identity, the
+/// 1-based source coordinate, and the span-table file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DebugCheckpointRecord {
+    /// Dense checkpoint identity, starting at 1.
+    pub(crate) id: u32,
+    /// Sparse checkpoint flags (§16.3).
+    pub(crate) flags: u32,
+    /// Manifest function that emits the hook.
+    pub(crate) function: GotId,
+    /// 1-based source line.
+    pub(crate) line: u32,
+    /// 1-based source column.
+    pub(crate) column: u32,
+    /// Span-table entry index.
+    pub(crate) span: u32,
+    /// Relative source file from the span table.
+    pub(crate) file: String,
+}
+
 /// The validated debug capability of one generation's metadata sidecar.
 ///
 /// The object is validated per build (Debug and Monitoring §16.2/§16.7). A
@@ -155,6 +178,8 @@ pub(crate) struct DebugMetadataReport {
     pub(crate) info: &'static str,
     /// Whether a valid non-empty checkpoint table is available.
     pub(crate) checkpoints: bool,
+    /// Validated checkpoint records, in ID order.
+    pub(crate) records: Vec<DebugCheckpointRecord>,
     /// Validation failure detail, without host paths or token material.
     pub(crate) error: Option<String>,
 }
@@ -177,6 +202,7 @@ pub(crate) fn debug_metadata(
         hooks: false,
         info: "none",
         checkpoints: false,
+        records: Vec::new(),
         error: None,
     };
     let Some(info) = info else {
@@ -267,12 +293,23 @@ pub(crate) fn debug_metadata(
             "the debug object has checkpoints but does not declare hooks",
         );
     }
-    let span_count = span_entry_count(info);
+    let span_table = if checkpoints.is_empty() {
+        None
+    } else {
+        let Some(table) = span_table(info) else {
+            return invalid(report, "the metadata spans table is malformed");
+        };
+        Some(table)
+    };
+    let span_count = span_table
+        .as_ref()
+        .map_or(0, |table| table.entry_files.len());
     let functions = manifest
         .functions
         .iter()
         .map(|function| function.got_id)
         .collect::<std::collections::BTreeSet<_>>();
+    let mut records = Vec::with_capacity(checkpoints.len());
     for (index, checkpoint) in checkpoints.iter().enumerate() {
         let Some(checkpoint) = checkpoint.as_object() else {
             return invalid(report, "a checkpoint entry is not a JSON object");
@@ -293,22 +330,19 @@ pub(crate) fn debug_metadata(
         if flags.is_none_or(|flags| flags & !CHECKPOINT_FLAG_MASK != 0) {
             return invalid(report, "a checkpoint flag has reserved bits set");
         }
-        if number("line")
-            .and_then(|value| u32::try_from(value).ok())
-            .is_none_or(|value| value == 0)
-            || number("column")
-                .and_then(|value| u32::try_from(value).ok())
-                .is_none_or(|value| value == 0)
-        {
+        let line = number("line").and_then(|value| u32::try_from(value).ok());
+        let column = number("column").and_then(|value| u32::try_from(value).ok());
+        if line.is_none_or(|value| value == 0) || column.is_none_or(|value| value == 0) {
             return invalid(
                 report,
                 "a checkpoint line or column is not a 1-based coordinate",
             );
         }
-        let span = number("span").and_then(|value| usize::try_from(value).ok());
-        if span.is_none_or(|span| span >= span_count) {
+        let span = number("span").and_then(|value| u32::try_from(value).ok());
+        let Some(span) = span.filter(|span| usize::try_from(*span).is_ok_and(|s| s < span_count))
+        else {
             return invalid(report, "a checkpoint names an invalid span index");
-        }
+        };
         let function = checkpoint
             .get("function")
             .and_then(Json::as_str)
@@ -319,27 +353,66 @@ pub(crate) fn debug_metadata(
         if !functions.contains(&function) {
             return invalid(report, "a checkpoint names an unknown manifest function");
         }
+        let Some(table) = span_table.as_ref() else {
+            return invalid(report, "a checkpoint names an invalid span index");
+        };
+        let file = table.entry_files[usize::try_from(span).unwrap_or(usize::MAX)] as usize;
+        records.push(DebugCheckpointRecord {
+            id: id.unwrap_or_default(),
+            flags: flags.unwrap_or_default(),
+            function,
+            line: line.unwrap_or_default(),
+            column: column.unwrap_or_default(),
+            span,
+            file: table.files[file].clone(),
+        });
     }
     report.hooks = hooks;
     report.info = info_name;
     report.checkpoints = !checkpoints.is_empty();
+    report.records = records;
     report
 }
 
-fn span_entry_count(info: &ModuleInfo) -> usize {
-    let Ok(root) = json::parse(&info.text) else {
-        return 0;
-    };
-    root.as_object()
-        .and_then(|object| object.get("spans"))
-        .and_then(Json::as_object)
-        .and_then(|spans| spans.get("entries"))
-        .and_then(Json::as_array)
-        .map_or(0, <[Json]>::len)
+struct SpanTable {
+    files: Vec<String>,
+    entry_files: Vec<u32>,
+}
+
+/// Parses and validates the span table used to resolve checkpoint source files.
+fn span_table(info: &ModuleInfo) -> Option<SpanTable> {
+    let root = json::parse(&info.text).ok()?;
+    let spans = root.as_object()?.get("spans")?.as_object()?;
+    let files = spans.get("files")?.as_array()?;
+    let entries = spans.get("entries")?.as_array()?;
+    let mut paths = Vec::with_capacity(files.len());
+    for file in files {
+        let file = file.as_str()?;
+        if !crate::frames::valid_source_file(file) {
+            return None;
+        }
+        paths.push(file.to_owned());
+    }
+    let mut entry_files = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let file = entry.as_object()?.get("file")?.as_number()?;
+        let file = u32::try_from(file).ok()?;
+        if usize::try_from(file).ok()? >= paths.len() {
+            return None;
+        }
+        entry_files.push(file);
+    }
+    Some(SpanTable {
+        files: paths,
+        entry_files,
+    })
 }
 
 fn invalid(mut report: DebugMetadataReport, message: &str) -> DebugMetadataReport {
     report.error = Some(message.to_owned());
+    report.hooks = false;
+    report.checkpoints = false;
+    report.records.clear();
     report
 }
 
@@ -608,6 +681,16 @@ pub fn manifest_path(module_path: &Path) -> PathBuf {
     };
     let stem = module_stem(name);
     module_path.with_file_name(format!("{stem}.stc-got.bin"))
+}
+
+/// Returns the stopped-frame sidecar path for a module.
+#[must_use]
+pub fn frames_path(module_path: &Path) -> PathBuf {
+    let Some(name) = module_path.file_name().and_then(|name| name.to_str()) else {
+        return module_path.with_extension("stc-frames.json");
+    };
+    let stem = module_stem(name);
+    module_path.with_file_name(format!("{stem}.stc-frames.json"))
 }
 
 fn module_stem(name: &str) -> String {

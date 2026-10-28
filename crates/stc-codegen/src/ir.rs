@@ -408,6 +408,9 @@ pub struct Function {
     block_counter: u32,
     debug_subprogram: Option<u32>,
     debug_location: Option<u32>,
+    /// Keep a frame pointer and disable tail calls for a hook-emitting debug
+    /// build (Debug and Monitoring §16.9).
+    debug_frames: bool,
     pub(crate) facts: FunctionFacts,
 }
 
@@ -431,6 +434,7 @@ impl Function {
             block_counter: 0,
             debug_subprogram: None,
             debug_location: None,
+            debug_frames: false,
             facts: FunctionFacts::default(),
         }
     }
@@ -443,6 +447,11 @@ impl Function {
     /// Returns the current `DISubprogram`, when debug metadata is enabled.
     pub(crate) fn debug_subprogram(&self) -> Option<u32> {
         self.debug_subprogram
+    }
+
+    /// Forces a frame pointer and disables tail calls for this function.
+    pub(crate) fn set_debug_frames(&mut self) {
+        self.debug_frames = true;
     }
 
     /// Sets the location attached to subsequently emitted instructions.
@@ -1084,9 +1093,14 @@ impl Function {
         let debug = self
             .debug_subprogram
             .map_or_else(String::new, |debug| format!(" !dbg !{debug}"));
+        let frames = if self.debug_frames {
+            " \"frame-pointer\"=\"all\" \"disable-tail-calls\"=\"true\""
+        } else {
+            ""
+        };
         let _ = writeln!(
             out,
-            "define {}{} @{}({params}) uwtable{debug} {{",
+            "define {}{} @{}({params}) uwtable{frames}{debug} {{",
             self.attrs.render(),
             self.ret.render(),
             self.name

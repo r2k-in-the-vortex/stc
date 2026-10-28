@@ -156,6 +156,8 @@ pub struct Candidate {
     pair: ValidatedPair,
     manifest_binary: Vec<u8>,
     info: Option<ModuleInfo>,
+    frames: Option<Arc<crate::frames::FrameTable>>,
+    frames_error: Option<String>,
     module_dir: PathBuf,
 }
 
@@ -171,6 +173,7 @@ impl Candidate {
         let manifest_binary = crate::store::read_file_bounded(manifest_path, MAX_MANIFEST_BYTES)?;
         let module = LoadedModule::load(module_path)?;
         let info = ModuleInfo::read_beside(module_path)?;
+        let frames = crate::frames::read(&crate::module_info::frames_path(module_path));
         let module_dir = module_path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -178,7 +181,7 @@ impl Candidate {
                 || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 Path::to_path_buf,
             );
-        Self::from_loaded_with_info_in(platform, module, manifest_binary, info, module_dir)
+        Self::from_loaded_full(platform, module, manifest_binary, info, module_dir, frames)
     }
 
     /// Loads a module and its manifest, using an explicit metadata sidecar.
@@ -194,6 +197,7 @@ impl Candidate {
     ) -> Result<Self> {
         let manifest_binary = crate::store::read_file_bounded(manifest_path, MAX_MANIFEST_BYTES)?;
         let module = LoadedModule::load(module_path)?;
+        let frames = crate::frames::read(&crate::module_info::frames_path(module_path));
         let module_dir = module_path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -201,7 +205,7 @@ impl Candidate {
                 || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 Path::to_path_buf,
             );
-        Self::from_loaded_with_info_in(platform, module, manifest_binary, info, module_dir)
+        Self::from_loaded_full(platform, module, manifest_binary, info, module_dir, frames)
     }
 
     /// Validates an already loaded module against binary manifest bytes.
@@ -246,6 +250,24 @@ impl Candidate {
         info: Option<ModuleInfo>,
         module_dir: PathBuf,
     ) -> Result<Self> {
+        Self::from_loaded_full(
+            platform,
+            module,
+            manifest_binary,
+            info,
+            module_dir,
+            crate::frames::FramesSource::Missing,
+        )
+    }
+
+    fn from_loaded_full(
+        platform: &HostPlatform,
+        module: LoadedModule,
+        manifest_binary: Vec<u8>,
+        info: Option<ModuleInfo>,
+        module_dir: PathBuf,
+        frames: crate::frames::FramesSource,
+    ) -> Result<Self> {
         let pair =
             ValidatedPair::from_bytes(platform, module.descriptor_bytes(), &manifest_binary)?;
         if module.function_addresses().len() != pair.descriptor.functions.len() {
@@ -258,6 +280,24 @@ impl Candidate {
                 ),
             ));
         }
+        let (frames, frames_error) = match frames {
+            crate::frames::FramesSource::Missing => (None, None),
+            crate::frames::FramesSource::Unreadable(error) => (None, Some(error)),
+            crate::frames::FramesSource::Bytes(bytes) => match std::str::from_utf8(&bytes) {
+                Ok(text) => match crate::frames::parse(
+                    text,
+                    pair.manifest.header.build_id,
+                    &platform.target,
+                ) {
+                    Ok(table) => (Some(Arc::new(table)), None),
+                    Err(error) => (None, Some(error)),
+                },
+                Err(_) => (
+                    None,
+                    Some("the stopped-frame sidecar is not valid UTF-8".to_owned()),
+                ),
+            },
+        };
         let required = entry_flag::PREPARE_INITIALIZES | entry_flag::CYCLE_CALLABLE;
         if pair.descriptor.entry_flags & required != required {
             return Err(Error::new(
@@ -273,6 +313,8 @@ impl Candidate {
             pair,
             manifest_binary,
             info,
+            frames,
+            frames_error,
             module_dir,
         })
     }
@@ -328,6 +370,7 @@ struct Generation {
     debug_info: &'static str,
     debug_checkpoints: bool,
     debug_metadata_error: Option<String>,
+    debug_tables: Option<Arc<crate::stop::DebugTables>>,
     pins: Arc<AtomicUsize>,
     attached: bool,
     shutdown_done: bool,
@@ -346,6 +389,7 @@ impl Generation {
         manifest_digest: Digest32,
         info: Option<ModuleInfo>,
         debug: crate::module_info::DebugMetadataReport,
+        debug_tables: Option<Arc<crate::stop::DebugTables>>,
     ) -> Self {
         Self {
             id,
@@ -361,6 +405,7 @@ impl Generation {
             debug_info: debug.info,
             debug_checkpoints: debug.checkpoints,
             debug_metadata_error: debug.error,
+            debug_tables,
             pins: Arc::new(AtomicUsize::new(0)),
             attached: false,
             shutdown_done: false,
@@ -423,6 +468,7 @@ fn debug_source<'a>(
         debug_info: Some(active.debug_info),
         checkpoints: active.debug_checkpoints,
         metadata_error: active.debug_metadata_error.as_deref(),
+        tables: active.debug_tables.clone(),
         manifest_digest: active.manifest_digest,
         manifest_json: Some(active.manifest_json.as_str()),
         manifest_binary: Some(active.manifest_binary.as_slice()),
@@ -1028,12 +1074,14 @@ impl Host {
             .active
             .as_ref()
             .map(|active| (active.id, active.manifest.header.build_id, active.cycles));
-        self.debug.end_state(
+        let result = self.debug.end_state(
             reason,
             context.map(|(generation, _, _)| generation),
             context.map(|(_, build, _)| build),
             context.map(|(_, _, cycle)| cycle),
-        )
+        );
+        crate::stop::abort_session();
+        result
     }
 
     /// Ends an active debug session because the target trapped or exited.
@@ -1053,12 +1101,14 @@ impl Host {
             .active
             .as_ref()
             .map(|active| (active.id, active.manifest.header.build_id, active.cycles));
-        self.debug.end_state(
+        let result = self.debug.end_state(
             DebugEndReason::TargetExit,
             context.map(|(generation, _, _)| generation),
             context.map(|(_, build, _)| build),
             context.map(|(_, _, cycle)| cycle),
-        )
+        );
+        crate::stop::abort_session();
+        result
     }
 
     /// Returns a `Send + Sync` service facade.
@@ -1832,6 +1882,7 @@ impl Host {
             &direct,
             &mut self.descriptors,
             &live,
+            &self.platform.target,
         ) {
             Ok((generation, descriptors)) => {
                 if let Some(failure) = crate::state::take_failure() {
@@ -1896,6 +1947,7 @@ impl Host {
                 &direct,
                 &mut descriptors,
                 &BTreeSet::new(),
+                &self.platform.target,
             )?;
             if let Some(failure) = crate::state::take_failure() {
                 return Err(Error::new(failure.code, failure.message));
@@ -1953,6 +2005,7 @@ impl Host {
             previous_debug.map(|(_, build, _)| build),
             previous_debug.map(|(_, _, cycle)| cycle),
         );
+        crate::stop::abort_session();
         self.scheduler = scheduler;
         self.last_rollback = None;
         self.last_warnings.clear();
@@ -1987,12 +2040,15 @@ impl Host {
         direct: &BTreeMap<GotId, usize>,
         descriptors: &mut DescriptorRegistry,
         live: &BTreeSet<GotId>,
+        target: &stc_got::layout::Target,
     ) -> Result<(Generation, PreparedDescriptors)> {
         let Candidate {
             module,
             pair,
             manifest_binary,
             info,
+            frames,
+            frames_error,
             module_dir: _,
         } = candidate;
         let debug_build = pair.descriptor.entry_flags & entry_flag::DEBUG_BUILD != 0;
@@ -2023,6 +2079,18 @@ impl Host {
                 functions.insert(function.got_id, *address as usize);
             }
             got.bind_functions(&functions)?;
+            let tables = if debug.checkpoints {
+                Some(Arc::new(crate::stop::DebugTables::new(
+                    debug.records.clone(),
+                    frames,
+                    frames_error,
+                    &manifest,
+                    &functions,
+                    target,
+                )))
+            } else {
+                None
+            };
             let function_cells = function_cell_addresses(&manifest, &got)?;
             let prepared = descriptors.prepare(&manifest, live, &function_cells)?;
 
@@ -2047,6 +2115,7 @@ impl Host {
                     manifest_digest,
                     info,
                     debug,
+                    tables,
                 );
                 let mask = if mode == 0 {
                     Vec::new()
@@ -2210,6 +2279,10 @@ impl Host {
             Some(previous_build),
             Some(previous_cycle),
         );
+        // A stop is synchronous with the cycle thread, so activation normally
+        // cannot run while parked. Wake any defensively installed session so
+        // service 13 never keeps a retired generation alive.
+        crate::stop::abort_session();
         self.last_warnings = warnings;
         self.refresh_debug_endpoint();
         self.debug_pump_at(0);
@@ -2282,6 +2355,31 @@ impl Host {
         }
         let outcome = {
             let generation = self.active.as_ref().expect("checked above");
+            // The parked debug hook needs the cycle thread's own view of the
+            // generation and the engine while service 13 is blocked inside
+            // the module call. The context holds raw pointers into these
+            // borrowed fields for exactly this call; the guard is dropped
+            // before any other host field is used again.
+            let pump_info = crate::stop::CyclePumpInfo {
+                target: &self.platform.target,
+                manifest: &generation.manifest,
+                roots: &self.roots,
+                info: generation.info.as_ref(),
+                generation: generation.id,
+                build_id: generation.manifest.header.build_id,
+                stop_cycle: generation.cycles.saturating_add(1),
+                mode: generation.debug_mode,
+                debug_hooks: generation.debug_hooks,
+                debug_info: generation.debug_info,
+                checkpoints: generation.debug_checkpoints,
+                metadata_error: &generation.debug_metadata_error,
+                tables: generation.debug_tables.clone(),
+                manifest_digest: generation.manifest_digest,
+                manifest_json: generation.manifest_json.as_str(),
+                manifest_binary: generation.manifest_binary.as_slice(),
+            };
+            let pump = crate::stop::CyclePump::new(pump_info, &mut self.debug);
+            let _pump_guard = crate::stop::CyclePumpGuard::enter(&pump);
             let _guard = host_api::enter_generation(generation_id);
             let outcome =
                 crate::trap_boundary::with_boundary(|| generation.module.cycle(generation_id));
@@ -2451,6 +2549,7 @@ impl Host {
             Some(candidate_build),
             Some(candidate_cycle),
         );
+        crate::stop::abort_session();
         self.scheduler = scheduler;
         if let Some(image) = image {
             image::restore(&image.snapshot);
@@ -2530,6 +2629,7 @@ impl Host {
                 debug_context.map(|(_, _, cycle)| cycle),
             )
             .err();
+        crate::stop::abort_session();
         self.stop_debug_server();
         let save_generation = self.active.as_ref().map(|generation| generation.id);
         self.install_state_service(save_generation);

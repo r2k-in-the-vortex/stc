@@ -33,7 +33,7 @@ pub mod verify;
 
 use std::fmt;
 
-use stc_got::{Digest32, Endianness, Manifest, Rename, Target};
+use stc_got::{Digest32, Endianness, GotId, Manifest, Rename, Target};
 use stc_hir::HirCrate;
 use stc_span::{FileId, SourceMap, Span};
 
@@ -214,6 +214,44 @@ pub struct SpanEntry {
     pub end: u32,
 }
 
+/// Front-end identity and type hints for one generated function's stopped
+/// frames (Debug and Monitoring §16.9).
+///
+/// The front end cannot know final stack offsets, so the driver merges these
+/// hints with backend-derived locations extracted from DWARF/CodeView. The
+/// hints are build-time data and are not part of any identity or artifact other
+/// than the additive frame sidecar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrameFunctionHint {
+    /// Manifest function identity.
+    pub function: GotId,
+    /// Code symbol.
+    pub symbol: String,
+    /// Parameters and locals in source declaration order.
+    pub locals: Vec<FrameLocalHint>,
+}
+
+/// One parameter or local hint for the frame sidecar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrameLocalHint {
+    /// Identifier normalized to ASCII upper case.
+    pub name: String,
+    /// Canonical manifest type key.
+    pub type_key: String,
+    /// Storage size in bytes.
+    pub size: u32,
+    /// Whether this is a parameter.
+    pub parameter: bool,
+    /// Source byte offset of the declaration.
+    pub declaration: u32,
+    /// First checkpoint ID of the owning function, or 0 when the function has
+    /// no checkpoints (a caller frame is then considered fully initialized).
+    pub first: u32,
+    /// Last checkpoint ID of the owning function, or 0 when the function has
+    /// no checkpoints.
+    pub last: u32,
+}
+
 /// The result of a successful generation.
 #[derive(Clone, Debug)]
 pub struct Output {
@@ -226,6 +264,9 @@ pub struct Output {
     /// The module projection: descriptor, manifest, canonical slots, and the
     /// canonical JSON/binary manifest bytes.
     pub got: ModuleArtifacts,
+    /// Frame identity/type hints; non-empty only for hook-emitting debug
+    /// builds. The driver uses this to write `<name>.stc-frames.json`.
+    pub frames: Vec<FrameFunctionHint>,
 }
 
 /// A structured code generation failure.

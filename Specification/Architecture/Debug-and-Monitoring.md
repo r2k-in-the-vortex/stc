@@ -1039,6 +1039,70 @@ snapshot is bound to `stop_id`; continue/step invalidates it.
 - The stack and register context are captured on the cycle thread at the checkpoint; frame and
   local reads use the snapshot, never a raw stack address exposed to the client.
 
+### 16.9 Stopped-frame sidecar
+
+A hook-emitting debug build emits `<name>.stc-frames.json` alongside the module, manifest,
+metadata, and debug object. It is format-1 JSON, deterministic, paired by `build_id`, optional at
+load, and excluded from build-ID, manifest, descriptor, module, state, metadata-sidecar, and
+host-ABI identity. The front end does not know LLVM's final frame offsets, so the table is
+extracted at build time from the module's emitted DWARF/CodeView (or an equivalent deterministic
+backend-derived source); the runtime never parses DWARF/CodeView. A build whose debug information
+cannot be extracted emits no frame table, and stack/frame reads are then unavailable rather than
+guessed.
+
+Format 1:
+
+```json
+{
+  "build_id": "0x0123456789abcdef0123456789abcdef",
+  "format": 1,
+  "functions": [
+    {
+      "cfa": "fp+16",
+      "frame_size": 48,
+      "function": "0x11111111111111111111111111111111",
+      "high_pc": 0,
+      "locals": [
+        {
+          "live": {"first": 3, "last": 9},
+          "location": "fp-24",
+          "name": "COUNTER",
+          "size": 4,
+          "type": "DINT"
+        }
+      ],
+      "low_pc": 0,
+      "return_address": -8,
+      "saved_fp": -16,
+      "symbol": "stc_main_cycle"
+    }
+  ],
+  "pointer_width": 8,
+  "target": "x86_64-unknown-linux-gnu"
+}
+```
+
+- `functions` is sorted by manifest function `GotId` bytes; locals are sorted by normalized name.
+  `function` is the manifest function `GotId`, `symbol`/`low_pc`/`high_pc` identify the code
+  range, and `frame_size`/`saved_fp`/`return_address`/`cfa` describe the frame layout.
+- Locals and parameters carry the normalized identifier, canonical type key, size, a simple
+  `fp`/`cfa`-relative location, and the live checkpoint/span range. Only simple static locations
+  are defined in v1; a value without one is reported unavailable, not reconstructed.
+- The table has at most 1,000,000 locals and is at most 64 MiB; records are validated for
+  identity, ordering, bounds, and location form. A missing or invalid table makes
+  `stack.list`/`frame.read` unavailable with `STC-E-DEBUG-017`; breakpoints and stepping depend
+  on the checkpoint table, not this sidecar.
+- Debug builds force frame pointers (`frame-pointer="all"`) and disable tail calls in generated
+  code so the saved-frame-pointer chain is reliable; release builds are unchanged.
+- At `debug_check` the cycle thread captures the frame, stack, and instruction pointers, walks
+  the chain, maps return addresses through the function ranges/symbols, copies typed locals from
+  their recorded locations, and stores immutable `StopFrame` snapshots behind `stop_id`. The
+  protocol thread reads only those snapshots. Values or frames the table cannot describe are
+  `available:false`/`optimized_out:true` with `STC-W-DEBUG-002`; no raw address is returned to a
+  client.
+- The v1 frame rules cover x86-64 Windows and Linux. AArch64 frame rules are a documented
+  follow-up unless the target is added to the runtime test matrix.
+
 ## 17. Debug and release build rules
 
 ### 17.1 Default mode and selection
@@ -1112,6 +1176,10 @@ sections are not inputs to the build ID.
   `<name>-<build-id>.pdb` (MSVC) or `<name>-<build-id>.debug` (ELF) sidecar; the module remains
   usable for source/line/type debugging without the sidecar, and the sidecar is never loaded by
   the runtime.
+- A hook-emitting debug build also emits `<name>.stc-frames.json` (§16.9), the stopped-frame
+  table used by the debugger. It is deterministic, paired by `build_id`, excluded from identity,
+  optional at load, and never changes runtime behavior; a missing table disables stack/frame
+  reads, not module loading.
 - A release build strips `.debug_*`, `.zdebug_*`, `.debug$S`, and `.debug$T` sections (and the
   corresponding CodeView records) and emits no PDB. It may emit a build-ID-named public-symbol
   sidecar; the sidecar is optional, has no runtime effect, and is not part of the manifest.

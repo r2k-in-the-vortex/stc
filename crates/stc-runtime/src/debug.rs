@@ -698,6 +698,8 @@ pub enum DebugEndReason {
     Shutdown,
     /// The target trapped or exited while the host remained alive.
     TargetExit,
+    /// A stopped cycle exceeded the stop budget.
+    PauseTimeout,
     /// A session ended or disconnected.
     SessionEnd,
 }
@@ -709,6 +711,7 @@ impl DebugEndReason {
         match self {
             Self::Swap | Self::Rollback | Self::ColdInstall => "swap-end",
             Self::Shutdown | Self::TargetExit | Self::SessionEnd => "session-end",
+            Self::PauseTimeout => "timeout",
         }
     }
 }
@@ -858,7 +861,7 @@ struct BusState {
 
 /// A small snapshot of engine-owned debug state, published by the cycle
 /// thread for the service thread.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct DebugSnapshot {
     pub(crate) generation: u64,
     pub(crate) build_id: GotId,
@@ -868,11 +871,14 @@ pub(crate) struct DebugSnapshot {
     pub(crate) debug_info: String,
     pub(crate) checkpoints: bool,
     pub(crate) stepping: bool,
+    pub(crate) frames: bool,
+    pub(crate) frames_error: Option<String>,
     pub(crate) metadata_error: Option<String>,
     pub(crate) queued_writes: usize,
     pub(crate) active_forces: usize,
     pub(crate) watches: usize,
     pub(crate) breakpoints: usize,
+    pub(crate) tables: Option<std::sync::Arc<crate::stop::DebugTables>>,
 }
 
 /// A teardown signal generated on the cycle thread.
@@ -1337,6 +1343,11 @@ impl DebugEngine {
         self.watches.values().map(ActiveWatch::points).sum()
     }
 
+    /// Returns whether an authenticated debug session is still bound.
+    pub(crate) fn has_session(&self) -> bool {
+        lock_bus(&self.bus).session.is_some()
+    }
+
     pub(crate) fn watch_list(&self) -> Vec<WatchInfo> {
         self.watches
             .iter()
@@ -1659,6 +1670,13 @@ impl DebugEngine {
             DebugEndReason::TargetExit => Some(DebugEndNotice {
                 reason: "target-exited",
                 code: None,
+                generation: generation.unwrap_or(0),
+                build_id: build.unwrap_or(GotId::ZERO),
+                cycle: cycle.unwrap_or(0),
+            }),
+            DebugEndReason::PauseTimeout => Some(DebugEndNotice {
+                reason: "pause-timeout",
+                code: Some(codes::DEBUG_SESSION_TIMEOUT),
                 generation: generation.unwrap_or(0),
                 build_id: build.unwrap_or(GotId::ZERO),
                 cycle: cycle.unwrap_or(0),
@@ -2203,6 +2221,10 @@ impl DebugEngine {
     }
 
     fn snapshot(&self, source: &DebugSource<'_>) -> DebugSnapshot {
+        let frames = source
+            .tables
+            .as_ref()
+            .is_some_and(|tables| tables.frames.is_some());
         DebugSnapshot {
             generation: source.generation,
             build_id: source.build_id,
@@ -2211,12 +2233,18 @@ impl DebugEngine {
             hooks: source.debug_hooks && source.metadata_error.is_none(),
             debug_info: source.debug_info.unwrap_or("none").to_owned(),
             checkpoints: source.checkpoints && source.metadata_error.is_none(),
-            stepping: false,
+            stepping: source.tables.as_ref().is_some_and(|tables| tables.stepping),
+            frames,
+            frames_error: source
+                .tables
+                .as_ref()
+                .and_then(|tables| tables.frames_error.clone()),
             metadata_error: source.metadata_error.map(str::to_owned),
             queued_writes: self.queue.len(),
             active_forces: self.forces.len(),
             watches: self.watch_count(),
             breakpoints: 0,
+            tables: source.tables.clone(),
         }
     }
 
@@ -2313,10 +2341,12 @@ const fn debug_end_detail(reason: DebugEndReason) -> &'static str {
         DebugEndReason::ColdInstall => "cold_install",
         DebugEndReason::Shutdown => "shutdown",
         DebugEndReason::TargetExit => "target_exit",
+        DebugEndReason::PauseTimeout => "pause_timeout",
         DebugEndReason::SessionEnd => "session_end",
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct DebugSource<'a> {
     pub(crate) target: &'a Target,
     pub(crate) manifest: &'a Manifest,
@@ -2330,6 +2360,7 @@ pub(crate) struct DebugSource<'a> {
     pub(crate) debug_info: Option<&'a str>,
     pub(crate) checkpoints: bool,
     pub(crate) metadata_error: Option<&'a str>,
+    pub(crate) tables: Option<std::sync::Arc<crate::stop::DebugTables>>,
     pub(crate) manifest_digest: stc_got::digest::Digest32,
     pub(crate) manifest_json: Option<&'a str>,
     pub(crate) manifest_binary: Option<&'a [u8]>,
@@ -6081,7 +6112,7 @@ pub(crate) fn require_allowed_keys(
     Ok(())
 }
 
-fn decode_type_value(
+pub(crate) fn decode_type_value(
     manifest: &Manifest,
     target: &Target,
     ty: &TypeKey,

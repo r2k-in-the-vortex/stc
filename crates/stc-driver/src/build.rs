@@ -789,6 +789,33 @@ pub(crate) fn emit(
         return build_failure(reporter, &message, &ir_path);
     }
     clang_time += start.elapsed();
+    if needs_pair
+        && request.debug
+        && !request.release
+        && !request.test_build
+        && !output.frames.is_empty()
+        && let Some(debug) = &output.metadata.debug
+    {
+        let target = stc_codegen::resolve_target(Some(target_triple));
+        let extract = crate::frames::ExtractRequest {
+            object: &object_path,
+            clang: &clang,
+            target_triple,
+            build_id: &debug.build_id,
+            pointer_width: target.pointer_width,
+            hints: &output.frames,
+        };
+        if let Some(table) = crate::frames::extract(&extract) {
+            let frames_path = out_dir.join(format!("{name}.stc-frames.json"));
+            if let Err(error) = std::fs::write(&frames_path, table) {
+                return artifact_error(
+                    reporter,
+                    &format!("cannot write `{}`: {error}", frames_path.display()),
+                );
+            }
+            log.detail(format!("frames {}", display_path(&frames_path)));
+        }
+    }
     if emit.contains(&Emit::Obj)
         && !needs_pair
         && !emit.contains(&Emit::Exe)

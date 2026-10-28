@@ -5,8 +5,10 @@
 //! the phase-3/4 typed debug service. It never dereferences host, module, root,
 //! or process-image storage: reads, writes, watches, and manifest exports are
 //! submitted as commands to [`DebugService`] and completed by the cycle thread
-//! at a boundary. Breakpoints, stops, stepping, and call stacks are phase 6;
-//! their `stc-debug/1` operations return the documented unavailable codes.
+//! at a boundary. Breakpoints, stops, stepping, and call stacks are resolved
+//! against the session's validated checkpoint and stopped-frame tables; the
+//! cycle thread parks at a matching checkpoint and this thread emits the
+//! `stopped`/`resumed` events and rejects stale snapshots.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
@@ -22,8 +24,12 @@ use stc_got::json::{self, Json};
 use crate::debug::{
     AuditEvent, AuditOutcome, AuditSink, AuditTarget, DebugBatch, DebugEvent, DebugQueueResult,
     DebugRead, DebugReadRequest, DebugService, DebugSnapshot, DebugTarget, DebugValue,
-    DebugWriteKind, DebugWriteRequest, MAX_WATCHES, MIN_WATCH_INTERVAL_NS, WatchId, WatchInfo,
-    WatchResult, base64_encode, typed_value_from_json, typed_value_json,
+    DebugWarning, DebugWriteKind, DebugWriteRequest, MAX_WATCHES, MIN_WATCH_INTERVAL_NS, WatchId,
+    WatchInfo, WatchResult, base64_encode, typed_value_from_json, typed_value_json,
+};
+use crate::stop::{
+    BreakpointInfo, BreakpointTarget, PauseOutcome, SessionStop, SourcePosition, StepMode,
+    StopEvent,
 };
 use crate::transport::{self, ClientConnection, Connection, Listener, TransportKind};
 
@@ -936,6 +942,9 @@ struct Handler {
     first_deadline: Instant,
     close: Option<ClosePlan>,
     finished: bool,
+    /// Installed stop session; present only for hook-emitting builds with a
+    /// validated checkpoint table.
+    session_stop: Option<Arc<SessionStop>>,
 }
 
 fn run_connection(shared: Arc<Shared>, mut connection: Connection, connection_id: u64) {
@@ -961,6 +970,7 @@ fn run_connection(shared: Arc<Shared>, mut connection: Connection, connection_id
         first_deadline: accepted + FIRST_REQUEST_DEADLINE,
         close: None,
         finished: false,
+        session_stop: None,
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handler.serve(&mut connection);
@@ -1100,6 +1110,10 @@ impl Handler {
     }
 
     fn poll_session(&mut self, connection: &mut Connection) -> Option<ClosePlan> {
+        self.drain_stop_events(connection);
+        if let Some(plan) = self.close.take() {
+            return Some(plan);
+        }
         self.drain_events(connection);
         if let Some(notice) = self.shared.service.take_end_notice() {
             let plan = ClosePlan::new(notice.reason, notice.code, true, false).with_tags(
@@ -1117,7 +1131,13 @@ impl Handler {
             .shared
             .snapshot()
             .map_or(0, |snapshot| snapshot.watches);
-        if self.shared.idle_expired(self.connection, now, watches > 0) {
+        // While the cycle is parked the stop bound in §14.3 governs; the idle
+        // bound must not preempt it. Both use the same configured duration.
+        let stopped = self
+            .session_stop
+            .as_ref()
+            .is_some_and(|session| session.status().stop.is_some());
+        if !stopped && self.shared.idle_expired(self.connection, now, watches > 0) {
             let mut event = AuditEvent::new("timeout", AuditOutcome::Error);
             event
                 .session
@@ -1176,6 +1196,12 @@ impl Handler {
                 && let Ok(reply) = self.shared.service.submit_clear_session_wait()
             {
                 let _ = reply.wait(Instant::now() + REQUEST_DEADLINE);
+            }
+            // A parked cycle services the clear command from its own pump;
+            // this wake is the fallback when the cycle is running or the
+            // command could not be submitted.
+            if let Some(stop) = self.session_stop.take() {
+                crate::stop::uninstall(&stop);
             }
             self.shared.service.set_session(None);
             self.shared.release_session(self.connection);
@@ -1412,6 +1438,7 @@ impl Handler {
                     self.shared.touch(self.connection, Instant::now());
                 }
                 self.send_ok(connection, request_id, result, warnings);
+                self.drain_stop_events(connection);
                 self.drain_events(connection);
                 true
             }
@@ -1563,6 +1590,19 @@ impl Handler {
         self.shared.service.set_session(Some(view.id.clone()));
         self.seq = 0;
         self.session = Some(view.clone());
+        self.session_stop = None;
+        if snapshot.hooks
+            && snapshot.checkpoints
+            && snapshot.metadata_error.is_none()
+            && let Some(tables) = snapshot.tables.clone()
+        {
+            self.session_stop = Some(crate::stop::install(
+                tables,
+                snapshot.generation,
+                snapshot.build_id,
+                self.shared.session_timeout,
+            ));
+        }
         let mut event = AuditEvent::new("session-start", AuditOutcome::Ok);
         event.session = Some(view.id.clone());
         event.generation = Some(snapshot.generation);
@@ -1901,7 +1941,10 @@ fn target_json(target: &DebugTarget) -> Json {
 
 fn capabilities(snapshot: &DebugSnapshot, scopes: Vec<Json>) -> (Json, Vec<Json>) {
     let mut warnings = Vec::new();
-    if !snapshot.hooks || !snapshot.checkpoints || !snapshot.stepping {
+    // Monitoring-only is the release and hook-free case (no checkpoint
+    // table). A hook-emitting build whose frame sidecar is missing keeps
+    // breakpoints and pause; only stepping and stack/frame reads degrade.
+    if !snapshot.hooks || !snapshot.checkpoints {
         let mut detail = BTreeMap::new();
         if let Some(error) = &snapshot.metadata_error {
             detail.insert("code".into(), Json::string(codes::DEBUG_METADATA));
@@ -1909,9 +1952,7 @@ fn capabilities(snapshot: &DebugSnapshot, scopes: Vec<Json>) -> (Json, Vec<Json>
         } else {
             detail.insert(
                 "capability".into(),
-                Json::string(if !snapshot.stepping {
-                    "stepping"
-                } else if !snapshot.checkpoints {
+                Json::string(if !snapshot.checkpoints {
                     "checkpoints"
                 } else {
                     "hooks"
@@ -1921,6 +1962,18 @@ fn capabilities(snapshot: &DebugSnapshot, scopes: Vec<Json>) -> (Json, Vec<Json>
         warnings.push(warning_json(
             codes::W_DEBUG_MONITORING_ONLY,
             "debug features are limited to typed monitoring in this build".into(),
+            Json::Object(detail),
+        ));
+    } else if !snapshot.frames {
+        let mut detail = BTreeMap::new();
+        if let Some(error) = &snapshot.frames_error {
+            detail.insert("reason".into(), Json::string(error.clone()));
+        } else {
+            detail.insert("capability".into(), Json::string("frames"));
+        }
+        warnings.push(warning_json(
+            codes::W_DEBUG_UNAVAILABLE,
+            "stopped-frame information is unavailable; stack and local reads will fail".into(),
             Json::Object(detail),
         ));
     }
@@ -1999,21 +2052,14 @@ impl Handler {
             "watch.remove" => self.watch_remove(params, deadline),
             "watch.list" => self.watch_list(params, deadline),
             "manifest.get" => self.manifest_get(params, deadline),
-            "breakpoint.set" | "breakpoint.clear" | "breakpoint.list" | "exec.continue"
-            | "exec.step" | "exec.pause" => {
-                self.phase6_operation(op, params)?;
-                Err(ProtocolError::new(
-                    codes::DEBUG_NO_HOOKS,
-                    "breakpoints, stops, and stepping are not available in this host build",
-                ))
-            }
-            "stack.list" | "frame.read" => {
-                self.phase6_operation(op, params)?;
-                Err(ProtocolError::new(
-                    codes::DEBUG_INFO,
-                    "source, stack, and local debug information is unavailable",
-                ))
-            }
+            "breakpoint.set" => self.breakpoint_set(params),
+            "breakpoint.clear" => self.breakpoint_clear(params),
+            "breakpoint.list" => self.breakpoint_list(params),
+            "exec.continue" => self.exec_continue(params),
+            "exec.step" => self.exec_step(params),
+            "exec.pause" => self.exec_pause(params),
+            "stack.list" => self.stack_list(params),
+            "frame.read" => self.frame_read(params),
             _ => Err(ProtocolError::malformed(
                 "the operation is not defined by stc-debug/1",
             )),
@@ -2021,9 +2067,18 @@ impl Handler {
     }
 
     fn status_result(&self) -> Json {
-        let (generation, build_id, cycle) = self.shared.tags();
+        let snapshot = self.shared.snapshot();
+        let status = self.session_stop.as_ref().map(|session| session.status());
+        let stop = status.as_ref().and_then(|status| status.stop.as_ref());
+        let (generation, build_id, cycle) = match (stop, self.session_stop.as_ref()) {
+            (Some(stop), Some(session)) => (session.generation(), session.build_id(), stop.cycle),
+            _ => self.shared.tags(),
+        };
         let mut object = BTreeMap::new();
-        object.insert("state".into(), Json::string("active"));
+        object.insert(
+            "state".into(),
+            Json::string(if stop.is_some() { "stopped" } else { "active" }),
+        );
         object.insert(
             "session".into(),
             Json::string(
@@ -2035,9 +2090,30 @@ impl Handler {
         object.insert("generation".into(), Json::unsigned(generation));
         object.insert("build_id".into(), Json::string(build_id.to_hex()));
         object.insert("cycle".into(), Json::unsigned(cycle));
-        object.insert("stop".into(), Json::Null);
-        object.insert("pause_remaining_ms".into(), Json::Null);
-        let snapshot = self.shared.snapshot();
+        object.insert(
+            "stop".into(),
+            stop.map_or(Json::Null, |stop| {
+                let mut data = BTreeMap::new();
+                data.insert("stop_id".into(), Json::unsigned(stop.stop_id));
+                data.insert("reason".into(), Json::string(stop.reason.name()));
+                data.insert(
+                    "checkpoint_id".into(),
+                    Json::unsigned(u64::from(stop.checkpoint_id)),
+                );
+                data.insert("source".into(), source_json(&stop.source));
+                if let Some(breakpoint_id) = stop.breakpoint_id {
+                    data.insert("breakpoint_id".into(), Json::unsigned(breakpoint_id));
+                }
+                Json::Object(data)
+            }),
+        );
+        object.insert(
+            "pause_remaining_ms".into(),
+            status
+                .as_ref()
+                .and_then(|status| status.pause_remaining_ms)
+                .map_or(Json::Null, Json::unsigned),
+        );
         object.insert(
             "queued_writes".into(),
             Json::unsigned(
@@ -2068,48 +2144,595 @@ impl Handler {
                     .unwrap_or(u64::MAX),
             ),
         );
+        let breakpoints = status.as_ref().map_or_else(
+            || snapshot.as_ref().map_or(0, |snapshot| snapshot.breakpoints),
+            |status| status.breakpoints,
+        );
         object.insert(
             "breakpoints".into(),
-            Json::unsigned(
-                snapshot
-                    .as_ref()
-                    .map_or(0, |snapshot| snapshot.breakpoints)
-                    .try_into()
-                    .unwrap_or(u64::MAX),
-            ),
+            Json::unsigned(breakpoints.try_into().unwrap_or(u64::MAX)),
         );
         Json::Object(object)
     }
+}
 
-    fn phase6_operation(
-        &self,
-        op: &str,
-        params: &BTreeMap<String, Json>,
-    ) -> std::result::Result<(), ProtocolError> {
-        let allowed: &[&str] = match op {
-            "breakpoint.set" => &["target"],
-            "breakpoint.clear" => &["breakpoint_id"],
-            "exec.step" => &["mode", "stop_id"],
-            "stack.list" => &["stop_id"],
-            "frame.read" => &["target", "stop_id"],
-            _ => &[],
-        };
-        check_keys(params, allowed)?;
-        match op {
-            "breakpoint.set" if !params.contains_key("target") => {
-                Err(ProtocolError::malformed("breakpoint.set requires a target"))
+// ---------------------------------------------------------------------------
+// Breakpoints, stops, stepping, and stopped frames (§16.7–§16.9)
+// ---------------------------------------------------------------------------
+
+impl Handler {
+    /// Returns the installed stop session, or the documented unavailable code.
+    fn stop_session(&self) -> std::result::Result<Arc<SessionStop>, ProtocolError> {
+        if let Some(session) = &self.session_stop {
+            if session.ending() {
+                return Err(ProtocolError::new(
+                    codes::DEBUG_SESSION,
+                    "the debug session is ending; reconnect after teardown",
+                ));
             }
-            "breakpoint.clear" if !params.contains_key("breakpoint_id") => Err(
-                ProtocolError::malformed("breakpoint.clear requires a breakpoint_id"),
-            ),
-            "exec.step" if !params.contains_key("mode") => {
-                Err(ProtocolError::malformed("exec.step requires a mode"))
-            }
-            "frame.read" if !params.contains_key("target") => {
-                Err(ProtocolError::malformed("frame.read requires a target"))
-            }
-            _ => Ok(()),
+            return Ok(Arc::clone(session));
         }
+        if self
+            .shared
+            .snapshot()
+            .is_some_and(|snapshot| snapshot.metadata_error.is_some())
+        {
+            return Err(ProtocolError::new(
+                codes::DEBUG_METADATA,
+                "the checkpoint table is invalid; breakpoints and stepping are unavailable",
+            ));
+        }
+        Err(ProtocolError::new(
+            codes::DEBUG_NO_HOOKS,
+            "breakpoints, stops, and stepping require an artifact with debug hooks and a valid checkpoint table",
+        )
+        .with_detail(json_object([(
+            "warning",
+            Json::string(codes::W_DEBUG_MONITORING_ONLY),
+        )])))
+    }
+
+    /// Returns the installed stop session for a stack or local read.
+    fn frame_session(&self) -> std::result::Result<Arc<SessionStop>, ProtocolError> {
+        if let Some(session) = &self.session_stop {
+            if session.ending() {
+                return Err(ProtocolError::new(
+                    codes::DEBUG_SESSION,
+                    "the debug session is ending; reconnect after teardown",
+                ));
+            }
+            return Ok(Arc::clone(session));
+        }
+        if self
+            .shared
+            .snapshot()
+            .is_some_and(|snapshot| snapshot.metadata_error.is_some())
+        {
+            return Err(ProtocolError::new(
+                codes::DEBUG_METADATA,
+                "the checkpoint table is invalid; stack and local reads are unavailable",
+            ));
+        }
+        Err(ProtocolError::new(
+            codes::DEBUG_INFO,
+            "source, stack, and local debug information is unavailable for this artifact",
+        ))
+    }
+
+    fn audit_breakpoint(&self, operation: &'static str, info: &BreakpointInfo) -> Result<()> {
+        let (generation, build_id, cycle) = self.shared.tags();
+        let mut event = AuditEvent::new(operation, AuditOutcome::Ok);
+        event.session = self.session.as_ref().map(|view| view.id.clone());
+        event.scope = Some("control".into());
+        event.generation = Some(generation);
+        event.build = Some(build_id);
+        event.cycle = Some(cycle);
+        event.target = Some(match &info.target {
+            BreakpointTarget::Source { file, .. } => AuditTarget {
+                key: file.clone(),
+                kind: "source".into(),
+            },
+            BreakpointTarget::Checkpoint { checkpoint_id } => AuditTarget {
+                key: checkpoint_id.to_string(),
+                kind: "checkpoint".into(),
+            },
+        });
+        event.detail = json_object([
+            ("bound", Json::Bool(info.bound)),
+            (
+                "checkpoint_ids",
+                Json::Array(
+                    info.checkpoints
+                        .iter()
+                        .map(|id| Json::unsigned(u64::from(*id)))
+                        .collect(),
+                ),
+            ),
+            (
+                "source",
+                info.source.as_ref().map_or(Json::Null, source_json),
+            ),
+        ]);
+        self.shared.audit(event)
+    }
+
+    fn breakpoint_set(
+        &mut self,
+        params: &BTreeMap<String, Json>,
+    ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
+        let session = self.stop_session()?;
+        check_keys(params, &["target"])?;
+        let target = parse_breakpoint_target(required(params, "target")?)?;
+        let info = session
+            .set_breakpoint(target)
+            .map_err(ProtocolError::from_stc)?;
+        if let Err(error) = self.audit_breakpoint("breakpoint-set", &info) {
+            // The audit is part of the modification contract; refuse and
+            // remove the breakpoint that was just installed.
+            let _ = session.clear_breakpoint(info.id);
+            return Err(ProtocolError::from_stc(error));
+        }
+        let warnings = if info.bound {
+            Vec::new()
+        } else {
+            let mut detail = BTreeMap::new();
+            if let Some(source) = &info.source {
+                detail.insert("file".into(), Json::string(source.file.clone()));
+                detail.insert("line".into(), Json::unsigned(u64::from(source.line)));
+                detail.insert("column".into(), Json::unsigned(u64::from(source.column)));
+            }
+            vec![warning_json(
+                codes::W_DEBUG_UNBOUND,
+                "no checkpoint exists at the requested source location; the breakpoint is not moved"
+                    .into(),
+                Json::Object(detail),
+            )]
+        };
+        Ok((breakpoint_json(&info), warnings))
+    }
+
+    fn breakpoint_clear(
+        &mut self,
+        params: &BTreeMap<String, Json>,
+    ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
+        let session = self.stop_session()?;
+        check_keys(params, &["breakpoint_id"])?;
+        let breakpoint_id = required_positive(params, "breakpoint_id")?;
+        let Some(info) = session.breakpoint(breakpoint_id) else {
+            return Err(ProtocolError::new(
+                codes::DEBUG_UNKNOWN,
+                format!("breakpoint {breakpoint_id} is unknown"),
+            ));
+        };
+        self.audit_breakpoint("breakpoint-clear", &info)
+            .map_err(ProtocolError::from_stc)?;
+        if !session.clear_breakpoint(breakpoint_id) {
+            return Err(ProtocolError::new(
+                codes::DEBUG_UNKNOWN,
+                format!("breakpoint {breakpoint_id} is unknown"),
+            ));
+        }
+        Ok((object([("cleared", Json::Bool(true))]), Vec::new()))
+    }
+
+    fn breakpoint_list(
+        &mut self,
+        params: &BTreeMap<String, Json>,
+    ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
+        let session = self.stop_session()?;
+        check_keys(params, &[])?;
+        let breakpoints = session.breakpoints();
+        let mut warnings = Vec::new();
+        if breakpoints.iter().any(|info| !info.bound) {
+            warnings.push(warning_json(
+                codes::W_DEBUG_UNBOUND,
+                "one or more breakpoints have no checkpoint at their source location".into(),
+                Json::Null,
+            ));
+        }
+        Ok((
+            object([(
+                "breakpoints",
+                Json::Array(breakpoints.iter().map(breakpoint_json).collect()),
+            )]),
+            warnings,
+        ))
+    }
+
+    fn exec_continue(
+        &mut self,
+        params: &BTreeMap<String, Json>,
+    ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
+        let session = self.stop_session()?;
+        check_keys(params, &["stop_id"])?;
+        let stop_id = optional_positive(params, "stop_id")?;
+        let previous = session
+            .continue_execution(stop_id)
+            .map_err(ProtocolError::from_stc)?;
+        Ok((
+            object([
+                ("status", Json::string("running")),
+                ("stop_id", Json::unsigned(previous)),
+            ]),
+            Vec::new(),
+        ))
+    }
+
+    fn exec_step(
+        &mut self,
+        params: &BTreeMap<String, Json>,
+    ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
+        let session = self.stop_session()?;
+        check_keys(params, &["mode", "stop_id"])?;
+        let mode_name = required(params, "mode")?
+            .as_str()
+            .ok_or_else(|| ProtocolError::malformed("mode must be a string"))?;
+        let Some(mode) = StepMode::parse(mode_name) else {
+            return Err(ProtocolError::new(
+                codes::DEBUG_STOP,
+                "the step mode must be `over`, `into`, or `out`",
+            ));
+        };
+        let stop_id = required_positive(params, "stop_id")?;
+        let previous = session
+            .step(mode, stop_id)
+            .map_err(ProtocolError::from_stc)?;
+        Ok((
+            object([
+                ("status", Json::string("stepping")),
+                ("stop_id", Json::unsigned(previous)),
+                ("mode", Json::string(mode.name())),
+            ]),
+            Vec::new(),
+        ))
+    }
+
+    fn exec_pause(
+        &mut self,
+        params: &BTreeMap<String, Json>,
+    ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
+        let session = self.stop_session()?;
+        check_keys(params, &[])?;
+        match session.pause().map_err(ProtocolError::from_stc)? {
+            PauseOutcome::Requested => Ok((
+                object([("status", Json::string("pause-requested"))]),
+                Vec::new(),
+            )),
+            PauseOutcome::Stopped(stop_id) => Ok((
+                object([
+                    ("status", Json::string("stopped")),
+                    ("stop_id", Json::unsigned(stop_id)),
+                ]),
+                Vec::new(),
+            )),
+        }
+    }
+
+    fn stack_list(
+        &mut self,
+        params: &BTreeMap<String, Json>,
+    ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
+        let session = self.frame_session()?;
+        check_keys(params, &["stop_id"])?;
+        let stop_id = required_positive(params, "stop_id")?;
+        let (frames, truncated) = session.stack(stop_id).map_err(ProtocolError::from_stc)?;
+        let mut warnings = Vec::new();
+        if frames.iter().any(|frame| frame.optimized_out) {
+            warnings.push(warning_json(
+                codes::W_DEBUG_UNAVAILABLE,
+                "one or more frames could not be unwound and are reported as optimized out".into(),
+                Json::Null,
+            ));
+        }
+        let frames = frames
+            .iter()
+            .map(|frame| {
+                let mut data = BTreeMap::new();
+                data.insert("index".into(), Json::unsigned(frame.index as u64));
+                data.insert(
+                    "function".into(),
+                    frame
+                        .function
+                        .map_or(Json::Null, |id| Json::string(id.to_hex())),
+                );
+                data.insert(
+                    "symbol".into(),
+                    frame
+                        .symbol
+                        .as_ref()
+                        .map_or(Json::Null, |symbol| Json::string(symbol.clone())),
+                );
+                data.insert(
+                    "source".into(),
+                    frame.source.as_ref().map_or(Json::Null, source_json),
+                );
+                data.insert("optimized_out".into(), Json::Bool(frame.optimized_out));
+                Json::Object(data)
+            })
+            .collect();
+        Ok((
+            object([
+                ("frames", Json::Array(frames)),
+                ("truncated", Json::Bool(truncated)),
+            ]),
+            warnings,
+        ))
+    }
+
+    fn frame_read(
+        &mut self,
+        params: &BTreeMap<String, Json>,
+    ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
+        let session = self.frame_session()?;
+        check_keys(params, &["target", "stop_id"])?;
+        let target = parse_target(required(params, "target")?, true)?;
+        let DebugTarget::Local { frame, path } = target else {
+            return Err(ProtocolError::malformed(
+                "frame.read requires a local target",
+            ));
+        };
+        let frame = frame.parse::<usize>().map_err(|_| {
+            ProtocolError::malformed("the frame index is not a non-negative integer")
+        })?;
+        let name = path.to_ascii_uppercase();
+        if name.is_empty() {
+            return Err(ProtocolError::malformed("a local name must not be empty"));
+        }
+        let stop_id = required_positive(params, "stop_id")?;
+        let view = session
+            .read_local(stop_id, frame, &name)
+            .map_err(ProtocolError::from_stc)?;
+        let warning = match &view.value {
+            DebugValue::Unavailable { warning } => Some(warning.clone()),
+            _ => None,
+        };
+        let typed = crate::debug::TypedValue {
+            type_key: view.type_key,
+            value: view.value,
+        };
+        let mut data = BTreeMap::new();
+        data.insert("frame".into(), Json::unsigned(frame as u64));
+        data.insert("name".into(), Json::string(name));
+        data.insert("stop_id".into(), Json::unsigned(stop_id));
+        data.insert(
+            "available".into(),
+            Json::Bool(!matches!(&typed.value, DebugValue::Unavailable { .. })),
+        );
+        data.insert("value".into(), typed_value_json(&typed));
+        data.insert("generation".into(), Json::unsigned(view.generation));
+        data.insert("build_id".into(), Json::string(view.build_id.to_hex()));
+        data.insert("cycle".into(), Json::unsigned(view.cycle));
+        let warnings = warning.map_or_else(Vec::new, |warning: DebugWarning| {
+            vec![warning_json(warning.code, warning.message, Json::Null)]
+        });
+        Ok((Json::Object(data), warnings))
+    }
+
+    fn drain_stop_events(&mut self, connection: &mut Connection) {
+        if self.session.is_none() {
+            return;
+        }
+        let Some(session) = self.session_stop.clone() else {
+            return;
+        };
+        for event in session.drain_events() {
+            let was_step = event.is_step();
+            match event {
+                StopEvent::Stopped {
+                    stop_id,
+                    reason,
+                    checkpoint_id,
+                    source,
+                    breakpoint_id,
+                    generation,
+                    build_id,
+                    cycle,
+                } => {
+                    let mut data = BTreeMap::new();
+                    data.insert("stop_id".into(), Json::unsigned(stop_id));
+                    data.insert("reason".into(), Json::string(reason.name()));
+                    data.insert(
+                        "checkpoint_id".into(),
+                        Json::unsigned(u64::from(checkpoint_id)),
+                    );
+                    data.insert("source".into(), source_json(&source));
+                    data.insert("generation".into(), Json::unsigned(generation));
+                    data.insert("build_id".into(), Json::string(build_id.to_hex()));
+                    data.insert("cycle".into(), Json::unsigned(cycle));
+                    if let Some(breakpoint_id) = breakpoint_id {
+                        data.insert("breakpoint_id".into(), Json::unsigned(breakpoint_id));
+                    }
+                    self.send_event(connection, "stopped", Json::Object(data), Vec::new());
+                    let mut audit = AuditEvent::new("stop", AuditOutcome::Ok);
+                    audit.session = self.session.as_ref().map(|view| view.id.clone());
+                    audit.generation = Some(generation);
+                    audit.build = Some(build_id);
+                    audit.cycle = Some(cycle);
+                    audit.detail = json_object([
+                        ("reason", Json::string(reason.name())),
+                        ("checkpoint_id", Json::unsigned(u64::from(checkpoint_id))),
+                        ("source", source_json(&source)),
+                        (
+                            "breakpoint_id",
+                            breakpoint_id.map_or(Json::Null, Json::unsigned),
+                        ),
+                    ]);
+                    if self.shared.audit(audit).is_err() {
+                        self.close = Some(ClosePlan::new(
+                            "internal",
+                            Some(codes::DEBUG_AUDIT),
+                            true,
+                            true,
+                        ));
+                        return;
+                    }
+                }
+                StopEvent::Resumed {
+                    stop_id,
+                    cause: _,
+                    cycle,
+                } => {
+                    let data = object([
+                        ("stop_id", Json::unsigned(stop_id)),
+                        ("cycle", Json::unsigned(cycle)),
+                    ]);
+                    self.send_event(connection, "resumed", data, Vec::new());
+                    let name = if was_step { "step" } else { "resume" };
+                    let mut audit = AuditEvent::new(name, AuditOutcome::Ok);
+                    audit.session = self.session.as_ref().map(|view| view.id.clone());
+                    audit.cycle = Some(cycle);
+                    audit.detail = object([("stop_id", Json::unsigned(stop_id))]);
+                    if self.shared.audit(audit).is_err() {
+                        self.close = Some(ClosePlan::new(
+                            "internal",
+                            Some(codes::DEBUG_AUDIT),
+                            true,
+                            true,
+                        ));
+                        return;
+                    }
+                }
+            }
+            self.shared.touch(self.connection, Instant::now());
+        }
+    }
+}
+
+fn source_json(source: &SourcePosition) -> Json {
+    object([
+        ("file", Json::string(source.file.clone())),
+        ("line", Json::unsigned(u64::from(source.line))),
+        ("column", Json::unsigned(u64::from(source.column))),
+    ])
+}
+
+fn breakpoint_json(info: &BreakpointInfo) -> Json {
+    let mut data = BTreeMap::new();
+    data.insert("breakpoint_id".into(), Json::unsigned(info.id));
+    data.insert("bound".into(), Json::Bool(info.bound));
+    data.insert(
+        "checkpoints".into(),
+        Json::Array(
+            info.checkpoints
+                .iter()
+                .map(|id| Json::unsigned(u64::from(*id)))
+                .collect(),
+        ),
+    );
+    data.insert(
+        "source".into(),
+        info.source.as_ref().map_or(Json::Null, source_json),
+    );
+    data.insert("target".into(), breakpoint_target_json(&info.target));
+    Json::Object(data)
+}
+
+fn breakpoint_target_json(target: &BreakpointTarget) -> Json {
+    match target {
+        BreakpointTarget::Source { file, line, column } => object([
+            ("kind", Json::string("source")),
+            ("file", Json::string(file.clone())),
+            ("line", Json::unsigned(u64::from(*line))),
+            ("column", Json::unsigned(u64::from(*column))),
+        ]),
+        BreakpointTarget::Checkpoint { checkpoint_id } => object([
+            ("kind", Json::string("checkpoint")),
+            ("checkpoint_id", Json::unsigned(u64::from(*checkpoint_id))),
+        ]),
+    }
+}
+
+fn parse_breakpoint_target(value: &Json) -> std::result::Result<BreakpointTarget, ProtocolError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ProtocolError::malformed("a breakpoint target must be an object"))?;
+    let kind = object
+        .get("kind")
+        .and_then(Json::as_str)
+        .ok_or_else(|| ProtocolError::malformed("a breakpoint target requires a kind"))?;
+    match kind {
+        "source" => {
+            if has_unknown_keys(object, &["kind", "file", "line", "column"]) {
+                return Err(ProtocolError::malformed(
+                    "an unknown breakpoint target key is invalid",
+                ));
+            }
+            let file = object
+                .get("file")
+                .and_then(Json::as_str)
+                .ok_or_else(|| ProtocolError::malformed("a source breakpoint requires file"))?;
+            if !crate::frames::valid_source_file(file) {
+                return Err(ProtocolError::malformed(
+                    "the source file must be a relative path without control characters",
+                ));
+            }
+            let line = object
+                .get("line")
+                .and_then(Json::as_number)
+                .filter(|line| (1..=i128::from(u32::MAX)).contains(line))
+                .and_then(|line| u32::try_from(line).ok())
+                .ok_or_else(|| {
+                    ProtocolError::malformed("a source breakpoint line must be a positive integer")
+                })?;
+            let column = match object.get("column") {
+                None => 0,
+                Some(value) => value
+                    .as_number()
+                    .filter(|column| (0..=i128::from(u32::MAX)).contains(column))
+                    .and_then(|column| u32::try_from(column).ok())
+                    .ok_or_else(|| {
+                        ProtocolError::malformed(
+                            "a source breakpoint column must be a non-negative integer",
+                        )
+                    })?,
+            };
+            Ok(BreakpointTarget::Source {
+                file: file.to_owned(),
+                line,
+                column,
+            })
+        }
+        "checkpoint" => {
+            if has_unknown_keys(object, &["kind", "checkpoint_id"]) {
+                return Err(ProtocolError::malformed(
+                    "an unknown breakpoint target key is invalid",
+                ));
+            }
+            let checkpoint_id = object
+                .get("checkpoint_id")
+                .and_then(Json::as_number)
+                .filter(|id| (1..=i128::from(u32::MAX)).contains(id))
+                .and_then(|id| u32::try_from(id).ok())
+                .ok_or_else(|| {
+                    ProtocolError::malformed(
+                        "a checkpoint breakpoint requires a positive checkpoint_id",
+                    )
+                })?;
+            Ok(BreakpointTarget::Checkpoint { checkpoint_id })
+        }
+        _ => Err(ProtocolError::malformed(
+            "a breakpoint target kind must be `source` or `checkpoint`",
+        )),
+    }
+}
+
+fn required_positive(
+    params: &BTreeMap<String, Json>,
+    key: &str,
+) -> std::result::Result<u64, ProtocolError> {
+    optional_positive(params, key)?
+        .ok_or_else(|| ProtocolError::malformed(format!("{key} is required")))
+}
+
+fn optional_positive(
+    params: &BTreeMap<String, Json>,
+    key: &str,
+) -> std::result::Result<Option<u64>, ProtocolError> {
+    match optional_u64(params, key)? {
+        Some(0) => Err(ProtocolError::malformed(format!(
+            "{key} must be a positive integer"
+        ))),
+        value => Ok(value),
     }
 }
 
@@ -2385,7 +3008,7 @@ fn slice_value(
     }
 }
 
-fn read_result(read: &DebugRead, value: DebugValue) -> Json {
+fn read_result(read: &DebugRead, value: DebugValue, stopped: bool) -> Json {
     let mut object = BTreeMap::new();
     object.insert("value".into(), {
         let typed = crate::debug::TypedValue {
@@ -2399,7 +3022,7 @@ fn read_result(read: &DebugRead, value: DebugValue) -> Json {
     object.insert("cycle".into(), Json::unsigned(read.cycle));
     object.insert("consistent".into(), Json::Bool(read.consistent));
     object.insert("atomic".into(), Json::Bool(read.atomic));
-    object.insert("stopped".into(), Json::Bool(false));
+    object.insert("stopped".into(), Json::Bool(stopped));
     Json::Object(object)
 }
 
@@ -2433,7 +3056,11 @@ impl Handler {
             event.cycle = Some(read.cycle);
             self.shared.audit(event).map_err(ProtocolError::from_stc)?;
         }
-        Ok((read_result(&read, value), Vec::new()))
+        let stopped = self
+            .session_stop
+            .as_ref()
+            .is_some_and(|session| session.status().stop.is_some());
+        Ok((read_result(&read, value, stopped), Vec::new()))
     }
 
     fn var_write(

@@ -139,7 +139,7 @@ pub static HOST_API: HostApi = HostApi {
     state_save: Some(service_state_save),
     assert: Some(service_assert),
     set_cycle_time_ns: Some(service_set_cycle_time_ns),
-    debug_check: Some(service_debug_check),
+    debug_check: Some(crate::stop::debug_check_hook),
 };
 
 /// Returns the table pointer passed to `stc_module_attach`.
@@ -484,14 +484,11 @@ unsafe extern "C" fn service_set_cycle_time_ns(ns: i64) {
     crate::stc_rt_set_cycle_time_ns(ns);
 }
 
-/// Debug checkpoint hook (host ABI 2.3).
-///
-/// Phase 2 installs the ABI slot only: without a debug session the call is a
-/// no-op and observes nothing. The service must stay callable on the cycle
-/// thread, so it holds no lock and performs no allocation. Phase 6 replaces
-/// this body with breakpoint matching, validation, and stop/park handling
-/// driven by the session state.
-unsafe extern "C" fn service_debug_check(_checkpoint_id: u32, _span_id: u32) {}
+// The host API 2.3 checkpoint hook is [`crate::stop::debug_check_hook`]. Its
+// x86-64 trampoline captures the checkpointing function's frame pointer,
+// stack pointer, and return address, then calls the session handler. Without
+// an installed session the handler returns immediately; no module state is
+// observed and no allocation occurs.
 
 #[cfg(test)]
 mod tests {
