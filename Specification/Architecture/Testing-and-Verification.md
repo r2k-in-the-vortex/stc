@@ -525,7 +525,7 @@ lean/
 | --- | --- |
 | `fmt` | `cargo fmt --all --check` |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
-| `test` | `cargo test --workspace --locked` on Windows x64 and Ubuntu x64; Linux AArch64 after basic development (D-042) |
+| `test` | `cargo test --workspace --locked` on Windows x64 and Ubuntu 24.04 x64, both full native hosts; Linux AArch64 after basic development (D-042) |
 | `coverage` | `cargo llvm-cov --workspace --locked` on Ubuntu x64; job summary, LCOV/JSON/HTML artifacts, and the `badges`-branch badge on `main` |
 | `ui` | diagnostic snapshots on Windows x64 and Ubuntu x64 |
 | `conformance` | conformance corpus on Windows x64 and Ubuntu x64 |
@@ -533,7 +533,7 @@ lean/
 | `projects` | end-to-end project and online workflow plus `manifest_hardening` and `examples` on Windows x64 and Ubuntu x64 |
 | `online` | hot-swap/manifest/cold-download suite on Windows x64 and Ubuntu x64 |
 | `package` | `cargo xtask package --locked`, checksum verification, and the unpacked `new/build/build --release/run/test` exercise on Windows x64 and Ubuntu x64; uploads the package |
-| `traceability` | `cargo xtask traceability --check` on Ubuntu x64 |
+| `traceability` | `cargo xtask traceability --check` and `cargo xtask host-audit --check` on Ubuntu x64 |
 | `debug` | `cargo xtask test --suite debug` on Windows x64 and Ubuntu x64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
@@ -547,7 +547,9 @@ exist, so the skeleton never reports a pass for a job that did not run. The `onl
 GOT identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
 launcher/embedding artifact suites; the `projects` job runs `new/check/build/run/test/fmt/clean`
 and the rename/download/diff/watch workflow; the `traceability` job checks every implemented rule
-has test evidence. The `coverage` job runs the workspace tests under LLVM instrumentation, reports
+has test evidence and runs `cargo xtask host-audit --check`, which fails when host-specific code
+appears outside the documented platform layer and allowlist. The `coverage` job runs the
+workspace tests under LLVM instrumentation, reports
 totals and the lowest-coverage files, uploads the LCOV/JSON/HTML reports, and publishes the README
 coverage badge to the `badges` branch on `main`; it is reporting-only, and the `test` job remains
 the pass/fail gate.
@@ -557,13 +559,32 @@ jobs are active on the documented matrix. The `debug` job runs the debug suite o
 hosts and, on a manual `workflow_dispatch`, also prints the informational overhead measurement
 described in §4.2; it never gates on timing.
 
+Host portability is verified natively, not by cross-compilation. The M8 phase-2 evidence run
+[`40784925474`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40784925474) (commit
+`252af75`) passed all 27 jobs on `windows-2025` and `ubuntu-24.04`; its Ubuntu x64 jobs cover the
+workspace, UI, conformance, execution, projects, online, debug, cross-target, traceability
+(including `host-audit --check`), docs, coverage, and package suites. Unix-only behaviour is
+asserted on `ubuntu-24.04`: state files are mode 0600 and a failed replace keeps the previous
+target and removes the temporary file (`stc-runtime` state tests); debug endpoint and audit files
+are mode 0600 in a mode-0700 socket directory (`debug_protocol`, `control`); `dlopen`/`dlsym`/
+`dlclose` load and retire compiler-produced modules (`host_lifecycle`); the launcher exits 130 on
+SIGINT and the test runner kills a timed-out child (`online_cli`, `test_cli`); artifact names match
+`stc`, `libstc_runtime.a`, `libstc_runtime.so`, `<module>-<build>.so`, `<name>.a`, and
+`lib<name>.so` (`package`, `cli_project`, `module_cli`, `execution`); and metadata, the build
+manifest, and the package record the host triple (`cli_project`, `module_cli`, and the `package`
+job). Linux AArch64 is not yet a native host: it remains cross-emitted only until the phase-3
+native ARM64 jobs.
+
 ### 6.2 Matrix
 
 - Primary: Windows x64, `x86_64-pc-windows-msvc`; the development host is Windows 11 and CI uses
   GitHub's `windows-2025` runner. Pinned clang/LLVM 23.1.4.
-- Secondary: Ubuntu 24.04 (`ubuntu-24.04`), `x86_64-unknown-linux-gnu` — workspace tests,
-  diagnostic snapshots, conformance corpus, execution tests, project workflow, end-to-end CLI,
-  and the debug suite.
+- Secondary, fully native: Ubuntu 24.04 (`ubuntu-24.04`), `x86_64-unknown-linux-gnu` — a full
+  native host for the workspace and every suite: workspace tests, diagnostic snapshots,
+  conformance corpus, execution tests, project workflow, end-to-end CLI, online-change and debug
+  suites, cross-target smoke, traceability with the host audit, docs, and the release package.
+  Linux x86-64 is supported natively from M8 phase 2; the deferred "after basic development"
+  qualifier (D-042) now applies only to AArch64.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`); `-latest` labels are not used, so
   image migrations do not silently change the matrix.
 - Host portability (after basic development, D-042): native or emulated Linux AArch64
