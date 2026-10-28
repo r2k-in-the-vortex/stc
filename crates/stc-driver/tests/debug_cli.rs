@@ -25,6 +25,11 @@ fn stc() -> &'static str {
     env!("CARGO_BIN_EXE_stc")
 }
 
+/// Waits that include a project build and host launch. A loaded Windows CI
+/// runner can be several times slower than a local machine, so these waits
+/// need a larger budget than protocol-only waits.
+const BUILD_AND_LAUNCH_TIMEOUT: Duration = Duration::from_secs(600);
+
 fn clang() -> Option<&'static str> {
     static CLANG: OnceLock<Option<&'static str>> = OnceLock::new();
     CLANG
@@ -825,7 +830,7 @@ fn launch_interactive_reports_session_status_and_never_prints_the_token() {
         wait_file_contains(
             &stdout_path,
             "\"kind\":\"response\"",
-            Duration::from_secs(60)
+            BUILD_AND_LAUNCH_TIMEOUT
         ),
         "no debug session started:\n{}\n{}",
         text_file(&stderr_path),
@@ -916,7 +921,7 @@ fn launch_reports_the_target_trap_exit_code() {
         .expect("spawn debug");
     // Keep stdin open so the session does not end on EOF before the trap.
     let stdin = child.stdin.take().expect("piped stdin");
-    let status = wait_exit(&mut child, Duration::from_secs(60));
+    let status = wait_exit(&mut child, BUILD_AND_LAUNCH_TIMEOUT);
     drop(stdin);
     let text = format!(
         "{}\n{}",
@@ -967,7 +972,7 @@ fn run_debug_server_accepts_attach_and_release_is_monitoring_only() {
         .spawn()
         .expect("spawn run");
     assert!(
-        wait_endpoint(&endpoint, &mut run, Duration::from_secs(180)),
+        wait_endpoint(&endpoint, &mut run, BUILD_AND_LAUNCH_TIMEOUT),
         "no debug endpoint; run output:\n{}\n{}",
         text_file(&project.path("run.stdout")),
         text_file(&project.path("run.stderr"))
