@@ -1,6 +1,6 @@
 # Runtime and Execution Model
 
-Status: M4.5 persistent host and ABI 2 module execution, M5 OOP descriptors, M6 scheduler, run loop, file-backed state, I/O, and control-channel work, and M6.5 debug/monitoring implemented (2026-10-28)  
+Status: M4.5 persistent host and ABI 2 module execution, M5 OOP descriptors, M6 scheduler, run loop, file-backed state, I/O, and control-channel work, M6.5 debug/monitoring, and M7 release packaging/hardening implemented (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 

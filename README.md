@@ -8,8 +8,10 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M6.5 (debug and monitoring) is complete (2026-10-28); M7 (release candidate) is next.** M6
-(project system, CLI, and verification hardening) is complete (2026-10-27). The repository
+**M7 (release candidate) is implemented: `stc` 1.0.0-rc.1 (2026-10-28); checklist sign-off is
+pending the both-host CI release run.** M6.5 (debug and
+monitoring) completed 2026-10-28, M6 (project system, CLI, and verification hardening) completed
+2026-10-27, and the earlier milestones are described below. The repository
 contains the source-map and diagnostic crates, the
 full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST views, strict pragma
 JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery, unsupported-construct
@@ -132,16 +134,19 @@ corpus, traceability tables, deterministic property tests, a 20k-term deep-chain
 `fuzz_module_descriptor` targets are in place. The
 specification continues to be written before implementation, as required below.
 
-**Known M6.5 limitations.** Windows debug DLLs carry no CodeView and produce no PDB because the
-current `lld-link` invocation omits `/DEBUG` (the CodeView assertion runs against the object);
-stack unwinding and typed locals are limited to the stopped-frame table on x86-64, with
-optimized-out values reported honestly and AArch64 frame rules deferred; a release embedding
-static archive is copied from the runtime toolchain and not stripped by the driver; format-1
-manifests require the documented cold download rather than migration; debug is local-only with
-no remote/network or raw-memory API, one session per host, bounded watches/events, and a
-five-minute default stop/idle bound. `stc` is not a safety PLC: debug may hold outputs
-indefinitely, and no fail-safe, output timeout, or interlock is provided. The full list with
-file references is in [handover_to_M7.md](handover_to_M7.md).
+**Release-candidate limitations.** Windows ships object-level CodeView and produces no PDB or
+DLL-level CodeView claim; stack unwinding and typed locals are limited to the stopped-frame table
+on x86-64, with optimized-out values reported honestly and AArch64 frame rules deferred to M8;
+format-1 manifests require the documented cold download rather than migration; debug and release
+forms are separately identified and not a supported hot-swap pair; debug is local-only with no
+remote/network or raw-memory API, one session per host, bounded watches/events, and a five-minute
+default stop/idle bound. `stc` is not a safety PLC and is not responsible for safety. It can
+control real machinery, but safety must be provided by a separate safety system and machine design
+as required by law and regulation; debug may hold outputs indefinitely, and no fail-safe, output
+timeout, or interlock is provided. The consolidated list is in
+[KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md); release evidence is in
+[RELEASE-NOTES.md](RELEASE-NOTES.md), [USER-GUIDE.md](USER-GUIDE.md),
+[NON-SAFETY.md](NON-SAFETY.md), and [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
 
 | Document | Purpose |
 | --- | --- |
@@ -161,6 +166,12 @@ file references is in [handover_to_M7.md](handover_to_M7.md).
 | [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md) | Versioned `GotId`, catalog, descriptor, manifest, plan, host ABI, build-ID formats |
 | [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md) | Typed access, forcing, breakpoints, debug info |
 | [Decisions and Open Questions](Specification/Decisions.md) | Rationale and backlog |
+| [Release Notes](RELEASE-NOTES.md) | `1.0.0-rc.1` highlights, artifacts, formats, upgrade notes |
+| [User Guide](USER-GUIDE.md) | Install, project workflow, build modes, online change, debug, tests |
+| [Known Limitations](KNOWN-LIMITATIONS.md) | Consolidated v1 limits and workarounds |
+| [Non-Safety Statement](NON-SAFETY.md) | Not a safety PLC; safety is a separate system |
+| [Release Checklist](RELEASE-CHECKLIST.md) | Owner, evidence, and sign-off record |
+| [M7 Plan](M7-Plan.md) | Release-candidate implementation plan |
 
 ## Goal
 
@@ -189,7 +200,7 @@ test runner, and inspectable artifacts.
 | Persistent memory | Host-owned GOT roots and stable storage; per-field roots, handle-based objects, runtime descriptors |
 | Identity baseline | Persistent GOT manifest (canonical JSON + compact binary) paired with every module; tracked renames/moves; runtime export/download |
 | Debug/monitoring | Full typed debug implemented (M6.5): typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView by default; `--release` stripped/hook-free; local authenticated `stc-debug/1`; every swap ends the debug session |
-| Safety | Not a safety PLC and not responsible for safety in any way; debug may hold outputs indefinitely |
+| Safety | Not a safety PLC and not responsible for safety; may control machinery, but safety must be provided by a separate system and machine design as required by law and regulation; debug may hold outputs indefinitely |
 | UTF-8 strings | Project extension: `USTRING`, `UCHAR`, `U#'...'`, `USTRING#'...'`, `${HEX}` escapes; `USTRING[n]` stores `n` characters as 32-bit scalars (4 bytes each, static) |
 | Strings | 2013 `STRING`/`WSTRING`/`CHAR`/`WCHAR` plus the UTF-8 extension |
 | Standard library | 2013 standard functions and FBs (`TON`, `TOF`, `TP`, counters, edge, bistable, strings, math); FB bodies are synthesized HIR in `STC_STD` (D-134), clock latched once per scan |
@@ -410,8 +421,15 @@ stc/
   M5-Plan.md                 structs/OOP/standard-library plan (complete)
   M6-Plan.md                 project system, CLI, and verification plan (complete)
   M6.5-Plan.md               debug/monitoring plan (complete)
+  M7-Plan.md                 release-candidate plan (complete)
   handover_to_M5.md          M4.5 handover and M5 opening contract
   handover_to_M7.md          M6.5 handover and M7 opening contract
+  handover_to_M8.md          M7 handover and M8 opening contract
+  RELEASE-NOTES.md           release-candidate notes and upgrade guidance
+  USER-GUIDE.md              install, workflow, build modes, online change, debug
+  KNOWN-LIMITATIONS.md       consolidated v1 limitations and workarounds
+  NON-SAFETY.md              non-safety statement
+  RELEASE-CHECKLIST.md       release owner, commands, and evidence
   update_plan_got.md         resolved online-change planning record
   tools/ci/check_docs.py     specification, link, and profile checks
   tools/ci/check_local.py    local CI parity checks (docs, lint, tests, fuzz)
@@ -546,6 +564,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-153–D-164 | M6 phase 0 fixes the project/package model (kebab-case `stc.toml`, package identity, lockfile), the cooperative host scheduler, the local deploy/status control channel, tracked-rename history, per-test artifacts and the host ABI 2.2 test clock, the debug/release boundary, the formatter style, the file I/O lifecycle, the Lean/vector contract, traceability annotations, runtime path resolution, and the applied diagnostic/report-shape contracts. Details in `Specification/Decisions.md` and `M6-Plan.md` §13–§14. |
 | D-165–D-172 | M6 phases 4–11 record the implementation details: run-loop exit codes and failed-scan scheduling, the `STCRET01` state file and I/O backends, the test-host result protocol and lexable synthetic names, formatter encoding preservation, the online download/diff/rename/watch workflow, the Lean vector format and the three codegen defects it exposed, the conformance/UI/traceability/CI pass, and the completion documentation pass. |
 | D-173–D-183 | M6.5 debug and monitoring: the local `stc-debug/1` protocol and four scopes, one session per host with the stop/idle bound, typed read/write/force/watch and checkpoint-hook rules, debug-by-default with a stripped hook-free `--release`, the format-2 manifest extension, the stopped-frame sidecar, the split-object `view` key, and the phase-10 documentation/M7 handover pass. Details in `Specification/Decisions.md` and `M6.5-Plan.md`. |
+| D-188–D-199 | M7 release candidate: version `1.0.0-rc.1`, `cargo xtask package` and the `bin`/`lib`/`docs` layout, object-only Windows CodeView, archive-aware release stripping with preserved symbol tables, cold-download-only format-1 manifests, informational performance measurement, no remote/raw-memory debug, IR/object-only cross-target support, pipe-only embedded debug transport, the release checklist/owner, the flake policy, and the retained non-debug traceability allowlist. Details in `M7-Plan.md` and `Specification/Decisions.md`. |
 
 ## Question log
 
@@ -584,7 +603,7 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 | A-027 | What survives an online change? | Matching per-field roots and compatible `RETAIN`; new roots initialize, removed roots quarantine; no field-layout migration in v1. |
 | A-028 | How do OOP descriptors survive? | Runtime-owned descriptors and vtable cells; preserved interfaces survive compatible swaps; shape changes are rejected while live. |
 | A-029 | Tooling, determinism, and loader security? | Module/manifest CLI and tables, stable diagnostics, deterministic builds, strict validation of untrusted manifest data. |
-| A-030 | Debug and non-functional stance? | Full typed debug in v1; debug info by default; swaps end sessions; debug may hold outputs; not a safety PLC. |
+| A-030 | Debug and non-functional stance? | Full typed debug in v1; debug info by default; swaps end sessions; debug may hold outputs; can control machinery but is not a safety PLC and safety must come from a separate system and machine design. |
 
 ### Open
 
@@ -592,10 +611,21 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 (A-005 through A-030). The detailed online-change disposition is in `update_plan_got.md`
 §13.0. New questions will be added here one at a time.
 
-## Building and running (M6.5)
+## Building and running (M7 release candidate)
+
+Build the release package from a clean checkout:
 
 ```sh
-cargo run -p stc-driver -- new examples/motor
+cargo xtask package --locked --out dist
+sha256sum -c dist/stc-1.0.0-rc.1-*/SHA256SUMS
+dist/stc-1.0.0-rc.1-*/bin/stc --version
+```
+
+Use the unpacked package (the driver finds the runtime in the sibling `lib/`), or run the
+workspace binary from source:
+
+```sh
+cargo run -p stc-driver -- new hello
 cargo run -p stc-driver -- check  --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- build  --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- build  --release --manifest-path examples/motor/stc.toml
@@ -606,8 +636,8 @@ cargo run -p stc-driver -- test   --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- fmt    --manifest-path examples/motor/stc.toml --check
 cargo run -p stc-driver -- metadata --manifest-path examples/motor/stc.toml --message-format json
 cargo run -p stc-driver -- online download --manifest-path examples/motor/stc.toml --out motor.stc-got.json
-cargo run -p stc-driver -- online diff examples/motor/target/stc/debug/motor-control.stc-got.json --manifest-path examples/motor/stc.toml
-cargo run -p stc-driver -- rename Main.Speed Main.Rate --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- online diff examples/motor/target/stc/debug/motor.stc-got.json --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- rename Motor.Speed Motor.Rate --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- run --watch --manifest-path examples/motor/stc.toml
 
 # Manifest-free bridge and the other artifact forms
@@ -632,8 +662,14 @@ and preserves `stc.lock`, retained-state files, and the runtime module/manifest 
 
 [`examples/hello`](examples/hello/README.md) is the small starter project: it demonstrates
 constants, scalar variables, control flow, a function, a function block, a standard timer, and a
-task configuration, with an isolated test suite and a committed `stc.lock`. Its README lists the
-workflow commands, and the `projects` CI suite checks, builds, tests, and format-checks it.
+task configuration, with an isolated test suite and a committed `stc.lock`.
+[`examples/motor`](examples/motor/README.md) is the multi-package example: its
+[`motorlib`](examples/motorlib/README.md) dependency supplies an interface, a class, an FB, an
+enum, a subrange, and UTF-8 strings, and the root package adds a configuration, direct I/O,
+retained state, tests, and the debug/online walkthrough.
+[`examples/online-change`](examples/online-change/README.md) is the minimal hot-swap, rename, diff,
+and cold-download project. The `projects` CI suite checks, builds, tests, and format-checks every
+example.
 
 Before pushing, run the same checks as the CI matrix (formatting, clippy, the
 workspace tests with clang required, specification/link checks, Markdown lint, and a

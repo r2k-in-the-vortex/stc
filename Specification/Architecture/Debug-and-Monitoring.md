@@ -13,8 +13,10 @@ resolved rationale is in `update_plan_got.md`, and the phase decisions are D-173
 
 ## 1. Scope and safety stance
 
-V1 provides **full typed debug and monitoring**. The project is **not a safety PLC and is not
-responsible for safety in any way**. Debug sessions may:
+V1 provides **full typed debug and monitoring**. `stc` can control real machinery, but the
+project is **not a safety PLC and is not responsible for safety in any way**; safety must be
+provided by a separate safety system and machine design as required by law and regulation. Debug
+sessions may:
 
 - stop the cycle (a future watchdog deadline is paused or extended while stopped);
 - hold outputs at their last or forced values indefinitely;
@@ -1333,5 +1335,7 @@ debugger that supports typed access, but it cannot stop at checkpoints. `stc tes
 
 The debug service, its pause bound, its authentication, and its audit log are availability and
 operability features, not safety functions. A stopped or forced controller may hold outputs
-indefinitely; the project is not a safety PLC and is not responsible for safety. Deployments that
-require fail-safe behavior must implement it independently and must not rely on `stc`.
+indefinitely. `stc` can control real machinery, but it is not a safety PLC and is not responsible
+for safety; safety must be provided by a separate safety system and machine design as required by
+law and regulation. Deployments that require fail-safe behavior must implement it independently
+and must not rely on `stc`.

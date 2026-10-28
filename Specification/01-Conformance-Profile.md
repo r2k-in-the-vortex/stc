@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, M4.5 online-change foundation, M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 project system, CLI, scheduler, state, I/O, test runner, formatter, online workflow, Lean vectors, conformance corpus, and CI complete (2026-10-27); M6.5 debug/monitoring complete (2026-10-28)
+Status: Target profile; M3 front end, M4 scalar codegen, M4.5 online-change foundation, M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 project system, CLI, scheduler, state, I/O, test runner, formatter, online workflow, Lean vectors, conformance corpus, and CI complete (2026-10-27); M6.5 debug/monitoring complete (2026-10-28); M7 release candidate `1.0.0-rc.1` implemented (2026-10-28)
 
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
@@ -26,8 +26,10 @@ Online change, the GOT, the persistent manifest, and debug/monitoring are **proj
 capabilities**, not IEC language features. They are specified in
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),
 [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md), and
-[Debug and Monitoring](Architecture/Debug-and-Monitoring.md). The project is **not a safety PLC
-and is not responsible for safety in any way**; debug sessions may hold outputs indefinitely.
+[Debug and Monitoring](Architecture/Debug-and-Monitoring.md). The project **can control real
+machinery** but is **not a safety PLC and is not responsible for safety in any way**; safety must
+be provided by a separate system and machine design as required by law and regulation, and debug
+sessions may hold outputs indefinitely.
 
 **Implementation status (M5):** the lexical surface, the full syntactic surface (CST, typed AST
 views, pragma payload validation, recovery), and the semantic surface (collection, namespaces
@@ -297,7 +299,9 @@ same time; tests use a mock clock with the same semantics.
   provided as project runtime capabilities in v1; both are implemented, debug/monitoring in
   M6.5.
 - Safety functions, safety certification, automatic fail-safe outputs, or a safety watchdog. The
-  project is not a safety PLC and assumes no safety responsibility.
+  project can control real machinery, but it is not a safety PLC and assumes no safety
+  responsibility; safety must be provided by a separate safety system and machine design as
+  required by law and regulation.
 - Field-layout migration, resizing, and pointer translation in v1. Per-field add/remove/rename
   and tracked moves are supported; incompatible changes reset or require a cold download.
 - Remote/network deployment, multi-user scheduling, and remote debugging in v1.
@@ -360,7 +364,7 @@ The following are deliberately chosen and must be documented and tested:
 | Baseline policy | Exact parent build ID + digest pairing + profile/target/ABI/layout match; missing/stale/invalid baseline forces a cold download |
 | Preservation | Matching `GotId`/type/layout/size roots preserved; new roots initialized; removed roots quarantined; no field-layout migration in v1 |
 | Debug builds | Debug is the default build form. M6.5 emits DWARF (ELF) or CodeView (MSVC) with deterministic paths/order and no timestamps; `--release` selects optimised, stripped, hook-free artifacts with distinct build IDs/manifests and default out-dir `target/stc/release`; debug stays `target/stc/debug` (D-178) |
-| Debug behavior | Typed read/write/force/watch, checkpoint breakpoints, stop-the-world stepping, call stacks with optimized-out reporting; writes/forces apply only at cycle boundaries; swaps and the pause bound end sessions and clear state; outputs may be held indefinitely; not a safety PLC (D-173–D-177) |
+| Debug behavior | Typed read/write/force/watch, checkpoint breakpoints, stop-the-world stepping, call stacks with optimized-out reporting; writes/forces apply only at cycle boundaries; swaps and the pause bound end sessions and clear state; outputs may be held indefinitely; may control machinery but is not a safety PLC (D-173–D-177) |
 | Debug protocol | Local-only `stc-debug/1` on a user-scoped pipe (default) or loopback socket (optional); newline-delimited JSON, per-run token, four scopes, audited protected access, rate limits, and bounded frames; separate from the M6 control channel (D-173, D-174) |
 | Debug checkpoints | Dense checkpoint table in the metadata sidecar, source-span bound, first-class host check service ID 13 at ABI 2.3; debug builds set `entry_flags` bit 4/bit 6 and `required_features` bit 4 when hooks are emitted; release and test builds are hook-free (D-177) |
 | Debug sessions | One session per host; start does not stop the cycle; a stop parks the cycle at a checkpoint and holds outputs; a five-minute default stop/idle bound, swap/disconnect/timeout teardown, force/breakpoint clearing, and explicit reconnect with no state migration (D-175) |
@@ -481,7 +485,8 @@ Any compliance statement produced by the project shall state:
   capability,
 - the implementation-defined choices in §8,
 - that Ed. 4 conformance is not claimed,
-- that the project is not a safety PLC and assumes no safety responsibility.
+- that the project is not a safety PLC and assumes no safety responsibility, while being usable
+  for controlling real machinery whose safety is provided by a separate system and machine design.
 
 The compiler should be able to emit this statement (or a machine-readable equivalent) from
 `stc --compliance`.

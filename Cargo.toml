@@ -20,10 +20,16 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0-rc.1"
 edition = "2024"
 rust-version = "1.99"
 publish = false
+
+# Release artifacts are shipped; reduce debug information at build time, and
+# the driver/package archive steps remove the remaining standard-library debug
+# sections (D-191).
+[profile.release]
+strip = "debuginfo"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

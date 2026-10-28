@@ -1,7 +1,8 @@
 # Architecture
 
-Status: M4.5 host/module model, M5 lowering, M6 project system/CLI/verification hardening, and
-M6.5 debug/monitoring implemented (2026-10-28); M7 release candidate is next  
+Status: M4.5 host/module model, M5 lowering, M6 project system/CLI/verification hardening,
+M6.5 debug/monitoring, and M7 release packaging/cross-target/hardening implemented (2026-10-28);
+release-checklist sign-off pending the both-host CI run  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
 

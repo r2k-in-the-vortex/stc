@@ -1,6 +1,6 @@
 # Testing and Verification
 
-Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixed the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are implemented and active (2026-10-28)  
+Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixed the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are implemented and active (2026-10-28); M7 adds the cross-target, packaging, examples, manifest-hardening, and performance evidence (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
@@ -46,6 +46,15 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 > workflow record the informational measurement. Phase 9 passed the full workspace, clippy,
 > formatting, and traceability checks, and phase 10 closed the documentation and M7 handover
 > (D-183).
+>
+> **M7 status (2026-10-28):** the release candidate adds the `cross-target` suite (nine triples
+> plus exe/lib rejection), the `examples` project smoke (hello, motor/motorlib, online-change),
+> `manifest_hardening` (format-1, cross-mode, truncated, and tampered manifests), package
+> verification in `cargo xtask package`, archive/PDB cleanliness tests, and the ignored
+> `performance` measurement. `projects` now runs `projects`, `online_cli`, `manifest_hardening`,
+> and `examples`. CI adds the `cross-target` and `package` jobs on Windows and Linux; the package
+> job builds, checksums, and exercises the unpacked layout in a fresh project. Release evidence is
+> recorded in `RELEASE-CHECKLIST.md`; timing remains informational (D-193).
 
 ## 1. Layers of testing
 
@@ -62,11 +71,15 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | Pragmas | JSON payload parsing, balanced braces, non-nesting, validation, precedence | `crates/stc-parser/tests`, `tests/ui` |
 | I/O metadata | Process-image layout, `AT` type checks, binding hints/overrides, unbound defaults | `crates/stc-codegen/tests`, `crates/stc-driver/tests/state_io_cli.rs`, `tests/conformance/io` |
 | State/retain | Warm/cold restart, layout hash, CRC/corruption, atomic write, mismatch policy | `crates/stc-runtime/tests`, `crates/stc-driver/tests/state_io_cli.rs`, `tests/conformance/state` |
-| Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `crates/stc-runtime/tests`, `crates/stc-driver/tests/online_cli.rs` |
-| GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, corrupt/manifest fuzzing | `crates/stc-got/tests`, `crates/stc-codegen/tests`, `crates/stc-driver/tests` |
+| Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `crates/stc-runtime/tests`, `crates/stc-driver/tests/online_cli.rs`, `manifest_hardening.rs` |
+| GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, format-1/cross-mode/tamper rejection, corrupt/manifest fuzzing | `crates/stc-got/tests`, `crates/stc-codegen/tests`, `crates/stc-driver/tests` |
 | Descriptors/OOP | Runtime descriptors, vtable cells, handle preservation, interface nullability, place descriptors | `crates/stc-runtime/tests/descriptor_lifecycle.rs`, `crates/stc-codegen/tests`, `tests/conformance/oop` |
 | Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `cargo xtask test --suite debug` (twelve targets) |
 | Real-time boundary | Switch latency, maintenance jitter, service-thread contention, generation pinning | `crates/stc-runtime/tests` |
+| Cross-target | IR/object emission for nine triples, header architecture/endianness, exe/lib rejection | `crates/stc-driver/tests/cross_target.rs` |
+| Packaging | Layout, checksums, version, formats/ABI, debug-free archive/shared library, stripped archive still links | `cargo xtask package`, `crates/stc-driver/tests/package.rs`, `debug_release.rs` |
+| Examples | Every committed example checks, builds both modes, runs, tests, and formats | `crates/stc-driver/tests/examples.rs` |
+| Performance | Build/cycle/switch/debug timings, recorded host/regime, non-gating | `crates/stc-driver/tests/performance.rs`, `debug_overhead.rs`, `crates/stc-runtime/tests/switch_latency.rs`, `Specification/Verification/Performance.md` |
 | Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests`, `crates/stc-driver/tests/fmt_cli.rs` |
 | Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
 | Lean | Exact-function models and proofs | `lean/`, `tests/vectors` |
@@ -517,13 +530,14 @@ lean/
 | `ui` | diagnostic snapshots on Windows x64 and Ubuntu x64 |
 | `conformance` | conformance corpus on Windows x64 and Ubuntu x64 |
 | `execution` | compile/run tests on Windows x64 and Ubuntu x64 |
-| `projects` | end-to-end project and online workflow on Windows x64 and Ubuntu x64 |
+| `projects` | end-to-end project and online workflow plus `manifest_hardening` and `examples` on Windows x64 and Ubuntu x64 |
 | `online` | hot-swap/manifest/cold-download suite on Windows x64 and Ubuntu x64 |
+| `package` | `cargo xtask package --locked`, checksum verification, and the unpacked `new/build/build --release/run/test` exercise on Windows x64 and Ubuntu x64; uploads the package |
 | `traceability` | `cargo xtask traceability --check` on Ubuntu x64 |
 | `debug` | `cargo xtask test --suite debug` on Windows x64 and Ubuntu x64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
-| `cross-target` | `clang --target=aarch64-... -c` smoke (IR/object) |
+| `cross-target` | `cargo xtask test --suite cross-target` on Windows x64 and Ubuntu x64: nine-triple IR/object matrix, header checks, and exe/lib rejection; also assembles the checked-in AArch64 smoke module |
 | `docs` | required-document, spec link, and profile checks; Markdown lint |
 
 The workflow is `.github/workflows/ci.yml`; the documentation checks are implemented in

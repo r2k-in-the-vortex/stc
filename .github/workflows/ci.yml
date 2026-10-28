@@ -42,6 +42,7 @@ jobs:
       - lean
       - fuzz-smoke
       - cross-target
+      - package
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -610,20 +611,89 @@ jobs:
           done
 
   cross-target:
-    name: Cross-target IR smoke
+    name: Cross-target IR smoke (${{ matrix.os }})
     needs: detect
     if: needs.detect.outputs.cross_target == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
     steps:
       - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
           clang --version | head -n 1 || echo "clang unavailable"
-      - name: Assemble AArch64 object from IR
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Assemble AArch64 object from the checked-in smoke module
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/cross-target"
           clang --target=aarch64-unknown-linux-gnu -c tests/cross-target/smoke.ll \
             -o "$RUNNER_TEMP/cross-target/smoke-aarch64.o"
+      - name: Run the cross-target matrix
+        shell: bash
+        run: cargo xtask test --suite cross-target --locked
+
+  # The release package is built and verified on both hosts. The job also
+  # exercises the unpacked layout: `bin/stc` must find the runtime in `lib/`
+  # and build, run, and test a fresh project without environment variables.
+  package:
+    name: Release package (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and verify the package
+        shell: bash
+        run: cargo xtask package --locked --out dist
+      - name: Verify checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/stc-*
+          sha256sum -c SHA256SUMS
+      - name: Exercise the unpacked package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(cd dist/stc-* && pwd)"
+          driver="$package/bin/stc"
+          if [ "$RUNNER_OS" = "Windows" ]; then driver="$driver.exe"; fi
+          "$driver" --version
+          "$driver" compliance --message-format json > compliance.json
+          "$driver" new fresh
+          cd fresh
+          "$driver" build
+          "$driver" build --release
+          "$driver" build --release --emit=lib --out-dir libcheck
+          "$driver" run --cycles 2
+          "$driver" test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stc-package-${{ matrix.os }}
+          path: |
+            dist/stc-*
+            compliance.json
+          if-no-files-found: error

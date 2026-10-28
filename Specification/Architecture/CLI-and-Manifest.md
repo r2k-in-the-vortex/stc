@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28)
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28)
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
 
@@ -345,7 +345,8 @@ leaves the host running; it returns 0 on a clean detach. A session ended by a sw
 a protocol error is reported with its `STC-E-DEBUG-*` code and exits 2. The CLI never prints the
 token; the endpoint path is printed on stderr in launch and server modes. The non-safety notice is
 printed at session start and included in `--help`; a stopped or forced controller may hold outputs
-indefinitely and the project is not a safety PLC.
+indefinitely. `stc` may control machinery, but it is not a safety PLC and safety must be provided
+by a separate system and machine design as required by law and regulation.
 
 **`stc run --debug-server`.** `stc run` gains:
 
@@ -744,6 +745,40 @@ Cleaning a directory that contains the project root is refused. A runtime store 
 `stc run --watch --store` CLI override is not discoverable by clean; keep it outside the generated
 trees or delete it explicitly.
 
+### 4.1 Release package layout
+
+`cargo xtask package --locked [--out <dir>]` builds `stc-driver` and `stc-runtime` in release
+mode (always `--locked`) and writes a versioned, timestamp-free package:
+
+```text
+stc-<version>-<host-triple>/
+  bin/stc(.exe)
+  lib/stc_runtime.lib | libstc_runtime.a      static host archive
+  lib/stc_runtime.dll | libstc_runtime.so     shared host library
+  docs/README.md
+  docs/USER-GUIDE.md
+  docs/RELEASE-NOTES.md
+  docs/KNOWN-LIMITATIONS.md
+  docs/NON-SAFETY.md
+  package.json
+  SHA256SUMS
+```
+
+- `package.json` records `schema`, `version`, `profile`, `host`, the supported artifact/ABI
+  versions, the artifact list, and the non-safety identifier. It contains no timestamp, absolute
+  path, user name, or random ID.
+- `SHA256SUMS` is sorted by package-relative path (`/` separators) and is compatible with
+  `sha256sum -c`.
+- Runtime discovery checks, in order: `--runtime`, `STC_RUNTIME`, `[build].runtime`, a file beside
+  the executable, `<exe>/lib`, `<exe>/../lib`, and the workspace `target/{release,debug}` fallback.
+  The `bin`/`lib` package layout therefore works without environment variables.
+- Static archives are unpacked, object members are stripped with `llvm-objcopy --strip-debug`, and
+  the stripped objects replace the originals with `llvm-ar rD`; every import-library member and
+  symbol-table entry is preserved. The shared host library is stripped directly. `package.json`
+  and the package are written only after the archive, shared library, module, and executable
+  checks pass.
+- The package is an archive, not an installer; there is no package-manager integration in v1.
+
 `<name>.stc-meta.json`:
 
 ```json
@@ -751,7 +786,7 @@ trees or delete it explicitly.
   "abi_version": 2,
   "artifact": "motor-control",
   "build_id": "0x…",
-  "compiler": "stc 0.1.0",
+  "compiler": "stc 1.0.0-rc.1",
   "configuration": "Main",
   "descriptor_digest": "0x…",
   "debug": {

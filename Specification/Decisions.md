@@ -264,9 +264,10 @@ workflow is M6.
 **Consequences:** The direct-reference, code-linked M4 artifact model is superseded. The host
 owns the cycle, persistent memory, modules, the process image, retained state, and debug
 services. No code-linked executable deployment path is maintained for online-change deployments.
-M4 artifacts are explicitly non-loadable under host ABI 2. The project is **not a safety PLC**
-and is not responsible for safety in any way; this must be stated wherever online change or debug
-behavior is described.
+M4 artifacts are explicitly non-loadable under host ABI 2. The project can control real machinery
+but is **not a safety PLC** and is not responsible for safety in any way; safety must be provided
+by a separate system and machine design as required by law and regulation, and this must be stated
+wherever online change or debug behavior is described.
 
 **Questions:** Q-018–Q-025, Q-089–Q-095.
 
@@ -425,7 +426,9 @@ codegen breakpoint checkpoints, stop-the-world stepping, call-stack unwinding, D
 and a manifest-assisted split-object view. Every online swap ends the debug session and clears
 breakpoints/forces. Debug information is the default build output; `--release` is the optional
 stripped/optimised mode with distinct build IDs/manifests. Debug may pause the watchdog and hold
-outputs indefinitely. The project is not a safety PLC and assumes no safety responsibility.
+outputs indefinitely. The project can control real machinery but is not a safety PLC and assumes
+no safety responsibility; safety must be provided by a separate system and machine design as
+required by law and regulation.
 
 **Consequences:** Debug/release artifacts are distinct. Debug hooks are absent in release.
 Starting/stopping a session has documented effects on outputs and timing. Non-RT threads must not
@@ -547,7 +550,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-103 | The runtime adds loader/prepare and lower-priority service/monitor threads; readers use generation pinning/epoch refcounts, status uses lock-free/double-buffered/bounded structures, and writes/forcing are queued for cycle boundaries. | Keeps non-RT work off the cycle while keeping preserved data alive and diagnostics lock-free. |
 | D-104 | V1 includes full typed debug/monitoring: read/write/force/watch, breakpoint checkpoints, stop-the-world stepping, call stacks, DWARF/CodeView, and a manifest-assisted split-object view. Every online swap ends the debug session and clears forces/breakpoints. | Full debug is a v1 requirement; session teardown prevents stale code/descriptor references. |
 | D-105 | Debug information is the default build output; `--release` is the optional stripped/optimised mode with distinct build IDs/manifests and sidecar symbols. Debug hooks are absent from release artifacts. | Debuggability by default without conflating debug and release artifact identities. |
-| D-106 | `stc` is not a safety PLC and is not responsible for safety in any way. Debug may pause the watchdog and hold outputs indefinitely; no automatic fail-safe is provided. | Explicit scope boundary; safety requires an independent qualified design and certification. |
+| D-106 | `stc` may control real machinery but is not a safety PLC and is not responsible for safety in any way; safety must be provided by a separate system and machine design as required by law and regulation. Debug may pause the watchdog and hold outputs indefinitely; no automatic fail-safe is provided. | Explicit scope boundary; safety requires an independent qualified design and certification. |
 | D-107 | Online-change foundation is M4.5 before M5; full debug is M6.5 between M6 and M7; M8 covers Linux host parity including module loading, threads, and debug info. | Front-loads the architecture before M5 features depend on it, and keeps debug and portability independently testable. |
 | D-108 | The CLI and project manifest gain module emission, GOT manifest/cold/rename options, `stc online download/diff`, run/watch, `[runtime]`/`[online]`/`[debug]` tables, and stable `MODULE`/`MANIFEST`/`ABI`/`ONLINE`/debug diagnostics. Manifest data is untrusted, validated, and access-controlled. | A usable, auditable workflow and a stable automation surface without a network protocol in v1. |
 | D-109 | M4.5 exposes manifest export/download and diff data through the host API and test entry points; the user-facing `stc online download`/`stc online diff` commands were delivered in M6. | Keeps the foundation milestone focused on the host/module/manifest contract; M6 owns the user workflow. |
@@ -630,6 +633,18 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-185 | Windows COFF objects are compiled with `-mno-incremental-linker-compatible` (the flag clang-cl uses for `/Brepro`), so LLVM does not stamp the COFF header with the wall-clock time. Driver object artifacts and the debug-object determinism test are byte-identical across output directories and across second boundaries, matching D-178's no-timestamp rule and the existing `/Brepro` link handling (D-126); the codegen test asserts the zero timestamp and the driver debug test checks a built object. | The Windows debug suite flaked when the two clang invocations straddled a second boundary (CI run 40733363364); zeroing the header timestamp makes the reproducibility contract true instead of timing-dependent. |
 | D-186 | The Windows user-only security descriptor used for debug endpoint/audit files and the debug pipe keeps its descriptor, ACL, and token buffers in `Box` allocations, so the `SECURITY_ATTRIBUTES` descriptor pointer and the descriptor's internal ACL pointer stay valid when `UserSecurity` moves. The buffers were previously inline, leaving both pointers aimed at `UserSecurity::new`'s dead stack frame; when that frame was overwritten, `CreateFileW`/`CreateNamedPipeW` failed intermittently with `ERROR_REVISION_MISMATCH` (1305). A Windows unit test clobbers the old frame and checks the descriptor revision. | The Windows debug suite failed at `start_debug_server` (CI run 40744761639) because the security descriptor was read from dead stack memory; stable buffer addresses make endpoint creation deterministic without changing the ACL's meaning. |
 | D-187 | The interactive debug CLI test passes an explicit `--endpoint` and reads the endpoint file directly instead of parsing the endpoint path out of stderr. The host and the CLI both print the endpoint to the inherited stderr, and each line is written in several `write_fmt` pieces, so the lines can interleave; a substring search could match mid-line while the strict line-prefix parse returned no path. The test still asserts that the endpoint line and file name are printed. | Removed a Windows-only test race that failed the workspace job (CI run 40747849546) while the debug suite passed; no product behavior changes. |
+| D-188 | M7 is the release-candidate milestone. The workspace, driver, and packaged artifacts report version `1.0.0-rc.1`; the version-bearing snapshots are regenerated once. M7 adds no language surface and changes no module, descriptor, state, metadata, debug-object, stopped-frame, manifest, host-ABI, service-ID, build-ID-domain, or `stc-debug/1` contract. | The profile is v1; an RC marker distinguishes the candidate from the final release while keeping the release identity explicit in `--version`, metadata, descriptors, and manifests. |
+| D-189 | Release packaging is the repository task `cargo xtask package`, not a product CLI verb. It builds `stc-driver` and `stc-runtime` with `--locked`, then writes `stc-<version>-<host-triple>/{bin,lib,docs}/package.json` and a sorted `SHA256SUMS`. `package.json` records schema, version, profile, host triple, supported format/ABI versions, artifact list, and the non-safety identifier, with no timestamps, absolute paths, user names, or random IDs. The driver searches for the runtime beside its executable and in `<exe>/../lib`; `--runtime`, `STC_RUNTIME`, and manifest paths keep precedence. | A repo task keeps packaging out of the language CLI, and the adjacent `bin`/`lib` layout makes an unpacked package work without environment variables while preserving explicit overrides. |
+| D-190 | The Windows release contract is object-level CodeView: COFF objects carry `.debug$S`/`.debug$T` for build-time frame extraction and external tools, and the linked DLL carries no CodeView or PDB. M7 does not add `/DEBUG`, PDB packaging, or a DLL-level CodeView claim. | The runtime consumes build-time sidecars, not DWARF/CodeView, and PDBs add nondeterministic identity; object-level CodeView is the honest, tested contract. |
+| D-191 | Release static runtime archives are made debug-free by an archive-aware strip step: the archive is unpacked, each object member is stripped with `llvm-objcopy --strip-debug`, and the stripped objects replace the originals in place with `llvm-ar rD`, preserving every other member and its symbol-table entries. `strip_release_artifact` applies this to `--emit=lib --release`, and `cargo xtask package` applies it to the packaged archive and shared library. The release profile also sets `strip = "debuginfo"`. | Precompiled Rust standard-library members carry CodeView/DWARF even in a release build, so a profile setting alone cannot make the archive debug-free. A fresh `ar rcs` repack collapses duplicate Windows import-library members and drops their symbols; in-place replacement keeps the archive linkable while removing debug sections. |
+| D-192 | Format-1 GOT manifests are cold-download only. The descriptor rejects any `manifest_format` other than 2 with the documented version diagnostic; no migration or in-place upgrade tool is provided. | Reinterpreting pre-M6.5 layouts risks preserved-value safety; a cold download is the documented, tested path. |
+| D-193 | M7 performance numbers are informational, not CI gates. Measurements record date, host, clang and cargo versions, regime, root/checkpoint counts, and variance in `Specification/Verification/Performance.md`. | Host variance makes a gate noisy; recorded evidence supports the performance pass without coupling release health to timing. |
+| D-194 | Remote/network debugging, raw-memory access, unauthenticated modes, and a privileged debug mode remain out of scope for v1. | Adding them would be an architecture and security decision, not release hardening. |
+| D-195 | Cross-target support in v1 means IR and object emission for the tested `clang --target` matrix. Module loading, execution, and frame extraction are supported only on x86-64 Windows MSVC and x86-64 Linux GNU. AArch64 frame rules and native AArch64 execution remain M8 (D-042). | No cross-target sysroots or execution hosts are part of v1 packaging; claiming more would be a silent acceptance of untested behaviour. |
+| D-196 | Embedded hosts use the pipe transport in v1. The local socket remains available through `DebugServerConfig` and the CLI; the embedding ABI gains no transport selector. | Adding a selector is an ABI change; pipe-only is the documented, tested embedded contract. |
+| D-197 | `RELEASE-CHECKLIST.md` names the project maintainer as owner and records the artifacts, commands, both-host evidence, hashes, documentation, and sign-off date. Sign-off requires recorded evidence for every item; unverified items are marked unsupported. | One named owner and an explicit artifact list make the release decision auditable. |
+| D-198 | Flaky process or timing tests are bugs. A failure is reproduced and diagnosed before a deadline or wait is changed; logs and the failing run are recorded. | Prevents the debug and CLI suites from passing by widening timeouts rather than fixing races. |
+| D-199 | The four non-debug traceability allowlist entries (`STC-E-ONLINE-STATE-001`, `STC-W-ONLINE-STATE-001`, `STC-W-ONLINE-004`, `STC-W-RUN-001`) remain documented as not-implemented v1 policy. No debug rule is allowlisted. | Closing them would change state/I/O behaviour, which M7 does not do; documenting them in the known-limitations list keeps traceability truthful. |
 
 D-118 was reviewed and approved on 2026-10-24; the four clarifications stand as recorded and phase 2
 is approved. Phase 3 is complete for review and D-119 records its IR-level choices. Phase 4 is
@@ -699,6 +714,19 @@ Windows-only debug-endpoint failure: the user-only security descriptor's buffers
 addresses instead of pointing into a returned stack frame. D-187 removes the remaining
 interactive-launch test race by reading a known endpoint file instead of parsing the shared stderr
 stream.
+
+M7 phase 0 (2026-10-28) fixes the release-candidate boundary in D-188–D-199: version
+`1.0.0-rc.1`, `cargo xtask package` and the `bin`/`lib` package layout, object-only CodeView,
+a debug-free release runtime archive via `strip = "debuginfo"`, cold-download-only format-1
+manifests, informational performance measurement, no remote/raw-memory debug, IR/object-only
+cross-target support, pipe-only embedded debug transport, the release-checklist owner and
+artifacts, the flake policy, and the retained non-debug traceability allowlist. No format, ABI,
+protocol, or language contract changes; the affected documents are `M7-Plan.md`,
+[CLI and Manifest](Architecture/CLI-and-Manifest.md),
+[Testing and Verification](Architecture/Testing-and-Verification.md), the
+[Conformance Profile](01-Conformance-Profile.md), `README.md`, the M7 release documents
+(`RELEASE-NOTES.md`, `USER-GUIDE.md`, `KNOWN-LIMITATIONS.md`, `NON-SAFETY.md`,
+`RELEASE-CHECKLIST.md`, `Specification/Verification/Performance.md`), and `handover_to_M8.md`.
 
 D-094 through D-187 affect
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),

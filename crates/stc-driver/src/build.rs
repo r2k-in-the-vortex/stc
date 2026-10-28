@@ -1025,18 +1025,14 @@ fn existing_build_modes(out_dir: &Path) -> Vec<bool> {
 /// corresponding CodeView records. Debug-sidecars are not produced for
 /// release, and `--strip-debug` preserves the build-ID note, descriptor,
 /// manifest metadata, and symbols.
+///
+/// The static host archive contains precompiled Rust standard-library objects
+/// that carry CodeView/DWARF regardless of the crate's own strip setting.
+/// Archives are therefore unpacked, each object member is stripped, and the
+/// stripped objects replace the originals in place (D-191).
 fn strip_release_artifact(clang: &str, artifact: &Path, log: Log) -> Result<(), String> {
     if is_archive(artifact) {
-        // `llvm-objcopy` does not support archive containers, and the static
-        // embedding host library is copied from the runtime toolchain rather
-        // than generated from this build. The module and executable are still
-        // stripped; build the runtime archive without debug information when
-        // packaging it as a release embedding library.
-        log.info(format!(
-            "skip stripping runtime archive {}",
-            artifact.display()
-        ));
-        return Ok(());
+        return strip_archive(clang, artifact, log);
     }
     let tool = find_objcopy(clang)?;
     let mut command = Command::new(&tool);
@@ -1047,6 +1043,146 @@ fn strip_release_artifact(clang: &str, artifact: &Path, log: Log) -> Result<(), 
             artifact.display()
         )
     })
+}
+
+/// Strips object members of a static archive and replaces them in place.
+///
+/// The archive is not repacked from scratch: Rust staticlibs contain repeated
+/// import-library members (for example several copies of the same Windows
+/// API-set DLL), and a fresh `ar rcs` would collapse duplicate names and drop
+/// their symbol-table entries. Extracting, stripping, and updating each object
+/// member with `llvm-ar rD` keeps every original member and symbol.
+fn strip_archive(clang: &str, archive: &Path, log: Log) -> Result<(), String> {
+    // Extraction runs with the archive's temporary directory as its working
+    // directory, so resolve the archive path first.
+    let archive = std::fs::canonicalize(archive)
+        .map_err(|error| format!("cannot resolve archive `{}`: {error}", archive.display()))?;
+    let archive = archive.as_path();
+    let archive_tool = find_beside_clang(
+        clang,
+        &["llvm-ar.exe", "llvm-ar", "ar.exe", "ar"],
+        "`llvm-ar` or `ar`",
+    )?;
+    let objcopy = find_objcopy(clang)?;
+    let directory = archive.with_extension(format!("strip-{}", std::process::id()));
+    if directory.exists() {
+        std::fs::remove_dir_all(&directory).map_err(|error| {
+            format!(
+                "cannot clear strip directory `{}`: {error}",
+                directory.display()
+            )
+        })?;
+    }
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        format!(
+            "cannot create strip directory `{}`: {error}",
+            directory.display()
+        )
+    })?;
+    let result = (|| -> Result<(), String> {
+        let mut extract = Command::new(&archive_tool);
+        extract.arg("x").arg(archive).current_dir(&directory);
+        run_tool(&mut extract, log)
+            .map_err(|error| format!("cannot extract `{}`: {error}", archive.display()))?;
+        let mut objects: Vec<PathBuf> = std::fs::read_dir(&directory)
+            .map_err(|error| format!("cannot read `{}`: {error}", directory.display()))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<_, _>>()
+            .map_err(|error| error.to_string())?;
+        objects.retain(|member| {
+            member.is_file()
+                && member
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        extension.eq_ignore_ascii_case("o") || extension.eq_ignore_ascii_case("obj")
+                    })
+        });
+        objects.sort();
+        if objects.is_empty() {
+            return Err(format!(
+                "archive `{}` contains no object members",
+                archive.display()
+            ));
+        }
+        // Rust staticlibs also embed import-library members, which are not
+        // object files and carry no debug information; they stay untouched.
+        for member in &objects {
+            let mut command = Command::new(&objcopy);
+            command.arg("--strip-debug").arg(member);
+            run_tool(&mut command, log).map_err(|error| {
+                format!(
+                    "cannot strip archive member `{}`: {error}",
+                    member.display()
+                )
+            })?;
+        }
+        // A Rust staticlib has hundreds of members; on Windows pass them
+        // through a response file so the command line stays below the limit.
+        // Unix command lines are long enough for direct arguments and avoid
+        // relying on an `ar @file` extension.
+        let mut replace = Command::new(&archive_tool);
+        replace.arg("rD");
+        if cfg!(windows) {
+            let mut response = String::new();
+            response.push_str(&archive.to_string_lossy());
+            response.push('\n');
+            for member in &objects {
+                let name = member.file_name().ok_or_else(|| {
+                    format!("archive member `{}` has no file name", member.display())
+                })?;
+                response.push_str(&name.to_string_lossy());
+                response.push('\n');
+            }
+            std::fs::write(directory.join("objects.txt"), response).map_err(|error| {
+                format!(
+                    "cannot write archive member list in `{}`: {error}",
+                    directory.display()
+                )
+            })?;
+            replace.arg("@objects.txt");
+        } else {
+            for member in &objects {
+                let name = member.file_name().ok_or_else(|| {
+                    format!("archive member `{}` has no file name", member.display())
+                })?;
+                replace.arg(name);
+            }
+        }
+        // `r` replaces the named object members in place, preserving every
+        // other member and its index; `D` zeroes the new members' timestamps.
+        replace.current_dir(&directory);
+        run_tool(&mut replace, log)
+            .map_err(|error| format!("cannot update `{}`: {error}", archive.display()))?;
+        log.detail(format!("stripped archive {}", archive.display()));
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&directory);
+    result
+}
+
+/// Finds a tool beside clang or on `PATH`.
+fn find_beside_clang(clang: &str, names: &[&str], description: &str) -> Result<String, String> {
+    for directory in clang_directories(clang) {
+        for name in names {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return Ok(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    for name in names {
+        if Command::new(name)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            return Ok((*name).to_owned());
+        }
+    }
+    Err(format!(
+        "release builds require {description} beside clang or on PATH"
+    ))
 }
 
 fn is_archive(path: &Path) -> bool {
@@ -1315,7 +1451,13 @@ fn find_runtime(request: &Request, kind: RuntimeKind, release: bool) -> Result<P
     if let Ok(exe) = std::env::current_exe()
         && let Some(directory) = exe.parent()
     {
+        // An unpacked release package keeps `stc` in `bin/` and the runtime
+        // archives in the sibling `lib/` directory (D-189).
         candidates.push(directory.join(file_name));
+        candidates.push(directory.join("lib").join(file_name));
+        if let Some(root) = directory.parent() {
+            candidates.push(root.join("lib").join(file_name));
+        }
     }
     if let Ok(current) = std::env::current_dir() {
         if release {

@@ -1,0 +1,19 @@
+schema = 1
+
+[package]
+name = "online-change"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+configuration = "OnlineDemo"
+
+[build]
+emit = ["module", "metadata"]
+
+[run]
+cycles = 0
+
+[test]
+sources = ["tests/**/*.st"]

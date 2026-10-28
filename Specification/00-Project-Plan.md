@@ -1,8 +1,8 @@
 # stc Project Plan
 
 Status: M4.5 online-change foundation, M5 lowering (phases 1–7 and 4b), M6 project system,
-CLI, and verification hardening (phases 0–11), and M6.5 debug/monitoring (phases 0–10)
-implemented (2026-10-28); M7 release candidate is next  
+CLI, and verification hardening (phases 0–11), M6.5 debug/monitoring (phases 0–10), and M7
+release candidate are implemented (2026-10-28); M8 Linux host portability is next  
 Date: 2026-10-24  
 Profile: `stc-2013-oop-utf8-v1`  
 Standard reference: IEC 61131-3:2013 (Ed. 3.0), local copy under `Specification/Reference/`
@@ -56,8 +56,9 @@ is specified in
 12. Typed variable access, forcing, watch, breakpoints, stepping, and call-stack inspection in
     v1, with debug information as the default build output and `--release` as the optional
     stripped/optimised mode.
-13. Explicit non-safety positioning: `stc` and its runtime are not a safety PLC and are not
-    responsible for safety in any way.
+13. Explicit non-safety positioning: `stc` and its runtime can control real machinery but are
+    not a safety PLC and are not responsible for safety in any way. Safety must be provided by a
+    separate system and machine design as required by law and regulation.
 
 ## 3. Non-goals for v1
 
@@ -66,8 +67,9 @@ is specified in
 - LD, FBD, SFC, and IL as input languages. Only ST is parsed.
 - The IEC communication model and HMI. Online change, monitoring, and debugging are project
   runtime capabilities in v1, not IEC conformance features.
-- A safety claim. `stc` is not a safety PLC and is not responsible for safety in any way; debug
-  sessions may hold outputs indefinitely.
+- A safety claim. `stc` can control real machinery, but it is not a safety PLC and is not
+  responsible for safety in any way; safety must be provided by a separate system and machine
+  design as required by law and regulation, and debug sessions may hold outputs indefinitely.
 - Field-layout migration in v1. Per-field add/remove/rename is supported; type changes,
   resizing, and array/string/`OVERLAP` layout changes reset the affected root or require a cold
   download.
@@ -114,7 +116,7 @@ is specified in
 | Identity baseline | Persistent GOT manifest (canonical JSON + compact binary) paired with every module; missing/stale/invalid baseline forces a cold download |
 | Runtime ABI | Host ABI 2; M4 code-linked artifacts are not loadable; module descriptor + manifest are versioned together |
 | Debug and monitoring | Full typed debug in v1; debug information is the default build output; `--release` is the optional stripped/optimised mode; swaps end debug sessions |
-| Safety | Not a safety PLC and not responsible for safety in any way; no automatic fail-safe; debug may hold outputs indefinitely |
+| Safety | Not a safety PLC and not responsible for safety in any way; may control machinery, but safety must be provided by a separate system and machine design as required by law and regulation; no automatic fail-safe; debug may hold outputs indefinitely |
 
 Assumption: the compiler host runs a single compilation job at a time. The generated runtime is
 single-threaded for ST execution; M6 adds a control/status thread and M6.5 adds service/monitor
@@ -155,6 +157,11 @@ portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 por
 - `M5-Plan.md` — FBs, OOP, aggregates, and UTF-8 strings implementation plan.
 - `M6-Plan.md` — project system, CLI, and verification hardening implementation plan.
 - `M6.5-Plan.md` — debug/monitoring implementation plan.
+- `M7-Plan.md` — release-candidate implementation plan.
+- `Specification/Verification/Performance.md` — recorded, non-gating performance measurements.
+- `RELEASE-NOTES.md`, `USER-GUIDE.md`, `KNOWN-LIMITATIONS.md`, `NON-SAFETY.md`, and
+  `RELEASE-CHECKLIST.md` — release identity, user documentation, limitations, non-safety stance,
+  and sign-off evidence.
 - This plan.
 
 ### 5.2 Implementation
@@ -482,7 +489,7 @@ Exit criteria:
 
 ### M7 — Release candidate
 
-M6.5 is complete; M7 is the next milestone.
+M6.5 is complete; M7 is implemented and awaiting the both-host release run for checklist sign-off.
 
 Deliverables: performance pass, cross-target smoke tests via `clang --target`, packaging,
 examples, release notes, known-limitations list, manifest/online-change hardening, debug and
@@ -494,6 +501,26 @@ Exit criteria:
 - Documented artifacts and ABI; reproducible IR and manifests; clean build from a fresh checkout.
 - Hot-swap, cold-download, manifest-download, debug, and monitoring suites pass on both hosts.
 - Release checklist signed off.
+
+> **M7 status (2026-10-28):** phases 0–8 are implemented; checklist sign-off is pending the
+> both-host CI release run. Phase 0 fixed the release-candidate
+> boundary and decisions D-188–D-199: version `1.0.0-rc.1`, `cargo xtask package` and the
+> `bin`/`lib`/`docs` layout, object-only Windows CodeView, archive-aware release stripping that
+> preserves the archive symbol table, cold-download-only format-1 manifests, informational
+> performance measurement, no remote/raw-memory debug, IR/object-only cross-target support,
+> pipe-only embedded debug transport, the release-checklist owner/artifacts, the flake policy,
+> and the retained non-debug traceability allowlist. Phase 1 added the package task, runtime
+> adjacency lookup, checksums, the version bump, and the archive/PDB cleanliness tests. Phase 2
+> added the `cross-target` matrix (nine triples) and the cross-target exe/lib rejection tests.
+> Phase 3 recorded build/cycle/switch/debug measurements in
+> [Performance](Verification/Performance.md) as informational. Phase 4 added the multi-package
+> `examples/motor`/`motorlib`, `examples/online-change`, and the example CI smoke. Phase 5
+> published the release notes, known limitations, user guide, non-safety statement, and release
+> checklist. Phase 6 added format-1, cross-mode, truncated, and tampered manifest/online-change
+> hardening. Phase 7 added release-archive/PDB/limit hardening. Phase 8 added the release CI
+> job, fresh-checkout package exercise, and sign-off record. No language or format change was
+> made; `stc` remains not a safety PLC, may control real machinery, and requires a separate
+> safety system and machine design for safety. M8 (Linux host portability) is next.
 
 ### M8 — Linux host portability
 
@@ -526,8 +553,11 @@ Exit criteria:
 | Lean | `lake build` proofs in CI; generated vectors checked in and verified by Rust tests |
 | CLI/manifest | Integration tests for every verb, exit code, JSON shape, and error path |
 | Fuzzing | Lexer/parser/analyzer fuzz targets; no panics; bounded time/memory |
-| Cross-target | `clang --target` smoke tests on IR/object emission (execution where available) |
-| Online change | Hot-swap suite across attach/prepare/activate/commit/rollback/unload; incompatible-change rejection; cold-download recovery; double-build determinism |
+| Cross-target | `clang --target` smoke tests on IR/object emission; nine-triple matrix with architecture/endianness inspection; exe/lib rejection |
+| Packaging | `cargo xtask package`; layout, checksums, formats/ABI, stripped archive/shared library, unpacked-layout exercise |
+| Examples | Every committed example checks, builds both modes, runs, tests, and format-checks |
+| Performance | Recorded build/cycle/switch/debug measurements with host/regime; informational, non-gating |
+| Online change | Hot-swap suite across attach/prepare/activate/commit/rollback/unload; incompatible-change rejection; cold-download recovery; format-1/cross-mode/tamper rejection; double-build determinism |
 | GOT/manifest | Identity/rename/move, exact-parent, download/consume, byte-identical manifests, corrupt/malformed parser fuzzing, quarantine/reset policy |
 | Real-time boundary | O(1) switch measurement, bounded maintenance jitter (M7 target), between-cycle candidate preparation in M6, service-thread contention and generation pinning |
 | Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap/session teardown, debug/release separation |
@@ -589,7 +619,9 @@ Exit criteria:
 - Full typed debug and monitoring works on both hosts, and every online swap ends the debug
   session cleanly.
 - The project documentation states explicitly that `stc` is not a safety PLC and assumes no
-  safety responsibility; debug sessions may hold outputs indefinitely.
+  safety responsibility; it can control real machinery, but safety must be provided by a separate
+  system and machine design as required by law and regulation; debug sessions may hold outputs
+  indefinitely.
 - `stc fmt` is idempotent, preserves comments, emits strict semicolons, and supports `--check`.
 - Production and release artifacts contain no test-only units or `STC_ASSERT` calls; production
   use of either is an error.
@@ -599,11 +631,12 @@ Exit criteria:
 
 ## 12. Immediate next actions
 
-1. M6.5 (debug and monitoring) is complete (2026-10-28); its phase records are D-173–D-183,
-   `M6.5-Plan.md`, and `handover_to_M7.md`. M7 (release candidate) is the next milestone:
-   performance pass, cross-target smoke tests, packaging, examples, release notes, the
-   known-limitations list, manifest/online-change hardening, debug/monitoring hardening, and the
-   documented non-safety stance.
+1. M7 (release candidate) is implemented (2026-10-28); its phase records are D-188–D-199,
+   `M7-Plan.md`, `RELEASE-NOTES.md`, `KNOWN-LIMITATIONS.md`, `USER-GUIDE.md`, `NON-SAFETY.md`,
+   and `RELEASE-CHECKLIST.md`. The both-host CI release run and checklist signature remain
+   before the candidate is published. M7 delivered the performance pass, cross-target smoke
+   tests, packaging, examples, release notes, the known-limitations list, manifest/online-change
+   and debug/monitoring hardening, and the documented non-safety stance.
 2. Keep the implemented debug contracts: debug is the default build form; `--release` is
    optimised, stripped, and hook-free with distinct build IDs/manifests; checkpoint hooks use
    host ABI service ID 13 at minor 2.3; the debug protocol is local-only `stc-debug/1`, separate

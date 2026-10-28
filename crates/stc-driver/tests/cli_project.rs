@@ -1153,7 +1153,11 @@ fn compliance_summary_shapes() {
     let text = stdout(&human);
     assert!(text.contains("stc compliance"), "{text}");
     assert!(
-        text.contains("This project is not a safety PLC and assumes no safety responsibility."),
+        text.contains("This project is not a safety PLC and assumes no safety responsibility"),
+        "{text}"
+    );
+    assert!(
+        text.contains("safety must be provided by a separate system and machine design"),
         "{text}"
     );
 }

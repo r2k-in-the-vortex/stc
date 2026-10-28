@@ -462,7 +462,9 @@ minor 2 and hook-free, and hook-free debug/release modules require minor 1.
 - No per-function hot patching, ancestor/partial-baseline matching, merge, or rebase.
 - No field-layout migration, resizing, or pointer translation in v1.
 - No network deployment protocol, multi-user scheduling, or remote UI in v1.
-- No safety claim. `stc` is not a safety PLC and is not responsible for safety in any way.
+- No safety claim. `stc` can control real machinery, but it is not a safety PLC and is not
+  responsible for safety in any way; safety must be provided by a separate system and machine
+  design as required by law and regulation.
   Debug sessions may hold outputs indefinitely and forced values may be saved on a normal
   shutdown when they override a `RETAIN` root (`STC-W-DEBUG-005`); no automatic fail-safe is
   provided, and all forces are cleared at session end or swap.
