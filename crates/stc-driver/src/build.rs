@@ -1156,6 +1156,7 @@ fn strip_archive(clang: &str, archive: &Path, log: Log) -> Result<(), String> {
             })?;
             replace.arg("@objects.txt");
         } else {
+            replace.arg(archive);
             for member in &objects {
                 let name = member.file_name().ok_or_else(|| {
                     format!("archive member `{}` has no file name", member.display())

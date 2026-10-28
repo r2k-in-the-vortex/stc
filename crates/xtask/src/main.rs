@@ -385,7 +385,7 @@ fn strip_runtime_archive(root: &Path, lib_dir: &Path) -> Result<(), String> {
             .map_err(|error| format!("cannot write member list: {error}"))?;
         run_checked(&ar, &["rD", "@objects.txt"], &directory)?;
     } else {
-        let mut args = vec!["rD".to_owned()];
+        let mut args = vec!["rD".to_owned(), archive.to_string_lossy().into_owned()];
         args.extend(objects.iter().cloned());
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
         run_checked(&ar, &borrowed, &directory)?;
