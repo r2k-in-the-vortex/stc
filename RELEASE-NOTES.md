@@ -134,7 +134,10 @@ cargo xtask package --locked
 ```
 
 CI runs the workspace, online, debug, UI, conformance, execution, projects,
-cross-target, traceability, Lean, and fuzz-smoke jobs on Windows and Ubuntu.
+cross-target, package, traceability, Lean, and fuzz-smoke jobs on Windows and
+Ubuntu. Release evidence: CI run
+[40777754963](https://github.com/r2k-in-the-vortex/stc/actions/runs/40777754963)
+passed on `windows-2025` and `ubuntu-24.04` for commit `8dbcbf4`.
 Performance measurements are informational and not gating.
 
 ## Known limitations

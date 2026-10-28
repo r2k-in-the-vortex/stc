@@ -8,8 +8,8 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M7 (release candidate) is implemented: `stc` 1.0.0-rc.1 (2026-10-28); checklist sign-off is
-pending the both-host CI release run.** M6.5 (debug and
+**M7 (release candidate) is complete and signed off: `stc` 1.0.0-rc.1 (2026-10-28), green CI run
+40777754963.** M6.5 (debug and
 monitoring) completed 2026-10-28, M6 (project system, CLI, and verification hardening) completed
 2026-10-27, and the earlier milestones are described below. The repository
 contains the source-map and diagnostic crates, the

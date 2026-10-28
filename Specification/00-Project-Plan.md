@@ -502,8 +502,8 @@ Exit criteria:
 - Hot-swap, cold-download, manifest-download, debug, and monitoring suites pass on both hosts.
 - Release checklist signed off.
 
-> **M7 status (2026-10-28):** phases 0–8 are implemented; checklist sign-off is pending the
-> both-host CI release run. Phase 0 fixed the release-candidate
+> **M7 status (2026-10-28):** phases 0–8 are implemented and the release checklist is signed off
+> against green CI run 40777754963 (commit 8dbcbf4). Phase 0 fixed the release-candidate
 > boundary and decisions D-188–D-199: version `1.0.0-rc.1`, `cargo xtask package` and the
 > `bin`/`lib`/`docs` layout, object-only Windows CodeView, archive-aware release stripping that
 > preserves the archive symbol table, cold-download-only format-1 manifests, informational

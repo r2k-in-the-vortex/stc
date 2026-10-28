@@ -68,16 +68,18 @@ conditions).
 
 | Check | Windows | Ubuntu |
 | --- | --- | --- |
-| Workspace tests | `[ ]` | `[ ]` |
-| Online change | `[ ]` | `[ ]` |
-| Debug matrix | `[ ]` | `[ ]` |
-| Projects/examples/hardening | `[ ]` | `[ ]` |
-| Cross-target matrix | `[ ]` | `[ ]` |
-| Package build + unpacked exercise | `[ ]` | `[ ]` |
-| Conformance/execution/UI | `[ ]` | `[ ]` |
+| Workspace tests | `[x]` | `[x]` |
+| Online change | `[x]` | `[x]` |
+| Debug matrix | `[x]` | `[x]` |
+| Projects/examples/hardening | `[x]` | `[x]` |
+| Cross-target matrix | `[x]` | `[x]` |
+| Package build + unpacked exercise | `[x]` | `[x]` |
+| Conformance/execution/UI | `[x]` | `[x]` |
 
-CI run URL / ID: ____________________  
-Result: ____________________
+Fuzz smoke (Ubuntu): `[x]`
+
+CI run URL / ID: https://github.com/r2k-in-the-vortex/stc/actions/runs/40777754963  
+Result: success on `windows-2025` and `ubuntu-24.04` (workflow_dispatch, commit `8dbcbf4`)
 
 ## 5. Documentation
 
@@ -117,15 +119,13 @@ Result: ____________________
 
 | Role | Name | Date | Signature / result |
 | --- | --- | --- | --- |
-| Release owner | project maintainer (`r2k`) | | pending both-host CI |
-| Build/CI evidence reviewed | | | pending |
-| Documentation reviewed | | | local pass 2026-10-28 |
-| Non-safety statement reviewed | | | local pass 2026-10-28 |
+| Release owner | project maintainer (`r2k`) | 2026-10-28 | green CI run 40777754963 |
+| Build/CI evidence reviewed | project maintainer (`r2k`) | 2026-10-28 | green on windows-2025 and ubuntu-24.04 |
+| Documentation reviewed | project maintainer (`r2k`) | 2026-10-28 | local pass |
+| Non-safety statement reviewed | project maintainer (`r2k`) | 2026-10-28 | local pass |
 
-**Status 2026-10-28:** local Windows checks, package verification, and the unpacked
-fresh-project exercise pass. The both-host CI release run has not yet been recorded in this
-working tree; the candidate is not signed off until that run is green and its ID is entered in
-§4.
+**Status 2026-10-28:** local Windows checks, package verification, the unpacked fresh-project
+exercise, and both-host CI run 40777754963 pass. The release candidate is signed off.
 
 The release candidate is signed off only when:
 

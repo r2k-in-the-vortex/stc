@@ -2,9 +2,9 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-28  
-Status: Implemented (2026-10-28); release-checklist sign-off pending the both-host CI run. Phase 0
-fixed the release identity and packaging contracts; phases 1–8 delivered packaging, cross-target,
-performance, examples, documentation, and hardening (D-188–D-199).
+Status: Complete (2026-10-28); release checklist signed off against green CI run 40777754963.
+Phase 0 fixed the release identity and packaging contracts; phases 1–8 delivered packaging,
+cross-target, performance, examples, documentation, and hardening (D-188–D-199).
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 (M7–M8), `handover_to_M7.md`,
 [Architecture](Specification/Architecture/Architecture.md),
 [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md),
@@ -319,6 +319,6 @@ Online-change coverage is the `online` CI job (`stc-got`, `stc-runtime`, `module
 - [x] `RELEASE-NOTES.md`, `KNOWN-LIMITATIONS.md`, `NON-SAFETY.md`, `USER-GUIDE.md`,
       `RELEASE-CHECKLIST.md`.
 - [x] Online-change and debug hardening tests and documentation.
-- [ ] Both-host suite evidence, traceability, docs, lint, and checklist sign-off (local evidence
-      complete; both-host CI and signature pending).
+- [x] Both-host suite evidence, traceability, docs, lint, and checklist sign-off (green CI run
+      40777754963).
 - [x] `handover_to_M8.md` and project-plan/decision-log updates.

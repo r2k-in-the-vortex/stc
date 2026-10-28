@@ -22,7 +22,7 @@ service-ID, build-ID, or `stc-debug/1` contracts.
 | --- | --- |
 | Version | `1.0.0-rc.1` (workspace, driver, descriptors, manifests, package) |
 | Branch | M7 work on `M7`; `main` remains the release baseline |
-| CI | `ci.yml` adds `package` and runs the `cross-target` suite on Windows and Ubuntu; the `debug`, `online`, `projects`, `test`, `ui`, `conformance`, `execution`, `traceability`, `lean`, and `fuzz-smoke` jobs remain |
+| CI | `ci.yml` adds `package` and runs the `cross-target` suite on Windows and Ubuntu; green run 40777754963 (commit 8dbcbf4) covers the `debug`, `online`, `projects`, `test`, `ui`, `conformance`, `execution`, `traceability`, `lean`, `fuzz-smoke`, `cross-target`, and `package` jobs |
 | Tests | Workspace: 1068 passed, 0 failed, 3 ignored (performance, debug overhead, switch latency) at the M7 local baseline; project/online/example/hardening and debug suites are separate CI jobs |
 | Package | `cargo xtask package --locked` writes `dist/stc-1.0.0-rc.1-<host>` with `bin`, `lib`, `docs`, `package.json`, and `SHA256SUMS`; the unpacked layout builds/runs/tests a fresh project |
 | Formats | Manifest/catalog 2; descriptor/module/state/metadata/debug-object/frames 1; host ABI 2.3 (test 2.2, production 2.1); protocol `stc-debug/1` |
