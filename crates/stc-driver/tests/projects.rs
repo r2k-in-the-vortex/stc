@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -37,6 +37,31 @@ fn clang() -> Option<&'static str> {
 
 fn runtime_artifact() -> PathBuf {
     common::runtime_static()
+}
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+/// Copies the committed example project without any local build directory.
+fn copy_example(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create example copy");
+    for entry in std::fs::read_dir(from).expect("read example directory") {
+        let entry = entry.expect("example directory entry");
+        if entry.file_name().to_str() == Some("target") {
+            continue;
+        }
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("example entry type").is_dir() {
+            copy_example(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("copy example file");
+        }
+    }
 }
 
 struct TestDir {
@@ -178,6 +203,71 @@ fn new_project_runs_the_v1_workflow() {
     assert!(
         directory.path("app/stc.lock").is_file(),
         "clean preserves stc.lock"
+    );
+}
+
+#[test]
+fn the_hello_example_runs_the_documented_workflow() {
+    let directory = TestDir::new("hello-example");
+    copy_example(
+        &workspace_root().join("examples/hello"),
+        &directory.path("hello"),
+    );
+
+    assert_success(
+        &directory.run("hello", &["check", "--locked"]),
+        "hello stc check",
+    );
+    assert_success(
+        &directory.run("hello", &["build", "--locked", "--emit", "ir"]),
+        "hello stc build --emit=ir",
+    );
+    assert_success(
+        &directory.run("hello", &["fmt", "--locked", "--check"]),
+        "hello stc fmt --check",
+    );
+
+    if clang().is_none() {
+        return;
+    }
+
+    assert_success(
+        &directory.run_with_runtime("hello", &["build", "--locked"]),
+        "hello stc build",
+    );
+    let run = directory.run_with_runtime("hello", &["run", "--locked", "--cycles", "5", "-v"]);
+    assert_success(&run, "hello stc run");
+    assert!(
+        stderr(&run).contains("status: cycles 5"),
+        "{}",
+        stderr(&run)
+    );
+
+    let test = directory.run_with_runtime("hello", &["test", "--locked"]);
+    assert_success(&test, "hello stc test");
+    assert!(
+        stdout(&test).contains("3 passed; 0 failed"),
+        "{}",
+        stdout(&test)
+    );
+
+    let batch = directory.path("hello/debug-requests.jsonl");
+    std::fs::write(&batch, "{\"op\":\"breakpoint.list\",\"params\":{}}\n")
+        .expect("write debug batch");
+    let debug = directory.run_with_runtime(
+        "hello",
+        &[
+            "debug",
+            "--locked",
+            "--batch",
+            batch.to_str().expect("batch path"),
+        ],
+    );
+    assert_success(&debug, "hello stc debug");
+    assert!(
+        stdout(&debug).contains("\"breakpoints\""),
+        "{}",
+        stdout(&debug)
     );
 }
 

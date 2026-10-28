@@ -613,10 +613,10 @@ cargo run -p stc-driver -- run --watch --manifest-path examples/motor/stc.toml
 # Manifest-free bridge and the other artifact forms
 cargo run -p stc-driver -- parse path/to/file.st
 cargo run -p stc-driver -- check path/to/file.st path/to/other.st
-cargo run -p stc-driver -- build examples/hello.st --emit=ir
-cargo run -p stc-driver -- build examples/hello.st --emit=module,metadata
-cargo run -p stc-driver -- build examples/hello.st --emit=module --got-manifest active.stc-got.json
-cargo run -p stc-driver -- build examples/hello.st --emit=exe,lib,metadata --runtime target/debug/stc_runtime.lib
+cargo run -p stc-driver -- build examples/hello/src/main.st --emit=ir
+cargo run -p stc-driver -- build examples/hello/src/main.st --emit=module,metadata
+cargo run -p stc-driver -- build examples/hello/src/main.st --emit=module --got-manifest active.stc-got.json
+cargo run -p stc-driver -- build examples/hello/src/main.st --emit=exe,lib,metadata --runtime target/debug/stc_runtime.lib
 ```
 
 `stc new` writes a project that builds, runs, tests, and formats with the commands above; the
@@ -626,6 +626,11 @@ artifact per test under `target/stc/test`. `stc build --release` selects the opt
 stripped, hook-free form and `target/stc/release`; `stc debug` builds the debug form and launches
 the authenticated local session. `stc run --watch` needs a local control endpoint and is intended
 for interactive deployment.
+
+[`examples/hello`](examples/hello/README.md) is the small starter project: it demonstrates
+constants, scalar variables, control flow, a function, a function block, a standard timer, and a
+task configuration, with an isolated test suite and a committed `stc.lock`. Its README lists the
+workflow commands, and the `projects` CI suite checks, builds, tests, and format-checks it.
 
 Before pushing, run the same checks as the CI matrix (formatting, clippy, the
 workspace tests with clang required, specification/link checks, Markdown lint, and a
