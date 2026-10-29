@@ -15,6 +15,7 @@ mod codes;
 mod discover;
 mod glob;
 mod graph;
+mod host;
 mod lock;
 mod model;
 mod parse;

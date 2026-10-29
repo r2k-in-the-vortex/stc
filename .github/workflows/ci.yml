@@ -42,6 +42,7 @@ jobs:
       - lean
       - fuzz-smoke
       - cross-target
+      - package
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -166,7 +167,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -270,7 +271,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -306,7 +307,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -329,7 +330,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -353,7 +354,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -377,7 +378,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -394,13 +395,14 @@ jobs:
       - name: Run the end-to-end project workflow
         run: cargo xtask test --suite projects --locked
 
-  # The debug suites get an explicit Windows/Linux job so a platform-specific
+  # The debug suites get an explicit per-host job so a platform-specific
   # regression in debug information, checkpoint hooks, stop/step/stack, the
   # protocol, or the CLI is visible even when the workspace job reports an
   # unrelated failure. `cargo xtask test --suite debug` runs the same targets
   # locally: typed access/write/watch, stop/step/stack, protocol/auth/audit,
   # CLI launch/attach/swap, release hook absence, frame sidecars, and
-  # checkpoint and debug-info generation.
+  # checkpoint and debug-info generation. Linux x64 and AArch64 both run the
+  # native DWARF frame path.
   debug:
     name: Debug suites (${{ matrix.os }})
     needs: detect
@@ -408,7 +410,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -473,6 +475,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check that every implemented rule has test evidence
         run: cargo run --locked -p xtask -- traceability --check
+      - name: Check that host-specific code stays in the platform layer
+        run: cargo run --locked -p xtask -- host-audit --check
 
   lean:
     name: Lean proofs
@@ -610,20 +614,130 @@ jobs:
           done
 
   cross-target:
-    name: Cross-target IR smoke
+    name: Cross-target IR smoke (${{ matrix.os }})
     needs: detect
     if: needs.detect.outputs.cross_target == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
     steps:
       - uses: actions/checkout@v5
       - name: Print toolchain versions
         shell: bash
         run: |
           clang --version | head -n 1 || echo "clang unavailable"
-      - name: Assemble AArch64 object from IR
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Assemble AArch64 object from the checked-in smoke module
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/cross-target"
           clang --target=aarch64-unknown-linux-gnu -c tests/cross-target/smoke.ll \
             -o "$RUNNER_TEMP/cross-target/smoke-aarch64.o"
+      - name: Run the cross-target matrix
+        shell: bash
+        run: cargo xtask test --suite cross-target --locked
+
+  # The release package is built and verified on every native host. The job
+  # also exercises the unpacked layout: `bin/stc` must find the runtime in
+  # `lib/` and check, build, run, test, and clean a fresh project without
+  # environment variables, then rebuild it after the clean.
+  package:
+    name: Release package (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and verify the package
+        shell: bash
+        run: cargo xtask package --locked --out dist
+      # The contract is host-derived (D-206). Assert the produced file, not
+      # just the code path: the directory ends with the native triple and the
+      # debug backend names this host's real object format.
+      - name: Verify package metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(cd dist/stc-* && pwd)"
+          name="$(basename "$package")"
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          case "$name" in
+            *"-$host") ;;
+            *)
+              echo "::error::package directory $name does not end with the native host triple $host"
+              exit 1
+              ;;
+          esac
+          contract="$(sed -n 's/.*"debug_contract": "\([^"]*\)".*/\1/p' "$package/package.json")"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            expected="object-codeview"
+          else
+            expected="dwarf"
+          fi
+          if [ "$contract" != "$expected" ]; then
+            echo "::error::package.json debug_contract is '$contract', expected '$expected' on $RUNNER_OS"
+            exit 1
+          fi
+          echo "package $name: host=$host debug_contract=$contract"
+      - name: Verify checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/stc-*
+          sha256sum -c SHA256SUMS
+      - name: Exercise the unpacked package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(cd dist/stc-* && pwd)"
+          driver="$package/bin/stc"
+          if [ "$RUNNER_OS" = "Windows" ]; then driver="$driver.exe"; fi
+          "$driver" --version
+          "$driver" compliance --message-format json > compliance.json
+          "$driver" new fresh
+          cd fresh
+          "$driver" check
+          "$driver" build
+          "$driver" build --release
+          "$driver" build --release --emit=lib --out-dir libcheck
+          "$driver" run --cycles 2
+          "$driver" test
+          # D-184: clean removes the generated trees but keeps the lockfile and
+          # the runtime store, so the project must build again afterwards.
+          "$driver" clean
+          for tree in target/stc/debug target/stc/release target/stc/test; do
+            if [ -e "$tree" ]; then
+              echo "::error::stc clean left generated tree $tree in place"
+              exit 1
+            fi
+          done
+          test -f stc.lock
+          "$driver" build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stc-package-${{ matrix.os }}
+          path: |
+            dist/stc-*
+            compliance.json
+          if-no-files-found: error

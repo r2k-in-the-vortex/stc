@@ -28,13 +28,3 @@ reason = "The stale-reference quarantine warning has a reserved code but no emis
 id = "STC-W-RUN-001"
 status = "not-implemented"
 reason = "Direct variables in function/FB bodies are rejected as STC-E-IO-001 rather than accepted with this deprecation warning (Runtime and Execution §2.4)."
-
-[[rule]]
-id = "STC-RUN-006"
-status = "example"
-reason = "Illustrative identifier in the project plan (§7, rule ID format); no rule with this number is defined."
-
-[[rule]]
-id = "STC-TYPE-031"
-status = "example"
-reason = "Illustrative identifier in the project plan (§7, rule ID format); no rule with this number is defined."

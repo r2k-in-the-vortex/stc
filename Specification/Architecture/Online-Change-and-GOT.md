@@ -12,8 +12,8 @@ is the normative companion to
 [I/O and Devices](IO-and-Devices.md), and
 [Debug and Monitoring](Debug-and-Monitoring.md). The byte-level keys, descriptors, manifest,
 plan, host API, and build-ID formats are fixed in
-[GOT Artifacts and Schemas](GOT-Artifacts.md). The resolved planning rationale and the full
-question disposition are in `update_plan_got.md`.
+[GOT Artifacts and Schemas](GOT-Artifacts.md). The resolved decisions are recorded in
+[Decisions](../Decisions.md).
 
 **Implementation status (2026-10-25):** M4.5 implements the host/module split, host-owned GOT
 and per-field roots, descriptor/manifest pairing, exact-baseline online change, the
@@ -68,6 +68,11 @@ The host owns:
 The module owns only code and version-local read-only data. It may allocate transient memory
 through the host service; that memory is freed when the version fails, retires, or unloads.
 
+On Linux GNU hosts the loader opens a module with `dlopen(RTLD_NOW | RTLD_LOCAL)`: every import
+resolves before the first entry point runs, so a module with an unresolved import fails to load
+(a non-fatal module error), and the module's exports stay out of the global symbol scope, so a
+retired generation's symbols cannot satisfy a later module's unresolved imports.
+
 ### 2.2 Thread classes
 
 | Thread | Responsibility |
@@ -75,12 +80,14 @@ through the host service; that memory is freed when the version fails, retires, 
 | Cycle | Latches inputs, sets task guards, executes ST, publishes outputs; the only thread that executes ST or switches generations |
 | Control/status (M6) | Accepts local deploy/status requests for `stc run --watch`; queues deploy work and publishes status; never executes ST |
 | Loader/prepare (M7 target) | Loads the candidate module, validates it, prepares roots/state, and builds the temp GOT. In M6 validation/load/prepare runs between cycles on the cycle thread; fully off-thread prepare remains M7 |
-| Service/monitor (M6.5) | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at lower priority; implemented by the local debug server thread class |
+| Service/monitor (M6.5) | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at the lowered service priority (Windows below-normal; Linux nice +10, best effort; D-204); implemented by the local debug server and control/status thread classes |
 
-The control and service threads never block the cycle with unbounded locks. They use generation
-pinning/epoch refcounts so a module cannot unload while a service reader holds a descriptor.
-Status publication uses lock-free counters, double-buffered snapshots, and bounded rings. The M6
-control channel is local deployment/status only and is not the M6.5 debug protocol (D-155).
+The control and service threads never block the cycle with unbounded locks. They run one priority
+class below the cycle thread, which keeps the process default; lower-than-default is advisory and
+a container may refuse it (D-204). They use generation pinning/epoch refcounts so a module cannot
+unload while a service reader holds a descriptor. Status publication uses lock-free counters,
+double-buffered snapshots, and bounded rings. The M6 control channel is local deployment/status
+only and is not the M6.5 debug protocol (D-155).
 
 The M6.5 service/monitor thread hosts at most one debug session per host (D-175). While the session
 is stopped the cycle is parked in host service ID 13 with the last output image held; the
@@ -400,10 +407,11 @@ by the host resolver.
 
 ## 10. Threads, services, and diagnostics
 
-M6.5 service/monitor threads use typed path/`GotId` access, not raw memory. Reads are
-generation-pinned and do not lock the cycle. Writes and forcing are queued for cycle-boundary
-application. A write queued across a swap does not migrate: the swap ends the session and
-discards it. A write that is
+M6.5 service/monitor threads use typed path/`GotId` access, not raw memory. They run at the
+lowered service priority (D-204): one operating-system class below the default-priority cycle
+thread, best effort on Linux. Reads are generation-pinned and do not lock the cycle. Writes and
+forcing are queued for cycle-boundary application. A write queued across a swap does not migrate:
+the swap ends the session and discards it. A write that is
 re-resolved at a boundary against a removed field or changed layout is rejected with
 `STC-E-DEBUG-010` and is never retargeted to removed storage.
 
@@ -451,7 +459,8 @@ minor 2 and hook-free, and hook-free debug/release modules require minor 1.
 - Generated code contains no persistent raw pointers and no module-owned persistent storage.
 - Double builds produce byte-identical modules and manifests; the active manifest can be
   downloaded and used as the next build baseline.
-- Hot-swap, manifest, cold-download, rollback, and descriptor tests run in CI on both hosts.
+- Hot-swap, manifest, cold-download, rollback, and descriptor tests run in CI on all three
+  native hosts.
 - Debug reads and boundary-queued writes/forces respect generation pins; a swap ends the session
   with `STC-E-DEBUG-019` and leaves no force, watch, breakpoint, or queued write behind; the
   debug protocol, checkpoint table, and minor-3 service pass the protocol/ABI tests in the debug
@@ -462,7 +471,9 @@ minor 2 and hook-free, and hook-free debug/release modules require minor 1.
 - No per-function hot patching, ancestor/partial-baseline matching, merge, or rebase.
 - No field-layout migration, resizing, or pointer translation in v1.
 - No network deployment protocol, multi-user scheduling, or remote UI in v1.
-- No safety claim. `stc` is not a safety PLC and is not responsible for safety in any way.
+- No safety claim. `stc` can control real machinery, but it is not a safety PLC and is not
+  responsible for safety in any way; safety must be provided by a separate system and machine
+  design as required by law and regulation.
   Debug sessions may hold outputs indefinitely and forced values may be saved on a normal
   shutdown when they override a `RETAIN` root (`STC-W-DEBUG-005`); no automatic fail-safe is
   provided, and all forces are cleared at session end or swap.

@@ -1,6 +1,6 @@
 # Runtime and Execution Model
 
-Status: M4.5 persistent host and ABI 2 module execution, M5 OOP descriptors, M6 scheduler, run loop, file-backed state, I/O, and control-channel work, and M6.5 debug/monitoring implemented (2026-10-28)  
+Status: M4.5 persistent host and ABI 2 module execution, M5 OOP descriptors, M6 scheduler, run loop, file-backed state, I/O, and control-channel work, M6.5 debug/monitoring, and M7 release packaging/hardening implemented (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 
@@ -227,7 +227,7 @@ thread is the only ST executor.
 - No Rust types cross the ABI except `u8`/`i32`/`i64`/`f32`/`f64`/pointers/opaque handles.
 - The runtime is built with the toolchain that matches the target C ABI: MSVC for
   `*-pc-windows-msvc`, GNU for `*-unknown-linux-gnu`. Windows x86-64 is the primary development
-  host; Linux x86-64 and AArch64 follow basic development (D-042).
+  host; Linux x86-64 and Linux AArch64 are supported native hosts from M8 (D-042, D-200).
 - Panics are caught at the ABI boundary and converted to `stc_rt_trap` where possible; the
   compiler-generated code does not rely on unwinding.
 - The host owns the GOT cell table, root allocator, module loader, manifest store, swap
@@ -334,10 +334,22 @@ cells, code addresses from function cells, and process-image addresses from dire
 
 #### 2.3.3 Generation pinning and services
 
-Service/monitor threads read typed variables through generation-pinned descriptors. A pin is an
-epoch/refcount that delays unload until the reader releases it. Service threads never call
-`stc_module_cycle`, never write GOT cells, and never take a lock held by the cycle thread.
-Debug writes and forcing are queued for cycle-boundary application.
+Service/monitor threads submit typed reads and watches; the cycle thread applies them at the next
+boundary in `Host::debug_pump_at`, pinning the active generation. A pin is an epoch/refcount that
+delays unload until the copy is complete. The service thread never dereferences host, module,
+root, or process-image storage, never calls `stc_module_cycle`, never writes GOT cells, and never
+takes a lock held by the cycle thread. Debug writes and forcing are queued for cycle-boundary
+application; `Host::debug_read` performs the same pinned copy synchronously on the calling thread
+for embedding hosts.
+
+The cycle thread runs at the process default operating-system priority. Control-server accept and
+connection threads and debug-server accept and handler threads run one class lower: Windows
+`THREAD_PRIORITY_BELOW_NORMAL` and Linux `setpriority(PRIO_PROCESS, 0, 10)` (nice +10) for the
+calling thread. The Linux call is best-effort: a container or sandbox may reject it, and the
+runtime never fails a session, swap, or shutdown because priority could not be lowered. v1 does
+not pin CPU affinity; placement belongs to the deployment's `cpuset` policy, so the host keeps
+its inherited processor mask. The policy is an advisory mitigation for maintenance jitter, not a
+real-time guarantee (D-204).
 
 Traps are fatal for the current run or, during an online-change rollback window, cause the host
 to restore the previous generation. In executable mode the runtime prints
@@ -627,6 +639,9 @@ assignment copies the root's value; the destination root identity is preserved.
   `.stc-meta.json` and, optionally, an embedded section.
 - Executable mode embeds the table; library mode exposes it via `stc_metadata_json`.
 - Span IDs are stable within a build, not across builds; the metadata includes a build hash.
+- Span IDs are assigned by sorting the distinct non-empty spans by `(FileId, start, end)`; the
+  table is deduplicated, so identical spans share one ID and repeated builds assign identical
+  IDs.
 
 ## 7. Test execution
 
@@ -680,6 +695,6 @@ Detailed test discovery, pragma syntax, and the per-test artifact interface are 
 
 None as of 2026-10-28. The online-change host/GOT/manifest/debug architecture is resolved in
 [Online Change and GOT](Online-Change-and-GOT.md),
-[Debug and Monitoring](Debug-and-Monitoring.md), and `update_plan_got.md` §13.0; the M6.5
+[Debug and Monitoring](Debug-and-Monitoring.md), and [Decisions](../Decisions.md); the M6.5
 protocol, session, access, checkpoint, and build contracts are recorded as D-173–D-183. New
 runtime questions are appended here or in [Decisions](../Decisions.md).

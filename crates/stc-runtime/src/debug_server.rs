@@ -629,6 +629,7 @@ impl DebugServer {
         let shutdown = Arc::clone(&self.shutdown);
         let handlers = Arc::clone(&self.handlers);
         self.accept = Some(std::thread::spawn(move || {
+            crate::priority::lower_service_priority();
             while !shutdown.load(Ordering::Acquire) {
                 let Some(connection) = listener.accept(&shutdown) else {
                     if shutdown.load(Ordering::Acquire) {
@@ -651,6 +652,7 @@ impl DebugServer {
                     .saturating_add(1);
                 let shared = Arc::clone(&shared);
                 let handle = std::thread::spawn(move || {
+                    crate::priority::lower_service_priority();
                     run_connection(shared, connection, connection_id);
                 });
                 lock(&handlers).push(handle);
@@ -1182,13 +1184,16 @@ impl Handler {
     fn framing_close(&mut self, connection: &mut Connection, detail: &str) {
         let id = 0_u64;
         let error = ProtocolError::new(codes::DEBUG_FRAME, detail);
-        self.send_error(connection, id, &error);
+        // Record the audit event before the error response leaves the server:
+        // a client (or test) that observes the framing error must be able to
+        // read the matching audit record without waiting on this thread.
         let mut event = AuditEvent::new("transport-error", AuditOutcome::Error);
         event
             .session
             .clone_from(&self.session.as_ref().map(|view| view.id.clone()));
         event.detail = object([("reason", Json::string("framing"))]);
         let _ = self.shared.audit(event);
+        self.send_error(connection, id, &error);
         let plan = self.close_plan("protocol-error", None, true, true);
         self.finish(connection, plan);
     }

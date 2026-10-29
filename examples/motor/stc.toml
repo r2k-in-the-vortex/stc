@@ -1,0 +1,43 @@
+schema = 1
+
+[package]
+name = "motor"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[dependencies]
+motorlib = { path = "../motorlib" }
+
+[project]
+sources = ["src/**/*.st"]
+configuration = "MotorDemo"
+
+[build]
+emit = ["module", "metadata"]
+
+[run]
+cycles = 0
+
+[io]
+backend = "memory"
+
+[[io.devices]]
+name = "drive1"
+kind = "demo"
+
+  [[io.devices.channels]]
+  name = "Enable"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "Ready"
+  direction = "input"
+  width = 1
+
+[retain]
+file = "state/motor.stcstate"
+on-mismatch = "reset"
+
+[test]
+sources = ["tests/**/*.st"]

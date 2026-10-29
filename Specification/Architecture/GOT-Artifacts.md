@@ -8,8 +8,7 @@ modules require 2.1), and build IDs.
 
 This document is the machine-readable companion to
 [Online Change and GOT](Online-Change-and-GOT.md). It fixes the bytes and identifiers that the
-host model, preservation policy, and lifecycle operate on. It supersedes the informal descriptor,
-host API, and manifest sketches in `update_plan_got.md` §6.4 and §6.9; the summaries in
+host model, preservation policy, and lifecycle operate on. The summaries in
 [Runtime and Execution](Runtime-and-Execution.md) §2.3.1–§2.3.2 are normative only through the
 formats here.
 
@@ -841,8 +840,9 @@ chain.
 An interface value is a 16-byte `{ ptr record; ptr vtable; }` pair: the object record pointer and
 the per-(object type, interface) VTABLE pointer. `NULL` is both fields zero. The pair is passed,
 stored, and compared as one value; dispatch indexes the pair's vtable directly and does not
-consult TYPEINFO. A valid non-null interface has both fields non-null. A null-interface test reads
-the record pointer.
+consult TYPEINFO. A valid non-null interface has both fields non-null. A class/FB-to-interface
+upcast of a null handle yields the all-zero `NULL` interface and does not trap. A null-interface
+test reads the record pointer.
 
 #### 8.5.5 Class and FB storage projection
 
@@ -1619,7 +1619,7 @@ The implementation phases added:
 ### 12.3 Phase status
 
 Phase 0 is complete: the resolved decisions D-094–D-112 are recorded and the documentation
-checklist in `update_plan_got.md` §12 is applied. This document is the phase 1 output, reviewed
+checklist is applied. This document is the phase 1 output, reviewed
 and approved before phase 2. Phase 2 is implemented in the `stc-got` crate (stable keys, `GotId`,
 catalog, binary/JSON manifest codecs, baseline matching, rename/move maps,
 preserve/allocate/drop classification, slot assignment, and deterministic snapshots); the
@@ -1835,5 +1835,3 @@ format-1 descriptor, module, state, metadata-sidecar, debug-object, and frame-si
 - [Testing and Verification](Testing-and-Verification.md) — hot-swap and manifest tests.
 - [Decisions](../Decisions.md) — D-113–D-127, the prior online-change decisions, and M6.5
   debug decisions D-173–D-183.
-- `handover_to_M7.md` — M6.5 state at handover, the contracts M7 must preserve, and the recorded
-  limitations.

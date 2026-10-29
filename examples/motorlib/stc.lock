@@ -1,0 +1,7 @@
+schema = 1
+
+[[package]]
+name = "motorlib"
+version = "0.1.0"
+source = "root"
+dependencies = []

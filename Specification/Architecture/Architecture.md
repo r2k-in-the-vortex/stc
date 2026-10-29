@@ -1,9 +1,10 @@
 # Architecture
 
-Status: M4.5 host/module model, M5 lowering, M6 project system/CLI/verification hardening, and
-M6.5 debug/monitoring implemented (2026-10-28); M7 release candidate is next  
+Status: M4.5 host/module model, M5 lowering, M6 project system/CLI/verification hardening,
+M6.5 debug/monitoring, and M7 release packaging/cross-target/hardening implemented (2026-10-28);
+release-checklist sign-off pending the both-host CI run  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
+Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
 
 ## 1. Overview
 
@@ -56,7 +57,7 @@ stc/
     stc-manifest/            stc.toml schema, local dependency graph, source discovery
     stc-runtime/             persistent host, loader/GOT/root allocator, staticlib/rlib
     stc-test/                test discovery, wrapper generation, runner, reporting
-    stc-driver/              CLI binary `stc`
+    stc-driver/              CLI binary `stc` and test-support library `stc_driver`
     xtask/                   `cargo xtask test --suite ...` and `traceability`
   lean/                      Lake project for exact-function models/proofs
   tests/                     conformance corpus, UI snapshots, committed vectors, cross-target fixtures
@@ -80,6 +81,10 @@ stc-codegen, stc-fmt, stc-got, stc-hir, stc-manifest, stc-runtime, stc-sema, stc
 manifest model is produced by codegen from HIR identity metadata, not by the runtime. The runtime
 does not depend on any compiler crate; the manifest parser lives behind the manifest boundary and
 is fuzzed independently.
+
+`stc-driver` is both the `stc` binary and a small support library (`stc_driver`) used by
+integration tests; it exposes `toolchain::system_link_args` so tests link the runtime staticlib
+with the host's linker arguments. Generated code is not part of that library.
 
 ## 3. Front end
 
@@ -167,6 +172,10 @@ Design:
 - Text formatting is stable and tested with snapshots.
 - A verifier step runs `clang -x ir -c -o NUL` (or `opt -verify`) in tests and CI; in production a
   failure is reported as an internal compiler error with the IR attached.
+- The builder guarantees that every function has at least one block, block labels are unique,
+  and every block ends in exactly one terminator; codegen runs this check before rendering.
+- Statements after `RETURN`, `EXIT`, or `CONTINUE` are lowered into a fresh block with no
+  predecessors, so no instruction follows a terminator in the same block.
 
 Module-shaped IR (`stc_codegen::ir`) adds the GOT primitives from
 [Online Change and GOT](Online-Change-and-GOT.md) §3. The per-generation slot table is the
@@ -264,6 +273,9 @@ storage and must not retain the pointer beyond the call.
   process-image offsets and records them in metadata; it does not link them to hardware. Binding
   process-image ranges to devices is runtime-owned (see [I/O and Devices](IO-and-Devices.md)).
   Unbound inputs receive type defaults each cycle; unbound outputs are discarded.
+- Generated accesses to process-image storage use byte-granular alignment (`align 1`). A bit
+  access is a masked read-modify-write of the containing byte; wider values are loaded and
+  stored at the same alignment because their image offsets are byte-addressed.
 - Persistent aggregates do not use one contiguous parent allocation. Each persistent field is a
   separate host root with its own cell, identity, and storage; field access lowers to a field-cell
   lookup. A runtime object record links the fields of an object and holds its descriptor.
@@ -291,6 +303,9 @@ storage and must not retain the pointer beyond the call.
   applies declared initializers for new fields only.
 - Function calls with output parameters (`=>`) pass references to the destination; input
   parameters are passed by value unless declared `VAR_IN_OUT`.
+- When a call omits an input parameter that declares a default, codegen materializes the
+  parameter's default expression at the call site; sema rejects a call that omits an input with
+  no default.
 - `VAR_IN_OUT` parameters use place descriptors/pointers to the actual variable's storage;
   aliasing is the user's responsibility per the ST semantics. Conformant `ARRAY [*]` parameters
   use the descriptor described above instead of a bare pointer.
@@ -363,6 +378,12 @@ storage and must not retain the pointer beyond the call.
   Explicit conversion functions use the same checks.
 - Float operations use `fadd`, `fsub`, `fmul`, `fdiv`, `frem` without `fast-math` flags. NaN and
   infinity behavior follows IEC 60559; transcendental functions call the runtime.
+- Float comparisons use ordered predicates (`oeq`, `olt`, `ole`, `ogt`, `oge`) except `<>`,
+  which uses `une`; a NaN operand is therefore unequal to every value and makes ordering
+  comparisons false.
+- A narrowing integer conversion checks the destination range and traps `STC_TRAP_RANGE`. A
+  real-to-integer conversion traps `STC_TRAP_CONVERSION` for NaN and `STC_TRAP_RANGE` for an
+  out-of-range finite or infinite value.
 - Comparisons produce `i1`; boolean values are normalized before storage.
 - Subrange assignments and array bounds are checked in hosted builds. A future `--release`
   policy may disable bounds checks; it is documented and tested separately.
@@ -561,16 +582,24 @@ state directory holds the active copy and a current pointer.
 
 ### 6.4 Host platforms
 
-- Primary development host: Windows 11, x86-64, MSVC (D-007).
-- Planned additional hosts after basic development: Linux x86-64 and Linux AArch64 (ARM64), GNU
-  toolchain (D-042). Both are little-endian, so the state-file format and IR are unchanged.
+- Supported native hosts (D-200): Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux
+  x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`).
+  Windows is the primary development host (D-007); both Linux hosts are supported natively from
+  M8. macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported.
+- Both Linux architectures are little-endian with 8-byte pointers, so the state-file format and
+  IR are unchanged. AArch64 debug uses the same `fp+16` stopped-frame rule with `x29`, `sp`, and
+  `x30`, and DWARF `DW_OP_reg29` frame-base extraction (D-202).
 - Linux x86-64 and Linux AArch64 are valid clang targets from the start. Cross-target builds
   need a runtime staticlib built for the target.
 - Host-specific operations are confined to the driver and runtime: clang/linker discovery,
-  executable/shared-library naming, path semantics, the monotonic clock, and atomic file
-  replace. The front end, HIR, and IR builder contain no host conditionals.
-- Linux host builds must pass the same workspace, execution, and conformance tests as Windows;
-  CI covers both hosts (see [Testing and Verification](Testing-and-Verification.md) §6).
+  executable/shared-library naming, path semantics, the monotonic clock, atomic file replace,
+  module loading, service-thread priority, and debug transport. The front end, HIR, and IR
+  builder contain no host conditionals. `stc-codegen` carries only its single host
+  target-resolution module and `stc-manifest` its single path-semantics module; the module and
+  manifest model otherwise has no OS branch. `cargo xtask host-audit --check` enforces the
+  allowlist (D-201).
+- Linux host builds pass the same workspace, execution, and conformance tests as Windows; CI
+  covers all three hosts (see [Testing and Verification](Testing-and-Verification.md) §6).
 
 ## 7. Runtime boundary
 
@@ -622,6 +651,5 @@ host exports, not module imports. The exact table, service IDs, versions, and si
 
 None as of 2026-10-24. The online-change/GOT/manifest/debug architecture is resolved in
 [Online Change and GOT](Online-Change-and-GOT.md),
-[Debug and Monitoring](Debug-and-Monitoring.md), and `update_plan_got.md` §13.0. Resolved
-decisions are tracked in [Decisions](../Decisions.md). New architecture questions are appended
-here.
+[Debug and Monitoring](Debug-and-Monitoring.md), and [Decisions](../Decisions.md). New
+architecture questions are appended here.

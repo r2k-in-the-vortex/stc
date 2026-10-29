@@ -257,16 +257,17 @@ errors.
 modules, not per-function hot patching. `module` becomes a first-class artifact paired with a GOT
 manifest; `exe` is a thin host launcher that loads an adjacent module; `lib` remains the
 embedding artifact. Online change is delivered through the host API and local CLI, is a runtime/
-platform capability rather than an IEC language feature, and is supported on Windows MSVC x64
-and Linux GNU x64 (AArch64 with M8). The foundation is M4.5, inserted before M5; the user-facing
-workflow is M6.
+platform capability rather than an IEC language feature, and is supported on Windows MSVC x64,
+Linux GNU x64, and Linux GNU AArch64 (M8). The foundation is M4.5, inserted before M5; the
+user-facing workflow is M6.
 
 **Consequences:** The direct-reference, code-linked M4 artifact model is superseded. The host
 owns the cycle, persistent memory, modules, the process image, retained state, and debug
 services. No code-linked executable deployment path is maintained for online-change deployments.
-M4 artifacts are explicitly non-loadable under host ABI 2. The project is **not a safety PLC**
-and is not responsible for safety in any way; this must be stated wherever online change or debug
-behavior is described.
+M4 artifacts are explicitly non-loadable under host ABI 2. The project can control real machinery
+but is **not a safety PLC** and is not responsible for safety in any way; safety must be provided
+by a separate system and machine design as required by law and regulation, and this must be stated
+wherever online change or debug behavior is described.
 
 **Questions:** Q-018–Q-025, Q-089–Q-095.
 
@@ -310,6 +311,14 @@ supports full typed arithmetic, indexing, and `SIZEOF` for contiguous values, po
 and results, null-dereference traps, and documented dangling-pointer behavior. Persistent pointer
 fields are rejected. References and pointers are not persisted in the v1 state file; a later
 state-format revision may persist `Root`/`Direct` descriptors.
+
+**Alternatives considered:** A full `POINTER TO` surface with persistent fields, casts, and
+dynamic allocation was rejected because raw addresses carry no `GotId`, type, layout, or
+lifetime identity: pointer-bearing roots could not be preserved, migrated, or persisted across a
+swap, and pointer arithmetic makes target tracking impossible. Aliasing `POINTER TO` to `REF_TO`
+was rejected because it would misrepresent raw-pointer semantics. A minimal `ADR`/`^`/`NULL`
+surface was expanded to the shipped transient-only extension with full typed arithmetic,
+indexing, and `SIZEOF` (D-145, D-146).
 
 **Consequences:** Reference values are host-resolvable descriptors, not raw addresses. Dereference
 costs a descriptor resolution (optionally cached with a generation check). `POINTER TO` is an
@@ -359,6 +368,19 @@ a pre-deployment compatibility report; the runtime stores the active manifest an
 Retained-state migration across restarts is not in v1; a later state format may key leaves by
 `GotId` plus path. Manifest size/cost is measured, the active record is cached, and an optional
 later scaffold may emit declarations (never bodies) from a downloaded manifest.
+
+**Alternatives considered:** Several designs were rejected when the persistent manifest was
+adopted. Using platform dynamic-linker symbols as the GOT gives no stable type, layout, or rename
+semantics, requires the host to export every root, adds Windows import-library and symbol
+collision problems, and still needs a manifest-like layer for unload and rebinding. A single
+runtime-owned state struct or arena with a base pointer shifts offsets when declarations are
+added or reordered and defeats per-root quarantine. Runtime-only key/layout matching cannot
+preserve `GotId`s across a rename, cannot provide a cross-developer baseline, and leaves every
+structural change cold. Globally stable numeric slot numbers collide across concurrent builds and
+still require an identity for renames. Heuristic rename detection can bind the wrong storage and
+silently corrupt state, so renames stay explicit. The adopted design keeps slot numbers per
+module, makes `GotId` the identity, and lets the compiler emit the change plan while the runtime
+validates and executes it.
 
 **Consequences:** Losing or corrupting the active manifest costs a cold restart. The manifest is
 untrusted parsed data: validate every field/digest, access-control download, never execute its
@@ -425,7 +447,9 @@ codegen breakpoint checkpoints, stop-the-world stepping, call-stack unwinding, D
 and a manifest-assisted split-object view. Every online swap ends the debug session and clears
 breakpoints/forces. Debug information is the default build output; `--release` is the optional
 stripped/optimised mode with distinct build IDs/manifests. Debug may pause the watchdog and hold
-outputs indefinitely. The project is not a safety PLC and assumes no safety responsibility.
+outputs indefinitely. The project can control real machinery but is not a safety PLC and assumes
+no safety responsibility; safety must be provided by a separate system and machine design as
+required by law and regulation.
 
 **Consequences:** Debug/release artifacts are distinct. Debug hooks are absent in release.
 Starting/stopping a session has documented effects on outputs and timing. Non-RT threads must not
@@ -498,7 +522,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-059 | M3 produces HIR: `stc-hir` owns arenas, IDs, the interner, the type arena, and resolved bodies; `stc-sema` lowers the typed AST into it. `stc-codegen` will consume HIR only. | The AST spec places HIR after type checking and M4 declares HIR as its input; producing it now stabilizes the contract. |
 | D-060 | The M3 multi-file bridge is `stc check <file>...`. Paths are sorted lexicographically before `FileId` assignment; all files form one in-memory package (`PackageId(0)`) with session root namespace `_root`. | Multi-file namespaces must be testable before `stc.toml` (M6); sorting makes diagnostics and IDs independent of CLI order. |
 | D-061 | `Interner`/`Symbol` live in `stc-hir`; the analyzer session owns the interner and the resolution map. Symbols are looked up by uppercase ASCII key and retain the first original spelling. | One intern table shared by HIR and sema, with case-insensitive lookup and stable IDs. |
-| D-062 | The M3 diagnostic table in `M3-Plan.md` §7 is stable. `STC-E-TYPE-012`, `STC-W-NAME-002`, parser, pragma, I/O, and retain codes keep their existing meanings. | Diagnostics are snapshot-tested contracts; codes are never renumbered. |
+| D-062 | The M3 diagnostic table in [Conformance Profile](01-Conformance-Profile.md) §10.2 is stable. `STC-E-TYPE-012`, `STC-W-NAME-002`, parser, pragma, I/O, and retain codes keep their existing meanings. | Diagnostics are snapshot-tested contracts; codes are never renumbered. |
 | D-063 | Type canonicalization: aliases are transparent; arrays, refs, strings, and inline structs are structural keys in the type arena except that inline structs receive anonymous nominal defs; enums, subranges, named-value types, named structs, classes, FBs, interfaces, functions, and programs are nominal (`Ty::Named(DefId)`). | Gives stable field IDs for structs/classes while keeping array/string/ref assignment simple. |
 | D-064 | Conversion matrix: implicit for int↔int, real↔real, int→real, bit-string same category, same-kind strings/chars, TIME→LTIME, subrange↔integer base with a bounds check, enum/named-value exact type, derived→base class/FB, class/FB→implemented interface, interface widening, ref covariance, and `NULL`; real→int, enum↔integer, cross-kind strings/chars, bit-string narrowing, and downcasts require an explicit conversion or `?=`. `BOOL` is never numeric. Duration arithmetic: `TIME ± TIME` yields the wider of the two, `TIME * numeric`/`numeric * TIME`/`TIME / numeric` yield the duration, and other mixed duration/numeric operations are rejected. | A documented matrix keeps checking predictable; runtime range/trap checks arrive with codegen (D-015). |
 | D-065 | Overload resolution ranks candidates by exact matches, then implicit conversions, then literal adaptation; a unique best candidate wins, otherwise `STC-E-CALL-004`. Named arguments must precede no positional arguments after them; output bindings use `=>` and must target a place. | Deterministic rule that is easy to test and explain. |
@@ -547,7 +571,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-103 | The runtime adds loader/prepare and lower-priority service/monitor threads; readers use generation pinning/epoch refcounts, status uses lock-free/double-buffered/bounded structures, and writes/forcing are queued for cycle boundaries. | Keeps non-RT work off the cycle while keeping preserved data alive and diagnostics lock-free. |
 | D-104 | V1 includes full typed debug/monitoring: read/write/force/watch, breakpoint checkpoints, stop-the-world stepping, call stacks, DWARF/CodeView, and a manifest-assisted split-object view. Every online swap ends the debug session and clears forces/breakpoints. | Full debug is a v1 requirement; session teardown prevents stale code/descriptor references. |
 | D-105 | Debug information is the default build output; `--release` is the optional stripped/optimised mode with distinct build IDs/manifests and sidecar symbols. Debug hooks are absent from release artifacts. | Debuggability by default without conflating debug and release artifact identities. |
-| D-106 | `stc` is not a safety PLC and is not responsible for safety in any way. Debug may pause the watchdog and hold outputs indefinitely; no automatic fail-safe is provided. | Explicit scope boundary; safety requires an independent qualified design and certification. |
+| D-106 | `stc` may control real machinery but is not a safety PLC and is not responsible for safety in any way; safety must be provided by a separate system and machine design as required by law and regulation. Debug may pause the watchdog and hold outputs indefinitely; no automatic fail-safe is provided. | Explicit scope boundary; safety requires an independent qualified design and certification. |
 | D-107 | Online-change foundation is M4.5 before M5; full debug is M6.5 between M6 and M7; M8 covers Linux host parity including module loading, threads, and debug info. | Front-loads the architecture before M5 features depend on it, and keeps debug and portability independently testable. |
 | D-108 | The CLI and project manifest gain module emission, GOT manifest/cold/rename options, `stc online download/diff`, run/watch, `[runtime]`/`[online]`/`[debug]` tables, and stable `MODULE`/`MANIFEST`/`ABI`/`ONLINE`/debug diagnostics. Manifest data is untrusted, validated, and access-controlled. | A usable, auditable workflow and a stable automation surface without a network protocol in v1. |
 | D-109 | M4.5 exposes manifest export/download and diff data through the host API and test entry points; the user-facing `stc online download`/`stc online diff` commands were delivered in M6. | Keeps the foundation milestone focused on the host/module/manifest contract; M6 owns the user workflow. |
@@ -630,6 +654,29 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-185 | Windows COFF objects are compiled with `-mno-incremental-linker-compatible` (the flag clang-cl uses for `/Brepro`), so LLVM does not stamp the COFF header with the wall-clock time. Driver object artifacts and the debug-object determinism test are byte-identical across output directories and across second boundaries, matching D-178's no-timestamp rule and the existing `/Brepro` link handling (D-126); the codegen test asserts the zero timestamp and the driver debug test checks a built object. | The Windows debug suite flaked when the two clang invocations straddled a second boundary (CI run 40733363364); zeroing the header timestamp makes the reproducibility contract true instead of timing-dependent. |
 | D-186 | The Windows user-only security descriptor used for debug endpoint/audit files and the debug pipe keeps its descriptor, ACL, and token buffers in `Box` allocations, so the `SECURITY_ATTRIBUTES` descriptor pointer and the descriptor's internal ACL pointer stay valid when `UserSecurity` moves. The buffers were previously inline, leaving both pointers aimed at `UserSecurity::new`'s dead stack frame; when that frame was overwritten, `CreateFileW`/`CreateNamedPipeW` failed intermittently with `ERROR_REVISION_MISMATCH` (1305). A Windows unit test clobbers the old frame and checks the descriptor revision. | The Windows debug suite failed at `start_debug_server` (CI run 40744761639) because the security descriptor was read from dead stack memory; stable buffer addresses make endpoint creation deterministic without changing the ACL's meaning. |
 | D-187 | The interactive debug CLI test passes an explicit `--endpoint` and reads the endpoint file directly instead of parsing the endpoint path out of stderr. The host and the CLI both print the endpoint to the inherited stderr, and each line is written in several `write_fmt` pieces, so the lines can interleave; a substring search could match mid-line while the strict line-prefix parse returned no path. The test still asserts that the endpoint line and file name are printed. | Removed a Windows-only test race that failed the workspace job (CI run 40747849546) while the debug suite passed; no product behavior changes. |
+| D-188 | M7 is the release-candidate milestone. The workspace, driver, and packaged artifacts report version `1.0.0-rc.1`; the version-bearing snapshots are regenerated once. M7 adds no language surface and changes no module, descriptor, state, metadata, debug-object, stopped-frame, manifest, host-ABI, service-ID, build-ID-domain, or `stc-debug/1` contract. | The profile is v1; an RC marker distinguishes the candidate from the final release while keeping the release identity explicit in `--version`, metadata, descriptors, and manifests. |
+| D-189 | Release packaging is the repository task `cargo xtask package`, not a product CLI verb. It builds `stc-driver` and `stc-runtime` with `--locked`, then writes `stc-<version>-<host-triple>/{bin,lib,docs}/package.json` and a sorted `SHA256SUMS`. `package.json` records schema, version, profile, host triple, supported format/ABI versions, artifact list, and the non-safety identifier, with no timestamps, absolute paths, user names, or random IDs. The driver searches for the runtime beside its executable and in `<exe>/../lib`; `--runtime`, `STC_RUNTIME`, and manifest paths keep precedence. | A repo task keeps packaging out of the language CLI, and the adjacent `bin`/`lib` layout makes an unpacked package work without environment variables while preserving explicit overrides. |
+| D-190 | The Windows release contract is object-level CodeView: COFF objects carry `.debug$S`/`.debug$T` for build-time frame extraction and external tools, and the linked DLL carries no CodeView or PDB. M7 does not add `/DEBUG`, PDB packaging, or a DLL-level CodeView claim. | The runtime consumes build-time sidecars, not DWARF/CodeView, and PDBs add nondeterministic identity; object-level CodeView is the honest, tested contract. |
+| D-191 | Release static runtime archives are made debug-free by an archive-aware strip step: the archive is unpacked, each native object member is stripped with `llvm-objcopy --strip-debug`, and the stripped objects replace the originals in place with `llvm-ar rD`, preserving every other member and its symbol-table entries. Windows import-library members and Linux LLVM bitcode members are left untouched (they have no object debug sections and are not writable by every `ar`). `strip_release_artifact` applies this to `--emit=lib --release`, and `cargo xtask package` applies it to the packaged archive and shared library. The release profile also sets `strip = "debuginfo"`. | Precompiled Rust standard-library members carry CodeView/DWARF even in a release build, so a profile setting alone cannot make the archive debug-free. A fresh `ar rcs` repack collapses duplicate Windows import-library members and drops their symbols; in-place replacement keeps the archive linkable while removing debug sections. |
+| D-192 | Format-1 GOT manifests are cold-download only. The descriptor rejects any `manifest_format` other than 2 with the documented version diagnostic; no migration or in-place upgrade tool is provided. | Reinterpreting pre-M6.5 layouts risks preserved-value safety; a cold download is the documented, tested path. |
+| D-193 | M7 performance numbers are informational, not CI gates. Measurements record date, host, clang and cargo versions, regime, root/checkpoint counts, and variance in `Specification/Verification/Performance.md`. | Host variance makes a gate noisy; recorded evidence supports the performance pass without coupling release health to timing. |
+| D-194 | Remote/network debugging, raw-memory access, unauthenticated modes, and a privileged debug mode remain out of scope for v1. | Adding them would be an architecture and security decision, not release hardening. |
+| D-195 | Cross-target support in v1 means IR and object emission for the tested `clang --target` matrix. Module loading, execution, and frame extraction are supported only on x86-64 Windows MSVC and x86-64 Linux GNU. AArch64 frame rules and native AArch64 execution remain M8 (D-042). Superseded by D-202 and D-209 for native AArch64 execution and frame extraction. | No cross-target sysroots or execution hosts are part of v1 packaging; claiming more would be a silent acceptance of untested behaviour. |
+| D-196 | Embedded hosts use the pipe transport in v1. The local socket remains available through `DebugServerConfig` and the CLI; the embedding ABI gains no transport selector. | Adding a selector is an ABI change; pipe-only is the documented, tested embedded contract. |
+| D-197 | `RELEASE-CHECKLIST.md` names the project maintainer as owner and records the artifacts, commands, both-host evidence, hashes, documentation, and sign-off date. Sign-off requires recorded evidence for every item; unverified items are marked unsupported. | One named owner and an explicit artifact list make the release decision auditable. |
+| D-198 | Flaky process or timing tests are bugs. A failure is reproduced and diagnosed before a deadline or wait is changed; logs and the failing run are recorded. | Prevents the debug and CLI suites from passing by widening timeouts rather than fixing races. |
+| D-199 | The four non-debug traceability allowlist entries (`STC-E-ONLINE-STATE-001`, `STC-W-ONLINE-STATE-001`, `STC-W-ONLINE-004`, `STC-W-RUN-001`) remain documented as not-implemented v1 policy. No debug rule is allowlisted. | Closing them would change state/I/O behaviour, which M7 does not do; documenting them in the known-limitations list keeps traceability truthful. |
+| D-200 | M8's supported native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`). macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported. | The project plan names the Linux hosts; naming the exact triples keeps the support matrix testable and prevents silent claims. |
+| D-201 | Host-specific operations are confined to `stc-runtime` platform modules (loader, transport, signal, state replace, service priority) and the `stc-driver` toolchain/build/link/run layer. `stc-lexer`, `stc-parser`, `stc-sema`, `stc-codegen`, `stc-got`, and the manifest model carry no OS-behaviour branches; path case/extension semantics live in one manifest host module and host target resolution in one codegen host module. `cargo xtask host-audit --check` enforces the allowlist. | D-042 requires a platform layer; an executable audit is the only way to keep the boundary from drifting. |
+| D-202 | AArch64 debug parity uses the existing format-1 frame rule: CFA `fp+16`, saved frame pointer at `CFA-16`, return address at `CFA-8`, with x29 as the frame pointer. The service-13 trampoline captures x29, sp, and x30; DWARF extraction accepts `DW_OP_reg29 (x29)`. No stopped-frame, runtime, or ABI contract changes. | AArch64 uses the same physical frame layout, so the port is capture and extraction work rather than a new contract. |
+| D-203 | Linux atomic writes create the temporary file user-only (mode 0600) for state files, sync the file, rename over the target, then sync the parent directory. Windows keeps `MoveFileEx` with `WRITE_THROUGH`. I/O output files keep ordinary permissions but use the same durability sequence. A failed replace leaves the previous file intact. | State files are runtime-private user data; parent-directory sync is required for rename durability after power loss. |
+| D-204 | Control-server and debug-server accept/handler threads run at below-normal OS priority on Windows (`THREAD_PRIORITY_BELOW_NORMAL`) and Linux (nice +10, best-effort). The cycle thread keeps the process default priority. v1 does not pin CPU affinity. | Service threads must not compete with the cycle thread; affinity pinning conflicts with container cpusets and is a deployment decision, not a runtime default. |
+| D-205 | CI adds the `ubuntu-24.04-arm` hosted runner to the native test, online, UI, conformance, execution, projects, debug, cross-target, and package matrices. Runner labels stay pinned; host-independent jobs remain on `ubuntu-24.04`. | The exit criteria require native AArch64 evidence; pinned labels prevent silent image migration. |
+| D-206 | Packaging produces one archive per native host triple. `package.json.debug_contract` is `object-codeview` on Windows MSVC and `dwarf` on Linux GNU. No combined archive and no timestamps. | The debug backend is host-visible metadata; a Windows-only label on a Linux package is false. |
+| D-207 | The Unix debug endpoint and audit file remain user-only on both Linux architectures: 0600 files in a 0700 directory, symlinks refused, endpoint/socket/audit removed on stop. Container and headless hosts use the same path rules with no shared-directory fallback. | Security behaviour must not depend on architecture or environment; a fallback would silently weaken the endpoint. |
+| D-208 | M8 makes no format, ABI, protocol, language, or version change. `stc` remains `1.0.0-rc.1`; M8 completes the host-portability scope of the release candidate. | The milestone is a portability pass; identity churn would invalidate M7 evidence without a contract reason. |
+| D-209 | M8 is complete (2026-10-29): native Windows x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU support is implemented and verified on all three hosts, superseding D-195's x86-64-only execution and frame statement. The host audit (D-201), AArch64 debug parity (D-202), state durability and permissions (D-203), service priority without affinity (D-204), the pinned ARM64 matrix (D-205), and per-architecture packaging (D-206) are delivered. No language, format, ABI, protocol, or version change; the final evidence run `40821738218` (commit `ba97c5a`, all 36 jobs green) is recorded in `RELEASE-NOTES.md` and `RELEASE-CHECKLIST.md`. | The milestone is a portability pass; three-host evidence closes D-042 without reopening the release candidate. |
+| D-210 | v1.0.0 is the final release identity (2026-10-29). The workspace, driver, descriptors, manifests, package, and version-bearing snapshots report `1.0.0`, replacing the `1.0.0-rc.1` candidate identity fixed by D-188. No language, format, ABI, protocol, or behavior change; the M8 evidence run `40821738218` remains the qualification evidence, and the release documents are updated to the final version. | The v1 profile and all M0–M8 milestones are complete; dropping the candidate marker is a release-identity change, not a contract change. |
 
 D-118 was reviewed and approved on 2026-10-24; the four clarifications stand as recorded and phase 2
 is approved. Phase 3 is complete for review and D-119 records its IR-level choices. Phase 4 is
@@ -662,8 +709,7 @@ runner, formatter, online workflow, Lean vectors, conformance/CI, and documentat
 
 M6.5 phase 0 (2026-10-27) fixes the debug protocol, session lifecycle, typed access and
 write/force rules, checkpoint table, debug/release build rules, and the DEBUG diagnostic,
-CLI, and manifest contracts in D-173–D-179 and `M6.5-Plan.md`. Phase 4 (2026-10-27) is
-complete; D-180 records the authorized manifest-format-2 extension for enum, subrange, and
+CLI, and manifest contracts in D-173–D-179. Phase 4 (2026-10-27) is complete; D-180 records the authorized manifest-format-2 extension for enum, subrange, and
 aggregate type metadata and the write/force queue, boundary application, and audit behavior
 implemented in that phase. The host ABI boundary is unchanged: major 2 stays and service ID 13
 is appended at minor 2.3. The descriptor, module, state, metadata-sidecar, and artifact formats
@@ -684,9 +730,10 @@ roots, opaque identities, and explicit `manifest_assisted`/`contiguous` labels d
 storage from a contiguous copy. No operation, format, ABI, or build-ID change is involved, and
 the phase-8 CLI is not implemented.
 
-Phase 9 (2026-10-28) is complete and recorded in `M6.5-Plan.md`: the Windows/Linux `debug` CI
-job, the twelve-target debug suite, the ignored overhead measurement, and the exit-criteria
-sweep. Phase 10 (2026-10-28) completes the milestone with D-183: the documentation sweep, the
+Phase 9 (2026-10-28) is complete: the Windows/Linux `debug` CI job, the twelve-target debug
+suite, the ignored overhead measurement, and the exit-criteria sweep are recorded in
+[Testing and Verification](Architecture/Testing-and-Verification.md) and
+[Performance](Verification/Performance.md). Phase 10 (2026-10-28) completes the milestone with D-183: the documentation sweep, the
 recorded limitations, and `handover_to_M7.md`. M6.5 is complete and M7 is the next milestone.
 
 After the milestone, D-184 resolves issue #3 (2026-10-28): `stc clean` now removes all generated
@@ -700,7 +747,46 @@ addresses instead of pointing into a returned stack frame. D-187 removes the rem
 interactive-launch test race by reading a known endpoint file instead of parsing the shared stderr
 stream.
 
-D-094 through D-187 affect
+M7 phase 0 (2026-10-28) fixes the release-candidate boundary in D-188–D-199: version
+`1.0.0-rc.1`, `cargo xtask package` and the `bin`/`lib` package layout, object-only CodeView,
+a debug-free release runtime archive via `strip = "debuginfo"`, cold-download-only format-1
+manifests, informational performance measurement, no remote/raw-memory debug, IR/object-only
+cross-target support, pipe-only embedded debug transport, the release-checklist owner and
+artifacts, the flake policy, and the retained non-debug traceability allowlist. No format, ABI,
+protocol, or language contract changes; the affected documents are `M7-Plan.md`,
+[CLI and Manifest](Architecture/CLI-and-Manifest.md),
+[Testing and Verification](Architecture/Testing-and-Verification.md), the
+[Conformance Profile](01-Conformance-Profile.md), `README.md`, the M7 release documents
+(`RELEASE-NOTES.md`, `USER-GUIDE.md`, `KNOWN-LIMITATIONS.md`, `NON-SAFETY.md`,
+`RELEASE-CHECKLIST.md`, `Specification/Verification/Performance.md`), and `handover_to_M8.md`.
+
+M8 phase 0 (2026-10-28) fixes the native-host boundary in D-200–D-208: the three supported host
+triples, the platform-layer confinement and `cargo xtask host-audit` enforcement, AArch64 debug
+parity with the existing `fp+16` frame rule, Linux state-file permissions and parent-directory
+sync, below-normal service-thread priority without affinity pinning, the pinned
+`ubuntu-24.04-arm` CI matrix, per-architecture packaging with a host-derived `debug_contract`,
+and the unchanged Unix endpoint-security rules. No format, ABI, protocol, language, or version
+change; the affected documents are `M8-Plan.md`,
+[Architecture](Architecture/Architecture.md),
+[Runtime and Execution](Architecture/Runtime-and-Execution.md),
+[State and RETAIN](Architecture/State-and-Retain.md),
+[Debug and Monitoring](Architecture/Debug-and-Monitoring.md),
+[CLI and Manifest](Architecture/CLI-and-Manifest.md),
+[Testing and Verification](Architecture/Testing-and-Verification.md), the
+[Conformance Profile](01-Conformance-Profile.md), `README.md`, `USER-GUIDE.md`,
+`KNOWN-LIMITATIONS.md`, `RELEASE-NOTES.md`, and `handover_to_M8.md`.
+
+M8 phases 1–8 (2026-10-28 to 2026-10-29) implement and verify that boundary, and D-209 records
+completion: the host audit and allowlist (D-201), native Linux x86-64 and AArch64 builds and
+suites, AArch64 debug parity with the D-202 frame rule, Linux state durability and permissions
+(D-203), below-normal service priority without affinity (D-204), the pinned ARM64 CI matrix
+(D-205), and per-architecture packaging (D-206). D-195's x86-64-only execution and frame
+statement is superseded by D-202 and D-209. The final sign-off run `40821738218` (commit
+`ba97c5a`) passed all 36 jobs on the three native hosts; it is recorded in `RELEASE-NOTES.md` and
+`RELEASE-CHECKLIST.md`. The release identity remains `1.0.0-rc.1` and the non-safety
+stance is unchanged.
+
+D-094 through D-209 affect
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),
 [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md),
 [Debug and Monitoring](Architecture/Debug-and-Monitoring.md),
@@ -710,16 +796,14 @@ D-094 through D-187 affect
 [I/O and Devices](Architecture/IO-and-Devices.md),
 [CLI and Manifest](Architecture/CLI-and-Manifest.md),
 [Testing and Verification](Architecture/Testing-and-Verification.md), the
-[Conformance Profile](01-Conformance-Profile.md), `README.md`, `M4.5-Plan.md`, `M5-Plan.md`,
-`M6-Plan.md`, `M6.5-Plan.md`, `handover_to_M5.md`, and `handover_to_M7.md`.
+[Conformance Profile](01-Conformance-Profile.md), `README.md`, and the release documents.
 
 D-042 is a host-portability requirement, not a language/profile change. It does not alter the IR,
 runtime ABI, or conformance profile. It requires host-specific operations (clang/linker
 discovery, artifact naming, path semantics, monotonic clock, atomic file replace) to be confined
 to the driver and runtime. Affected documents: [Architecture](Architecture/Architecture.md) §6.4,
 [Runtime](Architecture/Runtime-and-Execution.md) §2, [State](Architecture/State-and-Retain.md) §4.2,
-[Testing](Architecture/Testing-and-Verification.md) §6, and the [Project Plan](00-Project-Plan.md)
-M8.
+and [Testing](Architecture/Testing-and-Verification.md) §6.
 
 D-045 through D-058 resolve the M2 handover's open items. The syntax surface is implemented in
 `crates/stc-syntax` (stable kinds, lossless CST, typed AST views, pragma JSON),
@@ -744,9 +828,8 @@ hints, export names, folded task values, LDATE units), and the driver's manifest
 
 **None as of 2026-10-24.** All v1 planning questions Q-001 through Q-017 are resolved
 (A-005 through A-021). The online-change/GOT review Q-018 through Q-212 is resolved
-(A-022 through A-030); the full question/answer disposition is in `update_plan_got.md` §13.0.
-New questions will be appended here and in `README.md` one at a time, with a proposed default so
-implementation can continue without blocking.
+(A-022 through A-030). New questions will be appended here and in `README.md` one at a time, with
+a proposed default so implementation can continue without blocking.
 
 ## 4. Decision process
 
@@ -757,3 +840,4 @@ implementation can continue without blocking.
 - Each decision records the reason and the affected specification sections.
 - A decision that changes the language surface also changes the conformance profile and adds a
   test ID.
+- New compiler diagnostic codes require a decision entry.

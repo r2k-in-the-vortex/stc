@@ -1231,7 +1231,9 @@ fn print_help() {
          --debug-server` starts the same local service beside the run loop.\n\
          Debug sessions are availability and operability features, not safety\n\
          functions: a stopped or forced controller may hold outputs\n\
-         indefinitely, and the project is not a safety PLC.\n\
+         indefinitely. stc may control machinery, but it is not a safety PLC\n\
+         and safety must be provided by a separate system and machine design\n\
+         as required by law and regulation.\n\
          The manifest-free bridge keeps `--emit ir` and a sanitized file stem. `fmt` formats the\n\
          given files, or the root package's sources and test sources when no\n\
          paths are given, with the fixed lossless-CST style; `--check` writes\n\

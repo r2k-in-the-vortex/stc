@@ -43,7 +43,7 @@ impl JsonFields for Json {
 }
 
 /// The non-safety notice printed at every session start and in `--help`.
-const NOTICE: &str = "debug sessions are availability features, not safety functions; a stopped or forced controller may hold outputs indefinitely, and the project is not a safety PLC";
+const NOTICE: &str = "debug sessions are availability features, not safety functions; a stopped or forced controller may hold outputs indefinitely. stc may control machinery, but it is not a safety PLC and safety must be provided by a separate system and machine design as required by law and regulation";
 const ENDPOINT_DEADLINE: Duration = Duration::from_secs(5);
 const CONTROL_DEADLINE: Duration = Duration::from_secs(10);
 const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);

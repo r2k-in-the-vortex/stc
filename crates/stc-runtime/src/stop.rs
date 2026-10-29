@@ -130,7 +130,9 @@ impl DebugTables {
         functions: &BTreeMap<GotId, usize>,
         target: &Target,
     ) -> std::result::Result<(), String> {
-        if !target.triple.starts_with("x86_64-") || self.pointer_width != 8 {
+        if !(target.triple.starts_with("x86_64-") || target.triple.starts_with("aarch64-"))
+            || self.pointer_width != 8
+        {
             return Err(
                 "stopped-frame rules are not defined for the active target architecture".into(),
             );
@@ -1604,10 +1606,11 @@ fn capture_locals(
 
 /// The host API service-13 entry point.
 ///
-/// x86-64 builds capture the caller's `rbp`, `rsp`, and return address in an
-/// architecture trampoline and call [`debug_check_entry`]. Other architectures
-/// fall back to a call with no register context; the checkpoint table then
-/// keeps stops unavailable rather than guessing frame rules.
+/// x86-64 and AArch64 Linux builds capture the caller's frame pointer, stack
+/// pointer, and return address in an architecture trampoline and call
+/// [`debug_check_entry`]. Other architectures fall back to a call with no
+/// register context; the checkpoint table then keeps stops unavailable rather
+/// than guessing frame rules.
 #[cfg(all(target_arch = "x86_64", windows))]
 #[unsafe(naked)]
 pub(crate) unsafe extern "C" fn debug_check_hook(_checkpoint_id: u32, _span_id: u32) {
@@ -1646,8 +1649,33 @@ pub(crate) unsafe extern "C" fn debug_check_hook(_checkpoint_id: u32, _span_id: 
     );
 }
 
+/// The host API service-13 entry point (AArch64 System V).
+///
+/// The format-1 frame rule is the same as x86-64: the prologue stores x29 and
+/// x30 at `[x29]` and `[x29 + 8]`, so CFA is `fp + 16`, the saved frame
+/// pointer is `CFA - 16`, and the return address is `CFA - 8` (D-202).
+#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#[unsafe(naked)]
+pub(crate) unsafe extern "C" fn debug_check_hook(_checkpoint_id: u32, _span_id: u32) {
+    core::arch::naked_asm!(
+        // The host reaches this entry point through a function pointer; a
+        // BTI landing pad keeps an indirect call valid on hardened kernels.
+        "bti c",
+        // x0/x1 are the checkpoint and span IDs; pass x29, sp, and x30 as the
+        // third, fourth, and fifth arguments and tail-call the entry point.
+        "mov x2, x29",
+        "mov x3, sp",
+        "mov x4, x30",
+        "b {entry}",
+        entry = sym debug_check_entry,
+    );
+}
+
 /// Fallback service-13 entry for targets without v1 frame rules.
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_os = "linux")
+)))]
 pub(crate) unsafe extern "C" fn debug_check_hook(checkpoint_id: u32, span_id: u32) {
     // SAFETY: the caller uses the documented service-13 ABI; the fallback
     // performs no stack access and stops are unavailable without frame rules.

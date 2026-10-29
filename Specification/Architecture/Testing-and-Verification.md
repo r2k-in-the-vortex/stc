@@ -1,8 +1,8 @@
 # Testing and Verification
 
-Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixed the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are implemented and active (2026-10-28)  
+Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixed the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are implemented and active (2026-10-28); M7 adds the cross-target, packaging, examples, manifest-hardening, and performance evidence (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
+Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
 > **M4/M4.5 status:** IR snapshots, clang verification (`STC_REQUIRE_CLANG=1` in CI), execution
 > tests, C-harness library tests, process-image tests, scalar retained-state tests, determinism
@@ -46,6 +46,15 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 > workflow record the informational measurement. Phase 9 passed the full workspace, clippy,
 > formatting, and traceability checks, and phase 10 closed the documentation and M7 handover
 > (D-183).
+>
+> **M7 status (2026-10-28):** the release candidate adds the `cross-target` suite (nine triples
+> plus exe/lib rejection), the `examples` project smoke (hello, motor/motorlib, online-change),
+> `manifest_hardening` (format-1, cross-mode, truncated, and tampered manifests), package
+> verification in `cargo xtask package`, archive/PDB cleanliness tests, and the ignored
+> `performance` measurement. `projects` now runs `projects`, `online_cli`, `manifest_hardening`,
+> and `examples`. CI adds the `cross-target` and `package` jobs on Windows and Linux; the package
+> job builds, checksums, and exercises the unpacked layout in a fresh project. Release evidence is
+> recorded in `RELEASE-CHECKLIST.md`; timing remains informational (D-193).
 
 ## 1. Layers of testing
 
@@ -62,11 +71,15 @@ Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.
 | Pragmas | JSON payload parsing, balanced braces, non-nesting, validation, precedence | `crates/stc-parser/tests`, `tests/ui` |
 | I/O metadata | Process-image layout, `AT` type checks, binding hints/overrides, unbound defaults | `crates/stc-codegen/tests`, `crates/stc-driver/tests/state_io_cli.rs`, `tests/conformance/io` |
 | State/retain | Warm/cold restart, layout hash, CRC/corruption, atomic write, mismatch policy | `crates/stc-runtime/tests`, `crates/stc-driver/tests/state_io_cli.rs`, `tests/conformance/state` |
-| Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `crates/stc-runtime/tests`, `crates/stc-driver/tests/online_cli.rs` |
-| GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, corrupt/manifest fuzzing | `crates/stc-got/tests`, `crates/stc-codegen/tests`, `crates/stc-driver/tests` |
+| Online change | Load/prepare/activate/commit/rollback/unload, preservation, cold download, O(1) switch, jitter | `crates/stc-runtime/tests`, `crates/stc-driver/tests/online_cli.rs`, `manifest_hardening.rs` |
+| GOT/manifest | `GotId` identity/rename/move, exact-parent, download/consume, byte-identical double builds, format-1/cross-mode/tamper rejection, corrupt/manifest fuzzing | `crates/stc-got/tests`, `crates/stc-codegen/tests`, `crates/stc-driver/tests` |
 | Descriptors/OOP | Runtime descriptors, vtable cells, handle preservation, interface nullability, place descriptors | `crates/stc-runtime/tests/descriptor_lifecycle.rs`, `crates/stc-codegen/tests`, `tests/conformance/oop` |
 | Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap teardown | `cargo xtask test --suite debug` (twelve targets) |
 | Real-time boundary | Switch latency, maintenance jitter, service-thread contention, generation pinning | `crates/stc-runtime/tests` |
+| Cross-target | IR/object emission for nine triples, header architecture/endianness, exe/lib rejection | `crates/stc-driver/tests/cross_target.rs` |
+| Packaging | Layout, checksums, version, formats/ABI, debug-free archive/shared library, stripped archive still links | `cargo xtask package`, `crates/stc-driver/tests/package.rs`, `debug_release.rs` |
+| Examples | Every committed example checks, builds both modes, runs, tests, and formats | `crates/stc-driver/tests/examples.rs` |
+| Performance | Build/cycle/switch/debug timings, recorded host/regime, non-gating | `crates/stc-driver/tests/performance.rs`, `debug_overhead.rs`, `crates/stc-runtime/tests/switch_latency.rs`, `Specification/Verification/Performance.md` |
 | Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests`, `crates/stc-driver/tests/fmt_cli.rs` |
 | Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
 | Lean | Exact-function models and proofs | `lean/`, `tests/vectors` |
@@ -359,7 +372,7 @@ missing mappings and fails CI if a rule is marked implemented without a test.
 ### 4.1 Online-change and manifest suite
 
 `crates/stc-runtime/tests` and `crates/stc-driver/tests` exercise the host/module lifecycle on
-both hosts:
+all three native hosts:
 
 - cold install, code-only online change, field add/remove/reorder, tracked rename/move;
 - untracked rename/removal diagnosis and explicit allow/cold paths;
@@ -403,15 +416,15 @@ have distinct build IDs/manifests. The target mapping is:
 | `stc-codegen` | `debug_info`, `checkpoints`, `frames` |
 | `stc-got` | `metadata_v2` |
 
-The `debug` CI job runs that suite on `windows-2025` and `ubuntu-24.04` with
-`STC_REQUIRE_CLANG=1`; it preflights the platform inspection tools (`llvm-readobj` on Windows,
-`readelf` on Linux) so a missing tool fails the job instead of skipping an assertion.
+The `debug` CI job runs that suite on `windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm`
+with `STC_REQUIRE_CLANG=1`; it preflights the platform inspection tools (`llvm-readobj` on
+Windows, `readelf` on Linux) so a missing tool fails the job instead of skipping an assertion.
 Debug-disabled overhead is measured by the ignored
 `crates/stc-driver/tests/debug_overhead.rs` test (`cargo test -p stc-driver --test debug_overhead
 -- --ignored --nocapture`), which compares release, hook-free debug, and hook-bearing debug builds
 through the real build pipeline and records ns/cycle; the opt-in `Debug overhead` workflow runs
-the same measurement on both hosts. The measured numbers are recorded in the M6.5 plan and are
-not a CI timing gate.
+the same measurement on all three native hosts. The measured numbers are recorded in
+[Performance](../Verification/Performance.md) and the M7 record, and are not a CI timing gate.
 
 The debug suite also covers the externally fixed contracts of D-173–D-179:
 
@@ -512,18 +525,19 @@ lean/
 | --- | --- |
 | `fmt` | `cargo fmt --all --check` |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
-| `test` | `cargo test --workspace --locked` on Windows x64 and Ubuntu x64; Linux AArch64 after basic development (D-042) |
+| `test` | `cargo test --workspace --locked` on Windows x64, Ubuntu 24.04 x64, and Ubuntu 24.04 ARM64, all native hosts |
 | `coverage` | `cargo llvm-cov --workspace --locked` on Ubuntu x64; job summary, LCOV/JSON/HTML artifacts, and the `badges`-branch badge on `main` |
-| `ui` | diagnostic snapshots on Windows x64 and Ubuntu x64 |
-| `conformance` | conformance corpus on Windows x64 and Ubuntu x64 |
-| `execution` | compile/run tests on Windows x64 and Ubuntu x64 |
-| `projects` | end-to-end project and online workflow on Windows x64 and Ubuntu x64 |
-| `online` | hot-swap/manifest/cold-download suite on Windows x64 and Ubuntu x64 |
-| `traceability` | `cargo xtask traceability --check` on Ubuntu x64 |
-| `debug` | `cargo xtask test --suite debug` on Windows x64 and Ubuntu x64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
+| `ui` | diagnostic snapshots on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
+| `conformance` | conformance corpus on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
+| `execution` | compile/run tests on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
+| `projects` | end-to-end project and online workflow plus `manifest_hardening` and `examples` on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
+| `online` | hot-swap/manifest/cold-download suite on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
+| `package` | `cargo xtask package --locked`, host-triple and `debug_contract` metadata checks, checksum verification, and the unpacked `new/check/build/build --release/build --emit=lib/run/test/clean/rebuild` exercise on Windows x64, Ubuntu x64, and Ubuntu ARM64; uploads the package |
+| `traceability` | `cargo xtask traceability --check` and `cargo xtask host-audit --check` on Ubuntu x64 |
+| `debug` | `cargo xtask test --suite debug` on Windows x64, Ubuntu x64, and Ubuntu ARM64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
-| `cross-target` | `clang --target=aarch64-... -c` smoke (IR/object) |
+| `cross-target` | `cargo xtask test --suite cross-target` on Windows x64, Ubuntu x64, and Ubuntu ARM64: nine-triple IR/object matrix, header checks, and exe/lib rejection; also assembles the checked-in AArch64 smoke module |
 | `docs` | required-document, spec link, and profile checks; Markdown lint |
 
 The workflow is `.github/workflows/ci.yml`; the documentation checks are implemented in
@@ -533,29 +547,67 @@ exist, so the skeleton never reports a pass for a job that did not run. The `onl
 GOT identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
 launcher/embedding artifact suites; the `projects` job runs `new/check/build/run/test/fmt/clean`
 and the rename/download/diff/watch workflow; the `traceability` job checks every implemented rule
-has test evidence. The `coverage` job runs the workspace tests under LLVM instrumentation, reports
+has test evidence and runs `cargo xtask host-audit --check`, which fails when host-specific code
+appears outside the documented platform layer and allowlist. The `coverage` job runs the
+workspace tests under LLVM instrumentation, reports
 totals and the lowest-coverage files, uploads the LCOV/JSON/HTML reports, and publishes the README
 coverage badge to the `badges` branch on `main`; it is reporting-only, and the `test` job remains
 the pass/fail gate.
 Line coverage is a reporting metric; rule coverage remains the semantic traceability check in §7.
 The M6 UI, conformance, execution, projects, traceability, Lean, and fuzz-smoke
-jobs are active on the documented matrix. The `debug` job runs the debug suite on both
-hosts and, on a manual `workflow_dispatch`, also prints the informational overhead measurement
-described in §4.2; it never gates on timing.
+jobs are active on the documented matrix. The `debug` job runs the debug suite on Windows x64
+and both Linux architectures and, on a manual `workflow_dispatch`, also prints the informational
+overhead measurement described in §4.2 on those hosts; it never gates on timing.
+
+Host portability is verified natively, not by cross-compilation. All three native hosts run the
+workspace, UI, conformance, execution, projects, online, debug, cross-target, and package jobs;
+`windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm` are pinned runner labels (D-205). The M8
+phase-2 evidence run
+[`40787801942`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40787801942) (commit
+`0805a51`) established the Linux x86-64 native baseline; phase-3 run
+[`40790831659`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40790831659) (commit
+`07162f0`) added the native AArch64 suites; phase-4 run
+[`40792824763`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40792824763) (commit
+`edd6fae`) added native AArch64 debug parity; and phase-7 run
+[`40819548212`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40819548212) (commit
+`2aafbc5`) added the ARM64 package job. The final M8 sign-off run
+[`40821738218`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218) (commit
+`ba97c5a`) passed all 36 jobs.
+
+Unix-only behaviour is asserted on both Linux architectures: state files are mode 0600 and a
+failed replace keeps the previous target and removes the temporary file (`stc-runtime` state
+tests); debug endpoint and audit files are mode 0600 in a mode-0700 socket directory
+(`debug_protocol`, `control`); `dlopen`/`dlsym`/`dlclose` load and retire compiler-produced
+modules with `RTLD_LOCAL` symbol scope (`host_lifecycle`), and a retired module disappears from
+`/proc/self/maps` after the unload grace where `/proc` is available; the launcher exits 130 on
+SIGINT and the test runner kills a timed-out child (`online_cli`, `test_cli`); the service-priority
+unit test observes nice +10 in a spawned service thread; artifact names match `stc`,
+`libstc_runtime.a`, `libstc_runtime.so`, `<module>-<build>.so`, `<name>.a`, and `lib<name>.so`
+(`package`, `cli_project`, `module_cli`, `execution`); and metadata, the build manifest, and the
+package record the host triple (`cli_project`, `module_cli`, and the `package` job). AArch64 debug
+coverage includes the real service-13 trampoline, `x29`/`x30` capture, `DW_OP_reg29` extraction,
+typed locals, breakpoints, stepping, and call stacks. The host audit runs in the `traceability`
+job and fails on any host-specific line outside `tools/ci/host-allowlist.txt` (D-201).
 
 ### 6.2 Matrix
 
 - Primary: Windows x64, `x86_64-pc-windows-msvc`; the development host is Windows 11 and CI uses
   GitHub's `windows-2025` runner. Pinned clang/LLVM 23.1.4.
-- Secondary: Ubuntu 24.04 (`ubuntu-24.04`), `x86_64-unknown-linux-gnu` — workspace tests,
-  diagnostic snapshots, conformance corpus, execution tests, project workflow, end-to-end CLI,
-  and the debug suite.
-- Runner images are pinned (`windows-2025`, `ubuntu-24.04`); `-latest` labels are not used, so
-  image migrations do not silently change the matrix.
-- Host portability (after basic development, D-042): native or emulated Linux AArch64
-  (`aarch64-unknown-linux-gnu`) host jobs. Emulation is a smoke gate; release sign-off uses
-  native ARM64 runners. Further `aarch64` cross-target object emission remains in the
-  `cross-target` job.
+- Secondary, fully native: Ubuntu 24.04 (`ubuntu-24.04`), `x86_64-unknown-linux-gnu` — a full
+  native host for the workspace and every suite: workspace tests, diagnostic snapshots,
+  conformance corpus, execution tests, project workflow, end-to-end CLI, online-change and debug
+  suites, cross-target smoke, traceability with the host audit, docs, and the release package.
+  Linux x86-64 has been supported natively since M8 phase 2.
+- Secondary, fully native: Ubuntu 24.04 ARM64 (`ubuntu-24.04-arm`), `aarch64-unknown-linux-gnu` —
+  a full native host for the same workspace and suite set: workspace tests, diagnostic snapshots,
+  conformance corpus, execution tests, project workflow, online-change suite, debug suite,
+  cross-target smoke, and release package. The debug suite and package job joined in M8 phases 4
+  and 7 respectively, so every suite now runs natively on ARM64.
+- Runner images are pinned (`windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm`); `-latest` labels
+  are not used, so image migrations do not silently change the matrix.
+- Host portability (D-042, D-200): the three pinned runners are the supported native hosts. A
+  further `aarch64` cross-target object remains in the `cross-target` job; it is not a host
+  support claim.
 - Rust toolchain pinned in `rust-toolchain.toml`; Lean pinned in `lean/lean-toolchain`.
 - CI builds with `--locked`; a changed lockfile without a manifest change fails the job.
 - CI caches cargo and Lake builds; the clang version is printed in every job.
@@ -566,6 +618,32 @@ described in §4.2; it never gates on timing.
   silent acceptance fails the job.
 - Warnings are denied in CI (`-D warnings`), with documented allow-list exceptions.
 - Flaky tests are quarantined and fixed; timeouts are not silently retried.
+
+### 6.4 M8 host-portability verification
+
+The M8 verification list is run natively on each supported host (`windows-2025`,
+`ubuntu-24.04`, and `ubuntu-24.04-arm`); the same commands work locally on a native host:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+STC_REQUIRE_CLANG=1 cargo test --workspace --locked
+cargo xtask test --suite debug --locked
+cargo xtask test --suite projects --locked
+cargo xtask test --suite cross-target --locked
+cargo xtask traceability --check
+cargo xtask host-audit --check
+python tools/ci/check_docs.py
+npx --yes markdownlint-cli2@0.24.0
+cargo xtask package --locked --out dist
+```
+
+`cargo xtask host-audit --check` is the executable form of D-201: it scans workspace Rust
+sources, reports every host-specific line (`path:line`), and fails when a line is not in
+`tools/ci/host-allowlist.txt` or an allowlist entry is stale. The portable crates may name only
+their single documented host module (`stc-codegen/src/host.rs`, `stc-manifest/src/host.rs`);
+runtime and driver platform modules list every OS branch with a reason. Cross-target emission in
+the `cross-target` suite remains IR/object-only and is not native-host evidence.
 
 ## 7. Traceability
 

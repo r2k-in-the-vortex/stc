@@ -121,7 +121,10 @@ impl ControlServer {
         let thread_shared = Arc::clone(&shared);
         let handle = std::thread::Builder::new()
             .name("stc-control".into())
-            .spawn(move || serve(backend, thread_shared))
+            .spawn(move || {
+                crate::priority::lower_service_priority();
+                serve(backend, thread_shared);
+            })
             .map_err(|_| control_error("cannot start the control thread"))?;
         Ok(Self {
             shared,
@@ -429,7 +432,10 @@ fn serve(mut backend: Listener, shared: Arc<Shared>) {
         let connection_shared = Arc::clone(&shared);
         let _ = std::thread::Builder::new()
             .name("stc-control-client".into())
-            .spawn(move || serve_connection(connection, &connection_shared));
+            .spawn(move || {
+                crate::priority::lower_service_priority();
+                serve_connection(connection, &connection_shared);
+            });
     }
     backend.shutdown();
 }

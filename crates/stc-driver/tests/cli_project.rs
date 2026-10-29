@@ -499,6 +499,26 @@ fn toolchain_precedence_cli_env_manifest() {
 }
 
 #[test]
+fn built_manifest_records_the_host_triple() {
+    let Some(clang) = clang() else {
+        eprintln!("note: clang not found; skipping manifest target test");
+        return;
+    };
+    let project = TestDir::new("manifest-target");
+    scaffold(&project, "app");
+    let output = project.run("app", &["build", "--emit", "module", "--clang", clang]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let text = std::fs::read_to_string(project.path("app/target/stc/debug/app.stc-got.json"))
+        .expect("manifest JSON");
+    let manifest = stc_got::Manifest::decode_json(&text).expect("decode manifest");
+    assert_eq!(
+        manifest.header.target_triple,
+        stc_codegen::host_triple(),
+        "a build without --target records the running host's triple"
+    );
+}
+
+#[test]
 fn shared_and_static_host_libraries() {
     let Some((static_library, shared_library)) = runtime_pair() else {
         eprintln!("note: clang or the runtime host artifacts are unavailable; skipping");
@@ -1153,7 +1173,11 @@ fn compliance_summary_shapes() {
     let text = stdout(&human);
     assert!(text.contains("stc compliance"), "{text}");
     assert!(
-        text.contains("This project is not a safety PLC and assumes no safety responsibility."),
+        text.contains("This project is not a safety PLC and assumes no safety responsibility"),
+        "{text}"
+    );
+    assert!(
+        text.contains("safety must be provided by a separate system and machine design"),
         "{text}"
     );
 }

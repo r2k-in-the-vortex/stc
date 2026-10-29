@@ -485,13 +485,7 @@ pub(crate) fn relative_lock_path(root: &Path, target: &Path) -> Option<String> {
 }
 
 fn components_equal(left: Component<'_>, right: Component<'_>) -> bool {
-    let left = left.as_os_str().to_string_lossy();
-    let right = right.as_os_str().to_string_lossy();
-    if cfg!(windows) {
-        left.eq_ignore_ascii_case(&right)
-    } else {
-        left == right
-    }
+    crate::host::components_equal(left, right)
 }
 
 #[cfg(test)]

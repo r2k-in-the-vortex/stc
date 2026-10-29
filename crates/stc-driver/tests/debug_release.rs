@@ -339,8 +339,8 @@ fn modules_expose_2_3_hooks_in_debug_and_2_1_without_hooks_in_release() {
     }
     // On ELF the linked module keeps DWARF. On MSVC targets the object carries
     // `.debug$S`/`.debug$T`, but the current lld-link invocation (no `/DEBUG`)
-    // neither copies CodeView into the DLL nor emits a PDB; that phase-2
-    // limitation is recorded in the M6.5 plan and is not changed here.
+    // neither copies CodeView into the DLL nor emits a PDB; that limitation is
+    // recorded in KNOWN-LIMITATIONS.md §3 and is not changed here.
     if !cfg!(windows) {
         let debug_module = std::fs::read(project.path(&format!(
             "app/target/stc/debug/{}",
@@ -664,5 +664,216 @@ fn debug_session_flags_are_rejected_by_non_session_commands() {
             "{arguments:?}\n{}",
             stderr(&output)
         );
+    }
+}
+
+fn workspace_root() -> PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+/// Builds the release runtime once for archive-cleanliness checks (D-191).
+fn release_runtime() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let root = workspace_root();
+        let target = root.join("target/test-runtime-release");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let output = Command::new(cargo)
+            .args(["build", "--release", "--locked", "-p", "stc-runtime"])
+            .arg("--target-dir")
+            .arg(&target)
+            .env_remove("RUSTC_WRAPPER")
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .current_dir(&root)
+            .output()
+            .expect("run cargo build -p stc-runtime --release");
+        assert!(
+            output.status.success(),
+            "release runtime build failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let name = if cfg!(windows) {
+            "stc_runtime.lib"
+        } else {
+            "libstc_runtime.a"
+        };
+        target.join("release").join(name)
+    })
+    .clone()
+}
+
+fn find_tool(candidates: &[&str]) -> Option<String> {
+    candidates.iter().find_map(|candidate| {
+        Command::new(candidate)
+            .arg("--version")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|_| (*candidate).to_owned())
+    })
+}
+
+fn section_text(file: &std::path::Path) -> Option<String> {
+    for (program, args) in [
+        ("llvm-readobj", &["--sections"][..]),
+        ("llvm-objdump", &["--section-headers"][..]),
+        ("readelf", &["-S", "-W"][..]),
+    ] {
+        if let Ok(output) = Command::new(program).args(args).arg(file).output()
+            && output.status.success()
+        {
+            return Some(String::from_utf8_lossy(&output.stdout).into_owned());
+        }
+    }
+    None
+}
+
+fn has_debug_sections(file: &std::path::Path) -> bool {
+    section_text(file).is_some_and(|text| {
+        text.split(|character: char| {
+            character.is_whitespace() || matches!(character, ',' | ']' | '[' | '"' | '\'')
+        })
+        .any(|token| token.starts_with(".debug") && token != ".debug_gdb_scripts")
+    })
+}
+
+#[test]
+fn release_embedding_archive_is_debug_free() {
+    let Some(clang) = clang() else {
+        return;
+    };
+    let project = scaffold("release-archive", "");
+    let runtime = release_runtime();
+    let output = project.run(
+        "app",
+        &[
+            "build",
+            "--release",
+            "--emit=lib",
+            "--clang",
+            clang,
+            "--runtime",
+            runtime.to_str().expect("runtime path"),
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let library = if cfg!(windows) {
+        "app/target/stc/release/app.lib"
+    } else {
+        "app/target/stc/release/app.a"
+    };
+    let archive = project.path(library);
+    assert!(archive.is_file(), "missing embedding archive `{library}`");
+
+    let Some(ar) = find_tool(&["llvm-ar", "ar"]) else {
+        eprintln!("note: no archive tool; skipping archive section inspection");
+        return;
+    };
+    let check = project.path("archive-check");
+    std::fs::create_dir_all(&check).expect("create archive check directory");
+    let output = Command::new(ar)
+        .arg("x")
+        .arg(&archive)
+        .current_dir(&check)
+        .output()
+        .expect("extract archive");
+    assert!(
+        output.status.success(),
+        "cannot extract `{}`: {}",
+        archive.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut objects = 0;
+    for entry in std::fs::read_dir(&check).expect("archive contents") {
+        let path = entry.expect("archive entry").path();
+        if path.is_dir() {
+            continue;
+        }
+        objects += 1;
+        assert!(
+            !has_debug_sections(&path),
+            "release embedding archive contains debug sections in `{}`",
+            path.display()
+        );
+    }
+    assert!(objects > 0, "the archive contained no objects");
+
+    // The strip step must preserve every member and symbol-table entry. A
+    // fresh `ar rcs` would drop the duplicated Windows import-library members
+    // and leave `WaitOnAddress`/`WakeByAddressSingle` unresolved.
+    let linked = project.run(
+        "app",
+        &[
+            "build",
+            "--release",
+            "--emit=exe",
+            "--clang",
+            clang,
+            "--runtime",
+            archive.to_str().expect("archive path"),
+            "--out-dir",
+            "link-check",
+        ],
+    );
+    assert_eq!(
+        code(&linked),
+        0,
+        "the stripped archive is not linkable:\n{}",
+        stderr(&linked)
+    );
+
+    // A relative out-dir produces a relative archive path; the strip step
+    // changes its working directory and must resolve the archive first.
+    let relative = project.run(
+        "app",
+        &[
+            "build",
+            "--release",
+            "--emit=lib",
+            "--clang",
+            clang,
+            "--runtime",
+            runtime.to_str().expect("runtime path"),
+            "--out-dir",
+            "relative-lib",
+        ],
+    );
+    assert_eq!(
+        code(&relative),
+        0,
+        "relative out-dir archive failed:\n{}",
+        stderr(&relative)
+    );
+}
+
+#[test]
+fn windows_debug_and_release_builds_emit_no_pdb() {
+    if !cfg!(windows) {
+        return;
+    }
+    let Some(clang) = clang() else {
+        return;
+    };
+    let project = scaffold("no-pdb", "");
+    assert_eq!(code(&project.run("app", &["build", "--clang", clang])), 0);
+    assert_eq!(
+        code(&project.run("app", &["build", "--release", "--clang", clang])),
+        0
+    );
+    for directory in ["app/target/stc/debug", "app/target/stc/release"] {
+        for entry in std::fs::read_dir(project.path(directory)).expect("out-dir") {
+            let path = entry.expect("artifact entry").path();
+            assert_ne!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("pdb"),
+                "unexpected PDB `{}`; the release contract is object-level CodeView",
+                path.display()
+            );
+        }
     }
 }

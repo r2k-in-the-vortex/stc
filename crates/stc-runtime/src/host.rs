@@ -571,7 +571,7 @@ struct Rollback {
 }
 
 /// A host status snapshot for verbose runs and the control channel
-/// (M6-Plan §14.5).
+/// (Runtime and Execution §1.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostStatus {
     /// Active generation build, when one is installed.

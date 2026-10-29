@@ -9,12 +9,14 @@ stacks, debug information, the local debug protocol, and the interaction between
 and online change. It complements
 [Online Change and GOT](Online-Change-and-GOT.md) and
 [Runtime and Execution](Runtime-and-Execution.md). The full debugger is implemented in M6.5; the
-resolved rationale is in `update_plan_got.md`, and the phase decisions are D-173–D-183.
+phase decisions are D-173–D-183.
 
 ## 1. Scope and safety stance
 
-V1 provides **full typed debug and monitoring**. The project is **not a safety PLC and is not
-responsible for safety in any way**. Debug sessions may:
+V1 provides **full typed debug and monitoring**. `stc` can control real machinery, but the
+project is **not a safety PLC and is not responsible for safety in any way**; safety must be
+provided by a separate safety system and machine design as required by law and regulation. Debug
+sessions may:
 
 - stop the cycle (a future watchdog deadline is paused or extended while stopped);
 - hold outputs at their last or forced values indefinitely;
@@ -31,7 +33,7 @@ The runtime has three thread classes:
 | --- | --- |
 | Cycle | Executes ST, applies queued writes/forces at boundaries, and services breakpoint checkpoints |
 | Loader/prepare | Loads/prepares a candidate module during online change |
-| Service/monitor | Serves typed reads, watch streams, debug control, status, and manifest export |
+| Service/monitor | Queues typed reads and watches and serves debug control, status, and manifest export; the cycle thread applies reads and watch batches at a boundary |
 
 A debug session is a service-side session with an authenticated connection. Normal monitoring
 does not stop the cycle. Breakpoint stops and stepping suspend the cycle thread at defined
@@ -51,10 +53,11 @@ grant access to a running frame's locals.
 
 A read is performed against a generation-pinned view:
 
-- the service thread pins the active generation with an epoch/refcount;
-- the host resolves the descriptor and copies the typed value;
+- the service thread submits the read; the cycle thread applies it at the next boundary, pinning
+  the active generation with an epoch/refcount;
+- the cycle thread resolves the descriptor and copies the typed value (see §15.2);
 - the generation cannot unload until the pin is released;
-- no cycle lock is taken.
+- no cycle lock is taken and the service thread never dereferences host storage.
 
 A read may observe a value from a single cycle or a torn aggregate only if the type is explicitly
 declared as non-atomic; scalar roots and the documented atomic roots (`OVERLAP`) are copied as a
@@ -206,6 +209,8 @@ and debug-information errors. Online-change diagnostics use their own
 - Raw memory editing in the standard API.
 - Persistent breakpoints/forces across online swaps or restarts.
 - Reconstructing missing source or debug information from a manifest.
+- A general-purpose profiler or trace analyzer; the debug service collects no profiles or
+  execution traces.
 
 ## 11. Related documents
 
@@ -319,7 +324,7 @@ The host binds, creates the audit log, and then atomically writes a user-only en
 
 ```json
 {
-  "audit_log": "target/stc/debug/stc-debug-0123456789abcdef.audit.jsonl",
+  "audit_log": "target/stc/debug/stc-debug-0123456789abcdef0123456789abcdef.audit.jsonl",
   "build_id": "0x0123456789abcdef0123456789abcdef",
   "endpoint": "<transport-specific endpoint>",
   "format": 1,
@@ -346,7 +351,7 @@ The host binds, creates the audit log, and then atomically writes a user-only en
   no timestamps.
 
 The driver chooses the default endpoint path under the active out-dir as
-`stc-debug-<16 hex>.endpoint`; `--endpoint` (`stc debug`) or `--debug-endpoint` (`stc run`)
+`stc-debug-<32 hex>.endpoint`; `--endpoint` (`stc debug`) or `--debug-endpoint` (`stc run`)
 selects an explicit path whose parent directory must already exist. The host prints the endpoint
 path in server and launch modes; the token is never printed. A client reads the endpoint file
 only after the host reports it, or polls for it within the connect deadline.
@@ -392,9 +397,10 @@ Every request is checked in this order: framing and protocol, token, session sta
 authorization. Authentication precedes every operation, including `session.start`.
 
 - A missing, malformed, or wrong token is `STC-E-DEBUG-005`; the connection closes and the failure
-  is audited. Five authentication failures on one connection, or twenty on one endpoint within
-  60 seconds, make the endpoint refuse new connections for 60 seconds. Failures are rate-limited
-  before the constant-time comparison.
+  is audited. Because every authentication failure closes its connection, failures are counted per
+  endpoint, not per connection. Twenty authentication failures on one endpoint within 60 seconds
+  make the endpoint refuse new connections for 60 seconds, audited as `transport-error` with
+  `detail.reason:"auth-refused"`. Failures are rate-limited before the constant-time comparison.
 - `session.start` requests scopes from this closed set:
   - `observe`: `var.read`, `watch.*`, `session.status`, `stack.list`, `frame.read`,
     `manifest.get`.
@@ -733,9 +739,14 @@ instead of being guessed. A target absent from the type/root/aggregate tables re
 
 ### 15.2 Reads and consistency
 
-- The service thread pins the active generation (`Host::pin_active`), resolves the target, copies
-  the typed value from root/direct storage, and releases the pin. It never takes a lock held by
-  the cycle and never blocks the cycle.
+- The service thread submits the read and waits for the reply; the cycle thread applies it at the
+  next boundary in `Host::debug_pump_at`, pinning the active generation (`Host::pin_active`),
+  resolving the target, copying the typed value from root/direct storage, and releasing the pin.
+  The service thread never dereferences host, module, root, or process-image storage, takes no
+  lock held by the cycle, and never blocks the cycle. `Host::debug_read` is the synchronous
+  embedding API and performs the same pinned copy on the calling thread. `Host::cycle_at` pumps
+  automatically; an embedding host that drives the cycle itself calls `Host::debug_pump_at` at a
+  boundary.
 - A scalar root, enum, subrange, time/date value, single-root string, or single-root scalar array
   is copied as one unit and reported `atomic:true`. An `OVERLAP` root is copied as its declared
   bytes.
@@ -790,6 +801,10 @@ A write queued while stopped remains queued until the cycle resumes and reaches 
 write to an input is overwritten by the next input latch unless an active force holds it. A write
 to an output is visible in the same cycle's publication. A write to a `RETAIN` root follows the
 normal state-save policy.
+
+A write to a 1-bit direct variable (`%IX`/`%QX`/`%MX` bit form) updates only that bit in the
+shared process-image byte and preserves the other bits; the active process-image binding supplies
+the byte offset and bit position.
 
 ### 15.4 Force queue and release
 
@@ -901,6 +916,9 @@ force targets with `STC-E-DEBUG-009`.
 
 - A watch is a repeated read of up to 256 targets at an interval of at least 50 ms; the service
   thread coalesces missed periods into one batch, never a backlog of identical batches.
+- A new watch is due immediately: the first batch (the current values) is emitted at the next
+  boundary pump, and later batches follow at the watch interval. A watch batch may therefore
+  arrive before a teardown event on the same connection; this is within the coalescing rules.
 - Each batch is tagged with generation, build ID, cycle, and per-value `consistent`; values use
   §15.5. Unavailable values carry their warning code per value.
 - If the event queue is full (64 batches or 1 MiB), the oldest watch batch is dropped and the
@@ -1153,8 +1171,15 @@ Format 1:
   protocol thread reads only those snapshots. Values or frames the table cannot describe are
   `available:false`/`optimized_out:true` with `STC-W-DEBUG-002`; no raw address is returned to a
   client.
-- The v1 frame rules cover x86-64 Windows and Linux. AArch64 frame rules are a documented
-  follow-up unless the target is added to the runtime test matrix.
+- The format-1 frame rule covers x86-64 Windows and Linux and AArch64 Linux. On AArch64 the
+  service-13 entry point captures `x29` (frame pointer), `sp`, and `x30` (return address) and
+  passes them in place of the x86-64 `rbp`/`rsp`/stack return address; the build-time extractor
+  recognizes `DW_AT_frame_base` with `DW_OP_reg29 (x29)` in addition to x86-64 `DW_OP_reg6
+  (rbp)`, and uses the same `fp+16` CFA, `saved_fp = -16`, and `return_address = -8` layout.
+  AArch64 modules are compiled with `-mbranch-protection=none` so the saved link register is the
+  raw caller address the walk compares against manifest code ranges. A function compiled without
+  a frame pointer has no usable frame base; it is reported as an optimized-out caller
+  (`optimized_out:true` with `STC-W-DEBUG-002`) rather than walked with a guessed layout.
 
 ## 17. Debug and release build rules
 
@@ -1333,5 +1358,7 @@ debugger that supports typed access, but it cannot stop at checkpoints. `stc tes
 
 The debug service, its pause bound, its authentication, and its audit log are availability and
 operability features, not safety functions. A stopped or forced controller may hold outputs
-indefinitely; the project is not a safety PLC and is not responsible for safety. Deployments that
-require fail-safe behavior must implement it independently and must not rely on `stc`.
+indefinitely. `stc` can control real machinery, but it is not a safety PLC and is not responsible
+for safety; safety must be provided by a separate safety system and machine design as required by
+law and regulation. Deployments that require fail-safe behavior must implement it independently
+and must not rely on `stc`.

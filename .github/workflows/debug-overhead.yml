@@ -3,6 +3,8 @@ name: Debug overhead
 # Measurement only: the numbers are recorded on M6.5 and must never gate a
 # build. Dispatch this workflow when the debug overhead needs fresh Windows
 # and Linux figures; read them from the job log (`gh run view --log`).
+# The Linux matrix covers x64 and AArch64; the AArch64 figures are
+# informational and are never compared as a gate.
 on:
   workflow_dispatch:
 
@@ -19,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:

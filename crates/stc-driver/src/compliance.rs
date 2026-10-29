@@ -9,7 +9,7 @@ use stc_codegen::Json;
 use crate::report::Format;
 
 const EDITION: &str = "IEC 61131-3:2013";
-const SAFETY: &str = "This project is not a safety PLC and assumes no safety responsibility.";
+const SAFETY: &str = "This project is not a safety PLC and assumes no safety responsibility; it may control machinery, but safety must be provided by a separate system and machine design as required by law and regulation.";
 const EXTENSIONS: [&str; 4] = ["STC-UTF8", "STC-PRAGMA", "STC-TEST", "STC-POINTER"];
 const RUNTIME_CAPABILITIES: [&str; 3] = ["online-change", "got-manifest", "debug-monitoring"];
 

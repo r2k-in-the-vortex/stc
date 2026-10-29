@@ -36,7 +36,8 @@ The honest end claim, if the program succeeds, is:
 > hardware remain in the trusted computing base.
 
 This is deliberately weaker than "the compiler is formally verified". LLVM is not verified, the
-project is not a safety PLC, and verification is not certification. The claim ladder in §3 makes
+project is not a safety PLC (though it can control machinery, safety must come from a separate
+system and machine design), and verification is not certification. The claim ladder in §3 makes
 the boundary explicit.
 
 ## 2. Starting point
@@ -990,8 +991,9 @@ system, filesystem, I/O devices, and hardware.
 - Proving the Rust standard library, the operating system, the filesystem, I/O devices, or
   hardware.
 - A Lean rewrite of the 131k-line compiler. This is a separate product decision (D-V10).
-- Safety certification or a safety claim. The project is not a safety PLC and assumes no safety
-  responsibility.
+- Safety certification or a safety claim. The project can control real machinery but is not a
+  safety PLC and assumes no safety responsibility; safety must be provided by a separate safety
+  system and machine design as required by law and regulation.
 - Proving CLI ergonomics, diagnostic prose, or the TOML parser unless a security property
   requires it.
 - A cost-model proof of the O(1) activation or latency claims. These remain measured and

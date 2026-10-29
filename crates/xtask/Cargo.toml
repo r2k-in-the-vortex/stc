@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+stc-got = { path = "../stc-got" }
 toml_edit = "0.25.17"
 
 [lints]

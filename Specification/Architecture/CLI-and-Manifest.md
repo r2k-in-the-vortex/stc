@@ -1,8 +1,8 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28)
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28)
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
+Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md)
 
 ## 1. CLI surface
 
@@ -152,8 +152,13 @@ JSON format: one object per diagnostic on stdout, one per line:
 ```
 
 - Error codes are stable; see the conformance profile and each spec. The complete code index,
-  including the M6 `PROJECT`, `LOCK`, `ASSERT`, `TEST`, `FMT`, `RUN`, and `ONLINE` additions and
-  the M6.5 `DEBUG` family, is [Conformance Profile](../01-Conformance-Profile.md) §10.
+  including the M6 `PROJECT`, `LOCK`, `ASSERT`, `TEST`, `FMT`, `RUN`, and `ONLINE` additions,
+  the M6.5 `DEBUG` family, and the semantic/codegen/build families, is
+  [Conformance Profile](../01-Conformance-Profile.md) §10.
+- Promoting a warning to an error through `[lints]`, `-D <code>`, `-W <code>`, `-A <code>`, or
+  `--deny warnings` changes only its severity. The diagnostic keeps its original code and span,
+  so a promoted `STC-W-*` warning renders as an error carrying the same `STC-W-*` code; the
+  effective severity, not the code prefix, determines whether the build fails.
 - Project diagnostics use `STC-E-PROJECT-*` / `STC-W-PROJECT-*`; lockfile diagnostics use
   `STC-E-LOCK-*`; test and assertion diagnostics use `STC-E-TEST-*` / `STC-E-ASSERT-*`;
   formatter diagnostics use `STC-E-FMT-*`.
@@ -316,6 +321,9 @@ the command surface.
 | `--debug-protocol <kind>` | Launch transport (`pipe` or `socket`); overrides `[debug].protocol`. |
 | `--debug` / `--release` | Build-mode selection; `stc debug` defaults to debug. |
 
+`stc debug` accepts `--message-format human` (the default) or `json`; `short` is rejected as a
+usage error. `--batch` implies `json`.
+
 Launch mode also accepts the `stc run` run options (`--cycles`, `--cycle-time`, `--io`,
 `--io-file`, `--state-file`, `--reset-retain`, `--no-retain`, `--mock-clock`) and the common
 build/project options. `--attach` cannot be combined with build, launch, or server-grant options;
@@ -338,6 +346,10 @@ present the optional `view` result from Debug and Monitoring §15.5: the text na
 manifest-assisted, shows per-field runtime roots/handles rather than a raw struct dump, and never
 prints an address, absolute path, or timestamp.
 
+`watch` accepts an optional interval in milliseconds and defaults to 1000 ms; initial `--watch`
+targets use the same default. The server clamps the interval to its 50 ms minimum (Debug and
+Monitoring §13.5).
+
 **Launch versus attach.** Launch mode owns the target: on `quit` or EOF it stops the session,
 clears forces and breakpoints, shuts the host down, and returns 0 on a clean shutdown, 4 on a
 target trap, and 130 on interrupt. Attach mode stops the session (clearing state), detaches, and
@@ -345,7 +357,8 @@ leaves the host running; it returns 0 on a clean detach. A session ended by a sw
 a protocol error is reported with its `STC-E-DEBUG-*` code and exits 2. The CLI never prints the
 token; the endpoint path is printed on stderr in launch and server modes. The non-safety notice is
 printed at session start and included in `--help`; a stopped or forced controller may hold outputs
-indefinitely and the project is not a safety PLC.
+indefinitely. `stc` may control machinery, but it is not a safety PLC and safety must be provided
+by a separate system and machine design as required by law and regulation.
 
 **`stc run --debug-server`.** `stc run` gains:
 
@@ -493,8 +506,13 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   their own `[project] sources` and manifests.
 - `[project] stdlib` defaults to `true`. When false, standard FBs are not injected (standard
   functions remain, because they are part of the language prelude). This is for conformance tests.
-- `[project] configuration` selects one `CONFIGURATION` declaration. If omitted and exactly one
-  exists, it is selected. If omitted and multiple exist, the build fails with a list.
+- `[project] configuration` selects one `CONFIGURATION` declaration. Only `CONFIGURATION`
+  declarations in the root package are build entries. Configurations declared by dependency
+  packages are declarations, not selectable builds; naming one is `STC-E-PROJECT-007`
+  ("configuration `<name>` is not declared in package `<root>`"). If the key is omitted and
+  exactly one root-package configuration exists, it is selected. If omitted and multiple exist,
+  the build fails with a list. When no configuration is declared, the synthesized `_default`
+  plan considers only programs declared in the root package (D-083).
 - `[build] target` is passed to clang and emitted as the IR triple.
 - `[build] opt-level` is `0|1|2|3|"s"`; maps to clang `-O` flags. When the key is absent, debug
   builds default to 0 and release builds to 2 (D-178).
@@ -744,6 +762,46 @@ Cleaning a directory that contains the project root is refused. A runtime store 
 `stc run --watch --store` CLI override is not discoverable by clean; keep it outside the generated
 trees or delete it explicitly.
 
+### 4.1 Release package layout
+
+`cargo xtask package --locked [--out <dir>]` builds `stc-driver` and `stc-runtime` in release
+mode (always `--locked`) and writes a versioned, timestamp-free package:
+
+```text
+stc-<version>-<host-triple>/
+  bin/stc(.exe)
+  lib/stc_runtime.lib | libstc_runtime.a      static host archive
+  lib/stc_runtime.dll | libstc_runtime.so     shared host library
+  docs/README.md
+  docs/USER-GUIDE.md
+  docs/RELEASE-NOTES.md
+  docs/KNOWN-LIMITATIONS.md
+  docs/NON-SAFETY.md
+  package.json
+  SHA256SUMS
+```
+
+- One package is produced per native host triple: `x86_64-pc-windows-msvc`,
+  `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu`. There is no combined archive.
+- `package.json` records `schema`, `version`, `profile`, `host`, `debug_contract`, the supported
+  artifact/ABI versions, the artifact list, and the non-safety identifier. It contains no
+  timestamp, absolute path, user name, or random ID. `debug_contract` is host-derived:
+  `object-codeview` on Windows MSVC and `dwarf` on Linux GNU.
+- `SHA256SUMS` is sorted by package-relative path (`/` separators), lists every file in the
+  package except itself, and is compatible with `sha256sum -c`.
+- Runtime discovery checks, in order: `--runtime`, `STC_RUNTIME`, `[build].runtime`, a file beside
+  the executable, `<exe>/lib`, `<exe>/../lib`, and the workspace `target/{release,debug}` fallback.
+  The `bin`/`lib` package layout therefore works without environment variables.
+- The unpacked-package exercise runs `stc --version`, `stc compliance`, and then `new`, `check`,
+  `build`, `build --release`, `build --release --emit=lib`, `run --cycles 2`, `test`, `clean`, and
+  a final `build` that proves the project is usable after the clean.
+- Static archives are unpacked, native object members are stripped with
+  `llvm-objcopy --strip-debug`, and the stripped objects replace the originals with `llvm-ar rD`;
+  every import-library or LLVM-bitcode member and symbol-table entry is preserved. The shared host
+  library is stripped directly. `package.json` and the package are written only after the archive,
+  shared library, module, and executable checks pass.
+- The package is an archive, not an installer; there is no package-manager integration in v1.
+
 `<name>.stc-meta.json`:
 
 ```json
@@ -751,7 +809,7 @@ trees or delete it explicitly.
   "abi_version": 2,
   "artifact": "motor-control",
   "build_id": "0x…",
-  "compiler": "stc 0.1.0",
+  "compiler": "stc 1.0.0",
   "configuration": "Main",
   "descriptor_digest": "0x…",
   "debug": {
@@ -888,5 +946,5 @@ contains secrets; paths are printed as written by the user.
 None as of 2026-10-28. The M6.5 debug/release CLI, protocol, and `[debug]` schema were resolved
 in §1.7, §2.2, §4, and [Decisions](../Decisions.md) D-173–D-183. The online-change
 CLI/tables/manifest schema is resolved in [Online Change and GOT](Online-Change-and-GOT.md) and
-`update_plan_got.md` §13.0. New CLI/manifest questions are appended here or in
+[Decisions](../Decisions.md). New CLI/manifest questions are appended here or in
 [Decisions](../Decisions.md).

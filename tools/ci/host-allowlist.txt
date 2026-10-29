@@ -1,0 +1,35 @@
+# Host-specific source lines allowed by `cargo xtask host-audit --check` (D-201).
+# Format: <workspace-relative path> | <reason>
+#
+# The portable compiler crates and the module/manifest model may name only
+# their single host module. The runtime and driver own the platform layer and
+# list every file that contains an operating-system branch. The audit fails
+# when a source file is missing from this list or an entry here is stale.
+
+# Portable crates: one host module each.
+crates/stc-codegen/src/host.rs | host target triple resolution (D-201)
+crates/stc-manifest/src/host.rs | host filesystem path semantics (D-201)
+
+# Driver: toolchain discovery, artifact naming, and process handling.
+crates/stc-driver/src/build.rs | artifact names, PIC, linker flags, archive tools
+crates/stc-driver/src/debug.rs | platform debug-endpoint spelling
+crates/stc-driver/src/run.rs | Windows interrupt exit code
+crates/stc-driver/src/toolchain.rs | MSVC and GNU link arguments
+crates/stc-driver/src/watch.rs | Windows named-pipe and Unix socket endpoint spelling
+
+# Runtime: platform modules.
+crates/stc-runtime/src/catalog.rs | host triple for the default catalog
+crates/stc-runtime/src/control.rs | Unix socket permission assertion and Windows endpoint test
+crates/stc-runtime/src/debug_server.rs | named-pipe and Unix-socket binding
+crates/stc-runtime/src/lib.rs | host triple in the exported runtime identity
+crates/stc-runtime/src/loader.rs | LoadLibrary/dlopen platform loader
+crates/stc-runtime/src/priority.rs | service-thread priority lowering
+crates/stc-runtime/src/signal.rs | console and POSIX signal handlers
+crates/stc-runtime/src/state.rs | atomic replacement via MoveFileEx/rename
+crates/stc-runtime/src/stop.rs | x86-64 and AArch64 service-13 trampolines
+crates/stc-runtime/src/transport.rs | named pipes, Unix sockets, private files
+crates/stc-runtime/src/trap_boundary.rs | x86-64 and AArch64 setjmp shims
+
+# The audit itself names the patterns it looks for, and the release package
+# names the host's debug backend (D-206).
+crates/xtask/src/main.rs | host-audit patterns and host-derived debug contract

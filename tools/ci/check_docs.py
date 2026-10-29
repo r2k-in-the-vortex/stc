@@ -30,7 +30,6 @@ PROFILE = "stc-2013-oop-utf8-v1"
 
 REQUIRED_DOCUMENTS = (
     "README.md",
-    "Specification/00-Project-Plan.md",
     "Specification/01-Conformance-Profile.md",
     "Specification/Syntax/Tokenization.md",
     "Specification/Syntax/Grammar.md",
@@ -49,6 +48,7 @@ REQUIRED_DOCUMENTS = (
     "Specification/Verification/Semantics-Charter.md",
     "Specification/Verification/Semantics.md",
     "Specification/Verification/Core-Coverage.md",
+    "Specification/Verification/Performance.md",
     "Specification/Decisions.md",
     "Specification/UTF8-Strings.md",
 )

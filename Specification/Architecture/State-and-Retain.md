@@ -168,9 +168,20 @@ Adding/removing/reordering a retained field changes the hash.
 
 - Write to `<state-file>.tmp` in the same directory, flush/sync, then rename over the target.
   Keeping the temporary file in the same directory makes the rename a same-filesystem operation.
-- Replace-on-rename is provided by the runtime's host platform layer on Windows and Linux; a
-  failed replace leaves the previous state file intact and reports `STC-E-RUN-RETAIN-003`
-  (D-042).
+- Unix durability sequence for the retained-state file:
+  - the temporary file is created with mode `0600` and set to that exact mode before any state
+    is written, so the process umask cannot widen it (D-203);
+  - the whole file is written and then synced;
+  - the temporary file is renamed over the target in the same directory;
+  - after a successful rename, the parent directory is opened and synced so the rename
+    survives power loss.
+- Windows replaces the target with `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`; the
+  write-through flag makes the replacement durable, and Windows applies no Unix file mode.
+- I/O output files use the same durability sequence (temporary file, file sync, same-directory
+  rename, parent-directory sync on Unix) but keep ordinary permissions; they are output, not
+  runtime-private state.
+- A failed replace leaves the previous state file intact, removes the temporary file, and
+  reports `STC-E-RUN-RETAIN-003` (D-042).
 - v1 saves at normal shutdown (including handled interrupt). A crash or power loss can lose the
   latest cycle's state; periodic saving is a future option.
 
