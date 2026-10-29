@@ -2,7 +2,7 @@
 
 Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixed the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are implemented and active (2026-10-28); M7 adds the cross-target, packaging, examples, manifest-hardening, and performance evidence (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Project Plan](../00-Project-Plan.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
+Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
 > **M4/M4.5 status:** IR snapshots, clang verification (`STC_REQUIRE_CLANG=1` in CI), execution
 > tests, C-harness library tests, process-image tests, scalar retained-state tests, determinism
@@ -423,9 +423,8 @@ Debug-disabled overhead is measured by the ignored
 `crates/stc-driver/tests/debug_overhead.rs` test (`cargo test -p stc-driver --test debug_overhead
 -- --ignored --nocapture`), which compares release, hook-free debug, and hook-bearing debug builds
 through the real build pipeline and records ns/cycle; the opt-in `Debug overhead` workflow runs
-the same measurement on all three native hosts. The measured numbers are recorded in the M6.5
-plan, the M7 record, and (for one ARM64 runner) [Performance](../Verification/Performance.md),
-and are not a CI timing gate.
+the same measurement on all three native hosts. The measured numbers are recorded in
+[Performance](../Verification/Performance.md) and the M7 record, and are not a CI timing gate.
 
 The debug suite also covers the externally fixed contracts of D-173–D-179:
 
@@ -573,7 +572,7 @@ phase-2 evidence run
 [`40819548212`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40819548212) (commit
 `2aafbc5`) added the ARM64 package job. The final M8 sign-off run
 [`40821738218`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218) (commit
-`ba97c5a`) passed all 36 jobs, and `M8-Plan.md` §18 records it alongside the phase runs.
+`ba97c5a`) passed all 36 jobs.
 
 Unix-only behaviour is asserted on both Linux architectures: state files are mode 0600 and a
 failed replace keeps the previous target and removes the temporary file (`stc-runtime` state

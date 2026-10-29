@@ -428,6 +428,15 @@ pub enum SizeOfHir {
 
 Notes:
 
+- The implemented v1 `HirCrate` owns the `Interner`, the canonical `TyArena`, and dense arenas
+  for `defs`, `fields`, `params`, `locals`, `bodies`, `exprs`, `stmts`, `packages`, and
+  `std_fns`. Stable IDs are `DefId`, `FieldId`, `ParamId`, `LocalId`, `BodyId`, `ExprId`,
+  `StmtId`, `TyId`, `PackageId`, and `StdFnId`. A `Body` lists `ParamId`, `LocalId`, and
+  `StmtId` values in source order; `ExprHir`/`StmtHir` carry their kind and `Span` (and `TyId`
+  for expressions). Canonical `Ty` forms are builtin scalars, structural `Array`/`Ref`/`String`
+  (and `Ptr` for `STC-POINTER`), nominal `Named(DefId)`, internal `Null`, `Generic` for
+  standard-function signatures, and `Error`. `dump_hir` renders a deterministic, ID-ordered
+  textual dump for snapshots.
 - `PlaceHir` is a resolved lvalue: local, parameter, global, field, index, or deref. A deref of a
   `POINTER TO` place and a deref of a `REF_TO` place share the same place node; the operand type
   distinguishes them.
@@ -442,7 +451,10 @@ Notes:
   other conversions remain `Cast` nodes.
 - `TyId` indexes the type arena; types are canonicalized (same type = same ID).
 - `ConfigHir` contains the selected configuration, resources, tasks, program instances, and
-  variable bindings needed by the runtime generator.
+  variable bindings needed by the runtime generator. A `CONFIGURATION` with no explicit
+  `RESOURCE` is lowered with one synthesized resource named `RESOURCE` (empty `ON` target, no
+  tasks); its program configurations are checked and lowered under that resource, and identity
+  paths use `RESOURCE` as the resource segment.
 - `Export` records `{stc:export}` symbols and their stable C names.
 - `IdentityCatalog` is produced after semantic analysis and consumed by codegen to emit the GOT
   manifest. `GotId`s are content-derived identities; a tracked rename/move changes the current

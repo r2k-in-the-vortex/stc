@@ -1,4 +1,4 @@
-//! Stable M3 diagnostic codes (D-062 and `M3-Plan.md` §7).
+//! Stable M3 diagnostic codes (D-062; Conformance Profile §10.2).
 
 // Names and scopes.
 /// Unknown name.

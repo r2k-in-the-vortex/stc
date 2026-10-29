@@ -336,6 +336,7 @@ fn driver_emits_objects_for_the_matrix() {
     }
 }
 
+/// Cross-target `exe`/`lib` emission is rejected with `STC-E-BUILD-004`.
 #[test]
 fn cross_target_executable_and_library_are_rejected() {
     if clang().is_none() {

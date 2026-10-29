@@ -334,10 +334,13 @@ cells, code addresses from function cells, and process-image addresses from dire
 
 #### 2.3.3 Generation pinning and services
 
-Service/monitor threads read typed variables through generation-pinned descriptors. A pin is an
-epoch/refcount that delays unload until the reader releases it. Service threads never call
-`stc_module_cycle`, never write GOT cells, and never take a lock held by the cycle thread.
-Debug writes and forcing are queued for cycle-boundary application.
+Service/monitor threads submit typed reads and watches; the cycle thread applies them at the next
+boundary in `Host::debug_pump_at`, pinning the active generation. A pin is an epoch/refcount that
+delays unload until the copy is complete. The service thread never dereferences host, module,
+root, or process-image storage, never calls `stc_module_cycle`, never writes GOT cells, and never
+takes a lock held by the cycle thread. Debug writes and forcing are queued for cycle-boundary
+application; `Host::debug_read` performs the same pinned copy synchronously on the calling thread
+for embedding hosts.
 
 The cycle thread runs at the process default operating-system priority. Control-server accept and
 connection threads and debug-server accept and handler threads run one class lower: Windows
@@ -636,6 +639,9 @@ assignment copies the root's value; the destination root identity is preserved.
   `.stc-meta.json` and, optionally, an embedded section.
 - Executable mode embeds the table; library mode exposes it via `stc_metadata_json`.
 - Span IDs are stable within a build, not across builds; the metadata includes a build hash.
+- Span IDs are assigned by sorting the distinct non-empty spans by `(FileId, start, end)`; the
+  table is deduplicated, so identical spans share one ID and repeated builds assign identical
+  IDs.
 
 ## 7. Test execution
 
@@ -689,6 +695,6 @@ Detailed test discovery, pragma syntax, and the per-test artifact interface are 
 
 None as of 2026-10-28. The online-change host/GOT/manifest/debug architecture is resolved in
 [Online Change and GOT](Online-Change-and-GOT.md),
-[Debug and Monitoring](Debug-and-Monitoring.md), and `update_plan_got.md` §13.0; the M6.5
+[Debug and Monitoring](Debug-and-Monitoring.md), and [Decisions](../Decisions.md); the M6.5
 protocol, session, access, checkpoint, and build contracts are recorded as D-173–D-183. New
 runtime questions are appended here or in [Decisions](../Decisions.md).

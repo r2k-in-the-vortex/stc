@@ -27,6 +27,7 @@ machine design as required by law and regulation.
 | Multi-threaded ST task execution is not provided | One cooperative cycle thread executes ST; the control and debug service threads never execute ST |
 | `ARRAY [*]` is a conformant-parameter form only | Dynamic locals, globals, and function results are rejected |
 | `stc fmt` has one fixed style and no configuration | `--check` reports a diff; post-v1 work adds configuration |
+| `VAR_CONFIG` `AT` address overrides are rejected (`STC-E-CODEGEN-001`) | `VAR_CONFIG` initial values for scalar `AT` program fields are applied; declare the address on the variable itself instead of in `VAR_CONFIG` |
 
 ## 2. Hosts, targets, and packaging
 
@@ -55,6 +56,7 @@ machine design as required by law and regulation.
 | Session limits: 256 watches, 1024 breakpoints, 1024 queued writes/forces (1 MiB), 1024 aggregate leaves per read, 1024 stack frames per stop, 100 requests/s with burst 200, 5 s connect/request deadlines, 1 MiB request and 4 MiB response/event frames | These are product limits; changing them is a protocol decision |
 | Embedded hosts use the `pipe` transport; the embedding ABI has no transport selector | `socket` is available through `DebugServerConfig` and the CLI |
 | Unix audit records have `local_date_ns = 0` because no local-time conversion is available without a new platform dependency | `monotonic_ns` is process-relative and always present |
+| Persistent globals and program fields use declaration-only debug-info entries because their storage is host-owned GOT memory | DWARF reports their name, type, and source declaration but no storage location; CodeView omits them. Use typed reads and the manifest-assisted view for live values; function, parameter, local, and type debugging is unaffected |
 
 ## 4. Online change and manifests
 

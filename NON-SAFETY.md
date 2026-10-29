@@ -50,6 +50,6 @@ This statement is repeated in `README.md`, `RELEASE-NOTES.md`,
 `KNOWN-LIMITATIONS.md`, `USER-GUIDE.md`, the `stc compliance` output, and every
 example README. It may not be softened in later documentation.
 
-See [Project Plan](../Specification/00-Project-Plan.md) §3 and §11,
+See [Conformance Profile](../Specification/01-Conformance-Profile.md) §7,
 [Debug and Monitoring](../Specification/Architecture/Debug-and-Monitoring.md)
 §17, and decisions D-194 and D-198.

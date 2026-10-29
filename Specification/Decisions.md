@@ -312,6 +312,14 @@ and results, null-dereference traps, and documented dangling-pointer behavior. P
 fields are rejected. References and pointers are not persisted in the v1 state file; a later
 state-format revision may persist `Root`/`Direct` descriptors.
 
+**Alternatives considered:** A full `POINTER TO` surface with persistent fields, casts, and
+dynamic allocation was rejected because raw addresses carry no `GotId`, type, layout, or
+lifetime identity: pointer-bearing roots could not be preserved, migrated, or persisted across a
+swap, and pointer arithmetic makes target tracking impossible. Aliasing `POINTER TO` to `REF_TO`
+was rejected because it would misrepresent raw-pointer semantics. A minimal `ADR`/`^`/`NULL`
+surface was expanded to the shipped transient-only extension with full typed arithmetic,
+indexing, and `SIZEOF` (D-145, D-146).
+
 **Consequences:** Reference values are host-resolvable descriptors, not raw addresses. Dereference
 costs a descriptor resolution (optionally cached with a generation check). `POINTER TO` is an
 explicit vendor profile feature; no IEC conformance claim is made for it.
@@ -360,6 +368,19 @@ a pre-deployment compatibility report; the runtime stores the active manifest an
 Retained-state migration across restarts is not in v1; a later state format may key leaves by
 `GotId` plus path. Manifest size/cost is measured, the active record is cached, and an optional
 later scaffold may emit declarations (never bodies) from a downloaded manifest.
+
+**Alternatives considered:** Several designs were rejected when the persistent manifest was
+adopted. Using platform dynamic-linker symbols as the GOT gives no stable type, layout, or rename
+semantics, requires the host to export every root, adds Windows import-library and symbol
+collision problems, and still needs a manifest-like layer for unload and rebinding. A single
+runtime-owned state struct or arena with a base pointer shifts offsets when declarations are
+added or reordered and defeats per-root quarantine. Runtime-only key/layout matching cannot
+preserve `GotId`s across a rename, cannot provide a cross-developer baseline, and leaves every
+structural change cold. Globally stable numeric slot numbers collide across concurrent builds and
+still require an identity for renames. Heuristic rename detection can bind the wrong storage and
+silently corrupt state, so renames stay explicit. The adopted design keeps slot numbers per
+module, makes `GotId` the identity, and lets the compiler emit the change plan while the runtime
+validates and executes it.
 
 **Consequences:** Losing or corrupting the active manifest costs a cold restart. The manifest is
 untrusted parsed data: validate every field/digest, access-control download, never execute its
@@ -501,7 +522,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-059 | M3 produces HIR: `stc-hir` owns arenas, IDs, the interner, the type arena, and resolved bodies; `stc-sema` lowers the typed AST into it. `stc-codegen` will consume HIR only. | The AST spec places HIR after type checking and M4 declares HIR as its input; producing it now stabilizes the contract. |
 | D-060 | The M3 multi-file bridge is `stc check <file>...`. Paths are sorted lexicographically before `FileId` assignment; all files form one in-memory package (`PackageId(0)`) with session root namespace `_root`. | Multi-file namespaces must be testable before `stc.toml` (M6); sorting makes diagnostics and IDs independent of CLI order. |
 | D-061 | `Interner`/`Symbol` live in `stc-hir`; the analyzer session owns the interner and the resolution map. Symbols are looked up by uppercase ASCII key and retain the first original spelling. | One intern table shared by HIR and sema, with case-insensitive lookup and stable IDs. |
-| D-062 | The M3 diagnostic table in `M3-Plan.md` §7 is stable. `STC-E-TYPE-012`, `STC-W-NAME-002`, parser, pragma, I/O, and retain codes keep their existing meanings. | Diagnostics are snapshot-tested contracts; codes are never renumbered. |
+| D-062 | The M3 diagnostic table in [Conformance Profile](01-Conformance-Profile.md) §10.2 is stable. `STC-E-TYPE-012`, `STC-W-NAME-002`, parser, pragma, I/O, and retain codes keep their existing meanings. | Diagnostics are snapshot-tested contracts; codes are never renumbered. |
 | D-063 | Type canonicalization: aliases are transparent; arrays, refs, strings, and inline structs are structural keys in the type arena except that inline structs receive anonymous nominal defs; enums, subranges, named-value types, named structs, classes, FBs, interfaces, functions, and programs are nominal (`Ty::Named(DefId)`). | Gives stable field IDs for structs/classes while keeping array/string/ref assignment simple. |
 | D-064 | Conversion matrix: implicit for int↔int, real↔real, int→real, bit-string same category, same-kind strings/chars, TIME→LTIME, subrange↔integer base with a bounds check, enum/named-value exact type, derived→base class/FB, class/FB→implemented interface, interface widening, ref covariance, and `NULL`; real→int, enum↔integer, cross-kind strings/chars, bit-string narrowing, and downcasts require an explicit conversion or `?=`. `BOOL` is never numeric. Duration arithmetic: `TIME ± TIME` yields the wider of the two, `TIME * numeric`/`numeric * TIME`/`TIME / numeric` yield the duration, and other mixed duration/numeric operations are rejected. | A documented matrix keeps checking predictable; runtime range/trap checks arrive with codegen (D-015). |
 | D-065 | Overload resolution ranks candidates by exact matches, then implicit conversions, then literal adaptation; a unique best candidate wins, otherwise `STC-E-CALL-004`. Named arguments must precede no positional arguments after them; output bindings use `=>` and must target a place. | Deterministic rule that is easy to test and explain. |
@@ -654,7 +675,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-206 | Packaging produces one archive per native host triple. `package.json.debug_contract` is `object-codeview` on Windows MSVC and `dwarf` on Linux GNU. No combined archive and no timestamps. | The debug backend is host-visible metadata; a Windows-only label on a Linux package is false. |
 | D-207 | The Unix debug endpoint and audit file remain user-only on both Linux architectures: 0600 files in a 0700 directory, symlinks refused, endpoint/socket/audit removed on stop. Container and headless hosts use the same path rules with no shared-directory fallback. | Security behaviour must not depend on architecture or environment; a fallback would silently weaken the endpoint. |
 | D-208 | M8 makes no format, ABI, protocol, language, or version change. `stc` remains `1.0.0-rc.1`; M8 completes the host-portability scope of the release candidate. | The milestone is a portability pass; identity churn would invalidate M7 evidence without a contract reason. |
-| D-209 | M8 is complete (2026-10-29): native Windows x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU support is implemented and verified on all three hosts, superseding D-195's x86-64-only execution and frame statement. The host audit (D-201), AArch64 debug parity (D-202), state durability and permissions (D-203), service priority without affinity (D-204), the pinned ARM64 matrix (D-205), and per-architecture packaging (D-206) are delivered. No language, format, ABI, protocol, or version change; the final evidence run `40821738218` (commit `ba97c5a`, all 36 jobs green) is recorded in `M8-Plan.md` §18 and the project-plan M8 status block. | The milestone is a portability pass; three-host evidence closes D-042 without reopening the release candidate. |
+| D-209 | M8 is complete (2026-10-29): native Windows x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU support is implemented and verified on all three hosts, superseding D-195's x86-64-only execution and frame statement. The host audit (D-201), AArch64 debug parity (D-202), state durability and permissions (D-203), service priority without affinity (D-204), the pinned ARM64 matrix (D-205), and per-architecture packaging (D-206) are delivered. No language, format, ABI, protocol, or version change; the final evidence run `40821738218` (commit `ba97c5a`, all 36 jobs green) is recorded in `RELEASE-NOTES.md` and `RELEASE-CHECKLIST.md`. | The milestone is a portability pass; three-host evidence closes D-042 without reopening the release candidate. |
 
 D-118 was reviewed and approved on 2026-10-24; the four clarifications stand as recorded and phase 2
 is approved. Phase 3 is complete for review and D-119 records its IR-level choices. Phase 4 is
@@ -687,8 +708,7 @@ runner, formatter, online workflow, Lean vectors, conformance/CI, and documentat
 
 M6.5 phase 0 (2026-10-27) fixes the debug protocol, session lifecycle, typed access and
 write/force rules, checkpoint table, debug/release build rules, and the DEBUG diagnostic,
-CLI, and manifest contracts in D-173–D-179 and `M6.5-Plan.md`. Phase 4 (2026-10-27) is
-complete; D-180 records the authorized manifest-format-2 extension for enum, subrange, and
+CLI, and manifest contracts in D-173–D-179. Phase 4 (2026-10-27) is complete; D-180 records the authorized manifest-format-2 extension for enum, subrange, and
 aggregate type metadata and the write/force queue, boundary application, and audit behavior
 implemented in that phase. The host ABI boundary is unchanged: major 2 stays and service ID 13
 is appended at minor 2.3. The descriptor, module, state, metadata-sidecar, and artifact formats
@@ -709,9 +729,10 @@ roots, opaque identities, and explicit `manifest_assisted`/`contiguous` labels d
 storage from a contiguous copy. No operation, format, ABI, or build-ID change is involved, and
 the phase-8 CLI is not implemented.
 
-Phase 9 (2026-10-28) is complete and recorded in `M6.5-Plan.md`: the Windows/Linux `debug` CI
-job, the twelve-target debug suite, the ignored overhead measurement, and the exit-criteria
-sweep. Phase 10 (2026-10-28) completes the milestone with D-183: the documentation sweep, the
+Phase 9 (2026-10-28) is complete: the Windows/Linux `debug` CI job, the twelve-target debug
+suite, the ignored overhead measurement, and the exit-criteria sweep are recorded in
+[Testing and Verification](Architecture/Testing-and-Verification.md) and
+[Performance](Verification/Performance.md). Phase 10 (2026-10-28) completes the milestone with D-183: the documentation sweep, the
 recorded limitations, and `handover_to_M7.md`. M6.5 is complete and M7 is the next milestone.
 
 After the milestone, D-184 resolves issue #3 (2026-10-28): `stc clean` now removes all generated
@@ -760,8 +781,8 @@ suites, AArch64 debug parity with the D-202 frame rule, Linux state durability a
 (D-203), below-normal service priority without affinity (D-204), the pinned ARM64 CI matrix
 (D-205), and per-architecture packaging (D-206). D-195's x86-64-only execution and frame
 statement is superseded by D-202 and D-209. The final sign-off run `40821738218` (commit
-`ba97c5a`) passed all 36 jobs on the three native hosts; it is recorded in `M8-Plan.md` §18 and
-the project-plan M8 status block. The release identity remains `1.0.0-rc.1` and the non-safety
+`ba97c5a`) passed all 36 jobs on the three native hosts; it is recorded in `RELEASE-NOTES.md` and
+`RELEASE-CHECKLIST.md`. The release identity remains `1.0.0-rc.1` and the non-safety
 stance is unchanged.
 
 D-094 through D-209 affect
@@ -774,16 +795,14 @@ D-094 through D-209 affect
 [I/O and Devices](Architecture/IO-and-Devices.md),
 [CLI and Manifest](Architecture/CLI-and-Manifest.md),
 [Testing and Verification](Architecture/Testing-and-Verification.md), the
-[Conformance Profile](01-Conformance-Profile.md), `README.md`, `M4.5-Plan.md`, `M5-Plan.md`,
-`M6-Plan.md`, `M6.5-Plan.md`, `handover_to_M5.md`, and `handover_to_M7.md`.
+[Conformance Profile](01-Conformance-Profile.md), `README.md`, and the release documents.
 
 D-042 is a host-portability requirement, not a language/profile change. It does not alter the IR,
 runtime ABI, or conformance profile. It requires host-specific operations (clang/linker
 discovery, artifact naming, path semantics, monotonic clock, atomic file replace) to be confined
 to the driver and runtime. Affected documents: [Architecture](Architecture/Architecture.md) §6.4,
 [Runtime](Architecture/Runtime-and-Execution.md) §2, [State](Architecture/State-and-Retain.md) §4.2,
-[Testing](Architecture/Testing-and-Verification.md) §6, and the [Project Plan](00-Project-Plan.md)
-M8.
+and [Testing](Architecture/Testing-and-Verification.md) §6.
 
 D-045 through D-058 resolve the M2 handover's open items. The syntax surface is implemented in
 `crates/stc-syntax` (stable kinds, lossless CST, typed AST views, pragma JSON),
@@ -808,9 +827,8 @@ hints, export names, folded task values, LDATE units), and the driver's manifest
 
 **None as of 2026-10-24.** All v1 planning questions Q-001 through Q-017 are resolved
 (A-005 through A-021). The online-change/GOT review Q-018 through Q-212 is resolved
-(A-022 through A-030); the full question/answer disposition is in `update_plan_got.md` §13.0.
-New questions will be appended here and in `README.md` one at a time, with a proposed default so
-implementation can continue without blocking.
+(A-022 through A-030). New questions will be appended here and in `README.md` one at a time, with
+a proposed default so implementation can continue without blocking.
 
 ## 4. Decision process
 
@@ -821,3 +839,4 @@ implementation can continue without blocking.
 - Each decision records the reason and the affected specification sections.
 - A decision that changes the language surface also changes the conformance profile and adds a
   test ID.
+- New compiler diagnostic codes require a decision entry.

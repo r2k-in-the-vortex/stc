@@ -12,8 +12,8 @@ is the normative companion to
 [I/O and Devices](IO-and-Devices.md), and
 [Debug and Monitoring](Debug-and-Monitoring.md). The byte-level keys, descriptors, manifest,
 plan, host API, and build-ID formats are fixed in
-[GOT Artifacts and Schemas](GOT-Artifacts.md). The resolved planning rationale and the full
-question disposition are in `update_plan_got.md`.
+[GOT Artifacts and Schemas](GOT-Artifacts.md). The resolved decisions are recorded in
+[Decisions](../Decisions.md).
 
 **Implementation status (2026-10-25):** M4.5 implements the host/module split, host-owned GOT
 and per-field roots, descriptor/manifest pairing, exact-baseline online change, the
@@ -67,6 +67,11 @@ The host owns:
 
 The module owns only code and version-local read-only data. It may allocate transient memory
 through the host service; that memory is freed when the version fails, retires, or unloads.
+
+On Linux GNU hosts the loader opens a module with `dlopen(RTLD_NOW | RTLD_LOCAL)`: every import
+resolves before the first entry point runs, so a module with an unresolved import fails to load
+(a non-fatal module error), and the module's exports stay out of the global symbol scope, so a
+retired generation's symbols cannot satisfy a later module's unresolved imports.
 
 ### 2.2 Thread classes
 

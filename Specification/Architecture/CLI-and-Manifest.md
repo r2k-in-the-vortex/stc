@@ -2,7 +2,7 @@
 
 Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28)
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md), [Project Plan](../00-Project-Plan.md)
+Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md)
 
 ## 1. CLI surface
 
@@ -152,8 +152,13 @@ JSON format: one object per diagnostic on stdout, one per line:
 ```
 
 - Error codes are stable; see the conformance profile and each spec. The complete code index,
-  including the M6 `PROJECT`, `LOCK`, `ASSERT`, `TEST`, `FMT`, `RUN`, and `ONLINE` additions and
-  the M6.5 `DEBUG` family, is [Conformance Profile](../01-Conformance-Profile.md) §10.
+  including the M6 `PROJECT`, `LOCK`, `ASSERT`, `TEST`, `FMT`, `RUN`, and `ONLINE` additions,
+  the M6.5 `DEBUG` family, and the semantic/codegen/build families, is
+  [Conformance Profile](../01-Conformance-Profile.md) §10.
+- Promoting a warning to an error through `[lints]`, `-D <code>`, `-W <code>`, `-A <code>`, or
+  `--deny warnings` changes only its severity. The diagnostic keeps its original code and span,
+  so a promoted `STC-W-*` warning renders as an error carrying the same `STC-W-*` code; the
+  effective severity, not the code prefix, determines whether the build fails.
 - Project diagnostics use `STC-E-PROJECT-*` / `STC-W-PROJECT-*`; lockfile diagnostics use
   `STC-E-LOCK-*`; test and assertion diagnostics use `STC-E-TEST-*` / `STC-E-ASSERT-*`;
   formatter diagnostics use `STC-E-FMT-*`.
@@ -316,6 +321,9 @@ the command surface.
 | `--debug-protocol <kind>` | Launch transport (`pipe` or `socket`); overrides `[debug].protocol`. |
 | `--debug` / `--release` | Build-mode selection; `stc debug` defaults to debug. |
 
+`stc debug` accepts `--message-format human` (the default) or `json`; `short` is rejected as a
+usage error. `--batch` implies `json`.
+
 Launch mode also accepts the `stc run` run options (`--cycles`, `--cycle-time`, `--io`,
 `--io-file`, `--state-file`, `--reset-retain`, `--no-retain`, `--mock-clock`) and the common
 build/project options. `--attach` cannot be combined with build, launch, or server-grant options;
@@ -337,6 +345,10 @@ and `quit`. They map to the wire operations and add no protocol semantics. `prin
 present the optional `view` result from Debug and Monitoring §15.5: the text names the view
 manifest-assisted, shows per-field runtime roots/handles rather than a raw struct dump, and never
 prints an address, absolute path, or timestamp.
+
+`watch` accepts an optional interval in milliseconds and defaults to 1000 ms; initial `--watch`
+targets use the same default. The server clamps the interval to its 50 ms minimum (Debug and
+Monitoring §13.5).
 
 **Launch versus attach.** Launch mode owns the target: on `quit` or EOF it stops the session,
 clears forces and breakpoints, shuts the host down, and returns 0 on a clean shutdown, 4 on a
@@ -494,8 +506,13 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   their own `[project] sources` and manifests.
 - `[project] stdlib` defaults to `true`. When false, standard FBs are not injected (standard
   functions remain, because they are part of the language prelude). This is for conformance tests.
-- `[project] configuration` selects one `CONFIGURATION` declaration. If omitted and exactly one
-  exists, it is selected. If omitted and multiple exist, the build fails with a list.
+- `[project] configuration` selects one `CONFIGURATION` declaration. Only `CONFIGURATION`
+  declarations in the root package are build entries. Configurations declared by dependency
+  packages are declarations, not selectable builds; naming one is `STC-E-PROJECT-007`
+  ("configuration `<name>` is not declared in package `<root>`"). If the key is omitted and
+  exactly one root-package configuration exists, it is selected. If omitted and multiple exist,
+  the build fails with a list. When no configuration is declared, the synthesized `_default`
+  plan considers only programs declared in the root package (D-083).
 - `[build] target` is passed to clang and emitted as the IR triple.
 - `[build] opt-level` is `0|1|2|3|"s"`; maps to clang `-O` flags. When the key is absent, debug
   builds default to 0 and release builds to 2 (D-178).
@@ -770,8 +787,8 @@ stc-<version>-<host-triple>/
   artifact/ABI versions, the artifact list, and the non-safety identifier. It contains no
   timestamp, absolute path, user name, or random ID. `debug_contract` is host-derived:
   `object-codeview` on Windows MSVC and `dwarf` on Linux GNU.
-- `SHA256SUMS` is sorted by package-relative path (`/` separators) and is compatible with
-  `sha256sum -c`.
+- `SHA256SUMS` is sorted by package-relative path (`/` separators), lists every file in the
+  package except itself, and is compatible with `sha256sum -c`.
 - Runtime discovery checks, in order: `--runtime`, `STC_RUNTIME`, `[build].runtime`, a file beside
   the executable, `<exe>/lib`, `<exe>/../lib`, and the workspace `target/{release,debug}` fallback.
   The `bin`/`lib` package layout therefore works without environment variables.
@@ -929,5 +946,5 @@ contains secrets; paths are printed as written by the user.
 None as of 2026-10-28. The M6.5 debug/release CLI, protocol, and `[debug]` schema were resolved
 in §1.7, §2.2, §4, and [Decisions](../Decisions.md) D-173–D-183. The online-change
 CLI/tables/manifest schema is resolved in [Online Change and GOT](Online-Change-and-GOT.md) and
-`update_plan_got.md` §13.0. New CLI/manifest questions are appended here or in
+[Decisions](../Decisions.md). New CLI/manifest questions are appended here or in
 [Decisions](../Decisions.md).

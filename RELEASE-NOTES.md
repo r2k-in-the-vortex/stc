@@ -85,7 +85,8 @@ supported native hosts are:
 M8 verification: CI run
 [40821738218](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218)
 (commit `ba97c5a`) passed all 36 jobs on the three native hosts; the
-phase evidence runs are recorded in [`M8-Plan.md`](M8-Plan.md) §18.
+phase evidence runs are recorded in
+[Testing and Verification](Specification/Architecture/Testing-and-Verification.md) §6.4.
 
 ## Artifacts
 
@@ -178,8 +179,7 @@ cross-target, package, traceability, Lean, and fuzz-smoke jobs natively on
 CI run
 [40777754963](https://github.com/r2k-in-the-vortex/stc/actions/runs/40777754963)
 passed on `windows-2025` and `ubuntu-24.04` for commit `8dbcbf4`. M8 host
-evidence: every phase run in [`M8-Plan.md`](M8-Plan.md) §18 is green on the
-three native hosts, and the final sign-off run
+evidence: every phase run is green on the three native hosts, and the final sign-off run
 [40821738218](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218)
 passed all 36 jobs on commit `ba97c5a`.
 Performance measurements are informational and not gating.

@@ -339,8 +339,8 @@ fn modules_expose_2_3_hooks_in_debug_and_2_1_without_hooks_in_release() {
     }
     // On ELF the linked module keeps DWARF. On MSVC targets the object carries
     // `.debug$S`/`.debug$T`, but the current lld-link invocation (no `/DEBUG`)
-    // neither copies CodeView into the DLL nor emits a PDB; that phase-2
-    // limitation is recorded in the M6.5 plan and is not changed here.
+    // neither copies CodeView into the DLL nor emits a PDB; that limitation is
+    // recorded in KNOWN-LIMITATIONS.md §3 and is not changed here.
     if !cfg!(windows) {
         let debug_module = std::fs::read(project.path(&format!(
             "app/target/stc/debug/{}",

@@ -128,7 +128,7 @@ stepping, call stacks, the manifest-assisted split-object view, and a local auth
 teardown; and the `stc debug` CLI and `stc run --debug-server` expose it. Debug hooks add one
 host service (ID 13 at host ABI 2.3) and are absent from release and test artifacts.
 Debug-disabled overhead is measured on Windows and Linux and recorded in
-[M6.5-Plan.md](M6.5-Plan.md); it is not a CI gate.
+[Performance](Specification/Verification/Performance.md); it is not a CI gate.
 The persistent host, loadable modules, GOT roots, manifests, swap protocol,
 and process-image remap are implemented and shared by the M5 lowering. Parser and semantic snapshots, IR snapshots, clang verification, execution
 and C-harness tests, a committed
@@ -156,7 +156,6 @@ timeout, or interlock is provided. The consolidated list is in
 
 | Document | Purpose |
 | --- | --- |
-| [Project Plan](Specification/00-Project-Plan.md) | Scope, milestones, risks, definition of done |
 | [Conformance Profile](Specification/01-Conformance-Profile.md) | Exactly what is implemented and claimed; stable diagnostic code index (§10) |
 | [Tokenization](Specification/Syntax/Tokenization.md) | Source model, tokens, literals, trivia |
 | [Grammar](Specification/Syntax/Grammar.md) | EBNF for the supported ST surface |
@@ -177,8 +176,6 @@ timeout, or interlock is provided. The consolidated list is in
 | [Known Limitations](KNOWN-LIMITATIONS.md) | Consolidated v1 limits and workarounds |
 | [Non-Safety Statement](NON-SAFETY.md) | Not a safety PLC; safety is a separate system |
 | [Release Checklist](RELEASE-CHECKLIST.md) | Owner, evidence, and sign-off record |
-| [M7 Plan](M7-Plan.md) | Release-candidate implementation plan |
-| [M8 Plan](M8-Plan.md) | Linux host portability implementation plan |
 
 ## Goal
 
@@ -424,21 +421,11 @@ stc/
   .github/workflows/         GitHub Actions CI
   .vscode/                   rust-analyzer test explorer and coverage tasks
   .markdownlint-cli2.jsonc   Markdown lint configuration
-  M4.5-Plan.md               online-change foundation plan (complete)
-  M5-Plan.md                 structs/OOP/standard-library plan (complete)
-  M6-Plan.md                 project system, CLI, and verification plan (complete)
-  M6.5-Plan.md               debug/monitoring plan (complete)
-  M7-Plan.md                 release-candidate plan (complete)
-  M8-Plan.md                 Linux host portability plan (complete)
-  handover_to_M5.md          M4.5 handover and M5 opening contract
-  handover_to_M7.md          M6.5 handover and M7 opening contract
-  handover_to_M8.md          M7 handover and M8 opening contract
   RELEASE-NOTES.md           release-candidate notes and upgrade guidance
   USER-GUIDE.md              install, workflow, build modes, online change, debug
   KNOWN-LIMITATIONS.md       consolidated v1 limitations and workarounds
   NON-SAFETY.md              non-safety statement
   RELEASE-CHECKLIST.md       release owner, commands, and evidence
-  update_plan_got.md         resolved online-change planning record
   tools/ci/check_docs.py     specification, link, and profile checks
   tools/ci/check_local.py    local CI parity checks (docs, lint, tests, fuzz)
   tools/ci/coverage_badge.py LCOV line-coverage badge generator
@@ -563,8 +550,8 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-041 | `SyntaxKind` is a stable, append-only API; full CST/IDE API is planned for v2/v3. |
 | D-042 | `stc` and its runtime run natively on Linux x86-64 and Linux AArch64 (ARM64) from M8; Windows remains the primary development host. |
 | D-045–D-058 | M2 syntax decisions: arena CST owning the source, stable `SyntaxKind`, parser codes `STC-E-GRAM-105`–`111`, strict pragma JSON, token-extent diagnostics, recovery/missing-token policy, and interning deferred to M3. Details in `Specification/Decisions.md`. |
-| D-059–D-075 | M3 analyzer decisions: HIR in M3, the multi-file `stc check` bridge and `_root` session namespace, the interner/session model, the stable diagnostic table, type canonicalization and conversions, overloads, the standard prelude, constant evaluation, access defaults, reference/attempt rules, parse-error suppression, test-only handling, deterministic ordering, and arena-based iterative lowering. Details in `Specification/Decisions.md` and `M3-Plan.md`. |
-| D-094–D-108 | Online change is a v1 requirement: persistent host + loadable modules, host-owned GOT and per-field roots, handle-based OOP descriptors, place-descriptor references and transient `POINTER TO`, module lifecycle and double-buffered activation, persistent GOT manifest and exact-baseline/cold-download policy, full typed debug in v1, debug-by-default/`--release`, and the explicit non-safety stance. Details in `Specification/Decisions.md`, `update_plan_got.md`, and the online-change/debug specs. |
+| D-059–D-075 | M3 analyzer decisions: HIR in M3, the multi-file `stc check` bridge and `_root` session namespace, the interner/session model, the stable diagnostic table, type canonicalization and conversions, overloads, the standard prelude, constant evaluation, access defaults, reference/attempt rules, parse-error suppression, test-only handling, deterministic ordering, and arena-based iterative lowering. Details in `Specification/Decisions.md`. |
+| D-094–D-108 | Online change is a v1 requirement: persistent host + loadable modules, host-owned GOT and per-field roots, handle-based OOP descriptors, place-descriptor references and transient `POINTER TO`, module lifecycle and double-buffered activation, persistent GOT manifest and exact-baseline/cold-download policy, full typed debug in v1, debug-by-default/`--release`, and the explicit non-safety stance. Details in `Specification/Decisions.md` and the online-change/debug specs. |
 | D-113–D-117 | M4.5 phase 1 fixes the artifact contracts: normalized stable keys and content-derived `GotId`s, canonical binary/JSON encodings and digest chain, a pointer-free module descriptor with a separate function table, host ABI 2.0's exact service table and non-returning trap boundary, and build IDs derived from source/catalog/plan inputs. Details in `Specification/Architecture/GOT-Artifacts.md`. |
 | D-118 | M4.5 phase 2 records implementation clarifications without changing format 1: elementary layout encoding tags, export wrappers as module-local code paired with the wrapped callable's identity, rejection of reintroduced retired `GotId`s, and direct-variable address metadata remaining in the sidecar. The `stc-got` crate implements the identity, manifest, and plan layer. |
 | D-119–D-121 | M4.5 phases 3–4 fix the module IR shape (slot-table cell loads, indirect cell calls, ABI 2.0 entry points, structural verification), the M4 catalog projection (global/program-field/direct/task-guard roots, synthesized `_DEFAULT` topology, canonical imports, declaration-to-slot bindings), and the shared descriptor format-1 codec with digest/pairing validation and the acyclic descriptor/manifest sealing order. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
@@ -572,11 +559,11 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-124 | M4.5 phase 7 converts generated execution to the GOT/module model: persistent state, direct variables, retain leaves, and task guards use GOT cells; calls are indirect through function cells; host services use import cells; slot access is the two-load sequence; generated modules export the ABI 2 entry-point set; the host configures the process image and direct bindings from the metadata sidecar; `--emit=module`, the thin launcher, and the embedding host archive are driver artifacts; and a non-local trap boundary enables rollback-window recovery. Existing execution tests run through compiler-produced module pairs, completing the execution conversion before M5 and giving phase 8 a working preservation/rollback substrate. |
 | D-125 | M4.5 phase 8 completes the scalar compatibility/preservation policy: online activation reconfigures the process image or remaps direct cells in place, preserves values by `GotId`, and snapshots the image for rollback; moved variables and quarantined roots are exposed as runtime warnings; `reset_quarantine` is the explicit reset primitive while `Reset`/`Migrate` plans remain rejected; cold installs reinitialize roots and the image, and online prepare initializes only fresh roots; and compiler-produced modules cover initializer/state preservation, tracked rename, untracked-removal policy, type-change rejection with a cold reset, and direct-variable remap. |
 | D-126 | M4.5 phase 9 completes test and CI coverage: `fuzz_got_manifest` and `fuzz_module_descriptor` decode untrusted artifacts without loading native code; end-to-end double builds are byte-identical after adding content-derived Windows PE timestamps (`/Brepro`); combined `exe,lib` output is loaded by both the launcher and an embedding C harness; malformed baselines, invalid options, metadata sidecars, and concurrent generation pins are covered; an ignored measurement records 500 ns/1 µs activation at 16/1024 roots against 1.7 ms/86 ms prepare; and CI adds an explicit Windows/Linux online-change job plus one-MiB fuzz input caps; this closes the M4.5 verification gap on both hosts and records the O(1) switch evidence. |
-| D-127 | M4.5 phase 10 closes the milestone with a documentation and handover pass: the README, project plan, conformance profile, architecture/runtime/state/I/O/CLI/testing/debug specifications, plan, and decision log describe the implemented host/module model; `handover_to_M5.md` records the implemented contracts, M5 extension points, and open M5 decisions; and `Debug-and-Monitoring.md` §12 records the M4.5 boundary for M6.5. The debug-build entry flag is clarified: M4.5 marks its default non-release artifact form but emits no debug information or checkpoint hooks, and the M6.5 required-feature bit stays clear. This keeps the documentation truthful at the milestone boundary and prevents M5/M6.5 from reintroducing the retired direct-reference model or assuming debug hooks that do not exist yet. |
-| D-153–D-164 | M6 phase 0 fixes the project/package model (kebab-case `stc.toml`, package identity, lockfile), the cooperative host scheduler, the local deploy/status control channel, tracked-rename history, per-test artifacts and the host ABI 2.2 test clock, the debug/release boundary, the formatter style, the file I/O lifecycle, the Lean/vector contract, traceability annotations, runtime path resolution, and the applied diagnostic/report-shape contracts. Details in `Specification/Decisions.md` and `M6-Plan.md` §13–§14. |
+| D-127 | M4.5 phase 10 closes the milestone with a documentation and handover pass: the README, project plan, conformance profile, architecture/runtime/state/I/O/CLI/testing/debug specifications, plan, and decision log describe the implemented host/module model; the M4.5 handover recorded the implemented contracts, M5 extension points, and open M5 decisions; and `Debug-and-Monitoring.md` §12 records the M4.5 boundary for M6.5. The debug-build entry flag is clarified: M4.5 marks its default non-release artifact form but emits no debug information or checkpoint hooks, and the M6.5 required-feature bit stays clear. This keeps the documentation truthful at the milestone boundary and prevents M5/M6.5 from reintroducing the retired direct-reference model or assuming debug hooks that do not exist yet. |
+| D-153–D-164 | M6 phase 0 fixes the project/package model (kebab-case `stc.toml`, package identity, lockfile), the cooperative host scheduler, the local deploy/status control channel, tracked-rename history, per-test artifacts and the host ABI 2.2 test clock, the debug/release boundary, the formatter style, the file I/O lifecycle, the Lean/vector contract, traceability annotations, runtime path resolution, and the applied diagnostic/report-shape contracts. Details in `Specification/Decisions.md`. |
 | D-165–D-172 | M6 phases 4–11 record the implementation details: run-loop exit codes and failed-scan scheduling, the `STCRET01` state file and I/O backends, the test-host result protocol and lexable synthetic names, formatter encoding preservation, the online download/diff/rename/watch workflow, the Lean vector format and the three codegen defects it exposed, the conformance/UI/traceability/CI pass, and the completion documentation pass. |
-| D-173–D-183 | M6.5 debug and monitoring: the local `stc-debug/1` protocol and four scopes, one session per host with the stop/idle bound, typed read/write/force/watch and checkpoint-hook rules, debug-by-default with a stripped hook-free `--release`, the format-2 manifest extension, the stopped-frame sidecar, the split-object `view` key, and the phase-10 documentation/M7 handover pass. Details in `Specification/Decisions.md` and `M6.5-Plan.md`. |
-| D-188–D-199 | M7 release candidate: version `1.0.0-rc.1`, `cargo xtask package` and the `bin`/`lib`/`docs` layout, object-only Windows CodeView, archive-aware release stripping with preserved symbol tables, cold-download-only format-1 manifests, informational performance measurement, no remote/raw-memory debug, IR/object-only cross-target support, pipe-only embedded debug transport, the release checklist/owner, the flake policy, and the retained non-debug traceability allowlist. Details in `M7-Plan.md` and `Specification/Decisions.md`. |
+| D-173–D-183 | M6.5 debug and monitoring: the local `stc-debug/1` protocol and four scopes, one session per host with the stop/idle bound, typed read/write/force/watch and checkpoint-hook rules, debug-by-default with a stripped hook-free `--release`, the format-2 manifest extension, the stopped-frame sidecar, the split-object `view` key, and the phase-10 documentation/M7 handover pass. Details in `Specification/Decisions.md` and [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md). |
+| D-188–D-199 | M7 release candidate: version `1.0.0-rc.1`, `cargo xtask package` and the `bin`/`lib`/`docs` layout, object-only Windows CodeView, archive-aware release stripping with preserved symbol tables, cold-download-only format-1 manifests, informational performance measurement, no remote/raw-memory debug, IR/object-only cross-target support, pipe-only embedded debug transport, the release checklist/owner, the flake policy, and the retained non-debug traceability allowlist. Details in `Specification/Decisions.md`. |
 
 ## Question log
 
@@ -620,8 +607,8 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 ### Open
 
 **None as of 2026-10-24.** All v1 planning questions Q-001 through Q-212 are resolved
-(A-005 through A-030). The detailed online-change disposition is in `update_plan_got.md`
-§13.0. New questions will be added here one at a time.
+(A-005 through A-030). The detailed online-change disposition is in A-022 through A-030 above and
+[Decisions](Specification/Decisions.md). New questions will be added here one at a time.
 
 ## Building and running (M7 release candidate)
 
@@ -691,6 +678,13 @@ compile of the separate `fuzz/` workspace):
 python tools/ci/check_local.py
 ```
 
+On PowerShell, set environment variables for a command with `$env:` syntax, for example:
+
+```powershell
+$env:RUSTFLAGS = "-D warnings"; cargo clippy --workspace --all-targets --locked -- -D warnings
+$env:STC_REQUIRE_CLANG = "1"   # require clang acceptance locally
+```
+
 `fuzz/` is its own workspace, so `cargo test --workspace` and
 `cargo clippy --workspace` do not compile it; the local script does. Pass
 `--skip-markdownlint` or `--skip-fuzz` when Node.js or the fuzz workspace is
@@ -745,6 +739,24 @@ https://github.com/cli/cli/releases/tag/v2.103.2
 
 Windows 11 x86-64 is the primary development host. Linux x86-64 GNU and Linux AArch64 GNU are
 supported native hosts (D-042, D-200); CI runs the workspace and suite jobs on all three hosts.
+
+## Roadmap
+
+The following are post-v1 directions, not v1 claims. The consolidated v1 limits are in
+[KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md).
+
+- **Multi-root references to split persistent aggregates (v2).** v1 splits every persistent
+  aggregate into per-field host roots, so persistent structs and arrays of aggregates have no
+  single stable address: `REF`, `ADR`, and `SIZEOF` reject them, and passing them falls back to
+  whole-value copy-in/copy-out. A v2 extension could add a place-descriptor form that names an
+  aggregate's constituent per-field roots instead of one storage pointer, with host-side
+  resolution that validates each root's identity, layout, and generation, and a language-defined
+  copy-back window for writes made through the reference. The per-field root model enables
+  per-leaf preservation, quarantine, and retained-state flattening, but the extension requires an
+  append-only descriptor/ABI addition plus explicit aliasing, lifetime, and validation rules; raw
+  `ADR` arithmetic would remain contiguous-only.
+- **Per-task stepping.** The v1 debugger steps stop-the-world at statement granularity; stepping
+  individual tasks within a scan (cycle-synchronised/per-task stepping) is post-v1.
 
 ## References
 

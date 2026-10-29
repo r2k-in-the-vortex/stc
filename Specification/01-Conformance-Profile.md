@@ -265,7 +265,8 @@ The 2013 standard function categories implemented:
 - comparisons (`GT`, `GE`, `EQ`, `LE`, `LT`, `NE`),
 - string functions (`LEN`, `LEFT`, `RIGHT`, `MID`, `CONCAT`, `INSERT`, `DELETE`, `REPLACE`,
   `FIND`), with `USTRING` overloads,
-- date/time functions defined by the profile.
+- date/time `X_TO_Y` conversions only; the profile defines no date/time-function kinds, so
+  functions such as `NOW` are not provided.
 
 ### 6.2 Function blocks
 
@@ -304,6 +305,9 @@ same time; tests use a mock clock with the same semantics.
   required by law and regulation.
 - Field-layout migration, resizing, and pointer translation in v1. Per-field add/remove/rename
   and tracked moves are supported; incompatible changes reset or require a cold download.
+- CODESYS-style validity helpers such as `__ISVALIDREF` in v1. Use `= NULL`/`<> NULL`, `?=`,
+  and the `STC-TRAP_NULL_REF` null-dereference trap; an `__ISVALIDREF`-style helper may be
+  added later as a vendor extension.
 - Remote/network deployment, multi-user scheduling, and remote debugging in v1.
 - User-visible `__NEW`/`__DELETE` in v1; a separate v2 vendor extension.
 - A network package registry and version-solving resolver in v1. Local path dependencies are in
@@ -388,10 +392,10 @@ The following are deliberately chosen and must be documented and tested:
 
 ## 10. Diagnostic families and codes
 
-Existing lexical, grammatical, semantic, codegen, I/O, retain, module, manifest, ABI, and
-online-change families stay in their owning specifications; this section indexes the codes added
-or fixed for the project system, M6, and M6.5. A code has one meaning; a code is never reused.
-The owning specification is normative if a summary here disagrees.
+Existing lexical, grammatical, I/O, retain, module, manifest, ABI, and online-change families
+stay in their owning specifications; this section indexes the project/M6/M6.5 codes and the
+semantic, codegen, and build code meanings fixed by D-062 and D-092. A code has one meaning; a
+code is never reused. The owning specification is normative if a summary here disagrees.
 
 | Code | Condition | Owner |
 | --- | --- | --- |
@@ -471,6 +475,66 @@ traceability allowlist. The four allowlisted rules are non-debug
 | `STC-W-DEBUG-003` | watch batch coalesced/dropped under rate/backpressure | Debug and Monitoring §15.7 |
 | `STC-W-DEBUG-004` | debug information or hooks unavailable; monitoring-only session | Debug and Monitoring §16.6 |
 | `STC-W-DEBUG-005` | forced retained value may be saved by normal shutdown; force table is not persisted | Debug and Monitoring §4, §14.7 |
+
+### 10.2 Semantic analyzer diagnostics (M3)
+
+These families are owned by [AST](AST/AST.md) §7–§9 and enforced by `stc-sema`; the owning
+sections describe resolution, checking, and diagnostic behavior, and this table fixes the code
+meanings (D-062). `STC-E-IO-001/002/004`, `STC-E-RETAIN-001/002`, `STC-W-RETAIN-001`, and
+`STC-E-TEST-001` keep their owning-specification meanings (IO and Devices §7, State and RETAIN
+§7, Testing and Verification §2.2) and are not repeated here.
+
+| Code | Condition | Owner |
+| --- | --- | --- |
+| `STC-E-NAME-001` | unknown name | AST §9 |
+| `STC-W-NAME-002` | user POU shadows a standard name | AST §9 |
+| `STC-E-NAME-003` | duplicate definition | AST §9 |
+| `STC-E-NAME-004` | inaccessible definition (access violation) | AST §9 |
+| `STC-E-NAME-005` | name used in an invalid context | AST §9 |
+| `STC-E-NAME-006` | ambiguous name | AST §9 |
+| `STC-E-TYPE-001` | type mismatch | AST §9 |
+| `STC-E-TYPE-002` | invalid operand | AST §9 |
+| `STC-E-TYPE-003` | invalid or unsupported type (including cyclic type aliases) | AST §9 |
+| `STC-E-TYPE-012` | assignment mismatch (preserved example) | AST §9 |
+| `STC-E-CONST-001` | expression is not constant | AST §9 |
+| `STC-E-CONST-002` | constant evaluation failed (overflow, division by zero, invalid bounds) | AST §9 |
+| `STC-E-CONST-003` | duplicate or overlapping case label | AST §9 |
+| `STC-E-CONV-001` | no conversion exists | AST §9 |
+| `STC-E-CONV-002` | implicit conversion is not allowed; explicit conversion required | AST §9 |
+| `STC-E-CALL-001` | unknown or invalid callee | AST §9 |
+| `STC-E-CALL-002` | argument count or missing required argument | AST §9 |
+| `STC-E-CALL-003` | named or output argument error | AST §9 |
+| `STC-E-CALL-004` | overload ambiguity | AST §9 |
+| `STC-E-OOP-001` | inheritance cycle | AST §9 |
+| `STC-E-OOP-002` | invalid override or hiding | AST §9 |
+| `STC-E-OOP-003` | incomplete interface implementation | AST §9 |
+| `STC-E-OOP-004` | abstract rule violation | AST §9 |
+| `STC-E-OOP-005` | final rule violation | AST §9 |
+| `STC-E-OOP-006` | invalid assignment target or assignment-attempt relation | AST §9 |
+| `STC-E-ARRAY-001` | array bound or index error | AST §9 |
+| `STC-E-ARRAY-002` | conformant array placement | AST §9 |
+| `STC-E-REF-001` | reference rule violation | AST §9 |
+| `STC-E-REF-002` | null or invalid reference use | AST §9 |
+| `STC-E-REF-003` | invalid assignment attempt | AST §9 |
+| `STC-E-INIT-001` | initializer shape or type error | AST §9 |
+| `STC-E-CONFIG-001` | configuration/task/program binding error | AST §9 |
+
+### 10.3 Codegen and build diagnostics
+
+| Code | Condition |
+| --- | --- |
+| `STC-E-CODEGEN-001` | valid HIR construct not implemented by the compiler |
+| `STC-E-CODEGEN-002` | internal codegen failure or IR invariant violation |
+| `STC-E-BUILD-001` | clang missing, unsupported, or unusable |
+| `STC-E-BUILD-002` | build artifact, clang invocation, or link failure |
+| `STC-E-BUILD-003` | runtime static library missing or ABI mismatch |
+| `STC-E-BUILD-004` | invalid build option or artifact combination |
+| `STC-E-EXPORT-001` | invalid or duplicate `{stc:export}`/`{stc:no_mangle}` symbol |
+| `STC-E-RUN-001` | unsupported scheduling configuration, such as a task interval or priority out of range |
+| `STC-E-RUN-002` | no runnable program/configuration, or an ambiguous configuration |
+
+Codegen runs a definition-level preflight over non-synthetic definitions and reports one error per
+unsupported definition (D-093); unsupported callee kinds are reported at the call site.
 
 ## 11. Claim format
 

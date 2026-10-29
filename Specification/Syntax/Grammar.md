@@ -80,6 +80,10 @@ namespace_element  ::= data_type_decl
   as a root namespace; cross-package references use qualified names such as
   `motor-lib.Main.Motor`. A package's top-level declarations are public across packages unless
   `INTERNAL`.
+- Top-level declarations in a file with no `NAMESPACE` belong to the package root namespace (the
+  manifest name, or `_root` for the manifest-free `stc check <file>...` bridge). A namespace
+  declared with the same name in multiple files is merged into one scope; duplicate definitions
+  across those files are `STC-E-NAME-003`.
 
 ## 4. Data types
 
@@ -158,6 +162,8 @@ The `initializer` productions complete the reference grammar: the draft referenc
 `array_init` may nest for arrays of arrays; `struct_init` uses named field assignments and may
 name nested fields with dots.
 
+- A type declaration may refer to a type declared later in the same scope; declaration order
+  does not restrict type references. Cyclic type aliases are rejected with `STC-E-TYPE-003`.
 - `STRUCT ... END_STRUCT` may be used inline in a variable declaration or named in `TYPE`.
 - `OVERLAP` requests overlapping storage for `AT`-addressed struct elements. The analyzer checks
   that the overlapping fields have compatible bit ranges.

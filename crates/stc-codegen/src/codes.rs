@@ -1,4 +1,4 @@
-//! Stable codegen and build diagnostic codes (M4-Plan §8, D-092).
+//! Stable codegen and build diagnostic codes (D-092; Conformance Profile §10.3).
 
 /// A valid HIR construct that M4 does not implement.
 pub const CODEGEN_UNSUPPORTED: &str = "STC-E-CODEGEN-001";
