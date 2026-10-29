@@ -12,3 +12,5 @@
 *.txt text eol=lf
 tools/rt/stc-wl4-run text eol=lf
 tools/rt/stc-wl4.sudoers text eol=lf
+tools/rt/build-bundle.sh text eol=lf
+.github/workflows/rt-build.yml text eol=lf

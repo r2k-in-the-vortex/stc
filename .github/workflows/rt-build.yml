@@ -1,0 +1,78 @@
+name: RT artifact bundle
+
+# Manual build of the WL-4 Linux package and the rt-bench bundle. The bundle is
+# transferred to the RT host; the RT host is a run target and never builds.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  bundle:
+    name: Build rt-bench bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and verify the Linux package
+        shell: bash
+        run: cargo xtask package --locked --out dist
+      - name: Verify package checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(cd dist/stc-* && pwd)"
+          "$package/bin/stc" compliance --message-format json > compliance.json
+          cd "$package"
+          sha256sum -c SHA256SUMS
+          ./bin/stc --version
+      - name: Build the rt-bench bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(cd dist/stc-* && pwd)"
+          tools/rt/build-bundle.sh "$package" dist/rt-bench
+      - name: Verify the bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/rt-bench
+          sha256sum -c SHA256SUMS
+          for case in code-only field-add-remove incompatible trapping; do
+            test -f "candidates/$case/rt-bench.stc-got.json"
+          done
+          test -f workloads/light/rt-bench
+          test -f workloads/heavy/rt-bench
+      - name: Smoke the bundled launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/rt-bench
+          export LD_LIBRARY_PATH="$PWD/runtime:${LD_LIBRARY_PATH:-}"
+          ./rt-bench --cycles 3 --cycle-time 1ms --status
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stc-package-ubuntu-24.04
+          path: |
+            dist/stc-*
+            compliance.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rt-bench-bundle
+          path: dist/rt-bench
+          if-no-files-found: error

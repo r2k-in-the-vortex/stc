@@ -359,17 +359,20 @@ invalid duration was rejected with exit 64. No boot, governor, service, or swap 
 
 ### 9.2 Build and transfer (Windows development host)
 
+The `rt-build` workflow (`workflow_dispatch` on `ubuntu-24.04`) builds the Linux package and the
+`rt-bench` bundle and uploads `stc-package-ubuntu-24.04` and `rt-bench-bundle`.
 Set `RT_HOST` from the local `.env/RT_Host.md` note; it is not stored in this repository.
 
 ```sh
 gh run download <run-id> -n stc-package-ubuntu-24.04 -D dist/rt
 gh run download <run-id> -n rt-bench-bundle -D dist/rt
 scp -r dist/rt "$RT_HOST":~/stc-rt/
-ssh "$RT_HOST" 'cd ~/stc-rt && sha256sum -c SHA256SUMS'
+ssh "$RT_HOST" 'cd ~/stc-rt/stc-* && sha256sum -c SHA256SUMS'
+ssh "$RT_HOST" 'cd ~/stc-rt/rt-bench && sha256sum -c SHA256SUMS'
 ```
 
-The bundle contains the package, the launcher, and all candidate generations. Transfer the whole
-directory; do not rebuild on the host.
+The bundle contains the base launcher and module, the light and heavy workload launchers, and all
+four online-change candidates. Transfer the whole staging directory; do not rebuild on the host.
 
 ### 9.3 Verify the runtime layout
 
@@ -377,11 +380,12 @@ Replace `<version>` with the pinned package version.
 
 ```sh
 ssh "$RT_HOST" '~/stc-rt/stc-<version>-x86_64-unknown-linux-gnu/bin/stc --version'
-ssh "$RT_HOST" 'ldd ~/stc-rt/rt-bench/rt-bench | head'
+ssh "$RT_HOST" 'cd ~/stc-rt/rt-bench && ldd rt-bench | head'
+ssh "$RT_HOST" 'cd ~/stc-rt/rt-bench && LD_LIBRARY_PATH="$PWD/runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ./rt-bench --cycles 3 --cycle-time 1ms --status'
 ```
 
-If the launcher uses the shared runtime, set `LD_LIBRARY_PATH` to the package `lib` directory in
-the wrapper; otherwise confirm the static link. Record which form was used.
+If `ldd` reports `libstc_runtime.so` as missing, use the bundle `runtime/` directory as shown;
+otherwise the launcher is statically linked. Record which form was used.
 
 ### 9.4 Record the untuned host state
 
@@ -402,7 +406,7 @@ Record the values in every run header. The deferred tuned profile (§6.2) is not
 ### 9.5 Run the campaign
 
 ```sh
-sudo /usr/local/sbin/stc-wl4-run --regime r0 --duration 10m --cycle-time 1ms \
+sudo /usr/local/sbin/stc-wl4-run campaign --regime r0 --duration 10m --cycle-time 1ms \
   --out ~/stc-rt/results/2026-10-29-r0
 ```
 

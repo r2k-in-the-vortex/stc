@@ -1,0 +1,7 @@
+schema = 1
+
+[[package]]
+name = "rt-bench"
+version = "0.1.0"
+source = "root"
+dependencies = []
