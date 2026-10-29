@@ -24,6 +24,7 @@ crates/stc-runtime/src/debug_server.rs | named-pipe and Unix-socket binding
 crates/stc-runtime/src/lib.rs | host triple in the exported runtime identity
 crates/stc-runtime/src/loader.rs | LoadLibrary/dlopen platform loader
 crates/stc-runtime/src/priority.rs | service-thread priority lowering
+crates/stc-runtime/src/rt.rs | Linux absolute-clock, FIFO scheduling, affinity, and RT metrics
 crates/stc-runtime/src/signal.rs | console and POSIX signal handlers
 crates/stc-runtime/src/state.rs | atomic replacement via MoveFileEx/rename
 crates/stc-runtime/src/stop.rs | x86-64 and AArch64 service-13 trampolines
