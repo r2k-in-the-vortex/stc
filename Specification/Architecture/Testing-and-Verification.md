@@ -571,8 +571,9 @@ phase-2 evidence run
 [`40792824763`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40792824763) (commit
 `edd6fae`) added native AArch64 debug parity; and phase-7 run
 [`40819548212`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40819548212) (commit
-`2aafbc5`) added the ARM64 package job. The final M8 sign-off run is recorded in
-[`M8-Plan.md`](../../M8-Plan.md) §18.
+`2aafbc5`) added the ARM64 package job. The final M8 sign-off run
+[`40821738218`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218) (commit
+`ba97c5a`) passed all 36 jobs, and `M8-Plan.md` §18 records it alongside the phase runs.
 
 Unix-only behaviour is asserted on both Linux architectures: state files are mode 0600 and a
 failed replace keeps the previous target and removes the temporary file (`stc-runtime` state

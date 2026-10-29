@@ -654,7 +654,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-206 | Packaging produces one archive per native host triple. `package.json.debug_contract` is `object-codeview` on Windows MSVC and `dwarf` on Linux GNU. No combined archive and no timestamps. | The debug backend is host-visible metadata; a Windows-only label on a Linux package is false. |
 | D-207 | The Unix debug endpoint and audit file remain user-only on both Linux architectures: 0600 files in a 0700 directory, symlinks refused, endpoint/socket/audit removed on stop. Container and headless hosts use the same path rules with no shared-directory fallback. | Security behaviour must not depend on architecture or environment; a fallback would silently weaken the endpoint. |
 | D-208 | M8 makes no format, ABI, protocol, language, or version change. `stc` remains `1.0.0-rc.1`; M8 completes the host-portability scope of the release candidate. | The milestone is a portability pass; identity churn would invalidate M7 evidence without a contract reason. |
-| D-209 | M8 is complete (2026-10-29): native Windows x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU support is implemented and verified on all three hosts, superseding D-195's x86-64-only execution and frame statement. The host audit (D-201), AArch64 debug parity (D-202), state durability and permissions (D-203), service priority without affinity (D-204), the pinned ARM64 matrix (D-205), and per-architecture packaging (D-206) are delivered. No language, format, ABI, protocol, or version change; the final evidence run is recorded in `M8-Plan.md` §18 and the project-plan M8 status block. | The milestone is a portability pass; three-host evidence closes D-042 without reopening the release candidate. |
+| D-209 | M8 is complete (2026-10-29): native Windows x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU support is implemented and verified on all three hosts, superseding D-195's x86-64-only execution and frame statement. The host audit (D-201), AArch64 debug parity (D-202), state durability and permissions (D-203), service priority without affinity (D-204), the pinned ARM64 matrix (D-205), and per-architecture packaging (D-206) are delivered. No language, format, ABI, protocol, or version change; the final evidence run `40821738218` (commit `ba97c5a`, all 36 jobs green) is recorded in `M8-Plan.md` §18 and the project-plan M8 status block. | The milestone is a portability pass; three-host evidence closes D-042 without reopening the release candidate. |
 
 D-118 was reviewed and approved on 2026-10-24; the four clarifications stand as recorded and phase 2
 is approved. Phase 3 is complete for review and D-119 records its IR-level choices. Phase 4 is
@@ -759,9 +759,10 @@ completion: the host audit and allowlist (D-201), native Linux x86-64 and AArch6
 suites, AArch64 debug parity with the D-202 frame rule, Linux state durability and permissions
 (D-203), below-normal service priority without affinity (D-204), the pinned ARM64 CI matrix
 (D-205), and per-architecture packaging (D-206). D-195's x86-64-only execution and frame
-statement is superseded by D-202 and D-209. The final sign-off run is recorded in `M8-Plan.md`
-§18 and the project-plan M8 status block; the release identity remains `1.0.0-rc.1` and the
-non-safety stance is unchanged.
+statement is superseded by D-202 and D-209. The final sign-off run `40821738218` (commit
+`ba97c5a`) passed all 36 jobs on the three native hosts; it is recorded in `M8-Plan.md` §18 and
+the project-plan M8 status block. The release identity remains `1.0.0-rc.1` and the non-safety
+stance is unchanged.
 
 D-094 through D-209 affect
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),

@@ -562,8 +562,11 @@ Exit criteria:
 > package jobs (D-205, D-206). Phase 8 completed the host-support documentation, known
 > limitations, decisions, and the exit-criteria sweep. No language, format, ABI, protocol, or
 > version change was made; `stc` remains `1.0.0-rc.1` and the non-safety stance is unchanged.
-> The final evidence run is recorded in the phase-8 evidence commit and in
-> [Testing and Verification](Architecture/Testing-and-Verification.md) §6.
+> The final evidence run is
+> [`40821738218`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218) (commit
+> `ba97c5a`), all 36 jobs succeeding on `windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm`;
+> it is also recorded in [Testing and Verification](Architecture/Testing-and-Verification.md)
+> §6 and `M8-Plan.md` §18.
 
 ## 9. Verification strategy
 

@@ -10,11 +10,12 @@ x86-64 or any other target clang supports.
 
 **M8 (Linux host portability) is complete (2026-10-29): `stc` 1.0.0-rc.1 runs natively on
 Windows 11 x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU, with the native suites and
-packages verified on all three hosts.** M7 (release candidate) was signed off on 2026-10-28
-(green CI run 40777754963); M6.5 (debug and
-monitoring) completed 2026-10-28, M6 (project system, CLI, and verification hardening) completed
-2026-10-27, and the earlier milestones are described below. The repository
-contains the source-map and diagnostic crates, the
+packages verified on all three hosts in green CI run
+[40821738218](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218) (commit
+`ba97c5a`, all 36 jobs).** M7 (release candidate) was signed off on 2026-10-28 (green CI run
+40777754963); M6.5 (debug and monitoring) completed 2026-10-28, M6 (project system, CLI, and
+verification hardening) completed 2026-10-27, and the earlier milestones are described below.
+The repository contains the source-map and diagnostic crates, the
 full tokenizer, `stc-syntax` (stable `SyntaxKind`, lossless CST, typed AST views, strict pragma
 JSON), `stc-parser` (full ST grammar, Annex A precedence, error recovery, unsupported-construct
 diagnostics), `stc-hir` (arenas, stable IDs, interner, canonical types, resolved bodies,

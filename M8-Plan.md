@@ -2,8 +2,10 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-28  
-Status: In progress. Phase 0 fixes the host contract and decisions D-200–D-208; phases 1–8
-implement and verify native Linux x86-64 and Linux AArch64 support.
+Status: Complete (2026-10-29); signed off against green CI run `40821738218` (commit
+`ba97c5a`), all 36 jobs succeeding on the three native hosts. Phase 0 fixed the host contract
+and decisions D-200–D-208; phases 1–8 implement and verify native Linux x86-64 and Linux
+AArch64 support, and D-209 records completion.
 Inputs: [Project Plan](Specification/00-Project-Plan.md) §8 (M8), `handover_to_M8.md`,
 [Architecture](Specification/Architecture/Architecture.md),
 [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md),
@@ -346,7 +348,7 @@ spelling, and OS-specific FFI. Classify each as:
   model; the audit enforces it.
 - [x] Service-thread priority policy implemented and measured; affinity documented as absent.
 - [x] Host-support documentation, known limitations, decisions, and CI jobs updated.
-- [ ] M8 evidence recorded with the green both-architecture run.
+- [x] M8 evidence recorded with the green both-architecture run.
 
 The host-conditional item is satisfied in the confined form fixed by D-201, not as a literal
 absence of every `cfg` token. Each portable crate carries at most its single documented host
@@ -387,4 +389,4 @@ the run log. CI runs are never silently skipped or narrowed to make a phase pass
 | 5 — Linux state atomicity | Complete (2026-10-29) | `3db8978` | `40795153964` |
 | 6 — loader and service priority | Complete (2026-10-29) | `49ffd07` | `40817736386` |
 | 7 — packaging and CI matrix | Complete (2026-10-29) | `2aafbc5` | `40819548212` |
-| 8 — documentation and sign-off | Pending | | |
+| 8 — documentation and sign-off | Complete (2026-10-29) | `ba97c5a` | `40821738218` |

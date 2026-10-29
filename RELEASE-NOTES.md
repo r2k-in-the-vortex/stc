@@ -82,8 +82,10 @@ supported native hosts are:
   host-derived `package.json.debug_contract` (`object-codeview` on Windows
   MSVC, `dwarf` on Linux GNU), built and exercised on all three hosts.
 
-M8 verification: the phase evidence runs and the final sign-off run are
-recorded in [`M8-Plan.md`](M8-Plan.md) §18.
+M8 verification: CI run
+[40821738218](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218)
+(commit `ba97c5a`) passed all 36 jobs on the three native hosts; the
+phase evidence runs are recorded in [`M8-Plan.md`](M8-Plan.md) §18.
 
 ## Artifacts
 
@@ -177,7 +179,9 @@ CI run
 [40777754963](https://github.com/r2k-in-the-vortex/stc/actions/runs/40777754963)
 passed on `windows-2025` and `ubuntu-24.04` for commit `8dbcbf4`. M8 host
 evidence: every phase run in [`M8-Plan.md`](M8-Plan.md) §18 is green on the
-three native hosts; the final sign-off run is recorded there.
+three native hosts, and the final sign-off run
+[40821738218](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218)
+passed all 36 jobs on commit `ba97c5a`.
 Performance measurements are informational and not gating.
 
 ## Known limitations
