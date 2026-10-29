@@ -644,9 +644,10 @@ jobs:
         shell: bash
         run: cargo xtask test --suite cross-target --locked
 
-  # The release package is built and verified on both hosts. The job also
-  # exercises the unpacked layout: `bin/stc` must find the runtime in `lib/`
-  # and build, run, and test a fresh project without environment variables.
+  # The release package is built and verified on every native host. The job
+  # also exercises the unpacked layout: `bin/stc` must find the runtime in
+  # `lib/` and check, build, run, test, and clean a fresh project without
+  # environment variables, then rebuild it after the clean.
   package:
     name: Release package (${{ matrix.os }})
     needs: detect
@@ -654,7 +655,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
@@ -671,6 +672,34 @@ jobs:
       - name: Build and verify the package
         shell: bash
         run: cargo xtask package --locked --out dist
+      # The contract is host-derived (D-206). Assert the produced file, not
+      # just the code path: the directory ends with the native triple and the
+      # debug backend names this host's real object format.
+      - name: Verify package metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(cd dist/stc-* && pwd)"
+          name="$(basename "$package")"
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          case "$name" in
+            *"-$host") ;;
+            *)
+              echo "::error::package directory $name does not end with the native host triple $host"
+              exit 1
+              ;;
+          esac
+          contract="$(sed -n 's/.*"debug_contract": "\([^"]*\)".*/\1/p' "$package/package.json")"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            expected="object-codeview"
+          else
+            expected="dwarf"
+          fi
+          if [ "$contract" != "$expected" ]; then
+            echo "::error::package.json debug_contract is '$contract', expected '$expected' on $RUNNER_OS"
+            exit 1
+          fi
+          echo "package $name: host=$host debug_contract=$contract"
       - name: Verify checksums
         shell: bash
         run: |
@@ -688,11 +717,23 @@ jobs:
           "$driver" compliance --message-format json > compliance.json
           "$driver" new fresh
           cd fresh
+          "$driver" check
           "$driver" build
           "$driver" build --release
           "$driver" build --release --emit=lib --out-dir libcheck
           "$driver" run --cycles 2
           "$driver" test
+          # D-184: clean removes the generated trees but keeps the lockfile and
+          # the runtime store, so the project must build again afterwards.
+          "$driver" clean
+          for tree in target/stc/debug target/stc/release target/stc/test; do
+            if [ -e "$tree" ]; then
+              echo "::error::stc clean left generated tree $tree in place"
+              exit 1
+            fi
+          done
+          test -f stc.lock
+          "$driver" build
       - uses: actions/upload-artifact@v7
         with:
           name: stc-package-${{ matrix.os }}

@@ -764,14 +764,20 @@ stc-<version>-<host-triple>/
   SHA256SUMS
 ```
 
-- `package.json` records `schema`, `version`, `profile`, `host`, the supported artifact/ABI
-  versions, the artifact list, and the non-safety identifier. It contains no timestamp, absolute
-  path, user name, or random ID.
+- One package is produced per native host triple: `x86_64-pc-windows-msvc`,
+  `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu`. There is no combined archive.
+- `package.json` records `schema`, `version`, `profile`, `host`, `debug_contract`, the supported
+  artifact/ABI versions, the artifact list, and the non-safety identifier. It contains no
+  timestamp, absolute path, user name, or random ID. `debug_contract` is host-derived:
+  `object-codeview` on Windows MSVC and `dwarf` on Linux GNU.
 - `SHA256SUMS` is sorted by package-relative path (`/` separators) and is compatible with
   `sha256sum -c`.
 - Runtime discovery checks, in order: `--runtime`, `STC_RUNTIME`, `[build].runtime`, a file beside
   the executable, `<exe>/lib`, `<exe>/../lib`, and the workspace `target/{release,debug}` fallback.
   The `bin`/`lib` package layout therefore works without environment variables.
+- The unpacked-package exercise runs `stc --version`, `stc compliance`, and then `new`, `check`,
+  `build`, `build --release`, `build --release --emit=lib`, `run --cycles 2`, `test`, `clean`, and
+  a final `build` that proves the project is usable after the clean.
 - Static archives are unpacked, native object members are stripped with
   `llvm-objcopy --strip-debug`, and the stripped objects replace the originals with `llvm-ar rD`;
   every import-library or LLVM-bitcode member and symbol-table entry is preserved. The shared host

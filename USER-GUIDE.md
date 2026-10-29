@@ -30,6 +30,10 @@ stc-1.0.0-rc.1-<host-triple>/
   SHA256SUMS
 ```
 
+A package is produced for each native host triple: `x86_64-pc-windows-msvc`,
+`x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu`. Linux GNU packages
+therefore exist for both x86-64 and AArch64.
+
 Unpack the archive and put `bin` on `PATH` (or call `bin/stc` directly). The
 driver finds the runtime archive beside its executable or in the sibling
 `lib/` directory, so no environment variable is required for the packaged
