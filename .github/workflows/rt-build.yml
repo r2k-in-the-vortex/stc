@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           package="$(cd dist/stc-* && pwd)"
-          tools/rt/build-bundle.sh "$package" dist/rt-bench
+          bash tools/rt/build-bundle.sh "$package" dist/rt-bench
       - name: Verify the bundle
         shell: bash
         run: |

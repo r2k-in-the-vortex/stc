@@ -24,7 +24,7 @@ The field add/remove case uses `--allow-untracked-removal`; the incompatible cas
 The CI workflow `rt-build.yml` builds the Linux package and runs:
 
 ```sh
-tools/rt/build-bundle.sh dist/stc-<version>-x86_64-unknown-linux-gnu dist/rt-bench
+bash tools/rt/build-bundle.sh dist/stc-<version>-x86_64-unknown-linux-gnu dist/rt-bench
 ```
 
 The bundle is transferred to the RT host and run there; the RT host never builds.
