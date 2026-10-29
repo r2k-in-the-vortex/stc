@@ -1180,11 +1180,59 @@ fn failed_cold_install_restores_the_process_image_and_direct_cells() {
 }
 
 /// Reports whether `/proc/self/maps` still contains a mapping for `path`.
+///
+/// Returns `None` when `/proc` is unavailable so the caller can skip the
+/// observation instead of failing on a host that does not expose it.
 #[cfg(target_os = "linux")]
-fn module_is_mapped(path: &std::path::Path) -> bool {
-    let text = fs::read_to_string("/proc/self/maps").expect("read /proc/self/maps");
+fn module_is_mapped(path: &std::path::Path) -> Option<bool> {
+    let text = fs::read_to_string("/proc/self/maps").ok()?;
     let path = path.to_string_lossy();
-    text.lines().any(|line| line.ends_with(path.as_ref()))
+    Some(text.lines().any(|line| line.ends_with(path.as_ref())))
+}
+
+/// Reports whether a symbol is visible in the global dynamic symbol scope.
+///
+/// A module loaded with `RTLD_LOCAL` exports its symbols only through its own
+/// handle. `RTLD_DEFAULT` (the null handle) searches the same global scope that
+/// a later module's unresolved imports are resolved against, so absence there
+/// means one generation can never satisfy another generation's imports.
+#[cfg(target_os = "linux")]
+fn symbol_is_global(name: &str) -> bool {
+    use std::ffi::{CString, c_char, c_void};
+
+    const RTLD_DEFAULT: *mut c_void = std::ptr::null_mut();
+
+    unsafe extern "C" {
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+
+    let name = CString::new(name).expect("symbol name without NUL");
+    // SAFETY: the null handle selects the global scope and the name is
+    // NUL-terminated; the result is only compared with null.
+    !unsafe { dlsym(RTLD_DEFAULT, name.as_ptr()) }.is_null()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn loaded_module_symbols_stay_out_of_the_global_scope() {
+    let artifacts = common::artifacts(common::SIMPLE, "simple");
+    let Some(fixture) = fixture("scope-isolation", artifacts) else {
+        return;
+    };
+    assert!(
+        !symbol_is_global("stc_module_cycle"),
+        "the cycle entry point is not global before any module loads"
+    );
+    let module = stc_runtime::LoadedModule::load(&fixture.module_path).expect("load module");
+    assert!(
+        module.export_address("stc_module_cycle").is_some(),
+        "the module exports its cycle entry point through its own handle"
+    );
+    assert!(
+        !symbol_is_global("stc_module_cycle"),
+        "RTLD_LOCAL keeps module exports out of the global symbol scope"
+    );
+    drop(module);
 }
 
 #[cfg(target_os = "linux")]
@@ -1197,14 +1245,18 @@ fn shutdown_unloads_the_shared_library() {
     let module = fs::canonicalize(&fixture.module_path).expect("canonical module path");
     let mut host = in_memory_host();
     cold_install(&mut host, &fixture);
+    let Some(mapped) = module_is_mapped(&module) else {
+        eprintln!("note: /proc/self/maps is unavailable; skipping the unload observation");
+        return;
+    };
     assert!(
-        module_is_mapped(&module),
+        mapped,
         "the loaded module is mapped at {}",
         module.display()
     );
     host.shutdown().expect("shutdown");
-    assert!(
-        !module_is_mapped(&module),
-        "shutdown unloads the module mapping (dlclose)"
-    );
+    let Some(mapped) = module_is_mapped(&module) else {
+        return;
+    };
+    assert!(!mapped, "shutdown unloads the module mapping (dlclose)");
 }

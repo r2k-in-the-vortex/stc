@@ -339,6 +339,15 @@ epoch/refcount that delays unload until the reader releases it. Service threads 
 `stc_module_cycle`, never write GOT cells, and never take a lock held by the cycle thread.
 Debug writes and forcing are queued for cycle-boundary application.
 
+The cycle thread runs at the process default operating-system priority. Control-server accept and
+connection threads and debug-server accept and handler threads run one class lower: Windows
+`THREAD_PRIORITY_BELOW_NORMAL` and Linux `setpriority(PRIO_PROCESS, 0, 10)` (nice +10) for the
+calling thread. The Linux call is best-effort: a container or sandbox may reject it, and the
+runtime never fails a session, swap, or shutdown because priority could not be lowered. v1 does
+not pin CPU affinity; placement belongs to the deployment's `cpuset` policy, so the host keeps
+its inherited processor mask. The policy is an advisory mitigation for maintenance jitter, not a
+real-time guarantee (D-204).
+
 Traps are fatal for the current run or, during an online-change rollback window, cause the host
 to restore the previous generation. In executable mode the runtime prints
 `<file>:<line>:<column>: error[STC-RUN-xxx]: message` using the source map; in library mode it

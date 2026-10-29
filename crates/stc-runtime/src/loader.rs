@@ -11,6 +11,11 @@
 //! (Architecture §8), so calling an entry point is safe only in the sense that
 //! the artifact format was validated; the code itself has the host's
 //! privileges.
+//!
+//! Linux modules load with `RTLD_NOW | RTLD_LOCAL`: every import resolves
+//! before the first entry point runs, and the module's exports stay out of the
+//! global symbol scope, so a retired generation's symbols can never satisfy a
+//! later module's unresolved imports.
 
 use std::ffi::c_void;
 use std::path::Path;
@@ -351,6 +356,9 @@ mod platform {
     use super::NativeHandle;
 
     const RTLD_NOW: c_int = 2;
+    // The platform default on Linux GNU hosts; passing it explicitly keeps
+    // module exports out of the global scope (see the module documentation).
+    const RTLD_LOCAL: c_int = 0;
 
     unsafe extern "C" {
         fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
@@ -382,7 +390,7 @@ mod platform {
         // SAFETY: clear any stale error, then pass a valid path to the loader.
         unsafe {
             let _ = dlerror();
-            let handle = dlopen(name.as_ptr(), RTLD_NOW);
+            let handle = dlopen(name.as_ptr(), RTLD_NOW | RTLD_LOCAL);
             if handle.is_null() {
                 return Err(Error::new(
                     codes::MODULE_INVALID,

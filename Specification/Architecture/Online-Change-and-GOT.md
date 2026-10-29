@@ -75,12 +75,14 @@ through the host service; that memory is freed when the version fails, retires, 
 | Cycle | Latches inputs, sets task guards, executes ST, publishes outputs; the only thread that executes ST or switches generations |
 | Control/status (M6) | Accepts local deploy/status requests for `stc run --watch`; queues deploy work and publishes status; never executes ST |
 | Loader/prepare (M7 target) | Loads the candidate module, validates it, prepares roots/state, and builds the temp GOT. In M6 validation/load/prepare runs between cycles on the cycle thread; fully off-thread prepare remains M7 |
-| Service/monitor (M6.5) | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at lower priority; implemented by the local debug server thread class |
+| Service/monitor (M6.5) | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at the lowered service priority (Windows below-normal; Linux nice +10, best effort; D-204); implemented by the local debug server and control/status thread classes |
 
-The control and service threads never block the cycle with unbounded locks. They use generation
-pinning/epoch refcounts so a module cannot unload while a service reader holds a descriptor.
-Status publication uses lock-free counters, double-buffered snapshots, and bounded rings. The M6
-control channel is local deployment/status only and is not the M6.5 debug protocol (D-155).
+The control and service threads never block the cycle with unbounded locks. They run one priority
+class below the cycle thread, which keeps the process default; lower-than-default is advisory and
+a container may refuse it (D-204). They use generation pinning/epoch refcounts so a module cannot
+unload while a service reader holds a descriptor. Status publication uses lock-free counters,
+double-buffered snapshots, and bounded rings. The M6 control channel is local deployment/status
+only and is not the M6.5 debug protocol (D-155).
 
 The M6.5 service/monitor thread hosts at most one debug session per host (D-175). While the session
 is stopped the cycle is parked in host service ID 13 with the last output image held; the
@@ -400,10 +402,11 @@ by the host resolver.
 
 ## 10. Threads, services, and diagnostics
 
-M6.5 service/monitor threads use typed path/`GotId` access, not raw memory. Reads are
-generation-pinned and do not lock the cycle. Writes and forcing are queued for cycle-boundary
-application. A write queued across a swap does not migrate: the swap ends the session and
-discards it. A write that is
+M6.5 service/monitor threads use typed path/`GotId` access, not raw memory. They run at the
+lowered service priority (D-204): one operating-system class below the default-priority cycle
+thread, best effort on Linux. Reads are generation-pinned and do not lock the cycle. Writes and
+forcing are queued for cycle-boundary application. A write queued across a swap does not migrate:
+the swap ends the session and discards it. A write that is
 re-resolved at a boundary against a removed field or changed layout is rejected with
 `STC-E-DEBUG-010` and is never retargeted to removed storage.
 

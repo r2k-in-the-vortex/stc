@@ -80,3 +80,29 @@ mod tests {
         assert_eq!(nice, 10, "the service thread runs at nice +10 (D-204)");
     }
 }
+
+#[cfg(all(windows, test))]
+mod tests {
+    use std::ffi::c_void;
+
+    const THREAD_PRIORITY_BELOW_NORMAL: i32 = -1;
+
+    unsafe extern "system" {
+        fn GetCurrentThread() -> *mut c_void;
+        fn GetThreadPriority(thread: *mut c_void) -> i32;
+    }
+
+    #[test]
+    fn service_threads_run_below_normal_priority() {
+        let handle = std::thread::spawn(|| {
+            super::lower_service_priority();
+            // SAFETY: the pseudo-handle names the calling thread.
+            unsafe { GetThreadPriority(GetCurrentThread()) }
+        });
+        let priority = handle.join().expect("thread");
+        assert_eq!(
+            priority, THREAD_PRIORITY_BELOW_NORMAL,
+            "the service thread runs below normal priority (D-204)"
+        );
+    }
+}

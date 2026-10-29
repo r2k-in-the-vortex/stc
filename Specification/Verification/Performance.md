@@ -101,6 +101,21 @@ Reproduce:
 cargo test -p stc-runtime --test switch_latency --locked -- --ignored --nocapture
 ```
 
+## Service-thread priority and maintenance jitter
+
+Control-server and debug-server accept/handler threads run one OS priority class below the cycle
+thread: `THREAD_PRIORITY_BELOW_NORMAL` on Windows and nice +10 per thread on Linux, best effort
+(D-204). The cycle thread keeps the process default, and v1 does not pin CPU affinity.
+
+The policy is an advisory mitigation for maintenance jitter, not a real-time guarantee. The
+maintenance context is already recorded above: candidate load/validation/prepare runs on the
+cycle thread between scans in v1, so the 3.1037 ms (16 roots) and 141.2133 ms (1024 roots)
+prepare times are maintenance latency rather than cycle jitter, and an active observe session
+adds 1022.11 ns/cycle to the measured debug form. Lowering the service threads lets monitoring
+work yield to the scan; it does not bound prepare time, and a container or sandbox may reject the
+change without affecting the session. These figures describe the host in Environment, not a
+guarantee for another host or regime.
+
 ## Comparison with M6.5
 
 M6.5 recorded (Windows local, same class of host): release
