@@ -374,6 +374,6 @@ the run log. CI runs are never silently skipped or narrowed to make a phase pass
 | 3 — Linux AArch64 native build | Complete (2026-10-29) | `07162f0` | `40790831659` |
 | 4 — AArch64 debug parity | Complete (2026-10-29) | `edd6fae` | `40792824763` |
 | 5 — Linux state atomicity | Complete (2026-10-29) | `3db8978` | `40795153964` |
-| 6 — loader and service priority | Pending | | |
+| 6 — loader and service priority | Complete (2026-10-29) | `49ffd07` | `40817736386` |
 | 7 — packaging and CI matrix | Pending | | |
 | 8 — documentation and sign-off | Pending | | |
