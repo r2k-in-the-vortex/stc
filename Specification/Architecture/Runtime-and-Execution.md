@@ -227,7 +227,7 @@ thread is the only ST executor.
 - No Rust types cross the ABI except `u8`/`i32`/`i64`/`f32`/`f64`/pointers/opaque handles.
 - The runtime is built with the toolchain that matches the target C ABI: MSVC for
   `*-pc-windows-msvc`, GNU for `*-unknown-linux-gnu`. Windows x86-64 is the primary development
-  host; Linux x86-64 and AArch64 follow basic development (D-042).
+  host; Linux x86-64 and Linux AArch64 are supported native hosts from M8 (D-042, D-200).
 - Panics are caught at the ABI boundary and converted to `stc_rt_trap` where possible; the
   compiler-generated code does not rely on unwinding.
 - The host owns the GOT cell table, root allocator, module loader, manifest store, swap

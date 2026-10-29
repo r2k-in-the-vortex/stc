@@ -562,16 +562,24 @@ state directory holds the active copy and a current pointer.
 
 ### 6.4 Host platforms
 
-- Primary development host: Windows 11, x86-64, MSVC (D-007).
-- Planned additional hosts after basic development: Linux x86-64 and Linux AArch64 (ARM64), GNU
-  toolchain (D-042). Both are little-endian, so the state-file format and IR are unchanged.
+- Supported native hosts (D-200): Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux
+  x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`).
+  Windows is the primary development host (D-007); both Linux hosts are supported natively from
+  M8. macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported.
+- Both Linux architectures are little-endian with 8-byte pointers, so the state-file format and
+  IR are unchanged. AArch64 debug uses the same `fp+16` stopped-frame rule with `x29`, `sp`, and
+  `x30`, and DWARF `DW_OP_reg29` frame-base extraction (D-202).
 - Linux x86-64 and Linux AArch64 are valid clang targets from the start. Cross-target builds
   need a runtime staticlib built for the target.
 - Host-specific operations are confined to the driver and runtime: clang/linker discovery,
-  executable/shared-library naming, path semantics, the monotonic clock, and atomic file
-  replace. The front end, HIR, and IR builder contain no host conditionals.
-- Linux host builds must pass the same workspace, execution, and conformance tests as Windows;
-  CI covers both hosts (see [Testing and Verification](Testing-and-Verification.md) §6).
+  executable/shared-library naming, path semantics, the monotonic clock, atomic file replace,
+  module loading, service-thread priority, and debug transport. The front end, HIR, and IR
+  builder contain no host conditionals. `stc-codegen` carries only its single host
+  target-resolution module and `stc-manifest` its single path-semantics module; the module and
+  manifest model otherwise has no OS branch. `cargo xtask host-audit --check` enforces the
+  allowlist (D-201).
+- Linux host builds pass the same workspace, execution, and conformance tests as Windows; CI
+  covers all three hosts (see [Testing and Verification](Testing-and-Verification.md) §6).
 
 ## 7. Runtime boundary
 

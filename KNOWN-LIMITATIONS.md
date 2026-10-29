@@ -1,7 +1,7 @@
 # Known limitations — `stc` 1.0.0-rc.1
 
 Profile: `stc-2013-oop-utf8-v1`  
-Date: 2026-10-28
+Date: 2026-10-29
 
 This list is part of the release contract. Each entry is either an explicit
 v1 profile boundary or a tested limitation with a documented workaround.
@@ -32,10 +32,11 @@ machine design as required by law and regulation.
 
 | Limitation | Status / workaround |
 | --- | --- |
-| Module loading and execution are supported on x86-64 Windows MSVC (`x86_64-pc-windows-msvc`), x86-64 Linux GNU (`x86_64-unknown-linux-gnu`), and AArch64 Linux GNU (`aarch64-unknown-linux-gnu`) | Other triples are smoke-tested for IR/object emission only |
-| Cross-target support means IR and object emission only; `--emit=exe` and `--emit=lib` reject a non-host target | Use `stc build --target=<triple> --emit=ir|obj`; link on the target host |
-| Linux AArch64 native hosting and frame rules are complete from M8 phases 3 and 4 (D-042); ARM packaging and the final v1 sign-off are later M8 phases | Do not claim ARM packaging or final v1 sign-off until the phase 7 and 8 evidence exists |
-| There is no installer or package-manager integration | Unpack `stc-<version>-<host>` and use `bin/stc`; the runtime archives are in `lib/` |
+| Native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`) | Each has its own `stc-1.0.0-rc.1-<triple>` package; other triples are smoke-tested for IR/object emission only |
+| Module loading, execution, and frame extraction are supported on the three native hosts | Cross-target artifacts are not loadable or debuggable off-host; link and run on the target host |
+| macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported | Use a supported host, or emit IR/objects only; no support claim is made |
+| CPU affinity is not pinned; control and debug service threads run at below-normal priority (`THREAD_PRIORITY_BELOW_NORMAL` on Windows, nice +10 on Linux) as an advisory policy | CPU placement belongs to the deployment's cpuset/scheduler policy; this is not a real-time guarantee |
+| There is no installer or package-manager integration | Unpack `stc-<version>-<triple>` and use `bin/stc`; the runtime archives are in `lib/` |
 | Cross-target debug information follows the requested target (DWARF for ELF/Mach-O, CodeView for MSVC) | Compile with the same `--target` used to build the IR; do not reuse host debug IR for a foreign target |
 
 ## 3. Debug and monitoring

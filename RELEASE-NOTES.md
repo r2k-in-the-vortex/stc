@@ -1,8 +1,8 @@
 # Release notes — `stc` 1.0.0-rc.1
 
-Date: 2026-10-28  
+Date: 2026-10-29  
 Profile: `stc-2013-oop-utf8-v1`  
-Milestone: M7 — release candidate
+Milestone: M7 — release candidate; M8 — Linux host portability complete (2026-10-29)
 
 `stc` is a command-line compiler for IEC 61131-3:2013 Structured Text. It emits
 deterministic textual LLVM IR, invokes `clang` to produce loadable modules,
@@ -50,6 +50,40 @@ with online change, retained state, I/O backends, and typed debug/monitoring.
 The underlying milestones remain as delivered: M4.5 online-change foundation,
 M5 FBs/OOP/aggregates/UTF-8 strings, M6 project system/CLI/verification, and
 M6.5 full typed debug and monitoring.
+
+## Host portability (M8, 2026-10-29)
+
+M8 completes the host-portability scope of `1.0.0-rc.1`. It makes no language,
+format, ABI, protocol, or version change: `stc` remains `1.0.0-rc.1`. The
+supported native hosts are:
+
+| Host | Triple | Package |
+| --- | --- | --- |
+| Windows 11 x86-64 MSVC | `x86_64-pc-windows-msvc` | `stc-1.0.0-rc.1-x86_64-pc-windows-msvc` |
+| Linux x86-64 GNU | `x86_64-unknown-linux-gnu` | `stc-1.0.0-rc.1-x86_64-unknown-linux-gnu` |
+| Linux AArch64 GNU | `aarch64-unknown-linux-gnu` | `stc-1.0.0-rc.1-aarch64-unknown-linux-gnu` |
+
+- **Host audit.** Host-specific operations are confined to the runtime platform
+  layer and the driver toolchain/build layer; each portable compiler crate
+  keeps only its single documented host module, and no OS-behaviour branch
+  remains in the module/manifest model. `cargo xtask host-audit --check`
+  enforces the allowlist in CI.
+- **AArch64 debug parity.** Service-13 capture of `x29`/`sp`/`x30`, DWARF
+  `DW_OP_reg29` frame-base extraction, and the existing `fp+16` stopped-frame
+  rule give typed locals, breakpoints, stepping, and call stacks on AArch64
+  Linux; frame-less functions are reported as optimized-out.
+- **State durability and permissions.** Linux state saves create a 0600
+  temporary file, sync it, rename over the target, then sync the parent
+  directory; a failed replace leaves the previous file intact.
+- **Service-thread priority.** Control and debug service threads run below
+  normal priority (nice +10 on Linux), best effort; v1 does not pin CPU
+  affinity.
+- **Per-architecture packaging.** One archive per native host triple with a
+  host-derived `package.json.debug_contract` (`object-codeview` on Windows
+  MSVC, `dwarf` on Linux GNU), built and exercised on all three hosts.
+
+M8 verification: the phase evidence runs and the final sign-off run are
+recorded in [`M8-Plan.md`](M8-Plan.md) §18.
 
 ## Artifacts
 
@@ -109,12 +143,14 @@ both forms is rejected (`STC-E-PROJECT-010`).
 
 ## Supported hosts and targets
 
-- Compile: Windows 11 x86-64 MSVC (primary), Linux x86-64 GNU (CI).
-- Execute, load modules, and extract frames: x86-64 Windows MSVC and x86-64
-  Linux GNU.
-- IR/object emission: the M7 cross-target matrix above.
-- Linux AArch64 host support, execution, and AArch64 frame rules are M8
-  (D-042, D-195).
+- Native hosts: Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`, primary
+  development host), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux
+  AArch64 GNU (`aarch64-unknown-linux-gnu`). Compile, execute, load modules,
+  extract frames, debug, and run online changes on all three.
+- IR/object emission: the cross-target matrix above, for any other clang
+  target.
+- macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported. There
+  is no CPU-affinity pinning and no remote/network debug transport.
 
 ## Verification
 
@@ -128,26 +164,32 @@ cargo xtask test --suite debug --locked
 cargo xtask test --suite projects --locked            # includes examples and hardening
 cargo xtask test --suite cross-target --locked
 cargo xtask traceability --check
+cargo xtask host-audit --check
 python tools/ci/check_docs.py
 npx --yes markdownlint-cli2@0.24.0
 cargo xtask package --locked
 ```
 
 CI runs the workspace, online, debug, UI, conformance, execution, projects,
-cross-target, package, traceability, Lean, and fuzz-smoke jobs on Windows and
-Ubuntu. Release evidence: CI run
+cross-target, package, traceability, Lean, and fuzz-smoke jobs natively on
+`windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm`. M7 release evidence:
+CI run
 [40777754963](https://github.com/r2k-in-the-vortex/stc/actions/runs/40777754963)
-passed on `windows-2025` and `ubuntu-24.04` for commit `8dbcbf4`.
+passed on `windows-2025` and `ubuntu-24.04` for commit `8dbcbf4`. M8 host
+evidence: every phase run in [`M8-Plan.md`](M8-Plan.md) §18 is green on the
+three native hosts; the final sign-off run is recorded there.
 Performance measurements are informational and not gating.
 
 ## Known limitations
 
 See [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md). The most relevant for a
 first deployment are: no field-layout migration, cold-download-only format-1
-baselines, local-only debug with no raw memory, object-only Windows CodeView,
-x86-64-only frame extraction, prepare on the cycle thread rather than fully
-off-thread, retained state saved at normal shutdown, and null/memory/file I/O
-backends only.
+baselines, local-only debug with no raw memory or remote transport, object-only
+Windows CodeView, no macOS or Windows ARM64 host, no CPU-affinity pinning,
+prepare on the cycle thread rather than fully off-thread, retained state saved
+at normal shutdown, and null/memory/file I/O backends only. Frame extraction
+covers x86-64 and AArch64; frame-less functions are reported as optimized-out,
+and caller frames carry no source location.
 
 ## Safety
 

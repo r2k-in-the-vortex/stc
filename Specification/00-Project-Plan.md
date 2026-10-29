@@ -1,8 +1,8 @@
 # stc Project Plan
 
 Status: M4.5 online-change foundation, M5 lowering (phases 1–7 and 4b), M6 project system,
-CLI, and verification hardening (phases 0–11), M6.5 debug/monitoring (phases 0–10), and M7
-release candidate are implemented (2026-10-28); M8 Linux host portability is next  
+CLI, and verification hardening (phases 0–11), M6.5 debug/monitoring (phases 0–10), M7 release
+candidate, and M8 Linux host portability are implemented; M8 is complete (2026-10-29)  
 Date: 2026-10-24  
 Profile: `stc-2013-oop-utf8-v1`  
 Standard reference: IEC 61131-3:2013 (Ed. 3.0), local copy under `Specification/Reference/`
@@ -88,8 +88,9 @@ is specified in
   off-thread loader/prepare is M7. Only the cycle thread executes ST code.
 - `PERSISTENT` (not a 2013 keyword) and periodic/checkpointed state saves. v1 persists retained
   variables at normal shutdown; crash-time saves are a later extension.
-- Native Linux host support during initial development. Linux x86-64 and Linux AArch64 host
-  builds are the first planned post-basic-development deliverable (M8, D-042).
+- Native Linux host support during initial development. Linux x86-64 GNU and Linux AArch64 GNU
+  are supported native hosts from M8 (D-042, D-200); macOS, Windows ARM64, 32-bit, and
+  big-endian hosts remain out of scope.
 
 ## 4. Constraints and assumptions
 
@@ -100,7 +101,7 @@ is specified in
 | Backend driver | `clang` (and its linker) lowers IR to the selected target |
 | Dev toolchain | clang/LLVM 23.1.4, cargo 1.99.1, Lean 4.35.0 (Lake 5.0.0) |
 | Primary host | Windows 11, `x86_64-pc-windows-msvc` (development host) |
-| Additional hosts | After basic development: Linux x86-64 and Linux AArch64 (ARM64), native builds and execution (D-042) |
+| Additional hosts | Linux x86-64 GNU and Linux AArch64 GNU (ARM64) are supported native hosts from M8 (D-042, D-200); macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported |
 | Target selection | Host by default; `--target <triple>` passed to `clang` |
 | Source encoding | UTF-8 (optional BOM), case-insensitive language keywords/identifiers |
 | Project dependencies | Local path dependencies plus committed `stc.lock` in v1; package graph is acyclic; `--locked` enforced; registry/version solver later (A-009) |
@@ -124,8 +125,8 @@ threads, none of which execute ST or block the cycle. Fully off-thread candidate
 M7 work.
 
 Host-specific code is confined to the driver and runtime. The front end, HIR, and IR builder are
-portable Rust with no host conditionals, so the planned Linux x86-64/AArch64 port is additive
-(D-042).
+portable Rust with no host conditionals, so the Linux x86-64/AArch64 port delivered in M8 was
+additive (D-042, D-201).
 
 ## 5. Deliverables
 
@@ -538,6 +539,32 @@ Exit criteria:
 - No host-specific conditionals remain in `stc-lexer`, `stc-parser`, `stc-sema`, `stc-codegen`,
   or the module/manifest model.
 
+> **M8 status (2026-10-29):** phases 0–8 are complete and all exit criteria pass on the three
+> supported native hosts: Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU
+> (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`). Phase 0
+> fixed the native-host boundary and decisions D-200–D-208. Phase 1 audited and confined
+> host-specific operations and added `cargo xtask host-audit --check` with an explicit allowlist
+> (D-201): each portable crate carries only its single documented host module
+> (`stc-codegen/src/host.rs` target resolution, `stc-manifest/src/host.rs` path semantics), no
+> OS-behaviour branch remains elsewhere in the portable compiler crates or the module/manifest
+> model, and the runtime and driver keep their OS branches in the documented platform modules.
+> Phase 2 re-ran the full verification list natively on Linux x86-64 and fixed the remaining
+> host assumptions; phase 3 added native Linux AArch64 builds and suite fixes; phase 4 added
+> AArch64 debug parity (D-202): service-13 capture of `x29`/`sp`/`x30`, `DW_OP_reg29` frame-base
+> extraction, the existing `fp+16` rule, and `-mbranch-protection=none`, with typed locals,
+> breakpoints, stepping, and call stacks passing on `ubuntu-24.04-arm`. Phase 5 made Linux state
+> saves power-loss-shaped (D-203): a 0600 temporary file, file sync, rename, parent-directory
+> sync, user-only state permissions, and a failed replace that leaves the previous file intact.
+> Phase 6 verified `dlopen`/`dlsym`/`dlclose` unload and generation pinning and set control and
+> debug service threads below normal priority (nice +10 on Linux) without CPU-affinity pinning
+> (D-204). Phase 7 added one package per native host triple with a host-derived
+> `debug_contract`, extended the pinned `ubuntu-24.04-arm` matrix, and added ARM64 debug and
+> package jobs (D-205, D-206). Phase 8 completed the host-support documentation, known
+> limitations, decisions, and the exit-criteria sweep. No language, format, ABI, protocol, or
+> version change was made; `stc` remains `1.0.0-rc.1` and the non-safety stance is unchanged.
+> The final evidence run is recorded in the phase-8 evidence commit and in
+> [Testing and Verification](Architecture/Testing-and-Verification.md) §6.
+
 ## 9. Verification strategy
 
 | Level | Method |
@@ -561,7 +588,7 @@ Exit criteria:
 | GOT/manifest | Identity/rename/move, exact-parent, download/consume, byte-identical manifests, corrupt/malformed parser fuzzing, quarantine/reset policy |
 | Real-time boundary | O(1) switch measurement, bounded maintenance jitter (M7 target), between-cycle candidate preparation in M6, service-thread contention and generation pinning |
 | Debug/monitoring | Typed read/write/force/watch, breakpoints/step/call stack, DWARF/CodeView, swap/session teardown, debug/release separation |
-| Host portability | Full workspace tests and end-to-end CLI on Linux x86-64 and Linux AArch64 |
+| Host portability | Native workspace tests, every suite, and end-to-end CLI on Windows x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU; `cargo xtask host-audit --check` enforces host-code confinement |
 
 ## 10. Risks and mitigations
 
@@ -625,8 +652,8 @@ Exit criteria:
 - `stc fmt` is idempotent, preserves comments, emits strict semicolons, and supports `--check`.
 - Production and release artifacts contain no test-only units or `STC_ASSERT` calls; production
   use of either is an error.
-- Host-specific code is isolated behind a small platform layer; the planned Linux x86-64/AArch64
-  port is additive (D-042).
+- Host-specific code is isolated behind a small platform layer with an executable audit; Linux
+  x86-64 and Linux AArch64 native hosts are delivered (D-042, D-200, D-201).
 - No known silent correctness gaps.
 
 ## 12. Immediate next actions
@@ -651,15 +678,16 @@ Exit criteria:
    contiguous-object model, and do not reintroduce module-owned state or descriptors
    (Q-090/Q-091/Q-095).
 5. Keep host-specific operations (paths, clock, linker discovery, module loading, atomic
-   replace) behind a platform layer; Linux x86-64/AArch64 host support follows basic development
-   (M8, D-042).
+   replace, service priority) behind a platform layer and the `host-audit` allowlist; Linux
+   x86-64 and Linux AArch64 native host support is delivered (M8, D-042, D-200, D-201).
 
 ## 13. Post-v1 outlook
 
 - Field-layout migration for approved, pointer-free cases, building on per-field `GotId`s and
   the persistent manifest.
 - Remote/network deployment, multi-user online-change scheduling, and a deploy/rollback UI.
-- Linux x86-64 and Linux AArch64 host support (M8, D-042), then further hosts only on demand.
+- Further native hosts, such as macOS or Windows ARM64, only on demand; Linux x86-64 and Linux
+  AArch64 were delivered in M8 (D-042, D-200).
 - Public CST/traversal API for IDE tools (v2/v3), building on the stable `SyntaxKind`.
 - Hardware I/O backends and schedules: EtherCAT, Modbus, MQTT.
 - Preemptive/multi-threaded ST execution, task stepping, and off-thread candidate preparation;

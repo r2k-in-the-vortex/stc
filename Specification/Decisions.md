@@ -257,9 +257,9 @@ errors.
 modules, not per-function hot patching. `module` becomes a first-class artifact paired with a GOT
 manifest; `exe` is a thin host launcher that loads an adjacent module; `lib` remains the
 embedding artifact. Online change is delivered through the host API and local CLI, is a runtime/
-platform capability rather than an IEC language feature, and is supported on Windows MSVC x64
-and Linux GNU x64 (AArch64 with M8). The foundation is M4.5, inserted before M5; the user-facing
-workflow is M6.
+platform capability rather than an IEC language feature, and is supported on Windows MSVC x64,
+Linux GNU x64, and Linux GNU AArch64 (M8). The foundation is M4.5, inserted before M5; the
+user-facing workflow is M6.
 
 **Consequences:** The direct-reference, code-linked M4 artifact model is superseded. The host
 owns the cycle, persistent memory, modules, the process image, retained state, and debug
@@ -640,7 +640,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-192 | Format-1 GOT manifests are cold-download only. The descriptor rejects any `manifest_format` other than 2 with the documented version diagnostic; no migration or in-place upgrade tool is provided. | Reinterpreting pre-M6.5 layouts risks preserved-value safety; a cold download is the documented, tested path. |
 | D-193 | M7 performance numbers are informational, not CI gates. Measurements record date, host, clang and cargo versions, regime, root/checkpoint counts, and variance in `Specification/Verification/Performance.md`. | Host variance makes a gate noisy; recorded evidence supports the performance pass without coupling release health to timing. |
 | D-194 | Remote/network debugging, raw-memory access, unauthenticated modes, and a privileged debug mode remain out of scope for v1. | Adding them would be an architecture and security decision, not release hardening. |
-| D-195 | Cross-target support in v1 means IR and object emission for the tested `clang --target` matrix. Module loading, execution, and frame extraction are supported only on x86-64 Windows MSVC and x86-64 Linux GNU. AArch64 frame rules and native AArch64 execution remain M8 (D-042). | No cross-target sysroots or execution hosts are part of v1 packaging; claiming more would be a silent acceptance of untested behaviour. |
+| D-195 | Cross-target support in v1 means IR and object emission for the tested `clang --target` matrix. Module loading, execution, and frame extraction are supported only on x86-64 Windows MSVC and x86-64 Linux GNU. AArch64 frame rules and native AArch64 execution remain M8 (D-042). Superseded by D-202 and D-209 for native AArch64 execution and frame extraction. | No cross-target sysroots or execution hosts are part of v1 packaging; claiming more would be a silent acceptance of untested behaviour. |
 | D-196 | Embedded hosts use the pipe transport in v1. The local socket remains available through `DebugServerConfig` and the CLI; the embedding ABI gains no transport selector. | Adding a selector is an ABI change; pipe-only is the documented, tested embedded contract. |
 | D-197 | `RELEASE-CHECKLIST.md` names the project maintainer as owner and records the artifacts, commands, both-host evidence, hashes, documentation, and sign-off date. Sign-off requires recorded evidence for every item; unverified items are marked unsupported. | One named owner and an explicit artifact list make the release decision auditable. |
 | D-198 | Flaky process or timing tests are bugs. A failure is reproduced and diagnosed before a deadline or wait is changed; logs and the failing run are recorded. | Prevents the debug and CLI suites from passing by widening timeouts rather than fixing races. |
@@ -654,6 +654,7 @@ cause unbounded locks, allocator contention, or memory-bandwidth stalls in the c
 | D-206 | Packaging produces one archive per native host triple. `package.json.debug_contract` is `object-codeview` on Windows MSVC and `dwarf` on Linux GNU. No combined archive and no timestamps. | The debug backend is host-visible metadata; a Windows-only label on a Linux package is false. |
 | D-207 | The Unix debug endpoint and audit file remain user-only on both Linux architectures: 0600 files in a 0700 directory, symlinks refused, endpoint/socket/audit removed on stop. Container and headless hosts use the same path rules with no shared-directory fallback. | Security behaviour must not depend on architecture or environment; a fallback would silently weaken the endpoint. |
 | D-208 | M8 makes no format, ABI, protocol, language, or version change. `stc` remains `1.0.0-rc.1`; M8 completes the host-portability scope of the release candidate. | The milestone is a portability pass; identity churn would invalidate M7 evidence without a contract reason. |
+| D-209 | M8 is complete (2026-10-29): native Windows x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU support is implemented and verified on all three hosts, superseding D-195's x86-64-only execution and frame statement. The host audit (D-201), AArch64 debug parity (D-202), state durability and permissions (D-203), service priority without affinity (D-204), the pinned ARM64 matrix (D-205), and per-architecture packaging (D-206) are delivered. No language, format, ABI, protocol, or version change; the final evidence run is recorded in `M8-Plan.md` §18 and the project-plan M8 status block. | The milestone is a portability pass; three-host evidence closes D-042 without reopening the release candidate. |
 
 D-118 was reviewed and approved on 2026-10-24; the four clarifications stand as recorded and phase 2
 is approved. Phase 3 is complete for review and D-119 records its IR-level choices. Phase 4 is
@@ -753,7 +754,16 @@ change; the affected documents are `M8-Plan.md`,
 [Conformance Profile](01-Conformance-Profile.md), `README.md`, `USER-GUIDE.md`,
 `KNOWN-LIMITATIONS.md`, `RELEASE-NOTES.md`, and `handover_to_M8.md`.
 
-D-094 through D-208 affect
+M8 phases 1–8 (2026-10-28 to 2026-10-29) implement and verify that boundary, and D-209 records
+completion: the host audit and allowlist (D-201), native Linux x86-64 and AArch64 builds and
+suites, AArch64 debug parity with the D-202 frame rule, Linux state durability and permissions
+(D-203), below-normal service priority without affinity (D-204), the pinned ARM64 CI matrix
+(D-205), and per-architecture packaging (D-206). D-195's x86-64-only execution and frame
+statement is superseded by D-202 and D-209. The final sign-off run is recorded in `M8-Plan.md`
+§18 and the project-plan M8 status block; the release identity remains `1.0.0-rc.1` and the
+non-safety stance is unchanged.
+
+D-094 through D-209 affect
 [Online Change and GOT](Architecture/Online-Change-and-GOT.md),
 [GOT Artifacts and Schemas](Architecture/GOT-Artifacts.md),
 [Debug and Monitoring](Architecture/Debug-and-Monitoring.md),

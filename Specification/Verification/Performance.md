@@ -78,6 +78,36 @@ Reproduce:
 cargo test -p stc-driver --test debug_overhead --locked -- --ignored --nocapture
 ```
 
+## AArch64 debug overhead (one ARM64 runner measurement)
+
+This is one measurement from a single GitHub-hosted `ubuntu-24.04-arm` runner, taken from the
+phase-4 CI run
+[40792824763](https://github.com/r2k-in-the-vortex/stc/actions/runs/40792824763) (commit
+`edd6fae`). It is one ARM64 host in one regime, informational and non-gating (D-193); do not
+compare it with the Windows figures above without recording the host and toolchain difference.
+
+| Item | Value |
+| --- | --- |
+| Host | Ubuntu 24.04 ARM64, `aarch64-unknown-linux-gnu`, runner `ubuntu-24.04-arm` |
+| CPU | not reported by the runner (`unknown`) |
+| Rust | rustc 1.99.1 (58cf8f9c3 2026-10-13) |
+| clang | Ubuntu clang 18.1.3 (1ubuntu1) |
+| Regime | same generator source; 50,000 cycles/run, best and median of 15 runs, 2,000 warm-up cycles |
+
+| Build form | Best | Median |
+| --- | --- | --- |
+| Release (`-O2`, stripped) | 2189.56 ns/cycle | 2191.17 ns/cycle |
+| Debug hook-free (`-O0 -g`, test form) | 2194.01 ns/cycle | 2196.99 ns/cycle |
+| Debug hooks (`-O0 -g`, 8 checkpoints) | 2871.19 ns/cycle | 2872.73 ns/cycle |
+| Debug hooks + active observe session | 4913.53 ns/cycle | 4916.48 ns/cycle |
+| Typed read through the host API | 7289.83 ns/read | 7302.38 ns/read |
+
+The log derives a hook cost of 84.65 ns/hook, debug-hooks/release 1.31x, hook-free/release
+1.00x, and a checkpoint share of 23.6% of the debug cycle; an active observe session adds
+2042.33 ns/cycle (255.29 ns/hook), including the per-cycle server pump. The hook-free row is the
+documented test form, not a product configuration. The Ubuntu runner uses clang 18.1.3, unlike
+the clang 23.1.4 used for the Windows figures above, so cross-host comparison is not meaningful.
+
 ## Activation latency
 
 Measured by `crates/stc-runtime/tests/switch_latency.rs`: cold install, then

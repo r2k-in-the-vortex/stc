@@ -372,7 +372,7 @@ missing mappings and fails CI if a rule is marked implemented without a test.
 ### 4.1 Online-change and manifest suite
 
 `crates/stc-runtime/tests` and `crates/stc-driver/tests` exercise the host/module lifecycle on
-both hosts:
+all three native hosts:
 
 - cold install, code-only online change, field add/remove/reorder, tracked rename/move;
 - untracked rename/removal diagnosis and explicit allow/cold paths;
@@ -416,15 +416,16 @@ have distinct build IDs/manifests. The target mapping is:
 | `stc-codegen` | `debug_info`, `checkpoints`, `frames` |
 | `stc-got` | `metadata_v2` |
 
-The `debug` CI job runs that suite on `windows-2025` and `ubuntu-24.04` with
-`STC_REQUIRE_CLANG=1`; it preflights the platform inspection tools (`llvm-readobj` on Windows,
-`readelf` on Linux) so a missing tool fails the job instead of skipping an assertion.
+The `debug` CI job runs that suite on `windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm`
+with `STC_REQUIRE_CLANG=1`; it preflights the platform inspection tools (`llvm-readobj` on
+Windows, `readelf` on Linux) so a missing tool fails the job instead of skipping an assertion.
 Debug-disabled overhead is measured by the ignored
 `crates/stc-driver/tests/debug_overhead.rs` test (`cargo test -p stc-driver --test debug_overhead
 -- --ignored --nocapture`), which compares release, hook-free debug, and hook-bearing debug builds
 through the real build pipeline and records ns/cycle; the opt-in `Debug overhead` workflow runs
-the same measurement on both hosts. The measured numbers are recorded in the M6.5 plan and are
-not a CI timing gate.
+the same measurement on all three native hosts. The measured numbers are recorded in the M6.5
+plan, the M7 record, and (for one ARM64 runner) [Performance](../Verification/Performance.md),
+and are not a CI timing gate.
 
 The debug suite also covers the externally fixed contracts of D-173–D-179:
 
@@ -532,7 +533,7 @@ lean/
 | `execution` | compile/run tests on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
 | `projects` | end-to-end project and online workflow plus `manifest_hardening` and `examples` on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
 | `online` | hot-swap/manifest/cold-download suite on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
-| `package` | `cargo xtask package --locked`, checksum verification, and the unpacked `new/build/build --release/run/test` exercise on Windows x64 and Ubuntu x64; uploads the package |
+| `package` | `cargo xtask package --locked`, host-triple and `debug_contract` metadata checks, checksum verification, and the unpacked `new/check/build/build --release/build --emit=lib/run/test/clean/rebuild` exercise on Windows x64, Ubuntu x64, and Ubuntu ARM64; uploads the package |
 | `traceability` | `cargo xtask traceability --check` and `cargo xtask host-audit --check` on Ubuntu x64 |
 | `debug` | `cargo xtask test --suite debug` on Windows x64, Ubuntu x64, and Ubuntu ARM64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
 | `lean` | `lake build` + vector check |
@@ -559,23 +560,34 @@ jobs are active on the documented matrix. The `debug` job runs the debug suite o
 and both Linux architectures and, on a manual `workflow_dispatch`, also prints the informational
 overhead measurement described in §4.2 on those hosts; it never gates on timing.
 
-Host portability is verified natively, not by cross-compilation. The M8 phase-2 evidence run
-[`40784925474`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40784925474) (commit
-`252af75`) passed all 27 jobs on `windows-2025` and `ubuntu-24.04`; its Ubuntu x64 jobs cover the
-workspace, UI, conformance, execution, projects, online, debug, cross-target, traceability
-(including `host-audit --check`), docs, coverage, and package suites. Unix-only behaviour is
-asserted on `ubuntu-24.04`: state files are mode 0600 and a failed replace keeps the previous
-target and removes the temporary file (`stc-runtime` state tests); debug endpoint and audit files
-are mode 0600 in a mode-0700 socket directory (`debug_protocol`, `control`); `dlopen`/`dlsym`/
-`dlclose` load and retire compiler-produced modules (`host_lifecycle`); the launcher exits 130 on
-SIGINT and the test runner kills a timed-out child (`online_cli`, `test_cli`); artifact names match
-`stc`, `libstc_runtime.a`, `libstc_runtime.so`, `<module>-<build>.so`, `<name>.a`, and
-`lib<name>.so` (`package`, `cli_project`, `module_cli`, `execution`); and metadata, the build
-manifest, and the package record the host triple (`cli_project`, `module_cli`, and the `package`
-job). Linux AArch64 is a native host from M8 phase 3: the `test`, `ui`, `conformance`,
-`execution`, `projects`, `online`, and `cross-target` jobs run on `ubuntu-24.04-arm`, and the
-`debug` suite runs there natively from M8 phase 4; the release package remains an x86-64-only
-job until M8 phase 7.
+Host portability is verified natively, not by cross-compilation. All three native hosts run the
+workspace, UI, conformance, execution, projects, online, debug, cross-target, and package jobs;
+`windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm` are pinned runner labels (D-205). The M8
+phase-2 evidence run
+[`40787801942`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40787801942) (commit
+`0805a51`) established the Linux x86-64 native baseline; phase-3 run
+[`40790831659`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40790831659) (commit
+`07162f0`) added the native AArch64 suites; phase-4 run
+[`40792824763`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40792824763) (commit
+`edd6fae`) added native AArch64 debug parity; and phase-7 run
+[`40819548212`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40819548212) (commit
+`2aafbc5`) added the ARM64 package job. The final M8 sign-off run is recorded in
+[`M8-Plan.md`](../../M8-Plan.md) §18.
+
+Unix-only behaviour is asserted on both Linux architectures: state files are mode 0600 and a
+failed replace keeps the previous target and removes the temporary file (`stc-runtime` state
+tests); debug endpoint and audit files are mode 0600 in a mode-0700 socket directory
+(`debug_protocol`, `control`); `dlopen`/`dlsym`/`dlclose` load and retire compiler-produced
+modules with `RTLD_LOCAL` symbol scope (`host_lifecycle`), and a retired module disappears from
+`/proc/self/maps` after the unload grace where `/proc` is available; the launcher exits 130 on
+SIGINT and the test runner kills a timed-out child (`online_cli`, `test_cli`); the service-priority
+unit test observes nice +10 in a spawned service thread; artifact names match `stc`,
+`libstc_runtime.a`, `libstc_runtime.so`, `<module>-<build>.so`, `<name>.a`, and `lib<name>.so`
+(`package`, `cli_project`, `module_cli`, `execution`); and metadata, the build manifest, and the
+package record the host triple (`cli_project`, `module_cli`, and the `package` job). AArch64 debug
+coverage includes the real service-13 trampoline, `x29`/`x30` capture, `DW_OP_reg29` extraction,
+typed locals, breakpoints, stepping, and call stacks. The host audit runs in the `traceability`
+job and fails on any host-specific line outside `tools/ci/host-allowlist.txt` (D-201).
 
 ### 6.2 Matrix
 
@@ -585,17 +597,17 @@ job until M8 phase 7.
   native host for the workspace and every suite: workspace tests, diagnostic snapshots,
   conformance corpus, execution tests, project workflow, end-to-end CLI, online-change and debug
   suites, cross-target smoke, traceability with the host audit, docs, and the release package.
-  Linux x86-64 is supported natively from M8 phase 2.
+  Linux x86-64 has been supported natively since M8 phase 2.
 - Secondary, fully native: Ubuntu 24.04 ARM64 (`ubuntu-24.04-arm`), `aarch64-unknown-linux-gnu` —
-  from M8 phase 3 it runs the workspace tests, diagnostic snapshots, conformance corpus,
-  execution tests, project workflow, online-change suite, and cross-target smoke natively; from
-  M8 phase 4 the debug suite runs natively there as well. The release package joins in M8
-  phase 7.
+  a full native host for the same workspace and suite set: workspace tests, diagnostic snapshots,
+  conformance corpus, execution tests, project workflow, online-change suite, debug suite,
+  cross-target smoke, and release package. The debug suite and package job joined in M8 phases 4
+  and 7 respectively, so every suite now runs natively on ARM64.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm`); `-latest` labels
   are not used, so image migrations do not silently change the matrix.
-- Host portability (D-042): native Linux AArch64 host jobs run on `ubuntu-24.04-arm` from M8
-  phase 3 for the suites listed above (debug from phase 4). Further `aarch64` cross-target object
-  emission remains in the `cross-target` job.
+- Host portability (D-042, D-200): the three pinned runners are the supported native hosts. A
+  further `aarch64` cross-target object remains in the `cross-target` job; it is not a host
+  support claim.
 - Rust toolchain pinned in `rust-toolchain.toml`; Lean pinned in `lean/lean-toolchain`.
 - CI builds with `--locked`; a changed lockfile without a manifest change fails the job.
 - CI caches cargo and Lake builds; the clang version is printed in every job.
@@ -606,6 +618,32 @@ job until M8 phase 7.
   silent acceptance fails the job.
 - Warnings are denied in CI (`-D warnings`), with documented allow-list exceptions.
 - Flaky tests are quarantined and fixed; timeouts are not silently retried.
+
+### 6.4 M8 host-portability verification
+
+The M8 verification list is run natively on each supported host (`windows-2025`,
+`ubuntu-24.04`, and `ubuntu-24.04-arm`); the same commands work locally on a native host:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+STC_REQUIRE_CLANG=1 cargo test --workspace --locked
+cargo xtask test --suite debug --locked
+cargo xtask test --suite projects --locked
+cargo xtask test --suite cross-target --locked
+cargo xtask traceability --check
+cargo xtask host-audit --check
+python tools/ci/check_docs.py
+npx --yes markdownlint-cli2@0.24.0
+cargo xtask package --locked --out dist
+```
+
+`cargo xtask host-audit --check` is the executable form of D-201: it scans workspace Rust
+sources, reports every host-specific line (`path:line`), and fails when a line is not in
+`tools/ci/host-allowlist.txt` or an allowlist entry is stale. The portable crates may name only
+their single documented host module (`stc-codegen/src/host.rs`, `stc-manifest/src/host.rs`);
+runtime and driver platform modules list every OS branch with a reason. Cross-target emission in
+the `cross-target` suite remains IR/object-only and is not native-host evidence.
 
 ## 7. Traceability
 

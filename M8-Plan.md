@@ -335,18 +335,29 @@ spelling, and OS-specific FFI. Classify each as:
 
 ## 16. Definition of done
 
-- [ ] Native Linux x86-64 and Linux AArch64 builds of `stc` and the runtime.
-- [ ] `cargo test --workspace --locked` passes on both.
-- [ ] `stc new/build/check/run/test/clean` works end-to-end on both.
-- [ ] Execution, conformance, hot-swap, manifest, package, and debug suites pass on both.
-- [ ] Retained state round-trips; atomic save, directory sync, and 0600 permissions verified.
-- [ ] AArch64 `stack.list`/`frame.read` work for frame-pointer functions; no AArch64
+- [x] Native Linux x86-64 and Linux AArch64 builds of `stc` and the runtime.
+- [x] `cargo test --workspace --locked` passes on both.
+- [x] `stc new/build/check/run/test/clean` works end-to-end on both.
+- [x] Execution, conformance, hot-swap, manifest, package, and debug suites pass on both.
+- [x] Retained state round-trips; atomic save, directory sync, and 0600 permissions verified.
+- [x] AArch64 `stack.list`/`frame.read` work for frame-pointer functions; no AArch64
   unavailable limitation remains.
-- [ ] No host-specific conditionals in the portable compiler crates or the module/manifest
+- [x] No host-specific conditionals in the portable compiler crates or the module/manifest
   model; the audit enforces it.
-- [ ] Service-thread priority policy implemented and measured; affinity documented as absent.
-- [ ] Host-support documentation, known limitations, decisions, and CI jobs updated.
+- [x] Service-thread priority policy implemented and measured; affinity documented as absent.
+- [x] Host-support documentation, known limitations, decisions, and CI jobs updated.
 - [ ] M8 evidence recorded with the green both-architecture run.
+
+The host-conditional item is satisfied in the confined form fixed by D-201, not as a literal
+absence of every `cfg` token. Each portable crate carries at most its single documented host
+module: `stc-codegen/src/host.rs` for host target resolution and `stc-manifest/src/host.rs` for
+filesystem path semantics. `stc-lexer`, `stc-parser`, `stc-sema`, the rest of `stc-codegen`, and
+`stc-got` carry no OS-behaviour branch, and the module/manifest model has none. The runtime and
+driver keep every OS branch in their documented platform modules. `cargo xtask host-audit
+--check` enforces the allowlist in `tools/ci/host-allowlist.txt` and fails on an unlisted
+host-specific line; it reports 100 host-specific lines in 19 allowlisted files, of which two are
+the portable host modules, one is the audit itself, and the remainder are runtime/driver
+platform modules.
 
 Where this plan and a specification disagree, the specification and a decision record win.
 

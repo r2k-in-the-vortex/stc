@@ -30,9 +30,17 @@ stc-1.0.0-rc.1-<host-triple>/
   SHA256SUMS
 ```
 
-A package is produced for each native host triple: `x86_64-pc-windows-msvc`,
-`x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu`. Linux GNU packages
-therefore exist for both x86-64 and AArch64.
+A package is produced for each native host triple:
+
+```text
+stc-1.0.0-rc.1-x86_64-pc-windows-msvc
+stc-1.0.0-rc.1-x86_64-unknown-linux-gnu
+stc-1.0.0-rc.1-aarch64-unknown-linux-gnu
+```
+
+Linux GNU packages therefore exist for both x86-64 and AArch64, each with a
+host-derived `package.json` `debug_contract` (`object-codeview` on Windows
+MSVC, `dwarf` on Linux GNU).
 
 Unpack the archive and put `bin` on `PATH` (or call `bin/stc` directly). The
 driver finds the runtime archive beside its executable or in the sibling
@@ -301,9 +309,9 @@ aarch64-pc-windows-msvc        riscv64-unknown-elf
 thumbv7em-none-eabihf
 ```
 
-Execution, module loading, and frame extraction remain x86-64 Windows MSVC and
-x86-64 Linux GNU. `--emit=exe` and `--emit=lib` reject a non-host target with
-`STC-E-BUILD-004`.
+Execution, module loading, and frame extraction are native on Windows x86-64
+MSVC, Linux x86-64 GNU, and Linux AArch64 GNU. `--emit=exe` and `--emit=lib`
+reject a non-host target with `STC-E-BUILD-004`.
 
 ## 10. Performance
 
@@ -337,15 +345,17 @@ severity, spans, notes, and related locations.
 
 ## 12. Support matrix
 
-| Host | Compile | Run/model | Debug | Online change |
-| --- | --- | --- | --- | --- |
-| Windows 11 x86-64 MSVC | yes | yes | yes | yes |
-| Linux x86-64 GNU | yes (CI) | yes (CI) | yes (CI) | yes (CI) |
-| Linux AArch64 | M8 | M8 | M8 | M8 |
-| Other targets | IR/object emission only | no | no | no |
+| Host | Triple | Package | Compile | Run/model | Debug | Online change |
+| --- | --- | --- | --- | --- | --- | --- |
+| Windows 11 x86-64 MSVC | `x86_64-pc-windows-msvc` | `stc-1.0.0-rc.1-x86_64-pc-windows-msvc` | yes | yes | yes | yes |
+| Linux x86-64 GNU | `x86_64-unknown-linux-gnu` | `stc-1.0.0-rc.1-x86_64-unknown-linux-gnu` | yes | yes | yes | yes |
+| Linux AArch64 GNU | `aarch64-unknown-linux-gnu` | `stc-1.0.0-rc.1-aarch64-unknown-linux-gnu` | yes | yes | yes | yes |
+| Other targets | any clang triple | none | IR/object emission only | no | no | no |
 
-CI runs the workspace, debug, online, projects, conformance, execution, UI,
-cross-target, traceability, Lean, and fuzz-smoke jobs on the documented hosts.
+The three native hosts are supported from M8 (D-200); macOS, Windows ARM64,
+32-bit, and big-endian hosts are not supported. CI runs the workspace, debug,
+online, projects, conformance, execution, UI, cross-target, package,
+traceability, Lean, and fuzz-smoke jobs natively on all three hosts.
 
 ## 13. Safety
 

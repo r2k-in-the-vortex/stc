@@ -8,8 +8,10 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M7 (release candidate) is complete and signed off: `stc` 1.0.0-rc.1 (2026-10-28), green CI run
-40777754963.** M6.5 (debug and
+**M8 (Linux host portability) is complete (2026-10-29): `stc` 1.0.0-rc.1 runs natively on
+Windows 11 x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU, with the native suites and
+packages verified on all three hosts.** M7 (release candidate) was signed off on 2026-10-28
+(green CI run 40777754963); M6.5 (debug and
 monitoring) completed 2026-10-28, M6 (project system, CLI, and verification hardening) completed
 2026-10-27, and the earlier milestones are described below. The repository
 contains the source-map and diagnostic crates, the
@@ -135,9 +137,12 @@ corpus, traceability tables, deterministic property tests, a 20k-term deep-chain
 specification continues to be written before implementation, as required below.
 
 **Release-candidate limitations.** Windows ships object-level CodeView and produces no PDB or
-DLL-level CodeView claim; stack unwinding and typed locals are limited to the stopped-frame table
-on x86-64, with optimized-out values reported honestly and AArch64 frame rules deferred to M8;
-format-1 manifests require the documented cold download rather than migration; debug and release
+DLL-level CodeView claim; stack unwinding and typed locals use the stopped-frame table on x86-64
+(Windows MSVC and Linux GNU) and AArch64 (Linux GNU), with frame-less functions reported as
+optimized-out and caller frames reported honestly. The supported native hosts are Windows
+x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU; macOS, Windows ARM64, 32-bit, big-endian
+hosts, CPU-affinity pinning, and remote debug are not supported. Format-1 manifests require the
+documented cold download rather than migration; debug and release
 forms are separately identified and not a supported hot-swap pair; debug is local-only with no
 remote/network or raw-memory API, one session per host, bounded watches/events, and a five-minute
 default stop/idle bound. `stc` is not a safety PLC and is not responsible for safety. It can
@@ -172,6 +177,7 @@ timeout, or interlock is provided. The consolidated list is in
 | [Non-Safety Statement](NON-SAFETY.md) | Not a safety PLC; safety is a separate system |
 | [Release Checklist](RELEASE-CHECKLIST.md) | Owner, evidence, and sign-off record |
 | [M7 Plan](M7-Plan.md) | Release-candidate implementation plan |
+| [M8 Plan](M8-Plan.md) | Linux host portability implementation plan |
 
 ## Goal
 
@@ -252,9 +258,9 @@ stc build --emit=module             # loadable module + GOT manifest
   [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md).
 - `--target <triple>` is passed to clang and emitted as the IR triple; without it, clang uses the
   host target.
-- Windows 11 x86-64 (MSVC) is the primary development host. After basic development, `stc` and
-  its runtime are expected to run natively on Linux x86-64 and Linux AArch64 (ARM64); target
-  selection stays with clang, so either host can cross-compile (D-042).
+- Windows 11 x86-64 (MSVC) is the primary development host. `stc` and its runtime also run
+  natively on Linux x86-64 GNU and Linux AArch64 GNU (D-042, D-200); target selection stays with
+  clang, so any host can cross-compile IR/objects (D-195).
 - Executable mode generates a thin launcher that loads an adjacent module; library mode embeds
   the host. The module exports attach/prepare/cycle/shutdown/detach, explicit `{stc:export}`
   wrappers, and its descriptor.
@@ -422,6 +428,7 @@ stc/
   M6-Plan.md                 project system, CLI, and verification plan (complete)
   M6.5-Plan.md               debug/monitoring plan (complete)
   M7-Plan.md                 release-candidate plan (complete)
+  M8-Plan.md                 Linux host portability plan (complete)
   handover_to_M5.md          M4.5 handover and M5 opening contract
   handover_to_M7.md          M6.5 handover and M7 opening contract
   handover_to_M8.md          M7 handover and M8 opening contract
@@ -482,11 +489,12 @@ on pull requests.
 - `docs` runs from M0: required-document checks, relative-link validation, profile consistency,
   reference-PDF exclusion (`tools/ci/check_docs.py`), and Markdown lint.
 - `fmt`, `clippy`, `test`, `coverage`, `online`, `ui`, `conformance`, `execution`, `projects`,
-  `debug`, `traceability`, `lean`, `fuzz-smoke`, and `cross-target` are active for the present
-  tree. `test`, `online`, `ui`, `conformance`, `execution`, `projects`, and `debug` run on both
-  Windows Server 2025 x64 and Ubuntu 24.04 x64; the host-independent jobs (`fmt`, `clippy`,
-  `coverage`, `traceability`, `lean`, `fuzz-smoke`, `cross-target`) run on Ubuntu 24.04. The
-  `test` and `online` jobs set `STC_REQUIRE_CLANG=1`; the execution tests build `stc-runtime`
+  `debug`, `traceability`, `lean`, `fuzz-smoke`, `cross-target`, and `package` are active for
+  the present tree. `test`, `online`, `ui`, `conformance`, `execution`, `projects`, `debug`,
+  `cross-target`, and `package` run natively on Windows Server 2025 x64, Ubuntu 24.04 x64, and
+  Ubuntu 24.04 ARM64; the host-independent jobs (`fmt`, `clippy`, `coverage`, `traceability`,
+  `lean`, `fuzz-smoke`) run on Ubuntu 24.04. The `test` and `online` jobs set
+  `STC_REQUIRE_CLANG=1`; the execution tests build `stc-runtime`
   and link C harnesses with the same toolchain discovery as `stc build`. The `online` job runs
   the GOT identity, descriptor/manifest projection, host lifecycle, online-change CLI, and
   launcher/embedding artifact suites. The `projects` job runs the end-to-end
@@ -494,15 +502,18 @@ on pull requests.
   workflow. The `debug` job runs `cargo xtask test --suite debug` with `STC_REQUIRE_CLANG=1`,
   preflights `llvm-readobj`/`readelf` so object-content assertions cannot silently skip, and
   records the informational overhead measurement only on manual dispatch; the opt-in
-  `Debug overhead` workflow runs the same measurement on both hosts. The `traceability` job
-  runs `cargo xtask traceability --check`. `fuzz-smoke` caps each input at one MiB.
+  `Debug overhead` workflow runs the same measurement on all three native hosts. The
+  `traceability` job runs `cargo xtask traceability --check` and
+  `cargo xtask host-audit --check`, which fails when
+  host-specific code appears outside the documented platform layer and allowlist. `fuzz-smoke`
+  caps each input at one MiB.
 - `coverage` runs the workspace tests under `cargo llvm-cov` with clang required, writes line,
   region, and function totals plus the lowest-coverage files to the job summary, uploads
   `lcov.info`, `summary.json`, and the HTML report as artifacts, and on `main` publishes
   `coverage.svg`/`coverage.json` to the `badges` branch that the README badge reads. It is a
   reporting job: the `test` job remains the pass/fail gate.
-- Runner images are pinned (`windows-2025`, `ubuntu-24.04`) so `-latest` migrations do not change
-  the matrix silently.
+- Runner images are pinned (`windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm`) so `-latest`
+  migrations do not change the matrix silently.
 - Suite jobs call `cargo xtask test --suite <name> --locked`; the UI, conformance, execution, and
   projects jobs activate with both the suite directory and `xtask`.
 - Every job prints the clang version; builds use `--locked`; warnings are denied.
@@ -521,7 +532,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-004 | Emit textual LLVM IR; clang lowers/links to the target. |
 | D-005 | Executable and library artifacts via `--emit`. |
 | D-006 | Lean proofs cover exact functions; float math is test-based. |
-| D-007 | Primary development host: Windows x86-64 MSVC; Linux x86-64 and ARM64 hosts follow basic development (D-042); targets selected via clang. |
+| D-007 | Primary development host: Windows x86-64 MSVC; Linux x86-64 and AArch64 are supported native hosts from M8 (D-042, D-200); targets selected via clang. |
 | D-008 | ST only; no LD/FBD/SFC/IL and no AX preprocessor. |
 | D-009 | Specification is original; IEC PDF is local and not redistributed. |
 | D-010 | Rust workspace under `crates/`; spec under `Specification/`. |
@@ -549,7 +560,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-039 | Lint levels live in `[lints]`; CLI flags override; errors cannot be downgraded. |
 | D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use is an error. |
 | D-041 | `SyntaxKind` is a stable, append-only API; full CST/IDE API is planned for v2/v3. |
-| D-042 | After basic development, `stc` and its runtime also run natively on Linux x86-64 and Linux AArch64 (ARM64); Windows remains the primary development host. |
+| D-042 | `stc` and its runtime run natively on Linux x86-64 and Linux AArch64 (ARM64) from M8; Windows remains the primary development host. |
 | D-045–D-058 | M2 syntax decisions: arena CST owning the source, stable `SyntaxKind`, parser codes `STC-E-GRAM-105`–`111`, strict pragma JSON, token-extent diagnostics, recovery/missing-token policy, and interning deferred to M3. Details in `Specification/Decisions.md`. |
 | D-059–D-075 | M3 analyzer decisions: HIR in M3, the multi-file `stc check` bridge and `_root` session namespace, the interner/session model, the stable diagnostic table, type canonicalization and conversions, overloads, the standard prelude, constant evaluation, access defaults, reference/attempt rules, parse-error suppression, test-only handling, deterministic ordering, and arena-based iterative lowering. Details in `Specification/Decisions.md` and `M3-Plan.md`. |
 | D-094–D-108 | Online change is a v1 requirement: persistent host + loadable modules, host-owned GOT and per-field roots, handle-based OOP descriptors, place-descriptor references and transient `POINTER TO`, module lifecycle and double-buffered activation, persistent GOT manifest and exact-baseline/cold-download policy, full typed debug in v1, debug-by-default/`--release`, and the explicit non-safety stance. Details in `Specification/Decisions.md`, `update_plan_got.md`, and the online-change/debug specs. |
@@ -731,8 +742,8 @@ gh version 2.103.2 (2026-10-23)
 https://github.com/cli/cli/releases/tag/v2.103.2
 ```
 
-Windows 11 x86-64 is the primary development host. Native Linux x86-64 and Linux AArch64 host
-support follows basic development (D-042).
+Windows 11 x86-64 is the primary development host. Linux x86-64 GNU and Linux AArch64 GNU are
+supported native hosts (D-042, D-200); CI runs the workspace and suite jobs on all three hosts.
 
 ## References
 

@@ -454,7 +454,8 @@ minor 2 and hook-free, and hook-free debug/release modules require minor 1.
 - Generated code contains no persistent raw pointers and no module-owned persistent storage.
 - Double builds produce byte-identical modules and manifests; the active manifest can be
   downloaded and used as the next build baseline.
-- Hot-swap, manifest, cold-download, rollback, and descriptor tests run in CI on both hosts.
+- Hot-swap, manifest, cold-download, rollback, and descriptor tests run in CI on all three
+  native hosts.
 - Debug reads and boundary-queued writes/forces respect generation pins; a swap ends the session
   with `STC-E-DEBUG-019` and leaves no force, watch, breakpoint, or queued write behind; the
   debug protocol, checkpoint table, and minor-3 service pass the protocol/ABI tests in the debug
