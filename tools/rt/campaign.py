@@ -45,6 +45,7 @@ CASES = ("code-only", "field-add-remove", "incompatible", "trapping")
 LOAD_PROFILES = ("none", "cpu", "mixed")
 REGIMES = ("r0", "r1", "r2")
 WORKLOADS = ("base", "light", "heavy")
+CONTROL_MODES = ("socket", "none")
 
 DEFAULT_BUNDLE = "/home/r2k/stc-rt/rt-bench"
 DEFAULT_RT_CPU = 3
@@ -96,6 +97,16 @@ def format_ns(value: int | float | None) -> str:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def steady_cycle_count(warmup_ns: int, duration_ns: int, cycle_time_ns: int) -> int:
+    """Returns the launcher cycle count for a control-disabled steady run.
+
+    The control-disabled leg cannot ask the host for its cycle counter, so it
+    runs a fixed number of cycles covering the warm-up and measurement window,
+    plus one cycle of margin.
+    """
+    return math.ceil((warmup_ns + duration_ns) / cycle_time_ns) + 1
 
 
 def nearest_rank(values: array | list[int], percent: float) -> int | None:
@@ -779,17 +790,21 @@ def launcher_command(
     metrics_path: Path,
     endpoint: str,
     nonce: str,
+    control_mode: str = "socket",
+    cycles: int = 0,
 ) -> list[str]:
-    return [
+    command = [
         str(workload["launcher"]),
         "--cycles",
-        "0",
+        str(cycles),
         "--cycle-time",
         f"{cycle_time_ns}ns",
-        "--control",
-        endpoint,
-        "--control-nonce",
-        nonce,
+    ]
+    if control_mode == "socket":
+        command += ["--control", endpoint, "--control-nonce", nonce]
+    elif control_mode != "none":
+        raise HarnessError(f"unknown control mode {control_mode!r}")
+    command += [
         "--rt",
         "--rt-priority",
         str(rt_priority),
@@ -799,6 +814,7 @@ def launcher_command(
         str(metrics_path),
         "--status",
     ]
+    return command
 
 
 def redacted_command(command: list[str], nonce: str) -> list[str]:
@@ -816,6 +832,8 @@ class Launcher:
         rt_cpu: int,
         run_dir: Path,
         bundle: Path,
+        control_mode: str = "socket",
+        cycles: int = 0,
     ):
         self.workload = workload
         self.cycle_time_ns = cycle_time_ns
@@ -823,9 +841,17 @@ class Launcher:
         self.rt_cpu = rt_cpu
         self.run_dir = run_dir
         self.bundle = bundle
-        self.nonce = os.urandom(16).hex()
-        self.endpoint_dir = Path(tempfile.mkdtemp(prefix="stc-rt-"))
-        self.endpoint = str(self.endpoint_dir / "control.sock")
+        self.control_mode = control_mode
+        self.cycles = cycles
+        self.nonce = os.urandom(16).hex() if control_mode == "socket" else ""
+        self.endpoint_dir = (
+            Path(tempfile.mkdtemp(prefix="stc-rt-"))
+            if control_mode == "socket"
+            else None
+        )
+        self.endpoint = (
+            str(self.endpoint_dir / "control.sock") if self.endpoint_dir else ""
+        )
         self.metrics_path = run_dir / "cycles.jsonl"
         self.log_path = run_dir / "launcher.log"
         self.command = launcher_command(
@@ -836,6 +862,8 @@ class Launcher:
             self.metrics_path,
             self.endpoint,
             self.nonce,
+            control_mode,
+            cycles,
         )
         self.process: subprocess.Popen | None = None
         self.client: ControlClient | None = None
@@ -858,6 +886,8 @@ class Launcher:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+        if self.control_mode == "none":
+            return
         try:
             self.client = ControlClient(self.endpoint, self.nonce, timeout=15.0)
         except HarnessError:
@@ -889,6 +919,8 @@ class Launcher:
                 self.process.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self._stop_process()
+            if self.control_mode == "none":
+                self.clean_stop = self.process.returncode == 0
         self._close()
 
     def _stop_process(self) -> None:
@@ -909,7 +941,8 @@ class Launcher:
         if self.log_handle is not None:
             self.log_handle.close()
             self.log_handle = None
-        shutil.rmtree(self.endpoint_dir, ignore_errors=True)
+        if self.endpoint_dir is not None:
+            shutil.rmtree(self.endpoint_dir, ignore_errors=True)
 
     def log_tail(self, lines: int = 20) -> str:
         try:
@@ -1010,6 +1043,12 @@ def steady_run(args: argparse.Namespace, bundle: Path, host: dict) -> dict:
     cycle_time_ns = parse_duration_ns(args.cycle_time)
     duration_ns = parse_duration_ns(args.duration)
     warmup_ns = parse_duration_ns(args.warmup)
+    control_mode = args.control_mode
+    cycles = (
+        steady_cycle_count(warmup_ns, duration_ns, cycle_time_ns)
+        if control_mode == "none"
+        else 0
+    )
     launcher = Launcher(
         workload,
         cycle_time_ns,
@@ -1017,6 +1056,8 @@ def steady_run(args: argparse.Namespace, bundle: Path, host: dict) -> dict:
         args.rt_cpu,
         out,
         bundle,
+        control_mode,
+        cycles,
     )
     load = LoadRunner(
         args.load_profile,
@@ -1025,7 +1066,9 @@ def steady_run(args: argparse.Namespace, bundle: Path, host: dict) -> dict:
         out / "load.log",
     )
     sampler: ProcSampler | None = None
-    control_log = ControlLog(out / "control.jsonl")
+    control_log = (
+        ControlLog(out / "control.jsonl") if control_mode == "socket" else None
+    )
     errors: list[str] = []
     status_start: dict | None = None
     status_measure: dict | None = None
@@ -1034,21 +1077,32 @@ def steady_run(args: argparse.Namespace, bundle: Path, host: dict) -> dict:
     started_at = utc_now()
     try:
         launcher.start()
-        status_start = launcher.status()
-        control_log.record("status", response=status_start)
+        if control_log is not None:
+            status_start = launcher.status()
+            control_log.record("status", response=status_start)
         load.start()
         if warmup_ns > 0:
             time.sleep(warmup_ns / 1_000_000_000)
-        status_measure = launcher.status()
-        control_log.record("status", response=status_measure)
-        measure_start_cycle = int(status_measure.get("cycles", 0))
+        if control_log is not None:
+            status_measure = launcher.status()
+            control_log.record("status", response=status_measure)
+            measure_start_cycle = int(status_measure.get("cycles", 0))
+        else:
+            # Without a control channel the cycle counter is not available;
+            # approximate the warm-up boundary from the configured period.
+            measure_start_cycle = math.ceil(warmup_ns / cycle_time_ns)
         if launcher.process is not None:
             sampler = ProcSampler(launcher.process.pid, out / "proc.jsonl")
             sampler.start()
-        _wait_measured(args, launcher, control_log, duration_ns)
-        status_end = launcher.status()
-        control_log.record("status", response=status_end)
+        if control_log is not None:
+            _wait_measured(args, launcher, control_log, duration_ns)
+            status_end = launcher.status()
+            control_log.record("status", response=status_end)
+        else:
+            time.sleep(duration_ns / 1_000_000_000)
         launcher.stop()
+        if control_mode == "none" and launcher.return_code() not in (0, None):
+            errors.append(f"launcher exited with status {launcher.return_code()}")
     except (HarnessError, OSError, ValueError) as error:
         errors.append(str(error))
         launcher.stop()
@@ -1056,7 +1110,8 @@ def steady_run(args: argparse.Namespace, bundle: Path, host: dict) -> dict:
         load.stop()
         if sampler is not None:
             sampler.stop()
-        control_log.close()
+        if control_log is not None:
+            control_log.close()
 
     parsed = None
     if launcher.metrics_path.is_file():
@@ -1095,6 +1150,8 @@ def steady_run(args: argparse.Namespace, bundle: Path, host: dict) -> dict:
         "warmup_ns": warmup_ns,
         "rt": {"priority": args.rt_priority, "cpu": args.rt_cpu},
         "load_profile": args.load_profile,
+        "control_mode": control_mode,
+        "status_hz": args.status_hz,
         "started_at": started_at,
         "finished_at": utc_now(),
         "host": host,
@@ -1134,8 +1191,12 @@ def steady_run(args: argparse.Namespace, bundle: Path, host: dict) -> dict:
             "proc_sha256": proc_hash,
             "launcher_log": str(launcher.log_path),
             "launcher_log_sha256": sha256_file(launcher.log_path),
-            "control_log": str(out / "control.jsonl"),
-            "control_log_sha256": sha256_file(out / "control.jsonl"),
+            "control_log": (
+                str(out / "control.jsonl") if control_log is not None else None
+            ),
+            "control_log_sha256": (
+                sha256_file(out / "control.jsonl") if control_log is not None else None
+            ),
             "host": str(out / "host.json"),
         },
         "result": "failed" if errors else "passed",
@@ -1464,6 +1525,8 @@ def render_markdown(summary: dict) -> str:
             f"- Warm-up: {format_ns(summary.get('warmup_ns'))}",
             f"- RT priority/CPU: {summary.get('rt')}",
             f"- Load profile: `{summary.get('load_profile')}`",
+            f"- Control: `{summary.get('control_mode', 'socket')}` "
+            f"(status {summary.get('status_hz', 0)} Hz)",
             f"- Build: `{(summary.get('bundle') or {}).get('build_id')}`",
             "",
             "## Metrics",
@@ -1523,6 +1586,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise HarnessError("--rt-priority must be in 1..=99")
     if args.rt_cpu < 0 or args.rt_cpu > 63:
         raise HarnessError("--rt-cpu must be in 0..=63")
+    if args.control_mode not in CONTROL_MODES:
+        raise HarnessError(f"unknown control mode {args.control_mode!r}")
+    if args.mode == "online" and args.control_mode != "socket":
+        raise HarnessError("online mode needs the control socket")
+    if args.control_mode == "none" and args.status_hz != 0:
+        raise HarnessError("--status-hz must be 0 when control is disabled")
     if parse_duration_ns(args.cycle_time) <= 0:
         raise HarnessError("--cycle-time must be positive")
     if parse_duration_ns(args.duration) <= 0:
@@ -1550,6 +1619,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bundle", default=DEFAULT_BUNDLE)
     parser.add_argument("--load-profile", choices=LOAD_PROFILES, default=None)
     parser.add_argument("--status-hz", type=float, default=0.0)
+    parser.add_argument("--control-mode", choices=CONTROL_MODES, default="socket")
     parser.add_argument("--online-case", choices=CASES + ("all",), default="all")
     parser.add_argument("--out", required=True)
     return parser

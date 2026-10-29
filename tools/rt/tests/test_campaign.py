@@ -143,6 +143,66 @@ class ControlWireTests(unittest.TestCase):
             campaign.validate_control_response([], 1)
 
 
+class ControlModeTests(unittest.TestCase):
+    def workload(self) -> dict:
+        return {"launcher": Path("/tmp/rt-bench")}
+
+    def test_socket_launcher_command(self) -> None:
+        command = campaign.launcher_command(
+            self.workload(),
+            1_000_000,
+            90,
+            3,
+            Path("/tmp/cycles.jsonl"),
+            "/tmp/control.sock",
+            "nonce",
+            "socket",
+            0,
+        )
+        self.assertEqual(command[command.index("--cycles") + 1], "0")
+        self.assertIn("--control", command)
+        self.assertIn("--control-nonce", command)
+        self.assertIn("nonce", command)
+
+    def test_disabled_launcher_command(self) -> None:
+        command = campaign.launcher_command(
+            self.workload(),
+            1_000_000,
+            90,
+            3,
+            Path("/tmp/cycles.jsonl"),
+            "",
+            "",
+            "none",
+            12001,
+        )
+        self.assertEqual(command[command.index("--cycles") + 1], "12001")
+        self.assertNotIn("--control", command)
+        self.assertNotIn("--control-nonce", command)
+
+    def test_steady_cycle_count(self) -> None:
+        self.assertEqual(
+            campaign.steady_cycle_count(2_000_000_000, 10_000_000_000, 1_000_000),
+            12001,
+        )
+
+    def test_control_mode_validation(self) -> None:
+        args = campaign.build_parser().parse_args(
+            ["--out", "run", "--control-mode", "none", "--status-hz", "1"]
+        )
+        with self.assertRaises(campaign.HarnessError):
+            campaign.validate_args(args)
+        args = campaign.build_parser().parse_args(
+            ["--out", "run", "--mode", "online", "--control-mode", "none"]
+        )
+        with self.assertRaises(campaign.HarnessError):
+            campaign.validate_args(args)
+        args = campaign.build_parser().parse_args(
+            ["--out", "run", "--control-mode", "none"]
+        )
+        campaign.validate_args(args)
+
+
 class MetricsTests(unittest.TestCase):
     def write_metrics(self, directory: Path, lines: list[dict]) -> Path:
         path = directory / "cycles.jsonl"
