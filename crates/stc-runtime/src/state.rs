@@ -15,9 +15,10 @@
 //!
 //! Load returns the ABI 2 `state_load` result codes: 0 OK, 1 not found, 2
 //! layout/profile/version mismatch, 3 corrupt, 4 I/O error, 5 disabled. Save
-//! writes `<file>.tmp` in the same directory, flushes and syncs it, then
-//! replaces the target; a failed replace leaves the previous file intact and
-//! reports `STC-E-RUN-RETAIN-003`.
+//! writes `<file>.tmp` in the same directory with mode 0600 on Unix, flushes
+//! and syncs it, replaces the target, then syncs the parent directory; a
+//! failed replace leaves the previous file intact and reports
+//! `STC-E-RUN-RETAIN-003`.
 //!
 //! The service configuration and outcomes are process-wide because the host
 //! ABI service table is process-wide (the runtime is a single host process).
@@ -402,7 +403,7 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error>
 /// # Errors
 ///
 /// Reports the create/write/sync/flush or replace failure.
-pub fn write_private_atomically(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+pub(crate) fn write_private_atomically(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     write_file_atomically(path, bytes, true)
 }
 
@@ -666,6 +667,40 @@ mod tests {
         );
         assert_eq!(
             decode(&bytes, payload.len() as u64, hash),
+            Ok(payload.as_slice())
+        );
+    }
+
+    #[test]
+    fn canonical_encoding_is_host_independent() {
+        // A fixed payload and layout hash must encode to these exact bytes on
+        // every architecture. The sequence pins the magic, version, ABI,
+        // profile hash, layout hash, little-endian payload length, payload,
+        // and CRC32, so a host-dependent layout or hash would fail here.
+        let payload = [0x10_u8, 0x20, 0x30, 0x40, 0x50];
+        let layout_hash = 0x0011_2233_4455_6677_u64;
+        #[rustfmt::skip]
+        let expected: [u8; 49] = [
+            // magic "STCRET01"
+            0x53, 0x54, 0x43, 0x52, 0x45, 0x54, 0x30, 0x31,
+            // format version 1, little-endian u32
+            0x01, 0x00, 0x00, 0x00,
+            // runtime ABI major 2, little-endian u32
+            0x02, 0x00, 0x00, 0x00,
+            // FNV-1a profile hash of "stc-2013-oop-utf8-v1", little-endian u64
+            0x3d, 0xc9, 0x12, 0xd8, 0x68, 0x53, 0x20, 0xce,
+            // layout hash 0x0011223344556677, little-endian u64
+            0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00,
+            // payload length 5, little-endian u64
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            // payload
+            0x10, 0x20, 0x30, 0x40, 0x50,
+            // CRC32 (IEEE) 0x91350493 over the preceding 45 bytes
+            0x93, 0x04, 0x35, 0x91,
+        ];
+        assert_eq!(encode(&payload, layout_hash), expected);
+        assert_eq!(
+            decode(&expected, payload.len() as u64, layout_hash),
             Ok(payload.as_slice())
         );
     }
