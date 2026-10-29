@@ -395,13 +395,14 @@ jobs:
       - name: Run the end-to-end project workflow
         run: cargo xtask test --suite projects --locked
 
-  # The debug suites get an explicit Windows/Linux job so a platform-specific
+  # The debug suites get an explicit per-host job so a platform-specific
   # regression in debug information, checkpoint hooks, stop/step/stack, the
   # protocol, or the CLI is visible even when the workspace job reports an
   # unrelated failure. `cargo xtask test --suite debug` runs the same targets
   # locally: typed access/write/watch, stop/step/stack, protocol/auth/audit,
   # CLI launch/attach/swap, release hook absence, frame sidecars, and
-  # checkpoint and debug-info generation.
+  # checkpoint and debug-info generation. Linux x64 and AArch64 both run the
+  # native DWARF frame path.
   debug:
     name: Debug suites (${{ matrix.os }})
     needs: detect
@@ -409,7 +410,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:

@@ -1155,8 +1155,15 @@ Format 1:
   protocol thread reads only those snapshots. Values or frames the table cannot describe are
   `available:false`/`optimized_out:true` with `STC-W-DEBUG-002`; no raw address is returned to a
   client.
-- The v1 frame rules cover x86-64 Windows and Linux. AArch64 frame rules are a documented
-  follow-up unless the target is added to the runtime test matrix.
+- The format-1 frame rule covers x86-64 Windows and Linux and AArch64 Linux. On AArch64 the
+  service-13 entry point captures `x29` (frame pointer), `sp`, and `x30` (return address) and
+  passes them in place of the x86-64 `rbp`/`rsp`/stack return address; the build-time extractor
+  recognizes `DW_AT_frame_base` with `DW_OP_reg29 (x29)` in addition to x86-64 `DW_OP_reg6
+  (rbp)`, and uses the same `fp+16` CFA, `saved_fp = -16`, and `return_address = -8` layout.
+  AArch64 modules are compiled with `-mbranch-protection=none` so the saved link register is the
+  raw caller address the walk compares against manifest code ranges. A function compiled without
+  a frame pointer has no usable frame base; it is reported as an optimized-out caller
+  (`optimized_out:true` with `STC-W-DEBUG-002`) rather than walked with a guessed layout.
 
 ## 17. Debug and release build rules
 

@@ -534,7 +534,7 @@ lean/
 | `online` | hot-swap/manifest/cold-download suite on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
 | `package` | `cargo xtask package --locked`, checksum verification, and the unpacked `new/build/build --release/run/test` exercise on Windows x64 and Ubuntu x64; uploads the package |
 | `traceability` | `cargo xtask traceability --check` and `cargo xtask host-audit --check` on Ubuntu x64 |
-| `debug` | `cargo xtask test --suite debug` on Windows x64 and Ubuntu x64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
+| `debug` | `cargo xtask test --suite debug` on Windows x64, Ubuntu x64, and Ubuntu ARM64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
 | `cross-target` | `cargo xtask test --suite cross-target` on Windows x64, Ubuntu x64, and Ubuntu ARM64: nine-triple IR/object matrix, header checks, and exe/lib rejection; also assembles the checked-in AArch64 smoke module |
@@ -555,9 +555,9 @@ coverage badge to the `badges` branch on `main`; it is reporting-only, and the `
 the pass/fail gate.
 Line coverage is a reporting metric; rule coverage remains the semantic traceability check in §7.
 The M6 UI, conformance, execution, projects, traceability, Lean, and fuzz-smoke
-jobs are active on the documented matrix. The `debug` job runs the debug suite on both
-hosts and, on a manual `workflow_dispatch`, also prints the informational overhead measurement
-described in §4.2; it never gates on timing.
+jobs are active on the documented matrix. The `debug` job runs the debug suite on Windows x64
+and both Linux architectures and, on a manual `workflow_dispatch`, also prints the informational
+overhead measurement described in §4.2 on those hosts; it never gates on timing.
 
 Host portability is verified natively, not by cross-compilation. The M8 phase-2 evidence run
 [`40784925474`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40784925474) (commit
@@ -573,8 +573,9 @@ SIGINT and the test runner kills a timed-out child (`online_cli`, `test_cli`); a
 `lib<name>.so` (`package`, `cli_project`, `module_cli`, `execution`); and metadata, the build
 manifest, and the package record the host triple (`cli_project`, `module_cli`, and the `package`
 job). Linux AArch64 is a native host from M8 phase 3: the `test`, `ui`, `conformance`,
-`execution`, `projects`, `online`, and `cross-target` jobs run on `ubuntu-24.04-arm`, while the
-`debug` suite and the release package remain x86-64-only jobs until M8 phases 4 and 7.
+`execution`, `projects`, `online`, and `cross-target` jobs run on `ubuntu-24.04-arm`, and the
+`debug` suite runs there natively from M8 phase 4; the release package remains an x86-64-only
+job until M8 phase 7.
 
 ### 6.2 Matrix
 
@@ -587,13 +588,14 @@ job). Linux AArch64 is a native host from M8 phase 3: the `test`, `ui`, `conform
   Linux x86-64 is supported natively from M8 phase 2.
 - Secondary, fully native: Ubuntu 24.04 ARM64 (`ubuntu-24.04-arm`), `aarch64-unknown-linux-gnu` —
   from M8 phase 3 it runs the workspace tests, diagnostic snapshots, conformance corpus,
-  execution tests, project workflow, online-change suite, and cross-target smoke natively. The
-  debug suite and the release package join in M8 phases 4 and 7.
+  execution tests, project workflow, online-change suite, and cross-target smoke natively; from
+  M8 phase 4 the debug suite runs natively there as well. The release package joins in M8
+  phase 7.
 - Runner images are pinned (`windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm`); `-latest` labels
   are not used, so image migrations do not silently change the matrix.
 - Host portability (D-042): native Linux AArch64 host jobs run on `ubuntu-24.04-arm` from M8
-  phase 3 for the suites listed above. Further `aarch64` cross-target object emission remains
-  in the `cross-target` job.
+  phase 3 for the suites listed above (debug from phase 4). Further `aarch64` cross-target object
+  emission remains in the `cross-target` job.
 - Rust toolchain pinned in `rust-toolchain.toml`; Lean pinned in `lean/lean-toolchain`.
 - CI builds with `--locked`; a changed lockfile without a manifest change fails the job.
 - CI caches cargo and Lake builds; the clang version is printed in every job.

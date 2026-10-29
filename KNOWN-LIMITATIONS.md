@@ -32,9 +32,9 @@ machine design as required by law and regulation.
 
 | Limitation | Status / workaround |
 | --- | --- |
-| Module loading and execution are supported only on x86-64 Windows MSVC (`x86_64-pc-windows-msvc`) and x86-64 Linux GNU (`x86_64-unknown-linux-gnu`) | Other triples are smoke-tested for IR/object emission only |
+| Module loading and execution are supported on x86-64 Windows MSVC (`x86_64-pc-windows-msvc`), x86-64 Linux GNU (`x86_64-unknown-linux-gnu`), and AArch64 Linux GNU (`aarch64-unknown-linux-gnu`) | Other triples are smoke-tested for IR/object emission only |
 | Cross-target support means IR and object emission only; `--emit=exe` and `--emit=lib` reject a non-host target | Use `stc build --target=<triple> --emit=ir|obj`; link on the target host |
-| Linux AArch64 native host support and AArch64 frame rules are M8 (D-042) | Do not claim AArch64 execution or stack unwinding |
+| Linux AArch64 native hosting and frame rules are complete from M8 phases 3 and 4 (D-042); ARM packaging and the final v1 sign-off are later M8 phases | Do not claim ARM packaging or final v1 sign-off until the phase 7 and 8 evidence exists |
 | There is no installer or package-manager integration | Unpack `stc-<version>-<host>` and use `bin/stc`; the runtime archives are in `lib/` |
 | Cross-target debug information follows the requested target (DWARF for ELF/Mach-O, CodeView for MSVC) | Compile with the same `--target` used to build the IR; do not reuse host debug IR for a foreign target |
 
@@ -49,7 +49,7 @@ machine design as required by law and regulation.
 | Every swap, rollback, cold install, shutdown, or target exit ends the session and clears forces/breakpoints; queued writes/forces are rejected | Reconnect after the generation change |
 | Release builds are monitoring-only | Use a debug build for breakpoints, stepping, and full locals |
 | Caller frames have no source location; caller locals appear only where the stopped-frame sidecar has a whole-function live range | Only the top frame has a checkpoint source binding; unavailable values are reported honestly, never reconstructed |
-| Frame extraction covers x86-64 Windows MSVC and Linux only and needs `llvm-readobj` or `readelf` at build time | Without a usable sidecar, `stack.list`/`frame.read` report `STC-E-DEBUG-017`; module loading and typed monitoring still work |
+| Frame extraction covers x86-64 Windows MSVC, x86-64 Linux, and AArch64 Linux and needs `llvm-readobj` or `readelf` at build time | Without a usable sidecar, `stack.list`/`frame.read` report `STC-E-DEBUG-017`; functions compiled without a frame pointer are reported as optimized-out callers; module loading and typed monitoring still work |
 | Windows ships object-level CodeView (COFF `.debug$S`/`.debug$T`); there is no PDB and no DLL-level CodeView claim | Use the object (or external inspection) for source-level analysis; the runtime uses build-time sidecars, not DWARF/CodeView |
 | Session limits: 256 watches, 1024 breakpoints, 1024 queued writes/forces (1 MiB), 1024 aggregate leaves per read, 1024 stack frames per stop, 100 requests/s with burst 200, 5 s connect/request deadlines, 1 MiB request and 4 MiB response/event frames | These are product limits; changing them is a protocol decision |
 | Embedded hosts use the `pipe` transport; the embedding ABI has no transport selector | `socket` is available through `DebugServerConfig` and the CLI |
