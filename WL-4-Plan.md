@@ -365,16 +365,23 @@ default branch, a push to `WL-4` triggers it; `workflow_dispatch` becomes availa
 workflow is on the default branch.
 Set `RT_HOST` from the local `.env/RT_Host.md` note; it is not stored in this repository.
 
+The package artifact downloads under a `dist/` prefix, so stage the bundle in its own directory
+and copy the package directory directly:
+
 ```sh
-gh run download <run-id> -n stc-package-ubuntu-24.04 -D dist/rt
-gh run download <run-id> -n rt-bench-bundle -D dist/rt
-scp -r dist/rt "$RT_HOST":~/stc-rt/
+gh run download <run-id> -n stc-package-ubuntu-24.04 -D dist/wl4
+gh run download <run-id> -n rt-bench-bundle -D dist/wl4/rt-bench
+ssh "$RT_HOST" 'mkdir -p ~/stc-rt'
+scp -r dist/wl4/dist/stc-* "$RT_HOST":~/stc-rt/
+scp -r dist/wl4/rt-bench "$RT_HOST":~/stc-rt/
+ssh "$RT_HOST" 'chmod +x ~/stc-rt/stc-*/bin/stc ~/stc-rt/rt-bench/rt-bench ~/stc-rt/rt-bench/workloads/*/rt-bench'
 ssh "$RT_HOST" 'cd ~/stc-rt/stc-* && sha256sum -c SHA256SUMS'
 ssh "$RT_HOST" 'cd ~/stc-rt/rt-bench && sha256sum -c SHA256SUMS'
 ```
 
 The bundle contains the base launcher and module, the light and heavy workload launchers, and all
-four online-change candidates. Transfer the whole staging directory; do not rebuild on the host.
+four online-change candidates. Artifact downloads drop the executable bit, so the `chmod` is part
+of the transfer. Transfer the whole staging directory; do not rebuild on the host.
 
 ### 9.3 Verify the runtime layout
 
@@ -386,8 +393,29 @@ ssh "$RT_HOST" 'cd ~/stc-rt/rt-bench && ldd rt-bench | head'
 ssh "$RT_HOST" 'cd ~/stc-rt/rt-bench && LD_LIBRARY_PATH="$PWD/runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ./rt-bench --cycles 3 --cycle-time 1ms --status'
 ```
 
+The light and heavy workload launchers use the same layout:
+
+```sh
+ssh "$RT_HOST" 'cd ~/stc-rt/rt-bench/workloads/light && ./rt-bench --cycles 2 --cycle-time 1ms --status'
+ssh "$RT_HOST" 'cd ~/stc-rt/rt-bench/workloads/heavy && ./rt-bench --cycles 2 --cycle-time 1ms --status'
+```
+
 If `ldd` reports `libstc_runtime.so` as missing, use the bundle `runtime/` directory as shown;
 otherwise the launcher is statically linked. Record which form was used.
+
+**Phase 1 artifact evidence (2026-10-29).** `rt-build` run
+[40941245512](https://github.com/r2k-in-the-vortex/stc/actions/runs/40941245512) on commit
+`19c5bb0` uploaded `stc-package-ubuntu-24.04` (11,070,839 bytes) and `rt-bench-bundle`
+(7,090,218 bytes). Local validation with the Windows driver: `code-only` and `trapping` are
+compatible; `field-add-remove` is compatible with the `SPARE` quarantine warning; `incompatible`
+is cold (`online diff` exits 1); the trapping candidate traps on its first scan. Host
+verification: both `SHA256SUMS` files pass; `bin/stc --version` reports `stc 1.0.0`; the base
+launcher is statically linked; base/light/heavy ran 3/2/2 cycles with exit 0. Build IDs: base
+`0xe4cfdfe067d81174ca8292d2f1333fd4`, light `0x39230aa2b8c40ff6cc7e922216e557ec`, heavy
+`0x00496294897a5fd6f5e8b9e1d3ac5524`; candidate modules `f9208c110d714ba394d533bd9202f841`
+(code-only), `fbf4c879687fe2cbcbaee5883e46cc7a` (field), `c18805e99dabef777f18329430878681`
+(incompatible), and `45673bcf3ae588a7fe9b9789eef7231d` (trapping). Artifact downloads dropped the
+executable bit, so the runbook chmods the driver and launchers.
 
 ### 9.4 Record the untuned host state
 
