@@ -1,0 +1,20 @@
+[package]
+name = "stc-ide"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+stc-diag = { path = "../stc-diag" }
+stc-fmt = { path = "../stc-fmt" }
+stc-hir = { path = "../stc-hir" }
+stc-lexer = { path = "../stc-lexer" }
+stc-manifest = { path = "../stc-manifest" }
+stc-parser = { path = "../stc-parser" }
+stc-sema = { path = "../stc-sema" }
+stc-span = { path = "../stc-span" }
+stc-syntax = { path = "../stc-syntax" }
+
+[lints]
+workspace = true

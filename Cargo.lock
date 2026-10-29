@@ -161,6 +161,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "stc-ide"
+version = "1.0.0"
+dependencies = [
+ "stc-diag",
+ "stc-fmt",
+ "stc-hir",
+ "stc-lexer",
+ "stc-manifest",
+ "stc-parser",
+ "stc-sema",
+ "stc-span",
+ "stc-syntax",
+]
+
+[[package]]
 name = "stc-lexer"
 version = "1.0.0"
 dependencies = [
