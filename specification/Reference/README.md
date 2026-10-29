@@ -8,10 +8,10 @@ Place the locally obtained IEC 61131-3:2013 PDF here. It is **not** redistribute
 from version control by the top-level `.gitignore`:
 
 ```text
-/Specification/Reference/*.pdf
+/specification/Reference/*.pdf
 ```
 
-The specification in `Specification/` is original prose and grammar. It cites clause numbers for
+The specification in `specification/` is original prose and grammar. It cites clause numbers for
 traceability but does not reproduce the standard's text. Do not commit or publish the PDF.
 
 ## Other references

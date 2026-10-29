@@ -14,4 +14,4 @@ __pycache__/
 *.pyc
 
 # Local copyrighted reference: keep out of version control
-/Specification/Reference/*.pdf
+/specification/Reference/*.pdf

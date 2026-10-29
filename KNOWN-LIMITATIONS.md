@@ -6,7 +6,7 @@ Date: 2026-10-29
 This list is part of the release contract. Each entry is either an explicit
 v1 profile boundary or a tested limitation with a documented workaround.
 Anything not listed here and not described in
-[`Specification/01-Conformance-Profile.md`](Specification/01-Conformance-Profile.md)
+[`specification/01-Conformance-Profile.md`](specification/01-Conformance-Profile.md)
 must either work or produce an explicit diagnostic; silent acceptance of an
 unsupported feature is a bug.
 
@@ -81,7 +81,7 @@ machine design as required by law and regulation.
 | The test runner is sequential and process-isolated; parallel test threads are not provided | Deterministic output and resource use are deliberate |
 | `STC_ASSERT` and `{stc:test}` units are excluded from production builds; production use is an error | Keep test code in `[test].sources` or a separate test package |
 | I/O bindings in `stc.toml` are validated against the selected production configuration; a test build uses the synthetic test configuration, so binding paths that name production instances are not available in `stc test` | Use `{stc:io}` pragmas on the direct variable when the project must also test cleanly, or keep bindings in a production-only configuration project |
-| Performance figures are informational and host-dependent, not real-time guarantees | See [`Specification/Verification/Performance.md`](Specification/Verification/Performance.md) and record the host/regime when comparing |
+| Performance figures are informational and host-dependent, not real-time guarantees | See [`specification/Verification/Performance.md`](specification/Verification/Performance.md) and record the host/regime when comparing |
 
 ## 6. Traceability and evidence
 

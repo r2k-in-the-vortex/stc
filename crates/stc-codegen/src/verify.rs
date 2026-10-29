@@ -2,8 +2,8 @@
 //!
 //! The verifier runs on the builder's [`Module`] before an artifact is
 //! rendered. It enforces the GOT invariants of
-//! [Online Change and GOT](../Specification/Architecture/Online-Change-and-GOT.md)
-//! §3 and [GOT Artifacts and Schemas](../Specification/Architecture/GOT-Artifacts.md)
+//! [Online Change and GOT](../specification/Architecture/Online-Change-and-GOT.md)
+//! §3 and [GOT Artifacts and Schemas](../specification/Architecture/GOT-Artifacts.md)
 //! §7:
 //!
 //! - generated code never references a persistent root or a user callable

@@ -13,7 +13,7 @@ import Stc.Syntax.Tokens
 namespace Stc.Syntax
 
 /-- The production tags used by the core CST. The names mirror the core EBNF
-productions in [Grammar](../../../Specification/Syntax/Grammar.md). -/
+productions in [Grammar](../../../specification/Syntax/Grammar.md). -/
 inductive NodeKind where
   | sourceFile
   | topItem

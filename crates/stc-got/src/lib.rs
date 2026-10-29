@@ -2,7 +2,7 @@
 //! emission/consumption for the M4.5 online-change foundation.
 //!
 //! The formats implemented here are normative in
-//! `Specification/Architecture/GOT-Artifacts.md`: descriptor and module format
+//! `specification/Architecture/GOT-Artifacts.md`: descriptor and module format
 //! 1, and the GOT manifest format 2 from M6.5 phase 4 (D-180). This
 //! crate is the compiler identity layer: it derives `GotId`s, matches a
 //! catalog against a baseline manifest, applies tracked rename/move maps,

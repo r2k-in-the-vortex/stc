@@ -39,9 +39,9 @@ Record the command, result, and date. Re-run after any source change.
 | 8 | Traceability | `cargo xtask traceability --check` | `[x]` 253 rules, 249 implemented/covered, 4 allowed not-implemented |
 | 9 | Specification links | `python tools/ci/check_docs.py` | `[x]` 22 documents, 328 links, OK |
 | 10 | Markdown lint | `npx --yes markdownlint-cli2@0.24.0` | `[x]` 0 issues |
-| 11 | Performance | `cargo test -p stc-driver --test performance -- --ignored --nocapture` (informational) | `[x]` recorded 2026-10-28 in `Specification/Verification/Performance.md` (rc.1 build; not re-run for the version-only change) |
-| 12 | Debug overhead | `cargo test -p stc-driver --test debug_overhead -- --ignored --nocapture` (informational) | `[x]` recorded 2026-10-28 in `Specification/Verification/Performance.md` (rc.1 build; not re-run for the version-only change) |
-| 13 | Switch latency | `cargo test -p stc-runtime --test switch_latency -- --ignored --nocapture` (informational) | `[x]` recorded 2026-10-28 in `Specification/Verification/Performance.md` (rc.1 build; not re-run for the version-only change) |
+| 11 | Performance | `cargo test -p stc-driver --test performance -- --ignored --nocapture` (informational) | `[x]` recorded 2026-10-28 in `specification/Verification/Performance.md` (rc.1 build; not re-run for the version-only change) |
+| 12 | Debug overhead | `cargo test -p stc-driver --test debug_overhead -- --ignored --nocapture` (informational) | `[x]` recorded 2026-10-28 in `specification/Verification/Performance.md` (rc.1 build; not re-run for the version-only change) |
+| 13 | Switch latency | `cargo test -p stc-runtime --test switch_latency -- --ignored --nocapture` (informational) | `[x]` recorded 2026-10-28 in `specification/Verification/Performance.md` (rc.1 build; not re-run for the version-only change) |
 
 ## 3. Package verification
 
@@ -97,7 +97,7 @@ evidence, and the release PR's CI run is the final gate for the version commit.
       is not a safety PLC; safety must be provided by a separate safety system
       and machine design as required by law and regulation.
 - [x] Every example README repeats the non-safety stance.
-- [x] [`Specification/Verification/Performance.md`](Specification/Verification/Performance.md)
+- [x] [`specification/Verification/Performance.md`](specification/Verification/Performance.md)
       records host, regime, numbers, and the non-gating policy.
 - [x] README, conformance profile, CLI/testing specifications, and the decision
       log reflect the release.

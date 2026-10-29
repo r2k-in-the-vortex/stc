@@ -1,7 +1,7 @@
 # Traceability allowlist.
 #
 # `cargo xtask traceability --check` fails when an `STC-*` ID found in
-# `Specification/**/*.md` has no evidence in the tests or conformance corpus.
+# `specification/**/*.md` has no evidence in the tests or conformance corpus.
 # Each entry below records why a rule is exempt. Keep the list small and
 # update or remove entries when the rule is implemented or the spec changes.
 #
