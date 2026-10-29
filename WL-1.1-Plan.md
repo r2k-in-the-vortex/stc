@@ -304,7 +304,7 @@ audit behavior.
 | Phase | Work | Acceptance |
 | --- | --- | --- |
 | 0 | Decisions locked 2026-10-29; review the capability maps, the `stc-debug/1.1` contract, and the verification plan before phase 1 | Decisions recorded; review notes resolved |
-| 1 | `stc-ide` snapshot and query layer; additive CST token/node lookup; diagnostics, definition, references, hover, completion, symbols, formatting | Unit tests over `examples/` and the sample workspace pass; no compiler semantics change |
+| 1 | `stc-ide` snapshot and query layer; additive CST token/node lookup; diagnostics, definition, references, hover, completion, symbols, formatting | Unit tests over `examples/` pass; no compiler semantics change |
 | 2 | Extension shell: manifest, grammar, language configuration, task provider, problem matcher, settings, esbuild, VSIX packaging | Extension activates; grammar fixtures and matcher tests pass; `vsce package` succeeds |
 | 3 | `stc-lsp`: framing, lifecycle, document store, capability dispatch, position/URI conversion, diagnostics, queries, formatting; `stc lsp` command | LSP integration test covers diagnostics, symbols, definition, references, hover, completion, and formatting |
 | 4 | Runtime `stc-debug/1.1` negotiation and `frame.locals`; `stc-dap`: framing, launch/attach, breakpoints, stepping, stack, scopes/variables, evaluate, write/force; `stc dap` command | Protocol 1.0 and 1.1 tests pass; DAP integration test stops at a breakpoint, steps, lists frames, and reads globals and locals |
