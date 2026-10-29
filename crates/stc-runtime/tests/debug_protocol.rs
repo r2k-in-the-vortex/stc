@@ -17,12 +17,12 @@ use std::time::{Duration, Instant};
 use stc_got::codes;
 use stc_got::json::{self, Json};
 use stc_runtime::{
-    Candidate, DEBUG_PROTOCOL, DebugClient, DebugClientError, DebugEndpointFile, DebugServerConfig,
-    DebugServerInfo, Host, HostPlatform, LoadMode, LoadOutcome, ManifestStore, PROFILE,
-    TransportKind,
+    Candidate, DEBUG_PROTOCOL, DEBUG_PROTOCOL_1_1, DebugClient, DebugClientError,
+    DebugEndpointFile, DebugServerConfig, DebugServerInfo, Host, HostPlatform, LoadMode,
+    LoadOutcome, ManifestStore, PROFILE, TransportKind,
 };
 
-use common::{Behavior, BuildFlags, Fixture};
+use common::{Behavior, BuildFlags, Fixture, StopFixture, StopFlow};
 
 const SOURCE: &str = r#"
 TYPE
@@ -278,6 +278,13 @@ fn target_path(name: &str) -> Json {
     obj([("kind", Json::string("path")), ("key", Json::string(name))])
 }
 
+fn check_target(checkpoint_id: u32) -> Json {
+    obj([
+        ("kind", Json::string("checkpoint")),
+        ("checkpoint_id", Json::unsigned(u64::from(checkpoint_id))),
+    ])
+}
+
 fn decimal_value(type_key: &str, value: &str) -> Json {
     obj([
         ("type", Json::string(type_key)),
@@ -286,8 +293,12 @@ fn decimal_value(type_key: &str, value: &str) -> Json {
 }
 
 fn request_frame(id: u64, token: &str, op: &str, params: Json) -> String {
+    request_frame_version(id, DEBUG_PROTOCOL, token, op, params)
+}
+
+fn request_frame_version(id: u64, protocol: &str, token: &str, op: &str, params: Json) -> String {
     format!(
-        "{{\"kind\":\"request\",\"protocol\":\"{DEBUG_PROTOCOL}\",\"id\":{id},\"token\":\"{token}\",\"op\":\"{op}\",\"params\":{}}}",
+        "{{\"kind\":\"request\",\"protocol\":\"{protocol}\",\"id\":{id},\"token\":\"{token}\",\"op\":\"{op}\",\"params\":{}}}",
         params.render_compact()
     )
 }
@@ -560,6 +571,7 @@ fn audit_names(path: &Path) -> Vec<String> {
 
 #[test]
 fn endpoint_file_and_audit_log_describe_the_server_privately() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("endpoint-file", false, false, Duration::ZERO) else {
         return;
     };
@@ -661,6 +673,7 @@ fn endpoint_file_and_audit_log_describe_the_server_privately() {
 #[cfg(windows)]
 #[test]
 fn pipe_transport_is_a_local_named_pipe() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new_with(
         "pipe-windows",
         TransportKind::Pipe,
@@ -685,6 +698,7 @@ fn pipe_transport_is_a_local_named_pipe() {
 #[cfg(unix)]
 #[test]
 fn pipe_transport_is_a_user_private_unix_socket() {
+    let _guard = protocol_guard();
     use std::os::unix::fs::PermissionsExt;
 
     let Some(mut setup) = Setup::new_with(
@@ -720,6 +734,7 @@ fn pipe_transport_is_a_user_private_unix_socket() {
 
 #[test]
 fn authentication_requires_the_exact_endpoint_token() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("auth", false, false, Duration::ZERO) else {
         return;
     };
@@ -775,6 +790,7 @@ fn authentication_requires_the_exact_endpoint_token() {
 
 #[test]
 fn authentication_failure_limits_refuse_new_connections() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("auth-limit", false, false, Duration::ZERO) else {
         return;
     };
@@ -822,6 +838,7 @@ fn authentication_failure_limits_refuse_new_connections() {
 
 #[test]
 fn protocol_version_negotiation_retries_once() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("protocol-version", false, false, Duration::ZERO) else {
         return;
     };
@@ -833,8 +850,13 @@ fn protocol_version_negotiation_retries_once() {
     assert_eq!(response_code(&response), codes::DEBUG_PROTOCOL);
     let detail = field(field(&response, "error"), "detail");
     assert_eq!(
-        field(detail, "supported").as_array().expect("supported")[0].as_str(),
-        Some(DEBUG_PROTOCOL)
+        field(detail, "supported")
+            .as_array()
+            .expect("supported")
+            .iter()
+            .filter_map(Json::as_str)
+            .collect::<Vec<_>>(),
+        vec![DEBUG_PROTOCOL, DEBUG_PROTOCOL_1_1]
     );
 
     // The one permitted retry with the exact version succeeds.
@@ -860,6 +882,7 @@ fn protocol_version_negotiation_retries_once() {
 
 #[test]
 fn malformed_frames_close_after_three() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("malformed", false, false, Duration::ZERO) else {
         return;
     };
@@ -886,6 +909,7 @@ fn malformed_frames_close_after_three() {
 
 #[test]
 fn request_shape_ids_and_raw_addresses_are_validated() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("request-shape", false, false, Duration::ZERO) else {
         return;
     };
@@ -1013,6 +1037,7 @@ fn request_shape_ids_and_raw_addresses_are_validated() {
 
 #[test]
 fn oversize_request_frame_is_e004_and_closes() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("oversize", false, false, Duration::ZERO) else {
         return;
     };
@@ -1052,6 +1077,7 @@ fn oversize_request_frame_is_e004_and_closes() {
 
 #[test]
 fn first_request_deadline_closes_the_connection() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("first-request", false, false, Duration::ZERO) else {
         return;
     };
@@ -1078,6 +1104,7 @@ fn first_request_deadline_closes_the_connection() {
 
 #[test]
 fn request_processing_timeout_returns_e013_and_keeps_the_session() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("request-timeout", false, false, Duration::ZERO) else {
         return;
     };
@@ -1104,6 +1131,7 @@ fn request_processing_timeout_returns_e013_and_keeps_the_session() {
 
 #[test]
 fn scope_authorization_matrix_denies_every_ungranted_operation() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("scopes", false, false, Duration::ZERO) else {
         return;
     };
@@ -1229,6 +1257,7 @@ fn scope_authorization_matrix_denies_every_ungranted_operation() {
 
 #[test]
 fn host_allow_flags_gate_write_and_force_and_phase6_ops_are_unavailable() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("allow-flags", true, true, Duration::ZERO) else {
         return;
     };
@@ -1293,6 +1322,7 @@ fn host_allow_flags_gate_write_and_force_and_phase6_ops_are_unavailable() {
 
 #[test]
 fn disabled_allow_flags_are_audited_policy_denials() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("allow-off", false, false, Duration::ZERO) else {
         return;
     };
@@ -1330,6 +1360,7 @@ fn disabled_allow_flags_are_audited_policy_denials() {
 
 #[test]
 fn session_status_stop_second_session_and_capabilities() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("session-lifecycle", false, false, Duration::ZERO) else {
         return;
     };
@@ -1407,6 +1438,7 @@ fn session_status_stop_second_session_and_capabilities() {
 
 #[test]
 fn disconnect_clears_state_and_reconnect_has_no_replay() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("disconnect", false, false, Duration::ZERO) else {
         return;
     };
@@ -1474,6 +1506,7 @@ fn disconnect_clears_state_and_reconnect_has_no_replay() {
 
 #[test]
 fn idle_timeout_ends_the_session_but_not_while_a_watch_is_active() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("idle-timeout", false, false, Duration::from_secs(2)) else {
         return;
     };
@@ -1528,6 +1561,7 @@ fn idle_timeout_ends_the_session_but_not_while_a_watch_is_active() {
 
 #[test]
 fn swap_teardown_ends_the_session_with_e019_and_refreshes_the_endpoint() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("swap", false, false, Duration::ZERO) else {
         return;
     };
@@ -1613,6 +1647,7 @@ fn swap_teardown_ends_the_session_with_e019_and_refreshes_the_endpoint() {
 
 #[test]
 fn host_shutdown_ends_the_session_and_removes_the_endpoint() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("shutdown", false, false, Duration::ZERO) else {
         return;
     };
@@ -1639,6 +1674,7 @@ fn host_shutdown_ends_the_session_and_removes_the_endpoint() {
 
 #[test]
 fn stopping_the_server_ends_the_session_and_removes_the_endpoint() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("server-stop", false, false, Duration::ZERO) else {
         return;
     };
@@ -1665,6 +1701,7 @@ fn stopping_the_server_ends_the_session_and_removes_the_endpoint() {
 
 #[test]
 fn var_read_write_force_release_and_queue_results() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("var-operations", true, true, Duration::ZERO) else {
         return;
     };
@@ -1959,6 +1996,7 @@ fn var_read_write_force_release_and_queue_results() {
 
 #[test]
 fn watch_add_list_batches_and_remove() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("watches", false, false, Duration::ZERO) else {
         return;
     };
@@ -2069,6 +2107,7 @@ fn watch_add_list_batches_and_remove() {
 
 #[test]
 fn manifest_get_returns_json_and_binary_with_audit() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("manifest", false, false, Duration::ZERO) else {
         return;
     };
@@ -2148,6 +2187,7 @@ fn manifest_get_returns_json_and_binary_with_audit() {
 
 #[test]
 fn request_rate_limit_closes_after_twenty_rate_errors() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("rate-limit", false, false, Duration::ZERO) else {
         return;
     };
@@ -2249,6 +2289,7 @@ fn request_rate_limit_closes_after_twenty_rate_errors() {
 
 #[test]
 fn server_start_refuses_insecure_paths_and_audit_failures() {
+    let _guard = protocol_guard();
     let Some(mut setup) = Setup::new("startup", false, false, Duration::ZERO) else {
         return;
     };
@@ -2340,6 +2381,7 @@ fn server_start_refuses_insecure_paths_and_audit_failures() {
 
 #[test]
 fn capabilities_cover_release_test_and_hook_free_builds() {
+    let _guard = protocol_guard();
     let cases = [
         ("cap-default", BuildFlags::default(), "debug", None),
         (
@@ -2422,4 +2464,470 @@ fn capabilities_cover_release_test_and_hook_free_builds() {
         }
         host.stop_debug_server();
     }
+}
+
+// ---------------------------------------------------------------------------
+// `stc-debug/1.1` negotiation and `frame.locals` (WL-1.1 phase 4)
+// ---------------------------------------------------------------------------
+
+/// Serializes the process-global stop session used by the `frame.locals`
+/// tests. Host teardown calls the runtime's process-global `abort_session`, so
+/// every other protocol test holds the read side for its whole body; the stop
+/// tests hold the write side. This keeps a concurrently dropped host from
+/// aborting a stop session (a pre-existing runtime-wide assumption that one
+/// process drives one debug session at a time).
+static STOP_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+fn stop_guard() -> std::sync::RwLockWriteGuard<'static, ()> {
+    STOP_LOCK
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn protocol_guard() -> std::sync::RwLockReadGuard<'static, ()> {
+    STOP_LOCK
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn send_frame_version(
+    client: &mut DebugClient,
+    id: u64,
+    protocol: &str,
+    token: &str,
+    op: &str,
+    params: Json,
+) -> Json {
+    let frame = request_frame_version(id, protocol, token, op, params);
+    client
+        .write_frame(frame.as_bytes())
+        .expect("write request frame");
+    client
+        .read_message()
+        .expect("read response")
+        .expect("response before close")
+}
+
+fn protocol_of(message: &Json) -> &str {
+    text(message, "protocol")
+}
+
+/// A stopped-frame fixture with the paired metadata and frame sidecars.
+struct StopSetup {
+    host: Host,
+    dir: TestDir,
+    fixture: StopFixture,
+}
+
+impl StopSetup {
+    fn new(name: &str, extra_locals: usize) -> Option<Self> {
+        let output = common::output_with_flags(
+            common::STOP_SOURCE,
+            name,
+            BuildFlags {
+                debug_hooks: true,
+                ..BuildFlags::default()
+            },
+        );
+        let fixture = StopFixture::build(name, &output, StopFlow::Nested)?;
+        if extra_locals > 0 {
+            inflate_frame_locals(&fixture, extra_locals);
+        }
+        let mut host = in_memory_host();
+        let candidate = Candidate::open(&platform(), &fixture.module_path, &fixture.manifest_path)
+            .expect("candidate");
+        let outcome = host.load(candidate, LoadMode::Auto).expect("cold install");
+        let LoadOutcome::ColdInstalled { .. } = outcome else {
+            panic!("expected a cold install");
+        };
+        let dir = TestDir::new(name);
+        let mut config = DebugServerConfig::new(dir.endpoint(), TransportKind::Socket);
+        config.session_timeout = Duration::from_secs(60);
+        host.start_debug_server(&config).expect("debug server");
+        Some(Self { host, dir, fixture })
+    }
+
+    fn client(&self) -> DebugClient {
+        DebugClient::connect_file(&self.dir.endpoint()).expect("client")
+    }
+
+    fn finish(mut self) {
+        self.host.stop_debug_server();
+    }
+}
+
+/// Adds `extra` always-live locals to the top frame's function sidecar.
+///
+/// Every added local shares one in-frame slot; the test only asserts the
+/// protocol list cap and ordering, not the copied values.
+fn inflate_frame_locals(fixture: &StopFixture, extra: usize) {
+    let path = fixture.frames_path();
+    let text = fs::read_to_string(&path).expect("read frame sidecar");
+    let value = json::parse(&text).expect("frame sidecar json");
+    let mut root = value.as_object().expect("frame sidecar object").clone();
+    let mut functions = root
+        .get("functions")
+        .and_then(Json::as_array)
+        .expect("functions")
+        .to_vec();
+    let mut patched = false;
+    for function in &mut functions {
+        let Some(object) = function.as_object().cloned() else {
+            continue;
+        };
+        let is_inner = object
+            .get("locals")
+            .and_then(Json::as_array)
+            .is_some_and(|locals| {
+                locals.iter().any(|local| {
+                    local
+                        .as_object()
+                        .and_then(|local| local.get("name"))
+                        .and_then(Json::as_str)
+                        == Some("A")
+                })
+            });
+        if !is_inner {
+            continue;
+        }
+        let mut locals = object
+            .get("locals")
+            .and_then(Json::as_array)
+            .expect("locals")
+            .to_vec();
+        let last = locals
+            .iter()
+            .filter_map(|local| local.as_object())
+            .filter_map(|local| local.get("live"))
+            .filter_map(Json::as_object)
+            .filter_map(|live| live.get("last"))
+            .filter_map(Json::as_number)
+            .max()
+            .unwrap_or(1);
+        for index in 0..extra {
+            locals.push(obj([
+                (
+                    "live",
+                    obj([("first", Json::Number(1)), ("last", Json::Number(last))]),
+                ),
+                ("location", Json::string("fp-4")),
+                ("name", Json::string(format!("L{index:04}"))),
+                ("size", Json::Number(4)),
+                ("type", Json::string("DINT")),
+            ]));
+        }
+        let mut object = object;
+        object.insert("locals".into(), Json::Array(locals));
+        *function = Json::Object(object);
+        patched = true;
+    }
+    assert!(patched, "the Inner frame function was not found");
+    root.insert("functions".into(), Json::Array(functions));
+    fs::write(&path, Json::Object(root).render()).expect("write inflated frame sidecar");
+}
+
+fn start_session_1_1(client: &mut DebugClient, scopes: &[&str]) -> Json {
+    client.set_protocol_version(DEBUG_PROTOCOL_1_1);
+    let response = session_start_response(client, scopes);
+    assert_eq!(protocol_of(&response), DEBUG_PROTOCOL_1_1);
+    response_result(&response).clone()
+}
+
+fn next_stopped(client: &mut DebugClient) -> Json {
+    let mut seen = Vec::new();
+    loop {
+        let Some(message) = client.read_message().expect("read message") else {
+            panic!("the connection closed before a stopped event; saw {seen:?}");
+        };
+        if message_kind(&message) == Some("event") && event_name(&message) == "stopped" {
+            return message;
+        }
+        seen.push(
+            message
+                .as_object()
+                .and_then(|object| object.get("event"))
+                .and_then(Json::as_str)
+                .map_or_else(|| "<response>".to_owned(), str::to_owned),
+        );
+    }
+}
+
+#[test]
+fn protocol_1_1_negotiates_exactly_and_reports_both_supported_versions() {
+    let _guard = protocol_guard();
+    let Some(mut setup) = Setup::new("protocol-1-1", false, false, Duration::ZERO) else {
+        return;
+    };
+    let token = setup.endpoint_file().token;
+    let mut client = setup.client();
+
+    // An unsupported first request lists both versions and may retry once.
+    let wrong = request_frame_version(
+        1,
+        "stc-debug/2",
+        &token,
+        "session.start",
+        session_start_params(&["observe"]),
+    );
+    let response = send_text(&mut client, &wrong);
+    assert_eq!(response_code(&response), codes::DEBUG_PROTOCOL);
+    assert_eq!(protocol_of(&response), DEBUG_PROTOCOL);
+    let supported: Vec<_> = field(field(&response, "error"), "detail")
+        .as_object()
+        .and_then(|detail| detail.get("supported"))
+        .and_then(Json::as_array)
+        .expect("supported")
+        .iter()
+        .filter_map(Json::as_str)
+        .collect();
+    assert_eq!(supported, vec![DEBUG_PROTOCOL, DEBUG_PROTOCOL_1_1]);
+
+    // The one permitted retry selects 1.1 exactly; responses carry it.
+    let start = send_frame_version(
+        &mut client,
+        2,
+        DEBUG_PROTOCOL_1_1,
+        &token,
+        "session.start",
+        session_start_params(&["observe"]),
+    );
+    assert_eq!(text(&start, "status"), "ok", "{}", start.render_compact());
+    assert_eq!(protocol_of(&start), DEBUG_PROTOCOL_1_1);
+
+    // `frame.locals` is defined on 1.1; this fixture has no frame sidecar, so
+    // the honest answer is E-017 rather than the unknown-operation error.
+    let locals = send_frame_version(
+        &mut client,
+        3,
+        DEBUG_PROTOCOL_1_1,
+        &token,
+        "frame.locals",
+        obj([("stop_id", Json::unsigned(1)), ("frame", Json::unsigned(0))]),
+    );
+    assert_eq!(response_code(&locals), codes::DEBUG_INFO);
+    assert_eq!(protocol_of(&locals), DEBUG_PROTOCOL_1_1);
+
+    // A later message with another version is rejected and closes.
+    let mismatch = send_frame_version(
+        &mut client,
+        4,
+        DEBUG_PROTOCOL,
+        &token,
+        "session.status",
+        obj([]),
+    );
+    assert_eq!(response_code(&mismatch), codes::DEBUG_PROTOCOL);
+    assert_eq!(protocol_of(&mismatch), DEBUG_PROTOCOL_1_1);
+    let messages = drain_until_eof(&mut setup.host, &mut client);
+    let ended = find_session_ended(&messages);
+    assert_eq!(session_ended(&ended).0, "protocol-error");
+    assert_eq!(protocol_of(&ended), DEBUG_PROTOCOL_1_1);
+    setup.host.stop_debug_server();
+}
+
+#[test]
+fn frame_locals_is_an_unknown_operation_on_stc_debug_1() {
+    let _guard = protocol_guard();
+    let Some(mut setup) = Setup::new("frame-locals-1-0", false, false, Duration::ZERO) else {
+        return;
+    };
+    let mut client = setup.client();
+    let _ = start_session(&mut client, &["observe"]);
+    let response = client
+        .call(
+            "frame.locals",
+            obj([("stop_id", Json::unsigned(1)), ("frame", Json::unsigned(0))]),
+        )
+        .expect("frame.locals response");
+    assert_eq!(response_code(&response), codes::DEBUG_REQUEST);
+    assert_eq!(protocol_of(&response), DEBUG_PROTOCOL);
+    let error = field(&response, "error");
+    assert_eq!(
+        text(error, "message"),
+        "the operation is not defined by stc-debug/1"
+    );
+    // One malformed request leaves the connection usable.
+    let status = client
+        .call("session.status", obj([]))
+        .expect("session.status response");
+    assert_eq!(text(&status, "status"), "ok");
+    let _ = stop_session(&mut setup.host, &mut client);
+    setup.host.stop_debug_server();
+}
+
+#[test]
+fn frame_locals_requires_frame_metadata() {
+    let _guard = protocol_guard();
+    let Some(mut setup) = Setup::new("frame-locals-metadata", false, false, Duration::ZERO) else {
+        return;
+    };
+    let mut client = setup.client();
+    let _ = start_session_1_1(&mut client, &["observe"]);
+    let locals = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "frame.locals",
+        obj([("stop_id", Json::unsigned(1)), ("frame", Json::unsigned(0))]),
+    )
+    .expect_err("no frame metadata");
+    assert_eq!(locals.code.as_deref(), Some(codes::DEBUG_INFO));
+    let _ = stop_session(&mut setup.host, &mut client);
+    setup.host.stop_debug_server();
+}
+
+#[test]
+fn frame_locals_lists_sorted_names_with_liveness_and_no_values() {
+    let _guard = stop_guard();
+    let Some(mut setup) = StopSetup::new("frame-locals", 0) else {
+        return;
+    };
+    let mut client = setup.client();
+    let started = start_session_1_1(&mut client, &["observe", "control"]);
+    let capabilities = field(&started, "capabilities");
+    assert!(boolean(capabilities, "hooks"));
+    assert!(boolean(capabilities, "checkpoints"));
+
+    // Before any stop, the stop_id is unknown.
+    let unknown = client
+        .call_ok(
+            "frame.locals",
+            obj([("stop_id", Json::unsigned(1)), ("frame", Json::unsigned(0))]),
+        )
+        .expect_err("no current stop");
+    assert_eq!(unknown.code.as_deref(), Some(codes::DEBUG_UNKNOWN));
+
+    let breakpoint = client
+        .call_ok(
+            "breakpoint.set",
+            obj([("target", check_target(setup.fixture.hooks.inner_first.id))]),
+        )
+        .expect("breakpoint.set");
+    assert!(boolean(&breakpoint, "bound"));
+
+    let cycle = std::thread::scope(|scope| {
+        let host = &mut setup.host;
+        let handle = scope.spawn(move || host.cycle_at(1_000_000));
+        let stopped = next_stopped(&mut client);
+        assert_eq!(event_name(&stopped), "stopped");
+        assert_eq!(protocol_of(&stopped), DEBUG_PROTOCOL_1_1);
+        let stop_id = number(event_data(&stopped), "stop_id");
+
+        let result = client
+            .call_ok(
+                "frame.locals",
+                obj([
+                    ("stop_id", Json::unsigned(stop_id)),
+                    ("frame", Json::unsigned(0)),
+                ]),
+            )
+            .expect("frame.locals");
+        assert!(!boolean(&result, "truncated"));
+        let locals = field(&result, "locals").as_array().expect("locals");
+        let names: Vec<_> = locals.iter().map(|local| text(local, "name")).collect();
+        assert_eq!(names, vec!["A", "B", "C"]);
+        // Names are sorted, every entry is exactly the four documented keys,
+        // and no value or address is exposed.
+        for local in locals {
+            let object = local.as_object().expect("local object");
+            let keys: Vec<_> = object.keys().map(String::as_str).collect();
+            assert_eq!(keys, vec!["available", "live", "name", "type"]);
+            assert_eq!(text(local, "type"), "DINT");
+        }
+        assert!(boolean(&locals[0], "live"));
+        assert!(boolean(&locals[0], "available"));
+        assert!(boolean(&locals[1], "live"));
+        assert!(boolean(&locals[1], "available"));
+        assert!(!boolean(&locals[2], "live"));
+        assert!(!boolean(&locals[2], "available"));
+
+        // Caller frames keep their own captured locals.
+        let caller = client
+            .call_ok(
+                "frame.locals",
+                obj([
+                    ("stop_id", Json::unsigned(stop_id)),
+                    ("frame", Json::unsigned(1)),
+                ]),
+            )
+            .expect("frame.locals caller");
+        let caller_names: Vec<_> = field(&caller, "locals")
+            .as_array()
+            .expect("locals")
+            .iter()
+            .map(|local| text(local, "name"))
+            .collect();
+        assert_eq!(caller_names, vec!["CA", "CB"]);
+
+        let bad_frame = client
+            .call_ok(
+                "frame.locals",
+                obj([
+                    ("stop_id", Json::unsigned(stop_id)),
+                    ("frame", Json::unsigned(9)),
+                ]),
+            )
+            .expect_err("unknown frame");
+        assert_eq!(bad_frame.code.as_deref(), Some(codes::DEBUG_UNKNOWN));
+
+        let stale = client
+            .call_ok(
+                "frame.locals",
+                obj([
+                    ("stop_id", Json::unsigned(stop_id + 1)),
+                    ("frame", Json::unsigned(0)),
+                ]),
+            )
+            .expect_err("stale stop");
+        assert_eq!(stale.code.as_deref(), Some(codes::DEBUG_UNKNOWN));
+
+        client
+            .call_ok("exec.continue", obj([("stop_id", Json::unsigned(stop_id))]))
+            .expect("exec.continue");
+        handle.join().expect("cycle thread").expect("cycle")
+    });
+    assert!(matches!(cycle, stc_runtime::CycleOutcome::Ran { .. }));
+    setup.finish();
+}
+
+#[test]
+fn frame_locals_truncates_at_1024_entries() {
+    let _guard = stop_guard();
+    let Some(mut setup) = StopSetup::new("frame-locals-cap", 1_100) else {
+        return;
+    };
+    let mut client = setup.client();
+    let _ = start_session_1_1(&mut client, &["observe", "control"]);
+    let breakpoint = client
+        .call_ok(
+            "breakpoint.set",
+            obj([("target", check_target(setup.fixture.hooks.inner_first.id))]),
+        )
+        .expect("breakpoint.set");
+    assert!(boolean(&breakpoint, "bound"));
+    let cycle = std::thread::scope(|scope| {
+        let host = &mut setup.host;
+        let handle = scope.spawn(move || host.cycle_at(1_000_000));
+        let stopped = next_stopped(&mut client);
+        let stop_id = number(event_data(&stopped), "stop_id");
+        let result = client
+            .call_ok(
+                "frame.locals",
+                obj([
+                    ("stop_id", Json::unsigned(stop_id)),
+                    ("frame", Json::unsigned(0)),
+                ]),
+            )
+            .expect("frame.locals");
+        assert!(boolean(&result, "truncated"));
+        let locals = field(&result, "locals").as_array().expect("locals");
+        assert_eq!(locals.len(), 1024);
+        assert_eq!(text(&locals[0], "name"), "A");
+        assert_eq!(text(&locals[1023], "name"), "L1020");
+        client
+            .call_ok("exec.continue", obj([("stop_id", Json::unsigned(stop_id))]))
+            .expect("exec.continue");
+        handle.join().expect("cycle thread").expect("cycle")
+    });
+    assert!(matches!(cycle, stc_runtime::CycleOutcome::Ran { .. }));
+    setup.finish();
 }

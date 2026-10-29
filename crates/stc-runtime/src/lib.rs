@@ -105,8 +105,9 @@ pub use debug::{
     StringValue, TypedValue, WatchId, WatchResult, WatchSpec, WatchValue,
 };
 pub use debug_server::{
-    DEBUG_PROTOCOL, DebugClient, DebugClientError, DebugEndpointFile, DebugServer,
-    DebugServerConfig, DebugServerInfo, MAX_MESSAGE_BYTES, MAX_REQUEST_BYTES,
+    DEBUG_PROTOCOL, DEBUG_PROTOCOL_1_1, DEBUG_PROTOCOL_VERSIONS, DebugClient, DebugClientError,
+    DebugEndpointFile, DebugServer, DebugServerConfig, DebugServerInfo, MAX_MESSAGE_BYTES,
+    MAX_REQUEST_BYTES,
 };
 pub use debug_view::{
     IdentityKind, SplitView, ViewField, ViewIdentity, ViewKind, ViewNode, ViewOrigin, ViewRoot,

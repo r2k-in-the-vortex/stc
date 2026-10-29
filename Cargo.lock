@@ -269,6 +269,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "stc-dap"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "stc-got",
+ "stc-manifest",
+ "stc-runtime",
+]
+
+[[package]]
 name = "stc-diag"
 version = "1.0.0"
 dependencies = [
@@ -281,6 +292,7 @@ version = "1.0.0"
 dependencies = [
  "serde_json",
  "stc-codegen",
+ "stc-dap",
  "stc-diag",
  "stc-fmt",
  "stc-got",

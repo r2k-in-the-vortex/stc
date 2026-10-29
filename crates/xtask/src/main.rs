@@ -78,6 +78,7 @@ fn suite_targets(suite: &str) -> Option<&'static [SuiteTarget]> {
             ("stc-runtime", "debug_view"),
             ("stc-runtime", "debug_protocol"),
             ("stc-driver", "debug_cli"),
+            ("stc-driver", "dap_cli"),
             ("stc-driver", "debug_release"),
             ("stc-driver", "frames"),
             ("stc-codegen", "debug_info"),

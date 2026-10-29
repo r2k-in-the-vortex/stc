@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 
+import { StcDebugAdapterFactory, StcDebugConfigurationProvider } from './debug';
 import { StcLanguageClient } from './languageClient';
 import { StcTaskProvider, stcExecutable } from './tasks';
 
 let output: vscode.OutputChannel | undefined;
 let languageClient: StcLanguageClient | undefined;
 
-/** Activates local ST support: tasks and the `stc lsp` language client. */
+/** Activates local ST support: tasks, the `stc lsp` language client, and the `stc dap` debug adapter. */
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('stc');
   context.subscriptions.push(output);
@@ -15,6 +16,17 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.tasks.registerTaskProvider('stc', new StcTaskProvider()),
+  );
+
+  context.subscriptions.push(
+    vscode.debug.registerDebugAdapterDescriptorFactory(
+      'stc',
+      new StcDebugAdapterFactory(output),
+    ),
+    vscode.debug.registerDebugConfigurationProvider(
+      'stc',
+      new StcDebugConfigurationProvider(),
+    ),
   );
 
   languageClient = new StcLanguageClient();

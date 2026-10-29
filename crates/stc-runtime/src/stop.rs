@@ -37,6 +37,8 @@ pub(crate) const MAX_STACK_FRAMES: usize = 1024;
 pub(crate) const MAX_BREAKPOINTS: usize = 1024;
 /// Maximum number of local bytes copied into one stop snapshot.
 pub(crate) const MAX_LOCAL_COPY_BYTES: usize = 1024 * 1024;
+/// Maximum number of locals returned by one `frame.locals` (1.1) request.
+pub(crate) const MAX_LOCALS_LIST: usize = 1024;
 /// Maximum address span walked from one frame pointer chain.
 const MAX_STACK_WALK_BYTES: usize = 64 * 1024 * 1024;
 /// How often a parked cycle thread services the debug engine.
@@ -355,8 +357,25 @@ impl StopEvent {
 #[derive(Clone, Debug)]
 pub(crate) struct CapturedLocal {
     pub(crate) type_key: String,
+    /// Whether the declared storage is live at this stop. A local described by
+    /// the frame table but outside its live checkpoint range is captured with
+    /// `live: false` and no value.
+    pub(crate) live: bool,
     pub(crate) value: Option<DebugValue>,
     pub(crate) reason: Option<String>,
+}
+
+/// One local listed by the `stc-debug/1.1` `frame.locals` operation.
+///
+/// The list carries no value and no address: values remain `frame.read`
+/// requests. Names are the frame table's normalized uppercase spellings and
+/// the list is sorted by name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalInfo {
+    pub(crate) name: String,
+    pub(crate) type_key: String,
+    pub(crate) live: bool,
+    pub(crate) available: bool,
 }
 
 /// One captured stack frame.
@@ -861,6 +880,65 @@ impl SessionStop {
             cycle: stop.cycle,
             view,
         })
+    }
+
+    /// Lists the captured locals of one frame for `stc-debug/1.1`.
+    ///
+    /// The result carries names, canonical type keys, and the captured
+    /// live/available state only; values remain [`Self::read_local`] requests
+    /// and no address is exposed. Names are the frame table's normalized
+    /// uppercase spellings, sorted by name, and the list is capped at
+    /// [`MAX_LOCALS_LIST`] entries with `truncated` reporting the cap.
+    ///
+    /// An unknown or stale stop is `STC-E-DEBUG-008`; missing frame metadata
+    /// (no frame sidecar or an optimized-out frame) is `STC-E-DEBUG-017`.
+    pub(crate) fn locals(&self, stop_id: u64, frame: usize) -> Result<(Vec<LocalInfo>, bool)> {
+        let control = lock(&self.control);
+        let Some(stop) = control.stop.as_ref() else {
+            return Err(Error::new(
+                codes::DEBUG_UNKNOWN,
+                "the cycle is not stopped; frame.locals requires a current stop_id",
+            ));
+        };
+        if stop.id != stop_id {
+            return Err(Error::new(
+                codes::DEBUG_UNKNOWN,
+                "the stop_id is not the current stop; frame.locals requires a current stop_id",
+            ));
+        }
+        if !stop.frames_available {
+            return Err(Error::new(
+                codes::DEBUG_INFO,
+                "stopped-frame information is unavailable for this build",
+            ));
+        }
+        let Some(captured) = stop.frames.get(frame) else {
+            return Err(Error::new(
+                codes::DEBUG_UNKNOWN,
+                format!("frame {frame} is not in the current stop snapshot"),
+            ));
+        };
+        if captured.function.is_none() || captured.optimized_out {
+            return Err(Error::new(
+                codes::DEBUG_INFO,
+                format!("stopped-frame information is unavailable for frame {frame}"),
+            ));
+        }
+        let mut locals: Vec<LocalInfo> = captured
+            .locals
+            .iter()
+            .map(|(name, local)| LocalInfo {
+                name: name.clone(),
+                type_key: local.type_key.clone(),
+                live: local.live,
+                available: local.value.is_some(),
+            })
+            .collect();
+        let truncated = locals.len() > MAX_LOCALS_LIST;
+        if truncated {
+            locals.truncate(MAX_LOCALS_LIST);
+        }
+        Ok((locals, truncated))
     }
 
     /// Drains protocol stop events in order.
@@ -1513,6 +1591,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: false,
                     value: None,
                     reason: Some("the local is not live at this stop".into()),
                 },
@@ -1524,6 +1603,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: true,
                     value: None,
                     reason: Some("the local storage is outside the stopped frame".into()),
                 },
@@ -1536,6 +1616,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: true,
                     value: None,
                     reason: Some("the local storage range overflows".into()),
                 },
@@ -1547,6 +1628,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: true,
                     value: None,
                     reason: Some("the local storage is outside the live stack frame".into()),
                 },
@@ -1558,6 +1640,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: true,
                     value: None,
                     reason: Some("the stop snapshot local copy limit was reached".into()),
                 },
@@ -1578,6 +1661,7 @@ fn capture_locals(
                     local.name.clone(),
                     CapturedLocal {
                         type_key: local.type_key.clone(),
+                        live: true,
                         value: Some(value),
                         reason: None,
                     },
@@ -1588,6 +1672,7 @@ fn capture_locals(
                     local.name.clone(),
                     CapturedLocal {
                         type_key: local.type_key.clone(),
+                        live: true,
                         value: None,
                         reason: Some(
                             "the local could not be decoded from its recorded location".into(),

@@ -1,4 +1,11 @@
-//! The `stc-debug/1` local protocol server (Debug and Monitoring §13, §14).
+//! The `stc-debug/1` and `stc-debug/1.1` local protocol server (Debug and
+//! Monitoring §13, §14).
+//!
+//! Version negotiation is exact on the first request. `stc-debug/1` is the
+//! unchanged baseline; `stc-debug/1.1` adds only `frame.locals`, which lists a
+//! stopped frame's local names, types, and live/available state without
+//! exposing values or addresses (WL-1.1 I-4). The endpoint file keeps the
+//! baseline `protocol` field so existing clients can read it unchanged.
 //!
 //! The server owns the transport, endpoint file, audit log, authentication,
 //! sessions, authorization, rate and idle limits, and the protocol mapping of
@@ -34,8 +41,13 @@ use crate::stop::{
 };
 use crate::transport::{self, ClientConnection, Connection, Listener, TransportKind};
 
-/// The only protocol version accepted by this server.
+/// The baseline protocol version. `stc-debug/1` behavior is unchanged.
 pub const DEBUG_PROTOCOL: &str = "stc-debug/1";
+/// The additive protocol revision that adds `frame.locals` (WL-1.1 I-4).
+pub const DEBUG_PROTOCOL_1_1: &str = "stc-debug/1.1";
+/// Every version this server accepts, exact-match negotiated on the first
+/// request (Debug and Monitoring §13.2).
+pub const DEBUG_PROTOCOL_VERSIONS: [&str; 2] = [DEBUG_PROTOCOL, DEBUG_PROTOCOL_1_1];
 /// Maximum request frame size.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum response or event frame size.
@@ -934,6 +946,11 @@ struct Handler {
     shared: Arc<Shared>,
     connection: u64,
     token: String,
+    /// Protocol version settled by the first request. Responses and events
+    /// carry this version; later messages must match it exactly.
+    protocol: String,
+    /// Whether the first request selected a supported version.
+    negotiated: bool,
     session: Option<SessionView>,
     seq: u64,
     last_id: u64,
@@ -962,6 +979,8 @@ fn run_connection(shared: Arc<Shared>, mut connection: Connection, connection_id
         shared,
         connection: connection_id,
         token,
+        protocol: DEBUG_PROTOCOL.to_owned(),
+        negotiated: false,
         session: None,
         seq: 0,
         last_id: 0,
@@ -1306,16 +1325,25 @@ impl Handler {
             self.malformed_with_id(connection, response_id, "protocol is required");
             return self.close.is_none();
         }
-        if protocol != Some(DEBUG_PROTOCOL) {
-            let error = ProtocolError::new(
-                codes::DEBUG_PROTOCOL,
-                "the requested debug protocol version is not supported",
-            )
-            .with_detail(json_object([(
-                "supported",
-                Json::Array(vec![Json::string(DEBUG_PROTOCOL)]),
-            )]));
-            self.send_error(connection, response_id, &error);
+        let protocol = protocol.unwrap_or(DEBUG_PROTOCOL);
+        if self.negotiated {
+            // Negotiation is exact and happens on the first request. A later
+            // message with another version is a protocol error (§13.2, §13.6).
+            if protocol != self.protocol {
+                self.unsupported_protocol(connection, response_id);
+                self.finish(
+                    connection,
+                    ClosePlan::new("protocol-error", None, true, true),
+                );
+                return false;
+            }
+        } else if DEBUG_PROTOCOL_VERSIONS.contains(&protocol) {
+            self.protocol = protocol.to_owned();
+            self.negotiated = true;
+        } else {
+            // The first request may retry once with a supported version; a
+            // second unsupported version closes the connection.
+            self.unsupported_protocol(connection, response_id);
             if self.first_request && !self.protocol_retry {
                 self.protocol_retry = true;
                 self.first_request = false;
@@ -1352,12 +1380,13 @@ impl Handler {
             return self.close.is_none();
         };
         self.first_request = false;
-        if !known_operation(op) {
-            self.malformed_with_id(
-                connection,
-                response_id,
-                "the operation is not defined by stc-debug/1",
-            );
+        if !operation_known(op, &self.protocol) {
+            let message = if self.protocol == DEBUG_PROTOCOL_1_1 {
+                "the operation is not defined by stc-debug/1.1"
+            } else {
+                "the operation is not defined by stc-debug/1"
+            };
+            self.malformed_with_id(connection, response_id, message);
             return self.close.is_none();
         }
         if op == "session.start" {
@@ -1728,10 +1757,27 @@ impl Handler {
         true
     }
 
+    fn unsupported_protocol(&mut self, connection: &mut Connection, id: u64) {
+        let error = ProtocolError::new(
+            codes::DEBUG_PROTOCOL,
+            "the requested debug protocol version is not supported",
+        )
+        .with_detail(json_object([(
+            "supported",
+            Json::Array(
+                DEBUG_PROTOCOL_VERSIONS
+                    .iter()
+                    .map(|version| Json::string(*version))
+                    .collect(),
+            ),
+        )]));
+        self.send_error(connection, id, &error);
+    }
+
     fn send_ok(&mut self, connection: &mut Connection, id: u64, result: Json, warnings: Vec<Json>) {
         let response = json_object([
             ("kind", Json::string("response")),
-            ("protocol", Json::string(DEBUG_PROTOCOL)),
+            ("protocol", Json::string(self.protocol.clone())),
             ("id", Json::unsigned(id)),
             ("status", Json::string("ok")),
             ("result", result),
@@ -1757,7 +1803,7 @@ impl Handler {
         ]);
         let response = json_object([
             ("kind", Json::string("response")),
-            ("protocol", Json::string(DEBUG_PROTOCOL)),
+            ("protocol", Json::string(self.protocol.clone())),
             ("id", Json::unsigned(id)),
             ("status", Json::string("error")),
             ("error", error_object),
@@ -1781,7 +1827,7 @@ impl Handler {
         self.seq = self.seq.saturating_add(1).max(1);
         let event = json_object([
             ("kind", Json::string("event")),
-            ("protocol", Json::string(DEBUG_PROTOCOL)),
+            ("protocol", Json::string(self.protocol.clone())),
             ("session", Json::string(view.id)),
             ("seq", Json::unsigned(self.seq)),
             ("event", Json::string(name)),
@@ -2039,14 +2085,24 @@ fn known_operation(op: &str) -> bool {
             | "exec.pause"
             | "stack.list"
             | "frame.read"
+            | "frame.locals"
             | "manifest.get"
     )
+}
+
+/// Returns whether `op` is defined by the negotiated version.
+///
+/// `stc-debug/1.1` adds only `frame.locals`; every baseline operation is
+/// unchanged and remains available. A `stc-debug/1` connection that sends
+/// `frame.locals` receives the ordinary unknown-operation error.
+fn operation_known(op: &str, protocol: &str) -> bool {
+    known_operation(op) && (op != "frame.locals" || protocol == DEBUG_PROTOCOL_1_1)
 }
 
 fn required_scope(op: &str) -> Option<Scope> {
     match op {
         "var.read" | "watch.add" | "watch.remove" | "watch.list" | "stack.list" | "frame.read"
-        | "manifest.get" => Some(Scope::Observe),
+        | "frame.locals" | "manifest.get" => Some(Scope::Observe),
         "breakpoint.set" | "breakpoint.clear" | "breakpoint.list" | "exec.continue"
         | "exec.step" | "exec.pause" => Some(Scope::Control),
         "var.write" => Some(Scope::Write),
@@ -2084,6 +2140,7 @@ impl Handler {
             "exec.pause" => self.exec_pause(params),
             "stack.list" => self.stack_list(params),
             "frame.read" => self.frame_read(params),
+            "frame.locals" => self.frame_locals(params),
             _ => Err(ProtocolError::malformed(
                 "the operation is not defined by stc-debug/1",
             )),
@@ -2531,6 +2588,40 @@ impl Handler {
             vec![warning_json(warning.code, warning.message, Json::Null)]
         });
         Ok((Json::Object(data), warnings))
+    }
+
+    fn frame_locals(
+        &mut self,
+        params: &BTreeMap<String, Json>,
+    ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
+        let session = self.frame_session()?;
+        check_keys(params, &["stop_id", "frame"])?;
+        let stop_id = required_positive(params, "stop_id")?;
+        let frame = optional_u64(params, "frame")?
+            .ok_or_else(|| ProtocolError::malformed("frame is required"))?;
+        let frame =
+            usize::try_from(frame).map_err(|_| ProtocolError::malformed("frame is too large"))?;
+        let (locals, truncated) = session
+            .locals(stop_id, frame)
+            .map_err(ProtocolError::from_stc)?;
+        let locals = locals
+            .iter()
+            .map(|local| {
+                object([
+                    ("name", Json::string(local.name.clone())),
+                    ("type", Json::string(local.type_key.clone())),
+                    ("live", Json::Bool(local.live)),
+                    ("available", Json::Bool(local.available)),
+                ])
+            })
+            .collect();
+        Ok((
+            object([
+                ("locals", Json::Array(locals)),
+                ("truncated", Json::Bool(truncated)),
+            ]),
+            Vec::new(),
+        ))
     }
 
     fn drain_stop_events(&mut self, connection: &mut Connection) {
@@ -3463,10 +3554,19 @@ impl DebugEndpointFile {
 /// A minimal blocking `stc-debug/1` client used by protocol tests and the
 /// phase-8 CLI. It keeps one request outstanding and stashes events that arrive
 /// while a response is awaited.
+///
+/// The version defaults to [`DEBUG_PROTOCOL`] so existing callers keep exact
+/// `stc-debug/1` behavior. A 1.1 client selects [`DEBUG_PROTOCOL_1_1`] with
+/// [`DebugClient::set_protocol_version`] before its first request; the server
+/// negotiates the first request exactly and rejects later mismatches. A client
+/// that receives `STC-E-DEBUG-002` may select [`DEBUG_PROTOCOL`] and retry the
+/// same operation once.
 pub struct DebugClient {
     connection: ClientConnection,
     endpoint: String,
     token: String,
+    /// Version carried by every request on this connection.
+    protocol: String,
     next_id: u64,
     buffer: Vec<u8>,
     events: VecDeque<Json>,
@@ -3530,10 +3630,29 @@ impl DebugClient {
             connection,
             endpoint: endpoint.to_owned(),
             token: token.to_owned(),
+            protocol: DEBUG_PROTOCOL.to_owned(),
             next_id: 0,
             buffer: Vec::new(),
             events: VecDeque::new(),
         })
+    }
+
+    /// Returns the protocol version sent with every request.
+    #[must_use]
+    pub fn protocol_version(&self) -> &str {
+        &self.protocol
+    }
+
+    /// Selects the protocol version sent with subsequent requests.
+    ///
+    /// The default is [`DEBUG_PROTOCOL`]. Selecting [`DEBUG_PROTOCOL_1_1`]
+    /// before the first request asks the server for the additive revision; the
+    /// caller may select [`DEBUG_PROTOCOL`] and retry once after an
+    /// `STC-E-DEBUG-002` rejection. Versions are not validated here: the server
+    /// owns exact negotiation and answers unsupported versions with
+    /// `STC-E-DEBUG-002` and `detail.supported`.
+    pub fn set_protocol_version(&mut self, version: impl Into<String>) {
+        self.protocol = version.into();
     }
 
     /// Returns the transport endpoint.
@@ -3552,7 +3671,7 @@ impl DebugClient {
         let id = self.next_id;
         let request = json_object([
             ("kind", Json::string("request")),
-            ("protocol", Json::string(DEBUG_PROTOCOL)),
+            ("protocol", Json::string(self.protocol.clone())),
             ("id", Json::unsigned(id)),
             ("token", Json::string(self.token.clone())),
             ("op", Json::string(op)),
@@ -3600,7 +3719,7 @@ impl DebugClient {
         let id = self.next_id;
         let request = json_object([
             ("kind", Json::string("request")),
-            ("protocol", Json::string(DEBUG_PROTOCOL)),
+            ("protocol", Json::string(self.protocol.clone())),
             ("id", Json::unsigned(id)),
             ("token", Json::string(self.token.clone())),
             ("op", Json::string(op)),
@@ -3655,6 +3774,12 @@ impl DebugClient {
     ///
     /// Returns a transport error or an invalid frame error.
     pub fn poll_message(&mut self) -> std::io::Result<Option<Json>> {
+        // A response read may have consumed a chunk holding more than one
+        // frame; a complete buffered frame is ready even when the transport
+        // itself has no new bytes.
+        if self.buffer.contains(&b'\n') {
+            return self.read_message();
+        }
         if !self.connection.poll_readable()? {
             return Ok(None);
         }

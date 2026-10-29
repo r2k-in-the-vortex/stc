@@ -13,6 +13,7 @@ mod clean;
 mod cli;
 mod compat;
 mod compliance;
+mod dap;
 mod debug;
 mod fmt;
 mod frames;
@@ -214,11 +215,12 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
-        // The language server owns stdout and stderr; it must not go through
-        // the diagnostic reporter.
+        // The language server and debug adapter own stdout; they must not go
+        // through the diagnostic reporter.
         Command::Lsp => {
             stc_lsp::run_stdio(invocation.manifest.as_deref().map(std::path::Path::new))
         }
+        Command::Dap => dap::run(invocation.manifest.as_deref()),
     };
     ExitCode::from(code)
 }

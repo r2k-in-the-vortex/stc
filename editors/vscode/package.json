@@ -19,6 +19,7 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onLanguage:st",
+    "onDebugResolve:stc",
     "workspaceContains:**/stc.toml"
   ],
   "contributes": {
@@ -41,6 +42,160 @@
         "language": "st",
         "scopeName": "source.st",
         "path": "./syntaxes/st.tmLanguage.json"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "stc",
+        "label": "stc Structured Text",
+        "languages": [
+          "st"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "project": {
+                "type": "string",
+                "default": "${workspaceFolder}/stc.toml",
+                "description": "Path to stc.toml, its directory, or a project directory."
+              },
+              "outDir": {
+                "type": "string",
+                "description": "Output directory override; used by noBuild."
+              },
+              "noBuild": {
+                "type": "boolean",
+                "default": false,
+                "description": "Launch existing artifacts without building."
+              },
+              "release": {
+                "type": "boolean",
+                "default": false,
+                "description": "Build in release mode (monitoring only: no breakpoints, stepping, or locals)."
+              },
+              "allowWrite": {
+                "type": "boolean",
+                "default": false,
+                "description": "Enable setVariable writes; the host must also allow [debug].allow-write."
+              },
+              "allowForce": {
+                "type": "boolean",
+                "default": false,
+                "description": "Request the force scope; the host must also allow [debug].allow-force."
+              },
+              "sourceRoot": {
+                "type": "string",
+                "description": "Override the source-path root instead of resolving package roots."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Extra arguments appended to the launched host."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the launched host."
+              }
+            }
+          },
+          "attach": {
+            "properties": {
+              "project": {
+                "type": "string",
+                "default": "${workspaceFolder}/stc.toml",
+                "description": "Path to stc.toml, its directory, or a project directory."
+              },
+              "endpoint": {
+                "type": "string",
+                "default": "${workspaceFolder}/target/stc/debug/debug.endpoint.json",
+                "description": "Endpoint file printed by `stc run --debug-server`."
+              },
+              "outDir": {
+                "type": "string",
+                "description": "Output directory override; used by noBuild."
+              },
+              "noBuild": {
+                "type": "boolean",
+                "default": false,
+                "description": "Launch existing artifacts without building."
+              },
+              "release": {
+                "type": "boolean",
+                "default": false,
+                "description": "Build in release mode (monitoring only)."
+              },
+              "allowWrite": {
+                "type": "boolean",
+                "default": false,
+                "description": "Enable setVariable writes; the host must also allow [debug].allow-write."
+              },
+              "allowForce": {
+                "type": "boolean",
+                "default": false,
+                "description": "Request the force scope; the host must also allow [debug].allow-force."
+              },
+              "sourceRoot": {
+                "type": "string",
+                "description": "Override the source-path root instead of resolving package roots."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Extra arguments appended to the launched host."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the launched host."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "stc",
+            "request": "launch",
+            "name": "stc: Launch",
+            "project": "${workspaceFolder}/stc.toml",
+            "noBuild": false
+          },
+          {
+            "type": "stc",
+            "request": "attach",
+            "name": "stc: Attach",
+            "project": "${workspaceFolder}/stc.toml",
+            "endpoint": "${workspaceFolder}/target/stc/debug/debug.endpoint.json"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "stc: Launch",
+            "description": "Build and debug the local stc project.",
+            "body": {
+              "type": "stc",
+              "request": "launch",
+              "name": "stc: Launch",
+              "project": "^\"\\${workspaceFolder}/stc.toml\"",
+              "noBuild": false
+            }
+          },
+          {
+            "label": "stc: Attach",
+            "description": "Attach to a running `stc run --debug-server` endpoint.",
+            "body": {
+              "type": "stc",
+              "request": "attach",
+              "name": "stc: Attach",
+              "project": "^\"\\${workspaceFolder}/stc.toml\"",
+              "endpoint": "^\"\\${workspaceFolder}/target/stc/debug/debug.endpoint.json\""
+            }
+          }
+        ]
       }
     ],
     "taskDefinitions": [

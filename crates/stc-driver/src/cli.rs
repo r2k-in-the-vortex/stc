@@ -42,6 +42,8 @@ pub(crate) enum Command {
     Rename,
     /// Serve the Language Server Protocol over standard input and output.
     Lsp,
+    /// Serve the Debug Adapter Protocol over standard input and output.
+    Dap,
 }
 
 /// `stc test` options.
@@ -182,6 +184,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         "compliance" => Command::Compliance,
         "rename" => Command::Rename,
         "lsp" => Command::Lsp,
+        "dap" => Command::Dap,
         "online" => {
             let subcommand = args
                 .get(1)
@@ -203,6 +206,9 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
 
     if command == Command::Lsp {
         return parse_lsp(args, index);
+    }
+    if command == Command::Dap {
+        return parse_dap(args, index);
     }
 
     let mut format = Format::Human;
@@ -640,6 +646,63 @@ fn parse_lsp(args: &[String], mut index: usize) -> Result<Option<Invocation>, St
     }))
 }
 
+/// Parses the options `stc dap` accepts.
+///
+/// The debug adapter owns standard input and output, so it takes no
+/// diagnostic, build, or formatting options. `--manifest-path` is the only
+/// accepted argument; launch/attach settings arrive as DAP messages.
+fn parse_dap(args: &[String], mut index: usize) -> Result<Option<Invocation>, String> {
+    let mut manifest = None;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        match argument {
+            "--help" | "-h" => {
+                print_help();
+                return Ok(None);
+            }
+            "--version" | "-V" => {
+                println!("stc {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            "--manifest-path" => {
+                manifest = Some(next_value(args, &mut index, "--manifest-path")?);
+            }
+            other if other.starts_with("--manifest-path=") => {
+                manifest = Some(other["--manifest-path=".len()..].to_owned());
+            }
+            other => {
+                return Err(format!(
+                    "`stc dap` only accepts `--manifest-path <path>`, found `{other}`"
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(Some(Invocation {
+        command: Command::Dap,
+        paths: Vec::new(),
+        format: Format::Human,
+        diagnostic_paths: DiagnosticPaths::Package,
+        color: ColorChoice::Auto,
+        quiet: false,
+        verbosity: 0,
+        relaxed: false,
+        ast: false,
+        manifest,
+        locked: false,
+        lints: LintOverrides::default(),
+        watch: false,
+        watch_timeout_ns: None,
+        dry_run: false,
+        online: OnlineOptions::default(),
+        fmt_check: false,
+        clean_test: false,
+        build: Request::default(),
+        test: TestOptions::default(),
+        debug: DebugOptions::default(),
+    }))
+}
+
 fn select_build_mode(request: &mut Request, mode: BuildMode) -> Result<(), String> {
     if let Some(previous) = request.mode_override
         && previous != mode
@@ -1044,8 +1107,9 @@ fn validate(
         | Command::Compliance
         | Command::OnlineDownload
         | Command::Debug => path_count == 0,
-        // `stc lsp` is parsed separately and never reaches validation.
-        Command::Lsp => false,
+        // `stc lsp` and `stc dap` are parsed separately and never reach
+        // validation.
+        Command::Lsp | Command::Dap => false,
     };
     if !allowed {
         return Err(match command {
@@ -1232,6 +1296,7 @@ fn command_name(command: Command) -> &'static str {
         Command::OnlineDiff => "online diff",
         Command::Rename => "rename",
         Command::Lsp => "lsp",
+        Command::Dap => "dap",
     }
 }
 
@@ -1298,6 +1363,7 @@ fn print_help() {
          \x20         [--message-format human|json|short] [-v|-vv]\n\
          \x20 stc rename <old> <new> [--dry-run] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20 stc lsp [--manifest-path <stc.toml|dir>]\n\
+         \x20 stc dap [--manifest-path <stc.toml|dir>]\n\
          \x20 stc --version\n\
          \x20 stc --help\n\
          \n\
@@ -1407,6 +1473,32 @@ mod tests {
                 .collect::<Vec<_>>();
             let error = match parse(&args) {
                 Ok(_) => panic!("`stc lsp` must reject the option"),
+                Err(error) => error,
+            };
+            assert!(error.contains("only accepts `--manifest-path"), "{error}");
+        }
+    }
+
+    #[test]
+    fn dap_accepts_only_a_manifest_path() {
+        let parsed = invocation(&["dap", "--manifest-path", "stc.toml"]);
+        assert_eq!(parsed.command, Command::Dap);
+        assert_eq!(parsed.manifest.as_deref(), Some("stc.toml"));
+
+        let parsed = invocation(&["dap", "--manifest-path=project/stc.toml"]);
+        assert_eq!(parsed.manifest.as_deref(), Some("project/stc.toml"));
+
+        for args in [
+            ["dap", "--message-format", "json"].as_slice(),
+            ["dap", "file.st"].as_slice(),
+            ["dap", "--debug"].as_slice(),
+        ] {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            let error = match parse(&args) {
+                Ok(_) => panic!("`stc dap` must reject the option"),
                 Err(error) => error,
             };
             assert!(error.contains("only accepts `--manifest-path"), "{error}");

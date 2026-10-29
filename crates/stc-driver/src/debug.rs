@@ -42,10 +42,11 @@ impl JsonFields for Json {
     }
 }
 
-/// The non-safety notice printed at every session start and in `--help`.
-const NOTICE: &str = "debug sessions are availability features, not safety functions; a stopped or forced controller may hold outputs indefinitely. stc may control machinery, but it is not a safety PLC and safety must be provided by a separate system and machine design as required by law and regulation";
+/// The non-safety notice printed at every session start and in `--help`. The
+/// adapter emits the same text as an `output` event (WL-1.1 I-14).
+pub(crate) const NOTICE: &str = stc_dap::NON_SAFETY_NOTICE;
 const ENDPOINT_DEADLINE: Duration = Duration::from_secs(5);
-const CONTROL_DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const CONTROL_DEADLINE: Duration = Duration::from_secs(10);
 const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);
 const DEFAULT_WATCH_INTERVAL_MS: u64 = 1000;
 
@@ -68,7 +69,11 @@ fn resolve_endpoint(explicit: Option<&str>, out_dir: &Path) -> PathBuf {
     }
 }
 
-fn server_arguments_for(debug: &DebugOptions, manifest: &Manifest, endpoint: &Path) -> Vec<String> {
+pub(crate) fn server_arguments_for(
+    debug: &DebugOptions,
+    manifest: &Manifest,
+    endpoint: &Path,
+) -> Vec<String> {
     let mut arguments = vec![
         "--debug-endpoint".to_owned(),
         endpoint.to_string_lossy().into_owned(),
@@ -1669,7 +1674,7 @@ fn shutdown_host(control: &str, nonce: &str, child: &mut Child) -> Option<u8> {
     wait_child(child)
 }
 
-fn wait_child(child: &mut Child) -> Option<u8> {
+pub(crate) fn wait_child(child: &mut Child) -> Option<u8> {
     let deadline = Instant::now() + SHUTDOWN_DEADLINE;
     loop {
         match child.try_wait() {
@@ -1709,7 +1714,7 @@ fn absolute_path(path: &Path) -> PathBuf {
 
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn random_hex() -> String {
+pub(crate) fn random_hex() -> String {
     let counter = TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1723,7 +1728,7 @@ fn random_hex() -> String {
     token
 }
 
-fn control_endpoint() -> String {
+pub(crate) fn control_endpoint() -> String {
     let token = random_hex();
     if cfg!(windows) {
         format!(r"\\.\pipe\stc-debug-{}-{token}", std::process::id())

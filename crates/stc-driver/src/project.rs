@@ -66,6 +66,36 @@ struct SourceEntry {
     bytes: Vec<u8>,
 }
 
+/// A project prepared through parsing, analysis, and build-request
+/// resolution. Shared by `check`/`build`/`run`/`debug`/`metadata` and by the
+/// DAP launcher, which builds without an interactive debug loop.
+struct Prepared {
+    graph: stc_manifest::ProjectGraph,
+    analysis: stc_sema::Analysis,
+    sources: SourceMap,
+    diagnostics: DiagnosticSink,
+    request: Request,
+    name: String,
+    source_files: Vec<String>,
+    source_paths: Vec<String>,
+    fingerprint: stc_got::Digest32,
+    build_mode: build::BuildMode,
+}
+
+/// The artifacts and settings a run or debug launch needs.
+pub(crate) struct ProjectBuild {
+    /// Built launcher executable.
+    pub(crate) launcher: PathBuf,
+    /// Output directory that holds the launcher, module, metadata, and sides.
+    pub(crate) out_dir: PathBuf,
+    /// Resolved run options (`--cycles`, clock, I/O, state).
+    pub(crate) run: crate::build::RunRequest,
+    /// Root-package manifest used for debug-server flags and source mapping.
+    pub(crate) manifest: stc_manifest::Manifest,
+    /// Root package directory.
+    pub(crate) root_dir: PathBuf,
+}
+
 /// Runs a project command.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
@@ -78,12 +108,172 @@ pub(crate) fn run(
     reporter: &mut Reporter,
     log: Log,
 ) -> u8 {
+    let mut prepared = match prepare(
+        mode,
+        manifest,
+        locked,
+        diagnostic_paths,
+        request,
+        reporter,
+        log,
+    ) {
+        Ok(prepared) => prepared,
+        Err(code) => return code,
+    };
+    match mode {
+        Mode::Build | Mode::Run | Mode::Debug => {
+            let code = execute_build(&mut prepared, reporter, log);
+            if code != 0 {
+                return code;
+            }
+            if mode == Mode::Run || mode == Mode::Debug {
+                let build = project_build(&prepared);
+                if mode == Mode::Debug {
+                    return crate::debug::launch(
+                        &build.launcher,
+                        &build.out_dir,
+                        &build.run,
+                        debug,
+                        &build.manifest,
+                        &build.root_dir,
+                        reporter,
+                        log,
+                    );
+                }
+                return crate::run::launch(
+                    &build.launcher,
+                    &build.run,
+                    debug,
+                    &build.manifest,
+                    &build.root_dir,
+                    &build.out_dir,
+                    reporter,
+                    log,
+                );
+            }
+        }
+        Mode::Metadata => {
+            let generated = match build::generate_project(
+                &prepared.request,
+                &prepared.analysis.hir,
+                &prepared.name,
+                &prepared.source_files,
+                &prepared.source_paths,
+                &prepared.sources,
+                prepared.fingerprint,
+                &mut prepared.diagnostics,
+                reporter,
+                log,
+            ) {
+                Ok(generated) => generated,
+                Err(code) => {
+                    report_sink(&prepared.diagnostics, &prepared.sources, reporter, log);
+                    return code;
+                }
+            };
+            // Keep the summary the last stdout line in JSON mode.
+            report_sink(&prepared.diagnostics, &prepared.sources, reporter, log);
+            metadata::print(&generated, &prepared.request, reporter.is_json());
+            let code = diagnostic_exit(&prepared.diagnostics);
+            if code != 0 {
+                return code;
+            }
+        }
+        Mode::Check => unreachable!("check returns from prepare"),
+    }
+    u8::from(reporter.denied())
+}
+
+/// Builds a project for a `stc dap` launch without running an interactive
+/// debug loop.
+///
+/// `Mode::Debug` fixes the build form to debug unless `request` carries an
+/// explicit `--release` override, exactly like `stc debug`.
+pub(crate) fn build_for_launch(
+    manifest: Option<&str>,
+    locked: bool,
+    diagnostic_paths: DiagnosticPaths,
+    request: &Request,
+    reporter: &mut Reporter,
+    log: Log,
+) -> std::result::Result<ProjectBuild, u8> {
+    let mut prepared = prepare(
+        Mode::Debug,
+        manifest,
+        locked,
+        diagnostic_paths,
+        request,
+        reporter,
+        log,
+    )?;
+    let code = execute_build(&mut prepared, reporter, log);
+    if code != 0 {
+        return Err(code);
+    }
+    Ok(project_build(&prepared))
+}
+
+fn project_build(prepared: &Prepared) -> ProjectBuild {
+    let out_dir = prepared.request.out_dir.clone().map_or_else(
+        || PathBuf::from(build::default_out_dir(prepared.build_mode)),
+        PathBuf::from,
+    );
+    let launcher = build::launcher_path(&out_dir, &prepared.name);
+    let root = prepared.graph.root_package();
+    ProjectBuild {
+        launcher,
+        out_dir,
+        run: prepared.request.run.clone(),
+        manifest: root.manifest.clone(),
+        root_dir: root.root_dir.clone(),
+    }
+}
+
+fn execute_build(prepared: &mut Prepared, reporter: &mut Reporter, log: Log) -> u8 {
+    let code = build::run_project(
+        &prepared.request,
+        &prepared.analysis.hir,
+        &prepared.name,
+        &prepared.source_files,
+        &prepared.source_paths,
+        &prepared.sources,
+        prepared.fingerprint,
+        &mut prepared.diagnostics,
+        reporter,
+        log,
+    );
+    report_sink(&prepared.diagnostics, &prepared.sources, reporter, log);
+    if code != 0 {
+        return code;
+    }
+    let code = diagnostic_exit(&prepared.diagnostics);
+    if code != 0 {
+        return code;
+    }
+    if reporter.denied() {
+        return 1;
+    }
+    0
+}
+
+/// Loads, parses, analyzes, and resolves the build request for one command.
+/// `check` reports here and returns its exit code through `Err`.
+#[allow(clippy::too_many_arguments)]
+fn prepare(
+    mode: Mode,
+    manifest: Option<&str>,
+    locked: bool,
+    diagnostic_paths: DiagnosticPaths,
+    request: &Request,
+    reporter: &mut Reporter,
+    log: Log,
+) -> std::result::Result<Prepared, u8> {
     let manifest_input = manifest.unwrap_or("stc.toml");
     let graph = match load_project(manifest_input, &LoadOptions { locked }) {
         Ok(graph) => graph,
         Err(error) => {
             reporter.diagnostics(&error.diagnostics, &error.sources);
-            return 2;
+            return Err(2);
         }
     };
     let root = graph.root_package();
@@ -179,7 +369,7 @@ pub(crate) fn run(
     // D-070: do not analyze recovered trees when syntax errors exist.
     if diagnostics.has_errors() || read_error {
         report_sink(&diagnostics, &sources, reporter, log);
-        return diagnostic_exit(&diagnostics);
+        return Err(diagnostic_exit(&diagnostics));
     }
 
     let packages: Vec<PackageSession<'_>> = graph
@@ -212,15 +402,15 @@ pub(crate) fn run(
     if mode == Mode::Check {
         report_sink(&diagnostics, &sources, reporter, log);
         let code = diagnostic_exit(&diagnostics);
-        return if code == 0 && reporter.denied() {
+        return Err(if code == 0 && reporter.denied() {
             1
         } else {
             code
-        };
+        });
     }
     if diagnostics.has_errors() {
         report_sink(&diagnostics, &sources, reporter, log);
-        return diagnostic_exit(&diagnostics);
+        return Err(diagnostic_exit(&diagnostics));
     }
 
     let mut request = request.clone();
@@ -231,7 +421,7 @@ pub(crate) fn run(
             Ok(renames) => request.renames = renames,
             Err(error) => {
                 reporter.plain(error.code, stc_diag::Severity::Error, &error.message);
-                return 2;
+                return Err(2);
             }
         }
     }
@@ -283,7 +473,7 @@ pub(crate) fn run(
                         stc_diag::Severity::Error,
                         "`[online].baseline = \"explicit\"` requires a `manifest` path",
                     );
-                    return 2;
+                    return Err(2);
                 };
                 let path = root.root_dir.join(path);
                 if !path.is_file() {
@@ -295,7 +485,7 @@ pub(crate) fn run(
                             path.display()
                         ),
                     );
-                    return 2;
+                    return Err(2);
                 }
                 request.got_manifest = Some(path.to_string_lossy().into_owned());
             }
@@ -337,95 +527,22 @@ pub(crate) fn run(
             let file = sources.add_file("<project>", String::new());
             diagnostics.error(error.code, error.message, Span::new(file, 0, 0));
             report_sink(&diagnostics, &sources, reporter, log);
-            return 1;
+            return Err(1);
         }
     };
 
-    match mode {
-        Mode::Build | Mode::Run | Mode::Debug => {
-            let code = build::run_project(
-                &request,
-                &analysis.hir,
-                &name,
-                &source_files,
-                &source_paths,
-                &sources,
-                fingerprint,
-                &mut diagnostics,
-                reporter,
-                log,
-            );
-            report_sink(&diagnostics, &sources, reporter, log);
-            if code != 0 {
-                return code;
-            }
-            let code = diagnostic_exit(&diagnostics);
-            if code != 0 {
-                return code;
-            }
-            if reporter.denied() {
-                return 1;
-            }
-            if mode == Mode::Run || mode == Mode::Debug {
-                let out_dir = request.out_dir.clone().map_or_else(
-                    || PathBuf::from(build::default_out_dir(build_mode)),
-                    PathBuf::from,
-                );
-                let launcher = build::launcher_path(&out_dir, &name);
-                if mode == Mode::Debug {
-                    return crate::debug::launch(
-                        &launcher,
-                        &out_dir,
-                        &request.run,
-                        debug,
-                        &root.manifest,
-                        &root.root_dir,
-                        reporter,
-                        log,
-                    );
-                }
-                return crate::run::launch(
-                    &launcher,
-                    &request.run,
-                    debug,
-                    &root.manifest,
-                    &root.root_dir,
-                    &out_dir,
-                    reporter,
-                    log,
-                );
-            }
-        }
-        Mode::Metadata => {
-            let generated = match build::generate_project(
-                &request,
-                &analysis.hir,
-                &name,
-                &source_files,
-                &source_paths,
-                &sources,
-                fingerprint,
-                &mut diagnostics,
-                reporter,
-                log,
-            ) {
-                Ok(generated) => generated,
-                Err(code) => {
-                    report_sink(&diagnostics, &sources, reporter, log);
-                    return code;
-                }
-            };
-            // Keep the summary the last stdout line in JSON mode.
-            report_sink(&diagnostics, &sources, reporter, log);
-            metadata::print(&generated, &request, reporter.is_json());
-            let code = diagnostic_exit(&diagnostics);
-            if code != 0 {
-                return code;
-            }
-        }
-        Mode::Check => unreachable!("check returns before code generation"),
-    }
-    u8::from(reporter.denied())
+    Ok(Prepared {
+        graph,
+        analysis,
+        sources,
+        diagnostics,
+        request,
+        name,
+        source_files,
+        source_paths,
+        fingerprint,
+        build_mode,
+    })
 }
 
 fn duration(duration: std::time::Duration) -> String {

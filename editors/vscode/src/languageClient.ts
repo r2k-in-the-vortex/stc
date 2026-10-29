@@ -181,7 +181,7 @@ function findManifest(start: string): string | undefined {
 }
 
 /** Resolves `stc` from an explicit path or from PATH (with PATHEXT on Windows). */
-function resolveExecutable(command: string): string | undefined {
+export function resolveExecutable(command: string): string | undefined {
   const trimmed = command.trim();
   if (trimmed === '') {
     return undefined;
