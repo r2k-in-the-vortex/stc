@@ -347,6 +347,16 @@ scratch. It is out of scope for v2.0.0 and must not be applied during the campai
    and service list. Do not change them for v2.0.0.
 4. Confirm that no reboot or service change is required for the untuned campaign.
 
+**Installed wrapper (2026-10-29).** The source is [`tools/rt/stc-wl4-run`](tools/rt/stc-wl4-run),
+installed root-owned at `/usr/local/sbin/stc-wl4-run` (mode 0755). The sudoers source is
+[`tools/rt/stc-wl4.sudoers`](tools/rt/stc-wl4.sudoers), installed at `/etc/sudoers.d/stc-wl4`
+(mode 0440) and validated by `visudo -cf`. The wrapper accepts only `cyclictest`, `timerlat`,
+`osnoise`, `hwlat`, `perf`, and `campaign`; every argument is validated, and `campaign` execs
+only the root-owned `/home/r2k/stc-rt/tools/rt/campaign.py`. Test evidence: `cyclictest 2`
+completed with max latencies of 10-14 µs per CPU; `timerlat 2s` completed with all-CPU maxima
+of 6 µs IRQ, 22 µs thread, and 30 µs user; `hwlat 2s` reported no samples over threshold; an
+invalid duration was rejected with exit 64. No boot, governor, service, or swap change was made.
+
 ### 9.2 Build and transfer (Windows development host)
 
 Set `RT_HOST` from the local `.env/RT_Host.md` note; it is not stored in this repository.
