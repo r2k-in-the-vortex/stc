@@ -189,6 +189,7 @@ fn run_test(
         no_retain: true,
         mock_clock_ns: Some(options.mock_clock_ns),
         status: false,
+        ..RunOptions::default()
     };
     let outcome = run::run_loop(&mut host, &run);
     let records = host_api::end_assert_recording();
@@ -222,6 +223,9 @@ fn run_test(
                 ))),
                 RunLoopError::Interrupted { .. } => {
                     failures.push(Failure::plain("test was interrupted"));
+                }
+                RunLoopError::Setup { message } => {
+                    failures.push(Failure::plain(format!("runtime setup error: {message}")))
                 }
             }
         }

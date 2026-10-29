@@ -297,6 +297,30 @@ scratch. It is out of scope for v2.0.0 and must not be applied during the campai
 - The harness never reads or writes credentials; privileged setup is external (R-2).
 - The control endpoint stays user-only and is removed after the run.
 
+#### 6.3.1 RT metrics JSONL (`stc-rt-metrics/1`)
+
+The launcher writes one line per record when `--rt-metrics <path>` is set:
+
+```json
+{"record":"header","protocol":"stc-rt-metrics/1","build_id":"<hex|null>","cycle_time_ns":1000000,"priority":90,"cpu":3,"pid":1234,"started_monotonic_ns":0,"fault_interval":1000}
+{"record":"cycle","cycle":1,"generation":7,"deadline_ns":0,"wake_ns":0,"scan_start_ns":0,"scan_end_ns":0,"wake_lateness_ns":0,"execution_ns":0,"scan_overrun_ns":0,"missed_deadline":false,"skipped_periods":0,"minor_faults":null,"major_faults":null,"allocations":null,"frees":null}
+{"record":"summary","cycles":0,"missed_deadlines":0,"skipped_periods":0,"max_wake_lateness_ns":0,"max_execution_ns":0,"max_scan_overrun_ns":0,"last_minor_faults":null,"last_major_faults":null,"last_allocations":null,"last_frees":null,"finished_monotonic_ns":0}
+```
+
+- Timestamps are `CLOCK_MONOTONIC` nanoseconds. `deadline_ns` is the scheduled start of the
+  cycle; `wake_lateness_ns` is `wake - deadline` (signed); `scan_overrun_ns` is the completion
+  after `deadline + cycle_time`; `missed_deadline` is true when either the wake or the completion
+  is late.
+- `skipped_periods` is the number of whole cycles skipped after this cycle when the next deadline
+  had already passed; the next record's `deadline_ns` reflects the jump.
+- Fault and allocator fields are sampled at cycle 1 and every `fault_interval` cycles, and are
+  `null` on other records. The summary repeats the last sample.
+- The header's `pid`, `priority`, and `cpu` describe the cycle thread; `cpu` is `null` when no
+  affinity was requested.
+- The file is opened before the first deadline and the header is written before the first cycle.
+  Records are buffered and flushed at exit; the summary is written on normal exit, stop, or
+  interrupt.
+
 ### 6.4 Benchmark workload
 
 - A deterministic ST project with a configurable arithmetic and function-block workload, no I/O,
@@ -443,6 +467,9 @@ sudo /usr/local/sbin/stc-wl4-run campaign --regime r0 --duration 10m --cycle-tim
 Repeat for R0, R1, R2 and for the 10 ms secondary runs. R1 starts the recorded load on CPUs other
 than the cycle thread's CPU; R2 pins the load to that CPU. Run the online-change cases with a
 fresh generation per repetition.
+
+The harness starts the bundled launcher with `--rt --rt-priority 90 --rt-cpu <cycle-cpu>
+--rt-metrics <run>.jsonl`; §6.3.1 fixes the schema. It must not use `stc run --watch` on the host.
 
 ### 9.6 Collect and restore
 

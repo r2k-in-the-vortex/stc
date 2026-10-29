@@ -76,6 +76,7 @@ pub mod memory;
 pub mod migration;
 pub mod module_info;
 mod priority;
+mod rt;
 pub mod run;
 pub mod scheduler;
 pub mod signal;
@@ -319,6 +320,28 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
                     .ok_or_else(|| format!("invalid mock clock `{text}`"))?;
                 run.mock_clock_ns = Some(i64::try_from(ns).unwrap_or(i64::MAX));
             }
+            "--rt" => run.rt = true,
+            "--rt-priority" => {
+                let text = value("--rt-priority")?;
+                run.rt_priority = Some(parse_rt_priority(&text)?);
+            }
+            other if other.starts_with("--rt-priority=") => {
+                run.rt_priority = Some(parse_rt_priority(&other["--rt-priority=".len()..])?);
+            }
+            "--rt-cpu" => {
+                let text = value("--rt-cpu")?;
+                run.rt_cpu = Some(parse_rt_cpu(&text)?);
+            }
+            other if other.starts_with("--rt-cpu=") => {
+                run.rt_cpu = Some(parse_rt_cpu(&other["--rt-cpu=".len()..])?);
+            }
+            "--rt-metrics" => {
+                let path = value("--rt-metrics")?;
+                run.rt_metrics = Some(parse_rt_metrics_path(&path)?);
+            }
+            other if other.starts_with("--rt-metrics=") => {
+                run.rt_metrics = Some(parse_rt_metrics_path(&other["--rt-metrics=".len()..])?);
+            }
             "--status" => run.status = true,
             "--module" => {
                 module = Some(value("--module")?);
@@ -372,6 +395,18 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     if debug_session_timeout_ns.is_some() && debug_endpoint.is_none() {
         return Err("`--debug-session-timeout` requires `--debug-endpoint`".into());
     }
+    if !run.rt {
+        if run.rt_priority.is_some() || run.rt_cpu.is_some() || run.rt_metrics.is_some() {
+            return Err("`--rt-priority`, `--rt-cpu`, and `--rt-metrics` require `--rt`".into());
+        }
+    } else {
+        if run.cycle_time_ns.is_none_or(|ns| ns <= 0) {
+            return Err("`--rt` requires a positive `--cycle-time`".into());
+        }
+        if run.mock_clock_ns.is_some() {
+            return Err("`--rt` cannot be combined with `--mock-clock`".into());
+        }
+    }
     Ok(LauncherOptions {
         run,
         module,
@@ -384,6 +419,33 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
         debug_allow_force,
         debug_session_timeout_ns,
     })
+}
+
+fn parse_rt_priority(text: &str) -> Result<u8, String> {
+    let priority: u8 = text
+        .parse()
+        .map_err(|_| format!("invalid RT priority `{text}`"))?;
+    if !(1..=99).contains(&priority) {
+        return Err(format!("RT priority `{text}` must be between 1 and 99"));
+    }
+    Ok(priority)
+}
+
+fn parse_rt_cpu(text: &str) -> Result<u32, String> {
+    let cpu: u32 = text
+        .parse()
+        .map_err(|_| format!("invalid RT CPU `{text}`"))?;
+    if cpu > 63 {
+        return Err(format!("RT CPU `{text}` must be between 0 and 63"));
+    }
+    Ok(cpu)
+}
+
+fn parse_rt_metrics_path(text: &str) -> Result<PathBuf, String> {
+    if text.is_empty() {
+        return Err("`--rt-metrics` requires a non-empty path".into());
+    }
+    Ok(PathBuf::from(text))
 }
 
 fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_char) -> i32 {
@@ -583,7 +645,9 @@ fn absolute_path(path: &Path) -> PathBuf {
 }
 
 fn report_run_error(error: &RunLoopError) {
-    if let RunLoopError::Cycle {
+    if let RunLoopError::Setup { message } = error {
+        eprintln!("stc: {message}");
+    } else if let RunLoopError::Cycle {
         error: host_error,
         trap,
         ..
@@ -1353,6 +1417,7 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
         no_retain: options.no_retain != 0,
         mock_clock_ns: (options.mock_clock_ns >= 0).then_some(options.mock_clock_ns),
         status: options.status != 0,
+        ..RunOptions::default()
     };
     let module_path = unsafe { c_text(options.module_path) };
     let loads_module = module_path.is_some();
@@ -1619,5 +1684,91 @@ mod tests {
         unsafe { stc_rt_state_configure(std::ptr::null(), 0, 0) };
         assert_eq!(unsafe { stc_rt_state_load(second.as_mut_ptr(), 4, 9) }, 5);
         std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    #[test]
+    fn launcher_rt_options_validate_combinations() {
+        let args = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            parse_launcher_args(&args(&["stc", "--rt", "--cycle-time", "1ms"])).is_ok(),
+            "a positive cycle time is accepted"
+        );
+        assert!(
+            parse_launcher_args(&args(&[
+                "stc",
+                "--rt",
+                "--cycle-time",
+                "1ms",
+                "--rt-priority",
+                "90",
+                "--rt-cpu",
+                "3",
+                "--rt-metrics",
+                "metrics.jsonl",
+            ]))
+            .is_ok(),
+            "the full RT option set is accepted"
+        );
+        assert!(
+            parse_launcher_args(&args(&["stc", "--rt"])).is_err(),
+            "RT requires a cycle time"
+        );
+        assert!(
+            parse_launcher_args(&args(&["stc", "--rt-priority", "90"])).is_err(),
+            "RT sub-options require --rt"
+        );
+        assert!(
+            parse_launcher_args(&args(&[
+                "stc",
+                "--rt",
+                "--cycle-time",
+                "1ms",
+                "--mock-clock",
+                "0ns",
+            ]))
+            .is_err(),
+            "RT and the mock clock are mutually exclusive"
+        );
+        assert!(
+            parse_launcher_args(&args(&[
+                "stc",
+                "--rt",
+                "--cycle-time",
+                "1ms",
+                "--rt-priority",
+                "0",
+            ]))
+            .is_err(),
+            "RT priority zero is rejected"
+        );
+        assert!(
+            parse_launcher_args(&args(&[
+                "stc",
+                "--rt",
+                "--cycle-time",
+                "1ms",
+                "--rt-priority",
+                "100",
+            ]))
+            .is_err(),
+            "RT priority above 99 is rejected"
+        );
+        assert!(
+            parse_launcher_args(&args(&[
+                "stc",
+                "--rt",
+                "--cycle-time",
+                "1ms",
+                "--rt-cpu",
+                "64",
+            ]))
+            .is_err(),
+            "RT CPU 64 is outside the supported range"
+        );
     }
 }
