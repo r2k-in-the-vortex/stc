@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "stc-codegen"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "serde_json",
  "stc-diag",
@@ -112,14 +112,14 @@ dependencies = [
 
 [[package]]
 name = "stc-diag"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "stc-span",
 ]
 
 [[package]]
 name = "stc-driver"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "serde_json",
  "stc-codegen",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "stc-fmt"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "stc-diag",
  "stc-lexer",
@@ -151,18 +151,18 @@ dependencies = [
 
 [[package]]
 name = "stc-got"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 
 [[package]]
 name = "stc-hir"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "stc-span",
 ]
 
 [[package]]
 name = "stc-lexer"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "stc-diag",
  "stc-span",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "stc-manifest"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "stc-diag",
  "stc-span",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "stc-parser"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "stc-diag",
  "stc-lexer",
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "stc-runtime"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "stc-codegen",
  "stc-diag",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "stc-sema"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "stc-diag",
  "stc-hir",
@@ -215,11 +215,11 @@ dependencies = [
 
 [[package]]
 name = "stc-span"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 
 [[package]]
 name = "stc-syntax"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "stc-test"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "serde_json",
  "stc-diag",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "stc-got",
  "toml_edit",

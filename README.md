@@ -8,7 +8,7 @@ x86-64 or any other target clang supports.
 
 ## Status
 
-**M8 (Linux host portability) is complete (2026-10-29): `stc` 1.0.0-rc.1 runs natively on
+**v1.0.0 is released (2026-10-29): M8 (Linux host portability) is complete and `stc` 1.0.0 runs natively on
 Windows 11 x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU, with the native suites and
 packages verified on all three hosts in green CI run
 [40821738218](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218) (commit
@@ -171,7 +171,7 @@ timeout, or interlock is provided. The consolidated list is in
 | [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md) | Versioned `GotId`, catalog, descriptor, manifest, plan, host ABI, build-ID formats |
 | [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md) | Typed access, forcing, breakpoints, debug info |
 | [Decisions and Open Questions](Specification/Decisions.md) | Rationale and backlog |
-| [Release Notes](RELEASE-NOTES.md) | `1.0.0-rc.1` highlights, artifacts, formats, upgrade notes |
+| [Release Notes](RELEASE-NOTES.md) | `1.0.0` highlights, artifacts, formats, upgrade notes |
 | [User Guide](USER-GUIDE.md) | Install, project workflow, build modes, online change, debug, tests |
 | [Known Limitations](KNOWN-LIMITATIONS.md) | Consolidated v1 limits and workarounds |
 | [Non-Safety Statement](NON-SAFETY.md) | Not a safety PLC; safety is a separate system |
@@ -616,8 +616,8 @@ Build the release package from a clean checkout:
 
 ```sh
 cargo xtask package --locked --out dist
-sha256sum -c dist/stc-1.0.0-rc.1-*/SHA256SUMS
-dist/stc-1.0.0-rc.1-*/bin/stc --version
+sha256sum -c dist/stc-1.0.0-*/SHA256SUMS
+dist/stc-1.0.0-*/bin/stc --version
 ```
 
 Use the unpacked package (the driver finds the runtime in the sibling `lib/`), or run the

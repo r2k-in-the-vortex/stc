@@ -1,6 +1,6 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, M4.5 online-change foundation, M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 project system, CLI, scheduler, state, I/O, test runner, formatter, online workflow, Lean vectors, conformance corpus, and CI complete (2026-10-27); M6.5 debug/monitoring complete (2026-10-28); M7 release candidate `1.0.0-rc.1` implemented (2026-10-28)
+Status: Target profile; M3 front end, M4 scalar codegen, M4.5 online-change foundation, M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 project system, CLI, scheduler, state, I/O, test runner, formatter, online workflow, Lean vectors, conformance corpus, and CI complete (2026-10-27); M6.5 debug/monitoring complete (2026-10-28); M7 release candidate implemented (2026-10-28); v1.0.0 final (2026-10-29)
 
 Applies to: `stc` v1  
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  

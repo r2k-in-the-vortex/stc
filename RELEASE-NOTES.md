@@ -1,8 +1,8 @@
-# Release notes — `stc` 1.0.0-rc.1
+# Release notes — `stc` 1.0.0
 
 Date: 2026-10-29  
 Profile: `stc-2013-oop-utf8-v1`  
-Milestone: M7 — release candidate; M8 — Linux host portability complete (2026-10-29)
+Milestone: v1.0.0 final; M8 — Linux host portability complete (2026-10-29)
 
 `stc` is a command-line compiler for IEC 61131-3:2013 Structured Text. It emits
 deterministic textual LLVM IR, invokes `clang` to produce loadable modules,
@@ -16,8 +16,8 @@ with online change, retained state, I/O backends, and typed debug/monitoring.
 
 ## Highlights
 
-- **Release candidate for the v1 profile.** The workspace, driver, descriptor,
-  manifest, and package all report `1.0.0-rc.1`.
+- **v1.0.0 release.** The workspace, driver, descriptor, manifest, and package
+  all report `1.0.0`.
 - **Reproducible artifacts.** IR, GOT manifests, build IDs, debug metadata,
   sidecars, and rendered views are deterministic functions of source, options,
   and toolchain. Double builds are byte-identical, including PE timestamps.
@@ -53,15 +53,15 @@ M6.5 full typed debug and monitoring.
 
 ## Host portability (M8, 2026-10-29)
 
-M8 completes the host-portability scope of `1.0.0-rc.1`. It makes no language,
-format, ABI, protocol, or version change: `stc` remains `1.0.0-rc.1`. The
-supported native hosts are:
+M8 completed the host-portability scope of the release candidate. It made no
+language, format, ABI, or protocol change; the final `1.0.0` release is a
+release-identity update only (D-210). The supported native hosts are:
 
 | Host | Triple | Package |
 | --- | --- | --- |
-| Windows 11 x86-64 MSVC | `x86_64-pc-windows-msvc` | `stc-1.0.0-rc.1-x86_64-pc-windows-msvc` |
-| Linux x86-64 GNU | `x86_64-unknown-linux-gnu` | `stc-1.0.0-rc.1-x86_64-unknown-linux-gnu` |
-| Linux AArch64 GNU | `aarch64-unknown-linux-gnu` | `stc-1.0.0-rc.1-aarch64-unknown-linux-gnu` |
+| Windows 11 x86-64 MSVC | `x86_64-pc-windows-msvc` | `stc-1.0.0-x86_64-pc-windows-msvc` |
+| Linux x86-64 GNU | `x86_64-unknown-linux-gnu` | `stc-1.0.0-x86_64-unknown-linux-gnu` |
+| Linux AArch64 GNU | `aarch64-unknown-linux-gnu` | `stc-1.0.0-aarch64-unknown-linux-gnu` |
 
 - **Host audit.** Host-specific operations are confined to the runtime platform
   layer and the driver toolchain/build layer; each portable compiler crate
@@ -93,7 +93,7 @@ phase evidence runs are recorded in
 A package contains:
 
 ```text
-stc-1.0.0-rc.1-<host-triple>/
+stc-1.0.0-<host-triple>/
   bin/stc(.exe)
   lib/stc_runtime.lib, stc_runtime.dll        (Windows MSVC)
   lib/libstc_runtime.a, libstc_runtime.so     (Linux GNU)

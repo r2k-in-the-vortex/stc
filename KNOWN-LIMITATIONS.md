@@ -1,4 +1,4 @@
-# Known limitations — `stc` 1.0.0-rc.1
+# Known limitations — `stc` 1.0.0
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-29
@@ -33,7 +33,7 @@ machine design as required by law and regulation.
 
 | Limitation | Status / workaround |
 | --- | --- |
-| Native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`) | Each has its own `stc-1.0.0-rc.1-<triple>` package; other triples are smoke-tested for IR/object emission only |
+| Native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`) | Each has its own `stc-1.0.0-<triple>` package; other triples are smoke-tested for IR/object emission only |
 | Module loading, execution, and frame extraction are supported on the three native hosts | Cross-target artifacts are not loadable or debuggable off-host; link and run on the target host |
 | macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported | Use a supported host, or emit IR/objects only; no support claim is made |
 | CPU affinity is not pinned; control and debug service threads run at below-normal priority (`THREAD_PRIORITY_BELOW_NORMAL` on Windows, nice +10 on Linux) as an advisory policy | CPU placement belongs to the deployment's cpuset/scheduler policy; this is not a real-time guarantee |

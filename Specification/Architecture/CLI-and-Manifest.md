@@ -809,7 +809,7 @@ stc-<version>-<host-triple>/
   "abi_version": 2,
   "artifact": "motor-control",
   "build_id": "0x…",
-  "compiler": "stc 1.0.0-rc.1",
+  "compiler": "stc 1.0.0",
   "configuration": "Main",
   "descriptor_digest": "0x…",
   "debug": {

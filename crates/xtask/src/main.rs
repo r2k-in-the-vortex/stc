@@ -1322,7 +1322,7 @@ let ports: u16 = 80;
 
     #[test]
     fn package_json_names_the_host_debug_contract() {
-        let json = render_package_json("1.0.0-rc.1", "host-triple", &["bin/stc".into()]);
+        let json = render_package_json("1.0.0", "host-triple", &["bin/stc".into()]);
         let expected = if cfg!(windows) {
             "\"debug_contract\": \"object-codeview\""
         } else {

@@ -1,7 +1,7 @@
 # Non-safety statement
 
 Profile: `stc-2013-oop-utf8-v1`  
-Applies to: `stc` 1.0.0-rc.1 and its runtime
+Applies to: `stc` 1.0.0 and its runtime
 
 **`stc` is not a safety PLC and is not responsible for safety in any way.**
 
