@@ -343,6 +343,7 @@ class LoadTests(unittest.TestCase):
         assert command is not None
         self.assertEqual(command[0], "/usr/bin/taskset")
         self.assertIn("--cpu", command)
+        self.assertIn("matrixprod", command)
         self.assertNotIn("--vm", command)
 
     def test_mixed(self) -> None:

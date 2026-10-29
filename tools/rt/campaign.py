@@ -707,7 +707,7 @@ def load_command(
         "--cpu",
         str(workers * 2),
         "--cpu-method",
-        "matrix",
+        "matrixprod",
     ]
     if profile == "mixed":
         command += [
