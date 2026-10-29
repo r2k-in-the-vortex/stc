@@ -372,7 +372,7 @@ the run log. CI runs are never silently skipped or narrowed to make a phase pass
 | 1 — host abstraction audit | Complete (2026-10-28) | `252af75` | `40784925474` |
 | 2 — Linux x86-64 verification | Complete (2026-10-28) | `0805a51` | `40787801942` |
 | 3 — Linux AArch64 native build | Complete (2026-10-29) | `07162f0` | `40790831659` |
-| 4 — AArch64 debug parity | Pending | | |
+| 4 — AArch64 debug parity | Complete (2026-10-29) | `edd6fae` | `40792824763` |
 | 5 — Linux state atomicity | Pending | | |
 | 6 — loader and service priority | Pending | | |
 | 7 — packaging and CI matrix | Pending | | |
