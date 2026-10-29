@@ -6,6 +6,16 @@
 `stc` compiles IEC 61131-3 Structured Text to textual LLVM IR. `clang` takes the IR from there to
 x86-64 or any other target clang supports.
 
+## Preface
+
+This compiler and runtime v1.0.0 was generated for $34.33USD in token cost and 7 days of single developer work.
+At the same time, it approaches ability to compete with likes of Siemens AX or Beckhoff PLC++, leading edge, extensive engineering teams, multi year development effort projects.
+No matter what shortcomings this compiler may have or develop, it's trivia to reduce it and any problems that pop up to just specification for a improved rewrite from scratch.
+
+While more work remains to reach practically usable product status, as is also the case for commercial compeditors, this demonstrates conclusively that the entry barrier to deliver complex software has lowered by many orders of magnitude, and products which may have previously been economically impossible are now going to be minor hobby level tasks.
+
+Maybe not this piece of software specifically, but the general change in how software industry works will change landscape in industrial automation and other fields, drastically. Decades old pieces of software costing thousands of dollars in license costs yearly and providing comparatively little utility, software landscape will be whiped clean and started from scratch over next few years.
+
 ## Status
 
 **v1.0.0 is released (2026-10-29): M8 (Linux host portability) is complete and `stc` 1.0.0 runs natively on
