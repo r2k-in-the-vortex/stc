@@ -287,13 +287,16 @@ scratch. It is out of scope for v2.0.0 and must not be applied during the campai
 
 ### 6.3 Harness and data
 
-- `tools/rt/campaign.py`: orchestrates runs, starts the launcher with `--control`, writes the
-  nonce to a user-only file, drives deploy/status over the local socket, starts and stops load,
-  samples `/proc`, and writes one JSONL stream per run.
-- Raw samples: gzip JSONL with a header object (run ID, host baseline, artifact digests, regime,
-  workload, cycle time) followed by per-cycle records.
-- Summary: JSON with counts, percentiles, overflows, missed deadlines, and a human-readable
-  Markdown table.
+Implemented in `tools/rt/campaign.py` (2026-10-29).
+
+- The harness orchestrates runs, starts the launcher with `--control`, generates an ephemeral
+  nonce that is never logged, drives deploy/status over the local socket, starts and stops load,
+  samples `/proc`, and writes one gzip JSONL stream per run.
+- Raw samples: `cycles.jsonl.gz` (the `stc-rt-metrics/1` stream) and `proc.jsonl.gz`; the run
+  metadata, host baseline, artifact digests, regime, workload, and cycle time are in
+  `summary.json` and `host.json`.
+- Summary: `summary.json` (`stc-rt-summary/1`) with counts, percentiles, missed deadlines, fault
+  and allocator deltas, deploy/rollback evidence, and a human-readable `summary.md`.
 - The harness never reads or writes credentials; privileged setup is external (R-2).
 - The control endpoint stays user-only and is removed after the run.
 
@@ -441,6 +444,28 @@ launcher is statically linked; base/light/heavy ran 3/2/2 cycles with exit 0. Bu
 (incompatible), and `45673bcf3ae588a7fe9b9789eef7231d` (trapping). Artifact downloads dropped the
 executable bit, so the runbook chmods the driver and launchers.
 
+**Phase 3 harness evidence (2026-10-29).** `tools/rt/campaign.py` is installed root-owned at
+`/home/r2k/stc-rt/tools/rt/campaign.py`; the bundle and package were refreshed from `rt-build` run
+[40952490246](https://github.com/r2k-in-the-vortex/stc/actions/runs/40952490246) on `7ad6a60`,
+because the phase 1 bundle predates the phase 2 `--rt` flags. The harness unit tests (27) pass
+with `python3 -m unittest discover -s tools/rt/tests -v` and run in `rt-build`.
+
+Dry runs (raw data under `~/stc-rt/results/phase3-*`, not committed):
+
+- R0, base workload, 10 s at 1 ms: 2,503 measured cycles, execution p50 3.073 ms, 2,503 missed
+  deadlines, 7,509 skipped periods. The base workload overruns a 1 ms cycle.
+- R0, light workload, 10 s at 1 ms: 9,556 measured cycles, execution p50 0.950 ms, 9,556 missed
+  deadlines (the schema counts any positive wake lateness), 448 skipped periods. The light
+  workload is at the 1 ms budget, so phase 4 must calibrate the workload constants.
+- Online, 10 ms cycle: `code-only` and `field-add-remove` activated (`0xf9208c11…`,
+  `0xfbf4c879…`); `incompatible` returned `cold_required` and kept the base active; `trapping`
+  activated at cycle 205 and rolled back at cycle 206, observed after about 10.6 ms. All four
+  cases passed, and the `stc-rt-summary/1` keys were identical across reruns.
+
+No boot, GRUB, governor, C-state, IRQ-affinity, service, or swap change was made; the phase 0
+wrapper and sudoers rule were untouched. The only host setup change was the root-owned harness
+and the refreshed bundle/package.
+
 ### 9.4 Record the untuned host state
 
 Do not change the boot profile, governor, C-state limit, IRQ affinities, services, or swap.
@@ -461,21 +486,29 @@ Record the values in every run header. The deferred tuned profile (§6.2) is not
 
 ```sh
 sudo /usr/local/sbin/stc-wl4-run campaign --regime r0 --duration 10m --cycle-time 1ms \
-  --out ~/stc-rt/results/2026-10-29-r0
+  --workload light --out ~/stc-rt/results/2026-10-29-r0
+sudo /usr/local/sbin/stc-wl4-run campaign --regime r1 --load-profile mixed --duration 10m \
+  --cycle-time 1ms --workload light --out ~/stc-rt/results/2026-10-29-r1
+sudo /usr/local/sbin/stc-wl4-run campaign --mode online --online-case all --duration 10s \
+  --cycle-time 10ms --out ~/stc-rt/results/2026-10-29-online
 ```
 
-Repeat for R0, R1, R2 and for the 10 ms secondary runs. R1 starts the recorded load on CPUs other
-than the cycle thread's CPU; R2 pins the load to that CPU. Run the online-change cases with a
-fresh generation per repetition.
+`--workload` selects `base`, `light`, or `heavy`; phase 4 must calibrate the workload constants
+before the 1 ms primary runs. Repeat for R0, R1, R2 and for the 10 ms secondary runs. R1 starts
+the recorded load on CPUs other than the cycle thread's CPU; R2 pins the load to that CPU. Run
+the online-change cases with a fresh generation per repetition.
 
 The harness starts the bundled launcher with `--rt --rt-priority 90 --rt-cpu <cycle-cpu>
---rt-metrics <run>.jsonl`; §6.3.1 fixes the schema. It must not use `stc run --watch` on the host.
+--rt-metrics <run>/cycles.jsonl`; §6.3.1 fixes the schema. It must not use `stc run --watch` on
+the host.
 
 ### 9.6 Collect and restore
 
+The harness already writes `cycles.jsonl.gz` and `proc.jsonl.gz`; do not gzip them again.
+
 ```sh
-gzip -9 ~/stc-rt/results/*/*.jsonl
-sha256sum ~/stc-rt/results/*/* > ~/stc-rt/results/SHA256SUMS
+find ~/stc-rt/results -type f -print0 | sort -z | xargs -0 sha256sum \
+  > ~/stc-rt/results/SHA256SUMS
 scp -r "$RT_HOST":~/stc-rt/results dist/rt/results
 ```
 

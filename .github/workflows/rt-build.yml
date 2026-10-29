@@ -32,6 +32,9 @@ jobs:
       STC_REQUIRE_CLANG: "1"
     steps:
       - uses: actions/checkout@v5
+      - name: Run harness unit tests
+        shell: bash
+        run: python3 -m unittest discover -s tools/rt/tests -v
       - name: Print toolchain versions
         shell: bash
         run: |
