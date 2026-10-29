@@ -1,7 +1,7 @@
 (* rt-bench light workload: same generation as the base, lower WORK. *)
 
 VAR_GLOBAL CONSTANT
-  WORK : DINT := 20000;
+  WORK : DINT := 2000;
   INCREMENT : DINT := 3;
 END_VAR
 

@@ -4,7 +4,7 @@
    and the host must roll back within its one-cycle rollback window. *)
 
 VAR_GLOBAL CONSTANT
-  WORK : DINT := 60000;
+  WORK : DINT := 10000;
   INCREMENT : DINT := 3;
 END_VAR
 

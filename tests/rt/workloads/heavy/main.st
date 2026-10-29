@@ -1,7 +1,7 @@
 (* rt-bench heavy workload: same generation as the base, higher WORK. *)
 
 VAR_GLOBAL CONSTANT
-  WORK : DINT := 150000;
+  WORK : DINT := 18000;
   INCREMENT : DINT := 3;
 END_VAR
 

@@ -1,7 +1,7 @@
 (* Field add/remove online-change candidate: removes Spare, adds Extra. *)
 
 VAR_GLOBAL CONSTANT
-  WORK : DINT := 60000;
+  WORK : DINT := 10000;
   INCREMENT : DINT := 3;
 END_VAR
 
