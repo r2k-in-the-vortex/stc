@@ -33,6 +33,33 @@ impl Format {
     }
 }
 
+/// How project-mode diagnostics name source files.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DiagnosticPaths {
+    /// `<package>/<relative>`; the project default.
+    #[default]
+    Package,
+    /// The absolute source path on disk.
+    Absolute,
+}
+
+impl DiagnosticPaths {
+    /// Parses a `--diagnostic-paths` value.
+    ///
+    /// # Errors
+    ///
+    /// Rejects values other than `package` and `absolute`.
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "package" => Ok(Self::Package),
+            "absolute" => Ok(Self::Absolute),
+            other => Err(format!(
+                "unsupported diagnostic path style `{other}` (expected `package` or `absolute`)"
+            )),
+        }
+    }
+}
+
 /// The `--color` choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ColorChoice {
@@ -406,6 +433,20 @@ pub(crate) fn display_path(path: &std::path::Path) -> String {
         }
     }
     text.replace('\\', "/")
+}
+
+/// Renders an absolute diagnostic path: the Windows verbatim prefix is
+/// removed so problem matchers see an ordinary drive-letter or UNC path.
+#[must_use]
+pub(crate) fn absolute_path(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(stripped) => stripped.to_owned(),
+        None => text.into_owned(),
+    }
 }
 
 fn escape_json(text: &str) -> String {

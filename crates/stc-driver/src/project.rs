@@ -17,7 +17,7 @@ use stc_span::{FileId, SourceMap, Span};
 
 use crate::build::{self, Emit, Request};
 use crate::metadata;
-use crate::report::{Log, Reporter, elapsed};
+use crate::report::{DiagnosticPaths, Log, Reporter, absolute_path, elapsed};
 
 /// The project command being run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +72,7 @@ pub(crate) fn run(
     mode: Mode,
     manifest: Option<&str>,
     locked: bool,
+    diagnostic_paths: DiagnosticPaths,
     request: &Request,
     debug: &crate::cli::DebugOptions,
     reporter: &mut Reporter,
@@ -110,7 +111,10 @@ pub(crate) fn run(
     for (index, package) in graph.packages.iter().enumerate() {
         let start = parsed_files.len();
         for source in &package.sources {
-            let display = format!("{}/{}", package.name, source.relative);
+            let display = match diagnostic_paths {
+                DiagnosticPaths::Package => format!("{}/{}", package.name, source.relative),
+                DiagnosticPaths::Absolute => absolute_path(&source.path),
+            };
             let file = FileId::new(u32::try_from(parsed_files.len()).expect("too many sources"));
             let bytes = match std::fs::read(&source.path) {
                 Ok(bytes) => bytes,

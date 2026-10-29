@@ -27,7 +27,7 @@ use stc_test::{
 
 use crate::build::{self, Emit, Request};
 use crate::cli::TestOptions;
-use crate::report::{Log, Reporter};
+use crate::report::{DiagnosticPaths, Log, Reporter, absolute_path};
 
 /// One parsed source file in `FileId` order.
 struct SourceEntry {
@@ -52,9 +52,11 @@ struct BuiltTest {
 }
 
 /// Runs `stc test`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     manifest: Option<&str>,
     locked: bool,
+    diagnostic_paths: DiagnosticPaths,
     request: &Request,
     options: &TestOptions,
     filters: &[String],
@@ -97,6 +99,10 @@ pub(crate) fn run(
         }
         for (source, is_test) in package_sources {
             let display = format!("{}/{}", package.name, source.relative);
+            let diagnostic_display = match diagnostic_paths {
+                DiagnosticPaths::Package => display.clone(),
+                DiagnosticPaths::Absolute => absolute_path(&source.path),
+            };
             let Some(file) = u32::try_from(entries.len()).ok().map(FileId::new) else {
                 reporter.plain(
                     "STC-E-BUILD-002",
@@ -108,7 +114,7 @@ pub(crate) fn run(
             let bytes = match std::fs::read(&source.path) {
                 Ok(bytes) => bytes,
                 Err(error) => {
-                    let mapped = sources.add_file(display, String::new());
+                    let mapped = sources.add_file(diagnostic_display, String::new());
                     debug_assert_eq!(mapped, file);
                     parse_diagnostics.error(
                         "STC-E-BUILD-002",
@@ -123,7 +129,7 @@ pub(crate) fn run(
             let lex_start = Instant::now();
             let lexed = tokenize_bytes(file, &bytes, &mut parse_diagnostics);
             lex_time += lex_start.elapsed();
-            let mapped = sources.add_file(display.clone(), lexed.text.clone());
+            let mapped = sources.add_file(diagnostic_display.clone(), lexed.text.clone());
             debug_assert_eq!(mapped, file);
             let parse_start = Instant::now();
             let parsed = parse(

@@ -1,0 +1,126 @@
+{
+  "name": "stc-vscode",
+  "displayName": "stc Structured Text",
+  "description": "Local Structured Text support for stc: syntax highlighting, tasks, and compiler diagnostics.",
+  "version": "0.1.0",
+  "publisher": "stc-local",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "structured text",
+    "iec 61131-3",
+    "stc",
+    "plc"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:st",
+    "workspaceContains:**/stc.toml"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "st",
+        "aliases": [
+          "Structured Text",
+          "ST",
+          "st"
+        ],
+        "extensions": [
+          ".st"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "st",
+        "scopeName": "source.st",
+        "path": "./syntaxes/st.tmLanguage.json"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "stc",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "check",
+              "build",
+              "run",
+              "test",
+              "fmt"
+            ],
+            "description": "The stc command to run."
+          },
+          "project": {
+            "type": "string",
+            "description": "Path to stc.toml, its directory, or a project directory. Defaults to the first stc.toml in the workspace."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Additional arguments appended to the command."
+          },
+          "release": {
+            "type": "boolean",
+            "description": "Pass --release for build and run tasks."
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "stc",
+        "owner": "stc",
+        "source": "stc",
+        "fileLocation": "absolute",
+        "pattern": {
+          "regexp": "^(.+?):(\\d+):(\\d+): (error|warning)\\[(STC-[EW]-[A-Z0-9-]+)\\]: (.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        }
+      }
+    ],
+    "configuration": {
+      "title": "stc",
+      "properties": {
+        "stc.path": {
+          "type": "string",
+          "default": "stc",
+          "description": "Path to the stc compiler executable, or its name on PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs && vscode-tmgrammar-test -g syntaxes/st.tmLanguage.json \"test/grammar/*.st\"",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.82.0",
+    "@vscode/vsce": "4.1.0",
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3",
+    "vscode-tmgrammar-test": "0.1.3"
+  }
+}

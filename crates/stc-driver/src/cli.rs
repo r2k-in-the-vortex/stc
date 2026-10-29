@@ -7,7 +7,7 @@
 use stc_manifest::{DebugProtocol, LintLevel};
 
 use crate::build::{BuildMode, Emit, Request};
-use crate::report::{ColorChoice, Format, LintOverrides};
+use crate::report::{ColorChoice, DiagnosticPaths, Format, LintOverrides};
 
 /// A driver command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +107,8 @@ pub(crate) struct Invocation {
     pub(crate) paths: Vec<String>,
     /// Diagnostic message format.
     pub(crate) format: Format,
+    /// How project-mode diagnostics name source files.
+    pub(crate) diagnostic_paths: DiagnosticPaths,
     /// Color selection.
     pub(crate) color: ColorChoice,
     /// `-q`.
@@ -197,6 +199,8 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     index += 1;
 
     let mut format = Format::Human;
+    let mut diagnostic_paths = DiagnosticPaths::Package;
+    let mut diagnostic_paths_explicit = false;
     let mut color = ColorChoice::Auto;
     let mut quiet = false;
     let mut verbosity = 0_u8;
@@ -362,6 +366,15 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             other if other.starts_with("--message-format=") => {
                 format = parse_format(&other["--message-format=".len()..])?;
             }
+            "--diagnostic-paths" => {
+                let value = next_value(args, &mut index, "--diagnostic-paths")?;
+                diagnostic_paths = DiagnosticPaths::parse(&value)?;
+                diagnostic_paths_explicit = true;
+            }
+            other if other.starts_with("--diagnostic-paths=") => {
+                diagnostic_paths = DiagnosticPaths::parse(&other["--diagnostic-paths=".len()..])?;
+                diagnostic_paths_explicit = true;
+            }
             "--color" => {
                 let value = next_value(args, &mut index, "--color")?;
                 color = ColorChoice::parse(&value)?;
@@ -517,6 +530,18 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         format,
         &debug,
     )?;
+    if diagnostic_paths_explicit
+        && !matches!(
+            command,
+            Command::Check | Command::Build | Command::Run | Command::Test
+        )
+    {
+        return Err(
+            "`--diagnostic-paths` is only valid with `stc check`, `stc build`, `stc run`, or \
+             `stc test`"
+                .into(),
+        );
+    }
     for spec in &debug.breaks {
         parse_break_spec(spec)?;
     }
@@ -530,6 +555,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         command,
         paths,
         format,
+        diagnostic_paths,
         color,
         quiet,
         verbosity,
@@ -1150,14 +1176,16 @@ fn print_help() {
          \x20 stc parse <file> [--ast] [--relaxed] [--message-format human|json|short]\n\
          \x20 stc new <path>\n\
          \x20 stc check [<file>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
-         \x20           [--relaxed] [--message-format human|json|short] [-v|-vv] [-q]\n\
+         \x20           [--relaxed] [--message-format human|json|short]\n\
+         \x20           [--diagnostic-paths package|absolute] [-v|-vv] [-q]\n\
          \x20 stc build [<file>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20           [--debug|--release]\n\
          \x20           [--name <name>] [--emit ir,obj,module,exe,lib,metadata]\n\
          \x20           [--out-dir <dir>] [--target <triple>] [--clang <path>]\n\
          \x20           [--runtime <path>] [--got-manifest <path>] [--cold]\n\
          \x20           [--rename old=new]... [--allow-untracked-removal]\n\
-         \x20           [--relaxed] [--message-format human|json|short] [-v|-vv] [-q]\n\
+         \x20           [--relaxed] [--message-format human|json|short]\n\
+         \x20           [--diagnostic-paths package|absolute] [-v|-vv] [-q]\n\
          \x20 stc clean [--manifest-path <stc.toml|dir>] [--out-dir <dir>] [--locked]\n\
          \x20           [--debug|--release|--test]\n\
          \x20 stc metadata [--manifest-path <stc.toml|dir>] [--locked]\n\
@@ -1168,7 +1196,8 @@ fn print_help() {
          \x20         [--cycle-time <duration>] [--io null|memory|file]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--mock-clock <duration>] [--target <triple>]\n\
-         \x20         [--clang <path>] [--runtime <path>] [-v|-vv] [-q]\n\
+         \x20         [--clang <path>] [--runtime <path>]\n\
+         \x20         [--diagnostic-paths package|absolute] [-v|-vv] [-q]\n\
          \x20 stc run --debug-server [--debug-endpoint <path>] [--allow-write]\n\
          \x20         [--allow-force] [--session-timeout <duration>]\n\
          \x20         [--debug-protocol pipe|socket]\n\
@@ -1187,7 +1216,9 @@ fn print_help() {
          \x20          [--list] [--no-run] [--timeout <duration>]\n\
          \x20          [--io null|memory|file] [--io-file <path>]\n\
          \x20          [--target <triple>] [--clang <path>] [--runtime <path>]\n\
-         \x20          [--out-dir <dir>] [--relaxed] [--message-format human|json]\n\
+         \x20          [--out-dir <dir>] [--relaxed]\n\
+         \x20          [--message-format human|json|short]\n\
+         \x20          [--diagnostic-paths package|absolute]\n\
          \x20          [-v|-vv] [-q] [-- --nocapture]\n\
          \x20 stc fmt [<path>...] [--check] [--manifest-path <stc.toml|dir>]\n\
          \x20         [--locked] [--message-format human|json|short] [-v|-vv] [-q]\n\
@@ -1212,7 +1243,10 @@ fn print_help() {
          executable launcher, or the embedding host library through clang.\n\
          Without input files (or with `--manifest-path`), `check`, `build`,\n\
          `clean`, and `metadata` load `stc.toml`, compile the package graph in\n\
-         dependency order, and report package-qualified diagnostics. The\n\
+         dependency order, and report package-qualified diagnostics\n\
+         (`<package>/<relative>`). `--diagnostic-paths absolute` names the\n\
+         source file by its absolute path instead, for editor problem matchers;\n\
+         it is valid with `check`, `build`, `run`, and `test`. The\n\
          file-based form is the explicit manifest-free bridge. Project builds\n\
          default to `--emit module`, the debug build form, and\n\
          `target/stc/debug`. `--release` selects optimized, stripped,\n\

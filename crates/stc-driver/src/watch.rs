@@ -21,7 +21,7 @@ use stc_runtime::store::ManifestStore;
 use crate::build::Request;
 use crate::cli::DebugOptions;
 use crate::compat::CompatibilityReport;
-use crate::report::{Log, Reporter};
+use crate::report::{DiagnosticPaths, Log, Reporter};
 use crate::run as run_util;
 
 /// Runs the watch workflow.
@@ -29,6 +29,7 @@ use crate::run as run_util;
 pub(crate) fn run(
     manifest: Option<&str>,
     locked: bool,
+    diagnostic_paths: DiagnosticPaths,
     request: &Request,
     debug: &DebugOptions,
     store: Option<&str>,
@@ -76,6 +77,7 @@ pub(crate) fn run(
         manifest_input,
         &name,
         locked,
+        diagnostic_paths,
         request,
         mode,
         &out_dir,
@@ -199,6 +201,7 @@ pub(crate) fn run(
             manifest_input,
             &name,
             locked,
+            diagnostic_paths,
             request,
             mode,
             &out_dir,
@@ -217,6 +220,7 @@ pub(crate) fn run(
                             manifest_input,
                             &name,
                             locked,
+                            diagnostic_paths,
                             request,
                             mode,
                             &out_dir,
@@ -276,6 +280,7 @@ fn build_once(
     manifest_input: &str,
     name: &str,
     locked: bool,
+    diagnostic_paths: DiagnosticPaths,
     request: &Request,
     mode: crate::build::BuildMode,
     out_dir: &Path,
@@ -352,6 +357,9 @@ fn build_once(
     }
     if locked {
         command.arg("--locked");
+    }
+    if diagnostic_paths == DiagnosticPaths::Absolute {
+        command.args(["--diagnostic-paths", "absolute"]);
     }
     if let Some(target) = &request.target {
         command.arg("--target").arg(target);
