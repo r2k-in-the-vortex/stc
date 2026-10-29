@@ -40,6 +40,8 @@ pub(crate) enum Command {
     OnlineDiff,
     /// Source-aware tracked rename.
     Rename,
+    /// Serve the Language Server Protocol over standard input and output.
+    Lsp,
 }
 
 /// `stc test` options.
@@ -179,6 +181,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         "metadata" => Command::Metadata,
         "compliance" => Command::Compliance,
         "rename" => Command::Rename,
+        "lsp" => Command::Lsp,
         "online" => {
             let subcommand = args
                 .get(1)
@@ -197,6 +200,10 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         other => return Err(format!("unknown command `{other}`")),
     };
     index += 1;
+
+    if command == Command::Lsp {
+        return parse_lsp(args, index);
+    }
 
     let mut format = Format::Human;
     let mut diagnostic_paths = DiagnosticPaths::Package;
@@ -573,6 +580,63 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         build,
         test,
         debug,
+    }))
+}
+
+/// Parses the options `stc lsp` accepts.
+///
+/// The language server owns standard input and output, so it takes no
+/// diagnostic, build, or formatting options. `--manifest-path` is the only
+/// accepted argument.
+fn parse_lsp(args: &[String], mut index: usize) -> Result<Option<Invocation>, String> {
+    let mut manifest = None;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        match argument {
+            "--help" | "-h" => {
+                print_help();
+                return Ok(None);
+            }
+            "--version" | "-V" => {
+                println!("stc {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            "--manifest-path" => {
+                manifest = Some(next_value(args, &mut index, "--manifest-path")?);
+            }
+            other if other.starts_with("--manifest-path=") => {
+                manifest = Some(other["--manifest-path=".len()..].to_owned());
+            }
+            other => {
+                return Err(format!(
+                    "`stc lsp` only accepts `--manifest-path <path>`, found `{other}`"
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(Some(Invocation {
+        command: Command::Lsp,
+        paths: Vec::new(),
+        format: Format::Human,
+        diagnostic_paths: DiagnosticPaths::Package,
+        color: ColorChoice::Auto,
+        quiet: false,
+        verbosity: 0,
+        relaxed: false,
+        ast: false,
+        manifest,
+        locked: false,
+        lints: LintOverrides::default(),
+        watch: false,
+        watch_timeout_ns: None,
+        dry_run: false,
+        online: OnlineOptions::default(),
+        fmt_check: false,
+        clean_test: false,
+        build: Request::default(),
+        test: TestOptions::default(),
+        debug: DebugOptions::default(),
     }))
 }
 
@@ -980,6 +1044,8 @@ fn validate(
         | Command::Compliance
         | Command::OnlineDownload
         | Command::Debug => path_count == 0,
+        // `stc lsp` is parsed separately and never reaches validation.
+        Command::Lsp => false,
     };
     if !allowed {
         return Err(match command {
@@ -1165,6 +1231,7 @@ fn command_name(command: Command) -> &'static str {
         Command::OnlineDownload => "online download",
         Command::OnlineDiff => "online diff",
         Command::Rename => "rename",
+        Command::Lsp => "lsp",
     }
 }
 
@@ -1230,6 +1297,7 @@ fn print_help() {
          \x20         [--locked] [--debug|--release]\n\
          \x20         [--message-format human|json|short] [-v|-vv]\n\
          \x20 stc rename <old> <new> [--dry-run] [--manifest-path <stc.toml|dir>] [--locked]\n\
+         \x20 stc lsp [--manifest-path <stc.toml|dir>]\n\
          \x20 stc --version\n\
          \x20 stc --help\n\
          \n\
@@ -1276,7 +1344,13 @@ fn print_help() {
          envelope; `online diff` compares a candidate manifest with the active\n\
          baseline (or `--baseline`) and exits 0 compatible, 1 incompatible,\n\
          2 usage/parse. `rename` rewrites a sema-resolved declaration and its\n\
-         references and records the mapping in `stc.renames.toml`.\n\
+         references and records the mapping in `stc.renames.toml`. `lsp` serves the\n\
+         Language Server Protocol for the VS Code extension over standard input and\n\
+         output; stderr carries logs. `--manifest-path` selects the project;\n\
+         otherwise the server discovers `stc.toml` from the initialize workspace\n\
+         roots or the current directory, and fails initialization with a readable\n\
+         error when none exists. The server exits after the shutdown/exit handshake\n\
+         or when standard input closes.\n\
          Exit codes: 0 success, 1 compile error, 2 usage/manifest/toolchain error,\n\
          3 internal error, 4 runtime trap, 130 interrupted.",
         env!("CARGO_PKG_VERSION")
@@ -1311,6 +1385,32 @@ mod tests {
                 .mode_override,
             Some(BuildMode::Debug)
         );
+    }
+
+    #[test]
+    fn lsp_accepts_only_a_manifest_path() {
+        let parsed = invocation(&["lsp", "--manifest-path", "stc.toml"]);
+        assert_eq!(parsed.command, Command::Lsp);
+        assert_eq!(parsed.manifest.as_deref(), Some("stc.toml"));
+
+        let parsed = invocation(&["lsp", "--manifest-path=project/stc.toml"]);
+        assert_eq!(parsed.manifest.as_deref(), Some("project/stc.toml"));
+
+        for args in [
+            ["lsp", "--message-format", "json"].as_slice(),
+            ["lsp", "file.st"].as_slice(),
+            ["lsp", "--debug"].as_slice(),
+        ] {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            let error = match parse(&args) {
+                Ok(_) => panic!("`stc lsp` must reject the option"),
+                Err(error) => error,
+            };
+            assert!(error.contains("only accepts `--manifest-path"), "{error}");
+        }
     }
 
     #[test]

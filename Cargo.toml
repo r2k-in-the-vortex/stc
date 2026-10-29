@@ -15,6 +15,7 @@ members = [
     "crates/stc-test",
     "crates/stc-fmt",
     "crates/stc-ide",
+    "crates/stc-lsp",
     "crates/stc-driver",
     "crates/xtask",
 ]

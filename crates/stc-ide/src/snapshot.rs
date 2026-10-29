@@ -436,6 +436,24 @@ impl Snapshot {
         path: impl AsRef<Path>,
         text: impl Into<String>,
     ) -> Option<FileId> {
+        let file = self.set_overlay_parsed(path, text)?;
+        self.refresh();
+        Some(file)
+    }
+
+    /// Replaces a project file's text with an unsaved buffer and re-parses it
+    /// without re-running the project analysis.
+    ///
+    /// This is the parse-first half of [`Snapshot::set_overlay`] for editors:
+    /// [`Snapshot::parse_diagnostics`] reflects the new text immediately while
+    /// [`Snapshot::semantic_diagnostics`] and the query answers still describe
+    /// the previous analysis until [`Snapshot::reanalyze`] runs. Nothing is
+    /// written to disk. Returns `None` when `path` is not a project source.
+    pub fn set_overlay_parsed(
+        &mut self,
+        path: impl AsRef<Path>,
+        text: impl Into<String>,
+    ) -> Option<FileId> {
         let file = self.file_id_for_path(path)?;
         let text = text.into();
         let index = file.index();
@@ -445,8 +463,19 @@ impl Snapshot {
         self.texts[index] = decoded;
         self.file_diagnostics[index] = sink.into_diagnostics();
         self.overlays.insert(file, text);
-        self.refresh();
+        self.rebuild_source_map();
         Some(file)
+    }
+
+    /// Re-runs the project analysis over the current parsed texts and rebuilds
+    /// the declaration index.
+    ///
+    /// Call after one or more [`Snapshot::set_overlay_parsed`] or
+    /// [`Snapshot::clear_overlay_parsed`] updates when semantic diagnostics and
+    /// queries should reflect them. Files without an overlay keep their current
+    /// text.
+    pub fn reanalyze(&mut self) {
+        self.refresh();
     }
 
     /// Discards an unsaved overlay and restores the file from disk.
@@ -455,6 +484,21 @@ impl Snapshot {
     /// be read back (for example because it was deleted), the snapshot keeps an
     /// empty text and records `STC-E-BUILD-002` for the file.
     pub fn clear_overlay(&mut self, path: impl AsRef<Path>) -> Option<FileId> {
+        let file = self.file_id_for_path(&path)?;
+        if !self.overlays.contains_key(&file) {
+            return Some(file);
+        }
+        let file = self.clear_overlay_parsed(path)?;
+        self.refresh();
+        Some(file)
+    }
+
+    /// Discards an unsaved overlay, restores the file text from disk, and
+    /// re-parses it without re-running the project analysis.
+    ///
+    /// The same read failure rules as [`Snapshot::clear_overlay`] apply. A file
+    /// without an overlay is left unchanged and returned.
+    pub fn clear_overlay_parsed(&mut self, path: impl AsRef<Path>) -> Option<FileId> {
         let file = self.file_id_for_path(path)?;
         if self.overlays.remove(&file).is_none() {
             return Some(file);
@@ -478,7 +522,7 @@ impl Snapshot {
         self.parsed[index] = parsed;
         self.texts[index] = text;
         self.file_diagnostics[index] = sink.into_diagnostics();
-        self.refresh();
+        self.rebuild_source_map();
         Some(file)
     }
 

@@ -1,0 +1,17 @@
+[package]
+name = "stc-lsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+stc-diag = { path = "../stc-diag" }
+stc-ide = { path = "../stc-ide" }
+stc-span = { path = "../stc-span" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2.5.8"
+
+[lints]
+workspace = true

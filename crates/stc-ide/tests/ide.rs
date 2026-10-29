@@ -609,6 +609,66 @@ fn overlay_changes_diagnostics_and_queries_without_writing() {
 }
 
 #[test]
+fn parse_only_overlay_exposes_parse_diagnostics_before_reanalysis() {
+    let mut snapshot = Snapshot::load(manifest("hello")).expect("hello loads");
+    let main = file_id(&snapshot, "hello/src/main.st");
+    let path = snapshot.file(main).expect("info").path.clone();
+    let disk = std::fs::read(&path).expect("read main.st");
+    let source = text(&snapshot, main).to_owned();
+    assert_clean(&snapshot, main);
+
+    // A clean parse with an unknown name: the parse diagnostics are empty
+    // immediately, and the semantic error appears only after `reanalyze`.
+    let overlay = source.replacen("sum := AddTwo(sum, INCREMENT);", "sum := MissingName;", 1);
+    assert_ne!(overlay, source);
+    assert_eq!(
+        snapshot.set_overlay_parsed(&path, overlay.clone()),
+        Some(main)
+    );
+    assert!(snapshot.is_overlaid(main));
+    assert_eq!(snapshot.source(main), Some(overlay.as_str()));
+    assert!(
+        snapshot.parse_diagnostics(main).is_empty(),
+        "the unknown name parses cleanly"
+    );
+    assert!(
+        !snapshot
+            .semantic_diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("MissingName")),
+        "the old analysis is still published until reanalysis"
+    );
+    snapshot.reanalyze();
+    assert!(
+        snapshot
+            .diagnostics(main)
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("MissingName")),
+        "reanalysis reports the unknown name"
+    );
+
+    // A syntax error is visible from the parse alone, before reanalysis.
+    let broken = "PROGRAM Main\n  x := ;\nEND_PROGRAM\n";
+    assert_eq!(snapshot.set_overlay_parsed(&path, broken), Some(main));
+    assert!(!snapshot.parse_diagnostics(main).is_empty());
+    snapshot.reanalyze();
+    assert!(
+        snapshot
+            .diagnostics(main)
+            .iter()
+            .any(|diagnostic| diagnostic.is_error())
+    );
+
+    // Restoring the disk text without reanalysis clears the parse errors.
+    assert_eq!(snapshot.clear_overlay_parsed(&path), Some(main));
+    assert!(!snapshot.is_overlaid(main));
+    assert!(snapshot.parse_diagnostics(main).is_empty());
+    assert_eq!(std::fs::read(&path).expect("read main.st"), disk);
+    snapshot.reanalyze();
+    assert_clean(&snapshot, main);
+}
+
+#[test]
 fn overlay_formatting_refuses_syntax_errors_and_is_idempotent() {
     let mut snapshot = Snapshot::load(manifest("hello")).expect("hello loads");
     let main = file_id(&snapshot, "hello/src/main.st");

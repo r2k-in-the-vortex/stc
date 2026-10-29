@@ -37,7 +37,10 @@
 //! Unsaved editor buffers are supplied with [`Snapshot::set_overlay`]; the
 //! snapshot re-parses the affected file and re-runs the project analysis
 //! without touching the disk. [`Snapshot::clear_overlay`] restores the file
-//! from disk.
+//! from disk. Editor servers that publish parse diagnostics before a
+//! debounced analysis use [`Snapshot::set_overlay_parsed`],
+//! [`Snapshot::clear_overlay_parsed`], and [`Snapshot::reanalyze`] to split
+//! the re-parse from the re-analysis.
 
 #![forbid(unsafe_code)]
 

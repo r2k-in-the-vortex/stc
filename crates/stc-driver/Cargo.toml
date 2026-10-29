@@ -20,6 +20,7 @@ stc-fmt = { path = "../stc-fmt" }
 stc-got = { path = "../stc-got" }
 stc-hir = { path = "../stc-hir" }
 stc-lexer = { path = "../stc-lexer" }
+stc-lsp = { path = "../stc-lsp" }
 stc-manifest = { path = "../stc-manifest" }
 stc-parser = { path = "../stc-parser" }
 stc-runtime = { path = "../stc-runtime" }

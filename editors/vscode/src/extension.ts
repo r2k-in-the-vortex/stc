@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
 
+import { StcLanguageClient } from './languageClient';
 import { StcTaskProvider, stcExecutable } from './tasks';
 
 let output: vscode.OutputChannel | undefined;
+let languageClient: StcLanguageClient | undefined;
 
-/** Activates the local ST support shell: task provider only. */
+/** Activates local ST support: tasks and the `stc lsp` language client. */
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('stc');
   context.subscriptions.push(output);
@@ -14,16 +16,29 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.tasks.registerTaskProvider('stc', new StcTaskProvider()),
   );
+
+  languageClient = new StcLanguageClient();
+  context.subscriptions.push(languageClient);
+  void languageClient.start().catch((error: unknown) => {
+    output?.appendLine(`language server start failed: ${String(error)}`);
+  });
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('stc.path')) {
         output?.appendLine(`stc executable: ${stcExecutable()}`);
+        void languageClient?.restart().catch((error: unknown) => {
+          output?.appendLine(`language server restart failed: ${String(error)}`);
+        });
       }
     }),
   );
 }
 
-/** Deactivates the extension. */
-export function deactivate(): void {
+/** Stops the language clients and releases the output channels. */
+export function deactivate(): Thenable<void> | undefined {
+  const stopping = languageClient?.stop();
+  languageClient = undefined;
   output = undefined;
+  return stopping;
 }

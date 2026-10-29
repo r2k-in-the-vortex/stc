@@ -214,6 +214,11 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
+        // The language server owns stdout and stderr; it must not go through
+        // the diagnostic reporter.
+        Command::Lsp => {
+            stc_lsp::run_stdio(invocation.manifest.as_deref().map(std::path::Path::new))
+        }
     };
     ExitCode::from(code)
 }
