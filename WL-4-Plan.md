@@ -359,8 +359,10 @@ invalid duration was rejected with exit 64. No boot, governor, service, or swap 
 
 ### 9.2 Build and transfer (Windows development host)
 
-The `rt-build` workflow (`workflow_dispatch` on `ubuntu-24.04`) builds the Linux package and the
-`rt-bench` bundle and uploads `stc-package-ubuntu-24.04` and `rt-bench-bundle`.
+The `rt-build` workflow on `ubuntu-24.04` builds the Linux package and the `rt-bench` bundle and
+uploads `stc-package-ubuntu-24.04` and `rt-bench-bundle`. While `WL-4` is not merged to the
+default branch, a push to `WL-4` triggers it; `workflow_dispatch` becomes available once the
+workflow is on the default branch.
 Set `RT_HOST` from the local `.env/RT_Host.md` note; it is not stored in this repository.
 
 ```sh

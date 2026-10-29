@@ -1,12 +1,22 @@
 name: RT artifact bundle
 
-# Manual build of the WL-4 Linux package and the rt-bench bundle. The bundle is
+# Build of the WL-4 Linux package and the rt-bench bundle. The bundle is
 # transferred to the RT host; the RT host is a run target and never builds.
+#
+# `workflow_dispatch` requires the workflow to exist on the default branch, so
+# while WL-4 is not merged, a push to WL-4 triggers the build. The dispatch
+# trigger remains available once the workflow is on the default branch.
 on:
+  push:
+    branches: [WL-4]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: rt-build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
