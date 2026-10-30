@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "stc",
+      "request": "launch",
+      "name": "stc: Launch sample",
+      "project": "${workspaceFolder}/stc.toml",
+      "noBuild": false,
+      "release": false,
+      "allowWrite": false,
+      "allowForce": false
+    },
+    {
+      "type": "stc",
+      "request": "attach",
+      "name": "stc: Attach sample (replace endpoint)",
+      "project": "${workspaceFolder}/stc.toml",
+      "endpoint": "${workspaceFolder}/target/stc/debug/debug.endpoint.json"
+    }
+  ]
+}

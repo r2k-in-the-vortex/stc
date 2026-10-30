@@ -58,7 +58,25 @@ machine design as required by law and regulation.
 | Unix audit records have `local_date_ns = 0` because no local-time conversion is available without a new platform dependency | `monotonic_ns` is process-relative and always present |
 | Persistent globals and program fields use declaration-only debug-info entries because their storage is host-owned GOT memory | DWARF reports their name, type, and source declaration but no storage location; CodeView omits them. Use typed reads and the manifest-assisted view for live values; function, parameter, local, and type debugging is unaffected |
 
-## 4. Online change and manifests
+## 4. IDE integration
+
+| Limitation | Status / workaround |
+| --- | --- |
+| The VS Code extension and both servers are local only | No remote/network IDE access, remote source mapping, or remote attachments (WL-1.2); debug uses the local authenticated endpoint |
+| There is one debug session per host and one adapter session per launch | Stop the current session before starting another; a second session fails honestly |
+| Every online swap, rollback, cold install, shutdown, or target exit ends the editor session; breakpoints, forces, and watches do not migrate | Reconnect after the generation change and re-resolve targets |
+| Release and hook-free builds are monitoring-only | No breakpoints, stepping, or Locals scope; use a debug build for a full session |
+| Local names appear in the frame table's uppercase normalized spelling; the source spelling is not retained | Read the uppercase name shown in the Locals scope |
+| `evaluate` and watches accept a stopped-frame local name or a manifest target path, not an ST expression | Use a target path such as `MAIN.COUNTER`; `1 + 2` and conditions are rejected |
+| Locals requires a `stc-debug/1.1` host with stopped-frame information | A `stc-debug/1`-only host or a build without frame metadata has no Locals scope; Globals and typed monitoring still work |
+| The language server reanalyzes the whole project after a 200 ms debounce on open/change/save; there is no incremental analysis | Expect a short delay on large projects; the parse diagnostics appear first and semantic diagnostics replace them |
+| The LSP capability set is closed: no semantic tokens, rename, code actions, inlay hints, range formatting, call hierarchy, or workspace symbols | Highlighting comes from the TextMate grammar; use the compiler and `stc rename` outside the editor |
+| Debug writes are disabled by default; `setVariable` works only for writable live roots (globals, program-instance fields, and live split fields) and only when `allowWrite` and `[debug].allow-write` are enabled | Stopped-frame locals are read-only snapshots. `allowForce` requests the force scope, but DAP has no force request, so forcing remains a `stc debug` operation |
+| The adapter advertises no conditional, hit-count, log, function, data, or instruction breakpoints; no exception breakpoints, restart, reverse debugging, multi-thread debugging, or `stopOnEntry` | Use source breakpoints and over/into/out stepping; traps end the session |
+| VS Code 1.82 or newer is required, distribution is VSIX-only, and v2.0.0 does not publish to the marketplace or sign the VSIX | Install the VSIX from the release artifacts; there is no telemetry or network access |
+| The compiler is not bundled with the extension | Install `stc` and put it on `PATH` or set `stc.path`; the extension logs a missing compiler instead of starting a server |
+
+## 5. Online change and manifests
 
 | Limitation | Status / workaround |
 | --- | --- |
@@ -71,7 +89,7 @@ machine design as required by law and regulation.
 | `stc run --watch` and the control channel are local only | The debug protocol is a separate local endpoint |
 | A missing, stale, or corrupt baseline forces a cold download | The runtime exports and downloads the active manifest; never execute manifest content |
 
-## 5. State, I/O, and tests
+## 6. State, I/O, and tests
 
 | Limitation | Status / workaround |
 | --- | --- |
@@ -83,7 +101,7 @@ machine design as required by law and regulation.
 | I/O bindings in `stc.toml` are validated against the selected production configuration; a test build uses the synthetic test configuration, so binding paths that name production instances are not available in `stc test` | Use `{stc:io}` pragmas on the direct variable when the project must also test cleanly, or keep bindings in a production-only configuration project |
 | Performance figures are informational and host-dependent, not real-time guarantees | See [`specification/Verification/Performance.md`](specification/Verification/Performance.md) and record the host/regime when comparing |
 
-## 6. Traceability and evidence
+## 7. Traceability and evidence
 
 | Limitation | Status |
 | --- | --- |

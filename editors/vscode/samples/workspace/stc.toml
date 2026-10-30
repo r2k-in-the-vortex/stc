@@ -1,0 +1,20 @@
+schema = 1
+
+[package]
+name = "sample"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+configuration = "Sample"
+
+[build]
+emit = ["module", "metadata"]
+
+[run]
+# 0 = run until interrupted; a debug host must stay alive for a session.
+cycles = 0
+
+[test]
+sources = ["tests/**/*.st"]

@@ -151,6 +151,37 @@ fn scaffold(name: &str) -> TestDir {
     project
 }
 
+/// Returns the checked-in sample workspace used by the IDE tests.
+fn sample_workspace() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../editors/vscode/samples/workspace")
+}
+
+/// Copies a directory tree, skipping generated artifact directories.
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create directory");
+    for entry in std::fs::read_dir(from).expect("read directory") {
+        let entry = entry.expect("directory entry");
+        let name = entry.file_name();
+        if matches!(name.to_str(), Some("target" | "state")) {
+            continue;
+        }
+        let target = to.join(&name);
+        if entry.file_type().expect("entry type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("copy file");
+        }
+    }
+}
+
+/// Returns the 1-based line containing the first `needle`.
+fn line_of(source: &str, needle: &str) -> i64 {
+    let offset = source
+        .find(needle)
+        .unwrap_or_else(|| panic!("missing {needle:?}"));
+    i64::try_from(source[..offset].matches('\n').count()).expect("line") + 1
+}
+
 // ---------------------------------------------------------------------------
 // Raw DAP client
 // ---------------------------------------------------------------------------
@@ -599,6 +630,114 @@ fn launch_stops_at_a_breakpoint_and_reads_locals_and_globals() {
     assert!(
         output.iter().any(|line| line.contains("not a safety PLC")),
         "the non-safety notice is emitted: {output:?}"
+    );
+}
+
+#[test]
+fn sample_workspace_launch_reads_known_values_and_steps() {
+    let Some(_clang) = clang() else {
+        return;
+    };
+    let project = TestDir::new("sample");
+    copy_tree(&sample_workspace(), &project.path);
+    let main = project.source();
+    let source = std::fs::read_to_string(&main).expect("read sample source");
+    let first_statement = line_of(&source, "sum := AddStep(sum);");
+    let function_statement = line_of(&source, "incremented := INCREMENT;");
+    let function_next = line_of(&source, "AddStep := value + incremented;");
+
+    let mut client = DapClient::spawn(&project.path);
+    initialize(&mut client);
+    let breakpoints = client.request(
+        "setBreakpoints",
+        json!({
+            "source": { "path": main.to_string_lossy() },
+            "breakpoints": [
+                { "line": first_statement },
+                { "line": function_statement },
+            ],
+            "lines": [first_statement, function_statement],
+        }),
+    );
+    assert_eq!(breakpoints["success"], true, "{breakpoints}");
+
+    // The sample launch configuration: build, debug form, writes and forces
+    // disabled.
+    let launch = client.request(
+        "launch",
+        json!({
+            "project": project.manifest().to_string_lossy(),
+            "noBuild": false,
+            "release": false,
+            "allowWrite": false,
+            "allowForce": false,
+            "args": ["--cycles", "20000", "--cycle-time", "10ms"],
+        }),
+    );
+    assert_eq!(launch["success"], true, "{launch}");
+    let configuration = client.request("configurationDone", json!({}));
+    assert_eq!(configuration["success"], true, "{configuration}");
+
+    // First-statement stop: the never-written global has its initial value.
+    // `TOTAL` depends on how many cycles ran before the breakpoints bound, so
+    // the test only requires it to be a decimal integer.
+    let (_stack, scopes) = stop_at_line(&mut client, &project, first_statement);
+    assert_eq!(read_global(&mut client, &scopes, "INCREMENT"), "1");
+    let total = read_global(&mut client, &scopes, "TOTAL");
+    assert!(
+        total.parse::<i64>().is_ok(),
+        "TOTAL is a decimal integer: {total}"
+    );
+    let globals = scope_reference(&scopes, "Globals");
+    let denied = client.request(
+        "setVariable",
+        json!({ "variablesReference": globals, "name": "TOTAL", "value": "42" }),
+    );
+    assert_eq!(denied["success"], false, "{denied}");
+    assert!(
+        denied["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("allowWrite")),
+        "{denied}"
+    );
+
+    // Continue into the function and read its known locals.
+    let continued = client.request("continue", json!({ "threadId": 1 }));
+    assert_eq!(continued["success"], true, "{continued}");
+    let (_stack, function_scopes) = stop_at_line(&mut client, &project, function_statement);
+    assert_eq!(
+        read_local(&mut client, &function_scopes, "INCREMENTED"),
+        "0"
+    );
+    let value = read_local(&mut client, &function_scopes, "VALUE");
+    assert!(
+        value.parse::<i64>().is_ok(),
+        "VALUE is a decimal integer: {value}"
+    );
+    assert_eq!(read_global(&mut client, &function_scopes, "INCREMENT"), "1");
+
+    // Step over the first function statement: the local becomes 1.
+    let next = client.request("next", json!({ "threadId": 1 }));
+    assert_eq!(next["success"], true, "{next}");
+    let stepped = client.event("stopped", PROTOCOL_TIMEOUT);
+    assert_eq!(stepped["body"]["reason"], "step", "{stepped}");
+    let stepped_stack = client.request("stackTrace", json!({ "threadId": 1 }));
+    assert_eq!(
+        stepped_stack["body"]["stackFrames"][0]["line"],
+        json!(function_next),
+        "{stepped_stack}"
+    );
+    let frame_id = stepped_stack["body"]["stackFrames"][0]["id"]
+        .as_i64()
+        .expect("frame id");
+    let stepped_scopes = client.request("scopes", json!({ "frameId": frame_id }));
+    assert_eq!(read_local(&mut client, &stepped_scopes, "INCREMENTED"), "1");
+
+    let disconnect = client.request("disconnect", json!({ "terminateDebuggee": true }));
+    assert_eq!(disconnect["success"], true, "{disconnect}");
+    assert!(
+        client.wait_exit(PROTOCOL_TIMEOUT).is_some(),
+        "the adapter exits after disconnect"
     );
 }
 

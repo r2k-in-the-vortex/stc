@@ -118,7 +118,41 @@ evidence, and the release PR's CI run is the final gate for the version commit.
       (D-199).
 - [x] No installers, registry, hardware I/O, or remote deployment in v1.
 
-## 7. Sign-off
+## 7. VS Code extension (WL-1.1, v2.0.0)
+
+This section is the release gate for the local editor integration. It is not part of the `1.0.0`
+sign-off above; record evidence here for the v2.0.0 release.
+
+| # | Item | Command / evidence | Result |
+| --- | --- | --- | --- |
+| 1 | Extension toolchain | `cd editors/vscode && npm ci && npm run typecheck && npm test` | `[ ]` |
+| 2 | VSIX artifact | `npm run package` produces `stc-vscode-<version>.vsix`; CI uploads it and the release attaches it | `[ ]` |
+| 3 | VSIX contents | `samples/**`, `src/**`, `test/**`, TypeScript config, and build scripts are absent; grammar, language configuration, bundled extension, and README are present | `[ ]` |
+| 4 | Compiler discovery | Install the VSIX against a packaged `stc`; confirm `stc.path` and `PATH` both work and a missing compiler is reported without a modal error | `[ ]` |
+| 5 | Headless smoke | `@vscode/test-electron` installs the VSIX on the sample workspace, activates the extension, and exercises highlighting, diagnostics, definition, completion, formatting, a task, and a launch debug session; CI run ID and result recorded | `[ ]` |
+| 6 | Manual in-editor pass (Windows) | Install the VSIX, open `editors/vscode/samples/workspace`, and run the checks below | `[ ]` |
+| 7 | Manual in-editor pass (Linux) | The same pass on at least one supported Linux host | `[ ]` |
+
+Manual in-editor checks for items 6 and 7:
+
+- [ ] Syntax highlighting, comment toggling, and bracket behavior on `src/main.st`.
+- [ ] The Problems panel shows no diagnostics for the clean sample; introducing a syntax error
+      produces compiler diagnostics and fixing it clears them.
+- [ ] Document symbols, go-to-definition from `AddStep` to the function, references across
+      `tests/smoke.st`, hover, completion, and format document work.
+- [ ] `stc: check`, `stc: build`, `stc: test`, and `stc: fmt` tasks run with the `$stc` matcher;
+      `stc: test` reports both smoke tests as passing.
+- [ ] **stc: Launch sample** stops at line 39 (`sum := AddStep(sum);`); Globals shows
+      `INCREMENT = 1`; continuing stops at line 19 with local `INCREMENTED = 0`; stepping over
+      line 19 leaves `INCREMENTED = 1`; disconnect ends the session and the launch-owned host.
+- [ ] `stc run --debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` plus
+      **stc: Attach sample** stops at the breakpoint and leaves the host running after disconnect.
+- [ ] The non-safety notice appears in the debug console, and `setVariable` is refused unless
+      `allowWrite` and `[debug].allow-write` are enabled.
+- [ ] The documentation set (`IDE-Integration.md`, `Debug-and-Monitoring.md` §13–§18, CLI §1,
+      README, USER-GUIDE, KNOWN-LIMITATIONS, extension README) matches the observed behavior.
+
+## 8. Sign-off
 
 | Role | Name | Date | Signature / result |
 | --- | --- | --- | --- |

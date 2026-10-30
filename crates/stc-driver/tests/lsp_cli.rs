@@ -168,6 +168,29 @@ fn uri(path: &Path) -> String {
     stc_lsp::path_to_uri(path).expect("file URI").to_string()
 }
 
+/// Returns the checked-in sample workspace used by the IDE tests.
+fn sample_workspace() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../editors/vscode/samples/workspace")
+}
+
+/// Copies a directory tree, skipping generated artifact directories.
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create directory");
+    for entry in std::fs::read_dir(from).expect("read directory") {
+        let entry = entry.expect("directory entry");
+        let name = entry.file_name();
+        if matches!(name.to_str(), Some("target" | "state")) {
+            continue;
+        }
+        let target = to.join(&name);
+        if entry.file_type().expect("entry type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("copy file");
+        }
+    }
+}
+
 /// Returns the UTF-16 LSP position of the first `needle` occurrence.
 fn position_of(source: &str, needle: &str) -> Value {
     let offset = source
@@ -736,6 +759,175 @@ fn language_server_serves_diagnostics_navigation_completion_and_formatting() {
             .any(|symbol| symbol["name"] == json!("Triple")),
         "{extra_symbols}"
     );
+
+    assert_eq!(client.finish(), 0);
+}
+
+#[test]
+fn sample_workspace_serves_diagnostics_navigation_completion_and_formatting() {
+    let project = TestDir::new("sample");
+    copy_tree(&sample_workspace(), &project.path);
+    let main = project.path.join("src").join("main.st");
+    let smoke = project.path.join("tests").join("smoke.st");
+    let main_source = std::fs::read_to_string(&main).expect("read sample main source");
+    let smoke_source = std::fs::read_to_string(&smoke).expect("read sample test source");
+    let main_uri = uri(&main);
+    let smoke_uri = uri(&smoke);
+
+    let mut client = LspClient::start(&project.manifest());
+    let initialize = client.initialize(&project.path);
+    assert_eq!(initialize["serverInfo"]["name"], json!("stc-lsp"));
+
+    // The sample is clean in both the production and test source sets.
+    let diagnostics =
+        client.wait_diagnostics(&main_uri, |diagnostics: &[Value]| diagnostics.is_empty());
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let diagnostics =
+        client.wait_diagnostics(&smoke_uri, |diagnostics: &[Value]| diagnostics.is_empty());
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    client.open(&main, &main_source, 1);
+    client.open(&smoke, &smoke_source, 1);
+
+    // Definition from the program's call site resolves to the function name.
+    let function_declaration = position_of(&main_source, "AddStep : DINT");
+    let definition = client.request(
+        "textDocument/definition",
+        json!({
+            "textDocument": { "uri": main_uri },
+            "position": position_of(&main_source, "AddStep(sum)"),
+        }),
+    );
+    assert_eq!(definition["uri"], json!(main_uri));
+    assert_eq!(definition["range"]["start"], function_declaration);
+    assert_eq!(
+        definition["range"]["end"]["line"],
+        function_declaration["line"]
+    );
+
+    // References cover the declaration, the result assignment, and both calls;
+    // the test source is part of the analysis.
+    let references = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": main_uri },
+            "position": position_of(&main_source, "AddStep(sum)"),
+            "context": { "includeDeclaration": true },
+        }),
+    );
+    let references = references.as_array().expect("references");
+    assert_eq!(references.len(), 4, "{references:?}");
+    assert!(
+        references
+            .iter()
+            .any(|reference| reference["uri"] == json!(smoke_uri)),
+        "the test call is a reference: {references:?}"
+    );
+    let uses = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": main_uri },
+            "position": position_of(&main_source, "AddStep(sum)"),
+            "context": { "includeDeclaration": false },
+        }),
+    );
+    assert_eq!(uses.as_array().expect("uses").len(), 3);
+
+    // The test source resolves into the production file.
+    let test_definition = client.request(
+        "textDocument/definition",
+        json!({
+            "textDocument": { "uri": smoke_uri },
+            "position": position_of(&smoke_source, "AddStep(2)"),
+        }),
+    );
+    assert_eq!(test_definition["uri"], json!(main_uri));
+    assert_eq!(test_definition["range"]["start"], function_declaration);
+
+    // Hover on a program variable reports its type and owner.
+    let hover = client.request(
+        "textDocument/hover",
+        json!({
+            "textDocument": { "uri": main_uri },
+            "position": position_of(&main_source, "sum := AddStep"),
+        }),
+    );
+    let contents = hover["contents"]["value"].as_str().expect("hover text");
+    assert!(contents.contains("DINT"), "{contents}");
+    assert!(contents.contains("program Main"), "{contents}");
+
+    // Completion offers keywords and visible names.
+    let completion = client.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": main_uri },
+            "position": position_of(&main_source, "accumulator(increment"),
+        }),
+    );
+    let labels: Vec<&str> = completion["items"]
+        .as_array()
+        .expect("completion items")
+        .iter()
+        .filter_map(|item| item["label"].as_str())
+        .collect();
+    for expected in ["FUNCTION", "AddStep", "INCREMENT", "sum", "Main"] {
+        assert!(
+            labels.contains(&expected),
+            "missing {expected} in {labels:?}"
+        );
+    }
+
+    // Document symbols cover the program, the function block, and the function.
+    let symbols = client.request(
+        "textDocument/documentSymbol",
+        json!({ "textDocument": { "uri": main_uri } }),
+    );
+    let symbols = symbols.as_array().expect("document symbols");
+    for expected in ["Main", "Accumulator", "AddStep"] {
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol["name"] == json!(expected)),
+            "missing symbol {expected} in {symbols:?}"
+        );
+    }
+    let main_symbol = symbols
+        .iter()
+        .find(|symbol| symbol["name"] == json!("Main"))
+        .expect("PROGRAM Main symbol");
+    assert!(
+        !main_symbol["children"]
+            .as_array()
+            .expect("children")
+            .is_empty(),
+        "the program has variable children"
+    );
+
+    // The sample is already formatted; the formatter returns no edit.
+    let edits = client.request(
+        "textDocument/formatting",
+        json!({
+            "textDocument": { "uri": main_uri },
+            "options": { "tabSize": 2, "insertSpaces": true },
+        }),
+    );
+    assert_eq!(edits, json!([]));
+
+    // An unformatted buffer produces one whole-document edit.
+    let messy = main_source.replacen("  sum := AddStep(sum);", "  sum:=AddStep(sum);", 1);
+    assert_ne!(messy, main_source);
+    client.change(&main, &messy, 2);
+    let edits = client.request(
+        "textDocument/formatting",
+        json!({
+            "textDocument": { "uri": main_uri },
+            "options": { "tabSize": 2, "insertSpaces": true },
+        }),
+    );
+    let edits = edits.as_array().expect("formatting edits");
+    assert_eq!(edits.len(), 1);
+    let formatted = edits[0]["newText"].as_str().expect("formatted text");
+    assert!(formatted.contains("  sum := AddStep(sum);"), "{formatted}");
 
     assert_eq!(client.finish(), 0);
 }

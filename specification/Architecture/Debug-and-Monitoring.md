@@ -1,6 +1,6 @@
 # Debug and Monitoring
 
-Status: Resolved specification (2026-10-24); M4.5 interface recorded; M6 complete with the M6.5 boundary at host ABI 2.2 service ID 12 (2026-10-27); M6.5 phase 0 fixes the protocol, session, access, checkpoint, and build contracts (2026-10-27); M6.5 implementation complete (2026-10-28)  
+Status: Resolved specification (2026-10-24); M4.5 interface recorded; M6 complete with the M6.5 boundary at host ABI 2.2 service ID 12 (2026-10-27); M6.5 phase 0 fixes the protocol, session, access, checkpoint, and build contracts (2026-10-27); M6.5 implementation complete (2026-10-28); WL-1.1 adds the additive `stc-debug/1.1` revision (2026-10-30)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -356,6 +356,11 @@ selects an explicit path whose parent directory must already exist. The host pri
 path in server and launch modes; the token is never printed. A client reads the endpoint file
 only after the host reports it, or polls for it within the connect deadline.
 
+The endpoint file's `protocol` field remains the baseline `stc-debug/1` in format 1. It is a
+baseline marker, not the negotiated session version: a host accepts both versions in §13.2 and
+negotiates the exact version on the first request, so a client must not infer 1.1 support from
+the endpoint file.
+
 ### 13.2 Framing and version negotiation
 
 - The stream is UTF-8 without a BOM. Every message is one compact JSON object terminated by a
@@ -365,10 +370,15 @@ only after the host reports it, or polls for it within the connect deadline.
   its limit, or a partial frame that does not terminate within the request deadline, is
   `STC-E-DEBUG-004` and closes the connection. Three malformed frames in one connection also
   close it.
-- Every message carries `"protocol":"stc-debug/1"`. Version negotiation is exact and happens on
-  the first request. A first request carrying another version receives `STC-E-DEBUG-002` with
-  `detail.supported = ["stc-debug/1"]`; the connection may retry once with a supported version.
-  There is no unauthenticated banner, hello, or capability probe.
+- The supported versions are `stc-debug/1` (baseline) and `stc-debug/1.1` (the additive revision
+  defined in §13.4). Every message carries a `protocol` field; every response and event carries
+  the version negotiated for the connection. Negotiation is exact and happens on the first
+  request: a first request carrying either version selects it for the whole connection, and a
+  first request carrying any other version receives `STC-E-DEBUG-002` with
+  `detail.supported = ["stc-debug/1","stc-debug/1.1"]`; the connection may retry once with a
+  supported version. After negotiation, a message carrying a different version is
+  `STC-E-DEBUG-002` and closes the connection as a protocol error. There is no unauthenticated
+  banner, hello, or capability probe.
 - Message shapes (wire keys are snake_case; `stc.toml` remains kebab-case):
 
   ```json
@@ -378,6 +388,9 @@ only after the host reports it, or polls for it within the connect deadline.
   {"kind":"event","protocol":"stc-debug/1","session":"<id>","seq":7,"event":"stopped","data":{},"warnings":[]}
   ```
 
+- The message shapes are identical for `stc-debug/1.1`; only the `protocol` value and the
+  additional `frame.locals` operation differ. A 1.1 session uses the same framing, ids, events,
+  scopes, limits, and error object.
 - `id` is a client-assigned integer in `[1, 2^53-1]`, strictly increasing on one connection; the
   response echoes it. At most one request is outstanding per connection. The server processes
   requests in order and may interleave events. A duplicated, decreasing, or out-of-range `id` is
@@ -403,7 +416,7 @@ authorization. Authentication precedes every operation, including `session.start
   `detail.reason:"auth-refused"`. Failures are rate-limited before the constant-time comparison.
 - `session.start` requests scopes from this closed set:
   - `observe`: `var.read`, `watch.*`, `session.status`, `stack.list`, `frame.read`,
-    `manifest.get`.
+    `frame.locals` (1.1), `manifest.get`.
   - `control`: `breakpoint.*`, `exec.*`, `session.stop`.
   - `write`: `var.write`.
   - `force`: `var.force`, `var.release`, `var.release-all`.
@@ -450,7 +463,10 @@ authorization. Authentication precedes every operation, including `session.start
 
 ### 13.4 Operations and result shapes
 
-The operation set is closed for `stc-debug/1`. An unknown operation is `STC-E-DEBUG-003`.
+The baseline operation set is closed for `stc-debug/1`. `stc-debug/1.1` adds exactly the
+`frame.locals` operation; every baseline operation, parameter, result shape, and limit is
+unchanged. An unknown operation, or `frame.locals` on a `stc-debug/1` connection, is
+`STC-E-DEBUG-003`.
 
 | Operation | Scope | Result |
 | --- | --- | --- |
@@ -473,6 +489,7 @@ The operation set is closed for `stc-debug/1`. An unknown operation is `STC-E-DE
 | `exec.pause` | `control` | `status:"pause-requested"` or `"stopped"` |
 | `stack.list` | `observe` | `frames:[...]`, `truncated` |
 | `frame.read` | `observe` | typed local/parameter value or availability reason, plus an optional `view` (§15.5) |
+| `frame.locals` | `observe` | `locals:[{name,type,live,available}]`, `truncated`; `stc-debug/1.1` only |
 | `manifest.get` | `observe` | `format`, `digest`, and JSON data or base64 binary data |
 
 Request parameters:
@@ -482,6 +499,14 @@ Request parameters:
 - Target objects (§15.1): `{"kind":"got_id","got_id":"0x..."}`,
   `{"kind":"path","key":"MAIN.COUNTER"}`, `{"kind":"local","frame":0,"name":"x"}`. A `local`
   target is valid only for `frame.read` and requires the current `stop_id`.
+- `frame.locals` (`stc-debug/1.1` only): `{"stop_id":4,"frame":0}`. `stop_id` must be the current
+  stop and `frame` is the zero-based index reported by `stack.list`. The result is
+  `{"locals":[{"name":"COUNTER","type":"DINT","live":true,"available":true}],"truncated":false}`,
+  sorted by normalized name and capped by §13.5. It reports names, canonical type keys, and the
+  captured live/available state only; values remain `frame.read` requests, and no value or address
+  is returned. A `stc-debug/1` connection receives the ordinary unknown-operation
+  `STC-E-DEBUG-003`. An unknown or stale `stop_id`, or a frame outside the current snapshot, is
+  `STC-E-DEBUG-008`; unavailable frame metadata or an optimized-out frame is `STC-E-DEBUG-017`.
 - `var.read`:
   `{"target":<target>,"expected_generation":3,"expected_build_id":"0x...","range":{"start":0,"count":16}}`.
   `expected_*` are optional; when supplied they must match (`STC-E-DEBUG-010` otherwise).
@@ -521,7 +546,9 @@ Request parameters:
 valid checkpoint table and frame information are available; the two maxima repeat the §13.5
 limits. A release or hook-free artifact reports `hooks:false`, `checkpoints:false`, and
 `stepping:false` (and `debug_info:"none"` for a stripped release) with `STC-W-DEBUG-004`. No other
-capability key is valid in `stc-debug/1`.
+capability key is valid in `stc-debug/1`. `stc-debug/1.1` adds no capability key: the same
+object is the complete 1.1 set, and the client discovers `frame.locals` support by negotiating the
+version.
 
 Events:
 
@@ -555,6 +582,7 @@ belong to that stop snapshot; a stale `stop_id` is rejected. A `queue-result` wi
 | Queued writes and forces | 1024 entries or 1 MiB | `STC-E-DEBUG-011` |
 | Aggregate leaves per read | 1024 | `STC-E-DEBUG-011` |
 | Stack frames per stop | 1024 | `truncated:true` |
+| Locals per `frame.locals` result | 1024 | `truncated:true` |
 | Checkpoint table | 1,000,000 entries or 64 MiB metadata | `STC-E-DEBUG-016` |
 
 - A request timeout aborts only the request; the connection and session remain usable. Writes
@@ -1121,6 +1149,10 @@ backend-derived source); the runtime never parses DWARF/CodeView. A build whose 
 cannot be extracted emits no frame table, and stack/frame reads are then unavailable rather than
 guessed.
 
+`stc-debug/1.1` does not change this sidecar format. The `frame.locals` operation reads the same
+captured `StopFrame` snapshot produced from the table and exposes only name, canonical type, and
+captured live/available metadata; it adds no sidecar field, value, or address.
+
 Format 1:
 
 ```json
@@ -1353,6 +1385,12 @@ debugger that supports typed access, but it cannot stop at checkpoints. `stc tes
   response error, because the original request was accepted.
 - The stable diagnostic index and cross-references are in
   [Conformance Profile](../01-Conformance-Profile.md) §10.1.
+- `stc-debug/1.1` adds no diagnostic codes and does not change any v1.0 code meaning. It reuses
+  `STC-E-DEBUG-002` for an unsupported version (with both supported versions in
+  `detail.supported`) and for a later version mismatch, `STC-E-DEBUG-003` for `frame.locals` on a
+  `stc-debug/1` connection or a malformed request, `STC-E-DEBUG-008` for an unknown or stale
+  `stop_id` or frame, and `STC-E-DEBUG-017` for unavailable frame metadata or an optimized-out
+  frame. The v1.0 operation set, endpoint-file contract, and all other codes are unchanged.
 
 ### 18.4 Non-safety statement
 

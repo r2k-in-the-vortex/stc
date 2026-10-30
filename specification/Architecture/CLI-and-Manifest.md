@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28)
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28); WL-1.1 adds `stc lsp`, `stc dap`, and `--diagnostic-paths` (2026-10-30)
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md)
 
@@ -61,8 +61,10 @@ output goes to stdout.
 | `stc rename` | Source-aware tracked rename that preserves `GotId` history |
 | `stc run --watch` | Watch sources, rebuild, and deploy an online change |
 | `stc debug` | Build and launch a local authenticated debug session, or attach with `--attach` (§1.7) |
+| `stc lsp` | Serve the Language Server Protocol for the local project over stdio (§1.8) |
+| `stc dap` | Serve the Debug Adapter Protocol for the local project over stdio; distinct from `stc debug` (§1.8) |
 
-Future commands (not v1): `stc lsp`, `stc doc`.
+Future commands (not v1): `stc doc`.
 
 ### 1.2 Common options
 
@@ -87,6 +89,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--no-retain` | Disable retained-state load and save |
 | `--debug-protocol <kind>` | Local debug transport (`pipe` default, `socket` optional) for `stc debug` and `stc run --debug-server`; overrides `[debug].protocol` |
 | `--allow-untracked-removal` | Permit removing/renaming a root without a tracked rename; otherwise diagnose and require `--cold` |
+| `--diagnostic-paths <style>` | `package` (default) names project diagnostics `<package>/<relative>`; `absolute` names the source file by absolute path. Valid only with `check`, `build`, `run`, and `test` |
 | `--message-format <fmt>` | `human` (default), `json`, `short` |
 | `--color <when>` | `auto`, `always`, `never` |
 | `-v`, `-vv` | Verbose phase output; `-vv` includes clang commands and IR paths |
@@ -109,7 +112,8 @@ The table describes the v1 target surface. M6 implemented `--manifest-path`, `--
 `--no-retain`. `run --watch` adds `--store <dir>` and `--watch-timeout <duration>`; the online
 commands add `--out`, `--binary`, `--store`, `--host`, `--nonce`, and `--baseline`, and `rename`
 adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `stc debug` /
-`--debug-server` surface are implemented in M6.5; §1.7 fixes the contract.
+`--debug-server` surface are implemented in M6.5; §1.7 fixes the contract. WL-1.1 implements
+`--diagnostic-paths` and the `stc lsp` and `stc dap` servers; §1.8 fixes their surface.
 
 ### 1.3 Exit codes
 
@@ -375,6 +379,38 @@ monitoring-only session (`STC-W-DEBUG-004`). `stc test` rejects `--release`, `--
 `--debug-protocol`, and the server-grant options. `stc run --watch` and `--debug-server` may
 coexist: the M6 control endpoint and the M6.5 debug endpoint have different names, tokens,
 protocols, and messages (D-155, D-173).
+
+### 1.8 IDE servers (`stc lsp` and `stc dap`)
+
+Both servers own standard input and standard output. Standard output carries protocol messages
+only; logs, build output, and the debug endpoint line go to standard error. Both accept only
+`--manifest-path <path>` (plus `--help`/`--version`); diagnostic, build, and formatting options are
+rejected. The editor contracts are fixed in
+[IDE Integration](IDE-Integration.md) §3 and §4.
+
+**`stc lsp`.** Serves the Language Server Protocol with `Content-Length` framed JSON-RPC over
+stdio. `--manifest-path` selects the project; otherwise the server discovers `stc.toml` from the
+initialize `rootUri`, then `workspaceFolders`, then the process working directory, searching
+ancestors. A missing or unloadable project fails `initialize` with a readable error and logs the
+detail to stderr. The server exits 0 after the `shutdown`/`exit` handshake and 1 when input closes
+or `exit` arrives without `shutdown`. It provides push diagnostics, document symbols, definition,
+references, hover, completion, and whole-document formatting, with full synchronization and
+UTF-16 positions; the closed unsupported list is in IDE Integration §3.3.
+
+**`stc dap`.** Serves the Debug Adapter Protocol over stdio. Launch and attach settings arrive as
+DAP messages (`project`, `noBuild`, `outDir`, `release`, `allowWrite`, `allowForce`, `sourceRoot`,
+`args`, `cwd`, and `endpoint` for attach); `--manifest-path` is only a fallback project path.
+Launch builds the debug form by default and starts a local endpoint through the same driver
+plumbing as `stc debug`; `noBuild` launches existing artifacts. The adapter translates DAP to
+`stc-debug/1.1` and falls back to `stc-debug/1`, reports unsupported capabilities honestly, and
+owns no compiler or debugger logic. `disconnect` stops the session and exits the adapter; a
+launch-owned host is shut down, while attach leaves it running. `stc dap` is distinct from
+`stc debug`: `stc debug` is the interactive CLI client, and `stc dap` is the editor server.
+
+`--diagnostic-paths` affects project-mode diagnostics only. `package` is the default and keeps
+`<package>/<relative>` names for human and JSON output; `absolute` names the source file by its
+absolute path so an editor problem matcher can resolve multi-package sources. `stc run --watch`
+forwards the selected style to its child build.
 
 ## 2. Project manifest: `stc.toml`
 

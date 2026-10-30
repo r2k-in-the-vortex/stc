@@ -1,0 +1,102 @@
+# stc sample workspace
+
+A small, self-contained `stc` project used as the local fixture for the
+WL-1.1 language-server and debug-adapter integration tests. It contains a
+program, a function block, a function, and one `{stc:test}` source set, and it
+opens cleanly with no diagnostics.
+
+## What it shows
+
+| Feature | Where |
+| --- | --- |
+| Manifest, source globs, configuration selection, and the test source set | `stc.toml` |
+| Global variables with initial values | `src/main.st` |
+| `FUNCTION`, `FUNCTION_BLOCK`, and `PROGRAM` POUs | `src/main.st` |
+| `CONFIGURATION`/`RESOURCE`/`TASK` with a program instance | `src/main.st` |
+| Isolated smoke tests with `STC_ASSERT` | `tests/smoke.st` |
+| Launch and attach configurations | `.vscode/launch.json` |
+| `stc` tasks with the `$stc` problem matcher | `.vscode/tasks.json` |
+
+## Debug checkpoints
+
+The tests use two known executable lines:
+
+| Stop | Line | Statement | Known values at the stop |
+| --- | --- | --- | --- |
+| First statement of `PROGRAM Main` | 39 | `sum := AddStep(sum);` | global `INCREMENT = 1`; program fields are exposed under the program instance in the Globals scope. `TOTAL` reflects the cycles that ran before the breakpoints bound, so it is read as a decimal integer rather than an exact value |
+| First statement of `FUNCTION AddStep` | 19 | `incremented := INCREMENT;` | local `INCREMENTED = 0`; global `INCREMENT = 1`. The `VALUE` parameter carries the caller's `sum` and is read as a decimal integer |
+| After stepping over line 19 | 20 | `AddStep := value + incremented;` | local `INCREMENTED = 1` |
+
+Local names are the debug metadata's normalized uppercase spellings. Values
+come from the runtime's typed reads; the debug adapter does not reconstruct
+them.
+
+## Run the workflow
+
+From this directory, with `stc` installed and on `PATH` (or with `stc.path`
+pointing at the executable):
+
+```sh
+stc check
+stc build
+stc test
+stc fmt --check
+```
+
+`stc test` builds each `{stc:test}` POU into its own process. `stc build`
+writes the loadable module, its GOT manifest pair, and metadata under
+`target/stc/debug`. The manifest keeps `[run].cycles = 0`, so a debug host
+stays alive until the session ends.
+
+## Debug
+
+The launch configuration builds the project and starts a local debug session:
+
+```json
+{
+  "type": "stc",
+  "request": "launch",
+  "name": "stc: Launch sample",
+  "project": "${workspaceFolder}/stc.toml",
+  "noBuild": false,
+  "release": false,
+  "allowWrite": false,
+  "allowForce": false
+}
+```
+
+Open `src/main.st`, set a breakpoint on line 39, press F5, and choose **stc:
+Launch sample**. The Globals scope shows `INCREMENT` and `TOTAL`; the program
+instance contains the program fields. Continue to line 19 to read the
+function's locals.
+
+The attach example in `.vscode/launch.json` uses a placeholder endpoint path,
+`${workspaceFolder}/target/stc/debug/debug.endpoint.json`. Start a host with
+that endpoint, then start the attach configuration:
+
+```sh
+stc run --debug-server --debug-endpoint target/stc/debug/debug.endpoint.json
+```
+
+Attach mode leaves the host running after the session ends; launch mode owns
+and stops it.
+
+Writes are disabled by default. `allowWrite` enables `setVariable` for live
+roots, and `allowForce` additionally requests the force scope; the host must
+also grant `[debug].allow-write` or `[debug].allow-force`. `allowForce` does
+not add a DAP request, so forcing remains a `stc debug` operation in v2.0.0.
+
+Release builds are monitoring-only: no breakpoints, stepping, or Locals
+scope. A `stc-debug/1`-only host has no Locals scope either.
+
+## Non-safety
+
+`stc` can control real machinery, but it is not a safety PLC and is not
+responsible for safety. Safety must be provided by a separate safety system
+and machine design as required by law and regulation. A stopped or forced
+controller may hold outputs indefinitely; debug and forcing are availability
+and operability features, not safety functions.
+
+See the [extension README](../../README.md) and the
+[IDE integration specification](../../../../specification/Architecture/IDE-Integration.md)
+for the full local contract.

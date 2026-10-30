@@ -1416,7 +1416,9 @@ fn print_help() {
          otherwise the server discovers `stc.toml` from the initialize workspace\n\
          roots or the current directory, and fails initialization with a readable\n\
          error when none exists. The server exits after the shutdown/exit handshake\n\
-         or when standard input closes.\n\
+         or when standard input closes. `dap` serves the Debug Adapter Protocol\n\
+         over standard input and output; launch and attach settings arrive as DAP\n\
+         messages, and `--manifest-path` is a fallback project path.\n\
          Exit codes: 0 success, 1 compile error, 2 usage/manifest/toolchain error,\n\
          3 internal error, 4 runtime trap, 130 interrupted.",
         env!("CARGO_PKG_VERSION")

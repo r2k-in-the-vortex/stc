@@ -189,7 +189,7 @@ Formats and versions in this release:
 | GOT manifest / catalog | 2 |
 | Descriptor, module, state, metadata sidecar, debug object, stopped-frame sidecar | 1 |
 | Host ABI | 2.3 (test 2.2, production 2.1) |
-| Debug protocol | `stc-debug/1` |
+| Debug protocol | `stc-debug/1`, plus the additive `stc-debug/1.1` revision |
 
 IR and manifests are deterministic functions of source, options, and
 toolchain: no timestamps, absolute paths, host names, user names, random IDs,
@@ -215,6 +215,8 @@ or addresses. Double builds are byte-identical, including PE timestamps.
 | `stc rename <old> <new>` | Source-aware tracked rename |
 | `stc run --watch` | Rebuild and deploy online while watching sources |
 | `stc parse <file> [--ast]` | Dump the CST (and typed AST) |
+| `stc lsp` | Serve the Language Server Protocol over stdio |
+| `stc dap` | Serve the Debug Adapter Protocol over stdio |
 
 Global options include `--message-format human|short|json`,
 `--color auto|always|never`, `-q`, `-v`/`-vv`, `--manifest-path`,
@@ -273,12 +275,136 @@ include `print`, `set`, `force`, `release`, `release-all`, `watch`,
   remote transport. The endpoint file is user-only and contains the per-run
   token; never share it.
 - Every swap/rollback/cold install/shutdown/exit ends the session.
+- The server accepts `stc-debug/1` and the additive `stc-debug/1.1` revision. A 1.1 client can
+  list a stopped frame's local names, types, and liveness with `frame.locals`; values still come
+  from `frame.read`, and the endpoint-file `protocol` field stays `stc-debug/1`.
 
 See
 [`specification/Architecture/Debug-and-Monitoring.md`](specification/Architecture/Debug-and-Monitoring.md)
 §12–§18 and [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) §3 for the limits.
 
-## 8. Tests and formatting
+## 8. VS Code integration
+
+The local extension in [`editors/vscode`](editors/vscode) provides syntax highlighting, language
+features, tasks with compiler diagnostics, formatting, and a debug adapter for `stc` projects.
+
+### 8.1 Install
+
+Install the VSIX from the release artifacts (VSIX-only distribution in v2.0.0; it is not published
+to the marketplace):
+
+```sh
+code --install-extension stc-vscode-0.1.0.vsix
+```
+
+Or open **Extensions**, choose **...**, **Install from VSIX...**, and select the file. VS Code
+1.82 or newer is required. The extension does not bundle a compiler: install the `stc` release
+package and either put `bin` on `PATH` or set `stc.path` to the executable. A missing compiler is
+reported in the **stc** output channel; the language server is not started until it is resolved.
+
+Open a folder containing `stc.toml`. The extension starts one language server per project and
+watches `**/*.st` and `**/stc.toml`. No configuration is required beyond the compiler path.
+
+### 8.2 Tasks and diagnostics
+
+Run **Tasks: Run Task** and choose an `stc check`, `stc build`, `stc test`, or `stc fmt` task, or
+define tasks in `.vscode/tasks.json`:
+
+```json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "stc: build",
+      "type": "stc",
+      "command": "build",
+      "project": "${workspaceFolder}/stc.toml",
+      "problemMatcher": ["$stc"],
+      "group": "build"
+    }
+  ]
+}
+```
+
+The task type accepts `command` (`check`, `build`, `run`, `test`, or `fmt`), `project`, `args`, and
+`release` (for `build` and `run`). Generated tasks run in the manifest directory and pass
+`--message-format short --color never`; diagnostic commands also pass
+`--diagnostic-paths absolute` so the `$stc` problem matcher can resolve sources in multi-package
+projects. The matcher consumes `path:line:column: severity[CODE]: message` lines and does not
+reinterpret diagnostics.
+
+### 8.3 Language features
+
+With a project open and `stc` available:
+
+- diagnostics from the compiler in the Problems panel, updated as you type;
+- document symbols, go-to-definition, references, and hover for identifiers;
+- completion for keywords, visible names, and one level of members after `.`;
+- format document through `stc fmt` (one whole-document edit; no range formatting).
+
+The language server analyzes the root package's production and test sources, so test files resolve
+against production declarations. It does not offer semantic tokens, rename, code actions, inlay
+hints, call hierarchy, or workspace symbols. The grammar provides syntax highlighting.
+
+### 8.4 Launch and attach
+
+Add a configuration to `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "stc",
+      "request": "launch",
+      "name": "stc: Launch",
+      "project": "${workspaceFolder}/stc.toml",
+      "noBuild": false,
+      "release": false,
+      "allowWrite": false,
+      "allowForce": false
+    },
+    {
+      "type": "stc",
+      "request": "attach",
+      "name": "stc: Attach",
+      "project": "${workspaceFolder}/stc.toml",
+      "endpoint": "${workspaceFolder}/target/stc/debug/debug.endpoint.json"
+    }
+  ]
+}
+```
+
+Launch builds the debug form by default and stops a launch-owned host when the session ends.
+`noBuild` launches existing artifacts; `outDir` selects them; `release` builds the monitoring-only
+release form; `sourceRoot` overrides package-root source mapping; `args` and `cwd` apply to the
+launched host. Attach connects to the endpoint file printed by `stc run --debug-server` and leaves
+the host running. Replace the placeholder endpoint path with the printed file.
+
+Writes are disabled by default. `allowWrite` requests the write scope and enables `setVariable` for
+writable live roots (globals, program-instance fields, and live split fields); the host must also
+allow `[debug].allow-write`. `allowForce` requests the force
+scope and requires `[debug].allow-force`; DAP has no force request, so forcing remains a
+`stc debug` operation. Locals require a debug build and a `stc-debug/1.1` host; release builds are
+monitoring-only. There is one debug session per host, every online swap ends the session, and local
+names appear in the frame table's uppercase normalized spelling. `evaluate` accepts a local name or
+a manifest target path, not an ST expression.
+
+The local sample at
+[`editors/vscode/samples/workspace`](editors/vscode/samples/workspace/README.md) contains launch and
+attach configurations, tasks, a known breakpoint line, and known values, and is the fixture used by
+the automated tests.
+
+### 8.5 Non-safety
+
+The extension is local only: no telemetry, network requests, remote debugging, or bundled compiler.
+Debug and force can stop the cycle and hold outputs indefinitely. `stc` is not a safety PLC and is
+not responsible for safety; safety must be provided by a separate safety system and machine design
+as required by law and regulation. See
+[`specification/Architecture/IDE-Integration.md`](specification/Architecture/IDE-Integration.md)
+and [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) for the complete contract.
+
+## 9. Tests and formatting
 
 ```sh
 stc test                 # all discovered {stc:test} POUs
@@ -296,7 +422,7 @@ or release artifacts.
 `stc fmt` uses one fixed style over the lossless CST, preserves comments,
 emits strict semicolons, and supports `--check`. It is idempotent.
 
-## 9. Cross-target smoke tests
+## 10. Cross-target smoke tests
 
 `stc build --target=<triple> --emit=ir` (or `obj`) emits target-independent IR
 and an object for the requested triple. The release-candidate matrix covers:
@@ -313,7 +439,7 @@ Execution, module loading, and frame extraction are native on Windows x86-64
 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU. `--emit=exe` and `--emit=lib`
 reject a non-host target with `STC-E-BUILD-004`.
 
-## 10. Performance
+## 11. Performance
 
 Timing is informational, not a real-time guarantee. Record the host and regime
 when comparing numbers:
@@ -327,7 +453,7 @@ cargo test -p stc-runtime --test switch_latency -- --ignored --nocapture
 Recorded figures are in
 [`specification/Verification/Performance.md`](specification/Verification/Performance.md).
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 | Symptom | Cause / action |
 | --- | --- |
@@ -343,7 +469,7 @@ Recorded figures are in
 For every diagnostic, `--message-format json` gives a stable object with code,
 severity, spans, notes, and related locations.
 
-## 12. Support matrix
+## 13. Support matrix
 
 | Host | Triple | Package | Compile | Run/model | Debug | Online change |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -357,7 +483,7 @@ The three native hosts are supported from M8 (D-200); macOS, Windows ARM64,
 online, projects, conformance, execution, UI, cross-target, package,
 traceability, Lean, and fuzz-smoke jobs natively on all three hosts.
 
-## 13. Safety
+## 14. Safety
 
 See [`NON-SAFETY.md`](NON-SAFETY.md). In short: `stc` can control real
 machinery, but it is not a safety PLC; safety must be provided by a separate

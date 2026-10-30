@@ -180,6 +180,7 @@ timeout, or interlock is provided. The consolidated list is in
 | [Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md) | Host/module model, GOT, manifest, swap protocol |
 | [GOT Artifacts and Schemas](specification/Architecture/GOT-Artifacts.md) | Versioned `GotId`, catalog, descriptor, manifest, plan, host ABI, build-ID formats |
 | [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md) | Typed access, forcing, breakpoints, debug info |
+| [IDE Integration](specification/Architecture/IDE-Integration.md) | Local VS Code extension, LSP/DAP contracts, source mapping, packaging |
 | [Decisions and Open Questions](specification/Decisions.md) | Rationale and backlog |
 | [Release Notes](RELEASE-NOTES.md) | `1.0.0` highlights, artifacts, formats, upgrade notes |
 | [User Guide](USER-GUIDE.md) | Install, project workflow, build modes, online change, debug, tests |
@@ -312,6 +313,8 @@ stc online diff         compare a candidate manifest with the active baseline
 stc rename              source-aware tracked rename
 stc run --watch         watch, rebuild, and deploy online
 stc debug               start a local debug/monitoring session
+stc lsp                 serve the Language Server Protocol over stdio
+stc dap                 serve the Debug Adapter Protocol over stdio
 ```
 
 M6 implements the project workflow: `stc new/check/build/run/test/fmt/clean/metadata/compliance`,
@@ -334,6 +337,25 @@ and JSON output are implemented. Details:
 index, including the M6 project/test/online target codes, is
 [Conformance Profile](specification/01-Conformance-Profile.md) §10; JSON report shapes (test,
 compatibility, metadata, compliance) are in CLI and Manifest §1.6.
+
+## VS Code integration
+
+The local extension at [`editors/vscode/`](editors/vscode/README.md) makes VS Code a practical
+development environment for `stc` projects. It contributes the `st` language (`source.st` TextMate
+grammar and language configuration), `stc` tasks for `check`, `build`, `run`, `test`, and `fmt` with
+the `$stc` problem matcher, a language client for `stc lsp` (push diagnostics, document symbols,
+definition, references, hover, completion, and whole-document formatting), and a debug adapter for
+`stc dap` (launch and attach, source breakpoints, stepping, call stack, Globals and Locals). The
+extension is a client: the compiler and runtime remain the source of truth, and the extension
+contains no compiler logic. A sample workspace at
+[`editors/vscode/samples/workspace`](editors/vscode/samples/workspace/README.md) demonstrates the
+language features, tasks, and a local debug session.
+
+Requirements are VS Code 1.82 or newer and a local `stc` executable resolved from the `stc.path`
+setting or `PATH`. The compiler is not bundled. Everything runs locally with no telemetry or
+network access, and v2.0.0 distributes the extension as a VSIX only. `stc` is not a safety PLC;
+debugging and forcing are availability and operability features, not safety functions. The full
+contract is [IDE Integration](specification/Architecture/IDE-Integration.md).
 
 ## Project manifest
 
@@ -457,8 +479,12 @@ stc/
     stc-manifest/            stc.toml schema, dependency graph, source discovery, stc.lock
     stc-runtime/             persistent host: GOT, roots, loader, swap, scheduler, ABI 2 services, C ABI
     stc-test/                test discovery, wrapper generation, process-isolated runner
+    stc-ide/                 editor query layer: snapshot, diagnostics, navigation, formatting
+    stc-lsp/                 Language Server Protocol server
+    stc-dap/                 Debug Adapter Protocol server
     stc-driver/              CLI binary `stc`
     xtask/                   `cargo xtask test --suite ...` and `traceability`
+  editors/vscode/            local VS Code extension, grammar, tasks, and sample workspace
   fuzz/                      cargo-fuzz workspace; lexer/parser/analyzer/codegen/manifest/got/descriptor targets
   lean/                      Lake project: exact models, proofs, vector generator
   tests/

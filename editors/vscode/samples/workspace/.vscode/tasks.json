@@ -1,0 +1,36 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "stc: check",
+      "type": "stc",
+      "command": "check",
+      "project": "${workspaceFolder}/stc.toml",
+      "problemMatcher": ["$stc"],
+      "group": "build"
+    },
+    {
+      "label": "stc: build",
+      "type": "stc",
+      "command": "build",
+      "project": "${workspaceFolder}/stc.toml",
+      "problemMatcher": ["$stc"],
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "stc: test",
+      "type": "stc",
+      "command": "test",
+      "project": "${workspaceFolder}/stc.toml",
+      "problemMatcher": ["$stc"],
+      "group": "test"
+    },
+    {
+      "label": "stc: fmt",
+      "type": "stc",
+      "command": "fmt",
+      "project": "${workspaceFolder}/stc.toml",
+      "problemMatcher": ["$stc"]
+    }
+  ]
+}

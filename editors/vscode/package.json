@@ -1,14 +1,15 @@
 {
   "name": "stc-vscode",
   "displayName": "stc Structured Text",
-  "description": "Local Structured Text support for stc: syntax highlighting, tasks, and compiler diagnostics.",
+  "description": "Local Structured Text support for stc: syntax highlighting, language features, tasks, compiler diagnostics, and debugging.",
   "version": "0.1.0",
   "publisher": "stc-local",
   "engines": {
     "vscode": "^1.82.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers"
   ],
   "keywords": [
     "structured text",
