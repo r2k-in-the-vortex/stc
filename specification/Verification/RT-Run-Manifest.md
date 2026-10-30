@@ -4,12 +4,14 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-30  
 Status: Phase 4 evidence for the untuned v2.0.0 campaign. Raw samples remain in the
 local campaign archive; the report is the phase 5 deliverable.  
-Parent: [WL-4-Plan.md](../../WL-4-Plan.md)  
+Parent: [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) §4 (WL-4)  
+Report: [RT-Host.md](RT-Host.md)  
+Runbook: [RT-Runbook.md](RT-Runbook.md)  
 Schema: `stc-rt-summary/1` and `stc-rt-metrics/1`
 
 ## 1. Environment
 
-The campaign ran on the same untuned host recorded in the parent plan: Ubuntu 25.10, Linux
+The campaign ran on the same untuned host recorded in [RT-Host.md](RT-Host.md): Ubuntu 25.10, Linux
 `6.17.999-8-generic #8 SMP PREEMPT_RT`, Intel N150 (4 cores), 10 GiB RAM. No boot parameter,
 governor, C-state, IRQ affinity, service, or swap setting was changed.
 
@@ -182,7 +184,7 @@ The noise floor began immediately after the short calibration checks; the host s
 The R0 noise floor is untuned and includes normal host background services. The osnoise
 maxima in §7 are the untuned noise signal; the parent plan reopens the deferred tuned
 profile on any missed deadline or a judgment that jitter or latency is unsatisfactory.
-Phase 5 evaluates that trigger. The harness counts a missed deadline when wake or scan
+[RT-Host.md](RT-Host.md) §6 evaluates that trigger. The harness counts a missed deadline when wake or scan
 completion is late; the execution and wake-lateness percentiles above are the primary
 timing evidence.
 

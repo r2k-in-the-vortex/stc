@@ -329,7 +329,7 @@ Recorded figures are in
 
 On Linux, `stc run --rt --cycle-time 1ms --rt-priority 90 --rt-cpu 3 --rt-metrics rt.jsonl`
 runs the cycle thread with FIFO scheduling and absolute `CLOCK_MONOTONIC` pacing, and writes the
-JSONL metrics described in [WL-4-Plan.md](WL-4-Plan.md) §6.3.1. The mode is measurement-only;
+JSONL metrics described in [specification/Verification/RT-Host.md](specification/Verification/RT-Host.md) §3.4. The mode is measurement-only;
 without `--rt` the run loop and the generated artifacts are unchanged.
 
 ## 11. Troubleshooting

@@ -4,8 +4,9 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-30  
 Status: Informational and host-specific. Not a hard real-time guarantee, not a safety function,
 and not a CI gate.  
-Parent: [WL-4-Plan.md](../../WL-4-Plan.md)  
-Evidence: [RT-Run-Manifest.md](RT-Run-Manifest.md)
+Parent: [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) §4 (WL-4)  
+Evidence: [RT-Run-Manifest.md](RT-Run-Manifest.md)  
+Runbook: [RT-Runbook.md](RT-Runbook.md)
 
 This report records the untuned v2.0.0 PREEMPT_RT campaign on the available x86-64 host. It is
 the evidence for WL-4. It does not establish a hard real-time guarantee, does not define a
@@ -27,9 +28,8 @@ timing budget, and does not change the safety stance in [NON-SAFETY.md](../../NO
   activated and rolled back on the next cycle in every repetition.
 - The untuned noise floor measured cyclictest maxima of 27–40 µs, timerlat maxima of 69 µs IRQ /
   84 µs thread / 93 µs user, and osnoise maxima of 8.5–22.8 ms. hwlat recorded a 13 µs maximum.
-- The untuned R1 stress result and the osnoise maxima meet the deferred tuned-profile trigger in
-  [WL-4-Plan.md](../../WL-4-Plan.md) §6.2. The tuned profile remains future work and was not
-  executed in v2.0.0.
+- The untuned R1 stress result and the osnoise maxima meet the deferred tuned-profile trigger
+  recorded in §6. The tuned profile remains future work and was not executed in v2.0.0.
 
 ## 2. Environment
 
@@ -51,8 +51,10 @@ The campaign was untuned by design. The host snapshot at the start of the noise 
 after the noise floor with load averages around 1.3–1.9. The background services and the desktop
 session are part of the R0 regime.
 
-The full host baseline, including the kernel configuration and the original boot command line,
-is in [WL-4-Plan.md](../../WL-4-Plan.md) §3. The per-run host snapshots are in
+The full reference-host baseline, including the kernel configuration and the original boot
+command line, is in [RT-Runbook.md](RT-Runbook.md) §6. Access uses the local, gitignored host
+note and key login; the privileged wrapper, sudoers rule, and harness setup are in
+[RT-Runbook.md](RT-Runbook.md) §4. The per-run host snapshots are in
 [RT-Run-Manifest.md](RT-Run-Manifest.md) and the raw archive.
 
 ## 3. Method
@@ -121,6 +123,18 @@ manifest is [RT-Run-Manifest.md](RT-Run-Manifest.md).
   passed.
 - Fault and allocator fields are sampled at cycle 1 and every 1000 cycles; the summary reports
   the first and last sample and the delta.
+
+When `--rt-metrics <path>` is set, the launcher writes one JSON object per line:
+
+```json
+{"record":"header","protocol":"stc-rt-metrics/1","build_id":"<hex|null>","cycle_time_ns":1000000,"priority":90,"cpu":3,"pid":1234,"started_monotonic_ns":0,"fault_interval":1000}
+{"record":"cycle","cycle":1,"generation":7,"deadline_ns":0,"wake_ns":0,"scan_start_ns":0,"scan_end_ns":0,"wake_lateness_ns":0,"execution_ns":0,"scan_overrun_ns":0,"missed_deadline":false,"skipped_periods":0,"minor_faults":null,"major_faults":null,"allocations":null,"frees":null}
+{"record":"summary","cycles":0,"missed_deadlines":0,"skipped_periods":0,"max_wake_lateness_ns":0,"max_execution_ns":0,"max_scan_overrun_ns":0,"last_minor_faults":null,"last_major_faults":null,"last_allocations":null,"last_frees":null,"finished_monotonic_ns":0}
+```
+
+The header's `pid`, `priority`, and `cpu` describe the cycle thread; `cpu` is `null` when no
+affinity was requested. Records are buffered and flushed at exit; the summary is written on a
+normal exit, stop, or interrupt.
 
 ## 4. Results
 
@@ -287,15 +301,23 @@ untuned noise evidence and they meet the deferred tuned-profile trigger.
 
 ## 6. Deferred tuned-profile evaluation
 
-The trigger in [WL-4-Plan.md](../../WL-4-Plan.md) §6.2 is "any missed deadline in the untuned
-campaign, or a report review that judges jitter or latency unsatisfactory." The strict counter is
-nonzero in every run, and the R1 heavy mixed-load result (p50 2.58–2.68 ms at a 1 ms target) and
-the osnoise maxima (8.5–22.8 ms) are unsatisfactory for a 1 ms hard cycle. The trigger is met.
+The trigger is "any missed deadline in the untuned campaign, or a report review that judges
+jitter or latency unsatisfactory." The strict counter is nonzero in every run, and the R1 heavy
+mixed-load result (p50 2.58–2.68 ms at a 1 ms target) and the osnoise maxima (8.5–22.8 ms) are
+unsatisfactory for a 1 ms hard cycle. The trigger is met.
 
 The tuned profile remains deferred future work. It was not executed in v2.0.0 and is not part of
-the v2.0.0 scope. Adopting it later is a separate scope decision; the recorded profile,
-verification commands, and reboot cost are in [WL-4-Plan.md](../../WL-4-Plan.md) §6.2. No tuned
-measurement is claimed in this report.
+the v2.0.0 scope. The recorded profile is:
+
+- Boot: `isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2 intel_idle.max_cstate=1`.
+- Power: `performance` governor and performance EPP; IRQ affinity on CPUs 0-2.
+- Services: reduce background services to the documented minimum; swap off.
+- Verify after reboot: `/proc/cmdline`, `/sys/devices/system/cpu/isolated`, `nohz_full`, the
+  governor, the idle-state latencies, and the IRQ affinities.
+- Cost and risk: a reboot and maintenance window, and effects on other host users. Adopting it
+  later is a separate scope decision, not a silent extension of WL-4.
+
+No tuned measurement is claimed in this report.
 
 ## 7. Limits
 
@@ -314,7 +336,7 @@ measurement is claimed in this report.
 - Deploy prepare/load/activation runs on the cycle thread; deployment latency is maintenance
   latency, not cycle jitter. Fully off-thread prepare is post-v1 work.
 - The untuned host has deep idle states, no CPU isolation, and normal background services. The
-  tuned profile in the plan was not applied.
+  deferred tuned profile was not applied; see §6.
 - The light workload is about 25% of the 1 ms budget, not below a 0.2 ms numeric target, because
   the host has a measured fixed cycle cost of about 0.19 ms.
 - This report makes no hard real-time guarantee, no safety claim, and no timing budget. It is
@@ -334,12 +356,12 @@ measurement is claimed in this report.
 | Raw archive | Local gitignored `dist/rt/results/phase4`, 420 files; `SHA256SUMS` SHA256 `23f4daa2af10512978cc5fcda52d633dccf012f163b982ea035e3518f1623a3b` |
 
 The package and bundle were built in CI; the RT host never builds. The artifact transfer and
-checksum procedure, the privileged wrapper, and the host setup are in
-[WL-4-Plan.md](../../WL-4-Plan.md) §9.
+checksum procedure, the privileged wrapper, the host setup, and the other-host adaptation are in
+[RT-Runbook.md](RT-Runbook.md) §3–§5 and §8.
 
 ### 8.2 Commands
 
-The harness runs as root through the phase 0 wrapper. Replace `<run>` with a unique result
+The harness runs as root through the root-owned `stc-wl4-run` wrapper. Replace `<run>` with a unique result
 directory name.
 
 ```sh
@@ -376,8 +398,8 @@ sudo -n /usr/local/sbin/stc-wl4-run osnoise 10m
 sudo -n /usr/local/sbin/stc-wl4-run hwlat 10m
 ```
 
-The complete runbook, including the clean-boot check that the untuned host state is unchanged,
-is [WL-4-Plan.md](../../WL-4-Plan.md) §9.
+The complete runbook, including the clean-boot check that the untuned host state is unchanged and
+the procedure for other hosts, is [RT-Runbook.md](RT-Runbook.md).
 
 ### 8.3 Runbook
 
@@ -393,8 +415,9 @@ is [WL-4-Plan.md](../../WL-4-Plan.md) §9.
 
 ## 9. References
 
-- [WL-4-Plan.md](../../WL-4-Plan.md) — scope, decisions, host baseline, runbook, deferred tuned
-  profile.
+- [RT-Runbook.md](RT-Runbook.md) — the portable runbook, reference-host baseline, and other-host
+  procedure.
+- [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) — the v2.0.0 target set and the WL-4 completion status.
 - [RT-Run-Manifest.md](RT-Run-Manifest.md) — per-run tables, host snapshots, raw file SHA256
   values.
 - [Performance.md](Performance.md) — the full performance record, including this section.

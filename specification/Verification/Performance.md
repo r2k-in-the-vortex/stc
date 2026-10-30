@@ -173,8 +173,8 @@ the Windows or AArch64 figures above, and are not a hard real-time guarantee.
 The R1 case is a heavy mixed-load stress case, not a light background load. The report covers the
 10 ms secondary runs, the online-change/rollback cases, the control-cost A/B, and the noise
 floor. An untuned R1 p50 of about 2.6 ms at a 1 ms target and osnoise maxima of 8.5–22.8 ms meet
-the deferred tuned-profile trigger in [WL-4-Plan.md](../../WL-4-Plan.md) §6.2; the tuned profile
-was not executed in v2.0.0.
+the deferred tuned-profile trigger in [RT-Host.md](RT-Host.md) §6; the tuned profile was not
+executed in v2.0.0.
 
 ## Policy
 

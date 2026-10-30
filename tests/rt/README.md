@@ -28,4 +28,5 @@ bash tools/rt/build-bundle.sh dist/stc-<version>-x86_64-unknown-linux-gnu dist/r
 ```
 
 The bundle is transferred to the RT host and run there; the RT host never builds.
-See [WL-4-Plan.md](../../WL-4-Plan.md) §9 for the runbook.
+See [RT-Runbook.md](../../specification/Verification/RT-Runbook.md) for the runbook, including
+the procedure for other hosts.
