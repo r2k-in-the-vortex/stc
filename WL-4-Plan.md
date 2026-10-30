@@ -3,8 +3,9 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-29  
 Branch: `WL-4` (sub-plan of `v2.0.0-planning`)  
-Status: Decisions locked 2026-10-29; implementation not started. Host access is verified and the
-untuned baseline is captured. The tuned boot profile is deferred future work (§6.2).  
+Status: Phases 0–4 complete; phase 5 report published 2026-10-30; owner review pending. Host
+access and the untuned baseline are verified; the tuned boot profile remains deferred future work
+(§6.2).  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-4)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-4, [Performance.md](specification/Verification/Performance.md),
 [Runtime and Execution](specification/Architecture/Runtime-and-Execution.md),
@@ -284,6 +285,9 @@ scratch. It is out of scope for v2.0.0 and must not be applied during the campai
   judges jitter or latency unsatisfactory.
 - Cost and risk: a reboot and maintenance window, and effects on other host users. Adopting it
   later is a separate scope decision, not a silent extension of WL-4.
+- Phase 5 evaluation (2026-10-30): the untuned R1 heavy mixed-load p50 (~2.6 ms at a 1 ms
+  target) and the osnoise maxima (8.5–22.8 ms) meet the trigger. The tuned profile remains
+  deferred future work and was not executed; adopting it later is a separate scope decision.
 
 ### 6.3 Harness and data
 
@@ -344,6 +348,13 @@ The launcher writes one line per record when `--rt-metrics <path>` is set:
 | 3 | Harness: control client, deploy/rollback, load, `/proc` sampling, summaries, tests | Dry run on the host produces a complete JSONL and summary; reruns produce the same schema |
 | 4 | Campaign: untuned R0, R1, R2; cyclictest, timerlat, osnoise, hwlat; three 1 ms repetitions plus the 10 ms secondary; online-change and rollback cases | Every matrix row has raw data and a summary; host conditions recorded; failed runs kept and explained |
 | 5 | Report and runbook: `specification/Verification/RT-Host.md`, `Performance.md`, `KNOWN-LIMITATIONS.md`; record the deferred tuned profile (§6.2); review | Report states host, method, distributions, and limits; runbook repeats the untuned campaign from a clean boot; no safety claim |
+
+**Phase 5 evidence (2026-10-30).** The report is
+[RT-Host.md](specification/Verification/RT-Host.md); the per-run detail is
+[RT-Run-Manifest.md](specification/Verification/RT-Run-Manifest.md). `Performance.md` and
+`KNOWN-LIMITATIONS.md` record the PREEMPT_RT figures and limits. The untuned campaign evidence is
+complete; the tuned-profile trigger is met and the profile remains deferred. Documentation checks
+pass locally; the phase 5 CI gate runs on this commit. Owner review is pending.
 
 ## 8. Exit criteria
 
@@ -590,3 +601,4 @@ adjusted during phase 0 without a scope change.
 | 2026-10-29 | Locked decisions: R-3 opt-in measurement mode, scoped sudo wrapper, spec report with raw artifacts, 10 min × 3 campaign, quiet/other-CPU/same-CPU load, and all four online-change cases. Deferred the tuned boot profile to future work; v2.0.0 measures the untuned host. |
 | 2026-10-30 | Completed the WL-4 phase 4 untuned campaign: 23 harness runs, 24 online cases, the R0 noise floor, and the control A/B. Committed the run manifest [RT-Run-Manifest.md](specification/Verification/RT-Run-Manifest.md); raw data remains local and gitignored. |
 | 2026-10-30 | Fixed the raw archive checksum file to LF and recorded its verified SHA in the run manifest. |
+| 2026-10-30 | Published the WL-4 report [RT-Host.md](specification/Verification/RT-Host.md) and updated Performance.md and KNOWN-LIMITATIONS.md. The untuned campaign evidence is complete; the tuned-profile trigger is met and the profile remains deferred future work. |
