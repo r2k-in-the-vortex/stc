@@ -474,7 +474,7 @@ execution p50 0.497 ms, 0.248 ms, and 0.797 ms at a 1 ms cycle. Artifacts: `rt-b
 bundle and package `SHA256SUMS` SHA256 `6107e867…` and `415cca13…`; harness
 `02c3f6b8…` installed root-owned. The committed run manifest is
 [RT-Run-Manifest.md](specification/Verification/RT-Run-Manifest.md); raw samples are local and
-gitignored at `dist/rt/results/phase4` (420 files, `SHA256SUMS` SHA256 `23b7f059…`).
+gitignored at `dist/rt/results/phase4` (420 files, `SHA256SUMS` SHA256 `23f4daa2…`).
 
 - Main medium 1 ms: R0 execution p50 0.663–0.782 ms (p99 about 0.93 ms), 598–600k cycles; R1
   other-CPU mixed load p50 2.58–2.68 ms, 178–189k cycles and 411–422k skipped periods; R2
@@ -589,3 +589,4 @@ adjusted during phase 0 without a scope change.
 | 2026-10-29 | Started the WL-4 sub-plan. Verified SSH key access, captured the host and kernel baseline, ran a preliminary untuned cyclictest/timerlat/osnoise sample, and smoke-tested the released Linux package on the host. Proposed decisions R-1–R-10. |
 | 2026-10-29 | Locked decisions: R-3 opt-in measurement mode, scoped sudo wrapper, spec report with raw artifacts, 10 min × 3 campaign, quiet/other-CPU/same-CPU load, and all four online-change cases. Deferred the tuned boot profile to future work; v2.0.0 measures the untuned host. |
 | 2026-10-30 | Completed the WL-4 phase 4 untuned campaign: 23 harness runs, 24 online cases, the R0 noise floor, and the control A/B. Committed the run manifest [RT-Run-Manifest.md](specification/Verification/RT-Run-Manifest.md); raw data remains local and gitignored. |
+| 2026-10-30 | Fixed the raw archive checksum file to LF and recorded its verified SHA in the run manifest. |

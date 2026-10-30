@@ -196,4 +196,4 @@ Host snapshot after the campaign:
 ## 9. Raw data
 
 The raw campaign archive is local and gitignored at `dist/rt/results/phase4`; it contains
-420 files. `SHA256SUMS` SHA256: `23b7f05902584aaebfd333ec6b49340634eabb9a58e04e5ac1b1648ec157126b`.
+420 files. `SHA256SUMS` SHA256: `23f4daa2af10512978cc5fcda52d633dccf012f163b982ea035e3518f1623a3b`.
