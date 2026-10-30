@@ -121,6 +121,21 @@ pub(crate) fn run_arguments(
         args.push("--mock-clock".to_owned());
         args.push(format!("{ns}ns"));
     }
+    if request.rt {
+        args.push("--rt".to_owned());
+    }
+    if let Some(priority) = request.rt_priority {
+        args.push("--rt-priority".to_owned());
+        args.push(priority.to_string());
+    }
+    if let Some(cpu) = request.rt_cpu {
+        args.push("--rt-cpu".to_owned());
+        args.push(cpu.to_string());
+    }
+    if let Some(path) = request.rt_metrics.as_deref() {
+        args.push("--rt-metrics".to_owned());
+        args.push(absolute(path).to_string_lossy().into_owned());
+    }
     if verbose {
         args.push("--status".to_owned());
     }

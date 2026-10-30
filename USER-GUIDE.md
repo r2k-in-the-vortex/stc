@@ -153,7 +153,7 @@ allow-force = false
 - Production builds exclude `{stc:test}` POUs and `STC_ASSERT`. Test sources
   are compiled only by `stc test`.
 - The full schema, validation rules, and diagnostic codes are in
-  [`Specification/Architecture/CLI-and-Manifest.md`](Specification/Architecture/CLI-and-Manifest.md)
+  [`specification/Architecture/CLI-and-Manifest.md`](specification/Architecture/CLI-and-Manifest.md)
   §2.
 
 ## 4. Build modes and artifacts
@@ -243,8 +243,8 @@ stc online diff target/stc/debug/<name>.stc-got.json --baseline active.json
   manifest and module; `stc clean` preserves it.
 
 The complete model is in
-[`Specification/Architecture/Online-Change-and-GOT.md`](Specification/Architecture/Online-Change-and-GOT.md)
-and [`GOT-Artifacts.md`](Specification/Architecture/GOT-Artifacts.md).
+[`specification/Architecture/Online-Change-and-GOT.md`](specification/Architecture/Online-Change-and-GOT.md)
+and [`GOT-Artifacts.md`](specification/Architecture/GOT-Artifacts.md).
 
 ## 7. Debug and monitoring
 
@@ -275,7 +275,7 @@ include `print`, `set`, `force`, `release`, `release-all`, `watch`,
 - Every swap/rollback/cold install/shutdown/exit ends the session.
 
 See
-[`Specification/Architecture/Debug-and-Monitoring.md`](Specification/Architecture/Debug-and-Monitoring.md)
+[`specification/Architecture/Debug-and-Monitoring.md`](specification/Architecture/Debug-and-Monitoring.md)
 §12–§18 and [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) §3 for the limits.
 
 ## 8. Tests and formatting
@@ -325,7 +325,12 @@ cargo test -p stc-runtime --test switch_latency -- --ignored --nocapture
 ```
 
 Recorded figures are in
-[`Specification/Verification/Performance.md`](Specification/Verification/Performance.md).
+[`specification/Verification/Performance.md`](specification/Verification/Performance.md).
+
+On Linux, `stc run --rt --cycle-time 1ms --rt-priority 90 --rt-cpu 3 --rt-metrics rt.jsonl`
+runs the cycle thread with FIFO scheduling and absolute `CLOCK_MONOTONIC` pacing, and writes the
+JSONL metrics described in [specification/Verification/RT-Host.md](specification/Verification/RT-Host.md) §3.4. The mode is measurement-only;
+without `--rt` the run loop and the generated artifacts are unchanged.
 
 ## 11. Troubleshooting
 

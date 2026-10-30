@@ -490,6 +490,33 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             other if other.starts_with("--mock-clock=") => {
                 build.run.mock_clock_ns = Some(parse_cycle_time(&other["--mock-clock=".len()..])?);
             }
+            "--rt" => build.run.rt = true,
+            "--rt-priority" => {
+                build.run.rt_priority = Some(parse_rt_priority(&next_value(
+                    args,
+                    &mut index,
+                    "--rt-priority",
+                )?)?);
+            }
+            other if other.starts_with("--rt-priority=") => {
+                build.run.rt_priority = Some(parse_rt_priority(&other["--rt-priority=".len()..])?);
+            }
+            "--rt-cpu" => {
+                build.run.rt_cpu = Some(parse_rt_cpu(&next_value(args, &mut index, "--rt-cpu")?)?);
+            }
+            other if other.starts_with("--rt-cpu=") => {
+                build.run.rt_cpu = Some(parse_rt_cpu(&other["--rt-cpu=".len()..])?);
+            }
+            "--rt-metrics" => {
+                build.run.rt_metrics = Some(parse_rt_metrics(&next_value(
+                    args,
+                    &mut index,
+                    "--rt-metrics",
+                )?)?);
+            }
+            other if other.starts_with("--rt-metrics=") => {
+                build.run.rt_metrics = Some(parse_rt_metrics(&other["--rt-metrics=".len()..])?);
+            }
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
             }
@@ -795,6 +822,29 @@ fn validate(
                 .into(),
         );
     }
+    let rt_only = build.run.rt
+        || build.run.rt_priority.is_some()
+        || build.run.rt_cpu.is_some()
+        || build.run.rt_metrics.is_some();
+    if rt_only && command != Command::Run {
+        return Err(
+            "`--rt`, `--rt-priority`, `--rt-cpu`, and `--rt-metrics` are only valid with `stc run`"
+                .into(),
+        );
+    }
+    if !build.run.rt
+        && (build.run.rt_priority.is_some()
+            || build.run.rt_cpu.is_some()
+            || build.run.rt_metrics.is_some())
+    {
+        return Err("`--rt-priority`, `--rt-cpu`, and `--rt-metrics` require `--rt`".into());
+    }
+    if build.run.rt && build.run.mock_clock_ns.is_some() {
+        return Err("`--rt` cannot be combined with `--mock-clock`".into());
+    }
+    if build.run.rt && build.run.cycle_time_ns == Some(0) {
+        return Err("`--rt` requires a positive `--cycle-time`".into());
+    }
     let io_override = build.run.io.is_some() || build.run.io_file.is_some();
     if io_override && !matches!(command, Command::Run | Command::Test | Command::Debug) {
         return Err(
@@ -1008,6 +1058,33 @@ fn parse_cycle_time(value: &str) -> Result<u64, String> {
         })
 }
 
+fn parse_rt_priority(value: &str) -> Result<u8, String> {
+    let priority: u8 = value
+        .parse()
+        .map_err(|_| format!("invalid RT priority `{value}`"))?;
+    if !(1..=99).contains(&priority) {
+        return Err("`--rt-priority` must be between 1 and 99".into());
+    }
+    Ok(priority)
+}
+
+fn parse_rt_cpu(value: &str) -> Result<u32, String> {
+    let cpu: u32 = value
+        .parse()
+        .map_err(|_| format!("invalid RT CPU `{value}`"))?;
+    if cpu > 63 {
+        return Err("`--rt-cpu` must be between 0 and 63".into());
+    }
+    Ok(cpu)
+}
+
+fn parse_rt_metrics(value: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Err("`--rt-metrics` requires a non-empty path".into());
+    }
+    Ok(value.to_owned())
+}
+
 fn parse_debug_protocol(value: &str) -> Result<DebugProtocol, String> {
     match value {
         "pipe" => Ok(DebugProtocol::Pipe),
@@ -1168,6 +1245,8 @@ fn print_help() {
          \x20         [--cycle-time <duration>] [--io null|memory|file]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--mock-clock <duration>] [--target <triple>]\n\
+         \x20         [--rt] [--rt-priority <1-99>] [--rt-cpu <0-63>]\n\
+         \x20         [--rt-metrics <path>]\n\
          \x20         [--clang <path>] [--runtime <path>] [-v|-vv] [-q]\n\
          \x20 stc run --debug-server [--debug-endpoint <path>] [--allow-write]\n\
          \x20         [--allow-force] [--session-timeout <duration>]\n\
@@ -1276,6 +1355,64 @@ mod tests {
                 .build
                 .mode_override,
             Some(BuildMode::Debug)
+        );
+    }
+
+    #[test]
+    fn rt_options_require_run_and_companion_flags() {
+        let run = invocation(&["run", "--rt", "--cycle-time", "1ms"]);
+        assert!(run.build.run.rt);
+        assert_eq!(run.build.run.cycle_time_ns, Some(1_000_000));
+
+        let full = invocation(&[
+            "run",
+            "--rt",
+            "--cycle-time",
+            "1ms",
+            "--rt-priority",
+            "90",
+            "--rt-cpu",
+            "3",
+            "--rt-metrics",
+            "metrics.jsonl",
+        ]);
+        assert_eq!(full.build.run.rt_priority, Some(90));
+        assert_eq!(full.build.run.rt_cpu, Some(3));
+        assert_eq!(full.build.run.rt_metrics.as_deref(), Some("metrics.jsonl"));
+
+        let parse_error = |args: &[&str]| {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            parse(&args).err().expect("the invocation must fail")
+        };
+        assert!(
+            parse_error(&["run", "--rt-priority", "90"]).contains("require `--rt`"),
+            "companion options need --rt"
+        );
+        assert!(
+            parse_error(&["build", "--rt"]).contains("only valid with `stc run`"),
+            "--rt is a run-only option"
+        );
+        assert!(
+            parse_error(&["run", "--rt", "--cycle-time", "1ms", "--mock-clock", "0ns"])
+                .contains("cannot be combined"),
+            "--rt and the mock clock are mutually exclusive"
+        );
+        assert!(
+            parse_error(&["run", "--rt", "--cycle-time", "0ns"]).contains("positive"),
+            "--rt requires a positive cycle time"
+        );
+        assert!(
+            parse_error(&["run", "--rt", "--cycle-time", "1ms", "--rt-priority", "0",])
+                .contains("between 1 and 99"),
+            "priority zero is rejected"
+        );
+        assert!(
+            parse_error(&["run", "--rt", "--cycle-time", "1ms", "--rt-cpu", "64",])
+                .contains("between 0 and 63"),
+            "CPU 64 is rejected"
         );
     }
 

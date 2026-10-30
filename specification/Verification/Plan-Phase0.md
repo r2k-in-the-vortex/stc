@@ -172,7 +172,7 @@ lean/
     Semantics/       reference interpreter and conformance harness
     Registry/        theorem registry and status generation
 
-Specification/Verification/
+specification/Verification/
   Plan.md            authoritative program plan
   Plan-Phase0.md     this document
   Semantics.md       reviewed semantics reference (Phase 0 deliverable)
@@ -242,7 +242,7 @@ from agreed definitions and checks.
 - Add CI checks: no `sorry`/`admit` in Phase 0 modules, `#print axioms` audit for top-level
   theorems, registry resolution, and a semantics-conformance placeholder that fails until it
   runs real cases.
-- Write the `Specification/Verification/Semantics.md` skeleton with the section headings from
+- Write the `specification/Verification/Semantics.md` skeleton with the section headings from
   §9.
 
 **Deliverables.** Approved charter; module skeleton; registry entries; CI checks; Semantics.md
@@ -460,10 +460,10 @@ can cite.
 
 **Work.**
 
-- Complete `Specification/Verification/Semantics.md`: scope, core subset, grammar/AST/HIR/IR
+- Complete `specification/Verification/Semantics.md`: scope, core subset, grammar/AST/HIR/IR
   mapping, static and dynamic judgments, memory/GOT model, trap/UB policy, theorem inventory,
   TCB, and changelog.
-- Complete `Specification/Verification/Phase0-Report.md`: what was proved, the conformance
+- Complete `specification/Verification/Phase0-Report.md`: what was proved, the conformance
   results, known gaps and exclusions, and the handoff.
 - Run the review: internal review of the semantics document, specification traceability, proof
   audit (no `sorry`, axiom audit), and a registry check.
@@ -667,7 +667,7 @@ failure. The triage log is part of `Phase0-Report.md`.
 
 ## 10. Semantics document
 
-`Specification/Verification/Semantics.md` is the reviewed reference. It contains:
+`specification/Verification/Semantics.md` is the reviewed reference. It contains:
 
 - scope, core subset, and exclusions;
 - grammar/AST/HIR/IR mapping;
@@ -728,9 +728,9 @@ Phase 0 is done when:
 - `lake exe stc-sem` runs the core corpus.
 - `lake exe semantics-conformance` reports agreement for every core corpus case, or a documented
   exclusion with a triage reason.
-- `Specification/Verification/Semantics.md` is reviewed, versioned at `1.0`, and traceable to
+- `specification/Verification/Semantics.md` is reviewed, versioned at `1.0`, and traceable to
   the specification.
-- `Specification/Verification/Phase0-Report.md` records results, gaps, exclusions, and the
+- `specification/Verification/Phase0-Report.md` records results, gaps, exclusions, and the
   handoff.
 - The registry and parent plan reflect the completed S-level claim: the semantics is defined
   and proved sound; the Rust implementation is tested against it, not proved equivalent.
@@ -746,7 +746,7 @@ Phase 0 is done when:
 | P0-D5 | Mathlib/Batteries policy | **Decided 2026-10-27:** core Lean plus Batteries for executable models; Mathlib proof-only after a build-time spike |
 | P0-D6 | Floats, time, strings, and aggregates | **Decided by P0-D1 2026-10-27:** excluded from Phase 0; later phases own them |
 | P0-D7 | Conformance oracle | **Decided 2026-10-27:** compare the compiled artifact for execution and `stc test` for function cases; keep a no-clang pure-function path |
-| P0-D8 | Semantics document location | **Decided 2026-10-27:** `Specification/Verification/Semantics.md`, versioned with the plan |
+| P0-D8 | Semantics document location | **Decided 2026-10-27:** `specification/Verification/Semantics.md`, versioned with the plan |
 | P0-D9 | Recursion and fuel | **Decided 2026-10-27:** include recursion, fuel the interpreter, and do not require a source termination proof |
 | P0-D10 | Conformance acceptance threshold | **Decided 2026-10-27:** every core case agrees or has a written triage exclusion; no silent exclusions |
 
@@ -965,7 +965,7 @@ M6.5 rechecks them.
 | Area | Evidence | Current semantics | Resolution |
 | --- | --- | --- | --- |
 | `FOR` step evaluation and zero step | `lower_for` in `crates/stc-codegen/src/stmt.rs` | Start/stop/step once; zero takes the ascending test | Q4 |
-| Character conversions | `Specification/UTF8-Strings.md` §3.1 and the conversion table | Layout-only conversion; runs of surrogates preserved | Q3 |
+| Character conversions | `specification/UTF8-Strings.md` §3.1 and the conversion table | Layout-only conversion; runs of surrogates preserved | Q3 |
 | Power trap code | `ensure_pow_helper` in `crates/stc-codegen/src/expr.rs`; `consteval.rs` | `RANGE` for a negative signed exponent | Q6 |
 | Initialization order | `emit_global_initializers`, `emit_instance_initializers` in `crates/stc-codegen/src/unit.rs` | Globals then program fields, declaration order, once | Q5 |
 

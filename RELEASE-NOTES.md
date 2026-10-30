@@ -86,7 +86,7 @@ M8 verification: CI run
 [40821738218](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218)
 (commit `ba97c5a`) passed all 36 jobs on the three native hosts; the
 phase evidence runs are recorded in
-[Testing and Verification](Specification/Architecture/Testing-and-Verification.md) §6.4.
+[Testing and Verification](specification/Architecture/Testing-and-Verification.md) §6.4.
 
 ## Artifacts
 

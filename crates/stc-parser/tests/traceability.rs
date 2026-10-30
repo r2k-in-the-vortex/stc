@@ -725,5 +725,5 @@ fn collect_rust_sources(directory: &Path, output: &mut String) {
 }
 
 fn spec_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Specification/Syntax/Grammar.md")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specification/Syntax/Grammar.md")
 }

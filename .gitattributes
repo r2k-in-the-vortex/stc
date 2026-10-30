@@ -10,3 +10,9 @@
 *.json text eol=lf
 *.hex text eol=lf
 *.txt text eol=lf
+tools/rt/stc-wl4-run text eol=lf
+tools/rt/stc-wl4.sudoers text eol=lf
+tools/rt/build-bundle.sh text eol=lf
+tools/rt/campaign.py text eol=lf
+tools/rt/tests/*.py text eol=lf
+.github/workflows/rt-build.yml text eol=lf

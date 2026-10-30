@@ -1,4 +1,5 @@
 .claude/settings.local.json
+.env/*
 
 # Rust build artifacts
 /target/
@@ -14,4 +15,4 @@ __pycache__/
 *.pyc
 
 # Local copyrighted reference: keep out of version control
-/Specification/Reference/*.pdf
+/specification/Reference/*.pdf

@@ -63,7 +63,7 @@ separate process.
 
 `stc build --release` produces the optimised, stripped form under
 `target/stc/release`. The full command surface is in the repository
-[README](../../README.md) and [CLI and Manifest](../../Specification/Architecture/CLI-and-Manifest.md).
+[README](../../README.md) and [CLI and Manifest](../../specification/Architecture/CLI-and-Manifest.md).
 
 ### Debugging
 
@@ -105,14 +105,14 @@ counts. For a deployed controller, use the active manifest from
 candidate; a plain build warns again because the driver does not assume the
 previous local artifact is the active generation. `-A STC-W-MANIFEST-001`
 suppresses the warning without supplying a baseline. The baseline and plan
-contract is in [Online Change and GOT](../../Specification/Architecture/Online-Change-and-GOT.md).
+contract is in [Online Change and GOT](../../specification/Architecture/Online-Change-and-GOT.md).
 
 ## Where to go next
 
 The rest of the implemented language and runtime is documented in the
-[specification](../../Specification/): arrays, records, strings, references, and
-classes in [Grammar](../../Specification/Syntax/Grammar.md); I/O devices and
-retained state in [I/O and Devices](../../Specification/Architecture/IO-and-Devices.md)
-and [State and RETAIN](../../Specification/Architecture/State-and-Retain.md);
-tasks, tests, and CI in [Testing and Verification](../../Specification/Architecture/Testing-and-Verification.md);
-and debug and monitoring in [Debug and Monitoring](../../Specification/Architecture/Debug-and-Monitoring.md).
+[specification](../../specification/): arrays, records, strings, references, and
+classes in [Grammar](../../specification/Syntax/Grammar.md); I/O devices and
+retained state in [I/O and Devices](../../specification/Architecture/IO-and-Devices.md)
+and [State and RETAIN](../../specification/Architecture/State-and-Retain.md);
+tasks, tests, and CI in [Testing and Verification](../../specification/Architecture/Testing-and-Verification.md);
+and debug and monitoring in [Debug and Monitoring](../../specification/Architecture/Debug-and-Monitoring.md).

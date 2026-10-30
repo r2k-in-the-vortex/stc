@@ -851,6 +851,12 @@ impl Host {
         host_api::transient_bytes(generation)
     }
 
+    /// Returns one generation's successful allocation and free counts.
+    #[must_use]
+    pub fn transient_counts(&self, generation: u64) -> Option<(u64, u64)> {
+        host_api::transient_counts(generation)
+    }
+
     /// Returns the active generation's manifest.
     #[must_use]
     pub fn active_manifest(&self) -> Option<&Manifest> {

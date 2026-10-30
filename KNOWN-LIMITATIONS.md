@@ -6,7 +6,7 @@ Date: 2026-10-29
 This list is part of the release contract. Each entry is either an explicit
 v1 profile boundary or a tested limitation with a documented workaround.
 Anything not listed here and not described in
-[`Specification/01-Conformance-Profile.md`](Specification/01-Conformance-Profile.md)
+[`specification/01-Conformance-Profile.md`](specification/01-Conformance-Profile.md)
 must either work or produce an explicit diagnostic; silent acceptance of an
 unsupported feature is a bug.
 
@@ -81,7 +81,7 @@ machine design as required by law and regulation.
 | The test runner is sequential and process-isolated; parallel test threads are not provided | Deterministic output and resource use are deliberate |
 | `STC_ASSERT` and `{stc:test}` units are excluded from production builds; production use is an error | Keep test code in `[test].sources` or a separate test package |
 | I/O bindings in `stc.toml` are validated against the selected production configuration; a test build uses the synthetic test configuration, so binding paths that name production instances are not available in `stc test` | Use `{stc:io}` pragmas on the direct variable when the project must also test cleanly, or keep bindings in a production-only configuration project |
-| Performance figures are informational and host-dependent, not real-time guarantees | See [`Specification/Verification/Performance.md`](Specification/Verification/Performance.md) and record the host/regime when comparing |
+| Performance figures are informational and host-dependent, not real-time guarantees | See [`specification/Verification/Performance.md`](specification/Verification/Performance.md) and record the host/regime when comparing |
 
 ## 6. Traceability and evidence
 
@@ -91,3 +91,22 @@ machine design as required by law and regulation.
 | Timing measurements are not CI gates | The `performance` and `debug_overhead` tests are ignored by default and run explicitly |
 | `Debug overhead` workflow dispatch becomes available only after the workflow exists on the default branch | Run the same ignored test locally or in a dispatched `debug` job meanwhile |
 | Flaky process/timing tests are treated as bugs, not fixed by widening deadlines | See D-198 and [`RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md) |
+
+## 7. Real-time measurement (WL-4)
+
+Added 2026-10-30. The full evidence is in
+[`specification/Verification/RT-Host.md`](specification/Verification/RT-Host.md) and the per-run
+detail is in
+[`specification/Verification/RT-Run-Manifest.md`](specification/Verification/RT-Run-Manifest.md).
+
+| Limitation | Status / workaround |
+| --- | --- |
+| The WL-4 figures describe one untuned host and configuration; they are not a hard real-time guarantee and not a safety function | Use them as host-specific evidence; rerun the campaign per host and configuration |
+| The untuned host does not sustain a 1 ms cycle under the heavy R1 mixed external stress load (execution p50 about 2.6 ms) | The same-CPU lower-class load case is protected by FIFO:90; the tuned profile is deferred future work ([RT-Host.md](specification/Verification/RT-Host.md) §6) |
+| The strict `missed_deadline` counter counts any positive wake lateness, so it reports nearly every cycle | Use the execution and wake-lateness percentiles and the skipped-period count; the counter is not a hard-miss count |
+| The max wake-lateness columns contain isolated multi-hundred-millisecond samples | The raw data retains the per-cycle records; p99.9 is the tail metric; the maxima are not bounds |
+| The untuned noise floor shows osnoise maxima of 8.5–22.8 ms and a 13 µs hwlat maximum | The tuned profile remains deferred future work; the trigger is recorded in [RT-Host.md](specification/Verification/RT-Host.md) §6 |
+| Deploy prepare/load/activation runs on the cycle thread; online-change deployment latency is 1.8–4.3 ms in R2 and 14.9–126.3 ms in R1 | This is maintenance latency, not cycle jitter; fully off-thread prepare is post-v1 work |
+| RT metrics are buffered and flushed at exit; a hard crash can lose buffered records | Keep runs bounded or accept the loss; the launcher writes a summary on normal exit, stop, or interrupt |
+| The control-disabled control-cost leg estimates its warm-up cycle boundary from the cycle count | The error is negligible over a 10 minute run; the control-enabled legs use fixed status boundaries |
+| The tuned boot profile was not executed in v2.0.0 | It remains a separate future-work scope decision; no tuned result is claimed |

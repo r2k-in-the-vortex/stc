@@ -27,7 +27,34 @@ mod platform {
         fn setpriority(which: c_int, who: u32, prio: c_int) -> c_int;
     }
 
+    #[cfg(target_os = "linux")]
+    const SCHED_OTHER: c_int = 0;
+
+    #[cfg(target_os = "linux")]
+    #[repr(C)]
+    struct SchedParam {
+        sched_priority: c_int,
+    }
+
+    #[cfg(target_os = "linux")]
+    unsafe extern "C" {
+        fn sched_setscheduler(pid: c_int, policy: c_int, param: *const SchedParam) -> c_int;
+    }
+
     pub(super) unsafe fn lower() {
+        // A FIFO cycle thread makes new service threads inherit FIFO. Demote
+        // the calling service thread back to SCHED_OTHER before lowering its
+        // nice value; a sandbox may reject the change, which leaves the
+        // inherited policy in place (D-204).
+        #[cfg(target_os = "linux")]
+        {
+            let param = SchedParam { sched_priority: 0 };
+            // SAFETY: pid 0 names the calling thread; `param` is a valid
+            // `sched_param` for the duration of the call.
+            unsafe {
+                let _ = sched_setscheduler(0, SCHED_OTHER, &param);
+            }
+        }
         // SAFETY: `PRIO_PROCESS` with id 0 selects the calling thread on
         // Linux; a permission failure leaves the inherited priority in place.
         unsafe {

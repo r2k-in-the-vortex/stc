@@ -1,0 +1,17 @@
+schema = 1
+
+[package]
+name = "rt-bench"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+configuration = "RtBench"
+
+[build]
+emit = ["module", "metadata"]
+
+[run]
+cycles = 0
+cycle-time = "1ms"

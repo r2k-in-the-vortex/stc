@@ -11,7 +11,7 @@ Checks:
   * relative Markdown links resolve inside the repository;
   * every specification document names the profile identifier;
   * the Rust and Lean toolchain pins exist and are non-empty;
-  * no PDF under Specification/Reference is tracked, and reference PDFs stay ignored;
+  * no PDF under specification/Reference is tracked, and reference PDFs stay ignored;
   * no TODO/TBD/FIXME placeholders remain outside fenced/inline code
     (a line containing ``ci:allow-placeholder`` is exempt).
 
@@ -30,31 +30,31 @@ PROFILE = "stc-2013-oop-utf8-v1"
 
 REQUIRED_DOCUMENTS = (
     "README.md",
-    "Specification/01-Conformance-Profile.md",
-    "Specification/Syntax/Tokenization.md",
-    "Specification/Syntax/Grammar.md",
-    "Specification/AST/AST.md",
-    "Specification/Architecture/Architecture.md",
-    "Specification/Architecture/Runtime-and-Execution.md",
-    "Specification/Architecture/IO-and-Devices.md",
-    "Specification/Architecture/State-and-Retain.md",
-    "Specification/Architecture/CLI-and-Manifest.md",
-    "Specification/Architecture/Testing-and-Verification.md",
-    "Specification/Architecture/Online-Change-and-GOT.md",
-    "Specification/Architecture/GOT-Artifacts.md",
-    "Specification/Architecture/Debug-and-Monitoring.md",
-    "Specification/Verification/Plan.md",
-    "Specification/Verification/Plan-Phase0.md",
-    "Specification/Verification/Semantics-Charter.md",
-    "Specification/Verification/Semantics.md",
-    "Specification/Verification/Core-Coverage.md",
-    "Specification/Verification/Performance.md",
-    "Specification/Decisions.md",
-    "Specification/UTF8-Strings.md",
+    "specification/01-Conformance-Profile.md",
+    "specification/Syntax/Tokenization.md",
+    "specification/Syntax/Grammar.md",
+    "specification/AST/AST.md",
+    "specification/Architecture/Architecture.md",
+    "specification/Architecture/Runtime-and-Execution.md",
+    "specification/Architecture/IO-and-Devices.md",
+    "specification/Architecture/State-and-Retain.md",
+    "specification/Architecture/CLI-and-Manifest.md",
+    "specification/Architecture/Testing-and-Verification.md",
+    "specification/Architecture/Online-Change-and-GOT.md",
+    "specification/Architecture/GOT-Artifacts.md",
+    "specification/Architecture/Debug-and-Monitoring.md",
+    "specification/Verification/Plan.md",
+    "specification/Verification/Plan-Phase0.md",
+    "specification/Verification/Semantics-Charter.md",
+    "specification/Verification/Semantics.md",
+    "specification/Verification/Core-Coverage.md",
+    "specification/Verification/Performance.md",
+    "specification/Decisions.md",
+    "specification/UTF8-Strings.md",
 )
 
 # The reference-material README describes the local PDF only; it is not part of the profile.
-PROFILE_EXEMPT = {"Specification/Reference/README.md"}
+PROFILE_EXEMPT = {"specification/Reference/README.md"}
 
 TOOLCHAIN_PINS = (
     "rust-toolchain.toml",
@@ -189,7 +189,7 @@ def check_reference_pdf(root: Path, errors: list[str]) -> None:
     if not (root / ".git").exists():
         return
 
-    tracked = git(root, "ls-files", "--", "Specification/Reference")
+    tracked = git(root, "ls-files", "--", "specification/Reference")
     if tracked is None:
         errors.append("git is unavailable; cannot verify tracked reference PDFs")
         return
@@ -205,12 +205,12 @@ def check_reference_pdf(root: Path, errors: list[str]) -> None:
         "check-ignore",
         "-q",
         "--no-index",
-        "Specification/Reference/reference.pdf",
+        "specification/Reference/reference.pdf",
     )
     if ignored is None:
         errors.append("git is unavailable; cannot verify the reference PDF ignore rule")
     elif ignored.returncode != 0:
-        errors.append("Specification/Reference/*.pdf is not ignored by .gitignore")
+        errors.append("specification/Reference/*.pdf is not ignored by .gitignore")
 
 
 def main(argv: list[str]) -> int:
@@ -227,7 +227,7 @@ def main(argv: list[str]) -> int:
     document_count = check_required_documents(root, errors)
     link_count = 0
 
-    documents = [root / "README.md", *sorted((root / "Specification").rglob("*.md"))]
+    documents = [root / "README.md", *sorted((root / "specification").rglob("*.md"))]
     for path in documents:
         text = read_text(path)
         check_profile(root, path, text, errors)

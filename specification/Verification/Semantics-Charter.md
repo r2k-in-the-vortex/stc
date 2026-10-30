@@ -162,7 +162,7 @@ normative record, and this table confirms them for the charter.
 | P0-D5 | Mathlib/Batteries policy | Core Lean plus Batteries for executable models; Mathlib proof-only after a build-time spike |
 | P0-D6 | Floats, time, strings, and aggregates | Excluded from Phase 0 by P0-D1; later phases own them |
 | P0-D7 | Conformance oracle | Compare the compiled artifact for execution and `stc test` for function cases; keep a no-clang pure-function path |
-| P0-D8 | Semantics document location | `Specification/Verification/Semantics.md`, versioned with the plan |
+| P0-D8 | Semantics document location | `specification/Verification/Semantics.md`, versioned with the plan |
 | P0-D9 | Recursion and fuel | Include recursion, fuel the interpreter, and do not require a source termination proof |
 | P0-D10 | Conformance acceptance threshold | Every core case agrees or has a written triage exclusion; no silent exclusions |
 
@@ -173,7 +173,7 @@ semantics document skeleton.
 
 | Deliverable | Location | State |
 | --- | --- | --- |
-| This charter and the frozen scope | `Specification/Verification/Semantics-Charter.md` | Approved 2026-10-27 |
+| This charter and the frozen scope | `specification/Verification/Semantics-Charter.md` | Approved 2026-10-27 |
 | Semantics document skeleton | [Semantics.md](Semantics.md) | Approved 2026-10-27 |
 | Lean module skeletons | `lean/Stc/{Syntax,Grammar,Hir,Sem,Codegen}` and `lean/Verification/Semantics` | Builds with `lake build` |
 | Theorem registry | [`lean/verification-status.toml`](../../lean/verification-status.toml) | 24 inventory records, all `planned` |

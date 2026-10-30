@@ -312,6 +312,18 @@ pub fn transient_bytes(generation: u64) -> Option<u64> {
         .map(TransientAllocator::reserved_bytes)
 }
 
+/// Returns one generation's successful allocation and free counts.
+///
+/// A failed prepare, retire, or unload withdraws the generation, after which
+/// this returns `None`.
+#[must_use]
+pub fn transient_counts(generation: u64) -> Option<(u64, u64)> {
+    service_state()
+        .allocators
+        .get(&generation)
+        .map(TransientAllocator::counts)
+}
+
 fn record_fault(generation: u64, message: impl Into<String>) {
     service_state().faults.push((generation, message.into()));
 }

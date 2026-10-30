@@ -158,6 +158,24 @@ higher on this run (34 µs versus 4.3 µs). That difference is recorded honestly
 rather than treated as a regression gate; it should be re-measured with the
 debugging instrumentation that the M6.5 run used before drawing conclusions.
 
+## PREEMPT_RT host (WL-4)
+
+Measured on the untuned x86-64 PREEMPT_RT host in [RT-Host.md](RT-Host.md) on 2026-10-29/30.
+These figures describe one host in one regime. They are informational, are not comparable with
+the Windows or AArch64 figures above, and are not a hard real-time guarantee.
+
+| 1 ms medium workload | Execution p50 / p99 | Wake p50 / p99 | Cycles / skipped per 10 min |
+| --- | --- | --- | --- |
+| R0 quiet | 0.663–0.782 ms / 0.929–0.947 ms | 6.1–6.9 µs / 12.3–12.9 µs | 598,563–599,705 / 300–1,442 |
+| R1 other-CPU mixed load | 2.580–2.681 ms / 3.429–3.476 ms | 20.9–23.7 µs / 47.9–96.8 µs | 177,942–188,901 / 411,169–422,166 |
+| R2 same-CPU mixed load | 0.649–0.659 ms / 0.758–0.803 ms | 7.6–7.7 µs / 12.8–14.4 µs | 599,470–599,883 / 121–535 |
+
+The R1 case is a heavy mixed-load stress case, not a light background load. The report covers the
+10 ms secondary runs, the online-change/rollback cases, the control-cost A/B, and the noise
+floor. An untuned R1 p50 of about 2.6 ms at a 1 ms target and osnoise maxima of 8.5–22.8 ms meet
+the deferred tuned-profile trigger in [RT-Host.md](RT-Host.md) §6; the tuned profile was not
+executed in v2.0.0.
+
 ## Policy
 
 - A performance change is not a release blocker unless it breaks correctness,
@@ -166,3 +184,5 @@ debugging instrumentation that the M6.5 run used before drawing conclusions.
   checkpoint count, run count, and variance policy first (D-193).
 - Do not compare figures across hosts, clang versions, build forms, or
   checkpoint counts without recording the difference.
+- WL-4 PREEMPT_RT figures are informational and host-specific; they are not a CI gate and do
+  not establish a hard real-time guarantee (D-193).

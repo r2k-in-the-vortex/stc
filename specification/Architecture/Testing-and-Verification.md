@@ -79,7 +79,7 @@ Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Cha
 | Cross-target | IR/object emission for nine triples, header architecture/endianness, exe/lib rejection | `crates/stc-driver/tests/cross_target.rs` |
 | Packaging | Layout, checksums, version, formats/ABI, debug-free archive/shared library, stripped archive still links | `cargo xtask package`, `crates/stc-driver/tests/package.rs`, `debug_release.rs` |
 | Examples | Every committed example checks, builds both modes, runs, tests, and formats | `crates/stc-driver/tests/examples.rs` |
-| Performance | Build/cycle/switch/debug timings, recorded host/regime, non-gating | `crates/stc-driver/tests/performance.rs`, `debug_overhead.rs`, `crates/stc-runtime/tests/switch_latency.rs`, `Specification/Verification/Performance.md` |
+| Performance | Build/cycle/switch/debug timings, recorded host/regime, non-gating | `crates/stc-driver/tests/performance.rs`, `debug_overhead.rs`, `crates/stc-runtime/tests/switch_latency.rs`, `specification/Verification/Performance.md` |
 | Formatter | Idempotence, comment/trivia preservation, strict output, `--check` | `crates/stc-fmt/tests`, `crates/stc-driver/tests/fmt_cli.rs` |
 | Syntax API | `SyntaxKind` discriminants/names stable and append-only; semver surface | `crates/stc-syntax/tests` |
 | Lean | Exact-function models and proofs | `lean/`, `tests/vectors` |
@@ -649,7 +649,7 @@ the `cross-target` suite remains IR/object-only and is not native-host evidence.
 
 - Every rule ID (`STC-*`) appears in at least one test name, test annotation, or conformance
   metadata.
-- `cargo xtask traceability` scans `Specification/**/*.md` and the tests/corpus and emits a
+- `cargo xtask traceability` scans `specification/**/*.md` and the tests/corpus and emits a
   report:
   - covered rules,
   - rules marked "not implemented",

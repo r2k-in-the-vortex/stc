@@ -2,7 +2,7 @@
 //!
 //! `cargo xtask test --suite <name> [--locked]` runs one integration suite,
 //! which is one or more package/test-target pairs. `cargo xtask traceability
-//! [--check]` maps `STC-*` rule IDs found in `Specification/**/*.md` to
+//! [--check]` maps `STC-*` rule IDs found in `specification/**/*.md` to
 //! evidence in the tests and conformance corpus. The traceability allowlist
 //! (`tools/ci/traceability-allowlist.toml`) records rules that are not
 //! implemented and IDs that are examples, not rules.
@@ -1066,7 +1066,7 @@ fn read_allowlist(root: &Path) -> Result<BTreeMap<String, AllowEntry>, String> {
 
 fn spec_rules(root: &Path) -> Result<BTreeSet<String>, String> {
     let mut files = Vec::new();
-    collect_files(&root.join("Specification"), &mut files)?;
+    collect_files(&root.join("specification"), &mut files)?;
     let mut rules = BTreeSet::new();
     for file in files {
         if file.extension().and_then(|extension| extension.to_str()) != Some("md") {

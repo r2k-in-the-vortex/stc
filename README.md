@@ -6,6 +6,16 @@
 `stc` compiles IEC 61131-3 Structured Text to textual LLVM IR. `clang` takes the IR from there to
 x86-64 or any other target clang supports.
 
+## Preface
+
+This compiler and runtime v1.0.0 was generated for $34.33USD in token cost and 7 days of single developer work.
+At the same time, it approaches ability to compete with likes of Siemens AX or Beckhoff PLC++, leading edge, extensive engineering teams, multi year development effort projects.
+No matter what shortcomings this compiler may have or develop, it's trivia to reduce it and any problems that pop up to just specification for a improved rewrite from scratch.
+
+While more work remains to reach practically usable product status, as is also the case for commercial compeditors, this demonstrates conclusively that the entry barrier to deliver complex software has lowered by many orders of magnitude, and products which may have previously been economically impossible are now going to be minor hobby level tasks.
+
+Maybe not this piece of software specifically, but the general change in how software industry works will change landscape in industrial automation and other fields, drastically. Decades old pieces of software costing thousands of dollars in license costs yearly and providing comparatively little utility, software landscape will be whiped clean and started from scratch over next few years.
+
 ## Status
 
 **v1.0.0 is released (2026-10-29): M8 (Linux host portability) is complete and `stc` 1.0.0 runs natively on
@@ -39,7 +49,7 @@ plus loadable whole-program modules, persistent memory is host-owned and accesse
 project-defined GOT, every module is paired with a persistent GOT manifest, and activation is a
 cycle-boundary module swap. M4.5 phases 0–10 are complete (2026-10-25): the versioned `GotId`,
 catalog, descriptor, host-ABI, manifest/plan, and build-ID contracts are fixed in
-[GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md); `stc-got` implements
+[GOT Artifacts and Schemas](specification/Architecture/GOT-Artifacts.md); `stc-got` implements
 stable keys, catalog records, binary/canonical-JSON manifests, baseline matching, tracked
 renames, preserve/allocate/drop/reject classification, slot assignment, descriptor format-1
 encoding/decoding and descriptor/manifest pairing, and deterministic snapshots; `stc-codegen`
@@ -68,7 +78,7 @@ generation pins and metadata parsing have focused tests; and a recorded switch m
 at 1024 roots versus 86 ms prepare) supports the O(1) activation claim. CI runs an explicit
 online-change job on Windows and Ubuntu. Phase 10 closes the milestone's documentation: the
 specification set, plan, decision log, and M5 handover describe the implemented host/module
-model, [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md) §12 records
+model, [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md) §12 records
 the boundary M6.5 builds on, and the M5 handover addendum records the contracts M5 must extend.
 The foundation milestone is M4.5 before M5; M6.5 implements full typed debug and monitoring.
 
@@ -85,8 +95,8 @@ Interface source constructs, dispatch, assignment attempts (`?=`), object refere
 `REF_TO`-to-interface are implemented and verified in phase 4b; references to split aggregate
 values remain explicit diagnostics. Step 4b.0 records
 host ABI 2.1 with the inline TYPEINFO, VTABLE, and object-record layout in
-[GOT Artifacts](Specification/Architecture/GOT-Artifacts.md) §8.5 and
-[Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) §2.6. Step 4b.1
+[GOT Artifacts](specification/Architecture/GOT-Artifacts.md) §8.5 and
+[Runtime and Execution](specification/Architecture/Runtime-and-Execution.md) §2.6. Step 4b.1
 projects TYPEINFO/class VTABLE descriptors, interface-prototype function records with trap stubs,
 the class value/instance layout split (`PTR_TO` handle keys), and hidden non-retained
 `HANDLE`/`OBJREC` roots; generated prepare fills fresh records and handles, and the catalog
@@ -128,7 +138,7 @@ stepping, call stacks, the manifest-assisted split-object view, and a local auth
 teardown; and the `stc debug` CLI and `stc run --debug-server` expose it. Debug hooks add one
 host service (ID 13 at host ABI 2.3) and are absent from release and test artifacts.
 Debug-disabled overhead is measured on Windows and Linux and recorded in
-[Performance](Specification/Verification/Performance.md); it is not a CI gate.
+[Performance](specification/Verification/Performance.md); it is not a CI gate.
 The persistent host, loadable modules, GOT roots, manifests, swap protocol,
 and process-image remap are implemented and shared by the M5 lowering. Parser and semantic snapshots, IR snapshots, clang verification, execution
 and C-harness tests, a committed
@@ -156,21 +166,21 @@ timeout, or interlock is provided. The consolidated list is in
 
 | Document | Purpose |
 | --- | --- |
-| [Conformance Profile](Specification/01-Conformance-Profile.md) | Exactly what is implemented and claimed; stable diagnostic code index (§10) |
-| [Tokenization](Specification/Syntax/Tokenization.md) | Source model, tokens, literals, trivia |
-| [Grammar](Specification/Syntax/Grammar.md) | EBNF for the supported ST surface |
-| [UTF-8 Strings](Specification/UTF8-Strings.md) | `USTRING`/`UCHAR` extension, encoding, length, ABI |
-| [AST/CST/HIR](Specification/AST/AST.md) | Syntax tree and typed middle-end design |
-| [Architecture](Specification/Architecture/Architecture.md) | Pipeline, crates, LLVM IR, ABI |
-| [Runtime and Execution](Specification/Architecture/Runtime-and-Execution.md) | Execution model, runtime, standard functions/FBs |
-| [I/O and Devices](Specification/Architecture/IO-and-Devices.md) | Process image, AT linking, device model, JSON pragma hints |
-| [State and RETAIN](Specification/Architecture/State-and-Retain.md) | File-backed retained state, warm/cold restart, layout hash |
-| [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md) | Commands, diagnostics, `stc.toml` |
-| [Testing and Verification](Specification/Architecture/Testing-and-Verification.md) | Test framework, Lean, CI |
-| [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md) | Host/module model, GOT, manifest, swap protocol |
-| [GOT Artifacts and Schemas](Specification/Architecture/GOT-Artifacts.md) | Versioned `GotId`, catalog, descriptor, manifest, plan, host ABI, build-ID formats |
-| [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md) | Typed access, forcing, breakpoints, debug info |
-| [Decisions and Open Questions](Specification/Decisions.md) | Rationale and backlog |
+| [Conformance Profile](specification/01-Conformance-Profile.md) | Exactly what is implemented and claimed; stable diagnostic code index (§10) |
+| [Tokenization](specification/Syntax/Tokenization.md) | Source model, tokens, literals, trivia |
+| [Grammar](specification/Syntax/Grammar.md) | EBNF for the supported ST surface |
+| [UTF-8 Strings](specification/UTF8-Strings.md) | `USTRING`/`UCHAR` extension, encoding, length, ABI |
+| [AST/CST/HIR](specification/AST/AST.md) | Syntax tree and typed middle-end design |
+| [Architecture](specification/Architecture/Architecture.md) | Pipeline, crates, LLVM IR, ABI |
+| [Runtime and Execution](specification/Architecture/Runtime-and-Execution.md) | Execution model, runtime, standard functions/FBs |
+| [I/O and Devices](specification/Architecture/IO-and-Devices.md) | Process image, AT linking, device model, JSON pragma hints |
+| [State and RETAIN](specification/Architecture/State-and-Retain.md) | File-backed retained state, warm/cold restart, layout hash |
+| [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) | Commands, diagnostics, `stc.toml` |
+| [Testing and Verification](specification/Architecture/Testing-and-Verification.md) | Test framework, Lean, CI |
+| [Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md) | Host/module model, GOT, manifest, swap protocol |
+| [GOT Artifacts and Schemas](specification/Architecture/GOT-Artifacts.md) | Versioned `GotId`, catalog, descriptor, manifest, plan, host ABI, build-ID formats |
+| [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md) | Typed access, forcing, breakpoints, debug info |
+| [Decisions and Open Questions](specification/Decisions.md) | Rationale and backlog |
 | [Release Notes](RELEASE-NOTES.md) | `1.0.0` highlights, artifacts, formats, upgrade notes |
 | [User Guide](USER-GUIDE.md) | Install, project workflow, build modes, online change, debug, tests |
 | [Known Limitations](KNOWN-LIMITATIONS.md) | Consolidated v1 limits and workarounds |
@@ -217,7 +227,7 @@ test runner, and inspectable artifacts.
 | AX role | Syntax/UX inspiration only; AX preprocessor and vendor pragmas are out of profile |
 
 The 2013 PDF is a **local reference**, not a redistributable artifact. It is excluded from version
-control by `.gitignore`. The specification in `Specification/` is original prose and grammar; it
+control by `.gitignore`. The specification in `specification/` is original prose and grammar; it
 does not reproduce the standard. The 2013 text is consulted for clause-level behavior.
 
 ## Compilation model
@@ -253,7 +263,7 @@ stc build --emit=module             # loadable module + GOT manifest
   baseline; `--cold` explicitly requests a cold-layout build; `--rename old=new` records a
   tracked rename.
 - The host runtime, module descriptor, GOT, and swap protocol are specified in
-  [Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md).
+  [Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md).
 - `--target <triple>` is passed to clang and emitted as the IR triple; without it, clang uses the
   host target.
 - Windows 11 x86-64 (MSVC) is the primary development host. `stc` and its runtime also run
@@ -266,9 +276,9 @@ stc build --emit=module             # loadable module + GOT manifest
   debug/monitoring services. Generated module code never owns persistent storage.
 
 The full artifact layout, runtime ABI, and process-image model are in
-[Architecture](Specification/Architecture/Architecture.md),
-[Runtime](Specification/Architecture/Runtime-and-Execution.md), and
-[Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md).
+[Architecture](specification/Architecture/Architecture.md),
+[Runtime](specification/Architecture/Runtime-and-Execution.md), and
+[Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md).
 
 ## Lean
 
@@ -320,9 +330,9 @@ and manifest (D-178).
 
 Cargo-like diagnostics (`file:line:col: error[STC-E-...]`), source snippets, notes, suggestions,
 and JSON output are implemented. Details:
-[CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md). The stable diagnostic code
+[CLI and Manifest](specification/Architecture/CLI-and-Manifest.md). The stable diagnostic code
 index, including the M6 project/test/online target codes, is
-[Conformance Profile](Specification/01-Conformance-Profile.md) §10; JSON report shapes (test,
+[Conformance Profile](specification/01-Conformance-Profile.md) §10; JSON report shapes (test,
 compatibility, metadata, compliance) are in CLI and Manifest §1.6.
 
 ## Project manifest
@@ -408,11 +418,11 @@ Local path dependencies are resolved into an acyclic package graph and pinned by
 `stc.lock`; `--locked` refuses updates. I/O binding is runtime-owned: `[io]` defines devices and
 optional bindings, `AT` declarations may carry `{stc:io {...}}` hints, and the runtime may
 override them. The full schema, lockfile format, I/O schema, path rules, unknown-key policy, and
-environment overrides are in [CLI and Manifest](Specification/Architecture/CLI-and-Manifest.md)
-and [I/O and Devices](Specification/Architecture/IO-and-Devices.md). Online-change and debug
+environment overrides are in [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md)
+and [I/O and Devices](specification/Architecture/IO-and-Devices.md). Online-change and debug
 schema details are in
-[Online Change and GOT](Specification/Architecture/Online-Change-and-GOT.md) and
-[Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md).
+[Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md) and
+[Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md).
 
 ## Repository layout
 
@@ -457,7 +467,7 @@ stc/
     vectors/exact/           committed Lean-generated vectors
     cross-target/            AArch64 IR smoke fixture
   examples/                  small ST projects
-  Specification/             this specification set
+  specification/             this specification set
     Reference/               local IEC 61131-3:2013 PDF (gitignored)
 ```
 
@@ -506,11 +516,11 @@ on pull requests.
   projects jobs activate with both the suite directory and `xtask`.
 - Every job prints the clang version; builds use `--locked`; warnings are denied.
 
-The job definitions and matrix follow [Testing and Verification](Specification/Architecture/Testing-and-Verification.md) §6.
+The job definitions and matrix follow [Testing and Verification](specification/Architecture/Testing-and-Verification.md) §6.
 
 ## Confirmed decisions
 
-The full log with rationale is in [Decisions](Specification/Decisions.md).
+The full log with rationale is in [Decisions](specification/Decisions.md).
 
 | ID | Decision |
 | --- | --- |
@@ -523,7 +533,7 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-007 | Primary development host: Windows x86-64 MSVC; Linux x86-64 and AArch64 are supported native hosts from M8 (D-042, D-200); targets selected via clang. |
 | D-008 | ST only; no LD/FBD/SFC/IL and no AX preprocessor. |
 | D-009 | Specification is original; IEC PDF is local and not redistributed. |
-| D-010 | Rust workspace under `crates/`; spec under `Specification/`. |
+| D-010 | Rust workspace under `crates/`; spec under `specification/`. |
 | D-011 | v1 runtime is single-task; full config is parsed/analysed. Superseded by D-154 (cooperative multi-task scheduling). |
 | D-012 | Standard FBs in ST; standard functions in the runtime. Superseded by D-134: FB bodies are synthesized HIR in `STC_STD`. |
 | D-013 | Runtime ABI: `stc_init`/`stc_cycle`/`stc_shutdown` + `stc_rt_*`. Superseded by D-094/ABI 2 (`stc_module_*` + host API). |
@@ -549,25 +559,25 @@ The full log with rationale is in [Decisions](Specification/Decisions.md).
 | D-040 | Test-only units and `STC_ASSERT` are excluded from production builds; production use is an error. |
 | D-041 | `SyntaxKind` is a stable, append-only API; full CST/IDE API is planned for v2/v3. |
 | D-042 | `stc` and its runtime run natively on Linux x86-64 and Linux AArch64 (ARM64) from M8; Windows remains the primary development host. |
-| D-045–D-058 | M2 syntax decisions: arena CST owning the source, stable `SyntaxKind`, parser codes `STC-E-GRAM-105`–`111`, strict pragma JSON, token-extent diagnostics, recovery/missing-token policy, and interning deferred to M3. Details in `Specification/Decisions.md`. |
-| D-059–D-075 | M3 analyzer decisions: HIR in M3, the multi-file `stc check` bridge and `_root` session namespace, the interner/session model, the stable diagnostic table, type canonicalization and conversions, overloads, the standard prelude, constant evaluation, access defaults, reference/attempt rules, parse-error suppression, test-only handling, deterministic ordering, and arena-based iterative lowering. Details in `Specification/Decisions.md`. |
-| D-094–D-108 | Online change is a v1 requirement: persistent host + loadable modules, host-owned GOT and per-field roots, handle-based OOP descriptors, place-descriptor references and transient `POINTER TO`, module lifecycle and double-buffered activation, persistent GOT manifest and exact-baseline/cold-download policy, full typed debug in v1, debug-by-default/`--release`, and the explicit non-safety stance. Details in `Specification/Decisions.md` and the online-change/debug specs. |
-| D-113–D-117 | M4.5 phase 1 fixes the artifact contracts: normalized stable keys and content-derived `GotId`s, canonical binary/JSON encodings and digest chain, a pointer-free module descriptor with a separate function table, host ABI 2.0's exact service table and non-returning trap boundary, and build IDs derived from source/catalog/plan inputs. Details in `Specification/Architecture/GOT-Artifacts.md`. |
+| D-045–D-058 | M2 syntax decisions: arena CST owning the source, stable `SyntaxKind`, parser codes `STC-E-GRAM-105`–`111`, strict pragma JSON, token-extent diagnostics, recovery/missing-token policy, and interning deferred to M3. Details in `specification/Decisions.md`. |
+| D-059–D-075 | M3 analyzer decisions: HIR in M3, the multi-file `stc check` bridge and `_root` session namespace, the interner/session model, the stable diagnostic table, type canonicalization and conversions, overloads, the standard prelude, constant evaluation, access defaults, reference/attempt rules, parse-error suppression, test-only handling, deterministic ordering, and arena-based iterative lowering. Details in `specification/Decisions.md`. |
+| D-094–D-108 | Online change is a v1 requirement: persistent host + loadable modules, host-owned GOT and per-field roots, handle-based OOP descriptors, place-descriptor references and transient `POINTER TO`, module lifecycle and double-buffered activation, persistent GOT manifest and exact-baseline/cold-download policy, full typed debug in v1, debug-by-default/`--release`, and the explicit non-safety stance. Details in `specification/Decisions.md` and the online-change/debug specs. |
+| D-113–D-117 | M4.5 phase 1 fixes the artifact contracts: normalized stable keys and content-derived `GotId`s, canonical binary/JSON encodings and digest chain, a pointer-free module descriptor with a separate function table, host ABI 2.0's exact service table and non-returning trap boundary, and build IDs derived from source/catalog/plan inputs. Details in `specification/Architecture/GOT-Artifacts.md`. |
 | D-118 | M4.5 phase 2 records implementation clarifications without changing format 1: elementary layout encoding tags, export wrappers as module-local code paired with the wrapped callable's identity, rejection of reintroduced retired `GotId`s, and direct-variable address metadata remaining in the sidecar. The `stc-got` crate implements the identity, manifest, and plan layer. |
-| D-119–D-121 | M4.5 phases 3–4 fix the module IR shape (slot-table cell loads, indirect cell calls, ABI 2.0 entry points, structural verification), the M4 catalog projection (global/program-field/direct/task-guard roots, synthesized `_DEFAULT` topology, canonical imports, declaration-to-slot bindings), and the shared descriptor format-1 codec with digest/pairing validation and the acyclic descriptor/manifest sealing order. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
-| D-122–D-123 | M4.5 phases 5–6 implement the host substrate and swap controller: stable root/GOT storage, quarantine and transient lifetimes, descriptor/manifest/plan validation, the platform module loader, the ABI 2.0 host service table, atomic active-manifest storage and download, and load/prepare/activate/commit/rollback/unload with exact-currentness and cold paths. Details in `Specification/Architecture/GOT-Artifacts.md` and `Specification/Decisions.md`. |
+| D-119–D-121 | M4.5 phases 3–4 fix the module IR shape (slot-table cell loads, indirect cell calls, ABI 2.0 entry points, structural verification), the M4 catalog projection (global/program-field/direct/task-guard roots, synthesized `_DEFAULT` topology, canonical imports, declaration-to-slot bindings), and the shared descriptor format-1 codec with digest/pairing validation and the acyclic descriptor/manifest sealing order. Details in `specification/Architecture/GOT-Artifacts.md` and `specification/Decisions.md`. |
+| D-122–D-123 | M4.5 phases 5–6 implement the host substrate and swap controller: stable root/GOT storage, quarantine and transient lifetimes, descriptor/manifest/plan validation, the platform module loader, the ABI 2.0 host service table, atomic active-manifest storage and download, and load/prepare/activate/commit/rollback/unload with exact-currentness and cold paths. Details in `specification/Architecture/GOT-Artifacts.md` and `specification/Decisions.md`. |
 | D-124 | M4.5 phase 7 converts generated execution to the GOT/module model: persistent state, direct variables, retain leaves, and task guards use GOT cells; calls are indirect through function cells; host services use import cells; slot access is the two-load sequence; generated modules export the ABI 2 entry-point set; the host configures the process image and direct bindings from the metadata sidecar; `--emit=module`, the thin launcher, and the embedding host archive are driver artifacts; and a non-local trap boundary enables rollback-window recovery. Existing execution tests run through compiler-produced module pairs, completing the execution conversion before M5 and giving phase 8 a working preservation/rollback substrate. |
 | D-125 | M4.5 phase 8 completes the scalar compatibility/preservation policy: online activation reconfigures the process image or remaps direct cells in place, preserves values by `GotId`, and snapshots the image for rollback; moved variables and quarantined roots are exposed as runtime warnings; `reset_quarantine` is the explicit reset primitive while `Reset`/`Migrate` plans remain rejected; cold installs reinitialize roots and the image, and online prepare initializes only fresh roots; and compiler-produced modules cover initializer/state preservation, tracked rename, untracked-removal policy, type-change rejection with a cold reset, and direct-variable remap. |
 | D-126 | M4.5 phase 9 completes test and CI coverage: `fuzz_got_manifest` and `fuzz_module_descriptor` decode untrusted artifacts without loading native code; end-to-end double builds are byte-identical after adding content-derived Windows PE timestamps (`/Brepro`); combined `exe,lib` output is loaded by both the launcher and an embedding C harness; malformed baselines, invalid options, metadata sidecars, and concurrent generation pins are covered; an ignored measurement records 500 ns/1 µs activation at 16/1024 roots against 1.7 ms/86 ms prepare; and CI adds an explicit Windows/Linux online-change job plus one-MiB fuzz input caps; this closes the M4.5 verification gap on both hosts and records the O(1) switch evidence. |
 | D-127 | M4.5 phase 10 closes the milestone with a documentation and handover pass: the README, project plan, conformance profile, architecture/runtime/state/I/O/CLI/testing/debug specifications, plan, and decision log describe the implemented host/module model; the M4.5 handover recorded the implemented contracts, M5 extension points, and open M5 decisions; and `Debug-and-Monitoring.md` §12 records the M4.5 boundary for M6.5. The debug-build entry flag is clarified: M4.5 marks its default non-release artifact form but emits no debug information or checkpoint hooks, and the M6.5 required-feature bit stays clear. This keeps the documentation truthful at the milestone boundary and prevents M5/M6.5 from reintroducing the retired direct-reference model or assuming debug hooks that do not exist yet. |
-| D-153–D-164 | M6 phase 0 fixes the project/package model (kebab-case `stc.toml`, package identity, lockfile), the cooperative host scheduler, the local deploy/status control channel, tracked-rename history, per-test artifacts and the host ABI 2.2 test clock, the debug/release boundary, the formatter style, the file I/O lifecycle, the Lean/vector contract, traceability annotations, runtime path resolution, and the applied diagnostic/report-shape contracts. Details in `Specification/Decisions.md`. |
+| D-153–D-164 | M6 phase 0 fixes the project/package model (kebab-case `stc.toml`, package identity, lockfile), the cooperative host scheduler, the local deploy/status control channel, tracked-rename history, per-test artifacts and the host ABI 2.2 test clock, the debug/release boundary, the formatter style, the file I/O lifecycle, the Lean/vector contract, traceability annotations, runtime path resolution, and the applied diagnostic/report-shape contracts. Details in `specification/Decisions.md`. |
 | D-165–D-172 | M6 phases 4–11 record the implementation details: run-loop exit codes and failed-scan scheduling, the `STCRET01` state file and I/O backends, the test-host result protocol and lexable synthetic names, formatter encoding preservation, the online download/diff/rename/watch workflow, the Lean vector format and the three codegen defects it exposed, the conformance/UI/traceability/CI pass, and the completion documentation pass. |
-| D-173–D-183 | M6.5 debug and monitoring: the local `stc-debug/1` protocol and four scopes, one session per host with the stop/idle bound, typed read/write/force/watch and checkpoint-hook rules, debug-by-default with a stripped hook-free `--release`, the format-2 manifest extension, the stopped-frame sidecar, the split-object `view` key, and the phase-10 documentation/M7 handover pass. Details in `Specification/Decisions.md` and [Debug and Monitoring](Specification/Architecture/Debug-and-Monitoring.md). |
-| D-188–D-199 | M7 release candidate: version `1.0.0-rc.1`, `cargo xtask package` and the `bin`/`lib`/`docs` layout, object-only Windows CodeView, archive-aware release stripping with preserved symbol tables, cold-download-only format-1 manifests, informational performance measurement, no remote/raw-memory debug, IR/object-only cross-target support, pipe-only embedded debug transport, the release checklist/owner, the flake policy, and the retained non-debug traceability allowlist. Details in `Specification/Decisions.md`. |
+| D-173–D-183 | M6.5 debug and monitoring: the local `stc-debug/1` protocol and four scopes, one session per host with the stop/idle bound, typed read/write/force/watch and checkpoint-hook rules, debug-by-default with a stripped hook-free `--release`, the format-2 manifest extension, the stopped-frame sidecar, the split-object `view` key, and the phase-10 documentation/M7 handover pass. Details in `specification/Decisions.md` and [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md). |
+| D-188–D-199 | M7 release candidate: version `1.0.0-rc.1`, `cargo xtask package` and the `bin`/`lib`/`docs` layout, object-only Windows CodeView, archive-aware release stripping with preserved symbol tables, cold-download-only format-1 manifests, informational performance measurement, no remote/raw-memory debug, IR/object-only cross-target support, pipe-only embedded debug transport, the release checklist/owner, the flake policy, and the retained non-debug traceability allowlist. Details in `specification/Decisions.md`. |
 
 ## Question log
 
-Answers are recorded here and in `Specification/Decisions.md`, one at a time.
+Answers are recorded here and in `specification/Decisions.md`, one at a time.
 
 ### Answered
 
@@ -608,7 +618,7 @@ Answers are recorded here and in `Specification/Decisions.md`, one at a time.
 
 **None as of 2026-10-24.** All v1 planning questions Q-001 through Q-212 are resolved
 (A-005 through A-030). The detailed online-change disposition is in A-022 through A-030 above and
-[Decisions](Specification/Decisions.md). New questions will be added here one at a time.
+[Decisions](specification/Decisions.md). New questions will be added here one at a time.
 
 ## Building and running (M7 release candidate)
 

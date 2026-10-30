@@ -62,7 +62,7 @@ stc/
   lean/                      Lake project for exact-function models/proofs
   tests/                     conformance corpus, UI snapshots, committed vectors, cross-target fixtures
   examples/
-  Specification/
+  specification/
 ```
 
 Crate dependency direction is acyclic:
