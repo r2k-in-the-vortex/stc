@@ -181,7 +181,7 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | `CONSTANT`, `RETAIN`, `NON_RETAIN` | Implemented; effective policy per leaf; file-backed state in v1 |
 | `AT` direct-variable declarations | Implemented |
 | `R_EDGE` / `F_EDGE` edge variables | Implemented |
-| Access specifiers on class/FB variables | Implemented |
+| Access specifiers on class/FB variables | Implemented; FB `VAR_INPUT`/`VAR_OUTPUT`/`VAR_IN_OUT` default to `PUBLIC`, class and internal FB `VAR` default to `PROTECTED` (D-211) |
 | Initial values and constant expressions | Implemented |
 
 ### 4.4 Statements and expressions

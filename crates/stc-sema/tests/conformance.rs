@@ -81,6 +81,134 @@ END_PROGRAM
 }
 
 #[test]
+fn fb_interface_fields_are_externally_accessible_by_default() {
+    assert_clean(
+        "FUNCTION_BLOCK Counter
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR_OUTPUT
+  q : DINT;
+END_VAR
+VAR
+  cv : DINT;
+END_VAR
+  cv := cv + inc;
+  q := cv;
+END_FUNCTION_BLOCK
+PROGRAM P
+VAR
+  c : Counter;
+  x : DINT;
+END_VAR
+  c.inc := 2;
+  c();
+  x := c.q;
+END_PROGRAM
+",
+    );
+}
+
+#[test]
+fn fb_internal_fields_remain_protected() {
+    assert_error(
+        "FUNCTION_BLOCK Counter
+VAR_INPUT
+  inc : DINT;
+END_VAR
+VAR
+  cv : DINT;
+END_VAR
+  cv := cv + inc;
+END_FUNCTION_BLOCK
+PROGRAM P
+VAR
+  c : Counter;
+END_VAR
+  c.cv := 1;
+END_PROGRAM
+",
+        stc_sema::codes::NAME_INACCESSIBLE,
+    );
+}
+
+#[test]
+fn explicit_access_overrides_the_fb_interface_default() {
+    assert_error(
+        "FUNCTION_BLOCK Counter
+VAR_INPUT PRIVATE
+  inc : DINT;
+END_VAR
+END_FUNCTION_BLOCK
+PROGRAM P
+VAR
+  c : Counter;
+END_VAR
+  c.inc := 1;
+END_PROGRAM
+",
+        stc_sema::codes::NAME_INACCESSIBLE,
+    );
+}
+
+#[test]
+fn fb_call_bindings_honor_explicit_access_specifiers() {
+    // A PRIVATE input cannot be supplied through the call form either.
+    assert_error(
+        "FUNCTION_BLOCK Counter
+VAR_INPUT PRIVATE
+  inc : DINT;
+END_VAR
+END_FUNCTION_BLOCK
+PROGRAM P
+VAR
+  c : Counter;
+END_VAR
+  c(inc := 1);
+END_PROGRAM
+",
+        stc_sema::codes::NAME_INACCESSIBLE,
+    );
+
+    // A PROTECTED output cannot be read through the call form by an
+    // unrelated program.
+    assert_error(
+        "FUNCTION_BLOCK Counter
+VAR_OUTPUT PROTECTED
+  q : DINT;
+END_VAR
+END_FUNCTION_BLOCK
+PROGRAM P
+VAR
+  c : Counter;
+  x : DINT;
+END_VAR
+  c(q => x);
+END_PROGRAM
+",
+        stc_sema::codes::NAME_INACCESSIBLE,
+    );
+}
+
+#[test]
+fn protected_fb_fields_are_bindable_from_derived_blocks() {
+    assert_clean(
+        "FUNCTION_BLOCK Base
+VAR_INPUT PROTECTED
+  i : DINT;
+END_VAR
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK Derived EXTENDS Base
+VAR
+  b : Base;
+END_VAR
+  b(i := 1);
+END_FUNCTION_BLOCK
+",
+    );
+}
+
+#[test]
 fn classes_interfaces_and_dispatch_analyze_cleanly() {
     assert_clean(
         "INTERFACE IShape

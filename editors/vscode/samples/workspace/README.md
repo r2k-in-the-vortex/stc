@@ -12,6 +12,7 @@ opens cleanly with no diagnostics.
 | Manifest, source globs, configuration selection, and the test source set | `stc.toml` |
 | Global variables with initial values | `src/main.st` |
 | `FUNCTION`, `FUNCTION_BLOCK`, and `PROGRAM` POUs | `src/main.st` |
+| Direct FB input/output access (`accumulator.increment`, `accumulator.total`) | `src/main.st` |
 | `CONFIGURATION`/`RESOURCE`/`TASK` with a program instance | `src/main.st` |
 | Isolated smoke tests with `STC_ASSERT` | `tests/smoke.st` |
 | Launch and attach configurations | `.vscode/launch.json` |

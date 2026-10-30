@@ -554,7 +554,8 @@ Resolution rules:
   bounded edit-distance search.
 - Access control is checked after resolution: `PRIVATE` (declaring POU only), `PROTECTED`
   (declaring POU and derived types), `INTERNAL` (same package/namespace subtree), `PUBLIC`
-  (visible across packages).
+  (visible across packages). An FB call binding (`fb(in := x, out => y)`) is an access to the
+  corresponding field and is checked the same way.
 - Package boundaries participate in resolution: a dependency's package name (or alias) is a root
   namespace; symbols from a dependency are not implicitly imported. `INTERNAL` symbols are not
   visible outside their package.

@@ -37,7 +37,9 @@ VAR
   cycles : DINT;
 END_VAR
   sum := AddStep(sum);
-  accumulator(increment := INCREMENT, total => sum);
+  accumulator.increment := INCREMENT;
+  accumulator();
+  sum := accumulator.total;
   cycles := cycles + 1;
   TOTAL := sum;
 END_PROGRAM

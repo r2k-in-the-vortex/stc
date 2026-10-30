@@ -228,9 +228,8 @@ test case; the artifact is a normal ABI 2 module/manifest pair plus a test host,
 
 - **Body.** A function test gets a synthetic wrapper program that calls the function once and
   asserts its `BOOL` result. An FB test gets a wrapper that instantiates the FB and calls it once
-  per scan; because FB fields are `PROTECTED` by default, the test host reads the optional
-  `PASSED : BOOL` leaf through its GOT root instead of source access. A program test uses the
-  program itself.
+  per scan; the test host reads the optional `PASSED : BOOL` output through its GOT leaf root
+  instead of source access. A program test uses the program itself.
 - **Synthetic configuration.** Each artifact has one synthetic configuration `STC_TEST`, resource
   `STC_TEST_RES`, task `STC_TEST_TASK`, processor `STC_TEST_CPU`, instance `STC_TEST_INSTANCE`,
   and wrapper `STC_TEST_WRAPPER`. The lexer rejects leading/trailing double underscores, so these

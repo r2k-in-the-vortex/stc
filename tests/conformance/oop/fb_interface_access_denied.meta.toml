@@ -1,0 +1,5 @@
+profile = "stc-2013-oop-utf8-v1"
+kind = "compile-fail"
+expected_exit = 1
+expected_stderr_contains = ["STC-E-NAME-004"]
+rules = ["STC-E-NAME-004"]

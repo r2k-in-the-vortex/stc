@@ -100,11 +100,21 @@ unsupported or intentionally out of scope.
         `stc-sema` by recording the instance field on an FB call callee instead of the FB type,
         and covered by `navigation.rs`. Retest on the rebuilt release binary passes: the
         `Accumulator` result is exactly the FB declaration and the two type uses.
-17. [ ] **Hover.** `Ctrl+K Ctrl+I` on `sum`, `AddStep`, and `Accumulator` shows the declared type,
-        declaration kind, and owner.
-18. [ ] **Completion.** `Ctrl+Space` in a `PROGRAM Main` body offers keywords, visible names
-        (`INCREMENT`, `AddStep`, `accumulator`, `sum`), and after `accumulator.` offers the FB
-        members.
+17. [x] **Hover.** Pass 2026-10-30: `Ctrl+K Ctrl+I` on `sum` shows `sum : DINT` / `field of
+        program Main`; on `AddStep` shows `AddStep : DINT` / `function`; on `Accumulator` shows
+        `Accumulator` / `function block`.
+18. [x] **Completion.** Pass 2026-10-30: `Ctrl+Space` in the `PROGRAM Main` body offers
+        keywords/types (`DINT`, `IF`, `FOR`), visible names (`INCREMENT`, `TOTAL`, `AddStep`,
+        `Accumulator`), the program fields `accumulator` (detail `Accumulator`), `sum` and
+        `cycles` (detail `DINT`), and no duplicate spelling; after `accumulator.` only the FB
+        members `increment` and `total` are offered, without general keywords or names.
+        While typing the equivalent direct-access statements, `accumulator.increment` and
+        `accumulator.total` were rejected with `STC-E-NAME-004` even though the call form
+        worked. Root cause: FB interface fields defaulted to `PROTECTED` (D-068) while call
+        bindings skip field access checks. Fixed by D-211 (FB `VAR_INPUT`/`VAR_OUTPUT`/
+        `VAR_IN_OUT` default to `PUBLIC`; internal `VAR` stays `PROTECTED`; the diagnostic now
+        names the member). The sample now uses the equivalent member form and checks cleanly.
+        Recorded as follow-up **F-7**.
 19. [ ] **Document symbols.** `Ctrl+Shift+O` lists `AddStep`, `Accumulator`, `Main`, and
         `Sample`; the entries are hierarchical and jump to the right declaration.
 20. [ ] **Cross-file navigation.** From `tests/smoke.st`, F12 on `AddStep` and `Accumulator`
@@ -196,6 +206,17 @@ unsupported or intentionally out of scope.
       refused and preserved. Unit tests cover removal, audit-only rotation, and the foreign-file
       refusal; a second run and attach now work.
 
+- [x] **F-7 — Direct FB interface member access contradicted the call form.** Fixed 2026-10-30
+      by D-211. Before the fix, `fb.in := x` and `x := fb.out` were rejected with
+      `STC-E-NAME-004` while the equivalent `fb(in := x, out => y)` call worked: FB fields
+      defaulted to `PROTECTED` (D-068), but call bindings skip field access checks. FB
+      `VAR_INPUT`/`VAR_OUTPUT`/`VAR_IN_OUT` now default to `PUBLIC`; internal `VAR` and class
+      variables remain `PROTECTED`, explicit specifiers still override for direct access and for
+      call bindings (a `PRIVATE` input cannot be supplied and a `PROTECTED` output cannot be read
+      through `fb(...)` from an unauthorized context either), and `STC-E-NAME-004` names the
+      inaccessible member. Covered by `conformance.rs` and `navigation.rs`; the sample now uses
+      the member form and `stc check` exits 0.
+
 - [ ] **F-3 — Stop the `stc: run` task's process tree.** Terminating the VS Code task kills the
       shell but leaves `stc run` and the launcher (`sample.exe`) running. Make task termination
       stop the full tree (for example a custom execution that performs a process-tree kill, or a
@@ -227,7 +248,9 @@ unsupported or intentionally out of scope.
 | 14 | Pass | FB type and instance resolve; declaration F12 uses VS Code's reference fallback |
 | 15 | Pass | Variables, globals, and named labels resolve to declarations |
 | 16 | Pass | 16.1/16.3/16.4 pass; 16.2 fixed (instances no longer counted as type references) and retest passes |
-| 17–30 | Pending | Record pass/fail and any deviation above |
+| 17 | Pass | Hover shows type, kind, and owner for `sum`, `AddStep`, and `Accumulator` |
+| 18 | Pass | Completion offers keywords/names and only `increment`/`total` after `accumulator.`; direct member access fixed by D-211 (F-7) |
+| 19–30 | Pending | Record pass/fail and any deviation above |
 | 31 | Pass | Attach via `stc: run` debug server connects; disconnect leaves host running |
 | 32–36 | Pending | Record pass/fail and any deviation above |
 | F-2 | Pass | Run task is debuggable; attach connects |
@@ -235,4 +258,5 @@ unsupported or intentionally out of scope.
 | F-4 | Pass | Second debug-server run and attach work; audit rotated |
 | F-5 | Pass | Breakpoint stop uses the normal tab; no second `\\?\` tab |
 | F-6 | Pending | Removing a breakpoint does not remove it from the running session |
+| F-7 | Pass | FB interface member access now matches the call form (D-211); sample checks cleanly |
 | F-1 | Pending | Highlighting scope/color follow-up recorded |

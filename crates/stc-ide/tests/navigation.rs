@@ -52,18 +52,38 @@ fn assert_definition_at(
 }
 
 #[test]
-fn named_argument_labels_resolve_to_parameters() {
+fn named_argument_labels_resolve_to_fb_fields() {
     let snapshot = Snapshot::load(sample_manifest()).expect("sample loads");
-    let file = file_id(&snapshot, "src/main.st");
-    let source = snapshot.source(file).expect("source");
+    let main = file_id(&snapshot, "src/main.st");
+    let smoke = file_id(&snapshot, "tests/smoke.st");
+    let main_source = snapshot.source(main).expect("main source");
+    let smoke_source = snapshot.source(smoke).expect("smoke source");
 
-    let input_label = find(source, "increment := INCREMENT");
-    let input_declaration = find(source, "increment : DINT");
-    assert_definition_at(&snapshot, file, input_label, input_declaration, "increment");
+    // The smoke test's named arguments bind the FB fields declared in
+    // `src/main.st`, so the labels resolve across files.
+    let input_label = find(smoke_source, "increment := 2");
+    let input_declaration = find(main_source, "increment : DINT");
+    let definition = snapshot
+        .definition(smoke, input_label)
+        .expect("input label definition");
+    assert_eq!(definition.file, main);
+    assert_eq!(definition.span.start as usize, input_declaration);
+    assert_eq!(
+        definition.span.end as usize,
+        input_declaration + "increment".len()
+    );
 
-    let output_label = find(source, "total => sum");
-    let output_declaration = find(source, "total : DINT");
-    assert_definition_at(&snapshot, file, output_label, output_declaration, "total");
+    let output_label = find(smoke_source, "total => value");
+    let output_declaration = find(main_source, "total : DINT");
+    let definition = snapshot
+        .definition(smoke, output_label)
+        .expect("output label definition");
+    assert_eq!(definition.file, main);
+    assert_eq!(definition.span.start as usize, output_declaration);
+    assert_eq!(
+        definition.span.end as usize,
+        output_declaration + "total".len()
+    );
 }
 
 #[test]
@@ -71,7 +91,7 @@ fn fb_instance_call_receiver_resolves_to_its_field() {
     let snapshot = Snapshot::load(sample_manifest()).expect("sample loads");
     let file = file_id(&snapshot, "src/main.st");
     let source = snapshot.source(file).expect("source");
-    let use_offset = find(source, "accumulator(increment");
+    let use_offset = find(source, "accumulator()");
     let declaration = find(source, "accumulator : Accumulator");
     assert_definition_at(&snapshot, file, use_offset, declaration, "accumulator");
 }
@@ -111,8 +131,8 @@ fn fb_type_references_exclude_same_named_instances() {
     assert_eq!(actual, expected);
 
     // The instance field has its own reference set: its declaration and the
-    // call receiver in `Main` (not the type annotation, and not the
-    // same-spelled field in the smoke test).
+    // member receivers and call receiver in `Main` (not the type annotation,
+    // and not the same-spelled field in the smoke test).
     let field_declaration = find(main_source, "accumulator : Accumulator");
     let field_references = snapshot.references(main, field_declaration, true);
     let actual: Vec<(FileId, usize)> = field_references
@@ -121,7 +141,9 @@ fn fb_type_references_exclude_same_named_instances() {
         .collect();
     let expected = vec![
         (main, field_declaration),
-        (main, find(main_source, "accumulator(increment")),
+        (main, find(main_source, "accumulator.increment")),
+        (main, find(main_source, "accumulator()")),
+        (main, find(main_source, "accumulator.total")),
     ];
     assert_eq!(actual, expected);
 }
@@ -188,7 +210,7 @@ fn identifier_end_positions_resolve() {
     let source = snapshot.source(file).expect("source");
 
     // The caret immediately before `(` must resolve the callee.
-    let call_end = find(source, "accumulator(increment") + "accumulator".len();
+    let call_end = find(source, "accumulator()") + "accumulator".len();
     let call_declaration = find(source, "accumulator : Accumulator");
     assert_definition_at(&snapshot, file, call_end, call_declaration, "accumulator");
 

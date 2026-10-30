@@ -892,7 +892,7 @@ fn sample_workspace_serves_diagnostics_navigation_completion_and_formatting() {
         "textDocument/completion",
         json!({
             "textDocument": { "uri": main_uri },
-            "position": position_of(&main_source, "accumulator(increment"),
+            "position": position_of(&main_source, "sum := AddStep"),
         }),
     );
     let labels: Vec<&str> = completion["items"]

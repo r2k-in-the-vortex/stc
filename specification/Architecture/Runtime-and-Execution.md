@@ -660,7 +660,7 @@ assignment copies the root's value; the destination root identity is preserved.
   driver's sidecar supplies messages/locations), and `STC_CLOCK_ADVANCE` uses the appended ABI
   2.2 service ID 12 as `set(cycle_now_ns() + duration)`. `STC_IO_SET_INPUT(offset, value)` and
   `STC_IO_GET_OUTPUT(offset)` use the existing I/O services. An FB test's optional `PASSED`
-  output is read by the host through its GOT leaf root because FB fields are `PROTECTED`.
+  output is read by the host through its GOT leaf root rather than source-level access.
 - Program/FB tests may run a configured number of cycles (`cycles = N` in the test metadata) and
   inspect outputs/globals.
 - Results are reported as human-readable text or the JSON shape in

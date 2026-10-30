@@ -3316,6 +3316,16 @@ impl Analyzer<'_> {
         else {
             return self.alloc_error_expr(span);
         };
+        // Binding an FB input/output through the call form is an access to the
+        // corresponding field, so explicit access specifiers apply here too.
+        for (index, formal_index) in bindings.iter().enumerate() {
+            let Some(formal_index) = formal_index else {
+                continue;
+            };
+            if let Some(field) = formals[*formal_index].field {
+                self.check_field_access(field, ctx.owner, prepared[index].span);
+            }
+        }
         // The callee is an FB *instance*; its own declaration was recorded by
         // the receiver resolution. Recording the FB type here would make the
         // instance name a reference to the type.
@@ -5417,7 +5427,15 @@ impl Analyzer<'_> {
         span: Span,
     ) -> bool {
         let data = self.hir.field(field).clone();
-        self.check_visibility(data.visibility, data.owner, from_owner, data.span, span)
+        let name = self.hir.interner.text(data.name).to_string();
+        self.check_visibility(
+            data.visibility,
+            data.owner,
+            from_owner,
+            data.span,
+            span,
+            name,
+        )
     }
 
     fn check_method_access(
@@ -5426,17 +5444,18 @@ impl Analyzer<'_> {
         from_owner: Option<DefId>,
         span: Span,
     ) -> bool {
-        let (visibility, owner, decl) = match &self.hir.defs[method.index()].kind {
-            DefKind::Method { access, owner, .. } => {
-                (*access, *owner, self.hir.defs[method.index()].span)
+        let (visibility, owner, decl, name) = {
+            let data = &self.hir.defs[method.index()];
+            match &data.kind {
+                DefKind::Method { access, owner, .. } => (*access, *owner, data.span, data.name),
+                _ => (Visibility::Public, method, data.span, data.name),
             }
-            _ => (
-                Visibility::Public,
-                method,
-                self.hir.defs[method.index()].span,
-            ),
         };
-        self.check_visibility(visibility, owner, from_owner, decl, span)
+        let name = name.map_or_else(
+            || self.def_name(owner),
+            |symbol| self.hir.interner.text(symbol).to_string(),
+        );
+        self.check_visibility(visibility, owner, from_owner, decl, span, name)
     }
 
     fn check_visibility(
@@ -5446,6 +5465,7 @@ impl Analyzer<'_> {
         from_owner: Option<DefId>,
         decl: Span,
         span: Span,
+        name: String,
     ) -> bool {
         let ok = match visibility {
             Visibility::Public => true,
@@ -5462,7 +5482,6 @@ impl Analyzer<'_> {
             },
         };
         if !ok {
-            let name = self.def_name(owner);
             let note = if visibility == Visibility::Internal {
                 let package = self
                     .hir
