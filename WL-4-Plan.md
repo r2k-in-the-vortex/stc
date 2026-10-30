@@ -466,6 +466,33 @@ No boot, GRUB, governor, C-state, IRQ-affinity, service, or swap change was made
 wrapper and sudoers rule were untouched. The only host setup change was the root-owned harness
 and the refreshed bundle/package.
 
+**Phase 4 campaign evidence (2026-10-30).** The untuned campaign ran from 2026-10-29T21:34Z to
+2026-10-30T01:12Z through the phase 0 wrapper. The benchmark workloads were calibrated to
+base/candidates `WORK=10000`, light `WORK=2000`, and heavy `WORK=18000`; 10 s checks measured
+execution p50 0.497 ms, 0.248 ms, and 0.797 ms at a 1 ms cycle. Artifacts: `rt-build` run
+[40958283937](https://github.com/r2k-in-the-vortex/stc/actions/runs/40958283937) on `2be4325`;
+bundle and package `SHA256SUMS` SHA256 `6107e867…` and `415cca13…`; harness
+`02c3f6b8…` installed root-owned. The committed run manifest is
+[RT-Run-Manifest.md](specification/Verification/RT-Run-Manifest.md); raw samples are local and
+gitignored at `dist/rt/results/phase4` (420 files, `SHA256SUMS` SHA256 `23b7f059…`).
+
+- Main medium 1 ms: R0 execution p50 0.663–0.782 ms (p99 about 0.93 ms), 598–600k cycles; R1
+  other-CPU mixed load p50 2.58–2.68 ms, 178–189k cycles and 411–422k skipped periods; R2
+  same-CPU load p50 0.649–0.659 ms, 599k cycles.
+- 10 ms secondary: R0/R1/R2 execution p50 1.242/2.540/0.756 ms; 60k cycles; no skipped periods.
+- Supplementary R0: light p50 0.249 ms; heavy p50 0.784 ms.
+- Control/status A/B (R0, medium, 1 ms): execution p50 508 µs (control disabled), 624 µs
+  (control idle), 748 µs (status at 100 Hz).
+- Online change under load: all 24 case runs passed; code-only and field-add-remove activated;
+  incompatible returned `cold_required` with the base active; trapping activated and rolled back
+  on the next cycle in every R1/R2 repetition.
+- R0 noise floor: cyclictest max 27–40 µs; timerlat max 69 µs IRQ / 84 µs thread / 93 µs user;
+  osnoise max 8.5–22.8 ms; hwlat max 13 µs with 12 samples above the 10 µs threshold (the tool's
+  exit 1 is threshold-exceeded, not a missing run).
+- The osnoise maxima meet the parent plan's "unsatisfactory untuned jitter" trigger; phase 5
+  evaluates the deferred tuned profile (§6.2). No boot, governor, C-state, IRQ, service, or swap
+  change was made; no reboot.
+
 ### 9.4 Record the untuned host state
 
 Do not change the boot profile, governor, C-state limit, IRQ affinities, services, or swap.
@@ -561,3 +588,4 @@ adjusted during phase 0 without a scope change.
 | --- | --- |
 | 2026-10-29 | Started the WL-4 sub-plan. Verified SSH key access, captured the host and kernel baseline, ran a preliminary untuned cyclictest/timerlat/osnoise sample, and smoke-tested the released Linux package on the host. Proposed decisions R-1–R-10. |
 | 2026-10-29 | Locked decisions: R-3 opt-in measurement mode, scoped sudo wrapper, spec report with raw artifacts, 10 min × 3 campaign, quiet/other-CPU/same-CPU load, and all four online-change cases. Deferred the tuned boot profile to future work; v2.0.0 measures the untuned host. |
+| 2026-10-30 | Completed the WL-4 phase 4 untuned campaign: 23 harness runs, 24 online cases, the R0 noise floor, and the control A/B. Committed the run manifest [RT-Run-Manifest.md](specification/Verification/RT-Run-Manifest.md); raw data remains local and gitignored. |
