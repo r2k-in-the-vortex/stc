@@ -2858,12 +2858,15 @@ fn frame_locals_lists_sorted_names_with_liveness_and_no_values() {
             .collect();
         assert_eq!(caller_names, vec!["CA", "CB"]);
 
+        // The stack cap is 1024; this index is never present. (A small index
+        // can exist as an optimized-out caller on some architectures and is
+        // correctly reported as E-017 instead.)
         let bad_frame = client
             .call_ok(
                 "frame.locals",
                 obj([
                     ("stop_id", Json::unsigned(stop_id)),
-                    ("frame", Json::unsigned(9)),
+                    ("frame", Json::unsigned(1_000_000)),
                 ]),
             )
             .expect_err("unknown frame");
