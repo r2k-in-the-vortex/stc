@@ -45,6 +45,11 @@
         "path": "./syntaxes/st.tmLanguage.json"
       }
     ],
+    "breakpoints": [
+      {
+        "language": "st"
+      }
+    ],
     "debuggers": [
       {
         "type": "stc",

@@ -383,14 +383,16 @@ impl Snapshot {
 fn cursor_ident(parsed: &ParsedFile, offset: usize) -> Option<SyntaxToken> {
     let tree = parsed.tree();
     let offset = offset.min(tree.source().len());
-    let token = match tree.token_at(offset) {
-        Some(token) if token.kind() != SyntaxKind::Eof => token,
-        _ => {
-            let token = tree.token_before(offset)?;
-            (token.span().end as usize == offset).then_some(token)?
-        }
-    };
-    (token.kind() == SyntaxKind::Ident).then_some(token)
+    if let Some(token) = tree.token_at(offset)
+        && token.kind() == SyntaxKind::Ident
+    {
+        return Some(token);
+    }
+    // A caret immediately after an identifier (for example between a call's
+    // callee and its `(`) sits at the next token's start. F12 there must still
+    // name the identifier the caret is at the end of.
+    let token = tree.token_before(offset)?;
+    (token.kind() == SyntaxKind::Ident && token.span().end as usize == offset).then_some(token)
 }
 
 /// Normalizes a resolution to a declaration identity.

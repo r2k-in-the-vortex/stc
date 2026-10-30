@@ -479,6 +479,37 @@ fn read_frames(stdout: impl Read, sender: mpsc::Sender<Value>) {
 }
 
 #[test]
+fn definition_after_open_uses_the_analyzed_text() {
+    let project = TestDir::new("position-flush");
+    // The disk text uses CRLF while the editor buffer below uses LF. Before
+    // the analysis flush, positions were mapped against one text and the
+    // resolutions came from the other, so some identifiers silently targeted
+    // the wrong token. A definition request is sent immediately after the
+    // open, inside the debounce window.
+    let disk = MAIN_SOURCE.replace('\n', "\r\n");
+    let main = project.write("src/main.st", &disk);
+    project.write("stc.toml", MANIFEST);
+    let main_uri = uri(&main);
+
+    let mut client = LspClient::start(&project.manifest());
+    client.initialize(&project.path);
+    client.open(&main, MAIN_SOURCE, 1);
+
+    let definition = client.request(
+        "textDocument/definition",
+        json!({
+            "textDocument": { "uri": main_uri },
+            "position": position_of(MAIN_SOURCE, "sum := counter.state"),
+        }),
+    );
+    assert_eq!(definition["uri"], json!(main_uri));
+    assert_eq!(
+        definition["range"]["start"],
+        position_of(MAIN_SOURCE, "sum : DINT")
+    );
+}
+
+#[test]
 fn language_server_serves_diagnostics_navigation_completion_and_formatting() {
     let project = TestDir::new("session");
     let main = project.write("src/main.st", MAIN_SOURCE);

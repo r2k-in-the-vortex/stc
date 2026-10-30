@@ -1171,6 +1171,7 @@ impl Analyzer<'_> {
                 Some(def)
                     if matches!(&self.hir.defs[def.index()].kind, DefKind::Interface { .. }) =>
                 {
+                    self.record(path.syntax(), crate::Res::Def(def));
                     if !interfaces.contains(&def) {
                         interfaces.push(def);
                     }

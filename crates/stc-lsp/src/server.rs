@@ -176,6 +176,10 @@ where
                     }
                     if effects.schedule_analysis {
                         debouncer.note(Instant::now());
+                    } else if !session.pending_analysis {
+                        // A query flushed the analysis; the debounced run is
+                        // no longer needed.
+                        debouncer.clear();
                     }
                 }
                 Err(error) => {
@@ -276,6 +280,7 @@ struct Session {
     shutdown: bool,
     published: BTreeMap<String, Vec<Value>>,
     io_failed: bool,
+    pending_analysis: bool,
 }
 
 impl Session {
@@ -289,6 +294,7 @@ impl Session {
             shutdown: false,
             published: BTreeMap::new(),
             io_failed: false,
+            pending_analysis: false,
         }
     }
 
@@ -366,6 +372,17 @@ impl Session {
                 ),
             );
             return Effects::default();
+        }
+        if matches!(
+            method,
+            "textDocument/definition"
+                | "textDocument/references"
+                | "textDocument/hover"
+                | "textDocument/completion"
+                | "textDocument/documentSymbol"
+                | "textDocument/formatting"
+        ) {
+            self.flush_analysis(output);
         }
         match method {
             "textDocument/definition" => {
@@ -529,7 +546,7 @@ impl Session {
         match file {
             Some(file) => {
                 self.publish_parse(output, file);
-                Effects::analyze()
+                self.schedule_analysis()
             }
             None => {
                 self.publish_empty(output, uri);
@@ -576,7 +593,7 @@ impl Session {
         match file {
             Some(file) => {
                 self.publish_parse(output, file);
-                Effects::analyze()
+                self.schedule_analysis()
             }
             None => {
                 self.publish_empty(output, uri);
@@ -614,7 +631,7 @@ impl Session {
                 self.publish_parse(output, file);
             }
         }
-        Effects::analyze()
+        self.schedule_analysis()
     }
 
     fn did_close<W: Write>(&mut self, params: &Value, output: &mut W) -> Effects {
@@ -634,7 +651,7 @@ impl Session {
             .and_then(|snapshot| snapshot.clear_overlay_parsed(&document.path));
         self.publish_empty(output, uri);
         if restored.is_some() {
-            Effects::analyze()
+            self.schedule_analysis()
         } else {
             Effects::default()
         }
@@ -700,6 +717,25 @@ impl Session {
             snapshot.reanalyze();
         }
         self.publish_all(output);
+        self.pending_analysis = false;
+    }
+
+    /// Marks parsed overlays as awaiting the project analysis.
+    fn schedule_analysis(&mut self) -> Effects {
+        self.pending_analysis = true;
+        Effects::analyze()
+    }
+
+    /// Runs a pending debounced analysis before a query needs the snapshot.
+    ///
+    /// The document store and the parsed overlay are updated on every change,
+    /// but the semantic analysis (and therefore every resolution) is debounced.
+    /// A query answered during that window would interpret the client's
+    /// position against text whose analysis has not caught up yet.
+    fn flush_analysis<W: Write>(&mut self, output: &mut W) {
+        if self.pending_analysis {
+            self.analyze(output);
+        }
     }
 
     fn publish_parse<W: Write>(&mut self, output: &mut W, file: FileId) {
@@ -834,7 +870,11 @@ impl Session {
 
     fn query_offset(&self, params: &Value, file: FileId) -> Option<usize> {
         let position: Position = serde_json::from_value(params.get("position")?.clone()).ok()?;
-        let text = self.query_text(file)?;
+        // Map against the text the snapshot analyzed, not the open document.
+        // The two can differ (CRLF on disk vs LF in the editor, or an edit
+        // inside the debounce window); mixing them silently targets another
+        // token, so some identifiers resolve and others appear undefined.
+        let text = self.snapshot.as_ref()?.source(file)?;
         Some(PositionMap::new(text).offset(position))
     }
 

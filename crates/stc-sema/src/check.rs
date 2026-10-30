@@ -816,6 +816,18 @@ impl Analyzer<'_> {
         _span: Span,
     ) -> Option<ConstValue> {
         let (_, value) = self.eval_const_expr(expr, Some(selector_ty), scope)?;
+        if let Expr::Path(path) = expr {
+            let segments = path.segments();
+            if path.prefix().is_none() && segments.len() == 1 {
+                let name = &segments[0];
+                let symbol = self.hir.intern(name.text());
+                if let Lookup::Constant(binding) = self.lookup_scope(scope, symbol)
+                    && let ConstValue::Enum { def, value } = binding.value
+                {
+                    self.record(name.syntax(), crate::Res::EnumValue(def, value));
+                }
+            }
+        }
         Some(value)
     }
 
@@ -3564,6 +3576,13 @@ impl Analyzer<'_> {
             };
             let formal = &formals[*formal_index];
             let prepared = &prepared[index];
+            if let Some(label) = &prepared.label {
+                if let Some(field) = formal.field {
+                    self.record(label.syntax(), crate::Res::Field(field));
+                } else if let Some(param) = formal.param {
+                    self.record(label.syntax(), crate::Res::Param(param));
+                }
+            }
             match prepared.kind {
                 PreparedKind::Positional | PreparedKind::Named(_) => {
                     let Some(value_id) = prepared.value else {
@@ -3668,6 +3687,7 @@ impl Analyzer<'_> {
                     let id = self.check_expr(ctx, expr, None);
                     PreparedArg {
                         kind: PreparedKind::Positional,
+                        label: None,
                         value: Some(id),
                         value_ty: Some(self.hir.expr(id).ty),
                         target: None,
@@ -3681,6 +3701,7 @@ impl Analyzer<'_> {
                     let id = self.check_expr(ctx, expr, None);
                     PreparedArg {
                         kind: PreparedKind::Named(symbol),
+                        label: Some(name.clone()),
                         value: Some(id),
                         value_ty: Some(self.hir.expr(id).ty),
                         target: None,
@@ -3697,6 +3718,7 @@ impl Analyzer<'_> {
                 }
                 Arg::Error(_) => PreparedArg {
                     kind: PreparedKind::Error,
+                    label: None,
                     value: None,
                     value_ty: None,
                     target: None,
@@ -3718,7 +3740,7 @@ impl Analyzer<'_> {
         negated: bool,
         span: Span,
     ) -> PreparedArg {
-        let Some(name) = self.output_name(source) else {
+        let Some((name, label)) = self.output_name(source) else {
             self.error(
                 crate::codes::CALL_ARGUMENT,
                 "output binding requires a parameter name on the left of `=>`",
@@ -3726,6 +3748,7 @@ impl Analyzer<'_> {
             );
             return PreparedArg {
                 kind: PreparedKind::Error,
+                label: None,
                 value: None,
                 value_ty: None,
                 target: None,
@@ -3738,6 +3761,7 @@ impl Analyzer<'_> {
         let target_ty = self.hir.expr(target_id).ty;
         PreparedArg {
             kind: PreparedKind::Output(name),
+            label: Some(label),
             value: None,
             value_ty: None,
             target: Some(target_id),
@@ -3747,11 +3771,12 @@ impl Analyzer<'_> {
         }
     }
 
-    fn output_name(&mut self, expr: &Expr) -> Option<Symbol> {
+    fn output_name(&mut self, expr: &Expr) -> Option<(Symbol, Name)> {
         match expr {
             Expr::Path(path) if path.prefix().is_none() && path.segments().len() == 1 => {
                 let name = path.segments().first()?.clone();
-                Some(self.hir.intern(name.text()))
+                let symbol = self.hir.intern(name.text());
+                Some((symbol, name))
             }
             Expr::Unary(unary)
                 if unary
@@ -4577,7 +4602,12 @@ impl Analyzer<'_> {
         if segments.len() == 1 {
             let name = &segments[0];
             let symbol = self.hir.intern(name.text());
-            if let Some((value, ty)) = self.silent_value(ctx, symbol, name.token_span()) {
+            if let Some((value, ty, resolution)) =
+                self.silent_value_with_res(ctx, symbol, name.token_span())
+            {
+                if let Some(resolution) = resolution {
+                    self.record(name.syntax(), resolution);
+                }
                 if let Some(def) = self.fb_def_of_ty(ty) {
                     return CalleeKind::Fb {
                         instance: value,
@@ -4719,11 +4749,15 @@ impl Analyzer<'_> {
             }
             let first = &segments[0];
             let symbol = self.hir.intern(first.text());
-            let Some((mut receiver, mut ty)) = self.silent_value(ctx, symbol, first.token_span())
+            let Some((mut receiver, mut ty, resolution)) =
+                self.silent_value_with_res(ctx, symbol, first.token_span())
             else {
                 self.unknown_name(first.text(), span);
                 return CalleeKind::Invalid;
             };
+            if let Some(resolution) = resolution {
+                self.record(first.syntax(), resolution);
+            }
             let last = segments.len() - 1;
             for segment in &segments[1..last] {
                 let symbol = self.hir.intern(segment.text());
@@ -4733,6 +4767,7 @@ impl Analyzer<'_> {
                 };
                 let field_data = self.hir.field(field).clone();
                 self.check_field_access(field, ctx.owner, span);
+                self.record(segment.syntax(), crate::Res::Field(field));
                 receiver = self.hir.alloc_expr(
                     ExprKindHir::Place(PlaceHir::Field {
                         base: receiver,
@@ -4972,12 +5007,14 @@ impl Analyzer<'_> {
         }
     }
 
-    fn silent_value(
+    /// Resolves a value name for a callee path and reports the identity of the
+    /// resolved name so a method-call receiver remains navigable.
+    fn silent_value_with_res(
         &mut self,
         ctx: &mut BodyCtx,
         symbol: Symbol,
         span: Span,
-    ) -> Option<(ExprId, TyId)> {
+    ) -> Option<(ExprId, TyId, Option<crate::Res>)> {
         if let Some(local) = ctx.locals.get(&symbol) {
             let data = self.hir.local(*local).clone();
             let ty = data.external_target.map_or(data.ty, |global| {
@@ -4989,7 +5026,11 @@ impl Analyzer<'_> {
             let place = data
                 .external_target
                 .map_or(PlaceHir::Local(*local), PlaceHir::Global);
-            return Some((self.hir.alloc_expr(ExprKindHir::Place(place), ty, span), ty));
+            return Some((
+                self.hir.alloc_expr(ExprKindHir::Place(place), ty, span),
+                ty,
+                Some(crate::Res::Local(*local)),
+            ));
         }
         if let Some(param) = ctx.params.get(&symbol) {
             let ty = self.hir.params[param.index()].ty;
@@ -4997,6 +5038,7 @@ impl Analyzer<'_> {
                 self.hir
                     .alloc_expr(ExprKindHir::Place(PlaceHir::Param(*param)), ty, span),
                 ty,
+                Some(crate::Res::Param(*param)),
             ));
         }
         if ctx.result == Some(symbol) {
@@ -5014,6 +5056,7 @@ impl Analyzer<'_> {
                 self.hir
                     .alloc_expr(ExprKindHir::Place(PlaceHir::Result(def)), ty, span),
                 ty,
+                Some(crate::Res::Def(def)),
             ));
         }
         if let Some(owner) = ctx.owner {
@@ -5028,6 +5071,7 @@ impl Analyzer<'_> {
                             span,
                         ),
                         field_data.ty,
+                        Some(crate::Res::Field(field)),
                     ));
                 }
             }
@@ -5042,6 +5086,7 @@ impl Analyzer<'_> {
                         self.hir
                             .alloc_expr(ExprKindHir::Place(PlaceHir::Global(def)), ty, span),
                         ty,
+                        Some(crate::Res::Def(def)),
                     ));
                 }
                 None
@@ -5055,6 +5100,7 @@ impl Analyzer<'_> {
                     span,
                 ),
                 binding.ty,
+                None,
             )),
             _ => None,
         }
@@ -6102,6 +6148,7 @@ impl Analyzer<'_> {
             );
             return None;
         }
+        self.record(path.syntax(), crate::Res::Def(def));
         let task = program.with().map(|name| self.hir.intern(name.text()));
         if let Some(task) = task
             && !tasks.iter().any(|candidate| candidate.name == task)
@@ -6255,6 +6302,7 @@ enum TaskKind {
 #[derive(Clone, Debug)]
 struct PreparedArg {
     kind: PreparedKind,
+    label: Option<Name>,
     value: Option<ExprId>,
     value_ty: Option<TyId>,
     target: Option<ExprId>,

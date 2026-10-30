@@ -263,6 +263,15 @@ async function run() {
   await extension.activate();
   assert.strictEqual(extension.isActive, true, `the extension ${extensionId} is active`);
 
+  // `contributes.breakpoints` is what enables breakpoints in the editor
+  // gutter for a language; without it, clicking the margin does nothing.
+  const breakpointLanguages = (extension.packageJSON?.contributes?.breakpoints ?? [])
+    .map((entry) => entry?.language);
+  assert.ok(
+    breakpointLanguages.includes('st'),
+    `the extension enables breakpoints for st (found: ${JSON.stringify(breakpointLanguages)})`,
+  );
+
   const folder = workspaceFolder();
   const document = await vscode.workspace.openTextDocument(
     vscode.Uri.file(path.join(sampleWorkspace, 'src', 'main.st')),
