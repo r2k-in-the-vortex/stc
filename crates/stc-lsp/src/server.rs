@@ -854,8 +854,18 @@ impl Session {
 
     fn query_file(&self, params: &Value) -> Option<FileId> {
         let uri = params.get("textDocument")?.get("uri")?.as_str()?;
-        let path = uri_to_path(uri)?;
-        self.snapshot.as_ref()?.file_id_for_path(path)
+        let Some(path) = uri_to_path(uri) else {
+            eprintln!("stc-lsp: cannot convert document URI `{uri}` to a path");
+            return None;
+        };
+        let file = self.snapshot.as_ref()?.file_id_for_path(&path);
+        if file.is_none() {
+            eprintln!(
+                "stc-lsp: document `{uri}` (`{}`) is not a project source",
+                path.display()
+            );
+        }
+        file
     }
 
     fn query_text(&self, file: FileId) -> Option<&str> {

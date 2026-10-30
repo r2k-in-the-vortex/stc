@@ -15,7 +15,7 @@ export function activate(context: vscode.ExtensionContext): void {
   output.appendLine(`stc executable: ${stcExecutable()}`);
 
   context.subscriptions.push(
-    vscode.tasks.registerTaskProvider('stc', new StcTaskProvider()),
+    vscode.tasks.registerTaskProvider('stc', new StcTaskProvider(output)),
   );
 
   context.subscriptions.push(

@@ -70,16 +70,25 @@ Launch sample**. The Globals scope shows `INCREMENT` and `TOTAL`; the program
 instance contains the program fields. Continue to line 19 to read the
 function's locals.
 
-The attach example in `.vscode/launch.json` uses a placeholder endpoint path,
-`${workspaceFolder}/target/stc/debug/debug.endpoint.json`. Start a host with
-that endpoint, then start the attach configuration:
+The attach example in `.vscode/launch.json` uses the endpoint path
+`${workspaceFolder}/target/stc/debug/debug.endpoint.json`. The `stc: run` task
+starts the host with a debug server at that path, so start the task and then
+start **stc: Attach sample**. You can also start the host manually:
 
 ```sh
 stc run --debug-server --debug-endpoint target/stc/debug/debug.endpoint.json
 ```
 
 Attach mode leaves the host running after the session ends; launch mode owns
-and stops it.
+and stops it. The driver removes a validated stale endpoint and rotates the
+previous audit log to `debug.endpoint.audit.<timestamp>.jsonl` before starting
+a debug server with an explicit endpoint, so repeated `stc: run` and attach
+cycles work. An older `stc` binary without this behavior requires the stale
+endpoint and audit files to be removed first.
+
+Terminating the `stc: run` task currently leaves the driver and launcher
+processes running; stop the process tree manually until that is fixed (UI
+checklist follow-up F-3).
 
 Writes are disabled by default. `allowWrite` enables `setVariable` for live
 roots, and `allowForce` additionally requests the force scope; the host must

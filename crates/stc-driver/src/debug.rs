@@ -69,6 +69,123 @@ fn resolve_endpoint(explicit: Option<&str>, out_dir: &Path) -> PathBuf {
     }
 }
 
+/// Clears stale debug state for an explicit endpoint before the host starts.
+///
+/// The runtime deliberately refuses to reuse an existing endpoint or audit
+/// file. A fixed `--debug-endpoint` is meant to be reused across launches, so
+/// a stale endpoint is removed after validating that it is a `stc-debug/1`
+/// endpoint, and a stale audit log is rotated rather than deleted so its
+/// records are preserved.
+pub(crate) fn prepare_debug_endpoint(endpoint: &Path) -> Result<(), String> {
+    clear_stale_endpoint(endpoint)?;
+    rotate_stale_audit(&endpoint.with_extension("audit.jsonl"))?;
+    Ok(())
+}
+
+fn clear_stale_endpoint(endpoint: &Path) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(endpoint) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "cannot inspect debug endpoint `{}`: {error}",
+                endpoint.display()
+            ));
+        }
+    };
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "refusing to remove debug endpoint `{}`: not a regular file",
+            endpoint.display()
+        ));
+    }
+    let text = std::fs::read_to_string(endpoint).map_err(|error| {
+        format!(
+            "cannot read stale debug endpoint `{}`: {error}",
+            endpoint.display()
+        )
+    })?;
+    let object = stc_got::json::parse(&text)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .ok_or_else(|| {
+            format!(
+                "refusing to remove `{}`: not a JSON debug endpoint",
+                endpoint.display()
+            )
+        })?;
+    let protocol = object.get("protocol").and_then(Json::as_str).unwrap_or("");
+    let format = object.get("format").and_then(Json::as_number).unwrap_or(0);
+    if protocol != "stc-debug/1" || format != 1 {
+        return Err(format!(
+            "refusing to remove `{}`: not an stc-debug/1 endpoint",
+            endpoint.display()
+        ));
+    }
+    std::fs::remove_file(endpoint).map_err(|error| {
+        format!(
+            "cannot remove stale debug endpoint `{}`: {error}",
+            endpoint.display()
+        )
+    })
+}
+
+fn rotate_stale_audit(audit: &Path) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(audit) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "cannot inspect debug audit log `{}`: {error}",
+                audit.display()
+            ));
+        }
+    };
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "refusing to rotate debug audit log `{}`: not a regular file",
+            audit.display()
+        ));
+    }
+    let text = std::fs::read_to_string(audit).map_err(|error| {
+        format!(
+            "cannot read stale debug audit log `{}`: {error}",
+            audit.display()
+        )
+    })?;
+    if let Some(first) = text.lines().next().filter(|line| !line.is_empty()) {
+        let valid = stc_got::json::parse(first)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .is_some_and(|object| {
+                object.get("format").and_then(Json::as_number) == Some(1)
+                    && object.get("event").and_then(Json::as_str).is_some()
+            });
+        if !valid {
+            return Err(format!(
+                "refusing to rotate `{}`: not an stc audit log",
+                audit.display()
+            ));
+        }
+    }
+    let stem = audit
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| format!("cannot rotate debug audit log `{}`", audit.display()))?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("cannot read the clock: {error}"))?
+        .as_nanos();
+    let rotated = audit.with_file_name(format!("{stem}.{nanos}.jsonl"));
+    std::fs::rename(audit, &rotated).map_err(|error| {
+        format!(
+            "cannot rotate stale debug audit log `{}` to `{}`: {error}",
+            audit.display(),
+            rotated.display()
+        )
+    })
+}
+
 pub(crate) fn server_arguments_for(
     debug: &DebugOptions,
     manifest: &Manifest,
@@ -175,6 +292,10 @@ pub(crate) fn launch(
 ) -> u8 {
     stc_runtime::signal::install_stop_handler();
     let endpoint = resolve_endpoint(debug.endpoint.as_deref(), out_dir);
+    if let Err(message) = prepare_debug_endpoint(&endpoint) {
+        reporter.plain("STC-E-DEBUG-020", Severity::Error, &message);
+        return 2;
+    }
     let control = control_endpoint();
     let nonce = random_hex();
     let json = reporter.is_json();
@@ -1878,5 +1999,83 @@ mod tests {
         );
         assert!(parse_break_spec("src/main.st").is_err());
         assert!(parse_break_spec("src/main.st:0").is_err());
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("stc-debug-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
+    #[test]
+    fn prepare_debug_endpoint_clears_stale_state() {
+        let directory = temp_dir("prepare");
+        let endpoint = directory.join("debug.endpoint.json");
+        let audit = directory.join("debug.endpoint.audit.jsonl");
+        std::fs::write(
+            &endpoint,
+            r#"{"format":1,"protocol":"stc-debug/1","token":"x","endpoint":"pipe"}"#,
+        )
+        .expect("endpoint");
+        std::fs::write(
+            &audit,
+            "{\"format\":1,\"event\":\"server-start\",\"outcome\":\"ok\",\"seq\":1,\"monotonic_ns\":1,\"detail\":{}}\n",
+        )
+        .expect("audit");
+
+        prepare_debug_endpoint(&endpoint).expect("prepare");
+        assert!(!endpoint.exists(), "the stale endpoint is removed");
+        assert!(!audit.exists(), "the stale audit is rotated");
+        let rotated: Vec<String> = std::fs::read_dir(&directory)
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(rotated.len(), 1, "{rotated:?}");
+        assert!(
+            rotated[0].starts_with("debug.endpoint.audit."),
+            "{rotated:?}"
+        );
+        let content = std::fs::read_to_string(directory.join(&rotated[0])).expect("rotated");
+        assert!(content.contains("server-start"), "{content}");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn prepare_debug_endpoint_rotates_an_audit_without_an_endpoint() {
+        let directory = temp_dir("audit-only");
+        let endpoint = directory.join("debug.endpoint.json");
+        let audit = directory.join("debug.endpoint.audit.jsonl");
+        std::fs::write(
+            &audit,
+            "{\"format\":1,\"event\":\"server-stop\",\"outcome\":\"ok\",\"seq\":2,\"monotonic_ns\":2,\"detail\":{}}\n",
+        )
+        .expect("audit");
+
+        prepare_debug_endpoint(&endpoint).expect("prepare");
+        assert!(!audit.exists());
+        let rotated: Vec<String> = std::fs::read_dir(&directory)
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(rotated.len(), 1, "{rotated:?}");
+        assert!(
+            rotated[0].starts_with("debug.endpoint.audit."),
+            "{rotated:?}"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn prepare_debug_endpoint_refuses_a_foreign_file() {
+        let directory = temp_dir("foreign");
+        let endpoint = directory.join("important.json");
+        std::fs::write(&endpoint, "not a debug endpoint").expect("file");
+
+        assert!(prepare_debug_endpoint(&endpoint).is_err());
+        assert!(endpoint.exists(), "the foreign file is preserved");
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

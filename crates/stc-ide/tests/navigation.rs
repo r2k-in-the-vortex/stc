@@ -77,6 +77,56 @@ fn fb_instance_call_receiver_resolves_to_its_field() {
 }
 
 #[test]
+fn fb_type_references_exclude_same_named_instances() {
+    let snapshot = Snapshot::load(sample_manifest()).expect("sample loads");
+    let main = file_id(&snapshot, "src/main.st");
+    let smoke = file_id(&snapshot, "tests/smoke.st");
+    let main_source = snapshot.source(main).expect("main source");
+    let smoke_source = snapshot.source(smoke).expect("smoke source");
+
+    // References from the type annotation in `Main` must cover only the FB
+    // declaration and the type annotations; the instance field and the
+    // instance calls spell `Accumulator` case-insensitively but are not type
+    // references.
+    let type_use = find(main_source, "accumulator : Accumulator;") + "accumulator : ".len();
+    let references = snapshot.references(main, type_use, true);
+    let actual: Vec<(FileId, usize)> = references
+        .iter()
+        .map(|location| (location.file, location.span.start as usize))
+        .collect();
+    let expected = vec![
+        (
+            main,
+            find(main_source, "FUNCTION_BLOCK Accumulator") + "FUNCTION_BLOCK ".len(),
+        ),
+        (
+            main,
+            find(main_source, "accumulator : Accumulator;") + "accumulator : ".len(),
+        ),
+        (
+            smoke,
+            find(smoke_source, "accumulator : Accumulator;") + "accumulator : ".len(),
+        ),
+    ];
+    assert_eq!(actual, expected);
+
+    // The instance field has its own reference set: its declaration and the
+    // call receiver in `Main` (not the type annotation, and not the
+    // same-spelled field in the smoke test).
+    let field_declaration = find(main_source, "accumulator : Accumulator");
+    let field_references = snapshot.references(main, field_declaration, true);
+    let actual: Vec<(FileId, usize)> = field_references
+        .iter()
+        .map(|location| (location.file, location.span.start as usize))
+        .collect();
+    let expected = vec![
+        (main, field_declaration),
+        (main, find(main_source, "accumulator(increment")),
+    ];
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn method_call_receivers_resolve_to_their_declaration() {
     let snapshot = Snapshot::load(example_manifest("motor")).expect("motor loads");
     let file = file_id(&snapshot, "motor/src/motor.st");
@@ -151,6 +201,27 @@ fn identifier_end_positions_resolve() {
         function_declaration,
         "AddStep",
     );
+}
+
+#[test]
+fn verbatim_windows_paths_resolve_to_the_project_file() {
+    let snapshot = Snapshot::load(sample_manifest()).expect("sample loads");
+    let file = file_id(&snapshot, "src/main.st");
+    let path = snapshot.file(file).expect("file").path.clone();
+    assert_eq!(snapshot.file_id_for_path(&path), Some(file));
+
+    #[cfg(windows)]
+    {
+        // Project paths may themselves carry the verbatim prefix after
+        // canonicalization; test both the stripped and the verbatim spelling.
+        let text = path.display().to_string();
+        let normal = text
+            .strip_prefix(r"\\?\")
+            .map_or_else(|| path.clone(), PathBuf::from);
+        let verbatim = PathBuf::from(format!(r"\\?\{}", normal.display()));
+        assert_eq!(snapshot.file_id_for_path(&normal), Some(file));
+        assert_eq!(snapshot.file_id_for_path(&verbatim), Some(file));
+    }
 }
 
 #[test]

@@ -165,7 +165,15 @@ async function assertLanguageServer(document) {
 async function runCheckTask() {
   const tasks = await vscode.tasks.fetchTasks({ type: 'stc' });
   assert.ok(tasks.length > 0, 'the extension provides stc tasks');
-  const check = tasks.find((task) => task.definition.command === 'check');
+  // Prefer the configured task from `.vscode/tasks.json`: it carries a
+  // `${workspaceFolder}` project path and therefore exercises `resolveTask`
+  // and variable expansion, which the detected task does not.
+  const check =
+    tasks.find(
+      (task) =>
+        task.definition.command === 'check' &&
+        task.definition.project !== undefined,
+    ) ?? tasks.find((task) => task.definition.command === 'check');
   assert.ok(
     check,
     `a stc check task is provided (available: ${tasks

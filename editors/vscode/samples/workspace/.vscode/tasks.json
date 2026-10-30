@@ -18,6 +18,18 @@
       "group": { "kind": "build", "isDefault": true }
     },
     {
+      "label": "stc: run",
+      "type": "stc",
+      "command": "run",
+      "project": "${workspaceFolder}/stc.toml",
+      "args": [
+        "--debug-server",
+        "--debug-endpoint",
+        "target/stc/debug/debug.endpoint.json"
+      ],
+      "problemMatcher": ["$stc"]
+    },
+    {
       "label": "stc: test",
       "type": "stc",
       "command": "test",

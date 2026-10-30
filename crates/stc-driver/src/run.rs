@@ -30,7 +30,11 @@ pub(crate) fn launch(
 ) -> u8 {
     let mut args = run_arguments(request, manifest, root_dir, log.verbose());
     if debug.server {
-        let (debug_args, _) = crate::debug::server_arguments(debug, manifest, out_dir);
+        let (debug_args, endpoint) = crate::debug::server_arguments(debug, manifest, out_dir);
+        if let Err(message) = crate::debug::prepare_debug_endpoint(&endpoint) {
+            reporter.plain("STC-E-DEBUG-020", Severity::Error, &message);
+            return 1;
+        }
         args.extend(debug_args);
     }
     log.info(format!(

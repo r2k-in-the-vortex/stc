@@ -70,7 +70,7 @@ impl SourceTable {
                     .map(|source| SourceEntry {
                         relative: source.relative.clone(),
                         key: protocol_key(&source.relative),
-                        absolute: source.path.clone(),
+                        absolute: normalize_absolute(&source.path),
                     })
                     .collect(),
             })
@@ -129,7 +129,7 @@ impl SourceTable {
         }
         if let Some(root) = &self.source_root {
             let relative = self.canonical_relative(&key)?;
-            return Some(join_relative(root, &relative));
+            return Some(normalize_absolute(&join_relative(root, &relative)));
         }
         // `ProjectGraph` orders dependencies before the root package; iterate
         // in reverse so the root package wins when several packages carry the
@@ -138,7 +138,7 @@ impl SourceTable {
             .iter()
             .rev()
             .find_map(|package| package.source_by_key(&key))
-            .map(|source| source.absolute.clone())
+            .map(|source| normalize_absolute(&source.absolute))
     }
 
     /// Returns the canonical graph spelling for a normalized relative key.
@@ -155,6 +155,41 @@ impl PackageSource {
     fn source_by_key(&self, key: &str) -> Option<&SourceEntry> {
         self.sources.iter().find(|source| source.key == key)
     }
+}
+
+/// Removes the Windows verbatim prefix from an absolute path.
+///
+/// The project graph may carry `\\?\C:\...` paths after canonicalization, and
+/// DAP clients treat that as a different file from the normal spelling, which
+/// opens a second editor tab on every stop. The DAP `Source.path` is emitted
+/// without the prefix; comparison keys are normalized separately.
+#[cfg(windows)]
+fn normalize_absolute(path: &Path) -> PathBuf {
+    let mut components = path.components();
+    match components.next() {
+        Some(std::path::Component::Prefix(prefix)) => match prefix.kind() {
+            std::path::Prefix::VerbatimDisk(disk) => {
+                let mut base = std::ffi::OsString::from(format!("{}:", disk as char));
+                base.push(components.as_path());
+                PathBuf::from(base)
+            }
+            std::path::Prefix::VerbatimUNC(server, share) => {
+                let mut base = std::ffi::OsString::from(r"\\");
+                base.push(server);
+                base.push(r"\");
+                base.push(share);
+                base.push(components.as_path());
+                PathBuf::from(base)
+            }
+            _ => path.to_path_buf(),
+        },
+        _ => path.to_path_buf(),
+    }
+}
+
+#[cfg(not(windows))]
+fn normalize_absolute(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 /// Normalizes `\` to `/`, strips Windows verbatim/device prefixes, and removes
@@ -297,6 +332,25 @@ mod tests {
         assert_eq!(
             table.absolute_path(r"src\main.st"),
             Some(PathBuf::from("C:/work/app/src/main.st"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn absolute_paths_strip_windows_verbatim_prefixes() {
+        let mut sources = table(None);
+        sources.packages[0].sources[0].absolute = PathBuf::from(r"\\?\C:\work\app\src\main.st");
+        assert_eq!(
+            sources.absolute_path("src/main.st"),
+            Some(PathBuf::from(r"C:\work\app\src\main.st"))
+        );
+
+        let mut overridden = table(None);
+        overridden.source_root = Some(PathBuf::from(r"\\?\C:\checkout"));
+        overridden.source_root_key = Some(path_key(Path::new(r"\\?\C:\checkout")));
+        assert_eq!(
+            overridden.absolute_path("src/main.st"),
+            Some(PathBuf::from(r"C:\checkout\src\main.st"))
         );
     }
 

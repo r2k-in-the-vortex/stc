@@ -22,7 +22,8 @@ pub fn path_to_uri(path: &Path) -> Option<Url> {
 /// Returns `None` for non-file URIs and unparsable input.
 #[must_use]
 pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
-    Url::parse(uri).ok()?.to_file_path().ok()
+    let path = Url::parse(uri).ok()?.to_file_path().ok()?;
+    Some(normalize(&path))
 }
 
 /// Returns the URI spelling used as a document-store key.

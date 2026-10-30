@@ -47,8 +47,13 @@ export function stcExecutable(): string {
  * definition payload.
  */
 export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
+  public constructor(private readonly output: vscode.OutputChannel) {}
+
   public async provideTasks(_token: vscode.CancellationToken): Promise<vscode.Task[]> {
     const roots = await findProjectRoots();
+    this.output.appendLine(
+      `task provider: roots=${JSON.stringify(roots.map((root) => root.root))}`,
+    );
     const tasks: vscode.Task[] = [];
     for (const project of roots.length > 0 ? roots : [{ folder: undefined, root: undefined }]) {
       for (const command of COMMANDS) {
@@ -57,6 +62,9 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
         );
       }
     }
+    this.output.appendLine(
+      `task provider: ${tasks.length} tasks (${tasks.map((task) => task.name).join(', ')})`,
+    );
     return tasks;
   }
 
@@ -65,6 +73,9 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
     _token: vscode.CancellationToken,
   ): vscode.Task | undefined {
     const definition = task.definition as StcTaskDefinition;
+    this.output.appendLine(
+      `task provider: resolve ${task.name} project=${String(definition.project)}`,
+    );
     if (!isStcCommand(definition.command)) {
       return undefined;
     }
@@ -146,7 +157,7 @@ function resolveProjectRoot(
   if (definition.project === undefined || definition.project.trim() === '') {
     return undefined;
   }
-  let candidate = definition.project;
+  let candidate = expandTaskVariables(definition.project, folder);
   if (!path.isAbsolute(candidate)) {
     const base = folder?.uri.fsPath;
     candidate = base === undefined ? path.resolve(candidate) : path.join(base, candidate);
@@ -158,6 +169,32 @@ function resolveProjectRoot(
       ? path.dirname(candidate)
       : candidate;
   }
+}
+
+/**
+ * Expands the VS Code variables users expect in the custom task properties.
+ *
+ * VS Code expands variables in standard task fields such as `cwd`, but not in
+ * extension-defined properties such as `project`; a literal
+ * `${workspaceFolder}/stc.toml` would otherwise be treated as a relative path
+ * and produce a doubled working directory.
+ */
+function expandTaskVariables(
+  value: string,
+  folder: vscode.WorkspaceFolder | undefined,
+): string {
+  const workspaceFolder =
+    folder?.uri.fsPath ??
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+    '';
+  const workspaceFolderBasename =
+    folder?.name ??
+    vscode.workspace.workspaceFolders?.[0]?.name ??
+    '';
+  return value
+    .replace(/\$\{workspaceFolder\}/g, workspaceFolder)
+    .replace(/\$\{workspaceFolderBasename\}/g, workspaceFolderBasename)
+    .replace(/\$\{workspaceRoot\}/g, workspaceFolder);
 }
 
 async function isFile(candidate: string): Promise<boolean> {

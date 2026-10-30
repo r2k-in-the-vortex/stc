@@ -3147,7 +3147,7 @@ impl Analyzer<'_> {
                 self.check_conversion_call(ctx, &callee, from, to, &arguments, span)
             }
             CalleeKind::Fb { instance, def } => {
-                self.check_fb_call(ctx, &callee, instance, def, &arguments, span, as_statement)
+                self.check_fb_call(ctx, instance, def, &arguments, span, as_statement)
             }
             CalleeKind::Method {
                 receiver,
@@ -3296,7 +3296,6 @@ impl Analyzer<'_> {
     fn check_fb_call(
         &mut self,
         ctx: &mut BodyCtx,
-        callee: &Expr,
         instance: ExprId,
         def: DefId,
         arguments: &[Arg],
@@ -3317,7 +3316,9 @@ impl Analyzer<'_> {
         else {
             return self.alloc_error_expr(span);
         };
-        self.record(callee.syntax(), crate::Res::Def(def));
+        // The callee is an FB *instance*; its own declaration was recorded by
+        // the receiver resolution. Recording the FB type here would make the
+        // instance name a reference to the type.
         self.finish_call(
             ctx,
             CalleeHir::Fb { instance, def },
@@ -4844,6 +4845,7 @@ impl Analyzer<'_> {
                                         span,
                                     );
                                     if let Some(fb) = self.fb_def_of_ty(ty) {
+                                        self.record(segment.syntax(), crate::Res::Def(def));
                                         return Some(CalleeKind::Fb {
                                             instance: value,
                                             def: fb,
@@ -4962,6 +4964,11 @@ impl Analyzer<'_> {
         if let Some(field) = self.field_lookup(ty, symbol) {
             let field_data = self.hir.field(field).clone();
             if let Some(def) = self.fb_def_of_ty(field_data.ty) {
+                // The name is the FB instance field, not the FB type: record
+                // the instance identity so navigation resolves the receiver
+                // and reference collection does not treat the instance name as
+                // a spelling of the type.
+                self.record(name.syntax(), crate::Res::Field(field));
                 let place = self.hir.alloc_expr(
                     ExprKindHir::Place(PlaceHir::Field {
                         base: receiver,

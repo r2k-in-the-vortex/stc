@@ -1,8 +1,12 @@
 //! Project snapshots: loading, overlay texts, diagnostics, and positions.
 
 use std::collections::BTreeMap;
+#[cfg(windows)]
+use std::ffi::OsString;
 use std::fmt;
 use std::ops::Range;
+#[cfg(windows)]
+use std::path::{Component, Prefix};
 use std::path::{Path, PathBuf};
 
 use stc_diag::{Diagnostic, DiagnosticSink};
@@ -15,6 +19,41 @@ use stc_span::{FileId, SourceMap, Span};
 use stc_syntax::NodeId;
 
 use crate::query::DeclarationIndex;
+
+/// Removes the Windows verbatim prefix from `path`.
+///
+/// `std::fs::canonicalize` returns `\\?\C:\...` or `\\?\UNC\...` on Windows,
+/// while project sources carry the normal spelling. Comparing the two
+/// directly makes an editor buffer opened through a verbatim path look like it
+/// belongs to a different file (and therefore outside the project).
+#[cfg(windows)]
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut components = path.components();
+    match components.next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::VerbatimDisk(disk) => {
+                let mut base = OsString::from(format!("{}:", disk as char));
+                base.push(components.as_path());
+                PathBuf::from(base)
+            }
+            Prefix::VerbatimUNC(server, share) => {
+                let mut base = OsString::from(r"\\");
+                base.push(server);
+                base.push(r"\");
+                base.push(share);
+                base.push(components.as_path());
+                PathBuf::from(base)
+            }
+            _ => path.to_path_buf(),
+        },
+        _ => path.to_path_buf(),
+    }
+}
+
+#[cfg(not(windows))]
+fn normalize_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
 
 /// One project source file known to a [`Snapshot`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -325,15 +364,18 @@ impl Snapshot {
     /// project return `None`.
     #[must_use]
     pub fn file_id_for_path(&self, path: impl AsRef<Path>) -> Option<FileId> {
-        let path = path.as_ref();
-        let canonical = std::fs::canonicalize(path).ok();
+        let path = normalize_path(path.as_ref());
+        let canonical = std::fs::canonicalize(&path)
+            .ok()
+            .map(|canonical| normalize_path(&canonical));
         self.files
             .iter()
             .find(|info| {
-                info.path == path
+                let info_path = normalize_path(&info.path);
+                info_path == path
                     || canonical
-                        .as_deref()
-                        .is_some_and(|canonical| canonical == info.path)
+                        .as_ref()
+                        .is_some_and(|canonical| canonical == &info_path)
             })
             .map(|info| info.id)
     }
