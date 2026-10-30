@@ -1,6 +1,6 @@
 # Future Wishlist — v2.0.0
 
-Status: v2.0.0 target set locked 2026-10-29. Locked: WL-1.1, WL-2, WL-3 (P0.4), WL-4 (x86-64), WL-5.1, WL-9, and WL-10. Deferred: WL-1.2, WL-5.2, WL-6, WL-7, WL-8, and WL-11.  
+Status: v2.0.0 target set locked 2026-10-29. Locked: WL-1.1, WL-2, WL-3 (P0.4), WL-4 (x86-64), WL-5.1, WL-9, and WL-10. Deferred: WL-1.2, WL-5.2, WL-6, WL-7, WL-8, and WL-11. Completed: WL-4 (2026-10-30).  
 Date: 2026-10-29  
 Branch: `v2.0.0-planning`  
 Baseline: `stc` 1.0.0, released 2026-10-29  
@@ -87,7 +87,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Deferred |
 | WL-2 | Test coverage to 85% as reported by the existing CI coverage badge; CI pass gate | Quality | M/L | Existing coverage job/badge | Locked |
 | WL-3 | Expand the Lean specification per the verification plan; v2 target is P0.4 | Verification | M for P0.4 | Phase 0 P0.4 | Locked |
-| WL-4 | Run and verify RT performance on PREEMPT_RT Linux x86-64 | Runtime evidence | M | x86-64 RT run host and transferable artifacts | Locked |
+| WL-4 | Run and verify RT performance on PREEMPT_RT Linux x86-64 | Runtime evidence | M | x86-64 RT run host and transferable artifacts | Done 2026-10-30 |
 | WL-5.1 | Modbus TCP server I/O on all supported hosts; non-real-time | Runtime/IO | M/L | None | Locked |
 | WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host | Deferred |
 | WL-6 | Motion controller: coordinated multi-axis interpolated motion | Motion | L/XL | WL-5.2, WL-7, WL-4; robot-sim reuse | Deferred |
@@ -386,6 +386,10 @@ the full program remains XL.
 
 ### WL-4 — Run and verify RT performance on PREEMPT_RT Linux
 
+**Status.** Done 2026-10-30. Report: [RT-Host.md](specification/Verification/RT-Host.md);
+runbook: [RT-Runbook.md](specification/Verification/RT-Runbook.md); evidence:
+[RT-Run-Manifest.md](specification/Verification/RT-Run-Manifest.md).
+
 **Intent.** Measure `stc` runtime behavior on a PREEMPT_RT Linux host and produce evidence about
 cycle timing, jitter, and scheduling latency. Use the host only to run artifacts, never as a
 build environment.
@@ -430,7 +434,7 @@ real-time guarantee and not a safety claim.
   the measurement is specifically about debug overhead.
 - Results remain host- and configuration-specific; no hard real-time guarantee is claimed.
 
-**Open questions.**
+**Open questions (resolved 2026-10-30; see the report for the answers).**
 
 - What does "verified" mean here: a reproducible report, a threshold on max jitter or missed
   deadlines, or comparison against the `cyclictest` baseline?
@@ -1057,3 +1061,4 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-10-29 | Selected WL-1.1, WL-3 with the P0.4 target, WL-4 on the x86-64 PREEMPT_RT host, and WL-5.1 (Modbus TCP server, non-real-time). Deferred WL-5.2. Added WL-11 (Modbus TCP client) as a separate candidate. |
 | 2026-10-29 | Selected WL-9 (WebUI) and WL-10 (ST coverage emission); deferred WL-11 (Modbus TCP client). All recorded items are now selected or deferred. |
 | 2026-10-29 | Locked the v2.0.0 target set (WL-1.1, WL-2, WL-3 P0.4, WL-4 x86-64, WL-5.1, WL-9, WL-10) and started [V2.0.0-PLAN.md](V2.0.0-PLAN.md). |
+| 2026-10-30 | Marked WL-4 done after PR #7 merged into main and main was merged back into v2.0.0-planning; the report, runbook, and evidence are in specification/Verification/. |
