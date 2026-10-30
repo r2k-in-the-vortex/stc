@@ -43,6 +43,8 @@ jobs:
       - fuzz-smoke
       - cross-target
       - package
+      - extension
+      - extension-smoke
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -72,6 +74,7 @@ jobs:
       execution: ${{ steps.flags.outputs.execution }}
       projects: ${{ steps.flags.outputs.projects }}
       cross_target: ${{ steps.flags.outputs.cross_target }}
+      vscode: ${{ steps.flags.outputs.vscode }}
     steps:
       - uses: actions/checkout@v5
       - name: Print toolchain versions
@@ -106,6 +109,7 @@ jobs:
             emit projects false
           fi
           if [ -f tests/cross-target/smoke.ll ]; then emit cross_target true; else emit cross_target false; fi
+          if [ -f editors/vscode/package.json ]; then emit vscode true; else emit vscode false; fi
 
   docs:
     name: Docs and specification
@@ -741,3 +745,138 @@ jobs:
             dist/stc-*
             compliance.json
           if-no-files-found: error
+
+  # The extension is packaged once and the VSIX is the artifact the release
+  # attaches and the smoke job installs. `npm run package` runs the
+  # `vscode:prepublish` esbuild step; the content check asserts that only the
+  # bundled extension, grammar, language configuration, and README ship.
+  extension:
+    name: VS Code extension package
+    needs: detect
+    if: needs.detect.outputs.vscode == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - name: Install extension dependencies
+        working-directory: editors/vscode
+        run: npm ci
+      - name: Typecheck the extension
+        working-directory: editors/vscode
+        run: npm run typecheck
+      - name: Run the grammar and problem-matcher tests
+        working-directory: editors/vscode
+        run: npm test
+      - name: Package the VSIX
+        working-directory: editors/vscode
+        run: npm run package
+      - name: Verify the VSIX exists and contains only the shipped files
+        working-directory: editors/vscode
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          vsix=(stc-vscode-*.vsix)
+          if [ "${#vsix[@]}" -ne 1 ]; then
+            echo "::error::expected one stc-vscode-*.vsix in editors/vscode, found ${#vsix[@]}"
+            exit 1
+          fi
+          archive="${vsix[0]}"
+          ls -l "$archive"
+          unzip -l "$archive"
+          for required in \
+            extension/package.json \
+            extension/dist/extension.js \
+            extension/syntaxes/st.tmLanguage.json \
+            extension/language-configuration.json \
+            extension/readme.md; do
+            if ! unzip -l "$archive" | grep -qF "$required"; then
+              echo "::error::the VSIX is missing $required"
+              exit 1
+            fi
+          done
+          for excluded in \
+            extension/src/ \
+            extension/test/ \
+            extension/samples/ \
+            extension/tsconfig.json \
+            extension/esbuild.mjs; do
+            if unzip -l "$archive" | grep -qF "$excluded"; then
+              echo "::error::the VSIX must not contain $excluded"
+              exit 1
+            fi
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stc-vscode-vsix
+          path: editors/vscode/*.vsix
+          if-no-files-found: error
+
+  # The headless smoke installs the packaged VSIX into a throwaway extensions
+  # directory and drives real VS Code under xvfb: activation, the `stc lsp`
+  # language client, a `stc check` task, and a `stc dap` launch session. The
+  # Rust LSP/DAP suites stay the authoritative feature tests.
+  extension-smoke:
+    name: VS Code extension smoke
+    needs: [detect, extension]
+    if: needs.detect.outputs.vscode == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      # The debug launch links the static host library, which a `-p stc-driver`
+      # build alone does not emit, so build the runtime explicitly too.
+      - name: Build the compiler and runtime for the smoke
+        run: cargo build --locked -p stc-driver -p stc-runtime
+      - name: Add the debug compiler to PATH
+        shell: bash
+        run: echo "$GITHUB_WORKSPACE/target/debug" >> "$GITHUB_PATH"
+      - name: Download the VSIX
+        uses: actions/download-artifact@v7
+        with:
+          name: stc-vscode-vsix
+          path: ${{ runner.temp }}/stc-vsix
+      - name: Install extension dependencies
+        working-directory: editors/vscode
+        run: npm ci
+      - name: Install xvfb
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth
+      - name: Run the headless Electron smoke
+        working-directory: editors/vscode
+        shell: bash
+        env:
+          STC_SAMPLE_WORKSPACE: ${{ github.workspace }}/editors/vscode/samples/workspace
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          vsix=("$RUNNER_TEMP"/stc-vsix/stc-vscode-*.vsix)
+          if [ "${#vsix[@]}" -ne 1 ]; then
+            echo "::error::expected one stc-vscode-*.vsix in the downloaded artifact, found ${#vsix[@]}"
+            exit 1
+          fi
+          export STC_VSIX_PATH="${vsix[0]}"
+          echo "smoke VSIX: $STC_VSIX_PATH ($(stat -c %s "$STC_VSIX_PATH") bytes)"
+          xvfb-run -a npm run test:electron
+      - name: Upload the smoke logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: extension-smoke-logs
+          path: |
+            editors/vscode/.vscode-test/smoke/user-data/logs
+            editors/vscode/.vscode-test/smoke/extensions
+          if-no-files-found: ignore
