@@ -48,7 +48,7 @@ output goes to stdout.
 > **WL-10 status (2026-10-31):** `stc test` emits statement coverage for the ST code under test
 > when `[test] coverage = true` or `--coverage` is given. `--no-coverage` overrides the manifest,
 > and `--coverage-out` selects the report directory. `coverage.json` (`stc-coverage/1`) and
-> `coverage.info` (LCOV) default to `target/stc/coverage`; the human summary follows the test
+> `lcov.info` (LCOV) default to `target/stc/coverage`; the human summary follows the test
 > summary. Production artifacts, the host ABI, GOT/manifest, metadata, and test-result shapes are
 > unchanged. The model is in [Testing](Testing-and-Verification.md) §2.6.
 
@@ -241,7 +241,7 @@ order, after the test process exits:
 - `trap` is the trap name (for example `STC_TRAP_DIV_ZERO`) for `status = "trap"`, otherwise
   `null`. An expected trap that matches `expect-trap` produces `pass`.
 
-**Coverage report.** With coverage enabled, `stc test` writes `coverage.json` and `coverage.info`
+**Coverage report.** With coverage enabled, `stc test` writes `coverage.json` and `lcov.info`
 under the coverage directory (default `target/stc/coverage`; `--coverage-out <dir>` overrides) and
 prints a human summary. `coverage.json` is versioned by its `protocol` key:
 
@@ -306,7 +306,7 @@ prints a human summary. `coverage.json` is versioned by its `protocol` key:
   `coverage` is `reported`. `status` is the test status from the test-result shape above.
 - Paths are package-relative with forward slashes; a dependency file is `<package>/<relative>`.
 
-`coverage.info` is a standard LCOV tracefile sorted by file: one record per file with `TN:`, `SF:`,
+`lcov.info` is a standard LCOV tracefile sorted by file: one record per file with `TN:`, `SF:`,
 one `DA:<line>,<count>` per distinct start line (counts summed per line), `LF:`, `LH:`, and
 `end_of_record`. There are no `BRDA`, function, or checksum records in v2.0.0. The human summary
 follows the test summary in human mode:
@@ -857,7 +857,7 @@ target/stc/test/<artifact>/                     per-test artifact (stc test; hoo
 
 target/stc/coverage/                            coverage reports (stc test; default)
   coverage.json                                 native report (`stc-coverage/1`)
-  coverage.info                                 LCOV tracefile
+  lcov.info                                 LCOV tracefile
 
 target/stc/runtime/                             default runtime store (`stc run --watch`)
   modules/                                      runtime module generations (when configured)

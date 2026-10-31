@@ -59,7 +59,7 @@ Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Cha
 > **WL-10 status (2026-10-31):** `stc test --coverage` reports statement coverage for ST production
 > code compiled into test artifacts. Codegen instruments test builds only through a module-owned
 > counter array; the test host writes one raw sidecar per test; the driver aggregates by canonical
-> source span and writes deterministic `coverage.json` (`stc-coverage/1`), `coverage.info` (LCOV),
+> source span and writes deterministic `coverage.json` (`stc-coverage/1`), `lcov.info` (LCOV),
 > and a human summary. The model, exclusions, formats, and limits are in §2.6. The executable
 > example is `examples/coverage/`; committed golden reports are under
 > `crates/stc-driver/tests/coverage/expected/` and are checked by
@@ -319,7 +319,7 @@ the compiler itself (WL-2) and from the rule-level traceability check in §7.
 - The host validates the declared site count (cap 1,000,000). A missing export, invalid count, or
   sidecar write failure writes no usable data and changes only the coverage aggregate. The raw
   sidecar is an internal protocol between the generated host and the driver; only
-  `coverage.json`, `coverage.info`, and the human summary are stable interfaces.
+  `coverage.json`, `lcov.info`, and the human summary are stable interfaces.
 - Missing, malformed, or site-table-inconsistent data is `STC-W-COVERAGE-001`; the test is
   excluded from the aggregate and the test result is unchanged. A timed-out test is killed before
   the sidecar is written and is reported as having no data. Failed and trapped tests contribute
@@ -358,7 +358,7 @@ the owner chain.
 
 **Reports.**
 
-- Coverage writes `coverage.json` (`stc-coverage/1`) and `coverage.info` (LCOV) under
+- Coverage writes `coverage.json` (`stc-coverage/1`) and `lcov.info` (LCOV) under
   `target/stc/coverage/` by default, or `--coverage-out <dir>`, and prints a human summary after
   the test summary in human mode. In JSON mode the summary is suppressed on stdout and the two
   file paths are logged to stderr; `-q` suppresses the human summary. The files are still written
@@ -414,7 +414,7 @@ the owner chain.
 **Evidence.** `examples/coverage/` is the executable example: two contributing tests cover 3 of 5
 statements and lines (60.0%), one production function is never called, and a `{stc:test}` helper in
 a production file runs but contributes no sites. Committed golden reports are in
-`crates/stc-driver/tests/coverage/expected/` (`coverage.json`, `coverage.info`, and
+`crates/stc-driver/tests/coverage/expected/` (`coverage.json`, `lcov.info`, and
 `coverage.stdout`) and are regenerated with `STC_UPDATE_SNAPSHOTS=1`;
 `crates/stc-driver/tests/coverage_evidence.rs` covers determinism and host-data absence, result
 equivalence, production isolation, test-code exclusions, dependency labels, and optimized builds.

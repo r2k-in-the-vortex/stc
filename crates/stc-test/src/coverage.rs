@@ -488,7 +488,7 @@ pub fn render_json(report: &CoverageReport) -> String {
     text
 }
 
-/// Renders the LCOV tracefile (`coverage.info`).
+/// Renders the LCOV tracefile (`lcov.info`).
 ///
 /// One record per file, sorted by path. `DA:` lines carry one entry per start
 /// line with the summed counts of every site starting on that line; `LF:` and

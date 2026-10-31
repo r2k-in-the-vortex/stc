@@ -125,5 +125,5 @@ the test artifacts; the model and formats are in
 | Production `PROGRAM` bodies that a test artifact does not link are outside the measured universe | Put the code under test in a package the test build links, or accept that unlinked programs are not measured |
 | Dependency entries use package-qualified labels (`<package>/<relative>`), not filesystem paths | Use the label to map the report entry back to the dependency source |
 | There is no per-package or per-file coverage filter in v2.0.0 | Filter `coverage.json` in external tooling; all production packages are reported |
-| There is no fail-under threshold, coverage gate, or HTML report | Consume `coverage.json` or `coverage.info` in external tooling; see Testing and Verification §2.6 |
+| There is no fail-under threshold, coverage gate, or HTML report | Consume `coverage.json` or `lcov.info` in external tooling; see Testing and Verification §2.6 |
 | Coverage is not correctness evidence and is not rule-level traceability | Correctness is established by tests and by the rule traceability check; coverage only records executed statements |

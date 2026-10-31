@@ -597,7 +597,7 @@ pub(crate) fn run(
             ));
             log.status(format!(
                 "coverage report {}",
-                crate::report::display_path(&coverage_dir.join("coverage.info"))
+                crate::report::display_path(&coverage_dir.join("lcov.info"))
             ));
         } else if !reporter.is_quiet() {
             print!("{}", render_human(&report));
@@ -610,14 +610,14 @@ pub(crate) fn run(
     }
 }
 
-/// Writes `coverage.json` and `coverage.info`, creating the directory.
+/// Writes `coverage.json` and `lcov.info`, creating the directory.
 fn write_coverage_reports(dir: &Path, report: &stc_test::CoverageReport) -> Result<(), String> {
     std::fs::create_dir_all(dir)
         .map_err(|error| format!("cannot create `{}`: {error}", dir.display()))?;
     let json_path = dir.join("coverage.json");
     std::fs::write(&json_path, render_json(report))
         .map_err(|error| format!("cannot write `{}`: {error}", json_path.display()))?;
-    let info_path = dir.join("coverage.info");
+    let info_path = dir.join("lcov.info");
     std::fs::write(&info_path, render_lcov(report))
         .map_err(|error| format!("cannot write `{}`: {error}", info_path.display()))?;
     Ok(())

@@ -266,8 +266,8 @@ fn coverage_writes_reports_sidecars_and_per_test_indices() {
     let union: BTreeSet<u64> = first.iter().chain(second.iter()).copied().collect();
     assert_eq!(union, BTreeSet::from([0, 1]));
 
-    let info = std::fs::read_to_string(directory.coverage_dir().join("coverage.info"))
-        .expect("coverage.info");
+    let info =
+        std::fs::read_to_string(directory.coverage_dir().join("lcov.info")).expect("lcov.info");
     assert_eq!(
         info,
         "TN:\nSF:src/stats.st\nDA:5,1\nDA:12,1\nLF:2\nLH:2\nend_of_record\n"
@@ -310,7 +310,7 @@ fn coverage_is_off_by_default_and_no_coverage_overrides_manifest() {
         stderr(&enabled)
     );
     assert!(directory.coverage_dir().join("coverage.json").is_file());
-    assert!(directory.coverage_dir().join("coverage.info").is_file());
+    assert!(directory.coverage_dir().join("lcov.info").is_file());
 
     std::fs::remove_dir_all(directory.coverage_dir()).expect("remove reports");
     let disabled = directory.run_test(&["UsesAddOne", "--no-coverage"]);
@@ -505,7 +505,7 @@ fn quiet_suppresses_the_human_summary_but_still_writes_reports() {
     assert_eq!(code(&output), 0, "{}\n{}", stdout(&output), stderr(&output));
     assert!(stdout(&output).is_empty(), "{}", stdout(&output));
     assert!(directory.coverage_dir().join("coverage.json").is_file());
-    assert!(directory.coverage_dir().join("coverage.info").is_file());
+    assert!(directory.coverage_dir().join("lcov.info").is_file());
 }
 
 #[test]

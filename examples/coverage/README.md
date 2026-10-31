@@ -58,7 +58,7 @@ stc fmt --check
 ```
 
 `stc test --coverage` writes `coverage.json` (`stc-coverage/1`) and
-`coverage.info` (LCOV) under `target/stc/coverage/` and prints the human
+`lcov.info` (LCOV) under `target/stc/coverage/` and prints the human
 summary after the test summary. `--coverage-out <dir>` places the two files
 elsewhere.
 

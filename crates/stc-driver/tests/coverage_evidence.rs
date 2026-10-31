@@ -320,18 +320,14 @@ fn golden_reports_match_the_committed_example() {
 
     let coverage_dir = example.join("target/stc/coverage");
     let json_path = coverage_dir.join("coverage.json");
-    let info_path = coverage_dir.join("coverage.info");
+    let info_path = coverage_dir.join("lcov.info");
     let expected = expected_dir();
     compare_or_update(
         &expected.join("coverage.json"),
         &read_text(&json_path),
         update,
     );
-    compare_or_update(
-        &expected.join("coverage.info"),
-        &read_text(&info_path),
-        update,
-    );
+    compare_or_update(&expected.join("lcov.info"), &read_text(&info_path), update);
     compare_or_update(&expected.join("coverage.stdout"), &stdout(&output), update);
 
     // The golden report carries the suite union and per-test covered indices.
@@ -383,22 +379,19 @@ fn reruns_are_byte_identical_and_free_of_host_data() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 
     let json_path = example.join("target/stc/coverage/coverage.json");
-    let info_path = example.join("target/stc/coverage/coverage.info");
+    let info_path = example.join("target/stc/coverage/lcov.info");
     let json_first = std::fs::read(&json_path).expect("read coverage.json");
-    let info_first = std::fs::read(&info_path).expect("read coverage.info");
+    let info_first = std::fs::read(&info_path).expect("read lcov.info");
 
     let output = run_example(&example, &["--coverage"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let json_second = std::fs::read(&json_path).expect("read coverage.json");
-    let info_second = std::fs::read(&info_path).expect("read coverage.info");
+    let info_second = std::fs::read(&info_path).expect("read lcov.info");
     assert_eq!(
         json_first, json_second,
         "coverage.json must be byte-identical"
     );
-    assert_eq!(
-        info_first, info_second,
-        "coverage.info must be byte-identical"
-    );
+    assert_eq!(info_first, info_second, "lcov.info must be byte-identical");
 
     let temp = std::env::temp_dir().to_string_lossy().into_owned();
     let example_text = example.to_string_lossy().into_owned();
@@ -406,10 +399,7 @@ fn reruns_are_byte_identical_and_free_of_host_data() {
         .canonicalize()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
-    for (name, bytes) in [
-        ("coverage.json", &json_first),
-        ("coverage.info", &info_first),
-    ] {
+    for (name, bytes) in [("coverage.json", &json_first), ("lcov.info", &info_first)] {
         let text = std::str::from_utf8(bytes).expect("report is UTF-8");
         assert!(!text.contains('\r'), "{name} must use LF line endings");
         for marker in [
@@ -951,8 +941,8 @@ fn optimized_test_builds_report_identical_coverage() {
         normalized(&optimized_json),
         "the instrumentation must survive optimization without changing the report"
     );
-    let baseline_info = read_text(&baseline.join("target/stc/coverage/coverage.info"));
-    let optimized_info = read_text(&optimized.join("target/stc/coverage/coverage.info"));
+    let baseline_info = read_text(&baseline.join("target/stc/coverage/lcov.info"));
+    let optimized_info = read_text(&optimized.join("target/stc/coverage/lcov.info"));
     assert_eq!(normalized(&baseline_info), normalized(&optimized_info));
     assert_eq!(
         normalized(&stdout(&baseline_output)),

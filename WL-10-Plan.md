@@ -160,7 +160,7 @@ above.
 | C-4 | Production `PROGRAM` bodies not selected by the synthetic `STC_TEST` configuration are not linked into a test artifact and are outside the measured universe. This follows the existing test model and is documented as a limitation. `{stc:test}` program tests remain test code and are excluded. | Locked |
 | C-5 | The test host writes one per-test raw sidecar, `<artifact>.coverage`, in the internal `stc-coverage-raw/1` format: a header with the site count, then `id count` lines for nonzero counters in ascending ID order. The driver reads it after the process exits. Missing or malformed data is a warning, never a test failure; timed-out tests are marked as having no data. The result line, stdout shape, and exit codes do not change. | Locked |
 | C-6 | Map per-test counters to canonical sites by source span `(file, start, end, kind)`; identical spans across artifacts merge. Aggregate hit counts are sums; a site is covered when any test hits it. Canonical site order is `(file path, start byte, end byte)`. Per-test detail in the native report is the set of covered canonical site indices; per-test hit counts are not published. Site tables come from codegen output, not from rescanning sources. | Locked |
-| C-7 | Write `coverage.json` (`stc-coverage/1`) and `coverage.info` (LCOV) under `target/stc/coverage/` by default, or `--coverage-out <dir>`. Print the human summary to stdout after the test summary in human mode and suppress it on stdout in JSON mode (log the file paths to stderr). No HTML in v2.0.0. An explicit `--coverage` is rejected with `--list` (the manifest default is ignored there); `--no-run` builds instrumented artifacts but writes no report. | Locked |
+| C-7 | Write `coverage.json` (`stc-coverage/1`) and `lcov.info` (LCOV) under `target/stc/coverage/` by default, or `--coverage-out <dir>`. Print the human summary to stdout after the test summary in human mode and suppress it on stdout in JSON mode (log the file paths to stderr). No HTML in v2.0.0. An explicit `--coverage` is rejected with `--list` (the manifest default is ignored there); `--no-run` builds instrumented artifacts but writes no report. | Locked |
 | C-8 | Statement coverage is primary: covered sites / total sites. Line coverage is the documented projection for LCOV and editors: a line is covered when any site starting on it executed, and LCOV `DA` sums the hit counts of sites starting on that line. Both metrics appear in JSON and the human summary. No fail-under threshold or gating behavior in v2.0.0. | Locked |
 | C-9 | Reports contain no timestamps, durations, absolute paths, host names, build IDs, or test durations. Files and sites are canonically ordered; paths are package-relative with forward slashes; percentages use integer arithmetic with half-up rounding to one decimal. Identical sources, tests, filters, and options produce byte-identical reports on every supported host. | Locked |
 | C-10 | Add `STC-W-COVERAGE-001` (a test's raw coverage data is missing or malformed and is excluded from the aggregate) and `STC-W-COVERAGE-002` (a coverage site cannot be attributed to a reportable source file and is omitted). Reuse `STC-E-BUILD-002` for report-directory/file write failures. Register the warnings in `crates/stc-manifest/src/codes.rs` and Conformance Profile §10, and record this decision in `specification/Decisions.md` with the next free `D-` number when phase 3 lands. | Locked |
@@ -221,7 +221,7 @@ Coverage collection never changes the result line, the process exit code, or the
 failure set. A test that times out is killed before the sidecar is written; the driver marks it
 as having no coverage data. The test artifact directory is removed and rebuilt for each test on
 each run, so a stale sidecar cannot be read. The raw sidecar is an internal protocol between the
-generated host and the driver; only `coverage.json`, `coverage.info`, and the human summary are
+generated host and the driver; only `coverage.json`, `lcov.info`, and the human summary are
 stable interfaces.
 
 ### 6.3 Aggregation
@@ -400,7 +400,7 @@ example below shows the logical key order; serialized keys are alphabetical.
 
 ### 7.3 LCOV
 
-`coverage.info` uses the standard tracefile shape. Each record covers one file, and records are
+`lcov.info` uses the standard tracefile shape. Each record covers one file, and records are
 sorted by file path:
 
 ```
@@ -500,7 +500,7 @@ summary in human mode; files are still written.
 - Extend `crates/stc-driver/tests/coverage_cli.rs` or add
   `crates/stc-driver/tests/coverage_evidence.rs` with the evidence cases; phase 3 already covers
   the functional CLI, report, sidecar, filter, timeout, quiet, write-failure, and clean cases:
-  - Golden `coverage.json`, `coverage.info`, and human summary for the example, with
+  - Golden `coverage.json`, `lcov.info`, and human summary for the example, with
     `STC_UPDATE_SNAPSHOTS=1` regeneration like the UI snapshots.
   - Aggregation across tests with per-test `covered` arrays.
   - Byte-identical reruns and no host-specific or temporal data.
@@ -546,7 +546,7 @@ PR-triggered run appears.
 **Phase 3 note (2026-10-31).** The driver now reads `[test] coverage`, supports
 `--coverage`/`--no-coverage`/`--coverage-out` with the locked validation rules, instruments every
 non-test package file, validates each raw sidecar against the artifact site table, aggregates by
-canonical span, and writes `coverage.json`, `coverage.info`, and the human summary. The warning
+canonical span, and writes `coverage.json`, `lcov.info`, and the human summary. The warning
 codes are registered (D-211) and `stc clean` removes the default coverage directory. Eleven
 driver integration tests and eleven `stc-test` unit tests cover the functional path. The first
 CI run failed rule traceability for `STC-W-COVERAGE-002`; the single repair extracted the site
@@ -655,3 +655,4 @@ None as of 2026-10-31. The plan is locked; new questions are appended only with 
 | 2026-10-31 | Phase 3 complete: manifest/CLI enablement, driver aggregation, JSON/LCOV/human reports, warning codes D-211, clean behavior, and 22 tests; commits `5d1c4fe` and the single traceability repair `0d14ea2`, final CI run 41164663849 green. |
 | 2026-10-31 | Phase 4 complete: coverage example, committed goldens, seven evidence tests, three-host evidence, and the informational overhead measurement; commit `fd8c7f2`, CI run 41166845768 green. |
 | 2026-10-31 | Phase 5 complete: coverage model and formats consolidated into the specifications and user docs, performance note added, and WL-10 marked done in the parent plan; commit `f340aad`, CI run 41168834051 green after an unrelated flake rerun. |
+| 2026-10-31 | Renamed the LCOV artifact from `coverage.info` to `lcov.info` for Coverage Gutters compatibility (owner correction to C-7). |
