@@ -3,8 +3,8 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-31  
 Branch: `WL-10` (sub-plan of `v2.0.0-planning`)  
-Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phases 0–3 are
-complete; phase 4 is in progress.  
+Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phases 0–4 are
+complete; phase 5 is in progress.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-10)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-10,
 [Testing and Verification](specification/Architecture/Testing-and-Verification.md) §2,
@@ -522,7 +522,8 @@ summary in human mode; files are still written.
 | 1 | Complete 2026-10-31 | Codegen instrumentation, exclusions, verifier allowlist, 7 coverage tests; commit `132faaa`; CI run 41155573060 green. |
 | 2 | Complete 2026-10-31 | Host readout and raw writer, shared protocol constants, raw parser, 20 tests; commit `d58a58f`; CI run 41160138589 green. |
 | 3 | Complete 2026-10-31 | Manifest/CLI enablement, driver aggregation, JSON/LCOV/human reports, warnings, clean, 22 tests; commits `5d1c4fe` and `0d14ea2`; CI run 41164663849 green. |
-| 4 | In progress | — |
+| 4 | Complete 2026-10-31 | Coverage example, committed goldens, 7 evidence tests, cross-host matrix, informational overhead; commit `fd8c7f2`; CI run 41166845768 green. |
+| 5 | In progress | — |
 
 **Phase 1 note (2026-10-31).** The increment uses the element-indexing GEP shown in §6.1 rather
 than the earlier illustrative two-index form, because N is not final during lowering; the global
@@ -549,6 +550,22 @@ driver integration tests and eleven `stc-test` unit tests cover the functional p
 CI run failed rule traceability for `STC-W-COVERAGE-002`; the single repair extracted the site
 attribution loop and added a unit test that exercises the warning. The repair commit is
 `0d14ea2`; the final dispatched matrix run 41164663849 is green.
+
+**Phase 4 note (2026-10-31).** `examples/coverage/` now demonstrates 3/5 statement and line
+coverage (60.0%) with two tests, an uncovered function, an uncovered branch body, and an excluded
+test-only helper. Committed goldens cover JSON, LCOV, and human output, with
+`STC_UPDATE_SNAPSHOTS=1` regeneration; seven evidence tests cover determinism and host-data
+absence, instrumented/uninstrumented result equivalence (pass, fail, expected trap, unexpected
+trap, cycles, exit codes), production isolation, test-code and test-only exclusion,
+dependency-package labels, and O3-vs-O0 identity. The evidence target runs in the existing
+three-host Rust test matrix. The informational overhead measurement was 3619 ms plain vs
+3664 ms instrumented (5 paired runs, +45 ms, about 1.2%; noise-dominated by test-build
+compilation), plus an earlier 3-run sample of 3331 ms vs 3297 ms; it is host-specific and
+non-gating. Deviations: the example uses `AddValues` to avoid a standard-name shadowing warning;
+`stc build --coverage` is rejected as a test-only option with guidance rather than as an unknown
+option; the symbol-isolation checks inspect module/artifact files rather than the statically
+linked test-host executable; missing/malformed sidecar handling is covered by the phase 2/3 unit
+tests rather than a production test hook.
 
 ## 9. Exit criteria
 
@@ -624,3 +641,4 @@ None as of 2026-10-31. The plan is locked; new questions are appended only with 
 | 2026-10-31 | Phase 1 complete: codegen site table, span-deduped counters, exported global, verifier allowlist, exclusions, and tests; commit `132faaa`, CI green. Reconciled phase 2/3 acceptance for the end-to-end sidecar dependency. |
 | 2026-10-31 | Phase 2 complete: host counter readout and raw writer, shared protocol constants, and the raw parser with 20 tests; commit `d58a58f`, full matrix green via manual workflow dispatch at the same SHA. |
 | 2026-10-31 | Phase 3 complete: manifest/CLI enablement, driver aggregation, JSON/LCOV/human reports, warning codes D-211, clean behavior, and 22 tests; commits `5d1c4fe` and the single traceability repair `0d14ea2`, final CI run 41164663849 green. |
+| 2026-10-31 | Phase 4 complete: coverage example, committed goldens, seven evidence tests, three-host evidence, and the informational overhead measurement; commit `fd8c7f2`, CI run 41166845768 green. |

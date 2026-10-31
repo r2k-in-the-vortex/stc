@@ -176,6 +176,30 @@ floor. An untuned R1 p50 of about 2.6 ms at a 1 ms target and osnoise maxima of 
 the deferred tuned-profile trigger in [RT-Host.md](RT-Host.md) §6; the tuned profile was not
 executed in v2.0.0.
 
+## Coverage instrumentation overhead (WL-10)
+
+Measured on the Windows development host with the `examples/coverage` suite (three tests) as a
+full `stc test` process invocation. The comparison is informational, host-specific, and
+non-gating (WL-10 C-14); it is dominated by test-build compilation and host noise, not by the
+executed statements.
+
+| Regime | Plain median | Coverage median | Difference |
+| --- | --- | --- | --- |
+| Five paired runs | 3619 ms | 3664 ms | +45 ms (about 1.2%) |
+| Earlier three-run sample | 3331 ms | 3297 ms | -34 ms (noise) |
+
+Reproduce:
+
+```sh
+cargo run -p stc-driver -- test --manifest-path examples/coverage/stc.toml --locked
+cargo run -p stc-driver -- test --manifest-path examples/coverage/stc.toml --locked --coverage
+```
+
+Each invocation rebuilds every per-test artifact and links its host, so build and link time
+dominates. Instrumentation adds one GEP/load/add/store sequence per executed site; the earlier
+sample moved in the opposite direction, which shows the measurement is noise-dominated. No
+overhead budget, threshold, or CI gate is defined.
+
 ## Policy
 
 - A performance change is not a release blocker unless it breaks correctness,
