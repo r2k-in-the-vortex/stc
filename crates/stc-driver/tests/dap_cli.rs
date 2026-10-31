@@ -424,6 +424,12 @@ fn find_variable<'a>(variables: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("variable `{name}` in {variables}"))
 }
 
+/// Strips the Windows verbatim prefix the DAP source path intentionally omits.
+fn normalized_path(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
 /// Waits for a breakpoint stop and checks the frame and source mapping.
 fn stop_at_line(client: &mut DapClient, project: &TestDir, line: i64) -> (Value, Value) {
     let stopped = client.event("stopped", PROTOCOL_TIMEOUT);
@@ -442,9 +448,10 @@ fn stop_at_line(client: &mut DapClient, project: &TestDir, line: i64) -> (Value,
     let frames = stack["body"]["stackFrames"].as_array().expect("frames");
     assert!(!frames.is_empty(), "{stack}");
     let source = &frames[0]["source"];
+    let expected_source = normalized_path(&project.source());
     assert_eq!(
         source["path"].as_str(),
-        Some(project.source().to_string_lossy().as_ref()),
+        Some(expected_source.as_str()),
         "frame source maps to the workspace file: {stack}"
     );
     assert_eq!(frames[0]["line"], line, "{stack}");
@@ -681,7 +688,8 @@ fn sample_workspace_launch_reads_known_values_and_steps() {
     // First-statement stop: the never-written global has its initial value.
     // `TOTAL` depends on how many cycles ran before the breakpoints bound, so
     // the test only requires it to be a decimal integer.
-    let (_stack, scopes) = stop_at_line(&mut client, &project, first_statement);
+    let (stack, scopes) = stop_at_line(&mut client, &project, first_statement);
+    assert_eq!(stack["body"]["stackFrames"][0]["name"], "MAIN", "{stack}");
     assert_eq!(read_global(&mut client, &scopes, "INCREMENT"), "1");
     let total = read_global(&mut client, &scopes, "TOTAL");
     assert!(
@@ -689,6 +697,67 @@ fn sample_workspace_launch_reads_known_values_and_steps() {
         "TOTAL is a decimal integer: {total}"
     );
     let globals = scope_reference(&scopes, "Globals");
+    // The program instance exposes its nested aggregate fields, including the
+    // FB instance whose children come from the manifest-assisted view.
+    let globals_variables = client.request("variables", json!({ "variablesReference": globals }));
+    let instance = globals_variables["body"]["variables"]
+        .as_array()
+        .expect("globals")
+        .iter()
+        .find(|variable| variable["value"] == "<program instance>")
+        .expect("program instance");
+    let instance_reference = instance["variablesReference"]
+        .as_i64()
+        .expect("instance reference");
+    let fields = client.request(
+        "variables",
+        json!({ "variablesReference": instance_reference }),
+    );
+    for expected in ["ACCUMULATOR", "CYCLES", "SUM"] {
+        find_variable(&fields, expected);
+    }
+    let accumulator = find_variable(&fields, "ACCUMULATOR");
+    let accumulator_reference = accumulator["variablesReference"]
+        .as_i64()
+        .expect("accumulator reference");
+    assert_ne!(accumulator_reference, 0, "{accumulator}");
+    let members = client.request(
+        "variables",
+        json!({ "variablesReference": accumulator_reference }),
+    );
+    for expected in ["INCREMENT", "TOTAL"] {
+        find_variable(&members, expected);
+    }
+
+    // Watch/evaluate resolves visible instance fields by name, not only raw
+    // manifest paths; arbitrary ST expressions are still rejected.
+    let increment = client.request(
+        "evaluate",
+        json!({ "expression": "INCREMENT", "frameId": 0, "context": "watch" }),
+    );
+    assert_eq!(increment["body"]["result"], "1", "{increment}");
+    let sum = client.request(
+        "evaluate",
+        json!({ "expression": "sum", "frameId": 0, "context": "watch" }),
+    );
+    assert!(
+        sum["body"]["result"]
+            .as_str()
+            .is_some_and(|value| value.parse::<i64>().is_ok()),
+        "{sum}"
+    );
+    let expression = client.request(
+        "evaluate",
+        json!({ "expression": "1 + 2", "frameId": 0, "context": "repl" }),
+    );
+    assert_eq!(expression["success"], false, "{expression}");
+    assert!(
+        expression["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("ST expressions are not supported")),
+        "{expression}"
+    );
+
     let denied = client.request(
         "setVariable",
         json!({ "variablesReference": globals, "name": "TOTAL", "value": "42" }),
@@ -704,7 +773,11 @@ fn sample_workspace_launch_reads_known_values_and_steps() {
     // Continue into the function and read its known locals.
     let continued = client.request("continue", json!({ "threadId": 1 }));
     assert_eq!(continued["success"], true, "{continued}");
-    let (_stack, function_scopes) = stop_at_line(&mut client, &project, function_statement);
+    let (stack, function_scopes) = stop_at_line(&mut client, &project, function_statement);
+    assert_eq!(
+        stack["body"]["stackFrames"][0]["name"], "ADDSTEP",
+        "{stack}"
+    );
     assert_eq!(
         read_local(&mut client, &function_scopes, "INCREMENTED"),
         "0"

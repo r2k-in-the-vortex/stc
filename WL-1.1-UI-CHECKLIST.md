@@ -115,53 +115,115 @@ unsupported or intentionally out of scope.
         `VAR_IN_OUT` default to `PUBLIC`; internal `VAR` stays `PROTECTED`; the diagnostic now
         names the member). The sample now uses the equivalent member form and checks cleanly.
         Recorded as follow-up **F-7**.
-19. [ ] **Document symbols.** `Ctrl+Shift+O` lists `AddStep`, `Accumulator`, `Main`, and
-        `Sample`; the entries are hierarchical and jump to the right declaration.
-20. [ ] **Cross-file navigation.** From `tests/smoke.st`, F12 on `AddStep` and `Accumulator`
-        jumps to `src/main.st`; references from the test file are included.
+19. [x] **Document symbols.** Pass 2026-10-30: `Ctrl+Shift+O` lists 16 symbols:
+        `INCREMENT`, `TOTAL`, `AddStep` (`value`, `incremented`), `Accumulator` (`increment`,
+        `total`), `Main` (`accumulator`, `sum`, `cycles`), and `Sample` (`Cpu` → `MainTask`,
+        `sample`). Selecting an entry jumps to its declaration; the hierarchy matches the source.
+20. [x] **Cross-file navigation.** Pass 2026-10-30: from `tests/smoke.st`, F12 on `AddStep`
+        (line 8) jumps to `src/main.st:12`; F12 on `Accumulator` (line 16) jumps to
+        `src/main.st:23`; F12 on the smoke test's call receiver goes to its own field, not
+        `Main`'s. `Shift+F12` on `AddStep` returns the declaration, the result assignment, and
+        both calls (three without the declaration); `Shift+F12` on `Accumulator` returns the
+        declaration and both type uses, with no instance names/calls.
 
 ## D. Debugging
 
-21. [ ] **Breakpoint gutter.** Click the gutter on line 39 (`sum := AddStep(sum);`); a red dot
-        appears and the Breakpoints panel lists it.
-22. [ ] **Launch.** Press F5 and choose **stc: Launch sample**. The session builds, starts, and
-        stops at line 39. The Debug Console shows the non-safety notice.
-23. [ ] **Globals.** The Variables pane → **Globals** shows `INCREMENT = 1`; expand the program
-        instance to see `sum`, `cycles`, `accumulator`, and `TOTAL`.
-24. [ ] **Call stack.** The Call Stack shows `Main`; continue (F5) to the `AddStep` breakpoint if
-        one is set, or step into the function.
-25. [ ] **Step into.** With the stop on line 39, press F11 (`Step Into`); the session stops in
-        `AddStep`. **Locals** shows `VALUE` and `INCREMENTED = 0`; the stack shows `AddStep` above
-        `Main`.
-26. [ ] **Step over.** Press F10 on line 19; execution moves to line 20 and `INCREMENTED = 1`.
-27. [ ] **Step out.** Press `Shift+F11` from inside `AddStep`; execution returns to `Main`.
-28. [ ] **Watch and evaluate.** Add `INCREMENT` and `sum` to the Watch pane; values appear at the
-        next stop. In the Debug Console, `INCREMENT` returns `1`; an arbitrary ST expression is
-        rejected with a clear message.
-29. [ ] **setVariable gating.** Without `allowWrite`, editing a variable in the Variables pane is
-        refused. Set `"allowWrite": true` in the launch configuration and relaunch; editing a
-        live root succeeds. Revert the value and the configuration afterwards.
-30. [ ] **Terminate and relaunch.** `Shift+F5` ends the session; the launch-owned host exits. F5
-        launches a fresh session successfully.
+21. [x] **Breakpoint gutter.** Pass 2026-10-30: clicking the gutter on line 39 shows a red dot,
+        the Breakpoints panel lists `src/main.st` line 39, and toggling removes/restores both.
+22. [x] **Launch.** Pass 2026-10-30: F5 reuses the last-selected configuration; with **stc: Launch
+        sample** selected, the project builds, the session starts, and it stops at line 39. The
+        Debug Console shows the non-safety notice. Note: the endpoint error means the **stc:
+        Attach sample (replace endpoint)** configuration ran; attach needs the `stc: run` task,
+        launch does not.
+23. [x] **Globals.** Pass 2026-10-30: **Globals** shows `INCREMENT = 1` and `TOTAL`; the
+        program instance (`SAMPLE/CPU/SAMPLE`) expands to `ACCUMULATOR`, `CYCLES`, and `SUM`;
+        `ACCUMULATOR` expands to `INCREMENT` and `TOTAL`. Names are the debug metadata's
+        normalized uppercase spellings; `Main` has no frame locals, so an empty Locals scope is
+        expected at this stop.
+        First run 2026-10-30 exposed two `stc-dap` defects, both fixed and retested: hidden FB
+        object roots were dropped, so the instance had no `ACCUMULATOR`; and the runtime's
+        flattened `view` field shape was not expanded, so aggregates expanded to nothing.
+        Covered by `adapter.rs` unit tests, `value.rs` view tests, and `dap_cli.rs` (**F-8**).
+        `TOTAL` may be nonzero at the first stop because cycles run before breakpoints bind;
+        launching with a breakpoint is expected to stop on the first cycle, so this remains a
+        defect (**F-9**). A pause longer than `[debug].session-timeout` (default 5 min) ends the
+        session with `STC-E-DEBUG-018`; the host behavior follows D-175, but the UI gives no
+        advance warning (**F-10**).
+24. [x] **Call stack.** Pass 2026-10-30: at line 39 the stack shows `MAIN` with
+        `src/main.st:39:3`; stepping into `AddStep` shows `ADDSTEP` with `src/main.st:19:3` above
+        `MAIN`. Frame names are mapped from the manifest function `GotId` (`stc-dap` fix; the
+        previous UI showed mangled symbols). Deviations recorded: caller frames have no source
+        location (**F-11**), and two unresolved host frames appear as `frame`/Unknown Source
+        (**F-12**). `Locals` is populated in the function frame but empty for program/FB bodies,
+        whose fields are instance roots in `Globals` (**F-13**).
+25. [x] **Step into.** Pass 2026-10-30: F11 from line 39 stops in `AddStep` at line 19;
+        **Locals** shows `VALUE` (decimal) and `INCREMENTED = 0`; the stack shows `ADDSTEP` above
+        `MAIN`.
+26. [x] **Step over.** Pass 2026-10-30: F10 on line 19 moves to line 20 and
+        `INCREMENTED = 1`.
+27. [x] **Step out.** Pass 2026-10-30: `Shift+F11` from inside `AddStep` returns to `Main`.
+28. [x] **Watch and evaluate.** Pass 2026-10-30: Watch shows `INCREMENT = 1` and `sum` as a
+        decimal, and both refresh at the next stop. The Debug Console evaluates `INCREMENT = 1`
+        and `sum`; `1 + 2`/`sum + 1` are rejected with the explicit
+        "ST expressions are not supported" message. `stc-dap` now also resolves a visible global
+        or program-instance field by name for `evaluate`; covered by `dap_cli.rs`.
+29. [x] **setVariable gating.** Pass 2026-10-30: without `allowWrite`, editing `INCREMENT` is
+        refused with a message mentioning `allowWrite`; with `"allowWrite": true`, editing
+        `INCREMENT` (and program-instance fields) succeeds. The write is queued: the Variables
+        pane shows the requested value immediately, the stored value reads as `1` again while
+        stepping through the current cycle, and the new value is visible after the cycle
+        boundary (the next line-39 stop). Recorded as **F-14**; the launch configuration was
+        returned to `"allowWrite": false`.
+30. [x] **Terminate and relaunch.** Pass 2026-10-30: `Shift+F5` ends the session and the
+        launch-owned `sample.exe` exits; the remaining `stc` process is the language server.
+        `F5` launches a fresh session and stops at line 39 again; the non-safety notice repeats
+        and no stale endpoint/audit error appears. The Debug Console prints no terminate/exit
+        report (**F-15**).
 31. [x] **Attach.** pass 2026-10-30 using the `stc: run` task, which now passes
         `--debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` (F-2). The
         **stc: Attach sample** session connected, a breakpoint stopped, and disconnect left the
         host running. Stopping the run task still leaves its process tree (F-3), so the driver and
         `sample.exe` were killed manually; the `stc lsp` process remained.
-32. [ ] **Conditional breakpoints.** Right-click the gutter → **Add Conditional Breakpoint**.
-        The adapter does not support conditions; record the exact behavior (VS Code may disable
-        the action or the condition may be ignored).
-33. [ ] **Release monitoring-only.** Launch with `"release": true`; the session starts without
-        breakpoints, stepping, or a Locals scope and reports the limitation honestly.
+32. [x] **Conditional breakpoints.** Pass 2026-10-30: **Add Conditional Breakpoint** accepts a
+        condition with no error at creation; at launch VS Code warns that this breakpoint type is
+        not supported by the debugger and the breakpoint stops unconditionally. The condition is
+        not applied, but the unsupported action is reported rather than silently honored.
+33. [ ] **Release monitoring-only.** FAIL 2026-10-30: with `"release": true`, the session builds
+        release and starts (no breakpoints, stepping, or Locals), and reports
+        "stopped-frame information is unavailable, so there is no Locals scope". But Variables
+        shows no Globals, Watch reports values unavailable, `pause` fails with
+        `STC-E-DEBUG-014`, and F10/F11 report the target is not stopped. Typed reads do work while
+        running (verified with `stc debug --release`: `INCREMENT = 1` via `var.read`), but the
+        IDE exposes no monitoring surface. Recorded as follow-up **F-16**.
 
 ## E. Safety and limits
 
-34. [ ] **Non-safety notice.** The Debug Console shows the local-session notice; the extension
-        does not present debugging as a safety function.
-35. [ ] **Local-only.** No remote/network debug or language-server path is offered.
-36. [ ] **Known unsupported UI actions.** Record the behavior of semantic tokens, rename, code
-        actions, range formatting, call hierarchy, workspace symbols, restart, multi-thread, and
-        `stopOnEntry`: they must be absent or fail honestly, not silently misbehave.
+34. [x] **Non-safety notice.** Pass 2026-10-30: every session-start Debug Console output includes
+        the non-safety notice verbatim, and the extension surfaces checked (launch names, status
+        bar, README/tooltips) do not present debugging, forcing, or monitoring as a safety
+        function.
+35. [x] **Local-only.** Pass 2026-10-31: the launch/attach schema exposes only local fields
+        (`project`, `outDir`, `noBuild`, `release`, `allowWrite`, `allowForce`, `sourceRoot`,
+        `args`, `cwd`, and the attach `endpoint` file); no host, port, URL, or remote field.
+        `stc lsp` runs as a stdio child (`stc.exe lsp --manifest-path ...`) with no TCP
+        listeners, and the debug endpoint/audit paths are local files. The only
+        “`debugServer`” mention is the CLI flag in the attach `endpoint` description; the
+        extension schema (installed VSIX and source) has no such property. The only setting is
+        `stc.path`.
+36. [x] **Known unsupported UI actions.** Pass 2026-10-31: (1) semantic tokens are absent —
+        **Developer: Inspect Editor Tokens and Scopes** shows only the TextMate `source.st`
+        scope. (2) F2 rename does nothing and prints no message; the compiler/runtime already
+        implement rename history and online change, so IDE exposure is recorded as **F-19**/
+        **F-20**. (3) `Ctrl+.` reports “No code actions available”. (4) `Ctrl+K Ctrl+F` is not a
+        command in this VS Code and the server advertises no range-formatting provider, so range
+        formatting is absent. (5) `Shift+Alt+H` opens Help; no call-hierarchy provider is
+        advertised, so call hierarchy is absent. (6) `Ctrl+T` reports “No matching workspace
+        symbols”. (7) **Debug: Restart** works by client-side relaunch; the adapter does not
+        implement the DAP `restart` request (`supportsRestartRequest: false`). (8) One thread
+        (`cycle`) is shown; there is no multi-thread UI. (9) `"stopOnEntry": true` is rejected by
+        the launch schema (“Property stopOnEntry is not allowed”) before a session starts; the
+        adapter also rejects it if sent directly. None of the unsupported actions silently
+        applies a false result.
 
 ## Follow-ups discovered during verification
 
@@ -217,6 +279,111 @@ unsupported or intentionally out of scope.
       inaccessible member. Covered by `conformance.rs` and `navigation.rs`; the sample now uses
       the member form and `stc check` exits 0.
 
+- [x] **F-8 — Globals omitted FB-typed program fields and views did not expand.** Fixed in
+      `stc-dap` 2026-10-30 and retested in the UI: the instance now expands to `ACCUMULATOR`,
+      `CYCLES`, and `SUM`, and `ACCUMULATOR` expands to `INCREMENT`/`TOTAL`. Two defects:
+      (1) a hidden `OBJREC` root was filtered out while its nested leaf roots were skipped, so a
+      program instance never showed an FB-typed field such as `ACCUMULATOR`; the layout now
+      exposes the aggregate path (`SAMPLE::MAIN.ACCUMULATOR#<instance>`) and the runtime returns
+      its manifest-assisted object view. (2) The runtime flattens a field's node into the field
+      object, but `view_children` expected a nested `view`, so every manifest-assisted aggregate
+      expanded to an empty list; it now accepts the flattened shape and prefers the field `name`
+      over the path. Covered by the `adapter.rs` layout tests, `value.rs` view tests, and the
+      `sample_workspace_launch_reads_known_values_and_steps` DAP test.
+
+- [ ] **F-11 — Caller stack frames have no source location.** The top frame carries the
+      checkpoint's `file`/`line`/`column`, but `capture_frames` sets `source: None` for every
+      caller. The frame sidecar has function ranges and locals but no address-to-source mapping,
+      so a caller such as `MAIN` shows "Unknown Source" while stopped in `ADDSTEP` until the
+      session returns. Fixing this needs a line/address table in the debug metadata (or a
+      sidecar call-site map) and runtime resolution of the return address. Acceptance: the
+      caller frame shows the call-site file and line (for the sample, `src/main.st:39`) at any
+      depth.
+
+- [ ] **F-12 — Unknown host frames appear as `frame` entries.** The frame-pointer walk continues
+      past the ST program into the launcher/host, producing frames with no symbol/source that
+      the adapter labels `frame` (two in the sample). The runtime reports them honestly as
+      `optimized_out:true`, so this is a presentation choice: stop the walk at the first address
+      outside the manifest function ranges, or filter/label non-ST frames in `stc-dap`.
+      Acceptance: the Call Stack lists only resolved ST frames for a sample stop.
+
+- [ ] **F-13 — Locals is empty for program and FB body frames.** `Locals` lists only
+      `frame.locals`; program/FB fields are instance roots and appear under `Globals`, so a stop
+      in `Main` or an FB body shows an empty Locals scope even though that frame's state is
+      visible one scope up. Consider mirroring the frame's instance fields in `Locals` (which
+      needs a frame-to-instance mapping when several instances exist) or documenting the split
+      in the IDE spec/sample README. Acceptance: a stop in a program/FB body shows its fields
+      in a discoverable place without switching scopes blindly.
+
+- [ ] **F-9 — A launch with a breakpoint must stop on the first cycle.** Currently the host starts
+      its cycle loop before `session.start` and `breakpoint.set` complete, so 1–2 cycles run
+      first and the first stop observes `TOTAL = 2`/`sum = 2`/`cycles = 2` instead of the cycle-0
+      values. The sample README documents the value caveat, and `stopOnEntry` is rejected with no
+      start-paused mode. Fixing this needs a protocol/runtime change (start the host paused until
+      the session has bound breakpoints and resumed). Acceptance: the first stop at line 39
+      observes `TOTAL = 0`, `sum = 0`, `cycles = 0` (or the values written by the first cycle only
+      after the breakpoint is bound).
+
+- [ ] **F-10 — The pause timeout is silent until it fires.** `[debug].session-timeout` (default
+      5 min) ends a stopped session with `STC-E-DEBUG-018`; this is the documented D-175 stop
+      budget, but the UI shows neither the configured budget nor a countdown/warning, so an
+      unattended pause ends the session without explanation. Consider surfacing the timeout in
+      the launch configuration/session start, or warning before expiry. Acceptance: the user can
+      see the stop budget and is warned before the session ends.
+
+- [ ] **F-14 — `setVariable` shows the queued value before the program applies it.** With writes
+      enabled, editing `INCREMENT` displays the new value immediately, but the host applies the
+      write at the next cycle boundary (Debug and Monitoring §15.3). Stepping through the current
+      cycle reads the stored value again, and the new value appears after the boundary. This is
+      the documented queue behavior, but the UI has no pending indicator, so the temporary revert
+      looks like a lost write. Consider reading back the stored value until the queue applies
+      (with a pending marker) or flushing queued writes when a stopped cycle resumes. Acceptance:
+      the displayed value and the program's value agree, or the UI clearly marks the value as
+      queued.
+
+- [ ] **F-15 — Terminating a launch session gives no Debug Console report.** `Shift+F5` ends the
+      session and the launch-owned host exits, but the Debug Console prints no terminated/exited
+      text, so the stop is silent unless the Debug toolbar disappears. Consider emitting an
+      output event or relying on VS Code's session-ended indication. Acceptance: stopping a
+      session leaves a clear line in the Debug Console.
+
+- [ ] **F-16 — Release monitoring has no IDE surface.** With `"release": true`, the session
+      starts and warns that stopped-frame information is unavailable, but `stackTrace` fails
+      (`STC-E-DEBUG-017`), so `scopes`/`variables` have no frame, Variables shows no Globals, and
+      Watch expressions stay unavailable; `pause` fails with `STC-E-DEBUG-014`. Typed monitoring
+      reads do work while running (`stc debug --release` read `INCREMENT = 1` via `var.read`, and
+      the Debug Console can evaluate target names), but the IDE exposes no monitoring view.
+      Provide a surface — a synthetic running/monitoring frame with the Globals scope, a polling
+      monitor view, or documented Debug-Console-only reads — and make the session-start message
+      name the available monitoring path. Acceptance: a release session can observe globals from
+      the IDE without breakpoints.
+
+- [ ] **F-17 — No way to debug a test.** The launch configuration builds and runs the project,
+      not a `{stc:test}` POU; there is no launch configuration, command, or code lens to start a
+      per-test artifact under the debugger. Consider a `stc: Debug test` configuration that
+      builds the selected test and starts the test host with a debug server, or a Testing-API
+      integration with a Debug Test action. Acceptance: a test in `tests/smoke.st` can be
+      debugged with breakpoints and locals.
+
+- [ ] **F-18 — No per-test run control in VS Code.** `stc: test` runs the whole test source set
+      through a task; the editor offers no Testing view, gutter/code-lens, or per-test command to
+      run `AccumulatorWorks` or `AddStepWorks` individually. Consider a VS Code Testing API
+      provider backed by `stc test` JSON results, with Run and Debug actions. Acceptance: an
+      individual `{stc:test}` POU can be run (and later debugged) from the editor.
+
+- [ ] **F-19 — Rename is not exposed in the IDE.** F2 does nothing and prints no message, while
+      the compiler/runtime already carry rename history and online-change rename tracking. Add
+      `textDocument/prepareRename`/`textDocument/rename` to `stc-lsp` backed by the reference
+      resolution (and rename history where relevant), so VS Code offers a symbol rename.
+      Acceptance: F2 on a field/function renames all references, and unsupported cases fail with
+      a clear message.
+
+- [ ] **F-20 — Online change is not exposed in the IDE.** The compiler/runtime implement online
+      change and the CLI drives it, but the VS Code extension offers no command or status to
+      activate a swap, view the generation/build state, or surface the session ending on swap.
+      Consider a command/status item that invokes the online workflow and reports the generation.
+      Acceptance: an online change can be started and inspected from the IDE.
+
 - [ ] **F-3 — Stop the `stc: run` task's process tree.** Terminating the VS Code task kills the
       shell but leaves `stc run` and the launcher (`sample.exe`) running. Make task termination
       stop the full tree (for example a custom execution that performs a process-tree kill, or a
@@ -250,13 +417,41 @@ unsupported or intentionally out of scope.
 | 16 | Pass | 16.1/16.3/16.4 pass; 16.2 fixed (instances no longer counted as type references) and retest passes |
 | 17 | Pass | Hover shows type, kind, and owner for `sum`, `AddStep`, and `Accumulator` |
 | 18 | Pass | Completion offers keywords/names and only `increment`/`total` after `accumulator.`; direct member access fixed by D-211 (F-7) |
-| 19–30 | Pending | Record pass/fail and any deviation above |
+| 19 | Pass | 16 symbols; hierarchy and jumps match the source |
+| 20 | Pass | Cross-file F12/references both directions; smoke receiver resolves to its own field |
+| 21 | Pass | Breakpoint gutter and Breakpoints panel stay in sync; toggle works |
+| 22 | Pass | Launch builds/starts/stops at line 39; non-safety notice shown (F5 had reused Attach, which needs the run task) |
+| 23 | Pass | Instance expands to `ACCUMULATOR`/`CYCLES`/`SUM`; `ACCUMULATOR` expands to `INCREMENT`/`TOTAL` |
+| 24 | Pass | `MAIN`/`ADDSTEP` frames with source; caller source, unknown host frames, and Locals split recorded as F-11/F-12/F-13 |
+| 25 | Pass | Step into stops at line 19; `VALUE` populated; `INCREMENTED = 0` |
+| 26 | Pass | Step over moves to line 20; `INCREMENTED = 1` |
+| 27 | Pass | Step out returns to `Main` |
+| 28 | Pass | Watch/evaluate resolve names; values refresh; arbitrary ST expressions rejected |
+| 29 | Pass | Gating works; write queue applies at the next cycle boundary (F-14) |
+| 30 | Pass | Session stops, host exits, relaunch stops at line 39; terminate is silent (F-15) |
 | 31 | Pass | Attach via `stc: run` debug server connects; disconnect leaves host running |
-| 32–36 | Pending | Record pass/fail and any deviation above |
+| 32 | Pass | Conditional breakpoint accepted; launch warns unsupported and stops unconditionally |
+| 33 | Fail (monitoring) | Release starts/warns, but Variables/Watch cannot monitor; typed reads work only over the wire (F-16) |
+| 34 | Pass | Non-safety notice shown verbatim at every session start; no safety claims in the UI |
+| 35 | Pass | Local schema only; `stc lsp` is stdio with no TCP listeners; endpoint files are local |
+| 36 | Pass | Unsupported actions absent or honestly rejected; restart is a client relaunch |
 | F-2 | Pass | Run task is debuggable; attach connects |
 | F-3 | Pending | Task termination does not stop the driver/host process tree |
 | F-4 | Pass | Second debug-server run and attach work; audit rotated |
 | F-5 | Pass | Breakpoint stop uses the normal tab; no second `\\?\` tab |
 | F-6 | Pending | Removing a breakpoint does not remove it from the running session |
 | F-7 | Pass | FB interface member access now matches the call form (D-211); sample checks cleanly |
+| F-8 | Pass | Globals exposes FB fields and expands manifest-assisted views; UI retest passes |
+| F-9 | Pending | First stop is 1–2 cycles late; launch-with-breakpoint must stop on cycle 0 |
+| F-10 | Pending | Pause timeout ends the session after 5 min with no countdown/warning |
+| F-11 | Pending | Caller frames lose file/line while stopped in a callee |
+| F-12 | Pending | Unknown host frames appear as `frame`/Unknown Source |
+| F-13 | Pending | Locals is empty for program/FB bodies; fields live in Globals |
+| F-14 | Pending | `setVariable` shows the queued value before the program applies it at the next boundary |
+| F-15 | Pending | Terminating a launch session is silent in the Debug Console |
+| F-16 | Pending | Release monitoring has no IDE surface; typed reads work only over the wire |
+| F-17 | Pending | No way to debug a `{stc:test}` POU |
+| F-18 | Pending | No per-test run control (Testing view/code lens) in VS Code |
+| F-19 | Pending | `textDocument/rename` not exposed; F2 is silent in the IDE |
+| F-20 | Pending | Online change not exposed in the IDE |
 | F-1 | Pending | Highlighting scope/color follow-up recorded |

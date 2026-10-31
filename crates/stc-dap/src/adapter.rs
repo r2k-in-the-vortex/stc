@@ -125,6 +125,8 @@ struct Session {
     frames_available: bool,
     source_table: SourceTable,
     globals: GlobalsLayout,
+    /// Manifest function `GotId`s mapped to display names for stack frames.
+    function_names: BTreeMap<String, String>,
 }
 
 /// One requested DAP breakpoint.
@@ -541,7 +543,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             .and_then(|capabilities| jget(capabilities, "stepping"))
             .and_then(Json::as_bool)
             .unwrap_or(false);
-        let globals = client
+        let manifest_body = client
             .call_ok(
                 "manifest.get",
                 got_object([("format", Json::string("json"))]),
@@ -551,10 +553,13 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 jget(&result, "data")
                     .and_then(|data| jget(data, "body"))
                     .cloned()
-            })
-            .map_or_else(GlobalsLayout::default, |body| {
-                GlobalsLayout::from_manifest(&body)
             });
+        let globals = manifest_body
+            .as_ref()
+            .map_or_else(GlobalsLayout::default, GlobalsLayout::from_manifest);
+        let function_names = manifest_body
+            .as_ref()
+            .map_or_else(BTreeMap::new, function_names_from_manifest);
         self.session = Some(Session {
             client,
             host: launched.host,
@@ -563,6 +568,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             frames_available,
             source_table,
             globals,
+            function_names,
         });
         self.send_output("console", NON_SAFETY_NOTICE);
         if protocol == DEBUG_PROTOCOL_1_1 && frames_available {
@@ -998,6 +1004,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 return;
             }
         };
+        let function_names = session.function_names.clone();
         let truncated = jget(&result, "truncated")
             .and_then(Json::as_bool)
             .unwrap_or(false);
@@ -1012,6 +1019,11 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                     .and_then(Json::as_str)
                     .unwrap_or("frame")
                     .to_owned();
+                let name = jget(entry, "function")
+                    .and_then(Json::as_str)
+                    .and_then(|function| function_names.get(function))
+                    .cloned()
+                    .unwrap_or(symbol);
                 let source = jget(entry, "source");
                 let file = source
                     .and_then(|source| jget(source, "file"))
@@ -1029,7 +1041,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 let source_object = file.map(|file| self.frame_source(file));
                 frames.push(FrameEntry {
                     index,
-                    name: symbol,
+                    name,
                     source: source_object,
                     line,
                     column,
@@ -1472,6 +1484,30 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 Err(message) => last_error = Some(message),
             }
         }
+        // Watch/evaluate also accepts a visible global or program-instance
+        // field by name; the raw target path alone would need `MAIN.SUM`.
+        let root = self
+            .session
+            .as_ref()
+            .and_then(|session| {
+                find_root(&session.globals.globals, expression).or_else(|| {
+                    session
+                        .globals
+                        .instances
+                        .iter()
+                        .find_map(|instance| find_root(&instance.roots, expression))
+                })
+            })
+            .cloned();
+        if let Some(root) = root {
+            match self.read_target(&root.key) {
+                Ok(result) => {
+                    self.evaluate_result(request, &result);
+                    return;
+                }
+                Err(message) => last_error = Some(message),
+            }
+        }
         match self.read_target(expression) {
             Ok(result) => self.evaluate_result(request, &result),
             Err(message) => {
@@ -1884,7 +1920,47 @@ impl GlobalsLayout {
                 let Some(parsed) = parse_root_key(key) else {
                     continue;
                 };
-                if parsed.qualifier.is_some_and(hidden_qualifier) || root_kind == "task_guard" {
+                if root_kind == "task_guard" {
+                    continue;
+                }
+                if let Some(qualifier) = parsed.qualifier
+                    && hidden_qualifier(qualifier)
+                {
+                    // Hidden object storage (HANDLE/OBJREC) holds leaf
+                    // pointers, not a user value. Expose the aggregate path
+                    // without the hidden marker so the runtime returns its
+                    // manifest-assisted field view instead.
+                    if root_kind == "nested_field" {
+                        let Some((prefix, _)) = key.rsplit_once('#') else {
+                            continue;
+                        };
+                        let base = qualifier
+                            .strip_suffix("/HANDLE")
+                            .or_else(|| qualifier.strip_suffix("/OBJREC"))
+                            .filter(|base| !base.is_empty());
+                        let aggregate = match base {
+                            Some(base) => format!("{prefix}#{base}"),
+                            None => prefix.to_owned(),
+                        };
+                        let name = if field_path.is_empty() {
+                            parsed.path.to_owned()
+                        } else {
+                            field_path.to_owned()
+                        };
+                        let entry = GlobalRoot {
+                            name,
+                            key: aggregate,
+                            type_key,
+                        };
+                        if let Some(base) = base
+                            && let Some(group) =
+                                layout.instances.iter_mut().find(|group| group.name == base)
+                        {
+                            push_unique_root(&mut group.roots, entry);
+                        } else {
+                            push_unique_root(&mut layout.globals, entry);
+                        }
+                    }
                     continue;
                 }
                 let qualifier = parsed.qualifier;
@@ -1935,6 +2011,43 @@ impl GlobalsLayout {
             .sort_by(|left, right| left.name.cmp(&right.name));
         layout
     }
+}
+
+fn push_unique_root(roots: &mut Vec<GlobalRoot>, entry: GlobalRoot) {
+    if roots.iter().any(|existing| existing.key == entry.key) {
+        return;
+    }
+    roots.push(entry);
+}
+
+/// Maps each manifest function's `GotId` to a short display name.
+fn function_names_from_manifest(body: &Json) -> BTreeMap<String, String> {
+    let mut names = BTreeMap::new();
+    if let Some(functions) = jget(body, "functions").and_then(Json::as_array) {
+        for function in functions {
+            let Some(got_id) = jget(function, "got_id").and_then(Json::as_str) else {
+                continue;
+            };
+            let Some(key) = jget(function, "key").and_then(Json::as_str) else {
+                continue;
+            };
+            names.insert(got_id.to_owned(), frame_display_name(key));
+        }
+    }
+    names
+}
+
+/// Returns the POU or method name from a manifest function key.
+///
+/// Keys are `package::path@signature`; FB and program bodies use
+/// `path#BODY`, and methods use `owner.method`.
+fn frame_display_name(key: &str) -> String {
+    let head = key.split_once('@').map_or(key, |(head, _)| head);
+    let path = head.split_once("::").map_or(head, |(_, path)| path);
+    let path = path.strip_suffix("#BODY").unwrap_or(path);
+    path.rsplit_once('.')
+        .map_or(path, |(_, name)| name)
+        .to_owned()
 }
 
 struct ParsedRootKey<'a> {
@@ -1988,6 +2101,54 @@ mod tests {
         assert_eq!(layout.instances[0].roots[0].name, "TICKS");
         assert_eq!(layout.globals.len(), 1);
         assert_eq!(layout.globals[0].name, "G_TOTAL");
+    }
+
+    #[test]
+    fn exposes_hidden_object_roots_as_aggregate_fields() {
+        let layout = GlobalsLayout::from_manifest(&body(
+            r#"{
+                "instances": [
+                    {"instance_path": "SYNTHETIC/SYNTHETIC/MAIN", "program_type_key": "MAIN"}
+                ],
+                "roots": [
+                    {"key": "app::MAIN.COUNTER#SYNTHETIC/SYNTHETIC/MAIN/OBJREC", "type_key": "ARRAY[0..1]OF(PTR_TO(T:1))", "root_kind": "nested_field", "field_path": "COUNTER"},
+                    {"key": "app::MAIN.COUNTER.Q#SYNTHETIC/SYNTHETIC/MAIN", "type_key": "DINT", "root_kind": "nested_field", "field_path": "COUNTER.Q"},
+                    {"key": "app::MAIN.SUM#SYNTHETIC/SYNTHETIC/MAIN", "type_key": "DINT", "root_kind": "program_field", "field_path": "SUM"},
+                    {"key": "app::G_FB#OBJREC", "type_key": "ARRAY[0..1]OF(PTR_TO(T:2))", "root_kind": "nested_field", "field_path": "G_FB"}
+                ]
+            }"#,
+        ));
+        let instance = &layout.instances[0];
+        let names: Vec<&str> = instance
+            .roots
+            .iter()
+            .map(|root| root.name.as_str())
+            .collect();
+        assert_eq!(names, ["COUNTER", "SUM"]);
+        assert_eq!(
+            instance.roots[0].key,
+            "app::MAIN.COUNTER#SYNTHETIC/SYNTHETIC/MAIN"
+        );
+        assert_eq!(layout.globals.len(), 1);
+        assert_eq!(layout.globals[0].name, "G_FB");
+        assert_eq!(layout.globals[0].key, "app::G_FB");
+    }
+
+    #[test]
+    fn frame_names_use_manifest_keys() {
+        let body = body(
+            r#"{
+                "functions": [
+                    {"got_id": "0x01", "key": "app::MAIN#BODY@()->VOID"},
+                    {"got_id": "0x02", "key": "app::ADDSTEP@(IN:DINT)->DINT"},
+                    {"got_id": "0x03", "key": "app::DRIVE.START@()->BOOL"}
+                ]
+            }"#,
+        );
+        let names = function_names_from_manifest(&body);
+        assert_eq!(names.get("0x01").map(String::as_str), Some("MAIN"));
+        assert_eq!(names.get("0x02").map(String::as_str), Some("ADDSTEP"));
+        assert_eq!(names.get("0x03").map(String::as_str), Some("START"));
     }
 
     #[test]

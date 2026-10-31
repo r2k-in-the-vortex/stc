@@ -24,11 +24,11 @@ The tests use two known executable lines:
 
 | Stop | Line | Statement | Known values at the stop |
 | --- | --- | --- | --- |
-| First statement of `PROGRAM Main` | 39 | `sum := AddStep(sum);` | global `INCREMENT = 1`; program fields are exposed under the program instance in the Globals scope. `TOTAL` reflects the cycles that ran before the breakpoints bound, so it is read as a decimal integer rather than an exact value |
+| First statement of `PROGRAM Main` | 39 | `sum := AddStep(sum);` | global `INCREMENT = 1`; program fields are exposed under the program instance in the Globals scope (expand `ACCUMULATOR` for its input/output). `TOTAL` reflects the cycles that ran before the breakpoints bound, so it is read as a decimal integer rather than an exact value |
 | First statement of `FUNCTION AddStep` | 19 | `incremented := INCREMENT;` | local `INCREMENTED = 0`; global `INCREMENT = 1`. The `VALUE` parameter carries the caller's `sum` and is read as a decimal integer |
 | After stepping over line 19 | 20 | `AddStep := value + incremented;` | local `INCREMENTED = 1` |
 
-Local names are the debug metadata's normalized uppercase spellings. Values
+Root and local names are the debug metadata's normalized uppercase spellings. Values
 come from the runtime's typed reads; the debug adapter does not reconstruct
 them.
 

@@ -104,7 +104,9 @@ pub(crate) fn view_node_text(node: &Json) -> String {
         .map_or(0, <[Json]>::len);
     match kind {
         "array" => format!("[{elements}]"),
-        "aggregate" | "program" => format!("{{{fields} fields}}"),
+        "aggregate" | "program" | "function_block" | "class" | "interface" => {
+            format!("{{{fields} fields}}")
+        }
         _ => "<unavailable>".into(),
     }
 }
@@ -142,13 +144,14 @@ pub(crate) fn view_children(node: &Json) -> Vec<ViewChild<'_>> {
             let Some(field_object) = field.as_object() else {
                 continue;
             };
-            let Some(view) = field_object.get("view") else {
-                continue;
-            };
+            // The runtime flattens a field's node into the field object
+            // (`name`, `path`, then the node keys); older callers can still
+            // supply a nested `view`.
+            let view = field_object.get("view").unwrap_or(field);
             let name = field_object
-                .get("path")
+                .get("name")
                 .and_then(Json::as_str)
-                .or_else(|| field_object.get("name").and_then(Json::as_str))
+                .or_else(|| field_object.get("path").and_then(Json::as_str))
                 .unwrap_or("?")
                 .to_owned();
             children.push(ViewChild { name, node: view });
@@ -271,6 +274,31 @@ mod tests {
         assert_eq!(children[0].name, "x");
         assert_eq!(view_node_text(children[0].node), "1");
         assert_eq!(view_node_text(children[1].node), "FALSE");
+        assert!(!view_node_expandable(children[0].node));
+    }
+
+    #[test]
+    fn follows_flattened_view_children() {
+        // The runtime serializes each field's node into the field object.
+        let node = value(
+            r#"{
+                "kind": "function_block",
+                "type": "T:1",
+                "available": true,
+                "fields": [
+                    {"name": "INCREMENT", "path": "INCREMENT", "kind": "scalar", "type": "DINT", "value": 1},
+                    {"name": "TOTAL", "path": "TOTAL", "kind": "scalar", "type": "DINT", "value": 2}
+                ],
+                "elements": []
+            }"#,
+        );
+        assert_eq!(view_node_text(&node), "{2 fields}");
+        assert!(view_node_expandable(&node));
+        let children = view_children(&node);
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].name, "INCREMENT");
+        assert_eq!(view_node_text(children[0].node), "1");
+        assert_eq!(view_node_text(children[1].node), "2");
         assert!(!view_node_expandable(children[0].node));
     }
 }
