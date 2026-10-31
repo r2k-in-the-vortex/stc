@@ -539,8 +539,8 @@ fixes the final preconditions and notation.
 | `conversion_legal_iff` | The core conversion relation accepts exactly the specified conversions | P0.2 | exact models |
 | `eval_deterministic` | `Eval e s v₁ → Eval e s v₂ → v₁ = v₂` | P0.3 | source semantics |
 | `progress` | Well-typed, well-formed configurations are terminal, trap, or step | P0.3 | source semantics |
-| `preservation` | `HasType c T → Step c c' → HasType c' T` | P0.3 | source semantics |
-| `type_soundness` | A well-typed expression evaluates to a value of its type or a documented trap | P0.3 | source semantics |
+| `preservation` | `ConfigTyped u c → Step u c c' → ConfigTyped u c'` | P0.3 | source semantics |
+| `type_soundness` | The initial configuration is typed; every reachable configuration is typed and not stuck, with trap documentation carried by `trap_soundness` | P0.3 | source semantics |
 | `trap_soundness` | Every terminal trap is in the specified trap set | P0.3 | source semantics |
 | `checked_arith_traps_exactly` | Checked arithmetic traps exactly on overflow or divide by zero | P0.3 | exact models |
 | `interpreter_sound` | `stcSem fuel e s = .ok v → EvalStar e s v` | P0.3 | interpreter |
@@ -829,8 +829,8 @@ Phase 0 is done when:
 6. Build `stc-sem` against a small hand-written core dump before the full conformance harness.
 7. Add the core corpus and run the first conformance report.
 8. Schedule the P0.7 review once the source and target soundness theorems are proved.
-9. P0.3 is in progress and resumed on 2026-10-31 (§19). P0.4 (WL-3) is complete; its scope
-   decisions and execution record are in §20.
+9. P0.3 proof work is complete (2026-10-31); owner review is pending (§19.12). P0.4 (WL-3) is
+   complete; its scope decisions and execution record are in §20.
 
 ## 16. P0.0 execution record
 
@@ -954,14 +954,14 @@ proved in place of completeness, with the `FOR` over-rejection recorded; HIR wel
 defined and preserved by the checker; and the conversion relation is characterized against the
 analyzer's core conversions. The exact-model behaviour link is carried into P0.3.
 
-## 19. P0.3 execution record — in progress
+## 19. P0.3 execution record — complete, review pending
 
-Date: 2026-10-27. Status: **resumed 2026-10-31; in progress, not complete.** The definitions and
-part of the soundness work are in place. The remaining proof work was paused so the core subset
-and the open semantic questions could be aligned with M6.5. M6.5 has landed as `stc` 1.0.0, the
-drift register was rechecked on 2026-10-31 (§19.7), and P0.3 is unpaused after the P0.4 review and
-CI. The open questions are resolved in §19.8. This record is a status snapshot; it is not a
-completion claim.
+Date: 2026-10-27. Status: **complete 2026-10-31; owner review pending.** The definitions and the
+soundness work are in place. The work was paused for alignment with M6.5; the drift register was
+rechecked on 2026-10-31 (§19.7), the open questions were resolved in §19.8, and the remaining
+proofs are recorded in §19.9–§19.12. There is no `sorry` or `admit`; `lake build` and the CI
+checks pass. The completion record and review checklist are in §19.12. Review approval is
+pending.
 
 ### 19.1 Deliverables
 
@@ -974,18 +974,18 @@ completion claim.
 | `trap_soundness` | `Stc.Sem.Eval` | Proved |
 | `checked_arith_traps_exactly` | `Stc.Sem.Eval` | Proved in the guarded form described in Q2 |
 | Fuel interpreter `runFuel`/`stcSem` | [Interpreter.lean](../../lean/Verification/Semantics/Interpreter.lean) | Defined; `interpreter_sound` and `interpreter_complete` proved |
-| `progress` | `Stc.Sem.Eval` | Proved |
-| `preservation` | — | Not proved |
-| `type_soundness` | — | Not proved; depends on preservation |
-| Initial-state typing (`ConfigTyped u (initState u n)` from `HasType u`) | — | Not proved; needs context agreement for global initializers |
-| Source-semantics sections of [Semantics.md](Semantics.md) | — | Partially updated; completion waits for the proofs |
+| `progress` | `Stc.Sem.Eval` | Proved (P0-T08) |
+| `preservation` | `Stc.Sem.Eval` | Proved (P0-T09) |
+| `type_soundness` | `Stc.Sem.Eval` | Proved (P0-T10) |
+| Initial-state typing (`ConfigTyped u (initState u n)` from `HasType u`) | `Stc.Sem.Eval` | Proved (`initState_typed`, `initBody_typed`) |
+| Source-semantics sections of [Semantics.md](Semantics.md) | — | Complete for P0.3; completion record in §19.12 |
 
 ### 19.2 Exit criteria assessment
 
-The P0.3 exit criteria are **not met**. `preservation`, `type_soundness`, and initial-state typing
-are missing, and the semantics document still describes some dynamic semantics as future work. There is no `sorry` or `admit`; `lake build` and the local CI checks pass.
-P0.3 resumed on 2026-10-31 with the §19.8 decisions; the current definitions are committed as a
-WL-3 checkpoint.
+The P0.3 exit criteria are **met**. `progress`, `preservation`, initial-state typing, and
+`type_soundness` are proved; there is no `sorry` or `admit`; `lake build` and the local CI checks
+pass. The completion record and review checklist are in §19.12. The proof work is committed on
+WL-3; owner review approval is pending.
 
 ### 19.3 Open questions
 
@@ -1055,8 +1055,9 @@ and the open questions are resolved (§19.8). The remaining work:
    `Ctx.ofProgram` for global initializers.
 4. `type_soundness`, then the registry and semantics-document updates, and the P0.3 review.
 
-The definitions in `Stc.Sem.Values`, `Stc.Sem.Machine`, and `Stc.Sem.Eval` are the starting point;
-the machine and typing design are not expected to change unless Q1 selects a redesign.
+This sequence is complete as of 2026-10-31; see §19.11 (preservation) and §19.12 (initial-state
+typing and type soundness). The definitions in `Stc.Sem.Values`, `Stc.Sem.Machine`, and
+`Stc.Sem.Eval` are the basis; the machine and typing design follow Q1 with no redesign.
 
 ### 19.6 Local evidence
 
@@ -1068,8 +1069,10 @@ python tools/ci/check_semantics_placeholder.py
 grep -rnwE 'sorry|admit' lean/Stc/Sem lean/Verification    # no matches
 ```
 
-The registry marks the six proved P0.3 theorems as `proved`; `preservation` and `type_soundness`
-remain `planned` with a note pointing at this section.
+The registry marks the eight proved P0.3 theorems as `proved`: determinism, progress,
+preservation, type soundness, trap soundness, guarded exact arithmetic, and the interpreter
+soundness and completeness results. `type_soundness` is P0-T10; the completion record is in
+§19.12.
 
 ### 19.7 Drift recheck (2026-10-31)
 
