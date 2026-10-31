@@ -1,7 +1,7 @@
 # Future Wishlist — v2.0.0
 
-Status: v2.0.0 target set locked 2026-10-29. Locked: WL-1.1, WL-2, WL-3 (P0.4), WL-4 (x86-64), WL-5.1, WL-9, and WL-10. Deferred: WL-1.2, WL-5.2, WL-6, WL-7, WL-8, and WL-11. Completed: WL-4 (2026-10-30).  
-Date: 2026-10-29  
+Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, and WL-11. Completed: WL-4 (2026-10-30).  
+Date: 2026-10-29; revised 2026-10-31  
 Branch: `v2.0.0-planning`  
 Baseline: `stc` 1.0.0, released 2026-10-29  
 Profile: `stc-2013-oop-utf8-v1`
@@ -42,8 +42,9 @@ These apply to every candidate until a v2.0.0 target is locked.
 ## 3. Selection and locking
 
 All entries start as `Candidate`. The v2.0.0 targets are selected from this table; once the
-target set is locked, detailed planning begins. The v2.0.0 target set was locked on 2026-10-29;
-the locked targets and their plans are in [V2.0.0-PLAN.md](V2.0.0-PLAN.md).
+target set is locked, detailed planning begins. The v2.0.0 target set was locked on 2026-10-29
+and re-planned on 2026-10-31: WL-9 was removed and WL-5.2 was added. The locked targets and
+their plans are in [V2.0.0-PLAN.md](V2.0.0-PLAN.md).
 
 | Status | Meaning |
 | --- | --- |
@@ -89,11 +90,11 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-3 | Expand the Lean specification per the verification plan; v2 target is P0.4 | Verification | M for P0.4 | Phase 0 P0.4 | Locked |
 | WL-4 | Run and verify RT performance on PREEMPT_RT Linux x86-64 | Runtime evidence | M | x86-64 RT run host and transferable artifacts | Done 2026-10-30 |
 | WL-5.1 | Modbus TCP server I/O on all supported hosts; non-real-time | Runtime/IO | M/L | None | Locked |
-| WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host | Deferred |
+| WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host; EtherCAT hardware | Locked |
 | WL-6 | Motion controller: coordinated multi-axis interpolated motion | Motion | L/XL | WL-5.2, WL-7, WL-4; robot-sim reuse | Deferred |
 | WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Deferred |
 | WL-8 | Tracing UI to watch and graph PLC variables | Tooling/observability | M/L | WL-9 WebUI | Deferred |
-| WL-9 | WebUI for basic runtime control | Tooling/operations | M/L | Runtime control API; network security | Locked |
+| WL-9 | WebUI for basic runtime control | Tooling/operations | M/L | Runtime control API; network security | Deferred |
 | WL-10 | Coverage emission for the ST test suite | Test tooling | M/L | Test runner; span mapping | Locked |
 | WL-11 | Modbus TCP client capability; separate from WL-5.1 server | Runtime/IO | M/L | WL-5.1 backend contract | Deferred |
 
@@ -201,8 +202,8 @@ deployment, and remote source handling are different work from the local DAP ada
   exposure must be authenticated and encrypted; `stc` is not a safety PLC.
 - Source paths and debug information are build-host-specific. Cross-host artifacts need a path
   mapping or source-fetch policy.
-- The network model should be shared with WL-8 (tracing through the WebUI) and WL-9 (WebUI), not
-  invented independently.
+- The network model should be shared with WL-8 (tracing through the WebUI) and WL-9 (WebUI,
+  deferred), not invented independently.
 - A remote language server is not required for remote debugging; it is a separate workspace and
   security question that can be considered later.
 
@@ -443,7 +444,7 @@ real-time guarantee and not a safety claim.
 - How are artifacts transferred and verified, and is the RT host reachable from CI or only
   manually?
 - Should the harness include WL-5.1 Modbus server runs, or stay pure compute for the first
-  report? EtherCAT (WL-5.2) is deferred.
+  report? EtherCAT (WL-5.2) is a separate v2.0.0 target and was not part of this campaign.
 - If measurement exposes a runtime or compiler defect, fixing it is in scope as a bug fix.
 
 **Related.** [Performance](specification/Verification/Performance.md),
@@ -473,8 +474,8 @@ clients read and write the `stc` process image without custom integration. It is
 real I/O backend and exercises the v1 device tree, binding precedence, metadata sidecar, and
 per-generation direct-variable cells without the EtherCAT dependency. It is best-effort, not real-time, and is not an interpolated motion channel; polling
 latency and the lack of distributed clocks make it unsuitable for coordinated servo motion.
-Motion (WL-6) is deferred and would depend on EtherCAT (WL-5.2, deferred) and ESI (WL-7,
-deferred).
+Motion (WL-6) is deferred and would depend on EtherCAT (WL-5.2, locked for v2.0.0) and ESI
+(WL-7, deferred).
 
 **Selected scope.**
 
@@ -525,7 +526,8 @@ deferred).
 **Related.** [I/O and Device Linking](specification/Architecture/IO-and-Devices.md),
 [Runtime and Execution](specification/Architecture/Runtime-and-Execution.md),
 [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md),
-[Known limitations §5](KNOWN-LIMITATIONS.md), D-028. WL-11, WL-5.2, and WL-6 are deferred.
+[Known limitations §5](KNOWN-LIMITATIONS.md), D-028. WL-11 and WL-6 are deferred; WL-5.2 is
+locked for v2.0.0.
 
 **Tentative size.** M/L: backend framework M, Modbus TCP server M/L, plus cross-host test and
 evidence work.
@@ -536,7 +538,8 @@ evidence work.
 including cyclic process data and servo-drive integration. Implementing an EtherCAT master, a
 slave stack, or a raw EtherCAT protocol engine is explicitly out of scope.
 
-**Status.** Deferred to a future version (2026-10-29).
+**Selection.** Selected and locked for v2.0.0 on 2026-10-31; WL-4 is complete and the EtherCAT
+hardware has arrived. Detailed planning is in [V2.0.0-PLAN.md](V2.0.0-PLAN.md).
 
 **Why it matters.** EtherCAT provides cyclic, deterministic process data and is the practical
 fieldbus for interpolated multi-axis motion. IgH is a kernel-module plus userspace-library stack,
@@ -549,22 +552,21 @@ supply the device identity and PDO mapping that real slaves require.
 - Integrate IgH and map the `stc.toml` device tree and channel descriptors to IgH configuration
   and process data; run cyclic process data at the cycle boundary; handle startup, faults, and
   recovery; use distributed clocks where IgH provides them.
-- Use ESI (WL-7) for identity and PDO mapping. This entry may start with static configuration and
-  add ESI validation as WL-7 lands.
+- Use static configuration for the v2.0.0 path; ESI (WL-7, deferred) can supply identity and PDO
+  mapping when it lands.
 - Runtime configuration and override, binding resolution, health/status reporting, deterministic
   latch/publish, error paths, and simulator or loopback tests where possible.
 - Evidence: an IgH setup and runbook, hardware-in-the-loop tests on the PREEMPT_RT host (WL-4),
   I/O-cycle timing and jitter measurements, and specification updates.
-- Review IgH licensing and packaging before inclusion.
+- Review IgH licensing and packaging before implementation.
 
 **Constraints and current state.**
 
 - EtherCAT requires Linux, kernel support, and privileged or raw network access. IgH kernel
   modules constrain the kernel/RT configuration; the WL-4 host is the natural first target.
 - IgH licensing and distribution (GPL implications for the runtime and packages) must be reviewed
-  before inclusion. That review is a planning input, not a reason to write a master.
-- The backend depends on WL-7 for practical device configuration; static configuration is an
-  interim path.
+  before implementation. That review is a planning input, not a reason to write a master.
+- Static configuration is the v2.0.0 path; ESI-based device configuration (WL-7) is deferred.
 - When WL-6 is revived, it depends on this backend and WL-7 in practice. Modbus TCP (WL-5.1) is
   not a substitute.
 - Fieldbus failure behavior must not silently produce wrong outputs; the non-safety stance still
@@ -574,8 +576,8 @@ supply the device identity and PDO mapping that real slaves require.
 
 - IgH version, kernel modules, distributed-clock support, and the link model (shared library,
   static library, or daemon interface) are planning inputs.
-- Static configuration first, or ESI-based configuration first?
-- Which slaves and servo drives must be supported first, and what test hardware is available?
+- What is the minimum static configuration subset needed for the first hardware-in-the-loop run?
+- Which slaves and servo drives does the delivered hardware cover, and which are supported first?
 - What PDO and distributed-clock subset does motion (WL-6) require?
 - How is IgH configured: generated configuration, a library API, or both?
 - How do online change and rollback handle topology and binding changes that cannot be
@@ -744,7 +746,7 @@ behavior is in the first supported subset.
 
 ### WL-8 — Tracing UI to watch and graph PLC variables
 
-**Intent.** Provide a tracing UI, delivered as a module of the WebUI (WL-9), that lets a
+**Intent.** Provide a tracing UI, delivered as a module of the WebUI (WL-9, deferred), that lets a
 developer or commissioner select PLC variables, sample them over time, and see live graphs,
 with export and basic analysis.
 
@@ -764,7 +766,7 @@ without writing a custom client.
   cycle tags) for low-rate capture; optionally a runtime trace ring buffer sampled at the cycle
   boundary for high-rate or long captures, transferred in batches. Define sample semantics
   (cycle counter, monotonic time, latch point) and behavior across swaps and session end.
-- UI form: a tracing module inside the WebUI (WL-9), using its hosting, authentication,
+- UI form: a tracing module inside the WebUI (WL-9, deferred), using its hosting, authentication,
   packaging, and lifecycle. A VS Code webview could reuse the same component later, but the
   WebUI is the primary surface. Tracing must not run a second unauthenticated network service.
   Local-first; remote access only with the network-security work.
@@ -773,8 +775,8 @@ without writing a custom client.
 
 **Constraints and current state.**
 
-- The tracing UI depends on WL-9 for hosting, authentication, and deployment. Its data path
-  still uses the debug/watch contracts; the WebUI is only the front end.
+- The tracing UI depends on WL-9 (deferred) for hosting, authentication, and deployment. Its data
+  path still uses the debug/watch contracts; the WebUI is only the front end.
 - Debug is local-only and one session per host. Release builds are monitoring-only. Session
   limits include 256 watches, 100 requests/s with burst 200, 5 s deadlines, and 4 MiB response
   frames. Every swap, rollback, cold install, or shutdown ends the session.
@@ -787,8 +789,8 @@ without writing a custom client.
 
 **Open questions.**
 
-- What is the split between the WebUI shell (WL-9) and the tracing module: routing, auth scopes,
-  navigation, and packaging?
+- What is the split between the WebUI shell (WL-9, deferred) and the tracing module: routing,
+  auth scopes, navigation, and packaging?
 - Polled watches or a runtime-side ring buffer? What sample rate and capture duration are
   required?
 - Where is trace data stored, and what are the retention and export formats?
@@ -799,7 +801,8 @@ without writing a custom client.
 
 **Related.** [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
 [Known limitations §3](KNOWN-LIMITATIONS.md),
-[Runtime and Execution](specification/Architecture/Runtime-and-Execution.md), WL-9, WL-1.1.
+[Runtime and Execution](specification/Architecture/Runtime-and-Execution.md), WL-9 (deferred),
+WL-1.1.
 
 **Tentative size.** M/L, dominated by the sampling architecture and the UI, not by basic watch
 plumbing.
@@ -809,15 +812,15 @@ plumbing.
 **Intent.** Provide a browser-based UI for basic runtime control: start, stop, restart, and
 status, plus a small, explicitly scoped set of operational actions.
 
-**Selection.** Selected and locked for v2.0.0 on 2026-10-29. Detailed planning is in
-[V2.0.0-PLAN.md](V2.0.0-PLAN.md).
+**Status.** Deferred to a future version (2026-10-31); removed from the v2.0.0 target set in the
+2026-10-31 re-plan. Nothing in the locked set depends on it.
 
 **Why it matters.** v1 runtime control is a local CLI and API. There is no remote or network
 deployment, no multi-user scheduling, and no deploy or rollback UI. A minimal WebUI is the
 natural operations surface, but exposing a PLC runtime on a network is security-critical and
 must be designed rather than bolted on.
 
-**Selected scope.**
+**Candidate scope.**
 
 - A runtime HTTP/WebSocket server or a sidecar with a versioned API and static assets. Bind to
   loopback by default and require explicit opt-in for network exposure.
@@ -989,7 +992,7 @@ reconnect/backoff, and partial-failure handling with different scheduling implic
 - What are the timeout, reconnect/backoff, and partial-failure policies?
 - Can server and client run concurrently in one runtime, and what does that imply for the
   backend contract?
-- Is client capability needed before or after the deferred EtherCAT/motion work?
+- Is client capability needed before or after the EtherCAT (WL-5.2) and deferred motion work?
 
 **Related.** [I/O and Device Linking](specification/Architecture/IO-and-Devices.md),
 [Runtime and Execution](specification/Architecture/Runtime-and-Execution.md),
@@ -1000,27 +1003,27 @@ reconnect/backoff, and partial-failure handling with different scheduling implic
 
 ## 6. Cross-cutting notes
 
-- WL-4 and WL-5.1 are locked v2.0.0 targets: RT timing and Modbus TCP server I/O. WL-5.2, WL-6,
-  and WL-7 are deferred to a future version and would revive the EtherCAT/motion/ESI cluster.
-- WL-5.1 and WL-5.2 (when revived) share the runtime backend contract but have different platform,
-  scheduling, and failure models. Keep the interface shared and the implementations separate.
-  Modbus TCP is general I/O, not an interpolated motion channel; when WL-6 is revived, it depends
-  on WL-5.2 and WL-7 in practice.
+- WL-4, WL-5.1, and WL-5.2 are locked v2.0.0 targets: RT timing, Modbus TCP server I/O, and
+  EtherCAT I/O using IgH. WL-6 and WL-7 are deferred to a future version and would complete the
+  motion/ESI cluster.
+- WL-5.1 and WL-5.2 share the runtime backend contract but have different platform, scheduling,
+  and failure models. Keep the interface shared and the implementations separate. Modbus TCP is
+  general I/O, not an interpolated motion channel; when WL-6 is revived, it depends on WL-5.2 and
+  WL-7 in practice.
 - WL-11 is deferred. It is the Modbus TCP client counterpart to WL-5.1; the server role is
   selected first, while the client has different outbound scheduling and failure behavior.
-- If WL-5.2 is revived, WL-4 and WL-5.2 reinforce each other: EtherCAT cyclic process data is best
-  verified on the PREEMPT_RT host, and WL-5.2 should not assume the host exists without a fallback
-  test path.
+- WL-4 and WL-5.2 reinforce each other: EtherCAT cyclic process data is best verified on the
+  PREEMPT_RT host, and WL-5.2 should not assume the host exists without a fallback test path.
 - WL-6 is deferred to a future version. If revived, it reuses robot-sim's `robot-motion` and its
   Lean `Motion` library. Those proofs should be registered with stc's verification program
   rather than duplicated, which ties the item to WL-3 and to the Mathlib policy (D-V2) and
   introduces an external-repository maintenance obligation.
-- WL-8 is deferred to a future version. If revived, it is a module of the WebUI (WL-9), not a
-  separate front end; it uses the WebUI's authentication, packaging, and deployment, and neither
-  may bypass the runtime's control or debug contracts.
-- WL-9 is locked and is the only locked v2 item that touches network access. WL-1.2 and WL-8 are
-  deferred; if either is revived, a single authenticated remote-access design should cover remote
-  debugging, tracing, and the WebUI rather than three independent security models.
+- WL-8 is deferred to a future version, as is the WebUI it depends on (WL-9). If revived, it is a
+  module of the WebUI, not a separate front end; it uses the WebUI's authentication, packaging,
+  and deployment, and neither may bypass the runtime's control or debug contracts.
+- WL-9 is deferred. WL-5.1 is the only locked v2 item that exposes a network service. WL-1.2 and
+  WL-8 are deferred; if either is revived, a single authenticated remote-access design should
+  cover remote debugging, tracing, and the WebUI rather than three independent security models.
 - WL-10 is the ST-program counterpart to WL-2's Rust coverage. They may share report formats and
   CI habits, but not instrumentation: WL-2 measures the compiler with `cargo-llvm-cov`, while
   WL-10 instruments generated test artifacts. Keep the two numbers separate. WL-10 can emit LCOV
@@ -1062,3 +1065,4 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-10-29 | Selected WL-9 (WebUI) and WL-10 (ST coverage emission); deferred WL-11 (Modbus TCP client). All recorded items are now selected or deferred. |
 | 2026-10-29 | Locked the v2.0.0 target set (WL-1.1, WL-2, WL-3 P0.4, WL-4 x86-64, WL-5.1, WL-9, WL-10) and started [V2.0.0-PLAN.md](V2.0.0-PLAN.md). |
 | 2026-10-30 | Marked WL-4 done after PR #7 merged into main and main was merged back into v2.0.0-planning; the report, runbook, and evidence are in specification/Verification/. |
+| 2026-10-31 | Re-planned the v2.0.0 target set: deferred WL-9 (WebUI) and locked WL-5.2 (EtherCAT using IgH) now that WL-4 is complete and the EtherCAT hardware has arrived. |
