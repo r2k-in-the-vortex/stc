@@ -341,10 +341,25 @@ Completed findings are feature history, not open follow-ups. The close-out triag
       at generation 2, a saved edit deployed generation 3, and the session ended with
       `STC-E-DEBUG-019`; the owner reports the workflow works.
 
+- [x] **F-6 — Removing a breakpoint does not remove it from the running session.** Pass
+      2026-10-31. Clearing the breakpoint in the editor/Breakpoints panel now removes it from
+      the live debug session. Root cause (confirmed by a failing regression test): every
+      `setBreakpoints` request replaced the source's `SourceBreakpoints` entry, discarding the
+      applied host `breakpoint_id`s, so `apply_source_breakpoints` saw an empty previous list and
+      never sent `breakpoint.clear`. The adapter now updates the existing entry in place and
+      clears the previous host IDs before applying the new set, including an empty list;
+      `source::path_key` keeps the normal and `\\?\` spellings on one key. Regression tests:
+      `removing_breakpoints_while_stopped_clears_them_from_the_session` and
+      `removing_breakpoints_while_running_clears_them_from_the_session` in
+      `crates/stc-driver/tests/dap_cli.rs`, plus the `path_keys_normalize_one_source_spelling`
+      unit test in `crates/stc-dap/src/source.rs`. Commit `dfda944`; CI run `41209918428` green
+      (38 jobs). Manual verification 2026-10-31 passed: breakpoints removed while stopped and
+      while running no longer stop the session, and re-adding works without restarting.
+
 ### Required for WL-1.1
 
 These items are open and required for WL-1.1 (plan §12.1); F-1.1 is an implementation task, while
-F-3, F-6, F-12, and F-16 are close-out fixes.
+F-3, F-12, and F-16 are close-out fixes.
 
 - [ ] **F-1.1 — Default-theme ST token-color overlay.** Required for WL-1.1 (plan §12.1).
       F-1 ships `stc Dark`/`stc Light`, so the intended palette requires selecting a contributed
@@ -362,24 +377,6 @@ F-3, F-6, F-12, and F-16 are close-out fixes.
       driver-side Windows job object/signal handler that kills the launcher). Acceptance: after
       terminating the task, `Get-Process stc,sample` shows no run driver or host; the language
       server may remain.
-
-- [ ] **F-6 — Removing a breakpoint does not remove it from the running session.** Clearing the
-      breakpoint in the editor/Breakpoints panel updates the visual list, but the debug session
-      still stops at the removed location. Investigate the DAP `setBreakpoints` reconciliation:
-      the adapter must clear the previous host `breakpoint_id`s for the source even when the new
-      list is empty, and must use one path key for the normal and verbatim spellings. Acceptance:
-      remove a breakpoint while running or stopped; the session no longer stops there; re-adding
-      it works without restarting. **Implemented; manual verification pending.** Root cause
-      (confirmed by a failing regression test): every `setBreakpoints` request replaced the
-      source's `SourceBreakpoints` entry, discarding the applied host `breakpoint_id`s, so
-      `apply_source_breakpoints` saw an empty previous list and never sent `breakpoint.clear`.
-      The adapter now updates the existing entry in place and clears the previous host IDs before
-      applying the new set, including an empty list; `source::path_key` keeps the normal and
-      `\\?\` spellings on one key. Regression tests:
-      `removing_breakpoints_while_stopped_clears_them_from_the_session` and
-      `removing_breakpoints_while_running_clears_them_from_the_session` in
-      `crates/stc-driver/tests/dap_cli.rs`, plus the `path_keys_normalize_one_source_spelling`
-      unit test in `crates/stc-dap/src/source.rs`. The manual VS Code acceptance has not run.
 
 - [ ] **F-12 — Unknown host frames appear as `frame` entries.** The frame-pointer walk continues
       past the ST program into the launcher/host, producing frames with no symbol/source that
@@ -537,6 +534,7 @@ not a WL-1.1 code change.
 | F-8 | Pass | Globals exposes FB fields and expands manifest-assisted views; UI retest passes |
 | F-10 | Pass (respecified) | Timeout is opt-in and disabled by default (D-212); explicit bounds still end the session |
 | F-20 | Pass | Manual 2026-10-31: start at gen 1, attach at gen 2, saved edit deployed gen 3, session ended with `STC-E-DEBUG-019`; commands/status/channel/swap evidence; commit `fd8c69e`, CI `41201150443` green |
+| F-6 | Pass | Manual 2026-10-31: removal while stopped/running clears host IDs; re-add works without restart; normal/`\\?\` spellings share one key; commit `dfda944`, CI `41209918428` green |
 
 ### Required items
 
@@ -544,7 +542,6 @@ not a WL-1.1 code change.
 | --- | --- | --- |
 | F-1.1 | Required; pending | Default-theme ST token overlay; acceptance wording owner-approved 2026-10-31; plan §12.1 |
 | F-3 | Pending | Task termination does not stop the driver/host process tree |
-| F-6 | Implemented; manual verification pending | Removing breakpoints while stopped or running now clears the host IDs; re-adding works without restart; normal/`\\?\` spellings share one key. Tests: `dap_cli` stopped/running removal tests and `source::path_keys_normalize_one_source_spelling` |
 | F-12 | Pending | Unknown host frames appear as `frame`/Unknown Source |
 | F-16 | Pending | Release monitoring has no IDE surface; typed reads work only over the wire |
 
