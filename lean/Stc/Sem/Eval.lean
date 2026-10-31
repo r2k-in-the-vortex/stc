@@ -2121,6 +2121,22 @@ theorem stepValue_repeatCond_preserves {u : HirUnit} {c c' : State} {f : Frame}
     cases hs
     exact ConfigTyped.updateHeadFocus hc hf (FocusTyped.resume_of hrest) hloop
 
+/-- One is representable in every core integer type. -/
+theorem Ty.holdsB_one {ty : Ty} (hcore : ty.isCore = true) (hint : ty.isInt = true) :
+    ty.holdsB 1 = true := by
+  cases ty with
+  | bool => simp [Ty.isInt] at hint
+  | int w s =>
+      simp only [Ty.isCore, Ty.coreWidth, Bool.or_eq_true, beq_iff_eq, or_assoc] at hcore
+      rcases hcore with rfl | rfl | rfl | rfl <;> cases s <;> decide
+  | bits w => simp [Ty.isInt] at hint
+  | char k => simp [Ty.isInt] at hint
+
+/-- The default `FOR` step value is well formed. -/
+theorem Value.one_wellFormed {ty : Ty} (hcore : ty.isCore = true)
+    (hint : ty.isInt = true) : (Value.ofInt ty 1).WellFormed :=
+  Value.wellFormed_of hcore (Ty.holdsB_one hcore hint)
+
 /-- A frame completion preserves configuration typing. -/
 theorem completeFrame_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
     {rest : List Frame} (hunit : HasType u env) (hc : ConfigTyped u c)
