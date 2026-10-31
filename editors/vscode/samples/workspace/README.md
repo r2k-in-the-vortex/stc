@@ -18,6 +18,36 @@ opens cleanly with no diagnostics.
 | Launch and attach configurations | `.vscode/launch.json` |
 | `stc` tasks with the `$stc` problem matcher | `.vscode/tasks.json` |
 
+## Highlighting check
+
+Open `src/main.st`, place the cursor on a token, and run **Developer: Inspect
+Editor Tokens and Scopes**. The sample covers these scopes:
+
+| Token | Line | Expected scope |
+| --- | --- | --- |
+| `FUNCTION` | 12 | `keyword.declaration.st` |
+| `AddStep` declaration | 12 | `entity.name.function.st` |
+| `DINT` | 12, 14, 17, 28, 36, 37 | `support.type.primitives.st` |
+| `Accumulator` type reference | 35 | `entity.name.type.st` |
+| `sum` variable | 36, 39 | `variable.name.st` |
+| `value` parameter | 14 | `variable.parameter.st` |
+| `total` after `.` | 42 | `variable.other.member.st` |
+| `(* comment *)` | 1, 7 | `comment.block.st` |
+| `T#10ms` | 49 | `constant.numeric.duration.st` |
+| `sample` config instance | 50 | `variable.name.st` |
+
+In `tests/smoke.st`, `{stc:test}` names the pragma
+(`keyword.other.pragma.st`), the assertion string is
+`string.quoted.double.st`, and `TRUE` is `constant.language.st`. The grammar
+fixtures under `../../test/grammar/` cover tokens the sample does not contain:
+`IF`/`FOR`/`RETURN`, `//` line comments, `%IX0.0`, `ABS(`, and `TON`.
+
+The extension does not set `workbench.colorTheme`. To compare the shipped
+palettes, run **Preferences: Color Theme** and choose `stc Dark` or `stc
+Light`. Repeat the inspection in the built-in **Dark Modern** and **Light
+Modern** themes to see the documented fallback: standard scopes color
+correctly, while the pragma name may use the generic keyword color.
+
 ## Debug checkpoints
 
 The tests use two known executable lines:

@@ -16,6 +16,13 @@ locally.
   integer, real, based, and typed numeric literals, duration/date/time
   literals, every reserved keyword, `{stc:...}` pragmas, directly represented
   variables (`%IX0.0`, `%QW28`, `%I*`), and punctuation.
+- Semantic scope families for declared POU and type names, type references,
+  primitive types, variables, parameters, members, direct variables, control
+  keywords, modifiers, language constants and variables, prelude functions and
+  standard function blocks, and pragma names. See
+  [Highlighting and color themes](#highlighting-and-color-themes).
+- The bundled `stc Dark` and `stc Light` color themes, which give every
+  acceptance category a distinct, readable color.
 - Language configuration: `//` line comments, `(* *)` block comments,
   brackets, auto-closing and surrounding pairs, an ST-aware word pattern, and
   indentation rules for block constructs.
@@ -55,6 +62,68 @@ The supported language features are listed above. Semantic tokens, rename,
 code actions, inlay hints, range formatting, call hierarchy, and workspace
 symbols are not implemented; highlighting comes from the grammar. A missing
 compiler is logged to the **stc** output channel and the server is not started.
+
+## Highlighting and color themes
+
+Highlighting is TextMate-only. The language server publishes no semantic
+tokens, so declaration and use classification is lexical. The grammar uses
+standard TextMate scope roots with a `.st` suffix:
+
+| Role | Scope |
+| --- | --- |
+| Block/line/documentation comment | `comment.block.st`, `comment.line.double-slash.st`, `comment.line.documentation.st` |
+| String, escape, character | `string.quoted.single.st`, `string.quoted.double.st`, `constant.character.escape.st`, `constant.character.st` |
+| Number, duration, date/time | `constant.numeric.integer.st`, `.real.st`, `.based.st`, `.typed.st`, `.duration.st`, `.date.st`, `.time.st`, `.datetime.st` |
+| Declaration keyword | `keyword.declaration.st` |
+| Control keyword | `keyword.control.conditional.st`, `keyword.control.loop.st`, `keyword.control.flow.st` |
+| Modifier | `storage.modifier.st` |
+| Operator | `keyword.operator.st`, `keyword.operator.type.st` |
+| Language constant | `constant.language.st` |
+| Primitive type | `support.type.primitives.st` |
+| Function/method/program declaration name | `entity.name.function.st` |
+| Type/function-block/class/interface/type-alias name | `entity.name.type.st` |
+| Namespace/configuration/resource name | `entity.name.namespace.st` |
+| Extended/implemented type name | `entity.other.inherited-class.st` |
+| Variable | `variable.name.st` |
+| Parameter | `variable.parameter.st` |
+| Member/struct field | `variable.other.member.st` |
+| Direct variable | `variable.other.constant.st` |
+| Enum member | `variable.other.enummember.st` |
+| `THIS`/`SUPER` | `variable.language.st` |
+| Built-in function | `support.function.st` |
+| Standard function block | `support.class.st` |
+| Pragma region, name, braces | `meta.pragma.st`, `keyword.other.pragma.st`, `punctuation.definition.pragma.begin/end.st` |
+
+These scope names are a user-facing contract: `editor.tokenColorCustomizations`
+can target them, and a later rename is a breaking theme change.
+
+### Selecting a theme
+
+The extension contributes two optional token themes. Run **Preferences: Color
+Theme** and choose `stc Dark` or `stc Light`. The extension never changes
+`workbench.colorTheme` and the sample workspace does not set it; the active
+theme remains your choice. Both themes set `semanticHighlighting: false`,
+since no semantic-token provider exists, and they define the editor background,
+foreground, line number, selection, and cursor colors; the rest of the
+workbench chrome follows the contributed `vs-dark`/`vs` UI theme.
+
+The grammar's standard scope roots also color correctly under **Dark Modern**,
+**Light Modern**, **Dark+**, **Light+**, and the **One Dark** family. Under
+built-in themes the pragma name may render as a generic keyword and direct
+variables may follow the variable color; only the shipped themes guarantee
+distinct pragma and direct-variable colors. High-contrast themes are not a
+target, though the standard scope families still apply.
+
+Lexical limits:
+
+- Declarations and uses are not resolved. A user function or function-block
+  call name, and a named argument, is colored as a variable; only names in the
+  prelude table receive `support.function.st`/`support.class.st`.
+- A type reference is recognized after `:`, `ARRAY ... OF`, `REF_TO`,
+  `POINTER TO`, `EXTENDS`, and `IMPLEMENTS`; other ambiguous identifier
+  positions use the variable fallback.
+- Pragma-name and direct-variable distinctness depends on the theme, as noted
+  above.
 
 ## Tasks
 
@@ -188,10 +257,18 @@ npm test
 npm run package
 ```
 
-`npm test` runs the problem-matcher unit tests and the TextMate grammar
-fixtures in `test/grammar/`. The package step writes a `.vsix` next to
-`package.json`; `samples/**` is excluded by `.vscodeignore`. The Rust grammar
-coverage test (`cargo test -p stc-syntax grammar_covers_lexer_tables`) checks
-the grammar against `Keyword::ALL` and the punctuation table. The Rust
+`npm test` runs the problem-matcher and theme unit tests and the TextMate
+grammar fixtures in `test/grammar/`. `test/theme.test.mjs` checks that both
+themes are contributed, define the required editor colors and token rules, use
+nine distinct category colors, and keep every role at or above the 4.5:1
+contrast target. The package step writes a `.vsix` next to `package.json`;
+`samples/**` is excluded by `.vscodeignore`.
+
+The Rust tests keep the grammar in step with the compiler tables:
+`cargo test -p stc-syntax` runs `grammar_covers_lexer_tables` against
+`Keyword::ALL` and the punctuation table plus
+`primitive_type_keywords_use_primitive_scope`; `cargo test -p stc-sema` runs
+`prelude_names_are_scoped_in_the_vscode_grammar`, which checks the built-in
+function and standard function-block lists against the grammar. The Rust
 language-server and debug-adapter integration tests live in
 `crates/stc-driver/tests/lsp_cli.rs` and `dap_cli.rs`.

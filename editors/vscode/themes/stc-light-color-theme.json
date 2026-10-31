@@ -1,0 +1,164 @@
+{
+  "name": "stc Light",
+  "type": "light",
+  "semanticHighlighting": false,
+  "colors": {
+    "editor.background": "#FFFFFF",
+    "editor.foreground": "#1F1F1F",
+    "editorLineNumber.foreground": "#6E7681",
+    "editor.selectionBackground": "#ADD6FF",
+    "editorCursor.foreground": "#000000"
+  },
+  "tokenColors": [
+    {
+      "settings": {
+        "foreground": "#1F1F1F"
+      }
+    },
+    {
+      "name": "Comment",
+      "scope": [
+        "comment"
+      ],
+      "settings": {
+        "foreground": "#5A6673",
+        "fontStyle": "italic"
+      }
+    },
+    {
+      "name": "Control keyword",
+      "scope": [
+        "keyword.control"
+      ],
+      "settings": {
+        "foreground": "#AF00DB"
+      }
+    },
+    {
+      "name": "Declaration keyword and modifier",
+      "scope": [
+        "keyword.declaration",
+        "storage.modifier"
+      ],
+      "settings": {
+        "foreground": "#0000FF"
+      }
+    },
+    {
+      "name": "Function and declaration name",
+      "scope": [
+        "entity.name.function"
+      ],
+      "settings": {
+        "foreground": "#795E26"
+      }
+    },
+    {
+      "name": "Type",
+      "scope": [
+        "entity.name.type",
+        "support.type",
+        "support.type.primitives",
+        "entity.name.namespace",
+        "entity.other.inherited-class",
+        "support.class"
+      ],
+      "settings": {
+        "foreground": "#267F99"
+      }
+    },
+    {
+      "name": "Variable",
+      "scope": [
+        "variable"
+      ],
+      "settings": {
+        "foreground": "#001080"
+      }
+    },
+    {
+      "name": "Parameter",
+      "scope": [
+        "variable.parameter"
+      ],
+      "settings": {
+        "foreground": "#005A9E"
+      }
+    },
+    {
+      "name": "Member",
+      "scope": [
+        "variable.other.member"
+      ],
+      "settings": {
+        "foreground": "#001080"
+      }
+    },
+    {
+      "name": "Direct variable",
+      "scope": [
+        "variable.other.constant"
+      ],
+      "settings": {
+        "foreground": "#C2185B"
+      }
+    },
+    {
+      "name": "Language variable",
+      "scope": [
+        "variable.language"
+      ],
+      "settings": {
+        "foreground": "#0000FF"
+      }
+    },
+    {
+      "name": "String",
+      "scope": [
+        "string"
+      ],
+      "settings": {
+        "foreground": "#A31515"
+      }
+    },
+    {
+      "name": "Number",
+      "scope": [
+        "constant.numeric"
+      ],
+      "settings": {
+        "foreground": "#098658"
+      }
+    },
+    {
+      "name": "Language constant",
+      "scope": [
+        "constant.language"
+      ],
+      "settings": {
+        "foreground": "#0000FF"
+      }
+    },
+    {
+      "name": "Operator and punctuation",
+      "scope": [
+        "keyword.operator",
+        "punctuation"
+      ],
+      "settings": {
+        "foreground": "#1F1F1F"
+      }
+    },
+    {
+      "name": "Pragma",
+      "scope": [
+        "keyword.other.pragma.st",
+        "punctuation.definition.pragma.begin.st",
+        "punctuation.definition.pragma.end.st"
+      ],
+      "settings": {
+        "foreground": "#B45309"
+      }
+    }
+  ]
+}

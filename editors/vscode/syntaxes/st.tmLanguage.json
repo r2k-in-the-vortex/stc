@@ -33,25 +33,115 @@
       "include": "#direct-variables"
     },
     {
-      "include": "#keyword-types"
+      "include": "#config-program"
+    },
+    {
+      "include": "#function-declaration"
+    },
+    {
+      "include": "#method-declaration"
+    },
+    {
+      "include": "#function-block-declaration"
+    },
+    {
+      "include": "#class-declaration"
+    },
+    {
+      "include": "#interface-declaration"
+    },
+    {
+      "include": "#program-declaration"
+    },
+    {
+      "include": "#namespace-declaration"
+    },
+    {
+      "include": "#configuration-declaration"
+    },
+    {
+      "include": "#resource-declaration"
+    },
+    {
+      "include": "#using-declaration"
+    },
+    {
+      "include": "#action-declaration"
+    },
+    {
+      "include": "#extends-clause"
+    },
+    {
+      "include": "#implements-clause"
+    },
+    {
+      "include": "#primitive-types"
+    },
+    {
+      "include": "#var-parameter-section"
+    },
+    {
+      "include": "#var-section"
+    },
+    {
+      "include": "#type-section"
+    },
+    {
+      "include": "#case-region"
+    },
+    {
+      "include": "#array-of-type"
+    },
+    {
+      "include": "#pointer-to-type"
+    },
+    {
+      "include": "#ref-to-type"
     },
     {
       "include": "#keyword-declarations"
     },
     {
-      "include": "#keyword-control"
+      "include": "#keyword-modifiers"
+    },
+    {
+      "include": "#keyword-control-conditional"
+    },
+    {
+      "include": "#keyword-control-loop"
+    },
+    {
+      "include": "#keyword-control-flow"
     },
     {
       "include": "#keyword-operators"
     },
     {
+      "include": "#keyword-type-operators"
+    },
+    {
       "include": "#keyword-constants"
+    },
+    {
+      "include": "#language-variables"
+    },
+    {
+      "include": "#standard-fbs"
+    },
+    {
+      "include": "#builtin-functions"
     },
     {
       "include": "#operators"
     },
     {
+      "include": "#member-access"
+    },
+    {
       "include": "#punctuation"
+    },
+    {
+      "include": "#identifier-fallback"
     }
   ],
   "repository": {
@@ -121,11 +211,14 @@
     },
     "pragmas": {
       "name": "meta.pragma.st",
-      "begin": "\\{stc:",
+      "begin": "(\\{stc:)([A-Za-z_][A-Za-z0-9_]*)",
       "end": "\\}",
       "beginCaptures": {
-        "0": {
+        "1": {
           "name": "punctuation.definition.pragma.begin.st"
+        },
+        "2": {
+          "name": "keyword.other.pragma.st"
         }
       },
       "endCaptures": {
@@ -186,6 +279,14 @@
         },
         {
           "include": "#pragma-braces"
+        },
+        {
+          "match": "[A-Za-z_][A-Za-z0-9_]*",
+          "name": "variable.parameter.pragma.st"
+        },
+        {
+          "match": "-?\\d+(?:\\.\\d+)?",
+          "name": "constant.numeric.pragma.st"
         }
       ]
     },
@@ -362,36 +463,627 @@
       "match": "\\b\\d(?:_?\\d)*\\b"
     },
     "direct-variables": {
-      "name": "variable.other.direct.st",
+      "name": "variable.other.constant.st",
       "match": "%[IQM]?[XBWDL]?(?:\\d+(?:\\.\\d+)*|\\*)"
     },
-    "keyword-types": {
-      "name": "storage.type.st",
-      "match": "(?i:\\b(?:BOOL|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BYTE|WORD|DWORD|LWORD|REAL|LREAL|TIME|LTIME|DATE|LDATE|LDATE_AND_TIME|TIME_OF_DAY|TOD|LTOD|LTIME_OF_DAY|DATE_AND_TIME|DT|LDT|STRING|WSTRING|CHAR|WCHAR|ANY|ANY_DERIVED|ANY_ELEMENTARY|ANY_MAGNITUDE|ANY_NUM|ANY_REAL|ANY_INT|ANY_UNSIGNED|ANY_SIGNED|ANY_DURATION|ANY_BIT|ANY_CHARS|ANY_STRING|ANY_CHAR|ANY_DATE|USTRING|UCHAR)\\b)"
+    "config-program": {
+      "match": "(?i:\\b(PROGRAM))\\s+(?:(RETAIN|NON_RETAIN)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\\s+(WITH)\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*:\\s*(?:(BOOL|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BYTE|WORD|DWORD|LWORD|REAL|LREAL|LDATE_AND_TIME|LTIME_OF_DAY|DATE_AND_TIME|TIME_OF_DAY|ANY_ELEMENTARY|ANY_MAGNITUDE|ANY_DURATION|ANY_UNSIGNED|ANY_DERIVED|ANY_CHARS|ANY_STRING|ANY_SIGNED|ANY_NUM|ANY_REAL|ANY_INT|ANY_BIT|ANY_CHAR|ANY_DATE|ANY|TIME|LTIME|DATE|LDATE|TOD|LTOD|DT|LDT|STRING|WSTRING|CHAR|WCHAR|USTRING|UCHAR)\\b|([A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*){0,3}))",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "storage.modifier.st"
+        },
+        "3": {
+          "name": "variable.name.st"
+        },
+        "4": {
+          "name": "keyword.declaration.st"
+        },
+        "5": {
+          "name": "variable.name.st"
+        },
+        "6": {
+          "name": "support.type.primitives.st"
+        },
+        "7": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "program-declaration": {
+      "match": "(?i:\\b(PROGRAM))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.name.function.st"
+        }
+      }
+    },
+    "function-declaration": {
+      "match": "(?i:\\b(FUNCTION))\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s*:\\s*(?:(BOOL|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BYTE|WORD|DWORD|LWORD|REAL|LREAL|LDATE_AND_TIME|LTIME_OF_DAY|DATE_AND_TIME|TIME_OF_DAY|ANY_ELEMENTARY|ANY_MAGNITUDE|ANY_DURATION|ANY_UNSIGNED|ANY_DERIVED|ANY_CHARS|ANY_STRING|ANY_SIGNED|ANY_NUM|ANY_REAL|ANY_INT|ANY_BIT|ANY_CHAR|ANY_DATE|ANY|TIME|LTIME|DATE|LDATE|TOD|LTOD|DT|LDT|STRING|WSTRING|CHAR|WCHAR|USTRING|UCHAR)\\b|([A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*){0,3})))?",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.name.function.st"
+        },
+        "3": {
+          "name": "support.type.primitives.st"
+        },
+        "4": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "method-declaration": {
+      "match": "(?i:\\b(METHOD))\\s+(?:(PUBLIC|PRIVATE|PROTECTED|INTERNAL)\\s+)?(?:(FINAL|ABSTRACT)\\s+)?(?:(OVERRIDE)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\\s*:\\s*(?:(BOOL|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BYTE|WORD|DWORD|LWORD|REAL|LREAL|LDATE_AND_TIME|LTIME_OF_DAY|DATE_AND_TIME|TIME_OF_DAY|ANY_ELEMENTARY|ANY_MAGNITUDE|ANY_DURATION|ANY_UNSIGNED|ANY_DERIVED|ANY_CHARS|ANY_STRING|ANY_SIGNED|ANY_NUM|ANY_REAL|ANY_INT|ANY_BIT|ANY_CHAR|ANY_DATE|ANY|TIME|LTIME|DATE|LDATE|TOD|LTOD|DT|LDT|STRING|WSTRING|CHAR|WCHAR|USTRING|UCHAR)\\b|([A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*){0,3})))?",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "storage.modifier.st"
+        },
+        "3": {
+          "name": "storage.modifier.st"
+        },
+        "4": {
+          "name": "storage.modifier.st"
+        },
+        "5": {
+          "name": "entity.name.function.st"
+        },
+        "6": {
+          "name": "support.type.primitives.st"
+        },
+        "7": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "function-block-declaration": {
+      "match": "(?i:\\b(FUNCTION_BLOCK))\\s+(?:(FINAL|ABSTRACT)\\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "storage.modifier.st"
+        },
+        "3": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "class-declaration": {
+      "match": "(?i:\\b(CLASS))\\s+(?:(FINAL|ABSTRACT)\\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "storage.modifier.st"
+        },
+        "3": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "interface-declaration": {
+      "match": "(?i:\\b(INTERFACE))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "namespace-declaration": {
+      "match": "(?i:\\b(NAMESPACE))\\s+(?:(INTERNAL)\\s+)?([A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*)*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "storage.modifier.st"
+        },
+        "3": {
+          "name": "entity.name.namespace.st"
+        }
+      }
+    },
+    "configuration-declaration": {
+      "match": "(?i:\\b(CONFIGURATION))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.name.namespace.st"
+        }
+      }
+    },
+    "resource-declaration": {
+      "match": "(?i:\\b(RESOURCE))\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s+(ON)\\s+([A-Za-z_][A-Za-z0-9_]*))?",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.name.namespace.st"
+        },
+        "3": {
+          "name": "keyword.declaration.st"
+        },
+        "4": {
+          "name": "entity.name.namespace.st"
+        }
+      }
+    },
+    "using-declaration": {
+      "match": "(?i:\\b(USING))\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*)?(?:\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*)?)*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.name.namespace.st"
+        }
+      }
+    },
+    "action-declaration": {
+      "match": "(?i:\\b(ACTION))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.name.function.st"
+        }
+      }
+    },
+    "extends-clause": {
+      "match": "(?i:\\b(EXTENDS))\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*)*)*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.other.inherited-class.st"
+        }
+      }
+    },
+    "implements-clause": {
+      "match": "(?i:\\b(IMPLEMENTS))\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*)*)*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.other.inherited-class.st"
+        }
+      }
+    },
+    "primitive-types": {
+      "name": "support.type.primitives.st",
+      "match": "(?i:\\b(?:BOOL|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BYTE|WORD|DWORD|LWORD|REAL|LREAL|LDATE_AND_TIME|LTIME_OF_DAY|DATE_AND_TIME|TIME_OF_DAY|ANY_ELEMENTARY|ANY_MAGNITUDE|ANY_DURATION|ANY_UNSIGNED|ANY_DERIVED|ANY_CHARS|ANY_STRING|ANY_SIGNED|ANY_NUM|ANY_REAL|ANY_INT|ANY_BIT|ANY_CHAR|ANY_DATE|ANY|TIME|LTIME|DATE|LDATE|TOD|LTOD|DT|LDT|STRING|WSTRING|CHAR|WCHAR|USTRING|UCHAR)\\b)"
+    },
+    "var-parameter-section": {
+      "begin": "(?i:\\b(?:VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT)\\b)",
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.declaration.st"
+        }
+      },
+      "end": "(?i:\\bEND_VAR\\b)",
+      "endCaptures": {
+        "0": {
+          "name": "keyword.declaration.st"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#array-of-type"
+        },
+        {
+          "include": "#pointer-to-type"
+        },
+        {
+          "include": "#ref-to-type"
+        },
+        {
+          "include": "#type-after-colon"
+        },
+        {
+          "include": "#declared-parameter"
+        },
+        {
+          "include": "#expression-leaves"
+        }
+      ]
+    },
+    "var-section": {
+      "begin": "(?i:\\b(?:VAR_GLOBAL|VAR_EXTERNAL|VAR_ACCESS|VAR_CONFIG|VAR_TEMP|VAR)\\b)",
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.declaration.st"
+        }
+      },
+      "end": "(?i:\\bEND_VAR\\b)",
+      "endCaptures": {
+        "0": {
+          "name": "keyword.declaration.st"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#array-of-type"
+        },
+        {
+          "include": "#pointer-to-type"
+        },
+        {
+          "include": "#ref-to-type"
+        },
+        {
+          "include": "#type-after-colon"
+        },
+        {
+          "include": "#declared-variable"
+        },
+        {
+          "include": "#expression-leaves"
+        }
+      ]
+    },
+    "type-section": {
+      "begin": "(?i:\\bTYPE\\b)",
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.declaration.st"
+        }
+      },
+      "end": "(?i:\\bEND_TYPE\\b)",
+      "endCaptures": {
+        "0": {
+          "name": "keyword.declaration.st"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#struct-section"
+        },
+        {
+          "include": "#enum-values"
+        },
+        {
+          "include": "#array-of-type"
+        },
+        {
+          "include": "#pointer-to-type"
+        },
+        {
+          "include": "#ref-to-type"
+        },
+        {
+          "include": "#type-after-colon"
+        },
+        {
+          "include": "#declared-type-alias"
+        },
+        {
+          "include": "#expression-leaves"
+        }
+      ]
+    },
+    "struct-section": {
+      "begin": "(?i:\\bSTRUCT\\b)",
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.declaration.st"
+        }
+      },
+      "end": "(?i:\\bEND_STRUCT\\b)",
+      "endCaptures": {
+        "0": {
+          "name": "keyword.declaration.st"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#struct-section"
+        },
+        {
+          "include": "#array-of-type"
+        },
+        {
+          "include": "#pointer-to-type"
+        },
+        {
+          "include": "#ref-to-type"
+        },
+        {
+          "include": "#type-after-colon"
+        },
+        {
+          "include": "#declared-member"
+        },
+        {
+          "include": "#expression-leaves"
+        }
+      ]
+    },
+    "enum-values": {
+      "begin": "\\(",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.st"
+        }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.st"
+        }
+      },
+      "patterns": [
+        {
+          "match": "(?i:\\b[A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:,|\\)|:=|:))",
+          "name": "variable.other.enummember.st"
+        },
+        {
+          "include": "#expression-leaves"
+        }
+      ]
+    },
+    "case-region": {
+      "begin": "(?i:\\bCASE\\b)",
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.control.conditional.st"
+        }
+      },
+      "end": "(?i:\\bOF\\b)",
+      "endCaptures": {
+        "0": {
+          "name": "keyword.control.conditional.st"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#expression-leaves"
+        }
+      ]
+    },
+    "array-of-type": {
+      "match": "(?i:\\b(OF))\\s+((?!(?:BOOL|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BYTE|WORD|DWORD|LWORD|REAL|LREAL|LDATE_AND_TIME|LTIME_OF_DAY|DATE_AND_TIME|TIME_OF_DAY|ANY_ELEMENTARY|ANY_MAGNITUDE|ANY_DURATION|ANY_UNSIGNED|ANY_DERIVED|ANY_CHARS|ANY_STRING|ANY_SIGNED|ANY_NUM|ANY_REAL|ANY_INT|ANY_BIT|ANY_CHAR|ANY_DATE|ANY|TIME|LTIME|DATE|LDATE|TOD|LTOD|DT|LDT|STRING|WSTRING|CHAR|WCHAR|USTRING|UCHAR|ARRAY|STRUCT|REF_TO|POINTER|CTUD|CTU|CTD|TON|TOF|TP|R_TRIG|F_TRIG|SR|RS)\\b)[A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*){0,3})",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.type.st"
+        },
+        "2": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "pointer-to-type": {
+      "match": "(?i:\\b(POINTER))\\s+(?i:\\b(TO))\\s+((?!(?:BOOL|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BYTE|WORD|DWORD|LWORD|REAL|LREAL|LDATE_AND_TIME|LTIME_OF_DAY|DATE_AND_TIME|TIME_OF_DAY|ANY_ELEMENTARY|ANY_MAGNITUDE|ANY_DURATION|ANY_UNSIGNED|ANY_DERIVED|ANY_CHARS|ANY_STRING|ANY_SIGNED|ANY_NUM|ANY_REAL|ANY_INT|ANY_BIT|ANY_CHAR|ANY_DATE|ANY|TIME|LTIME|DATE|LDATE|TOD|LTOD|DT|LDT|STRING|WSTRING|CHAR|WCHAR|USTRING|UCHAR|ARRAY|STRUCT|REF_TO|POINTER|CTUD|CTU|CTD|TON|TOF|TP|R_TRIG|F_TRIG|SR|RS)\\b)[A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*){0,3})",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "keyword.operator.type.st"
+        },
+        "3": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "pointer-to-keywords": {
+      "match": "(?i:\\b(POINTER))\\s+(?i:\\b(TO))\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "keyword.operator.type.st"
+        }
+      }
+    },
+    "ref-to-type": {
+      "match": "(?i:\\b(REF_TO))\\s+((?!(?:BOOL|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BYTE|WORD|DWORD|LWORD|REAL|LREAL|LDATE_AND_TIME|LTIME_OF_DAY|DATE_AND_TIME|TIME_OF_DAY|ANY_ELEMENTARY|ANY_MAGNITUDE|ANY_DURATION|ANY_UNSIGNED|ANY_DERIVED|ANY_CHARS|ANY_STRING|ANY_SIGNED|ANY_NUM|ANY_REAL|ANY_INT|ANY_BIT|ANY_CHAR|ANY_DATE|ANY|TIME|LTIME|DATE|LDATE|TOD|LTOD|DT|LDT|STRING|WSTRING|CHAR|WCHAR|USTRING|UCHAR|ARRAY|STRUCT|REF_TO|POINTER|CTUD|CTU|CTD|TON|TOF|TP|R_TRIG|F_TRIG|SR|RS)\\b)[A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*){0,3})",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.st"
+        },
+        "2": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "type-after-colon": {
+      "match": "(?i:(:))\\s*((?!(?:BOOL|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BYTE|WORD|DWORD|LWORD|REAL|LREAL|LDATE_AND_TIME|LTIME_OF_DAY|DATE_AND_TIME|TIME_OF_DAY|ANY_ELEMENTARY|ANY_MAGNITUDE|ANY_DURATION|ANY_UNSIGNED|ANY_DERIVED|ANY_CHARS|ANY_STRING|ANY_SIGNED|ANY_NUM|ANY_REAL|ANY_INT|ANY_BIT|ANY_CHAR|ANY_DATE|ANY|TIME|LTIME|DATE|LDATE|TOD|LTOD|DT|LDT|STRING|WSTRING|CHAR|WCHAR|USTRING|UCHAR|ARRAY|STRUCT|REF_TO|POINTER|CTUD|CTU|CTD|TON|TOF|TP|R_TRIG|F_TRIG|SR|RS)\\b)[A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*){0,3})",
+      "captures": {
+        "1": {
+          "name": "punctuation.st"
+        },
+        "2": {
+          "name": "entity.name.type.st"
+        }
+      }
+    },
+    "declared-parameter": {
+      "match": "(?i:\\b[A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:,|AT\\b|:(?!=)))",
+      "name": "variable.parameter.st"
+    },
+    "declared-variable": {
+      "match": "(?i:\\b[A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:,|AT\\b|:(?!=)))",
+      "name": "variable.name.st"
+    },
+    "declared-member": {
+      "match": "(?i:\\b[A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:AT\\b|:(?!=)))",
+      "name": "variable.other.member.st"
+    },
+    "declared-type-alias": {
+      "match": "(?i:\\b[A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*:(?!=))",
+      "name": "entity.name.type.st"
+    },
+    "expression-leaves": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#pragmas"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#typed-char-literals"
+        },
+        {
+          "include": "#duration-literals"
+        },
+        {
+          "include": "#date-and-time-literals"
+        },
+        {
+          "include": "#typed-literals"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#direct-variables"
+        },
+        {
+          "include": "#pointer-to-keywords"
+        },
+        {
+          "include": "#primitive-types"
+        },
+        {
+          "include": "#keyword-constants"
+        },
+        {
+          "include": "#language-variables"
+        },
+        {
+          "include": "#keyword-operators"
+        },
+        {
+          "include": "#keyword-modifiers"
+        },
+        {
+          "include": "#keyword-declarations"
+        },
+        {
+          "include": "#keyword-type-operators"
+        },
+        {
+          "include": "#keyword-control-conditional"
+        },
+        {
+          "include": "#keyword-control-loop"
+        },
+        {
+          "include": "#keyword-control-flow"
+        },
+        {
+          "include": "#standard-fbs"
+        },
+        {
+          "include": "#builtin-functions"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#member-access"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#identifier-fallback"
+        }
+      ]
     },
     "keyword-declarations": {
       "name": "keyword.declaration.st",
-      "match": "(?i:\\b(?:TYPE|END_TYPE|STRUCT|END_STRUCT|OVERLAP|ARRAY|OF|AT|VAR|END_VAR|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR_TEMP|VAR_GLOBAL|VAR_EXTERNAL|VAR_ACCESS|VAR_CONFIG|CONSTANT|RETAIN|NON_RETAIN|R_EDGE|F_EDGE|REF_TO|REF|NULL|POINTER|FUNCTION|END_FUNCTION|FUNCTION_BLOCK|END_FUNCTION_BLOCK|PROGRAM|END_PROGRAM|CLASS|END_CLASS|INTERFACE|END_INTERFACE|METHOD|END_METHOD|EXTENDS|IMPLEMENTS|OVERRIDE|FINAL|ABSTRACT|PUBLIC|PRIVATE|PROTECTED|INTERNAL|THIS|SUPER|NAMESPACE|END_NAMESPACE|USING|CONFIGURATION|END_CONFIGURATION|RESOURCE|END_RESOURCE|ON|TASK|SINGLE|INTERVAL|PRIORITY|WITH|READ_ONLY|READ_WRITE|ACTION|END_ACTION|STEP|END_STEP|INITIAL_STEP|TRANSITION|END_TRANSITION|FROM)\\b)"
+      "match": "(?i:\\b(?:TYPE|END_TYPE|STRUCT|END_STRUCT|ARRAY|AT|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR_TEMP|VAR_GLOBAL|VAR_EXTERNAL|VAR_ACCESS|VAR_CONFIG|VAR|END_VAR|R_EDGE|F_EDGE|REF_TO|REF|POINTER|FUNCTION_BLOCK|END_FUNCTION_BLOCK|FUNCTION|END_FUNCTION|PROGRAM|END_PROGRAM|CLASS|END_CLASS|INTERFACE|END_INTERFACE|METHOD|END_METHOD|EXTENDS|IMPLEMENTS|NAMESPACE|END_NAMESPACE|USING|CONFIGURATION|END_CONFIGURATION|RESOURCE|END_RESOURCE|ON|TASK|SINGLE|INTERVAL|PRIORITY|WITH|ACTION|END_ACTION|STEP|END_STEP|INITIAL_STEP|TRANSITION|END_TRANSITION|FROM)\\b)"
     },
-    "keyword-control": {
-      "name": "keyword.control.st",
-      "match": "(?i:\\b(?:IF|THEN|ELSIF|ELSE|END_IF|CASE|END_CASE|FOR|TO|BY|DO|END_FOR|WHILE|END_WHILE|REPEAT|UNTIL|END_REPEAT|EXIT|CONTINUE|RETURN)\\b)"
+    "keyword-modifiers": {
+      "name": "storage.modifier.st",
+      "match": "(?i:\\b(?:PUBLIC|PRIVATE|PROTECTED|INTERNAL|FINAL|ABSTRACT|OVERRIDE|OVERLAP|NON_RETAIN|RETAIN|CONSTANT|READ_ONLY|READ_WRITE)\\b)"
+    },
+    "keyword-control-conditional": {
+      "name": "keyword.control.conditional.st",
+      "match": "(?i:\\b(?:IF|THEN|ELSIF|ELSE|END_IF|CASE|END_CASE)\\b)"
+    },
+    "keyword-control-loop": {
+      "name": "keyword.control.loop.st",
+      "match": "(?i:\\b(?:FOR|TO|BY|DO|END_FOR|WHILE|END_WHILE|REPEAT|UNTIL|END_REPEAT)\\b)"
+    },
+    "keyword-control-flow": {
+      "name": "keyword.control.flow.st",
+      "match": "(?i:\\b(?:EXIT|CONTINUE|RETURN)\\b)"
     },
     "keyword-operators": {
       "name": "keyword.operator.st",
       "match": "(?i:\\b(?:AND|OR|XOR|NOT|MOD|ADR|SIZEOF)\\b)"
     },
+    "keyword-type-operators": {
+      "name": "keyword.operator.type.st",
+      "match": "(?i:\\b(?:OF)\\b)"
+    },
     "keyword-constants": {
       "name": "constant.language.st",
-      "match": "(?i:\\b(?:TRUE|FALSE)\\b)"
+      "match": "(?i:\\b(?:TRUE|FALSE|NULL)\\b)"
+    },
+    "language-variables": {
+      "name": "variable.language.st",
+      "match": "(?i:\\b(?:THIS|SUPER)\\b)"
+    },
+    "standard-fbs": {
+      "name": "support.class.st",
+      "match": "(?i:\\b(?:CTUD|CTU|CTD|TON|TOF|TP|R_TRIG|F_TRIG|SR|RS)\\b)"
+    },
+    "builtin-functions": {
+      "name": "support.function.st",
+      "match": "(?i:\\b(?:LEN_CODE_UNIT|LEN_MAX|STC_CLOCK_ADVANCE|STC_IO_SET_INPUT|STC_IO_GET_OUTPUT|STC_ASSERT|ATAN2|SQRT|ASIN|ACOS|ATAN|TRUNC|LIMIT|CONCAT|REPLACE|INSERT|DELETE|LEN|LEFT|RIGHT|MID|FIND|ABS|LN|LOG|EXP|SIN|COS|TAN|EXPT|ADD|SUB|MUL|DIV|MOVE|SHL|SHR|ROL|ROR|SEL|MAX|MIN|MUX|GT|GE|EQ|LE|LT|NE)\\b)(?=\\s*\\()"
     },
     "operators": {
       "name": "keyword.operator.st",
       "match": ":=|=>|\\?=|\\*\\*|\\.\\.|<>|<=|>=|\\^|\\+|\\-|\\*|/|=|<|>|&"
     },
+    "member-access": {
+      "match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.st"
+        },
+        "2": {
+          "name": "variable.other.member.st"
+        }
+      }
+    },
     "punctuation": {
       "name": "punctuation.st",
       "match": "\\(|\\)|\\[|\\]|;|,|:|\\.|#|@|%"
+    },
+    "identifier-fallback": {
+      "name": "variable.name.st",
+      "match": "[A-Za-z_][A-Za-z0-9_]*"
     }
   }
 }

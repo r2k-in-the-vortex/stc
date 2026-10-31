@@ -71,6 +71,55 @@ Out of scope for v2.0.0:
   The language id is `st`, the TextMate scope is `source.st`, and `.st` files are the only
   language association.
 
+### 2.1 Language contribution and highlighting
+
+Highlighting is TextMate-only. The extension contributes one grammar for `st` with the root scope
+`source.st`; `stc lsp` publishes no semantic tokens, and F-1 adds no semantic-token capability.
+The grammar uses standard TextMate scope roots with a `.st` suffix so ordinary themes match them:
+
+| Role | Scope |
+| --- | --- |
+| Block/line/documentation comment | `comment.block.st`, `comment.line.double-slash.st`, `comment.line.documentation.st` |
+| String, escape, character | `string.quoted.single.st`, `string.quoted.double.st`, `constant.character.escape.st`, `constant.character.st` |
+| Number, duration, date/time | `constant.numeric.integer.st`, `.real.st`, `.based.st`, `.typed.st`, `.duration.st`, `.date.st`, `.time.st`, `.datetime.st` |
+| Declaration keyword | `keyword.declaration.st` |
+| Control keyword | `keyword.control.conditional.st`, `keyword.control.loop.st`, `keyword.control.flow.st` |
+| Modifier | `storage.modifier.st` |
+| Operator | `keyword.operator.st`, `keyword.operator.type.st` |
+| Language constant | `constant.language.st` |
+| Primitive type | `support.type.primitives.st` |
+| Function/method/program declaration name | `entity.name.function.st` |
+| Type/function-block/class/interface/type-alias name | `entity.name.type.st` |
+| Namespace/configuration/resource name | `entity.name.namespace.st` |
+| Extended/implemented type name | `entity.other.inherited-class.st` |
+| Variable | `variable.name.st` |
+| Parameter | `variable.parameter.st` |
+| Member/struct field | `variable.other.member.st` |
+| Direct variable | `variable.other.constant.st` |
+| Enum member | `variable.other.enummember.st` |
+| `THIS`/`SUPER` | `variable.language.st` |
+| Built-in function | `support.function.st` |
+| Standard function block | `support.class.st` |
+| Pragma region/name/braces | `meta.pragma.st`, `keyword.other.pragma.st`, `punctuation.definition.pragma.begin/end.st` |
+
+Specific captures (comments, pragmas, strings, typed literals, direct variables, declaration
+lines and regions) take precedence over generic keyword, punctuation, and identifier-fallback
+rules. The scope names are a user-facing theme contract; renaming one is a breaking theme change.
+
+Because the classification is lexical, declarations and uses are not resolved. A user function or
+function-block call name and a named argument use the variable fallback; only names in the prelude
+table receive `support.function.st`/`support.class.st`. A type reference is recognized after `:`,
+`ARRAY ... OF`, `REF_TO`, `POINTER TO`, `EXTENDS`, and `IMPLEMENTS`.
+
+The extension contributes two optional token themes, `stc Dark` (`uiTheme: "vs-dark"`) and
+`stc Light` (`uiTheme: "vs"`), both with `semanticHighlighting: false`. They define the editor
+background, foreground, line number, selection, and cursor colors; workbench chrome follows the
+UI theme. The extension does not set `workbench.colorTheme`, so the active theme remains the
+user's choice. The standard roots also color under Dark Modern/Light Modern, Dark+/Light+, and the
+One Dark family. Built-in themes may render the pragma name as a generic keyword and direct
+variables as ordinary variables; only the shipped themes guarantee distinct colors for all nine
+F-1 acceptance categories. High-contrast themes are not a target.
+
 ## 3. Language-server contract
 
 ### 3.1 Documents and analysis
@@ -254,10 +303,11 @@ The extension lives at `editors/vscode/`. It is TypeScript bundled by esbuild in
 runs `vsce package --no-dependencies` and writes a `.vsix` next to `package.json`. The VSIX is
 built in CI and attached to the release; no marketplace publication occurs in v2.0.0.
 
-The VSIX contains the manifest, bundled extension, grammar, language configuration, and README. It
-excludes TypeScript sources, tests, build scripts, the lockfile, and the sample workspace
-(`samples/**` in `.vscodeignore`). The compiler and runtime are separate release artifacts; the
-extension resolves `stc` from `stc.path` or `PATH` and never bundles it.
+The VSIX contains the manifest, bundled extension, grammar, language configuration, the two theme
+files under `themes/`, and README. It excludes TypeScript sources, tests, build scripts, the
+lockfile, and the sample workspace (`samples/**` in `.vscodeignore`). The compiler and runtime are
+separate release artifacts; the extension resolves `stc` from `stc.path` or `PATH` and never
+bundles it.
 
 ## 6. Verification
 
@@ -269,9 +319,19 @@ extension resolves `stc` from `stc.path` or `PATH` and never bundles it.
   clang, and cover launch with a first-statement breakpoint, known locals and globals, stepping,
   evaluate, write gating, attach, no-build, and clean teardown. They run through the debug suite
   and require clang there.
-- The extension checks are `npm ci`, `npm run typecheck`, `npm test` (problem-matcher unit tests
-  and TextMate grammar fixtures), and `npm run package`. The Rust grammar coverage test compares
-  the grammar against the lexer keyword and punctuation tables.
+- The extension checks are `npm ci`, `npm run typecheck`, `npm test` (problem-matcher unit tests,
+  theme JSON tests, and TextMate grammar fixtures), and `npm run package`. The theme test checks
+  the contributed themes, required editor colors and token rules, distinct acceptance categories,
+  and the 4.5:1 contrast target. The Rust tests compare the grammar against the lexer keyword and
+  punctuation tables (`grammar_covers_lexer_tables`), check every primitive type name against
+  `support.type.primitives.st` (`primitive_type_keywords_use_primitive_scope`), and check the
+  `stc-sema` prelude function and function-block lists against the built-in scopes
+  (`prelude_names_are_scoped_in_the_vscode_grammar`).
+- The manual highlighting check uses **Developer: Inspect Editor Tokens and Scopes** on the sample
+  workspace and the grammar fixtures, in Dark Modern, Light Modern, `stc Dark`, and `stc Light`,
+  optionally spot-checking One Dark. It records the rendered color and scope stack for the
+  declaration, type, variable/parameter/member, keyword, comment, string, number, pragma,
+  direct-variable, language-constant, and built-in tokens in the release checklist.
 - The phase 6 CI extension job installs the VSIX in a headless `@vscode/test-electron` session,
   activates the extension on the sample workspace, and exercises highlighting, diagnostics,
   definition, completion, formatting, a task, and a launch debug session. The job and its evidence

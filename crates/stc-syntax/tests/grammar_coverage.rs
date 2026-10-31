@@ -44,6 +44,31 @@ fn collect_patterns(value: &Value, patterns: &mut Vec<String>) {
     }
 }
 
+/// Collects `(scope, regex)` pairs for rules that name a whole `match`,
+/// `begin`, or `end` pattern.
+fn collect_scoped_patterns(value: &Value, patterns: &mut Vec<(String, String)>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(name) = map.get("name").and_then(Value::as_str) {
+                for key in ["match", "begin", "end"] {
+                    if let Some(pattern) = map.get(key).and_then(Value::as_str) {
+                        patterns.push((name.to_owned(), pattern.to_owned()));
+                    }
+                }
+            }
+            for child in map.values() {
+                collect_scoped_patterns(child, patterns);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_scoped_patterns(item, patterns);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn is_word_boundary(character: Option<char>) -> bool {
     character.is_none_or(|character| !(character.is_ascii_alphanumeric() || character == '_'))
 }
@@ -106,4 +131,89 @@ fn grammar_covers_lexer_tables() {
         missing.is_empty(),
         "the TextMate grammar is missing punctuation: {missing:?}"
     );
+}
+
+#[test]
+fn primitive_type_keywords_use_primitive_scope() {
+    // Tokenization §3.1: the elementary and generic primitive type names.
+    const PRIMITIVES: &[&str] = &[
+        "BOOL",
+        "SINT",
+        "INT",
+        "DINT",
+        "LINT",
+        "USINT",
+        "UINT",
+        "UDINT",
+        "ULINT",
+        "BYTE",
+        "WORD",
+        "DWORD",
+        "LWORD",
+        "REAL",
+        "LREAL",
+        "TIME",
+        "LTIME",
+        "DATE",
+        "LDATE",
+        "LDATE_AND_TIME",
+        "TIME_OF_DAY",
+        "TOD",
+        "LTOD",
+        "LTIME_OF_DAY",
+        "DATE_AND_TIME",
+        "DT",
+        "LDT",
+        "STRING",
+        "WSTRING",
+        "CHAR",
+        "WCHAR",
+        "ANY",
+        "ANY_DERIVED",
+        "ANY_ELEMENTARY",
+        "ANY_MAGNITUDE",
+        "ANY_NUM",
+        "ANY_REAL",
+        "ANY_INT",
+        "ANY_UNSIGNED",
+        "ANY_SIGNED",
+        "ANY_DURATION",
+        "ANY_BIT",
+        "ANY_CHARS",
+        "ANY_STRING",
+        "ANY_CHAR",
+        "ANY_DATE",
+        "USTRING",
+        "UCHAR",
+    ];
+
+    let path = grammar_path();
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+    let grammar: Value = serde_json::from_str(&text).expect("grammar JSON");
+
+    let mut scoped = Vec::new();
+    collect_scoped_patterns(&grammar, &mut scoped);
+    let primitive_patterns: Vec<String> = scoped
+        .iter()
+        .filter(|(scope, _)| scope == "support.type.primitives.st")
+        .map(|(_, pattern)| pattern.clone())
+        .collect();
+    assert!(
+        !primitive_patterns.is_empty(),
+        "the TextMate grammar has no support.type.primitives.st rule"
+    );
+
+    for primitive in PRIMITIVES {
+        assert!(
+            Keyword::ALL
+                .iter()
+                .any(|keyword| keyword.as_str() == *primitive),
+            "{primitive} is not a lexer keyword"
+        );
+        assert!(
+            contains_word(&primitive_patterns, primitive),
+            "the TextMate grammar is missing the primitive type scope for {primitive}"
+        );
+    }
 }

@@ -455,3 +455,126 @@ pub fn ty_matches_generic(ty: &Ty, generic: GenericKind) -> bool {
         GenericKind::AnyDate => matches!(ty, Ty::Date(_)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use serde_json::Value;
+    use stc_lexer::Keyword;
+
+    use super::{ALL_STD_FNS, STANDARD_FBS, TEST_STD_FNS};
+
+    fn grammar_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root")
+            .join("editors")
+            .join("vscode")
+            .join("syntaxes")
+            .join("st.tmLanguage.json")
+    }
+
+    fn is_word_boundary(character: Option<char>) -> bool {
+        character.is_none_or(|character| !(character.is_ascii_alphanumeric() || character == '_'))
+    }
+
+    /// Returns `true` when `word` appears as a whole alternative, so `ABS`
+    /// inside `ABS_X` does not count.
+    fn contains_word(pattern: &str, word: &str) -> bool {
+        pattern.match_indices(word).any(|(start, _)| {
+            let before = pattern[..start].chars().next_back();
+            let after = pattern[start + word.len()..].chars().next();
+            is_word_boundary(before) && is_word_boundary(after)
+        })
+    }
+
+    /// Collects the regexes of rules whose whole-match name is `scope`.
+    fn collect_scope_patterns(value: &Value, scope: &str, patterns: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                if map.get("name").and_then(Value::as_str) == Some(scope) {
+                    for key in ["match", "begin", "end"] {
+                        if let Some(pattern) = map.get(key).and_then(Value::as_str) {
+                            patterns.push(pattern.to_owned());
+                        }
+                    }
+                }
+                for child in map.values() {
+                    collect_scope_patterns(child, scope, patterns);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_scope_patterns(item, scope, patterns);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The grammar's built-in lists must stay in step with the prelude tables.
+    #[test]
+    fn prelude_names_are_scoped_in_the_vscode_grammar() {
+        let path = grammar_path();
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+        let grammar: Value = serde_json::from_str(&text).expect("grammar JSON");
+
+        let mut function_patterns = Vec::new();
+        collect_scope_patterns(&grammar, "support.function.st", &mut function_patterns);
+        let mut class_patterns = Vec::new();
+        collect_scope_patterns(&grammar, "support.class.st", &mut class_patterns);
+        assert!(
+            !function_patterns.is_empty(),
+            "the TextMate grammar has no support.function.st rule"
+        );
+        assert!(
+            !class_patterns.is_empty(),
+            "the TextMate grammar has no support.class.st rule"
+        );
+
+        let lexer_keywords: Vec<&str> = Keyword::ALL
+            .iter()
+            .map(|keyword| keyword.as_str())
+            .collect();
+
+        for name in ALL_STD_FNS
+            .iter()
+            .chain(TEST_STD_FNS.iter())
+            .map(|kind| kind.as_str())
+        {
+            if lexer_keywords.contains(&name) {
+                continue;
+            }
+            assert!(
+                function_patterns
+                    .iter()
+                    .any(|pattern| contains_word(pattern, name)),
+                "the TextMate grammar is missing support.function.st for {name}"
+            );
+        }
+
+        for name in STANDARD_FBS.iter().map(|spec| spec.0) {
+            if lexer_keywords.contains(&name) {
+                continue;
+            }
+            assert!(
+                class_patterns
+                    .iter()
+                    .any(|pattern| contains_word(pattern, name)),
+                "the TextMate grammar is missing support.class.st for {name}"
+            );
+        }
+
+        for name in ["AND", "OR", "XOR", "NOT", "MOD"] {
+            assert!(
+                !function_patterns
+                    .iter()
+                    .any(|pattern| contains_word(pattern, name)),
+                "{name} is a lexer keyword and must not appear in the support.function alternation"
+            );
+        }
+    }
+}

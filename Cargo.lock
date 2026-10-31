@@ -403,6 +403,7 @@ dependencies = [
 name = "stc-sema"
 version = "1.0.0"
 dependencies = [
+ "serde_json",
  "stc-diag",
  "stc-hir",
  "stc-lexer",

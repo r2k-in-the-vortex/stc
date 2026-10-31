@@ -794,6 +794,8 @@ jobs:
             extension/dist/extension.js \
             extension/syntaxes/st.tmLanguage.json \
             extension/language-configuration.json \
+            extension/themes/stc-dark-color-theme.json \
+            extension/themes/stc-light-color-theme.json \
             extension/readme.md; do
             if ! unzip -l "$archive" | grep -qF "$required"; then
               echo "::error::the VSIX is missing $required"

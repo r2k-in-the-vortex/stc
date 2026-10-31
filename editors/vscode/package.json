@@ -45,6 +45,18 @@
         "path": "./syntaxes/st.tmLanguage.json"
       }
     ],
+    "themes": [
+      {
+        "label": "stc Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/stc-dark-color-theme.json"
+      },
+      {
+        "label": "stc Light",
+        "uiTheme": "vs",
+        "path": "./themes/stc-light-color-theme.json"
+      }
+    ],
     "breakpoints": [
       {
         "language": "st"

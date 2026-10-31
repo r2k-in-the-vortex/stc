@@ -127,7 +127,7 @@ sign-off above; record evidence here for the v2.0.0 release.
 | --- | --- | --- | --- |
 | 1 | Extension toolchain | `cd editors/vscode && npm ci && npm run typecheck && npm test` | `[ ]` |
 | 2 | VSIX artifact | `npm run package` produces `stc-vscode-<version>.vsix`; CI uploads it and the release attaches it | `[ ]` |
-| 3 | VSIX contents | `samples/**`, `src/**`, `test/**`, TypeScript config, and build scripts are absent; grammar, language configuration, bundled extension, and README are present | `[ ]` |
+| 3 | VSIX contents | `samples/**`, `src/**`, `test/**`, TypeScript config, and build scripts are absent; grammar, language configuration, bundled extension, both theme files under `themes/`, and README are present | `[ ]` |
 | 4 | Compiler discovery | Install the VSIX against a packaged `stc`; confirm `stc.path` and `PATH` both work and a missing compiler is reported without a modal error | `[ ]` |
 | 5 | Headless smoke | `@vscode/test-electron` installs the VSIX on the sample workspace, activates the extension, and exercises highlighting, diagnostics, definition, completion, formatting, a task, and a launch debug session; CI run ID and result recorded | `[ ]` |
 | 6 | Manual in-editor pass (Windows) | Install the VSIX, open `editors/vscode/samples/workspace`, and run the checks below | `[ ]` |
@@ -136,6 +136,11 @@ sign-off above; record evidence here for the v2.0.0 release.
 Manual in-editor checks for items 6 and 7:
 
 - [ ] Syntax highlighting, comment toggling, and bracket behavior on `src/main.st`.
+- [ ] **Developer: Inspect Editor Tokens and Scopes** matrix on the sample and grammar fixtures
+      (declaration, type, variable/parameter/member, keyword, comment, string, number, pragma,
+      direct variable, language constant, built-in) in **Dark Modern**, **Light Modern**,
+      `stc Dark`, and `stc Light`, with One Dark as an optional spot-check. Each acceptance
+      category is distinct in the shipped themes, and every role meets the 4.5:1 contrast target.
 - [ ] The Problems panel shows no diagnostics for the clean sample; introducing a syntax error
       produces compiler diagnostics and fixing it clears them.
 - [ ] Document symbols, go-to-definition from `AddStep` to the function, references across

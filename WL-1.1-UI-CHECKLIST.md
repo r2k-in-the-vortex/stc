@@ -35,6 +35,16 @@ required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan
        numbers/durations, pragmas, direct variables, and operators are scoped. The palette is
        dominated by red and white with the current theme; scope and color-scheme polish is
        recorded as follow-up **F-1**, not a manual-pass failure.
+       F-1 implementation (2026-10-31) adds the semantic scope families and the `stc Dark`/`stc
+       Light` themes. Expected scopes for this workspace are in
+       [F-1](#follow-ups-discovered-during-verification) and the sample README: declaration names
+       `entity.name.function.st`/`entity.name.type.st`, primitives
+       `support.type.primitives.st`, variables `variable.name.st`, parameters
+       `variable.parameter.st`, members `variable.other.member.st`, control keywords
+       `keyword.control.*`, built-ins `support.function.st`/`support.class.st`, and pragma names
+       `keyword.other.pragma.st`. The manual **Developer: Inspect Editor Tokens and Scopes**
+       color matrix in Dark Modern, Light Modern, `stc Dark`, and `stc Light` remains pending; the
+       scope taxonomy and themes are covered by automated tests but not by a UI inspection.
 2. [x] **Comment toggling** — pass 2026-10-30. Line toggle via `Ctrl+ä` (VS Code's binding for
        this Estonian layout; inserts/toggles `//`), multi-line toggle on lines 39–42, block
        comment via `Shift+Alt+A` (`(* ... *)`), and nested block-comment highlighting all pass.
@@ -250,6 +260,13 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       keyword/type/declaration/variable/comment/string/number/pragma/direct-variable colors in a
       standard dark and a standard light theme, verified with **Developer: Inspect Editor Tokens
       and Scopes**.
+      **Implementation and automated tests complete 2026-10-31; manual verification pending.**
+      The grammar emits the standard scopes above (plus `variable.language.st` for `THIS`/`SUPER`
+      and `support.class.st` for standard function blocks); `stc Dark`/`stc Light` ship in
+      `editors/vscode/themes/`; `npm test` includes the theme and grammar tests, and
+      `cargo test -p stc-syntax -p stc-sema` includes the primitive and prelude drift tests.
+      Acceptance stays open until the Inspect Tokens matrix and rendered colors are recorded in
+      Dark Modern, Light Modern, `stc Dark`, and `stc Light` (evidence table: plan §6.3).
 
 - [x] **F-2 — Make the sample `stc: run` task debuggable.** Pass 2026-10-30: the task passes
       `--debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` (relative to the task
@@ -409,7 +426,7 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 | 0.2 | Pass | Release path; binary 09:09, server PID 35220 started 09:16; end-of-word definition verified |
 | 0.3 | Pass | Sample workspace opened; `src/main.st` active |
 | 0.4 | Pass | Server serving; language mode Structured Text; Problems empty |
-| 1 | Pass | Scopes correct; poor palette recorded as follow-up F-1 |
+| 1 | Pass (scopes) | Scopes correct; poor palette recorded as follow-up F-1. F-1 scopes/themes implemented 2026-10-31; manual color matrix pending |
 | 2 | Pass | Line/multi-line/block/nested comment toggling; layout shortcut is `Ctrl+ä` |
 | 3 | Pass | Auto-close, comment/string suppression, bracket matching, surrounding pairs |
 | 4 | Pass | Format normalizes spacing/indentation; idempotent; no extra undo step |
@@ -464,4 +481,4 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 | F-18 | Pending | No per-test run control (Testing view/code lens) in VS Code |
 | F-19 | Pending | `textDocument/rename` not exposed; F2 is silent in the IDE |
 | F-20 | Pending | Online change not exposed in the IDE |
-| F-1 | Pending | Highlighting scope/color follow-up recorded |
+| F-1 | Pending (implementation/tests done) | Scope families, `stc Dark`/`stc Light`, and automated grammar/theme/prelude tests complete 2026-10-31; Inspect Tokens color matrix in both built-in and shipped themes still pending |
