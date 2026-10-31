@@ -2150,6 +2150,64 @@ fact, the head frame's instructions are replaced without disturbing the invarian
 `callFunction` and the three `irStepRet` forms, together with the `storeValue` frame/storage
 updates inside the store step, remain; Phases 2–3 remain as inventoried below.
 
+**Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
+frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
+obligations that the approved fact set does not discharge. No invariant change was applied;
+the compiling checkpoints are `b2fefde` (`wfState_status`), `d214201` (`wfState_withHead`), and
+`8fe020f` (`wfState_withHeadInstrs`). The six obligations, each with the failing step, are:
+
+1. **`ReturnLink` covers only the head pair.** `ReturnLink c` constrains only the first two
+   frames (`∀ callee caller rest, c.frames = callee :: caller :: rest → ...`). At `irStepRet`
+   with `c.frames = callee :: caller :: below`, the successor's head pair is
+   `(caller, below.head)`, which `ReturnLink c` does not record (it records `(callee, caller)`);
+   a call step likewise cannot preserve the pre-existing `(caller, below.head)` pair while the
+   callee is pushed. Proposed extension: the all-adjacent-pairs form
+   `∀ prefix callee caller suffix, c.frames = prefix ++ callee :: caller :: suffix → ...`.
+   Calls establish the new head pair from the call typing and leave the other pairs unchanged;
+   returns restore a pair that was already present in the pre-state.
+2. **Storage-domain liveness.** `StoragePtrsLive`/`StorageValuesLive` require every storage
+   pointer to address a live entry, but nothing guarantees entries exist: (a) a `.cell` load of
+   a `Data`/`Direct` slot yields `.ptr (.root slot 0)` in a local (`ir_got_sound`), yet
+   `lookupStorage (.root slot)` need not exist; (b) a `.symbol g` value is `.ptr (.global g 0)`,
+   and storing it to `.root`/`.global`, passing it as a call argument, or returning it puts it in
+   a local or in storage, requiring `lookupStorage (.global g)` to be non-empty. Proposed
+   extension: a state-level `StorageDomain` field (every `Data`/`Direct` slot root has a
+   non-empty entry; every module global referenced by `fn.facts.symbolRefs` has a non-empty
+   entry), host-supplied at `initState?_wf` and preserved because `writeStorage` preserves keys
+   and lengths and no step removes storage ids.
+3. **`SlotsGlobalReadOnly` is static only.** The state has no fact connecting an executed
+   store's `.global g` address to `fn.facts.memoryGlobals`, so a `StorageValuesLive`-admitted
+   pointer loaded from storage can target a slot global and overwrite its offset-0 entry,
+   breaking `SlotsGlobalStored` and then `SlotsBase`. Proposed resolutions: exclude pointers to
+   `SlotGlobalNames` from storage values and locals (dynamic exclusion facts) together with the
+   syntactic `.symbol`-store exclusion, or narrow the covered fragment to exclude stores through
+   dynamically obtained global pointers.
+4. **Alloca element representability.** `initAllocMem` fills array cells with
+   `IRValue.default elem`, and `MemTyped` requires `v.type? = some elem`, i.e.
+   `default_type?` needs `elem.isRepresentable`. `Instr.WellTyped` admits any `ty.isValue =
+   true`, which includes `.array .void n` and nested arrays, for which `IRValue.default elem`
+   is not `MemValueTyped`. Proposed extension: a builder-trusted `WFProgram` fact that every
+   alloca element type is representable (or a strengthened P0.4 alloca rule).
+5. **Origin `.global g` runtime/base link.** `OriginsTrusted`'s `.global _` case checks only
+   that the defining instruction is a GEP; `OriginHolds` requires the value to be
+   `.ptr (.global g off)` with `g ∈ contract.localGlobals`. Nothing ties the recorded `g` to the
+   GEP's base value or to `contract.localGlobals`. Proposed extension: require a `.symbol g`
+   base (or a same-global GEP chain) in `OriginsTrusted`, plus a contract-membership fact for
+   recorded origin globals.
+6. **`.cell slot false` origin for descriptor slots.** The `.slotEntry` load yields
+   `.ptr (.cell slot)` for any in-range slot, but `OriginHolds` requires the slot kind to be
+   storage or callable; a descriptor slot (neither) satisfies every current fact, so the
+   load's destination local breaks `originsMatch`. Proposed extension: extend the
+   builder-trusted slot-kind facts to `.cell slot false` origin slots
+   (`kind.isStorage = true ∨ kind.isCallable = true`).
+
+Items 1–3, 5, and 6 extend `WFState`/`WFProgram`/`originsTrusted` and item 2 changes
+`initState?_wf`'s host hypotheses; item 4 extends `WFProgram`. They extend, not trim, the
+approved invariant, but they change structures and proofs the owner has already approved, so
+they are recorded here for owner approval before implementation. The `callFunction` and
+`irStepRet` frame-shape and typing obligations are otherwise the ones inventoried below; the
+only blockers are these facts.
+
 **`irStep_wf` proof inventory (2026-10-31).** The remaining induction is a proof-engineering
 pass, not a design gap. The `.step` outcomes reduce to five state-update forms:
 
