@@ -2610,6 +2610,50 @@ theorem stepValue_forStep_preserves {u : HirUnit} {c c' : State} {f : Frame}
   exact forContinue_preserves hc hf hvar hint hstop ⟨hvwf, hvy⟩
     hbody hrest hloop hs
 
+/-- A value transition preserves configuration typing. -/
+theorem stepValue_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
+    {fr : List Frame} {v : Value}
+    (hunit : HasType u env) (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hval : FocusTyped u f (.value v))
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  rcases hval with ⟨hvwf, T, hty, hstack⟩
+  have hne : f.k ≠ [] := StackTyped.value_ne_nil hstack
+  cases hk : f.k with
+  | nil => exact absurd hk hne
+  | cons cont k =>
+      rw [hk] at hstack
+      cases hstack with
+      | assign hlookup hrest =>
+          exact stepValue_assign_preserves hc hf hk hvwf hty hlookup hrest hs
+      | unary hop hrest =>
+          exact stepValue_unary_preserves hc hf hk hvwf hty hop hrest hs
+      | binaryL hrhs hop hres hrest =>
+          exact stepValue_binaryL_preserves hc hf hk hvwf hty hrhs hop hres hrest hs
+      | binaryR hlhs hlt hop hres hrest =>
+          exact stepValue_binaryR_preserves hc hf hk hlhs hlt hvwf hty hop hres hrest hs
+      | cast hconv hcore hrest =>
+          exact stepValue_cast_preserves hc hf hk hvwf hty hconv hcore hrest hs
+      | callArgs hrem htyped hdone hsig hresult hrest =>
+          exact stepValue_callArgs_preserves hunit hc hf hk hrem htyped hdone hsig hresult
+            hrest hvwf hty hs
+      | ifCond harms helse hrest =>
+          exact stepValue_ifCond_preserves hc hf hk harms helse hrest hs
+      | caseSel hsel hint hlabels hbodies helse hrest =>
+          exact stepValue_caseSel_preserves hc hf hk hbodies helse hrest hs
+      | whileCond hcond hbody hrest =>
+          exact stepValue_whileCond_preserves hc hf hk hcond hbody hrest hs
+      | repeatCond hcond hbody hrest =>
+          exact stepValue_repeatCond_preserves hc hf hk hcond hbody hrest hs
+      | forInit hvar hint hnot hstop hstep hzero hbody hrest =>
+          exact stepValue_forInit_preserves hc hf hk hvar hint hnot hstop hstep hzero hbody
+            hrest hvwf hty hs
+      | forStop hvar hint hnot hstep hzero hbody hrest =>
+          exact stepValue_forStop_preserves hc hf hk hvar hint hnot hstep hzero hbody hrest
+            hvwf hty hs
+      | forStep hvar hint hnot hstop hbody hrest =>
+          exact stepValue_forStep_preserves hc hf hk hvar hint hnot hstop hbody hrest
+            hvwf hty hs
+
 /-- A frame completion preserves configuration typing. -/
 theorem completeFrame_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
     {rest : List Frame} (hunit : HasType u env) (hc : ConfigTyped u c)
