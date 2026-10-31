@@ -131,7 +131,9 @@ UI theme. The extension does not set `workbench.colorTheme`, so the active theme
 user's choice. The standard roots also color under Dark Modern/Light Modern, Dark+/Light+, and the
 One Dark family. Built-in themes may render the pragma name as a generic keyword and direct
 variables as ordinary variables; only the shipped themes guarantee distinct colors for all nine
-F-1 acceptance categories. High-contrast themes are not a target.
+F-1 acceptance categories. High-contrast themes are not a target. F-1.1 is required for WL-1.1:
+an opt-out `.st` token-color overlay for Default Dark Modern and Default Light Modern, so
+distinct ST colors do not require selecting a contributed theme.
 
 ## 3. Language-server contract
 

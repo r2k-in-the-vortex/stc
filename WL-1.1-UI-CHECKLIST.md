@@ -241,10 +241,12 @@ required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan
         adapter also rejects it if sent directly. None of the unsupported actions silently
         applies a false result.
 
-## Follow-ups discovered during verification
+## Findings and close-out status
 
-The close-out triage (required for WL-1.1, documented as unsupported, or deferred to a separate
-plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
+Completed findings are feature history, not open follow-ups. The close-out triage is in
+[WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
+
+### Completed features and resolved findings
 
 - [x] **F-1 — Highlighting scope and color scheme.** Complete 2026-10-31 (owner-confirmed);
       required for WL-1.1 (plan §12.1). The grammar's scopes are correct for the tested tokens
@@ -266,7 +268,8 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       `cargo test -p stc-syntax -p stc-sema` includes the primitive and prelude drift tests.
       Commits `ee242ce`/`695b296`; CI run `41163217237` is green. The owner accepted the manual
       color check in Dark Modern, Light Modern, `stc Dark`, and `stc Light` on 2026-10-31
-      (evidence: the sample README's highlighting check and IDE-Integration §2.1/§6).
+      (evidence: the sample README's highlighting check and IDE-Integration §2.1/§6). F-1.1 is
+      required for WL-1.1 (plan §12.1); `stc Dark`/`stc Light` remain explicit alternatives.
 
 - [x] **F-2 — Make the sample `stc: run` task debuggable.** Pass 2026-10-30: the task passes
       `--debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` (relative to the task
@@ -274,25 +277,17 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       the host running. If a user-defined task needs a variable in `args`, the provider should
       also expand `${workspaceFolder}` there.
 
-- [x] **F-5 — Debug stops open a `\\?\` source tab.** Fixed 2026-10-30 and retested: `stc-dap`
-      normalizes absolute source paths (package entries and the `sourceRoot` override) before
-      emitting DAP `Source.path`; a breakpoint stop now uses the normal tab and does not open a
-      second `\\?\` tab. A regression test covers both branches.
-
-- [ ] **F-6 — Removing a breakpoint does not remove it from the running session.** Clearing the
-      breakpoint in the editor/Breakpoints panel updates the visual list, but the debug session
-      still stops at the removed location. Investigate the DAP `setBreakpoints` reconciliation:
-      the adapter must clear the previous host `breakpoint_id`s for the source even when the new
-      list is empty, and must use one path key for the normal and verbatim spellings. Acceptance:
-      remove a breakpoint while running or stopped; the session no longer stops there; re-adding
-      it works without restarting.
-
 - [x] **F-4 — Reusable fixed debug endpoint.** Fixed 2026-10-30 in the driver and retested:
       `stc run --debug-server --debug-endpoint` and `stc debug --endpoint` remove a validated
       stale `stc-debug/1` endpoint and rotate a valid stale audit log to
       `<base>.audit.<nanos>.jsonl` before launching. A non-debug endpoint or non-audit file is
       refused and preserved. Unit tests cover removal, audit-only rotation, and the foreign-file
       refusal; a second run and attach now work.
+
+- [x] **F-5 — Debug stops open a `\\?\` source tab.** Fixed 2026-10-30 and retested: `stc-dap`
+      normalizes absolute source paths (package entries and the `sourceRoot` override) before
+      emitting DAP `Source.path`; a breakpoint stop now uses the normal tab and does not open a
+      second `\\?\` tab. A regression test covers both branches.
 
 - [x] **F-7 — Direct FB interface member access contradicted the call form.** Fixed 2026-10-30
       by D-211. Before the fix, `fb.in := x` and `x := fb.out` were rejected with
@@ -317,39 +312,6 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       over the path. Covered by the `adapter.rs` layout tests, `value.rs` view tests, and the
       `sample_workspace_launch_reads_known_values_and_steps` DAP test.
 
-- [ ] **F-11 — Caller stack frames have no source location.** The top frame carries the
-      checkpoint's `file`/`line`/`column`, but `capture_frames` sets `source: None` for every
-      caller. The frame sidecar has function ranges and locals but no address-to-source mapping,
-      so a caller such as `MAIN` shows "Unknown Source" while stopped in `ADDSTEP` until the
-      session returns. Fixing this needs a line/address table in the debug metadata (or a
-      sidecar call-site map) and runtime resolution of the return address. Acceptance: the
-      caller frame shows the call-site file and line (for the sample, `src/main.st:39`) at any
-      depth.
-
-- [ ] **F-12 — Unknown host frames appear as `frame` entries.** The frame-pointer walk continues
-      past the ST program into the launcher/host, producing frames with no symbol/source that
-      the adapter labels `frame` (two in the sample). The runtime reports them honestly as
-      `optimized_out:true`, so this is a presentation choice: stop the walk at the first address
-      outside the manifest function ranges, or filter/label non-ST frames in `stc-dap`.
-      Acceptance: the Call Stack lists only resolved ST frames for a sample stop.
-
-- [ ] **F-13 — Locals is empty for program and FB body frames.** `Locals` lists only
-      `frame.locals`; program/FB fields are instance roots and appear under `Globals`, so a stop
-      in `Main` or an FB body shows an empty Locals scope even though that frame's state is
-      visible one scope up. Consider mirroring the frame's instance fields in `Locals` (which
-      needs a frame-to-instance mapping when several instances exist) or documenting the split
-      in the IDE spec/sample README. Acceptance: a stop in a program/FB body shows its fields
-      in a discoverable place without switching scopes blindly.
-
-- [ ] **F-9 — A launch with a breakpoint must stop on the first cycle.** Currently the host starts
-      its cycle loop before `session.start` and `breakpoint.set` complete, so 1–2 cycles run
-      first and the first stop observes `TOTAL = 2`/`sum = 2`/`cycles = 2` instead of the cycle-0
-      values. The sample README documents the value caveat, and `stopOnEntry` is rejected with no
-      start-paused mode. Fixing this needs a protocol/runtime change (start the host paused until
-      the session has bound breakpoints and resumed). Acceptance: the first stop at line 39
-      observes `TOTAL = 0`, `sum = 0`, `cycles = 0` (or the values written by the first cycle only
-      after the breakpoint is bound).
-
 - [x] **F-10 — The pause timeout was a silent default.** Respecified by D-212 on 2026-10-31:
       `[debug].session-timeout` is opt-in and disabled by default; when configured, expiry still
       emits `STC-E-DEBUG-018`, clears session state, and resumes the cycle. An automatic resume
@@ -357,53 +319,6 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       optional session-start budget/warning message is part of the F-15 session-status polish
       plan. Manifest, runtime, CLI, host ABI, and specifications updated; tests cover the default
       and explicit zero.
-
-- [ ] **F-14 — `setVariable` shows the queued value before the program applies it.** With writes
-      enabled, editing `INCREMENT` displays the new value immediately, but the host applies the
-      write at the next cycle boundary (Debug and Monitoring §15.3). Stepping through the current
-      cycle reads the stored value again, and the new value appears after the boundary. This is
-      the documented queue behavior, but the UI has no pending indicator, so the temporary revert
-      looks like a lost write. Consider reading back the stored value until the queue applies
-      (with a pending marker) or flushing queued writes when a stopped cycle resumes. Acceptance:
-      the displayed value and the program's value agree, or the UI clearly marks the value as
-      queued.
-
-- [ ] **F-15 — Terminating a launch session gives no Debug Console report.** `Shift+F5` ends the
-      session and the launch-owned host exits, but the Debug Console prints no terminated/exited
-      text, so the stop is silent unless the Debug toolbar disappears. Consider emitting an
-      output event or relying on VS Code's session-ended indication. Acceptance: stopping a
-      session leaves a clear line in the Debug Console.
-
-- [ ] **F-16 — Release monitoring has no IDE surface.** Required for WL-1.1; implementation chosen (plan §12.1). With `"release": true`, the session
-      starts and warns that stopped-frame information is unavailable, but `stackTrace` fails
-      (`STC-E-DEBUG-017`), so `scopes`/`variables` have no frame, Variables shows no Globals, and
-      Watch expressions stay unavailable; `pause` fails with `STC-E-DEBUG-014`. Typed monitoring
-      reads do work while running (`stc debug --release` read `INCREMENT = 1` via `var.read`, and
-      the Debug Console can evaluate target names), but the IDE exposes no monitoring view.
-      Provide a surface — a synthetic running/monitoring frame with the Globals scope, a polling
-      monitor view, or documented Debug-Console-only reads — and make the session-start message
-      name the available monitoring path. Acceptance: a release session can observe globals from
-      the IDE without breakpoints.
-
-- [ ] **F-17 — No way to debug a test.** The launch configuration builds and runs the project,
-      not a `{stc:test}` POU; there is no launch configuration, command, or code lens to start a
-      per-test artifact under the debugger. Consider a `stc: Debug test` configuration that
-      builds the selected test and starts the test host with a debug server, or a Testing-API
-      integration with a Debug Test action. Acceptance: a test in `tests/smoke.st` can be
-      debugged with breakpoints and locals.
-
-- [ ] **F-18 — No per-test run control in VS Code.** `stc: test` runs the whole test source set
-      through a task; the editor offers no Testing view, gutter/code-lens, or per-test command to
-      run `AccumulatorWorks` or `AddStepWorks` individually. Consider a VS Code Testing API
-      provider backed by `stc test` JSON results, with Run and Debug actions. Acceptance: an
-      individual `{stc:test}` POU can be run (and later debugged) from the editor.
-
-- [ ] **F-19 — Rename is not exposed in the IDE.** F2 does nothing and prints no message, while
-      the compiler/runtime already carry rename history and online-change rename tracking. Add
-      `textDocument/prepareRename`/`textDocument/rename` to `stc-lsp` backed by the reference
-      resolution (and rename history where relevant), so VS Code offers a symbol rename.
-      Acceptance: F2 on a field/function renames all references, and unsupported cases fail with
-      a clear message.
 
 - [x] **F-20 — Online change is not exposed in the IDE.** Required for WL-1.1 (plan §12.1).
       The compiler/runtime implement online
@@ -426,13 +341,20 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       at generation 2, a saved edit deployed generation 3, and the session ended with
       `STC-E-DEBUG-019`; the owner reports the workflow works.
 
-- [ ] **F-21 — Decouple online change from the file watch for an always-on runtime (deferred).**
-      F-20's local workflow starts `stc run --watch` and deploys on every saved edit. The expected
-      operating model is an always-on PLC runtime in the background (remote after v2.0.0), where
-      online change is not coupled to a file watcher. When the user attaches a debug session and
-      the source has changed, the IDE should offer an explicit choice between a cold download and
-      an online change (with cancel). Recorded as deferred in plan §12.3 and the WL-1.2 remote
-      workflow; not part of WL-1.1.
+### Required for WL-1.1
+
+These items are open and required for WL-1.1 (plan §12.1); F-1.1 is an implementation task, while
+F-3, F-6, F-12, and F-16 are close-out fixes.
+
+- [ ] **F-1.1 — Default-theme ST token-color overlay.** Required for WL-1.1 (plan §12.1).
+      F-1 ships `stc Dark`/`stc Light`, so the intended palette requires selecting a contributed
+      theme. Add an opt-out overlay through `editor.tokenColorCustomizations` (extension-provided
+      defaults or a documented setting) keyed for Default Dark Modern and Default Light Modern,
+      with `.st` scope rules; keep the contributed themes as explicit alternatives. Acceptance,
+      owner approved 2026-10-31: with no contributed theme selected, ST tokens render distinctly
+      in Default Dark Modern and Default Light Modern when the extension's ST token-color overlay
+      is active; the overlay targets `.st` scopes, leaves other languages unchanged, and is
+      documented and opt-out. Implementation pending.
 
 - [ ] **F-3 — Stop the `stc: run` task's process tree.** Terminating the VS Code task kills the
       shell but leaves `stc run` and the launcher (`sample.exe`) running. Make task termination
@@ -441,7 +363,114 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       terminating the task, `Get-Process stc,sample` shows no run driver or host; the language
       server may remain.
 
+- [ ] **F-6 — Removing a breakpoint does not remove it from the running session.** Clearing the
+      breakpoint in the editor/Breakpoints panel updates the visual list, but the debug session
+      still stops at the removed location. Investigate the DAP `setBreakpoints` reconciliation:
+      the adapter must clear the previous host `breakpoint_id`s for the source even when the new
+      list is empty, and must use one path key for the normal and verbatim spellings. Acceptance:
+      remove a breakpoint while running or stopped; the session no longer stops there; re-adding
+      it works without restarting.
+
+- [ ] **F-12 — Unknown host frames appear as `frame` entries.** The frame-pointer walk continues
+      past the ST program into the launcher/host, producing frames with no symbol/source that
+      the adapter labels `frame` (two in the sample). The runtime reports them honestly as
+      `optimized_out:true`, so this is a presentation choice: stop the walk at the first address
+      outside the manifest function ranges, or filter/label non-ST frames in `stc-dap`.
+      Acceptance: the Call Stack lists only resolved ST frames for a sample stop.
+
+- [ ] **F-16 — Release monitoring has no IDE surface.** Required for WL-1.1; implementation chosen (plan §12.1). With `"release": true`, the session
+      starts and warns that stopped-frame information is unavailable, but `stackTrace` fails
+      (`STC-E-DEBUG-017`), so `scopes`/`variables` have no frame, Variables shows no Globals, and
+      Watch expressions stay unavailable; `pause` fails with `STC-E-DEBUG-014`. Typed monitoring
+      reads do work while running (`stc debug --release` read `INCREMENT = 1` via `var.read`, and
+      the Debug Console can evaluate target names), but the IDE exposes no monitoring view.
+      Provide a surface — a synthetic running/monitoring frame with the Globals scope, a polling
+      monitor view, or documented Debug-Console-only reads — and make the session-start message
+      name the available monitoring path. Acceptance: a release session can observe globals from
+      the IDE without breakpoints.
+
+### Deferred follow-ups
+
+These items belong to separate follow-up plans (plan §12.3); they are not required for WL-1.1.
+
+- [ ] **F-9 — A launch with a breakpoint must stop on the first cycle.** Currently the host starts
+      its cycle loop before `session.start` and `breakpoint.set` complete, so 1–2 cycles run
+      first and the first stop observes `TOTAL = 2`/`sum = 2`/`cycles = 2` instead of the cycle-0
+      values. The sample README documents the value caveat, and `stopOnEntry` is rejected with no
+      start-paused mode. Fixing this needs a protocol/runtime change (start the host paused until
+      the session has bound breakpoints and resumed). Acceptance: the first stop at line 39
+      observes `TOTAL = 0`, `sum = 0`, `cycles = 0` (or the values written by the first cycle only
+      after the breakpoint is bound).
+
+- [ ] **F-15 — Terminating a launch session gives no Debug Console report.** `Shift+F5` ends the
+      session and the launch-owned host exits, but the Debug Console prints no terminated/exited
+      text, so the stop is silent unless the Debug toolbar disappears. Consider emitting an
+      output event or relying on VS Code's session-ended indication. Acceptance: stopping a
+      session leaves a clear line in the Debug Console.
+
+- [ ] **F-17 — No way to debug a test.** The launch configuration builds and runs the project,
+      not a `{stc:test}` POU; there is no launch configuration, command, or code lens to start a
+      per-test artifact under the debugger. Consider a `stc: Debug test` configuration that
+      builds the selected test and starts the test host with a debug server, or a Testing-API
+      integration with a Debug Test action. Acceptance: a test in `tests/smoke.st` can be
+      debugged with breakpoints and locals.
+
+- [ ] **F-18 — No per-test run control in VS Code.** `stc: test` runs the whole test source set
+      through a task; the editor offers no Testing view, gutter/code-lens, or per-test command to
+      run `AccumulatorWorks` or `AddStepWorks` individually. Consider a VS Code Testing API
+      provider backed by `stc test` JSON results, with Run and Debug actions. Acceptance: an
+      individual `{stc:test}` POU can be run (and later debugged) from the editor.
+
+- [ ] **F-19 — Rename is not exposed in the IDE.** F2 does nothing and prints no message, while
+      the compiler/runtime already carry rename history and online-change rename tracking. Add
+      `textDocument/prepareRename`/`textDocument/rename` to `stc-lsp` backed by the reference
+      resolution (and rename history where relevant), so VS Code offers a symbol rename.
+      Acceptance: F2 on a field/function renames all references, and unsupported cases fail with
+      a clear message.
+
+- [ ] **F-21 — Decouple online change from the file watch for an always-on runtime (deferred).**
+      F-20's local workflow starts `stc run --watch` and deploys on every saved edit. The expected
+      operating model is an always-on PLC runtime in the background (remote after v2.0.0), where
+      online change is not coupled to a file watcher. When the user attaches a debug session and
+      the source has changed, the IDE should offer an explicit choice between a cold download and
+      an online change (with cancel). Recorded as deferred in plan §12.3 and the WL-1.2 remote
+      workflow; not part of WL-1.1.
+
+### Documented limitations
+
+These items are accepted limitations or deliberate design (plan §12.2); they require documentation,
+not a WL-1.1 code change.
+
+- [ ] **F-11 — Caller stack frames have no source location.** The top frame carries the
+      checkpoint's `file`/`line`/`column`, but `capture_frames` sets `source: None` for every
+      caller. The frame sidecar has function ranges and locals but no address-to-source mapping,
+      so a caller such as `MAIN` shows "Unknown Source" while stopped in `ADDSTEP` until the
+      session returns. Fixing this needs a line/address table in the debug metadata (or a
+      sidecar call-site map) and runtime resolution of the return address. Acceptance: the
+      caller frame shows the call-site file and line (for the sample, `src/main.st:39`) at any
+      depth.
+
+- [ ] **F-13 — Locals is empty for program and FB body frames.** `Locals` lists only
+      `frame.locals`; program/FB fields are instance roots and appear under `Globals`, so a stop
+      in `Main` or an FB body shows an empty Locals scope even though that frame's state is
+      visible one scope up. Consider mirroring the frame's instance fields in `Locals` (which
+      needs a frame-to-instance mapping when several instances exist) or documenting the split
+      in the IDE spec/sample README. Acceptance: a stop in a program/FB body shows its fields
+      in a discoverable place without switching scopes blindly.
+
+- [ ] **F-14 — `setVariable` shows the queued value before the program applies it.** With writes
+      enabled, editing `INCREMENT` displays the new value immediately, but the host applies the
+      write at the next cycle boundary (Debug and Monitoring §15.3). Stepping through the current
+      cycle reads the stored value again, and the new value appears after the boundary. This is
+      the documented queue behavior, but the UI has no pending indicator, so the temporary revert
+      looks like a lost write. Consider reading back the stored value until the queue applies
+      (with a pending marker) or flushing queued writes when a stopped cycle resumes. Acceptance:
+      the displayed value and the program's value agree, or the UI clearly marks the value as
+      queued.
+
 ## Results log
+
+### Checklist items
 
 | Item | Result | Notes |
 | --- | --- | --- |
@@ -485,24 +514,45 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 | 34 | Pass | Non-safety notice shown verbatim at every session start; no safety claims in the UI |
 | 35 | Pass | Local schema only; `stc lsp` is stdio with no TCP listeners; endpoint files are local |
 | 36 | Pass | Unsupported actions absent or honestly rejected; restart is a client relaunch |
+
+### Completed features
+
+| Item | Result | Notes |
+| --- | --- | --- |
+| F-1 | Pass | Complete 2026-10-31 (owner-confirmed): scope families, `stc Dark`/`stc Light`, automated grammar/theme/prelude tests, and manual color check |
 | F-2 | Pass | Run task is debuggable; attach connects |
-| F-3 | Pending | Task termination does not stop the driver/host process tree |
 | F-4 | Pass | Second debug-server run and attach work; audit rotated |
 | F-5 | Pass | Breakpoint stop uses the normal tab; no second `\\?\` tab |
-| F-6 | Pending | Removing a breakpoint does not remove it from the running session |
 | F-7 | Pass | FB interface member access now matches the call form (D-211); sample checks cleanly |
 | F-8 | Pass | Globals exposes FB fields and expands manifest-assisted views; UI retest passes |
-| F-9 | Pending | First stop is 1–2 cycles late; launch-with-breakpoint must stop on cycle 0 |
 | F-10 | Pass (respecified) | Timeout is opt-in and disabled by default (D-212); explicit bounds still end the session |
-| F-11 | Pending | Caller frames lose file/line while stopped in a callee |
+| F-20 | Pass | Manual 2026-10-31: start at gen 1, attach at gen 2, saved edit deployed gen 3, session ended with `STC-E-DEBUG-019`; commands/status/channel/swap evidence; commit `fd8c69e`, CI `41201150443` green |
+
+### Required items
+
+| Item | Result | Notes |
+| --- | --- | --- |
+| F-1.1 | Required; pending | Default-theme ST token overlay; acceptance wording owner-approved 2026-10-31; plan §12.1 |
+| F-3 | Pending | Task termination does not stop the driver/host process tree |
+| F-6 | Pending | Removing a breakpoint does not remove it from the running session |
 | F-12 | Pending | Unknown host frames appear as `frame`/Unknown Source |
-| F-13 | Pending | Locals is empty for program/FB bodies; fields live in Globals |
-| F-14 | Pending | `setVariable` shows the queued value before the program applies it at the next boundary |
-| F-15 | Pending | Terminating a launch session is silent in the Debug Console |
 | F-16 | Pending | Release monitoring has no IDE surface; typed reads work only over the wire |
+
+### Deferred follow-ups
+
+| Item | Result | Notes |
+| --- | --- | --- |
+| F-9 | Pending | First stop is 1–2 cycles late; launch-with-breakpoint must stop on cycle 0 |
+| F-15 | Pending | Terminating a launch session is silent in the Debug Console |
 | F-17 | Pending | No way to debug a `{stc:test}` POU |
 | F-18 | Pending | No per-test run control (Testing view/code lens) in VS Code |
 | F-19 | Pending | `textDocument/rename` not exposed; F2 is silent in the IDE |
-| F-20 | Pass | Manual 2026-10-31: start at gen 1, attach at gen 2, saved edit deployed gen 3, session ended with `STC-E-DEBUG-019`; commands/status/channel/swap evidence; commit `fd8c69e`, CI `41201150443` green |
 | F-21 | Deferred | Always-on runtime; attach-time cold-download vs online-change choice, no file-watch requirement; plan §12.3 / WL-1.2 |
-| F-1 | Pass | Complete 2026-10-31 (owner-confirmed): scope families, `stc Dark`/`stc Light`, automated grammar/theme/prelude tests, and manual color check |
+
+### Documented limitations
+
+| Item | Result | Notes |
+| --- | --- | --- |
+| F-11 | Pending | Caller frames lose file/line while stopped in a callee |
+| F-13 | Pending | Locals is empty for program/FB bodies; fields live in Globals |
+| F-14 | Pending | `setVariable` shows the queued value before the program applies it at the next boundary |
