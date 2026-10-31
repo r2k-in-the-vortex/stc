@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod coverage;
 pub mod descriptor;
 pub mod digest;
 pub mod engine;

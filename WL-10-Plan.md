@@ -3,8 +3,8 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-31  
 Branch: `WL-10` (sub-plan of `v2.0.0-planning`)  
-Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phase 0 is
-complete; phase 1 is in progress.  
+Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phases 0 and 1
+are complete; phase 2 is in progress.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-10)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-10,
 [Testing and Verification](specification/Architecture/Testing-and-Verification.md) §2,
@@ -178,11 +178,14 @@ above.
 - Instrumentation emits, in the current block before the statement:
 
   ```
-  %cov.ptr = getelementptr inbounds [N x i64], ptr @stc_coverage_counters, i64 0, i64 <id>
+  %cov.ptr = getelementptr inbounds i64, ptr @stc_coverage_counters, i64 <id>
   %cov.old = load i64, ptr %cov.ptr, align 8
   %cov.new = add i64 %cov.old, 1
   store i64 %cov.new, ptr %cov.ptr, align 8
   ```
+
+  N is not final while bodies are lowered, so the increment indexes the element directly. The
+  emitted global is still `[N x i64]`, and the host readout is base + 8 × id.
 
   The operations cannot trap, allocate, or change ST-visible values. No ordering relative to the
   statement's own effects is observable except that the counter records entry to the statement,
@@ -436,8 +439,8 @@ summary in human mode; files are still written.
 | --- | --- | --- |
 | 0 | Lock C-1–C-14 and record this plan in the parent. Confirm the schema, exclusion rules, and output locations. | Decisions locked; no open questions; parent plan links this sub-plan; no code. |
 | 1 | Codegen: coverage option, site table, span-keyed counters, exported global, verifier allowlist, test-only/file filters, output field. | Codegen tests show the counter global and one increment per site; no instrumentation when disabled or outside a test build; test-only/test-source/synthetic exclusions; deterministic IR; structural verifier passes. |
-| 2 | Runtime and `stc-test`: test-host options, counter readout, raw sidecar writer, raw parser, caps and warnings. | An instrumented artifact's host writes the expected raw sidecar; uninstrumented hosts are unchanged; malformed/missing data is handled without changing test outcomes. |
-| 3 | Driver: CLI flags and validation, codegen plumbing, per-test point mapping, aggregation, JSON/LCOV/human writers, default directory, warnings, `stc clean`. Aggregator unit tests. | `stc test --coverage` writes all three reports; JSON stdout is unchanged; exit codes are unchanged; clean removes the default directory; aggregation tests pass without clang. |
+| 2 | Runtime and `stc-test`: test-host options, counter readout, raw sidecar writer, raw parser, caps and warnings. | The host parses `--coverage`/`--coverage-sites`, reads the exported array, and writes the raw sidecar; uninstrumented hosts are unchanged; raw parser and host argument tests pass. The end-to-end sidecar proof lands with the phase 3 driver plumbing. |
+| 3 | Driver: CLI flags and validation, codegen plumbing, per-test point mapping, aggregation, JSON/LCOV/human writers, default directory, warnings, `stc clean`. Aggregator unit tests. | `stc test --coverage` writes all three reports and the host writes and driver reads the raw sidecar per test; JSON stdout is unchanged; exit codes are unchanged; clean removes the default directory; aggregation tests pass without clang. |
 | 4 | Evidence: example project, golden reports, aggregation/determinism/equivalence/production-isolation/dependency/timeout/filter/opt-level tests; cross-host runs; informational overhead measurement. | All tests pass on Windows x64, Linux x64, and Linux AArch64 in the existing workspace test matrix; the overhead figure is recorded and non-gating. |
 | 5 | Documentation and review: specification sections, warning codes, user guide, limitations, README; mark WL-10 done and consolidate the plan into the specifications. | Documentation is complete and reviewed; no production format, ABI, or behavior change. |
 
@@ -514,7 +517,15 @@ summary in human mode; files are still written.
 | Phase | Status | Evidence |
 | --- | --- | --- |
 | 0 | Complete 2026-10-31 | Plan locked; parent linked; commit `d3655d5`; PR #8 CI run 41153573207 green. |
-| 1 | In progress | — |
+| 1 | Complete 2026-10-31 | Codegen instrumentation, exclusions, verifier allowlist, 7 coverage tests; commit `132faaa`; CI run 41155573060 green. |
+| 2 | In progress | — |
+
+**Phase 1 note (2026-10-31).** The increment uses the element-indexing GEP shown in §6.1 rather
+than the earlier illustrative two-index form, because N is not final during lowering; the global
+and host readout are unchanged. `record_coverage` lives in `unit.rs` and is called from
+`stmt.rs`. Seven codegen tests cover exact sites, owner-chain and file exclusions, synthesized
+FB bodies, `Empty` and zero-length spans, span dedupe, disabled-build IR equality, the
+non-test-build rejection, determinism, and structural verification.
 
 ## 9. Exit criteria
 
@@ -587,3 +598,4 @@ None as of 2026-10-31. The plan is locked; new questions are appended only with 
 | 2026-10-31 | Locked C-5 and C-10: per-test raw sidecar transport and new coded coverage warnings; no fail-under threshold and no HTML in v2.0.0. |
 | 2026-10-31 | Locked C-9 and C-12: byte-identical reports across hosts and `stc clean` removal of the default coverage directory; no CI upload and a full per-file human summary. |
 | 2026-10-31 | Locked C-13 and C-14: no report filter and an informational, non-gating overhead measurement. All decisions C-1–C-14 are locked; the plan has no open questions. |
+| 2026-10-31 | Phase 1 complete: codegen site table, span-deduped counters, exported global, verifier allowlist, exclusions, and tests; commit `132faaa`, CI green. Reconciled phase 2/3 acceptance for the end-to-end sidecar dependency. |
