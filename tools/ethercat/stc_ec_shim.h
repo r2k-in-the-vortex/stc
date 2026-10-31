@@ -101,19 +101,19 @@ typedef struct {
     uint32_t al_states;
     uint8_t link_up;
     uint8_t reserved[3];
-} stc_ec_master_status;
+} stc_ec_master_status_t;
 
 typedef struct {
     uint16_t working_counter;
     uint8_t wc_state;
     uint8_t redundancy;
-} stc_ec_domain_status;
+} stc_ec_domain_status_t;
 
 typedef struct {
     uint16_t al_state;
     uint8_t online;
     uint8_t operational;
-} stc_ec_slave_status;
+} stc_ec_slave_status_t;
 
 STC_EC_API uint32_t stc_ec_abi_version(void);
 STC_EC_API const char *stc_ec_abi_name(void);
@@ -143,11 +143,11 @@ STC_EC_API int stc_ec_domain_data(stc_ec_master *master, uint8_t **data,
         size_t *size, char *err, size_t err_len);
 
 STC_EC_API int stc_ec_master_status(stc_ec_master *master,
-        stc_ec_master_status *out);
+        stc_ec_master_status_t *out);
 STC_EC_API int stc_ec_domain_status(stc_ec_master *master,
-        stc_ec_domain_status *out);
+        stc_ec_domain_status_t *out);
 STC_EC_API int stc_ec_slave_status(stc_ec_master *master, uint32_t slave,
-        stc_ec_slave_status *out);
+        stc_ec_slave_status_t *out);
 
 STC_EC_API int stc_ec_receive(stc_ec_master *master);
 STC_EC_API int stc_ec_domain_process(stc_ec_master *master);

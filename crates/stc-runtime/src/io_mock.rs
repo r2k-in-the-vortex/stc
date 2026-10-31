@@ -758,12 +758,10 @@ pub(crate) fn status_channel_width(name: &str, data_devices: usize) -> Option<u3
     let width = match name {
         "master.phase"
         | "master.slaves_responding"
-        | "master.frame_loss_permille"
         | "domain.wc_state"
         | "domain.working_counter" => 16,
         "master.active" | "master.link_up" | "input.stale" => 1,
-        "master.lost_frames" | "master.tx_errors" | "master.last_error" | "master.recoveries"
-        | "cycle.exchanges" | "cycle.faults" => 32,
+        "master.last_error" | "master.recoveries" | "cycle.exchanges" | "cycle.faults" => 32,
         _ => {
             let rest = name.strip_prefix("slave")?;
             let (index, field) = rest.split_once('.')?;
@@ -1426,6 +1424,16 @@ mod tests {
             status(vec![chan("slave0.online", "input", 1)], None),
             "unknown status channel",
         );
+        for (name, width) in [
+            ("master.lost_frames", 32),
+            ("master.tx_errors", 32),
+            ("master.frame_loss_permille", 16),
+        ] {
+            assert_invalid(
+                status(vec![chan(name, "input", width)], None),
+                "unknown status channel",
+            );
+        }
         assert_invalid(
             status(
                 vec![

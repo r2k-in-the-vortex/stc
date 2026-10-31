@@ -248,9 +248,10 @@ implementation without a scope change.
 | E-11 | Record the exact IgH 1.6.13 license terms; dynamically link the userspace library; distribute the shim source; do not redistribute kernel modules; include notices. The licensing review is a phase-0 gate. | Accepted 2026-10-31 (dynamic link, CI shim) |
 | E-12 | Linux x86-64 is the only hardware-evidence platform in v2.0.0. AArch64 builds are allowed but not hardware-verified; the mapping assumes little-endian. | Accepted 2026-10-31 (x86-64 only) |
 | E-13 | The runtime I/O interface is a Rust trait in `stc-runtime` and is multi-backend from the start. One coordinator owns the shared process image and a list of per-device backend instances; bindings group by device `kind`. At the input boundary it applies the global input defaults to unbound areas, then calls each backend's input latch in device declaration order. At the output boundary it calls each backend's output publish in the same order, then applies the global output behavior to unbound areas. Cold start and shutdown traverse the instances in device declaration order and reverse order. Bound image ranges are disjoint across devices/backends, and conflicts are rejected. WL-5.2 registers only the EtherCAT backend and proves the plural interface with a mock second backend; WL-5.1 adds Modbus as a Rust module or linked crate without changing the EtherCAT backend. | Accepted 2026-10-31 (Rust trait) |
-| E-14 | Expose EtherCAT master and slave status and diagnostics to the PLC as a read-only status device in the device tree, not only through `--status`. The runtime implements the full channel set (master phase/active/slave count, link state, domain WC state/working counter, per-slave AL/online/operational state, lost frames, Tx errors, frame loss, last error, recovery count, stale flag, exchange/fault counters); the project binds only the fields it needs, so unbound fields cost no image bytes. The runtime fills the block each cycle from the EtherCAT backend; the layout is versioned and unknown channels are rejected. | Accepted 2026-10-31 (full set, bind as needed) |
+| E-14 | Expose EtherCAT master and slave status and diagnostics to the PLC as a read-only status device in the device tree, not only through `--status`. The runtime implements the channel set: master phase/active/slave count, link state, domain WC state/working counter, per-slave AL/online/operational state, last error, recovery count, stale flag, and exchange/fault counters. The project binds only the fields it needs, so unbound fields cost no image bytes. The runtime fills the block each cycle from the EtherCAT backend; the layout is versioned and unknown channels are rejected. Lost-frame, Tx-error, and frame-loss counters are not exposed by ecrt 1.6.13 and are read from `ethercat master` at run boundaries, not per cycle. | Accepted 2026-10-31 (status set; frame counters via CLI) |
 | E-15 | Support explicit I/O routes as a directed graph: physical input→PLC input, PLC output→physical output, physical input→physical output, and PLC→PLC. A route has one source and one or more sinks; fan-out is allowed, fan-in is rejected. The route table lives in the selected machine profile (`[io].config`) alongside the PDO map; the compiler resolves variables, devices, and channels and emits the routes in metadata; the runtime applies them at the cycle boundary. PLC→PLC routes apply at the input boundary with one scan of latency; route cycles are allowed and resolved by that buffer as expected behavior, with no warning. | Accepted 2026-10-31 (one-scan delay, profile location, cycles allowed) |
-| E-16 | Unrouted PLC `%I`/`%Q` variables are warnings, not errors. An unrouted `%I` uses its declared/default value and the runtime reports that default; an unrouted `%Q` is discarded. Fan-in remains an error. The compiler emits the warning; the runtime reports the variable and its default. Physical route source/sink representation checks remain runtime fail-closed. The profile is embedded as raw source text and hashed with SHA-256 over those exact bytes. | Accepted 2026-10-31 (warnings, not errors; raw profile text) |
+| E-16 | Unrouted PLC `%I`/`%Q` variables are warnings, not errors. An unrouted `%I` uses its declared/default value and the runtime reports that default; an unrouted `%Q` is discarded. Fan-in remains an error. The compiler emits the warning; the runtime reports the variable and its default. Warnings emit only when a machine profile is selected; profile-less v1 projects keep their existing behavior. Physical route source/sink representation checks remain runtime fail-closed. The profile is embedded as raw source text and hashed with SHA-256 over those exact bytes. | Accepted 2026-10-31 (warnings, not errors; profile-gated; raw profile text) |
+| E-17 | `dc.assign-activate` is a u16 integer matching `ecrt_slave_config_dc`; the manifest validator accepts 0..=65535. Boolean shorthand is not accepted. The DIEWU profile omits DC. | Accepted 2026-10-31 (u16) |
 
 ## 6. Architecture
 
@@ -616,9 +617,6 @@ set is versioned and unknown channels are rejected. Proposed layout:
 | `master.active` | `BOOL` | Master has an active application |
 | `master.slaves_responding` | `UINT` | Responding slave count |
 | `master.link_up` | `BOOL` | EtherCAT link state |
-| `master.lost_frames` | `UDINT` | IgH lost-frame counter |
-| `master.tx_errors` | `UDINT` | IgH Tx-error counter |
-| `master.frame_loss_permille` | `UINT` | Frame-loss rate in tenths of a percent |
 | `master.last_error` | `UDINT` | Last backend error code |
 | `master.recoveries` | `UDINT` | Successful recovery count |
 | `domain.wc_state` | `UINT` | Working-counter state |
@@ -671,7 +669,8 @@ and computes per-backend percentiles and fault counts.
 Frame loss is any of: domain WC state not OK, a slave not operational, a send/receive error, a
 missed exchange, or an increase in the IgH master's lost-frame, Tx-error, or frame-loss counters.
 The harness samples `ethercat master` before and after each run and records the domain and slave
-state per cycle.
+state per cycle. Those three master counters are not exposed by ecrt 1.6.13 and are not in the PLC
+status block; they are read from the CLI at run boundaries.
 
 ### 6.9 Cycle-time sweep
 
@@ -720,7 +719,7 @@ a second failure stops the sequence for a human decision.
 | --- | --- | --- | --- |
 | 0 — schema/contracts | Done | `63b8a7e` | [41177379223](https://github.com/r2k-in-the-vortex/stc/actions/runs/41177379223) — success |
 | 1 — backend surface, routing, mapping | Done | `d254583` | [41181242085](https://github.com/r2k-in-the-vortex/stc/actions/runs/41181242085) — success |
-| 2 — shim, lifecycle, CI build | In progress — E-16 warning follow-up included | — | — |
+| 2 — shim, lifecycle, CI build | In progress — human-authorized third attempt; DC/status/warning decisions recorded | `e96ce71` + pending fix | [41203057703](https://github.com/r2k-in-the-vortex/stc/actions/runs/41203057703) — failure |
 | 3 — HIL frame-level bring-up | Not started | — | — |
 | 4 — software fault, recovery, status | Not started | — | — |
 | 5 — CT sweep, draft report | Not started | — | — |
@@ -970,8 +969,11 @@ Resolved 2026-10-31:
 - **Backend dispatch, online change, licensing:** E-3, E-7, and E-11 are accepted.
 - **Test sequencing:** all manual/physical tests are phase 6; phases 3–5 use open-ended I/O and
   treat frame acceptance/reply by IgH as success.
+- **Phase-2 contract decisions:** `dc.assign-activate` is a u16 integer (E-17); lost-frame and
+  Tx-error channels are removed from the PLC status block and read from `ethercat master` at run
+  boundaries (E-14); E-16 warnings are emitted only when a machine profile is selected.
 
-Remaining: no owner-level questions. All decisions E-1–E-15 are accepted. Implementation details
+Remaining: no owner-level questions. All decisions E-1–E-17 are accepted. Implementation details
 such as the exact trait names, the `[io].config` key spelling, and the status channel names are
 phase-0/1 defaults and do not change the scope.
 
@@ -992,3 +994,5 @@ phase-0/1 defaults and do not change the scope.
 | 2026-10-31 | Phase 0 complete: commit `63b8a7e`, CI run 41177379223 green. The contract is locked in `specification/Architecture/IO-Routing-and-Backends.md`; phase 1 started. |
 | 2026-10-31 | Phase 1 complete: commit `d254583`, CI run 41181242085 green. Profile embedding, route graph, coordinator, mock backends, and mapping implemented with tests. Phase 2 paused for confirmation of two phase-1 defaults: profile raw-text embedding vs canonicalization, and runtime-only fail-closed validation for routed physical outputs. |
 | 2026-10-31 | Owner confirmed raw profile text + SHA-256 and directed that unrouted PLC `%I`/`%Q` variables be warnings, not errors; an unrouted `%I` uses its default value and an unrouted `%Q` is discarded. Added E-16 and resumed phase 2 with the warning follow-up. |
+| 2026-10-31 | Phase 2 second CI run failed in the Linux shim build: `stc_ec_master_status`/`stc_ec_domain_status`/`stc_ec_slave_status` are used as both typedefs and exported functions. One fix was attempted (run 41203057703); no third attempt was made. Phase 2 blocked for a human decision. Also pending: `dc.assign-activate` type, lost-frame/Tx-error status channels, and E-16 warning gating. |
+| 2026-10-31 | Owner authorized a third phase-2 attempt. Set `dc.assign-activate` to u16 (E-17), removed lost-frame/Tx-error channels from the PLC status block (E-14; `ethercat master` at run boundaries), and kept E-16 warnings profile-gated. |

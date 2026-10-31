@@ -676,11 +676,15 @@ impl ProfileParser {
         };
         self.check_unknown(dc, "dc", DC_KEYS);
         if let Some(value) = dc.get("assign-activate")
-            && value.as_bool().is_none()
+            && value
+                .as_integer()
+                .is_none_or(|value| !(0..=65_535).contains(&value))
         {
             self.error(
                 "STC-E-PROJECT-009",
-                format!("profile device `{device}` `dc.assign-activate` must be a boolean"),
+                format!(
+                    "profile device `{device}` `dc.assign-activate` must be an integer in 0..=65535"
+                ),
                 self.item_span(value),
             );
         }
@@ -1285,7 +1289,7 @@ bits = 16
 vendor = "0x00000b95"
 product = 66048
 revision = "1"
-dc = { assign-activate = true, sync0-cycle = 1000000 }
+dc = { assign-activate = 768, sync0-cycle = 1000000 }
 "#;
         let profile = parse_profile(text, file()).expect("valid device");
         let ConfigValue::Table(table) = &profile.devices[0].config else {
@@ -1298,7 +1302,27 @@ dc = { assign-activate = true, sync0-cycle = 1000000 }
         let Some(ConfigValue::Table(dc)) = table.get("dc") else {
             panic!("dc is not a table");
         };
-        assert_eq!(dc.get("assign-activate"), Some(&ConfigValue::Boolean(true)));
+        assert_eq!(dc.get("assign-activate"), Some(&ConfigValue::Integer(768)));
+    }
+
+    #[test]
+    fn rejects_boolean_and_out_of_range_assign_activate() {
+        for value in ["true", "false", "65536", "-1", "\"768\""] {
+            let text = format!("[device.diewu]\ndc = {{ assign-activate = {value} }}\n");
+            let diagnostics = parse_profile(&text, file()).expect_err("invalid assign-activate");
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "STC-E-PROJECT-009"
+                        && diagnostic.message.contains("0..=65535")),
+                "assign-activate = {value}: {diagnostics:?}"
+            );
+        }
+
+        for value in ["0", "65535"] {
+            let text = format!("[device.diewu]\ndc = {{ assign-activate = {value} }}\n");
+            parse_profile(&text, file()).expect("valid assign-activate");
+        }
     }
 
     #[test]

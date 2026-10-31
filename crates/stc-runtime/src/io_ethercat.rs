@@ -16,10 +16,9 @@
 //! EtherCAT master is required to probe the ABI; only cold start opens one.
 //!
 //! Distributed-clock configuration is only applied when `dc.assign-activate`
-//! is the numeric IgH AssignActivate word. The profile schema validates that
-//! key as a boolean, which cannot be mapped to a vendor-specific word without
-//! inventing policy; a boolean `true` therefore fails cold start with
-//! `STC-E-IO-ETH-006` rather than silently ignoring the request.
+//! is the numeric IgH AssignActivate word (E-17, a `u16`). The profile schema
+//! accepts `0..=65535`; a boolean or an out-of-range value fails cold start
+//! with `STC-E-IO-ETH-006` rather than silently changing the request.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -897,9 +896,6 @@ enum StatusField {
     MasterActive,
     MasterSlavesResponding,
     MasterLinkUp,
-    MasterLostFrames,
-    MasterTxErrors,
-    MasterFrameLossPermille,
     MasterLastError,
     MasterRecoveries,
     DomainWcState,
@@ -1144,8 +1140,6 @@ impl EthercatBackend {
                     u64::from(self.snapshot.master.slaves_responding)
                 }
                 StatusField::MasterLinkUp => u64::from(self.snapshot.master.link_up),
-                StatusField::MasterLostFrames | StatusField::MasterTxErrors => 0,
-                StatusField::MasterFrameLossPermille => 0,
                 StatusField::MasterLastError => u64::from(self.last_error_code),
                 StatusField::MasterRecoveries => self.recoveries,
                 StatusField::DomainWcState => u64::from(self.snapshot.domain.wc_state),
@@ -2161,9 +2155,6 @@ fn parse_status_field(name: &str, data_count: usize) -> Option<StatusField> {
         "master.active" => StatusField::MasterActive,
         "master.slaves_responding" => StatusField::MasterSlavesResponding,
         "master.link_up" => StatusField::MasterLinkUp,
-        "master.lost_frames" => StatusField::MasterLostFrames,
-        "master.tx_errors" => StatusField::MasterTxErrors,
-        "master.frame_loss_permille" => StatusField::MasterFrameLossPermille,
         "master.last_error" => StatusField::MasterLastError,
         "master.recoveries" => StatusField::MasterRecoveries,
         "domain.wc_state" => StatusField::DomainWcState,
@@ -2341,22 +2332,14 @@ fn parse_dc(
     let assign_activate = match assign {
         Json::Number(number) => u16::try_from(*number).map_err(|_| {
             cfg_error(format!(
-                "device `{}` `dc.assign-activate` must fit in 16 bits",
+                "device `{}` `dc.assign-activate` must be an integer in 0..=65535",
                 device.name
             ))
         })?,
-        Json::Bool(true) => {
-            return Err(cfg_error(format!(
-                "device `{}` `dc.assign-activate` is a boolean; IgH requires the \
-                 vendor-specific 16-bit AssignActivate word, so distributed clocks cannot be \
-                 configured from the profile boolean",
-                device.name
-            )));
-        }
-        Json::Bool(false) => return Ok(None),
         _ => {
             return Err(cfg_error(format!(
-                "device `{}` `dc.assign-activate` must be a boolean or an integer",
+                "device `{}` `dc.assign-activate` must be an integer in 0..=65535 (the vendor \
+                 AssignActivate word); boolean shorthand is not accepted",
                 device.name
             )));
         }
@@ -3255,6 +3238,39 @@ mod tests {
     }
 
     #[test]
+    fn removed_frame_counters_are_rejected_as_status_channels() {
+        let (mut backend, _shared) = fake_backend(2);
+        for (name, width) in [
+            ("master.lost_frames", 32),
+            ("master.tx_errors", 32),
+            ("master.frame_loss_permille", 16),
+        ] {
+            let error = backend
+                .cold_start(&config(
+                    vec![
+                        device("diewu", "ethercat", Some(DATA_CONFIG), data_channels()),
+                        device(
+                            "status",
+                            "ethercat-status",
+                            Some(r#"{"layout": 1}"#),
+                            vec![bound(name, "input", width, 1, 0)],
+                        ),
+                    ],
+                    Vec::new(),
+                    4,
+                    1,
+                ))
+                .expect_err("removed frame counter");
+            assert_eq!(error.code, codes::ETH_CONFIG);
+            assert!(
+                error.message.contains("unknown status channel"),
+                "{name}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
     fn binding_disagreement_uses_eth_007() {
         let (mut backend, _shared) = fake_backend(2);
         let mut config = basic_config();
@@ -3303,6 +3319,26 @@ mod tests {
             .expect_err("boolean DC is ambiguous");
         assert_eq!(error.code, codes::ETH_CONFIG);
         assert!(error.message.contains("AssignActivate"));
+
+        let out_of_range = DATA_CONFIG.replace(
+            "\"recovery-cycles\": 2,",
+            "\"recovery-cycles\": 2, \"dc\": {\"assign-activate\": 65536, \"sync0-cycle\": 1000000},",
+        );
+        let error = backend
+            .cold_start(&config(
+                vec![device(
+                    "diewu",
+                    "ethercat",
+                    Some(&out_of_range),
+                    data_channels(),
+                )],
+                data_bindings(),
+                1,
+                1,
+            ))
+            .expect_err("out-of-range DC");
+        assert_eq!(error.code, codes::ETH_CONFIG);
+        assert!(error.message.contains("0..=65535"), "{}", error.message);
 
         let numeric = DATA_CONFIG.replace(
             "\"recovery-cycles\": 2,",

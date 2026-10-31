@@ -406,7 +406,7 @@ int stc_ec_domain_data(stc_ec_master *master, uint8_t **data, size_t *size,
     return STC_EC_OK;
 }
 
-int stc_ec_master_status(stc_ec_master *master, stc_ec_master_status *out)
+int stc_ec_master_status(stc_ec_master *master, stc_ec_master_status_t *out)
 {
     ec_master_state_t state;
     int rc;
@@ -425,7 +425,7 @@ int stc_ec_master_status(stc_ec_master *master, stc_ec_master_status *out)
     return STC_EC_OK;
 }
 
-int stc_ec_domain_status(stc_ec_master *master, stc_ec_domain_status *out)
+int stc_ec_domain_status(stc_ec_master *master, stc_ec_domain_status_t *out)
 {
     ec_domain_state_t state;
     int rc;
@@ -444,7 +444,7 @@ int stc_ec_domain_status(stc_ec_master *master, stc_ec_domain_status *out)
 }
 
 int stc_ec_slave_status(stc_ec_master *master, uint32_t slave,
-        stc_ec_slave_status *out)
+        stc_ec_slave_status_t *out)
 {
     ec_slave_config_t *config;
     ec_slave_config_state_t state;

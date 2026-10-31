@@ -17,7 +17,7 @@ campaign. WL-5.2 implements the EtherCAT backend; WL-5.1 adds a Modbus backend t
 contract.
 
 The accepted decisions and their rationale are in the [WL-5.2 plan](../../WL-5.2-Plan.md) §5
-(E-1–E-16), §6.3–§6.3.1, and §6.4–§6.7. This document records the resulting contract; where the
+(E-1–E-17), §6.3–§6.3.1, and §6.4–§6.7. This document records the resulting contract; where the
 plan gives only the shape, this document fixes the schema. If implementation finds a conflict,
 the plan is amended first and this document follows.
 
@@ -159,9 +159,12 @@ defines it.
   overlapping PDO entries or channel bit ranges are rejected at cold start.
 - The optional `dc` table carries `assign-activate`, `sync0-cycle`, `sync0-shift`,
   `sync1-cycle`, and `sync1-shift` in the same units as the IgH distributed-clock API.
-  Distributed clocks are configured only when `assign-activate` is present; without it the
-  device runs free-run. A `dc` table that requests synchronization but omits `assign-activate`
-  is `STC-W-IO-ETH-002`. The DIEWU profile omits `dc` by owner decision.
+  `assign-activate` is the vendor-specific `u16` AssignActivate word passed to
+  `ecrt_slave_config_dc`; the schema accepts integers in `0..=65535` and rejects booleans,
+  strings, and out-of-range values (E-17). Distributed clocks are configured only when
+  `assign-activate` is present; without it the device runs free-run. A `dc` table that
+  requests synchronization but omits `assign-activate` is `STC-W-IO-ETH-002`. The DIEWU
+  profile omits `dc` by owner decision.
 - The V2.0.0 profile model is static: an ESI parser, dynamic PDO discovery, and SDO-based device
   configuration are deferred (WL-7). The hand-maintained map is the contract.
 
@@ -393,9 +396,6 @@ counted. For example, `slave0.al_state` is the first configured data device and
 | `master.active` | `BOOL` | Master has an active application. |
 | `master.slaves_responding` | `UINT` | Responding slave count. |
 | `master.link_up` | `BOOL` | EtherCAT link state. |
-| `master.lost_frames` | `UDINT` | IgH lost-frame counter. |
-| `master.tx_errors` | `UDINT` | IgH Tx-error counter. |
-| `master.frame_loss_permille` | `UINT` | Frame-loss rate in tenths of a percent. |
 | `master.last_error` | `UDINT` | Last backend error code. |
 | `master.recoveries` | `UDINT` | Successful recovery count. |
 | `domain.wc_state` | `UINT` | Working-counter state. |
@@ -406,6 +406,9 @@ counted. For example, `slave0.al_state` is the first configured data device and
 | `input.stale` | `BOOL` | Inputs are the last received values, not current. |
 | `cycle.exchanges` | `UDINT` | Successful exchanges since start. |
 | `cycle.faults` | `UDINT` | Fault episodes since start. |
+
+ecrt 1.6.13 exposes no lost-frame, Tx-error, or frame-loss counter, so these are not status
+channels. The runbook and report read them from `ethercat master` at run boundaries (E-14).
 
 ### 5.2 Binding and versioning
 
@@ -438,8 +441,8 @@ not process-image values.
 
 - On a fault the runtime does not zero outputs, default inputs, or exit. The PLC output values
   continue to be sent unchanged, the last received inputs are presented as stale, and
-  `input.stale`, the domain working counter, the master counters, and the per-slave state are
-  visible every cycle.
+  `input.stale`, the domain working counter, the master error and recovery registers, and the
+  per-slave state are visible every cycle.
 - Recovery is automatic when communication returns, after the configured number of consecutive
   healthy exchanges. Connect and disconnect of a configured slave are normal and use this path.
 - Adding or removing a device is a topology change; the runtime does not reconfigure the master
@@ -486,8 +489,9 @@ The backend campaign is split so that frame-level evidence is gathered without p
 - **Phases 3–5** use open-ended (unwired/unloaded) I/O. A cycle succeeds at the frame level:
   the send is accepted, the receive/process path sees the reply, the domain working-counter
   state is healthy, all configured slaves are operational, there are no send/receive errors,
-  and the master's lost-frame and Tx-error counters do not increase. For timing runs, skipped
-  periods and missed deadlines must also be zero. Physical I/O values are not verified.
+  and, sampled from `ethercat master` at run boundaries, the master's lost-frame and Tx-error
+  counters do not increase. For timing runs, skipped periods and missed deadlines must also be
+  zero. Physical I/O values are not verified.
 - **Phase 6** builds the loopback harness (all 16 outputs to all 16 inputs with the correct NPN
   common), runs the automated all-points matrix, performs the physical fault injection (cable
   unplug/replug, slave power cycle, configured-slave reconnect), and completes all manual and
@@ -533,8 +537,8 @@ allowlist.
 | `STC-E-IO-BINDING-001` | A sink has more than one source (fan-in), or two routes/bindings claim the same output. |
 | `STC-E-IO-BINDING-002` | A route endpoint does not resolve, or its direction or width is invalid. |
 | `STC-E-IO-BINDING-003` | A route or device names a `kind` with no registered backend. |
-| `STC-W-IO-ROUTE-001` | An unrouted direct `%I` variable keeps its declared/default value. |
-| `STC-W-IO-ROUTE-002` | An unrouted direct `%Q` variable is discarded. |
+| `STC-W-IO-ROUTE-001` | In a project that selects a machine profile, an unrouted direct `%I` variable keeps its declared/default value. |
+| `STC-W-IO-ROUTE-002` | In a project that selects a machine profile, an unrouted direct `%Q` variable is discarded. |
 | `STC-E-IO-ETH-001` | The shim/library is missing, cannot be loaded, or fails the version/symbol handshake. |
 | `STC-E-IO-ETH-002` | The IgH master cannot be requested (busy, unavailable, or permission denied). |
 | `STC-E-IO-ETH-003` | Slave configuration failed (identity mismatch or invalid position/alias). |
@@ -550,7 +554,7 @@ allowlist.
 
 ## 11. Open questions
 
-No design questions remain as of 2026-10-31; E-1–E-16 in the
+No design questions remain as of 2026-10-31; E-1–E-17 in the
 [WL-5.2 plan](../../WL-5.2-Plan.md) are accepted. The exact Rust type names and metadata JSON
 key spellings are implementation defaults fixed in phase 1; they do not change the contract in
 this document.
