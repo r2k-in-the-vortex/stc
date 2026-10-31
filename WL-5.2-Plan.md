@@ -721,8 +721,8 @@ a second failure stops the sequence for a human decision.
 | 1 — backend surface, routing, mapping | Done | `d254583` | [41181242085](https://github.com/r2k-in-the-vortex/stc/actions/runs/41181242085) — success |
 | 2 — shim, lifecycle, CI build | Done | `c2f8272`, `eb2459c` | [41209155816](https://github.com/r2k-in-the-vortex/stc/actions/runs/41209155816) — success |
 | 3 — HIL frame-level bring-up | Done | `021e12f`, `477176f` | [41215865030](https://github.com/r2k-in-the-vortex/stc/actions/runs/41215865030) — success |
-| 4 — software fault, recovery, status | In progress | — | — |
-| 5 — CT sweep, draft report | Not started | — | — |
+| 4 — software fault, recovery, status | Done (service stop/start pending the installed wrapper) | `938aa93`, `1fdd4ef` | [41219308011](https://github.com/r2k-in-the-vortex/stc/actions/runs/41219308011) — success |
+| 5 — CT sweep, draft report | In progress — preparing privileged wrappers; awaiting user install | — | — |
 | 6 — harness, all manual tests, final report | Not started | — | — |
 
 Status values: Not started, In progress, Done, Blocked. The orchestrator updates this table after
@@ -1000,3 +1000,5 @@ phase-0/1 defaults and do not change the scope.
 | 2026-10-31 | Owner authorized a fourth phase-2 attempt; fix the anti-link script to match the unhashed runtime rlib and rerun CI. |
 | 2026-10-31 | Phase 2 complete: commits `c2f8272` and `eb2459c`, CI run 41209155816 green. Shim builds, loader/lifecycle tests pass, anti-link check passes. Phase 3 started: open-ended I/O frame-level bring-up on `ecat-host`. |
 | 2026-10-31 | Phase 3 complete: commits `021e12f` and `477176f`, CI run 41215865030 green. The clean run did 600,000 requested 1 ms cycles with 0 faults, WC 3/3, slave OP, 1 slave, link up, and no lost frames or Tx errors; the diagnostic run's single transient fault is documented in the runbook. Phase 4 started: software fault, recovery, status, and online change. |
+| 2026-10-31 | Phase 4 complete: commits `938aa93` and `1fdd4ef`, CI run 41219308011 green. HIL software faults (master owned, wrong identity/position, startup timeout), status registers, and code-only/topology online change verified. Master service stop/start was not executed: no NOPASSWD rule covers `systemctl`; the owner chose to install narrow wrappers. |
+| 2026-10-31 | Owner authorized narrow root-owned wrappers for `systemctl stop/start ethercat` and for the privileged CT-sweep launcher. Phase 5 starts by preparing the wrappers and pausing for installation. |

@@ -31,6 +31,7 @@ injection, or any manual toggling/measuring. Those belong to phase 6.
 | `src/main.st` | Non-CPU-bound program: `Out0..Out13 := In0..In13`, `In14` toggles a state bit, `Counter` increments; 1 ms task. |
 | `build.sh` | Builds the fixture with the deployed `stc` package. |
 | `run-open-ended.sh` | Runs 600000 cycles at 1 ms (10 minutes) with `-v` status output. |
+| `run-ct.sh` | Runs one phase-5 cycle-time sweep step; invoked as `r2k` through the privileged `stc-wl52-run` wrapper, not directly. |
 | `holder/holder.c` | Ordinary-user helper that calls `ecrt_request_master(0)` and pauses; used in phase 4 to exercise the runtime's master-already-owned failure. |
 
 ## Process-image map
@@ -174,6 +175,22 @@ timeout), the 14 PLC-visible status registers, and same-configuration versus cha
 online change were exercised on `ecat-host` without physical faults, root, or host changes; the
 master service stop/start case is a recorded privilege gap. Results and evidence hashes are in
 the [EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md) §9.
+
+## Phase 5 cycle-time sweep
+
+Phase 5 adds `run-ct.sh`, which runs one step of the plan's §6.9 sweep with the
+packaged release launcher (`stc run --release --rt --rt-priority 90
+--rt-cpu 3 --cycle-time <cycle> --cycles 0 --rt-metrics <log>.jsonl -v`). It
+sets `STC_ETHERCAT_LIBRARY` and `LD_LIBRARY_PATH=/usr/local/etherlab/lib` and
+bounds build plus run with `timeout` at the requested duration plus a 60 s
+build allowance. The script is user-writable and is executed as `r2k` with
+only `CAP_SYS_NICE` ambient by the privileged `stc-wl52-run` wrapper; it is
+never run as root and is not meant to be invoked directly. It exits 0 only
+for a frame-level pass: healthy status, `exchanges` equal to the completed
+cycle count, at least the requested window's worth of cycles, zero missed
+deadlines and skipped periods, and unchanged master Tx-error and lost-frame
+counters. The install and use procedure is in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md) §10.
 
 ## Troubleshooting
 

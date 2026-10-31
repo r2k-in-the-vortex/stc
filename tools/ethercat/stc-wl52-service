@@ -1,0 +1,48 @@
+#!/bin/bash -p
+# WL-5.2 privileged EtherCAT service wrapper.
+#
+# This file is installed root-owned at /usr/local/sbin/stc-wl52-service. The
+# sudoers rule grants the login user NOPASSWD access to this wrapper only.
+# The unit, the verb set, and the argument count are fixed; there is no
+# generic systemctl passthrough.
+#
+# The wrapper exists only to close the phase-4 privilege gap for the
+# master-service stop/start case. It does not change the host service state
+# unless the operator asks for it.
+
+set -euo pipefail
+umask 022
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+readonly SYSTEMCTL=/usr/bin/systemctl
+readonly UNIT=ethercat
+
+usage() {
+    cat <<'EOF'
+usage: stc-wl52-service <stop|start|restart|status>
+
+Runs exactly `systemctl <verb> ethercat`. No other verbs or arguments are
+accepted.
+EOF
+}
+
+die() {
+    printf 'stc-wl52-service: %s\n' "$*" >&2
+    exit 64
+}
+
+if [[ $# -ne 1 ]]; then
+    usage >&2
+    exit 64
+fi
+
+case "$1" in
+    stop|start|restart|status)
+        [[ -x $SYSTEMCTL ]] || die "systemctl not found: $SYSTEMCTL"
+        exec "$SYSTEMCTL" "$1" "$UNIT"
+        ;;
+    *)
+        usage >&2
+        exit 64
+        ;;
+esac

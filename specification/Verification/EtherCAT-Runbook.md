@@ -3,9 +3,9 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-31  
 Status: Draft. The phase-3 open-ended procedure plus the phase-4 software-fault, status-register,
-and online-change evidence are recorded here; phases 5–6 extend this runbook when they are
-executed. Results are host- and hardware-specific; this is not a hard real-time guarantee and not
-a safety function.  
+and online-change evidence are recorded here; phase 5 adds the privileged wrapper install and
+cycle-time procedure in §10, and phase 6 extends this runbook when it is executed. Results are
+host- and hardware-specific; this is not a hard real-time guarantee and not a safety function.  
 Parent: [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 (phases 3–4)  
 Inputs: [I/O Routing and Backends](../Architecture/IO-Routing-and-Backends.md),
 [I/O and Devices](../Architecture/IO-and-Devices.md),
@@ -617,14 +617,136 @@ committed hashes afterwards. The online-change test used one code-only edit and 
 the remaining configuration classes are covered by CI tests on the same hash policy. No timing or
 real-time claim is made.
 
-## 10. Cleanup
+## 10. Phase 5 privileged wrappers
+
+Phase 4 recorded the master service stop/start case as a privilege gap (§9.3).
+Phase 5 needs that transition plus a privileged RT launcher for the cycle-time
+sweep. Two root-owned fixed-command wrappers and one sudoers fragment are
+committed; a human installs them. This section is the install and use
+procedure. The wrappers were prepared but **not installed or executed** by the
+automated phase work.
+
+### 10.1 Files and installed paths
+
+| Repository file | Installed path | Mode | Purpose |
+| --- | --- | --- | --- |
+| `tools/ethercat/stc-wl52-service` | `/usr/local/sbin/stc-wl52-service` | `0755` root:root | Fixed `systemctl stop\|start\|restart\|status ethercat` |
+| `tools/ethercat/stc-wl52-run` | `/usr/local/sbin/stc-wl52-run` | `0755` root:root | Fixed `ct <cycle-time> <duration> <label>` sweep step |
+| `tools/ethercat/stc-wl52.sudoers` | `/etc/sudoers.d/stc-wl52` | `0440` root:root | NOPASSWD for exactly the two installed paths |
+
+The runner itself is `tests/ethercat/diewu/run-ct.sh`, deployed with the
+fixture at `/home/r2k/stc-wl52/diewu/run-ct.sh`. It is user-writable and is
+executed as `r2k`, never as root.
+
+### 10.2 Install
+
+Stage the files on the host, then install them from an interactive `r2k`
+session. The `install` commands, the `0440` sudoers mode, and the `visudo -cf`
+validation are required.
+
+```sh
+# From the repository checkout:
+ssh r2k@ecat-host 'mkdir -p ~/stc-wl52/install'
+scp tools/ethercat/stc-wl52-service tools/ethercat/stc-wl52-run \
+    tools/ethercat/stc-wl52.sudoers r2k@ecat-host:~/stc-wl52/install/
+scp tests/ethercat/diewu/run-ct.sh r2k@ecat-host:~/stc-wl52/diewu/run-ct.sh
+ssh r2k@ecat-host 'chmod 0755 ~/stc-wl52/diewu/run-ct.sh'
+
+# On ecat-host, as r2k:
+visudo -cf ~/stc-wl52/install/stc-wl52.sudoers
+sudo install -o root -g root -m 0755 ~/stc-wl52/install/stc-wl52-service \
+    /usr/local/sbin/stc-wl52-service
+sudo install -o root -g root -m 0755 ~/stc-wl52/install/stc-wl52-run \
+    /usr/local/sbin/stc-wl52-run
+sudo install -o root -g root -m 0440 ~/stc-wl52/install/stc-wl52.sudoers \
+    /etc/sudoers.d/stc-wl52
+sudo visudo -cf /etc/sudoers.d/stc-wl52
+sudo -n -l
+```
+
+`sudo -n -l` must list the two NOPASSWD wrapper paths; no broader rule is
+added for this phase. If `visudo -cf` fails, remove or correct
+`/etc/sudoers.d/stc-wl52` before running another `sudo` command.
+
+### 10.3 Use
+
+```sh
+sudo -n /usr/local/sbin/stc-wl52-service status
+sudo -n /usr/local/sbin/stc-wl52-service stop
+sudo -n /usr/local/sbin/stc-wl52-service start
+sudo -n /usr/local/sbin/stc-wl52-run ct 1ms 60 screen-1ms
+```
+
+The service wrapper accepts only the four verbs with exactly one argument and
+runs `systemctl <verb> ethercat`; it has no generic passthrough. The run
+wrapper accepts only `ct`, the cycle times `1ms`, `500us`, `250us`, `200us`,
+`150us`, `100us`, `75us`, `50us`, `25us`, the durations `60` and `600`, and a
+`[a-z0-9-]{1,32}` label. Any other command, path, or extra argument is
+rejected with exit status 64.
+
+### 10.4 Privilege model
+
+`stc-wl52-run` validates the fixed launcher, fixture, shim, and log directory,
+then drops to `r2k` with `setpriv`:
+
+```text
+setpriv --reuid=1000 --regid=1000 --init-groups --no-new-privs \
+    --inh-caps=+sys_nice --ambient-caps=+sys_nice --bounding-set=+sys_nice \
+    -- /bin/bash /home/r2k/stc-wl52/diewu/run-ct.sh <cycle> <duration> <label>
+```
+
+`--init-groups` initializes the supplementary groups for `r2k`, so the
+`ethercat` group (gid 1001) is retained for `/dev/EtherCAT0`. `CAP_SYS_NICE`
+is the only ambient capability; it lets the cycle thread enter `SCHED_FIFO`
+priority 90, and it carries across exec into the packaged `stc` launcher.
+`no_new_privs` prevents the user-writable script or its children from gaining
+privileges through exec. No user-writable file is executed as root.
+
+Host values checked read-only on 2026-10-31: `r2k` uid/gid `1000`/`1000`,
+`getent group ethercat` -> `ethercat:x:1001:r2k`, `setpriv` from util-linux
+2.39.3, and `capsh` from libcap as an alternative. `setpriv` was chosen
+because it is available and expresses the uid/gid drop, supplementary groups,
+and ambient capability in one fixed command; `capsh` is not used.
+
+### 10.5 Cycle-time runner
+
+`run-ct.sh` invokes the packaged launcher with:
+
+```text
+stc run --release --manifest-path /home/r2k/stc-wl52/diewu/stc.toml \
+    --io ethercat --cycles 0 --cycle-time <cycle> \
+    --rt --rt-priority 90 --rt-cpu 3 --rt-metrics <log>.jsonl -v
+```
+
+with `STC_ETHERCAT_LIBRARY=/home/r2k/stc-wl52/lib/libstc_io_ethercat.so` and
+`LD_LIBRARY_PATH=/usr/local/etherlab/lib`, bounded by
+`timeout --signal=TERM --kill-after=30 --preserve-status <duration + 60 s>`.
+The 60 s allowance covers the in-process release build; the timeout is a
+safety limit, not additional measurement time. Logs, metrics, and master
+samples are written under `/home/r2k/stc-wl52/logs/`:
+`ct-<cycle>-<duration>s-<label>-<UTC stamp>.log`, `.jsonl`,
+`.master-before.txt`, `.master-after.txt`, `.slaves-before.txt`, and
+`.slaves-after.txt`.
+
+The script exits 0 only for a frame-level pass: the final
+`stc: status: io-backend ethercat` line reports `state=running`, `faults=0`,
+`domain.wc_state=2`, `input.stale=0`, no master error, link up, one responding
+slave, and no recovery; `exchanges` equals the completed cycle count; the
+metrics summary reports zero missed deadlines and zero skipped periods and at
+least the requested screening duration's worth of cycles; the master's Tx-error
+and lost-frame counters are unchanged from the before sample; and after release
+the master is `Phase: Idle` with `Active: no` and the slave is PREOP. Physical
+I/O values are not checked. A nonzero exit distinguishes a frame-level or run
+failure (1) from a usage or deployment error (2).
+
+## 11. Cleanup
 
 The run releases the master on exit. Confirm `ethercat master` is `Phase: Idle` and
 `ethercat slaves` shows PREOP. Keep the logs under `~/stc-wl52/logs/`; leave the host's IgH
 installation, boot profile, and service state unchanged. Do not rewrite the output image or
 zero the outputs as part of cleanup.
 
-## 11. Phase 5–6 extensions
+## 12. Phase 5–6 extensions
 
 Phase 4 is recorded in §9: the software-fault matrix (master already owned, wrong identity,
 startup timeout), the PLC-visible status registers, the stale/recovery model, and online change.
@@ -632,7 +754,9 @@ The master service stop/start case remains a recorded privilege gap.
 
 Phase 5 adds the cycle-time sweep from 1 ms down to 50 µs (extending below 50 µs if that passes),
 60 s screening per step, a 10-minute confirmation at the fastest passing step, release-build
-measurements, skipped-period/deadline checks, and the `stc-io-metrics/1` JSONL stream.
+measurements, skipped-period/deadline checks, and the `stc-io-metrics/1` JSONL stream. The
+privileged wrappers that run the service transition and the sweep are installed by a human
+following §10; they are not installed or exercised by the automated phase work.
 
 Phase 6 adds the loopback harness, the automated all-points matrix, physical fault injection
 (cable unplug/replug, slave power cycle, configured-slave reconnect), and the final report. Those
