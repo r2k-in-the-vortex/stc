@@ -1,6 +1,6 @@
 # Future Wishlist — v2.0.0
 
-Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, and WL-11. Completed: WL-4 (2026-10-30).  
+Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, and WL-11. Completed: WL-4 (2026-10-30) and WL-10 (2026-10-31). In progress: WL-3 (started 2026-10-31).  
 Date: 2026-10-29; revised 2026-10-31  
 Branch: `v2.0.0-planning`  
 Baseline: `stc` 1.0.0, released 2026-10-29  
@@ -87,7 +87,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-1.1 | Local VS Code integration and debugging | Tooling | L (staged) | Stable IDE/debug API | Locked |
 | WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Deferred |
 | WL-2 | Test coverage to 85% as reported by the existing CI coverage badge; CI pass gate | Quality | M/L | Existing coverage job/badge | Locked |
-| WL-3 | Expand the Lean specification per the verification plan; v2 target is P0.4 | Verification | M for P0.4 | Phase 0 P0.4 | Locked |
+| WL-3 | Expand the Lean specification per the verification plan; P0.4 complete, P0.3 resumed | Verification | M for P0.4 | Phase 0 P0.4 | In progress; P0.4 done, P0.3 resumed 2026-10-31 |
 | WL-4 | Run and verify RT performance on PREEMPT_RT Linux x86-64 | Runtime evidence | M | x86-64 RT run host and transferable artifacts | Done 2026-10-30 |
 | WL-5.1 | Modbus TCP server I/O on all supported hosts; non-real-time | Runtime/IO | M/L | None | Locked |
 | WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host; EtherCAT hardware | Locked |
@@ -95,7 +95,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Deferred |
 | WL-8 | Tracing UI to watch and graph PLC variables | Tooling/observability | M/L | WL-9 WebUI | Deferred |
 | WL-9 | WebUI for basic runtime control | Tooling/operations | M/L | Runtime control API; network security | Deferred |
-| WL-10 | Coverage emission for the ST test suite | Test tooling | M/L | Test runner; span mapping | Locked |
+| WL-10 | Coverage emission for the ST test suite | Test tooling | M/L | Test runner; span mapping | Done 2026-10-31 |
 | WL-11 | Modbus TCP client capability; separate from WL-5.1 server | Runtime/IO | M/L | WL-5.1 backend contract | Deferred |
 
 ## 5. Candidate items
@@ -324,9 +324,13 @@ area expected to touch the compiler, and only for bug fixes found by the work. T
 wishlist for new language or core compiler features.
 
 **Selection.** Selected and locked for v2.0.0 on 2026-10-29 with the **P0.4** target (target
-syntax and `WellFormed`). Core compiler features and the language are not expected to change, so
-further drift is not expected; only bug fixes are in scope. Detailed planning is in
-[V2.0.0-PLAN.md](V2.0.0-PLAN.md).
+syntax and `WellFormed`), and started on branch `WL-3` on 2026-10-31. P0.4 is complete and
+review-approved (2026-10-31); WL-3 continues with P0.3, resumed on 2026-10-31 with its open
+questions resolved in [Plan-Phase0 §19.8](specification/Verification/Plan-Phase0.md).
+Core compiler features and the language are not expected to change, so further
+drift is not expected; only bug fixes are in scope. Detailed planning is in
+[V2.0.0-PLAN.md](V2.0.0-PLAN.md); the P0.4 scope decisions are in
+[Plan-Phase0.md](specification/Verification/Plan-Phase0.md) §20.
 
 **Why it matters.** Phase 0 is paused mid-P0.3 pending alignment with M6.5. The earlier blocker —
 ongoing compiler changes — is resolved by the v1.0.0 release. The expensive parts are partly in
@@ -1066,3 +1070,5 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-10-29 | Locked the v2.0.0 target set (WL-1.1, WL-2, WL-3 P0.4, WL-4 x86-64, WL-5.1, WL-9, WL-10) and started [V2.0.0-PLAN.md](V2.0.0-PLAN.md). |
 | 2026-10-30 | Marked WL-4 done after PR #7 merged into main and main was merged back into v2.0.0-planning; the report, runbook, and evidence are in specification/Verification/. |
 | 2026-10-31 | Re-planned the v2.0.0 target set: deferred WL-9 (WebUI) and locked WL-5.2 (EtherCAT using IgH) now that WL-4 is complete and the EtherCAT hardware has arrived. |
+| 2026-10-31 | Marked WL-10 done and started WL-3 (P0.4) on branch `WL-3`; the compiler drift that paused P0.3 was rechecked against `stc` 1.0.0. |
+| 2026-10-31 | P0.4 is complete and review-approved; WL-3 continues with P0.3, which is resumed with the Q1–Q7 decisions recorded in Plan-Phase0 §19.8. |

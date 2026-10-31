@@ -418,6 +418,59 @@ theorem StackTyped.hasLoop {ctx : Ctx} {c : Cont} {rest : List Cont} {input : Ex
     StackHasLoop (c :: rest) :=
   Or.inl hm
 
+/-- A stack with a loop marker has a `dropToLoop` result. -/
+theorem StackHasLoop.dropToLoop_some {k : List Cont} (h : StackHasLoop k) :
+    ∃ k', dropToLoop k = some k' := by
+  induction k with
+  | nil => cases h
+  | cons c rest ih =>
+      by_cases hm : c.isLoopMarker = true
+      · exact ⟨rest, by simp [dropToLoop, hm]⟩
+      · have htail : StackHasLoop rest := by
+          simpa [StackHasLoop, hm] using h
+        rcases ih htail with ⟨k', hk'⟩
+        exact ⟨k', by simp [dropToLoop, hm, hk']⟩
+
+/-- A stack with a loop marker has a `findLoop` result. -/
+theorem StackHasLoop.findLoop_some {k : List Cont} (h : StackHasLoop k) :
+    ∃ cont rest, findLoop k = some (cont, rest) := by
+  induction k with
+  | nil => cases h
+  | cons c rest ih =>
+      by_cases hm : c.isLoopMarker = true
+      · exact ⟨c, rest, by simp [findLoop, hm]⟩
+      · have htail : StackHasLoop rest := by
+          simpa [StackHasLoop, hm] using h
+        rcases ih htail with ⟨cont, rest', hk'⟩
+        exact ⟨cont, rest', by simp [findLoop, hm, hk']⟩
+
+/-- The unit-wide function table of a function frame's context. -/
+theorem frameCtx_functions_ofFunction {u : HirUnit} {index : Nat} {fn : Function}
+    (h : u.functions[index]? = some fn) :
+    (frameCtx u (.function index)).functions = (Env.ofUnit u).functions := by
+  simp [frameCtx, h, Ctx.ofFunction]
+
+/-- The unit-wide function table of the program context. -/
+theorem frameCtx_functions_program (u : HirUnit) :
+    (frameCtx u .program).functions = (Env.ofUnit u).functions := rfl
+
+/-- A function signature in the unit environment comes from the unit's function
+list. -/
+theorem Env.ofUnit_functions_getElem? {u : HirUnit} {index : Nat} {sig : Signature}
+    (h : (Env.ofUnit u).functions[index]? = some sig) :
+    ∃ fn, u.functions[index]? = some fn := by
+  simp only [Env.ofUnit] at h
+  rw [List.getElem?_map] at h
+  cases hl : u.functions[index]? with
+  | none => rw [hl] at h; cases h
+  | some fn => exact ⟨fn, rfl⟩
+
+/-- A shaped stack whose head is a function frame has a nonempty tail. -/
+theorem FramesShape.function_tail_ne_nil {f : Frame} {rest : List Frame}
+    (h : FramesShape (f :: rest)) (hf : ∃ index, f.kind = .function index) :
+    rest ≠ [] :=
+  FramesShape.tail_ne_nil h hf
+
 /-! ## Runtime store operations -/
 
 /-- A `Forall2` relation relates lists of equal length. -/
@@ -536,8 +589,124 @@ theorem ConfigTyped.lookupVar?_some {u : HirUnit} {s : State} {f : Frame}
           simp only [Ctx.ofProgram, Ctx.lookup] at h
           cases h
 
+/-! ## Progress support -/
 
+/-- A function signature in a frame's context resolves to a unit function. -/
+theorem frameCtx_functions_lookup {u : HirUnit} {f : Frame} {index : Nat}
+    {sig : Signature} (hfm : FrameMatches u f)
+    (hsig : (frameCtx u f.kind).functions[index]? = some sig) :
+    ∃ fn, u.functions[index]? = some fn := by
+  have hctxf : (frameCtx u f.kind).functions = (Env.ofUnit u).functions := by
+    cases hk : f.kind with
+    | program => simpa [hk] using frameCtx_functions_program u
+    | function i =>
+        simp only [FrameMatches, hk] at hfm
+        rcases hfm with ⟨fn, hfn, _⟩
+        exact frameCtx_functions_ofFunction hfn
+  exact Env.ofUnit_functions_getElem? (by rwa [hctxf] at hsig)
 
+/-- A typed expression focus never gets stuck. -/
+theorem stepExpr_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
+    {e : Expr} (hf : c.frames = f :: rest) (hctx : ConfigTyped u c)
+    (hfm : FrameMatches u f)
+    (h : ∃ T, ExprHasType (frameCtx u f.kind) e T ∧
+        StackTyped (frameCtx u f.kind) f.k (.value T) f.loopCtx) :
+    stepExpr u c e ≠ .stuck := by
+  simp only [stepExpr, hf]
+  cases e with
+  | literal lit span => simp
+  | var id span =>
+      rcases h with ⟨T, ht, _⟩
+      cases ht with
+      | var hlookup =>
+          obtain ⟨v, hv⟩ := ConfigTyped.lookupVar?_some hctx hf hlookup
+          simp [hv]
+  | unary op operand span => simp
+  | binary op lhs rhs span => simp
+  | call callee args span =>
+      cases args with
+      | nil =>
+          cases callee with
+          | std fn sp =>
+              simp only [performCall]
+              split <;> simp
+          | function index sp =>
+              rcases h with ⟨T, ht, _⟩
+              cases ht with
+              | call hcall =>
+                  rcases callHasType_cases hcall with
+                    ⟨idx, cspan, sig, hcallee, hsig, hres, hargs⟩ |
+                    ⟨fn, cspan, ty, hcallee, hres, hstd⟩
+                  · cases hcallee
+                    obtain ⟨fn, hfn⟩ := frameCtx_functions_lookup hfm hsig
+                    simp [performCall, hfn, hf]
+                  · cases hcallee
+      | cons arg more => simp
+  | cast operand to kind span => simp
+
+/-- A typed value focus never gets stuck. -/
+theorem stepValue_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
+    {v : Value} (hf : c.frames = f :: rest) (hfm : FrameMatches u f)
+    (h : v.WellFormed ∧ ∃ T, v.ty = T ∧
+        StackTyped (frameCtx u f.kind) f.k (.value T) f.loopCtx) :
+    stepValue u c v ≠ .stuck := by
+  rcases h with ⟨_hvwf, T, _hty, hstack⟩
+  have hne : f.k ≠ [] := StackTyped.value_ne_nil hstack
+  simp only [stepValue, hf]
+  cases hk : f.k with
+  | nil => exact absurd hk hne
+  | cons cont rest =>
+      rw [hk] at hstack
+      simp only [hk]
+      cases hstack with
+      | assign hlookup hrest => simp [stepValue, hf, hk]
+      | unary hop hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | binaryL hrhs hop hres hrest => simp [stepValue, hf, hk]
+      | binaryR hlhs hty hop hres hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | cast hconv hcore hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | callArgs hrem htyped hdone hsig hresult hrest =>
+          simp only [stepValue, hf, hk]
+          split
+          · exfalso; exact hrem rfl
+          · simp only [performCall]
+            split
+            · split
+              · simp
+              · split <;> simp
+            · simp only [CalleeSignatureV] at hsig
+              rcases hsig with ⟨sig, hsigfn, _hargs⟩
+              obtain ⟨fn, hfn⟩ := frameCtx_functions_lookup hfm hsigfn
+              simp [performCall, hfn, hf]
+          · simp
+      | ifCond harms helse hrest =>
+          simp only [stepValue, hf, hk]
+          repeat' split
+          all_goals simp
+      | caseSel hsel hint hlabels hbodies helse hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | whileCond hcond hbody hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | repeatCond hcond hbody hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | forInit hvar hint hnot hstop hstep hzero hbody hrest =>
+          simp [stepValue, hf, hk]
+      | forStop hvar hint hnot hstep hzero hbody hrest =>
+          simp only [stepValue, hf, hk, forContinue]
+          repeat' split
+          all_goals simp
+      | forStep hvar hint hnot hstop hbody hrest =>
+          simp only [stepValue, hf, hk, forContinue]
+          repeat' split
+          all_goals simp
 
 /-! ## Determinism -/
 

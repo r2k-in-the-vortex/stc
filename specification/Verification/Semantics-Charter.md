@@ -2,8 +2,10 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-27
-Status: Approved 2026-10-27. P0.0 freezes the scope and the claim; no source or target semantics
-is claimed as defined or proved yet.
+Status: Approved 2026-10-27. P0.0 froze the scope and the claim. P0.1 and P0.2 are complete, P0.3
+is resumed mid-proof (2026-10-31) with its drift register rechecked and open questions resolved,
+and P0.4 is complete and review-approved (2026-10-31). The frozen target scope was revised on
+2026-10-31 to remove `switch`; no other inclusion or exclusion changed.
 Parent: [Verification Program Plan](Plan.md)
 Phase plan: [Phase 0 Implementation Plan](Plan-Phase0.md)
 Semantics reference: [stc Semantics — Phase 0 Core](Semantics.md)
@@ -117,11 +119,14 @@ Included in Phase 0:
   `LIMIT`, `MUX`, and core calls; assignment, `IF`, `CASE`, `FOR`, `WHILE`, `REPEAT`, `EXIT`,
   `CONTINUE`, `RETURN`; one program and one sequential cycle; exact standard functions;
   `OVERFLOW`, `DIV_ZERO`, and `RANGE` traps;
-- target: `i1`, `i8`, `i16`, `i32`, `i64`, and `ptr`; integer and bitwise instructions,
-  comparisons, casts, `select`, `phi`, `br`, `switch`, `ret`, direct and indirect `call`,
-  `alloca`, `load`, `store`, slot-table `getelementptr`, checked arithmetic intrinsics, and trap
-  calls; the slot table, function-address table, and module-local constants; ABI 2 entry points;
-  stack frames and GOT cells with no heap.
+- target: `void`, `i1`, `i8`, `i16`, `i32`, `i64`, and `ptr`; the `{ iN, i1 }` overflow result and
+  fixed `[N x ptr]`/`[N x i8]` arrays; integer and bitwise instructions including the rotate
+  intrinsics, comparisons, casts, `select`, `phi`, `br`, `ret`, `unreachable`, direct and indirect
+  `call`, `alloca`, `load`, `store`, stack-slot/root-array/slot-table `getelementptr`, checked
+  arithmetic intrinsics with `extractvalue`, and trap calls; the slot table with five cell kinds
+  (`Data`, `Function`, `Descriptor`, `Direct`, `Import`), the function-address table, and
+  module-local constants; host ABI 2 entry points (production modules require minor 2.1); stack
+  frames and GOT cells with no heap.
 
 | Excluded from Phase 0 | Examples | Added by |
 | --- | --- | --- |
@@ -136,7 +141,8 @@ Included in Phase 0:
 | I/O, retained state, and online change | `AT` bindings, `RETAIN`, persistent image, swap, rollback, unload | Phase 6 source; Phase 8 runtime |
 | Additional traps | Bounds, null reference, conversion-to-real, and traps that depend on excluded types | Phase 6 source; Phase 7 target |
 | Target floating point and general values | `float`, `double`, vectors, `fadd`/`fsub`/`fmul`/`fdiv`/`frem` | Phase 5 syntax; Phase 7 semantics |
-| Advanced target instructions | Atomics, volatile access, `invoke`/`landingpad`, dynamic `alloca`, descriptor/vtable/TYPEINFO blobs, process image, string data | Phase 5 syntax; Phase 7 semantics; Phase 8 runtime |
+| Advanced target instructions | Atomics, volatile access, `invoke`/`landingpad`, dynamic `alloca`, `insertvalue`, `llvm.memcpy`, `ptrtoint`/`inttoptr`, descriptor/vtable/TYPEINFO blobs, process image, string data | Phase 5 syntax; Phase 7 semantics; Phase 8 runtime |
+| Dense-label `switch` lowering | `CASE` currently lowers to comparison branches; no `switch` is emitted | Phase 5 syntax if lowering changes |
 | Debug and monitoring | DWARF/CodeView contents, `stc-debug/1`, sessions, typed access, forcing, checkpoint hooks and metadata, host service 13 | Not planned for v1 verification: the verified release build excludes debug state by contract (D-178); see [Plan](Plan.md) §11 |
 | Full host lifecycle | Attach/prepare/activate/commit/rollback/unload beyond the initialization boundary | Phase 8 |
 | General LLVM model | Poison/`undef` generality, provenance, optimizer behaviour, general pointer arithmetic | Not planned; a non-goal of the program |
@@ -147,6 +153,12 @@ Included in Phase 0:
 A feature moves from this table only through a charter revision and a matching parent-plan
 update. The source and target semantics modules stay free of excluded features so that adding
 one later is an extension, not a rewrite.
+
+**Known semantic gap (2026-10-31).** P0.3 models `CHAR`, `WCHAR`, and `UCHAR` by layout only.
+Unicode scalar validity and the `WCHAR_TO_UCHAR`/`UCHAR_TO_WCHAR` traps specified in
+[UTF8-Strings.md](../UTF8-Strings.md) are not modeled; they are deferred to the later string
+phase and excluded from P0.6 conformance until then. This is a recorded gap, not a scope
+reduction: the character types remain in the core.
 
 ## 7. Phase 0 decisions
 

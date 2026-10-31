@@ -12,9 +12,13 @@ the soundness and rejection-characterization theorems are defined and proved. P0
 (2026-10-27): the value and trap model, the small-step machine, the configuration typing, the
 determinism, trap-soundness, and guarded exact-arithmetic results, and the fuel interpreter's
 soundness and completeness are in place; `progress`, `preservation`, `type_soundness`, and
-initial-state typing remain. P0.4–P0.5 definitions and proofs are added in their sub-phases and
-reviewed in P0.7. The open P0.3 semantic questions and the drift register are recorded in
-[Plan-Phase0.md](Plan-Phase0.md) §19. This document does not yet make the full Phase 0 soundness
+initial-state typing remain. The M6.5 compiler drift that paused P0.3 has stabilized at `stc`
+1.0.0; the drift register was rechecked on 2026-10-31 and still holds. P0.3 resumed on 2026-10-31
+and its open questions are resolved in [Plan-Phase0.md](Plan-Phase0.md) §19.8. P0.4 is complete
+(review approved 2026-10-31, WL-3): `IRFrag`, `IRContract`, `WellFormed`, and the structural
+lemmas are defined and proved. P0.5 definitions and proofs follow and are reviewed in P0.7. The open P0.3
+semantic questions and the drift register are recorded in [Plan-Phase0.md](Plan-Phase0.md) §19;
+the P0.4 scope decisions are in §20. This document does not yet make the full Phase 0 soundness
 claim.
 Charter: [Semantics Charter](Semantics-Charter.md)
 Plan: [Phase 0 Implementation Plan](Plan-Phase0.md) · [Verification Program Plan](Plan.md)
@@ -26,9 +30,12 @@ source subset is scalar: `BOOL`, signed and unsigned integers, bit strings, and 
 scalar variables, globals, functions, and one program; exact operators and standard functions;
 structured control flow without `VAR_OUTPUT`, `VAR_IN_OUT`, or aliasing; and the `OVERFLOW`,
 `DIV_ZERO`, and `RANGE` traps. The target subset is the emitted-IR fragment for that source
-subset: integer and pointer types, integer and bitwise instructions, casts, `select`, `phi`,
-branches, `switch`, calls, stack slots, loads and stores, slot-table `getelementptr`, checked
-arithmetic intrinsics, and trap calls, with GOT cells modeled as typed indices.
+subset: integer and pointer types, the overflow-intrinsic result and fixed arrays, integer and
+bitwise instructions including the rotate intrinsics, casts, `select`, `phi`, branches, calls,
+stack slots, loads and stores, `getelementptr` for stack slots, root-pointer arrays, and the slot
+table, checked arithmetic intrinsics with `extractvalue`, and trap calls, with GOT cells modeled
+as typed indices. `switch` is not emitted by the current compiler and is not part of the
+fragment.
 
 The exclusions and the phase that adds each one are recorded in the
 [charter's exclusion register](Semantics-Charter.md#6-frozen-core-and-exclusion-register).
@@ -85,10 +92,15 @@ unsigned layout, integers carry their signedness, bit strings are unsigned, and 
 
 ### 2.5 HIR-to-IR mapping and the covered fragment
 
-P0.4 defines `IRFrag` and `WellFormed` in `Stc.Codegen.Ir`; P0.5 defines the operational
-semantics in `Stc.Codegen.Semantics`. The mapping covers the emitted IR for the core source
-subset only. The textual printer and parser are out of scope, so the semantics is defined over
-the in-memory fragment.
+P0.4 defines `IRFrag`, `IRContract`, and `WellFormed` in `Stc.Codegen.Ir`; P0.5 defines the
+operational semantics in `Stc.Codegen.Semantics`. The mapping covers the production module the
+compiler emits for the core source subset: scalar types, the overflow-intrinsic result, fixed
+pointer and byte arrays, the emitted instructions and terminators, the generated entry-point
+wrappers, and the module globals. `WellFormed` is defined over the whole module; P0.5 interprets
+the covered user functions and the cycle body, with attach/prepare/shutdown as the initialization
+boundary. The textual printer and parser and the debug/test build forms are out of scope, so the
+semantics is defined over the in-memory fragment. The definition-to-emission map is the
+[Core IR Coverage](Core-IR-Coverage.md) table.
 
 ## 3. Static semantics
 
@@ -98,8 +110,15 @@ P0.2 defines the canonical `Ty` family and its widths. `BOOL` is a one-bit unsig
 `i8` in memory and an `i1` normalized with `icmp ne 0` in SSA. Integer and bit-string operations
 reuse the existing `Stc.Exact` models, including checked overflow, truncating division, masked
 shift and rotate counts, and conversion rules. `CHAR`, `WCHAR`, and `UCHAR` are unsigned integer
-layouts; `UCHAR` is a 32-bit Unicode scalar. Literals are typed HIR values with an integer
+layouts; `UCHAR` uses a 32-bit unsigned layout. Literals are typed HIR values with an integer
 payload; `Literal.WellFormed` requires the payload to fit the literal's core type.
+
+**Known gap (Q3).** The P0.3 character model is layout-only. [UTF8-Strings.md](../UTF8-Strings.md)
+requires `WCHAR_TO_UCHAR` to trap on lone surrogates and `UCHAR_TO_WCHAR` to trap above the BMP,
+and defines `UCHAR` as a Unicode scalar. P0.3 does not enforce scalar validity and does not model
+those conversion traps; the conversions are integer layout conversions. This gap is deferred to
+the later string phase and excluded from P0.6 conformance until it is modeled. The source type
+soundness result is therefore relative to the layout-only character model.
 
 HIR typing is monomorphic. The declarative operator rules require arithmetic operands to be the
 same integer type, bitwise operands to be the same `BOOL`/bit-string type, and comparison
@@ -156,8 +175,9 @@ characterized by the checker's label-problem function; the success path is prove
 `ConversionLegal` accepts exactly the conversions the analyzer's `can_convert` accepts for the
 core scalar types: identity; integer-to-integer; bit-string-to-bit-string; character-to-
 character; integer/bit-string cross-conversions; and `BOOL` to/from integers and bit strings.
-Character-to-integer conversions are excluded. `conversion_legal_iff` proves the relation is
-decided by `conversionLegalB`, the checker's executable form. `ImplicitConversion` records the
+Character-to-integer conversions are excluded. Character conversions use the layout-only model
+described in §3.1; the Unicode scalar traps are the recorded Q3 gap. `conversion_legal_iff`
+proves the relation is decided by `conversionLegalB`, the checker's executable form. `ImplicitConversion` records the
 smaller source-level assignability relation the lowering must realize, and
 `implicit_conversion_legal` proves it is contained in `ConversionLegal`. The behavioural
 agreement between legal conversions and `Stc.Exact.IntType.convert` (success with a destination
@@ -180,8 +200,9 @@ frames, the running frame's focus (`expr`, `value`, `stmts`, `resume`, `returned
 or `halted`), and per-frame continuation stacks. A frame carries its parameters, locals,
 result variable, continuation stack, and loop context. `EXIT` and `CONTINUE` target the
 innermost loop marker in the continuation stack; `CONTINUE` in a `FOR` performs the checked
-increment and bound test. `RETURN` completes the current frame and delivers its result to the
-caller. The configuration-typing judgment `ConfigTyped` is defined in `Stc.Sem.Eval`; the
+increment and bound test. A signed `FOR` uses the ascending bound test exactly when the runtime
+step is positive; an unsigned loop always ascends. This matches `lower_for` and resolves Q4.
+`RETURN` completes the current frame and delivers its result to the caller. The configuration-typing judgment `ConfigTyped` is defined in `Stc.Sem.Eval`; the
 progress and preservation proofs are not yet complete.
 
 ### 4.2 Source small-step relation `Step`
@@ -235,8 +256,11 @@ typed cell contents described by `WellFormed`.
 A GOT cell is an index, not an arbitrary pointer. The target state carries a root map
 `GotId → Value`, a slot table `Slot → CellKind`, and a function table `GotId → Callable`.
 `WellFormed` records each cell's kind, and the semantics checks kind agreement on every load,
-store, and call. `ir_got_sound` states that a load returns the root value recorded by the slot
-table.
+store, and call. The cell kinds are `Data`, `Function`, `Descriptor`, `Direct`, and `Import`;
+`Descriptor` cells are structurally representable but semantically out of the core because OOP is
+excluded. The slot table is grouped in the canonical kind order; sorting within a group by
+`GotId`/service ID is Phase 3's `slots_canonical`. `ir_got_sound` states that a load returns the
+root value recorded by the slot table.
 
 ### 5.3 Traps
 
@@ -255,20 +279,22 @@ state on the fragment. This is a property of the modeled fragment, not a general
 The source and target integer operations are defined against the existing `Stc.Exact` models.
 `checked_arith_traps_exactly` states that source checked arithmetic agrees with the `Stc.Exact`
 models, including checked conversions and the exact standard functions. `evalCast` and
-`evalStd` re-check their results with the exact checked wrapper; that guard is redundant for
-representable inputs but is not separately proved to be vacuous (open question Q2 in
-[Plan-Phase0.md](Plan-Phase0.md) §19). `ir_checked_arith_refines_exact` states that the IR
+`evalStd` re-check their results with the exact checked wrapper. P0.3 keeps this guarded form
+(Q2 resolved in [Plan-Phase0.md](Plan-Phase0.md) §19.8); the guard is redundant for representable
+inputs but the unguarded equality needs the `convert_ok_fits` and standard-function fit lemmas,
+which are recorded as a P0.5/Phase 2 follow-up. `ir_checked_arith_refines_exact` states that the IR
 instruction sequence plus its trap path produces the same result or trap as the exact model.
 
 ## 7. Theorem inventory and proof status
 
 The authoritative status of every entry is [`lean/verification-status.toml`](../../lean/verification-status.toml);
 `tools/ci/check_verification_registry.py` validates it and audits proved theorems. This section
-mirrors the registry at P0.3 in progress: the P0.1 and P0.2 entries are proved except
-`core_check_complete`, which is descoped with the reason recorded in the registry; the P0.3
-entries for determinism, trap soundness, guarded exact arithmetic, and the interpreter are
-proved, while `progress`, `preservation`, and `type_soundness` remain in progress. Open P0.3
-questions are recorded in [Plan-Phase0.md](Plan-Phase0.md) §19. The registry is regenerated
+mirrors the registry while P0.3 is resumed and P0.4 is complete: the P0.1 and P0.2 entries are
+proved except `core_check_complete`, which is descoped with the reason recorded in the registry;
+the P0.3 entries for determinism, trap soundness, guarded exact arithmetic, and the interpreter
+are proved, while `progress`, `preservation`, and `type_soundness` remain in progress; the P0.4
+definitions and structural lemmas are proved. Open P0.3 questions are recorded in
+[Plan-Phase0.md](Plan-Phase0.md) §19 and the P0.4 decisions in §20. The registry is regenerated
 into this section at P0.7.
 
 ### 7.1 Source soundness
@@ -288,7 +314,31 @@ into this section at P0.7.
 | `Stc.Sem.trap_soundness` | `Stc.Sem.Eval` | P0.3 | proved |
 | `Stc.Sem.checked_arith_traps_exactly` | `Stc.Sem.Eval` | P0.3 | proved (guarded form, Q2) |
 
-### 7.2 Target soundness
+### 7.2 Target syntax and well-formedness
+
+P0.4 defines the production-module fragment and its well-formedness predicate. The structural
+lemmas are projections of `Stc.Codegen.WellFormed`; the full inventory and shapes are in
+[Plan-Phase0 §7.1](Plan-Phase0.md#71-p04-structural-lemmas).
+
+| Lemma | Module | Sub-phase | Status |
+| --- | --- | --- | --- |
+| `Stc.Codegen.wellFormed_blocks_have_terminators` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_phis_first` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_phi_predecessors_match` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_types_correct` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_uses_defined` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_module_shapes` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_slot_refs_in_range` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_slot_refs_kind_correct` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_slot_table_canonical` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_entry_points_match_contract` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_no_direct_root_or_callable` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_pre_attach_clean` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_local_globals_allowed` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_cells_not_written` | `Stc.Codegen.Ir` | P0.4 | proved |
+| `Stc.Codegen.wellFormed_descriptor_and_table` | `Stc.Codegen.Ir` | P0.4 | proved |
+
+### 7.3 Target soundness
 
 | Theorem | Module | Sub-phase | Status |
 | --- | --- | --- | --- |
@@ -301,7 +351,7 @@ into this section at P0.7.
 | `Stc.Codegen.ir_recursive_model_equiv` | `Stc.Codegen.Semantics` | P0.5 | planned |
 | `Stc.Codegen.ir_no_ub` | `Stc.Codegen.Semantics` | P0.5 | planned |
 
-### 7.3 Interpreter equivalence and harness properties
+### 7.4 Interpreter equivalence and harness properties
 
 | Theorem | Module | Sub-phase | Status |
 | --- | --- | --- | --- |
@@ -309,7 +359,7 @@ into this section at P0.7.
 | `Verification.Semantics.interpreter_complete` | `Verification.Semantics.Interpreter` | P0.3 | proved |
 | `Verification.Semantics.semantics_versioned` | `Verification.Semantics.Conformance` | P0.6 | planned |
 
-### 7.4 Conformance evidence
+### 7.5 Conformance evidence
 
 | Evidence | Artifact | Sub-phase | Status |
 | --- | --- | --- | --- |
@@ -358,6 +408,8 @@ construct is rejected.
 | 2026-10-27 | 1.0-draft | P0.1 | Defined tokens, trivia, spans, the lossless CST contract, the surface AST, and `Derives`; proved `ast_span_wellformed` and the root source-span lemmas; added the [Core Syntax Coverage](Core-Coverage.md) table |
 | 2026-10-27 | 1.0-draft | P0.2 | Defined the typed HIR, the declarative typing judgment, `checkCore`, `HirWellFormed`, and the conversion relation; proved `core_check_sound`, `core_rejection_characterized`, `hir_wellformed`, and `conversion_legal_iff`; descoped `core_check_complete` with the `FOR` over-rejection recorded |
 | 2026-10-27 | 1.0-draft | P0.3 (in progress) | Defined values and traps, the small-step machine, the configuration typing, and the fuel interpreter; proved `eval_deterministic`, `trap_soundness`, guarded `checked_arith_traps_exactly`, `interpreter_sound`, and `interpreter_complete`; `progress`, `preservation`, `type_soundness`, and initial-state typing remain; open questions Q1–Q7 and the drift register are recorded in Plan-Phase0.md §19 |
+| 2026-10-31 | 1.0-draft | P0.4 (complete) | Started WL-3. Fixed the production-module fragment: five GOT cell kinds, a grouped slot table, the overflow-result and fixed-array types, rotate intrinsics, `extractvalue`, and `unreachable`; removed `switch` (CASE lowers to branches). Defined `IRFrag`, `IRContract`, `ModuleShapes`, `WellFormed`, and the structural lemmas, and proved the P0.4 lemmas with the standard Lean axioms; the definition-to-emission map is the [Core IR Coverage](Core-IR-Coverage.md) table. The P0.4 review was approved 2026-10-31 |
+| 2026-10-31 | 1.0-draft | P0.3 (resumed) | Reevaluated Q1–Q7: keep the current machine and `ConfigTyped` invariant; keep the guarded exact form; record layout-only characters as a known Q3 gap; correct the `FOR` zero-step test to `step > 0` for signed loops and always-ascending for unsigned; confirm the initialization boundary and the `RANGE` power trap; commit WIP checkpoints. `progress`, `preservation`, initial-state typing, and `type_soundness` remain |
 
 ## 10. Rust/Lean interface
 
@@ -399,6 +451,7 @@ exclusion is a Phase 0 exit failure. The triage log is part of `Phase0-Report.md
 
 - [Semantics Charter](Semantics-Charter.md)
 - [Core Syntax Coverage](Core-Coverage.md)
+- [Core IR Coverage](Core-IR-Coverage.md)
 - [Phase 0 Implementation Plan](Plan-Phase0.md)
 - [Verification Program Plan](Plan.md)
 - [Testing and Verification](../Architecture/Testing-and-Verification.md)

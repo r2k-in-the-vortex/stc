@@ -12,8 +12,12 @@ rejection-characterization theorems are in place. P0.3 is in progress (2026-10-2
 trap model, the small-step machine, the configuration typing, determinism, trap soundness, exact
 arithmetic agreement, and the sound/completeness results for the fuel interpreter are in place;
 `progress`, `preservation`, `type_soundness`, and initial-state typing remain. Work is paused for
-alignment with M6.5 and will be rechecked afterwards. The open semantic questions and the drift
-register are recorded in §19.
+alignment with M6.5. The compiler drift that prompted the pause has stabilized at `stc` 1.0.0;
+the §19.4 register was rechecked on 2026-10-31 and still holds, so P0.3 remains paused with its
+open questions unchanged. P0.4 is complete (review approved 2026-10-31) as WL-3 of
+[V2.0.0-PLAN.md](../../V2.0.0-PLAN.md); its scope decisions and execution record are in §20. P0.3
+resumed on 2026-10-31; the reevaluation is in §19.8. The open P0.3 semantic questions and the
+drift register are recorded in §19.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -118,9 +122,10 @@ Semantics decisions for the core:
 - A program has scalar local variables and a single cycle body. Persistent scalar globals and
   scalar program fields are GOT roots. There is no heap, no aliasing beyond GOT cells, and no
   `VAR_IN_OUT`.
-- `CASE` is restricted to integer selectors and integer literal/range labels. Dense-label
-  `switch` lowering is part of the target fragment, but the source semantics does not require a
-  particular lowering.
+- `CASE` is restricted to integer selectors and integer literal/range labels. The source
+  semantics does not require a particular lowering. `stc-codegen` currently lowers `CASE` to
+  comparison branches, so `switch` is not part of the P0.4 fragment; Phase 5 adds it if lowering
+  changes.
 - `EXIT` and `CONTINUE` target the innermost enclosing loop. Their semantics is expressed with a
   structured control stack in the small-step relation.
 
@@ -131,18 +136,32 @@ language. Phase 0 models this fragment natively in Lean; it does not import or p
 
 | Area | Included in Phase 0 | Excluded until later phases |
 | --- | --- | --- |
-| Types | `i1`, `i8`, `i16`, `i32`, `i64`, `ptr`; slot-table array types | `float`, `double`, structs, general arrays, vector types |
-| Instructions | Integer `add`/`sub`/`mul`/`sdiv`/`udiv`/`srem`/`urem`, `and`/`or`/`xor`/`shl`/`lshr`/`ashr`, `icmp`, `zext`/`sext`/`trunc`, `select`, `phi`, `br`, `switch`, `ret`, direct and indirect `call`, `alloca`, `load`, `store`, `getelementptr` for stack slots and the slot table, checked arithmetic intrinsics, trap calls | `fadd`/`fsub`/`fmul`/`fdiv`/`frem`, vector ops, atomics, volatile access, `invoke`/`landingpad`, dynamic `alloca`, descriptor/vtable/TYPEINFO blobs, process-image access |
-| Globals | Slot table, function-address table, module-local read-only constants | Descriptor globals, process image, string data, debug metadata |
-| Entry points | ABI 2 entry-point signatures and the cycle body; attach/prepare/shutdown are modeled as the initialization boundary | Full host lifecycle, swap, rollback, unload |
-| Memory | Stack frames, GOT cells as opaque pointer-sized values, no heap | Object records, process image, I/O memory, raw pointer arithmetic |
+| Types | `void`, `i1`, `i8`, `i16`, `i32`, `i64`, `ptr`; the `{ iN, i1 }` overflow-intrinsic result; fixed arrays `[N x ptr]` (function table and root-pointer arrays) and `[N x i8]` (descriptor and metadata blobs) | `float`, `double`, general structs and arrays, vector types |
+| Instructions | Integer `add`/`sub`/`mul`/`sdiv`/`udiv`/`srem`/`urem`, `and`/`or`/`xor`/`shl`/`lshr`/`ashr`, the `llvm.fshl`/`llvm.fshr` rotate intrinsics, `icmp`, `zext`/`sext`/`trunc`, `select`, `phi`, `br`, `ret`, `unreachable`, direct and indirect `call`, `alloca`, `load`, `store`, `getelementptr` for stack slots, root-pointer arrays, and the slot table, the `llvm.{s,u}{add,sub,mul}.with.overflow.iN` checked arithmetic intrinsics, `extractvalue` of their `{ iN, i1 }` result, and trap calls | `fadd`/`fsub`/`fmul`/`fdiv`/`frem`, vector ops, atomics, volatile access, `invoke`/`landingpad`, dynamic `alloca`, `insertvalue`, `llvm.memcpy`, `ptrtoint`/`inttoptr`, `switch`, descriptor/vtable/TYPEINFO blobs, process-image access |
+| Globals | The slot table, the function-address table, the module descriptor blob, and other module-local read-only constants such as the metadata blob; module-local mutable pointers to the host API and slot table; the retain buffer | Runtime descriptor/vtable cells, process image, source string data, debug metadata |
+| Entry points | Host ABI 2 entry-point signatures (production modules require minor 2.1; the current host minor is 2.3) and the cycle body; attach/prepare/shutdown are modeled as the initialization boundary | Full host lifecycle, swap, rollback, unload |
+| Memory | Stack frames, GOT cells as opaque pointer-sized values, and the root-pointer array passed to a program body; no heap | Object records, process image, I/O memory, raw pointer arithmetic |
 | Undefined behavior | No poison/undef, no out-of-bounds stack access, no misaligned access on covered programs; prove no UB under `WellFormed` | Full LLVM memory model, integer-pointer casts, provenance |
+
+The fragment is the production module shape: debug-info builds, test instrumentation, coverage
+counters, and debug checkpoint hooks are excluded. `WellFormed` is defined over the whole module,
+including the generated entry-point wrappers and module globals. The P0.5 target semantics
+interprets the covered user functions and the cycle body and treats attach/prepare/shutdown as
+the initialization boundary.
 
 The target semantics treats a GOT cell as an indexed, typed cell, not as an arbitrary pointer.
 `WellFormed` records the slot table and each cell's kind; the semantics checks that a load or
-store uses the matching kind. Function cells are loaded and called indirectly; the semantics
-relates a function cell to its `GotId` and records the callable. This is enough for the core and
-leaves descriptors, vtables, and the process image to Phase 5 and Phase 8.
+store uses the matching kind. The cell kinds are `Data`, `Function`, `Descriptor`, `Direct`, and
+`Import`, matching [GOT Artifacts §7.1](../Architecture/GOT-Artifacts.md) and
+[Online Change and GOT §3.2](../Architecture/Online-Change-and-GOT.md). `Descriptor` cells are
+structurally representable but semantically out of the core because OOP is excluded. Function
+cells are loaded and called indirectly; the semantics relates a function cell to its `GotId` and
+records the callable. This is enough for the core and leaves descriptors, vtables, and the
+process image to Phase 5 and Phase 8.
+
+The slot table is canonical in the sense of the five contiguous kind groups (`Data`, `Function`,
+`Descriptor`, `Direct`, `Import`). Sorting identities within a group by `GotId` bytes, and imports
+by service ID, is the Phase 3 theorem `slots_canonical`; it is not a P0.4 proof obligation.
 
 ### 3.5 Semantics versioning
 
@@ -177,6 +196,7 @@ specification/Verification/
   Plan-Phase0.md     this document
   Semantics.md       reviewed semantics reference (Phase 0 deliverable)
   Core-Coverage.md   core production-to-definition coverage (P0.1)
+  Core-IR-Coverage.md core emitted-IR-to-definition coverage (P0.4)
   Phase0-Report.md   results, conformance report, gaps, handoff
 
 tests/verification/semantics/
@@ -357,27 +377,47 @@ assumes.
 
 **Work.**
 
-- Define `IRFrag`: modules, type definitions, globals, constants, functions, basic blocks,
-  instructions, terminators, and the slot/function tables.
-- Define `WellFormed`: type correctness, SSA/dominance, block terminators, `phi` arity, GOT cell
-  kinds, canonical slot table, entry-point signatures, and no direct persistent-root or
-  user-callable references in the covered fragment.
-- Define the slot table and cell-kind model used by the target semantics: data, function, and
-  local cells, with the canonical ordering rule.
-- Prove structural lemmas: well-formed blocks have a terminator; `phi` predecessors match;
-  slot references are in range and have the recorded kind; the entry-point signatures match the
-  ABI 2 contract.
-- Coordinate with the program plan's Phase 5, which extends `IRFrag` and implements the proved
-  checker. Phase 0 defines and proves the core structural lemmas; it does not build the checker.
+- Define `IRFrag` over the whole emitted production module: type definitions, globals and
+  constants, functions, basic blocks, instructions, terminators, the slot table, the
+  function-address table, and the generated entry-point wrappers. Debug-info builds, test
+  instrumentation, coverage counters, and debug checkpoint hooks are out of scope.
+- Define the cell-kind model with all five GOT kinds (`Data`, `Function`, `Descriptor`, `Direct`,
+  `Import`) and a slot table grouped in the canonical kind order. Sorting within a group by
+  `GotId`/service ID remains Phase 3's `slots_canonical`.
+- Define `IRContract`, mirroring the Rust verifier's contract: persistent roots, user callables,
+  the module-local global allowlist, the slot table, the required entry points, and the
+  descriptor/function-table shapes.
+- Define `WellFormed contract frag`: type correctness, SSA/dominance and definedness, block
+  terminators, `phi` firstness and predecessor/arity agreement, slot references in range and
+  kind-correct, the grouped slot table, the host ABI 2 production entry-point signatures and
+  linkage, no direct persistent-root or user-callable references (the function table is the
+  documented exception), no cell writes, pre-attach entry points that do not use cells, and the
+  local-global allowlist.
+- Prove the structural lemmas in §7.1. The predicate is the contract; each lemma is a projection
+  consumed by P0.5 and Phase 5.
+- Record the rule-by-rule alignment with `crates/stc-codegen/src/verify.rs` and the intentional
+  differences: Lean checks type correctness, SSA/dominance, and `phi` shape intrinsically, while
+  the Rust verifier relies on the builder and checks structural facts; Rust does not check
+  canonical slot ordering because the catalog owns it; descriptor/function-table content pairing
+  is Phase 5.
+- Update the semantics document where P0.4 fixes vocabulary or the fragment.
+- Write the target fragment coverage table in `Core-IR-Coverage.md`, mapping every included
+  instruction, terminator, type, global shape, and entry point to its Lean definition and
+  specification section.
 
-**Deliverables.** `Stc.Codegen.Ir`; `WellFormed`; structural lemmas; the core fragment coverage
-table.
+**Deliverables.** `Stc.Codegen.Ir`; `IRFrag`, `IRContract`, `WellFormed`, the cell-kind and slot
+model; the §7.1 structural lemmas; [Core-IR-Coverage.md](Core-IR-Coverage.md); registry entries;
+the verifier alignment record.
 
-**Exit criteria.** `IRFrag` covers the core emitted IR; `WellFormed` is defined; the structural
-lemmas are proved; the fragment and its exclusions are documented.
+**Exit criteria.** `IRFrag` covers the emitted production module; every included construct has a
+Lean constructor and a coverage-table row; `WellFormed` is defined; every structural lemma in
+§7.1 is proved with no `sorry`; the Lean build and registry checks pass; the P0.4 review is
+approved and recorded.
 
-**Risks.** The textual IR is large and evolving. Define only what the core emits; reject
-everything else rather than modeling it. Keep the printer/parser out of scope.
+**Risks.** The textual IR is large and evolving. Define only the emitted fragment and reject
+everything else rather than modeling it. Keep the printer/parser, the full LLVM memory model, and
+OOP/process-image constructs out of scope. The wrapper bodies are generated, so re-run the
+fragment coverage table when `stc-codegen` changes.
 
 ### P0.5 — Target operational semantics and soundness
 
@@ -515,6 +555,34 @@ fixes the final preconditions and notation.
 | `ir_no_ub` | `WellFormed ir → ¬ UB ir` on the covered fragment | P0.5 | target semantics |
 | `semantics_conformance` | The harness reports agreement for every core corpus case or a documented exclusion | P0.6 | interpreter, harness |
 | `semantics_versioned` | Every report and dump carries the semantics and format versions | P0.6 | harness |
+
+### 7.1 P0.4 structural lemmas
+
+The P0.4 predicate is `Stc.Codegen.WellFormed`; it takes an `IRContract` and an `IRFrag`. The
+lemmas below are its projections. They are the structural contract P0.5 and Phase 5 consume.
+Names are fixed once registered in [`lean/verification-status.toml`](../../lean/verification-status.toml).
+
+| Lemma | Shape | Depends on |
+| --- | --- | --- |
+| `wellFormed_blocks_have_terminators` | Every block in a well-formed function has exactly one terminator after its instructions | IRFrag, WellFormed |
+| `wellFormed_phis_first` | Every `phi` precedes all non-`phi` instructions in its block | IRFrag, WellFormed |
+| `wellFormed_phi_predecessors_match` | A `phi` has exactly one incoming pair per CFG predecessor of its block, and no other labels | IRFrag, WellFormed |
+| `wellFormed_types_correct` | Every instruction and terminator is type-correct for the core IR types, and `ret` matches the function signature | IRFrag, WellFormed |
+| `wellFormed_uses_defined` | Every local operand is a parameter or a dominating definition, and parameter/definition names are unique | IRFrag, WellFormed |
+| `wellFormed_module_shapes` | Type-definition, global, declaration, and function names are unique; type definitions, global initializers, and declarations are well-typed; declarations are known intrinsics | IRFrag, WellFormed |
+| `wellFormed_slot_refs_in_range` | Every slot index is below the slot-table length | IRFrag, IRContract, WellFormed |
+| `wellFormed_slot_refs_kind_correct` | Calls use `Function`/`Import` cells, loads and stores use `Data`/`Direct` cells, and cell addresses are never stored | IRFrag, IRContract, WellFormed |
+| `wellFormed_slot_table_canonical` | The slot table's cell kinds are non-decreasing in the canonical `Data`, `Function`, `Descriptor`, `Direct`, `Import` group order | IRFrag, WellFormed |
+| `wellFormed_entry_points_match_contract` | The required entry points exist with the host ABI 2 production signatures and external linkage | IRFrag, IRContract, WellFormed |
+| `wellFormed_no_direct_root_or_callable` | No body or global initializer names a persistent root or user callable directly; the function table is the only exception | IRFrag, IRContract, WellFormed |
+| `wellFormed_pre_attach_clean` | The descriptor and function accessors do not use the slot table or make indirect calls | IRFrag, IRContract, WellFormed |
+| `wellFormed_local_globals_allowed` | Direct global loads and stores target only the contract's local-global allowlist | IRFrag, IRContract, WellFormed |
+| `wellFormed_cells_not_written` | No instruction stores through a cell address | IRFrag, IRContract, WellFormed |
+| `wellFormed_descriptor_and_table` | The descriptor blob and function table have the contract's constant/internal array shapes, and the table entries match the fragment's function-table list | IRFrag, IRContract, WellFormed |
+
+`slots_canonical` and `slot_table_valid_iff_canonical` remain Phase 3 theorems; P0.4 defines only
+the grouped kind order. Descriptor/function-table content pairing remains Phase 5's
+`descriptor_and_table_pair`.
 
 The source recursive-model equivalence is the pair `interpreter_sound` and
 `interpreter_complete`; the target recursive-model equivalence is `ir_recursive_model_equiv`.
@@ -761,6 +829,7 @@ Phase 0 is done when:
 6. Build `stc-sem` against a small hand-written core dump before the full conformance harness.
 7. Add the core corpus and run the first conformance report.
 8. Schedule the P0.7 review once the source and target soundness theorems are proved.
+9. P0.3 remains paused (§19). P0.4 (WL-3) started 2026-10-31 with the scope decisions in §20.
 
 ## 16. P0.0 execution record
 
@@ -886,10 +955,12 @@ analyzer's core conversions. The exact-model behaviour link is carried into P0.3
 
 ## 19. P0.3 execution record — in progress
 
-Date: 2026-10-27. Status: **in progress, not complete.** The definitions and part of the soundness
-work are in place. The remaining proof work is paused so the core subset and the open semantic
-questions can be aligned with M6.5 and rechecked afterwards. This record is a status snapshot; it is
-not a completion claim.
+Date: 2026-10-27. Status: **resumed 2026-10-31; in progress, not complete.** The definitions and
+part of the soundness work are in place. The remaining proof work was paused so the core subset
+and the open semantic questions could be aligned with M6.5. M6.5 has landed as `stc` 1.0.0, the
+drift register was rechecked on 2026-10-31 (§19.7), and P0.3 is unpaused after the P0.4 review and
+CI. The open questions are resolved in §19.8. This record is a status snapshot; it is not a
+completion claim.
 
 ### 19.1 Deliverables
 
@@ -912,13 +983,14 @@ not a completion claim.
 
 The P0.3 exit criteria are **not met**. `progress`, `preservation`, `type_soundness`, and
 initial-state typing are missing, and the semantics document still describes the dynamic semantics as
-future work in places. There is no `sorry` or `admit`; `lake build` and the local CI checks pass. The
-working tree is not committed as a completed sub-phase.
+future work in places. There is no `sorry` or `admit`; `lake build` and the local CI checks pass.
+P0.3 resumed on 2026-10-31 with the §19.8 decisions; the current definitions are committed as a
+WL-3 checkpoint.
 
 ### 19.3 Open questions
 
-These questions are deliberately open. They are recorded here so the alignment pass after M6.5 can
-resolve them with the updated compiler and specification in view.
+These questions were deliberately open. They are resolved in §19.8; the original statements are
+kept for the record.
 
 - **Q1 — Completion path.** Finish the current machine and `ConfigTyped` proofs, redesign the
   configuration invariant to make preservation smaller, or descope `progress`, `preservation`, and
@@ -959,22 +1031,20 @@ call returns the default `BOOL` value and is unreachable from typed calls.
 
 ### 19.4 Drift register
 
-Checked against the tree on 2026-10-27. These are recorded, not reconciled; the alignment pass after
-M6.5 rechecks them.
+Checked against the tree on 2026-10-27 and rechecked on 2026-10-31 after M6.5 stabilized. These are
+recorded, not reconciled; the P0.3 alignment pass resolves them when that phase resumes.
 
 | Area | Evidence | Current semantics | Resolution |
 | --- | --- | --- | --- |
-| `FOR` step evaluation and zero step | `lower_for` in `crates/stc-codegen/src/stmt.rs` | Start/stop/step once; zero takes the ascending test | Q4 |
+| `FOR` step evaluation and zero step | `lower_for` in `crates/stc-codegen/src/stmt.rs` | Start/stop/step once; signed loops use the ascending test only when `step > 0`, unsigned loops always ascend. The machine was corrected on 2026-10-31 to match. | Q4 resolved |
 | Character conversions | `specification/UTF8-Strings.md` §3.1 and the conversion table | Layout-only conversion; runs of surrogates preserved | Q3 |
 | Power trap code | `ensure_pow_helper` in `crates/stc-codegen/src/expr.rs`; `consteval.rs` | `RANGE` for a negative signed exponent | Q6 |
 | Initialization order | `emit_global_initializers`, `emit_instance_initializers` in `crates/stc-codegen/src/unit.rs` | Globals then program fields, declaration order, once | Q5 |
 
 ### 19.5 Resumption plan
 
-After M6.5 lands, re-align the core subset, the HIR dump, and this plan with M6.5 (including ABI 2.3
-and any HIR changes; later-phase version drift is reconciled by the phase that consumes it, not
-treated as a merge blocker). Then recheck the drift register against the updated compiler and
-specification, resolve Q1–Q6, and finish the remaining work:
+P0.3 resumed on 2026-10-31 after the P0.4 review and CI. The drift register was rechecked (§19.7)
+and the open questions are resolved (§19.8). The remaining work:
 
 1. `progress` and the supporting no-stuck lemmas (runtime lookup, loop-marker existence, frame
    completion, call performance), using `ConfigTyped.lookupVar?_some`, the `StackTyped`
@@ -1000,3 +1070,75 @@ grep -rnwE 'sorry|admit' lean/Stc/Sem lean/Verification    # no matches
 
 The registry marks the five proved P0.3 theorems as `proved`; `progress`, `preservation`, and
 `type_soundness` remain `planned` with a note pointing at this section.
+
+### 19.7 Drift recheck (2026-10-31)
+
+The compiler drift that paused P0.3 has stabilized in `stc` 1.0.0. The four §19.4 rows were
+rechecked against the released tree:
+
+| Area | Recheck result |
+| --- | --- |
+| `FOR` zero step | Unchanged: `lower_for` uses `sgt step, 0` for the ascending test and the descending test for zero; the Lean machine still uses `step ≥ 0`. Q4 remains open. |
+| Character conversions | Unchanged: [UTF8-Strings.md](../UTF8-Strings.md) still requires scalar validity and conversion traps, and the P0.3 value model remains layout-only. Q3 remains open. |
+| Power trap code | Unchanged: `ensure_pow_helper` traps `RANGE` for a negative signed exponent. Q6 remains open. |
+| Initialization order | Unchanged: global initializers then program-field initializers, declaration order, once. Q5 remains as recorded. |
+
+No new drift was found in the files the register covers.
+
+### 19.8 Reevaluation (2026-10-31)
+
+P0.3 resumed after the P0.4 review and CI. The open questions are resolved as follows:
+
+| Question | Resolution |
+| --- | --- |
+| Q1 — completion path | Keep the current machine and `ConfigTyped` invariant and finish the proofs. Redesign only if preservation blocks; no descoping. |
+| Q2 — exact-model link | Keep the guarded `evalCast`/`evalStd` form for P0.3. The unguarded equality needs `convert_ok_fits` and standard-function fit lemmas; record it as a follow-up for P0.5/Phase 2. The semantics document states the guarded form. |
+| Q3 — character validity | Keep the layout-only character model in P0.3 and record Unicode scalar validity and the `WCHAR_TO_UCHAR`/`UCHAR_TO_WCHAR` traps as a known gap for the later string phase and P0.6 dump validation. |
+| Q4 — `FOR` zero step | Fixed in `Machine.forContinue`: signed loops use the ascending test only when `step > 0`; unsigned loops always ascend. This matches `lower_for`. |
+| Q5 — initialization boundary | Confirmed: global initializers, then program-field and local initializers, then the cycle body; `RETURN` ends the cycle and `cyclesLeft` persists program state. |
+| Q6 — negative signed exponent | Confirmed and implemented: `evalPow` traps `RANGE` for a signed negative exponent; constant evaluation rejects the constant case. |
+| Q7 — checkpoint policy | Commit the compiling work as WIP checkpoints on WL-3; the P0.4 commit is the first checkpoint. |
+
+The remaining work is the §19.5 sequence: `progress` and the no-stuck lemmas, `preservation` and
+the store-update lemmas, initial-state typing, then `type_soundness`, the registry and semantics
+document updates, and the P0.3 review.
+
+## 20. P0.4 execution record — in progress
+
+Date: 2026-10-31. Status: **complete; review approved 2026-10-31.** The scope decisions were
+taken before implementation:
+
+| Decision | Resolution |
+| --- | --- |
+| Module boundary | `IRFrag`/`WellFormed` cover the whole emitted production module, including generated entry-point wrappers and module globals. P0.5 interprets user functions and the cycle body; attach/prepare/shutdown remain the initialization boundary. |
+| Cell kinds | All five GOT kinds: `Data`, `Function`, `Descriptor`, `Direct`, `Import`. `Descriptor` cells are structurally representable but semantically out of the core. |
+| Slot canonicality | The slot table is grouped in the canonical kind order in P0.4. Identity sorting by `GotId`/service ID remains Phase 3's `slots_canonical` and `slot_table_valid_iff_canonical`. |
+| Verifier alignment | `WellFormed` includes every `stc-codegen` structural rule that applies to the core fragment: type/SSA checks intrinsic to Lean, plus the contract rules for roots/callables/local globals, slot kinds, entry points, pre-attach accessors, cell writes, and descriptor/function-table shape. Content pairing is Phase 5. |
+| `switch` | Removed from the P0.4 fragment: the current compiler lowers `CASE` to branches. Phase 5 adds `switch` if lowering changes. |
+| Fragment coverage table | [Core-IR-Coverage.md](Core-IR-Coverage.md). |
+
+The deliverables and lemmas are in §6 (P0.4) and §7.1. Registry records P0-T25–P0-T45 are
+`proved`; `lake build` passes and the registry audit reports only the standard Lean axioms. The
+definitions are in [`Stc.Codegen.Ir`](../../lean/Stc/Codegen/Ir.lean); the smoke inhabitant
+`minimalFrag` proves `WellFormed` is satisfiable. The P0.4 review was approved on 2026-10-31 with
+no definition changes requested.
+
+Local evidence:
+
+```text
+cd lean && lake build
+python tools/ci/check_verification_registry.py   # 45 records: 31 proved, 13 planned, 1 descoped
+python tools/ci/check_docs.py
+grep -rnwE 'sorry|admit' lean/Stc/Codegen lean/Verification    # no matches
+```
+
+### 20.1 Review record
+
+The P0.4 review was approved by the owner on 2026-10-31 with no definition changes requested. The
+review confirmed:
+
+- the five cell kinds and the grouped slot-table rule match [GOT Artifacts §7.1](../Architecture/GOT-Artifacts.md) and [Online Change and GOT §3.2](../Architecture/Online-Change-and-GOT.md);
+- the `WellFormed` rule mapping in [Core-IR-Coverage §7](Core-IR-Coverage.md#7-well-formedness-rules) covers `crates/stc-codegen/src/verify.rs`, including the intentional differences (Lean checks type correctness, SSA/dominance, and `phi` shape intrinsically; Rust relies on builder facts; identity-sorted slot canonicality is Phase 3; descriptor/function-table content pairing is Phase 5);
+- the fragment boundary is the whole production module, with debug/test builds, coverage counters, checkpoint hooks, `switch`, aggregates, OOP, and the process image excluded;
+- the smoke inhabitant `minimalFrag` is an adequate non-vacuity check for `WellFormed`;
+- any definition change from the review is reflected in the registry and this record.
