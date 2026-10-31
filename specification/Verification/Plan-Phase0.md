@@ -1347,9 +1347,10 @@ follows:
   `LocalGlobalsAllowed`.
 
 The invariant must be preserved by `irStep` before the three theorems can be stated as whole-run
-properties. That preservation proof, not the semantics definitions, is the remaining P0.5 work.
-The concrete proposal for the invariant and the four decisions is in §22; it is a design note
-awaiting owner approval, and no semantics or proof change has been made for it.
+properties. The concrete proposal for the invariant and the four decisions is in §22; the owner
+approved it on 2026-10-31, the model and invariant are implemented, and the three per-state
+theorems are proved (§22.10). The initial-state/preservation proofs and the reachability
+corollaries remain as the whole-run follow-up (§22.11).
 
 ### 21.3 Deliverables and evidence
 
@@ -1383,15 +1384,16 @@ unaffected.
 5. The plan, [Semantics.md](Semantics.md), [Plan.md](Plan.md), [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md),
    and the registry agree.
 
-## 22. P0.5 target state invariant — design proposal (awaiting owner approval)
+## 22. P0.5 target state invariant — approved design and implementation record
 
-Date: 2026-10-31. Status: **design proposal; no machine-semantics or proof change has been
-made.** This section resolves the four open decisions for the shared invariant behind `ir_progress`
-(P0-T16), `ir_memory_safe` (P0-T17), and `ir_no_ub` (P0-T22). The owner must approve the
-proposal before the invariant is encoded and the three theorems are proved. The five theorems
-already proved (`ir_deterministic`, `ir_got_sound`, `ir_trap_sound`,
-`ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`) stay in place; the proposal notes
-exactly which statements change under the recommended alternatives.
+Date: 2026-10-31. Status: **approved by the owner on 2026-10-31 and implemented.** The four
+decisions are resolved below, the model changes are in `Stc.Codegen.Semantics`, and
+`ir_progress`, `ir_memory_safe`, and `ir_no_ub` are proved against the invariant (§22.10). All
+eight P0.5 target soundness theorems are now proved. The initial-state and preservation proofs
+and the reachability corollaries remain open (§22.11). The five theorems proved before this
+section (`ir_deterministic`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`,
+`ir_recursive_model_equiv`) remain proved; `ir_got_sound` was updated for the offset-aware
+storage model.
 
 ### 22.1 Invariant shape
 
@@ -1986,3 +1988,114 @@ defined fault and has no `.step` successor to preserve it through.
 After approval, the implementation order is: D1/D2 model changes, D4 fact amendment if chosen,
 `WFProgram`/`WFState` encoding, initial-state and preservation proofs, one-step progress,
 memory-safety, and no-UB lemmas, then the reachability corollaries and registry updates.
+
+**Owner approval (2026-10-31).** All six checklist items are approved as recommended: D1
+Option 2 (offset-aware persistent storage and `.slotEntry`), D2 Option 1 (bounds-checked
+accesses with out-of-range as `.stuck` and the Q3 carve-out), D3 builder-trusted
+origin/stack-origin/call-target facts with no P0.4 change, D4 Option A
+(`IRState.functionSignatures` plus `FunctionBindingsTyped`/`CallTargetsTyped`), the
+`WFState`/`AccessBounded` shape, and out-of-range accesses as defined faults.
+
+### 22.10 Implementation record
+
+The approved design is implemented in [`Stc.Codegen.Semantics`](../../lean/Stc/Codegen/Semantics.lean):
+
+- **D1 model.** `IRAddr.root`/`.global` carry offsets, `IRAddr.slotEntry` is added, `StoreId`
+  keys `IRState.storage`, and `lookupStorage`/`writeStorage` implement the offset-aware store.
+  `loadValue`/`storeValue` read and write storage; `.cell` loads return `.ptr (.root slot 0)`
+  for `Data`/`Direct`; `evalGepAddr` advances stack, root, global, and slot-table offsets.
+  `ir_got_sound` is updated to `.ptr (.root slot 0)`.
+- **D2 model.** `evalGepAddr` results are checked by `gepInBounds`; loads check the value type
+  against the instruction type; stores check the value type and the target allocation's element
+  type via `stackStoreTypeOK`; out-of-range and type-mismatched stack/storage accesses return
+  `.stuck`. Cell, slot-entry, function, and import store targets are also defined `.stuck`
+  faults. **Clarification:** the UB sources are therefore `unreachable` and unspecified
+  trap-service codes, not cell stores; the design note's earlier listing of cell stores as UB
+  is superseded by this implementation choice.
+- **D3 facts.** `OriginsTrusted`, `StackOriginsTrusted`, `CallPtrOrigins`,
+  `TrapCodesSpecified`, and `UnreachableGuarded` are `WFProgram` fields. **Correction:**
+  `OriginHolds` includes the `.null` initialization default as an allowed value, because a
+  recorded origin local holds the default until its defining instruction executes; the origin
+  shape is required once the local is non-default. This keeps `WFState` satisfiable at function
+  entry without adding an execution history.
+- **D4 model.** `IRState.functionSignatures` and `lookupFunctionSignature` are added;
+  `FunctionBindingsTyped`, `CallTargetsTyped`, and `ReturnLink` are defined as proposed.
+  `AccessValid`'s global case checks storage liveness, not contract membership; the contract
+  permission remains the P0.4 `LocalGlobalsAllowed` rule. `stackStoreTypeOK` checks the target
+  frame's allocation, not the caller's.
+- **Invariant and theorems.** `WFProgram`, `WFState`, `WFRunning`, `AccessBounded`, `StepLoad`,
+  `StepStore`, and `AccessValid` are defined. The exact proved statements are:
+
+```lean
+theorem ir_progress {contract : IRContract} {c : IRState}
+    (hwf : WFRunning contract c) (haccess : AccessBounded contract c) :
+    (∃ c', irStep c = .step c') ∨ (∃ trap c', irStep c = .trapped trap c')
+
+theorem ir_memory_safe {contract : IRContract} {c : IRState}
+    (hwf : WFRunning contract c) :
+    (∀ addr ty v, StepLoad c addr ty v → AccessValid contract c addr false ty) ∧
+    (∀ addr ty v c', StepStore c addr ty v c' →
+      AccessValid contract c addr true ty)
+
+theorem ir_no_ub {contract : IRContract} {c c' : IRState}
+    (hwf : WFRunning contract c) : irStep c ≠ .ub c'
+```
+
+  The proofs use no `sorry`/`admit`. Registry records P0-T15–P0-T22 are all `proved`; the
+  registry audit reports only the standard Lean axioms. The P0.5 target soundness exit
+  criterion is met.
+
+### 22.11 Remaining whole-run work
+
+The three theorems are per-state, as approved. The initial-state proof, the preservation
+proof, and the reachability corollaries are not yet proved; they are the remaining P0.5
+follow-up, not blockers for the three registry theorems. The concrete obligations are:
+
+1. **Initial state (`initState?_wf`).** The one-frame state from `initState?` must satisfy
+   `WFState`/`WFRunning`. This needs: a typed-host-arguments predicate (parameter types match
+   the supplied `IRValue`s); a `WFProgram` rule that parameter/local-definition types are not
+   arrays or `void` (so `IRValue.default` has the declared type); host predicates for live
+   roots/storage, resolvable function bindings, and trap-only callable imports; and the
+   one-frame instantiations of `frameBlock`, `framePrev`, `localsInitialized`, and
+   `localsTyped`. The `.null` origin default (§22.10) makes `originsMatch` hold initially.
+2. **Preservation (`irStep_wf`).** Every `.step` successor must satisfy `WFState`. The
+   remaining technical gaps found while implementing the invariant are:
+   - a **slots-base invariant** (`%slots` holds `.ptr .slotTable`) so the `.slotEntry` load and
+     the `.cell slot false` origin shape are produced; the value is a function parameter or
+     slots-global load and is never redefined;
+   - a **syntactic local-type lemma**: from `FunctionUsesDefined.allNodup` and the defining
+     instruction, `fn.localType? dest = resultType` for every destination, so `localsTyped`
+     follows from the instruction's type check;
+   - a strengthened **memory-value invariant** that also bounds stack pointers stored in
+     memory (the current `MemTyped` constrains types and extents but not pointer provenance);
+   - **return-link preservation** using the local-type lemma for direct calls and
+     `FunctionBindingsTyped`/`CallTargetsTyped` for indirect calls;
+   - **no-bare-unreachable preservation** using `UnreachableGuarded` (a trap-service call
+     cannot step normally, so the following `unreachable` is not reached).
+3. **Reachability corollaries.** Compose `initState?_wf` with `irStep_wf` and the three
+   per-state theorems, then lift to `irRun` for the executable entry point. The Q3 carve-out
+   remains: `AccessBounded` is the source-check premise and the character-index path needs
+   `CharIndexBounded` or exclusion until Q3 is resolved.
+
+Evidence for this record:
+
+```text
+cd lean && lake build
+PYTHONUTF8=1 python tools/ci/check_verification_registry.py   # 45 records: 42 proved, 2 planned, 1 descoped
+python tools/ci/check_docs.py
+python tools/ci/check_semantics_placeholder.py
+grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
+```
+
+### 22.12 P0.5 review checklist
+
+1. The D1/D2/D4 model changes match the approved decisions, including the `.slotEntry` level,
+   the offset-aware storage, the `.stuck` fault policy, and the host signature bindings.
+2. `WFProgram`/`WFState`/`WFRunning`/`AccessBounded` match §22.1–§22.2, with the two
+   implementation corrections recorded in §22.10 (origin default and cell-store faults) and the
+   `AccessValid` global-membership clarification.
+3. `ir_progress`, `ir_memory_safe`, and `ir_no_ub` are proved with only standard axioms; P0-T16,
+   P0-T17, and P0-T22 are `proved` and P0-T15–P0-T22 are all `proved`.
+4. No `sorry`/`admit`; `lake build` is green; the registry, docs, and markdownlint checks pass.
+5. The whole-run bridge in §22.11 is acknowledged as the remaining P0.5 follow-up; none of it
+   changes the three proved statements.

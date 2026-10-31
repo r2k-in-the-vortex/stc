@@ -47,18 +47,26 @@ inductive IRStatus where
 deriving Repr, DecidableEq
 
 /-- A target address. Stack addresses carry the frame, allocation, and element
-offset. `cell` is a host GOT cell address, `root` the storage pointer stored in
-a `Data`/`Direct` cell, and `function`/`importCell` the callable values of
-`Function`/`Import` cells. `slotTable` is the host slot-table base parameter. -/
+offset. `slotEntry` is a slot-table entry address, `cell` a host GOT cell
+address, `root` a persistent-storage address, and `function`/`importCell` the
+callable values of `Function`/`Import` cells. `slotTable` is the host
+slot-table base parameter. -/
 inductive IRAddr where
   | stack (frame : Nat) (slot : Nat) (offset : Nat)
+  | slotEntry (slot : Nat)
   | cell (slot : Nat)
-  | root (slot : Nat)
-  | global (name : String)
-  | globalOffset (name : String) (offset : Nat)
+  | root (slot : Nat) (offset : Nat)
+  | global (name : String) (offset : Nat)
   | slotTable
   | function (name : String)
   | importCell (slot : Nat)
+deriving Repr, DecidableEq
+
+/-- The identity of a persistent-storage region: a `Data`/`Direct` cell slot or
+a module global. -/
+inductive StoreId where
+  | root (slot : Nat)
+  | global (name : String)
 deriving Repr, DecidableEq
 
 /-- A target value. Integer payloads are unsigned bit patterns in
@@ -211,6 +219,10 @@ structure IRState where
   imports : List (Nat × ImportKind)
   /-- Module globals by symbol. -/
   globals : List (String × IRValue)
+  /-- Persistent storage: a value sequence per root slot or global. -/
+  storage : List (StoreId × List IRValue)
+  /-- Host function-cell signatures by slot. -/
+  functionSignatures : List (Nat × Signature)
   /-- Completed cycles. -/
   cycles : Nat
   /-- Remaining cycles. -/
@@ -248,6 +260,32 @@ def lookupGlobal (s : IRState) (name : String) : Option IRValue :=
 /-- Update a module global. -/
 def setGlobal (s : IRState) (name : String) (value : IRValue) : IRState :=
   { s with globals := setList s.globals name value }
+
+/-- The persistent-storage sequence for a store id. -/
+def lookupStorage (s : IRState) (id : StoreId) : Option (List IRValue) :=
+  lookupList s.storage id
+
+/-- A persistent-storage read at an in-range offset. -/
+def lookupStorageAt (s : IRState) (id : StoreId) (offset : Nat) : Option IRValue :=
+  match s.lookupStorage id with
+  | some values => if offset < values.length then values[offset]? else none
+  | none => none
+
+/-- A persistent-storage write at an in-range offset. -/
+def writeStorage (s : IRState) (id : StoreId) (offset : Nat)
+    (value : IRValue) : Option IRState :=
+  match s.lookupStorage id with
+  | some values =>
+      if offset < values.length then
+        some { s with
+          storage := setList s.storage id
+            (values.take offset ++ value :: values.drop (offset + 1)) }
+      else none
+  | none => none
+
+/-- The host signature recorded for a function-cell slot. -/
+def lookupFunctionSignature (s : IRState) (slot : Nat) : Option Signature :=
+  lookupList s.functionSignatures slot
 
 /-- The slot kind. -/
 def slotKind? (s : IRState) (slot : Nat) : Option CellKind :=
@@ -299,7 +337,7 @@ def evalOperand (f : IRFrame) : Operand → Option IRValue
   | .local name => f.lookupLocal name
   | .intLit ty value => some (.int ty value)
   | .nullPtr => some .null
-  | .symbol name => some (.ptr (.global name))
+  | .symbol name => some (.ptr (.global name 0))
 
 /-- The integer width of a type. -/
 def intBits? : IrType → Option Nat
@@ -455,18 +493,18 @@ def evalRotate (info : RotateInfo) (a b count : Int) : IRValue :=
   .int (.int w) (Int.ofNat result)
 
 /-- A GEP address computation. The indices are summed as element offsets; the
-covered fragment emits zero-based array GEPs and slot-table indices. -/
+covered fragment emits zero-based array GEPs, slot-table indices, and
+persistent-storage offsets. -/
 def evalGepAddr (base : IRAddr) (indices : List Int) : Option IRAddr :=
   let offset := indices.foldl (fun acc index => acc + index.toNat) 0
   match base with
   | .slotTable =>
       match indices with
-      | index :: _ => some (.cell index.toNat)
+      | index :: _ => some (.slotEntry index.toNat)
       | [] => none
   | .stack frame slot baseOffset => some (.stack frame slot (baseOffset + offset))
-  | .global name => some (.globalOffset name offset)
-  | .globalOffset name baseOffset => some (.globalOffset name (baseOffset + offset))
-  | .root slot => some (.root slot)
+  | .root slot baseOffset => some (.root slot (baseOffset + offset))
+  | .global name baseOffset => some (.global name (baseOffset + offset))
   | _ => none
 
 /-! ## Stack initialization and memory -/
@@ -499,42 +537,49 @@ def withHead (s : IRState) (f : IRFrame) : IRState :=
 def frameById? (s : IRState) (id : Nat) : Option IRFrame :=
   s.frames.find? (fun frame => frame.id == id)
 
-/-- Load a value from an address. Cell loads return the root storage pointer or
-the callable recorded by the slot table. -/
+/-- Load a value from an address. A slot-table entry yields the cell address;
+a cell yields its content; a root or global address reads persistent storage. -/
 def loadValue (s : IRState) (addr : IRAddr) : Option IRValue :=
   match addr with
-  | .stack frame _ _ =>
+  | .stack frame slot offset =>
       match s.frameById? frame with
-      | some f => f.lookupMem addr
+      | some f => f.lookupMem (.stack frame slot offset)
       | none => none
-  | .root slot => s.lookupRoot slot
-  | .global name => s.lookupGlobal name
-  | .globalOffset name _ => s.lookupGlobal name
+  | .slotEntry slot =>
+      if slot < s.module.slots.length then some (.ptr (.cell slot)) else none
   | .cell slot =>
       match s.slotKind? slot with
-      | some .data | some .direct => some (.ptr (.root slot))
+      | some .data | some .direct => some (.ptr (.root slot 0))
       | some .function => (s.lookupFunction slot).map (fun name => .ptr (.function name))
       | some .importCell => some (.ptr (.importCell slot))
       | some .descriptor => none
       | none => none
+  | .root slot offset => s.lookupStorageAt (.root slot) offset
+  | .global name offset => s.lookupStorageAt (.global name) offset
   | .slotTable => none
   | .function _ => none
   | .importCell _ => none
 
-/-- Store a value to an address. GOT cell addresses are host-owned and are not
-writable by generated code. -/
+/-- Store a value to an address. Stack and persistent-storage stores are
+extent-checked; GOT cell and slot-table addresses are host-owned. -/
 def storeValue (s : IRState) (addr : IRAddr) (value : IRValue) : Option IRState :=
   match addr with
-  | .stack frame _ _ =>
-      if s.frames.any (fun f => f.id == frame) then
-        some ({ s with
-          frames := s.frames.map fun f =>
-            if f.id == frame then f.setMem addr value else f })
-      else none
-  | .root slot => some (s.setRoot slot value)
-  | .global name => some (s.setGlobal name value)
-  | .globalOffset name _ => some (s.setGlobal name value)
-  | _ => none
+  | .stack frame slot offset =>
+      match s.frameById? frame with
+      | some f =>
+          match f.allocType? slot with
+          | some ty =>
+              if offset < allocSize ty then
+                some { s with
+                  frames := s.frames.map fun g =>
+                    if g.id == frame then g.setMem (.stack frame slot offset) value
+                    else g }
+              else none
+          | none => none
+      | none => none
+  | .root slot offset => s.writeStorage (.root slot) offset value
+  | .global name offset => s.writeStorage (.global name) offset value
+  | .slotEntry _ | .cell _ | .slotTable | .function _ | .importCell _ => none
 
 end IRState
 
@@ -622,6 +667,40 @@ def trapOutcome (s : IRState) (values : List IRValue) : IRStepResult :=
       else .ub s
   | _ => .ub s
 
+/-- Whether a store's value type matches the target stack allocation's element
+type. -/
+def stackStoreTypeOK (s : IRState) (addr : IRAddr) (ty : IrType) : Bool :=
+  match addr with
+  | .stack frame slot _ =>
+      match s.frameById? frame with
+      | some f =>
+          match f.allocType? slot with
+          | some (.array elem _) => ty == elem
+          | some allocTy => ty == allocTy
+          | none => false
+      | none => false
+  | _ => true
+
+/-- Whether a GEP result addresses live storage within its extent. -/
+def gepInBounds (s : IRState) (f : IRFrame) (addr : IRAddr) : Bool :=
+  match addr with
+  | .stack frame slot offset =>
+      if frame == f.id then
+        match f.allocType? slot with
+        | some ty => decide (offset < allocSize ty)
+        | none => false
+      else false
+  | .slotEntry slot => decide (slot < s.module.slots.length)
+  | .root slot offset =>
+      match s.lookupStorage (.root slot) with
+      | some values => decide (offset < values.length)
+      | none => false
+  | .global name offset =>
+      match s.lookupStorage (.global name) with
+      | some values => decide (offset < values.length)
+      | none => false
+  | _ => true
+
 /-- Execute one instruction. -/
 def stepInstr (s : IRState) (f : IRFrame) (instr : Instr) (rest : List Instr) : IRStepResult :=
   match instr with
@@ -634,20 +713,24 @@ def stepInstr (s : IRState) (f : IRFrame) (instr : Instr) (rest : List Instr) : 
           allocs := f.allocs ++ [(f.nextAlloc, ty)],
           nextAlloc := f.nextAlloc + 1 }
       .step (s.withHead f')
-  | .load dest _ty ptr _align =>
+  | .load dest ty ptr _align =>
       match evalOperand f ptr with
       | some (.ptr addr) =>
           match s.loadValue addr with
           | some value =>
-              .step (s.withHead ({ (f.setLocal dest value) with instrs := rest }))
+              if value.type? == some ty then
+                .step (s.withHead ({ (f.setLocal dest value) with instrs := rest }))
+              else .stuck s
           | none => .stuck s
       | _ => .stuck s
-  | .store _ty value ptr _align =>
+  | .store ty value ptr _align =>
       match evalOperand f value, evalOperand f ptr with
       | some v, some (.ptr addr) =>
-          match s.storeValue addr v with
-          | some s' => .step (s'.withHead ({ f with instrs := rest }))
-          | none => .ub s
+          if v.type? == some ty && stackStoreTypeOK s addr ty then
+            match s.storeValue addr v with
+            | some s' => .step (s'.withHead ({ f with instrs := rest }))
+            | none => .stuck s
+          else .stuck s
       | _, _ => .stuck s
   | .gep dest _pointee base indices _inbounds =>
       match evalOperand f base with
@@ -656,8 +739,10 @@ def stepInstr (s : IRState) (f : IRFrame) (instr : Instr) (rest : List Instr) : 
           | some values =>
               match evalGepAddr addr values with
               | some addr' =>
-                  .step (s.withHead
-                    { (f.setLocal dest (.ptr addr')) with instrs := rest })
+                  if gepInBounds s f addr' then
+                    .step (s.withHead
+                      { (f.setLocal dest (.ptr addr')) with instrs := rest })
+                  else .stuck s
               | none => .stuck s
           | none => .stuck s
       | _ => .stuck s
@@ -784,6 +869,8 @@ construction itself. -/
 def initState? (module : IRFrag) (entry : String) (args : List IRValue)
     (roots : List (Nat × IRValue)) (functions : List (Nat × String))
     (imports : List (Nat × ImportKind)) (globals : List (String × IRValue))
+    (storage : List (StoreId × List IRValue))
+    (functionSignatures : List (Nat × Signature))
     (cycles : Nat) : Option IRState :=
   match module.function? entry with
   | none => none
@@ -799,7 +886,9 @@ def initState? (module : IRFrag) (entry : String) (args : List IRValue)
                              locals := initLocals fn args, mem := [], allocs := [],
                              nextAlloc := 0, prev := none, retDest := none }],
                 roots := roots, functions := functions, imports := imports,
-                globals := globals, cycles := 0, cyclesLeft := cycles,
+                globals := globals, storage := storage,
+                functionSignatures := functionSignatures,
+                cycles := 0, cyclesLeft := cycles,
                 nextFrame := 1, status := .running }
             some state
           else none
@@ -808,19 +897,340 @@ def initState? (module : IRFrag) (entry : String) (args : List IRValue)
 def IRSem (module : IRFrag) (entry : String) (args : List IRValue)
     (roots : List (Nat × IRValue)) (functions : List (Nat × String))
     (imports : List (Nat × ImportKind)) (globals : List (String × IRValue))
+    (storage : List (StoreId × List IRValue))
+    (functionSignatures : List (Nat × Signature))
     (cycles : Nat) : Option IRState :=
-  initState? module entry args roots functions imports globals cycles
+  initState? module entry args roots functions imports globals storage
+    functionSignatures cycles
 
 /-- Run the target machine with fuel. -/
 def irRun (fuel : Nat) (module : IRFrag) (entry : String) (args : List IRValue)
     (roots : List (Nat × IRValue)) (functions : List (Nat × String))
     (imports : List (Nat × ImportKind)) (globals : List (String × IRValue))
+    (storage : List (StoreId × List IRValue))
+    (functionSignatures : List (Nat × Signature))
     (cycles : Nat) : Option IROutcome :=
-  (IRSem module entry args roots functions imports globals cycles).map (irExecRec fuel)
+  (IRSem module entry args roots functions imports globals storage
+    functionSignatures cycles).map (irExecRec fuel)
 
 /-- The P0.4 smoke fragment produces an initial target state, so `IRSem` is
 not vacuous. -/
-example : (IRSem minimalFrag "main" [] [] [] [] [] 0).isSome = true := by decide
+example :
+    (IRSem minimalFrag "main" [] [] [] [] [] [] [] 0).isSome = true := by decide
+
+/-! ## Target invariant (approved design, Plan-Phase0 §22) -/
+
+/-- The first instruction that defines an SSA name. -/
+def defInstr? (fn : Function) (name : Ssa) : Option Instr :=
+  match fn.defSite? name with
+  | some (label, index) =>
+      match fn.block? label with
+      | some block => block.instrs[index]?
+      | none => none
+  | none => none
+
+/-- Builder-recorded origins attach to pointer locals with the expected
+defining instruction shape; vtable origins are outside the core fragment. -/
+def OriginsTrusted (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ entry ∈ fn.facts.origins,
+    fn.localType? entry.1 = some .ptr ∧
+      match entry.2 with
+      | .vtableCode => False
+      | .cell _ false =>
+          ∃ ty ptr align, defInstr? fn entry.1 = some (.load entry.1 ty ptr align)
+      | .cell _ true =>
+          ∃ ty ptr align, defInstr? fn entry.1 = some (.load entry.1 ty ptr align)
+      | .global _ =>
+          ∃ dest ty base indices inbounds,
+            defInstr? fn entry.1 = some (.gep dest ty base indices inbounds)
+
+/-- Pointer locals without a recorded origin are parameters, allocas, or GEP
+results. -/
+def StackOriginsTrusted (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ name,
+    fn.facts.originOf? name = none → fn.localType? name = some .ptr →
+      name ∈ fn.params.map (·.2) ∨
+        (∃ ty, defInstr? fn name = some (.alloca name ty)) ∨
+        (∃ dest ty base indices inbounds,
+          defInstr? fn name = some (.gep dest ty base indices inbounds))
+
+/-- Every indirect call is a local with a callable-cell origin. -/
+def CallPtrOrigins (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
+      ∃ name slot, callee = .local name ∧
+        fn.facts.originOf? name = some (.cell slot true)
+
+/-- Calls through import cells pass a literal trap code in `1..3`. -/
+def TrapCodesSpecified (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
+      (∃ name slot, callee = .local name ∧
+          fn.facts.originOf? name = some (.cell slot true) ∧
+          frag.slots[slot]? = some .importCell) →
+        ∃ code span, args = [.intLit (.int 32) code, span] ∧
+          (code = 1 ∨ code = 2 ∨ code = 3)
+
+/-- Every `unreachable` block ends in a call through an import cell. -/
+def UnreachableGuarded (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
+    block.terminator = some .unreachable →
+      ∃ instr, block.instrs.getLast? = some instr ∧
+        ∃ dest ret callee args, instr = .callPtr dest ret callee args ∧
+          (∃ name slot, callee = .local name ∧
+            fn.facts.originOf? name = some (.cell slot true) ∧
+            frag.slots[slot]? = some .importCell)
+
+/-- Module-level facts for the target invariant. -/
+structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
+  wellFormed : WellFormed contract frag
+  allocsNonEmpty : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
+    ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty → 0 < allocSize ty
+  originsTrusted : OriginsTrusted frag
+  stackOriginsTrusted : StackOriginsTrusted frag
+  callPtrOrigins : CallPtrOrigins frag
+  trapCodesSpecified : TrapCodesSpecified frag
+  unreachableGuarded : UnreachableGuarded frag
+
+/-- A local value realizes the builder-recorded pointer origin, or is still
+the initialization default (`.null`) before its defining instruction runs. -/
+def OriginHolds (contract : IRContract) (c : IRState) (f : IRFrame)
+    (name : String) (origin : PointerOrigin) : Prop :=
+  ∃ v, f.lookupLocal name = some v ∧ f.fn.localType? name = some .ptr ∧
+    (v = .null ∨
+    match origin with
+    | .cell slot false =>
+        v = .ptr (.cell slot) ∧
+          ∃ kind, c.slotKind? slot = some kind ∧
+            (kind.isStorage = true ∨ kind.isCallable = true)
+    | .cell slot true =>
+        ∃ kind, c.slotKind? slot = some kind ∧
+          ((kind.isStorage = true ∧ v = .ptr (.root slot 0)) ∨
+            (kind = .function ∧
+              ∃ fname, c.lookupFunction slot = some fname ∧
+                v = .ptr (.function fname) ∧
+                ∃ fn ∈ c.module.functions, fn.name = fname) ∨
+            (kind = .importCell ∧ v = .ptr (.importCell slot)))
+    | .global g =>
+        (∃ off, v = .ptr (.global g off)) ∧ g ∈ contract.localGlobals
+    | .vtableCode => False)
+
+/-- The recorded predecessor is a real CFG edge, or the frame is at the entry
+block. -/
+def PrevEdge (c : IRState) (f : IRFrame) : Prop :=
+  (f.prev = none ∧ ∃ rest, f.fn.blocks = f.block :: rest) ∨
+  (∃ label block, f.prev = some label ∧ f.fn.block? label = some block ∧
+    f.block.label ∈ block.successors)
+
+/-- Allocation slots are unique, exactly the range `[0, nextAlloc)`, and every
+allocation has a non-empty element extent. -/
+def AllocsWellFormed (f : IRFrame) : Prop :=
+  (f.allocs.map (·.1)).Nodup ∧
+  (f.allocs.map (·.1)).Perm (List.range f.nextAlloc) ∧
+  ∀ slot ty, f.allocType? slot = some ty → 0 < allocSize ty
+
+/-- Every stack pointer held in a local is inside an allocated slot. -/
+def StackPtrsBounded (c : IRState) (f : IRFrame) : Prop :=
+  ∀ name v addr, f.lookupLocal name = some v → v = .ptr addr →
+    match addr with
+    | .stack frame slot off =>
+        ∃ g, c.frameById? frame = some g ∧
+          ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty
+    | _ => True
+
+/-- A stack cell's stored value matches the allocation element type. -/
+def MemValueTyped (ty : IrType) (v : IRValue) : Prop :=
+  match ty with
+  | .array elem _ => v.type? = some elem
+  | _ => v.type? = some ty
+
+def MemTyped (c : IRState) (f : IRFrame) : Prop :=
+  ∀ addr v, f.lookupMem addr = some v →
+    ∃ slot off ty, addr = .stack f.id slot off ∧
+      f.allocType? slot = some ty ∧ off < allocSize ty ∧ MemValueTyped ty v
+
+/-- Every persistent-storage pointer held in a local addresses a live storage
+entry. -/
+def StoragePtrsLive (c : IRState) (f : IRFrame) : Prop :=
+  (∀ name v slot off, f.lookupLocal name = some v → v = .ptr (.root slot off) →
+    ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length) ∧
+  (∀ name v g off, f.lookupLocal name = some v → v = .ptr (.global g off) →
+    ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length)
+
+/-- The host's function-cell binding names a module function whose signature is
+the one recorded for the cell. -/
+def FunctionBindingsTyped (c : IRState) : Prop :=
+  ∀ slot fname, c.lookupFunction slot = some fname →
+    ∃ fn ∈ c.module.functions, fn.name = fname ∧
+      c.lookupFunctionSignature slot = some fn.signature
+
+/-- Every indirect call agrees with the signature of the callable cell it
+targets. -/
+def CallTargetsTyped (c : IRState) : Prop :=
+  ∀ fn ∈ c.module.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
+      ∃ name slot, callee = .local name ∧
+        fn.facts.originOf? name = some (.cell slot true) →
+        (∃ sig, c.lookupFunctionSignature slot = some sig ∧
+          sig.returnType = ret ∧
+          listForall₂ (fun arg ty => operandHasType fn ty arg) args sig.params) ∨
+        (c.slotKind? slot = some .importCell ∧
+          c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
+
+/-- The callee's return destination agrees with the caller's local type. -/
+def ReturnLink (c : IRState) : Prop :=
+  ∀ callee caller rest, c.frames = callee :: caller :: rest →
+    match callee.retDest with
+    | none => True
+    | some dest =>
+        callee.fn.returnType ≠ .void ∧
+          caller.fn.localType? dest = some callee.fn.returnType
+
+/-- The state-level target invariant. -/
+structure WFState (contract : IRContract) (c : IRState) : Prop where
+  program : WFProgram contract c.module
+  frameIdsNodup : (c.frames.map (·.id)).Nodup
+  frameIdsBound : ∀ f ∈ c.frames, f.id < c.nextFrame
+  frameFunction : ∀ f ∈ c.frames, f.fn ∈ c.module.functions
+  frameBlock : ∀ f ∈ c.frames, ∃ block ∈ f.fn.blocks,
+    f.block = block ∧ f.terminator = block.terminator ∧
+      ∃ done, block.instrs = done ++ f.instrs
+  framePrev : ∀ f ∈ c.frames, PrevEdge c f
+  noBareUnreachable : ∀ f rest, c.frames = f :: rest → f.instrs = [] →
+    f.terminator ≠ some .unreachable
+  localsInitialized : ∀ f ∈ c.frames, ∀ name ty,
+    f.fn.localType? name = some ty → ∃ v, f.lookupLocal name = some v
+  localsTyped : ∀ f ∈ c.frames, ∀ name v,
+    f.lookupLocal name = some v → ∀ ty, f.fn.localType? name = some ty →
+      v.type? = some ty
+  originsMatch : ∀ f ∈ c.frames, ∀ entry ∈ f.fn.facts.origins,
+    OriginHolds contract c f entry.1 entry.2
+  allocsWellFormed : ∀ f ∈ c.frames, AllocsWellFormed f
+  stackPtrsBounded : ∀ f ∈ c.frames, StackPtrsBounded c f
+  memTyped : ∀ f ∈ c.frames, MemTyped c f
+  storagePtrsLive : ∀ f ∈ c.frames, StoragePtrsLive c f
+  functionBindings : FunctionBindingsTyped c
+  callTargets : CallTargetsTyped c
+  returnLink : ReturnLink c
+  bottomRetDest : ∀ last, c.frames.getLast? = some last → last.retDest = none
+
+/-- The running restriction used by the three soundness theorems. -/
+def WFRunning (contract : IRContract) (c : IRState) : Prop :=
+  WFState contract c ∧ c.status = .running ∧ c.frames ≠ []
+
+/-- A successful target access is to valid stack, GOT, or persistent storage. -/
+def AccessValid (_contract : IRContract) (c : IRState) (addr : IRAddr)
+    (store : Bool) (ty : IrType) : Prop :=
+  match addr with
+  | .stack frame slot off =>
+      ∃ f, c.frameById? frame = some f ∧
+        ((∃ elem count, f.allocType? slot = some (.array elem count) ∧
+            ty = elem ∧ off < count) ∨
+          (f.allocType? slot = some ty ∧ off = 0))
+  | .slotEntry slot => store = false ∧ slot < c.module.slots.length
+  | .cell slot =>
+      store = false ∧ ∃ kind, c.slotKind? slot = some kind ∧
+        (kind.isStorage = true ∨
+          (kind = .function ∧ ∃ fname, c.lookupFunction slot = some fname) ∨
+          kind = .importCell)
+  | .root slot off =>
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length
+  | .global g off =>
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length
+  | _ => False
+
+/-- The current configuration performs this successful load. -/
+def StepLoad (c : IRState) (addr : IRAddr) (ty : IrType) (v : IRValue) : Prop :=
+  ∃ f restFrames dest ptr align restInstrs,
+    c.frames = f :: restFrames ∧ f.instrs = .load dest ty ptr align :: restInstrs ∧
+      evalOperand f ptr = some (.ptr addr) ∧ c.loadValue addr = some v ∧
+      v.type? = some ty
+
+/-- The current configuration performs this successful store. -/
+def StepStore (c : IRState) (addr : IRAddr) (ty : IrType) (v : IRValue)
+    (c' : IRState) : Prop :=
+  ∃ f restFrames value ptr align restInstrs,
+    c.frames = f :: restFrames ∧ f.instrs = .store ty value ptr align :: restInstrs ∧
+      evalOperand f value = some v ∧ v.type? = some ty ∧
+      evalOperand f ptr = some (.ptr addr) ∧
+      stackStoreTypeOK c addr ty = true ∧ c.storeValue addr v = some c'
+
+/-- The per-instruction stuck-freedom precondition. -/
+def AccessBoundedInstr (_contract : IRContract) (c : IRState) (f : IRFrame) :
+    Instr → Prop
+  | .alloca _ _ => True
+  | .load _ ty ptr _ =>
+      ∃ addr v, evalOperand f ptr = some (.ptr addr) ∧ c.loadValue addr = some v ∧
+        v.type? = some ty
+  | .store ty value ptr _ =>
+      ∃ addr v s', evalOperand f value = some v ∧ v.type? = some ty ∧
+        evalOperand f ptr = some (.ptr addr) ∧ stackStoreTypeOK c addr ty = true ∧
+        c.storeValue addr v = some s'
+  | .gep _ _ base indices _ =>
+      ∃ addr values addr', evalOperand f base = some (.ptr addr) ∧
+        evalOperandInts f (indices.map (·.2)) = some values ∧
+        evalGepAddr addr values = some addr' ∧ gepInBounds c f addr' = true
+  | .binop _ _ ty lhs rhs =>
+      ∃ a b bits, evalOperandInt? f lhs = some a ∧ evalOperandInt? f rhs = some b ∧
+        intBits? ty = some bits
+  | .icmp _ _ ty lhs rhs =>
+      ∃ a b bits, evalOperandInt? f lhs = some a ∧ evalOperandInt? f rhs = some b ∧
+        intBits? ty = some bits
+  | .select _ _ cond thenValue elseValue =>
+      ∃ condTy condition, evalOperand f cond = some (.int condTy condition) ∧
+        ∃ value, evalOperand f (if condition == 0 then elseValue else thenValue) = some value
+  | .cast _ _ value fromTy toTy =>
+      ∃ a fromBits toBits, evalOperandInt? f value = some a ∧
+        intBits? fromTy = some fromBits ∧ intBits? toTy = some toBits
+  | .phi _ _ incoming =>
+      ∃ inc value,
+        incoming.find? (fun inc => f.prev == some inc.predecessor) = some inc ∧
+          evalOperand f inc.value = some value
+  | .call _ _ callee args =>
+      ∃ values, evalOperands f args = some values ∧
+        ((∃ info ty1 ty2 a b, parseChecked callee = some info ∧
+            values = [.int ty1 a, .int ty2 b]) ∨
+         (parseChecked callee = none ∧
+            ∃ info ty1 ty2 ty3 a b c, parseRotate callee = some info ∧
+              values = [.int ty1 a, .int ty2 b, .int ty3 c]) ∨
+         (parseChecked callee = none ∧ parseRotate callee = none ∧
+            ∃ fn, c.module.function? callee = some fn ∧
+              fn.blocks ≠ [] ∧ values.length = fn.params.length))
+  | .callPtr _ _ callee args =>
+      ∃ values calleeValue, evalOperands f args = some values ∧
+        evalOperand f callee = some calleeValue ∧
+        ((∃ name fn, calleeValue = .ptr (.function name) ∧
+            c.module.function? name = some fn ∧ fn.blocks ≠ [] ∧
+            values.length = fn.params.length) ∨
+         (∃ slot a b, calleeValue = .ptr (.importCell slot) ∧
+            c.lookupImport slot = some .trap ∧
+            values = [.int (.int 32) a, b] ∧ (a = 1 ∨ a = 2 ∨ a = 3)))
+  | .extractValue _ aggregate index _ =>
+      ∃ pairTy value overflow, evalOperand f aggregate = some (.pair pairTy value overflow) ∧
+        (index = 0 ∨ index = 1)
+
+/-- The terminator stuck-freedom precondition. -/
+def AccessBoundedTerminator (_contract : IRContract) (c : IRState) (f : IRFrame) :
+    Terminator → Prop
+  | .ret none => f.retDest = none
+  | .ret (some operand) => ∃ v, evalOperand f operand = some v
+  | .br target => ∃ block, f.fn.block? target = some block
+  | .condBr cond thenTarget elseTarget =>
+      ∃ condTy value, evalOperand f cond = some (.int condTy value) ∧
+        ∃ block, f.fn.block? (if value == 0 then elseTarget else thenTarget) = some block
+  | .unreachable => False
+
+/-- The current instruction or terminator is ready to execute. -/
+def AccessBounded (contract : IRContract) (c : IRState) : Prop :=
+  match c.frames with
+  | [] => True
+  | f :: _ =>
+      match f.instrs with
+      | [] =>
+          match f.terminator with
+          | some terminator => AccessBoundedTerminator contract c f terminator
+          | none => False
+      | instr :: _ => AccessBoundedInstr contract c f instr
 
 /-! ## Target soundness -/
 
@@ -848,8 +1258,8 @@ import cell identity for `Import` cells, and nothing for `Descriptor` cells. -/
 theorem ir_got_sound (s : IRState) (slot : Nat) (kind : CellKind)
     (h : s.slotKind? slot = some kind) :
     match kind with
-    | .data => s.loadValue (.cell slot) = some (.ptr (.root slot))
-    | .direct => s.loadValue (.cell slot) = some (.ptr (.root slot))
+    | .data => s.loadValue (.cell slot) = some (.ptr (.root slot 0))
+    | .direct => s.loadValue (.cell slot) = some (.ptr (.root slot 0))
     | .function =>
         s.loadValue (.cell slot) =
           (s.lookupFunction slot).map (fun name => .ptr (.function name))
@@ -948,5 +1358,573 @@ theorem ir_recursive_model_equiv {c r : IRState} :
     exact irExecRec_halt_sound h
   · rintro ⟨hstar, ht⟩
     exact irExecRec_halt_complete hstar ht
+
+theorem mem_of_frameById? {c : IRState} {id : Nat} {f : IRFrame}
+    (h : c.frameById? id = some f) : f ∈ c.frames := by
+  unfold IRState.frameById? at h
+  exact List.mem_of_find?_eq_some h
+
+theorem ir_memory_safe {contract : IRContract} {c : IRState}
+    (hwf : WFRunning contract c) :
+    (∀ addr ty v, StepLoad c addr ty v → AccessValid contract c addr false ty) ∧
+    (∀ addr ty v c', StepStore c addr ty v c' → AccessValid contract c addr true ty) := by
+  constructor
+  · intro addr ty v hstep
+    rcases hstep with
+      ⟨f, restFrames, dest, ptr, align, restInstrs, hframes, hinstrs, hptr, hload, hty⟩
+    rcases hwf with ⟨hwf, hstatus, hne⟩
+    cases addr with
+    | stack frame slot off =>
+        cases hfr : c.frameById? frame with
+        | none => simp [IRState.loadValue, hfr] at hload
+        | some g =>
+            simp only [IRState.loadValue, hfr] at hload
+            have hmem : g ∈ c.frames := mem_of_frameById? hfr
+            have hm := hwf.memTyped g hmem
+            unfold MemTyped at hm
+            rcases hm (.stack frame slot off) v hload with
+              ⟨slot', off', allocTy, haddr, halloc, hbound, hmemty⟩
+            injection haddr with hframe hslot hoff
+            subst hframe
+            subst hslot
+            subst hoff
+            refine ⟨g, hfr, ?_⟩
+            cases allocTy with
+            | array elem count =>
+                simp [MemValueTyped] at hmemty
+                exact Or.inl ⟨elem, count, halloc,
+                  Option.some.inj (hty.symm.trans hmemty),
+                  by simpa [allocSize] using hbound⟩
+            | void =>
+                simp [MemValueTyped] at hmemty
+                exact Or.inr ⟨by simpa [Option.some.inj (hty.symm.trans hmemty)] using halloc,
+                  Nat.lt_one_iff.mp (by simpa [allocSize] using hbound)⟩
+            | int bits =>
+                simp [MemValueTyped] at hmemty
+                exact Or.inr ⟨by simpa [Option.some.inj (hty.symm.trans hmemty)] using halloc,
+                  Nat.lt_one_iff.mp (by simpa [allocSize] using hbound)⟩
+            | ptr =>
+                simp [MemValueTyped] at hmemty
+                exact Or.inr ⟨by simpa [Option.some.inj (hty.symm.trans hmemty)] using halloc,
+                  Nat.lt_one_iff.mp (by simpa [allocSize] using hbound)⟩
+            | overflow bits =>
+                simp [MemValueTyped] at hmemty
+                exact Or.inr ⟨by simpa [Option.some.inj (hty.symm.trans hmemty)] using halloc,
+                  Nat.lt_one_iff.mp (by simpa [allocSize] using hbound)⟩
+    | slotEntry slot =>
+        by_cases hs : slot < c.module.slots.length
+        · simp [IRState.loadValue, if_pos hs] at hload
+          exact ⟨rfl, hs⟩
+        · simp [IRState.loadValue, if_neg hs] at hload
+    | cell slot =>
+        cases hk : c.slotKind? slot with
+        | none => simp [IRState.loadValue, hk] at hload
+        | some kind =>
+            cases kind with
+            | data =>
+                simp only [IRState.loadValue, hk] at hload
+                exact ⟨rfl, CellKind.data, hk, Or.inl rfl⟩
+            | direct =>
+                simp only [IRState.loadValue, hk] at hload
+                exact ⟨rfl, CellKind.direct, hk, Or.inl rfl⟩
+            | function =>
+                cases hfn : c.lookupFunction slot with
+                | none => simp [IRState.loadValue, hk, hfn] at hload
+                | some fname =>
+                    simp only [IRState.loadValue, hk, hfn] at hload
+                    exact ⟨rfl, CellKind.function, hk,
+                      Or.inr (Or.inl ⟨rfl, fname, hfn⟩)⟩
+            | descriptor => simp [IRState.loadValue, hk] at hload
+            | importCell =>
+                simp only [IRState.loadValue, hk] at hload
+                exact ⟨rfl, CellKind.importCell, hk, Or.inr (Or.inr rfl)⟩
+    | root slot off =>
+        cases hs : c.lookupStorage (.root slot) with
+        | none => simp [IRState.loadValue, IRState.lookupStorageAt, hs] at hload
+        | some values =>
+            by_cases hb : off < values.length
+            · simp only [IRState.loadValue, IRState.lookupStorageAt, hs, if_pos hb] at hload
+              exact ⟨values, hs, hb⟩
+            · simp [IRState.loadValue, IRState.lookupStorageAt, hs, if_neg hb] at hload
+    | global name off =>
+        cases hs : c.lookupStorage (.global name) with
+        | none => simp [IRState.loadValue, IRState.lookupStorageAt, hs] at hload
+        | some values =>
+            by_cases hb : off < values.length
+            · simp only [IRState.loadValue, IRState.lookupStorageAt, hs, if_pos hb] at hload
+              exact ⟨values, hs, hb⟩
+            · simp [IRState.loadValue, IRState.lookupStorageAt, hs, if_neg hb] at hload
+    | slotTable => simp [IRState.loadValue] at hload
+    | function name => simp [IRState.loadValue] at hload
+    | importCell slot => simp [IRState.loadValue] at hload
+  · intro addr ty v c' hstep
+    rcases hstep with
+      ⟨f, restFrames, value, ptr, align, restInstrs, hframes, hinstrs,
+        hvalue, hty, hptr, hss, hstore⟩
+    rcases hwf with ⟨hwf, hstatus, hne⟩
+    cases addr with
+    | stack frame slot off =>
+        cases hfr : c.frameById? frame with
+        | none => simp [IRState.storeValue, hfr] at hstore
+        | some g =>
+            simp only [IRState.storeValue, hfr] at hstore
+            cases halloc : g.allocType? slot with
+            | none => simp [halloc] at hstore
+            | some allocTy =>
+                simp only [halloc] at hstore
+                by_cases hb : off < allocSize allocTy
+                ·
+                    unfold stackStoreTypeOK at hss
+                    simp only [hfr, halloc] at hss
+                    refine ⟨g, hfr, ?_⟩
+                    cases allocTy with
+                    | array elem count =>
+                        exact Or.inl ⟨elem, count, halloc, beq_iff_eq.mp hss,
+                          by simpa [allocSize] using hb⟩
+                    | void =>
+                        exact Or.inr ⟨by rw [beq_iff_eq.mp hss]; exact halloc,
+                          Nat.lt_one_iff.mp (by simpa [allocSize] using hb)⟩
+                    | int bits =>
+                        exact Or.inr ⟨by rw [beq_iff_eq.mp hss]; exact halloc,
+                          Nat.lt_one_iff.mp (by simpa [allocSize] using hb)⟩
+                    | ptr =>
+                        exact Or.inr ⟨by rw [beq_iff_eq.mp hss]; exact halloc,
+                          Nat.lt_one_iff.mp (by simpa [allocSize] using hb)⟩
+                    | overflow bits =>
+                        exact Or.inr ⟨by rw [beq_iff_eq.mp hss]; exact halloc,
+                          Nat.lt_one_iff.mp (by simpa [allocSize] using hb)⟩
+                · simp [hb] at hstore
+    | slotEntry slot => simp [IRState.storeValue] at hstore
+    | cell slot => simp [IRState.storeValue] at hstore
+    | root slot off =>
+        cases hs : c.lookupStorage (.root slot) with
+        | none => simp [IRState.storeValue, IRState.writeStorage, hs] at hstore
+        | some values =>
+            by_cases hb : off < values.length
+            · simp only [IRState.storeValue, IRState.writeStorage, hs, if_pos hb] at hstore
+              exact ⟨values, hs, hb⟩
+            · simp [IRState.storeValue, IRState.writeStorage, hs, if_neg hb] at hstore
+    | global name off =>
+        cases hs : c.lookupStorage (.global name) with
+        | none => simp [IRState.storeValue, IRState.writeStorage, hs] at hstore
+        | some values =>
+            by_cases hb : off < values.length
+            · simp only [IRState.storeValue, IRState.writeStorage, hs, if_pos hb] at hstore
+              exact ⟨values, hs, hb⟩
+            · simp [IRState.storeValue, IRState.writeStorage, hs, if_neg hb] at hstore
+    | slotTable => simp [IRState.storeValue] at hstore
+    | function name => simp [IRState.storeValue] at hstore
+    | importCell slot => simp [IRState.storeValue] at hstore
+
+theorem stepInstr_progress {contract : IRContract} {c : IRState} {f : IRFrame}
+    {instr : Instr} {rest : List Instr}
+    (h : AccessBoundedInstr contract c f instr) :
+    (∃ c', stepInstr c f instr rest = .step c') ∨
+      (∃ trap c', stepInstr c f instr rest = .trapped trap c') := by
+  cases instr with
+  | alloca dest ty =>
+      exact Or.inl ⟨_, rfl⟩
+  | load dest ty ptr align =>
+      rcases h with ⟨addr, v, hptr, hload, hty⟩
+      have hb : (v.type? == some ty) = true := by simp [hty]
+      simp only [stepInstr, hptr, hload, if_pos hb]
+      exact Or.inl ⟨_, rfl⟩
+  | store ty value ptr align =>
+      rcases h with ⟨addr, v, s', hvalue, hty, hptr, hss, hstore⟩
+      have hb : (v.type? == some ty && stackStoreTypeOK c addr ty) = true := by
+        simp [hty, hss]
+      simp only [stepInstr, hvalue, hptr, if_pos hb, hstore]
+      exact Or.inl ⟨_, rfl⟩
+  | gep dest pointee base indices inbounds =>
+      rcases h with ⟨addr, values, addr', hbase, hindices, hgep, hbounds⟩
+      simp only [stepInstr, hbase, hindices, hgep, if_pos hbounds]
+      exact Or.inl ⟨_, rfl⟩
+  | binop dest op ty lhs rhs =>
+      rcases h with ⟨a, b, bits, hlhs, hrhs, hbits⟩
+      simp only [stepInstr, hlhs, hrhs, hbits]
+      split
+      · exact Or.inl ⟨_, rfl⟩
+      · exact Or.inr ⟨_, _, rfl⟩
+  | icmp dest pred ty lhs rhs =>
+      rcases h with ⟨a, b, bits, hlhs, hrhs, hbits⟩
+      simp only [stepInstr, hlhs, hrhs, hbits]
+      exact Or.inl ⟨_, rfl⟩
+  | select dest ty cond thenValue elseValue =>
+      rcases h with ⟨condTy, condition, hcond, value, hvalue⟩
+      simp only [stepInstr, hcond, hvalue]
+      exact Or.inl ⟨_, rfl⟩
+  | cast dest op value fromTy toTy =>
+      rcases h with ⟨a, fromBits, toBits, hvalue, hfrom, hto⟩
+      simp only [stepInstr, hvalue, hfrom, hto]
+      exact Or.inl ⟨_, rfl⟩
+  | phi dest ty incoming =>
+      rcases h with ⟨inc, value, hfind, hvalue⟩
+      simp only [stepInstr, hfind, hvalue]
+      exact Or.inl ⟨_, rfl⟩
+  | call dest ret callee args =>
+      rcases h with ⟨values, hargs, hcase⟩
+      rcases hcase with ⟨info, ty1, ty2, a, b, hparse, hvalues⟩
+        | ⟨hparse, info, ty1, ty2, ty3, a, b, c, hrotate, hvalues⟩
+        | ⟨hparse, hrotate, fn, hfn, hblocks, hlen⟩
+      · simp only [stepInstr, hargs, hparse, hvalues, callResult]
+        split <;> exact Or.inl ⟨_, rfl⟩
+      · simp only [stepInstr, hargs, hparse, hrotate, hvalues, callResult]
+        split <;> exact Or.inl ⟨_, rfl⟩
+      · cases hb : fn.blocks with
+        | nil => exact absurd hb hblocks
+        | cons block restBlocks =>
+            simp only [stepInstr, hargs, hparse, hrotate, hfn, hb, hlen, callFunction]
+            exact Or.inl ⟨_, rfl⟩
+  | callPtr dest ret callee args =>
+      rcases h with ⟨values, calleeValue, hargs, hcallee, hcase⟩
+      rcases hcase with ⟨name, fn, hcv, hfn, hblocks, hlen⟩
+        | ⟨slot, a, b, hcv, himp, hvalues, hcode⟩
+      · cases hb : fn.blocks with
+        | nil => exact absurd hb hblocks
+        | cons block restBlocks =>
+            simp only [stepInstr, hargs, hcallee, hcv, hfn, hb, hlen, callFunction]
+            exact Or.inl ⟨_, rfl⟩
+      · simp only [stepInstr, hargs, hcallee, hcv, himp, hvalues, trapOutcome]
+        rcases hcode with h1 | h2 | h3
+        · simp only [h1]
+          exact Or.inr ⟨_, _, rfl⟩
+        · simp only [h2]
+          exact Or.inr ⟨_, _, rfl⟩
+        · simp only [h3]
+          exact Or.inr ⟨_, _, rfl⟩
+  | extractValue dest aggregate index ty =>
+      rcases h with ⟨pairTy, value, overflow, hagg, hidx⟩
+      rcases hidx with hidx | hidx
+      · simp only [stepInstr, hagg, hidx, callResult]
+        exact Or.inl ⟨_, rfl⟩
+      · simp only [stepInstr, hagg, hidx, callResult]
+        exact Or.inl ⟨_, rfl⟩
+
+theorem stepTerminator_progress {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {term : Terminator}
+    (h : AccessBoundedTerminator contract c f term)
+    (hframes : c.frames = f :: restFrames)
+    (hterm : f.terminator = some term) :
+    (∃ c', stepTerminator c f = .step c') ∨
+      (∃ trap c', stepTerminator c f = .trapped trap c') := by
+  cases term with
+  | ret value =>
+      cases restFrames with
+      | nil =>
+          cases value with
+          | none =>
+              simp only [AccessBoundedTerminator] at h
+              cases hd : f.retDest
+              · simp only [stepTerminator, hterm, irStepRet, hframes, hd]
+                exact Or.inl ⟨_, rfl⟩
+              · simp only [hd] at h
+                cases h
+          | some operand =>
+              rcases h with ⟨v, hv⟩
+              cases hd : f.retDest
+              · simp only [stepTerminator, hterm, irStepRet, hframes, hd, hv]
+                exact Or.inl ⟨_, rfl⟩
+              · simp only [stepTerminator, hterm, irStepRet, hframes, hd, hv]
+                exact Or.inl ⟨_, rfl⟩
+      | cons caller below =>
+          cases below with
+          | nil =>
+              cases value with
+              | none =>
+                  simp only [AccessBoundedTerminator] at h
+                  cases hd : f.retDest
+                  · simp only [stepTerminator, hterm, irStepRet, hframes, hd]
+                    exact Or.inl ⟨_, rfl⟩
+                  · simp only [hd] at h
+                    cases h
+              | some operand =>
+                  rcases h with ⟨v, hv⟩
+                  cases hd : f.retDest
+                  · simp only [stepTerminator, hterm, irStepRet, hframes, hd, hv]
+                    exact Or.inl ⟨_, rfl⟩
+                  · simp only [stepTerminator, hterm, irStepRet, hframes, hd, hv]
+                    exact Or.inl ⟨_, rfl⟩
+          | cons caller2 below2 =>
+              cases value with
+              | none =>
+                  simp only [AccessBoundedTerminator] at h
+                  cases hd : f.retDest
+                  · simp only [stepTerminator, hterm, irStepRet, hframes, hd]
+                    exact Or.inl ⟨_, rfl⟩
+                  · simp only [hd] at h
+                    cases h
+              | some operand =>
+                  rcases h with ⟨v, hv⟩
+                  cases hd : f.retDest
+                  · simp only [stepTerminator, hterm, irStepRet, hframes, hd, hv]
+                    exact Or.inl ⟨_, rfl⟩
+                  · simp only [stepTerminator, hterm, irStepRet, hframes, hd, hv]
+                    exact Or.inl ⟨_, rfl⟩
+  | br target =>
+      rcases h with ⟨block, hb⟩
+      simp only [stepTerminator, hterm, irJump, hb]
+      exact Or.inl ⟨_, rfl⟩
+  | condBr cond thenTarget elseTarget =>
+      rcases h with ⟨condTy, value, hcond, block, hb⟩
+      simp only [stepTerminator, hterm, irJump, hcond, hb]
+      exact Or.inl ⟨_, rfl⟩
+  | unreachable =>
+      exact absurd h (by simp [AccessBoundedTerminator])
+
+theorem ir_progress {contract : IRContract} {c : IRState}
+    (hwf : WFRunning contract c) (haccess : AccessBounded contract c) :
+    (∃ c', irStep c = .step c') ∨
+      (∃ trap c', irStep c = .trapped trap c') := by
+  rcases hwf with ⟨hwf, hstatus, hne⟩
+  cases hframes : c.frames with
+  | nil => exact absurd hframes hne
+  | cons f restFrames =>
+      cases hinstrs : f.instrs with
+      | nil =>
+          cases hterm : f.terminator with
+          | none =>
+              simp [AccessBounded, hframes, hinstrs, hterm] at haccess
+          | some term =>
+              simp only [AccessBounded, hframes, hinstrs, hterm] at haccess
+              have hp := stepTerminator_progress (contract := contract) (c := c)
+                (f := f) (restFrames := restFrames) (term := term) haccess hframes hterm
+              rcases hp with ⟨c', hc⟩ | ⟨trap, c', hc⟩
+              · exact Or.inl ⟨c', by
+                  simp only [irStep, hstatus, hframes, hinstrs, hterm,
+                    IRStepResult.toOutcome, hc]⟩
+              · exact Or.inr ⟨trap, c', by
+                  simp only [irStep, hstatus, hframes, hinstrs, hterm,
+                    IRStepResult.toOutcome, hc]⟩
+      | cons instr restInstrs =>
+          simp only [AccessBounded, hframes, hinstrs] at haccess
+          have hp := stepInstr_progress (contract := contract) (c := c)
+            (f := f) (instr := instr) (rest := restInstrs) haccess
+          rcases hp with ⟨c', hc⟩ | ⟨trap, c', hc⟩
+          · exact Or.inl ⟨c', by
+              simp only [irStep, hstatus, hframes, hinstrs, IRStepResult.toOutcome, hc]⟩
+          · exact Or.inr ⟨trap, c', by
+              simp only [irStep, hstatus, hframes, hinstrs, IRStepResult.toOutcome, hc]⟩
+
+theorem toOutcome_ub {r : IRStepResult} {c' : IRState}
+    (h : r.toOutcome = .ub c') : r = .ub c' := by
+  cases r <;> simp_all [IRStepResult.toOutcome]
+
+theorem stepInstr_ub_imp {c : IRState} {f : IRFrame} {instr : Instr}
+    {rest : List Instr} {c' : IRState}
+    (h : stepInstr c f instr rest = .ub c') :
+    ∃ dest ret callee args values slot,
+      instr = .callPtr dest ret callee args ∧
+        evalOperands f args = some values ∧
+        evalOperand f callee = some (.ptr (.importCell slot)) ∧
+        c.lookupImport slot = some .trap ∧
+        trapOutcome c values = .ub c' := by
+  cases instr with
+  | alloca dest ty =>
+      simp_all [stepInstr]
+  | load dest ty ptr align =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals simp_all
+  | store ty value ptr align =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals simp_all
+  | gep dest pointee base indices inbounds =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals simp_all
+  | binop dest op ty lhs rhs =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals simp_all
+  | icmp dest pred ty lhs rhs =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals simp_all
+  | select dest ty cond thenValue elseValue =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals simp_all
+  | cast dest op value fromTy toTy =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals simp_all
+  | phi dest ty incoming =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals simp_all
+  | call dest ret callee args =>
+      simp only [stepInstr, callResult, callFunction] at h
+      repeat' split at h
+      all_goals simp_all
+  | callPtr dest ret callee args =>
+      cases hargs : evalOperands f args with
+      | none => simp [stepInstr, hargs] at h
+      | some values =>
+          cases hcallee : evalOperand f callee with
+          | none => simp [stepInstr, hargs, hcallee] at h
+          | some cv =>
+              cases cv with
+              | int ty v => simp [stepInstr, hargs, hcallee] at h
+              | pair ty v b => simp [stepInstr, hargs, hcallee] at h
+              | null => simp [stepInstr, hargs, hcallee] at h
+              | ptr addr =>
+                  cases addr with
+                  | function fname =>
+                      cases hfn : c.module.function? fname with
+                      | none => simp [stepInstr, hargs, hcallee, hfn] at h
+                      | some fn =>
+                          simp only [stepInstr, hargs, hcallee, hfn, callFunction] at h
+                          repeat' split at h
+                          all_goals simp_all
+                  | importCell slot =>
+                      cases himp : c.lookupImport slot with
+                      | none => simp [stepInstr, hargs, hcallee, himp] at h
+                      | some kind =>
+                          cases kind with
+                          | trap =>
+                              simp only [stepInstr, hargs, hcallee, himp] at h
+                              exact ⟨dest, ret, callee, args, values, slot, rfl, hargs,
+                                hcallee, himp, h⟩
+                          | host => simp [stepInstr, hargs, hcallee, himp] at h
+                  | stack frame slot off => simp [stepInstr, hargs, hcallee] at h
+                  | slotEntry slot => simp [stepInstr, hargs, hcallee] at h
+                  | cell slot => simp [stepInstr, hargs, hcallee] at h
+                  | root slot off => simp [stepInstr, hargs, hcallee] at h
+                  | global name off => simp [stepInstr, hargs, hcallee] at h
+                  | slotTable => simp [stepInstr, hargs, hcallee] at h
+  | extractValue dest aggregate index ty =>
+      simp only [stepInstr, callResult] at h
+      repeat' split at h
+      all_goals simp_all
+
+theorem trapOutcome_trapped {c : IRState} {values : List IRValue} {ty : IrType}
+    {code : Int} {rest : List IRValue}
+    (hv : values = .int ty code :: rest)
+    (hc : code = 1 ∨ code = 2 ∨ code = 3) :
+    ∃ trap c', trapOutcome c values = .trapped trap c' := by
+  subst hv
+  rcases hc with h1 | h2 | h3
+  · subst h1
+    exact ⟨.overflow, { c with status := .trapped .overflow }, by simp [trapOutcome]⟩
+  · subst h2
+    exact ⟨.divZero, { c with status := .trapped .divZero }, by simp [trapOutcome]⟩
+  · subst h3
+    exact ⟨.range, { c with status := .trapped .range }, by simp [trapOutcome]⟩
+
+theorem mem_of_originOf? {facts : FunctionFacts} {name : String}
+    {origin : PointerOrigin}
+    (h : facts.originOf? name = some origin) : (name, origin) ∈ facts.origins := by
+  unfold FunctionFacts.originOf? at h
+  cases hfind : facts.origins.find? (fun entry => entry.1 == name) with
+  | none => simp [hfind] at h
+  | some entry =>
+      simp only [hfind, Option.map_some] at h
+      have hmem := List.mem_of_find?_eq_some hfind
+      have hp := List.find?_some hfind
+      rcases entry with ⟨entryName, entryOrigin⟩
+      simp only at hp h hmem ⊢
+      have heq : entryName = name := beq_iff_eq.mp hp
+      have hEq : entryOrigin = origin := Option.some.inj h
+      subst heq
+      subst hEq
+      exact hmem
+
+theorem evalOperands_intLit_head {f : IRFrame} {ty : IrType} {code : Int}
+    {span : Operand} {values : List IRValue}
+    (h : evalOperands f [.intLit ty code, span] = some values) :
+    ∃ rest, values = .int ty code :: rest := by
+  rw [evalOperands.eq_2] at h
+  simp only [evalOperand] at h
+  split at h
+  · rename_i v rest hv hrest
+    have hv' : v = .int ty code := (Option.some.inj hv).symm
+    have hlist : values = v :: rest := (Option.some.inj h).symm
+    exact ⟨rest, by rw [hlist, hv']⟩
+  · cases h
+
+theorem ir_no_ub {contract : IRContract} {c c' : IRState}
+    (hwf : WFRunning contract c) : irStep c ≠ .ub c' := by
+  rintro h
+  rcases hwf with ⟨hwf, hstatus, hne⟩
+  unfold irStep at h
+  rw [hstatus] at h
+  cases hframes : c.frames with
+  | nil => simp [hframes] at h
+  | cons f restFrames =>
+      simp only [hframes] at h
+      cases hinstrs : f.instrs with
+      | nil =>
+          cases hterm : f.terminator with
+          | none => simp [hinstrs, hterm, stepTerminator, IRStepResult.toOutcome] at h
+          | some term =>
+              cases term with
+              | unreachable =>
+                  exact hwf.noBareUnreachable f restFrames hframes hinstrs hterm
+              | ret v =>
+                  cases v with
+                  | none =>
+                      simp only [stepTerminator, irStepRet, hinstrs, hterm, hframes] at h
+                      repeat' split at h
+                      all_goals simp_all [IRStepResult.toOutcome]
+                  | some operand =>
+                      simp only [stepTerminator, irStepRet, hinstrs, hterm, hframes] at h
+                      repeat' split at h
+                      all_goals simp_all [IRStepResult.toOutcome]
+              | br target =>
+                  simp only [stepTerminator, irJump, hinstrs, hterm] at h
+                  repeat' split at h
+                  all_goals simp_all [IRStepResult.toOutcome]
+              | condBr cond thenTarget elseTarget =>
+                  simp only [stepTerminator, irJump, hinstrs, hterm] at h
+                  repeat' split at h
+                  all_goals simp_all [IRStepResult.toOutcome]
+      | cons instr restInstrs =>
+          simp only [hinstrs] at h
+          have hub := toOutcome_ub h
+          rcases stepInstr_ub_imp hub with
+            ⟨dest, ret, callee, args, values, slot, hinstr, hargs, hcallee, himp, htub⟩
+          have hfmem : f ∈ c.frames := by
+            rw [hframes]
+            exact List.mem_cons_self ..
+          rcases hwf.frameBlock f hfmem with
+            ⟨block, hblockmem, hblockeq, htermEq, done, hblockinstrs⟩
+          have hinstr_mem : instr ∈ block.instrs := by
+            rw [hblockinstrs, hinstrs]
+            simp
+          rcases hwf.program.callPtrOrigins f.fn (hwf.frameFunction f hfmem)
+            block hblockmem instr hinstr_mem dest ret callee args hinstr with
+            ⟨name, originSlot, hcalleeEq, horigin⟩
+          have hmemorig := mem_of_originOf? horigin
+          rcases hwf.originsMatch f hfmem (name, .cell originSlot true) hmemorig with
+            ⟨v, hlookup, hlocType, hkindcase⟩
+          rw [hcalleeEq] at hcallee
+          simp only [evalOperand] at hcallee
+          have hvEq : v = .ptr (.importCell slot) := by
+            rw [hcallee] at hlookup
+            exact (Option.some.inj hlookup).symm
+          rcases hkindcase with hdefault | hkindcase
+          · rw [hvEq] at hdefault
+            cases hdefault
+          · rcases hkindcase with ⟨kind, hkind, hcase⟩
+            rcases hcase with ⟨hstorage, hroot⟩
+              | ⟨hkindFn, hfname, hfnlook, hfnval, hfnmem⟩
+              | ⟨hkindImp, hval⟩
+            · rw [hvEq] at hroot
+              cases hroot
+            · rw [hvEq] at hfnval
+              cases hfnval
+            · cases hval
+              subst hkindImp
+              have htrap := hwf.program.trapCodesSpecified f.fn (hwf.frameFunction f hfmem)
+                block hblockmem instr hinstr_mem dest ret callee args hinstr
+                ⟨name, originSlot, hcalleeEq, horigin,
+                  by simpa [IRState.slotKind?] using hkind⟩
+              rcases htrap with ⟨code, span, hargsEq, hcode⟩
+              rw [hargsEq] at hargs
+              rcases evalOperands_intLit_head hargs with ⟨restValues, hvalues⟩
+              rcases trapOutcome_trapped hvalues hcode with ⟨trap, c'', htr⟩
+              rw [htr] at htub
+              cases htub
 
 end Stc.Codegen

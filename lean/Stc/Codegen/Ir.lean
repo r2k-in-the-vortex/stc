@@ -1068,7 +1068,7 @@ def minimalFrag : IRFrag :=
     slots := [], functionTable := [] }
 
 /-- The minimal fragment is well formed. -/
-example : WellFormed minimalContract minimalFrag where
+theorem minimalWellFormed : WellFormed minimalContract minimalFrag where
   blocksHaveTerminators := by
     intro fn hfn block hblock
     simp only [minimalFrag] at hfn

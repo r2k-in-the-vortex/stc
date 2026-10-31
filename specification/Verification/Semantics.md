@@ -117,7 +117,10 @@ requires `WCHAR_TO_UCHAR` to trap on lone surrogates and `UCHAR_TO_WCHAR` to tra
 and defines `UCHAR` as a Unicode scalar. P0.3 does not enforce scalar validity and does not model
 those conversion traps; the conversions are integer layout conversions. This gap is deferred to
 the later string phase and excluded from P0.6 conformance until it is modeled. The source type
-soundness result is therefore relative to the layout-only character model.
+soundness result is therefore relative to the layout-only character model. For P0.5, this is why
+target `ir_progress` carries the `AccessBounded` source-check premise instead of deriving it:
+the character-index path needs `CharIndexBounded` or exclusion until Q3 is resolved (see
+`Plan-Phase0.md` §22.4 and §22.11).
 
 HIR typing is monomorphic. The declarative operator rules require arithmetic operands to be the
 same integer type, bitwise operands to be the same `BOOL`/bit-string type, and comparison
@@ -261,12 +264,13 @@ state whose own step is `.halt`. The executor soundness and completeness lemmas 
 Phase 1 refinement target; the step relation remains the reference for progress and memory
 soundness.
 
-P0.5 is in progress. `ir_deterministic`, `ir_got_sound`, `ir_trap_sound`,
-`ir_checked_arith_refines_exact`, and `ir_recursive_model_equiv` are proved. `ir_progress`,
-`ir_memory_safe`, and `ir_no_ub` are stated over reachable well-formed states and await the
-target state invariant. The invariant design proposal is in `Plan-Phase0.md` §22, covering the
-persistent-storage model, stack/GEP bounds and the Q3 character gap, indirect-call origins, and
-return linkage; it is awaiting owner approval before implementation. Earlier scoping is in §21.
+All eight P0.5 target soundness theorems are now proved. `ir_progress`, `ir_memory_safe`, and
+`ir_no_ub` are stated over the `WFRunning` target invariant, which is implemented in
+`Stc.Codegen.Semantics` together with the offset-aware storage, `.slotEntry`, bounds-checked
+memory operations, origin/binding facts, and return-link predicates.  The approved design and
+implementation record is in `Plan-Phase0.md` §22. The initial-state and preservation proofs and
+the reachability corollaries remain as the whole-run follow-up; the three registry theorems are
+per-state and do not depend on them. Earlier scoping is in §21.
 
 ### 4.6 Cycle and initialization boundary
 
@@ -285,11 +289,11 @@ activate, commit, rollback, and unload beyond the initialization boundary are Ph
 The core has stack frames and persistent GOT cells. There is no heap, no general pointer
 arithmetic, and no aliasing beyond GOT cells. Target values are integers, pointers, and the
 typed cell contents described by `WellFormed`. Stack memory is modeled per slot and array
-element. Globals and `Data`/`Direct` root values are modeled as whole values, so offsets into
-persistent storage are abstracted; the slot-table entry level of the two-load GOT access pattern
-is currently collapsed as well. The P0.5 invariant design proposal in `Plan-Phase0.md` §22
-recommends replacing both with the offset-aware store and the `.slotEntry` level; it is awaiting
-owner approval.
+element. Persistent storage behind a `Data`/`Direct` root or a module global is an addressable
+value sequence keyed by store id and offset; the builder's two-load GOT access pattern is
+modeled with a distinct `.slotEntry` address, so the cell address and the cell content have
+different state values and the recorded `PointerOrigin` stages match the state. The model,
+bounds checks, and fault policy are the approved D1/D2 design in `Plan-Phase0.md` §22.
 
 ### 5.2 GOT root and slot model
 
@@ -302,9 +306,9 @@ excluded. The slot table is grouped in the canonical kind order; sorting within 
 `GotId`/service ID is Phase 3's `slots_canonical`. `ir_got_sound` is proved for the target
 `loadValue`: given the slot kind, a `Data`/`Direct` cell load returns the root pointer, a
 `Function` cell load returns the bound callable, an `Import` cell load returns the import cell
-identity, and a `Descriptor` cell load returns nothing. The §22 proposal adds a `.slotEntry`
-address for the first of the builder's two GOT loads, so the cell address and the cell content
-have distinct model values and the recorded `PointerOrigin` stages match the state.
+identity, and a `Descriptor` cell load returns nothing. The model adds a `.slotEntry` address
+for the first of the builder's two GOT loads, so the cell address and the cell content have
+distinct state values and the recorded `PointerOrigin` stages match the state.
 
 ### 5.3 Traps
 
@@ -317,9 +321,13 @@ arithmetic and range-check clauses that produce those outcomes.
 ### 5.4 Undefined-behavior policy
 
 The covered fragment excludes poison and `undef`, out-of-bounds stack access, misaligned access,
-and raw pointer arithmetic. `ir_no_ub` states that `WellFormed` IR cannot reach an undefined
-state on the fragment. The statement is staged on the target state invariant in P0.5; this is a
-property of the modeled fragment, not a general LLVM result.
+and raw pointer arithmetic. `ir_no_ub` is proved for every `WFRunning` state: the only modeled
+undefined sources are an executed `unreachable` and an unspecified trap-service code, and both
+are excluded by the trusted trap-code/guarded-unreachable facts. Out-of-range stack and storage
+accesses are defined `.stuck` faults, as are stores through host-owned cells/slot entries, so
+they are not undefined behavior. This is a property of the modeled fragment, not a general LLVM
+result; lifting it from states to reachable runs is the whole-run follow-up in `Plan-Phase0.md`
+§22.11.
 
 ## 6. Exact arithmetic connection
 
@@ -341,11 +349,13 @@ mirrors the registry while P0.3 is complete, review-approved, and merged into
 `core_check_complete`, which is descoped with the reason recorded in the registry; the P0.3
 entries for determinism, progress, preservation, type soundness, trap soundness, guarded exact
 arithmetic, and the interpreter are proved; the P0.4 definitions and structural lemmas are
-proved. P0.5 is in progress: determinism, GOT soundness, trap soundness, checked-arithmetic
-refinement, and the recursive-model equivalence are proved; progress, memory safety, and no-UB
-await the target state invariant. Open P0.3 questions are recorded in
-[Plan-Phase0.md](Plan-Phase0.md) §19, the P0.4 decisions in §20, and the P0.5 checkpoint in
-§21. The registry is regenerated into this section at P0.7.
+proved. P0.5 target soundness is proved: determinism, progress, memory safety, GOT soundness,
+trap soundness, checked-arithmetic refinement, the recursive-model equivalence, and no-UB are
+all proved against the implemented invariant. The initial-state/preservation proofs and the
+reachability corollaries remain as the whole-run follow-up. Open P0.3 questions are recorded in
+[Plan-Phase0.md](Plan-Phase0.md) §19, the P0.4 decisions in §20, the P0.5 checkpoint in §21, and
+the P0.5 design/implementation record in §22. The registry is regenerated into this section at
+P0.7.
 
 ### 7.1 Source soundness
 
@@ -393,13 +403,13 @@ lemmas are projections of `Stc.Codegen.WellFormed`; the full inventory and shape
 | Theorem | Module | Sub-phase | Status |
 | --- | --- | --- | --- |
 | `Stc.Codegen.ir_deterministic` | `Stc.Codegen.Semantics` | P0.5 | proved |
-| `Stc.Codegen.ir_progress` | `Stc.Codegen.Semantics` | P0.5 | planned (state invariant) |
-| `Stc.Codegen.ir_memory_safe` | `Stc.Codegen.Semantics` | P0.5 | planned (state invariant) |
+| `Stc.Codegen.ir_progress` | `Stc.Codegen.Semantics` | P0.5 | proved |
+| `Stc.Codegen.ir_memory_safe` | `Stc.Codegen.Semantics` | P0.5 | proved |
 | `Stc.Codegen.ir_got_sound` | `Stc.Codegen.Semantics` | P0.5 | proved |
 | `Stc.Codegen.ir_trap_sound` | `Stc.Codegen.Semantics` | P0.5 | proved |
 | `Stc.Codegen.ir_checked_arith_refines_exact` | `Stc.Codegen.Semantics` | P0.5 | proved |
 | `Stc.Codegen.ir_recursive_model_equiv` | `Stc.Codegen.Semantics` | P0.5 | proved |
-| `Stc.Codegen.ir_no_ub` | `Stc.Codegen.Semantics` | P0.5 | planned (state invariant) |
+| `Stc.Codegen.ir_no_ub` | `Stc.Codegen.Semantics` | P0.5 | proved |
 
 ### 7.4 Interpreter equivalence and harness properties
 
