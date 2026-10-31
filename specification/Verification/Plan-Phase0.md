@@ -1102,7 +1102,27 @@ P0.3 resumed after the P0.4 review and CI. The open questions are resolved as fo
 store-update lemmas, initial-state typing, then `type_soundness`, the registry and semantics
 document updates, and the P0.3 review.
 
-## 20. P0.4 execution record — in progress
+### 19.9 Preservation checkpoint (2026-10-31)
+
+Preservation exposed three invariant gaps, now fixed:
+
+- `StackTyped.seq` carries `StmtListHasType` for the remaining statements, so
+  resuming a statement list reconstructs a typed `.stmts` focus.
+- `performCall` records a statement caller's expectation as `unit` (and an
+  expression caller's as the callee result type), matching the caller's
+  `StackTyped` expectation.
+- The assignment branch of `stepValue` pops the assignment continuation before
+  writing; previously the stack retained a value-consuming head and the next
+  `resume` was stuck.
+
+The store/frame lemmas (`ConfigTyped.setVar`, the `FrameMatches` updates,
+`GlobalsTyped.setGlobal`), the typed variable lookup, and `callArgsPush` are
+proved. Preservation itself remains open: the `performCall` frame construction,
+the value/statement/resume/returned transition cases, initial-state typing, and
+`type_soundness` remain, followed by the review. `preservation` stays planned
+(P0-T09). No `sorry` remains in the tree.
+
+## 20. P0.4 execution record — complete
 
 Date: 2026-10-31. Status: **complete; review approved 2026-10-31.** The scope decisions were
 taken before implementation:

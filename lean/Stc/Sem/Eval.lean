@@ -307,8 +307,11 @@ inductive StackTyped (ctx : Ctx) : List Cont → Expect → LoopCtx → Prop whe
         ({ kind := .forBody var stopVal stepVal body, before := before, after := after,
            span := span } :: rest)
         .unit before
-  /-- Continue the statement list after a statement. -/
+  /-- Continue the statement list after a statement. The remaining list must
+  stay typed so resuming the continuation reconstructs a typed statement
+  focus. -/
   | seq {restStmts : List Stmt} {lc : LoopCtx} {span : Span} {rest : List Cont}
+      (hstmts : StmtListHasType ctx lc.depth lc.controlled restStmts)
       (hrest : StackTyped ctx rest .unit lc) :
       StackTyped ctx
         ({ kind := .seq restStmts, before := lc, after := lc, span := span } :: rest)
@@ -503,11 +506,23 @@ theorem frameCtx_function {u : HirUnit} {index : Nat} {fn : Function}
     frameCtx u (.function index) = Ctx.ofFunction (Env.ofUnit u) fn := by
   simp [frameCtx, h]
 
-/-- A typed variable is present in the runtime store. -/
-theorem ConfigTyped.lookupVar?_some {u : HirUnit} {s : State} {f : Frame}
+/-- A mapped-list lookup success identifies its source and mapping. -/
+theorem List.getElem?_map_eq_some {α β : Type} {f : α → β} {l : List α} {i : Nat}
+    {b : β} (h : (l.map f)[i]? = some b) : ∃ a, l[i]? = some a ∧ f a = b := by
+  rw [List.getElem?_map] at h
+  cases hl : l[i]? with
+  | none => rw [hl] at h; cases h
+  | some a =>
+      rw [hl] at h
+      have h' : f a = b := by simpa using h
+      exact ⟨a, rfl, h'⟩
+
+/-- A typed variable is present in the runtime store with its declared type
+and a well-formed value. -/
+theorem ConfigTyped.lookupVar?_typed {u : HirUnit} {s : State} {f : Frame}
     {rest : List Frame} (hc : ConfigTyped u s) (hf : s.frames = f :: rest)
     {id : VarId} {ty : Ty} (h : (frameCtx u f.kind).lookup id = some ty) :
-    ∃ v, s.lookupVar? id = some v := by
+    ∃ v, s.lookupVar? id = some v ∧ v.ty = ty ∧ v.WellFormed := by
   have hm := hc.headMatch f rest hf
   cases id with
   | param i =>
@@ -518,10 +533,14 @@ theorem ConfigTyped.lookupVar?_some {u : HirUnit} {s : State} {f : Frame}
           rcases hm with ⟨fn, hfn, hplen, hpar, hllen, hloc, hres⟩
           rw [frameCtx_function hfn] at h
           simp only [Ctx.ofFunction, Ctx.lookup] at h
-          rcases List.getElem?_map_some h with ⟨p, hp⟩
+          obtain ⟨p, hp, hpt⟩ := List.getElem?_map_eq_some h
           have hi := List.getElem?_isSome hp
           have hi' : i < f.params.length := by omega
-          exact ⟨f.params[i], by simp [State.lookupVar?, State.head?, hf, List.getElem?_eq_getElem hi']⟩
+          rcases hpar i f.params[i] (List.getElem?_eq_getElem hi') with ⟨p', hp', hty, hwf⟩
+          have hpp : p' = p := by rw [hp] at hp'; cases hp'; rfl
+          refine ⟨f.params[i],
+            by simp [State.lookupVar?, State.head?, hf, List.getElem?_eq_getElem hi'], ?_, hwf⟩
+          rw [hty, hpp, hpt]
       | program =>
           rw [hk, frameCtx_program] at h
           simp [Ctx.ofProgram, Ctx.lookup] at h
@@ -533,19 +552,27 @@ theorem ConfigTyped.lookupVar?_some {u : HirUnit} {s : State} {f : Frame}
           rcases hm with ⟨fn, hfn, hplen, hpar, hllen, hloc, hres⟩
           rw [frameCtx_function hfn] at h
           simp only [Ctx.ofFunction, Ctx.lookup] at h
-          rcases List.getElem?_map_some h with ⟨l, hl⟩
+          obtain ⟨l, hl, hlt⟩ := List.getElem?_map_eq_some h
           have hi := List.getElem?_isSome hl
           have hi' : i < f.locals.length := by omega
-          exact ⟨f.locals[i], by simp [State.lookupVar?, State.head?, hf, List.getElem?_eq_getElem hi']⟩
+          rcases hloc i f.locals[i] (List.getElem?_eq_getElem hi') with ⟨l', hl', hty, hwf⟩
+          have hll : l' = l := by rw [hl] at hl'; cases hl'; rfl
+          refine ⟨f.locals[i],
+            by simp [State.lookupVar?, State.head?, hf, List.getElem?_eq_getElem hi'], ?_, hwf⟩
+          rw [hty, hll, hlt]
       | program =>
           rw [hk, frameCtx_program] at h
           simp only [Ctx.ofProgram, Ctx.lookup] at h
           simp only [FrameMatches, hk] at hm
           rcases hm with ⟨_, _, hlen, hloc⟩
-          rcases List.getElem?_map_some h with ⟨l, hl⟩
+          obtain ⟨l, hl, hlt⟩ := List.getElem?_map_eq_some h
           have hi := List.getElem?_isSome hl
           have hi' : i < f.locals.length := by omega
-          exact ⟨f.locals[i], by simp [State.lookupVar?, State.head?, hf, List.getElem?_eq_getElem hi']⟩
+          rcases hloc i f.locals[i] (List.getElem?_eq_getElem hi') with ⟨l', hl', hty, hwf⟩
+          have hll : l' = l := by rw [hl] at hl'; cases hl'; rfl
+          refine ⟨f.locals[i],
+            by simp [State.lookupVar?, State.head?, hf, List.getElem?_eq_getElem hi'], ?_, hwf⟩
+          rw [hty, hll, hlt]
   | «global» i =>
       cases hk : f.kind with
       | function index =>
@@ -554,19 +581,29 @@ theorem ConfigTyped.lookupVar?_some {u : HirUnit} {s : State} {f : Frame}
           rcases hm with ⟨fn, hfn, _⟩
           rw [frameCtx_function hfn] at h
           simp only [Ctx.ofFunction, Ctx.lookup] at h
+          simp only [Env.ofUnit] at h
           rcases hc.globals with ⟨glen, gok⟩
-          rcases List.getElem?_map_some h with ⟨g, hg⟩
+          obtain ⟨g, hg, hgt⟩ := List.getElem?_map_eq_some h
           have hi := List.getElem?_isSome hg
           have hi' : i < s.globals.length := by omega
-          exact ⟨s.globals[i], by simp [State.lookupVar?, State.head?, List.getElem?_eq_getElem hi']⟩
+          rcases gok i s.globals[i] (List.getElem?_eq_getElem hi') with ⟨g', hg', hty, hwf⟩
+          have hgg : g' = g := by rw [hg] at hg'; cases hg'; rfl
+          refine ⟨s.globals[i],
+            by simp [State.lookupVar?, List.getElem?_eq_getElem hi'], ?_, hwf⟩
+          rw [hty, hgg, hgt]
       | program =>
           rw [hk, frameCtx_program] at h
           simp only [Ctx.ofProgram, Ctx.lookup] at h
+          simp only [Env.ofUnit] at h
           rcases hc.globals with ⟨glen, gok⟩
-          rcases List.getElem?_map_some h with ⟨g, hg⟩
+          obtain ⟨g, hg, hgt⟩ := List.getElem?_map_eq_some h
           have hi := List.getElem?_isSome hg
           have hi' : i < s.globals.length := by omega
-          exact ⟨s.globals[i], by simp [State.lookupVar?, State.head?, List.getElem?_eq_getElem hi']⟩
+          rcases gok i s.globals[i] (List.getElem?_eq_getElem hi') with ⟨g', hg', hty, hwf⟩
+          have hgg : g' = g := by rw [hg] at hg'; cases hg'; rfl
+          refine ⟨s.globals[i],
+            by simp [State.lookupVar?, List.getElem?_eq_getElem hi'], ?_, hwf⟩
+          rw [hty, hgg, hgt]
   | result =>
       cases hk : f.kind with
       | function index =>
@@ -575,19 +612,440 @@ theorem ConfigTyped.lookupVar?_some {u : HirUnit} {s : State} {f : Frame}
           rcases hm with ⟨fn, hfn, hplen, hpar, hllen, hloc, hres⟩
           rw [frameCtx_function hfn] at h
           simp only [Ctx.ofFunction, Ctx.lookup] at h
-          -- h : fn.resultType = some ty
           cases hrt : fn.resultType with
           | none => rw [hrt] at h; cases h
           | some rty =>
+              rw [hrt] at h
+              have hrty : rty = ty := by cases h; rfl
               rw [hrt] at hres
               cases hr : f.result with
               | none => rw [hr] at hres; cases hres
               | some v =>
-                  exact ⟨v, by simp [State.lookupVar?, State.head?, hf, hr]⟩
+                  rw [hr] at hres
+                  rcases hres with ⟨hvty, hvwf⟩
+                  refine ⟨v, by simp [State.lookupVar?, State.head?, hf, hr], ?_, hvwf⟩
+                  rw [hvty, hrty]
       | program =>
           rw [hk, frameCtx_program] at h
           simp only [Ctx.ofProgram, Ctx.lookup] at h
           cases h
+
+/-- A typed variable is present in the runtime store. -/
+theorem ConfigTyped.lookupVar?_some {u : HirUnit} {s : State} {f : Frame}
+    {rest : List Frame} (hc : ConfigTyped u s) (hf : s.frames = f :: rest)
+    {id : VarId} {ty : Ty} (h : (frameCtx u f.kind).lookup id = some ty) :
+    ∃ v, s.lookupVar? id = some v := by
+  obtain ⟨v, hv, _, _⟩ := hc.lookupVar?_typed hf h
+  exact ⟨v, hv⟩
+
+/-! ## Store and frame preservation -/
+
+/-- The global types of a function frame's context. -/
+theorem frameCtx_globals_function {u : HirUnit} {index : Nat} {fn : Function}
+    (h : u.functions[index]? = some fn) :
+    (frameCtx u (.function index)).globals = (Env.ofUnit u).globalTypes := by
+  rw [frameCtx_function h]; rfl
+
+/-- The parameter types of a function frame's context. -/
+theorem frameCtx_params_function {u : HirUnit} {index : Nat} {fn : Function}
+    (h : u.functions[index]? = some fn) :
+    (frameCtx u (.function index)).params = fn.params.map (·.ty) := by
+  rw [frameCtx_function h]; rfl
+
+/-- The local types of a function frame's context. -/
+theorem frameCtx_locals_function {u : HirUnit} {index : Nat} {fn : Function}
+    (h : u.functions[index]? = some fn) :
+    (frameCtx u (.function index)).locals = fn.locals.map (·.ty) := by
+  rw [frameCtx_function h]; rfl
+
+/-- The result type of a function frame's context. -/
+theorem frameCtx_result_function {u : HirUnit} {index : Nat} {fn : Function}
+    (h : u.functions[index]? = some fn) :
+    (frameCtx u (.function index)).result = fn.resultType := by
+  rw [frameCtx_function h]; rfl
+
+/-- The global types of the program context. -/
+theorem frameCtx_globals_program (u : HirUnit) :
+    (frameCtx u .program).globals = (Env.ofUnit u).globalTypes := rfl
+
+/-- The program context has no parameters. -/
+theorem frameCtx_params_program (u : HirUnit) : (frameCtx u .program).params = [] := rfl
+
+/-- The program context's local types. -/
+theorem frameCtx_locals_program (u : HirUnit) :
+    (frameCtx u .program).locals = u.program.locals.map (·.ty) := rfl
+
+/-- The program context has no result variable. -/
+theorem frameCtx_result_program (u : HirUnit) : (frameCtx u .program).result = none := rfl
+
+/-- A frame-shape is preserved when only a head frame's stored values change. -/
+theorem FramesShape.updateHead {f f' : Frame} {rest : List Frame}
+    (h : FramesShape (f :: rest)) (hk : f'.kind = f.kind) :
+    FramesShape (f' :: rest) := by
+  cases h with
+  | last hkind => exact FramesShape.last (by rw [hk, hkind])
+  | cons hfun htail =>
+      exact FramesShape.cons
+        (by rcases hfun with ⟨i, hi⟩; exact ⟨i, by rw [hk, hi]⟩) htail
+
+/-- Focus typing depends on the frame's POU, continuation stack, and loop
+context, not on its stored parameter, local, or result values. -/
+theorem FocusTyped.updateFrame {u : HirUnit} {f f' : Frame} {focus : Focus}
+    (h : FocusTyped u f focus) (hk : f'.kind = f.kind)
+    (hk' : f'.k = f.k) (hlc : f'.loopCtx = f.loopCtx) :
+    FocusTyped u f' focus := by
+  cases focus with
+  | expr e =>
+      simp only [FocusTyped] at h ⊢
+      rw [hk, hk', hlc]
+      exact h
+  | value v =>
+      simp only [FocusTyped] at h ⊢
+      rw [hk, hk', hlc]
+      exact h
+  | stmts ss lc =>
+      simp only [FocusTyped] at h ⊢
+      rw [hk, hk', hlc]
+      exact h
+  | resume =>
+      simp only [FocusTyped] at h ⊢
+      rw [hk, hk', hlc]
+      exact h
+  | returned rv =>
+      simp only [FocusTyped] at h ⊢
+      rw [hk, hk', hlc]
+      exact h
+  | trapped trap span => trivial
+  | halted => trivial
+
+/-- `FrameMatches` is preserved by a parameter write of the context type. -/
+theorem FrameMatches.setParams {u : HirUnit} {f : Frame} {i : Nat} {v : Value}
+    (hm : FrameMatches u f)
+    (hlookup : (frameCtx u f.kind).lookup (.param i) = some v.ty)
+    (hvwf : v.WellFormed) :
+    FrameMatches u { f with params := f.params.set i v } := by
+  cases hk : f.kind with
+  | program =>
+      simp only [FrameMatches, hk] at hm
+      rcases hm with ⟨hparams, _, _, _⟩
+      rw [hk] at hlookup
+      simp only [Ctx.lookup] at hlookup
+      rw [frameCtx_params_program] at hlookup
+      cases hlookup
+  | function index =>
+      simp only [FrameMatches, hk] at hm
+      rcases hm with ⟨fn, hfn, hplen, hpar, hllen, hloc, hres⟩
+      rw [hk] at hlookup
+      simp only [Ctx.lookup] at hlookup
+      rw [frameCtx_params_function hfn] at hlookup
+      obtain ⟨p, hp, hpt⟩ := List.getElem?_map_eq_some hlookup
+      have hiMap : i < (fn.params.map (·.ty)).length := List.getElem?_isSome hlookup
+      have hi : i < fn.params.length := by simpa using hiMap
+      have hif : i < f.params.length := by omega
+      refine ⟨fn, hfn, ?_, ?_, hllen, hloc, hres⟩
+      · simp [List.length_set, hplen]
+      · intro j w hw
+        by_cases hji : i = j
+        · subst hji
+          rw [List.getElem?_set_self hif] at hw
+          simp only [Option.some.injEq] at hw
+          subst hw
+          exact ⟨p, hp, hpt.symm, hvwf⟩
+        · rw [List.getElem?_set_ne hji] at hw
+          exact hpar j w hw
+
+/-- `FrameMatches` is preserved by a local write of the context type. -/
+theorem FrameMatches.setLocals {u : HirUnit} {f : Frame} {i : Nat} {v : Value}
+    (hm : FrameMatches u f)
+    (hlookup : (frameCtx u f.kind).lookup (.local i) = some v.ty)
+    (hvwf : v.WellFormed) :
+    FrameMatches u { f with locals := f.locals.set i v } := by
+  cases hk : f.kind with
+  | program =>
+      simp only [FrameMatches, hk] at hm
+      rcases hm with ⟨hparams, hresult, hlen, hloc⟩
+      rw [hk] at hlookup
+      simp only [Ctx.lookup] at hlookup
+      rw [frameCtx_locals_program] at hlookup
+      obtain ⟨l, hl, hlt⟩ := List.getElem?_map_eq_some hlookup
+      have hiMap : i < (u.program.locals.map (·.ty)).length := List.getElem?_isSome hlookup
+      have hi : i < u.program.locals.length := by simpa using hiMap
+      have hif : i < f.locals.length := by omega
+      refine ⟨hparams, hresult, ?_, ?_⟩
+      · simp [List.length_set, hlen]
+      · intro j w hw
+        by_cases hji : i = j
+        · subst hji
+          rw [List.getElem?_set_self hif] at hw
+          simp only [Option.some.injEq] at hw
+          subst hw
+          exact ⟨l, hl, hlt.symm, hvwf⟩
+        · rw [List.getElem?_set_ne hji] at hw
+          exact hloc j w hw
+  | function index =>
+      simp only [FrameMatches, hk] at hm
+      rcases hm with ⟨fn, hfn, hplen, hpar, hllen, hloc, hres⟩
+      rw [hk] at hlookup
+      simp only [Ctx.lookup] at hlookup
+      rw [frameCtx_locals_function hfn] at hlookup
+      obtain ⟨l, hl, hlt⟩ := List.getElem?_map_eq_some hlookup
+      have hiMap : i < (fn.locals.map (·.ty)).length := List.getElem?_isSome hlookup
+      have hi : i < fn.locals.length := by simpa using hiMap
+      have hif : i < f.locals.length := by omega
+      refine ⟨fn, hfn, hplen, hpar, ?_, ?_, hres⟩
+      · simp [List.length_set, hllen]
+      · intro j w hw
+        by_cases hji : i = j
+        · subst hji
+          rw [List.getElem?_set_self hif] at hw
+          simp only [Option.some.injEq] at hw
+          subst hw
+          exact ⟨l, hl, hlt.symm, hvwf⟩
+        · rw [List.getElem?_set_ne hji] at hw
+          exact hloc j w hw
+
+/-- `FrameMatches` is preserved by a result write of the context type. -/
+theorem FrameMatches.setResult {u : HirUnit} {f : Frame} {v : Value}
+    (hm : FrameMatches u f)
+    (hlookup : (frameCtx u f.kind).lookup .result = some v.ty)
+    (hvwf : v.WellFormed) :
+    FrameMatches u { f with result := some v } := by
+  cases hk : f.kind with
+  | program =>
+      simp only [FrameMatches, hk] at hm
+      rw [hk] at hlookup
+      simp only [Ctx.lookup] at hlookup
+      rw [frameCtx_result_program] at hlookup
+      cases hlookup
+  | function index =>
+      simp only [FrameMatches, hk] at hm
+      rcases hm with ⟨fn, hfn, hplen, hpar, hllen, hloc, hres⟩
+      rw [hk] at hlookup
+      simp only [Ctx.lookup] at hlookup
+      rw [frameCtx_result_function hfn] at hlookup
+      refine ⟨fn, hfn, hplen, hpar, hllen, hloc, ?_⟩
+      rw [hlookup]
+      exact ⟨rfl, hvwf⟩
+
+/-- `GlobalsTyped` is preserved by a global write of the declared type. -/
+theorem GlobalsTyped.setGlobal {u : HirUnit} {globals : List Value} {i : Nat}
+    {v : Value} (hg : GlobalsTyped u globals)
+    (hv : ∃ g, u.globals[i]? = some g ∧ v.ty = g.ty)
+    (hvwf : v.WellFormed) :
+    GlobalsTyped u (globals.set i v) := by
+  rcases hg with ⟨hlen, hok⟩
+  rcases hv with ⟨g, hgi, hty⟩
+  have hi : i < u.globals.length := List.getElem?_isSome hgi
+  have hif : i < globals.length := by omega
+  refine ⟨by simp [List.length_set, hlen], ?_⟩
+  intro j w hw
+  rw [List.getElem?_set] at hw
+  by_cases hji : i = j
+  · rw [if_pos hji, if_pos hif] at hw
+    simp only [Option.some.injEq] at hw
+    subst hw
+    rw [hji] at hgi
+    exact ⟨g, hgi, hty, hvwf⟩
+  · simp [hji] at hw
+    exact hok j w hw
+
+/-- A typed write preserves configuration typing. -/
+theorem ConfigTyped.setVar {u : HirUnit} {s : State} {f : Frame} {rest : List Frame}
+    (hc : ConfigTyped u s) (hf : s.frames = f :: rest)
+    {id : VarId} {v : Value}
+    (hlookup : (frameCtx u f.kind).lookup id = some v.ty)
+    (hvwf : v.WellFormed) :
+    ConfigTyped u (s.setVar id v) := by
+  have hshape : FramesShape (f :: rest) := by simpa [hf] using hc.shape
+  cases id with
+  | param i =>
+      have hm' : FrameMatches u { f with params := f.params.set i v } :=
+        FrameMatches.setParams (hc.headMatch f rest hf) hlookup hvwf
+      have hfr : (s.setVar (.param i) v).frames =
+          { f with params := f.params.set i v } :: rest := by simp [State.setVar, hf]
+      have hfocus : (s.setVar (.param i) v).focus = s.focus := by simp [State.setVar, hf]
+      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      · simpa [State.setVar, hf] using hc.globals
+      · rw [hfr]; exact FramesShape.updateHead hshape rfl
+      · intro g gs hg
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        exact hm'
+      · intro g gs hg
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        rw [hfocus]
+        exact FocusTyped.updateFrame (hc.headFocus f rest hf) rfl rfl rfl
+      · intro g gs hg
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        exact hc.tailTyped f rest hf
+  | «local» i =>
+      have hm' : FrameMatches u { f with locals := f.locals.set i v } :=
+        FrameMatches.setLocals (hc.headMatch f rest hf) hlookup hvwf
+      have hfr : (s.setVar (.local i) v).frames =
+          { f with locals := f.locals.set i v } :: rest := by simp [State.setVar, hf]
+      have hfocus : (s.setVar (.local i) v).focus = s.focus := by simp [State.setVar, hf]
+      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      · simpa [State.setVar, hf] using hc.globals
+      · rw [hfr]; exact FramesShape.updateHead hshape rfl
+      · intro g gs hg
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        exact hm'
+      · intro g gs hg
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        rw [hfocus]
+        exact FocusTyped.updateFrame (hc.headFocus f rest hf) rfl rfl rfl
+      · intro g gs hg
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        exact hc.tailTyped f rest hf
+  | result =>
+      have hm' : FrameMatches u { f with result := some v } :=
+        FrameMatches.setResult (hc.headMatch f rest hf) hlookup hvwf
+      have hfr : (s.setVar .result v).frames = { f with result := some v } :: rest := by
+        simp [State.setVar, hf]
+      have hfocus : (s.setVar .result v).focus = s.focus := by simp [State.setVar, hf]
+      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      · simpa [State.setVar, hf] using hc.globals
+      · rw [hfr]; exact FramesShape.updateHead hshape rfl
+      · intro g gs hg
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        exact hm'
+      · intro g gs hg
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        rw [hfocus]
+        exact FocusTyped.updateFrame (hc.headFocus f rest hf) rfl rfl rfl
+      · intro g gs hg
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        exact hc.tailTyped f rest hf
+  | global i =>
+      have hm := hc.headMatch f rest hf
+      have hg' : GlobalsTyped u (s.globals.set i v) := by
+        cases hk : f.kind with
+        | program =>
+            rw [hk] at hlookup
+            simp only [Ctx.lookup] at hlookup
+            rw [frameCtx_globals_program] at hlookup
+            simp only [Env.ofUnit] at hlookup
+            obtain ⟨g, hglob, hty⟩ := List.getElem?_map_eq_some hlookup
+            exact GlobalsTyped.setGlobal hc.globals ⟨g, hglob, hty.symm⟩ hvwf
+        | function index =>
+            simp only [FrameMatches, hk] at hm
+            rcases hm with ⟨fn, hfn, _⟩
+            rw [hk] at hlookup
+            simp only [Ctx.lookup] at hlookup
+            rw [frameCtx_globals_function hfn] at hlookup
+            simp only [Env.ofUnit] at hlookup
+            obtain ⟨g, hglob, hty⟩ := List.getElem?_map_eq_some hlookup
+            exact GlobalsTyped.setGlobal hc.globals ⟨g, hglob, hty.symm⟩ hvwf
+      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      · simpa [State.setVar, hf] using hg'
+      · simpa [State.setVar, hf] using hc.shape
+      · intro g gs hg
+        have hgold : s.frames = g :: gs := by simpa [State.setVar, hf] using hg
+        simpa [State.setVar, hf] using hc.headMatch g gs hgold
+      · intro g gs hg
+        have hgold : s.frames = g :: gs := by simpa [State.setVar, hf] using hg
+        simpa [State.setVar, hf] using hc.headFocus g gs hgold
+      · intro g gs hg
+        have hgold : s.frames = g :: gs := by simpa [State.setVar, hf] using hg
+        simpa [State.setVar, hf] using hc.tailTyped g gs hgold
+
+/-- A binary operator's well-typedness forces equal operand types. -/
+theorem binaryWellTyped_eq {op : BinaryOp} {a b : Ty}
+    (h : binaryWellTyped op a b = true) : a = b := by
+  cases op <;> simp [binaryWellTyped] at h ⊢
+  all_goals first | exact h.1 | exact h
+
+/-- `FrameMatches` ignores the continuation stack. -/
+theorem FrameMatches.updateK {u : HirUnit} {f : Frame} {k : List Cont}
+    (h : FrameMatches u f) : FrameMatches u { f with k := k } := by
+  cases hk : f.kind with
+  | program => simpa [FrameMatches, hk] using h
+  | function index => simpa [FrameMatches, hk] using h
+
+/-- Replacing the head frame's continuation stack and the focus preserves
+configuration typing. -/
+theorem ConfigTyped.updateHeadFocus {u : HirUnit} {s : State} {f : Frame}
+    {rest : List Frame} {focus : Focus} {k : List Cont}
+    (hc : ConfigTyped u s) (hf : s.frames = f :: rest)
+    (hfocus : FocusTyped u { f with k := k } focus) :
+    ConfigTyped u { s with frames := { f with k := k } :: rest, focus := focus } := by
+  have hshape : FramesShape (f :: rest) := by simpa [hf] using hc.shape
+  have hframe : FrameMatches u { f with k := k } :=
+    FrameMatches.updateK (hc.headMatch f rest hf)
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · simpa using hc.globals
+  · exact FramesShape.updateHead hshape rfl
+  · intro g gs hg
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hframe
+  · intro g gs hg
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hfocus
+  · intro g gs hg
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hc.tailTyped f rest hf
+
+/-- Pushing the first call argument preserves stack typing. -/
+theorem callArgsPush {ctx : Ctx} {callee : Callee} {arg : Expr} {more : List Expr}
+    {T : Ty} {k : List Cont} {lc : LoopCtx} {span : Span}
+    (hcall : CallHasType ctx callee (arg :: more) (some T))
+    (hstack : StackTyped ctx k (.value T) lc) :
+    ∃ t, ExprHasType ctx arg t ∧
+      StackTyped ctx
+        (Cont.same (.callArgs callee [] (arg :: more) false) lc span :: k)
+        (.value t) lc := by
+  rcases callHasType_cases hcall with
+    ⟨idx, cspan, sig, hcallee, hsigfn, hres, hargs⟩ |
+    ⟨fn, cspan, ty, hcallee, hresOuter, hstd⟩
+  · subst hcallee
+    cases hsp : sig.params with
+    | nil => rw [hsp] at hargs; cases hargs
+    | cons p ps =>
+        rw [hsp] at hargs
+        cases hargs with
+        | cons harg htail =>
+            refine ⟨p, harg, ?_⟩
+            refine StackTyped.callArgs (ts := ps) (result := some T) (by simp) ?_ (by simp) ?_ (by simp) ?_
+            · exact Forall2.cons harg htail
+            · refine ⟨sig, hsigfn, ?_, ?_⟩
+              · simp [hsp]
+              · exact hres.symm
+            · simpa [Expect.ofOption] using hstack
+  · subst hcallee
+    have hty : ty = T := by cases hresOuter; rfl
+    cases hstd with
+    | @mk _ _ argTys _ hargs hres =>
+        cases ht : argTys with
+        | nil => rw [ht] at hargs; cases hargs
+        | cons p ps =>
+            rw [ht] at hargs
+            cases hargs with
+            | cons harg htail =>
+                refine ⟨p, harg, ?_⟩
+                refine StackTyped.callArgs (ts := ps) (result := some T) (by simp) ?_ (by simp) ?_ (by simp) ?_
+                · exact Forall2.cons harg htail
+                · simpa [CalleeSignatureV, ht, hty] using hres
+                · simpa [Expect.ofOption] using hstack
 
 /-! ## Progress support -/
 
@@ -845,7 +1303,7 @@ theorem stepResume_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List 
       rw [hk] at h
       simp only [hk]
       cases h with
-      | seq hrest => simp
+      | seq hstmts hrest => simp
       | whileLoop hdepth hctrl hcond hbody hrest => simp
       | repeatBody hdepth hctrl hcond hbody hrest => simp
       | forBody hdepth hctrl hvar hint hstop hstep hbody hrest =>

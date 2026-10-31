@@ -407,7 +407,10 @@ def performCall (u : HirUnit) (c : State) (callee : Callee) (args : List Value)
               let calleeFrame : Frame :=
                 { kind := .function index, params := args, locals := fn.locals.map (fun l => Value.default l.ty), result := fn.resultType.map Value.default, k := [], expect := none, loopCtx := LoopCtx.top }
               .step { c with
-                frames := calleeFrame :: { caller with expect := fn.resultType } :: rest
+                -- A statement call discards the result, so the suspended caller's
+                -- expectation is `unit`; an expression call expects the result.
+                frames := calleeFrame ::
+                  { caller with expect := if isStmt then none else fn.resultType } :: rest
                 focus := .stmts (localInitStmts fn.locals ++ fn.body) LoopCtx.top }
 
 /-- Evaluate an expression. -/
@@ -529,7 +532,10 @@ def stepValue (u : HirUnit) (c : State) (v : Value) : Outcome :=
       | [] => .stuck
       | cont :: rest =>
           match cont.kind with
-          | .assign place => .step { c.setVar place.id v with focus := .resume }
+          | .assign place =>
+              -- Pop the assignment continuation, then write the value.
+              .step { (c.updateHead { f with k := rest }).setVar place.id v with
+                focus := .resume }
           | .unary op =>
               match evalUnary op v.ty v.value with
               | .error trap => .step { c with focus := .trapped trap cont.span }
