@@ -124,6 +124,10 @@ struct Session {
     write_enabled: bool,
     /// Whether the host reports stopped-frame information (`stepping`).
     frames_available: bool,
+    /// Whether the host is monitoring-only (release or hook-free build: no
+    /// debug hooks or no checkpoint table). Breakpoints, pause, stepping, and
+    /// stopped-frame reads are unavailable; typed monitoring stays available.
+    monitoring_only: bool,
     source_table: SourceTable,
     globals: GlobalsLayout,
     /// Manifest function `GotId`s mapped to display names for stack frames.
@@ -544,6 +548,18 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             .and_then(|capabilities| jget(capabilities, "stepping"))
             .and_then(Json::as_bool)
             .unwrap_or(false);
+        let hooks = capabilities
+            .and_then(|capabilities| jget(capabilities, "hooks"))
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
+        let checkpoints = capabilities
+            .and_then(|capabilities| jget(capabilities, "checkpoints"))
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
+        // Release and hook-free hosts cannot stop, so breakpoints, pause,
+        // stepping, and stopped-frame reads are unavailable. Typed monitoring
+        // (Globals, variables, evaluate) stays available while the host runs.
+        let monitoring_only = !hooks || !checkpoints;
         let manifest_body = client
             .call_ok(
                 "manifest.get",
@@ -567,6 +583,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             protocol: protocol.clone(),
             write_enabled,
             frames_available,
+            monitoring_only,
             source_table,
             globals,
             function_names,
@@ -576,6 +593,11 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             self.send_output(
                 "console",
                 "stc: debug session started with stc-debug/1.1; the Locals scope is available",
+            );
+        } else if monitoring_only {
+            self.send_output(
+                "console",
+                "stc: monitoring-only debug session (release or hook-free build): Globals and evaluate are available while the target runs; use the Debug Console to evaluate Globals and target paths. Breakpoints, stepping, and Locals are unavailable",
             );
         } else if protocol == DEBUG_PROTOCOL_1_1 {
             self.send_output(
@@ -1004,7 +1026,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
 
     fn stack_trace(&mut self, request: &Request) {
         let Some(stop_id) = self.stop_id else {
-            self.fail(request, "the target is not stopped");
+            self.stack_trace_while_running(request);
             return;
         };
         let Some(session) = self.session.as_mut() else {
@@ -1081,6 +1103,39 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             frames.clear();
         }
         self.frames = frames;
+        let body = self.stack_trace_body(request, truncated);
+        self.respond(request, true, Some(body), None);
+    }
+
+    /// Answers `stackTrace` while a monitoring-only host runs.
+    ///
+    /// Release and hook-free hosts have no stopped-frame information and never
+    /// stop. They still serve typed monitoring while running, so the adapter
+    /// exposes one synthetic frame representing that live state. This is not a
+    /// fabricated stop: no `stopped` event is sent and the host keeps running;
+    /// the frame id addresses only the Globals scope and `evaluate`.
+    fn stack_trace_while_running(&mut self, request: &Request) {
+        let Some(session) = self.session.as_ref() else {
+            self.fail(request, "no debug session is active");
+            return;
+        };
+        if !session.monitoring_only {
+            self.fail(request, "the target is not stopped");
+            return;
+        }
+        self.frames = vec![FrameEntry {
+            index: 0,
+            name: "monitoring".into(),
+            source: None,
+            line: 0,
+            column: 0,
+        }];
+        let body = self.stack_trace_body(request, false);
+        self.respond(request, true, Some(body), None);
+    }
+
+    /// Builds one `stackTrace` response body from `self.frames`.
+    fn stack_trace_body(&self, request: &Request, truncated: bool) -> Value {
         let start = request
             .arguments
             .get("startFrame")
@@ -1116,7 +1171,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
         if !truncated {
             body["totalFrames"] = json!(len);
         }
-        self.respond(request, true, Some(body), None);
+        body
     }
 
     /// Maps one protocol source file to a DAP `Source` object.
@@ -1131,15 +1186,15 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
     }
 
     fn scopes(&mut self, request: &Request) {
-        if self.stop_id.is_none() {
-            self.fail(request, "the target is not stopped");
-            return;
-        }
         let frame = request
             .arguments
             .get("frameId")
             .and_then(Value::as_u64)
             .unwrap_or(0);
+        if self.stop_id.is_none() {
+            self.scopes_while_running(request, frame);
+            return;
+        }
         let Some(session) = self.session.as_ref() else {
             self.fail(request, "no debug session is active");
             return;
@@ -1163,6 +1218,42 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             "expensive": true,
         }));
         self.respond(request, true, Some(json!({ "scopes": scopes })), None);
+    }
+
+    /// Answers `scopes` for the synthetic monitoring frame (id 0).
+    ///
+    /// Only Globals exists: the host has no stopped frame, so there are no
+    /// Locals and no live stopped-frame reads.
+    fn scopes_while_running(&mut self, request: &Request, frame: u64) {
+        let Some(session) = self.session.as_ref() else {
+            self.fail(request, "no debug session is active");
+            return;
+        };
+        if !session.monitoring_only {
+            self.fail(request, "the target is not stopped");
+            return;
+        }
+        if frame != 0 {
+            self.fail(
+                request,
+                format!(
+                    "unknown frame id {frame}: a monitoring-only session exposes one synthetic frame (id 0)"
+                ),
+            );
+            return;
+        }
+        let globals = session.globals.clone();
+        let reference = self.new_container(Container::Globals(globals));
+        self.respond(
+            request,
+            true,
+            Some(json!({ "scopes": [{
+                "name": "Globals",
+                "variablesReference": reference,
+                "expensive": true,
+            }]})),
+            None,
+        );
     }
 
     fn variables(&mut self, request: &Request) {
@@ -1629,6 +1720,16 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             self.fail(request, "no debug session is active");
             return;
         };
+        if session.monitoring_only {
+            // A release or hook-free host has no checkpoint table to stop at.
+            // Report that honestly instead of forwarding `STC-E-DEBUG-014` or
+            // pretending the running host paused.
+            self.fail(
+                request,
+                "pause is unavailable in a monitoring-only session (release or hook-free build); evaluate Globals and target paths while the target runs",
+            );
+            return;
+        }
         match session.client.call_ok("exec.pause", got_object([])) {
             Ok(_) => self.respond(request, true, None, None),
             Err(error) => self.fail(request, error.to_string()),

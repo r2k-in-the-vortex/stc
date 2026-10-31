@@ -899,6 +899,134 @@ fn sample_workspace_launch_reads_known_values_and_steps() {
     );
 }
 
+/// F-16: a release session cannot stop, but its live monitoring surface must
+/// still let a client list one synthetic running frame, read Globals, and
+/// evaluate names while the host runs. No fake `stopped` event is involved.
+#[test]
+fn release_session_monitors_globals_while_running() {
+    let Some(_clang) = clang() else {
+        return;
+    };
+    let project = TestDir::new("release-monitor");
+    copy_tree(&sample_workspace(), &project.path);
+
+    let mut client = DapClient::spawn(&project.path);
+    initialize(&mut client);
+    let launch = client.request(
+        "launch",
+        json!({
+            "project": project.manifest().to_string_lossy(),
+            "noBuild": false,
+            "release": true,
+            "allowWrite": false,
+            "allowForce": false,
+            "args": ["--cycles", "20000", "--cycle-time", "10ms"],
+        }),
+    );
+    assert_eq!(launch["success"], true, "{launch}");
+    let configuration = client.request("configurationDone", json!({}));
+    assert_eq!(configuration["success"], true, "{configuration}");
+
+    // The session-start messages name the available monitoring path. The
+    // release host is already running; no `stopped` event was sent.
+    let outputs: Vec<&str> = client
+        .events()
+        .filter(|event| event["event"] == "output")
+        .filter_map(|event| event["body"]["output"].as_str())
+        .collect();
+    assert!(
+        outputs.iter().any(|line| line.contains("monitoring-only")
+            && line.contains("Globals")
+            && line.contains("evaluate")
+            && line.contains("Debug Console")),
+        "the session names the monitoring path: {outputs:?}"
+    );
+    assert!(
+        !client.events().any(|event| event["event"] == "stopped"),
+        "a monitoring-only session does not fabricate a stop: {:?}",
+        client.events().collect::<Vec<_>>()
+    );
+
+    // `stackTrace` works while running and returns exactly one synthetic
+    // monitoring frame with no source location.
+    let stack = client.request("stackTrace", json!({ "threadId": 1 }));
+    assert_eq!(stack["success"], true, "{stack}");
+    let frames = stack["body"]["stackFrames"]
+        .as_array()
+        .expect("stack frames");
+    assert_eq!(frames.len(), 1, "{stack}");
+    assert_eq!(frames[0]["id"], 0, "{stack}");
+    assert_eq!(frames[0]["name"], "monitoring", "{stack}");
+    assert_eq!(frames[0]["line"], 0, "{stack}");
+    assert_eq!(frames[0]["column"], 0, "{stack}");
+    assert!(frames[0].get("source").is_none(), "{stack}");
+    assert_eq!(stack["body"]["totalFrames"], 1, "{stack}");
+
+    // The synthetic frame exposes Globals only; a running host has no Locals.
+    let scopes = client.request("scopes", json!({ "frameId": 0 }));
+    assert_eq!(scopes["success"], true, "{scopes}");
+    let names: Vec<&str> = scopes["body"]["scopes"]
+        .as_array()
+        .expect("scopes")
+        .iter()
+        .map(|scope| scope["name"].as_str().expect("scope name"))
+        .collect();
+    assert_eq!(names, ["Globals"], "{scopes}");
+
+    // Globals reads the typed value from the running release host.
+    let globals = scope_reference(&scopes, "Globals");
+    let variables = client.request("variables", json!({ "variablesReference": globals }));
+    assert_eq!(
+        find_variable(&variables, "INCREMENT")["value"],
+        json!("1"),
+        "{variables}"
+    );
+    let increment_path = find_variable(&variables, "INCREMENT")["evaluateName"]
+        .as_str()
+        .expect("evaluateName")
+        .to_owned();
+
+    // evaluate resolves a visible name and a manifest target path while the
+    // host runs, addressed through the synthetic frame id.
+    let increment = client.request(
+        "evaluate",
+        json!({ "expression": "INCREMENT", "frameId": 0, "context": "watch" }),
+    );
+    assert_eq!(increment["success"], true, "{increment}");
+    assert_eq!(increment["body"]["result"], "1", "{increment}");
+    let path = client.request(
+        "evaluate",
+        json!({ "expression": increment_path, "frameId": 0, "context": "repl" }),
+    );
+    assert_eq!(path["success"], true, "{path}");
+    assert_eq!(path["body"]["result"], "1", "{path}");
+
+    // `pause` reports the monitoring-only limit instead of the raw runtime
+    // code, and does not pretend the target stopped.
+    let pause = client.request("pause", json!({ "threadId": 1 }));
+    assert_eq!(pause["success"], false, "{pause}");
+    assert!(
+        pause["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("monitoring-only")),
+        "{pause}"
+    );
+
+    client.collect_events();
+    assert!(
+        !client.events().any(|event| event["event"] == "stopped"),
+        "stackTrace/scopes/pause never fabricate a stopped event: {:?}",
+        client.events().collect::<Vec<_>>()
+    );
+
+    let disconnect = client.request("disconnect", json!({ "terminateDebuggee": true }));
+    assert_eq!(disconnect["success"], true, "{disconnect}");
+    assert!(
+        client.wait_exit(PROTOCOL_TIMEOUT).is_some(),
+        "the adapter exits after disconnect"
+    );
+}
+
 #[test]
 fn launch_accepts_breakpoints_after_the_launch_request() {
     let Some(_clang) = clang() else {
