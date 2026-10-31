@@ -2208,6 +2208,32 @@ they are recorded here for owner approval before implementation. The `callFuncti
 `irStepRet` frame-shape and typing obligations are otherwise the ones inventoried below; the
 only blockers are these facts.
 
+**Owner decision (2026-10-31).** The owner approved all five direct extensions and chose
+dynamic exclusion for item 3. The implementation is:
+
+- item 1: the all-adjacent-pairs `ReturnLink` form;
+- item 2: a host-supplied `StorageDomain` fact (a `WFState` field, established at
+  `initState?_wf` from a host hypothesis);
+- item 4: a builder-trusted alloca element-representability fact in `WFProgram`;
+- item 5: the origin `.global g` symbol/contract membership link (a `WFProgram` fact
+  requiring a `.symbol g` base or a same-global base origin, plus `g ∈ contract.localGlobals`);
+- item 6: builder-trusted origin-slot kind facts excluding descriptor slots;
+- item 3: a dynamic slot-global exclusion invariant over locals, stack memory, and storage
+  (`NoSlotsGlobalPointers`), with its preservation. The invariant also covers stack memory:
+  a `.global` pointer returned to a local by a stack load would otherwise bypass it. Its
+  preservation uses a builder fact that `.symbol g` operands naming a slots global appear only
+  as the pointer operand of a `load` (never as a GEP base, store value, call argument, or
+  return operand), together with the dynamic exclusion itself.
+
+These extend the approved invariant; no fact is weakened. The definition-level
+implementation is on `WL-3`: `ReturnLink` is the all-adjacent-pairs form; `StorageDomain` and
+`NoSlotsGlobalPointers` are `WFState` fields (with host hypotheses for `initState?_wf`);
+`WFProgram` gains `allocaRepresentable`, `originGlobals`, `originSlotKinds`, and
+`slotsSymbolsLoadOnly`; the `SlotsGlobals`, `instrValueSymbols`/`terminatorValueSymbols`
+helpers and the storage-write lemmas (`lookupStorage_setStorage_eq`/`_ne`,
+`length_take_cons_drop`, `storageDomain_writeStorage`) are proved. The preservation proofs
+for the new fields are part of the remaining Phase 2 forms.
+
 **`irStep_wf` proof inventory (2026-10-31).** The remaining induction is a proof-engineering
 pass, not a design gap. The `.step` outcomes reduce to five state-update forms:
 

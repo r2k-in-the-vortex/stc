@@ -1066,6 +1066,75 @@ def SlotsGlobalReadOnly (frag : IRFrag) : Prop :=
   ∀ fn ∈ frag.functions, ∀ g ∈ SlotGlobalNames fn,
     (g, true) ∉ fn.facts.memoryGlobals
 
+/-- The `@symbol` names referenced by an operand. -/
+def operandSymbols : Operand → List String
+  | .symbol g => [g]
+  | _ => []
+
+/-- The operand positions that can become a state value. A `load`'s pointer
+operand is excluded: a load reads storage instead of producing the symbol's
+address. -/
+def instrValueSymbols : Instr → List String
+  | .alloca _ _ => []
+  | .load _ _ _ _ => []
+  | .store _ value ptr _ => operandSymbols value ++ operandSymbols ptr
+  | .gep _ _ base indices _ =>
+      operandSymbols base ++ indices.flatMap (fun index => operandSymbols index.2)
+  | .binop _ _ _ lhs rhs => operandSymbols lhs ++ operandSymbols rhs
+  | .icmp _ _ _ lhs rhs => operandSymbols lhs ++ operandSymbols rhs
+  | .select _ _ cond thenValue elseValue =>
+      operandSymbols cond ++ operandSymbols thenValue ++ operandSymbols elseValue
+  | .cast _ _ value _ _ => operandSymbols value
+  | .phi _ _ incoming => incoming.flatMap (fun inc => operandSymbols inc.value)
+  | .call _ _ _ args => args.flatMap operandSymbols
+  | .callPtr _ _ callee args => operandSymbols callee ++ args.flatMap operandSymbols
+  | .extractValue _ aggregate _ _ => operandSymbols aggregate
+
+/-- The `@symbol` names in value positions of a terminator. -/
+def terminatorValueSymbols : Terminator → List String
+  | .ret none => []
+  | .ret (some operand) => operandSymbols operand
+  | .br _ => []
+  | .condBr cond _ _ => operandSymbols cond
+  | .unreachable => []
+
+/-- The slots globals of a fragment. -/
+def SlotsGlobals (frag : IRFrag) : List String :=
+  frag.functions.flatMap SlotGlobalNames
+
+/-- The slots globals never appear in value positions; they are only loaded. -/
+def SlotsSymbolsLoadOnly (frag : IRFrag) : Prop :=
+  (∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ g ∈ instrValueSymbols instr, g ∉ SlotsGlobals frag) ∧
+  (∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ term,
+    block.terminator = some term →
+      ∀ g ∈ terminatorValueSymbols term, g ∉ SlotsGlobals frag)
+
+/-- Every `alloca`'s initialized element type is representable. -/
+def AllocaElementRepresentable (ty : IrType) : Prop :=
+  match ty with
+  | .array elem _ => elem.isRepresentable = true
+  | _ => ty.isRepresentable = true
+
+/-- Origin-recorded global pointers have a symbol or same-global base, and the
+global is a contract-local global. -/
+def OriginGlobalsLink (contract : IRContract) (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ entry ∈ fn.facts.origins, ∀ g, entry.2 = .global g →
+    g ∈ contract.localGlobals ∧
+      ∃ dest ty base indices inbounds,
+        defInstr? fn entry.1 = some (.gep dest ty base indices inbounds) ∧
+        (base = .symbol g ∨
+          ∃ baseName, base = .local baseName ∧
+            fn.facts.originOf? baseName = some (.global g))
+
+/-- `.cell slot false` origin slots are storage or callable cells, never
+descriptor cells. -/
+def OriginSlotKinds (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ entry ∈ fn.facts.origins, ∀ slot,
+    entry.2 = .cell slot false →
+      ∃ kind, frag.slots[slot]? = some kind ∧
+        (kind.isStorage = true ∨ kind.isCallable = true)
+
 /-- Every call forwards the caller's slot-table value to the callee's appended
 slots parameter (the caller's last parameter, or the loaded slots global). -/
 def CallSlots (frag : IRFrag) : Prop :=
@@ -1123,6 +1192,12 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   callSlots : CallSlots frag
   returnNonStack : ReturnNonStack frag
   slotsGlobalReadOnly : SlotsGlobalReadOnly frag
+  allocaRepresentable : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
+    ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty →
+      AllocaElementRepresentable ty
+  originGlobals : OriginGlobalsLink contract frag
+  originSlotKinds : OriginSlotKinds frag
+  slotsSymbolsLoadOnly : SlotsSymbolsLoadOnly frag
 
 /-- A local value realizes the builder-recorded pointer origin, or is still
 the initialization default (`.null`) before its defining instruction runs. -/
@@ -1162,6 +1237,25 @@ def StorageValuesLive (c : IRState) : Prop :=
       ∃ values, c.lookupStorage (.root slot) = some values ∧ off' < values.length) ∧
     (∀ g off', v = .ptr (.global g off') →
       ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length)
+
+/-- The host storage domain: every `Data`/`Direct` root slot and every global
+referenced by a builder-recorded `@symbol` has a non-empty storage entry. -/
+def StorageDomain (c : IRState) : Prop :=
+  (∀ slot kind, c.slotKind? slot = some kind → kind.isStorage = true →
+    ∃ values, c.lookupStorage (.root slot) = some values ∧ 0 < values.length) ∧
+  (∀ g, (∃ fn ∈ c.module.functions, g ∈ fn.facts.symbolRefs) →
+    ∃ values, c.lookupStorage (.global g) = some values ∧ 0 < values.length)
+
+/-- No local, stack cell, or persistent-storage value is a pointer to a slots
+global. Stack memory is included because a stack load returns its value to a
+local. -/
+def NoSlotsGlobalPointers (c : IRState) : Prop :=
+  (∀ f ∈ c.frames, ∀ name v g off, f.lookupLocal name = some v →
+    v = .ptr (.global g off) → g ∉ SlotsGlobals c.module) ∧
+  (∀ f ∈ c.frames, ∀ addr v g off, f.lookupMem addr = some v →
+    v = .ptr (.global g off) → g ∉ SlotsGlobals c.module) ∧
+  (∀ id off v g off', c.lookupStorageAt id off = some v →
+    v = .ptr (.global g off') → g ∉ SlotsGlobals c.module)
 
 /-- The recorded predecessor is a real CFG edge, or the frame is at the entry
 block. -/
@@ -1226,9 +1320,11 @@ def CallTargetsTyped (c : IRState) : Prop :=
         (c.slotKind? slot = some .importCell ∧
           c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
 
-/-- The callee's return destination agrees with the caller's local type. -/
+/-- The callee's return destination agrees with the caller's local type, for
+every adjacent frame pair in the stack. -/
 def ReturnLink (c : IRState) : Prop :=
-  ∀ callee caller rest, c.frames = callee :: caller :: rest →
+  ∀ pre callee caller suffix,
+    c.frames = pre ++ callee :: caller :: suffix →
     match callee.retDest with
     | none => True
     | some dest =>
@@ -1273,6 +1369,8 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
   storagePtrsLive : ∀ f ∈ c.frames, StoragePtrsLive c f
   slotsBase : ∀ f ∈ c.frames, SlotsBase c f
   storageValuesLive : StorageValuesLive c
+  storageDomain : StorageDomain c
+  noSlotsGlobalPointers : NoSlotsGlobalPointers c
   functionBindings : FunctionBindingsTyped c
   callTargets : CallTargetsTyped c
   returnLink : ReturnLink c
@@ -2631,6 +2729,12 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
     (hargsLive : ∀ fn, module.function? entry = some fn → HostArgsLive c fn args)
     (hslots : ∀ f ∈ c.frames, SlotsBase c f)
     (hstorage : StorageValuesLive c)
+    (hdomain : StorageDomain c)
+    (hnoSlotsArgs : ∀ fn, module.function? entry = some fn → ∀ p a,
+      (p, a) ∈ fn.params.zip args → ∀ g off, a = .ptr (.global g off) →
+        g ∉ SlotsGlobals module)
+    (hnoSlotsStorage : ∀ id off v g off', c.lookupStorageAt id off = some v →
+      v = .ptr (.global g off') → g ∉ SlotsGlobals module)
     (hbindings : FunctionBindingsTyped c)
     (hcallTargets : CallTargetsTyped c)
     (hstackReturns : StackReturnsSafe c)
@@ -2733,10 +2837,29 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
                 (lookupLocal_find?_eq hv) hval
           · exact hslots
           · exact hstorage
+          · exact hdomain
+          · constructor
+            · intro f hf name v gname off hv hval
+              simp only [List.mem_singleton] at hf
+              subst hf
+              rcases initLocals_find_cases (lookupLocal_find?_eq hv) with
+                ⟨p, a, _, _, hzip, ha⟩ | ⟨ty, _, hvdef⟩
+              · exact hnoSlotsArgs fn hfn p a hzip gname off (by rw [ha, hval])
+              · exact absurd (by rw [← hvdef]; exact hval) (default_ne_global ty gname off)
+            · constructor
+              · intro f hf addr v gname off hmem hval
+                simp only [List.mem_singleton] at hf
+                subst hf
+                simp [IRFrame.lookupMem] at hmem
+              · exact hnoSlotsStorage
           · exact hbindings
           · exact hcallTargets
-          · intro callee caller rest hframes
-            simp at hframes
+          · intro pre callee caller suffix hframes
+            have hlen : (pre ++ callee :: caller :: suffix).length = 1 := by
+              rw [← hframes]
+              rfl
+            simp only [List.length_append, List.length_cons] at hlen
+            omega
           · intro last hlast
             simp at hlast
             cases hlast
@@ -3339,9 +3462,9 @@ state invariant. The halt is the only `.step` outcome that changes the status. -
 theorem wfState_status {contract : IRContract} {c : IRState} (st : IRStatus)
     (hwf : WFState contract c) : WFState contract { c with status := st } := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-    h17, h18, h19, h20, h21, h22⟩ := hwf
+    h17, h18, h19, h20, h21, h22, h23, h24⟩ := hwf
   exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-    h17, h18, h19, h20, h21, h22⟩
+    h17, h18, h19, h20, h21, h22, h23, h24⟩
 
 theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     {rest : List IRFrame}
@@ -3365,6 +3488,10 @@ theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     (hmem : MemTyped c g)
     (hstoragePtrs : StoragePtrsLive c g)
     (hslotsBase : SlotsBase c g)
+    (hnoSlotsLocals : ∀ name v gname off, g.lookupLocal name = some v →
+      v = .ptr (.global gname off) → gname ∉ SlotsGlobals c.module)
+    (hnoSlotsMem : ∀ addr v gname off, g.lookupMem addr = some v →
+      v = .ptr (.global gname off) → gname ∉ SlotsGlobals c.module)
     (hstackReturns : ∀ operand v, g.terminator = some (.ret (some operand)) →
       evalOperand g operand = some v →
       ∀ frame slot off, v = .ptr (.stack frame slot off) → frame ≠ g.id)
@@ -3465,13 +3592,37 @@ theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     · exact hslotsBase
     · exact hwf.slotsBase f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
   · exact hwf.storageValuesLive
+  · exact hwf.storageDomain
+  · constructor
+    · intro f' hf' name v gname off hv hval
+      have hf'' : f' ∈ g :: rest := by simpa using hf'
+      rcases List.mem_cons.mp hf'' with rfl | hf'
+      · exact hnoSlotsLocals name v gname off hv hval
+      · exact hwf.noSlotsGlobalPointers.1 f'
+          (by rw [hframes]; exact List.mem_cons_of_mem f hf') name v gname off hv hval
+    · constructor
+      · intro f' hf' addr v gname off hv hval
+        have hf'' : f' ∈ g :: rest := by simpa using hf'
+        rcases List.mem_cons.mp hf'' with rfl | hf'
+        · exact hnoSlotsMem addr v gname off hv hval
+        · exact hwf.noSlotsGlobalPointers.2.1 f'
+            (by rw [hframes]; exact List.mem_cons_of_mem f hf') addr v gname off hv hval
+      · exact hwf.noSlotsGlobalPointers.2.2
   · exact hwf.functionBindings
   · exact hwf.callTargets
-  · intro callee caller below heq
-    injection heq with hcallee hrest
-    rw [← hcallee]
-    rw [hretDest, hfn]
-    exact hwf.returnLink f caller below (by rw [hframes, hrest])
+  · intro pre callee caller suffix heq
+    cases pre with
+    | nil =>
+        simp only [List.nil_append] at heq
+        injection heq with hgc hrest
+        subst hgc
+        rw [hretDest, hfn]
+        exact hwf.returnLink [] f caller suffix (by rw [hframes, hrest]; rfl)
+    | cons a as =>
+        simp only [List.cons_append] at heq
+        injection heq with _ hrest
+        exact hwf.returnLink (f :: as) callee caller suffix (by
+          rw [hframes, hrest]; rfl)
   · intro last hlast
     cases rest with
     | nil =>
@@ -3530,7 +3681,76 @@ theorem wfState_withHeadInstrs {contract : IRContract} {c : IRState} {instrs : L
         (hwf.memTyped f hmem)
         (hwf.storagePtrsLive f hmem)
         (hwf.slotsBase f hmem)
+        (hwf.noSlotsGlobalPointers.1 f hmem)
+        (hwf.noSlotsGlobalPointers.2.1 f hmem)
         (hwf.stackReturnsSafe f hmem)
         (hwf.slotsParamsSafe f hmem)
+
+theorem lookupStorage_setStorage_eq (s : IRState) (id : StoreId) (values : List IRValue) :
+    ({ s with storage := setList s.storage id values }).lookupStorage id = some values := by
+  unfold IRState.lookupStorage
+  rw [lookupList_setList_eq]
+
+theorem lookupStorage_setStorage_ne {s : IRState} {id id' : StoreId} {values : List IRValue}
+    (h : (id' == id) = false) :
+    ({ s with storage := setList s.storage id values }).lookupStorage id' =
+      s.lookupStorage id' := by
+  unfold IRState.lookupStorage
+  rw [lookupList_setList_ne _ values h]
+
+theorem length_take_cons_drop {values : List IRValue} {off : Nat} (h : off < values.length)
+    {v : IRValue} :
+    (values.take off ++ v :: values.drop (off + 1)).length = values.length := by
+  simp only [List.length_append, List.length_cons, List.length_take, List.length_drop]
+  have hmin : min off values.length = off := Nat.min_eq_left (Nat.le_of_lt h)
+  rw [hmin]
+  omega
+
+theorem storageDomain_writeStorage {s s' : IRState} {id : StoreId} {off : Nat}
+    {value : IRValue} (h : StorageDomain s)
+    (hw : s.writeStorage id off value = some s') : StorageDomain s' := by
+  unfold IRState.writeStorage at hw
+  cases hlook : s.lookupStorage id with
+  | none => simp [hlook] at hw
+  | some values =>
+      simp only [hlook] at hw
+      by_cases hoff : off < values.length
+      · rw [ite_eq_left hoff] at hw
+        cases hw
+        constructor
+        · intro slot kind hkind hstorage
+          by_cases hid : (StoreId.root slot) = id
+          · subst hid
+            rcases h.1 slot kind hkind hstorage with ⟨vs, hvs, hpos⟩
+            have hvs' : vs = values := by
+              rw [hvs] at hlook
+              exact Option.some.inj hlook
+            rw [hvs'] at hpos
+            refine ⟨values.take off ++ value :: values.drop (off + 1), ?_, ?_⟩
+            · exact lookupStorage_setStorage_eq s (.root slot) _
+            · rw [length_take_cons_drop hoff]
+              exact hpos
+          · rcases h.1 slot kind hkind hstorage with ⟨vs, hvs, hpos⟩
+            refine ⟨vs, ?_, hpos⟩
+            rw [lookupStorage_setStorage_ne (beq_eq_false_iff_ne.mpr hid)]
+            exact hvs
+        · intro g hg
+          by_cases hid : (StoreId.global g) = id
+          · subst hid
+            rcases h.2 g hg with ⟨vs, hvs, hpos⟩
+            have hvs' : vs = values := by
+              rw [hvs] at hlook
+              exact Option.some.inj hlook
+            rw [hvs'] at hpos
+            refine ⟨values.take off ++ value :: values.drop (off + 1), ?_, ?_⟩
+            · exact lookupStorage_setStorage_eq s (.global g) _
+            · rw [length_take_cons_drop hoff]
+              exact hpos
+          · rcases h.2 g hg with ⟨vs, hvs, hpos⟩
+            refine ⟨vs, ?_, hpos⟩
+            rw [lookupStorage_setStorage_ne (beq_eq_false_iff_ne.mpr hid)]
+            exact hvs
+      · rw [ite_eq_right hoff] at hw
+        simp at hw
 
 end Stc.Codegen
