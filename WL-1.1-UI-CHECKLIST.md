@@ -235,7 +235,8 @@ required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan
 The close-out triage (required for WL-1.1, documented as unsupported, or deferred to a separate
 plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 
-- [ ] **F-1 — Highlighting scope and color scheme.** Required for WL-1.1 (plan §12.1). The grammar's scopes are correct for the
+- [ ] **F-1 — Highlighting scope and color scheme.** Required for WL-1.1 (plan §12.1);
+      sub-plan: [WL-1.1-F1-Plan.md](WL-1.1-F1-Plan.md). The grammar's scopes are correct for the
       tested tokens (`keyword.declaration.st`, `constant.language.st`,
       `string.quoted.double.st`), but the resulting palette is dominated by red and white.
       Enrich the grammar with standard semantic scopes — declared POU/type names

@@ -497,6 +497,9 @@ and the D-211 FB interface-access change. The remaining items are assigned to ex
 
 Notes:
 
+- F-1 has a dedicated sub-plan: [WL-1.1-F1-Plan.md](WL-1.1-F1-Plan.md). Its F1-Q1–F1-Q8
+  questions are recommendations pending owner answers; the grammar work can start before the
+  theme answer.
 - Owner decisions on 2026-10-31 added F-1 (highlighting) and F-20 (online change) to WL-1.1 and
   chose the implementation path for F-16; these are recorded in the change log.
 - F-3, F-6, F-12, and the adapter part of F-16 are bounded fixes. F-1 changes only the
