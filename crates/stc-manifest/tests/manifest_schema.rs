@@ -166,6 +166,7 @@ fn minimal_manifest_applies_documented_defaults() {
     assert!(!manifest.online.allow_untracked_removal);
     assert!(manifest.debug.default);
     assert_eq!(manifest.debug.protocol.as_str(), "pipe");
+    assert_eq!(manifest.debug.session_timeout, DurationNs(0));
     assert_eq!(manifest.lints.warnings, LintLevel::Warn);
     assert_eq!(manifest.run.cycles, 0);
     assert_eq!(manifest.run.cycle_time, None);
@@ -555,6 +556,27 @@ fn debug_settings_record_explicit_values_without_obsolete_warnings() {
     assert!(explicit_false.manifest.build.debug_explicit);
     assert!(!explicit_false.manifest.debug.default);
     assert!(explicit_false.manifest.debug.default_explicit);
+}
+
+#[test]
+fn debug_session_timeout_is_opt_in() {
+    let default = parse_ok(FULL);
+    assert_eq!(default.manifest.debug.session_timeout, DurationNs(0));
+
+    let disabled = parse_ok(&FULL.replace(
+        "[debug]\ndefault = true",
+        "[debug]\ndefault = true\nsession-timeout = \"0ns\"",
+    ));
+    assert_eq!(disabled.manifest.debug.session_timeout, DurationNs(0));
+
+    let enabled = parse_ok(&FULL.replace(
+        "[debug]\ndefault = true",
+        "[debug]\ndefault = true\nsession-timeout = \"5m\"",
+    ));
+    assert_eq!(
+        enabled.manifest.debug.session_timeout,
+        DurationNs(300_000_000_000)
+    );
 }
 
 #[test]

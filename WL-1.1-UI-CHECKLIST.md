@@ -2,12 +2,16 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-30  
+Updated: 2026-10-31  
 Sample: `editors/vscode/samples/workspace`  
 Extension: latest local `editors/vscode/stc-vscode-0.1.0.vsix`  
 Compiler: the binary `stc.path` points at; use the latest debug or a rebuilt release binary
 
 Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **N/A** =
 unsupported or intentionally out of scope.
+
+Summary 2026-10-31: 40/40 entries evaluated — 38 pass (95%), items 12 and 33 fail. The
+required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 
 ## 0. Prerequisites
 
@@ -146,9 +150,10 @@ unsupported or intentionally out of scope.
         Covered by `adapter.rs` unit tests, `value.rs` view tests, and `dap_cli.rs` (**F-8**).
         `TOTAL` may be nonzero at the first stop because cycles run before breakpoints bind;
         launching with a breakpoint is expected to stop on the first cycle, so this remains a
-        defect (**F-9**). A pause longer than `[debug].session-timeout` (default 5 min) ends the
-        session with `STC-E-DEBUG-018`; the host behavior follows D-175, but the UI gives no
-        advance warning (**F-10**).
+        defect (**F-9**). The `[debug].session-timeout` bound ends the session with
+        `STC-E-DEBUG-018` when configured; after D-212 it is opt-in and disabled by default, so
+        the earlier 5-minute default no longer applies (**F-10** resolved; the optional warning is
+        part of F-15).
 24. [x] **Call stack.** Pass 2026-10-30: at line 39 the stack shows `MAIN` with
         `src/main.st:39:3`; stepping into `AddStep` shows `ADDSTEP` with `src/main.st:19:3` above
         `MAIN`. Frame names are mapped from the manifest function `GotId` (`stc-dap` fix; the
@@ -227,7 +232,10 @@ unsupported or intentionally out of scope.
 
 ## Follow-ups discovered during verification
 
-- [ ] **F-1 — Highlighting scope and color scheme.** The grammar's scopes are correct for the
+The close-out triage (required for WL-1.1, documented as unsupported, or deferred to a separate
+plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
+
+- [ ] **F-1 — Highlighting scope and color scheme.** Required for WL-1.1 (plan §12.1). The grammar's scopes are correct for the
       tested tokens (`keyword.declaration.st`, `constant.language.st`,
       `string.quoted.double.st`), but the resulting palette is dominated by red and white.
       Enrich the grammar with standard semantic scopes — declared POU/type names
@@ -324,12 +332,13 @@ unsupported or intentionally out of scope.
       observes `TOTAL = 0`, `sum = 0`, `cycles = 0` (or the values written by the first cycle only
       after the breakpoint is bound).
 
-- [ ] **F-10 — The pause timeout is silent until it fires.** `[debug].session-timeout` (default
-      5 min) ends a stopped session with `STC-E-DEBUG-018`; this is the documented D-175 stop
-      budget, but the UI shows neither the configured budget nor a countdown/warning, so an
-      unattended pause ends the session without explanation. Consider surfacing the timeout in
-      the launch configuration/session start, or warning before expiry. Acceptance: the user can
-      see the stop budget and is warned before the session ends.
+- [x] **F-10 — The pause timeout was a silent default.** Respecified by D-212 on 2026-10-31:
+      `[debug].session-timeout` is opt-in and disabled by default; when configured, expiry still
+      emits `STC-E-DEBUG-018`, clears session state, and resumes the cycle. An automatic resume
+      can move machinery unexpectedly, so the bound must be an explicit operator choice. The
+      optional session-start budget/warning message is part of the F-15 session-status polish
+      plan. Manifest, runtime, CLI, host ABI, and specifications updated; tests cover the default
+      and explicit zero.
 
 - [ ] **F-14 — `setVariable` shows the queued value before the program applies it.** With writes
       enabled, editing `INCREMENT` displays the new value immediately, but the host applies the
@@ -347,7 +356,7 @@ unsupported or intentionally out of scope.
       output event or relying on VS Code's session-ended indication. Acceptance: stopping a
       session leaves a clear line in the Debug Console.
 
-- [ ] **F-16 — Release monitoring has no IDE surface.** With `"release": true`, the session
+- [ ] **F-16 — Release monitoring has no IDE surface.** Required for WL-1.1; implementation chosen (plan §12.1). With `"release": true`, the session
       starts and warns that stopped-frame information is unavailable, but `stackTrace` fails
       (`STC-E-DEBUG-017`), so `scopes`/`variables` have no frame, Variables shows no Globals, and
       Watch expressions stay unavailable; `pause` fails with `STC-E-DEBUG-014`. Typed monitoring
@@ -378,7 +387,7 @@ unsupported or intentionally out of scope.
       Acceptance: F2 on a field/function renames all references, and unsupported cases fail with
       a clear message.
 
-- [ ] **F-20 — Online change is not exposed in the IDE.** The compiler/runtime implement online
+- [ ] **F-20 — Online change is not exposed in the IDE.** Required for WL-1.1 (plan §12.1). The compiler/runtime implement online
       change and the CLI drives it, but the VS Code extension offers no command or status to
       activate a swap, view the generation/build state, or surface the session ending on swap.
       Consider a command/status item that invokes the online workflow and reports the generation.
@@ -443,7 +452,7 @@ unsupported or intentionally out of scope.
 | F-7 | Pass | FB interface member access now matches the call form (D-211); sample checks cleanly |
 | F-8 | Pass | Globals exposes FB fields and expands manifest-assisted views; UI retest passes |
 | F-9 | Pending | First stop is 1–2 cycles late; launch-with-breakpoint must stop on cycle 0 |
-| F-10 | Pending | Pause timeout ends the session after 5 min with no countdown/warning |
+| F-10 | Pass (respecified) | Timeout is opt-in and disabled by default (D-212); explicit bounds still end the session |
 | F-11 | Pending | Caller frames lose file/line while stopped in a callee |
 | F-12 | Pending | Unknown host frames appear as `frame`/Unknown Source |
 | F-13 | Pending | Locals is empty for program/FB bodies; fields live in Globals |

@@ -1269,13 +1269,7 @@ impl Parser {
             && let Some(timeout) =
                 self.parse_duration_setting(value, "STC-E-PROJECT-010", "session-timeout")
         {
-            if timeout.as_nanos() == 0 {
-                self.error(
-                    "STC-E-PROJECT-010",
-                    "invalid `session-timeout` 0ns; expected a positive duration",
-                    self.item_span(value),
-                );
-            } else if timeout.as_nanos() > MAX_DEBUG_SESSION_TIMEOUT_NS {
+            if timeout.as_nanos() > MAX_DEBUG_SESSION_TIMEOUT_NS {
                 self.error(
                     "STC-E-PROJECT-010",
                     "`session-timeout` must not exceed 24 hours",

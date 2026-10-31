@@ -137,7 +137,7 @@ typedef struct {
     const char* debug_endpoint;   /* local debug endpoint file, or null */
     int32_t  debug_allow_write;   /* grant the debug write scope */
     int32_t  debug_allow_force;   /* grant the debug force scope */
-    int64_t  debug_session_timeout_ns; /* 0 = [debug].session-timeout default */
+    int64_t  debug_session_timeout_ns; /* 0 = disabled */
 } stc_host_options;
 ```
 
@@ -152,8 +152,8 @@ The four debug fields are appended and `struct_size`-gated; an older embedding h
 shorter struct gets no debug server. A non-null `debug_endpoint` starts the local debug service
 and writes the endpoint file there; it is a separate endpoint, token, and protocol from
 `control_endpoint` (D-155, D-173). `debug_allow_write`/`debug_allow_force` grant the corresponding
-scopes; `debug_session_timeout_ns` of 0 selects the manifest/default five-minute bound. An
-embedding host that does not set `debug_endpoint` never starts the service.
+scopes; `debug_session_timeout_ns` of 0 disables the pause/idle bound, and a positive value sets
+it (D-212). An embedding host that does not set `debug_endpoint` never starts the service.
 
 Embedding hosts configure the process-image backend and retained state before loading a module
 with `stc_host_configure_io(backend, file)` (`-1` keeps the metadata backend, `0`/`1`/`2` select
@@ -405,11 +405,11 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
   normally; the swap does not reset or re-latch it, so timers observe elapsed wall/monotonic time.
 - When a watchdog exists, it is paused or extended with a documented bound during
   prepare/activation and while a debugger has the cycle stopped. The debug stop/idle bound is
-  `[debug].session-timeout` (default five minutes); on expiry the session ends with
-  `STC-E-DEBUG-018`, forces and breakpoints are cleared, and the cycle resumes with a fresh
-  deadline ([Debug and Monitoring](Debug-and-Monitoring.md) §14.3). If a bound is exceeded, the
-  normal watchdog policy resumes. M6 has no watchdog implementation; M6.5 phase 6 implemented
-  the host-side stop budget, and a future watchdog consults it (D-175).
+  `[debug].session-timeout`, optional and disabled by default (D-212); when configured and
+  exceeded, the session ends with `STC-E-DEBUG-018`, forces and breakpoints are cleared, and the
+  cycle resumes with a fresh deadline ([Debug and Monitoring](Debug-and-Monitoring.md) §14.3). If
+  a bound is exceeded, the normal watchdog policy resumes. M6 has no watchdog implementation;
+  M6.5 phase 6 implemented the host-side stop budget, and a future watchdog consults it (D-175).
 - In executable mode, the runtime latches the host monotonic clock at the start of each cycle.
   `--cycle-time` controls the loop deadline but does not change the value latched for the scan.
 - In library mode, the host owns the loop. By default `stc_module_cycle` latches the live
@@ -686,7 +686,7 @@ Detailed test discovery, pragma syntax, and the per-test artifact interface are 
 | Missing/invalid/stale manifest baseline | Cold download; no merge or partial recovery |
 | Candidate prepare failure | Discard temp GOT/module; active generation continues |
 | Trap in the rollback window | Restore the previous generation; record the failure |
-| Debug session stop / forced value | The stop/idle bound (`[debug].session-timeout`, default 5 min) ends the session with `STC-E-DEBUG-018`, clears state, and resumes with a fresh deadline; forced values are held until release/session end/swap; not a safety function |
+| Debug session stop / forced value | The opt-in stop/idle bound (`[debug].session-timeout`, disabled by default) ends the session with `STC-E-DEBUG-018` when configured, clears state, and resumes with a fresh deadline; forced values are held until release/session end/swap; not a safety function |
 | Debug read/write/force for a removed field or stale generation | Reads pin the generation; a removed/stale/layout-changed target is `STC-E-DEBUG-010` and is never retargeted; queued writes/forces are rejected at the boundary; every swap ends the session (`STC-E-DEBUG-019`) |
 | Debug protocol/authentication failure | Reject or close the connection; no cycle effect; audit the failure; `STC-E-DEBUG-*` |
 | Debug metadata/checkpoint mismatch | Refuse breakpoints/stepping; the module keeps running; `STC-E-DEBUG-016` |

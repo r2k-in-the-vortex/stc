@@ -403,9 +403,9 @@ arbitrary module code.
 `cargo xtask test --suite debug` runs the debug suite: the twelve integration targets that
 cover typed reads/writes/forces/watches, removed-field rejection across a swap, breakpoint
 binding/unbinding, step/continue, call-stack and optimized-out reporting, DWARF/CodeView
-inspection, the stop/idle session bound (pause expiry, state clearing, and resume with a fresh
-deadline), force teardown, session authentication/audit, and the rule that every online swap ends
-the debug session. Debug/release tests assert that release artifacts contain no debug hooks and
+inspection, the opt-in stop/idle session bound (pause expiry, state clearing, and resume with a
+fresh deadline), force teardown, session authentication/audit, and the rule that every online swap
+ends the debug session. Debug/release tests assert that release artifacts contain no debug hooks and
 have distinct build IDs/manifests. The target mapping is:
 
 | Package | Test targets |

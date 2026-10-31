@@ -66,7 +66,6 @@ const AUTH_FAIL_ENDPOINT: usize = 20;
 const AUTH_FAIL_WINDOW: Duration = Duration::from_secs(60);
 const AUTH_REFUSAL: Duration = Duration::from_secs(60);
 const MAX_MALFORMED_FRAMES: usize = 3;
-const DEFAULT_SESSION_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_WATCH_INTERVAL_MS: i64 = 3_600_000;
 
 // ---------------------------------------------------------------------------
@@ -84,12 +83,12 @@ pub struct DebugServerConfig {
     pub allow_write: bool,
     /// Grants the `force` scope when requested.
     pub allow_force: bool,
-    /// Idle session bound; zero selects the five-minute default.
+    /// Idle session bound; zero disables it.
     pub session_timeout: Duration,
 }
 
 impl DebugServerConfig {
-    /// Creates a configuration with the default five-minute idle bound.
+    /// Creates a configuration with no idle session bound.
     #[must_use]
     pub fn new(endpoint: impl Into<PathBuf>, transport: TransportKind) -> Self {
         Self {
@@ -97,7 +96,7 @@ impl DebugServerConfig {
             transport,
             allow_write: false,
             allow_force: false,
-            session_timeout: DEFAULT_SESSION_TIMEOUT,
+            session_timeout: Duration::ZERO,
         }
     }
 }
@@ -477,7 +476,7 @@ impl Shared {
     }
 
     fn idle_expired(&self, connection: u64, now: Instant, has_watches: bool) -> bool {
-        if has_watches {
+        if has_watches || self.session_timeout.is_zero() {
             return false;
         }
         let state = lock(&self.sessions);
@@ -568,11 +567,7 @@ impl DebugServer {
             token,
             allow_write: config.allow_write,
             allow_force: config.allow_force,
-            session_timeout: if config.session_timeout.is_zero() {
-                DEFAULT_SESSION_TIMEOUT
-            } else {
-                config.session_timeout
-            },
+            session_timeout: config.session_timeout,
             audit: Arc::clone(&audit),
             sessions: Mutex::new(SessionsState {
                 current: None,

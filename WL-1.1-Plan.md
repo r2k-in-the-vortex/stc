@@ -2,9 +2,11 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-29  
+Updated: 2026-10-31  
 Branch: `WL-1.1` (sub-plan of `v2.0.0-planning`)  
-Status: Planning started 2026-10-29. Decisions accepted 2026-10-29; I-11, I-13, and I-15 are
-implementation defaults. Implementation has not started.  
+Status: Phases 0–6 implemented and green in CI (2026-10-29/30); phase 7 close-out is pending.
+Manual VS Code verification complete 2026-10-31: 38 of 40 checklist entries pass; items 12 and 33
+fail. Required close-out items and deferred follow-ups are triaged in §12.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-1.1,
 [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
@@ -15,9 +17,10 @@ Inputs: [FutureWishlist.md](FutureWishlist.md) WL-1.1,
 
 ## 1. Objective
 
-Make VS Code the practical local development environment for `stc`: edit and navigate ST, run
-build/test/run/fmt tasks, see compiler diagnostics in the Problems panel, format with `stc fmt`,
-and debug a local runtime through breakpoints, stepping, variables, and call stacks.
+Make VS Code the practical local development environment for `stc`: edit and navigate ST with a
+readable highlighting palette, run build/test/run/fmt tasks, see compiler diagnostics in the
+Problems panel, format with `stc fmt`, debug a local runtime through breakpoints, stepping,
+variables, and call stacks, and drive an online change of the running host.
 
 Everything runs locally against the local compiler and runtime. The extension is a client: the
 compiler remains the single source of truth for syntax, diagnostics, types, and formatting. WL-1.1
@@ -29,12 +32,16 @@ versioned `stc-debug/1.1` addition described in §4.2.
 In scope:
 
 - A local-only VS Code extension with a TextMate grammar and language configuration.
+- A readable highlighting palette: semantic scopes in the grammar and either a small shipped
+  theme or a documented recommended theme (F-1).
 - Tasks and problem matchers for `stc check`, `stc build`, `stc run`, `stc test`, and `stc fmt`.
 - A language server (`stc-lsp`) for push diagnostics, document symbols, go-to-definition,
   references, hover, completion, and `stc fmt` formatting.
 - A debug adapter (`stc-dap`) translating DAP to the local `stc-debug/1.1` protocol (with
   `stc-debug/1` compatibility): launch and attach, source breakpoints, stepping, variables,
   watch, and call stack.
+- An online-change command/status surface over the existing runtime/CLI workflow, showing the
+  active generation and surfacing the session teardown on swap (F-20).
 - Packaging as a VSIX, with a sample ST workspace and launch/task configurations.
 - Smoke tests for diagnostics, navigation, formatting, and a local debug session.
 
@@ -298,6 +305,15 @@ audit behavior.
   endpoint file; those remain WL-1.2/WebUI concerns.
 - Debug write/force can hold outputs indefinitely; the extension shows the non-safety notice and
   keeps write/force opt-in.
+- When `[debug].session-timeout` is configured (disabled by default, D-212), a stopped session
+  ends after the bound with `STC-E-DEBUG-018`; the editor reports the end reason but gives no
+  countdown or advance warning. Leaving it unset is the default because an automatic resume can
+  move machinery unexpectedly.
+- Caller stack frames report no source location; only the top frame carries file and line.
+- Locals lists the stopped frame's locals only; program and FB instance fields are exposed under
+  Globals, not Locals.
+- `setVariable` queues a write and displays the requested value; the program observes it at the
+  next cycle boundary, so stepping through the current cycle reads the stored value again.
 
 ## 7. Work breakdown
 
@@ -310,15 +326,21 @@ audit behavior.
 | 4 | Runtime `stc-debug/1.1` negotiation and `frame.locals`; `stc-dap`: framing, launch/attach, breakpoints, stepping, stack, scopes/variables, evaluate, write/force; `stc dap` command | Protocol 1.0 and 1.1 tests pass; DAP integration test stops at a breakpoint, steps, lists frames, and reads globals and locals |
 | 5 | Sample workspace, launch/task configurations, IDE-Integration spec, `stc-debug/1.1` spec update, CLI/README/USER-GUIDE/KNOWN-LIMITATIONS updates, release checklist | Extension and docs reviewed; sample workspace opens, navigates, formats, and debugs |
 | 6 | CI: LSP tests in the workspace matrix, DAP/protocol tests in the debug suite, extension package job and VSIX artifact, headless Electron smoke; record evidence | All jobs pass on the supported hosts; VSIX artifact and smoke evidence recorded |
+| 7 | Close-out: required items in §12.1 (F-1 highlighting palette/theme, F-3 task process tree, F-6 breakpoint removal, F-12 non-ST frame filtering, F-16 release monitoring surface, F-20 online-change command/status) and the §12.2 documentation actions | §12.1 closed, including a readable palette/theme and an online-change surface; §12.2 documented; the checklist is re-run to 40/40 pass |
 
 ## 8. Exit criteria
 
 - The VSIX installs and activates in VS Code; syntax highlighting works on the sample workspace.
+- Syntax highlighting uses semantic scopes with distinct keyword/type/declaration/variable/
+  comment/string/number/pragma/direct-variable colors in a standard dark and light theme, and the
+  grammar coverage check stays green (F-1).
 - Diagnostics appear in the Problems panel from the language server and from `stc check` tasks.
 - Definition, references, hover, completion, document symbols, and formatting work on the
   sample workspace and are covered by automated tests.
 - A local debug session supports launch and attach, source breakpoints, stepping, variables
-  (globals and locals), watch targets, and call stacks.
+  (globals and locals), watch targets, call stacks, and release monitoring.
+- The extension can start and observe an online change of the launched host, showing the active
+  generation and surfacing the session teardown on swap (F-20).
 - The DAP capability map and the LSP capability map are documented, including unsupported
   features and their reporting.
 - `stc-debug/1.1` is documented and tested; `stc-debug/1` clients keep their exact v1 behavior.
@@ -328,6 +350,8 @@ audit behavior.
   in-editor pass.
 - The extension has no compiler logic: diagnostics, types, and formatting come from `stc` crates.
 - No remote or network capability is added, and the non-safety stance is visible in the editor.
+- The §12.1 required close-out items are closed; the §12.2 accepted limitations are documented,
+  and the §12.3 deferred items are recorded in their follow-up plans.
 
 ## 9. Verification and CI
 
@@ -373,7 +397,8 @@ and Linux local runs are the fallback when the runner is unavailable.
 The release checklist keeps a manual pass on the Windows development host and at least one Linux
 host: install the VSIX, open the sample workspace, confirm all language features and tasks, and
 run one launch and one attach debug session. The checklist and its result are recorded in the
-release evidence.
+release evidence. The local Windows pass is recorded in
+[WL-1.1-UI-CHECKLIST.md](WL-1.1-UI-CHECKLIST.md); its open items are triaged in §12.
 
 ## 10. Documentation and specification updates
 
@@ -389,6 +414,11 @@ release evidence.
   launch/attach configurations, and the sample workspace.
 - [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md): the IDE section from §6.3 and the local-only
   stance.
+- Record the accepted limitations from §12.2 in
+  [IDE-Integration](specification/Architecture/IDE-Integration.md) §4.3/§4.6 and
+  [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md): the pause-timeout bound, caller-frame source,
+  the Locals/Globals split for program/FB bodies, and queued-write display. Add the F-1
+  recommended-theme note to the extension README.
 - [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) and [RELEASE-NOTES.md](RELEASE-NOTES.md) at
   release time, including the VSIX evidence.
 
@@ -441,7 +471,60 @@ I-11 (sample workspace path), I-13 (grammar coverage check), and I-15 (documenta
 defaults rather than owner decisions; they may be adjusted during implementation without a scope
 change.
 
-## 12. Change log
+## 12. Open items and close-out triage (2026-10-31)
+
+The 36-item manual checklist ([WL-1.1-UI-CHECKLIST.md](WL-1.1-UI-CHECKLIST.md)) is complete:
+38 of 40 entries pass, including the four prerequisites; items 12 and 33 fail. Closed during
+verification: F-2, F-4, F-5, F-7, F-8, the DAP frame-name mapping and evaluate-by-name fixes,
+and the D-211 FB interface-access change. The remaining items are assigned to exactly one bucket:
+
+- **Required** — must be closed before WL-1.1 is complete.
+- **Documented** — accepted limitation or deliberate design; record it in the IDE specification,
+  [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md), or the sample README, with no code change.
+- **Deferred** — belongs to a separate follow-up plan; document the current limitation now and
+  keep the item in that plan.
+
+### 12.1 Required to complete WL-1.1
+
+| Item | Finding | Why required | Acceptance |
+| --- | --- | --- | --- |
+| F-1 | The grammar scopes are correct, but the palette is dominated by red and white and no theme decision has been made. | The first thing a user sees; the owner requires it for WL-1.1. | Enrich the grammar with standard semantic scopes (declarations, types, variables, parameters, control keywords, built-ins) using [Serhioromano/vscode-st](https://github.com/Serhioromano/vscode-st) as a reference, and ship a small theme or document a recommended one; verify distinct keyword/type/declaration/variable/comment/string/number/pragma/direct-variable colors in a standard dark and light theme. |
+| F-3 | Terminating the `stc: run` task kills the shell but leaves `stc run` and `sample.exe` running. | Checklist item 12 fails; tasks are in the locked scope. | Terminating the task stops the whole process tree; `Get-Process stc,sample` shows no run driver or host (the language server may remain). |
+| F-6 | Removing a breakpoint updates the editor/panel but the running session still stops at the removed line. | Source breakpoints are a core debug feature; a stale host breakpoint is a correctness bug. | Remove and re-add while running or stopped; the session no longer stops at the removed location, and normal and verbatim path spellings share one key. |
+| F-12 | The frame-pointer walk continues into the launcher/host; unresolved frames appear as `frame`/Unknown Source on every stop. | Call stacks are a shipped feature; the sample shows two spurious rows. | Stop the walk at the first address outside the manifest function ranges, or filter/label non-ST frames in `stc-dap`; a sample stop lists only resolved ST frames. |
+| F-16 | Release mode starts and warns, but has no IDE monitoring surface: no frame/scopes, Variables empty, Watch unavailable. | Checklist item 33 fails; the owner chose implementation over downgrading the `release` option. | Implement a synthetic running/monitoring frame with the Globals scope and evaluate while the release host runs (no breakpoints, stepping, or Locals); a release session can observe globals and watch targets from the IDE. |
+| F-20 | Online change is implemented in the compiler/runtime and CLI but the extension has no command or status surface. | The owner requires it as a headline WL-1.1 feature. | A command/status item starts an online change, shows the active generation/build state, and surfaces the session ending on swap; the existing runtime/CLI workflow is reused. |
+
+Notes:
+
+- Owner decisions on 2026-10-31 added F-1 (highlighting) and F-20 (online change) to WL-1.1 and
+  chose the implementation path for F-16; these are recorded in the change log.
+- F-3, F-6, F-12, and the adapter part of F-16 are bounded fixes. F-1 changes only the
+  grammar/theme, and F-20 uses the existing runtime/CLI workflow; none changes the language,
+  artifact format, module ABI, or `stc-debug/1` behavior.
+
+### 12.2 Documented as not supported or by design
+
+| Item | Finding | Documentation action |
+| --- | --- | --- |
+| F-10 | When configured, `[debug].session-timeout` ends a stopped session with `STC-E-DEBUG-018`; the bound is disabled by default (D-212), and the editor gives no countdown or warning when an operator opts in. | D-212 makes the bound opt-in because an automatic resume can move machinery unexpectedly. Document the opt-in bound and the end reason in IDE-Integration §4.6 and KNOWN-LIMITATIONS; the optional session-start budget/warning message is part of the F-15 session-status polish plan. |
+| F-11 | Caller frames have no source location; only the top frame carries file/line, so `MAIN` shows Unknown Source while stopped in `ADDSTEP`. | IDE-Integration §4.6 already states caller and optimized-out information is reported honestly; resolving call sites needs an address-to-source table, which is not part of WL-1.1. Document the limitation in KNOWN-LIMITATIONS. |
+| F-13 | `Locals` is empty for program and FB body frames; their fields are instance roots in `Globals`. | Deliberate model: Locals lists `frame.locals`, while Globals groups manifest instance roots. Document the split in IDE-Integration §4.3 and the sample README so users know where program/FB state lives. |
+| F-14 | `setVariable` displays the requested value immediately, but the program sees it only at the next cycle boundary; stepping through the current cycle reads the stored value again. | Deliberate queued-write semantics (Debug and Monitoring §15.3). Document the queue behavior in IDE-Integration §4.3/KNOWN-LIMITATIONS; a pending-state UI is optional future polish. |
+| Conditional breakpoints, multi-thread, `stopOnEntry`, DAP `restart` | Conditional breakpoints warn that they are unsupported and stop unconditionally; one thread (`cycle`) is shown; `stopOnEntry` is rejected by the launch schema and by the adapter; restart works through VS Code's client-side relaunch, not the DAP request. | Keep the capability maps and KNOWN-LIMITATIONS current; no code change. These are the I-9 limits confirmed by the manual pass. |
+| Semantic tokens, rename, code actions, range formatting, call hierarchy, workspace symbols | Semantic tokens are absent (TextMate only); rename is silent (F-19); code actions report none; range formatting and call hierarchy have no provider; workspace symbols report none. | Keep the I-7 capability map and KNOWN-LIMITATIONS current; no code change. Rename is additionally tracked as deferred F-19. |
+
+### 12.3 Deferred to a separate follow-up plan
+
+| Item | Finding | Follow-up plan |
+| --- | --- | --- |
+| F-9 | A launch with a breakpoint binds after 1–2 cycles, so the first stop can observe `TOTAL = 2`/`sum = 2`/`cycles = 2` instead of cycle-0 values. | Debug-protocol/runtime plan: add a start-paused mode (or equivalent) so breakpoints bind before the first cycle. This is outside WL-1.1's locked runtime change (`stc-debug/1.1`); WL-1.1 documents the current offset. If the owner requires cycle-0 stops for WL-1.1, this becomes a required scope amendment. |
+| F-15 | Terminating a launch session prints nothing in the Debug Console even though the host exits. | Session-status polish plan: report terminate/exit in the Debug Console and optionally surface the `[debug].session-timeout` budget or a warning; the silent stop is accepted meanwhile. |
+| F-17 | There is no way to debug a `{stc:test}` POU; the launch configuration builds the project, not a per-test artifact. | Test-workflow plan: build the selected test with test metadata and start the test host under the debugger, or add a Testing-API Debug Test action. |
+| F-18 | `stc: test` runs the whole test source set through a task; there is no Testing view, code lens, or per-test command. | Test-workflow plan: a VS Code Testing API provider backed by `stc test` JSON results with Run and Debug actions. |
+| F-19 | Rename (F2) does nothing and prints no message, while the compiler/runtime already carry rename history. | Language-server refactoring plan: `textDocument/prepareRename`/`textDocument/rename` backed by the reference resolution; explicitly outside I-7. |
+
+## 13. Change log
 
 | Date | Change |
 | --- | --- |
@@ -450,3 +533,5 @@ change.
 | 2026-10-29 | Locked the remaining decisions: read-only variables with `allowWrite`/`allowForce`, a headless `@vscode/test-electron` CI smoke, and the `st`/`source.st` language id. |
 | 2026-10-30 | Manual UI verification fixed FB interface access (D-211): FB `VAR_INPUT`/`VAR_OUTPUT`/`VAR_IN_OUT` default to `PUBLIC`, internal `VAR` stays `PROTECTED`, and call bindings enforce explicit qualifiers. Direct member access now matches the call form; the sample uses `accumulator.increment := ...; accumulator(); sum := accumulator.total;`. |
 | 2026-10-30 | Manual debugging verification fixed the DAP Globals view: hidden FB object roots are exposed through their aggregate paths, and manifest-assisted views expand with the runtime's flattened field shape and field names. The first-stop cycle offset is recorded as follow-up F-9. |
+| 2026-10-31 | Completed manual UI verification: 38/40 checklist entries pass; items 12 and 33 fail. Added §12 close-out triage: required F-3, F-6, F-12, F-16; documented F-10, F-11, F-13, F-14 and the I-7/I-9 unsupported set; deferred F-1, F-9, F-15, F-17–F-20 to follow-up plans. Updated the status, exit criteria, and documentation actions. |
+| 2026-10-31 | Owner decisions: F-1 (highlighting palette/theme), F-20 (online-change IDE surface), and F-16 (release monitoring implementation) are required for WL-1.1. D-212 amends D-173/D-175/D-179 so `[debug].session-timeout` is opt-in and disabled by default; manifest, runtime, CLI, host ABI, and specifications updated. Plan §1, §2, §6.3, §7, §8, and §12 updated. |

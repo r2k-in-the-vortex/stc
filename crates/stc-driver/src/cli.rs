@@ -93,7 +93,8 @@ pub(crate) struct DebugOptions {
     pub(crate) allow_write: bool,
     /// `--allow-force`.
     pub(crate) allow_force: bool,
-    /// `--session-timeout` in nanoseconds.
+    /// `--session-timeout` in nanoseconds; `None` inherits the manifest
+    /// setting and zero disables the bound.
     pub(crate) session_timeout_ns: Option<u64>,
     /// `--debug-protocol`.
     pub(crate) protocol: Option<DebugProtocol>,
@@ -1184,9 +1185,11 @@ fn parse_debug_timeout(value: &str) -> Result<u64, String> {
                  of `ns`, `us`, `ms`, `s`, `m`, or `h`"
             )
         })?;
-    if ns == 0 || ns > MAX_SESSION_TIMEOUT_NS {
+    if ns > MAX_SESSION_TIMEOUT_NS {
         return Err(
-            "STC-E-PROJECT-010: `--session-timeout` must be positive and at most 24 hours".into(),
+            "STC-E-PROJECT-010: `--session-timeout` must be zero or a positive duration and at \
+             most 24 hours"
+                .into(),
         );
     }
     Ok(ns)
@@ -1453,6 +1456,16 @@ mod tests {
                 .mode_override,
             Some(BuildMode::Debug)
         );
+    }
+
+    #[test]
+    fn session_timeout_accepts_zero_as_disabled() {
+        assert_eq!(parse_debug_timeout("0ns").expect("zero"), 0);
+        assert_eq!(
+            parse_debug_timeout("5m").expect("five minutes"),
+            300_000_000_000
+        );
+        assert!(parse_debug_timeout("25h").is_err());
     }
 
     #[test]

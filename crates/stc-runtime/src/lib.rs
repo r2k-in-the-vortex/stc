@@ -349,9 +349,6 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
                 let text = value("--debug-session-timeout")?;
                 let ns = run::parse_duration_ns(&text)
                     .ok_or_else(|| format!("invalid debug session timeout `{text}`"))?;
-                if ns == 0 {
-                    return Err("the debug session timeout must be positive".into());
-                }
                 debug_session_timeout_ns = Some(ns);
             }
             "--trace" => {

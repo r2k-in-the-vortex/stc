@@ -969,6 +969,40 @@ fn pause_timeout_ends_session_and_resumes_cycle() {
 }
 
 #[test]
+fn zero_session_timeout_disables_the_pause_bound() {
+    let _guard = stop_guard();
+    let Some(mut setup) = StopSetup::new(
+        "pause-no-timeout",
+        StopFlow::Pause,
+        Duration::ZERO,
+        Sidecar::Valid,
+    ) else {
+        return;
+    };
+    let mut client = setup.client();
+    session_start(&mut client);
+    let response = request(&mut client, "exec.pause", obj([]));
+    assert_eq!(text(result_of(&response), "status"), "pause-requested");
+
+    let cycle = std::thread::scope(|scope| {
+        let host = &mut setup.host;
+        let handle = scope.spawn(move || host.cycle_at(1_000_000));
+        let stopped = wait_stopped(&mut client, Duration::from_secs(10));
+        assert_eq!(text(&stopped, "reason"), "pause");
+        assert!(
+            field(&session_status(&mut client), "pause_remaining_ms").is_null(),
+            "a zero timeout has no remaining bound"
+        );
+        let stop_id = number(&stopped, "stop_id");
+        let response = request(&mut client, "exec.continue", stop_id_params(stop_id));
+        assert_eq!(text(result_of(&response), "status"), "running");
+        handle.join().expect("cycle thread").expect("cycle")
+    });
+    assert_ran(cycle, setup.generation);
+    setup.finish();
+}
+
+#[test]
 fn step_over_skips_the_callee() {
     let _guard = stop_guard();
     let Some(mut setup) = StopSetup::new(

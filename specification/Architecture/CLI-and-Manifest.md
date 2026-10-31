@@ -321,7 +321,7 @@ the command surface.
 | `--watch <target>` | Add an initial watch target; repeatable. |
 | `--allow-write` | Launch the server with the `write` scope and request it. |
 | `--allow-force` | Launch the server with the `force` scope and request it. |
-| `--session-timeout <duration>` | Launch-mode stop/idle bound; defaults to `[debug].session-timeout`. |
+| `--session-timeout <duration>` | Launch-mode stop/idle bound; defaults to `[debug].session-timeout` (disabled by default; zero disables). |
 | `--debug-protocol <kind>` | Launch transport (`pipe` or `socket`); overrides `[debug].protocol`. |
 | `--debug` / `--release` | Build-mode selection; `stc debug` defaults to debug. |
 
@@ -372,7 +372,7 @@ by a separate system and machine design as required by law and regulation.
 | `--debug-endpoint <path>` | Endpoint file to write (default a per-run path under the out-dir). |
 | `--allow-write` | Grant the `write` scope. |
 | `--allow-force` | Grant the `force` scope. |
-| `--session-timeout <duration>` | Stop/idle bound; defaults to `[debug].session-timeout`. |
+| `--session-timeout <duration>` | Stop/idle bound; defaults to `[debug].session-timeout` (disabled by default; zero disables). |
 
 `--debug-server` is valid for debug and release modules; a release module yields a
 monitoring-only session (`STC-W-DEBUG-004`). `stc test` rejects `--release`, `--debug-server`,
@@ -486,7 +486,7 @@ allow-untracked-removal = false
 default = true
 protocol = "pipe"                   # pipe | socket (local only)
 force-sessions-end-on-swap = true   # must be true in v1
-session-timeout = "5m"              # continuous stop/idle bound (implemented, M6.5)
+# session-timeout = "5m"            # optional continuous stop/idle bound; omit or "0ns" to disable
 allow-write = false                 # grant the write scope (implemented, M6.5)
 allow-force = false                 # grant the force scope (implemented, M6.5)
 
@@ -597,11 +597,11 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   override it.
 - `[debug]` controls the default build mode (`default`), local transport (`protocol`, `pipe`
   default or `socket`), the swap teardown policy (`force-sessions-end-on-swap`, which must be
-  `true` in v1), the stop/idle bound (`session-timeout`, a duration string, default `5m`), and
-  the default write/force grants (`allow-write`, `allow-force`, both false). `[debug].default`
-  must agree with an explicitly present `[build].debug`; a disagreement or
-  `force-sessions-end-on-swap = false` is `STC-E-PROJECT-010`. `session-timeout` must be a
-  positive duration and must not exceed 24 hours; `allow-write`/`allow-force` are booleans.
+  `true` in v1), the optional stop/idle bound (`session-timeout`, a duration string; unset or
+  `0ns` disables it), and the default write/force grants (`allow-write`, `allow-force`, both
+  false). `[debug].default` must agree with an explicitly present `[build].debug`; a disagreement
+  or `force-sessions-end-on-swap = false` is `STC-E-PROJECT-010`. `session-timeout` must be zero
+  or a positive duration and must not exceed 24 hours; `allow-write`/`allow-force` are booleans.
   These settings are runtime/session policy and do not affect the build ID or manifest identity.
   `stc test` ignores them and always builds the hook-free debug form. Debug remains a local,
   authenticated capability; it is not a safety function (D-173–D-179).

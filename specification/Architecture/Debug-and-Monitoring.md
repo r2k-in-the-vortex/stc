@@ -120,11 +120,11 @@ unbound rather than silently moved to an unrelated statement.
 
 Stepping is stop-the-world: the cycle thread is suspended at a checkpoint. Step-over, step-into,
 step-out, and continue are supported. A step that would cross an online swap ends the session
-instead of continuing into a different generation. While the cycle is stopped, the bounded stop
-budget of §14.3 (`[debug].session-timeout`, default five minutes) applies; if the bound is
-exceeded the session is terminated and the cycle resumes with a fresh deadline. M6 has no
-watchdog; if one is added later it is paused or extended while the cycle is stopped, and the stop
-budget still terminates the session.
+instead of continuing into a different generation. While the cycle is stopped, the optional stop
+budget of §14.3 (`[debug].session-timeout`, disabled by default) applies when configured; if the
+bound is exceeded the session is terminated and the cycle resumes with a fresh deadline. M6 has no
+watchdog; if one is added later it is paused or extended while the cycle is stopped, and the
+configured stop budget still terminates the session.
 
 ### 5.3 Call stack
 
@@ -570,7 +570,7 @@ belong to that stop snapshot; a stale `stop_id` is rejected. A `queue-result` wi
 | --- | --- | --- |
 | Connect and first-request deadline | 5 s | Close; audited |
 | Request processing deadline | 5 s | `STC-E-DEBUG-013` |
-| Stop/idle session bound | `[debug].session-timeout`, default 5 min | `STC-E-DEBUG-018`, session ends |
+| Stop/idle session bound | `[debug].session-timeout`, disabled by default | When configured and exceeded: `STC-E-DEBUG-018`, session ends |
 | Request frame | 1 MiB | `STC-E-DEBUG-004`, close |
 | Response or event frame | 4 MiB | `STC-E-DEBUG-011` |
 | Request rate | 100/s, burst 200, per session | `STC-E-DEBUG-012` |
@@ -650,9 +650,9 @@ it without ending the session (§14.5).
 
 ### 14.3 Pause bound and watchdog interaction
 
-The documented pause bound is `[debug].session-timeout`, default `5m`, configurable per launch by
-`--session-timeout`. The bound covers the continuous time the cycle is stopped, from the parking
-checkpoint to the resume. When it expires:
+The optional pause bound is `[debug].session-timeout`, disabled by default and configurable per
+launch by `--session-timeout` (zero disables). The bound, when set, covers the continuous time the
+cycle is stopped, from the parking checkpoint to the resume. When it expires:
 
 1. the host emits `session-ended` with `reason:"pause-timeout"` and code `STC-E-DEBUG-018`;
 2. all breakpoints, step/pause plans, forces, and queued writes are cleared;
@@ -660,16 +660,17 @@ checkpoint to the resume. When it expires:
 4. the next cycle deadline is computed fresh, with no catch-up and no accumulated missed-cycle
    count.
 
-An idle session with no watches that sends no successful request for the bound is ended with
-`reason:"idle-timeout"`. A delivered watch batch counts as activity, so a watch-only session is
-bounded by connection liveness rather than this timer. `session.status` does not extend either
-bound.
+The same configured bound ends an idle session with no watches that sends no successful request
+for the bound with `reason:"idle-timeout"`. A delivered watch batch counts as activity, so a
+watch-only session is bounded by connection liveness rather than this timer. `session.status` does
+not extend either timer. With no configured bound, neither timer expires; the non-safety notice
+states that a stopped or forced controller may hold outputs indefinitely (D-212).
 
 M6 has no watchdog implementation; it has only a trap code for a watchdog expiry. Phase 6
 implements this stop budget as the host-side pause bound. If a watchdog is added later, its
 deadline is paused or extended while the cycle is parked, never treated as an elapsed cycle, and
-the pause bound above still terminates the session. This is a non-safety behavior: the bound is
-an availability control, not a safety function.
+the configured pause bound above still terminates the session. This is a non-safety behavior: the
+bound is an opt-in availability control, not a safety function.
 
 ### 14.4 Generation, build, and cycle tagging
 
@@ -1394,8 +1395,8 @@ debugger that supports typed access, but it cannot stop at checkpoints. `stc tes
 
 ### 18.4 Non-safety statement
 
-The debug service, its pause bound, its authentication, and its audit log are availability and
-operability features, not safety functions. A stopped or forced controller may hold outputs
+The debug service, its optional pause bound, its authentication, and its audit log are
+availability and operability features, not safety functions. A stopped or forced controller may hold outputs
 indefinitely. `stc` can control real machinery, but it is not a safety PLC and is not responsible
 for safety; safety must be provided by a separate safety system and machine design as required by
 law and regulation. Deployments that require fail-safe behavior must implement it independently

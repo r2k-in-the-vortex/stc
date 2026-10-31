@@ -434,7 +434,8 @@ struct StopState {
     checkpoint: DebugCheckpointRecord,
     breakpoint_id: Option<u64>,
     cycle: u64,
-    deadline: Instant,
+    /// No deadline means the session timeout is disabled.
+    deadline: Option<Instant>,
     frames: Vec<CapturedFrame>,
     truncated: bool,
     frames_available: bool,
@@ -776,9 +777,10 @@ impl SessionStop {
             breakpoint_id: stop.breakpoint_id,
             cycle: stop.cycle,
         });
-        let pause_remaining_ms = control.stop.as_ref().map(|stop| {
-            let remaining = stop.deadline.saturating_duration_since(now);
-            u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)
+        let pause_remaining_ms = control.stop.as_ref().and_then(|stop| {
+            let deadline = stop.deadline?;
+            let remaining = deadline.saturating_duration_since(now);
+            Some(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX))
         });
         SessionStatus {
             stop,
@@ -1303,7 +1305,7 @@ pub(crate) unsafe extern "C" fn debug_check_entry(
             checkpoint: record.clone(),
             breakpoint_id,
             cycle,
-            deadline: now + session.timeout,
+            deadline: (!session.timeout.is_zero()).then(|| now + session.timeout),
             frames,
             truncated,
             frames_available: session.tables.frames.is_some(),
@@ -1361,9 +1363,12 @@ fn park(session: &SessionStop, pump: &CyclePump) {
             let Some(stop) = control.stop.as_ref() else {
                 return;
             };
+            let deadline = stop.deadline;
+            let cycle = stop.cycle;
             let now = Instant::now();
-            if now >= stop.deadline {
-                let cycle = stop.cycle;
+            if let Some(deadline) = deadline
+                && now >= deadline
+            {
                 control.ending = true;
                 control.stop = None;
                 control.step = None;
@@ -1373,7 +1378,9 @@ fn park(session: &SessionStop, pump: &CyclePump) {
                 pump.pause_timeout(session, cycle);
                 return;
             }
-            let wait = stop.deadline.saturating_duration_since(now).min(PARK_POLL);
+            let wait = deadline.map_or(PARK_POLL, |deadline| {
+                deadline.saturating_duration_since(now).min(PARK_POLL)
+            });
             let (mut guard, _) = session
                 .wake
                 .wait_timeout(control, wait)
