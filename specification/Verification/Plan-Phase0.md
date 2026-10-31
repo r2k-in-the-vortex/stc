@@ -2049,33 +2049,43 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
 ### 22.11 Remaining whole-run work
 
 **Owner decision (2026-10-31).** The owner chose the **full invariant**, not the reduced
-alternative. The whole-run bridge must keep every `WFState` field.
+alternative, and then approved the three provenance extensions below. The whole-run bridge
+keeps every `WFState` field and adds the extensions; no invariant was trimmed.
 
-**Status (2026-10-31, follow-up).** The `WFProgram.localTypesRepresentable` rule and the
-`default_type?` lemma are implemented as prerequisites. The initial-state, preservation, and
-reachability proofs are **not** complete. The full-invariant preservation proof is blocked on
-three provenance invariants that the approved `WFState` does not contain; without them the
-`originsMatch`, `stackPtrsBounded`, and `storagePtrsLive` fields are not preserved by `irStep`.
-No invariant was trimmed; the compiling checkpoint is `061da82` on `WL-3`. The three invariant
-extensions require owner approval:
+**Status (2026-10-31, follow-up).** The three provenance extensions are now part of the model:
+`SlotsBase` (default-aware) and `StorageValuesLive` are `WFState` fields, and `MemTyped` includes
+`MemValuePtrBounded`. The `WFProgram.localTypesRepresentable` rule and `default_type?` are
+implemented. The list/syntax infrastructure is implemented: the filterMap/flatMap sublist
+lemmas, `localDefs` name uniqueness from `FunctionUsesDefined.allNodup`, `find?_localDefs_eq`,
+`localType?_eq_resultType`, `find?_params_eq`, `localType?_of_param`, and the
+`mem_zip`/`find?_zip_map_eq` lemmas. The initial-state, preservation, and reachability proofs
+are **not** complete; the remaining exact obligations are: `initLocals` coverage for the
+parameters and local definitions; the host predicates and one-frame `initState?_wf`; the
+per-instruction `irStep_wf` induction for the 18 `WFState` fields (with the slots-base,
+local-type, memory-pointer, return-link, and `UnreachableGuarded` obligations); and the
+reachability/`irRun` corollaries. The compiling checkpoint is on `WL-3`; the eight soundness
+theorems and the registry remain green. The three extensions were required because without
+them the invariant was not preserved:
 
 1. **Slots base (`SlotsBase`).** For every `.cell slot false` origin whose defining `load`
    reads a `.slotTable` GEP, the GEP's base local holds `.ptr .slotTable`. The current
    `OriginsTrusted` checks only the constant slot index, so an arbitrary pointer-typed base
    (e.g. a stack pointer) could make the load read a value that does not have the recorded
-   `.cell slot` shape. `localsTyped` does not constrain the base's address. Proposed state
-   field:
+   `.cell slot` shape. `localsTyped` does not constrain the base's address. Implemented
+   state field (`SlotBases` collects the bases of the slot-cell GEPs; the default disjunct
+   covers a base that is still `.null` before its defining load):
 
    ```lean
    def SlotsBase (c : IRState) (f : IRFrame) : Prop :=
-     ∀ base slot, IsSlotTableGepBase f base slot →
-       f.lookupLocal base = some (.ptr .slotTable)
+     ∀ base ∈ SlotBases f.fn,
+       f.lookupLocal base = some (.ptr .slotTable) ∨
+       f.lookupLocal base = some .null
    ```
 
 2. **Memory pointer bounds (`MemValuePtrBounded`).** `MemTyped` constrains a stack cell's value
    type and extent but not the bounds of a stack pointer stored in that cell. A load can
    therefore introduce an out-of-bounds stack pointer into a local, breaking
-   `StackPtrsBounded`. Proposed strengthening, as a conjunct of `MemTyped`:
+   `StackPtrsBounded`. Implemented strengthening, as a conjunct of `MemTyped`:
 
    ```lean
    def MemValuePtrBounded (c : IRState) (v : IRValue) : Prop :=
@@ -2089,7 +2099,7 @@ extensions require owner approval:
 3. **Storage value liveness (`StorageValuesLive`).** `StoragePtrsLive` constrains only locals.
    A load from persistent storage can return a storage pointer stored by the host; without an
    invariant on storage contents, the destination local need not address a live storage entry.
-   Proposed state field:
+   Implemented state field:
 
    ```lean
    def StorageValuesLive (c : IRState) : Prop :=

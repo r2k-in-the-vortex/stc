@@ -1030,6 +1030,42 @@ def OriginHolds (contract : IRContract) (c : IRState) (f : IRFrame)
         (∃ off, v = .ptr (.global g off)) ∧ g ∈ contract.localGlobals
     | .vtableCode => False)
 
+/-- Bases of GEPs whose results are loaded as `.cell slot false` origin
+values. -/
+def SlotBases (fn : Function) : List Ssa :=
+  fn.facts.origins.filterMap fun entry =>
+    match entry.2 with
+    | .cell _ false =>
+        match defInstr? fn entry.1 with
+        | some (.load _ _ (.local gepName) _) =>
+            match defInstr? fn gepName with
+            | some (.gep _ _ (.local base) _ _) => some base
+            | _ => none
+        | _ => none
+    | _ => none
+
+/-- A slot-table base local holds the slot-table pointer, or is still the
+initialization default before its defining load executes. -/
+def SlotsBase (c : IRState) (f : IRFrame) : Prop :=
+  ∀ base ∈ SlotBases f.fn,
+    f.lookupLocal base = some (.ptr .slotTable) ∨ f.lookupLocal base = some .null
+
+/-- A stored stack pointer is inside an allocated extent. -/
+def MemValuePtrBounded (c : IRState) (v : IRValue) : Prop :=
+  match v with
+  | .ptr (.stack frame slot off) =>
+      ∃ g, c.frameById? frame = some g ∧
+        ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty
+  | _ => True
+
+/-- Every storage-pointer value in persistent storage addresses a live entry. -/
+def StorageValuesLive (c : IRState) : Prop :=
+  ∀ id off v, c.lookupStorageAt id off = some v →
+    (∀ slot off', v = .ptr (.root slot off') →
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off' < values.length) ∧
+    (∀ g off', v = .ptr (.global g off') →
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length)
+
 /-- The recorded predecessor is a real CFG edge, or the frame is at the entry
 block. -/
 def PrevEdge (c : IRState) (f : IRFrame) : Prop :=
@@ -1062,7 +1098,8 @@ def MemValueTyped (ty : IrType) (v : IRValue) : Prop :=
 def MemTyped (c : IRState) (f : IRFrame) : Prop :=
   ∀ addr v, f.lookupMem addr = some v →
     ∃ slot off ty, addr = .stack f.id slot off ∧
-      f.allocType? slot = some ty ∧ off < allocSize ty ∧ MemValueTyped ty v
+      f.allocType? slot = some ty ∧ off < allocSize ty ∧
+      MemValueTyped ty v ∧ MemValuePtrBounded c v
 
 /-- Every persistent-storage pointer held in a local addresses a live storage
 entry. -/
@@ -1124,6 +1161,8 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
   stackPtrsBounded : ∀ f ∈ c.frames, StackPtrsBounded c f
   memTyped : ∀ f ∈ c.frames, MemTyped c f
   storagePtrsLive : ∀ f ∈ c.frames, StoragePtrsLive c f
+  slotsBase : ∀ f ∈ c.frames, SlotsBase c f
+  storageValuesLive : StorageValuesLive c
   functionBindings : FunctionBindingsTyped c
   callTargets : CallTargetsTyped c
   returnLink : ReturnLink c
@@ -1398,7 +1437,7 @@ theorem ir_memory_safe {contract : IRContract} {c : IRState}
             have hm := hwf.memTyped g hmem
             unfold MemTyped at hm
             rcases hm (.stack frame slot off) v hload with
-              ⟨slot', off', allocTy, haddr, halloc, hbound, hmemty⟩
+              ⟨slot', off', allocTy, haddr, halloc, hbound, hmemty, _⟩
             injection haddr with hframe hslot hoff
             subst hframe
             subst hslot
@@ -1941,5 +1980,253 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
               rcases trapOutcome_trapped hvalues hcode with ⟨trap, c'', htr⟩
               rw [htr] at htub
               cases htub
+
+theorem filterMap_sublist_of_imp {α β : Type} {f g : α → Option β} :
+    ∀ {l : List α}, (∀ a b, f a = some b → g a = some b) →
+      (l.filterMap f).Sublist (l.filterMap g)
+  | [], _ => by simp
+  | a :: as, h => by
+      simp only [List.filterMap_cons]
+      cases hf : f a with
+      | none =>
+          simp only [hf]
+          cases hg : g a with
+          | none =>
+              simp only [hg]
+              exact filterMap_sublist_of_imp h (l := as)
+          | some b =>
+              simp only [hg]
+              exact List.Sublist.cons b (filterMap_sublist_of_imp h (l := as))
+      | some b =>
+          have hga : g a = some b := h a b hf
+          simp only [hf, hga]
+          exact List.Sublist.cons₂ b (filterMap_sublist_of_imp h (l := as))
+
+theorem flatMap_sublist_of_forall {α β : Type} {f g : α → List β} :
+    ∀ {l : List α}, (∀ a ∈ l, (f a).Sublist (g a)) →
+      (l.flatMap f).Sublist (l.flatMap g)
+  | [], _ => by simp
+  | a :: as, h => by
+      rw [List.flatMap_cons, List.flatMap_cons]
+      exact List.Sublist.append (h a (by simp))
+        (flatMap_sublist_of_forall (fun b hb => h b (by simp [hb])))
+
+theorem localDefs_names_sublist (fn : Function) :
+    (fn.localDefs.map (·.1)).Sublist
+      (fn.blocks.flatMap fun block => block.instrs.filterMap Instr.dest?) := by
+  unfold Function.localDefs
+  rw [List.map_flatMap]
+  apply flatMap_sublist_of_forall
+  intro block _
+  rw [List.map_filterMap]
+  apply filterMap_sublist_of_imp
+  intro instr dest hdest
+  split at hdest
+  · rename_i d t hd ht
+    simp only [Option.map_some, Option.some.injEq] at hdest
+    subst hdest
+    exact hd
+  · simp at hdest
+
+theorem localDefs_names_nodup {fn : Function} (h : FunctionUsesDefined fn) :
+    (fn.localDefs.map (·.1)).Nodup := by
+  have hall := h.allNodup
+  rw [List.nodup_append] at hall
+  exact (localDefs_names_sublist fn).nodup hall.2.1
+
+theorem find?_localDefs_eq {fn : Function}
+    (hnd : (fn.localDefs.map (·.1)).Nodup)
+    {name : String} {ty : IrType} (hmem : (name, ty) ∈ fn.localDefs) :
+    fn.localDefs.find? (fun e => e.1 == name) = some (name, ty) := by
+  revert hnd hmem
+  induction fn.localDefs with
+  | nil => intro hnd hmem; simp at hmem
+  | cons hd tl ih =>
+      intro hnd hmem
+      simp only [List.map_cons] at hnd
+      rw [List.nodup_cons] at hnd
+      rcases hd with ⟨hdName, hdTy⟩
+      by_cases hh : hdName = name
+      · subst hdName
+        have hty : hdTy = ty := by
+          rcases List.mem_cons.mp hmem with hhead | htail
+          · have h' : ty = hdTy := by simpa using hhead
+            exact h'.symm
+          · exfalso
+            exact hnd.1 (List.mem_map.mpr ⟨(name, ty), htail, rfl⟩)
+        subst hty
+        exact List.find?_cons_of_pos (by simp)
+      · have hmem' : (name, ty) ∈ tl := by
+          rcases List.mem_cons.mp hmem with hhead | htail
+          · exfalso
+            apply hh
+            simpa using (congrArg Prod.fst hhead).symm
+          · exact htail
+        rw [List.find?_cons_of_neg (by simp [beq_iff_eq, hh])]
+        exact ih hnd.2 hmem'
+
+theorem find?_localDefs_eq' {fn : Function} (hud : FunctionUsesDefined fn)
+    {name : String} {ty : IrType} (hmem : (name, ty) ∈ fn.localDefs) :
+    fn.localDefs.find? (fun e => e.1 == name) = some (name, ty) :=
+  find?_localDefs_eq (localDefs_names_nodup hud) hmem
+
+theorem mem_dests_of_block {fn : Function} {block : Block} {instr : Instr}
+    {dest : Ssa} (hblock : block ∈ fn.blocks) (hinstr : instr ∈ block.instrs)
+    (hdest : instr.dest? = some dest) :
+    dest ∈ fn.blocks.flatMap (fun b => b.instrs.filterMap Instr.dest?) :=
+  List.mem_flatMap.mpr ⟨block, hblock,
+    List.mem_filterMap.mpr ⟨instr, hinstr, hdest⟩⟩
+
+theorem mem_localDefs_of_block {fn : Function} {block : Block} {instr : Instr}
+    {dest : Ssa} {ty : IrType} (hblock : block ∈ fn.blocks)
+    (hinstr : instr ∈ block.instrs) (hdest : instr.dest? = some dest)
+    (hty : instr.resultType? = some ty) :
+    (dest, ty) ∈ fn.localDefs := by
+  unfold Function.localDefs
+  exact List.mem_flatMap.mpr ⟨block, hblock,
+    List.mem_filterMap.mpr ⟨instr, hinstr, by simp [hdest, hty]⟩⟩
+
+theorem localType?_eq_resultType {fn : Function} (hud : FunctionUsesDefined fn)
+    {label : Label} {index : Nat} {block : Block} {instr : Instr}
+    {dest : Ssa} {ty : IrType}
+    (hblock : fn.block? label = some block)
+    (hinstr : block.instrs[index]? = some instr)
+    (hdest : instr.dest? = some dest)
+    (hty : instr.resultType? = some ty) :
+    fn.localType? dest = some ty := by
+  have hblockMem : block ∈ fn.blocks := by
+    unfold Function.block? at hblock
+    exact List.mem_of_find?_eq_some hblock
+  have hinstrMem : instr ∈ block.instrs := List.mem_iff_getElem?.mpr ⟨index, hinstr⟩
+  have hdestsMem : dest ∈ fn.blocks.flatMap (fun b => b.instrs.filterMap Instr.dest?) :=
+    mem_dests_of_block hblockMem hinstrMem hdest
+  have hlocalMem : (dest, ty) ∈ fn.localDefs :=
+    mem_localDefs_of_block hblockMem hinstrMem hdest hty
+  have hall := hud.allNodup
+  rw [List.nodup_append] at hall
+  have hnotParam : dest ∉ fn.params.map (·.2) := by
+    intro hmem
+    exact hall.2.2 dest hmem dest hdestsMem rfl
+  have hfindNone : fn.params.find? (fun p => p.2 == dest) = none := by
+    rw [List.find?_eq_none]
+    intro p hp hbeq
+    apply hnotParam
+    exact List.mem_map.mpr ⟨p, hp, beq_iff_eq.mp hbeq⟩
+  have hlocalFind : fn.localDefs.find? (fun e => e.1 == dest) = some (dest, ty) :=
+    find?_localDefs_eq' hud hlocalMem
+  unfold Function.localType?
+  rw [hfindNone]
+  simp only [hlocalFind, Option.map_some]
+
+theorem find?_params_eq {params : List (IrType × String)}
+    (hnd : (params.map (·.2)).Nodup) {p : IrType × String} (hp : p ∈ params) :
+    params.find? (fun q => q.2 == p.2) = some p := by
+  revert hnd hp
+  induction params with
+  | nil => intro hnd hp; simp at hp
+  | cons hd tl ih =>
+      intro hnd hp
+      simp only [List.map_cons] at hnd
+      rw [List.nodup_cons] at hnd
+      by_cases hh : hd.2 = p.2
+      · have hp' : p = hd := by
+          rcases List.mem_cons.mp hp with hhead | htail
+          · exact hhead
+          · exfalso
+            exact hnd.1 (List.mem_map.mpr ⟨p, htail, by simp [hh]⟩)
+        subst hp'
+        exact List.find?_cons_of_pos (by simp)
+      · rcases List.mem_cons.mp hp with hhead | htail
+        · subst hhead
+          exact absurd rfl hh
+        · rw [List.find?_cons_of_neg (by simp [hh])]
+          exact ih hnd.2 htail
+
+theorem localType?_of_param {fn : Function} (hud : FunctionUsesDefined fn)
+    {p : IrType × String} (hp : p ∈ fn.params) :
+    fn.localType? p.2 = some p.1 := by
+  have hnd : (fn.params.map (·.2)).Nodup := by
+    have hall := hud.allNodup
+    rw [List.nodup_append] at hall
+    exact hall.1
+  have hfind := find?_params_eq hnd hp
+  unfold Function.localType?
+  rw [hfind]
+
+theorem mem_left_of_zip {α β : Type} {l1 : List α} {l2 : List β}
+    {a : α} {b : β} (h : (a, b) ∈ l1.zip l2) : a ∈ l1 := by
+  induction l1 generalizing l2 with
+  | nil => simp at h
+  | cons x xs ih =>
+      cases l2 with
+      | nil => simp at h
+      | cons y ys =>
+          simp only [List.zip_cons_cons, List.mem_cons] at h
+          rcases h with h | h
+          · cases h
+            exact List.mem_cons_self ..
+          · exact List.mem_cons_of_mem _ (ih h)
+
+theorem mem_zip_of_mem_left {α β : Type} :
+    ∀ {l1 : List α} {l2 : List β}, l1.length = l2.length →
+      ∀ a ∈ l1, ∃ b, (a, b) ∈ l1.zip l2
+  | [], l2, hlen, a, ha => by simp at ha
+  | _ :: _, [], hlen, a, ha => by simp at hlen
+  | a1 :: as, b1 :: bs, hlen, a, ha => by
+      rcases List.mem_cons.mp ha with h | h
+      · subst h
+        exact ⟨b1, by simp⟩
+      · have hlen' : as.length = bs.length := by simpa using hlen
+        rcases mem_zip_of_mem_left hlen' a h with ⟨b, hb⟩
+        exact ⟨b, by simp [hb]⟩
+
+theorem find?_zip_map_eq {params : List (IrType × String)} {args : List IRValue}
+    (hnd : (params.map (·.2)).Nodup) (hlen : params.length = args.length)
+    {p : IrType × String} (hp : p ∈ params) {a : IRValue}
+    (ha : (p, a) ∈ params.zip args) :
+    (params.zip args).find? (fun e => e.1.2 == p.2) = some (p, a) := by
+  revert hnd hlen hp ha
+  induction params generalizing args with
+  | nil => intro hnd hlen hp ha; simp at hp
+  | cons hd tl ih =>
+      intro hnd hlen hp ha
+      cases args with
+      | nil => simp at hlen
+      | cons a0 as =>
+          simp only [List.map_cons] at hnd
+          rw [List.nodup_cons] at hnd
+          simp only [List.zip_cons_cons, List.mem_cons] at ha
+          by_cases hh : hd.2 = p.2
+          · have hp' : p = hd := by
+              rcases List.mem_cons.mp hp with hhead | htail
+              · exact hhead
+              · exfalso
+                exact hnd.1 (List.mem_map.mpr ⟨p, htail, by simp [hh]⟩)
+            subst p
+            simp only [List.zip_cons_cons]
+            have ha' : a = a0 := by
+              rcases ha with hhead | htail
+              · cases hhead; rfl
+              · exfalso
+                exact hnd.1 (List.mem_map.mpr ⟨hd, mem_left_of_zip htail, rfl⟩)
+            cases ha'
+            exact List.find?_cons_of_pos (by simp)
+          · have hpTail : p ∈ tl := by
+              rcases List.mem_cons.mp hp with hhead | htail
+              · exfalso
+                apply hh
+                rw [hhead]
+              · exact htail
+            have haTail : (p, a) ∈ tl.zip as := by
+              rcases ha with hhead | htail
+              · exfalso
+                apply hh
+                have hp_eq : p = hd := congrArg Prod.fst hhead
+                rw [hp_eq]
+              · exact htail
+            have hlen' : tl.length = as.length := by simpa using hlen
+            simp only [List.zip_cons_cons]
+            rw [List.find?_cons_of_neg (by simp [beq_iff_eq, hh])]
+            exact ih hnd.2 hlen' hpTail haTail
 
 end Stc.Codegen
