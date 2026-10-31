@@ -1148,11 +1148,16 @@ caller's `expect` was not linked to the callee's declared result, so the
 - `ConfigTyped.updateCycles` and `completeFrame_preserves`; frame completion is
   now proved for both function return and program cycle reset.
 
-Remaining obstruction: `stepResume_preserves` needs the loop-marker rules
-(`whileLoop`, `repeatBody`, `forBody`) to carry the tail loop condition
-`after.depth > 0 → StackHasLoop rest`, and the value/statement/call cases still
-need their transition proofs. `preservation` and `type_soundness` remain
-planned.
+The same checkpoint adds the loop-marker tail condition to
+`StackTyped.whileLoop`, `repeatBody`, and `forBody`, so a completed loop can
+reconstruct a typed resume or expression focus when an outer loop remains.
+`StackHasLoop` moves before `StackTyped` so the rule can refer to it.
+
+Remaining: `stepValue_preserves` (including the completed-argument
+`performCall`), `stepStmt`/`stepStmts` preservation, `stepResume_preserves`
+(including `forAdvance`/`forContinue`), `stepReturned_preserves`, assembling
+`preservation`, initial-state typing, and `type_soundness`. `preservation` and
+`type_soundness` remain planned.
 
 ## 20. P0.4 execution record — complete
 

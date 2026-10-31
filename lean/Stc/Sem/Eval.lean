@@ -123,6 +123,11 @@ def CalleeSignatureV (ctx : Ctx) (callee : Callee) (done : List Value)
 
 /-! ## Stack typing -/
 
+/-- Whether the stack contains a loop marker. -/
+def StackHasLoop : List Cont → Prop
+  | [] => False
+  | c :: rest => c.isLoopMarker = true ∨ StackHasLoop rest
+
 /-- The continuation stack: each continuation consumes the current focus's
 expectation, types the AST it carries, and leaves the next expectation. -/
 inductive StackTyped (ctx : Ctx) : List Cont → Expect → LoopCtx → Prop where
@@ -225,6 +230,7 @@ inductive StackTyped (ctx : Ctx) : List Cont → Expect → LoopCtx → Prop whe
       (hctrl : before.controlled = after.controlled)
       (hcond : ExprHasType ctx cond .bool)
       (hbody : StmtListHasType ctx before.depth before.controlled body)
+      (hloop : after.depth > 0 → StackHasLoop rest)
       (hrest : StackTyped ctx rest .unit after) :
       StackTyped ctx
         ({ kind := .whileLoop cond body, before := before, after := after,
@@ -237,6 +243,7 @@ inductive StackTyped (ctx : Ctx) : List Cont → Expect → LoopCtx → Prop whe
       (hctrl : before.controlled = after.controlled)
       (hcond : ExprHasType ctx cond .bool)
       (hbody : StmtListHasType ctx before.depth before.controlled body)
+      (hloop : after.depth > 0 → StackHasLoop rest)
       (hrest : StackTyped ctx rest .unit after) :
       StackTyped ctx
         ({ kind := .repeatBody body cond, before := before, after := after,
@@ -302,6 +309,7 @@ inductive StackTyped (ctx : Ctx) : List Cont → Expect → LoopCtx → Prop whe
       (hstop : stopVal.WellFormed ∧ stopVal.ty = ty)
       (hstep : stepVal.WellFormed ∧ stepVal.ty = ty)
       (hbody : StmtListHasType ctx before.depth before.controlled body)
+      (hloop : after.depth > 0 → StackHasLoop rest)
       (hrest : StackTyped ctx rest .unit after) :
       StackTyped ctx
         ({ kind := .forBody var stopVal stepVal body, before := before, after := after,
@@ -316,11 +324,6 @@ inductive StackTyped (ctx : Ctx) : List Cont → Expect → LoopCtx → Prop whe
       StackTyped ctx
         ({ kind := .seq restStmts, before := lc, after := lc, span := span } :: rest)
         .unit lc
-
-/-- Whether the stack contains a loop marker. -/
-def StackHasLoop : List Cont → Prop
-  | [] => False
-  | c :: rest => c.isLoopMarker = true ∨ StackHasLoop rest
 
 /-! ## Focus and configuration typing -/
 
