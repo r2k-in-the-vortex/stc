@@ -702,6 +702,12 @@ mod tests {
         path
     }
 
+    /// Creates a host for coverage-readout tests.
+    ///
+    /// Dropping a [`Host`] runs its shutdown, which reinstalls the
+    /// process-wide retained-state configuration. Tests that create one must
+    /// hold [`crate::test_support::state_guard`] so they cannot race the
+    /// state-service tests.
     fn empty_host() -> Host {
         Host::new(host_platform(), ManifestStore::memory())
     }
@@ -790,6 +796,7 @@ mod tests {
 
     #[test]
     fn zero_sites_write_a_header_only_sidecar_without_a_module() {
+        let _state = crate::test_support::state_guard();
         let directory = temp_dir("zero");
         let path = directory.join("test.coverage");
         let options = parse_args(&args(&[
@@ -812,6 +819,7 @@ mod tests {
 
     #[test]
     fn missing_counter_export_skips_the_sidecar() {
+        let _state = crate::test_support::state_guard();
         let directory = temp_dir("missing-symbol");
         let path = directory.join("test.coverage");
         let options = parse_args(&args(&[
@@ -829,6 +837,7 @@ mod tests {
 
     #[test]
     fn site_counts_above_the_cap_skip_the_sidecar() {
+        let _state = crate::test_support::state_guard();
         let directory = temp_dir("cap");
         let path = directory.join("test.coverage");
         let options = parse_args(&args(&[
@@ -846,6 +855,7 @@ mod tests {
 
     #[test]
     fn uninstrumented_runs_write_no_coverage() {
+        let _state = crate::test_support::state_guard();
         let directory = temp_dir("uninstrumented");
         let options = parse_args(&args(&["test"])).expect("valid options");
         // With no coverage path the host returns before validating the count
