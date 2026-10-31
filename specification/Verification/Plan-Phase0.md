@@ -2149,6 +2149,24 @@ replacement as a corollary: given the new suffix's block decomposition and no-ba
 fact, the head frame's instructions are replaced without disturbing the invariant. The
 `callFunction` and the three `irStepRet` forms remain; Phases 2–3 remain as inventoried below.
 
+**Phase 2 obstruction 2 (2026-10-31): module-wide slots storage at calls.** The
+`callFunction` form exposes a fact the approved set does not carry. `SlotsBase c f` includes
+`SlotsGlobalStored c f`, which constrains `c.lookupStorageAt (.global g) 0` for the slot-global
+names of that frame's *function*. A pushed callee has a possibly different function, so its
+`SlotsBase` requires the same slot-table storage fact for the callee function's slot globals,
+and the caller frame's `SlotsGlobalStored` only covers the caller function's names. At the
+initial state the `initState?_wf` hypothesis covers only the entry frame's function. Proposed
+extension: a state-level `SlotsStorage` fact over all module functions — for every
+`fn ∈ c.module.functions`, every slot-base global loaded by `fn` has
+`c.lookupStorageAt (.global g) 0 = some (.ptr .slotTable)` — as a `WFState` field, established
+at `initState?_wf` from a host hypothesis and preserved because the store exclusion forbids
+writes to the slots globals. The alternative is to require a static fact that every function
+reuses the entry function's slot globals; that is more restrictive and less direct. This fact
+is not the approved dynamic exclusion (which forbids *holding pointers to* a slots global), so
+it is recorded for owner approval before implementation. The remaining `callFunction` and
+`irStepRet` obligations are otherwise as inventoried; the store's state-update lemmas are
+already pushed in `5fa319b`.
+
 The store's `storeValue` updates are now proved as state-level form lemmas:
 `wfState_storeFrames` (the stack case: the frame map with `setMem`, including the
 `MemValuePtrBounded`/`MemTyped` preservation through `memTyped_storeFrames` and the
