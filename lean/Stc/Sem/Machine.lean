@@ -298,25 +298,29 @@ def caseArmBody? : List CaseArm → Int → Option (List Stmt)
       if arm.labels.any (fun label => caseLabelContains label value) then some arm.body
       else caseArmBody? rest value
 
+/-- Statements that initialize a list of locals, starting at `index`. -/
+def localInitStmtsFrom (index : Nat) : List Local → List Stmt
+  | [] => []
+  | loc :: rest =>
+      (match loc.init with
+        | some e => [Stmt.assign ⟨.local index, loc.span⟩ e loc.span]
+        | none => []) ++ localInitStmtsFrom (index + 1) rest
+
 /-- Statements that initialize a list of locals. -/
 def localInitStmts (locals : List Local) : List Stmt :=
-  let rec go (index : Nat) : List Local → List Stmt
-    | [] => []
-    | loc :: rest =>
-        (match loc.init with
-          | some e => [Stmt.assign ⟨.local index, loc.span⟩ e loc.span]
-          | none => []) ++ go (index + 1) rest
-  go 0 locals
+  localInitStmtsFrom 0 locals
+
+/-- Statements that initialize a list of global roots, starting at `index`. -/
+def globalInitStmtsFrom (index : Nat) : List Global → List Stmt
+  | [] => []
+  | glob :: rest =>
+      (match glob.init with
+        | some e => [Stmt.assign ⟨.global index, glob.span⟩ e glob.span]
+        | none => []) ++ globalInitStmtsFrom (index + 1) rest
 
 /-- Statements that initialize global roots. -/
 def globalInitStmts (globals : List Global) : List Stmt :=
-  let rec go (index : Nat) : List Global → List Stmt
-    | [] => []
-    | glob :: rest =>
-        (match glob.init with
-          | some e => [Stmt.assign ⟨.global index, glob.span⟩ e glob.span]
-          | none => []) ++ go (index + 1) rest
-  go 0 globals
+  globalInitStmtsFrom 0 globals
 
 /-- The initialization sequence followed by the first cycle body. -/
 def initBody (u : HirUnit) : List Stmt :=

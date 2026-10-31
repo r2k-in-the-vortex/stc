@@ -261,7 +261,7 @@ inductive StackTyped (ctx : Ctx) : List Cont → Expect → LoopCtx → Prop whe
       (hstep : ∀ e, step = some e → ExprHasType ctx e ty)
       (hzero : ∀ e, step = some e → ∀ v, Expr.constInt? e = some v → v ≠ 0)
       (hbody : StmtListHasType ctx (lc.depth + 1) (var.id :: lc.controlled) body)
-      (hrest : StackTyped ctx rest (.value ty) lc) :
+      (hrest : StackTyped ctx rest .unit lc) :
       StackTyped ctx
         ({ kind := .forInit var stop step body, before := lc, after := lc,
            span := span } :: rest)
@@ -275,7 +275,7 @@ inductive StackTyped (ctx : Ctx) : List Cont → Expect → LoopCtx → Prop whe
       (hstep : ∀ e, step = some e → ExprHasType ctx e ty)
       (hzero : ∀ e, step = some e → ∀ v, Expr.constInt? e = some v → v ≠ 0)
       (hbody : StmtListHasType ctx (lc.depth + 1) (var.id :: lc.controlled) body)
-      (hrest : StackTyped ctx rest (.value ty) lc) :
+      (hrest : StackTyped ctx rest .unit lc) :
       StackTyped ctx
         ({ kind := .forStop var step body, before := lc, after := lc, span := span } :: rest)
         (.value ty) lc
@@ -347,11 +347,13 @@ def FocusTyped (u : HirUnit) (f : Frame) : Focus → Prop
   | .trapped _ _ => True
   | .halted => True
 
-/-- A suspended frame: its stored values match its declarations and its
-continuation stack is typed under the expectation the callee will meet. -/
+/-- A suspended frame: its stored values match its declarations, its
+continuation stack is typed under the expectation the callee will meet, and a
+positive loop depth has a loop marker in the stack. -/
 def FrameTyped (u : HirUnit) (f : Frame) : Prop :=
   FrameMatches u f ∧
-    StackTyped (frameCtx u f.kind) f.k (.ofOption f.expect) f.loopCtx
+    StackTyped (frameCtx u f.kind) f.k (.ofOption f.expect) f.loopCtx ∧
+    (f.loopCtx.depth > 0 → StackHasLoop f.k)
 
 /-- Every suspended frame is well typed. -/
 def FramesTailTyped (u : HirUnit) : List Frame → Prop
@@ -370,6 +372,8 @@ structure ConfigTyped (u : HirUnit) (s : State) : Prop where
   headFocus : ∀ f rest, s.frames = f :: rest → FocusTyped u f s.focus
   /-- The suspended frames are well typed. -/
   tailTyped : ∀ f rest, s.frames = f :: rest → FramesTailTyped u rest
+  /-- A positive loop depth has a loop marker in the running frame's stack. -/
+  headLoop : ∀ f rest, s.frames = f :: rest → f.loopCtx.depth > 0 → StackHasLoop f.k
 
 /-! ## Basic projections -/
 
@@ -864,7 +868,7 @@ theorem ConfigTyped.setVar {u : HirUnit} {s : State} {f : Frame} {rest : List Fr
       have hfr : (s.setVar (.param i) v).frames =
           { f with params := f.params.set i v } :: rest := by simp [State.setVar, hf]
       have hfocus : (s.setVar (.param i) v).focus = s.focus := by simp [State.setVar, hf]
-      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
       · simpa [State.setVar, hf] using hc.globals
       · rw [hfr]; exact FramesShape.updateHead hshape rfl
       · intro g gs hg
@@ -883,13 +887,18 @@ theorem ConfigTyped.setVar {u : HirUnit} {s : State} {f : Frame} {rest : List Fr
         simp only [List.cons.injEq] at hg
         rcases hg with ⟨rfl, rfl⟩
         exact hc.tailTyped f rest hf
+      · intro g gs hg hd
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        exact hc.headLoop f rest hf hd
   | «local» i =>
       have hm' : FrameMatches u { f with locals := f.locals.set i v } :=
         FrameMatches.setLocals (hc.headMatch f rest hf) hlookup hvwf
       have hfr : (s.setVar (.local i) v).frames =
           { f with locals := f.locals.set i v } :: rest := by simp [State.setVar, hf]
       have hfocus : (s.setVar (.local i) v).focus = s.focus := by simp [State.setVar, hf]
-      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
       · simpa [State.setVar, hf] using hc.globals
       · rw [hfr]; exact FramesShape.updateHead hshape rfl
       · intro g gs hg
@@ -908,13 +917,18 @@ theorem ConfigTyped.setVar {u : HirUnit} {s : State} {f : Frame} {rest : List Fr
         simp only [List.cons.injEq] at hg
         rcases hg with ⟨rfl, rfl⟩
         exact hc.tailTyped f rest hf
+      · intro g gs hg hd
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        exact hc.headLoop f rest hf hd
   | result =>
       have hm' : FrameMatches u { f with result := some v } :=
         FrameMatches.setResult (hc.headMatch f rest hf) hlookup hvwf
       have hfr : (s.setVar .result v).frames = { f with result := some v } :: rest := by
         simp [State.setVar, hf]
       have hfocus : (s.setVar .result v).focus = s.focus := by simp [State.setVar, hf]
-      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
       · simpa [State.setVar, hf] using hc.globals
       · rw [hfr]; exact FramesShape.updateHead hshape rfl
       · intro g gs hg
@@ -933,6 +947,11 @@ theorem ConfigTyped.setVar {u : HirUnit} {s : State} {f : Frame} {rest : List Fr
         simp only [List.cons.injEq] at hg
         rcases hg with ⟨rfl, rfl⟩
         exact hc.tailTyped f rest hf
+      · intro g gs hg hd
+        rw [hfr] at hg
+        simp only [List.cons.injEq] at hg
+        rcases hg with ⟨rfl, rfl⟩
+        exact hc.headLoop f rest hf hd
   | global i =>
       have hm := hc.headMatch f rest hf
       have hg' : GlobalsTyped u (s.globals.set i v) := by
@@ -953,7 +972,7 @@ theorem ConfigTyped.setVar {u : HirUnit} {s : State} {f : Frame} {rest : List Fr
             simp only [Env.ofUnit] at hlookup
             obtain ⟨g, hglob, hty⟩ := List.getElem?_map_eq_some hlookup
             exact GlobalsTyped.setGlobal hc.globals ⟨g, hglob, hty.symm⟩ hvwf
-      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
       · simpa [State.setVar, hf] using hg'
       · simpa [State.setVar, hf] using hc.shape
       · intro g gs hg
@@ -965,6 +984,9 @@ theorem ConfigTyped.setVar {u : HirUnit} {s : State} {f : Frame} {rest : List Fr
       · intro g gs hg
         have hgold : s.frames = g :: gs := by simpa [State.setVar, hf] using hg
         simpa [State.setVar, hf] using hc.tailTyped g gs hgold
+      · intro g gs hg hd
+        have hgold : s.frames = g :: gs := by simpa [State.setVar, hf] using hg
+        exact hc.headLoop g gs hgold hd
 
 /-- A binary operator's well-typedness forces equal operand types. -/
 theorem binaryWellTyped_eq {op : BinaryOp} {a b : Ty}
@@ -984,12 +1006,13 @@ configuration typing. -/
 theorem ConfigTyped.updateHeadFocus {u : HirUnit} {s : State} {f : Frame}
     {rest : List Frame} {focus : Focus} {k : List Cont}
     (hc : ConfigTyped u s) (hf : s.frames = f :: rest)
-    (hfocus : FocusTyped u { f with k := k } focus) :
+    (hfocus : FocusTyped u { f with k := k } focus)
+    (hloop : f.loopCtx.depth > 0 → StackHasLoop k) :
     ConfigTyped u { s with frames := { f with k := k } :: rest, focus := focus } := by
   have hshape : FramesShape (f :: rest) := by simpa [hf] using hc.shape
   have hframe : FrameMatches u { f with k := k } :=
     FrameMatches.updateK (hc.headMatch f rest hf)
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · simpa using hc.globals
   · exact FramesShape.updateHead hshape rfl
   · intro g gs hg
@@ -1004,6 +1027,216 @@ theorem ConfigTyped.updateHeadFocus {u : HirUnit} {s : State} {f : Frame}
     simp only [List.cons.injEq] at hg
     rcases hg with ⟨rfl, rfl⟩
     exact hc.tailTyped f rest hf
+  · intro g gs hg hd
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hloop hd
+
+/-- Replace the head frame and the focus, preserving configuration typing. -/
+theorem ConfigTyped.updateHeadFrame {u : HirUnit} {s : State} {f : Frame} {rest : List Frame}
+    {f' : Frame} {focus : Focus} (hc : ConfigTyped u s) (hf : s.frames = f :: rest)
+    (hframe : FrameMatches u f') (hfocus : FocusTyped u f' focus)
+    (hshape : FramesShape (f' :: rest))
+    (hloop : f'.loopCtx.depth > 0 → StackHasLoop f'.k) :
+    ConfigTyped u { s with frames := f' :: rest, focus := focus } := by
+  refine ⟨?_, hshape, ?_, ?_, ?_, ?_⟩
+  · simpa using hc.globals
+  · intro g gs hg
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hframe
+  · intro g gs hg
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hfocus
+  · intro g gs hg
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hc.tailTyped f rest hf
+  · intro g gs hg hd
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hloop hd
+
+/-- Replace the focus while keeping the frames, preserving configuration
+typing. -/
+theorem ConfigTyped.updateFocus {u : HirUnit} {s : State} {f : Frame} {rest : List Frame}
+    {focus : Focus} (hc : ConfigTyped u s) (hf : s.frames = f :: rest)
+    (hfocus : FocusTyped u f focus) :
+    ConfigTyped u { s with focus := focus } := by
+  have hshape : FramesShape (f :: rest) := by simpa [hf] using hc.shape
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa using hc.globals
+  · simpa using hc.shape
+  · intro g gs hg
+    have hg' : s.frames = g :: gs := by simpa using hg
+    simpa using hc.headMatch g gs hg'
+  · intro g gs hg
+    have hg' : s.frames = g :: gs := by simpa using hg
+    rw [hf] at hg'
+    simp only [List.cons.injEq] at hg'
+    rcases hg' with ⟨rfl, rfl⟩
+    simpa using hfocus
+  · intro g gs hg
+    have hg' : s.frames = g :: gs := by simpa using hg
+    simpa using hc.tailTyped g gs hg'
+  · intro g gs hg hd
+    have hg' : s.frames = g :: gs := by simpa using hg
+    exact hc.headLoop g gs hg' hd
+
+/-- `FrameMatches` ignores the caller expectation. -/
+theorem FrameMatches.updateExpect {u : HirUnit} {f : Frame} {e : Option Ty}
+    (h : FrameMatches u f) : FrameMatches u { f with expect := e } := by
+  cases hk : f.kind with
+  | program => simpa [FrameMatches, hk] using h
+  | function index => simpa [FrameMatches, hk] using h
+
+/-- A `Forall2` with an empty left list has an empty right list. -/
+theorem Forall2.nil_left {α β : Type} {R : α → β → Prop} {bs : List β}
+    (h : Forall2 R ([] : List α) bs) : bs = [] := by
+  cases h
+  rfl
+
+/-- Changing only a head frame's continuation stack preserves the shape. -/
+theorem FramesShape.updateHeadK {f : Frame} {rest : List Frame}
+    (h : FramesShape (f :: rest)) (k : List Cont) :
+    FramesShape ({ f with k := k } :: rest) :=
+  FramesShape.updateHead h rfl
+
+/-- Changing only a head frame's expectation preserves the shape. -/
+theorem FramesShape.updateHeadExpect {f : Frame} {rest : List Frame} {e : Option Ty}
+    (h : FramesShape (f :: rest)) :
+    FramesShape ({ f with expect := e } :: rest) :=
+  FramesShape.updateHead h rfl
+
+/-- Pushing a function frame preserves the call-stack shape. -/
+theorem FramesShape.push {callee caller : Frame} {rest : List Frame} {index : Nat}
+    (h : FramesShape (caller :: rest)) (hk : callee.kind = .function index) :
+    FramesShape (callee :: caller :: rest) :=
+  FramesShape.cons ⟨index, hk⟩ h
+
+/-- Push a callee frame above a suspended caller, preserving configuration
+typing. -/
+theorem ConfigTyped.pushFrame {u : HirUnit} {s : State} {f : Frame} {rest : List Frame}
+    {callee caller : Frame} {focus : Focus} (hc : ConfigTyped u s)
+    (hf : s.frames = f :: rest) (hcallee : FrameMatches u callee)
+    (hcaller : FrameTyped u caller) (hshape : FramesShape (callee :: caller :: rest))
+    (hfocus : FocusTyped u callee focus)
+    (hcalleeLoop : callee.loopCtx.depth > 0 → StackHasLoop callee.k) :
+    ConfigTyped u { s with frames := callee :: caller :: rest, focus := focus } := by
+  have htail : FramesTailTyped u rest := hc.tailTyped f rest hf
+  refine ⟨?_, hshape, ?_, ?_, ?_, ?_⟩
+  · simpa using hc.globals
+  · intro g gs hg
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hcallee
+  · intro g gs hg
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hfocus
+  · intro g gs hg
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact ⟨hcaller, htail⟩
+  · intro g gs hg hd
+    simp only [List.cons.injEq] at hg
+    rcases hg with ⟨rfl, rfl⟩
+    exact hcalleeLoop hd
+
+/-- `binaryResultTy` at equal operand types is the comparison result or the
+operand type. -/
+theorem binaryResultTy_eq (op : BinaryOp) (ty : Ty) :
+    binaryResultTy op ty ty = if op.isComparison then .bool else ty := by
+  cases op <;> rfl
+
+/-- Local initializer statements are typed when the context's local types match
+the declarations. -/
+theorem localInitStmtsFrom_typed {ctx : Ctx} (index : Nat) (locals : List Local)
+    (hlocals : ctx.locals.drop index = locals.map (·.ty))
+    (h : ∀ loc ∈ locals, ∀ expr, loc.init = some expr →
+      ExprHasType ctx expr loc.ty) :
+    StmtListHasType ctx 0 [] (localInitStmtsFrom index locals) := by
+  induction locals generalizing index with
+  | nil => simp [localInitStmtsFrom, StmtListHasType]
+  | cons loc rest ih =>
+      cases hinit : loc.init with
+      | none =>
+          simp only [localInitStmtsFrom, hinit, List.nil_append]
+          apply ih (index + 1)
+          · have h0 : ctx.locals.drop index = loc.ty :: rest.map (·.ty) := by
+              rw [hlocals, List.map_cons]
+            rw [← List.drop_drop (i := 1) (j := index), h0]
+            rfl
+          · intro loc' hmem expr hexpr
+            exact h loc' (List.mem_cons_of_mem _ hmem) expr hexpr
+      | some e =>
+          simp only [localInitStmtsFrom, hinit, List.singleton_append]
+          intro stmt hstmt
+          rcases List.mem_cons.mp hstmt with hhead | htail
+          · subst hhead
+            apply StmtHasType.assign
+            · simp
+            · simp only [Ctx.lookup]
+              have h0 : ctx.locals.drop index = loc.ty :: rest.map (·.ty) := by
+                rw [hlocals, List.map_cons]
+              have hget : ctx.locals[index]? = some loc.ty := by
+                have := congrArg (fun l => l[0]?) h0
+                simpa [List.getElem?_drop] using this
+              simpa using hget
+            · exact h loc (List.mem_cons_self ..) e hinit
+          · apply ih (index + 1)
+            · have h0 : ctx.locals.drop index = loc.ty :: rest.map (·.ty) := by
+                rw [hlocals, List.map_cons]
+              rw [← List.drop_drop (i := 1) (j := index), h0]
+              rfl
+            · intro loc' hmem expr hexpr
+              exact h loc' (List.mem_cons_of_mem _ hmem) expr hexpr
+            · exact htail
+
+/-- Global initializer statements are typed when the context's global types
+match the declarations. -/
+theorem globalInitStmtsFrom_typed {ctx : Ctx} (index : Nat) (globals : List Global)
+    (hglobals : ctx.globals.drop index = globals.map (·.ty))
+    (h : ∀ glob ∈ globals, ∀ expr, glob.init = some expr →
+      ExprHasType ctx expr glob.ty) :
+    StmtListHasType ctx 0 [] (globalInitStmtsFrom index globals) := by
+  induction globals generalizing index with
+  | nil => simp [globalInitStmtsFrom, StmtListHasType]
+  | cons glob rest ih =>
+      cases hinit : glob.init with
+      | none =>
+          simp only [globalInitStmtsFrom, hinit, List.nil_append]
+          apply ih (index + 1)
+          · have h0 : ctx.globals.drop index = glob.ty :: rest.map (·.ty) := by
+              rw [hglobals, List.map_cons]
+            rw [← List.drop_drop (i := 1) (j := index), h0]
+            rfl
+          · intro glob' hmem expr hexpr
+            exact h glob' (List.mem_cons_of_mem _ hmem) expr hexpr
+      | some e =>
+          simp only [globalInitStmtsFrom, hinit, List.singleton_append]
+          intro stmt hstmt
+          rcases List.mem_cons.mp hstmt with hhead | htail
+          · subst hhead
+            apply StmtHasType.assign
+            · simp
+            · simp only [Ctx.lookup]
+              have h0 : ctx.globals.drop index = glob.ty :: rest.map (·.ty) := by
+                rw [hglobals, List.map_cons]
+              have hget : ctx.globals[index]? = some glob.ty := by
+                have := congrArg (fun l => l[0]?) h0
+                simpa [List.getElem?_drop] using this
+              simpa using hget
+            · exact h glob (List.mem_cons_self ..) e hinit
+          · apply ih (index + 1)
+            · have h0 : ctx.globals.drop index = glob.ty :: rest.map (·.ty) := by
+                rw [hglobals, List.map_cons]
+              rw [← List.drop_drop (i := 1) (j := index), h0]
+              rfl
+            · intro glob' hmem expr hexpr
+              exact h glob' (List.mem_cons_of_mem _ hmem) expr hexpr
+            · exact htail
 
 /-- Pushing the first call argument preserves stack typing. -/
 theorem callArgsPush {ctx : Ctx} {callee : Callee} {arg : Expr} {more : List Expr}
@@ -1063,6 +1296,56 @@ theorem frameCtx_functions_lookup {u : HirUnit} {f : Frame} {index : Nat}
         exact frameCtx_functions_ofFunction hfn
   exact Env.ofUnit_functions_getElem? (by rwa [hctxf] at hsig)
 
+/-- A signature in a frame's context is the environment signature of a unit
+function. -/
+theorem frameCtx_functions_signature {u : HirUnit} {f : Frame} {index : Nat}
+    {sig : Signature} (hfm : FrameMatches u f)
+    (hsig : (frameCtx u f.kind).functions[index]? = some sig) :
+    ∃ fn, u.functions[index]? = some fn ∧
+      sig = ⟨fn.name, fn.params.map (·.ty), fn.resultType, fn.span⟩ := by
+  have hctxf : (frameCtx u f.kind).functions = (Env.ofUnit u).functions := by
+    cases hk : f.kind with
+    | program => simpa [hk] using frameCtx_functions_program u
+    | function i =>
+        simp only [FrameMatches, hk] at hfm
+        rcases hfm with ⟨fn, hfn, _⟩
+        exact frameCtx_functions_ofFunction hfn
+  have hsig' : (Env.ofUnit u).functions[index]? = some sig := by rwa [hctxf] at hsig
+  obtain ⟨fn, hfn⟩ := Env.ofUnit_functions_getElem? hsig'
+  have hsigfn : (Env.ofUnit u).functions[index]? =
+      some ⟨fn.name, fn.params.map (·.ty), fn.resultType, fn.span⟩ := by
+    simp [Env.ofUnit, hfn]
+  rw [hsigfn] at hsig'
+  cases hsig'
+  exact ⟨fn, hfn, rfl⟩
+
+/-- The frame built by `performCall` matches its function declaration. -/
+theorem calleeFrameMatches {u : HirUnit} {index : Nat} {fn : Function} {args : List Value}
+    (hfn : u.functions[index]? = some fn)
+    (hparamsLen : args.length = fn.params.length)
+    (hparams : ∀ (i : Nat) (v : Value), args[i]? = some v →
+      ∃ p : Param, fn.params[i]? = some p ∧ v.ty = p.ty ∧ v.WellFormed)
+    (hcore : FunctionWellFormed fn) :
+    FrameMatches u
+      { kind := .function index, params := args,
+        locals := fn.locals.map (fun l => Value.default l.ty),
+        result := fn.resultType.map Value.default, k := [], expect := none,
+        loopCtx := LoopCtx.top } := by
+  refine ⟨fn, hfn, hparamsLen, hparams, ?_, ?_, ?_⟩
+  · simp
+  · intro i v hv
+    obtain ⟨l, hl, hlv⟩ := List.getElem?_map_eq_some hv
+    refine ⟨l, hl, ?_, ?_⟩
+    · rw [← hlv]
+      rfl
+    · rw [← hlv]
+      exact Value.default_wellFormed (hcore.locals l (List.mem_of_getElem? hl))
+  · cases hrt : fn.resultType with
+    | none => simp [hrt]
+    | some ty =>
+        simp [hrt]
+        exact ⟨rfl, Value.default_wellFormed (hcore.result ty hrt)⟩
+
 /-- A typed expression focus never gets stuck. -/
 theorem stepExpr_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
     {e : Expr} (hf : c.frames = f :: rest) (hctx : ConfigTyped u c)
@@ -1101,6 +1384,164 @@ theorem stepExpr_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Fr
                   · cases hcallee
       | cons arg more => simp
   | cast operand to kind span => simp
+
+/-- A typed expression step preserves configuration typing. -/
+theorem stepExpr_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
+    {rest : List Frame} {e : Expr} (hunit : HasType u env) (hc : ConfigTyped u c)
+    (hf : c.frames = f :: rest) (he : FocusTyped u f (.expr e))
+    (hs : stepExpr u c e = .step c') : ConfigTyped u c' := by
+  have hfm := hc.headMatch f rest hf
+  simp only [FocusTyped] at he
+  rcases he with ⟨T, ht, hstack⟩
+  simp only [stepExpr, hf] at hs
+  cases e with
+  | literal lit span =>
+      cases hs
+      cases ht with
+      | literal hwf =>
+          rw [← hf]
+          apply ConfigTyped.updateFocus hc hf
+          exact ⟨Value.wellFormed_of (Literal.isCore_of_wellFormed hwf)
+              (Literal.holds_of_wellFormed hwf), lit.ty, rfl, hstack⟩
+  | var id span =>
+      cases ht with
+      | var hlookup =>
+          obtain ⟨v, hv, hvty, hvwf⟩ := ConfigTyped.lookupVar?_typed hc hf hlookup
+          simp only [hv] at hs
+          cases hs
+          rw [← hf]
+          apply ConfigTyped.updateFocus hc hf
+          exact ⟨hvwf, T, hvty, hstack⟩
+  | unary op operand span =>
+      cases hs
+      cases ht with
+      | unary hop hoperand =>
+          apply ConfigTyped.updateHeadFrame hc hf
+            (FrameMatches.updateK (hc.headMatch f rest hf))
+          · exact ⟨_, hoperand, StackTyped.unary hop hstack⟩
+          · exact FramesShape.updateHeadK (by simpa [hf] using hc.shape) _
+          · intro hd
+            exact Or.inr (hc.headLoop f rest hf hd)
+  | binary op lhs rhs span =>
+      cases hs
+      cases ht with
+      | binary hop hlhs hrhs =>
+          rename_i lhsTy rhsTy
+          have hty : lhsTy = rhsTy := binaryWellTyped_eq hop
+          have hrhs' : ExprHasType (frameCtx u f.kind) rhs lhsTy := by
+            rw [hty]; exact hrhs
+          apply ConfigTyped.updateHeadFrame hc hf
+            (FrameMatches.updateK (hc.headMatch f rest hf))
+          · change ∃ T, ExprHasType (frameCtx u f.kind) lhs T ∧
+                StackTyped (frameCtx u f.kind)
+                  (Cont.same (.binaryL op rhs) f.loopCtx span :: f.k) (.value T) f.loopCtx
+            refine ⟨lhsTy, hlhs, ?_⟩
+            rw [← hty] at hop
+            exact StackTyped.binaryL hrhs' hop rfl hstack
+          · exact FramesShape.updateHeadK (by simpa [hf] using hc.shape) _
+          · intro hd
+            exact Or.inr (hc.headLoop f rest hf hd)
+  | call callee args span =>
+      cases args with
+      | nil =>
+          cases callee with
+          | std fn sp =>
+              cases ht with
+              | call hcall =>
+                  rcases callHasType_cases hcall with
+                    ⟨idx, cspan, sig, hcallee, hsig, hres, hargs⟩ |
+                    ⟨fn, cspan, ty, hcallee, hres, hstd⟩
+                  · cases hcallee
+                  · rcases stdFnHasType_cases hstd with ⟨argTys, hargs, hres'⟩
+                    have hargTysNil : argTys = [] := Forall2.nil_left hargs
+                    rw [hargTysNil] at hres'
+                    cases fn <;> simp [stdResult?] at hres'
+          | function index sp =>
+              cases ht with
+              | call hcall =>
+                  rcases callHasType_cases hcall with
+                    ⟨idx, cspan, sig, hcallee, hsig, hres, hargs⟩ |
+                    ⟨fn, cspan, ty, hcallee, hres, hstd⟩
+                  · cases hcallee
+                    have hsigParamsNil : sig.params = [] := Forall2.nil_left hargs
+                    obtain ⟨fn, hfn, hsigEq⟩ :=
+                      frameCtx_functions_signature (hc.headMatch f rest hf) hsig
+                    rw [hsigEq] at hsigParamsNil
+                    have hparams : fn.params = [] := List.map_eq_nil_iff.mp hsigParamsNil
+                    have hresult : fn.resultType = some T := by
+                      rw [hsigEq] at hres
+                      exact hres.symm
+                    have hfnmem : fn ∈ u.functions := List.mem_of_getElem? hfn
+                    have hftyped : FunctionTyped (Env.ofUnit u) fn := by
+                      have := hunit.functions fn hfnmem
+                      rwa [hunit.env_eq] at this
+                    have hwell : FunctionWellFormed fn := hunit.wellformed.functions fn hfnmem
+                    have hcalleeMatch : FrameMatches u
+                        { kind := .function index, params := [],
+                          locals := fn.locals.map (fun l => Value.default l.ty),
+                          result := fn.resultType.map Value.default, k := [], expect := none,
+                          loopCtx := LoopCtx.top } := by
+                      apply calleeFrameMatches hfn
+                      · simp [hparams]
+                      · intro i v hv
+                        simp at hv
+                      · exact hwell
+                    have hcaller : FrameTyped u { f with expect := fn.resultType } := by
+                      refine ⟨FrameMatches.updateExpect hfm, ?_, hc.headLoop f rest hf⟩
+                      rw [hresult]
+                      simpa [Expect.ofOption] using hstack
+                    have hshape : FramesShape
+                        ({ kind := .function index, params := [],
+                           locals := fn.locals.map (fun l => Value.default l.ty),
+                           result := fn.resultType.map Value.default, k := [], expect := none,
+                           loopCtx := LoopCtx.top } :: { f with expect := fn.resultType } :: rest) := by
+                      apply FramesShape.push
+                      · exact FramesShape.updateHeadExpect (by simpa [hf] using hc.shape)
+                      · rfl
+                    have hfocus : FocusTyped u
+                        { kind := .function index, params := [],
+                          locals := fn.locals.map (fun l => Value.default l.ty),
+                          result := fn.resultType.map Value.default, k := [], expect := none,
+                          loopCtx := LoopCtx.top }
+                        (.stmts (localInitStmts fn.locals ++ fn.body) LoopCtx.top) := by
+                      refine ⟨rfl, StackTyped.nil rfl rfl, ?_, ?_⟩
+                      · rw [frameCtx_function hfn]
+                        intro stmt hmem
+                        rcases List.mem_append.mp hmem with hinit | hbody
+                        · have hlocals : StmtListHasType (Ctx.ofFunction (Env.ofUnit u) fn)
+                              0 [] (localInitStmts fn.locals) := by
+                            simpa [localInitStmts] using
+                              localInitStmtsFrom_typed 0 fn.locals rfl hftyped.1
+                          exact hlocals stmt hinit
+                        · exact hftyped.2 stmt hbody
+                      · intro hd
+                        simp [LoopCtx.top] at hd
+                    simp only [performCall, hfn, hf] at hs
+                    cases hs
+                    exact ConfigTyped.pushFrame hc hf hcalleeMatch hcaller hshape hfocus
+                      (by intro hd; simp [LoopCtx.top] at hd)
+                  · cases hcallee
+      | cons arg more =>
+          cases hs
+          cases ht with
+          | call hcall =>
+              rcases callArgsPush hcall hstack with ⟨t, harg, hstack'⟩
+              apply ConfigTyped.updateHeadFrame hc hf
+                (FrameMatches.updateK (hc.headMatch f rest hf))
+              · exact ⟨_, harg, hstack'⟩
+              · exact FramesShape.updateHeadK (by simpa [hf] using hc.shape) _
+              · intro hd
+                exact Or.inr (hc.headLoop f rest hf hd)
+  | cast operand to kind span =>
+      cases hs
+      cases ht with
+      | cast hoperand hconv hcore =>
+          apply ConfigTyped.updateHeadFrame hc hf
+            (FrameMatches.updateK (hc.headMatch f rest hf))
+          · exact ⟨_, hoperand, StackTyped.cast hconv hcore hstack⟩
+          · exact FramesShape.updateHeadK (by simpa [hf] using hc.shape) _
+          · intro hd
+            exact Or.inr (hc.headLoop f rest hf hd)
 
 /-- A typed value focus never gets stuck. -/
 theorem stepValue_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}

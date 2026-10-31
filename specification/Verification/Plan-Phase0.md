@@ -1098,13 +1098,13 @@ P0.3 resumed after the P0.4 review and CI. The open questions are resolved as fo
 | Q6 — negative signed exponent | Confirmed and implemented: `evalPow` traps `RANGE` for a signed negative exponent; constant evaluation rejects the constant case. |
 | Q7 — checkpoint policy | Commit the compiling work as WIP checkpoints on WL-3; the P0.4 commit is the first checkpoint. |
 
-`progress` is done. The remaining work is the rest of the §19.5 sequence: `preservation` and the
-store-update lemmas, initial-state typing, then `type_soundness`, the registry and semantics
-document updates, and the P0.3 review.
+`progress` is done. The remaining work is the rest of the §19.5 sequence: `preservation` (with
+the value/statement/resume/returned transitions), initial-state typing, then `type_soundness`,
+the registry and semantics document updates, and the P0.3 review.
 
 ### 19.9 Preservation checkpoint (2026-10-31)
 
-Preservation exposed three invariant gaps, now fixed:
+Preservation exposed five invariant gaps, now fixed:
 
 - `StackTyped.seq` carries `StmtListHasType` for the remaining statements, so
   resuming a statement list reconstructs a typed `.stmts` focus.
@@ -1114,11 +1114,20 @@ Preservation exposed three invariant gaps, now fixed:
 - The assignment branch of `stepValue` pops the assignment continuation before
   writing; previously the stack retained a value-consuming head and the next
   `resume` was stuck.
+- `StackTyped.forInit` and `StackTyped.forStop` require the stack below them to
+  expect a unit; the machine leaves a unit-expecting stack below the `FOR`
+  continuations, so the old value expectation was wrong.
+- `ConfigTyped.headLoop` and the `FrameTyped` loop field record that a positive
+  loop depth has a loop marker in the frame's stack. Choosing an `IF`/`CASE`/loop
+  body after an expression step reconstructs a typed `.stmts` focus from it.
 
 The store/frame lemmas (`ConfigTyped.setVar`, the `FrameMatches` updates,
-`GlobalsTyped.setGlobal`), the typed variable lookup, and `callArgsPush` are
-proved. Preservation itself remains open: the `performCall` frame construction,
-the value/statement/resume/returned transition cases, initial-state typing, and
+`GlobalsTyped.setGlobal`), the typed variable lookup, `callArgsPush`, the
+`ConfigTyped` transition helpers (`updateFocus`, `updateHeadFocus`,
+`updateHeadFrame`, `pushFrame`), the initializer-typing lemmas, the callee-frame
+construction, and `stepExpr_preserves` are proved. Preservation itself remains
+open: the value/statement/resume/returned transition cases (including the
+completed-argument `performCall` frame construction), initial-state typing, and
 `type_soundness` remain, followed by the review. `preservation` stays planned
 (P0-T09). No `sorry` remains in the tree.
 
