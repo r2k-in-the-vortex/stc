@@ -589,8 +589,60 @@ theorem ConfigTyped.lookupVar?_some {u : HirUnit} {s : State} {f : Frame}
           simp only [Ctx.ofProgram, Ctx.lookup] at h
           cases h
 
+/-! ## Progress support -/
 
+/-- A function signature in a frame's context resolves to a unit function. -/
+theorem frameCtx_functions_lookup {u : HirUnit} {f : Frame} {index : Nat}
+    {sig : Signature} (hfm : FrameMatches u f)
+    (hsig : (frameCtx u f.kind).functions[index]? = some sig) :
+    ∃ fn, u.functions[index]? = some fn := by
+  have hctxf : (frameCtx u f.kind).functions = (Env.ofUnit u).functions := by
+    cases hk : f.kind with
+    | program => simpa [hk] using frameCtx_functions_program u
+    | function i =>
+        simp only [FrameMatches, hk] at hfm
+        rcases hfm with ⟨fn, hfn, _⟩
+        exact frameCtx_functions_ofFunction hfn
+  exact Env.ofUnit_functions_getElem? (by rwa [hctxf] at hsig)
 
+/-- A typed expression focus never gets stuck. -/
+theorem stepExpr_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
+    {e : Expr} (hf : c.frames = f :: rest) (hctx : ConfigTyped u c)
+    (hfm : FrameMatches u f)
+    (h : ∃ T, ExprHasType (frameCtx u f.kind) e T ∧
+        StackTyped (frameCtx u f.kind) f.k (.value T) f.loopCtx) :
+    stepExpr u c e ≠ .stuck := by
+  simp only [stepExpr, hf]
+  cases e with
+  | literal lit span => simp
+  | var id span =>
+      rcases h with ⟨T, ht, _⟩
+      cases ht with
+      | var hlookup =>
+          obtain ⟨v, hv⟩ := ConfigTyped.lookupVar?_some hctx hf hlookup
+          simp [hv]
+  | unary op operand span => simp
+  | binary op lhs rhs span => simp
+  | call callee args span =>
+      cases args with
+      | nil =>
+          cases callee with
+          | std fn sp =>
+              simp only [performCall]
+              split <;> simp
+          | function index sp =>
+              rcases h with ⟨T, ht, _⟩
+              cases ht with
+              | call hcall =>
+                  rcases callHasType_cases hcall with
+                    ⟨idx, cspan, sig, hcallee, hsig, hres, hargs⟩ |
+                    ⟨fn, cspan, ty, hcallee, hres, hstd⟩
+                  · cases hcallee
+                    obtain ⟨fn, hfn⟩ := frameCtx_functions_lookup hfm hsig
+                    simp [performCall, hfn, hf]
+                  · cases hcallee
+      | cons arg more => simp
+  | cast operand to kind span => simp
 
 /-! ## Determinism -/
 
