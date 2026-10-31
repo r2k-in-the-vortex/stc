@@ -324,6 +324,12 @@ struct LoadedShim {
     api: Api,
 }
 
+// SAFETY: `LoadedShim` is used only through `&mut self`; moving it between
+// threads is safe because the dynamic library handle and resolved function
+// pointers are process-wide, and the shim never exposes Rust thread-local
+// state.
+unsafe impl Send for LoadedShim {}
+
 macro_rules! resolve_symbol {
     ($handle:expr, $name:literal, $type:ty) => {{
         let symbol = unsafe { dlsym($handle, concat!($name, "\0").as_ptr().cast::<c_char>()) };
@@ -802,7 +808,7 @@ struct SlaveStatus {
 ///
 /// The trait exists so lifecycle and policy can be tested without a master or
 /// a built shim; [`LoadedShim`] is the production implementation.
-trait EcShim {
+trait EcShim: Send {
     fn master_open(&mut self, master_index: u16) -> ShimResult<*mut c_void>;
     fn master_close(&mut self, master: *mut c_void) -> ShimResult<()>;
     fn domain_create(&mut self, master: *mut c_void) -> ShimResult<()>;
@@ -963,6 +969,12 @@ pub struct EthercatBackend {
     recoveries: u64,
     last_error_code: u32,
 }
+
+// SAFETY: the backend is used only through `&mut self`; the raw master and
+// domain pointers are owned by the shim for the active lifetime and are
+// process memory. Moving the backend between threads is safe as long as access
+// is not concurrent, which the coordinator guarantees.
+unsafe impl Send for EthercatBackend {}
 
 impl Default for EthercatBackend {
     fn default() -> Self {
@@ -1287,6 +1299,30 @@ impl DeviceBackend for EthercatBackend {
         self.status.clone()
     }
 
+    fn diagnostics(&self) -> BTreeMap<String, String> {
+        let mut values = BTreeMap::new();
+        values.insert(
+            "master.slaves_responding".into(),
+            self.snapshot.master.slaves_responding.to_string(),
+        );
+        values.insert(
+            "master.link_up".into(),
+            u8::from(self.snapshot.master.link_up).to_string(),
+        );
+        values.insert(
+            "domain.wc_state".into(),
+            self.snapshot.domain.wc_state.to_string(),
+        );
+        values.insert(
+            "domain.working_counter".into(),
+            self.snapshot.domain.working_counter.to_string(),
+        );
+        values.insert("input.stale".into(), u8::from(self.stale).to_string());
+        values.insert("master.recoveries".into(), self.recoveries.to_string());
+        values.insert("master.last_error".into(), self.last_error_code.to_string());
+        values
+    }
+
     fn shutdown(&mut self) -> Result<()> {
         let error = self.release_active();
         self.status.state = BackendState::Stopped;
@@ -1480,7 +1516,7 @@ fn build_active(
 fn wait_for_operational(shim: &mut dyn EcShim, active: &Active, timeout: Duration) -> Result<()> {
     let started = Instant::now();
     loop {
-        let result = shim
+        let received = shim
             .receive(active.master)
             .and_then(|()| shim.domain_process(active.master))
             .and_then(|()| {
@@ -1501,13 +1537,15 @@ fn wait_for_operational(shim: &mut dyn EcShim, active: &Active, timeout: Duratio
                     })
                 }
             });
+        // Queue and send the current domain on every attempt. The slave only
+        // advances PREOP -> SAFEOP -> OP when it receives process data; waiting
+        // without transmitting would never observe a healthy startup.
+        let sent = shim
+            .domain_queue(active.master)
+            .and_then(|()| shim.send(active.master));
+        let result = received.and(sent);
         match result {
-            Ok(()) => {
-                return shim
-                    .domain_queue(active.master)
-                    .and_then(|()| shim.send(active.master))
-                    .map_err(|error| Error::new(codes::ETH_STARTUP, error.message));
-            }
+            Ok(()) => return Ok(()),
             Err(error) => {
                 if started.elapsed() >= timeout {
                     return Err(Error::new(

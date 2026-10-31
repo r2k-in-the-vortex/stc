@@ -719,8 +719,8 @@ a second failure stops the sequence for a human decision.
 | --- | --- | --- | --- |
 | 0 — schema/contracts | Done | `63b8a7e` | [41177379223](https://github.com/r2k-in-the-vortex/stc/actions/runs/41177379223) — success |
 | 1 — backend surface, routing, mapping | Done | `d254583` | [41181242085](https://github.com/r2k-in-the-vortex/stc/actions/runs/41181242085) — success |
-| 2 — shim, lifecycle, CI build | In progress — human-authorized fourth attempt; anti-link script fix | `c2f8272` + pending fix | [41204656995](https://github.com/r2k-in-the-vortex/stc/actions/runs/41204656995) — failure |
-| 3 — HIL frame-level bring-up | Not started | — | — |
+| 2 — shim, lifecycle, CI build | Done | `c2f8272`, `eb2459c` | [41209155816](https://github.com/r2k-in-the-vortex/stc/actions/runs/41209155816) — success |
+| 3 — HIL frame-level bring-up | In progress | — | — |
 | 4 — software fault, recovery, status | Not started | — | — |
 | 5 — CT sweep, draft report | Not started | — | — |
 | 6 — harness, all manual tests, final report | Not started | — | — |
@@ -998,3 +998,4 @@ phase-0/1 defaults and do not change the scope.
 | 2026-10-31 | Owner authorized a third phase-2 attempt. Set `dc.assign-activate` to u16 (E-17), removed lost-frame/Tx-error channels from the PLC status block (E-14; `ethercat master` at run boundaries), and kept E-16 warnings profile-gated. |
 | 2026-10-31 | Phase 2 third run: the shim compiles and the loader/lifecycle tests pass; the anti-link step fails because it looks for `libstc_runtime-*.rlib` while a clean `cargo build -p stc-runtime` produces `libstc_runtime.rlib`. Human decision needed for a fourth attempt; suggested fix is to match `libstc_runtime*.rlib`. |
 | 2026-10-31 | Owner authorized a fourth phase-2 attempt; fix the anti-link script to match the unhashed runtime rlib and rerun CI. |
+| 2026-10-31 | Phase 2 complete: commits `c2f8272` and `eb2459c`, CI run 41209155816 green. Shim builds, loader/lifecycle tests pass, anti-link check passes. Phase 3 started: open-ended I/O frame-level bring-up on `ecat-host`. |

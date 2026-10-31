@@ -1,0 +1,250 @@
+# DIEWU EtherCAT-IO 16I/16O bench profile for open-ended HIL bring-up.
+#
+# The identity, sync/PDO tree, and channel map come from
+# `ethercat cstruct -p 0` on ecat-host (see WL-5.2-Plan.md §3.3 and
+# tests/ethercat/diewu/README.md). The vendor numbers its RxPDOs 0x1a00/0x1a01
+# and TxPDOs 0x1600/0x1601, which is reversed relative to the usual
+# convention; the map below is the device's actual mapping.
+#
+# DC is omitted: the SII has no AssignActivate value and the slave runs
+# free-run (plan decision E-17).
+
+[device.diewu]
+master = 0
+alias = 0
+position = 0
+vendor = "0x00000b95"
+product = "0x00010200"
+revision = 1
+startup-timeout = "10s"
+recovery-cycles = 3
+
+# SM0: output byte 0 (OUT0..OUT7), watchdog enabled.
+[[device.diewu.syncs]]
+index = 0
+direction = "output"
+watchdog = "enable"
+
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3101"
+subindex = 1
+bits = 8
+
+# SM1: output byte 1 (OUT8..OUT15), watchdog enabled.
+[[device.diewu.syncs]]
+index = 1
+direction = "output"
+watchdog = "enable"
+
+[[device.diewu.syncs.pdos]]
+index = "0x1a01"
+
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3101"
+subindex = 2
+bits = 8
+
+# SM2: input bytes 0 and 1 (IN0..IN15), watchdog disabled.
+[[device.diewu.syncs]]
+index = 2
+direction = "input"
+watchdog = "disable"
+
+[[device.diewu.syncs.pdos]]
+index = "0x1600"
+
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 1
+bits = 8
+
+[[device.diewu.syncs.pdos]]
+index = "0x1601"
+
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 2
+bits = 8
+
+# Channel map: IN0..IN7 are bits 0..7 of 0x3001:01, IN8..IN15 are bits 0..7 of
+# 0x3001:02. OUT0..OUT7 and OUT8..OUT15 mirror that on 0x3101:01/0x3101:02.
+
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 1 }
+bit = 0
+
+[[device.diewu.pdo-channels]]
+name = "IN1"
+entry = { index = "0x3001", subindex = 1 }
+bit = 1
+
+[[device.diewu.pdo-channels]]
+name = "IN2"
+entry = { index = "0x3001", subindex = 1 }
+bit = 2
+
+[[device.diewu.pdo-channels]]
+name = "IN3"
+entry = { index = "0x3001", subindex = 1 }
+bit = 3
+
+[[device.diewu.pdo-channels]]
+name = "IN4"
+entry = { index = "0x3001", subindex = 1 }
+bit = 4
+
+[[device.diewu.pdo-channels]]
+name = "IN5"
+entry = { index = "0x3001", subindex = 1 }
+bit = 5
+
+[[device.diewu.pdo-channels]]
+name = "IN6"
+entry = { index = "0x3001", subindex = 1 }
+bit = 6
+
+[[device.diewu.pdo-channels]]
+name = "IN7"
+entry = { index = "0x3001", subindex = 1 }
+bit = 7
+
+[[device.diewu.pdo-channels]]
+name = "IN8"
+entry = { index = "0x3001", subindex = 2 }
+bit = 0
+
+[[device.diewu.pdo-channels]]
+name = "IN9"
+entry = { index = "0x3001", subindex = 2 }
+bit = 1
+
+[[device.diewu.pdo-channels]]
+name = "IN10"
+entry = { index = "0x3001", subindex = 2 }
+bit = 2
+
+[[device.diewu.pdo-channels]]
+name = "IN11"
+entry = { index = "0x3001", subindex = 2 }
+bit = 3
+
+[[device.diewu.pdo-channels]]
+name = "IN12"
+entry = { index = "0x3001", subindex = 2 }
+bit = 4
+
+[[device.diewu.pdo-channels]]
+name = "IN13"
+entry = { index = "0x3001", subindex = 2 }
+bit = 5
+
+[[device.diewu.pdo-channels]]
+name = "IN14"
+entry = { index = "0x3001", subindex = 2 }
+bit = 6
+
+[[device.diewu.pdo-channels]]
+name = "IN15"
+entry = { index = "0x3001", subindex = 2 }
+bit = 7
+
+[[device.diewu.pdo-channels]]
+name = "OUT0"
+entry = { index = "0x3101", subindex = 1 }
+bit = 0
+
+[[device.diewu.pdo-channels]]
+name = "OUT1"
+entry = { index = "0x3101", subindex = 1 }
+bit = 1
+
+[[device.diewu.pdo-channels]]
+name = "OUT2"
+entry = { index = "0x3101", subindex = 1 }
+bit = 2
+
+[[device.diewu.pdo-channels]]
+name = "OUT3"
+entry = { index = "0x3101", subindex = 1 }
+bit = 3
+
+[[device.diewu.pdo-channels]]
+name = "OUT4"
+entry = { index = "0x3101", subindex = 1 }
+bit = 4
+
+[[device.diewu.pdo-channels]]
+name = "OUT5"
+entry = { index = "0x3101", subindex = 1 }
+bit = 5
+
+[[device.diewu.pdo-channels]]
+name = "OUT6"
+entry = { index = "0x3101", subindex = 1 }
+bit = 6
+
+[[device.diewu.pdo-channels]]
+name = "OUT7"
+entry = { index = "0x3101", subindex = 1 }
+bit = 7
+
+[[device.diewu.pdo-channels]]
+name = "OUT8"
+entry = { index = "0x3101", subindex = 2 }
+bit = 0
+
+[[device.diewu.pdo-channels]]
+name = "OUT9"
+entry = { index = "0x3101", subindex = 2 }
+bit = 1
+
+[[device.diewu.pdo-channels]]
+name = "OUT10"
+entry = { index = "0x3101", subindex = 2 }
+bit = 2
+
+[[device.diewu.pdo-channels]]
+name = "OUT11"
+entry = { index = "0x3101", subindex = 2 }
+bit = 3
+
+[[device.diewu.pdo-channels]]
+name = "OUT12"
+entry = { index = "0x3101", subindex = 2 }
+bit = 4
+
+[[device.diewu.pdo-channels]]
+name = "OUT13"
+entry = { index = "0x3101", subindex = 2 }
+bit = 5
+
+[[device.diewu.pdo-channels]]
+name = "OUT14"
+entry = { index = "0x3101", subindex = 2 }
+bit = 6
+
+[[device.diewu.pdo-channels]]
+name = "OUT15"
+entry = { index = "0x3101", subindex = 2 }
+bit = 7
+
+# Routes for the open-ended run:
+#  - IN15 passes through to OUT15 without involving the PLC program;
+#  - the PLC output Out0 drives OUT14 (PLC output -> physical output);
+#  - the PLC output Out1 drives Shadow1 through the buffered PLC -> PLC path
+#    (one-scan delay).
+[[routes]]
+source = { kind = "physical-input", device = "diewu", channel = "IN15" }
+sinks = [{ kind = "physical-output", device = "diewu", channel = "OUT15" }]
+
+[[routes]]
+source = { kind = "plc-output", variable = "Out0" }
+sinks = [{ kind = "physical-output", device = "diewu", channel = "OUT14" }]
+
+[[routes]]
+source = { kind = "plc-output", variable = "Out1" }
+sinks = [{ kind = "plc-input", variable = "Shadow1" }]

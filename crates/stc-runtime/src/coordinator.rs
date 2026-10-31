@@ -301,7 +301,7 @@ pub struct BackendConfig {
 ///
 /// No EtherCAT, Modbus, or other protocol type crosses this interface. The
 /// coordinator applies routes, never a backend.
-pub trait DeviceBackend {
+pub trait DeviceBackend: Send {
     /// Validates the configuration and enters the ready state.
     fn cold_start(&mut self, config: &BackendConfig) -> Result<()>;
     /// Writes the instance's bound `%I` ranges and status block.
@@ -310,6 +310,13 @@ pub trait DeviceBackend {
     fn publish_outputs(&mut self, image: &ProcessImage) -> Result<()>;
     /// Returns the per-backend status summary.
     fn status(&self) -> BackendStatus;
+    /// Returns backend-specific diagnostic values for operator status output.
+    ///
+    /// Keys are stable names such as `domain.wc_state`; a protocol that has no
+    /// extra values returns an empty map.
+    fn diagnostics(&self) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
     /// Stops exchanging and releases resources.
     fn shutdown(&mut self) -> Result<()>;
 }
@@ -344,6 +351,12 @@ impl BackendRegistry {
         let mut registry = Self::new();
         crate::backend_defaults::register_ethercat(&mut registry);
         registry
+    }
+
+    /// Returns `true` when `kind` resolves to a registered backend instance.
+    #[must_use]
+    pub fn contains_kind(&self, kind: &str) -> bool {
+        self.registrations.contains_key(kind)
     }
 
     /// Registers `kind` as served by `instance`.
@@ -421,6 +434,8 @@ pub struct BackendReport {
     pub last_fault: Option<String>,
     /// Configuration hash carried in the status (IO-Routing-and-Backends §7).
     pub config_hash: String,
+    /// Backend-specific diagnostic values.
+    pub diagnostics: BTreeMap<String, String>,
 }
 
 /// The multi-backend coordinator.
@@ -835,6 +850,15 @@ impl Coordinator {
         &self.config_hash
     }
 
+    /// Overrides the effective backend for unbound image areas.
+    ///
+    /// The host passes the CLI-selected backend so an explicit `--io`
+    /// override keeps its documented meaning when hardware devices are
+    /// present.
+    pub fn set_global_backend(&mut self, backend: IoBackend) {
+        self.global_backend = backend;
+    }
+
     /// Returns every backend's status summary in declaration order.
     #[must_use]
     pub fn reports(&self) -> Vec<BackendReport> {
@@ -852,6 +876,7 @@ impl Coordinator {
                     faults: status.faults.saturating_add(instance.faults),
                     last_fault: instance.last_fault.clone().or(status.last_fault),
                     config_hash: self.config_hash.clone(),
+                    diagnostics: instance.backend.diagnostics(),
                 }
             })
             .collect()

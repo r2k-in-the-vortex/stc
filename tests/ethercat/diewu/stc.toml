@@ -1,0 +1,532 @@
+schema = 1
+
+[package]
+name = "diewu-hil"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+configuration = "DiewuHil"
+
+[build]
+emit = ["module", "metadata"]
+
+[run]
+cycles = 0
+cycle-time = "1ms"
+
+[retain]
+enabled = false
+
+[io]
+backend = "ethercat"
+config = "io/bench.toml"
+
+[[io.devices]]
+name = "diewu"
+kind = "ethercat"
+
+  [[io.devices.channels]]
+  name = "IN0"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN1"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN2"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN3"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN4"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN5"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN6"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN7"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN8"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN9"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN10"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN11"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN12"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN13"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN14"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN15"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT0"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT1"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT2"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT3"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT4"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT5"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT6"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT7"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT8"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT9"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT10"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT11"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT12"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT13"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT14"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT15"
+  direction = "output"
+  width = 1
+
+[[io.devices]]
+name = "status"
+kind = "ethercat-status"
+config = { layout = 1 }
+
+  [[io.devices.channels]]
+  name = "master.phase"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "master.active"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "master.slaves_responding"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "master.link_up"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "master.last_error"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "master.recoveries"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "domain.wc_state"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "domain.working_counter"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "input.stale"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "cycle.exchanges"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "cycle.faults"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "slave0.al_state"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "slave0.online"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "slave0.operational"
+  direction = "input"
+  width = 1
+
+# Direct process-image bindings for the DIEWU channels. OUT14 and OUT15 are
+# deliberately routed instead: OUT14 is driven by PLC output Out0 and OUT15 is
+# an open-ended input-to-output pass-through.
+[[io.bindings]]
+variable = "In0"
+device = "diewu"
+channel = "IN0"
+direction = "input"
+
+[[io.bindings]]
+variable = "In1"
+device = "diewu"
+channel = "IN1"
+direction = "input"
+
+[[io.bindings]]
+variable = "In2"
+device = "diewu"
+channel = "IN2"
+direction = "input"
+
+[[io.bindings]]
+variable = "In3"
+device = "diewu"
+channel = "IN3"
+direction = "input"
+
+[[io.bindings]]
+variable = "In4"
+device = "diewu"
+channel = "IN4"
+direction = "input"
+
+[[io.bindings]]
+variable = "In5"
+device = "diewu"
+channel = "IN5"
+direction = "input"
+
+[[io.bindings]]
+variable = "In6"
+device = "diewu"
+channel = "IN6"
+direction = "input"
+
+[[io.bindings]]
+variable = "In7"
+device = "diewu"
+channel = "IN7"
+direction = "input"
+
+[[io.bindings]]
+variable = "In8"
+device = "diewu"
+channel = "IN8"
+direction = "input"
+
+[[io.bindings]]
+variable = "In9"
+device = "diewu"
+channel = "IN9"
+direction = "input"
+
+[[io.bindings]]
+variable = "In10"
+device = "diewu"
+channel = "IN10"
+direction = "input"
+
+[[io.bindings]]
+variable = "In11"
+device = "diewu"
+channel = "IN11"
+direction = "input"
+
+[[io.bindings]]
+variable = "In12"
+device = "diewu"
+channel = "IN12"
+direction = "input"
+
+[[io.bindings]]
+variable = "In13"
+device = "diewu"
+channel = "IN13"
+direction = "input"
+
+[[io.bindings]]
+variable = "In14"
+device = "diewu"
+channel = "IN14"
+direction = "input"
+
+[[io.bindings]]
+variable = "In15"
+device = "diewu"
+channel = "IN15"
+direction = "input"
+
+[[io.bindings]]
+variable = "Out0"
+device = "diewu"
+channel = "OUT0"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out1"
+device = "diewu"
+channel = "OUT1"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out2"
+device = "diewu"
+channel = "OUT2"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out3"
+device = "diewu"
+channel = "OUT3"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out4"
+device = "diewu"
+channel = "OUT4"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out5"
+device = "diewu"
+channel = "OUT5"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out6"
+device = "diewu"
+channel = "OUT6"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out7"
+device = "diewu"
+channel = "OUT7"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out8"
+device = "diewu"
+channel = "OUT8"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out9"
+device = "diewu"
+channel = "OUT9"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out10"
+device = "diewu"
+channel = "OUT10"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out11"
+device = "diewu"
+channel = "OUT11"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out12"
+device = "diewu"
+channel = "OUT12"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out13"
+device = "diewu"
+channel = "OUT13"
+direction = "output"
+
+# Status-device bindings. The runtime fills these from the live master and
+# domain state at the input boundary, before the program runs.
+[[io.bindings]]
+variable = "StatusPhase"
+device = "status"
+channel = "master.phase"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusMasterActive"
+device = "status"
+channel = "master.active"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusSlavesResponding"
+device = "status"
+channel = "master.slaves_responding"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusLinkUp"
+device = "status"
+channel = "master.link_up"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusLastError"
+device = "status"
+channel = "master.last_error"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusRecoveries"
+device = "status"
+channel = "master.recoveries"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusWcState"
+device = "status"
+channel = "domain.wc_state"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusWorkingCounter"
+device = "status"
+channel = "domain.working_counter"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusInputStale"
+device = "status"
+channel = "input.stale"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusExchanges"
+device = "status"
+channel = "cycle.exchanges"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusFaults"
+device = "status"
+channel = "cycle.faults"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusSlaveAlState"
+device = "status"
+channel = "slave0.al_state"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusSlaveOnline"
+device = "status"
+channel = "slave0.online"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusSlaveOperational"
+device = "status"
+channel = "slave0.operational"
+direction = "input"

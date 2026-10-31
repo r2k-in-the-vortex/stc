@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::coordinator::Coordinator;
 use crate::module_info::{ImageLayout, ModuleInfo};
 use crate::run::IoBackend;
 use crate::state;
@@ -207,6 +208,67 @@ impl IoRuntime {
                     area.copy_from_slice(&latched);
                 });
             }
+        }
+    }
+
+    /// Latches inputs through a hardware coordinator.
+    ///
+    /// The coordinator owns the backend-facing process image. The host image
+    /// seeds it with any host-supplied or default input values, the backend
+    /// and routes update it, and the result is copied back so the module scans
+    /// the same values. This keeps the `memory` backend's host-supplied inputs
+    /// intact and preserves the `null`/hardware backend's default behavior.
+    pub fn latch_inputs_with(&mut self, coordinator: &mut Coordinator) {
+        let inputs = usize::try_from(self.layout.inputs_bytes).unwrap_or(0);
+        if inputs > 0 {
+            crate::image_with(|image| {
+                if let Some(area) = coordinator.image_mut().area_bytes_mut(1) {
+                    let count = area.len().min(inputs).min(image.len());
+                    area[..count].copy_from_slice(&image[..count]);
+                }
+            });
+        }
+        coordinator.input_boundary();
+        if inputs > 0 {
+            crate::image_with(|image| {
+                if let Some(area) = coordinator.image().area_bytes(1) {
+                    let count = area.len().min(inputs).min(image.len());
+                    image[..count].copy_from_slice(&area[..count]);
+                }
+            });
+        }
+    }
+
+    /// Publishes outputs through a hardware coordinator.
+    ///
+    /// The module's output image is copied into the coordinator image so
+    /// PLC-output routes and bound channels see this scan's values. Publication
+    /// then runs even when the scan failed, which keeps a fieldbus watchdog
+    /// fed; the returned image preserves the coordinator's output behavior
+    /// (unbound outputs are cleared only under the null/hardware default).
+    pub fn publish_outputs_with(&mut self, coordinator: &mut Coordinator) {
+        let inputs = usize::try_from(self.layout.inputs_bytes).unwrap_or(0);
+        let outputs = usize::try_from(self.layout.outputs_bytes).unwrap_or(0);
+        if outputs > 0 {
+            crate::image_with(|image| {
+                let start = inputs.min(image.len());
+                let end = start.saturating_add(outputs).min(image.len());
+                if let Some(area) = coordinator.image_mut().area_bytes_mut(2) {
+                    let count = area.len().min(end - start);
+                    area[..count].copy_from_slice(&image[start..start + count]);
+                }
+            });
+        }
+        coordinator.after_scan();
+        if outputs > 0 {
+            crate::image_with(|image| {
+                let start = inputs.min(image.len());
+                let end = start.saturating_add(outputs).min(image.len());
+                if let Some(area) = coordinator.image().area_bytes(2) {
+                    let count = area.len().min(end - start);
+                    image[start..start + count].copy_from_slice(&area[..count]);
+                }
+            });
         }
     }
 

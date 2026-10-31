@@ -627,6 +627,7 @@ pub struct Host {
     scheduler: TaskScheduler,
     retain: RetainConfig,
     io: crate::io::IoRuntime,
+    coordinator: Option<crate::coordinator::Coordinator>,
     debug: DebugEngine,
     debug_server: Option<DebugServer>,
 }
@@ -658,6 +659,7 @@ impl Host {
             scheduler: TaskScheduler::default(),
             retain: RetainConfig::default(),
             io: crate::io::IoRuntime::default(),
+            coordinator: None,
             debug: DebugEngine::new(),
             debug_server: None,
         }
@@ -675,6 +677,18 @@ impl Host {
     #[must_use]
     pub fn io_runtime(&self) -> &crate::io::IoRuntime {
         &self.io
+    }
+
+    /// Returns every hardware backend's status summary.
+    ///
+    /// When the run has no hardware devices this is empty and the
+    /// process-image backend remains the only I/O state.
+    #[must_use]
+    pub fn io_reports(&self) -> Vec<crate::coordinator::BackendReport> {
+        self.coordinator
+            .as_ref()
+            .map(crate::coordinator::Coordinator::reports)
+            .unwrap_or_default()
     }
 
     /// Configures file-backed retained state for subsequent loads and the
@@ -1399,6 +1413,37 @@ impl Host {
         Ok(())
     }
 
+    /// Applies the input boundary, through the coordinator when hardware
+    /// backends are active.
+    fn latch_inputs(&mut self) {
+        if let Some(coordinator) = self.coordinator.as_mut() {
+            self.io.latch_inputs_with(coordinator);
+        } else {
+            self.io.latch_inputs();
+        }
+    }
+
+    /// Publishes outputs after a successful cycle attempt.
+    fn publish_outputs(&mut self) {
+        if let Some(coordinator) = self.coordinator.as_mut() {
+            self.io.publish_outputs_with(coordinator);
+        } else {
+            self.io.publish_outputs();
+        }
+    }
+
+    /// Publishes outputs after a failed or rolled-back cycle attempt.
+    ///
+    /// The null, memory, and file backends keep their existing behavior and do
+    /// not publish on failure. A hardware coordinator still queues and sends
+    /// the frame so the fieldbus watchdog sees a cycle (IO-Routing-and-
+    /// Backends §4.3 step 3).
+    fn publish_outputs_on_failure(&mut self) {
+        if let Some(coordinator) = self.coordinator.as_mut() {
+            self.io.publish_outputs_with(coordinator);
+        }
+    }
+
     /// Recomputes the active generation's direct cell addresses after the
     /// process image was restored by a failed cold install.
     fn restore_direct_bindings(&mut self, fallback: BTreeMap<GotId, usize>) {
@@ -1926,9 +1971,24 @@ impl Host {
         let previous_io = self.io.clone();
         let image = candidate.info().map(|_| crate::image_snapshot());
         let generation_id = allocate_generation();
+        // A cold install reconfigures the process image and the device tree.
+        // Stop any active hardware coordinator first; the new generation may
+        // need the master, and a cold install is an explicit deployment stop.
+        // The backend never rewrites outputs while shutting down.
+        if let Some(mut coordinator) = self.coordinator.take() {
+            let _ = coordinator.shutdown();
+        }
         self.last_candidate = Some(generation_id);
         self.install_state_service(None);
-        let prepared = (|| -> Result<(Generation, RootRegistry, DescriptorRegistry, PreparedDescriptors, TaskScheduler)> {
+        let prepared = (|| -> Result<(
+            Generation,
+            RootRegistry,
+            DescriptorRegistry,
+            PreparedDescriptors,
+            TaskScheduler,
+            Option<crate::coordinator::Coordinator>,
+        )> {
+            let coordinator_info = candidate.info().cloned();
             if let Some(info) = candidate.info() {
                 let module_dir = candidate.module_dir().to_path_buf();
                 self.apply_info(info, &module_dir)?;
@@ -1959,12 +2019,38 @@ impl Host {
                 return Err(Error::new(failure.code, failure.message));
             }
             self.io.cold_start();
+            // Hardware devices need the coordinator even when the effective
+            // global backend is null or memory. A project with no registered
+            // device kinds keeps the pre-coordinator process-image behavior.
+            let registry = crate::coordinator::BackendRegistry::with_defaults();
+            let coordinator = match coordinator_info.as_ref() {
+                Some(info)
+                    if info
+                        .devices
+                        .iter()
+                        .any(|device| registry.contains_kind(&device.kind)) =>
+                {
+                    let mut coordinator =
+                        crate::coordinator::Coordinator::cold_start(info, &registry)?;
+                    coordinator.set_global_backend(self.io.backend());
+                    Some(coordinator)
+                }
+                _ => None,
+            };
             let scheduler = TaskScheduler::from_manifest(&generation.manifest)?;
             let stored = StoredManifest::new(generation.manifest.clone())?;
             self.store.install(stored)?;
-            Ok((generation, roots, descriptors, prepared, scheduler))
+            Ok((
+                generation,
+                roots,
+                descriptors,
+                prepared,
+                scheduler,
+                coordinator,
+            ))
         })();
-        let (generation, roots, mut descriptors, prepared, scheduler) = match prepared {
+        let (generation, roots, mut descriptors, prepared, scheduler, coordinator) = match prepared
+        {
             Ok(prepared) => prepared,
             Err(error) => {
                 if let Some(image) = image {
@@ -2013,6 +2099,7 @@ impl Host {
         );
         crate::stop::abort_session();
         self.scheduler = scheduler;
+        self.coordinator = coordinator;
         self.last_rollback = None;
         self.last_warnings.clear();
         self.collect_state_notices();
@@ -2352,11 +2439,12 @@ impl Host {
         self.debug_pump_at(now_ns);
         // Inputs are latched once, then every due task runs against the same
         // image; outputs publish after the cycle (IO §6.3).
-        self.io.latch_inputs();
+        self.latch_inputs();
         self.debug_apply_input_forces();
         self.scheduler.begin_scan(now_ns);
         if let Err(error) = self.write_task_guards() {
             self.scheduler.finish_scan(false);
+            self.publish_outputs_on_failure();
             return Err(error);
         }
         let outcome = {
@@ -2397,6 +2485,9 @@ impl Host {
             Ok(code) => code,
             Err(trap) => {
                 self.scheduler.finish_scan(false);
+                // A failed cycle still queues and sends the last output image
+                // for hardware backends (IO-Routing-and-Backends §4.3 step 3).
+                self.publish_outputs_on_failure();
                 let reason = format!(
                     "module trapped during cycle (code {} at span {})",
                     trap.code, trap.span_id
@@ -2410,6 +2501,7 @@ impl Host {
         };
         if code != 0 || !faults.is_empty() {
             self.scheduler.finish_scan(false);
+            self.publish_outputs_on_failure();
             let reason = if faults.is_empty() {
                 format!("stc_module_cycle returned {code}")
             } else {
@@ -2425,7 +2517,7 @@ impl Host {
         // active forces then win over those writes. Both are complete before
         // outputs publish, so an output write/force is visible this cycle.
         self.debug_apply_queue_and_forces();
-        self.io.publish_outputs();
+        self.publish_outputs();
         self.scheduler.finish_scan(true);
         if let Some(active) = self.active.as_mut() {
             active.cycles = active.cycles.saturating_add(1);
@@ -2640,9 +2732,20 @@ impl Host {
         let save_generation = self.active.as_ref().map(|generation| generation.id);
         self.install_state_service(save_generation);
         let io_error = self.io.flush_output();
+        // Stop hardware backends in reverse declaration order and release the
+        // master without rewriting outputs. The slave watchdog handles the
+        // stopped frames (IO-Routing-and-Backends §4.3 step 4).
+        let coordinator_error = self
+            .coordinator
+            .as_mut()
+            .and_then(|coordinator| coordinator.shutdown().err());
+        self.coordinator = None;
         self.collect_io_notices();
         let mut first_error =
             debug_error.or_else(|| io_error.map(|message| Error::new("STC-E-RUN-IO-001", message)));
+        if let Some(error) = coordinator_error {
+            first_error.get_or_insert(error);
+        }
         if let Some(error) = self.abort_pending().err() {
             first_error.get_or_insert(error);
         }

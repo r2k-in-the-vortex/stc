@@ -712,6 +712,29 @@ fn print_host_status(host: &Host) {
         .file()
         .map_or_else(String::new, |file| format!(" file={}", file.display()));
     eprintln!("stc: status: io {}{io_file}", io.backend().name());
+    for report in host.io_reports() {
+        let details = report
+            .diagnostics
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let fault = report
+            .last_fault
+            .as_deref()
+            .map_or_else(String::new, |fault| format!(" last-fault={fault}"));
+        eprintln!(
+            "stc: status: io-backend {} devices={} state={} exchanges={} faults={} \
+             hash={}{fault}{}{details}",
+            report.name,
+            report.devices,
+            report.state.as_str(),
+            report.exchanges,
+            report.faults,
+            report.config_hash,
+            if details.is_empty() { "" } else { " " },
+        );
+    }
     let retain = host.retain_config();
     eprintln!(
         "stc: status: retain {} policy {}{}",

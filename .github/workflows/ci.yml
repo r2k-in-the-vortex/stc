@@ -733,6 +733,12 @@ jobs:
             echo "::error::stc-runtime references IgH ecrt symbols"
             exit 1
           fi
+      - name: Upload the Linux x86-64 shim
+        uses: actions/upload-artifact@v7
+        with:
+          name: stc-io-ethercat-linux-x86_64
+          path: ${{ runner.temp }}/stc-ec-shim/libstc_io_ethercat.so
+          if-no-files-found: error
 
   # The release package is built and verified on every native host. The job
   # also exercises the unpacked layout: `bin/stc` must find the runtime in
