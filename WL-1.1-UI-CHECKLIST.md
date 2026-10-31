@@ -10,7 +10,7 @@ Compiler: the binary `stc.path` points at; use the latest debug or a rebuilt rel
 Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **N/A** =
 unsupported or intentionally out of scope.
 
-Summary 2026-10-31: 40/40 entries evaluated — 38 pass (95%), items 12 and 33 fail. The
+Summary 2026-10-31: 40/40 entries evaluated — 39 pass (97.5%), item 12 fails. The
 required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 
 ## 0. Prerequisites
@@ -204,13 +204,13 @@ required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan
         condition with no error at creation; at launch VS Code warns that this breakpoint type is
         not supported by the debugger and the breakpoint stops unconditionally. The condition is
         not applied, but the unsupported action is reported rather than silently honored.
-33. [ ] **Release monitoring-only.** FAIL 2026-10-30: with `"release": true`, the session builds
-        release and starts (no breakpoints, stepping, or Locals), and reports
-        "stopped-frame information is unavailable, so there is no Locals scope". But Variables
-        shows no Globals, Watch reports values unavailable, `pause` fails with
-        `STC-E-DEBUG-014`, and F10/F11 report the target is not stopped. Typed reads do work while
-        running (verified with `stc debug --release`: `INCREMENT = 1` via `var.read`), but the
-        IDE exposes no monitoring surface. Recorded as follow-up **F-16**.
+33. [x] **Release monitoring-only.** Pass 2026-10-31 after F-16: with `"release": true`, the
+        session builds release, starts, and reports the monitoring-only path in the Debug Console.
+        Variables/Watch remain unavailable while running because VS Code only requests stack/scopes
+        after a stop; the accepted surface is Debug Console evaluation of Globals and target paths.
+        `INCREMENT` returns `1`, pause returns a clear monitoring-only message rather than
+        `STC-E-DEBUG-014`, and no Locals/breakpoints/stepping are offered. Target paths use manifest
+        keys (`SAMPLE::TOTAL` for the sample global, not `MAIN.TOTAL`).
 
 ## E. Safety and limits
 
@@ -375,10 +375,34 @@ Completed findings are feature history, not open follow-ups. The close-out triag
       Manual verification 2026-10-31 passed: `MAIN` only at line 39; `ADDSTEP` above `MAIN` at
       line 19; no host frames; caller `MAIN`, Locals, scopes, and stepping still work.
 
+- [x] **F-16 — Release monitoring has no IDE surface.** Pass 2026-10-31. Required for WL-1.1
+      (plan §12.1). With `"release": true`, the session starts and warns that stopped-frame information is unavailable, but `stackTrace` fails
+      (`STC-E-DEBUG-017`), so `scopes`/`variables` have no frame, Variables shows no Globals, and
+      Watch expressions stay unavailable; `pause` fails with `STC-E-DEBUG-014`. Typed monitoring
+      reads do work while running (`stc debug --release` read `INCREMENT = 1` via `var.read`, and
+      the Debug Console can evaluate target names), but the IDE exposes no monitoring view.
+      Provide a surface — a synthetic running/monitoring frame with the Globals scope, a polling
+      monitor view, or documented Debug-Console-only reads — and make the session-start message
+      name the available monitoring path. Acceptance: a release session can observe globals from
+      the IDE without breakpoints.
+      **Pass 2026-10-31.** Owner selected documented Debug-Console-only reads on 2026-10-31. The
+      adapter identifies monitoring-only sessions from the runtime's `hooks`/`checkpoints`
+      capabilities, returns one synthetic `monitoring` frame with the Globals scope, allows
+      `scopes`/`variables`/`evaluate` while the release host runs, and returns a clear
+      monitoring-only pause error instead of `STC-E-DEBUG-014`. The session-start message names
+      Globals, evaluate, and the Debug Console. VS Code's built-in Variables and Watch panes only
+      request stack/scopes after a `stopped` event, so they remain unavailable while running; the
+      accepted IDE path is Debug Console evaluation of visible Globals and target paths. No fake
+      stopped event is sent. Implementation `d0abb12`; CI run `41234800343` green (38 jobs).
+      Manual release-mode verification 2026-10-31 passed: the monitoring-only message and
+      `INCREMENT = 1` work in the Debug Console; pause returns the monitoring-only message; no
+      Variables/Watch/Locals, breakpoints, or stepping are offered. Target paths use manifest
+      keys (`SAMPLE::TOTAL` for the sample global, not `MAIN.TOTAL`).
+
 ### Required for WL-1.1
 
 These items are open and required for WL-1.1 (plan §12.1); F-1.1 is an implementation task, while
-F-3 and F-16 are close-out fixes.
+F-3 is the remaining close-out fix.
 
 - [ ] **F-1.1 — Default-theme ST token-color overlay.** Required for WL-1.1 (plan §12.1).
       F-1 ships `stc Dark`/`stc Light`, so the intended palette requires selecting a contributed
@@ -396,17 +420,6 @@ F-3 and F-16 are close-out fixes.
       driver-side Windows job object/signal handler that kills the launcher). Acceptance: after
       terminating the task, `Get-Process stc,sample` shows no run driver or host; the language
       server may remain.
-
-- [ ] **F-16 — Release monitoring has no IDE surface.** Required for WL-1.1; implementation chosen (plan §12.1). With `"release": true`, the session
-      starts and warns that stopped-frame information is unavailable, but `stackTrace` fails
-      (`STC-E-DEBUG-017`), so `scopes`/`variables` have no frame, Variables shows no Globals, and
-      Watch expressions stay unavailable; `pause` fails with `STC-E-DEBUG-014`. Typed monitoring
-      reads do work while running (`stc debug --release` read `INCREMENT = 1` via `var.read`, and
-      the Debug Console can evaluate target names), but the IDE exposes no monitoring view.
-      Provide a surface — a synthetic running/monitoring frame with the Globals scope, a polling
-      monitor view, or documented Debug-Console-only reads — and make the session-start message
-      name the available monitoring path. Acceptance: a release session can observe globals from
-      the IDE without breakpoints.
 
 ### Deferred follow-ups
 
@@ -529,7 +542,7 @@ not a WL-1.1 code change.
 | 30 | Pass | Session stops, host exits, relaunch stops at line 39; terminate is silent (F-15) |
 | 31 | Pass | Attach via `stc: run` debug server connects; disconnect leaves host running |
 | 32 | Pass | Conditional breakpoint accepted; launch warns unsupported and stops unconditionally |
-| 33 | Fail (monitoring) | Release starts/warns, but Variables/Watch cannot monitor; typed reads work only over the wire (F-16) |
+| 33 | Pass | Pass 2026-10-31 (F-16): monitoring-only message names Debug Console; `INCREMENT = 1`; clear pause error; no fake stop; target paths use manifest keys (`SAMPLE::TOTAL`, not `MAIN.TOTAL`) |
 | 34 | Pass | Non-safety notice shown verbatim at every session start; no safety claims in the UI |
 | 35 | Pass | Local schema only; `stc lsp` is stdio with no TCP listeners; endpoint files are local |
 | 36 | Pass | Unsupported actions absent or honestly rejected; restart is a client relaunch |
@@ -548,6 +561,7 @@ not a WL-1.1 code change.
 | F-20 | Pass | Manual 2026-10-31: start at gen 1, attach at gen 2, saved edit deployed gen 3, session ended with `STC-E-DEBUG-019`; commands/status/channel/swap evidence; commit `fd8c69e`, CI `41201150443` green |
 | F-6 | Pass | Manual 2026-10-31: removal while stopped/running clears host IDs; re-add works without restart; normal/`\\?\` spellings share one key; commit `dfda944`, CI `41209918428` green |
 | F-12 | Pass | Manual 2026-10-31: Main stop lists only `MAIN`; AddStep lists `ADDSTEP` above `MAIN`; no host frames; caller/scopes/Locals/stepping work; commit `68ecbfc`, CI `41212737785` green |
+| F-16 | Pass | Manual 2026-10-31: Debug-Console-only monitoring accepted; monitoring-only message, `INCREMENT = 1`, clear pause error, no fake stop; target paths use manifest keys; commit `d0abb12`, CI `41234800343` green |
 
 ### Required items
 
@@ -555,7 +569,6 @@ not a WL-1.1 code change.
 | --- | --- | --- |
 | F-1.1 | Required; pending | Default-theme ST token overlay; acceptance wording owner-approved 2026-10-31; plan §12.1 |
 | F-3 | Pending | Task termination does not stop the driver/host process tree |
-| F-16 | Pending | Release monitoring has no IDE surface; typed reads work only over the wire |
 
 ### Deferred follow-ups
 

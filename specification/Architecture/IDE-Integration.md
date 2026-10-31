@@ -301,7 +301,13 @@ adapter session per launch.
 
 - One debug session per host; a second session fails until the first ends.
 - Every online swap ends the session; reconnect and re-resolve.
-- Release and hook-free builds are monitoring-only: no breakpoints, stepping, or Locals.
+- Release and hook-free builds are monitoring-only: no breakpoints, stepping, or Locals. The
+  accepted monitoring path is the Debug Console: evaluate visible Globals and target paths while
+  the host runs. The adapter also exposes one synthetic `monitoring` frame with the Globals scope
+  over DAP, but VS Code's built-in Variables and Watch panes only request a stack after a
+  `stopped` event and therefore remain unavailable while the release host is running.
+  `evaluate` accepts a manifest key, not a source-language path: the sample global `TOTAL` is
+  `SAMPLE::TOTAL`, not `MAIN.TOTAL`.
 - Local names are uppercase normalized spellings from the stopped-frame metadata.
 - Caller frames and optimized-out functions report unavailable information honestly.
 - `evaluate` does not parse ST expressions.

@@ -49,7 +49,7 @@ machine design as required by law and regulation.
 | One debug session per host | Stop the current session before starting another |
 | Starting a session does not stop the cycle; a stop/step/breakpoint holds outputs | The 5-minute default stop/idle bound resumes the cycle and ends the session; this is not a fail-safe timeout |
 | Every swap, rollback, cold install, shutdown, or target exit ends the session and clears forces/breakpoints; queued writes/forces are rejected | Reconnect after the generation change |
-| Release builds are monitoring-only | Use a debug build for breakpoints, stepping, and full locals |
+| Release builds are monitoring-only | Use a debug build for breakpoints, stepping, and full locals; monitor live Globals from the Debug Console |
 | Caller frames have no source location; caller locals appear only where the stopped-frame sidecar has a whole-function live range | Only the top frame has a checkpoint source binding; unavailable values are reported honestly, never reconstructed |
 | Frame extraction covers x86-64 Windows MSVC, x86-64 Linux, and AArch64 Linux and needs `llvm-readobj` or `readelf` at build time | Without a usable sidecar, `stack.list`/`frame.read` report `STC-E-DEBUG-017`; functions compiled without a frame pointer are reported as optimized-out callers; module loading and typed monitoring still work |
 | Windows ships object-level CodeView (COFF `.debug$S`/`.debug$T`); there is no PDB and no DLL-level CodeView claim | Use the object (or external inspection) for source-level analysis; the runtime uses build-time sidecars, not DWARF/CodeView |
@@ -65,7 +65,7 @@ machine design as required by law and regulation.
 | The VS Code extension and both servers are local only | No remote/network IDE access, remote source mapping, or remote attachments (WL-1.2); debug uses the local authenticated endpoint |
 | There is one debug session per host and one adapter session per launch | Stop the current session before starting another; a second session fails honestly |
 | Every online swap, rollback, cold install, shutdown, or target exit ends the editor session; breakpoints, forces, and watches do not migrate | Reconnect after the generation change and re-resolve targets |
-| Release and hook-free builds are monitoring-only | No breakpoints, stepping, or Locals scope; use a debug build for a full session |
+| Release and hook-free builds are monitoring-only | No breakpoints, stepping, or Locals scope; use the Debug Console for live Globals and target paths, and a debug build for a full session |
 | Local names appear in the frame table's uppercase normalized spelling; the source spelling is not retained | Read the uppercase name shown in the Locals scope |
 | `evaluate` and watches accept a stopped-frame local name or a manifest target path, not an ST expression | Use a target path such as `MAIN.COUNTER`; `1 + 2` and conditions are rejected |
 | Locals requires a `stc-debug/1.1` host with stopped-frame information | A `stc-debug/1`-only host or a build without frame metadata has no Locals scope; Globals and typed monitoring still work |

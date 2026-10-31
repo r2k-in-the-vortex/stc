@@ -213,7 +213,12 @@ endpoint file printed by `stc run --debug-server` and leaves the host running.
 
 Locals require a debug build and a `stc-debug/1.1` host; a release or
 hook-free build is monitoring-only and offers no breakpoints, stepping, or
-Locals. Local names are shown in the frame table's normalized uppercase form.
+Locals. Use the Debug Console to evaluate visible Globals and target paths
+while the release host runs; Variables and Watch remain unavailable because
+VS Code requests them only after a stopped frame. Target paths use the
+generated manifest keys (for example `SAMPLE::TOTAL` for the sample global);
+a source-style path such as `MAIN.TOTAL` is not a manifest key. Local names
+are shown in the frame table's normalized uppercase form.
 `evaluate` accepts a stopped-frame local name or a manifest target path; it
 does not parse ST expressions. There is one debug session per host, and every
 online swap ends the session without migrating breakpoints, forces, or

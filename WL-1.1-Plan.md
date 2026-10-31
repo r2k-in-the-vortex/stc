@@ -10,10 +10,11 @@ owner-confirmed manual color check 2026-10-31). F-20 is complete: implemented in
 (CI run `41201150443`, 37 jobs) and manually accepted 2026-10-31 (start, attach, and swap
 teardown observed; generation 1 -> 2 -> 3). F-6 is complete: commit `dfda944` (CI run
 `41209918428`, 38 jobs) and manually verified 2026-10-31. F-12 is complete: commit `68ecbfc` (CI
-run `41212737785`, 38 jobs) and manually verified 2026-10-31. The remaining required close-out
-items in §12.1 (F-1.1, F-3, F-16) are pending. Manual VS Code verification 2026-10-31: 38 of 40
-checklist entries pass; items 12 and 33 fail. Required close-out items and deferred follow-ups
-are triaged in §12.  
+run `41212737785`, 38 jobs) and manually verified 2026-10-31. F-16 is complete: commit `d0abb12`
+(CI run `41234800343`, 38 jobs) and manually verified 2026-10-31 with Debug-Console-only
+monitoring. The remaining required close-out items in §12.1 (F-1.1, F-3) are pending. Manual VS
+Code verification 2026-10-31: 39 of 40 checklist entries pass; item 12 fails. Required close-out
+items and deferred follow-ups are triaged in §12.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-1.1,
 [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
@@ -335,7 +336,7 @@ audit behavior.
 | 4 | Runtime `stc-debug/1.1` negotiation and `frame.locals`; `stc-dap`: framing, launch/attach, breakpoints, stepping, stack, scopes/variables, evaluate, write/force; `stc dap` command | Protocol 1.0 and 1.1 tests pass; DAP integration test stops at a breakpoint, steps, lists frames, and reads globals and locals |
 | 5 | Sample workspace, launch/task configurations, IDE-Integration spec, `stc-debug/1.1` spec update, CLI/README/USER-GUIDE/KNOWN-LIMITATIONS updates, release checklist | Extension and docs reviewed; sample workspace opens, navigates, formats, and debugs |
 | 6 | CI: LSP tests in the workspace matrix, DAP/protocol tests in the debug suite, extension package job and VSIX artifact, headless Electron smoke; record evidence | All jobs pass on the supported hosts; VSIX artifact and smoke evidence recorded |
-| 7 | Close-out: required items in §12.1 (F-1 highlighting palette/theme — complete; F-1.1 default-theme ST token overlay; F-3 task process tree; F-6 breakpoint removal — complete; F-12 non-ST frame filtering — complete; F-16 release monitoring surface; F-20 online-change command/status — complete) and the §12.2 documentation actions | §12.1 closed, including a readable palette/theme and an online-change surface; §12.2 documented; the checklist is re-run to 40/40 pass |
+| 7 | Close-out: required items in §12.1 (F-1 highlighting palette/theme — complete; F-1.1 default-theme ST token overlay; F-3 task process tree; F-6 breakpoint removal — complete; F-12 non-ST frame filtering — complete; F-16 release monitoring surface — complete; F-20 online-change command/status — complete) and the §12.2 documentation actions | §12.1 closed, including a readable palette/theme and an online-change surface; §12.2 documented; the checklist is re-run to 40/40 pass |
 
 ## 8. Exit criteria
 
@@ -486,12 +487,12 @@ change.
 ## 12. Open items and close-out triage (2026-10-31)
 
 The 36-item manual checklist ([WL-1.1-UI-CHECKLIST.md](WL-1.1-UI-CHECKLIST.md)) is complete:
-38 of 40 entries pass, including the four prerequisites; items 12 and 33 fail. Closed during
-verification: F-2, F-4, F-5, F-7, F-8, the DAP frame-name mapping and evaluate-by-name fixes,
-and the D-211 FB interface-access change. Complete features (F-1, F-2, F-4, F-5, F-6, F-7, F-8,
-F-10, F-12, F-20) are feature history, not open follow-ups; they remain in the tables only as
-acceptance evidence. The open required items are F-1.1, F-3, and F-16. The remaining items are
-assigned to exactly one bucket:
+39 of 40 entries pass, including the four prerequisites; item 12 fails. Closed during verification:
+F-2, F-4, F-5, F-7, F-8, the DAP frame-name mapping and evaluate-by-name fixes, and the D-211
+FB interface-access change. Complete features (F-1, F-2, F-4, F-5, F-6, F-7, F-8, F-10, F-12,
+F-16, F-20) are feature history, not open follow-ups; they remain in the tables only as
+acceptance evidence. The open required items are F-1.1 and F-3. The remaining items are assigned
+to exactly one bucket:
 
 - **Required** — must be closed before WL-1.1 is complete.
 - **Documented** — accepted limitation or deliberate design; record it in the IDE specification,
@@ -507,7 +508,6 @@ assigned to exactly one bucket:
 | --- | --- | --- | --- |
 | F-1.1 | F-1 ships `stc Dark`/`stc Light`, so the intended ST palette requires selecting a contributed theme; a user on Default Dark Modern/Light Modern does not get the `.st`-specific token rules without a theme switch. | The owner requires the default-theme path for WL-1.1; users should not have to select a custom theme to see distinct ST colors. | Add an opt-out ST token-color overlay through `editor.tokenColorCustomizations` (extension-provided defaults or a documented setting), keyed for Default Dark Modern and Default Light Modern, with `.st` scope rules; keep the contributed themes as explicit alternatives. Acceptance, owner-approved 2026-10-31: with no contributed theme selected, ST tokens render distinctly in Default Dark Modern and Default Light Modern when the extension's ST token-color overlay is active; the overlay targets `.st` scopes, leaves other languages unchanged, and is documented and opt-out. |
 | F-3 | Terminating the `stc: run` task kills the shell but leaves `stc run` and `sample.exe` running. | Checklist item 12 fails; tasks are in the locked scope. | Terminating the task stops the whole process tree; `Get-Process stc,sample` shows no run driver or host (the language server may remain). |
-| F-16 | Release mode starts and warns, but has no IDE monitoring surface: no frame/scopes, Variables empty, Watch unavailable. | Checklist item 33 fails; the owner chose implementation over downgrading the `release` option. | Implement a synthetic running/monitoring frame with the Globals scope and evaluate while the release host runs (no breakpoints, stepping, or Locals); a release session can observe globals and watch targets from the IDE. |
 
 #### Completed required features
 
@@ -518,6 +518,7 @@ These are feature history, not open work.
 | F-1 | The grammar scopes are correct, but the palette is dominated by red and white and no theme decision has been made. | The first thing a user sees; the owner requires it for WL-1.1. | Enrich the grammar with standard semantic scopes (declarations, types, variables, parameters, control keywords, built-ins) using [Serhioromano/vscode-st](https://github.com/Serhioromano/vscode-st) as a reference, and ship a small theme or document a recommended one; verify distinct keyword/type/declaration/variable/comment/string/number/pragma/direct-variable colors in a standard dark and light theme. |
 | F-6 | Removing a breakpoint updates the editor/panel but the running session still stops at the removed line. | Source breakpoints are a core debug feature; a stale host breakpoint is a correctness bug. | Remove and re-add while running or stopped; the session no longer stops at the removed location, and normal and verbatim path spellings share one key. Implemented in `dfda944`; CI run `41209918428` green (38 jobs); manual verification 2026-10-31 passed. |
 | F-12 | The frame-pointer walk continues into the launcher/host; unresolved frames appear as `frame`/Unknown Source on every stop. | Call stacks are a shipped feature; the sample shows two spurious rows. | Filter or label non-ST frames in `stc-dap`; a sample stop lists only resolved ST frames. The adapter keeps only manifest-resolved function frames, preserves runtime indices for frame operations, and keeps source-less ST callers (F-11). Implemented in `68ecbfc`; CI run `41212737785` green (38 jobs); manual verification 2026-10-31 passed. |
+| F-16 | Release mode starts and warns, but has no IDE monitoring surface: no frame/scopes, Variables empty, Watch unavailable. | Checklist item 33 fails; the owner chose implementation over downgrading the `release` option. | Monitoring-only DAP surface: one synthetic running frame with the Globals scope, live `variables`/`evaluate`, a clear pause error, and a session-start Debug Console path message. Owner accepted Debug-Console-only reads on 2026-10-31; Variables/Watch require a stopped frame. Implemented in `d0abb12`; CI run `41234800343` green (38 jobs); manual verification 2026-10-31 passed. |
 | F-20 | Online change is implemented in the compiler/runtime and CLI but the extension has no command or status surface. | The owner requires it as a headline WL-1.1 feature. | A command/status item starts an online change, shows the active generation/build state, and surfaces the session ending on swap; the existing runtime/CLI workflow is reused. |
 
 Notes:
@@ -541,9 +542,9 @@ Notes:
   rather than requiring a file watch.
 - Owner decisions on 2026-10-31 added F-1 (highlighting) and F-20 (online change) to WL-1.1 and
   chose the implementation path for F-16; these are recorded in the change log.
-- F-3 and the adapter part of F-16 are bounded fixes. F-1/F-1.1 change only the grammar/theme,
-  and F-20 uses the existing runtime/CLI workflow; none changes the language, artifact format,
-  module ABI, or `stc-debug/1` behavior.
+- F-3 is the remaining bounded fix. F-1/F-1.1 change only the grammar/theme, and F-20 uses the
+  existing runtime/CLI workflow; none changes the language, artifact format, module ABI, or
+  `stc-debug/1` behavior.
 
 ### 12.2 Documented as not supported or by design
 
@@ -586,3 +587,4 @@ Notes:
 | 2026-10-31 | Owner requires F-1.1 for WL-1.1 completion: with no contributed theme selected, ST tokens render distinctly in Default Dark Modern and Default Light Modern when the extension's ST token-color overlay is active; the overlay targets `.st` scopes, leaves other languages unchanged, and is documented and opt-out. F-1.1 moves to §12.1 required; F-1 remains complete with `stc Dark`/`stc Light` as explicit themes. Completed findings are recorded as features, not follow-ups. |
 | 2026-10-31 | F-6 complete: `setBreakpoints` now preserves the applied host breakpoint IDs and clears them before applying the new set, including an empty list; normal and `\\?\` spellings share one key. Commit `dfda944`; CI run `41209918428` green (38 jobs); manual verification 2026-10-31 passed. Checklist F-6 marked pass; plan §12.1 moves F-6 to the completed required features. |
 | 2026-10-31 | F-12 complete: the DAP adapter keeps only manifest-resolved ST frames, preserves runtime indices for frame operations, and keeps source-less ST callers; host/launcher `frame` rows are gone. Commit `68ecbfc`; CI run `41212737785` green (38 jobs); manual verification 2026-10-31 passed. Checklist F-12 marked pass; plan §12.1 moves F-12 to completed required features. |
+| 2026-10-31 | F-16 implementation and owner scope decision: Debug-Console-only monitoring is accepted for release/hook-free sessions. The adapter exposes one synthetic `monitoring` frame with the Globals scope, live `variables`/`evaluate`, a clear pause error, and a session-start path message; VS Code's built-in Variables/Watch require a stopped frame and remain unavailable while running. Commit `d0abb12`; CI run `41234800343` green (38 jobs); manual release-mode verification 2026-10-31 passed. Checklist F-16/item 33 marked pass; plan §12.1 moves F-16 to completed required features. Target paths use manifest keys (`SAMPLE::TOTAL`, not `MAIN.TOTAL`). |

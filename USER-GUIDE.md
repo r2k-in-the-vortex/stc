@@ -274,7 +274,8 @@ include `print`, `set`, `force`, `release`, `release-all`, `watch`,
 - Writes and forces are queued and applied at a cycle boundary, revalidated
   for generation, root, type, layout, and writability.
 - Release builds are monitoring-only; breakpoints, stepping, and full locals
-  require a debug build.
+  require a debug build. Monitor live Globals and target paths from the Debug
+  Console; Variables and Watch require a stopped frame.
 - Debug is local only. There is no raw-memory access, unauthenticated mode, or
   remote transport. The endpoint file is user-only and contains the per-run
   token; never share it.
@@ -390,9 +391,12 @@ writable live roots (globals, program-instance fields, and live split fields); t
 allow `[debug].allow-write`. `allowForce` requests the force
 scope and requires `[debug].allow-force`; DAP has no force request, so forcing remains a
 `stc debug` operation. Locals require a debug build and a `stc-debug/1.1` host; release builds are
-monitoring-only. There is one debug session per host, every online swap ends the session, and local
-names appear in the frame table's uppercase normalized spelling. `evaluate` accepts a local name or
-a manifest target path, not an ST expression.
+monitoring-only. Use the Debug Console to evaluate live Globals and target paths while the release
+host runs; Variables and Watch require a stopped frame and remain unavailable. Target paths use
+manifest keys (the sample global `TOTAL` is `SAMPLE::TOTAL`, not `MAIN.TOTAL`). There is one debug
+session per host, every online swap ends the session, and local names appear in the frame table's
+uppercase normalized spelling. `evaluate` accepts a local name or a manifest target path, not an ST
+expression.
 
 The local sample at
 [`editors/vscode/samples/workspace`](editors/vscode/samples/workspace/README.md) contains launch and
