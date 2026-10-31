@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { resolveExecutable } from './languageClient';
+import { resolveExecutable } from './executable';
 import { stcExecutable } from './tasks';
 
 /**

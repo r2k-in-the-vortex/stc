@@ -420,6 +420,25 @@ F-3 is the remaining close-out fix.
       driver-side Windows job object/signal handler that kills the launcher). Acceptance: after
       terminating the task, `Get-Process stc,sample` shows no run driver or host; the language
       server may remain.
+      **Implemented; manual verification pending.** Root cause: the task used
+      `vscode.ShellExecution`, so VS Code terminated only the shell it created, leaving `stc run`
+      and its host running as orphans. The `run` task now uses a `vscode.CustomExecution` with a
+      pseudoterminal (`editors/vscode/src/runTerminal.ts`) that resolves the same `stc.path`
+      executable (including the Windows `.cmd`/`.bat` shim case), spawns the same generated argv
+      in the same project directory, streams stdout/stderr to the task terminal, forwards input,
+      and fires `onDidClose` when the child exits. Terminal `close()` — the task API's
+      termination path — calls the existing `killProcessTree` helper, which sends SIGINT and
+      escalates to a process-group SIGKILL on POSIX or `taskkill /T /F` on Windows, then ends the
+      task with no exit code as VS Code's terminated-task contract requires. `check`, `build`,
+      `test`, and `fmt` keep `ShellExecution`, so their exit codes and problem-matcher behavior
+      are unchanged. Regression coverage in `editors/vscode/test/electron/suite.js`: the smoke
+      starts the configured `stc: run` task (with `--debug-server`), polls `tasklist`/`ps` until
+      the `sample` host and a new `stc` driver exist, calls `execution.terminate()`, waits for
+      `onDidEndTask`, then polls until no `sample` host and no non-baseline `stc` process remains
+      (the language server's `stc` processes are allowed to survive). The smoke retains the
+      `stc check` exit-code-0 assertion and passes locally on Windows with `npm run typecheck`,
+      `npm test`, `npm run package`, and `npm run test:electron`. Manual VS Code acceptance has
+      not run.
 
 ### Deferred follow-ups
 
@@ -568,7 +587,7 @@ not a WL-1.1 code change.
 | Item | Result | Notes |
 | --- | --- | --- |
 | F-1.1 | Required; pending | Default-theme ST token overlay; acceptance wording owner-approved 2026-10-31; plan §12.1 |
-| F-3 | Pending | Task termination does not stop the driver/host process tree |
+| F-3 | Implemented; manual verification pending | Run task uses a custom-execution pseudoterminal whose `close()` calls the process-tree kill; Electron smoke starts `stc: run`, terminates it through the task API, and polls that no `sample` host or non-baseline `stc` remains (language server allowed); `stc check` exit-code test retained; typecheck/test/package/smoke pass locally |
 
 ### Deferred follow-ups
 

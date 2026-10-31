@@ -164,7 +164,8 @@ Every task runs in the manifest directory. Generated tasks pass
 `--message-format short --color never`; `check`, `build`, `run`, and `test`
 also pass `--diagnostic-paths absolute`, so the problem matcher can resolve
 source files from multi-package projects. `stc run` tasks keep running until
-you terminate the task.
+you terminate the task; terminating it stops the `stc run` driver and the host
+it launched, not just the task shell.
 
 ## Debugging
 

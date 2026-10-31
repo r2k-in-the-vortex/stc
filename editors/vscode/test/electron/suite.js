@@ -5,7 +5,8 @@
 // This suite runs inside the VS Code extension host that `runTest.js` starts
 // with `--extensionTestsPath`. It proves the installed extension activates,
 // starts the real `stc lsp` language client, runs a `stc` task through the
-// contributed task provider and `$stc` matcher path, and launches a local
+// contributed task provider and `$stc` matcher path, terminates a `stc: run`
+// task and verifies its driver/host tree is gone, and launches a local
 // `stc dap` debug session. It also drives the online-change surface end to
 // end: start the extension-owned watch, observe the generation, attach the
 // debugger, edit a layout-preserving literal, observe the swap teardown, and
@@ -14,6 +15,7 @@
 // real editor wiring.
 
 const assert = require('node:assert');
+const { execFile } = require('node:child_process');
 const { existsSync, rmSync } = require('node:fs');
 const path = require('node:path');
 const vscode = require('vscode');
@@ -21,6 +23,8 @@ const vscode = require('vscode');
 const LANGUAGE_SERVER_TIMEOUT_MS = 60_000;
 const DIAGNOSTICS_SETTLE_MS = 3_000;
 const TASK_TIMEOUT_MS = 120_000;
+const RUN_TASK_START_TIMEOUT_MS = 180_000;
+const RUN_TASK_STOP_TIMEOUT_MS = 60_000;
 const DEBUG_START_TIMEOUT_MS = 180_000;
 const DEBUG_STOP_TIMEOUT_MS = 60_000;
 const ONLINE_CHANGE_TIMEOUT_MS = 180_000;
@@ -72,6 +76,89 @@ async function poll(what, timeoutMs, probe) {
       throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}${detail}`);
     }
     await delay(POLL_INTERVAL_MS);
+  }
+}
+
+/** Runs a helper process and resolves its UTF-8 output. */
+function execText(file, args) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      file,
+      args,
+      { encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(stdout);
+        }
+      },
+    );
+  });
+}
+
+/** Normalizes an image name so `sample.exe` and `sample` compare equal. */
+function processName(name) {
+  return path.basename(name).toLowerCase().replace(/\.exe$/, '');
+}
+
+/**
+ * Lists running processes as `{ name, pid }`.
+ *
+ * The smoke only needs image names: `stc` covers both the run driver and the
+ * language server, and the sample's host is named after the package.
+ */
+async function listProcesses() {
+  if (process.platform === 'win32') {
+    const output = await execText('tasklist', ['/FO', 'CSV', '/NH']);
+    const processes = [];
+    for (const line of output.split(/\r?\n/)) {
+      const match = /^"([^"]+)","(\d+)"/.exec(line);
+      if (match !== null) {
+        processes.push({ name: processName(match[1]), pid: Number(match[2]) });
+      }
+    }
+    return processes;
+  }
+  const output = await execText('ps', ['-axo', 'pid=,comm=']);
+  const processes = [];
+  for (const line of output.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
+    if (match !== null) {
+      processes.push({ name: processName(match[2]), pid: Number(match[1]) });
+    }
+  }
+  return processes;
+}
+
+function processIds(processes, name) {
+  return processes
+    .filter((candidate) => candidate.name === name)
+    .map((candidate) => candidate.pid);
+}
+
+/** Kills anything the run-task test started, even after an assertion failed. */
+async function killRunLeftovers(baselineStc) {
+  let processes;
+  try {
+    processes = await listProcesses();
+  } catch {
+    return;
+  }
+  const leftovers = [
+    ...processIds(processes, 'sample'),
+    ...processIds(processes, 'stc').filter((pid) => !baselineStc.has(pid)),
+  ];
+  for (const pid of leftovers) {
+    if (process.platform === 'win32') {
+      await execText('taskkill', ['/pid', String(pid), '/t', '/f']).catch(() => undefined);
+    } else {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // The process already exited.
+      }
+    }
   }
 }
 
@@ -207,6 +294,95 @@ async function runCheckTask() {
     assert.strictEqual(exitCode, 0, 'the stc check task exits successfully');
   } finally {
     listener.dispose();
+  }
+}
+
+/**
+ * Runs the configured `stc: run` task, waits for the driver and host, then
+ * terminates the task through the task API and proves the whole tree stops.
+ *
+ * The language server is also an `stc` process, so `stc` pids present before
+ * the task starts are the allowed baseline; anything added by the run task
+ * must disappear.
+ */
+async function runRunTaskTermination() {
+  const tasks = await vscode.tasks.fetchTasks({ type: 'stc' });
+  const run =
+    tasks.find(
+      (task) =>
+        task.definition.command === 'run' &&
+        task.definition.project !== undefined,
+    ) ?? tasks.find((task) => task.definition.command === 'run');
+  assert.ok(
+    run,
+    `a stc run task is provided (available: ${tasks
+      .map((task) => String(task.definition.command ?? task.name))
+      .join(', ')})`,
+  );
+  assert.ok(
+    Array.isArray(run.definition.args) && run.definition.args.includes('--debug-server'),
+    'the configured run task starts the debug server for attach',
+  );
+
+  const before = await listProcesses();
+  const baselineStc = new Set(processIds(before, 'stc'));
+  assert.strictEqual(
+    processIds(before, 'sample').length,
+    0,
+    'no sample host is left over before the run task test',
+  );
+
+  let execution;
+  let resolveEnded;
+  const ended = new Promise((resolve) => {
+    resolveEnded = resolve;
+  });
+  const endListener = vscode.tasks.onDidEndTask((event) => {
+    if (execution !== undefined && event.execution === execution) {
+      resolveEnded();
+    }
+  });
+  try {
+    execution = await vscode.tasks.executeTask(run);
+    const active = await poll(
+      'the stc run driver and host to start',
+      RUN_TASK_START_TIMEOUT_MS,
+      async () => {
+        const processes = await listProcesses();
+        return processIds(processes, 'sample').length > 0 ? processes : undefined;
+      },
+    );
+    const drivers = processIds(active, 'stc').filter((pid) => !baselineStc.has(pid));
+    assert.ok(
+      drivers.length > 0,
+      `the stc run driver is running (stc pids: ${
+        processIds(active, 'stc').join(', ') || 'none'
+      })`,
+    );
+    console.log(
+      `stc smoke: stc run started (driver ${drivers.join(', ')}; ` +
+        `host ${processIds(active, 'sample').join(', ')})`,
+    );
+
+    execution.terminate();
+    await withTimeout(ended, RUN_TASK_STOP_TIMEOUT_MS, 'the terminated stc run task to end');
+
+    await poll(
+      'the terminated stc run process tree to stop',
+      RUN_TASK_STOP_TIMEOUT_MS,
+      async () => {
+        const processes = await listProcesses();
+        const hosts = processIds(processes, 'sample');
+        const extraDrivers = processIds(processes, 'stc').filter(
+          (pid) => !baselineStc.has(pid),
+        );
+        return hosts.length === 0 && extraDrivers.length === 0 ? true : undefined;
+      },
+    );
+    console.log('stc smoke: stc run process tree stopped');
+  } finally {
+    endListener.dispose();
+    await killRunLeftovers(baselineStc).catch(() => undefined);
   }
 }
 
@@ -473,6 +649,8 @@ async function run() {
     await assertLanguageServer(document);
     console.log('stc smoke: stc check task');
     await runCheckTask();
+    console.log('stc smoke: stc run task termination');
+    await runRunTaskTermination();
     console.log('stc smoke: stc dap launch');
     await runDebugSession(folder);
     console.log('stc smoke: stc online change');

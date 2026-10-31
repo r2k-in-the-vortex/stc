@@ -3,6 +3,8 @@ import { stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 
+import { createStcRunTerminal } from './runTerminal';
+
 /** The commands the extension offers as tasks. */
 export type StcCommand = 'check' | 'build' | 'run' | 'test' | 'fmt';
 
@@ -92,21 +94,28 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
     folder: vscode.WorkspaceFolder | undefined,
   ): vscode.Task {
     const command = definition.command;
-    const args: string[] = [command, '--message-format', 'short', '--color', 'never'];
-    if (DIAGNOSTIC_COMMANDS.has(command)) {
-      args.push('--diagnostic-paths', 'absolute');
+    let execution: vscode.ShellExecution | vscode.CustomExecution;
+    if (command === 'run') {
+      // VS Code only terminates a shell task's shell. Owning the `stc run`
+      // process in a pseudoterminal lets `close()` stop the driver and the
+      // launcher it started. The callback receives the definition with VS
+      // Code's variables resolved, so the arguments match what a
+      // `ShellExecution` would have produced.
+      execution = new vscode.CustomExecution(async (resolvedDefinition) => {
+        const resolved = resolvedDefinition as StcTaskDefinition;
+        return createStcRunTerminal({
+          executable: stcExecutable(),
+          args: commandArguments(resolved),
+          cwd: resolveProjectRoot(resolved, folder) ?? root,
+        });
+      });
+    } else {
+      const options: vscode.ShellExecutionOptions = {};
+      if (root !== undefined) {
+        options.cwd = root;
+      }
+      execution = new vscode.ShellExecution(stcExecutable(), commandArguments(definition), options);
     }
-    if (definition.release === true && RELEASE_COMMANDS.has(command)) {
-      args.push('--release');
-    }
-    if (definition.args !== undefined) {
-      args.push(...definition.args);
-    }
-    const options: vscode.ShellExecutionOptions = {};
-    if (root !== undefined) {
-      options.cwd = root;
-    }
-    const execution = new vscode.ShellExecution(stcExecutable(), args, options);
     const scope = folder ?? vscode.TaskScope.Workspace;
     const task = new vscode.Task(
       definition,
@@ -123,6 +132,22 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
     }
     return task;
   }
+}
+
+/** Builds the generated argument list for a stc task. */
+function commandArguments(definition: StcTaskDefinition): string[] {
+  const command = definition.command;
+  const args: string[] = [command, '--message-format', 'short', '--color', 'never'];
+  if (DIAGNOSTIC_COMMANDS.has(command)) {
+    args.push('--diagnostic-paths', 'absolute');
+  }
+  if (definition.release === true && RELEASE_COMMANDS.has(command)) {
+    args.push('--release');
+  }
+  if (definition.args !== undefined) {
+    args.push(...definition.args);
+  }
+  return args;
 }
 
 /** Finds `stc.toml` project roots in the workspace. */

@@ -6,7 +6,8 @@ import * as readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import * as vscode from 'vscode';
 
-import { findManifest, resolveExecutable } from '../languageClient';
+import { resolveExecutable } from '../executable';
+import { findManifest } from '../languageClient';
 import { killProcessTree, waitForExit } from '../processTree';
 import { findProjectRoots, stcExecutable } from '../tasks';
 import {
