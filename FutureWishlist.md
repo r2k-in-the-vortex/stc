@@ -1,6 +1,6 @@
 # Future Wishlist — v2.0.0
 
-Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, and WL-11. Completed: WL-4 (2026-10-30) and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; continuing with P0.5).  
+Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3 + P0.5), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, and WL-11. Completed: WL-4 (2026-10-30) and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31 and merged through PR #11; P0.5 checkpoint proved determinism, GOT, trap, checked-arithmetic, and recursive-model theorems; progress, memory safety, and no-UB await the state invariant).  
 Date: 2026-10-29; revised 2026-10-31  
 Branch: `v2.0.0-planning`  
 Baseline: `stc` 1.0.0, released 2026-10-29  
@@ -87,7 +87,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-1.1 | Local VS Code integration and debugging | Tooling | L (staged) | Stable IDE/debug API | Locked |
 | WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Deferred |
 | WL-2 | Test coverage to 85% as reported by the existing CI coverage badge; CI pass gate | Quality | M/L | Existing coverage job/badge | Locked |
-| WL-3 | Expand the Lean specification per the verification plan; P0.4 and P0.3 complete, continuing with P0.5 | Verification | M for P0.4 | Phase 0 P0.4 | In progress; P0.4/P0.3 complete 2026-10-31 |
+| WL-3 | Expand the Lean specification per the verification plan; P0.4 and P0.3 complete and merged, P0.5 checkpoint in progress | Verification | M for P0.4 | Phase 0 P0.4 | In progress; P0.4/P0.3 complete and merged 2026-10-31; P0.5 partial |
 | WL-4 | Run and verify RT performance on PREEMPT_RT Linux x86-64 | Runtime evidence | M | x86-64 RT run host and transferable artifacts | Done 2026-10-30 |
 | WL-5.1 | Modbus TCP server I/O on all supported hosts; non-real-time | Runtime/IO | M/L | None | Locked |
 | WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host; EtherCAT hardware | Locked |
@@ -325,13 +325,17 @@ wishlist for new language or core compiler features.
 
 **Selection.** Selected and locked for v2.0.0 on 2026-10-29 with the **P0.4** target (target
 syntax and `WellFormed`), and started on branch `WL-3` on 2026-10-31. P0.4 is complete and
-review-approved (2026-10-31). P0.3 is complete and review-approved (2026-10-31): `progress`,
-`preservation`, initial-state typing, and `type_soundness` are proved. WL-3 remains in progress
-for P0.5 and is done only after owner confirmation. Core compiler features and the language are
-not expected to change, so further drift is not expected; only bug fixes are in scope. Detailed planning is in
+review-approved (2026-10-31). P0.3 is complete, review-approved (2026-10-31), and merged through
+PR #11 (merge commit `612f84d`): `progress`, `preservation`, initial-state typing, and
+`type_soundness` are proved. WL-3 remains in progress for P0.5 and is done only after owner
+confirmation. The P0.5 checkpoint defines the target machine, step relation, executor, and
+coverage table, and proves determinism, GOT soundness, trap soundness, checked-arithmetic
+refinement, and the recursive-model equivalence; progress, memory safety, and no-UB await the
+target state invariant. Core compiler features and the language are not expected to change, so
+further drift is not expected; only bug fixes are in scope. Detailed planning is in
 [V2.0.0-PLAN.md](V2.0.0-PLAN.md); the P0.4 scope decisions are in
-[Plan-Phase0.md](specification/Verification/Plan-Phase0.md) §20 and the P0.3 completion record in
-§19.12.
+[Plan-Phase0.md](specification/Verification/Plan-Phase0.md) §20, the P0.3 completion record in
+§19.12, and the P0.5 checkpoint in §21.
 
 **Why it matters.** Phase 0 was paused mid-P0.3 pending alignment with M6.5; P0.3 is now complete
 and review-approved. The earlier blocker — ongoing compiler changes — is resolved by the v1.0.0
@@ -1076,3 +1080,5 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-10-31 | P0.4 is complete and review-approved; WL-3 continues with P0.3, which is resumed with the Q1–Q7 decisions recorded in Plan-Phase0 §19.8. |
 | 2026-10-31 | P0.3 proof work is complete: `progress`, `preservation`, initial-state typing, and `type_soundness` are proved; the review checklist is in Plan-Phase0 §19.12. |
 | 2026-10-31 | Approved the P0.3 review; WL-3 remains in progress for P0.5 and is done only after owner confirmation. |
+| 2026-10-31 | Merged PR #11 (P0.3) into `v2.0.0-planning` as `612f84d`; WL-3 remains in progress for P0.5. |
+| 2026-10-31 | P0.5 checkpoint: target machine, step relation, executor, and coverage table defined; determinism, GOT soundness, trap soundness, checked-arithmetic refinement, and recursive-model equivalence proved. Progress, memory safety, and no-UB await the target state invariant; see Plan-Phase0 §21. |

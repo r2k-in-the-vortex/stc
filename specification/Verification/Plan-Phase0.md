@@ -1249,8 +1249,9 @@ grep -rnwE 'sorry|admit' lean/Stc/Sem               # no matches
 ```
 
 **Review approved by the owner on 2026-10-31.** The P0.3 exit criteria are met and the sign-off
-is recorded. P0.3 is complete; WL-3 continues with P0.5, followed by P0.6–P0.7. WL-3 is done only
-after owner confirmation.
+is recorded. P0.3 is complete and was merged into `v2.0.0-planning` through PR #11 (merge commit
+`612f84d`). WL-3 remains in progress for P0.5, followed by P0.6–P0.7. WL-3 completion is still
+subject to owner confirmation.
 
 ## 20. P0.4 execution record — complete
 
@@ -1291,3 +1292,91 @@ review confirmed:
 - the fragment boundary is the whole production module, with debug/test builds, coverage counters, checkpoint hooks, `switch`, aggregates, OOP, and the process image excluded;
 - the smoke inhabitant `minimalFrag` is an adequate non-vacuity check for `WellFormed`;
 - any definition change from the review is reflected in the registry and this record.
+
+## 21. P0.5 execution record — in progress
+
+Date: 2026-10-31. Status: **in progress; checkpoint ready for review.** P0.3 was merged into
+`v2.0.0-planning` through PR #11 (merge commit `612f84d`); WL-3 remains in progress for P0.5, and
+WL-3 completion is still subject to owner confirmation.
+
+P0.5 defines the target machine in [`Stc.Codegen.Semantics`](../../lean/Stc/Codegen/Semantics.lean):
+`IRState`/`IRFrame`/`IRAddr`/`IRValue`, the total step function `irStep` with `IROutcome`
+(`step`/`halt`/`trapped`/`ub`/`stuck`), `IRStepResult` for instruction-level execution,
+`IRStep`/`IRStepStar`, `initState?`/`IRSem`, and the fuel executor `irExecRec`/`irRun`. Every
+P0.4 instruction and terminator has a semantics clause; the construct table is in
+[Semantics.md §4.4](Semantics.md#44-target-small-step-relation-irstep).
+
+### 21.1 Proved in this checkpoint
+
+| Registry | Theorem | Statement |
+| --- | --- | --- |
+| P0-T15 | `ir_deterministic` | `IRStep c c₁ → IRStep c c₂ → c₁ = c₂`. |
+| P0-T18 | `ir_got_sound` | A cell load returns the root pointer, callable, import identity, or nothing according to the slot kind. |
+| P0-T19 | `ir_trap_sound` | Every `trapped` outcome uses `overflow`, `divZero`, or `range`. |
+| P0-T20 | `ir_checked_arith_refines_exact` | `checkedInt` equals the `Stc.Exact` result, with the wrapped value and overflow flag on overflow. |
+| P0-T21 | `ir_recursive_model_equiv` | `(∃ fuel, irExecRec fuel c = .halt r) ↔ IRStepStar c r ∧ irStep r = .halt r`, via `irExecRec_halt_sound` and `irExecRec_halt_complete`. |
+
+The helper `irStep_halt_eq` records the machine invariant that a `halt` outcome reports the input
+state; instruction-level results cannot halt. Registry records P0-T15/T18/T19/T20/T21 are
+`proved` and the audit reports only the standard Lean axioms. `lake build` passes with no
+`sorry`/`admit`.
+
+### 21.2 Remaining P0.5 work
+
+P0-T16 `ir_progress`, P0-T17 `ir_memory_safe`, and P0-T22 `ir_no_ub` are stated over reachable
+well-formed target states and are not yet proved. They need one shared invariant, staged as
+follows:
+
+- module/frame agreement: the head frame's function is a `WellFormed` module function (or the
+  entry function), its block/instruction/terminator triple is the current block, and every branch
+  target used by the current block exists (`Function.CfgClosed`);
+- local typing: every parameter and SSA definition has a value of the declared `IrType`, so
+  operand evaluation and the integer/pointer discriminations used by `stepInstr` succeed;
+- stack memory: every `alloca` slot is allocated and initialized, stores preserve the slot type,
+  and computed `gep` addresses stay within the allocation or produce a defined fault;
+- persistent storage: the current model treats a `Data`/`Direct` root address as the root map
+  entry and ignores offsets into globals; the invariant must either show the covered cycle body
+  never stores through a root pointer or refine the storage model before `ir_memory_safe` can
+  claim persistent-storage safety;
+- GOT agreement: every resolved cell load agrees with the slot kind (`ir_got_sound` gives the
+  load half) and generated code never stores through a cell;
+- call resolution: every direct/indirect callee resolves to a module function or a specified
+  import service, and return destinations match the caller expectation;
+- trap/UB sources: `unreachable`, unknown trap-service codes, host import calls, and cell stores
+  are excluded from the covered reachable fragment; module-global stores stay within
+  `LocalGlobalsAllowed`.
+
+The invariant must be preserved by `irStep` before the three theorems can be stated as whole-run
+properties. That preservation proof, not the semantics definitions, is the remaining P0.5 work.
+
+### 21.3 Deliverables and evidence
+
+- `Stc.Codegen.Semantics` with the definitions and the five proofs above; no `sorry`/`admit`.
+- Target semantics coverage table: [Semantics.md §4.4](Semantics.md#44-target-small-step-relation-irstep).
+- Smoke check: `(IRSem minimalFrag "main" [] [] [] [] [] 0).isSome = true` by `decide`, so the
+  initializer is non-vacuous on the P0.4 smoke fragment.
+- Registry: P0-T15/T18/T19/T20/T21 `proved`; P0-T16/T17/T22 remain `planned`.
+- Local evidence:
+
+```text
+cd lean && lake build
+PYTHONUTF8=1 python tools/ci/check_verification_registry.py   # 45 records: 39 proved, 5 planned, 1 descoped
+python tools/ci/check_docs.py
+python tools/ci/check_semantics_placeholder.py
+grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
+```
+
+Note on Windows: `check_verification_registry.py` needs `PYTHONUTF8=1`; the audit subprocess
+otherwise decodes Lean's UTF-8 output with the console code page. CI runs on Linux and is
+unaffected.
+
+### 21.4 Review checklist
+
+1. The semantics covers every P0.4 construct and the `IRStepResult`/`IROutcome` split matches the
+   halt-as-status design.
+2. The five proved statements match the P0.5 intent in §7 and the registry.
+3. `ir_recursive_model_equiv` uses the halting-run form (`IRStepStar` plus `irStep r = .halt r`);
+   the executor returns the input state on halt.
+4. The remaining three theorems are scoped by the §21.2 invariant, not by a weaker semantics.
+5. The plan, [Semantics.md](Semantics.md), [Plan.md](Plan.md), [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md),
+   and the registry agree.

@@ -909,9 +909,9 @@ turn it into the registry.
 | Feature | Phase | Target level | Key theorem | Current status |
 | --- | --- | --- | --- | --- |
 | AST, HIR, and IR fragment types | 0 | S | definitions plus `WellFormed` | Syntax, grammar, and HIR defined (P0.1–P0.2); IR fragment defined and review-approved (P0.4, 2026-10-31) |
-| Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31; see Plan-Phase0.md §19 |
+| Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31 and merged into v2.0.0-planning via PR #11 (612f84d); see Plan-Phase0.md §19 |
 | Core typing judgment and checker | 0 | S | `core_check_sound`, `core_rejection_characterized` | Proved (P0.2) |
-| Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | Not started |
+| Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | In progress (P0.5): target machine, step relation, executor, coverage table, determinism, GOT soundness, trap soundness, checked-arithmetic refinement, and recursive-model equivalence proved; progress, memory safety, and no-UB await the target state invariant; see Plan-Phase0.md §21 |
 | Reference interpreter and conformance | 0 | V0 | `lake exe semantics-conformance` report | Fuel interpreter sound/complete (P0.3); conformance harness pending (P0.6) |
 | Checked integer arithmetic | 2 | V1 | `add_ok_iff`, overflow/div-zero lemmas | Model + vectors (V0) |
 | Bitwise, shifts, rotates | 2 | V1 | range, masking, inverse lemmas | Model + vectors (V0) |

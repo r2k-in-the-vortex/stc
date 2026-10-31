@@ -205,7 +205,7 @@ level = "S"
 spec = "specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Codegen.Semantics"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -241,7 +241,7 @@ level = "S"
 spec = "specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Codegen.Semantics"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -253,7 +253,7 @@ level = "S"
 spec = "specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Codegen.Semantics"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -265,7 +265,7 @@ level = "S"
 spec = "specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Codegen.Semantics"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "depends on the Stc.Exact models; audited with #print axioms"
 
 [[records]]
@@ -277,7 +277,7 @@ level = "S"
 spec = "specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Codegen.Semantics"
 owner = "verification"
-status = "planned"
+status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
