@@ -1159,6 +1159,43 @@ Remaining: `stepValue_preserves` (including the completed-argument
 `preservation`, initial-state typing, and `type_soundness`. `preservation` and
 `type_soundness` remain planned.
 
+### 19.11 Preservation checkpoint (2026-10-31)
+
+`preservation` is proved (`P0-T09`). The checkpoint adds:
+
+- `stepValue_preserves`, with per-continuation helpers for assignment,
+  unary/binary/cast, `IF`/`CASE`, `WHILE`/`REPEAT`, `FOR` start/bound/step,
+  and call arguments. Completed-argument calls go through `performCall`
+  (standard and user functions) and `CalleeSignatureV.push`.
+- `stepStmt_preserves` and `stepStmts_preserves` for every statement form,
+  including `EXIT`/`CONTINUE`, and a statement-call `callArgsPushStmt`.
+- `stepResume_preserves` and `stepReturned_preserves`.
+- `forContinue_preserves` and `forAdvance_preserves` for the `FOR` increment
+  path, including the control-variable write, and `MarkerTyped` /
+  `StackTyped.findLoop_marker` for the innermost loop marker.
+
+Proving preservation exposed three more machine bugs, now fixed:
+
+- The `.callArgs` continuation re-focused the argument it had just consumed
+  instead of the following one, so multi-argument calls would re-evaluate the
+  first argument and never evaluate the rest. It now matches
+  `_ :: next :: more` and carries `next :: more`, matching the
+  `StackTyped.callArgs` invariant.
+- `EXIT` kept the loop body's loop context after dropping the marker; it now
+  resumes in the marker's outer context via `findLoop`. The now-unused
+  `dropToLoop` was removed.
+- `CONTINUE` on a `FOR` marker entered `forAdvance` in the body's loop
+  context; it now enters in the marker's outer context, matching the typing of
+  the stack below the marker.
+
+Remaining for P0.3: initial-state typing (`HasType u env →
+ConfigTyped u (initState u cycles)`) and `type_soundness`. Initial-state
+typing needs a context-agreement lemma lifting the global-initializer typing
+from `Ctx.ofGlobals` to the program frame's `Ctx.ofProgram`; mutating only the
+local table must preserve `ExprHasType`/`CallHasType` derivations. After that,
+`type_soundness` follows from the proved initial-state typing, `preservation`,
+and `progress`, and the registry and semantics document are updated.
+
 ## 20. P0.4 execution record — complete
 
 Date: 2026-10-31. Status: **complete; review approved 2026-10-31.** The scope decisions were

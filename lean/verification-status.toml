@@ -131,8 +131,8 @@ level = "S"
 spec = "specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
-status = "planned"
-note = "Resumed 2026-10-31: see specification/Verification/Plan-Phase0.md §19 and the §19.8 decisions for the current state."
+status = "proved"
+note = "Proved 2026-10-31 after the value/statement/resume/returned transition lemmas; see Plan-Phase0.md §19.11."
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]

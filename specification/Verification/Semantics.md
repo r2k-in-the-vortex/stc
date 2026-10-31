@@ -204,7 +204,7 @@ innermost loop marker in the continuation stack; `CONTINUE` in a `FOR` performs 
 increment and bound test. A signed `FOR` uses the ascending bound test exactly when the runtime
 step is positive; an unsigned loop always ascends. This matches `lower_for` and resolves Q4.
 `RETURN` completes the current frame and delivers its result to the caller. The configuration-typing judgment `ConfigTyped` is defined in `Stc.Sem.Eval`;
-`progress` is proved and `preservation` remains.
+`progress` and `preservation` are proved; type soundness follows once initial-state typing is established.
 
 ### 4.2 Source small-step relation `Step`
 
@@ -310,7 +310,7 @@ into this section at P0.7.
 | `Stc.Sem.conversion_legal_iff` | `Stc.Sem.Typing` | P0.2 | proved |
 | `Stc.Sem.eval_deterministic` | `Stc.Sem.Eval` | P0.3 | proved |
 | `Stc.Sem.progress` | `Stc.Sem.Eval` | P0.3 | proved |
-| `Stc.Sem.preservation` | `Stc.Sem.Eval` | P0.3 | in progress |
+| `Stc.Sem.preservation` | `Stc.Sem.Eval` | P0.3 | proved |
 | `Stc.Sem.type_soundness` | `Stc.Sem.Eval` | P0.3 | in progress |
 | `Stc.Sem.trap_soundness` | `Stc.Sem.Eval` | P0.3 | proved |
 | `Stc.Sem.checked_arith_traps_exactly` | `Stc.Sem.Eval` | P0.3 | proved (guarded form, Q2) |
@@ -412,6 +412,7 @@ construct is rejected.
 | 2026-10-31 | 1.0-draft | P0.4 (complete) | Started WL-3. Fixed the production-module fragment: five GOT cell kinds, a grouped slot table, the overflow-result and fixed-array types, rotate intrinsics, `extractvalue`, and `unreachable`; removed `switch` (CASE lowers to branches). Defined `IRFrag`, `IRContract`, `ModuleShapes`, `WellFormed`, and the structural lemmas, and proved the P0.4 lemmas with the standard Lean axioms; the definition-to-emission map is the [Core IR Coverage](Core-IR-Coverage.md) table. The P0.4 review was approved 2026-10-31 |
 | 2026-10-31 | 1.0-draft | P0.3 (resumed) | Reevaluated Q1–Q7: keep the current machine and `ConfigTyped` invariant; keep the guarded exact form; record layout-only characters as a known Q3 gap; correct the `FOR` zero-step test to `step > 0` for signed loops and always-ascending for unsigned; confirm the initialization boundary and the `RANGE` power trap; commit WIP checkpoints. |
 | 2026-10-31 | 1.0-draft | P0.3 (progress) | Proved `progress`: a `ConfigTyped` configuration is terminal or takes a step, via the expression, value, statement, resume, and return no-stuck lemmas. `preservation`, initial-state typing, and `type_soundness` remain |
+| 2026-10-31 | 1.0-draft | P0.3 (preservation) | Proved `preservation` over every focus form, including the value/statement/resume/returned transitions and the FOR advance path. Fixed three machine bugs found by the proof: the call-argument continuation advanced past the wrong argument, `EXIT` kept the loop body's loop context, and `CONTINUE` on a `FOR` entered the increment in the body's loop context. Initial-state typing and `type_soundness` remain |
 
 ## 10. Rust/Lean interface
 
