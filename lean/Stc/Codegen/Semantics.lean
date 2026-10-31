@@ -1052,11 +1052,40 @@ def SlotBases (fn : Function) : List Ssa :=
         | _ => none
     | _ => none
 
+/-- Slot-entry GEP result SSA names and their constant slot numbers. -/
+def SlotEntries (fn : Function) : List (Ssa × Nat) :=
+  fn.facts.origins.filterMap fun entry =>
+    match entry.2 with
+    | .cell slot false =>
+        match defInstr? fn entry.1 with
+        | some (.load _ _ (.local gepName) _) =>
+            match defInstr? fn gepName with
+            | some (.gep _ _ (.local _base) indices _) =>
+                if indices = [(.int 64, .intLit (.int 64) (Int.ofNat slot))] then
+                  some (gepName, slot)
+                else none
+            | _ => none
+        | _ => none
+    | _ => none
+
+/-- The slots-global storage entry for a base defined by a load is the
+slot-table pointer. -/
+def SlotsGlobalStored (c : IRState) (f : IRFrame) : Prop :=
+  ∀ base ∈ SlotBases f.fn, ∀ g ty ptr align,
+    defInstr? f.fn base = some (.load base ty ptr align) → ptr = .symbol g →
+      c.lookupStorageAt (.global g) 0 = some (.ptr .slotTable)
+
 /-- A slot-table base local holds the slot-table pointer, or is still the
-initialization default before its defining load executes. -/
+initialization default before its defining load executes; slot-entry GEP
+results hold the corresponding entry address (or the default); and a base
+initialized from the slots global has the slot-table pointer in storage. -/
 def SlotsBase (c : IRState) (f : IRFrame) : Prop :=
-  ∀ base ∈ SlotBases f.fn,
-    f.lookupLocal base = some (.ptr .slotTable) ∨ f.lookupLocal base = some .null
+  (∀ base ∈ SlotBases f.fn,
+    f.lookupLocal base = some (.ptr .slotTable) ∨ f.lookupLocal base = some .null) ∧
+  (∀ gepName slot, (gepName, slot) ∈ SlotEntries f.fn →
+    f.lookupLocal gepName = some (.ptr (.slotEntry slot)) ∨
+      f.lookupLocal gepName = some .null) ∧
+  SlotsGlobalStored c f
 
 /-- A stored stack pointer is inside an allocated extent. -/
 def MemValuePtrBounded (c : IRState) (v : IRValue) : Prop :=
@@ -1146,6 +1175,13 @@ def ReturnLink (c : IRState) : Prop :=
         callee.fn.returnType ≠ .void ∧
           caller.fn.localType? dest = some callee.fn.returnType
 
+/-- A return value does not point at the returning frame. -/
+def StackReturnsSafe (c : IRState) : Prop :=
+  ∀ f ∈ c.frames, ∀ operand v,
+    f.terminator = some (.ret (some operand)) →
+    evalOperand f operand = some v →
+    ∀ frame slot off, v = .ptr (.stack frame slot off) → frame ≠ f.id
+
 /-- The state-level target invariant. -/
 structure WFState (contract : IRContract) (c : IRState) : Prop where
   program : WFProgram contract c.module
@@ -1175,6 +1211,7 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
   callTargets : CallTargetsTyped c
   returnLink : ReturnLink c
   bottomRetDest : ∀ last, c.frames.getLast? = some last → last.retDest = none
+  stackReturnsSafe : StackReturnsSafe c
 
 /-- The running restriction used by the three soundness theorems. -/
 def WFRunning (contract : IRContract) (c : IRState) : Prop :=
@@ -2528,7 +2565,8 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
     (hslots : ∀ f ∈ c.frames, SlotsBase c f)
     (hstorage : StorageValuesLive c)
     (hbindings : FunctionBindingsTyped c)
-    (hcallTargets : CallTargetsTyped c) :
+    (hcallTargets : CallTargetsTyped c)
+    (hstackReturns : StackReturnsSafe c) :
     WFRunning contract c := by
   unfold initState? at hinit
   split at hinit
@@ -2635,6 +2673,7 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
             simp at hlast
             cases hlast
             rfl
+          · exact hstackReturns
         · simp
 
       · simp at hinit

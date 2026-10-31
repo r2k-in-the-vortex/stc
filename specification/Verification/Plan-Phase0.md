@@ -2075,31 +2075,35 @@ fact, `StorageValuesLive`, `FunctionBindingsTyped`, and `CallTargetsTyped`, and 
 contract; the slots-global storage fact is included through the `SlotsBase` hypothesis.
 
 The remaining bridge work is the per-instruction `irStep_wf` induction for the 18 `WFState`
-fields and the reachability/`irRun` corollaries. While setting up the induction, two further
-provenance gaps appeared; they are **not** weakenings and require a decision:
+fields and the reachability/`irRun` corollaries. The two provenance gaps found during the
+induction were approved and are implemented:
 
-1. **Slot-entry value precision (within `SlotsBase`).** `SlotsBase` constrains the slot-table
-   base local but not the GEP result SSA. The `.cell slot false` origin load reads the GEP
-   result, and nothing in `WFState` forces that result to be `.ptr (.slotEntry slot)`; a
-   state satisfying the current invariant can therefore produce a non-`.cell` value.
-   Extending the already-approved `SlotsBase` to also constrain the slot-entry GEP results
-   (and the slots-global storage entry that initializes a base defined by a load) is the
-   natural fix; it strengthens the approved invariant rather than adding a new decision.
-2. **Stack-return safety (`StackReturnsSafe`).** At `irStepRet`, the caller receives the
-   callee's return value. If a callee returns `.ptr (.stack calleeFrame ...)`, the callee
-   frame is popped and the caller's `StackPtrsBounded` cannot find it. The builder does not
-   return stack pointers, but the invariant needs the fact. Proposed new `WFState` field:
+1. **Slot-entry value precision (`SlotsBase` extension).** `SlotsBase` now also constrains
+   every slot-entry GEP result SSA (`SlotEntries`): the local holds `.ptr (.slotEntry slot)`
+   or `.null` before its defining GEP. `SlotsGlobalStored` records that a base defined by a
+   load from the slots global has `.ptr .slotTable` in that storage entry.
+2. **Stack-return safety (`StackReturnsSafe`).** Added to `WFState` and to `initState?_wf`
+   as a builder/host hypothesis; its definition is below.
 
-   ```lean
-   def StackReturnsSafe (c : IRState) : Prop :=
-     ∀ f ∈ c.frames, ∀ operand v,
-       f.terminator = some (.ret (some operand)) →
-       evalOperand f operand = some v →
-       ∀ frame slot off, v = .ptr (.stack frame slot off) → frame ≠ f.id
-   ```
+Setting up `callFunction`/`irStepRet` revealed the next obstruction: the callee frame's
+invariants cannot be derived from the caller state alone, because the callee's slots base and
+return operands are program-level facts of the callee function. Three builder-trusted
+`WFProgram` facts are required:
 
-   This is a genuine extension; owner approval is requested. The initial-state proof would
-   add the corresponding host/builder hypothesis.
+1. **`CallSlots`** — at every call, the callee's appended `%slots` parameter receives the
+   caller's slot-table value (`.ptr .slotTable`), so the callee's `SlotsBase` holds. A
+   syntactic fact over the call instruction's argument list.
+2. **`ReturnNonStack`** — every `ret (some operand)` uses an operand that is not a stack
+   pointer (its origin is a cell/global value or a non-pointer), so the callee's
+   `StackReturnsSafe` holds and the caller's `StackPtrsBounded` survives the pop. A
+   builder-trusted fact over the return operand's origin.
+3. **`SlotsGlobalReadOnly`** — no store targets the slots global, so stores preserve
+   `SlotsGlobalStored`. A builder-trusted `memoryGlobals` exclusion.
+
+These are static program facts, not new state invariants; without them `irStep_wf` cannot
+establish the callee frame at a call or preserve the stack invariants at a return. No
+invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soundness theorems
+and the registry remain green.
 
 The compiling checkpoint is on `WL-3`; the eight soundness theorems and the registry remain
 green. The three earlier extensions were required because without them the invariant was not
