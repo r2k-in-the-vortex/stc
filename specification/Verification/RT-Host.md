@@ -97,6 +97,7 @@ measured window only.
   It starts the bundled launcher, drives the local control socket, starts and stops the load,
   samples `/proc`, and writes the summary.
 - Metrics: `stc-rt-metrics/1` from the launcher, one record per cycle plus a header and summary.
+  A dedicated writer thread owns the file; the cycle thread only enqueues a sample.
 - Summary: `stc-rt-summary/1`, with min/p50/p90/p99/p99.9/max for execution and wake lateness,
   counts, faults, and allocator deltas.
 - Control: protocol 1, newline-delimited JSON over a user-only Unix socket with an ephemeral
@@ -129,12 +130,17 @@ When `--rt-metrics <path>` is set, the launcher writes one JSON object per line:
 ```json
 {"record":"header","protocol":"stc-rt-metrics/1","build_id":"<hex|null>","cycle_time_ns":1000000,"priority":90,"cpu":3,"pid":1234,"started_monotonic_ns":0,"fault_interval":1000}
 {"record":"cycle","cycle":1,"generation":7,"deadline_ns":0,"wake_ns":0,"scan_start_ns":0,"scan_end_ns":0,"wake_lateness_ns":0,"execution_ns":0,"scan_overrun_ns":0,"missed_deadline":false,"skipped_periods":0,"minor_faults":null,"major_faults":null,"allocations":null,"frees":null}
-{"record":"summary","cycles":0,"missed_deadlines":0,"skipped_periods":0,"max_wake_lateness_ns":0,"max_execution_ns":0,"max_scan_overrun_ns":0,"last_minor_faults":null,"last_major_faults":null,"last_allocations":null,"last_frees":null,"finished_monotonic_ns":0}
+{"record":"summary","cycles":0,"missed_deadlines":0,"skipped_periods":0,"dropped_records":0,"max_wake_lateness_ns":0,"max_execution_ns":0,"max_scan_overrun_ns":0,"last_minor_faults":null,"last_major_faults":null,"last_allocations":null,"last_frees":null,"finished_monotonic_ns":0}
 ```
 
 The header's `pid`, `priority`, and `cpu` describe the cycle thread; `cpu` is `null` when no
-affinity was requested. Records are buffered and flushed at exit; the summary is written on a
-normal exit, stop, or interrupt.
+affinity was requested. A dedicated writer thread owns the metrics file and runs at
+`SCHED_OTHER` with the service nice level, outside the cycle thread's CPU when CPU pinning is
+used, so formatting and disk writes cannot delay a cycle. The cycle thread enqueues each sample
+on a bounded queue with a non-blocking send and counts a full queue as a dropped record; the
+summary's additive `dropped_records` field reports that count (zero for a healthy run). On a
+normal exit, stop, or interrupt the writer drains the queue, writes the summary, flushes, and is
+joined. A hard process crash can still lose the queued tail.
 
 ## 4. Results
 
@@ -330,7 +336,8 @@ No tuned measurement is claimed in this report.
 - The max columns contain isolated outliers, including 772 ms in the light run and 649 ms in the
   control-disabled run. They are retained for honesty but are not representative tails and are
   not bounds. The cause of the multi-hundred-millisecond samples is not resolved.
-- The metrics are buffered and flushed at exit; a hard process crash can lose buffered records.
+- The metrics writer runs on a bounded queue and drops records if the writer cannot keep up; the
+  summary reports the count and a hard process crash can lose the queued tail.
 - The control-disabled leg estimates its warm-up cycle boundary from the cycle count. The error
   is negligible over a 10 minute run but is not a fixed sample boundary.
 - Deploy prepare/load/activation runs on the cycle thread; deployment latency is maintenance

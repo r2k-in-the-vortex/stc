@@ -4,7 +4,9 @@
 //! It sets the calling (cycle) thread to `SCHED_FIFO`, optionally pins it to
 //! one CPU, and provides absolute `CLOCK_MONOTONIC` sleep for the run loop.
 //! The metrics writer emits one JSON header, one record per cycle, and a
-//! summary record as JSONL.
+//! summary record as JSONL. A dedicated writer thread at `SCHED_OTHER` (below
+//! normal nice, off the cycle CPU) owns the file and its buffer, so the cycle
+//! thread never blocks on disk I/O.
 //!
 //! The mode is measurement instrumentation. It does not change the ST clock,
 //! the generated modules, or the default run loop, which keeps the original
@@ -13,25 +15,43 @@
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
+use std::sync::mpsc::{self, SyncSender};
+use std::thread::JoinHandle;
 
 /// Metrics protocol identifier written in the header record.
 pub(crate) const METRICS_PROTOCOL: &str = "stc-rt-metrics/1";
 /// Cycles between `/proc/self/stat` and allocator-counter samples.
 pub(crate) const FAULT_INTERVAL_CYCLES: u64 = 1000;
-
+/// Cycle records the writer queue can hold before records are dropped.
+///
+/// The cycle thread never blocks on the writer: a full queue drops the record
+/// and the summary reports the count.
+const METRICS_QUEUE_CAPACITY: usize = 8192;
 /// The entered RT mode.
-pub(crate) struct RtRuntime;
+pub(crate) struct RtRuntime {
+    background_affinity: Option<u64>,
+}
 
 impl RtRuntime {
     /// Enters FIFO mode and optionally pins the calling thread.
+    ///
+    /// When a cycle CPU is requested, the thread's affinity mask before the
+    /// pin is captured without that CPU for the metrics writer thread.
     ///
     /// # Errors
     ///
     /// Returns a message when the platform is unsupported or the syscall is
     /// denied. The caller must not continue with an invalid measurement.
     pub(crate) fn enter(priority: u8, cpu: Option<u32>) -> Result<Self, String> {
-        platform::enter(priority, cpu)?;
-        Ok(Self)
+        let background_affinity = platform::enter(priority, cpu)?;
+        Ok(Self {
+            background_affinity,
+        })
+    }
+
+    /// Returns the affinity mask for the metrics writer thread, if any.
+    pub(crate) fn background_affinity(&self) -> Option<u64> {
+        self.background_affinity
     }
 
     /// Returns the current `CLOCK_MONOTONIC` time in nanoseconds.
@@ -112,6 +132,7 @@ pub(crate) fn deadline_missed(
 }
 
 /// One cycle's metric fields.
+#[derive(Clone, Copy)]
 pub(crate) struct CycleSample {
     pub(crate) cycle: u64,
     pub(crate) generation: Option<u64>,
@@ -137,10 +158,37 @@ pub(crate) struct MetricsHeader {
     pub(crate) started_ns: u64,
 }
 
-/// Buffered JSONL metrics writer.
+/// One message from the cycle thread to the metrics writer thread.
+enum WriterMessage {
+    Header(MetricsHeader),
+    Cycle(CycleSample),
+    Finish(WriterSummary),
+}
+
+/// Summary counters computed on the cycle thread.
+#[derive(Clone, Copy)]
+struct WriterSummary {
+    cycles: u64,
+    missed: u64,
+    skipped: u64,
+    max_wake_lateness_ns: i64,
+    max_execution_ns: u64,
+    max_scan_overrun_ns: u64,
+    last_faults: Option<(u64, u64)>,
+    last_allocations: Option<(u64, u64)>,
+    dropped_records: u64,
+}
+
+/// Non-blocking JSONL metrics writer.
+///
+/// The cycle thread only updates counters and enqueues a copy of the sample.
+/// A dedicated thread at `SCHED_OTHER` and below-normal nice owns the file and
+/// its 1 MiB buffer, so a buffer flush never stalls the cycle thread. When the
+/// bounded queue is full the record is dropped and counted; the summary
+/// reports the count as `dropped_records`.
 pub(crate) struct MetricsWriter {
-    writer: std::io::BufWriter<std::fs::File>,
-    buffer: String,
+    sender: SyncSender<WriterMessage>,
+    handle: Option<JoinHandle<Result<(), String>>>,
     finished: bool,
     cycles: u64,
     missed: u64,
@@ -150,85 +198,94 @@ pub(crate) struct MetricsWriter {
     max_scan_overrun_ns: u64,
     last_faults: Option<(u64, u64)>,
     last_allocations: Option<(u64, u64)>,
+    dropped_records: u64,
 }
 
 impl MetricsWriter {
     /// Opens the metrics file without writing a header yet.
     ///
     /// The caller writes the header after the RT setup is complete so the
-    /// first deadline does not include file-creation time.
+    /// first deadline does not include file-creation time. The writer thread
+    /// is demoted to `SCHED_OTHER` with a below-normal nice level before this
+    /// function returns; when `background_affinity` is set it is moved off the
+    /// cycle CPU as well.
     ///
     /// # Errors
     ///
-    /// Returns a message when the file cannot be created.
-    pub(crate) fn open(path: &Path) -> Result<Self, String> {
+    /// Returns a message when the file cannot be created or the writer thread
+    /// cannot start or enter its background scheduling class.
+    pub(crate) fn open(path: &Path, background_affinity: Option<u64>) -> Result<Self, String> {
+        Self::open_with(path, METRICS_QUEUE_CAPACITY, background_affinity, None)
+    }
+
+    fn open_with(
+        path: &Path,
+        capacity: usize,
+        background_affinity: Option<u64>,
+        start_gate: Option<std::sync::Arc<std::sync::Barrier>>,
+    ) -> Result<Self, String> {
         let file = std::fs::File::create(path).map_err(|error| {
             format!(
                 "cannot create the RT metrics file `{}`: {error}",
                 path.display()
             )
         })?;
-        Ok(Self {
-            writer: std::io::BufWriter::with_capacity(1 << 20, file),
-            buffer: String::with_capacity(4096),
-            finished: false,
-            cycles: 0,
-            missed: 0,
-            skipped: 0,
-            max_wake_lateness_ns: i64::MIN,
-            max_execution_ns: 0,
-            max_scan_overrun_ns: 0,
-            last_faults: None,
-            last_allocations: None,
-        })
+        let (sender, receiver) = mpsc::sync_channel(capacity);
+        let (ready_sender, ready_receiver) = mpsc::channel();
+        let handle = std::thread::Builder::new()
+            .name("stc-rt-metrics".into())
+            .spawn(move || {
+                writer_main(
+                    receiver,
+                    file,
+                    background_affinity,
+                    start_gate,
+                    ready_sender,
+                )
+            })
+            .map_err(|error| format!("cannot start the RT metrics writer thread: {error}"))?;
+        match ready_receiver.recv() {
+            Ok(Ok(())) => Ok(Self {
+                sender,
+                handle: Some(handle),
+                finished: false,
+                cycles: 0,
+                missed: 0,
+                skipped: 0,
+                max_wake_lateness_ns: i64::MIN,
+                max_execution_ns: 0,
+                max_scan_overrun_ns: 0,
+                last_faults: None,
+                last_allocations: None,
+                dropped_records: 0,
+            }),
+            Ok(Err(message)) => {
+                let _ = handle.join();
+                Err(message)
+            }
+            Err(_) => {
+                let _ = handle.join();
+                Err("the RT metrics writer thread stopped during startup".into())
+            }
+        }
     }
 
-    /// Writes the header record.
+    /// Queues the header record.
     ///
     /// # Errors
     ///
-    /// Returns a message when the buffered write fails.
-    pub(crate) fn write_header(&mut self, header: &MetricsHeader) -> Result<(), String> {
-        self.buffer.clear();
-        self.buffer
-            .push_str("{\"record\":\"header\",\"protocol\":\"");
-        self.buffer.push_str(METRICS_PROTOCOL);
-        self.buffer.push_str("\",\"build_id\":");
-        match &header.build_id {
-            Some(build) => {
-                self.buffer.push('"');
-                self.buffer.push_str(build);
-                self.buffer.push('"');
-            }
-            None => self.buffer.push_str("null"),
-        }
-        let _ = write!(
-            self.buffer,
-            ",\"cycle_time_ns\":{},\"priority\":{},\"cpu\":",
-            header.cycle_time_ns, header.priority
-        );
-        match header.cpu {
-            Some(cpu) => {
-                let _ = write!(self.buffer, "{cpu}");
-            }
-            None => self.buffer.push_str("null"),
-        }
-        let _ = writeln!(
-            self.buffer,
-            ",\"pid\":{},\"started_monotonic_ns\":{},\"fault_interval\":{}}}",
-            std::process::id(),
-            header.started_ns,
-            FAULT_INTERVAL_CYCLES
-        );
-        self.flush_buffer()
+    /// Returns a message when the writer thread has stopped.
+    pub(crate) fn write_header(&mut self, header: MetricsHeader) -> Result<(), String> {
+        self.sender
+            .send(WriterMessage::Header(header))
+            .map_err(|_| "the RT metrics writer stopped before the header".to_string())
     }
 
-    /// Appends one cycle record.
+    /// Queues one cycle record without blocking the cycle thread.
     ///
-    /// # Errors
-    ///
-    /// Returns a message when the buffered write fails.
-    pub(crate) fn record(&mut self, sample: &CycleSample) -> Result<(), String> {
+    /// A full queue drops the record; the drop count is written in the
+    /// summary.
+    pub(crate) fn record(&mut self, sample: &CycleSample) {
         self.cycles = sample.cycle;
         if sample.missed_deadline {
             self.missed = self.missed.saturating_add(1);
@@ -243,88 +300,45 @@ impl MetricsWriter {
         if let Some(allocations) = sample.allocations {
             self.last_allocations = Some(allocations);
         }
-
-        self.buffer.clear();
-        let _ = write!(
-            self.buffer,
-            "{{\"record\":\"cycle\",\"cycle\":{},\"generation\":",
-            sample.cycle
-        );
-        write_opt_u64(&mut self.buffer, sample.generation);
-        let _ = write!(
-            self.buffer,
-            ",\"deadline_ns\":{},\"wake_ns\":{},\"scan_start_ns\":{},\"scan_end_ns\":{},\
-             \"wake_lateness_ns\":{},\"execution_ns\":{},\"scan_overrun_ns\":{},\
-             \"missed_deadline\":{},\"skipped_periods\":{},\"minor_faults\":",
-            sample.deadline_ns,
-            sample.wake_ns,
-            sample.scan_start_ns,
-            sample.scan_end_ns,
-            sample.wake_lateness_ns,
-            sample.execution_ns,
-            sample.scan_overrun_ns,
-            sample.missed_deadline,
-            sample.skipped_periods
-        );
-        write_opt_pair(&mut self.buffer, sample.faults, false);
-        self.buffer.push_str(",\"major_faults\":");
-        write_opt_pair(&mut self.buffer, sample.faults, true);
-        self.buffer.push_str(",\"allocations\":");
-        write_opt_pair(&mut self.buffer, sample.allocations, false);
-        self.buffer.push_str(",\"frees\":");
-        write_opt_pair(&mut self.buffer, sample.allocations, true);
-        self.buffer.push_str("}\n");
-        self.flush_buffer()
+        if self.sender.try_send(WriterMessage::Cycle(*sample)).is_err() {
+            self.dropped_records = self.dropped_records.saturating_add(1);
+        }
     }
 
-    /// Writes the summary record and flushes the file.
+    /// Queues the summary, drains the writer, and joins it.
     ///
     /// # Errors
     ///
-    /// Returns a message when the final write fails.
+    /// Returns a message when the writer thread stopped, panicked, or could
+    /// not write or flush the file.
     pub(crate) fn finish(&mut self) -> Result<(), String> {
         if self.finished {
             return Ok(());
         }
-        self.flush_buffer()?;
         self.finished = true;
-        self.buffer.clear();
-        let _ = write!(
-            self.buffer,
-            "{{\"record\":\"summary\",\"cycles\":{},\"missed_deadlines\":{},\
-             \"skipped_periods\":{},\"max_wake_lateness_ns\":{},\"max_execution_ns\":{},\
-             \"max_scan_overrun_ns\":{},\"last_minor_faults\":",
-            self.cycles,
-            self.missed,
-            self.skipped,
-            self.max_wake_lateness_ns.max(0),
-            self.max_execution_ns,
-            self.max_scan_overrun_ns
-        );
-        write_opt_pair(&mut self.buffer, self.last_faults, false);
-        self.buffer.push_str(",\"last_major_faults\":");
-        write_opt_pair(&mut self.buffer, self.last_faults, true);
-        self.buffer.push_str(",\"last_allocations\":");
-        write_opt_pair(&mut self.buffer, self.last_allocations, false);
-        self.buffer.push_str(",\"last_frees\":");
-        write_opt_pair(&mut self.buffer, self.last_allocations, true);
-        let _ = writeln!(
-            self.buffer,
-            ",\"finished_monotonic_ns\":{}}}",
-            platform::now_ns().unwrap_or(0)
-        );
-        self.flush_buffer()?;
-        self.writer
-            .flush()
-            .map_err(|error| format!("cannot flush the RT metrics file: {error}"))
-    }
-
-    fn flush_buffer(&mut self) -> Result<(), String> {
-        self.writer
-            .write_all(self.buffer.as_bytes())
-            .map_err(|error| format!("cannot write the RT metrics file: {error}"))?;
-        self.buffer.clear();
-        Ok(())
+        let summary = WriterSummary {
+            cycles: self.cycles,
+            missed: self.missed,
+            skipped: self.skipped,
+            max_wake_lateness_ns: self.max_wake_lateness_ns,
+            max_execution_ns: self.max_execution_ns,
+            max_scan_overrun_ns: self.max_scan_overrun_ns,
+            last_faults: self.last_faults,
+            last_allocations: self.last_allocations,
+            dropped_records: self.dropped_records,
+        };
+        let sent = self.sender.send(WriterMessage::Finish(summary));
+        let Some(handle) = self.handle.take() else {
+            return sent
+                .map_err(|_| "the RT metrics writer stopped before the summary".to_string());
+        };
+        match handle.join() {
+            Ok(Ok(())) => {
+                sent.map_err(|_| "the RT metrics writer stopped before the summary".to_string())
+            }
+            Ok(Err(message)) => Err(message),
+            Err(_) => Err("the RT metrics writer thread panicked".into()),
+        }
     }
 }
 
@@ -332,6 +346,156 @@ impl Drop for MetricsWriter {
     fn drop(&mut self) {
         let _ = self.finish();
     }
+}
+
+/// Owns the metrics file and writes queued records until the finish message.
+fn writer_main(
+    receiver: mpsc::Receiver<WriterMessage>,
+    file: std::fs::File,
+    background_affinity: Option<u64>,
+    start_gate: Option<std::sync::Arc<std::sync::Barrier>>,
+    ready_sender: mpsc::Sender<Result<(), String>>,
+) -> Result<(), String> {
+    // Explicitly leave the inherited FIFO scheduling class and the cycle
+    // CPU before consuming any records.
+    if let Err(message) = platform::background(background_affinity) {
+        let _ = ready_sender.send(Err(message.clone()));
+        return Err(message);
+    }
+    if ready_sender.send(Ok(())).is_err() {
+        return Ok(());
+    }
+    if let Some(gate) = start_gate {
+        gate.wait();
+    }
+    let mut writer = std::io::BufWriter::with_capacity(1 << 20, file);
+    let mut buffer = String::with_capacity(4096);
+    loop {
+        match receiver.recv() {
+            Ok(WriterMessage::Header(header)) => {
+                format_header(&mut buffer, &header);
+                write_line(&mut writer, &mut buffer)?;
+            }
+            Ok(WriterMessage::Cycle(sample)) => {
+                format_cycle(&mut buffer, &sample);
+                write_line(&mut writer, &mut buffer)?;
+            }
+            Ok(WriterMessage::Finish(summary)) => {
+                format_summary(&mut buffer, &summary);
+                write_line(&mut writer, &mut buffer)?;
+                return writer
+                    .flush()
+                    .map_err(|error| format!("cannot flush the RT metrics file: {error}"));
+            }
+            Err(_) => return Ok(()),
+        }
+    }
+}
+
+fn write_line(
+    writer: &mut std::io::BufWriter<std::fs::File>,
+    buffer: &mut String,
+) -> Result<(), String> {
+    writer
+        .write_all(buffer.as_bytes())
+        .map_err(|error| format!("cannot write the RT metrics file: {error}"))?;
+    buffer.clear();
+    Ok(())
+}
+
+fn format_header(buffer: &mut String, header: &MetricsHeader) {
+    buffer.clear();
+    buffer.push_str("{\"record\":\"header\",\"protocol\":\"");
+    buffer.push_str(METRICS_PROTOCOL);
+    buffer.push_str("\",\"build_id\":");
+    match &header.build_id {
+        Some(build) => {
+            buffer.push('"');
+            buffer.push_str(build);
+            buffer.push('"');
+        }
+        None => buffer.push_str("null"),
+    }
+    let _ = write!(
+        buffer,
+        ",\"cycle_time_ns\":{},\"priority\":{},\"cpu\":",
+        header.cycle_time_ns, header.priority
+    );
+    match header.cpu {
+        Some(cpu) => {
+            let _ = write!(buffer, "{cpu}");
+        }
+        None => buffer.push_str("null"),
+    }
+    let _ = writeln!(
+        buffer,
+        ",\"pid\":{},\"started_monotonic_ns\":{},\"fault_interval\":{}}}",
+        std::process::id(),
+        header.started_ns,
+        FAULT_INTERVAL_CYCLES
+    );
+}
+
+fn format_cycle(buffer: &mut String, sample: &CycleSample) {
+    buffer.clear();
+    let _ = write!(
+        buffer,
+        "{{\"record\":\"cycle\",\"cycle\":{},\"generation\":",
+        sample.cycle
+    );
+    write_opt_u64(buffer, sample.generation);
+    let _ = write!(
+        buffer,
+        ",\"deadline_ns\":{},\"wake_ns\":{},\"scan_start_ns\":{},\"scan_end_ns\":{},\
+         \"wake_lateness_ns\":{},\"execution_ns\":{},\"scan_overrun_ns\":{},\
+         \"missed_deadline\":{},\"skipped_periods\":{},\"minor_faults\":",
+        sample.deadline_ns,
+        sample.wake_ns,
+        sample.scan_start_ns,
+        sample.scan_end_ns,
+        sample.wake_lateness_ns,
+        sample.execution_ns,
+        sample.scan_overrun_ns,
+        sample.missed_deadline,
+        sample.skipped_periods
+    );
+    write_opt_pair(buffer, sample.faults, false);
+    buffer.push_str(",\"major_faults\":");
+    write_opt_pair(buffer, sample.faults, true);
+    buffer.push_str(",\"allocations\":");
+    write_opt_pair(buffer, sample.allocations, false);
+    buffer.push_str(",\"frees\":");
+    write_opt_pair(buffer, sample.allocations, true);
+    buffer.push_str("}\n");
+}
+
+fn format_summary(buffer: &mut String, summary: &WriterSummary) {
+    buffer.clear();
+    let _ = write!(
+        buffer,
+        "{{\"record\":\"summary\",\"cycles\":{},\"missed_deadlines\":{},\
+         \"skipped_periods\":{},\"dropped_records\":{},\"max_wake_lateness_ns\":{},\
+         \"max_execution_ns\":{},\"max_scan_overrun_ns\":{},\"last_minor_faults\":",
+        summary.cycles,
+        summary.missed,
+        summary.skipped,
+        summary.dropped_records,
+        summary.max_wake_lateness_ns.max(0),
+        summary.max_execution_ns,
+        summary.max_scan_overrun_ns
+    );
+    write_opt_pair(buffer, summary.last_faults, false);
+    buffer.push_str(",\"last_major_faults\":");
+    write_opt_pair(buffer, summary.last_faults, true);
+    buffer.push_str(",\"last_allocations\":");
+    write_opt_pair(buffer, summary.last_allocations, false);
+    buffer.push_str(",\"last_frees\":");
+    write_opt_pair(buffer, summary.last_allocations, true);
+    let _ = writeln!(
+        buffer,
+        ",\"finished_monotonic_ns\":{}}}",
+        platform::now_ns().unwrap_or(0)
+    );
 }
 
 fn write_opt_u64(buffer: &mut String, value: Option<u64>) {
@@ -409,10 +573,46 @@ mod platform {
             remain: *mut Timespec,
         ) -> c_int;
         fn sched_setscheduler(pid: c_int, policy: c_int, param: *const SchedParam) -> c_int;
+        fn sched_getaffinity(pid: c_int, cpusetsize: usize, mask: *mut u64) -> c_int;
         fn sched_setaffinity(pid: c_int, cpusetsize: usize, mask: *const u64) -> c_int;
     }
 
-    pub(super) fn enter(priority: u8, cpu: Option<u32>) -> Result<(), String> {
+    pub(super) fn enter(priority: u8, cpu: Option<u32>) -> Result<Option<u64>, String> {
+        let pinned = match cpu {
+            Some(cpu) => {
+                let Some(mask) = 1_u64.checked_shl(cpu) else {
+                    return Err(format!(
+                        "--rt-cpu {cpu} is outside the supported 0..=63 range"
+                    ));
+                };
+                Some((cpu, mask))
+            }
+            None => None,
+        };
+        // Read the caller's mask before pinning it, so the metrics writer can
+        // be moved to the remaining CPUs instead of inheriting the cycle CPU.
+        let background_affinity = match pinned {
+            Some((cpu, mask)) => {
+                let mut current = 0_u64;
+                // SAFETY: pid 0 names the calling thread; the mask is one u64.
+                let result =
+                    unsafe { sched_getaffinity(0, std::mem::size_of::<u64>(), &mut current) };
+                if result != 0 {
+                    return Err(format!(
+                        "cannot read the cycle thread affinity: {}",
+                        io::Error::last_os_error()
+                    ));
+                }
+                let background = current & !mask;
+                if background == 0 {
+                    return Err(format!(
+                        "--rt-cpu {cpu} leaves no CPU for the RT metrics writer thread"
+                    ));
+                }
+                Some(background)
+            }
+            None => None,
+        };
         let param = SchedParam {
             sched_priority: c_int::from(priority),
         };
@@ -425,18 +625,28 @@ mod platform {
                 io::Error::last_os_error()
             ));
         }
-        if let Some(cpu) = cpu {
-            let Some(mask) = 1_u64.checked_shl(cpu) else {
-                return Err(format!(
-                    "--rt-cpu {cpu} is outside the supported 0..=63 range"
-                ));
-            };
+        if let Some((cpu, mask)) = pinned {
             // SAFETY: pid 0 names the calling thread; the mask is one u64 and
             // the kernel accepts a byte length that covers the selected CPU.
             let result = unsafe { sched_setaffinity(0, std::mem::size_of::<u64>(), &mask) };
             if result != 0 {
                 return Err(format!(
                     "cannot pin the cycle thread to CPU {cpu}: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+        }
+        Ok(background_affinity)
+    }
+
+    pub(super) fn background(affinity: Option<u64>) -> Result<(), String> {
+        crate::priority::lower_service_priority_checked()?;
+        if let Some(mask) = affinity {
+            // SAFETY: pid 0 names the calling thread; the mask is one u64.
+            let result = unsafe { sched_setaffinity(0, std::mem::size_of::<u64>(), &mask) };
+            if result != 0 {
+                return Err(format!(
+                    "cannot move the metrics writer thread off the cycle CPU: {}",
                     io::Error::last_os_error()
                 ));
             }
@@ -501,8 +711,12 @@ mod platform {
 
 #[cfg(not(target_os = "linux"))]
 mod platform {
-    pub(super) fn enter(_priority: u8, _cpu: Option<u32>) -> Result<(), String> {
+    pub(super) fn enter(_priority: u8, _cpu: Option<u32>) -> Result<Option<u64>, String> {
         Err("--rt is only supported on Linux".into())
+    }
+
+    pub(super) fn background(_affinity: Option<u64>) -> Result<(), String> {
+        Ok(())
     }
 
     pub(super) fn now_ns() -> Result<u64, String> {
@@ -563,42 +777,38 @@ mod tests {
                 cpu: Some(3),
                 started_ns: 123,
             };
-            let mut writer = MetricsWriter::open(&path).expect("open");
-            writer.write_header(&header).expect("header");
-            writer
-                .record(&CycleSample {
-                    cycle: 1,
-                    generation: Some(7),
-                    deadline_ns: 123,
-                    wake_ns: 124,
-                    scan_start_ns: 124,
-                    scan_end_ns: 200,
-                    wake_lateness_ns: 1,
-                    execution_ns: 76,
-                    scan_overrun_ns: 0,
-                    missed_deadline: false,
-                    skipped_periods: 0,
-                    faults: Some((3, 4)),
-                    allocations: Some((5, 6)),
-                })
-                .expect("record");
-            writer
-                .record(&CycleSample {
-                    cycle: 2,
-                    generation: Some(7),
-                    deadline_ns: 1_000_123,
-                    wake_ns: 1_000_200,
-                    scan_start_ns: 1_000_200,
-                    scan_end_ns: 1_000_400,
-                    wake_lateness_ns: 77,
-                    execution_ns: 200,
-                    scan_overrun_ns: 0,
-                    missed_deadline: true,
-                    skipped_periods: 1,
-                    faults: None,
-                    allocations: None,
-                })
-                .expect("record");
+            let mut writer = MetricsWriter::open(&path, None).expect("open");
+            writer.write_header(header).expect("header");
+            writer.record(&CycleSample {
+                cycle: 1,
+                generation: Some(7),
+                deadline_ns: 123,
+                wake_ns: 124,
+                scan_start_ns: 124,
+                scan_end_ns: 200,
+                wake_lateness_ns: 1,
+                execution_ns: 76,
+                scan_overrun_ns: 0,
+                missed_deadline: false,
+                skipped_periods: 0,
+                faults: Some((3, 4)),
+                allocations: Some((5, 6)),
+            });
+            writer.record(&CycleSample {
+                cycle: 2,
+                generation: Some(7),
+                deadline_ns: 1_000_123,
+                wake_ns: 1_000_200,
+                scan_start_ns: 1_000_200,
+                scan_end_ns: 1_000_400,
+                wake_lateness_ns: 77,
+                execution_ns: 200,
+                scan_overrun_ns: 0,
+                missed_deadline: true,
+                skipped_periods: 1,
+                faults: None,
+                allocations: None,
+            });
             writer.finish().expect("finish");
         }
         let text = std::fs::read_to_string(&path).expect("read metrics");
@@ -623,6 +833,105 @@ mod tests {
         assert!(lines[3].contains("\"skipped_periods\":1"));
         assert!(lines[3].contains("\"max_wake_lateness_ns\":77"));
         assert!(lines[3].contains("\"max_execution_ns\":200"));
+        assert!(lines[3].contains("\"dropped_records\":0"));
+    }
+
+    fn metrics_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "stc-rt-metrics-{name}-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ))
+    }
+
+    fn cycle_sample(cycle: u64, skipped_periods: u64) -> CycleSample {
+        CycleSample {
+            cycle,
+            generation: Some(7),
+            deadline_ns: 123,
+            wake_ns: 124,
+            scan_start_ns: 124,
+            scan_end_ns: 200,
+            wake_lateness_ns: 1,
+            execution_ns: 76,
+            scan_overrun_ns: 0,
+            missed_deadline: false,
+            skipped_periods,
+            faults: None,
+            allocations: None,
+        }
+    }
+
+    fn metrics_header() -> MetricsHeader {
+        MetricsHeader {
+            build_id: Some("deadbeef".into()),
+            cycle_time_ns: 1_000_000,
+            priority: 90,
+            cpu: Some(3),
+            started_ns: 123,
+        }
+    }
+
+    #[test]
+    fn metrics_writer_reports_dropped_records() {
+        let path = metrics_path("dropped");
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut writer =
+            MetricsWriter::open_with(&path, 4, None, Some(gate.clone())).expect("open");
+        writer.write_header(metrics_header()).expect("header");
+        // The writer is parked behind the gate, so the header and three cycle
+        // records fill the four slots and the fourth cycle record is dropped.
+        for cycle in 1..=4 {
+            writer.record(&cycle_sample(cycle, 0));
+        }
+        gate.wait();
+        writer.finish().expect("finish");
+        let text = std::fs::read_to_string(&path).expect("read metrics");
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 5, "header, three cycles, summary: {text:?}");
+        let cycles = lines
+            .iter()
+            .filter(|line| line.contains("\"record\":\"cycle\""))
+            .count();
+        assert_eq!(cycles, 3);
+        let summary = lines.last().expect("summary");
+        assert!(summary.contains("\"dropped_records\":1"), "{summary}");
+        assert!(summary.contains("\"cycles\":4"), "{summary}");
+    }
+
+    #[test]
+    fn metrics_writer_finish_drains_without_hanging() {
+        let path = metrics_path("shutdown");
+        let mut writer = MetricsWriter::open(&path, None).expect("open");
+        writer.write_header(metrics_header()).expect("header");
+        for cycle in 1..=100 {
+            writer.record(&cycle_sample(cycle, 0));
+        }
+        let (done_sender, done_receiver) = std::sync::mpsc::channel();
+        let finish_thread = std::thread::spawn(move || {
+            let _ = done_sender.send(writer.finish());
+        });
+        let result = done_receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("finish did not complete");
+        assert!(result.is_ok(), "{result:?}");
+        finish_thread.join().expect("finish thread");
+        let text = std::fs::read_to_string(&path).expect("read metrics");
+        let _ = std::fs::remove_file(&path);
+        let cycles = text
+            .lines()
+            .filter(|line| line.contains("\"record\":\"cycle\""))
+            .count();
+        assert_eq!(cycles, 100);
+        assert!(
+            text.lines()
+                .last()
+                .expect("summary")
+                .contains("\"dropped_records\":0")
+        );
     }
 
     #[cfg(target_os = "linux")]

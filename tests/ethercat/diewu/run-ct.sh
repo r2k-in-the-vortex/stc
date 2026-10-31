@@ -8,10 +8,11 @@
 #     counter, current (not stale) inputs, link up, one responding slave, no
 #     master error, and no recovery;
 #   * every completed cycle exchanged a frame (exchanges == cycles);
-#   * the RT metrics summary reports zero skipped periods and the per-cycle
-#     execution p99 is at most half the cycle time; the strict
-#     missed_deadline counter is reported but not gated because the project
-#     documents it as a non-hard counter (KNOWN-LIMITATIONS.md);
+#   * the RT metrics summary reports zero skipped periods, zero dropped
+#     metrics records, and a per-cycle execution p99 at most half the cycle
+#     time; the strict missed_deadline counter is reported but not gated
+#     because the project documents it as a non-hard counter
+#     (KNOWN-LIMITATIONS.md);
 #   * the IgH master's Tx-error and lost-frame counters did not increase.
 #
 # Physical input values and measured outputs are not checked; phases 3-5 are
@@ -212,6 +213,11 @@ case "$summary" in
     *'"skipped_periods":0'*) ;;
     *) fail "skipped periods in the RT summary: $summary" ;;
 esac
+dropped=$(sed -n 's/.*"dropped_records":\([0-9][0-9]*\).*/\1/p' <<<"$summary")
+[[ -n $dropped ]] \
+    || fail "RT summary has no dropped_records count (the deployed runtime predates the asynchronous metrics writer): $summary"
+[[ $dropped == 0 ]] \
+    || fail "the RT metrics writer dropped $dropped cycle records: $summary"
 strict_missed=$(sed -n 's/.*"missed_deadlines":\([0-9][0-9]*\).*/\1/p' <<<"$summary")
 [[ -n $strict_missed ]] || fail "RT summary has no missed_deadlines count: $summary"
 
@@ -298,7 +304,7 @@ done
 [[ $slave_ok == 1 ]] \
     || fail "the configured slave is not PREOP after the run: $(cat "$LOGS/$stem.slaves-after.txt" 2>/dev/null)"
 
-printf 'run-ct: PASS cycle=%s duration=%s label=%s exchanges=%s cycles=%s skipped=0 strict_missed=%s\n' \
+printf 'run-ct: PASS cycle=%s duration=%s label=%s exchanges=%s cycles=%s skipped=0 dropped=0 strict_missed=%s\n' \
     "$cycle_time" "$duration" "$label" "$exchanges" "$completed" "$strict_missed"
 printf 'run-ct: timing exec_ns p50=%s p99=%s p99.9=%s max=%s; wake_ns p50=%s p99=%s p99.9=%s max=%s\n' \
     "$exec_p50" "$exec_p99" "$exec_p999" "$exec_max" \

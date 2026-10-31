@@ -16,6 +16,23 @@ pub(crate) fn lower_service_priority() {
     unsafe { platform::lower() }
 }
 
+/// Lowers the calling thread to `SCHED_OTHER` with the service nice level.
+///
+/// Unlike [`lower_service_priority`], this reports a syscall failure so a
+/// measurement writer can fail closed instead of inheriting a real-time
+/// scheduling class.
+///
+/// # Errors
+///
+/// Returns a message when the scheduler policy or the nice level cannot be
+/// changed.
+#[cfg(target_os = "linux")]
+pub(crate) fn lower_service_priority_checked() -> Result<(), String> {
+    // SAFETY: the platform function changes only the calling thread's
+    // scheduling priority.
+    unsafe { platform::lower_checked() }
+}
+
 #[cfg(unix)]
 mod platform {
     use std::os::raw::c_int;
@@ -60,6 +77,31 @@ mod platform {
         unsafe {
             let _ = setpriority(PRIO_PROCESS, 0, SERVICE_NICE);
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) unsafe fn lower_checked() -> Result<(), String> {
+        use std::io;
+        let param = SchedParam { sched_priority: 0 };
+        // SAFETY: pid 0 names the calling thread; `param` is a valid
+        // `sched_param` for the duration of the call.
+        let result = unsafe { sched_setscheduler(0, SCHED_OTHER, &param) };
+        if result != 0 {
+            return Err(format!(
+                "cannot set the metrics writer thread to SCHED_OTHER: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: `PRIO_PROCESS` with id 0 selects the calling thread on
+        // Linux; lowering the priority is permitted without privilege.
+        let result = unsafe { setpriority(PRIO_PROCESS, 0, SERVICE_NICE) };
+        if result != 0 {
+            return Err(format!(
+                "cannot lower the metrics writer thread priority: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
     }
 }
 

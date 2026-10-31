@@ -218,9 +218,10 @@ pub(crate) fn run_loop_with_control(
         0
     };
     let mut metrics = match (&rt, &options.rt_metrics) {
-        (Some(_), Some(path)) => {
-            Some(MetricsWriter::open(path).map_err(|message| RunLoopError::Setup { message })?)
-        }
+        (Some(rt), Some(path)) => Some(
+            MetricsWriter::open(path, rt.background_affinity())
+                .map_err(|message| RunLoopError::Setup { message })?,
+        ),
         _ => None,
     };
     // The first deadline is set after the metrics file is open so file
@@ -242,7 +243,7 @@ pub(crate) fn run_loop_with_control(
             started_ns: deadline_ns.unwrap_or(0),
         };
         metrics
-            .write_header(&header)
+            .write_header(header)
             .map_err(|message| RunLoopError::Setup { message })?;
     }
     let mut cycles = 0_u64;
@@ -334,9 +335,7 @@ pub(crate) fn run_loop_with_control(
                     faults,
                     allocations,
                 };
-                metrics
-                    .record(&sample)
-                    .map_err(|message| RunLoopError::Setup { message })?;
+                metrics.record(&sample);
             }
         }
         if control_signal == ControlSignal::Stop {
