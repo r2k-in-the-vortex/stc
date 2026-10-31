@@ -3334,4 +3334,13 @@ theorem memValuePtrBounded_of_evalOperand {c : IRState} {f : IRFrame}
       cases h
       trivial
 
+/-- The empty-frame halt form: changing only the machine status preserves the
+state invariant. The halt is the only `.step` outcome that changes the status. -/
+theorem wfState_status {contract : IRContract} {c : IRState} (st : IRStatus)
+    (hwf : WFState contract c) : WFState contract { c with status := st } := by
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+    h17, h18, h19, h20, h21, h22⟩ := hwf
+  exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+    h17, h18, h19, h20, h21, h22⟩
+
 end Stc.Codegen
