@@ -315,7 +315,7 @@ writes:
 - `coverage.json` — the native `stc-coverage/1` report: suite and per-file
   totals, every canonical site with line, column, and summed hit count, and
   the site indices each test covered.
-- `coverage.info` — LCOV for editors and `lcov`/`genhtml` tooling; one `DA`
+- `lcov.info` — LCOV for editors and `lcov`/`genhtml` tooling; one `DA`
   line per line with a site, with counts summed per line.
 - A human summary on stdout after the test summary.
 

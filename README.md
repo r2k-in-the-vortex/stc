@@ -149,7 +149,7 @@ specification continues to be written before implementation, as required below.
 
 WL-10 (v2.0.0) adds statement coverage for the ST code under test: `stc test --coverage`
 instruments test builds only and writes deterministic `coverage.json` (`stc-coverage/1`),
-`coverage.info` (LCOV), and a human summary under `target/stc/coverage`. `[test] coverage = true`
+`lcov.info` (LCOV), and a human summary under `target/stc/coverage`. `[test] coverage = true`
 sets the project default; `--coverage`/`--no-coverage` override it per run and `--coverage-out`
 selects the report directory. Host ABI,
 GOT/manifest, metadata, production modules, and test results are unchanged. The model is in
