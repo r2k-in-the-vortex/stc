@@ -498,7 +498,8 @@ def stepStmt (u : HirUnit) (c : State) (s : Stmt) (rest : List Stmt)
                     focus := .expr cond
                     frames := { f with k := Cont.same (.repeatCond body cond) marker.after marker.span :: below, loopCtx := marker.after } :: fr }
               | .forBody var stopVal stepVal body =>
-                  forAdvance u { c with frames := { f with k := below } :: fr } marker below var stopVal stepVal body
+                  forAdvance u { c with frames := { f with k := below, loopCtx := marker.after } :: fr }
+                    marker below var stopVal stepVal body
               | _ => .stuck
       | .empty _ => .step { c with focus := .stmts rest lc }
       | .ifThenElse arms elseBody span =>
