@@ -28,3 +28,43 @@ reason = "The stale-reference quarantine warning has a reserved code but no emis
 id = "STC-W-RUN-001"
 status = "not-implemented"
 reason = "Direct variables in function/FB bodies are rejected as STC-E-IO-001 rather than accepted with this deprecation warning (Runtime and Execution §2.4)."
+
+[[rule]]
+id = "STC-E-IO-BINDING-001"
+status = "not-implemented"
+reason = "WL-5.2 phase 0 locks the route-graph contract; fan-in detection and its tests arrive with the phase-1 coordinator."
+
+[[rule]]
+id = "STC-E-IO-BINDING-002"
+status = "not-implemented"
+reason = "WL-5.2 phase 0 locks the route-graph contract; endpoint/width validation and its tests arrive with the phase-1 coordinator."
+
+[[rule]]
+id = "STC-E-IO-BINDING-003"
+status = "not-implemented"
+reason = "WL-5.2 phase 0 locks the route-graph contract; backend-kind registration and its tests arrive with the phase-1 coordinator."
+
+[[rule]]
+id = "STC-E-IO-ETH-006"
+status = "not-implemented"
+reason = "WL-5.2 phase 0 locks the EtherCAT contract; device/channel configuration validation and its tests arrive in phase 2."
+
+[[rule]]
+id = "STC-E-IO-ETH-007"
+status = "not-implemented"
+reason = "WL-5.2 phase 0 locks the EtherCAT contract; bound-channel resolution and its tests arrive in phase 2."
+
+[[rule]]
+id = "STC-W-IO-ETH-001"
+status = "not-implemented"
+reason = "WL-5.2 phase 0 locks the EtherCAT contract; the unbound-channel warning and its tests arrive in phase 2."
+
+[[rule]]
+id = "STC-W-IO-ETH-002"
+status = "not-implemented"
+reason = "WL-5.2 phase 0 locks the EtherCAT contract; the distributed-clock warning and its tests arrive with the phase-2 lifecycle."
+
+[[rule]]
+id = "STC-W-IO-ETH-003"
+status = "not-implemented"
+reason = "WL-5.2 phase 0 locks the transparent-fault contract; fault/recovery emission and its tests arrive in phase 4."

@@ -174,6 +174,7 @@ timeout, or interlock is provided. The consolidated list is in
 | [Architecture](specification/Architecture/Architecture.md) | Pipeline, crates, LLVM IR, ABI |
 | [Runtime and Execution](specification/Architecture/Runtime-and-Execution.md) | Execution model, runtime, standard functions/FBs |
 | [I/O and Devices](specification/Architecture/IO-and-Devices.md) | Process image, AT linking, device model, JSON pragma hints |
+| [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) | Machine profiles, route graph, multi-backend coordinator, status and fault contracts |
 | [State and RETAIN](specification/Architecture/State-and-Retain.md) | File-backed retained state, warm/cold restart, layout hash |
 | [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) | Commands, diagnostics, `stc.toml` |
 | [Testing and Verification](specification/Architecture/Testing-and-Verification.md) | Test framework, Lean, CI |

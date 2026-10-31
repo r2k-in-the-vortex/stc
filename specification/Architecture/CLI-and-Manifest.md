@@ -535,7 +535,9 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
 - `[io]` is optional. `backend` is `null`, `memory`, or `file` in v1; hardware backend names are
   runtime-defined in v2. `file` names the file used by the file backend.
   `input-bytes`/`output-bytes`/`marker-bytes` are optional; the compiler computes them from `AT`
-  declarations when omitted. `[test] io` overrides the backend for test runs.
+  declarations when omitted. `[test] io` overrides the backend for test runs. The v2.0.0
+  machine-profile key `[io].config`, the `--io-config` diagnostic override, and the profile and
+  route schemas are fixed in [I/O Routing and Backends](IO-Routing-and-Backends.md).
 - `[[io.devices]]` declares a device tree. `name` is unique; `kind` is an opaque string;
   `config` is opaque TOML copied to metadata. `[[io.devices.channels]]` is optional and gives the
   compiler enough information to validate hints (`name`, `direction`, `width`).
