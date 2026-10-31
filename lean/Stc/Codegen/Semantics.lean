@@ -541,6 +541,13 @@ def withHead (s : IRState) (f : IRFrame) : IRState :=
   | [] => s
   | _ :: rest => { s with frames := f :: rest }
 
+/-- Replace the running frame's remaining instructions, preserving its locals
+and memory (including a store just performed by the step). -/
+def withHeadInstrs (s : IRState) (instrs : List Instr) : IRState :=
+  match s.frames with
+  | [] => s
+  | f :: rest => { s with frames := { f with instrs := instrs } :: rest }
+
 /-- Find a frame by id. -/
 def frameById? (s : IRState) (id : Nat) : Option IRFrame :=
   s.frames.find? (fun frame => frame.id == id)
@@ -736,7 +743,7 @@ def stepInstr (s : IRState) (f : IRFrame) (instr : Instr) (rest : List Instr) : 
       | some v, some (.ptr addr) =>
           if v.type? == some ty && stackStoreTypeOK s addr ty then
             match s.storeValue addr v with
-            | some s' => .step (s'.withHead ({ f with instrs := rest }))
+            | some s' => .step (s'.withHeadInstrs rest)
             | none => .stuck s
           else .stuck s
       | _, _ => .stuck s

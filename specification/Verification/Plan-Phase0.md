@@ -2046,6 +2046,12 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
   criterion is met. For the whole-run follow-up, `WFProgram.localTypesRepresentable` and
   `default_type?` are already implemented; the remaining obligations are §22.11.
 
+  **Machine fix (2026-10-31).** The store step used the pre-store head frame in
+  `withHead`, so a store to the current frame's stack memory was discarded. The step now
+  uses `IRState.withHeadInstrs`, which updates the remaining instructions on the head frame
+  *after* `storeValue`, preserving the store. The three proved soundness theorems and the
+  registry are unaffected; the proof obligations below assume the corrected step.
+
 ### 22.11 Remaining whole-run work
 
 **Owner decision (2026-10-31).** The owner chose the **full invariant**, not the reduced
@@ -2069,10 +2075,35 @@ fact, `StorageValuesLive`, `FunctionBindingsTyped`, and `CallTargetsTyped`, and 
 contract; the slots-global storage fact is included through the `SlotsBase` hypothesis.
 
 The remaining bridge work is the per-instruction `irStep_wf` induction for the 18 `WFState`
-fields (with the slots-base, local-type, memory-pointer, return-link, and
-`UnreachableGuarded` obligations) and the reachability/`irRun` corollaries. The compiling
-checkpoint is on `WL-3`; the eight soundness theorems and the registry remain green. The three
-extensions were required because without them the invariant was not preserved:
+fields and the reachability/`irRun` corollaries. While setting up the induction, two further
+provenance gaps appeared; they are **not** weakenings and require a decision:
+
+1. **Slot-entry value precision (within `SlotsBase`).** `SlotsBase` constrains the slot-table
+   base local but not the GEP result SSA. The `.cell slot false` origin load reads the GEP
+   result, and nothing in `WFState` forces that result to be `.ptr (.slotEntry slot)`; a
+   state satisfying the current invariant can therefore produce a non-`.cell` value.
+   Extending the already-approved `SlotsBase` to also constrain the slot-entry GEP results
+   (and the slots-global storage entry that initializes a base defined by a load) is the
+   natural fix; it strengthens the approved invariant rather than adding a new decision.
+2. **Stack-return safety (`StackReturnsSafe`).** At `irStepRet`, the caller receives the
+   callee's return value. If a callee returns `.ptr (.stack calleeFrame ...)`, the callee
+   frame is popped and the caller's `StackPtrsBounded` cannot find it. The builder does not
+   return stack pointers, but the invariant needs the fact. Proposed new `WFState` field:
+
+   ```lean
+   def StackReturnsSafe (c : IRState) : Prop :=
+     ∀ f ∈ c.frames, ∀ operand v,
+       f.terminator = some (.ret (some operand)) →
+       evalOperand f operand = some v →
+       ∀ frame slot off, v = .ptr (.stack frame slot off) → frame ≠ f.id
+   ```
+
+   This is a genuine extension; owner approval is requested. The initial-state proof would
+   add the corresponding host/builder hypothesis.
+
+The compiling checkpoint is on `WL-3`; the eight soundness theorems and the registry remain
+green. The three earlier extensions were required because without them the invariant was not
+preserved:
 
 1. **Slots base (`SlotsBase`).** For every `.cell slot false` origin whose defining `load`
    reads a `.slotTable` GEP, the GEP's base local holds `.ptr .slotTable`. The current
