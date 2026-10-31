@@ -1048,6 +1048,27 @@ theorem FrameMatches.updateK {u : HirUnit} {f : Frame} {k : List Cont}
   | program => simpa [FrameMatches, hk] using h
   | function index => simpa [FrameMatches, hk] using h
 
+/-- `FrameMatches` ignores the loop context. -/
+theorem FrameMatches.updateLoopCtx {u : HirUnit} {f : Frame} {lc : LoopCtx}
+    (h : FrameMatches u f) : FrameMatches u { f with loopCtx := lc } := by
+  cases hk : f.kind with
+  | program => simpa [FrameMatches, hk] using h
+  | function index => simpa [FrameMatches, hk] using h
+
+/-- `FrameMatches` ignores the continuation stack and the loop context. -/
+theorem FrameMatches.updateKLoop {u : HirUnit} {f : Frame} {k : List Cont} {lc : LoopCtx}
+    (h : FrameMatches u f) : FrameMatches u { f with k := k, loopCtx := lc } := by
+  cases hk : f.kind with
+  | program => simpa [FrameMatches, hk] using h
+  | function index => simpa [FrameMatches, hk] using h
+
+/-- `FrameMatches` ignores the caller expectation and the continuation stack. -/
+theorem FrameMatches.updateKExpect {u : HirUnit} {f : Frame} {k : List Cont} {e : Option Ty}
+    (h : FrameMatches u f) : FrameMatches u { f with k := k, expect := e } := by
+  cases hk : f.kind with
+  | program => simpa [FrameMatches, hk] using h
+  | function index => simpa [FrameMatches, hk] using h
+
 /-- Replacing the head frame's continuation stack and the focus preserves
 configuration typing. -/
 theorem ConfigTyped.updateHeadFocus {u : HirUnit} {s : State} {f : Frame}
@@ -1741,6 +1762,364 @@ theorem stepExpr_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
           · intro hd
             exact Or.inr (hc.headLoop f rest hf hd)
           · rfl
+
+/-- Assignment preserves configuration typing. -/
+theorem stepValue_assign_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {k : List Cont} {place : Place} {ty : Ty} {span : Span} {v : Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hk : f.k = Cont.mk (.assign place) f.loopCtx f.loopCtx span :: k)
+    (hvwf : v.WellFormed) (hvy : v.ty = ty)
+    (hlookup : (frameCtx u f.kind).lookup place.id = some ty)
+    (hrest : StackTyped (frameCtx u f.kind) k .unit f.loopCtx)
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  simp only [stepValue, hf, hk] at hs
+  cases hs
+  have hloop : f.loopCtx.depth > 0 → StackHasLoop k := by
+    intro hd
+    have h := hc.headLoop f fr hf hd
+    rw [hk] at h
+    exact StackHasLoop.tail_of_not_marker h
+      (by simp [Cont.isLoopMarker, ContKind.isLoopMarker])
+  let s' : State := { c with frames := { f with k := k } :: fr, focus := .resume }
+  have hc1 : ConfigTyped u s' :=
+    ConfigTyped.updateHeadFocus hc hf (FocusTyped.resume_of hrest) hloop
+  have hlookup' : (frameCtx u ({ f with k := k } : Frame).kind).lookup place.id =
+      some v.ty := by
+    rw [hvy]; simpa using hlookup
+  have hc2 : ConfigTyped u (s'.setVar place.id v) :=
+    ConfigTyped.setVar hc1 rfl hlookup' hvwf
+  cases hid : place.id <;> simpa [s', hf, State.updateHead, State.setVar, hid] using hc2
+
+/-- Unary evaluation preserves configuration typing. -/
+theorem stepValue_unary_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {k : List Cont} {op : UnaryOp} {ty : Ty} {span : Span} {v : Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hk : f.k = Cont.mk (.unary op) f.loopCtx f.loopCtx span :: k)
+    (hvwf : v.WellFormed) (hvy : v.ty = ty)
+    (hop : unaryWellTyped op ty = true)
+    (hrest : StackTyped (frameCtx u f.kind) k (.value ty) f.loopCtx)
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  simp only [stepValue, hf, hk] at hs
+  rw [hvy] at hs
+  generalize hev : evalUnary op ty v.value = res at hs
+  cases res with
+  | error trap =>
+      simp at hs
+      cases hs
+      simpa [hf] using ConfigTyped.updateFocus hc hf (FocusTyped.trapped u f trap span)
+  | ok w =>
+      simp at hs
+      cases hs
+      have hcore : ty.isCore = true := by
+        have hw := Value.isCore_of_wellFormed hvwf
+        rwa [hvy] at hw
+      have hholds : ty.Holds v.value := by
+        have hw := Value.holds_of_wellFormed hvwf
+        rwa [hvy] at hw
+      obtain ⟨hwty, hwwf⟩ := evalUnary_ok hcore hop hholds hev
+      have hloop : f.loopCtx.depth > 0 → StackHasLoop k := by
+        intro hd
+        have hloop := hc.headLoop f fr hf hd
+        rw [hk] at hloop
+        exact StackHasLoop.tail_of_not_marker hloop
+          (by simp [Cont.isLoopMarker, ContKind.isLoopMarker])
+      have hfocus : FocusTyped u { f with k := k } (.value w) := by
+        refine FocusTyped.value_of ?_ hwwf
+        rwa [hwty]
+      exact ConfigTyped.updateHeadFrame hc hf
+        (FrameMatches.updateK (hc.headMatch f fr hf)) hfocus
+        (FramesShape.updateHeadK (by simpa [hf] using hc.shape) k) hloop rfl
+
+/-- Evaluating the right operand preserves configuration typing. -/
+theorem stepValue_binaryL_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {k : List Cont} {op : BinaryOp} {rhs : Expr} {ty res : Ty}
+    {span : Span} {v : Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hk : f.k = Cont.mk (.binaryL op rhs) f.loopCtx f.loopCtx span :: k)
+    (hvwf : v.WellFormed) (hvy : v.ty = ty)
+    (hrhs : ExprHasType (frameCtx u f.kind) rhs ty)
+    (hop : binaryWellTyped op ty ty = true)
+    (hres : res = binaryResultTy op ty ty)
+    (hrest : StackTyped (frameCtx u f.kind) k (.value res) f.loopCtx)
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  simp only [stepValue, hf, hk] at hs
+  cases hs
+  let k' : List Cont := Cont.mk (.binaryR op v) f.loopCtx f.loopCtx span :: k
+  have hloop : f.loopCtx.depth > 0 → StackHasLoop k' := by
+    intro hd
+    have h := hc.headLoop f fr hf hd
+    rw [hk] at h
+    exact Or.inr (StackHasLoop.tail_of_not_marker h
+      (by simp [Cont.isLoopMarker, ContKind.isLoopMarker]))
+  have hstack' : StackTyped (frameCtx u f.kind) k' (.value ty) f.loopCtx :=
+    StackTyped.binaryR hvwf hvy hop hres hrest
+  have hfocus : FocusTyped u { f with k := k' } (.expr rhs) :=
+    ⟨ty, hrhs, hstack'⟩
+  exact ConfigTyped.updateHeadFrame hc hf
+    (FrameMatches.updateK (hc.headMatch f fr hf)) hfocus
+    (FramesShape.updateHeadK (by simpa [hf] using hc.shape) _) hloop rfl
+
+/-- Applying the binary operation preserves configuration typing. -/
+theorem stepValue_binaryR_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {k : List Cont} {op : BinaryOp} {lhs : Value} {ty res : Ty}
+    {span : Span} {v : Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hk : f.k = Cont.mk (.binaryR op lhs) f.loopCtx f.loopCtx span :: k)
+    (hlhs : lhs.WellFormed) (hty : lhs.ty = ty) (hvwf : v.WellFormed)
+    (hvy : v.ty = ty)
+    (hop : binaryWellTyped op ty ty = true)
+    (hres : res = binaryResultTy op ty ty)
+    (hrest : StackTyped (frameCtx u f.kind) k (.value res) f.loopCtx)
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  simp only [stepValue, hf, hk] at hs
+  rw [hty] at hs
+  generalize hev : evalBinary op ty lhs.value v.value = res at hs
+  cases res with
+  | error trap =>
+      simp at hs
+      cases hs
+      simpa [hf] using ConfigTyped.updateFocus hc hf (FocusTyped.trapped u f trap span)
+  | ok w =>
+      simp at hs
+      cases hs
+      have hcore : ty.isCore = true := by
+        have hw := Value.isCore_of_wellFormed hlhs
+        rwa [hty] at hw
+      have ha : ty.Holds lhs.value := by
+        have hw := Value.holds_of_wellFormed hlhs
+        rwa [hty] at hw
+      have hb : ty.Holds v.value := by
+        have hw := Value.holds_of_wellFormed hvwf
+        rwa [hvy] at hw
+      obtain ⟨hwty, hwwf⟩ := evalBinary_ok hcore hop ha hb hev
+      have hres' : res = (if op.isComparison then Ty.bool else ty) := by
+        rw [binaryResultTy_eq] at hres; exact hres
+      have hwty' : w.ty = res := hwty.trans hres'.symm
+      have hloop : f.loopCtx.depth > 0 → StackHasLoop k := by
+        intro hd
+        have hloop := hc.headLoop f fr hf hd
+        rw [hk] at hloop
+        exact StackHasLoop.tail_of_not_marker hloop
+          (by simp [Cont.isLoopMarker, ContKind.isLoopMarker])
+      have hfocus : FocusTyped u { f with k := k } (.value w) := by
+        refine FocusTyped.value_of ?_ hwwf
+        rwa [hwty']
+      exact ConfigTyped.updateHeadFrame hc hf
+        (FrameMatches.updateK (hc.headMatch f fr hf)) hfocus
+        (FramesShape.updateHeadK (by simpa [hf] using hc.shape) k) hloop rfl
+
+/-- Applying the conversion preserves configuration typing. -/
+theorem stepValue_cast_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {k : List Cont} {to src : Ty} {span : Span} {v : Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hk : f.k = Cont.mk (.cast to) f.loopCtx f.loopCtx span :: k)
+    (hvwf : v.WellFormed) (hvy : v.ty = src)
+    (hconv : ConversionLegal src to) (hcore : to.isCore = true)
+    (hrest : StackTyped (frameCtx u f.kind) k (.value to) f.loopCtx)
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  simp only [stepValue, hf, hk] at hs
+  rw [hvy] at hs
+  generalize hev : evalCast src to v.value = res at hs
+  cases res with
+  | error trap =>
+      simp at hs
+      cases hs
+      simpa [hf] using ConfigTyped.updateFocus hc hf (FocusTyped.trapped u f trap span)
+  | ok w =>
+      simp at hs
+      cases hs
+      obtain ⟨hwty, hwwf⟩ := evalCast_ok hcore hev
+      have hloop : f.loopCtx.depth > 0 → StackHasLoop k := by
+        intro hd
+        have hloop := hc.headLoop f fr hf hd
+        rw [hk] at hloop
+        exact StackHasLoop.tail_of_not_marker hloop
+          (by simp [Cont.isLoopMarker, ContKind.isLoopMarker])
+      have hfocus : FocusTyped u { f with k := k } (.value w) := by
+        refine FocusTyped.value_of ?_ hwwf
+        rwa [hwty]
+      exact ConfigTyped.updateHeadFrame hc hf
+        (FrameMatches.updateK (hc.headMatch f fr hf)) hfocus
+        (FramesShape.updateHeadK (by simpa [hf] using hc.shape) k) hloop rfl
+
+/-- `IF` arm selection preserves configuration typing. -/
+theorem stepValue_ifCond_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {k : List Cont} {arms : List IfArm} {elseBody : List Stmt}
+    {span : Span} {v : Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hk : f.k = Cont.mk (.ifCond arms elseBody) f.loopCtx f.loopCtx span :: k)
+    (harms : ∀ arm ∈ arms, ExprHasType (frameCtx u f.kind) arm.cond .bool ∧
+      StmtListHasType (frameCtx u f.kind) f.loopCtx.depth f.loopCtx.controlled arm.body)
+    (helse : StmtListHasType (frameCtx u f.kind) f.loopCtx.depth f.loopCtx.controlled elseBody)
+    (hrest : StackTyped (frameCtx u f.kind) k .unit f.loopCtx)
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  have hloop : f.loopCtx.depth > 0 → StackHasLoop k := by
+    intro hd
+    have h := hc.headLoop f fr hf hd
+    rw [hk] at h
+    exact StackHasLoop.tail_of_not_marker h
+      (by simp [Cont.isLoopMarker, ContKind.isLoopMarker])
+  simp only [stepValue, hf, hk] at hs
+  cases arms with
+  | nil =>
+      simp at hs
+      cases hs
+      exact ConfigTyped.updateHeadFocus hc hf
+        (FocusTyped.stmts_of rfl hrest helse hloop) hloop
+  | cons arm remaining =>
+      by_cases hzero : (v.value == 0) = true
+      · simp [hzero] at hs
+        cases remaining with
+        | nil =>
+            simp at hs
+            cases hs
+            exact ConfigTyped.updateHeadFocus hc hf
+              (FocusTyped.stmts_of rfl hrest helse hloop) hloop
+        | cons next more =>
+            simp at hs
+            cases hs
+            have hnext := harms next (by simp)
+            let k' : List Cont :=
+              Cont.mk (.ifCond (next :: more) elseBody) f.loopCtx f.loopCtx span :: k
+            have hstack' : StackTyped (frameCtx u f.kind) k' (.value .bool) f.loopCtx :=
+              StackTyped.ifCond (arms := next :: more)
+                (by intro a ha; exact harms a (by simp [ha])) helse hrest
+            have hfocus : FocusTyped u { f with k := k' } (.expr next.cond) :=
+              ⟨.bool, hnext.1, hstack'⟩
+            have hloop' : f.loopCtx.depth > 0 → StackHasLoop k' := by
+              intro hd; exact Or.inr (hloop hd)
+            exact ConfigTyped.updateHeadFrame hc hf
+              (FrameMatches.updateK (hc.headMatch f fr hf)) hfocus
+              (FramesShape.updateHead (f := f) (rest := fr) (f' := { f with k := k' }) (by simpa [hf] using hc.shape) rfl) hloop' rfl
+      · simp [hzero] at hs
+        cases hs
+        have harm := harms arm (by simp)
+        exact ConfigTyped.updateHeadFocus hc hf
+          (FocusTyped.stmts_of rfl hrest harm.2 hloop) hloop
+
+/-- A body returned by `caseArmBody?` is one of the arm bodies. -/
+theorem caseArmBody?_typed {ctx : Ctx} {depth : Nat} {controlled : List VarId}
+    {arms : List CaseArm} {value : Int} {body : List Stmt}
+    (hbodies : ∀ arm ∈ arms, StmtListHasType ctx depth controlled arm.body)
+    (h : caseArmBody? arms value = some body) :
+    StmtListHasType ctx depth controlled body := by
+  induction arms with
+  | nil => simp [caseArmBody?] at h
+  | cons arm rest ih =>
+      by_cases hmem : arm.labels.any (fun label => caseLabelContains label value) = true
+      · simp [caseArmBody?, hmem] at h
+        subst h
+        exact hbodies arm (by simp)
+      · simp [caseArmBody?, hmem] at h
+        exact ih (by intro a ha; exact hbodies a (by simp [ha])) h
+
+/-- `CASE` arm selection preserves configuration typing. -/
+theorem stepValue_caseSel_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {k : List Cont} {selector : Expr} {arms : List CaseArm}
+    {elseBody : List Stmt} {span : Span} {v : Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hk : f.k = Cont.mk (.caseSel selector arms elseBody) f.loopCtx f.loopCtx span :: k)
+    (hbodies : ∀ arm ∈ arms,
+      StmtListHasType (frameCtx u f.kind) f.loopCtx.depth f.loopCtx.controlled arm.body)
+    (helse : StmtListHasType (frameCtx u f.kind) f.loopCtx.depth f.loopCtx.controlled elseBody)
+    (hrest : StackTyped (frameCtx u f.kind) k .unit f.loopCtx)
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  have hloop : f.loopCtx.depth > 0 → StackHasLoop k := by
+    intro hd
+    have h := hc.headLoop f fr hf hd
+    rw [hk] at h
+    exact StackHasLoop.tail_of_not_marker h
+      (by simp [Cont.isLoopMarker, ContKind.isLoopMarker])
+  simp only [stepValue, hf, hk] at hs
+  generalize hcase : caseArmBody? arms v.value = res at hs
+  cases res with
+  | none =>
+      simp at hs
+      cases hs
+      exact ConfigTyped.updateHeadFocus hc hf
+        (FocusTyped.stmts_of rfl hrest helse hloop) hloop
+  | some body =>
+      simp at hs
+      cases hs
+      have hbody := caseArmBody?_typed hbodies hcase
+      exact ConfigTyped.updateHeadFocus hc hf
+        (FocusTyped.stmts_of rfl hrest hbody hloop) hloop
+
+/-- `WHILE` condition selection preserves configuration typing. -/
+theorem stepValue_whileCond_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {k : List Cont} {cond : Expr} {body : List Stmt}
+    {span : Span} {v : Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hk : f.k = Cont.mk (.whileCond cond body) f.loopCtx f.loopCtx span :: k)
+    (hcond : ExprHasType (frameCtx u f.kind) cond .bool)
+    (hbody : StmtListHasType (frameCtx u f.kind) (f.loopCtx.depth + 1)
+      f.loopCtx.controlled body)
+    (hrest : StackTyped (frameCtx u f.kind) k .unit f.loopCtx)
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  have hloop : f.loopCtx.depth > 0 → StackHasLoop k := by
+    intro hd
+    have h := hc.headLoop f fr hf hd
+    rw [hk] at h
+    exact StackHasLoop.tail_of_not_marker h
+      (by simp [Cont.isLoopMarker, ContKind.isLoopMarker])
+  simp only [stepValue, hf, hk] at hs
+  by_cases hzero : (v.value == 0) = true
+  · simp [hzero] at hs
+    cases hs
+    exact ConfigTyped.updateHeadFocus hc hf (FocusTyped.resume_of hrest) hloop
+  · simp [hzero] at hs
+    cases hs
+    let bodyLc : LoopCtx := LoopCtx.body f.loopCtx f.loopCtx.controlled
+    let k' : List Cont := Cont.mk (.whileLoop cond body) bodyLc f.loopCtx span :: k
+    have hstack' : StackTyped (frameCtx u f.kind) k' .unit bodyLc :=
+      StackTyped.whileLoop rfl rfl hcond (by simpa [bodyLc, LoopCtx.body] using hbody)
+        (by intro hd; exact hloop hd) hrest
+    have hfocus : FocusTyped u { f with k := k', loopCtx := bodyLc }
+        (.stmts body bodyLc) :=
+      FocusTyped.stmts_of rfl hstack' (by simpa [bodyLc, LoopCtx.body] using hbody)
+        (by intro _; exact Or.inl rfl)
+    exact ConfigTyped.updateHeadFrame hc hf (FrameMatches.updateKLoop
+      (hc.headMatch f fr hf)) hfocus
+      (FramesShape.updateHead (f := f) (rest := fr) (f' := { f with k := k', loopCtx := bodyLc }) (by simpa [hf] using hc.shape) rfl)
+      (by intro _; exact Or.inl rfl) rfl
+
+/-- `REPEAT` condition selection preserves configuration typing. -/
+theorem stepValue_repeatCond_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {k : List Cont} {body : List Stmt} {cond : Expr}
+    {span : Span} {v : Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hk : f.k = Cont.mk (.repeatCond body cond) f.loopCtx f.loopCtx span :: k)
+    (hcond : ExprHasType (frameCtx u f.kind) cond .bool)
+    (hbody : StmtListHasType (frameCtx u f.kind) (f.loopCtx.depth + 1)
+      f.loopCtx.controlled body)
+    (hrest : StackTyped (frameCtx u f.kind) k .unit f.loopCtx)
+    (hs : stepValue u c v = .step c') : ConfigTyped u c' := by
+  have hloop : f.loopCtx.depth > 0 → StackHasLoop k := by
+    intro hd
+    have h := hc.headLoop f fr hf hd
+    rw [hk] at h
+    exact StackHasLoop.tail_of_not_marker h
+      (by simp [Cont.isLoopMarker, ContKind.isLoopMarker])
+  simp only [stepValue, hf, hk] at hs
+  by_cases hzero : (v.value == 0) = true
+  · simp [hzero] at hs
+    cases hs
+    let bodyLc : LoopCtx := LoopCtx.body f.loopCtx f.loopCtx.controlled
+    let k' : List Cont := Cont.mk (.repeatBody body cond) bodyLc f.loopCtx span :: k
+    have hstack' : StackTyped (frameCtx u f.kind) k' .unit bodyLc :=
+      StackTyped.repeatBody rfl rfl hcond (by simpa [bodyLc, LoopCtx.body] using hbody)
+        (by intro hd; exact hloop hd) hrest
+    have hfocus : FocusTyped u { f with k := k', loopCtx := bodyLc }
+        (.stmts body bodyLc) :=
+      FocusTyped.stmts_of rfl hstack' (by simpa [bodyLc, LoopCtx.body] using hbody)
+        (by intro _; exact Or.inl rfl)
+    exact ConfigTyped.updateHeadFrame hc hf (FrameMatches.updateKLoop
+      (hc.headMatch f fr hf)) hfocus
+      (FramesShape.updateHead (f := f) (rest := fr) (f' := { f with k := k', loopCtx := bodyLc }) (by simpa [hf] using hc.shape) rfl)
+      (by intro _; exact Or.inl rfl) rfl
+  · simp [hzero] at hs
+    cases hs
+    exact ConfigTyped.updateHeadFocus hc hf (FocusTyped.resume_of hrest) hloop
 
 /-- A frame completion preserves configuration typing. -/
 theorem completeFrame_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
