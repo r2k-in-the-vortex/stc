@@ -31,6 +31,7 @@ injection, or any manual toggling/measuring. Those belong to phase 6.
 | `src/main.st` | Non-CPU-bound program: `Out0..Out13 := In0..In13`, `In14` toggles a state bit, `Counter` increments; 1 ms task. |
 | `build.sh` | Builds the fixture with the deployed `stc` package. |
 | `run-open-ended.sh` | Runs 600000 cycles at 1 ms (10 minutes) with `-v` status output. |
+| `holder/holder.c` | Ordinary-user helper that calls `ecrt_request_master(0)` and pauses; used in phase 4 to exercise the runtime's master-already-owned failure. |
 
 ## Process-image map
 
@@ -165,6 +166,14 @@ logs remain on `ecat-host`; the run summary, hashes, and the earlier diagnostic
 run are in the
 [EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md)
 §8. Physical I/O values were not verified.
+
+## Phase 4 result
+
+The software-fault matrix (master already owned, wrong identity, missing position, startup
+timeout), the 14 PLC-visible status registers, and same-configuration versus changed-configuration
+online change were exercised on `ecat-host` without physical faults, root, or host changes; the
+master service stop/start case is a recorded privilege gap. Results and evidence hashes are in
+the [EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md) §9.
 
 ## Troubleshooting
 
