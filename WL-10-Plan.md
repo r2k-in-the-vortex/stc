@@ -3,8 +3,10 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-31  
 Branch: `WL-10` (sub-plan of `v2.0.0-planning`)  
-Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phases 0–4 are
-complete; phase 5 is in progress.  
+Status: Complete 2026-10-31. Phases 0–5 are complete and WL-10 is done. The enduring coverage
+model and report formats are in [Testing and Verification](specification/Architecture/Testing-and-Verification.md)
+§2.6 and [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) §1.6; this working
+plan is retained for review.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-10)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-10,
 [Testing and Verification](specification/Architecture/Testing-and-Verification.md) §2,
@@ -523,7 +525,7 @@ summary in human mode; files are still written.
 | 2 | Complete 2026-10-31 | Host readout and raw writer, shared protocol constants, raw parser, 20 tests; commit `d58a58f`; CI run 41160138589 green. |
 | 3 | Complete 2026-10-31 | Manifest/CLI enablement, driver aggregation, JSON/LCOV/human reports, warnings, clean, 22 tests; commits `5d1c4fe` and `0d14ea2`; CI run 41164663849 green. |
 | 4 | Complete 2026-10-31 | Coverage example, committed goldens, 7 evidence tests, cross-host matrix, informational overhead; commit `fd8c7f2`; CI run 41166845768 green. |
-| 5 | In progress | — |
+| 5 | Complete 2026-10-31 | Specifications, user docs, performance note, and parent closeout; commit `f340aad`; CI run 41168834051 green after one rerun of an unrelated flaky runtime test. |
 
 **Phase 1 note (2026-10-31).** The increment uses the element-indexing GEP shown in §6.1 rather
 than the earlier illustrative two-index form, because N is not final during lowering; the global
@@ -566,6 +568,16 @@ non-gating. Deviations: the example uses `AddValues` to avoid a standard-name sh
 option; the symbol-isolation checks inspect module/artifact files rather than the statically
 linked test-host executable; missing/malformed sidecar handling is covered by the phase 2/3 unit
 tests rather than a production test hook.
+
+**Phase 5 note (2026-10-31).** The coverage model, collection protocol, exclusions, report
+shapes, enablement rules, determinism, and limitations are consolidated into Testing and
+Verification §2.6 and CLI and Manifest §1.1–§1.3, §1.6, §2.4, and §4. USER-GUIDE,
+KNOWN-LIMITATIONS, README, and Performance record the user-facing behavior and the informational
+overhead measurement. V2.0.0-PLAN marks WL-10 done. The Conformance Profile warning entries and
+D-211 were verified without edits. The first CI attempt failed only in
+`stc_runtime::tests::legacy_state_helpers_use_the_configured_file`, a pre-existing process-wide
+retained-state race unrelated to the docs-only diff; the single repair was a rerun, and the
+second attempt was green. This flake remains a known test-suite issue outside WL-10 scope.
 
 ## 9. Exit criteria
 
@@ -642,3 +654,4 @@ None as of 2026-10-31. The plan is locked; new questions are appended only with 
 | 2026-10-31 | Phase 2 complete: host counter readout and raw writer, shared protocol constants, and the raw parser with 20 tests; commit `d58a58f`, full matrix green via manual workflow dispatch at the same SHA. |
 | 2026-10-31 | Phase 3 complete: manifest/CLI enablement, driver aggregation, JSON/LCOV/human reports, warning codes D-211, clean behavior, and 22 tests; commits `5d1c4fe` and the single traceability repair `0d14ea2`, final CI run 41164663849 green. |
 | 2026-10-31 | Phase 4 complete: coverage example, committed goldens, seven evidence tests, three-host evidence, and the informational overhead measurement; commit `fd8c7f2`, CI run 41166845768 green. |
+| 2026-10-31 | Phase 5 complete: coverage model and formats consolidated into the specifications and user docs, performance note added, and WL-10 marked done in the parent plan; commit `f340aad`, CI run 41168834051 green after an unrelated flake rerun. |
