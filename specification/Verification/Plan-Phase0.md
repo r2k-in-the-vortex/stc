@@ -1131,6 +1131,29 @@ completed-argument `performCall` frame construction), initial-state typing, and
 `type_soundness` remain, followed by the review. `preservation` stays planned
 (P0-T09). No `sorry` remains in the tree.
 
+### 19.10 Caller-expectation checkpoint (2026-10-31)
+
+`completeFrame` preservation exposed a missing configuration invariant: the
+caller's `expect` was not linked to the callee's declared result, so the
+`.returned` focus could not be typed when the callee returned. The fix adds:
+
+- `CallerExpects u f g` and `FramesCallerExpects u frames`, recording that every
+  suspended caller's `expect` is `none` (statement call) or the callee's declared
+  result type. The link uses the declaration, not the callee's current result
+  value, so result-variable writes preserve it.
+- `ConfigTyped.callers`, with corresponding proofs in `ConfigTyped.setVar`,
+  `updateHeadFocus`, `updateHeadFrame`, `updateFocus`, and `pushFrame`.
+- `FrameMatches.result_cases` and `FocusTyped.returned_of_caller`, which derive
+  the `.returned` focus typing from the link.
+- `ConfigTyped.updateCycles` and `completeFrame_preserves`; frame completion is
+  now proved for both function return and program cycle reset.
+
+Remaining obstruction: `stepResume_preserves` needs the loop-marker rules
+(`whileLoop`, `repeatBody`, `forBody`) to carry the tail loop condition
+`after.depth > 0 → StackHasLoop rest`, and the value/statement/call cases still
+need their transition proofs. `preservation` and `type_soundness` remain
+planned.
+
 ## 20. P0.4 execution record — complete
 
 Date: 2026-10-31. Status: **complete; review approved 2026-10-31.** The scope decisions were
