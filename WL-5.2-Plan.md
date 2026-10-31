@@ -250,6 +250,7 @@ implementation without a scope change.
 | E-13 | The runtime I/O interface is a Rust trait in `stc-runtime` and is multi-backend from the start. One coordinator owns the shared process image and a list of per-device backend instances; bindings group by device `kind`. At the input boundary it applies the global input defaults to unbound areas, then calls each backend's input latch in device declaration order. At the output boundary it calls each backend's output publish in the same order, then applies the global output behavior to unbound areas. Cold start and shutdown traverse the instances in device declaration order and reverse order. Bound image ranges are disjoint across devices/backends, and conflicts are rejected. WL-5.2 registers only the EtherCAT backend and proves the plural interface with a mock second backend; WL-5.1 adds Modbus as a Rust module or linked crate without changing the EtherCAT backend. | Accepted 2026-10-31 (Rust trait) |
 | E-14 | Expose EtherCAT master and slave status and diagnostics to the PLC as a read-only status device in the device tree, not only through `--status`. The runtime implements the full channel set (master phase/active/slave count, link state, domain WC state/working counter, per-slave AL/online/operational state, lost frames, Tx errors, frame loss, last error, recovery count, stale flag, exchange/fault counters); the project binds only the fields it needs, so unbound fields cost no image bytes. The runtime fills the block each cycle from the EtherCAT backend; the layout is versioned and unknown channels are rejected. | Accepted 2026-10-31 (full set, bind as needed) |
 | E-15 | Support explicit I/O routes as a directed graph: physical input→PLC input, PLC output→physical output, physical input→physical output, and PLC→PLC. A route has one source and one or more sinks; fan-out is allowed, fan-in is rejected. The route table lives in the selected machine profile (`[io].config`) alongside the PDO map; the compiler resolves variables, devices, and channels and emits the routes in metadata; the runtime applies them at the cycle boundary. PLC→PLC routes apply at the input boundary with one scan of latency; route cycles are allowed and resolved by that buffer as expected behavior, with no warning. | Accepted 2026-10-31 (one-scan delay, profile location, cycles allowed) |
+| E-16 | Unrouted PLC `%I`/`%Q` variables are warnings, not errors. An unrouted `%I` uses its declared/default value and the runtime reports that default; an unrouted `%Q` is discarded. Fan-in remains an error. The compiler emits the warning; the runtime reports the variable and its default. Physical route source/sink representation checks remain runtime fail-closed. The profile is embedded as raw source text and hashed with SHA-256 over those exact bytes. | Accepted 2026-10-31 (warnings, not errors; raw profile text) |
 
 ## 6. Architecture
 
@@ -635,13 +636,15 @@ for operators. The status block is part of the process image, so the PLC can rea
 `input.stale`, per-slave state, and the counters in its normal logic. It is diagnostic, not
 safety-rated.
 
-Proposed diagnostic codes (final wording is phase 2):
+The phase-2 diagnostic codes are:
 
 | Code | Condition |
 | --- | --- |
 | `STC-E-IO-BINDING-001` | A sink has more than one source (fan-in), or two routes claim the same output |
 | `STC-E-IO-BINDING-002` | A route endpoint does not resolve, or its direction/width is invalid |
 | `STC-E-IO-BINDING-003` | A route names a device with no registered backend |
+| `STC-W-IO-ROUTE-001` | An unrouted direct `%I` variable keeps its declared/default value |
+| `STC-W-IO-ROUTE-002` | An unrouted direct `%Q` variable is discarded |
 | `STC-E-IO-ETH-001` | The shim/library is missing, cannot be loaded, or reports an incompatible ABI |
 | `STC-E-IO-ETH-002` | The IgH master cannot be requested (busy, unavailable, or permission denied) |
 | `STC-E-IO-ETH-003` | Slave configuration failed (identity mismatch or invalid position/alias) |
@@ -716,8 +719,8 @@ a second failure stops the sequence for a human decision.
 | Phase | Status | Commit | CI |
 | --- | --- | --- | --- |
 | 0 — schema/contracts | Done | `63b8a7e` | [41177379223](https://github.com/r2k-in-the-vortex/stc/actions/runs/41177379223) — success |
-| 1 — backend surface, routing, mapping | In progress | — | — |
-| 2 — shim, lifecycle, CI build | Not started | — | — |
+| 1 — backend surface, routing, mapping | Done | `d254583` | [41181242085](https://github.com/r2k-in-the-vortex/stc/actions/runs/41181242085) — success |
+| 2 — shim, lifecycle, CI build | In progress — E-16 warning follow-up included | — | — |
 | 3 — HIL frame-level bring-up | Not started | — | — |
 | 4 — software fault, recovery, status | Not started | — | — |
 | 5 — CT sweep, draft report | Not started | — | — |
@@ -987,3 +990,5 @@ phase-0/1 defaults and do not change the scope.
 | 2026-10-31 | Accepted the last route decisions: one-scan PLC→PLC delay, routes in the machine profile with the PDO map, and route cycles allowed without warning. All decisions E-1–E-15 are now accepted. |
 | 2026-10-31 | Moved all manual/physical tests to phase 6. Phases 3–5 run open-ended (unwired/unloaded) I/O and treat a frame accepted and replied by IgH as success; phase 6 runs the loopback harness, the all-points matrix, and physical fault injection. Updated E-9, the phase table, test matrix, risks, and exit criteria. |
 | 2026-10-31 | Phase 0 complete: commit `63b8a7e`, CI run 41177379223 green. The contract is locked in `specification/Architecture/IO-Routing-and-Backends.md`; phase 1 started. |
+| 2026-10-31 | Phase 1 complete: commit `d254583`, CI run 41181242085 green. Profile embedding, route graph, coordinator, mock backends, and mapping implemented with tests. Phase 2 paused for confirmation of two phase-1 defaults: profile raw-text embedding vs canonicalization, and runtime-only fail-closed validation for routed physical outputs. |
+| 2026-10-31 | Owner confirmed raw profile text + SHA-256 and directed that unrouted PLC `%I`/`%Q` variables be warnings, not errors; an unrouted `%I` uses its default value and an unrouted `%Q` is discarded. Added E-16 and resumed phase 2 with the warning follow-up. |

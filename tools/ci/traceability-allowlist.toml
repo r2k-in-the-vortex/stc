@@ -30,26 +30,11 @@ status = "not-implemented"
 reason = "Direct variables in function/FB bodies are rejected as STC-E-IO-001 rather than accepted with this deprecation warning (Runtime and Execution §2.4)."
 
 [[rule]]
-id = "STC-E-IO-ETH-006"
-status = "not-implemented"
-reason = "WL-5.2 phase 1 provides the backend surface and a test/mock EtherCAT backend; hardware device/channel diagnostics and their tests arrive in phase 2."
-
-[[rule]]
-id = "STC-E-IO-ETH-007"
-status = "not-implemented"
-reason = "WL-5.2 phase 1 provides the backend surface and a test/mock EtherCAT backend; hardware bound-channel diagnostics and their tests arrive in phase 2."
-
-[[rule]]
 id = "STC-W-IO-ETH-001"
 status = "not-implemented"
-reason = "WL-5.2 phase 1 provides the backend surface and a test/mock EtherCAT backend; the hardware unbound-channel warning and its tests arrive in phase 2."
+reason = "The locked DeviceBackend interface has no configuration-warning channel; unbound declared channels are configured and visible through backend status instead of emitting this warning."
 
 [[rule]]
 id = "STC-W-IO-ETH-002"
 status = "not-implemented"
-reason = "WL-5.2 phase 1 provides the backend surface and a test/mock EtherCAT backend; the distributed-clock warning and its tests arrive with the phase-2 lifecycle."
-
-[[rule]]
-id = "STC-W-IO-ETH-003"
-status = "not-implemented"
-reason = "WL-5.2 phase 1 provides per-backend fault isolation; transparent fault/recovery emission and its tests arrive in phase 4."
+reason = "The locked DeviceBackend interface has no configuration-warning channel; a DC table without assign-activate runs free-run and is otherwise silent."

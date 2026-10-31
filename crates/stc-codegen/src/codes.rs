@@ -28,3 +28,7 @@ pub const IO_BINDING_INVALID: &str = "STC-E-IO-BINDING-002";
 pub const W_PROJECT_OVERRIDES_HINT: &str = "STC-W-IO-003";
 /// Pragma names a device not declared in `stc.toml`.
 pub const W_IO_UNKNOWN_DEVICE: &str = "STC-W-IO-001";
+/// An unrouted direct `%I` variable keeps its default value.
+pub const W_IO_ROUTE_INPUT: &str = "STC-W-IO-ROUTE-001";
+/// An unrouted direct `%Q` variable is discarded.
+pub const W_IO_ROUTE_OUTPUT: &str = "STC-W-IO-ROUTE-002";

@@ -173,9 +173,17 @@ pub(crate) fn generate(
     if !route_io.errors.is_empty() {
         return Err(route_io.errors);
     }
+    // E-16 applies only to builds that select a machine profile: a v1 project
+    // with no route graph keeps its existing direct-variable behavior.
+    let route_warnings = if options.project.io.profile.is_some() {
+        config::unrouted_warnings(hir, &image, &options.project.io.routes)
+    } else {
+        Vec::new()
+    };
     let mut got = got;
     got.diagnostics.extend(project_io.warnings);
     got.diagnostics.extend(route_io.warnings);
+    got.diagnostics.extend(route_warnings);
     let (span_ids, span_entries) = build_span_table(hir);
     let debug = crate::debug::DebugInfo::new(options, target);
     let checkpoint_slot = got.import_slot(ImportService::DebugCheck);

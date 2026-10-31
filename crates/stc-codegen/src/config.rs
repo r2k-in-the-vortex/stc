@@ -241,6 +241,8 @@ pub(crate) struct IoBinding {
     pub init: Option<ExprId>,
     /// Owning declaration, when the binding comes from an `AT` declaration.
     pub target: Option<IoRootTarget>,
+    /// Declaration span, used for route and binding diagnostics.
+    pub span: Span,
 }
 
 impl IoBinding {
@@ -752,6 +754,7 @@ pub(crate) fn image_layout(
                         target: Some(IoRootTarget::Global(DefId::new(
                             u32::try_from(index).unwrap_or(u32::MAX),
                         ))),
+                        span: def.span,
                     };
                     binding.apply_hint();
                     bindings.push(binding);
@@ -797,6 +800,7 @@ pub(crate) fn image_layout(
                                 instance: instance.name,
                                 field: *field,
                             }),
+                            span: data.span,
                         };
                         binding.apply_hint();
                         bindings.push(binding);
@@ -1071,12 +1075,158 @@ fn resolve_plc_variable<'a>(
 ) -> Option<&'a IoBinding> {
     // A PLC route endpoint must name a direct variable. The lookup is total;
     // `resolve_endpoint` reports the failure at the profile span.
-    image.bindings.iter().find(|binding| {
+    plc_binding_index(hir, image, variable, area).map(|index| &image.bindings[index])
+}
+
+/// Returns the image binding a PLC route endpoint names.
+fn plc_binding_index(
+    hir: &HirCrate,
+    image: &ImageLayout,
+    variable: &str,
+    area: DirectArea,
+) -> Option<usize> {
+    image.bindings.iter().position(|binding| {
         binding.area == area
             && binding_names(hir, binding)
                 .iter()
                 .any(|name| name.eq_ignore_ascii_case(variable))
     })
+}
+
+/// Builds the E-16 warnings for direct variables that no route drives.
+///
+/// A binding is routed when it carries the single-sink `device`/`channel`
+/// shorthand or when it is the PLC endpoint of a resolved route. Unrouted
+/// inputs keep their default image value; unrouted outputs are discarded.
+/// Only builds that select a machine profile emit these warnings, so v1
+/// projects keep their existing behavior.
+pub(crate) fn unrouted_warnings(
+    hir: &HirCrate,
+    image: &ImageLayout,
+    routes: &[IoRoute],
+) -> Vec<ModuleError> {
+    let mut routed = vec![false; image.bindings.len()];
+    for (index, binding) in image.bindings.iter().enumerate() {
+        if binding.device.is_some() && binding.channel.is_some() {
+            routed[index] = true;
+        }
+    }
+    for route in routes {
+        if let IoRouteEndpoint::PlcOutput { variable, .. } = &route.source
+            && let Some(index) = plc_binding_index(hir, image, variable, DirectArea::Output)
+        {
+            routed[index] = true;
+        }
+        for sink in &route.sinks {
+            if let IoRouteEndpoint::PlcInput { variable, .. } = sink
+                && let Some(index) = plc_binding_index(hir, image, variable, DirectArea::Input)
+            {
+                routed[index] = true;
+            }
+        }
+    }
+
+    let mut warnings = Vec::new();
+    for (binding, routed) in image.bindings.iter().zip(routed) {
+        if routed {
+            continue;
+        }
+        let (code, message) = match binding.area {
+            DirectArea::Input => (
+                codes::W_IO_ROUTE_INPUT,
+                format!(
+                    "unrouted `%I` variable `{}` (%I{}) is not driven by any route and keeps its \
+                     default value {}",
+                    binding.variable,
+                    binding.address,
+                    binding_default(image, binding),
+                ),
+            ),
+            DirectArea::Output => (
+                codes::W_IO_ROUTE_OUTPUT,
+                format!(
+                    "unrouted `%Q` variable `{}` (%Q{}) is not consumed by any route; its value \
+                     is discarded",
+                    binding.variable, binding.address,
+                ),
+            ),
+            DirectArea::Memory => continue,
+        };
+        warnings.push(ModuleError {
+            code,
+            severity: crate::module::Severity::Warning,
+            message,
+            span: Some(binding.span),
+            got_id: None,
+            old_key: None,
+            new_key: None,
+        });
+    }
+    warnings
+}
+
+/// Decodes one binding's effective default from the input image.
+fn binding_default(image: &ImageLayout, binding: &IoBinding) -> String {
+    let start_bit = usize::try_from(binding.start_bit).unwrap_or(usize::MAX);
+    let byte_index = start_bit / 8;
+    if binding.kind == ScalarKind::Bool {
+        let bit = u8::try_from(start_bit % 8).unwrap_or(0);
+        let set = image
+            .input_defaults
+            .get(byte_index)
+            .is_some_and(|value| value & (1 << bit) != 0);
+        return if set { "TRUE" } else { "FALSE" }.into();
+    }
+
+    let mut bytes = [0_u8; 8];
+    let width = usize::try_from(binding.kind.size_bytes())
+        .unwrap_or(0)
+        .min(bytes.len());
+    if let Some(slice) = image
+        .input_defaults
+        .get(byte_index..byte_index.saturating_add(width))
+    {
+        bytes[..width].copy_from_slice(slice);
+    }
+    match binding.kind {
+        ScalarKind::Bool => unreachable!("BOOL defaults are handled above"),
+        ScalarKind::Int { signed, width } => {
+            if signed {
+                signed_default(&bytes, width).to_string()
+            } else {
+                unsigned_default(&bytes, width).to_string()
+            }
+        }
+        ScalarKind::Char { width } => unsigned_default(&bytes, width).to_string(),
+        ScalarKind::Real { width: 32 } => format!(
+            "{:?}",
+            f32::from_bits(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        ),
+        ScalarKind::Real { .. } => {
+            format!("{:?}", f64::from_bits(u64::from_le_bytes(bytes)))
+        }
+        ScalarKind::Time | ScalarKind::Date(_) => i64::from_le_bytes(bytes).to_string(),
+    }
+}
+
+fn unsigned_default(bytes: &[u8; 8], width: u16) -> u64 {
+    let width = u32::from(width).clamp(1, 64);
+    let raw = u64::from_le_bytes(*bytes);
+    if width == 64 {
+        raw
+    } else {
+        raw & ((1_u64 << width) - 1)
+    }
+}
+
+fn signed_default(bytes: &[u8; 8], width: u16) -> i64 {
+    let width = u32::from(width).clamp(1, 64);
+    let raw = unsigned_default(bytes, u16::try_from(width).unwrap_or(64));
+    if width == 64 {
+        raw as i64
+    } else {
+        ((raw << (64 - width)) as i64) >> (64 - width)
+    }
 }
 
 fn plc_endpoint(kind: &'static str, binding: &IoBinding) -> RouteEndpointMetadata {
@@ -1825,6 +1975,7 @@ mod tests {
             source: "project",
             init: None,
             target: None,
+            span: route_span(),
         }
     }
 
@@ -2121,5 +2272,80 @@ mod tests {
             let result = resolve_routes(&hir, &image, &devices, &routes);
             assert_route_error(&result, codes::IO_BINDING_INVALID, needle);
         }
+    }
+
+    #[test]
+    fn unrouted_inputs_keep_their_default_and_outputs_are_discarded() {
+        let hir = HirCrate::new("app", "app");
+        let mut image = route_image(vec![
+            image_binding("seen", DirectArea::Input, 0, int16()),
+            image_binding(
+                "defaulted",
+                DirectArea::Input,
+                16,
+                ScalarKind::Int {
+                    signed: true,
+                    width: 16,
+                },
+            ),
+            image_binding("driven", DirectArea::Output, 0, int16()),
+            image_binding("lost", DirectArea::Output, 16, int16()),
+            physical_binding(
+                "shorthand",
+                DirectArea::Input,
+                32,
+                int8(),
+                "diewu",
+                "IN0",
+                "input",
+            ),
+        ]);
+        // -5 as little-endian INT at bit 16.
+        image.input_defaults = vec![0, 0, 0xFB, 0xFF, 0, 0, 0, 0];
+        let routes = vec![
+            route(phys_input("diewu", "IN0"), vec![plc_in("seen")]),
+            route(plc_out("driven"), vec![phys_output("diewu", "OUT0")]),
+        ];
+
+        let warnings = unrouted_warnings(&hir, &image, &routes);
+        assert_eq!(warnings.len(), 2, "{warnings:#?}");
+        let input = warnings
+            .iter()
+            .find(|warning| warning.code == codes::W_IO_ROUTE_INPUT)
+            .expect("unrouted input warning");
+        assert!(input.message.contains("defaulted"), "{}", input.message);
+        assert!(input.message.contains("-5"), "{}", input.message);
+        assert_eq!(input.span, Some(route_span()));
+        let output = warnings
+            .iter()
+            .find(|warning| warning.code == codes::W_IO_ROUTE_OUTPUT)
+            .expect("unrouted output warning");
+        assert!(output.message.contains("lost"), "{}", output.message);
+        assert!(output.message.contains("discarded"), "{}", output.message);
+    }
+
+    #[test]
+    fn unrouted_bool_input_reports_its_effective_default() {
+        let hir = HirCrate::new("app", "app");
+        let mut image = route_image(vec![
+            image_binding("flag", DirectArea::Input, 1, ScalarKind::Bool),
+            physical_binding(
+                "claimed",
+                DirectArea::Input,
+                2,
+                ScalarKind::Bool,
+                "diewu",
+                "IN0",
+                "input",
+            ),
+        ]);
+        // The binding has no route, but the physical shorthand leaves it alone.
+        image.input_defaults = vec![0b10];
+
+        let warnings = unrouted_warnings(&hir, &image, &[]);
+        assert_eq!(warnings.len(), 1, "{warnings:#?}");
+        assert_eq!(warnings[0].code, codes::W_IO_ROUTE_INPUT);
+        assert!(warnings[0].message.contains("`flag`"));
+        assert!(warnings[0].message.contains("TRUE"));
     }
 }

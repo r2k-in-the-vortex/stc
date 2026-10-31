@@ -754,7 +754,7 @@ fn validate_status_device(device: &BackendDeviceConfig, data_devices: usize) -> 
     Ok(())
 }
 
-fn status_channel_width(name: &str, data_devices: usize) -> Option<u32> {
+pub(crate) fn status_channel_width(name: &str, data_devices: usize) -> Option<u32> {
     let width = match name {
         "master.phase"
         | "master.slaves_responding"

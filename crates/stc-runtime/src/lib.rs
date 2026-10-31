@@ -41,9 +41,11 @@
 //! - [`coordinator`] owns the shared process image, per-device backend
 //!   dispatch, route application, and per-backend fault isolation
 //!   (IO-Routing-and-Backends §3–§4);
-//! - [`io_mock`] is the phase-1 protocol-neutral mock backend used by the
-//!   coordinator tests and by `ethercat`/`ethercat-status` until the phase-2
-//!   shim is registered;
+//! - [`io_mock`] is the protocol-neutral mock backend used by the coordinator
+//!   tests; on Linux `ethercat`/`ethercat-status` are served by [`io_ethercat`]
+//!   instead, and the mock remains the default elsewhere;
+//! - [`io_ethercat`] (Linux only) dynamically loads the project-owned IgH shim
+//!   and owns EtherCAT configuration, startup, fault/recovery, and status;
 //! - `signal` installs the Ctrl-C/Ctrl-Break stop handlers;
 //! - `trap_boundary` provides the non-local trap exit around module calls.
 //!
@@ -78,6 +80,8 @@ pub mod host;
 pub mod host_api;
 pub mod image;
 pub mod io;
+#[cfg(target_os = "linux")]
+pub mod io_ethercat;
 pub mod io_mock;
 pub mod loader;
 pub mod memory;
@@ -134,6 +138,8 @@ pub use host::{
 pub use host_api::{ABI_VERSION, HOST_API, HostApi, TrapRecord};
 pub use image::{DirectRemap, MAX_IMAGE_BYTES};
 pub use io::{IoNotice, IoRuntime};
+#[cfg(target_os = "linux")]
+pub use io_ethercat::{EthercatBackend, SHIM_ENV, SHIM_LIBRARY, ShimInfo, probe_shim};
 pub use io_mock::{MockEthercatBackend, MockWire};
 pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};

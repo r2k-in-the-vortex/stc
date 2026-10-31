@@ -43,6 +43,7 @@ jobs:
       - fuzz-smoke
       - cross-target
       - package
+      - ethercat-shim
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -643,6 +644,89 @@ jobs:
       - name: Run the cross-target matrix
         shell: bash
         run: cargo xtask test --suite cross-target --locked
+
+  # The EtherCAT backend is loaded through a project-owned C shim built
+  # against IgH 1.6.13. This job builds the IgH userspace library and the shim,
+  # then verifies the loader's version/symbol handshake. It never opens a
+  # master, so no hardware, kernel module, or elevated privileges are needed.
+  ethercat-shim:
+    name: EtherCAT shim (Linux)
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+      IGH_COMMIT: 61cc654f5b721ddd54df0f58bdd34106d91c5359
+      IGH_REPOSITORY: https://gitlab.com/etherlab.org/ethercat.git
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - name: Install IgH build prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential git libtool pkg-config
+      - name: Build IgH EtherCAT 1.6.13 userspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          clone="$RUNNER_TEMP/igh"
+          prefix="$RUNNER_TEMP/igh-install"
+          git clone --no-checkout "$IGH_REPOSITORY" "$clone"
+          git -C "$clone" checkout --detach "$IGH_COMMIT"
+          test "$(git -C "$clone" rev-parse HEAD)" = "$IGH_COMMIT"
+          cd "$clone"
+          ./bootstrap
+          ./configure --disable-kernel --enable-userlib --prefix="$prefix"
+          make -j"$(nproc)"
+          make install
+      - name: Build the project shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/igh-install"
+          include_dir="$(dirname "$(find "$prefix" -name ecrt.h -print -quit)")"
+          lib_dir="$(dirname "$(find "$prefix" -name libethercat.so -print -quit)")"
+          test -n "$include_dir"
+          test -n "$lib_dir"
+          sh tools/ethercat/build.sh \
+            "$RUNNER_TEMP/stc-ec-shim/libstc_io_ethercat.so" \
+            "$include_dir" "$lib_dir"
+          echo "STC_EC_LIB_DIR=$lib_dir" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify the loader resolves the shim ABI and symbols
+        shell: bash
+        env:
+          STC_ETHERCAT_LIBRARY: ${{ runner.temp }}/stc-ec-shim/libstc_io_ethercat.so
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$STC_EC_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          cargo test --locked -p stc-runtime --test ethercat_shim -- --nocapture
+      - name: Run the hardware-free backend lifecycle tests
+        shell: bash
+        env:
+          STC_ETHERCAT_LIBRARY: ${{ runner.temp }}/stc-ec-shim/libstc_io_ethercat.so
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$STC_EC_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          cargo test --locked -p stc-runtime --lib io_ethercat::tests -- --nocapture
+      - name: Verify the base runtime does not link libethercat
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p stc-runtime
+          binary="$(find target/debug/deps -maxdepth 1 -name 'libstc_runtime-*.rlib' -print -quit)"
+          test -n "$binary"
+          if nm -u "$binary" | grep -q 'ecrt_'; then
+            echo "::error::stc-runtime references IgH ecrt symbols"
+            exit 1
+          fi
 
   # The release package is built and verified on every native host. The job
   # also exercises the unpacked layout: `bin/stc` must find the runtime in

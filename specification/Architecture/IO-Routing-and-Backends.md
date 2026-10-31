@@ -17,7 +17,7 @@ campaign. WL-5.2 implements the EtherCAT backend; WL-5.1 adds a Modbus backend t
 contract.
 
 The accepted decisions and their rationale are in the [WL-5.2 plan](../../WL-5.2-Plan.md) §5
-(E-1–E-15), §6.3–§6.3.1, and §6.4–§6.7. This document records the resulting contract; where the
+(E-1–E-16), §6.3–§6.3.1, and §6.4–§6.7. This document records the resulting contract; where the
 plan gives only the shape, this document fixes the schema. If implementation finds a conflict,
 the plan is amended first and this document follows.
 
@@ -228,6 +228,10 @@ or adding an unknown key is invalid.
   the matching direction, and the variable must exist with a direct address. An unresolved
   endpoint is `STC-E-IO-BINDING-002`. A route that names a device whose `kind` has no registered
   backend is rejected at cold start with `STC-E-IO-BINDING-003`.
+- The compiler validates the effective route graph against the program and the declared device
+  tree. The runtime revalidates physical route source/sink representation and the bound image
+  ranges at cold start and fails closed; it never substitutes an unrouted value for a physical
+  endpoint.
 
 ### 3.3 Fan-out, fan-in, and bindings
 
@@ -242,6 +246,18 @@ or adding an unknown key is invalid.
 - `[[io.bindings]]` is the single-sink shorthand: `variable` + `device`/`channel` + `direction`
   is equivalent to a route with one source and one sink. Its precedence over pragmas and raw
   addresses is unchanged ([I/O and Devices](IO-and-Devices.md) §4).
+- In a project that selects a machine profile, an unrouted direct `%I` variable is a warning, not
+  an error. It keeps its declared/default input value, and the compiler emits
+  `STC-W-IO-ROUTE-001` naming the variable and its effective default. The runtime keeps the same
+  default in the process image. A `%I` variable is routed when a binding supplies its
+  `device`/`channel` shorthand or when it is the `plc-input` sink of a route.
+- In the same project, an unrouted direct `%Q` variable is a warning: its value is discarded and
+  the compiler emits `STC-W-IO-ROUTE-002` naming the variable. A `%Q` variable is routed when a
+  binding supplies its `device`/`channel` shorthand or when it is the `plc-output` source of a
+  route. These warnings do not apply to a project without a profile, which has no route graph and
+  keeps v1 behavior.
+- Fan-in remains `STC-E-IO-BINDING-001`; an unrouted variable is never accepted as a second
+  source for an already claimed sink.
 - Route cycles are allowed. They are resolved by the one-scan PLC→PLC buffer described in
   §3.4 and produce no warning; a cycle is expected behavior, not a configuration error.
 
@@ -508,16 +524,25 @@ the source profile.
 
 ## 10. Diagnostics
 
-The contract uses these stable codes; the full EtherCAT code set and final wording are recorded
-in the [WL-5.2 plan](../../WL-5.2-Plan.md) §6.7 and are finalized in phase 2.
+The contract uses these stable codes. The phase-2 implementation fixes the full EtherCAT set and
+its wording; diagnostics that are defined but not yet emitted are recorded in the traceability
+allowlist.
 
 | Code | Condition |
 | --- | --- |
 | `STC-E-IO-BINDING-001` | A sink has more than one source (fan-in), or two routes/bindings claim the same output. |
 | `STC-E-IO-BINDING-002` | A route endpoint does not resolve, or its direction or width is invalid. |
 | `STC-E-IO-BINDING-003` | A route or device names a `kind` with no registered backend. |
+| `STC-W-IO-ROUTE-001` | An unrouted direct `%I` variable keeps its declared/default value. |
+| `STC-W-IO-ROUTE-002` | An unrouted direct `%Q` variable is discarded. |
+| `STC-E-IO-ETH-001` | The shim/library is missing, cannot be loaded, or fails the version/symbol handshake. |
+| `STC-E-IO-ETH-002` | The IgH master cannot be requested (busy, unavailable, or permission denied). |
+| `STC-E-IO-ETH-003` | Slave configuration failed (identity mismatch or invalid position/alias). |
+| `STC-E-IO-ETH-004` | PDO/sync configuration or entry registration failed. |
+| `STC-E-IO-ETH-005` | Master activation, domain data, or release failed. |
 | `STC-E-IO-ETH-006` | The EtherCAT device or channel configuration is invalid. |
-| `STC-E-IO-ETH-007` | A bound channel does not resolve, or its direction or width mismatches. |
+| `STC-E-IO-ETH-007` | A bound channel does not resolve, or its direction or width or image range mismatches. |
+| `STC-E-IO-ETH-008` | Startup did not reach OP within the startup timeout. |
 | `STC-W-IO-ETH-001` | A declared EtherCAT channel is unbound. |
 | `STC-W-IO-ETH-002` | Distributed clocks were requested but no `assign-activate` is configured. |
 | `STC-W-IO-ETH-003` | Fieldbus fault: outputs unchanged, inputs stale, status registers updated; recovery continues. |
@@ -525,7 +550,7 @@ in the [WL-5.2 plan](../../WL-5.2-Plan.md) §6.7 and are finalized in phase 2.
 
 ## 11. Open questions
 
-No design questions remain as of 2026-10-31; E-1–E-15 in the
+No design questions remain as of 2026-10-31; E-1–E-16 in the
 [WL-5.2 plan](../../WL-5.2-Plan.md) are accepted. The exact Rust type names and metadata JSON
 key spellings are implementation defaults fixed in phase 1; they do not change the contract in
 this document.

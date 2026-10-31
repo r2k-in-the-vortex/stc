@@ -1733,3 +1733,78 @@ END_CONFIGURATION
     let output = generate(source, Mode::Executable);
     verify_with_clang("class_null_dispatch", &output.module);
 }
+
+const UNROUTED_IO: &str = r#"
+VAR_GLOBAL
+  raw_in AT %IW0 : INT := -5;
+  raw_out AT %QW0 : INT;
+END_VAR
+
+PROGRAM Main
+VAR
+  copy : INT;
+END_VAR
+  copy := raw_in;
+  raw_out := copy;
+END_PROGRAM
+
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+#[test]
+fn unrouted_route_warnings_follow_the_selected_profile() {
+    let sources = vec!["<test>".to_string()];
+    let mut options = project_options("unrouted-io", &sources, Vec::new());
+    let hir = clean_hir(UNROUTED_IO);
+
+    // A project without a profile has no route graph and keeps v1 behavior.
+    let bare = stc_codegen::generate(&hir, &options).expect("profile-less codegen");
+    let bare_codes: Vec<&str> = bare
+        .got
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect();
+    assert!(
+        !bare_codes
+            .iter()
+            .any(|code| code.starts_with("STC-W-IO-ROUTE-")),
+        "{bare_codes:?}"
+    );
+
+    options.project.io.profile = Some(stc_codegen::IoProfileMetadata {
+        path: "io/test.toml".into(),
+        text: "[device.drive1]\n".into(),
+        digest: "0x0000000000000000000000000000000000000000000000000000000000000000".into(),
+        devices: vec!["drive1".into()],
+    });
+    let output = stc_codegen::generate(&hir, &options).expect("profile codegen");
+    let input = output
+        .got
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "STC-W-IO-ROUTE-001")
+        .expect("unrouted input warning");
+    assert!(input.message.contains("raw_in"), "{}", input.message);
+    assert!(input.message.contains("-5"), "{}", input.message);
+    let output_warning = output
+        .got
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "STC-W-IO-ROUTE-002")
+        .expect("unrouted output warning");
+    assert!(
+        output_warning.message.contains("raw_out"),
+        "{}",
+        output_warning.message
+    );
+    assert!(
+        output_warning.message.contains("discarded"),
+        "{}",
+        output_warning.message
+    );
+}
