@@ -276,11 +276,6 @@ def frameCtx (u : HirUnit) : FrameKind → Ctx
           { globals := [], functions := [], params := [], locals := [], result := none }
   | .program => Ctx.ofProgram (Env.ofUnit u) u.program
 
-/-- Drop continuations down to and including the innermost loop marker. -/
-def dropToLoop : List Cont → Option (List Cont)
-  | [] => none
-  | c :: rest => if c.isLoopMarker then some rest else dropToLoop rest
-
 /-- Find the innermost loop marker and the stack below it. -/
 def findLoop : List Cont → Option (Cont × List Cont)
   | [] => none
@@ -483,9 +478,12 @@ def stepStmt (u : HirUnit) (c : State) (s : Stmt) (rest : List Stmt)
           | _ => .stuck
       | .return_ _ => completeFrame u c
       | .exit _ =>
-          match dropToLoop f.k with
-          | some k' => .step { c with focus := .resume, frames := { f with k := k', loopCtx := lc } :: fr }
+          match findLoop f.k with
           | none => .stuck
+          -- Exiting a loop resumes in the loop context the marker closes over,
+          -- not the body's loop context.
+          | some (marker, below) =>
+              .step { c with focus := .resume, frames := { f with k := below, loopCtx := marker.after } :: fr }
       | .continue_ _ =>
           match findLoop f.k with
           | none => .stuck
