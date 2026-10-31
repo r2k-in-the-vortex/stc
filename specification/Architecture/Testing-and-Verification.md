@@ -314,8 +314,9 @@ the compiler itself (WL-2) and from the rule-level traceability check in §7.
 **Collection.**
 
 - Each test runs in its own process. The test host writes one raw sidecar, `<artifact>.coverage`,
-  in the internal `stc-coverage-raw/1` format: a header with the site count, then one `id count`
-  line per nonzero counter in ascending ID order. The driver reads it after the process exits.
+  in the internal `stc-coverage-raw/1` format: a first line `stc-coverage-raw/1 <site-count>`, then
+  one `id count` line per nonzero counter in ascending ID order. The driver reads it after the
+  process exits.
 - The host validates the declared site count (cap 1,000,000). A missing export, invalid count, or
   sidecar write failure writes no usable data and changes only the coverage aggregate. The raw
   sidecar is an internal protocol between the generated host and the driver; only
@@ -349,7 +350,7 @@ the compiler itself (WL-2) and from the rule-level traceability check in §7.
 | Synthesized standard function-block bodies | No | No ST source; emitted directly |
 | Declarations and initializer expressions | No | Not executable statements |
 | `Empty` statements and zero-length spans | No | No source location |
-| Unlinked production `PROGRAM` bodies | No | Not in the test artifact (C-4) |
+| Unlinked production `PROGRAM` bodies | No | Not in the test artifact |
 | Shutdown-time execution | No | Collection ends before `host.shutdown()` |
 
 Statements in a production file that belong to a `{stc:test}` definition are excluded through the

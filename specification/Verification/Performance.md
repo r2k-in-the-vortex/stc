@@ -180,7 +180,7 @@ executed in v2.0.0.
 
 Measured on the Windows development host with the `examples/coverage` suite (three tests) as a
 full `stc test` process invocation. The comparison is informational, host-specific, and
-non-gating (WL-10 C-14); it is dominated by test-build compilation and host noise, not by the
+non-gating (WL-10); it is dominated by test-build compilation and host noise, not by the
 executed statements.
 
 | Regime | Plain median | Coverage median | Difference |

@@ -115,6 +115,8 @@ Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LO
 `[test] coverage`, while `--list` ignores the manifest default. Invalid combinations
 (`--coverage` with `--no-coverage`, `--coverage` with `--list`, and `--coverage-out` with
 `--list` or without effective coverage) are usage errors (`STC-E-PROJECT-010`, exit 2).
+Coverage options are valid only with `stc test`; using them with another command, including
+`stc build`, is a usage error (`STC-E-PROJECT-010`, exit 2).
 
 The table describes the v1 target surface. M6 implemented `--manifest-path`, `--locked`,
 `--color`, `-q`, `-D`/`-W`/`-A`, `--deny warnings`, `-v`/`-vv`, `--debug`, and, for `stc run`,
