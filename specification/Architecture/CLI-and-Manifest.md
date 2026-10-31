@@ -44,6 +44,13 @@ output goes to stdout.
 > **M6.5 status (2026-10-28):** phases 0–10 are implemented. The `stc debug`, `--debug`,
 > `--release`, debug-information, checkpoint, `--debug-protocol`, and `[debug]` contracts are in
 > place; the M6 behavior above is historical.
+>
+> **WL-10 status (2026-10-31):** `stc test` emits statement coverage for the ST code under test
+> when `[test] coverage = true` or `--coverage` is given. `--no-coverage` overrides the manifest,
+> and `--coverage-out` selects the report directory. `coverage.json` (`stc-coverage/1`) and
+> `coverage.info` (LCOV) default to `target/stc/coverage`; the human summary follows the test
+> summary. Production artifacts, the host ABI, GOT/manifest, metadata, and test-result shapes are
+> unchanged. The model is in [Testing](Testing-and-Verification.md) §2.6.
 
 | Command | Purpose |
 | --- | --- |
@@ -51,9 +58,9 @@ output goes to stdout.
 | `stc check` | Lex, parse, resolve, and type-check; no codegen |
 | `stc build` | Emit artifacts selected by `--emit` / manifest; excludes test-only units |
 | `stc run` | Build an executable and run it |
-| `stc test` | Build and run the built-in test suite; includes test-only units |
+| `stc test` | Build and run the built-in test suite; includes test-only units; `--coverage` adds statement coverage of the ST code under test (`[test] coverage` sets the project default) |
 | `stc fmt [paths...]` | Format sources with the fixed style; `--check` for CI |
-| `stc clean` | Remove generated artifact directories: debug (`target/stc/debug`), release (`target/stc/release`), test (`target/stc/test`), and an explicit `[build].out-dir`; `--debug`, `--release`, or `--test` narrows the command to one tree, and `--out-dir` selects exactly one directory. Never `stc.lock`, retained-state files, or the runtime module/manifest store |
+| `stc clean` | Remove generated artifact directories: debug (`target/stc/debug`), release (`target/stc/release`), test (`target/stc/test`), coverage (`target/stc/coverage`, with the default tree and `--test`), and an explicit `[build].out-dir`; `--debug`, `--release`, or `--test` narrows the command to one tree, and `--out-dir` selects exactly one directory. Never `stc.lock`, retained-state files, or the runtime module/manifest store |
 | `stc metadata` | Print the selected configuration, ABI version, build mode, debug summary, exports, and artifact layout |
 | `stc compliance` | Print the profile ID and supported feature matrix |
 | `stc online download` | Export the active manifest, layout summary, and controller/deployment identifier |
@@ -95,13 +102,19 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--deny warnings` | Equivalent to `-D warnings` |
 | `--locked` | Require `stc.lock` to match the manifest/dependency graph; fail instead of updating it |
 | `--list` | `stc test`: list discovered tests without building |
-| `--test` | `stc clean`: remove only the test artifact tree (`target/stc/test`, or the `--out-dir` root) |
+| `--test` | `stc clean`: remove only the test artifact tree (`target/stc/test`) and the default coverage directory (`target/stc/coverage`); with `--out-dir`, exactly the given root |
 | `--no-run` | `stc test`: build test artifacts without executing them |
 | `--timeout <duration>` | `stc test`: override the per-test timeout (default 5 s) |
+| `--coverage` | `stc test`: force statement coverage on, overriding `[test] coverage`; rejected with `--list`; with `--no-run`, artifacts are instrumented but no report is written |
+| `--no-coverage` | `stc test`: force coverage off, overriding `[test] coverage`; conflicts with `--coverage` |
+| `--coverage-out <dir>` | `stc test`: coverage report directory; requires effective coverage and is rejected with `--list`; default `target/stc/coverage` relative to the project root, an explicit value is used as given |
 | `-- --nocapture` | `stc test`: forward test-host output instead of only reporting results |
 
 Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LOG`) >
-`stc.toml` > built-in defaults.
+`stc.toml` > built-in defaults. For coverage, `--coverage` and `--no-coverage` override
+`[test] coverage`, while `--list` ignores the manifest default. Invalid combinations
+(`--coverage` with `--no-coverage`, `--coverage` with `--list`, and `--coverage-out` with
+`--list` or without effective coverage) are usage errors (`STC-E-PROJECT-010`, exit 2).
 
 The table describes the v1 target surface. M6 implemented `--manifest-path`, `--locked`,
 `--color`, `-q`, `-D`/`-W`/`-A`, `--deny warnings`, `-v`/`-vv`, `--debug`, and, for `stc run`,
@@ -109,7 +122,9 @@ The table describes the v1 target surface. M6 implemented `--manifest-path`, `--
 `--no-retain`. `run --watch` adds `--store <dir>` and `--watch-timeout <duration>`; the online
 commands add `--out`, `--binary`, `--store`, `--host`, `--nonce`, and `--baseline`, and `rename`
 adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `stc debug` /
-`--debug-server` surface are implemented in M6.5; §1.7 fixes the contract.
+`--debug-server` surface are implemented in M6.5; §1.7 fixes the contract. WL-10 implements
+`--coverage`, `--no-coverage`, and `--coverage-out` for `stc test`, plus the `[test] coverage`
+project default (§2.4).
 
 ### 1.3 Exit codes
 
@@ -121,6 +136,12 @@ adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `s
 | 3 | Internal compiler error (panic caught at the driver boundary) |
 | 4 | Trap or runtime failure in `stc run`/`stc test` |
 | 130 | Interrupted (Ctrl-C) |
+
+For `stc test`, coverage leaves the test exit codes unchanged: 0 when the selected tests pass, 1
+for a failing or timed-out test or a coverage report directory/file write failure
+(`STC-E-BUILD-002`), 2 for a usage or manifest error, and 4 for an unexpected trap. Coverage
+collection never changes a test status. The coverage warnings `STC-W-COVERAGE-001/002` follow the
+normal lint levels and fail the run only when promoted to errors.
 
 ### 1.4 Diagnostics
 
@@ -219,6 +240,85 @@ order, after the test process exits:
   are omitted only when the call site has no source location.
 - `trap` is the trap name (for example `STC_TRAP_DIV_ZERO`) for `status = "trap"`, otherwise
   `null`. An expected trap that matches `expect-trap` produces `pass`.
+
+**Coverage report.** With coverage enabled, `stc test` writes `coverage.json` and `coverage.info`
+under the coverage directory (default `target/stc/coverage`; `--coverage-out <dir>` overrides) and
+prints a human summary. `coverage.json` is versioned by its `protocol` key:
+
+```json
+{
+  "files": [
+    {
+      "covered": 1,
+      "file": "src/stats.st",
+      "line_percent": 50.0,
+      "lines": 2,
+      "lines_covered": 1,
+      "percent": 50.0,
+      "sites": 2
+    }
+  ],
+  "filters": [],
+  "kind": "statement",
+  "package": "coverage-demo",
+  "profile": "stc-2013-oop-utf8-v1",
+  "protocol": "stc-coverage/1",
+  "sites": [
+    { "column": 3, "count": 1, "file": "src/stats.st", "line": 4 },
+    { "column": 3, "count": 0, "file": "src/stats.st", "line": 7 }
+  ],
+  "tests": [
+    {
+      "coverage": "reported",
+      "covered": [0],
+      "name": "ClassifyPositive",
+      "sites_covered": 1,
+      "status": "pass"
+    },
+    {
+      "coverage": "timeout",
+      "name": "SlowTest",
+      "status": "timeout"
+    }
+  ],
+  "totals": {
+    "covered": 1,
+    "line_percent": 50.0,
+    "lines": 2,
+    "lines_covered": 1,
+    "percent": 50.0,
+    "sites": 2
+  }
+}
+```
+
+- `protocol` is `stc-coverage/1`; `profile` is the profile ID; `package` is the root package name;
+  `kind` is `statement`; `filters` records the positional filters as given (`[]` when none).
+- `totals` and each `files` entry carry `sites`, `covered`, `percent`, `lines`, `lines_covered`,
+  and `line_percent`. `files` is sorted by `file`; files with no executable sites are absent from
+  `files` and `sites`. `percent` and `line_percent` are `null` when the denominator is zero,
+  otherwise half-up rounded to one decimal; `lines` counts distinct start lines with at least one
+  site, and `lines_covered` counts those with a hit.
+- `sites` is sorted by `(file, start byte, end byte)`; `line` and `column` are the span start, and
+  `count` is the summed hit count (`u64`). Identical spans from different test artifacts merge.
+- `tests` is in run order. `coverage` is `reported`, `missing`, or `timeout`; `covered` holds
+  ascending indices into `sites` and `sites_covered` its length, and both are present only when
+  `coverage` is `reported`. `status` is the test status from the test-result shape above.
+- Paths are package-relative with forward slashes; a dependency file is `<package>/<relative>`.
+
+`coverage.info` is a standard LCOV tracefile sorted by file: one record per file with `TN:`, `SF:`,
+one `DA:<line>,<count>` per distinct start line (counts summed per line), `LF:`, `LH:`, and
+`end_of_record`. There are no `BRDA`, function, or checksum records in v2.0.0. The human summary
+follows the test summary in human mode:
+
+```text
+coverage: 3/5 statements (60.0%), 3/5 lines (60.0%)
+  src/stats.st: 3/5 statements (60.0%), 3/5 lines (60.0%)
+```
+
+A run with no sites prints `coverage: no sites`. In JSON mode the summary is suppressed on stdout
+and the two file paths are logged to stderr; `-q` suppresses the human summary. The files are still
+written. The reports contain no timings, build IDs, absolute paths, or host data.
 
 **Compatibility report.** `stc build` and `stc online` write one object when a baseline is in
 use (human output is the default; `--message-format json` selects this shape):
@@ -469,6 +569,7 @@ timeout = "5s"
 default-cycles = 1
 mock-clock = "0ns"
 io = "memory"
+coverage = false                  # statement coverage by default (WL-10)
 
 [[test.case]]
 name = "TimerBlink"
@@ -630,6 +731,13 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
 - `timeout` is a duration string; the runner kills the test process on expiry. The default is 5 s.
 - `[test].mock-clock` sets the initial mock time; tests advance the next cycle's latched time with
   `STC_CLOCK_ADVANCE` through host ABI 2.2 service ID 12 (D-157).
+- `[test] coverage` is a boolean (default `false`). When `true`, `stc test` collects statement
+  coverage by default. `--coverage` forces it on and `--no-coverage` forces it off, overriding the
+  manifest; `--list` ignores the manifest default. `--coverage` with `--no-coverage`, `--coverage`
+  with `--list`, and `--coverage-out` with `--list` or without effective coverage are usage
+  errors. Reports default to `target/stc/coverage`; `--coverage-out <dir>` selects another
+  directory. Coverage is test tooling only; see
+  [Testing and Verification](Testing-and-Verification.md) §2.6.
 - `[[test.case]].expect-trap` (M6) records the expected trap code; a test that traps with that
   code passes, and any other trap fails it. The same key is accepted in the `{stc:test}` JSON
   payload; a pragma/manifest conflict is `STC-E-PROJECT-008`.
@@ -747,20 +855,28 @@ target/stc/test/<artifact>/                     per-test artifact (stc test; hoo
   <artifact>.stc-got.json
   <artifact>.stc-got.bin
 
+target/stc/coverage/                            coverage reports (stc test; default)
+  coverage.json                                 native report (`stc-coverage/1`)
+  coverage.info                                 LCOV tracefile
+
 target/stc/runtime/                             default runtime store (`stc run --watch`)
   modules/                                      runtime module generations (when configured)
   manifests/                                    active/retired GOT manifests
 ```
 
-`stc clean` removes the debug, release, and test trees and an explicit `[build].out-dir`. It
-preserves `stc.lock`, every retained-state file (`*.stcstate`), an explicit `[retain].file`, and
-the runtime module/manifest store (`[runtime].module-dir`, `[runtime].manifest-dir`, or the
-default `target/stc/runtime`); a preserved entry keeps its parent directories in place. With no
-selector, clean covers the three generated trees and the explicit out-dir; `--debug`, `--release`,
+`stc clean` removes the debug, release, and test trees, the default coverage directory
+(`target/stc/coverage`), and an explicit `[build].out-dir`. It preserves `stc.lock`, every
+retained-state file (`*.stcstate`), an explicit `[retain].file`, and the runtime module/manifest
+store (`[runtime].module-dir`, `[runtime].manifest-dir`, or the default `target/stc/runtime`); a
+preserved entry keeps its parent directories in place. With no selector, clean covers the three
+generated trees, the default coverage directory, and the explicit out-dir; `--debug`, `--release`,
 or `--test` narrows the command to one, and `--out-dir` selects exactly the given directory.
-Cleaning a directory that contains the project root is refused. A runtime store selected only by a
-`stc run --watch --store` CLI override is not discoverable by clean; keep it outside the generated
-trees or delete it explicitly.
+`--test` removes the test tree and the default coverage directory together; `--debug` and
+`--release` leave coverage reports in place. A custom `--coverage-out` directory, like a custom
+`--out-dir`, is outside the default tree and is not removed. Cleaning a directory that contains
+the project root is refused. A runtime store selected only by a `stc run --watch --store` CLI
+override is not discoverable by clean; keep it outside the generated trees or delete it
+explicitly.
 
 ### 4.1 Release package layout
 

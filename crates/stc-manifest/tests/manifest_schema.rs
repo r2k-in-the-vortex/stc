@@ -135,6 +135,7 @@ timeout = "5s"
 default-cycles = 1
 mock-clock = "0ns"
 io = "memory"
+coverage = true
 
 [[test.case]]
 name = "TimerBlink"
@@ -173,6 +174,7 @@ fn minimal_manifest_applies_documented_defaults() {
     assert_eq!(manifest.test.default_cycles, 1);
     assert_eq!(manifest.test.mock_clock, DurationNs(0));
     assert_eq!(manifest.test.effective_io(), IoBackend::Memory);
+    assert!(!manifest.test.coverage);
     assert!(manifest.test.sources.is_empty());
 }
 
@@ -200,6 +202,7 @@ fn full_manifest_parses() {
     assert_eq!(manifest.run.cycles, 10);
     assert_eq!(manifest.run.cycle_time, Some(DurationNs(10_000_000)));
     assert_eq!(manifest.test.cases.len(), 1);
+    assert!(manifest.test.coverage);
     assert_eq!(manifest.test.cases[0].name, "TimerBlink");
     assert_eq!(manifest.test.cases[0].cycles, Some(25));
     assert_eq!(
@@ -474,6 +477,21 @@ fn test_settings_are_validated() {
         &parse_err(&FULL.replace("io = \"memory\"", "io = \"disk\"")),
         "STC-E-PROJECT-008",
     );
+    assert_code(
+        &parse_err(&FULL.replace("coverage = true", "coverage = \"yes\"")),
+        "STC-E-PROJECT-002",
+    );
+    assert_code(
+        &parse_err(&FULL.replace("coverage = true", "coverage = 1")),
+        "STC-E-PROJECT-002",
+    );
+    let unknown = parse_err(&FULL.replace("coverage = true", "coverge = true"));
+    assert_code(&unknown, "STC-E-PROJECT-002");
+    let diagnostic = unknown
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("coverge"))
+        .expect("unknown-key diagnostic");
+    assert_eq!(diagnostic.suggestions[0].replacement, "coverage");
     assert_code(
         &parse_err(&FULL.replace(
             "expect-trap = \"STC_TRAP_DIV_ZERO\"",

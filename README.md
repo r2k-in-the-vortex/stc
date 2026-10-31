@@ -147,6 +147,16 @@ corpus, traceability tables, deterministic property tests, a 20k-term deep-chain
 `fuzz_module_descriptor` targets are in place. The
 specification continues to be written before implementation, as required below.
 
+WL-10 (v2.0.0) adds statement coverage for the ST code under test: `stc test --coverage`
+instruments test builds only and writes deterministic `coverage.json` (`stc-coverage/1`),
+`coverage.info` (LCOV), and a human summary under `target/stc/coverage`. `[test] coverage = true`
+sets the project default; `--coverage`/`--no-coverage` override it per run and `--coverage-out`
+selects the report directory. Host ABI,
+GOT/manifest, metadata, production modules, and test results are unchanged. The model is in
+[Testing and Verification](specification/Architecture/Testing-and-Verification.md) §2.6;
+[examples/coverage/](examples/coverage/README.md) and the committed golden reports under
+`crates/stc-driver/tests/coverage/expected/` are the evidence.
+
 **Release-candidate limitations.** Windows ships object-level CodeView and produces no PDB or
 DLL-level CodeView claim; stack unwinding and typed locals use the stopped-frame table on x86-64
 (Windows MSVC and Linux GNU) and AArch64 (Linux GNU), with frame-less functions reported as
@@ -326,7 +336,10 @@ checks, with `--name`, `--emit`, `--out-dir`, `--target`, `--clang`, `--runtime`
 embedding `lib` host; M6 adds `lib-type = "shared"`. M6.5 adds `stc debug`, `--debug` and
 `--release`, debug information, checkpoint hooks, and `stc run --debug-server`; debug is the
 default form, and `--release` is the optimised, stripped, hook-free form with its own build ID
-and manifest (D-178).
+and manifest (D-178). WL-10 adds `stc test --coverage`/`--no-coverage`/`--coverage-out` and the
+`[test] coverage` default, with deterministic `stc-coverage/1` JSON and LCOV reports under
+`target/stc/coverage`; see [Testing and Verification](specification/Architecture/Testing-and-Verification.md)
+§2.6 and [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) §1.6.
 
 Cargo-like diagnostics (`file:line:col: error[STC-E-...]`), source snippets, notes, suggestions,
 and JSON output are implemented. Details:
@@ -402,6 +415,7 @@ timeout = "5s"
 default-cycles = 1
 mock-clock = "0ns"
 io = "memory"
+coverage = false                    # statement coverage by default (WL-10)
 
 [online]
 baseline = "active"                 # active | explicit
@@ -466,7 +480,7 @@ stc/
     ui/                      diagnostic snapshots
     vectors/exact/           committed Lean-generated vectors
     cross-target/            AArch64 IR smoke fixture
-  examples/                  small ST projects
+  examples/                  small ST projects (hello, motor, motorlib, online-change, coverage)
   specification/             this specification set
     Reference/               local IEC 61131-3:2013 PDF (gitignored)
 ```
@@ -642,6 +656,7 @@ cargo run -p stc-driver -- run    --manifest-path examples/motor/stc.toml --cycl
 cargo run -p stc-driver -- run    --debug-server --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- debug  --manifest-path examples/motor/stc.toml
 cargo run -p stc-driver -- test   --manifest-path examples/motor/stc.toml
+cargo run -p stc-driver -- test   --manifest-path examples/coverage/stc.toml --coverage
 cargo run -p stc-driver -- fmt    --manifest-path examples/motor/stc.toml --check
 cargo run -p stc-driver -- metadata --manifest-path examples/motor/stc.toml --message-format json
 cargo run -p stc-driver -- online download --manifest-path examples/motor/stc.toml --out motor.stc-got.json
@@ -677,8 +692,11 @@ task configuration, with an isolated test suite and a committed `stc.lock`.
 enum, a subrange, and UTF-8 strings, and the root package adds a configuration, direct I/O,
 retained state, tests, and the debug/online walkthrough.
 [`examples/online-change`](examples/online-change/README.md) is the minimal hot-swap, rename, diff,
-and cold-download project. The `projects` CI suite checks, builds, tests, and format-checks every
-example.
+and cold-download project. [`examples/coverage`](examples/coverage/README.md) is the WL-10
+coverage example: production functions with known covered and uncovered statements, two
+contributing tests, an excluded test-only helper, and committed golden reports under
+`crates/stc-driver/tests/coverage/expected/`. The `projects` CI suite checks, builds, tests, and
+format-checks every example.
 
 Before pushing, run the same checks as the CI matrix (formatting, clippy, the
 workspace tests with clang required, specification/link checks, Markdown lint, and a

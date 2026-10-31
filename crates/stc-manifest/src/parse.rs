@@ -89,6 +89,7 @@ const TEST_KEYS: &[&str] = &[
     "default-cycles",
     "mock-clock",
     "io",
+    "coverage",
     "case",
 ];
 const TEST_CASE_KEYS: &[&str] = &["name", "cycles", "timeout", "expect-trap"];
@@ -1471,6 +1472,9 @@ impl Parser {
             && let Some(backend) = self.parse_io_backend(value, "STC-E-PROJECT-008", "io")
         {
             settings.io = Some(backend);
+        }
+        if let Some(value) = test.get("coverage") {
+            settings.coverage = self.expect_bool(value, "STC-E-PROJECT-002", "coverage");
         }
         if let Some(value) = test.get("case") {
             settings.cases = self.parse_test_cases(value);

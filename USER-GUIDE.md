@@ -205,7 +205,7 @@ or addresses. Double builds are byte-identical, including PE timestamps.
 | `stc run` | Build `exe,module,metadata` and run the tasks |
 | `stc debug` | Build and launch a local authenticated debug session |
 | `stc run --debug-server` | Run with a debug service beside the cycle loop |
-| `stc test` | Build and run `{stc:test}` POUs in separate processes |
+| `stc test` | Build and run `{stc:test}` POUs in separate processes; `--coverage` reports ST statement coverage |
 | `stc fmt [--check]` | Format with the fixed style |
 | `stc clean [--debug\|--release\|--test]` | Remove generated trees; preserves the runtime store and state |
 | `stc metadata [--message-format json]` | Print the build/artifact summary |
@@ -292,6 +292,54 @@ Each test runs in its own process with a deterministic clock. `STC_ASSERT`
 failures, traps, and timeouts are reported per test; `[[test.case]]` can set
 cycles, mock-clock, and expected traps. Test-only code never enters production
 or release artifacts.
+
+### Coverage
+
+```sh
+stc test --coverage                         # write target/stc/coverage/
+stc test --coverage --coverage-out out/cov  # custom report directory
+stc test --no-coverage                      # override [test] coverage = true
+```
+
+Set `[test] coverage = true` in `stc.toml` to make coverage the project
+default. `--coverage` forces it on and `--no-coverage` forces it off for one
+run; the CLI wins in either direction. `--coverage` is rejected with `--list`,
+and `--coverage-out` requires coverage to be enabled. `stc clean` and
+`stc clean --test` remove the default `target/stc/coverage` directory; a custom
+`--coverage-out` directory is left alone.
+
+`stc test --coverage` instruments the production statements compiled into each
+test artifact, runs the same tests with the same statuses and exit codes, then
+writes:
+
+- `coverage.json` — the native `stc-coverage/1` report: suite and per-file
+  totals, every canonical site with line, column, and summed hit count, and
+  the site indices each test covered.
+- `coverage.info` — LCOV for editors and `lcov`/`genhtml` tooling; one `DA`
+  line per line with a site, with counts summed per line.
+- A human summary on stdout after the test summary.
+
+```text
+coverage: 3/5 statements (60.0%), 3/5 lines (60.0%)
+  src/coverage.st: 3/5 statements (60.0%), 3/5 lines (60.0%)
+```
+
+In `coverage.json`, `percent` and `line_percent` are `null` when the
+denominator is zero. Reports contain no timings, absolute paths, or host data and are
+byte-identical for identical inputs on every supported host. Positional test
+filters select the tests that contribute, and the filters are recorded in the
+report.
+
+Coverage is statement-based only: there is no branch, condition, or MC/DC
+coverage, no fail-under gate, and no HTML report. Timeouts are wall-clock and
+include instrumentation overhead, so a test near its limit may need a larger
+`--timeout`. Timed-out, crashed, and failed-to-load tests contribute no data;
+failed and trapped tests contribute what they executed. Production `PROGRAM`
+bodies that a test artifact does not link are outside the measured universe.
+Coverage is not correctness evidence. See
+[`specification/Architecture/Testing-and-Verification.md`](specification/Architecture/Testing-and-Verification.md)
+§2.6, [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) §8, and
+[`examples/coverage/`](examples/coverage/README.md).
 
 `stc fmt` uses one fixed style over the lossless CST, preserves comments,
 emits strict semicolons, and supports `--check`. It is idempotent.

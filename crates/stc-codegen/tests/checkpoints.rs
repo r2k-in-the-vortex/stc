@@ -149,6 +149,7 @@ fn generate(source: &str, form: BuildForm) -> stc_codegen::Output {
         module: stc_codegen::ModuleBuildOptions::default(),
         project: stc_codegen::ProjectOptions::default(),
         test_build: form.test_build,
+        coverage: None,
     };
     stc_codegen::generate(&hir, &options)
         .unwrap_or_else(|errors| panic!("codegen failed: {errors:#?}"))

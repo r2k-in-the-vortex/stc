@@ -110,3 +110,20 @@ detail is in
 | RT metrics are buffered and flushed at exit; a hard crash can lose buffered records | Keep runs bounded or accept the loss; the launcher writes a summary on normal exit, stop, or interrupt |
 | The control-disabled control-cost leg estimates its warm-up cycle boundary from the cycle count | The error is negligible over a 10 minute run; the control-enabled legs use fixed status boundaries |
 | The tuned boot profile was not executed in v2.0.0 | It remains a separate future-work scope decision; no tuned result is claimed |
+
+## 8. Coverage (WL-10)
+
+Added 2026-10-31. `stc test --coverage` reports statement coverage for the ST code compiled into
+the test artifacts; the model and formats are in
+[Testing and Verification](specification/Architecture/Testing-and-Verification.md) §2.6.
+
+| Limitation | Status / workaround |
+| --- | --- |
+| Statement coverage only; branch, condition, and MC/DC coverage are not measured | Use the statement and line figures; the `stc-coverage/1` protocol is versioned so a later format can be added without changing this one |
+| Test timeouts are wall-clock and include instrumentation overhead | Raise `--timeout` for a test that runs near its limit under coverage; statuses and exit codes otherwise do not change |
+| A timed-out, crashed, or failed-to-load test contributes no coverage data; failed and trapped tests do contribute what they executed | Investigate the failure with the normal test report; coverage is not a substitute for it |
+| Production `PROGRAM` bodies that a test artifact does not link are outside the measured universe | Put the code under test in a package the test build links, or accept that unlinked programs are not measured |
+| Dependency entries use package-qualified labels (`<package>/<relative>`), not filesystem paths | Use the label to map the report entry back to the dependency source |
+| There is no per-package or per-file coverage filter in v2.0.0 | Filter `coverage.json` in external tooling; all production packages are reported |
+| There is no fail-under threshold, coverage gate, or HTML report | Consume `coverage.json` or `coverage.info` in external tooling; see Testing and Verification §2.6 |
+| Coverage is not correctness evidence and is not rule-level traceability | Correctness is established by tests and by the rule traceability check; coverage only records executed statements |

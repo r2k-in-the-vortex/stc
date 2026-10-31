@@ -1,6 +1,6 @@
 # Testing and Verification
 
-Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixed the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are implemented and active (2026-10-28); M7 adds the cross-target, packaging, examples, manifest-hardening, and performance evidence (2026-10-28)  
+Status: M4.5, M5, and M6 implementation and test plans complete (2026-10-27); M6 conformance/UI corpus, Lean vectors, traceability, fuzz smoke, and CI matrix active; M6.5 phase 0 fixed the debug suite contracts (protocol, access, checkpoints, builds, diagnostics) and the debug tests are implemented and active (2026-10-28); M7 adds the cross-target, packaging, examples, manifest-hardening, and performance evidence (2026-10-28); WL-10 adds ST statement coverage to `stc test` (2026-10-31)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI/Manifest](CLI-and-Manifest.md)
 
@@ -55,6 +55,16 @@ Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Cha
 > and `examples`. CI adds the `cross-target` and `package` jobs on Windows and Linux; the package
 > job builds, checksums, and exercises the unpacked layout in a fresh project. Release evidence is
 > recorded in `RELEASE-CHECKLIST.md`; timing remains informational (D-193).
+>
+> **WL-10 status (2026-10-31):** `stc test --coverage` reports statement coverage for ST production
+> code compiled into test artifacts. Codegen instruments test builds only through a module-owned
+> counter array; the test host writes one raw sidecar per test; the driver aggregates by canonical
+> source span and writes deterministic `coverage.json` (`stc-coverage/1`), `coverage.info` (LCOV),
+> and a human summary. The model, exclusions, formats, and limits are in §2.6. The executable
+> example is `examples/coverage/`; committed golden reports are under
+> `crates/stc-driver/tests/coverage/expected/` and are checked by
+> `crates/stc-driver/tests/coverage_evidence.rs`. No host ABI, GOT/manifest, metadata, production
+> module, or test-result shape changed.
 
 ## 1. Layers of testing
 
@@ -266,6 +276,150 @@ test case; the artifact is a normal ABI 2 module/manifest pair plus a test host,
 - **Contract boundary.** No manifest/descriptor/state format changes; the only ABI addition is
   service ID 12. Test artifacts never participate in a baseline or a swap, so they cannot affect
   production identity or retained state.
+
+### 2.6 Coverage
+
+`stc test` can report statement coverage for the ST code under test (WL-10; D-211 records the two
+warning codes). Coverage records which executable statements the test suite executed, attributed
+to ST source file, line, and column, aggregated across the suite and available per test. It is
+test tooling: coverage is not a correctness claim and does not gate a build. Coverage of the ST
+program under test is separate from the Rust line coverage reported by the CI `coverage` job for
+the compiler itself (WL-2) and from the rule-level traceability check in §7.
+
+**Sites.**
+
+- A site is one distinct executable statement span lowered into a test artifact from a non-test
+  definition in a production source file of any package in the test build (root and dependencies).
+  Executable kinds are `StmtKindHir` other than `Empty` with a non-empty span. The lowerer keys
+  sites by span, so a repeated span reuses one counter.
+- A site is covered when its counter is nonzero; hit counts accumulate per test and across tests.
+  The canonical site universe is the union of every selected test artifact's site table, including
+  tests whose coverage data is missing or that timed out.
+- The reported location is the span start: a 1-based line and a 1-based column counted in Unicode
+  scalar values (STC-LEX-005).
+
+**Instrumentation.**
+
+- Test builds emit one module-owned, zero-initialized, 8-byte-aligned `[N x i64]` global named
+  `stc_coverage_counters`, exported as `dso_local dllexport`, when at least one site exists. Each
+  site increments its cell before the statement executes. The increment cannot trap, allocate, or
+  change an ST-visible value; a statement that traps still records entry.
+- The test host reads the array through the existing module export lookup after the scan loop and
+  before shutdown. The counter symbol is an internal, test-build-only export and is not part of
+  the deployable module ABI.
+- Codegen rejects coverage outside a test build. Production builds emit no counter global, site
+  table, or report, and no host ABI service, ABI version, GOT cell, descriptor field, metadata
+  key, or manifest field changes.
+
+**Collection.**
+
+- Each test runs in its own process. The test host writes one raw sidecar, `<artifact>.coverage`,
+  in the internal `stc-coverage-raw/1` format: a header with the site count, then one `id count`
+  line per nonzero counter in ascending ID order. The driver reads it after the process exits.
+- The host validates the declared site count (cap 1,000,000). A missing export, invalid count, or
+  sidecar write failure writes no usable data and changes only the coverage aggregate. The raw
+  sidecar is an internal protocol between the generated host and the driver; only
+  `coverage.json`, `coverage.info`, and the human summary are stable interfaces.
+- Missing, malformed, or site-table-inconsistent data is `STC-W-COVERAGE-001`; the test is
+  excluded from the aggregate and the test result is unchanged. A timed-out test is killed before
+  the sidecar is written and is reported as having no data. Failed and trapped tests contribute
+  what they executed; an expected-trap test that passes contributes up to the trap.
+- Collection never changes the result line, stdout shape, recorded failures, test status, or exit
+  code.
+
+**Aggregation.**
+
+- Artifact-local counters map to canonical sites by `(report path, start byte, end byte, kind)`;
+  identical keys across artifacts merge. Canonical sites are sorted by `(report path, start byte,
+  end byte)`. Aggregate hit counts are saturating sums; a site is covered when its aggregate count
+  is greater than zero.
+- Per-test detail is the ascending set of canonical site indices the test covered; per-test hit
+  counts are not published. A site whose report path cannot be resolved is omitted with
+  `STC-W-COVERAGE-002`, and the rest of the report is still produced.
+
+**Exclusions.**
+
+| Source region | Measured | Reason |
+| --- | --- | --- |
+| Production sources in the root and dependency packages | Yes | Code under test |
+| `[test].sources` | No | Test code |
+| `{stc:test}` POUs and members of test-only definitions | No | Test code |
+| Synthetic test wrapper (`STC_TEST_WRAPPER`, virtual file) | No | Generated harness |
+| Prelude, synthetic, and compiler-generated definitions | No | Not user code |
+| Synthesized standard function-block bodies | No | No ST source; emitted directly |
+| Declarations and initializer expressions | No | Not executable statements |
+| `Empty` statements and zero-length spans | No | No source location |
+| Unlinked production `PROGRAM` bodies | No | Not in the test artifact (C-4) |
+| Shutdown-time execution | No | Collection ends before `host.shutdown()` |
+
+Statements in a production file that belong to a `{stc:test}` definition are excluded through the
+definition's test-only flag, not by file; methods of test-only POUs and types are excluded through
+the owner chain.
+
+**Reports.**
+
+- Coverage writes `coverage.json` (`stc-coverage/1`) and `coverage.info` (LCOV) under
+  `target/stc/coverage/` by default, or `--coverage-out <dir>`, and prints a human summary after
+  the test summary in human mode. In JSON mode the summary is suppressed on stdout and the two
+  file paths are logged to stderr; `-q` suppresses the human summary. The files are still written
+  in both cases.
+- Statement coverage is primary: covered sites / total sites. Line coverage is the documented
+  projection for LCOV and editors: a line is covered when any site starting on it executed, and
+  LCOV `DA` sums the hit counts of sites starting on that line. Both metrics appear in the JSON
+  report and the human summary.
+- `percent` and `line_percent` are `null` in the JSON report when the denominator is zero;
+  otherwise they are half-up rounded to one decimal using integer arithmetic. The human summary
+  renders a zero-site run as `coverage: no sites`.
+- The report is produced regardless of test outcomes. If any test artifact fails to build, the
+  command returns the build error and writes no report. If no test is discovered or the filters
+  select none, no report is written. The report directory is created if missing, and the two
+  files are overwritten. The report directory is independent of `--out-dir`.
+
+**Enablement.**
+
+- `[test] coverage = true` enables coverage as the project default; absent or false leaves it off.
+  `--coverage` forces it on and `--no-coverage` forces it off; the CLI overrides the manifest in
+  either direction, and the two flags together are a usage error.
+- `--list` ignores the manifest default and never collects coverage; an explicit `--coverage` or
+  `--coverage-out` with `--list` is a usage error. `--coverage-out` also requires effective
+  coverage. `--no-run` builds instrumented artifacts but writes no report.
+- `stc clean` and `stc clean --test` remove the default coverage directory as part of the test
+  tree. A custom `--coverage-out` directory, like a custom `--out-dir`, is outside the default tree
+  and is not removed.
+
+**Determinism.**
+
+- Identical sources, tests, filters, and options produce byte-identical reports on every supported
+  host. Reports contain no timings, durations, build IDs, absolute paths, host names, or other
+  host data.
+- Files and sites are canonically ordered; tests stay in run order. Paths are package-relative
+  with forward slashes. Root files use the package-relative path, and dependency files use
+  `<package>/<relative>`. Site attribution is span-based, so line endings and host path spelling do
+  not affect it. Site IDs are artifact-local and never appear in reports.
+
+**Limitations.**
+
+- Statement coverage only; there is no branch, condition, or MC/DC coverage.
+- Test timeouts are wall-clock and include instrumentation overhead. A test near its timeout may
+  need a larger `--timeout` under coverage; outcomes otherwise do not change.
+- A timed-out, crashed, or failed-to-load test contributes no coverage data. Failed tests do
+  contribute coverage for what they executed, and expected-trap tests that pass contribute up to
+  the trap.
+- Production `PROGRAM` bodies that the test artifact does not link are outside the measured
+  universe. A statement after an unconditional transfer, or one removed by the optimizer, stays in
+  the universe with a zero count.
+- There is no fail-under threshold, coverage gate, or HTML report. Coverage is not correctness
+  evidence and is not the rule-level traceability check in §7.
+
+**Evidence.** `examples/coverage/` is the executable example: two contributing tests cover 3 of 5
+statements and lines (60.0%), one production function is never called, and a `{stc:test}` helper in
+a production file runs but contributes no sites. Committed golden reports are in
+`crates/stc-driver/tests/coverage/expected/` (`coverage.json`, `coverage.info`, and
+`coverage.stdout`) and are regenerated with `STC_UPDATE_SNAPSHOTS=1`;
+`crates/stc-driver/tests/coverage_evidence.rs` covers determinism and host-data absence, result
+equivalence, production isolation, test-code exclusions, dependency labels, and optimized builds.
+The warning codes are `STC-W-COVERAGE-001/002` ([Conformance Profile](../01-Conformance-Profile.md)
+§10; D-211).
 
 ## 3. Compiler tests
 

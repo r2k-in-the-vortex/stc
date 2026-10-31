@@ -234,6 +234,7 @@ version = "1.0.0"
 dependencies = [
  "serde_json",
  "stc-diag",
+ "stc-got",
  "stc-lexer",
  "stc-manifest",
  "stc-parser",
