@@ -644,6 +644,70 @@ theorem stepExpr_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Fr
       | cons arg more => simp
   | cast operand to kind span => simp
 
+/-- A typed value focus never gets stuck. -/
+theorem stepValue_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
+    {v : Value} (hf : c.frames = f :: rest) (hfm : FrameMatches u f)
+    (h : v.WellFormed ∧ ∃ T, v.ty = T ∧
+        StackTyped (frameCtx u f.kind) f.k (.value T) f.loopCtx) :
+    stepValue u c v ≠ .stuck := by
+  rcases h with ⟨_hvwf, T, _hty, hstack⟩
+  have hne : f.k ≠ [] := StackTyped.value_ne_nil hstack
+  simp only [stepValue, hf]
+  cases hk : f.k with
+  | nil => exact absurd hk hne
+  | cons cont rest =>
+      rw [hk] at hstack
+      simp only [hk]
+      cases hstack with
+      | assign hlookup hrest => simp [stepValue, hf, hk]
+      | unary hop hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | binaryL hrhs hop hres hrest => simp [stepValue, hf, hk]
+      | binaryR hlhs hty hop hres hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | cast hconv hcore hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | callArgs hrem htyped hdone hsig hresult hrest =>
+          simp only [stepValue, hf, hk]
+          split
+          · exfalso; exact hrem rfl
+          · simp only [performCall]
+            split
+            · split
+              · simp
+              · split <;> simp
+            · simp only [CalleeSignatureV] at hsig
+              rcases hsig with ⟨sig, hsigfn, _hargs⟩
+              obtain ⟨fn, hfn⟩ := frameCtx_functions_lookup hfm hsigfn
+              simp [performCall, hfn, hf]
+          · simp
+      | ifCond harms helse hrest =>
+          simp only [stepValue, hf, hk]
+          repeat' split
+          all_goals simp
+      | caseSel hsel hint hlabels hbodies helse hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | whileCond hcond hbody hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | repeatCond hcond hbody hrest =>
+          simp only [stepValue, hf, hk]
+          split <;> simp
+      | forInit hvar hint hnot hstop hstep hzero hbody hrest =>
+          simp [stepValue, hf, hk]
+      | forStop hvar hint hnot hstep hzero hbody hrest =>
+          simp only [stepValue, hf, hk, forContinue]
+          repeat' split
+          all_goals simp
+      | forStep hvar hint hnot hstop hbody hrest =>
+          simp only [stepValue, hf, hk, forContinue]
+          repeat' split
+          all_goals simp
+
 /-! ## Determinism -/
 
 /-- A terminal state has no successors. -/
