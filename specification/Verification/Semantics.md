@@ -11,8 +11,9 @@ typing judgment, the core checker `checkCore`, the conversion relation, HIR well
 the soundness and rejection-characterization theorems are defined and proved. P0.3 is in progress
 (2026-10-27): the value and trap model, the small-step machine, the configuration typing, the
 determinism, trap-soundness, and guarded exact-arithmetic results, and the fuel interpreter's
-soundness and completeness are in place; `progress`, `preservation`, `type_soundness`, and
-initial-state typing remain. The M6.5 compiler drift that paused P0.3 has stabilized at `stc`
+soundness and completeness are in place; `progress` is proved, while `preservation`,
+`type_soundness`, and initial-state typing remain. The M6.5 compiler drift that paused P0.3 has
+stabilized at `stc`
 1.0.0; the drift register was rechecked on 2026-10-31 and still holds. P0.3 resumed on 2026-10-31
 and its open questions are resolved in [Plan-Phase0.md](Plan-Phase0.md) §19.8. P0.4 is complete
 (review approved 2026-10-31, WL-3): `IRFrag`, `IRContract`, `WellFormed`, and the structural
@@ -202,15 +203,15 @@ result variable, continuation stack, and loop context. `EXIT` and `CONTINUE` tar
 innermost loop marker in the continuation stack; `CONTINUE` in a `FOR` performs the checked
 increment and bound test. A signed `FOR` uses the ascending bound test exactly when the runtime
 step is positive; an unsigned loop always ascends. This matches `lower_for` and resolves Q4.
-`RETURN` completes the current frame and delivers its result to the caller. The configuration-typing judgment `ConfigTyped` is defined in `Stc.Sem.Eval`; the
-progress and preservation proofs are not yet complete.
+`RETURN` completes the current frame and delivers its result to the caller. The configuration-typing judgment `ConfigTyped` is defined in `Stc.Sem.Eval`;
+`progress` is proved and `preservation` remains.
 
 ### 4.2 Source small-step relation `Step`
 
 P0.3 defines `Step` as the graph of the total step function `Stc.Sem.step`, with a
 prefix-oriented reflexive-transitive closure `Steps`, and `Terminal` as `step u c = .halt`.
 The relation is the reference for source soundness and does not require termination; functions
-may be recursive. `eval_deterministic` is proved. `progress` and `preservation` are pending.
+may be recursive. `eval_deterministic` and `progress` are proved; `preservation` is pending.
 
 ### 4.3 Recursive reference model `stcSem`
 
@@ -292,7 +293,7 @@ The authoritative status of every entry is [`lean/verification-status.toml`](../
 mirrors the registry while P0.3 is resumed and P0.4 is complete: the P0.1 and P0.2 entries are
 proved except `core_check_complete`, which is descoped with the reason recorded in the registry;
 the P0.3 entries for determinism, trap soundness, guarded exact arithmetic, and the interpreter
-are proved, while `progress`, `preservation`, and `type_soundness` remain in progress; the P0.4
+are proved, `progress` is proved, while `preservation` and `type_soundness` remain in progress; the P0.4
 definitions and structural lemmas are proved. Open P0.3 questions are recorded in
 [Plan-Phase0.md](Plan-Phase0.md) §19 and the P0.4 decisions in §20. The registry is regenerated
 into this section at P0.7.
@@ -308,7 +309,7 @@ into this section at P0.7.
 | `Stc.Sem.hir_wellformed` | `Stc.Sem.Typing` | P0.2 | proved |
 | `Stc.Sem.conversion_legal_iff` | `Stc.Sem.Typing` | P0.2 | proved |
 | `Stc.Sem.eval_deterministic` | `Stc.Sem.Eval` | P0.3 | proved |
-| `Stc.Sem.progress` | `Stc.Sem.Eval` | P0.3 | in progress |
+| `Stc.Sem.progress` | `Stc.Sem.Eval` | P0.3 | proved |
 | `Stc.Sem.preservation` | `Stc.Sem.Eval` | P0.3 | in progress |
 | `Stc.Sem.type_soundness` | `Stc.Sem.Eval` | P0.3 | in progress |
 | `Stc.Sem.trap_soundness` | `Stc.Sem.Eval` | P0.3 | proved |
@@ -409,7 +410,8 @@ construct is rejected.
 | 2026-10-27 | 1.0-draft | P0.2 | Defined the typed HIR, the declarative typing judgment, `checkCore`, `HirWellFormed`, and the conversion relation; proved `core_check_sound`, `core_rejection_characterized`, `hir_wellformed`, and `conversion_legal_iff`; descoped `core_check_complete` with the `FOR` over-rejection recorded |
 | 2026-10-27 | 1.0-draft | P0.3 (in progress) | Defined values and traps, the small-step machine, the configuration typing, and the fuel interpreter; proved `eval_deterministic`, `trap_soundness`, guarded `checked_arith_traps_exactly`, `interpreter_sound`, and `interpreter_complete`; `progress`, `preservation`, `type_soundness`, and initial-state typing remain; open questions Q1–Q7 and the drift register are recorded in Plan-Phase0.md §19 |
 | 2026-10-31 | 1.0-draft | P0.4 (complete) | Started WL-3. Fixed the production-module fragment: five GOT cell kinds, a grouped slot table, the overflow-result and fixed-array types, rotate intrinsics, `extractvalue`, and `unreachable`; removed `switch` (CASE lowers to branches). Defined `IRFrag`, `IRContract`, `ModuleShapes`, `WellFormed`, and the structural lemmas, and proved the P0.4 lemmas with the standard Lean axioms; the definition-to-emission map is the [Core IR Coverage](Core-IR-Coverage.md) table. The P0.4 review was approved 2026-10-31 |
-| 2026-10-31 | 1.0-draft | P0.3 (resumed) | Reevaluated Q1–Q7: keep the current machine and `ConfigTyped` invariant; keep the guarded exact form; record layout-only characters as a known Q3 gap; correct the `FOR` zero-step test to `step > 0` for signed loops and always-ascending for unsigned; confirm the initialization boundary and the `RANGE` power trap; commit WIP checkpoints. `progress`, `preservation`, initial-state typing, and `type_soundness` remain |
+| 2026-10-31 | 1.0-draft | P0.3 (resumed) | Reevaluated Q1–Q7: keep the current machine and `ConfigTyped` invariant; keep the guarded exact form; record layout-only characters as a known Q3 gap; correct the `FOR` zero-step test to `step > 0` for signed loops and always-ascending for unsigned; confirm the initialization boundary and the `RANGE` power trap; commit WIP checkpoints. |
+| 2026-10-31 | 1.0-draft | P0.3 (progress) | Proved `progress`: a `ConfigTyped` configuration is terminal or takes a step, via the expression, value, statement, resume, and return no-stuck lemmas. `preservation`, initial-state typing, and `type_soundness` remain |
 
 ## 10. Rust/Lean interface
 

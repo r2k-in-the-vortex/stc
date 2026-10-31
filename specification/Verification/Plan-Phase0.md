@@ -11,8 +11,8 @@ typing judgment, `checkCore`, conversion relation, HIR well-formedness, and the 
 rejection-characterization theorems are in place. P0.3 is in progress (2026-10-27): the value and
 trap model, the small-step machine, the configuration typing, determinism, trap soundness, exact
 arithmetic agreement, and the sound/completeness results for the fuel interpreter are in place;
-`progress`, `preservation`, `type_soundness`, and initial-state typing remain. Work is paused for
-alignment with M6.5. The compiler drift that prompted the pause has stabilized at `stc` 1.0.0;
+`progress` is proved; `preservation`, `type_soundness`, and initial-state typing remain. Work was
+paused for alignment with M6.5. The compiler drift that prompted the pause has stabilized at `stc` 1.0.0;
 the §19.4 register was rechecked on 2026-10-31 and still holds, so P0.3 remains paused with its
 open questions unchanged. P0.4 is complete (review approved 2026-10-31) as WL-3 of
 [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md); its scope decisions and execution record are in §20. P0.3
@@ -973,7 +973,7 @@ completion claim.
 | `trap_soundness` | `Stc.Sem.Eval` | Proved |
 | `checked_arith_traps_exactly` | `Stc.Sem.Eval` | Proved in the guarded form described in Q2 |
 | Fuel interpreter `runFuel`/`stcSem` | [Interpreter.lean](../../lean/Verification/Semantics/Interpreter.lean) | Defined; `interpreter_sound` and `interpreter_complete` proved |
-| `progress` | — | Not proved |
+| `progress` | `Stc.Sem.Eval` | Proved |
 | `preservation` | — | Not proved |
 | `type_soundness` | — | Not proved; depends on preservation |
 | Initial-state typing (`ConfigTyped u (initState u n)` from `HasType u`) | — | Not proved; needs context agreement for global initializers |
@@ -981,9 +981,8 @@ completion claim.
 
 ### 19.2 Exit criteria assessment
 
-The P0.3 exit criteria are **not met**. `progress`, `preservation`, `type_soundness`, and
-initial-state typing are missing, and the semantics document still describes the dynamic semantics as
-future work in places. There is no `sorry` or `admit`; `lake build` and the local CI checks pass.
+The P0.3 exit criteria are **not met**. `preservation`, `type_soundness`, and initial-state typing
+are missing, and the semantics document still describes some dynamic semantics as future work. There is no `sorry` or `admit`; `lake build` and the local CI checks pass.
 P0.3 resumed on 2026-10-31 with the §19.8 decisions; the current definitions are committed as a
 WL-3 checkpoint.
 
@@ -1048,7 +1047,7 @@ and the open questions are resolved (§19.8). The remaining work:
 
 1. `progress` and the supporting no-stuck lemmas (runtime lookup, loop-marker existence, frame
    completion, call performance), using `ConfigTyped.lookupVar?_some`, the `StackTyped`
-   projections, and the `FramesShape` lemmas already present.
+   projections, and the `FramesShape` lemmas already present. **Done 2026-10-31.**
 2. `preservation` and the store-update lemmas for `FrameMatches`/`GlobalsTyped`, including the
    callee-frame construction, loop markers, and the cycle reset.
 3. Initial-state typing from `HasType`, including context agreement between `Ctx.ofGlobals` and
@@ -1068,8 +1067,8 @@ python tools/ci/check_semantics_placeholder.py
 grep -rnwE 'sorry|admit' lean/Stc/Sem lean/Verification    # no matches
 ```
 
-The registry marks the five proved P0.3 theorems as `proved`; `progress`, `preservation`, and
-`type_soundness` remain `planned` with a note pointing at this section.
+The registry marks the six proved P0.3 theorems as `proved`; `preservation` and `type_soundness`
+remain `planned` with a note pointing at this section.
 
 ### 19.7 Drift recheck (2026-10-31)
 
@@ -1099,8 +1098,8 @@ P0.3 resumed after the P0.4 review and CI. The open questions are resolved as fo
 | Q6 — negative signed exponent | Confirmed and implemented: `evalPow` traps `RANGE` for a signed negative exponent; constant evaluation rejects the constant case. |
 | Q7 — checkpoint policy | Commit the compiling work as WIP checkpoints on WL-3; the P0.4 commit is the first checkpoint. |
 
-The remaining work is the §19.5 sequence: `progress` and the no-stuck lemmas, `preservation` and
-the store-update lemmas, initial-state typing, then `type_soundness`, the registry and semantics
+`progress` is done. The remaining work is the rest of the §19.5 sequence: `preservation` and the
+store-update lemmas, initial-state typing, then `type_soundness`, the registry and semantics
 document updates, and the P0.3 review.
 
 ## 20. P0.4 execution record — in progress
