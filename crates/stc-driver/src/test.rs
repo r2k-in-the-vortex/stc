@@ -495,27 +495,8 @@ pub(crate) fn run(
                 .iter()
                 .map(|entry| (entry.file_id, entry.report_path.as_str()))
                 .collect();
-            let mut points = Vec::with_capacity(generated.output.coverage_sites.len());
-            let mut omitted = 0_usize;
-            for site in &generated.output.coverage_sites {
-                let point = report_paths.get(&site.span.file).map(|path| {
-                    let location = sources.location(site.span);
-                    CoveragePoint {
-                        file: (*path).to_owned(),
-                        start: site.span.start,
-                        end: site.span.end,
-                        line: location.line,
-                        column: location.column,
-                        kind: match site.kind {
-                            stc_codegen::CoverageKind::Statement => CoverageKind::Statement,
-                        },
-                    }
-                });
-                if point.is_none() {
-                    omitted += 1;
-                }
-                points.push(point);
-            }
+            let (points, omitted) =
+                coverage_points(&generated.output.coverage_sites, &report_paths, &sources);
             if omitted > 0 {
                 reporter.plain(
                     "STC-W-COVERAGE-002",
@@ -714,6 +695,40 @@ fn run_tests(
         0
     };
     (code, coverage_tests)
+}
+
+/// Maps artifact-local coverage sites to canonical report points.
+///
+/// `report_paths` holds the reportable files (all non-test entries); a site in
+/// any other file is omitted and counted. Omitted sites are reported with
+/// `STC-W-COVERAGE-002`.
+fn coverage_points(
+    sites: &[stc_codegen::CoverageSite],
+    report_paths: &BTreeMap<FileId, &str>,
+    sources: &SourceMap,
+) -> (Vec<Option<CoveragePoint>>, usize) {
+    let mut points = Vec::with_capacity(sites.len());
+    let mut omitted = 0_usize;
+    for site in sites {
+        let point = report_paths.get(&site.span.file).map(|path| {
+            let location = sources.location(site.span);
+            CoveragePoint {
+                file: (*path).to_owned(),
+                start: site.span.start,
+                end: site.span.end,
+                line: location.line,
+                column: location.column,
+                kind: match site.kind {
+                    stc_codegen::CoverageKind::Statement => CoverageKind::Statement,
+                },
+            }
+        });
+        if point.is_none() {
+            omitted += 1;
+        }
+        points.push(point);
+    }
+    (points, omitted)
 }
 
 /// Reads and validates one raw coverage sidecar against the artifact site table.
@@ -953,6 +968,36 @@ mod tests {
         ));
         std::fs::write(&path, contents).expect("write sidecar");
         path
+    }
+
+    #[test]
+    fn coverage_sites_outside_reportable_files_are_omitted() {
+        // A site without a reportable file is dropped from the report; this is
+        // the `STC-W-COVERAGE-002` case.
+        let mut sources = SourceMap::new();
+        let reportable = sources.add_file("src/main.st", "PROGRAM Main\nEND_PROGRAM\n");
+        let excluded = sources.add_file("tests/main.st", "PROGRAM Main\nEND_PROGRAM\n");
+        let report_paths = BTreeMap::from([(reportable, "src/main.st")]);
+        let sites = [
+            stc_codegen::CoverageSite {
+                id: 0,
+                span: Span::new(reportable, 0, 12),
+                kind: stc_codegen::CoverageKind::Statement,
+            },
+            stc_codegen::CoverageSite {
+                id: 1,
+                span: Span::new(excluded, 0, 12),
+                kind: stc_codegen::CoverageKind::Statement,
+            },
+        ];
+        let (points, omitted) = coverage_points(&sites, &report_paths, &sources);
+        assert_eq!(omitted, 1);
+        assert_eq!(points.len(), 2);
+        let point = points[0].as_ref().expect("reportable site");
+        assert_eq!(point.file, "src/main.st");
+        assert_eq!((point.start, point.end), (0, 12));
+        assert_eq!((point.line, point.column), (1, 1));
+        assert!(points[1].is_none());
     }
 
     #[test]
