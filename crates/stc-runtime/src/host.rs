@@ -1728,7 +1728,29 @@ impl Host {
             Ok(PlanDecision::Cold) => Ok(LoadOutcome::ColdRequired {
                 reason: "the candidate is a cold-layout build".into(),
             }),
-            Ok(PlanDecision::Online) => self.prepare_online(candidate),
+            Ok(PlanDecision::Online) => {
+                // Backend configuration is fixed for a prepared generation:
+                // the coordinator keeps its device instances, PDO/channel map,
+                // routes, and bound image ranges across activation. Compare the
+                // candidate's configuration hash with the active generation's
+                // before any state changes (IO-Routing-and-Backends §7).
+                let active_hash = crate::coordinator::configuration_hash(
+                    self.active
+                        .as_ref()
+                        .and_then(|generation| generation.info.as_ref()),
+                );
+                let candidate_hash = crate::coordinator::configuration_hash(candidate.info());
+                if active_hash != candidate_hash {
+                    return Err(Error::new(
+                        codes::ONLINE_IO,
+                        format!(
+                            "the I/O configuration changed (active {active_hash}, candidate \
+                             {candidate_hash}); a cold download is required"
+                        ),
+                    ));
+                }
+                self.prepare_online(candidate)
+            }
             Err(error) => {
                 if plan_is_terminal(candidate.manifest()) {
                     Err(error)

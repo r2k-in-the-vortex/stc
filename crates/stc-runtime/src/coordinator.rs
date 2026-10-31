@@ -697,7 +697,7 @@ impl Coordinator {
             groups.entry(instance).or_default().push(device);
         }
 
-        let config_hash = configuration_hash(info);
+        let config_hash = configuration_hash(Some(info));
         let mut instances = Vec::new();
         for name in &order {
             let Some(mut backend) = registry.create(name) else {
@@ -1227,54 +1227,81 @@ fn no_backend(message: impl Into<String>) -> Error {
 }
 
 /// Returns the stable configuration hash over the profile, device tree,
-/// PDO/channel map, bindings, and routes (IO-Routing-and-Backends §7).
-fn configuration_hash(info: &ModuleInfo) -> String {
+/// PDO/channel map, device-bound bindings, and routes
+/// (IO-Routing-and-Backends §7).
+///
+/// Only bindings that attach a direct variable to a device channel take part:
+/// they define the backend range. Plain direct-variable bindings are excluded
+/// because moving an unbound image area is a compatible remap handled by the
+/// host, not a backend configuration change.
+pub(crate) fn configuration_hash(info: Option<&ModuleInfo>) -> String {
     let mut text = String::new();
-    if let Some(profile) = &info.profile {
-        text.push_str("profile\0");
-        text.push_str(&profile.digest);
-        text.push('\0');
-    }
-    for route in &info.routes {
-        text.push_str("route\0");
-        push_endpoint(&mut text, &route.source);
-        for sink in &route.sinks {
-            text.push_str("sink\0");
-            push_endpoint(&mut text, sink);
-        }
-    }
-    for device in &info.devices {
-        text.push_str("device\0");
-        text.push_str(&device.name);
-        text.push('\0');
-        text.push_str(&device.kind);
-        text.push('\0');
-        text.push_str(device.config.as_deref().unwrap_or(""));
-        text.push('\0');
-        for channel in &device.channels {
-            text.push_str(&channel.name);
-            text.push('\0');
-            text.push_str(&channel.direction);
-            text.push('\0');
-            text.push_str(&channel.width_bits.to_string());
+    if let Some(info) = info {
+        if let Some(profile) = &info.profile {
+            text.push_str("profile\0");
+            text.push_str(&profile.digest);
             text.push('\0');
         }
-    }
-    for binding in &info.bindings {
-        text.push_str("binding\0");
-        text.push_str(&binding.got_id.to_hex());
-        text.push('\0');
-        text.push_str(&binding.area.to_string());
-        text.push('\0');
-        text.push_str(&binding.offset_bits.to_string());
-        text.push('\0');
-        text.push_str(&binding.width_bits.to_string());
-        text.push('\0');
-        text.push_str(binding.device.as_deref().unwrap_or(""));
-        text.push('\0');
-        text.push('\n');
+        for route in &info.routes {
+            text.push_str("route\0");
+            push_endpoint(&mut text, &route.source);
+            for sink in &route.sinks {
+                text.push_str("sink\0");
+                push_endpoint(&mut text, sink);
+            }
+        }
+        for device in &info.devices {
+            text.push_str("device\0");
+            text.push_str(&device.name);
+            text.push('\0');
+            text.push_str(&device.kind);
+            text.push('\0');
+            text.push_str(device.config.as_deref().unwrap_or(""));
+            text.push('\0');
+            for channel in &device.channels {
+                text.push_str(&channel.name);
+                text.push('\0');
+                text.push_str(&channel.direction);
+                text.push('\0');
+                text.push_str(&channel.width_bits.to_string());
+                text.push('\0');
+            }
+        }
+        for binding in &info.bindings {
+            let (Some(device), Some(channel)) = (&binding.device, &binding.channel) else {
+                continue;
+            };
+            text.push_str("binding\0");
+            text.push_str(&binding.got_id.to_hex());
+            text.push('\0');
+            text.push_str(&binding.area.to_string());
+            text.push('\0');
+            text.push_str(&binding.offset_bits.to_string());
+            text.push('\0');
+            text.push_str(&binding.width_bits.to_string());
+            text.push('\0');
+            text.push_str(device);
+            text.push('\0');
+            push_channel(&mut text, channel);
+            text.push('\0');
+            text.push_str(binding.direction.as_deref().unwrap_or(""));
+            text.push('\n');
+        }
     }
     Digest32::from_bytes(stc_got::sha256::sha256(text.as_bytes())).to_hex()
+}
+
+fn push_channel(text: &mut String, channel: &BindingChannel) {
+    match channel {
+        BindingChannel::Index(index) => {
+            text.push_str("index:");
+            text.push_str(&index.to_string());
+        }
+        BindingChannel::Name(name) => {
+            text.push_str("name:");
+            text.push_str(name);
+        }
+    }
 }
 
 fn push_endpoint(text: &mut String, endpoint: &RouteEndpoint) {
@@ -1588,6 +1615,81 @@ mod tests {
         info.inputs_bytes = 3;
         let changed = Coordinator::cold_start(&info, &BackendRegistry::new()).expect("cold start");
         assert_ne!(changed.config_hash(), coordinator.config_hash());
+    }
+
+    #[test]
+    fn configuration_hash_covers_backend_config_and_ignores_unbound_remaps() {
+        let unbound = || DirectBinding {
+            got_id: GotId::from_bytes([9; 16]),
+            area: 1,
+            offset_bits: 8,
+            width_bits: 8,
+            device: None,
+            channel: None,
+            direction: None,
+        };
+        let mut info = module(
+            vec![diewu("ethercat", Some(MOCK_CONFIG), all_channels())],
+            vec![binding(1, 1, 0, 8, "diewu", "IN0", "input"), unbound()],
+            vec![route(
+                physical("diewu", "OUT0", 8, false),
+                vec![plc(1, 16, 8)],
+            )],
+            3,
+            1,
+        );
+        assert_eq!(
+            configuration_hash(None),
+            configuration_hash(Some(&ModuleInfo::default())),
+            "an absent metadata sidecar is an empty configuration"
+        );
+        let hash = configuration_hash(Some(&info));
+
+        // Moving a direct variable that is not bound to a device channel is an
+        // image-compatible remap handled by the host, not a backend change.
+        let mut remapped = info.clone();
+        remapped.bindings[1].offset_bits = 24;
+        assert_eq!(hash, configuration_hash(Some(&remapped)));
+
+        // Each backend-relevant change requires a cold download.
+        let mut channel = info.clone();
+        channel.bindings[0].channel = Some(BindingChannel::Name("IN1".into()));
+        assert_ne!(hash, configuration_hash(Some(&channel)));
+
+        let mut range = info.clone();
+        range.bindings[0].offset_bits = 8;
+        assert_ne!(hash, configuration_hash(Some(&range)));
+
+        let mut direction = info.clone();
+        direction.bindings[0].direction = Some("output".into());
+        assert_ne!(hash, configuration_hash(Some(&direction)));
+
+        let mut pdo = info.clone();
+        pdo.devices[0].config = Some("{\"sm\":[]}".into());
+        assert_ne!(hash, configuration_hash(Some(&pdo)));
+
+        let mut device_channel = info.clone();
+        device_channel.devices[0].channels[0].width_bits = 16;
+        assert_ne!(hash, configuration_hash(Some(&device_channel)));
+
+        let mut kind = info.clone();
+        kind.devices[0].kind = "ethercat-status".into();
+        assert_ne!(hash, configuration_hash(Some(&kind)));
+
+        info.profile = Some(ProfileInfo {
+            path: "io/bench.toml".into(),
+            text: String::new(),
+            digest: "0x1234".into(),
+            devices: vec!["diewu".into()],
+        });
+        assert_ne!(hash, configuration_hash(Some(&info)));
+
+        let mut routed = info.clone();
+        routed.routes[0].sinks[0] = plc(1, 24, 8);
+        assert_ne!(
+            configuration_hash(Some(&info)),
+            configuration_hash(Some(&routed))
+        );
     }
 
     #[test]

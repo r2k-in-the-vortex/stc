@@ -7,6 +7,7 @@
 mod common;
 
 use stc_got::{GotId, PlanVerdict, RootKind};
+use stc_runtime::module_info::{BindingChannel, ChannelInfo, DeviceInfo, ProfileInfo};
 use stc_runtime::{
     Candidate, CycleOutcome, DirectBinding, Host, HostPlatform, LayoutState, LoadMode, LoadOutcome,
     ManifestStore, ModuleInfo, PROFILE, RuntimeLayout,
@@ -61,6 +62,48 @@ fn info(sizes: (u64, u64, u64), bindings: Vec<DirectBinding>) -> ModuleInfo {
         outputs_bytes: sizes.1,
         markers_bytes: sizes.2,
         bindings,
+        ..ModuleInfo::default()
+    }
+}
+
+/// Metadata with one direct input bound to a device channel.
+///
+/// The device kind is not registered by the runtime defaults, so the host
+/// validates and hashes the configuration without activating a backend. This
+/// keeps the online-change policy test independent of host hardware.
+fn hardware_info(artifacts: &stc_codegen::module::ModuleArtifacts, channel: &str) -> ModuleInfo {
+    ModuleInfo {
+        inputs_bytes: 2,
+        markers_bytes: 4,
+        bindings: vec![
+            DirectBinding {
+                got_id: direct_root(artifacts, "INPUT"),
+                area: 1,
+                offset_bits: 0,
+                width_bits: 16,
+                device: Some("bench".into()),
+                channel: Some(BindingChannel::Name(channel.into())),
+                direction: Some("input".into()),
+            },
+            binding(artifacts, "MARKER", 3, 0, 32),
+        ],
+        devices: vec![DeviceInfo {
+            name: "bench".into(),
+            kind: "embedded-bench".into(),
+            config: Some("{\"input\":\"0x1a00\"}".into()),
+            channels: vec![
+                ChannelInfo {
+                    name: "IN0".into(),
+                    direction: "input".into(),
+                    width_bits: 16,
+                },
+                ChannelInfo {
+                    name: "IN1".into(),
+                    direction: "input".into(),
+                    width_bits: 16,
+                },
+            ],
+        }],
         ..ModuleInfo::default()
     }
 }
@@ -227,6 +270,119 @@ fn online_change_reconfigures_the_image_and_remaps_direct_cells() {
         CycleOutcome::Committed { .. }
     ));
     assert_eq!(&image_bytes()[4..8], &42_u32.to_le_bytes());
+}
+
+#[test]
+fn online_change_rejects_a_changed_io_configuration() {
+    let _guard = common::image_guard();
+    let v1 = common::artifacts(REMAP_V1, "hardware");
+    let Some(v1_fixture) = Fixture::build("hardware-v1", v1.clone(), Behavior::default()) else {
+        return;
+    };
+    let platform = platform();
+    let mut host = in_memory_host();
+    let candidate = Candidate::open_with_info(
+        &platform,
+        &v1_fixture.module_path,
+        &v1_fixture.manifest_path,
+        Some(hardware_info(&v1, "IN0")),
+    )
+    .expect("v1 candidate");
+    assert!(matches!(
+        host.load(candidate, LoadMode::Cold).expect("cold install"),
+        LoadOutcome::ColdInstalled { .. }
+    ));
+
+    // A same-configuration rebuild preserves the backend configuration, so it
+    // can be prepared and activated online.
+    let v2 = common::artifacts_with(REMAP_V1, "hardware", v1.manifest.clone(), false);
+    assert_eq!(v2.verdict(), PlanVerdict::OnlineCandidate);
+    let Some(v2_fixture) = Fixture::build("hardware-v2", v2.clone(), Behavior::default()) else {
+        return;
+    };
+    let candidate = Candidate::open_with_info(
+        &platform,
+        &v2_fixture.module_path,
+        &v2_fixture.manifest_path,
+        Some(hardware_info(&v2, "IN0")),
+    )
+    .expect("v2 candidate");
+    assert!(matches!(
+        host.load(candidate, LoadMode::Online)
+            .expect("same configuration"),
+        LoadOutcome::Prepared { .. }
+    ));
+    host.activate().expect("activate");
+    assert!(matches!(
+        host.cycle().expect("commit cycle"),
+        CycleOutcome::Committed { .. }
+    ));
+
+    let baseline = host.export_manifest().expect("baseline").clone();
+    let active = host.active_generation();
+    let build = host.active_build_id();
+    let v3 = common::artifacts_with(REMAP_V1, "hardware", baseline.clone(), false);
+    let Some(v3_fixture) = Fixture::build("hardware-v3", v3.clone(), Behavior::default()) else {
+        return;
+    };
+
+    let mut binding_changed = hardware_info(&v3, "IN0");
+    binding_changed.bindings[0].channel = Some(BindingChannel::Index(1));
+    let mut pdo_changed = hardware_info(&v3, "IN0");
+    pdo_changed.devices[0].config = Some("{\"input\":\"0x1600\"}".into());
+    let mut topology_changed = hardware_info(&v3, "IN0");
+    topology_changed.devices.push(DeviceInfo {
+        name: "aux".into(),
+        kind: "embedded-bench".into(),
+        config: None,
+        channels: vec![ChannelInfo {
+            name: "OUT0".into(),
+            direction: "output".into(),
+            width_bits: 8,
+        }],
+    });
+    let mut profile_changed = hardware_info(&v3, "IN0");
+    profile_changed.profile = Some(ProfileInfo {
+        path: "io/bench.toml".into(),
+        text: String::new(),
+        digest: "0xfeed".into(),
+        devices: vec!["bench".into()],
+    });
+
+    for (label, changed) in [
+        ("binding", binding_changed),
+        ("pdo", pdo_changed),
+        ("topology", topology_changed),
+        ("profile", profile_changed),
+    ] {
+        let candidate = Candidate::open_with_info(
+            &platform,
+            &v3_fixture.module_path,
+            &v3_fixture.manifest_path,
+            Some(changed),
+        )
+        .expect("changed candidate");
+        let error = host
+            .load(candidate, LoadMode::Online)
+            .expect_err("a changed I/O configuration is rejected");
+        assert_eq!(error.code, stc_got::codes::ONLINE_IO, "{label}");
+        assert!(
+            error.message.contains("cold download"),
+            "{label}: {}",
+            error.message
+        );
+        assert_eq!(host.active_generation(), active, "{label}");
+        assert_eq!(host.active_build_id(), build, "{label}");
+        assert!(host.pending_generation().is_none(), "{label}");
+        assert_eq!(host.export_manifest(), Some(&baseline), "{label}");
+    }
+    assert!(
+        matches!(
+            host.cycle().expect("active generation continues"),
+            CycleOutcome::Ran { .. }
+        ),
+        "the active generation keeps running after each rejection"
+    );
 }
 
 const SAME_V1: &str = r#"

@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use stc_got::error::{Error, codes};
 use stc_got::json::{Json, parse as parse_json};
 
 use crate::Host;
@@ -229,14 +230,7 @@ fn handle_request(host: &mut Host, request: &ControlRequest) -> Json {
                     DEPLOY_REJECTED,
                     &format!("unexpected load outcome: {other:?}"),
                 ),
-                Err(error) => {
-                    let mut response = error_response(id, error.code, &error.message);
-                    if let Json::Object(fields) = &mut response {
-                        fields.insert("prepare_ns".into(), prepare_ns);
-                        fields.insert("report".into(), report);
-                    }
-                    response
-                }
+                Err(error) => deploy_error_response(id, &error, prepare_ns, report),
             }
         }
         ControlOp::Status => {
@@ -373,6 +367,20 @@ fn error_response(id: Json, code: &str, message: &str) -> Json {
         ("ok".into(), Json::Bool(false)),
         ("protocol".into(), protocol_value()),
     ])
+}
+
+/// Shapes a deploy rejection, marking a changed I/O configuration as needing a
+/// cold download while the active generation keeps running.
+fn deploy_error_response(id: Json, error: &Error, prepare_ns: Json, report: Json) -> Json {
+    let mut response = error_response(id, error.code, &error.message);
+    if let Json::Object(fields) = &mut response {
+        if error.code == codes::ONLINE_IO {
+            fields.insert("cold_required".into(), Json::Bool(true));
+        }
+        fields.insert("prepare_ns".into(), prepare_ns);
+        fields.insert("report".into(), report);
+    }
+    response
 }
 
 fn control_error(message: impl Into<String>) -> stc_got::error::Error {
@@ -675,6 +683,32 @@ mod tests {
             parse_request(&wrong_protocol, "abc")
                 .expect_err("protocol")
                 .contains("protocol")
+        );
+    }
+
+    #[test]
+    fn io_configuration_rejection_marks_cold_required() {
+        let error = Error::new(codes::ONLINE_IO, "the I/O configuration changed");
+        let response =
+            deploy_error_response(Json::unsigned(7), &error, Json::unsigned(1), Json::Null);
+        let object = response.as_object().expect("response object");
+        assert_eq!(
+            object.get("code").and_then(Json::as_str),
+            Some(codes::ONLINE_IO)
+        );
+        assert_eq!(
+            object.get("cold_required").and_then(Json::as_bool),
+            Some(true)
+        );
+
+        let other = Error::new(codes::ONLINE_PREPARE, "prepare failed");
+        let response =
+            deploy_error_response(Json::unsigned(8), &other, Json::unsigned(1), Json::Null);
+        assert_eq!(
+            response
+                .as_object()
+                .and_then(|object| object.get("cold_required")),
+            None
         );
     }
 
