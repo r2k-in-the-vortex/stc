@@ -574,6 +574,7 @@ pub(crate) fn generate(
             },
         },
         test_build: request.test_build,
+        coverage: None,
     };
     let codegen_start = Instant::now();
     let output = match stc_codegen::generate(hir, &options) {

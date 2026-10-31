@@ -7,8 +7,8 @@ use std::sync::OnceLock;
 use stc_diag::DiagnosticSink;
 use stc_hir::HirCrate;
 use stc_lexer::tokenize_bytes;
-use stc_parser::{ParseOptions, parse};
-use stc_sema::{Analysis, analyze};
+use stc_parser::{ParseOptions, ParsedFile, parse};
+use stc_sema::{Analysis, PackageSession, ProjectSession, analyze, analyze_project};
 use stc_span::FileId;
 
 pub fn analyze_source(source: &str) -> (Analysis, DiagnosticSink) {
@@ -69,6 +69,7 @@ pub fn options<'a>(
         module: stc_codegen::ModuleBuildOptions::default(),
         project: stc_codegen::ProjectOptions::default(),
         test_build: false,
+        coverage: None,
     }
 }
 
@@ -77,6 +78,95 @@ pub fn generate(source: &str, mode: stc_codegen::Mode) -> stc_codegen::Output {
     let sources = vec!["<test>".to_string()];
     stc_codegen::generate(&hir, &options("test", mode, &sources))
         .unwrap_or_else(|errors| panic!("codegen failed: {errors:#?}"))
+}
+
+/// Parses `sources` in order; source `index` gets `FileId(index)`.
+pub fn parse_sources(sources: &[&str]) -> Vec<ParsedFile> {
+    let mut sink = DiagnosticSink::unlimited();
+    let mut files = Vec::with_capacity(sources.len());
+    for (index, source) in sources.iter().enumerate() {
+        let file = FileId::new(u32::try_from(index).expect("file limit"));
+        let lexed = tokenize_bytes(file, source.as_bytes(), &mut sink);
+        let parsed = parse(
+            file,
+            lexed.text.as_str(),
+            &lexed.stream,
+            ParseOptions::default(),
+            &mut sink,
+        );
+        files.push(parsed);
+    }
+    assert!(
+        !sink.has_errors(),
+        "parse errors for test-build sources: {:?}",
+        sink.diagnostics()
+    );
+    files
+}
+
+/// Analyzes one root package as a test build.
+///
+/// `test_files` indexes entries of `files` that are `[test].sources`; every
+/// definition declared in such a file is marked test-only by the front end.
+pub fn analyze_test_build(files: &[ParsedFile], test_files: &[usize]) -> Analysis {
+    let mut sink = DiagnosticSink::unlimited();
+    let test_files: Vec<ParsedFile> = test_files
+        .iter()
+        .map(|index| {
+            files
+                .get(*index)
+                .unwrap_or_else(|| panic!("test file index {index} out of range"))
+                .clone()
+        })
+        .collect();
+    let session = ProjectSession {
+        packages: vec![PackageSession::new("_root", "_root", files, true)],
+        configuration: None,
+        stdlib: true,
+        test_build: true,
+        test_files: &test_files,
+    };
+    let analysis = analyze_project(&session, &mut sink);
+    analysis
+        .hir
+        .check_invariants()
+        .unwrap_or_else(|message| panic!("HIR invariant: {message}"));
+    let errors: Vec<_> = sink
+        .iter()
+        .filter(|diagnostic| diagnostic.is_error())
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "semantic errors for test-build sources: {errors:#?}"
+    );
+    analysis
+}
+
+/// Options for a test build, optionally enabling statement coverage for the
+/// listed source files.
+pub fn test_build_options<'a>(
+    name: &'a str,
+    sources: &'a [String],
+    coverage: Option<&[FileId]>,
+) -> stc_codegen::Options<'a> {
+    stc_codegen::Options {
+        artifact_name: name,
+        target: Some("x86_64-unknown-linux-gnu"),
+        debug: false,
+        emit_metadata: true,
+        mode: stc_codegen::Mode::Executable,
+        relaxed: false,
+        release: false,
+        sources,
+        source_paths: Some(sources),
+        source_map: None,
+        module: stc_codegen::ModuleBuildOptions::default(),
+        project: stc_codegen::ProjectOptions::default(),
+        test_build: true,
+        coverage: coverage.map(|files| stc_codegen::CoverageOptions {
+            files: files.iter().copied().collect(),
+        }),
+    }
 }
 
 pub fn clang() -> Option<&'static str> {

@@ -3,8 +3,8 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-31  
 Branch: `WL-10` (sub-plan of `v2.0.0-planning`)  
-Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions remain. No
-implementation has started.  
+Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phase 0 is
+complete; phase 1 is in progress.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-10)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-10,
 [Testing and Verification](specification/Architecture/Testing-and-Verification.md) §2,
@@ -508,6 +508,13 @@ summary in human mode; files are still written.
     new xtask suite is required; `cargo test --workspace` already runs the target.
 - Record an informational instrumented-vs-uninstrumented `stc test` wall-clock comparison for
   the example. It is reported as evidence and is not a gate.
+
+### 8.5 Phase status
+
+| Phase | Status | Evidence |
+| --- | --- | --- |
+| 0 | Complete 2026-10-31 | Plan locked; parent linked; commit `d3655d5`; PR #8 CI run 41153573207 green. |
+| 1 | In progress | — |
 
 ## 9. Exit criteria
 

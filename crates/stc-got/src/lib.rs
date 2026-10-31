@@ -31,8 +31,9 @@ pub use catalog::{
     TaskDecl, TypeDecl, expression_initializer_digest, initializer_digest, root_kind_identity,
 };
 pub use descriptor::{
-    DEBUG_ABI_MINOR, DESCRIPTOR_FORMAT, DESCRIPTOR_MAGIC, Descriptor, DescriptorFunction,
-    HOST_ABI_MAJOR, HOST_ABI_MINOR, MODULE_FORMAT, PRODUCTION_ABI_MINOR, TEST_ABI_MINOR,
+    COVERAGE_COUNTERS, DEBUG_ABI_MINOR, DESCRIPTOR_FORMAT, DESCRIPTOR_MAGIC, Descriptor,
+    DescriptorFunction, HOST_ABI_MAJOR, HOST_ABI_MINOR, MODULE_FORMAT, PRODUCTION_ABI_MINOR,
+    TEST_ABI_MINOR,
 };
 pub use digest::{Digest32, GotId};
 pub use engine::{BuildInput, BuildOptions, BuildOutcome, Rename, build, source_fingerprint};
