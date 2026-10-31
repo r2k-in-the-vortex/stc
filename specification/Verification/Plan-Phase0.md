@@ -2091,32 +2091,26 @@ value), `ReturnNonStack` (return operands are not `StackDefined` by an alloca or
 a GEP chain), and `SlotsGlobalReadOnly` (no store targets the slots global).
 The checkpoint adds `SlotGlobalNames`, `StackDefined`, and the three fields.
 
-Using them in `irStep_wf` exposes the next obstruction: the static facts do not
-yet have dynamic counterparts in `WFState`.
+Both dynamic counterparts were approved and are implemented:
 
-1. **Slots parameter value.** `CallSlots` identifies the forwarded SSA but does
-   not say its value is `.ptr .slotTable`. A new `WFState` field is needed:
+- **`SlotsParamsSafe`** is a `WFState` field and an `initState?_wf` host
+  hypothesis. It states that every frame's appended `%slots` parameter holds
+  `.ptr .slotTable`; `irStep_wf` preserves it at calls using `CallSlots` plus the
+  caller's invariant (a wrapper forwarding a loaded slots-global value uses
+  `SlotsGlobalStored`).
+- **`ReturnNonStack`** is strengthened through `SafeReturnValue`: a return
+  operand local is a parameter, an origin-recorded pointer, or defined by
+  `binop`/`icmp`/`cast`/`extractValue`, so loads/selects/phis that could carry a
+  stack pointer to the returning frame are excluded. It is the static fact used
+  to preserve `StackReturnsSafe` at `irStepRet`.
 
-   ```lean
-   def SlotsParamsSafe (c : IRState) : Prop :=
-     ∀ f ∈ c.frames, ∀ p : IrType × String,
-       f.fn.params.getLast? = some p → p.2 = "%slots" →
-         f.lookupLocal p.2 = some (.ptr .slotTable)
-   ```
+The remaining work is the `irStep_wf` per-instruction/terminator/halt induction
+over the 22 `WFState` fields, then the reachability corollaries and the `irRun`
+lift with the Q3 `CharIndexBounded`/exclusion caveat. No further design approval
+is needed for those steps; they are the proof-engineering pass over the
+instruction/terminator case matrix.
 
-   It is established at `initState?_wf` from a host hypothesis and preserved at
-   calls by `CallSlots` plus the caller's `SlotsParamsSafe`; a wrapper forwarding
-   a loaded slots-global value needs the `SlotsGlobalStored` entry. Owner
-   approval is requested for the new field.
-2. **Return-operand provenance.** `ReturnNonStack` excludes alloca/GEP-defined
-   return operands, but a return operand could be a load from memory containing
-   a stack pointer to the returning frame, or a select/phi of one. Preserving
-   `StackReturnsSafe` needs either a stronger trusted fact over every
-   return-operand definition (excluding loads/selects/phis whose value can be a
-   stack pointer) or a dynamic return-operand invariant. This is a design choice
-   for the owner; the current fact is necessary but not sufficient.
-
-No invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soundness theorems
+No invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soundness theoremsNo invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soundness theorems
 and the registry remain green.
 
 The compiling checkpoint is on `WL-3`; the eight soundness theorems and the registry remain

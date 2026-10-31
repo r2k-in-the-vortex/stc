@@ -1083,11 +1083,28 @@ inductive StackDefined (fn : Function) : Ssa → Prop where
       defInstr? fn dest = some (.gep dest ty (.local base) indices inbounds) →
       StackDefined fn base → StackDefined fn dest
 
-/-- Return operands are never stack-defined. -/
+/-- Return operands come from parameters, origin-recorded pointers, or
+integer-producing instructions, so they cannot be a stack pointer to the
+returning frame. -/
+inductive SafeReturnValue (fn : Function) : Ssa → Prop where
+  | param {name : Ssa} : name ∈ fn.params.map (·.2) → SafeReturnValue fn name
+  | origin {name : Ssa} {origin : PointerOrigin} :
+      fn.facts.originOf? name = some origin → SafeReturnValue fn name
+  | binop {dest : Ssa} {op : IntBinOp} {ty : IrType} {lhs rhs : Operand} :
+      defInstr? fn dest = some (.binop dest op ty lhs rhs) → SafeReturnValue fn dest
+  | icmp {dest : Ssa} {pred : ICmpPred} {ty : IrType} {lhs rhs : Operand} :
+      defInstr? fn dest = some (.icmp dest pred ty lhs rhs) → SafeReturnValue fn dest
+  | cast {dest : Ssa} {op : CastOp} {value : Operand} {fromTy toTy : IrType} :
+      defInstr? fn dest = some (.cast dest op value fromTy toTy) → SafeReturnValue fn dest
+  | extractValue {dest : Ssa} {aggregate : Operand} {index : Nat} {ty : IrType} :
+      defInstr? fn dest = some (.extractValue dest aggregate index ty) →
+        SafeReturnValue fn dest
+
+/-- Return operands are safe values. -/
 def ReturnNonStack (frag : IRFrag) : Prop :=
   ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ term, block.terminator = some term →
     ∀ operand, term = .ret (some operand) →
-      ∀ name ∈ operand.localNames, ¬ StackDefined fn name
+      ∀ name ∈ operand.localNames, SafeReturnValue fn name
 
 /-- Module-level facts for the target invariant. -/
 structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
@@ -1216,6 +1233,12 @@ def ReturnLink (c : IRState) : Prop :=
         callee.fn.returnType ≠ .void ∧
           caller.fn.localType? dest = some callee.fn.returnType
 
+/-- The appended slots parameter of every frame holds the slot-table pointer. -/
+def SlotsParamsSafe (c : IRState) : Prop :=
+  ∀ f ∈ c.frames, ∀ p : IrType × String,
+    f.fn.params.getLast? = some p → p.2 = "%slots" →
+      f.lookupLocal p.2 = some (.ptr .slotTable)
+
 /-- A return value does not point at the returning frame. -/
 def StackReturnsSafe (c : IRState) : Prop :=
   ∀ f ∈ c.frames, ∀ operand v,
@@ -1253,6 +1276,7 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
   returnLink : ReturnLink c
   bottomRetDest : ∀ last, c.frames.getLast? = some last → last.retDest = none
   stackReturnsSafe : StackReturnsSafe c
+  slotsParamsSafe : SlotsParamsSafe c
 
 /-- The running restriction used by the three soundness theorems. -/
 def WFRunning (contract : IRContract) (c : IRState) : Prop :=
@@ -2607,7 +2631,8 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
     (hstorage : StorageValuesLive c)
     (hbindings : FunctionBindingsTyped c)
     (hcallTargets : CallTargetsTyped c)
-    (hstackReturns : StackReturnsSafe c) :
+    (hstackReturns : StackReturnsSafe c)
+    (hslotsParams : SlotsParamsSafe c) :
     WFRunning contract c := by
   unfold initState? at hinit
   split at hinit
@@ -2715,6 +2740,7 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
             cases hlast
             rfl
           · exact hstackReturns
+          · exact hslotsParams
         · simp
 
       · simp at hinit
