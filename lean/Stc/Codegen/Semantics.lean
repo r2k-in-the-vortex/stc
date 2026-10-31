@@ -156,12 +156,12 @@ def IrType.isRepresentable : IrType → Bool
 def lookupList {α β : Type} [BEq α] (entries : List (α × β)) (key : α) : Option β :=
   (entries.find? (fun entry => entry.1 == key)).map (·.2)
 
-/-- A keyed list update or insert. -/
+/-- A keyed list update or insert. The updated entry is placed at the head and
+all previous entries with the same key are removed; keyed lookup is unchanged
+for unique keys and the latest value wins for duplicates. -/
 def setList {α β : Type} [BEq α] (entries : List (α × β)) (key : α)
     (value : β) : List (α × β) :=
-  if entries.any (fun entry => entry.1 == key) then
-    entries.map (fun entry => if entry.1 == key then (key, value) else entry)
-  else entries ++ [(key, value)]
+  (key, value) :: entries.filter (fun entry => !(entry.1 == key))
 
 /-- One target frame. `locals` holds parameters and SSA definitions; `mem` holds
 initialized stack cells; `allocs` records each allocation's element type. -/
@@ -2744,5 +2744,120 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
         · simp
 
       · simp at hinit
+
+theorem find?_filter_of_imp {α : Type} (l : List α) (p q : α → Bool)
+    (h : ∀ a, q a = true → p a = true) :
+    (l.filter p).find? q = l.find? q := by
+  induction l with
+  | nil => rfl
+  | cons a as ih =>
+      simp only [List.filter_cons]
+      by_cases hp : p a = true
+      · rw [if_pos hp]
+        by_cases hq : q a = true
+        · rw [List.find?_cons_of_pos hq, List.find?_cons_of_pos hq]
+        · rw [List.find?_cons_of_neg hq, List.find?_cons_of_neg hq]
+          exact ih
+      · rw [if_neg hp]
+        by_cases hq : q a = true
+        · exact absurd (h a hq) (by simp [hp])
+        · rw [List.find?_cons_of_neg hq]
+          exact ih
+
+theorem find?_setList_eq {α β : Type} [BEq α] [LawfulBEq α]
+    (entries : List (α × β)) (key : α) (value : β) :
+    (setList entries key value).find? (fun e => e.1 == key) = some (key, value) := by
+  unfold setList
+  rw [List.find?_cons_of_pos]
+  simp [beq_iff_eq]
+
+theorem find?_setList_ne {α β : Type} [BEq α] [LawfulBEq α]
+    (entries : List (α × β)) {key key' : α} (value : β)
+    (hne : (key' == key) = false) :
+    (setList entries key value).find? (fun e => e.1 == key') =
+      entries.find? (fun e => e.1 == key') := by
+  unfold setList
+  have hk : (key == key') = false := by
+    rw [beq_eq_false_iff_ne] at hne ⊢
+    intro h
+    exact hne h.symm
+  rw [List.find?_cons_of_neg (by simp [hk])]
+  apply find?_filter_of_imp
+  intro a hq
+  have ha : a.1 = key' := beq_iff_eq.mp hq
+  have hak : (a.1 == key) = false := by
+    rw [beq_eq_false_iff_ne]
+    intro h
+    exact (beq_eq_false_iff_ne.mp hne) (by rw [← ha]; exact h)
+  simp [hak]
+
+theorem lookupList_setList_eq {α β : Type} [BEq α] [LawfulBEq α]
+    (entries : List (α × β)) (key : α) (value : β) :
+    lookupList (setList entries key value) key = some value := by
+  unfold lookupList
+  rw [find?_setList_eq]
+  rfl
+
+theorem lookupList_setList_ne {α β : Type} [BEq α] [LawfulBEq α]
+    (entries : List (α × β)) {key key' : α} (value : β)
+    (hne : (key' == key) = false) :
+    lookupList (setList entries key value) key' = lookupList entries key' := by
+  unfold lookupList
+  rw [find?_setList_ne entries value hne]
+
+theorem lookupLocal_setLocal_eq (f : IRFrame) (name : String) (v : IRValue) :
+    (f.setLocal name v).lookupLocal name = some v := by
+  unfold IRFrame.setLocal IRFrame.lookupLocal
+  rw [find?_setList_eq]
+  rfl
+
+theorem lookupLocal_setLocal_ne (f : IRFrame) {name other : String}
+    (h : (other == name) = false) (v : IRValue) :
+    (f.setLocal name v).lookupLocal other = f.lookupLocal other := by
+  unfold IRFrame.setLocal IRFrame.lookupLocal
+  rw [find?_setList_ne _ v h]
+
+theorem lookupMem_setMem_eq (f : IRFrame) (addr : IRAddr) (v : IRValue) :
+    (f.setMem addr v).lookupMem addr = some v := by
+  unfold IRFrame.setMem IRFrame.lookupMem
+  rw [find?_setList_eq]
+  rfl
+
+theorem lookupMem_setMem_ne (f : IRFrame) {addr other : IRAddr}
+    (h : (other == addr) = false) (v : IRValue) :
+    (f.setMem addr v).lookupMem other = f.lookupMem other := by
+  unfold IRFrame.setMem IRFrame.lookupMem
+  rw [find?_setList_ne _ v h]
+
+theorem localsInitialized_setLocal {f : IRFrame} {dest : String} {value : IRValue}
+    (h : ∀ name ty, f.fn.localType? name = some ty → ∃ v, f.lookupLocal name = some v) :
+    ∀ name ty, f.fn.localType? name = some ty →
+      ∃ v, (f.setLocal dest value).lookupLocal name = some v := by
+  intro name ty hty
+  by_cases hname : name = dest
+  · subst hname
+    exact ⟨value, lookupLocal_setLocal_eq f name value⟩
+  · rcases h name ty hty with ⟨v, hv⟩
+    exact ⟨v, by
+      rw [lookupLocal_setLocal_ne f (beq_eq_false_iff_ne.mpr hname) value]
+      exact hv⟩
+
+theorem localsTyped_setLocal {f : IRFrame} {dest : String} {value : IRValue}
+    (h : ∀ name v, f.lookupLocal name = some v → ∀ ty,
+      f.fn.localType? name = some ty → v.type? = some ty)
+    (hdest : ∀ ty, f.fn.localType? dest = some ty → value.type? = some ty) :
+    ∀ name v, (f.setLocal dest value).lookupLocal name = some v → ∀ ty,
+      f.fn.localType? name = some ty → v.type? = some ty := by
+  intro name v hv ty hty
+  by_cases hname : name = dest
+  · subst hname
+    rw [lookupLocal_setLocal_eq] at hv
+    have hvEq : v = value := (Option.some.inj hv).symm
+    rw [hvEq]
+    exact hdest ty hty
+  · have hvOld : f.lookupLocal name = some v := by
+      rw [← lookupLocal_setLocal_ne f (beq_eq_false_iff_ne.mpr hname) value]
+      exact hv
+    exact h name v hvOld ty hty
 
 end Stc.Codegen

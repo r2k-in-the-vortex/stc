@@ -2050,7 +2050,9 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
   `withHead`, so a store to the current frame's stack memory was discarded. The step now
   uses `IRState.withHeadInstrs`, which updates the remaining instructions on the head frame
   *after* `storeValue`, preserving the store. The three proved soundness theorems and the
-  registry are unaffected; the proof obligations below assume the corrected step.
+  registry are unaffected; the proof obligations below assume the corrected step. The internal
+  `setList` representation was also changed to a head-update form with identical keyed lookup
+  semantics.
 
 ### 22.11 Remaining whole-run work
 
@@ -2114,7 +2116,17 @@ No invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soun
 and the registry remain green.
 
 The compiling checkpoint is on `WL-3`; the eight soundness theorems and the registry remain
-green. **`irStep_wf` proof inventory (2026-10-31).** The remaining induction is a proof-engineering
+green. **Phase 1 progress (2026-10-31).** `setList` now stores the updated entry at the head and
+filters previous entries with the same key; keyed lookup is unchanged (the latest value wins
+for duplicate keys), and the representation change is internal. The lookup layer is proved:
+`find?_filter_of_imp`, `find?_setList_eq`/`_ne`, `lookupList_setList_eq`/`_ne`,
+`lookupLocal_setLocal_eq`/`_ne`, `lookupMem_setMem_eq`/`_ne`, `localsInitialized_setLocal`,
+and `localsTyped_setLocal`. Remaining Phase 1 helpers: `originsMatch` under `setLocal` (needs
+an origins-name uniqueness fact on `OriginsTrusted`), `MemTyped` under `setMem`/`storeValue`,
+`StackPtrsBounded` and `StoragePtrsLive` under `setLocal`, and `frameById?` under
+`withHead`/`withHeadInstrs` and frame maps. Phases 2–3 remain as inventoried below.
+
+**`irStep_wf` proof inventory (2026-10-31).** The remaining induction is a proof-engineering
 pass, not a design gap. The `.step` outcomes reduce to five state-update forms:
 
 1. the empty-frame halt: `{ c with status := .halted }`;
