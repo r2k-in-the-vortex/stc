@@ -947,6 +947,7 @@ defining instruction shape; vtable origins are outside the core fragment. -/
 def OriginsTrusted (frag : IRFrag) : Prop :=
   ∀ fn ∈ frag.functions, ∀ entry ∈ fn.facts.origins,
     fn.localType? entry.1 = some .ptr ∧
+      entry.1 ∉ fn.params.map (·.2) ∧
       match entry.2 with
       | .vtableCode => False
       | .cell _ false =>
@@ -2228,5 +2229,407 @@ theorem find?_zip_map_eq {params : List (IrType × String)} {args : List IRValue
             simp only [List.zip_cons_cons]
             rw [List.find?_cons_of_neg (by simp [beq_iff_eq, hh])]
             exact ih hnd.2 hlen' hpTail haTail
+
+theorem listForall2_zip {α β : Type} {rel : α → β → Prop} :
+    ∀ {l1 : List α} {l2 : List β}, listForall₂ rel l1 l2 →
+      ∀ a b, (a, b) ∈ l1.zip l2 → rel a b
+  | [], [], _, a, b, hmem => by simp at hmem
+  | [], _ :: _, h, a, b, hmem => by simp [listForall₂] at h
+  | _ :: _, [], h, a, b, hmem => by simp [listForall₂] at h
+  | a1 :: as, b1 :: bs, h, a, b, hmem => by
+      simp only [listForall₂] at h
+      simp only [List.zip_cons_cons, List.mem_cons] at hmem
+      rcases h with ⟨hr, hrest⟩
+      rcases hmem with hhead | htail
+      · cases hhead
+        exact hr
+      · exact listForall2_zip hrest a b htail
+
+def ArgsTyped (fn : Function) (args : List IRValue) : Prop :=
+  listForall₂ (fun param v => v.type? = some param.1) fn.params args
+
+theorem ArgsTyped.of_zip_mem {fn : Function} {args : List IRValue}
+    (h : ArgsTyped fn args) {p : IrType × String} {a : IRValue}
+    (hmem : (p, a) ∈ fn.params.zip args) : a.type? = some p.1 :=
+  listForall2_zip h p a hmem
+
+theorem mem_initLocals_cases {fn : Function} {args : List IRValue}
+    {name : String} {v : IRValue}
+    (hmem : (name, v) ∈ initLocals fn args) :
+    (∃ (p : IrType × String) (a : IRValue),
+        p ∈ fn.params ∧ p.2 = name ∧ (p, a) ∈ fn.params.zip args ∧ a = v) ∨
+      (∃ ty, (name, ty) ∈ fn.localDefs ∧ v = IRValue.default ty) := by
+  unfold initLocals at hmem
+  rcases List.mem_append.mp hmem with hleft | hright
+  · rcases List.mem_map.mp hleft with ⟨entry, hzip, hentry⟩
+    rcases entry with ⟨p, a⟩
+    injection hentry with hname hv
+    exact Or.inl ⟨p, a, mem_left_of_zip hzip, hname, hzip, hv⟩
+  · rcases List.mem_map.mp hright with ⟨entry, hdef, hentry⟩
+    rcases entry with ⟨d, ty⟩
+    injection hentry with hname hv
+    exact Or.inr ⟨ty, by simpa [← hname] using hdef, hv.symm⟩
+
+theorem params_names_nodup {fn : Function} (hud : FunctionUsesDefined fn) :
+    (fn.params.map (·.2)).Nodup := by
+  have hall := hud.allNodup
+  rw [List.nodup_append] at hall
+  exact hall.1
+
+theorem find?_initLocals_param {fn : Function} {args : List IRValue}
+    (hud : FunctionUsesDefined fn) (hlen : args.length = fn.params.length)
+    {p : IrType × String} {a : IRValue}
+    (hp : p ∈ fn.params) (ha : (p, a) ∈ fn.params.zip args) :
+    (initLocals fn args).find? (fun e => e.1 == p.2) = some (p.2, a) := by
+  have hzip : (fn.params.zip args).find? (fun e => e.1.2 == p.2) = some (p, a) :=
+    find?_zip_map_eq (params_names_nodup hud) hlen.symm hp ha
+  have hmap : ((fn.params.zip args).map (fun e => (e.1.2, e.2))).find?
+      (fun e => e.1 == p.2) = some (p.2, a) := by
+    rw [List.find?_map]
+    change Option.map (fun e : (IrType × String) × IRValue => (e.1.2, e.2))
+      (List.find? (fun e : (IrType × String) × IRValue => e.1.2 == p.2)
+        (fn.params.zip args)) = some (p.2, a)
+    rw [hzip]
+    rfl
+  unfold initLocals
+  rw [List.find?_append, hmap]
+  simp
+
+theorem find?_initLocals_localDef {fn : Function} {args : List IRValue}
+    (hud : FunctionUsesDefined fn) {name : String} {ty : IrType}
+    (hmem : (name, ty) ∈ fn.localDefs) :
+    (initLocals fn args).find? (fun e => e.1 == name) =
+      some (name, IRValue.default ty) := by
+  have hall := hud.allNodup
+  rw [List.nodup_append] at hall
+  have hnameDests : name ∈ fn.blocks.flatMap (fun b => b.instrs.filterMap Instr.dest?) :=
+    (localDefs_names_sublist fn).subset (List.mem_map.mpr ⟨(name, ty), hmem, rfl⟩)
+  have hnameNotParams : name ∉ fn.params.map (·.2) := by
+    intro hmemP
+    exact hall.2.2 name hmemP name hnameDests rfl
+  have hparamsNone : ((fn.params.zip args).map (fun e => (e.1.2, e.2))).find?
+      (fun e => e.1 == name) = none := by
+    rw [List.find?_map]
+    have hinner : List.find?
+        (fun e : (IrType × String) × IRValue => e.1.2 == name)
+        (fn.params.zip args) = none := by
+      rw [List.find?_eq_none]
+      intro entry hentry hpred
+      have hp : entry.1 ∈ fn.params := mem_left_of_zip hentry
+      exact hnameNotParams (List.mem_map.mpr ⟨entry.1, hp, beq_iff_eq.mp hpred⟩)
+    change Option.map (fun e : (IrType × String) × IRValue => (e.1.2, e.2))
+      (List.find? (fun e : (IrType × String) × IRValue => e.1.2 == name)
+        (fn.params.zip args)) = none
+    rw [hinner]
+    rfl
+  have hdefMap : (fn.localDefs.map (fun e => (e.1, IRValue.default e.2))).find?
+      (fun e => e.1 == name) = some (name, IRValue.default ty) := by
+    rw [List.find?_map]
+    change Option.map (fun e : String × IrType => (e.1, IRValue.default e.2))
+      (List.find? (fun e : String × IrType => e.1 == name) fn.localDefs) =
+      some (name, IRValue.default ty)
+    rw [find?_localDefs_eq' hud hmem]
+    rfl
+  unfold initLocals
+  rw [List.find?_append, hparamsNone]
+  simp only [Option.none_or]
+  exact hdefMap
+
+theorem lookupLocal_initLocals_of_localType {fn : Function} {args : List IRValue}
+    {name : String} {ty : IrType}
+    (hud : FunctionUsesDefined fn) (hlen : args.length = fn.params.length)
+    (hargs : ArgsTyped fn args)
+    (hrep : ∀ name ty, fn.localType? name = some ty → ty.isRepresentable = true)
+    (hty : fn.localType? name = some ty) :
+    ∃ v, (initLocals fn args).find? (fun e => e.1 == name) = some (name, v) ∧
+      v.type? = some ty := by
+  have hty0 := hty
+  unfold Function.localType? at hty
+  cases hfind : fn.params.find? (fun p => p.2 == name) with
+  | some p =>
+      simp only [hfind, Option.some.injEq] at hty
+      have hp : p ∈ fn.params := List.mem_of_find?_eq_some hfind
+      have hpbeq : (p.2 == name) = true :=
+        List.find?_some (p := fun q : IrType × String => q.2 == name) hfind
+      have hpname : p.2 = name := beq_iff_eq.mp hpbeq
+      rcases mem_zip_of_mem_left hlen.symm p hp with ⟨a, ha⟩
+      have hargty : a.type? = some p.1 := ArgsTyped.of_zip_mem hargs ha
+      have hfindInit := find?_initLocals_param hud hlen hp ha
+      refine ⟨a, ?_, ?_⟩
+      · simpa [hpname] using hfindInit
+      · rw [hargty, hty]
+  | none =>
+      simp only [hfind] at hty
+      cases hdefFind : fn.localDefs.find? (fun e => e.1 == name) with
+      | none => simp [hdefFind] at hty
+      | some entry =>
+          rcases entry with ⟨ename, ety⟩
+          simp only [hdefFind, Option.map_some, Option.some.injEq] at hty
+          have hmemFind := List.mem_of_find?_eq_some hdefFind
+          have hebeq : (ename == name) = true :=
+            List.find?_some (p := fun e : String × IrType => e.1 == name) hdefFind
+          have hename : ename = name := beq_iff_eq.mp hebeq
+          have hentryMem : (name, ty) ∈ fn.localDefs := by
+            have hpair : (ename, ety) = (name, ty) := by
+              rw [hename, hty]
+            simpa [hpair] using hmemFind
+          exact ⟨IRValue.default ty, find?_initLocals_localDef hud hentryMem,
+            default_type? (hrep name ty hty0)⟩
+
+theorem mem_of_function? {frag : IRFrag} {name : String} {fn : Function}
+    (h : frag.function? name = some fn) : fn ∈ frag.functions := by
+  unfold IRFrag.function? at h
+  exact List.mem_of_find?_eq_some h
+
+theorem default_ne_root (ty : IrType) (slot off : Nat) :
+    IRValue.default ty ≠ .ptr (.root slot off) := by
+  induction ty with
+  | array elem count ih => simpa [IRValue.default] using ih
+  | _ => simp [IRValue.default]
+
+theorem default_ne_global (ty : IrType) (g : String) (off : Nat) :
+    IRValue.default ty ≠ .ptr (.global g off) := by
+  induction ty with
+  | array elem count ih => simpa [IRValue.default] using ih
+  | _ => simp [IRValue.default]
+
+theorem default_ne_stack (ty : IrType) (frame slot off : Nat) :
+    IRValue.default ty ≠ .ptr (.stack frame slot off) := by
+  induction ty with
+  | array elem count ih => simpa [IRValue.default] using ih
+  | _ => simp [IRValue.default]
+
+theorem lookupLocal_find?_eq {f : IRFrame} {name : String} {v : IRValue}
+    (h : f.lookupLocal name = some v) :
+    f.locals.find? (fun e => e.1 == name) = some (name, v) := by
+  unfold IRFrame.lookupLocal at h
+  cases hf : f.locals.find? (fun e => e.1 == name) with
+  | none => simp [hf] at h
+  | some entry =>
+      rcases entry with ⟨n, w⟩
+      simp only [hf, Option.map_some, Option.some.injEq] at h
+      have hbeq : (n == name) = true :=
+        List.find?_some (p := fun e : String × IRValue => e.1 == name) hf
+      have hn : n = name := beq_iff_eq.mp hbeq
+      subst hn
+      subst h
+      rfl
+
+theorem params_find?_none {fn : Function} {name : String}
+    (h : name ∉ fn.params.map (·.2)) :
+    fn.params.find? (fun p => p.2 == name) = none := by
+  rw [List.find?_eq_none]
+  intro p hp hbeq
+  exact h (List.mem_map.mpr ⟨p, hp, beq_iff_eq.mp hbeq⟩)
+
+theorem initLocals_lookup_default {fn : Function} {args : List IRValue}
+    {name : String} {ty : IrType}
+    (hud : FunctionUsesDefined fn)
+    (hnotParam : name ∉ fn.params.map (·.2))
+    (hty : fn.localType? name = some ty) :
+    (initLocals fn args).find? (fun e => e.1 == name) =
+      some (name, IRValue.default ty) := by
+  have hfindNone := params_find?_none hnotParam
+  have hty0 := hty
+  unfold Function.localType? at hty
+  rw [hfindNone] at hty
+  cases hdefFind : fn.localDefs.find? (fun e => e.1 == name) with
+  | none => simp [hdefFind] at hty
+  | some entry =>
+      rcases entry with ⟨ename, ety⟩
+      simp only [hdefFind, Option.map_some, Option.some.injEq] at hty
+      have hmemFind := List.mem_of_find?_eq_some hdefFind
+      have hebeq : (ename == name) = true :=
+        List.find?_some (p := fun e : String × IrType => e.1 == name) hdefFind
+      have hename : ename = name := beq_iff_eq.mp hebeq
+      have hentry : (name, ty) ∈ fn.localDefs := by
+        have hpair : (ename, ety) = (name, ty) := by
+          rw [hename, hty]
+        simpa [hpair] using hmemFind
+      exact find?_initLocals_localDef hud hentry
+
+def HostArgsLive (c : IRState) (fn : Function) (args : List IRValue) : Prop :=
+  ∀ p a, (p, a) ∈ fn.params.zip args →
+    (∀ slot off, a = .ptr (.root slot off) →
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length) ∧
+    (∀ g off, a = .ptr (.global g off) →
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length) ∧
+    (∀ frame slot off, a = .ptr (.stack frame slot off) → False)
+
+theorem initLocals_find_cases {fn : Function} {args : List IRValue}
+    {name : String} {v : IRValue}
+    (h : (initLocals fn args).find? (fun e => e.1 == name) = some (name, v)) :
+    (∃ (p : IrType × String) (a : IRValue),
+        p ∈ fn.params ∧ p.2 = name ∧ (p, a) ∈ fn.params.zip args ∧ a = v) ∨
+      (∃ ty, (name, ty) ∈ fn.localDefs ∧ v = IRValue.default ty) :=
+  mem_initLocals_cases (List.mem_of_find?_eq_some h)
+
+theorem initLocals_no_stack {c : IRState} {fn : Function} {args : List IRValue}
+    {name : String} {v : IRValue} {frame slot off : Nat}
+    (hlive : HostArgsLive c fn args)
+    (h : (initLocals fn args).find? (fun e => e.1 == name) = some (name, v))
+    (hv : v = .ptr (.stack frame slot off)) : False := by
+  rcases initLocals_find_cases h with ⟨p, a, _, _, hzip, ha⟩ | ⟨ty, _, hvdef⟩
+  · exact (hlive p a hzip).2.2 frame slot off (by rw [ha, hv])
+  · exact default_ne_stack ty frame slot off (by rw [← hvdef]; exact hv)
+
+theorem initLocals_root_live {c : IRState} {fn : Function} {args : List IRValue}
+    {name : String} {v : IRValue} {slot off : Nat}
+    (hlive : HostArgsLive c fn args)
+    (h : (initLocals fn args).find? (fun e => e.1 == name) = some (name, v))
+    (hv : v = .ptr (.root slot off)) :
+    ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length := by
+  rcases initLocals_find_cases h with ⟨p, a, _, _, hzip, ha⟩ | ⟨ty, _, hvdef⟩
+  · exact (hlive p a hzip).1 slot off (by rw [ha, hv])
+  · exact absurd (by rw [← hvdef]; exact hv) (default_ne_root ty slot off)
+
+theorem initLocals_global_live {c : IRState} {fn : Function} {args : List IRValue}
+    {name : String} {v : IRValue} {g : String} {off : Nat}
+    (hlive : HostArgsLive c fn args)
+    (h : (initLocals fn args).find? (fun e => e.1 == name) = some (name, v))
+    (hv : v = .ptr (.global g off)) :
+    ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length := by
+  rcases initLocals_find_cases h with ⟨p, a, _, _, hzip, ha⟩ | ⟨ty, _, hvdef⟩
+  · exact (hlive p a hzip).2.1 g off (by rw [ha, hv])
+  · exact absurd (by rw [← hvdef]; exact hv) (default_ne_global ty g off)
+
+theorem initLocals_value_typed {fn : Function} {args : List IRValue}
+    {name : String} {v : IRValue} {ty : IrType}
+    (hud : FunctionUsesDefined fn) (hlen : args.length = fn.params.length)
+    (hargs : ArgsTyped fn args)
+    (hrep : ∀ name ty, fn.localType? name = some ty → ty.isRepresentable = true)
+    (hv : (initLocals fn args).find? (fun e => e.1 == name) = some (name, v))
+    (hty : fn.localType? name = some ty) : v.type? = some ty := by
+  rcases lookupLocal_initLocals_of_localType hud hlen hargs hrep hty with
+    ⟨v', hfind', htype'⟩
+  rw [hv] at hfind'
+  have hpair := Option.some.inj hfind'
+  have hvv : v = v' := (Prod.mk.inj hpair).2
+  rw [hvv]
+  exact htype'
+
+theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
+    {args : List IRValue} {roots : List (Nat × IRValue)}
+    {functions : List (Nat × String)} {imports : List (Nat × ImportKind)}
+    {globals : List (String × IRValue)} {storage : List (StoreId × List IRValue)}
+    {functionSignatures : List (Nat × Signature)} {cycles : Nat} {c : IRState}
+    (hprog : WFProgram contract module)
+    (hinit : initState? module entry args roots functions imports globals storage
+      functionSignatures cycles = some c)
+    (hargsTyped : ∀ fn, module.function? entry = some fn → ArgsTyped fn args)
+    (hargsLive : ∀ fn, module.function? entry = some fn → HostArgsLive c fn args)
+    (hslots : ∀ f ∈ c.frames, SlotsBase c f)
+    (hstorage : StorageValuesLive c)
+    (hbindings : FunctionBindingsTyped c)
+    (hcallTargets : CallTargetsTyped c) :
+    WFRunning contract c := by
+  unfold initState? at hinit
+  split at hinit
+  · simp at hinit
+  · rename_i fn hfn
+    split at hinit
+    · simp at hinit
+    · rename_i block restBlocks hblocks
+      split at hinit
+      · rename_i hlen
+        cases hinit
+        have hfunMem : fn ∈ module.functions := mem_of_function? hfn
+        have hblockMem : block ∈ fn.blocks := by
+          rw [hblocks]
+          exact List.mem_cons_self ..
+        have hud : FunctionUsesDefined fn := hprog.wellFormed.usesDefined fn hfunMem
+        refine ⟨?_, rfl, ?_⟩
+        · constructor
+          · simpa using hprog
+          · simp
+          · intro f hf
+            simp only [List.mem_singleton] at hf
+            subst hf
+            simp
+          · intro f hf
+            simp only [List.mem_singleton] at hf
+            subst hf
+            exact hfunMem
+          · intro f hf
+            simp only [List.mem_singleton] at hf
+            subst hf
+            exact ⟨block, hblockMem, rfl, rfl, [], by simp⟩
+          · intro f hf
+            simp only [List.mem_singleton] at hf
+            subst hf
+            exact Or.inl ⟨rfl, ⟨restBlocks, hblocks⟩⟩
+          · intro f rest hframes hinstrs hterm
+            simp only [List.mem_singleton, List.cons.injEq] at hframes
+            rcases hframes with ⟨rfl, rfl⟩
+            have hguard := hprog.unreachableGuarded fn hfunMem block hblockMem hterm
+            rcases hguard with ⟨instr, hlast, _⟩
+            have hinstrs' : block.instrs = [] := by simpa using hinstrs
+            rw [hinstrs'] at hlast
+            simp at hlast
+          · intro f hf name ty hty
+            simp only [List.mem_singleton] at hf
+            subst hf
+            rcases lookupLocal_initLocals_of_localType hud hlen (hargsTyped fn hfn)
+              (hprog.localTypesRepresentable fn hfunMem) hty with ⟨v, hv, _⟩
+            exact ⟨v, by simpa [IRFrame.lookupLocal, hv]⟩
+          · intro f hf name v hv ty hty
+            simp only [List.mem_singleton] at hf
+            subst hf
+            have hfind := lookupLocal_find?_eq hv
+            exact initLocals_value_typed hud hlen (hargsTyped fn hfn)
+              (hprog.localTypesRepresentable fn hfunMem) hfind hty
+          · intro f hf entry he
+            simp only [List.mem_singleton] at hf
+            subst hf
+            rcases hprog.originsTrusted fn hfunMem entry he with
+              ⟨hlocTy, hnotParam, _⟩
+            have hfind := initLocals_lookup_default (args := args) hud hnotParam hlocTy
+            refine ⟨.null, ?_, hlocTy, Or.inl rfl⟩
+            simpa [IRFrame.lookupLocal, IRValue.default] using congrArg (Option.map (·.2)) hfind
+          · intro f hf
+            simp only [List.mem_singleton] at hf
+            subst hf
+            simp [AllocsWellFormed, IRFrame.allocType?]
+          · intro f hf name v addr hv haddr
+            simp only [List.mem_singleton] at hf
+            subst hf
+            have hfind := lookupLocal_find?_eq hv
+            cases addr with
+            | stack frame slot off =>
+                exact False.elim (initLocals_no_stack (hargsLive fn hfn) hfind haddr)
+            | slotEntry slot => trivial
+            | cell slot => trivial
+            | root slot off => trivial
+            | global name off => trivial
+            | slotTable => trivial
+            | function name => trivial
+            | importCell slot => trivial
+          · intro f hf addr v hmem
+            simp only [List.mem_singleton] at hf
+            subst hf
+            simp [IRFrame.lookupMem] at hmem
+          · intro f hf
+            simp only [List.mem_singleton] at hf
+            subst hf
+            constructor
+            · intro name v slot off hv hval
+              exact initLocals_root_live (hargsLive fn hfn)
+                (lookupLocal_find?_eq hv) hval
+            · intro name v g off hv hval
+              exact initLocals_global_live (hargsLive fn hfn)
+                (lookupLocal_find?_eq hv) hval
+          · exact hslots
+          · exact hstorage
+          · exact hbindings
+          · exact hcallTargets
+          · intro callee caller rest hframes
+            simp at hframes
+          · intro last hlast
+            simp at hlast
+            cases hlast
+            rfl
+        · simp
+
+      · simp at hinit
 
 end Stc.Codegen

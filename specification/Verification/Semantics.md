@@ -268,8 +268,8 @@ All eight P0.5 target soundness theorems are now proved. `ir_progress`, `ir_memo
 `ir_no_ub` are stated over the `WFRunning` target invariant, which is implemented in
 `Stc.Codegen.Semantics` together with the offset-aware storage, `.slotEntry`, bounds-checked
 memory operations, origin/binding facts, and return-link predicates.  The approved design and
-implementation record is in `Plan-Phase0.md` §22. The initial-state and preservation proofs and
-the reachability corollaries remain as the whole-run follow-up; the three registry theorems are
+implementation record is in `Plan-Phase0.md` §22. `initState?_wf` is proved; the preservation
+proof and the reachability corollaries remain as the whole-run follow-up; the three registry theorems are
 per-state and do not depend on them. Earlier scoping is in §21.
 
 ### 4.6 Cycle and initialization boundary

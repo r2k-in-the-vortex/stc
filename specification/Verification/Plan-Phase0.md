@@ -2052,20 +2052,27 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
 alternative, and then approved the three provenance extensions below. The whole-run bridge
 keeps every `WFState` field and adds the extensions; no invariant was trimmed.
 
-**Status (2026-10-31, follow-up).** The three provenance extensions are now part of the model:
+**Status (2026-10-31, follow-up).** The three provenance extensions are part of the model:
 `SlotsBase` (default-aware) and `StorageValuesLive` are `WFState` fields, and `MemTyped` includes
 `MemValuePtrBounded`. The `WFProgram.localTypesRepresentable` rule and `default_type?` are
 implemented. The list/syntax infrastructure is implemented: the filterMap/flatMap sublist
 lemmas, `localDefs` name uniqueness from `FunctionUsesDefined.allNodup`, `find?_localDefs_eq`,
-`localType?_eq_resultType`, `find?_params_eq`, `localType?_of_param`, and the
-`mem_zip`/`find?_zip_map_eq` lemmas. The initial-state, preservation, and reachability proofs
-are **not** complete; the remaining exact obligations are: `initLocals` coverage for the
-parameters and local definitions; the host predicates and one-frame `initState?_wf`; the
-per-instruction `irStep_wf` induction for the 18 `WFState` fields (with the slots-base,
-local-type, memory-pointer, return-link, and `UnreachableGuarded` obligations); and the
-reachability/`irRun` corollaries. The compiling checkpoint is on `WL-3`; the eight soundness
-theorems and the registry remain green. The three extensions were required because without
-them the invariant was not preserved:
+`localType?_eq_resultType`, `find?_params_eq`, `localType?_of_param`, the param zip
+membership/find lemmas, and the `initLocals` coverage lemmas
+(`lookupLocal_initLocals_of_localType`, `initLocals_lookup_default`,
+`initLocals_no_stack`, `initLocals_root_live`, `initLocals_global_live`).
+
+`initState?_wf` is proved. It takes the `WFProgram` invariant, the `initState?` equation, typed
+host arguments (`ArgsTyped`), live host storage/root arguments (`HostArgsLive`), the slots-base
+fact, `StorageValuesLive`, `FunctionBindingsTyped`, and `CallTargetsTyped`, and produces
+`WFRunning` for the one-frame initial state. The host predicates are the initialization-boundary
+contract; the slots-global storage fact is included through the `SlotsBase` hypothesis.
+
+The remaining bridge work is the per-instruction `irStep_wf` induction for the 18 `WFState`
+fields (with the slots-base, local-type, memory-pointer, return-link, and
+`UnreachableGuarded` obligations) and the reachability/`irRun` corollaries. The compiling
+checkpoint is on `WL-3`; the eight soundness theorems and the registry remain green. The three
+extensions were required because without them the invariant was not preserved:
 
 1. **Slots base (`SlotsBase`).** For every `.cell slot false` origin whose defining `load`
    reads a `.slotTable` GEP, the GEP's base local holds `.ptr .slotTable`. The current
