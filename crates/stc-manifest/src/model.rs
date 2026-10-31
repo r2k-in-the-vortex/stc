@@ -636,6 +636,9 @@ pub struct TestSettings {
     pub mock_clock: DurationNs,
     /// Test I/O backend; `None` selects `memory`.
     pub io: Option<IoBackend>,
+    /// Whether `stc test` collects statement coverage by default (WL-10).
+    /// `--coverage` and `--no-coverage` override this per run.
+    pub coverage: bool,
     /// Per-POU overrides.
     pub cases: Vec<TestCase>,
 }
@@ -648,6 +651,7 @@ impl Default for TestSettings {
             default_cycles: 1,
             mock_clock: DurationNs(0),
             io: None,
+            coverage: false,
             cases: Vec::new(),
         }
     }

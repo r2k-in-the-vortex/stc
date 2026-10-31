@@ -15,7 +15,11 @@ pub mod discovery;
 pub mod report;
 pub mod runner;
 
-pub use coverage::{RawCoverage, RawCoverageError, parse as parse_raw_coverage};
+pub use coverage::{
+    CoverageData, CoverageKind, CoveragePoint, CoverageReport, CoverageRun, CoverageState,
+    CoverageTest, FileCoverage, RawCoverage, RawCoverageError, SiteCoverage, TestCoverage,
+    aggregate, parse as parse_raw_coverage, percent, render_human, render_json, render_lcov,
+};
 
 pub use discovery::{
     Discovery, SourceFileRef, TestCase, TestKind, discover, filter_tests, wrapper_source,

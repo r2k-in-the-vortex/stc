@@ -265,6 +265,8 @@ pub(crate) struct Request {
     /// Whether this is a test build (`stc test`): emit the test-host launcher
     /// and the host ABI 2.2 test-clock import.
     pub test_build: bool,
+    /// Statement coverage instrumentation for this test build (WL-10).
+    pub coverage: Option<stc_codegen::CoverageOptions>,
     /// Effective `[build].opt-level`.
     pub opt_level: OptLevel,
     /// Whether `[build].opt-level` was explicitly present; absent levels use
@@ -312,6 +314,7 @@ impl Default for Request {
             debug: false,
             release: false,
             test_build: false,
+            coverage: None,
             opt_level: OptLevel::O0,
             opt_level_explicit: false,
             lib_type: LibType::Static,
@@ -574,7 +577,7 @@ pub(crate) fn generate(
             },
         },
         test_build: request.test_build,
-        coverage: None,
+        coverage: request.coverage.clone(),
     };
     let codegen_start = Instant::now();
     let output = match stc_codegen::generate(hir, &options) {

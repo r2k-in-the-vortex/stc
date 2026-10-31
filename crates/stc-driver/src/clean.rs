@@ -22,6 +22,9 @@ use crate::report::{Log, Reporter, display_path};
 /// Default test artifact root (`stc test`).
 const DEFAULT_TEST_DIR: &str = "target/stc/test";
 
+/// Default coverage report directory (`stc test --coverage`).
+const DEFAULT_COVERAGE_DIR: &str = "target/stc/coverage";
+
 /// Default runtime store root used by `stc run --watch` when
 /// `[runtime].manifest-dir` is absent.
 const DEFAULT_RUNTIME_DIR: &str = "target/stc/runtime";
@@ -92,6 +95,9 @@ fn targets(request: &Request, test_only: bool, root: &Package) -> Vec<PathBuf> {
         targets.push(comparable(&absolute(Path::new(value))));
     } else if test_only {
         targets.push(comparable(&absolute(&root.root_dir.join(DEFAULT_TEST_DIR))));
+        targets.push(comparable(&absolute(
+            &root.root_dir.join(DEFAULT_COVERAGE_DIR),
+        )));
     } else if let Some(mode) = request.mode_override {
         let configured = if root.manifest.build.out_dir_explicit {
             root.root_dir.join(&root.manifest.build.out_dir)
@@ -106,6 +112,9 @@ fn targets(request: &Request, test_only: bool, root: &Package) -> Vec<PathBuf> {
             )));
         }
         targets.push(comparable(&absolute(&root.root_dir.join(DEFAULT_TEST_DIR))));
+        targets.push(comparable(&absolute(
+            &root.root_dir.join(DEFAULT_COVERAGE_DIR),
+        )));
         if root.manifest.build.out_dir_explicit {
             targets.push(comparable(&absolute(
                 &root.root_dir.join(&root.manifest.build.out_dir),

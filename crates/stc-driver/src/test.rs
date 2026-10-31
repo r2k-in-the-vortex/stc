@@ -9,7 +9,7 @@
 //! separate processes; the runner enforces the timeout and parses the
 //! structured result line.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -21,8 +21,9 @@ use stc_parser::{ParseOptions, ParsedFile, parse};
 use stc_sema::{PackageSession, ProjectSession};
 use stc_span::{FileId, SourceMap, Span};
 use stc_test::{
-    SourceFileRef, TestCase, TestStatus, discover, filter_tests, human_failure_lines,
-    human_result_line, json_result, summary_line, wrapper_source,
+    CoverageData, CoverageKind, CoveragePoint, CoverageRun, CoverageTest, SourceFileRef, TestCase,
+    TestStatus, aggregate, discover, filter_tests, human_failure_lines, human_result_line,
+    json_result, render_human, render_json, render_lcov, summary_line, wrapper_source,
 };
 
 use crate::build::{self, Emit, Request};
@@ -44,11 +45,21 @@ struct SourceEntry {
     parsed: ParsedFile,
 }
 
+/// One built test artifact's coverage instrumentation.
+struct CoverageArtifact {
+    /// Raw sidecar the test host writes after the run.
+    raw_path: PathBuf,
+    /// Local site-ID to canonical point mapping; `None` marks an omitted site.
+    sites: Vec<Option<CoveragePoint>>,
+}
+
 /// A built test artifact ready to run.
 struct BuiltTest {
     test: TestCase,
     exe: PathBuf,
     args: Vec<String>,
+    /// Coverage instrumentation, when the run has coverage enabled.
+    coverage: Option<CoverageArtifact>,
 }
 
 /// Runs `stc test`.
@@ -76,6 +87,19 @@ pub(crate) fn run(
     reporter.diagnostics(&graph.warnings, &graph.sources);
     log.info(format!("manifest {manifest_input}"));
     log.info(format!("profile {}", stc_manifest::PROFILE_ID));
+
+    // `--coverage`/`--no-coverage` override `[test] coverage`; `--list` ignores
+    // the manifest default and returns before any coverage work.
+    let effective_coverage = options.coverage.unwrap_or(root.manifest.test.coverage);
+    if options.coverage_out.is_some() && !effective_coverage {
+        reporter.plain(
+            "STC-E-PROJECT-010",
+            Severity::Error,
+            "`--coverage-out` requires coverage to be enabled (`--coverage` or `[test] coverage = \
+             true`)",
+        );
+        return 2;
+    }
 
     let relaxed = request.relaxed || root.manifest.build.syntax == SyntaxMode::Relaxed;
     let mut sources = SourceMap::new();
@@ -226,6 +250,17 @@ pub(crate) fn run(
         .filter(|entry| entry.is_test)
         .map(|entry| entry.parsed.clone())
         .collect();
+    // Production sources of every package are instrumented; `[test].sources`
+    // and the synthetic wrapper are excluded by construction.
+    let coverage_files: BTreeSet<FileId> = if effective_coverage {
+        entries
+            .iter()
+            .filter(|entry| !entry.is_test)
+            .map(|entry| entry.file_id)
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
 
     // Catch semantic errors once before building N artifacts.
     {
@@ -330,6 +365,15 @@ pub(crate) fn run(
         test_request.project = build::ProjectSettings::from_manifest(&root.manifest);
         test_request.project.retain_enabled = false;
         test_request.project.io_backend.clone_from(&effective_io);
+        // Non-coverage test builds stay byte-identical: the request carries no
+        // coverage options and codegen receives `None`.
+        test_request.coverage = if effective_coverage {
+            Some(stc_codegen::CoverageOptions {
+                files: coverage_files.clone(),
+            })
+        } else {
+            None
+        };
         let out_dir = artifact_root.join(&artifact);
         // A previous run can leave a module with an older content-derived
         // build ID; start each test artifact directory clean.
@@ -446,6 +490,50 @@ pub(crate) fn run(
             build_exit = build_exit.max(1);
             continue;
         }
+        let coverage = if effective_coverage {
+            let report_paths: BTreeMap<FileId, &str> = entries
+                .iter()
+                .map(|entry| (entry.file_id, entry.report_path.as_str()))
+                .collect();
+            let mut points = Vec::with_capacity(generated.output.coverage_sites.len());
+            let mut omitted = 0_usize;
+            for site in &generated.output.coverage_sites {
+                let point = report_paths.get(&site.span.file).map(|path| {
+                    let location = sources.location(site.span);
+                    CoveragePoint {
+                        file: (*path).to_owned(),
+                        start: site.span.start,
+                        end: site.span.end,
+                        line: location.line,
+                        column: location.column,
+                        kind: match site.kind {
+                            stc_codegen::CoverageKind::Statement => CoverageKind::Statement,
+                        },
+                    }
+                });
+                if point.is_none() {
+                    omitted += 1;
+                }
+                points.push(point);
+            }
+            if omitted > 0 {
+                reporter.plain(
+                    "STC-W-COVERAGE-002",
+                    Severity::Warning,
+                    &format!(
+                        "{omitted} coverage site(s) in test `{}` cannot be attributed to a \
+                         reportable source file; omitted",
+                        test.name
+                    ),
+                );
+            }
+            Some(CoverageArtifact {
+                raw_path: generated.out_dir.join(format!("{artifact}.coverage")),
+                sites: points,
+            })
+        } else {
+            None
+        };
         let exe = build::launcher_path(&generated.out_dir, &artifact);
         let module = generated.out_dir.join(&generated.module_file);
         let declaration = sources.location(test.span);
@@ -481,20 +569,59 @@ pub(crate) fn run(
             args.push("--passed-root".into());
             args.push(root);
         }
+        if let Some(coverage) = &coverage {
+            args.push("--coverage".into());
+            args.push(coverage.raw_path.to_string_lossy().into_owned());
+            args.push("--coverage-sites".into());
+            args.push(coverage.sites.len().to_string());
+        }
         built.push(BuiltTest {
             test: test.clone(),
             exe,
             args,
+            coverage,
         });
     }
     if build_exit != 0 {
         return build_exit;
     }
     if options.no_run {
+        if effective_coverage {
+            log.status(
+                "coverage enabled: instrumented artifacts built; no coverage report is written \
+                 with `--no-run`",
+            );
+        }
         log.status(format!("built {} test artifact(s)", built.len()));
         return u8::from(reporter.denied());
     }
-    let code = run_tests(&built, options, reporter);
+    let (mut code, coverage_tests) = run_tests(&built, options, reporter);
+    if effective_coverage {
+        let coverage_dir = options
+            .coverage_out
+            .as_ref()
+            .map_or_else(|| root.root_dir.join("target/stc/coverage"), PathBuf::from);
+        let report = aggregate(&CoverageRun {
+            package: root.name.clone(),
+            filters: filters.to_vec(),
+            tests: coverage_tests,
+        });
+        if let Err(message) = write_coverage_reports(&coverage_dir, &report) {
+            reporter.plain("STC-E-BUILD-002", Severity::Error, &message);
+            code = 1;
+        } else if reporter.is_json() {
+            log.status(format!(
+                "coverage report {}",
+                crate::report::display_path(&coverage_dir.join("coverage.json"))
+            ));
+            log.status(format!(
+                "coverage report {}",
+                crate::report::display_path(&coverage_dir.join("coverage.info"))
+            ));
+        } else if !reporter.is_quiet() {
+            print!("{}", render_human(&report));
+        }
+    }
     if code == 0 && reporter.denied() {
         1
     } else {
@@ -502,12 +629,30 @@ pub(crate) fn run(
     }
 }
 
+/// Writes `coverage.json` and `coverage.info`, creating the directory.
+fn write_coverage_reports(dir: &Path, report: &stc_test::CoverageReport) -> Result<(), String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|error| format!("cannot create `{}`: {error}", dir.display()))?;
+    let json_path = dir.join("coverage.json");
+    std::fs::write(&json_path, render_json(report))
+        .map_err(|error| format!("cannot write `{}`: {error}", json_path.display()))?;
+    let info_path = dir.join("coverage.info");
+    std::fs::write(&info_path, render_lcov(report))
+        .map_err(|error| format!("cannot write `{}`: {error}", info_path.display()))?;
+    Ok(())
+}
+
 /// Runs the built test processes sequentially.
-fn run_tests(built: &[BuiltTest], options: &TestOptions, reporter: &Reporter) -> u8 {
+fn run_tests(
+    built: &[BuiltTest],
+    options: &TestOptions,
+    reporter: &mut Reporter,
+) -> (u8, Vec<CoverageTest>) {
     let mut passed = 0;
     let mut failed = 0;
     let mut timed_out = 0;
     let mut trapped = 0;
+    let mut coverage_tests = Vec::new();
     for item in built {
         let timeout = Duration::from_nanos(item.test.timeout_ns.max(1));
         let outcome = stc_test::run_process(&item.exe, &item.args, timeout);
@@ -529,17 +674,68 @@ fn run_tests(built: &[BuiltTest], options: &TestOptions, reporter: &Reporter) ->
                 println!("{line}");
             }
         }
+        if let Some(artifact) = &item.coverage {
+            let data = if outcome.status == TestStatus::Timeout {
+                // A timed-out process never reports data; its sidecar is not read.
+                CoverageData::Timeout
+            } else {
+                match load_coverage_data(&artifact.raw_path, artifact.sites.len()) {
+                    Ok(counts) => CoverageData::Reported { counts },
+                    Err(message) => {
+                        reporter.plain(
+                            "STC-W-COVERAGE-001",
+                            Severity::Warning,
+                            &format!(
+                                "test `{}` has no usable coverage data: {message}; excluded from \
+                                 the aggregate",
+                                item.test.name
+                            ),
+                        );
+                        CoverageData::Missing
+                    }
+                }
+            };
+            coverage_tests.push(CoverageTest {
+                name: item.test.name.clone(),
+                status: outcome.status,
+                sites: artifact.sites.clone(),
+                data,
+            });
+        }
     }
     if !reporter.is_json() && !reporter.is_quiet() {
         println!("{}", summary_line(passed, failed, timed_out, trapped));
     }
-    if trapped > 0 {
+    let code = if trapped > 0 {
         4
     } else if failed > 0 || timed_out > 0 {
         1
     } else {
         0
+    };
+    (code, coverage_tests)
+}
+
+/// Reads and validates one raw coverage sidecar against the artifact site table.
+fn load_coverage_data(path: &Path, sites: usize) -> Result<Vec<(u32, u64)>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("cannot read `{}`: {error}", path.display()))?;
+    let parsed = stc_test::parse_raw_coverage(&text)
+        .map_err(|error| format!("malformed `{}`: {error}", path.display()))?;
+    if parsed.sites as usize != sites {
+        return Err(format!(
+            "`{}` declares {} site(s), the artifact has {sites}",
+            path.display(),
+            parsed.sites
+        ));
     }
+    if let Some((id, _)) = parsed.counts.iter().find(|(id, _)| *id as usize >= sites) {
+        return Err(format!(
+            "`{}` site ID {id} is out of range for {sites} site(s)",
+            path.display()
+        ));
+    }
+    Ok(parsed.counts)
 }
 
 /// Builds the merged session for one analysis pass.
@@ -743,5 +939,65 @@ fn report_sink(sink: &DiagnosticSink, sources: &SourceMap, reporter: &mut Report
             "note: {} further diagnostic(s) suppressed",
             sink.suppressed()
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sidecar(name: &str, contents: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "stc-load-coverage-{}-{name}.coverage",
+            std::process::id()
+        ));
+        std::fs::write(&path, contents).expect("write sidecar");
+        path
+    }
+
+    #[test]
+    fn accepts_a_sidecar_matching_the_artifact_site_table() {
+        let path = sidecar("valid", "stc-coverage-raw/1 2\n0 3\n1 1\n");
+        let counts = load_coverage_data(&path, 2).expect("valid sidecar");
+        assert_eq!(counts, vec![(0, 3), (1, 1)]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_missing_malformed_and_mismatched_sidecars() {
+        let missing = std::env::temp_dir().join(format!(
+            "stc-load-coverage-{}-missing.coverage",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&missing);
+        assert!(
+            load_coverage_data(&missing, 1)
+                .unwrap_err()
+                .contains("cannot read")
+        );
+
+        let malformed = sidecar("malformed", "not a sidecar\n");
+        assert!(
+            load_coverage_data(&malformed, 1)
+                .unwrap_err()
+                .contains("malformed")
+        );
+        let _ = std::fs::remove_file(malformed);
+
+        let mismatched = sidecar("mismatched", "stc-coverage-raw/1 1\n0 1\n");
+        let error = load_coverage_data(&mismatched, 2).unwrap_err();
+        assert!(
+            error.contains("declares 1 site(s), the artifact has 2"),
+            "{error}"
+        );
+        let _ = std::fs::remove_file(mismatched);
+
+        let out_of_range = sidecar("range", "stc-coverage-raw/1 1\n1 1\n");
+        assert!(
+            load_coverage_data(&out_of_range, 1)
+                .unwrap_err()
+                .contains("out of range")
+        );
+        let _ = std::fs::remove_file(out_of_range);
     }
 }

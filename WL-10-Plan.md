@@ -3,8 +3,8 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-31  
 Branch: `WL-10` (sub-plan of `v2.0.0-planning`)  
-Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phases 0 and 1
-are complete; phase 2 is in progress.  
+Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phases 0–2 are
+complete; phase 3 is in progress.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-10)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-10,
 [Testing and Verification](specification/Architecture/Testing-and-Verification.md) §2,
@@ -518,7 +518,8 @@ summary in human mode; files are still written.
 | --- | --- | --- |
 | 0 | Complete 2026-10-31 | Plan locked; parent linked; commit `d3655d5`; PR #8 CI run 41153573207 green. |
 | 1 | Complete 2026-10-31 | Codegen instrumentation, exclusions, verifier allowlist, 7 coverage tests; commit `132faaa`; CI run 41155573060 green. |
-| 2 | In progress | — |
+| 2 | Complete 2026-10-31 | Host readout and raw writer, shared protocol constants, raw parser, 20 tests; commit `d58a58f`; CI run 41160138589 green. |
+| 3 | In progress | — |
 
 **Phase 1 note (2026-10-31).** The increment uses the element-indexing GEP shown in §6.1 rather
 than the earlier illustrative two-index form, because N is not final during lowering; the global
@@ -526,6 +527,15 @@ and host readout are unchanged. `record_coverage` lives in `unit.rs` and is call
 `stmt.rs`. Seven codegen tests cover exact sites, owner-chain and file exclusions, synthesized
 FB bodies, `Empty` and zero-length spans, span dedupe, disabled-build IR equality, the
 non-test-build rejection, determinism, and structural verification.
+
+**Phase 2 note (2026-10-31).** The raw protocol constants live in `stc_got::coverage`
+(`RAW_PROTOCOL`, `MAX_SITES`); the host reads `stc_coverage_counters` through
+`Host::export_symbol` after the run loop and writes the sidecar even for traps, before the
+expected-trap and `PASSED` checks. The `stc-test` parser is file-independent and validates the
+protocol, cap, ID range, ordering, and counts. GitHub did not create a pull-request run for the
+phase 2 push; the full matrix was dispatched manually on ref `WL-10` at the same head SHA
+(`d58a58f`), so PR #8's check list remains empty. Later phases must do the same fallback if no
+PR-triggered run appears.
 
 ## 9. Exit criteria
 
@@ -599,3 +609,4 @@ None as of 2026-10-31. The plan is locked; new questions are appended only with 
 | 2026-10-31 | Locked C-9 and C-12: byte-identical reports across hosts and `stc clean` removal of the default coverage directory; no CI upload and a full per-file human summary. |
 | 2026-10-31 | Locked C-13 and C-14: no report filter and an informational, non-gating overhead measurement. All decisions C-1–C-14 are locked; the plan has no open questions. |
 | 2026-10-31 | Phase 1 complete: codegen site table, span-deduped counters, exported global, verifier allowlist, exclusions, and tests; commit `132faaa`, CI green. Reconciled phase 2/3 acceptance for the end-to-end sidecar dependency. |
+| 2026-10-31 | Phase 2 complete: host counter readout and raw writer, shared protocol constants, and the raw parser with 20 tests; commit `d58a58f`, full matrix green via manual workflow dispatch at the same SHA. |

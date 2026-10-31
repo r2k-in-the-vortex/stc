@@ -123,6 +123,8 @@ pub(crate) const KNOWN_CODES: &[&str] = &[
     "STC-E-TYPE-002",
     "STC-E-TYPE-003",
     "STC-E-TYPE-012",
+    "STC-W-COVERAGE-001",
+    "STC-W-COVERAGE-002",
     "STC-W-IO-001",
     "STC-W-IO-002",
     "STC-W-IO-003",

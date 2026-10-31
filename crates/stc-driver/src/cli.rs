@@ -53,6 +53,10 @@ pub(crate) struct TestOptions {
     pub timeout_ns: Option<u64>,
     /// `-- --nocapture`: forward test-host output.
     pub nocapture: bool,
+    /// `--coverage`/`--no-coverage`; `None` uses `[test] coverage`.
+    pub coverage: Option<bool>,
+    /// `--coverage-out <dir>` report directory.
+    pub coverage_out: Option<String>,
 }
 
 /// Online-change command options.
@@ -252,6 +256,30 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             "--test" => clean_test = true,
             "--list" => test.list = true,
             "--no-run" => test.no_run = true,
+            "--coverage" => {
+                if test.coverage == Some(false) {
+                    return Err(
+                        "STC-E-PROJECT-010: `--coverage` and `--no-coverage` are mutually exclusive"
+                            .into(),
+                    );
+                }
+                test.coverage = Some(true);
+            }
+            "--no-coverage" => {
+                if test.coverage == Some(true) {
+                    return Err(
+                        "STC-E-PROJECT-010: `--coverage` and `--no-coverage` are mutually exclusive"
+                            .into(),
+                    );
+                }
+                test.coverage = Some(false);
+            }
+            "--coverage-out" => {
+                test.coverage_out = Some(next_value(args, &mut index, "--coverage-out")?);
+            }
+            other if other.starts_with("--coverage-out=") => {
+                test.coverage_out = Some(other["--coverage-out=".len()..].to_owned());
+            }
             "--timeout" => {
                 test.timeout_ns = Some(parse_cycle_time(&next_value(
                     args,
@@ -852,13 +880,24 @@ fn validate(
                 .into(),
         );
     }
-    if (test.list || test.no_run || test.timeout_ns.is_some() || test.nocapture)
+    let coverage_flags = test.coverage.is_some() || test.coverage_out.is_some();
+    if (test.list || test.no_run || test.timeout_ns.is_some() || test.nocapture || coverage_flags)
         && command != Command::Test
     {
         return Err(
-            "`--list`, `--no-run`, `--timeout`, and `-- --nocapture` are only valid with `stc test`"
+            "`--list`, `--no-run`, `--timeout`, `--coverage`, `--no-coverage`, `--coverage-out`, \
+             and `-- --nocapture` are only valid with `stc test`"
                 .into(),
         );
+    }
+    if command == Command::Test && test.list && test.coverage == Some(true) {
+        return Err("STC-E-PROJECT-010: `--coverage` cannot be combined with `--list`".into());
+    }
+    if command == Command::Test && test.list && test.coverage_out.is_some() {
+        return Err("STC-E-PROJECT-010: `--coverage-out` cannot be combined with `--list`".into());
+    }
+    if command == Command::Test && test.coverage_out.is_some() && test.coverage == Some(false) {
+        return Err("STC-E-PROJECT-010: `--coverage-out` requires coverage to be enabled".into());
     }
     if build.out_dir.is_some()
         && !matches!(
@@ -1264,6 +1303,7 @@ fn print_help() {
          \x20         [--message-format human|json] [-v|-vv] [-q]\n\
          \x20 stc test [<filter>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20          [--list] [--no-run] [--timeout <duration>]\n\
+         \x20          [--coverage|--no-coverage] [--coverage-out <dir>]\n\
          \x20          [--io null|memory|file] [--io-file <path>]\n\
          \x20          [--target <triple>] [--clang <path>] [--runtime <path>]\n\
          \x20          [--out-dir <dir>] [--relaxed] [--message-format human|json]\n\
@@ -1451,6 +1491,66 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.starts_with("STC-E-PROJECT-010: "), "{error}");
+    }
+
+    #[test]
+    fn coverage_flags_are_parsed_and_validated() {
+        let default = invocation(&["test"]);
+        assert_eq!(default.test.coverage, None);
+        assert!(default.test.coverage_out.is_none());
+
+        assert_eq!(
+            invocation(&["test", "--coverage"]).test.coverage,
+            Some(true)
+        );
+        assert_eq!(
+            invocation(&["test", "--no-coverage"]).test.coverage,
+            Some(false)
+        );
+        assert_eq!(
+            invocation(&["test", "--coverage-out", "cov"])
+                .test
+                .coverage_out
+                .as_deref(),
+            Some("cov")
+        );
+        assert_eq!(
+            invocation(&["test", "--coverage-out=out/cov"])
+                .test
+                .coverage_out
+                .as_deref(),
+            Some("out/cov")
+        );
+
+        let parse_error = |args: &[&str]| {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            parse(&args).err().expect("the invocation must fail")
+        };
+        assert!(
+            parse_error(&["test", "--coverage", "--no-coverage"]).contains("mutually exclusive")
+        );
+        assert!(
+            parse_error(&["test", "--no-coverage", "--coverage"]).contains("mutually exclusive")
+        );
+        assert!(parse_error(&["test", "--coverage", "--list"]).contains("--list"));
+        assert!(parse_error(&["test", "--coverage-out", "cov", "--list"]).contains("--list"));
+        assert!(
+            parse_error(&["test", "--coverage-out", "cov", "--no-coverage"])
+                .contains("requires coverage")
+        );
+        assert!(parse_error(&["build", "--coverage"]).contains("only valid with `stc test`"));
+        assert!(
+            parse_error(&["build", "--coverage-out", "cov"]).contains("only valid with `stc test`")
+        );
+
+        // `--list` ignores the manifest default, so no explicit flag is needed;
+        // `--no-coverage` remains valid there.
+        let listed = invocation(&["test", "--list"]);
+        assert_eq!(listed.test.coverage, None);
+        assert!(invocation(&["test", "--list", "--no-coverage"]).test.list);
     }
 
     #[test]
