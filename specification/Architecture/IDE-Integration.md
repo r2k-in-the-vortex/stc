@@ -1,7 +1,7 @@
 # IDE Integration
 
 Status: WL-1.1 phase 5 specification (2026-10-30); the VS Code extension, `stc lsp`, and `stc dap`
-are implemented and tested  
+are implemented and tested; F-20 adds the extension-owned online-change surface (2026-10-31)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: local VS Code language support, tasks, and debugging; not a language, compiler, artifact,
 module-ABI, or runtime-protocol feature beyond the additive `stc-debug/1.1` revision
@@ -22,7 +22,9 @@ Related: [Architecture](Architecture.md), [Debug and Monitoring](Debug-and-Monit
 The integration is local only. It opens no network listener, sends no telemetry, performs no
 marketplace or update check, and never receives remote source or debug traffic. The language server
 and debug adapter are local processes that use standard input and output; the runtime debug endpoint
-remains the authenticated local endpoint of Debug and Monitoring §13.
+remains the authenticated local endpoint of Debug and Monitoring §13. The online-change surface
+drives the existing `stc run --watch` CLI as an extension-owned child and reads that same local
+runtime endpoint file; it adds no wire protocol or transport (§4.7).
 
 **Non-safety statement.** `stc` can control real machinery, but it is not a safety PLC and is not
 responsible for safety. Safety must be provided by a separate safety system and machine design as
@@ -38,7 +40,11 @@ Out of scope for v2.0.0:
 - conditional, hit-count, log, function, data, and instruction breakpoints; exception breakpoints;
   reverse debugging; multi-thread debugging; `stopOnEntry`; restart; and ST expression evaluation;
 - marketplace publishing, code signing, telemetry, and extension-bundled compiler binaries;
-- a second formatter, type checker, diagnostics engine, or debugger protocol.
+- a second formatter, type checker, diagnostics engine, debugger protocol, online-change protocol,
+  deploy client, or control-channel client; the editor surface presents the existing CLI workflow
+  and the existing runtime endpoint file instead;
+- cold-download confirmation, deploy/rollback UI, migration UI, remote deployment, and
+  cross-window online-change coordination.
 
 ## 2. Processes, transports, and discovery
 
@@ -46,6 +52,7 @@ Out of scope for v2.0.0:
 | --- | --- | --- |
 | `stc lsp [--manifest-path <path>]` | LSP JSON-RPC with `Content-Length` framing over stdio | The extension's language clients |
 | `stc dap [--manifest-path <path>]` | DAP JSON with `Content-Length` framing over stdio | The extension's `stc` debug adapter |
+| `stc run --watch ... [--debug-server --debug-endpoint <path>]` | stderr `[stc]` status lines; runtime debug endpoint JSON file (format 1) | The extension's online-change session (one per window) |
 
 - Standard output carries protocol messages only; logs and build output go to standard error. The
   language server never writes diagnostics text to standard output outside a JSON-RPC frame. The
@@ -61,6 +68,12 @@ Out of scope for v2.0.0:
 - `stc dap` receives no project argument from the extension. It starts in the workspace folder and
   each launch or attach configuration carries `project`; `--manifest-path` is an optional fallback
   for clients that omit it.
+- The online-change session runs `stc run --watch --manifest-path <project>/stc.toml --debug-server
+  --debug-endpoint <storage>/oc/<8 hex>/d.json --color never <stc.onlineChange.args>`. It parses
+  the CLI's `[stc]` stderr status lines and polls the runtime's user-only endpoint file; it does
+  not connect to the control channel, does not parse `-v` output for the control nonce, and does
+  not read the endpoint's `token`, `endpoint`, or `audit_log` fields. A unique per-session endpoint
+  path is required because the watch path does not prepare or rotate a debug endpoint.
 - Compiler discovery uses the `stc.path` setting, whose default is `stc`. An absolute or
   path-containing value is used directly; otherwise the value is resolved on `PATH`, including
   `PATHEXT` extensions on Windows. A missing executable is logged to the `stc` output channel and
@@ -295,6 +308,99 @@ adapter session per launch.
 - Debug write and force can hold outputs indefinitely; they are opt-in and never presented as
   safety functions.
 
+### 4.7 Online-change surface
+
+The extension starts, observes, and stops the existing `stc run --watch` workflow. It adds no
+online-change implementation, deploy/control client, protocol, or debugger. One session per editor
+window is owned by `editors/vscode/src/onlineChange/session.ts`; the pure state machine, status-line
+classification, endpoint parsing, redaction, and formatting live in
+`editors/vscode/src/onlineChange/state.ts`, which does not import `vscode`.
+
+**Commands and status item.** The palette contributes four commands in the `stc` category:
+
+| Command | Behavior |
+| --- | --- |
+| `stc.startOnlineChange` | Resolve the project and spawn the extension-owned watch. Refused while a session is running; when an `stc` debug session is active it warns, because a second local host will run. |
+| `stc.stopOnlineChange` | Close the child's stdin and wait; fall back to a process-tree kill. Gated by `stc.onlineChangeActive`. |
+| `stc.showOnlineChangeStatus` | Reveal the `stc Online Change` channel and return the read-only state snapshot used by the smoke. |
+| `stc.attachOnlineDebugger` | Attach the `stc` debug adapter to the running watch host. Gated by `stc.onlineChangeAttachable`. |
+
+There is no default keybinding. One status-bar item shows `starting`, `building`,
+`gen <n> · <8 hex>` while active, `build failed; gen <n> kept` when a candidate is rejected, and
+`stopped (<reason>)` after an unexpected end; it is hidden while idle and after a user stop. Its
+tooltip names the project and shows the full generation/build, mode, host pid, cold flag, last
+error, and the one-line non-safety notice.
+
+**Child process and configuration.** The invocation is:
+
+```text
+stc run --watch --manifest-path <project>/stc.toml
+    --debug-server --debug-endpoint <storage>/oc/<8 hex>/d.json
+    --color never <stc.onlineChange.args>
+```
+
+`cwd` is the project directory. All three stdio streams are pipes; on POSIX the child is
+`detached` so the fallback can signal its process group, and on Windows it uses `windowsHide`.
+`stc.onlineChange.args` (string array, resource scope, default empty) appends run options such as
+`--release`, `--store`, `--watch-timeout`, or `-v`; the extension-owned flags (`--manifest-path`,
+`--debug-server`, `--debug-endpoint`, `--color`, `--control`, `--control-nonce`, `-q`, `--quiet`,
+`--help`, `--version`) are rejected with a message naming the flag. The endpoint path is internal
+and not configurable. Project selection is the active editor's nearest ancestor `stc.toml` inside a
+workspace folder, otherwise a single discovered project, otherwise a QuickPick; no project is an
+error and nothing starts.
+
+**Status parsing.** stderr lines classify into `starting` (`online baseline`, `cold layout: no
+active baseline`), `watching`, `building` (`stale baseline; rebuilding`), `activating` (`deployed
+build <hex>`), and a kept-generation failure (`keeping generation <hex>; candidate was rejected`,
+`...; deploy failed`, `build failed; keeping generation <hex>`). Terminal lines map `initial build
+failed with status <n>` to `failed`, `host exited with status <n>` to `host-exited`, `watch
+interrupted` to `interrupted`, `watch timeout reached` to `timeout`, and `watch stopped` to `user`.
+A child exit without a recognized line is `failed` or `forced`. Unknown lines are logged and do not
+change state. The "keeping generation" token is a build id, not the numeric generation.
+
+**Endpoint polling and secrets.** Every 750 ms while the child is alive, and immediately after a
+`deployed build` line, the extension reads the per-session endpoint file: a regular file of at most
+64 KiB, `format === 1`, protocol beginning `stc-debug/1`, with a safe integer `generation`, a
+non-empty `build_id`/`mode`, and a positive `pid`. Only those four fields are retained; `token`,
+`endpoint`, and `audit_log` are discarded immediately and never logged, copied, or written. The
+file is authoritative for the numeric generation and build. If a `deployed build` line is not
+confirmed by the endpoint within two seconds, the status shows the new build id with the last known
+generation and the channel logs the discrepancy honestly. A missing or unparseable file while the
+child is alive keeps the last known state; it is never reported as an ended session.
+
+Every channel line passes redaction: a `^[stc] control nonce` line is dropped, lines containing
+`STC_CONTROL_NONCE` or `--control-nonce` are refused, the control endpoint in the `watching for
+changes` line is replaced with `<hidden>`, and the runtime's own `stc: debug endpoint <path>` and
+`stc: debug audit <path>` lines are replaced with `<hidden>`. The status item, tooltip,
+notifications, and snapshot contain no nonce, token, control endpoint, or debug endpoint/audit
+path.
+
+**Attach and swap teardown.** `stc.attachOnlineDebugger` requires a running watch, waits up to ten
+seconds for the endpoint file, then starts an attach session with `project` and `endpoint` and
+default read-only scopes, recording the generation observed at attach time. On
+`onDidTerminateDebugSession`, if the tracked session ended while the watch is running, the user did
+not request the stop, the extension is not deactivating, and the endpoint's generation differs from
+the recorded one, the extension logs the new generation and shows one information message: "The
+online change ended the debug session (`STC-E-DEBUG-019` is in the Debug Console). Re-attach to
+debug the new generation." with **Attach Debugger** and **Show Output** actions. The Debug Console
+line and the DAP `terminated` event remain authoritative. An unchanged generation is never reported
+as a swap. There is no automatic reconnect and no breakpoint, force, or watch replay (D-175).
+
+**Stop and deactivate.** `stc.stopOnlineChange` calls `stdin.end()` and waits up to five seconds. If
+the child has not exited, the extension warns that normal shutdown may not have run, so retained
+state may not be saved, then kills the process tree: `taskkill /pid <pid> /t /f` on Windows, SIGINT
+then a process-group SIGKILL on POSIX. A forced stop is recorded as such and suppresses the swap
+notification. `deactivate` performs the same stop with a two-second graceful wait so a window
+close or reload does not leave an owned child. A clean stdin-close stop exits 0 and prints `[stc]
+watch stopped` (CLI and Manifest §1.7).
+
+**Limits.** One online-change session per window; no cross-window coordination, so two windows can
+start two watches on one project (the CLI does not lock a store). The surface offers no
+cold-download, rollback, migration, write, or force action, and it is local only. A per-session
+directory under extension storage remains as local audit evidence after a stop; the runtime removes
+the endpoint file, and the audit log is kept. Status-bar and channel text is presentation only;
+activation and stop are not safety functions.
+
 ## 5. Packaging and distribution
 
 The extension lives at `editors/vscode/`. It is TypeScript bundled by esbuild into
@@ -320,9 +426,13 @@ bundles it.
   evaluate, write gating, attach, no-build, and clean teardown. They run through the debug suite
   and require clang there.
 - The extension checks are `npm ci`, `npm run typecheck`, `npm test` (problem-matcher unit tests,
-  theme JSON tests, and TextMate grammar fixtures), and `npm run package`. The theme test checks
-  the contributed themes, required editor colors and token rules, distinct acceptance categories,
-  and the 4.5:1 contrast target. The Rust tests compare the grammar against the lexer keyword and
+  theme JSON tests, online-change state tests, and TextMate grammar fixtures), and `npm run
+  package`. `test/online-change.test.mjs` bundles the pure state module and covers every status
+  line, the stopped reasons, endpoint parsing and field whitelisting (including wrong
+  format/protocol, oversized and non-regular files, and malformed fields), redaction, and status
+  formatting. The theme test checks the contributed themes, required editor colors and token
+  rules, distinct acceptance categories, and the 4.5:1 contrast target. The Rust tests compare the
+  grammar against the lexer keyword and
   punctuation tables (`grammar_covers_lexer_tables`), check every primitive type name against
   `support.type.primitives.st` (`primitive_type_keywords_use_primitive_scope`), and check the
   `stc-sema` prelude function and function-block lists against the built-in scopes
@@ -334,11 +444,15 @@ bundles it.
   direct-variable, language-constant, and built-in tokens in the release checklist.
 - The phase 6 CI extension job installs the VSIX in a headless `@vscode/test-electron` session,
   activates the extension on the sample workspace, and exercises highlighting, diagnostics,
-  definition, completion, formatting, a task, and a launch debug session. The job and its evidence
-  are part of the release checklist.
+  definition, completion, formatting, a task, and a launch debug session. The smoke then starts the
+  online-change command, waits for a numeric generation and build id, attaches the debugger, saves
+  a layout-preserving literal edit, waits for the attached session to terminate on the swap and for
+  a higher generation and different build id, and stops the watch; it restores the source and stops
+  any running child in a `finally`. The job and its evidence are part of the release checklist.
 - The release checklist records a manual pass on the Windows development host and at least one
   Linux host: install the VSIX, open the sample workspace, confirm the language features and
-  tasks, and run one launch and one attach session.
+  tasks, run one launch and one attach session, and run the online-change start/attach/swap/stop
+  walkthrough while inspecting the channel and logs for control metadata.
 
 ## 7. Related documents
 

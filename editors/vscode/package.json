@@ -24,6 +24,30 @@
     "workspaceContains:**/stc.toml"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "stc.startOnlineChange",
+        "title": "Start Online Change",
+        "category": "stc"
+      },
+      {
+        "command": "stc.stopOnlineChange",
+        "title": "Stop Online Change",
+        "category": "stc",
+        "enablement": "stc.onlineChangeActive"
+      },
+      {
+        "command": "stc.showOnlineChangeStatus",
+        "title": "Show Online Change Status",
+        "category": "stc"
+      },
+      {
+        "command": "stc.attachOnlineDebugger",
+        "title": "Attach Debugger to Online Change",
+        "category": "stc",
+        "enablement": "stc.onlineChangeAttachable"
+      }
+    ],
     "languages": [
       {
         "id": "st",
@@ -276,6 +300,15 @@
           "type": "string",
           "default": "stc",
           "description": "Path to the stc compiler executable, or its name on PATH."
+        },
+        "stc.onlineChange.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Extra arguments appended to `stc run --watch`, such as --release, --store, or --watch-timeout. The extension owns --manifest-path, --debug-server, --debug-endpoint, --color, the control flags, and --quiet."
         }
       }
     }

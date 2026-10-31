@@ -161,7 +161,7 @@ export class StcLanguageClient implements vscode.Disposable {
 }
 
 /** Finds `stc.toml` in `start` or one of its ancestors. */
-function findManifest(start: string): string | undefined {
+export function findManifest(start: string): string | undefined {
   let directory = start;
   for (;;) {
     const candidate = path.join(directory, MANIFEST);

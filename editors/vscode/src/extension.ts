@@ -2,10 +2,12 @@ import * as vscode from 'vscode';
 
 import { StcDebugAdapterFactory, StcDebugConfigurationProvider } from './debug';
 import { StcLanguageClient } from './languageClient';
+import { OnlineChangeSession } from './onlineChange/session';
 import { StcTaskProvider, stcExecutable } from './tasks';
 
 let output: vscode.OutputChannel | undefined;
 let languageClient: StcLanguageClient | undefined;
+let onlineChange: OnlineChangeSession | undefined;
 
 /** Activates local ST support: tasks, the `stc lsp` language client, and the `stc dap` debug adapter. */
 export function activate(context: vscode.ExtensionContext): void {
@@ -35,6 +37,9 @@ export function activate(context: vscode.ExtensionContext): void {
     output?.appendLine(`language server start failed: ${String(error)}`);
   });
 
+  onlineChange = new OnlineChangeSession(context);
+  context.subscriptions.push(onlineChange);
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('stc.path')) {
@@ -47,10 +52,22 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
-/** Stops the language clients and releases the output channels. */
+/** Stops the language client and any online-change host, and releases the output channels. */
 export function deactivate(): Thenable<void> | undefined {
-  const stopping = languageClient?.stop();
+  const stopping: Array<Promise<void> | Thenable<void>> = [];
+  const languageStopping = languageClient?.stop();
+  if (languageStopping !== undefined) {
+    stopping.push(languageStopping);
+  }
+  const onlineStopping = onlineChange?.stopForDeactivate();
+  if (onlineStopping !== undefined) {
+    stopping.push(onlineStopping);
+  }
   languageClient = undefined;
+  onlineChange = undefined;
   output = undefined;
-  return stopping;
+  if (stopping.length === 0) {
+    return undefined;
+  }
+  return Promise.all(stopping).then(() => undefined);
 }

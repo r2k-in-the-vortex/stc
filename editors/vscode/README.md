@@ -36,7 +36,11 @@ locally.
   pause, over/into/out stepping, call stack, Globals and Locals scopes,
   variable expansion, `evaluate` for locals and manifest target paths, and
   `setVariable` when writes are enabled.
-- The `stc.path` setting.
+- An online-change surface: start, inspect, stop, and re-attach to an
+  extension-owned `stc run --watch`, with a status-bar generation/build, a
+  redacted output channel, and the existing swap teardown surfaced as one
+  notification.
+- The `stc.path` and `stc.onlineChange.args` settings.
 
 The language-server and debug-adapter contracts, including the closed
 capability lists, are in `specification/Architecture/IDE-Integration.md` in
@@ -215,6 +219,72 @@ does not parse ST expressions. There is one debug session per host, and every
 online swap ends the session without migrating breakpoints, forces, or
 watches.
 
+## Online change
+
+The extension runs the existing `stc run --watch` workflow and reports it; it
+does not implement a second deployer, control client, or online-change
+protocol. The commands are in the Command Palette under the **stc** category:
+
+| Command | Behavior |
+| --- | --- |
+| `stc.startOnlineChange` | Choose the project and start `stc run --watch` as an extension-owned child with a private per-session debug endpoint. |
+| `stc.stopOnlineChange` | Close the watch's stdin, which the CLI treats as a graceful stop. A process-tree kill is only a fallback. |
+| `stc.showOnlineChangeStatus` | Show the **stc Online Change** channel and the current state. |
+| `stc.attachOnlineDebugger` | Attach a read-only `stc` debug session to the running watch host. |
+
+The status-bar item shows `starting`, `building`, `gen <n> · <8 hex>`,
+`build failed; gen <n> kept`, or a stopped reason. It is hidden while idle and
+after a user stop. The tooltip names the project and shows the full
+generation/build, mode, host pid, cold flag, last error, and the one-line
+non-safety notice; clicking the item shows the channel.
+
+The **stc Online Change** channel prints the CLI's stdout/stderr with
+redaction: a `[stc] control nonce` line is dropped, any line that would carry
+the control nonce is refused, and the control endpoint plus the runtime's
+`stc: debug endpoint` and `stc: debug audit` path lines are replaced with
+`<hidden>`. The numeric generation and build id come only from
+the runtime's user-only debug endpoint file, one private path per session under
+extension storage; the extension reads `generation`, `build_id`, `mode`, and
+`pid` and never reads, retains, or logs the token, endpoint, or audit path.
+
+The watch runs until stopped. Closing its stdin makes the CLI stop the host
+gracefully and exit 0; Ctrl-C would instead exit 130. If the child has not
+exited five seconds after the stdin close, the extension kills its process tree
+and warns in the channel that normal shutdown, including retained-state saving,
+may not have happened. Closing or reloading the window stops an owned watch the
+same way.
+
+`stc.attachOnlineDebugger` waits for the endpoint file (up to ten seconds) and
+starts the existing attach session with default read-only scopes. Every swap
+ends that debug session: the Debug Console shows `stc: the debug session
+ended: swap (STC-E-DEBUG-019)`, and the extension shows one information
+message with **Attach Debugger** and **Show Output** actions. It never
+reconnects or replays breakpoints, forces, or watches automatically;
+re-attaching is an explicit action. A swap with no attached session only
+updates the status item and channel.
+
+The v1 limits are: one online-change session per editor window and no
+cross-window coordination (two windows can start two watches on the same
+project); the extension offers no cold-download, rollback, migration, write, or
+force action; and online change is local only. The watch, its host, and the
+debug session are not safety functions.
+
+### Online-change arguments
+
+`stc.onlineChange.args` is a string array (default `[]`) appended to the
+extension-owned `stc run --watch`; use it for options such as `--release`,
+`--store <dir>`, `--watch-timeout <duration>`, or `-v`. The extension owns
+`--manifest-path`, `--debug-server`, `--debug-endpoint`, `--color`, the control
+flags, `--quiet`, `--help`, and `--version`; a value for one of those is
+rejected with a message naming the flag. `-v` is allowed and its output is
+still redacted.
+
+The project is the active editor's nearest `stc.toml` when it is inside a
+workspace folder; otherwise a single discovered project is used, or a
+QuickPick asks which of several. Starting again while a watch runs refuses and
+offers **Stop Online Change** first. Starting while an `stc` debug session is
+active asks for confirmation because a second local host will run.
+
 ## Sample workspace
 
 `samples/workspace/` is a clean, self-contained project with a program, a
@@ -228,6 +298,7 @@ folder as the workspace to try the extension.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `stc.path` | `"stc"` | Path to the `stc` executable, or its name on `PATH`. |
+| `stc.onlineChange.args` | `[]` | Extra arguments appended to the extension-owned `stc run --watch`. Resource-scoped, so a workspace folder can override it. |
 
 ## Diagnostics
 
@@ -240,11 +311,14 @@ the extension does not reinterpret either source.
 
 - VSIX-only distribution for v2.0.0; the extension is not published to the
   VS Code Marketplace.
-- Local only: no telemetry, no network requests, and no bundled compiler.
-- Debugging and forcing are availability and operability features, not safety
-  functions. `stc` is not a safety PLC and safety must be provided by a
-  separate system and machine design. A stopped or forced controller may hold
-  outputs indefinitely.
+- Local only: no telemetry, no network requests, and no bundled compiler. The
+  online-change surface starts a local `stc run --watch` child and reads the
+  runtime's user-only local endpoint file; it adds no network path.
+- Debugging, forcing, and online change are availability and operability
+  features, not safety functions. `stc` is not a safety PLC and safety must be
+  provided by a separate system and machine design. A stopped or forced
+  controller may hold outputs indefinitely, and an online change can activate
+  new logic while the machine is running.
 
 ## Development
 
@@ -257,12 +331,17 @@ npm test
 npm run package
 ```
 
-`npm test` runs the problem-matcher and theme unit tests and the TextMate
-grammar fixtures in `test/grammar/`. `test/theme.test.mjs` checks that both
-themes are contributed, define the required editor colors and token rules, use
-nine distinct category colors, and keep every role at or above the 4.5:1
-contrast target. The package step writes a `.vsix` next to `package.json`;
-`samples/**` is excluded by `.vscodeignore`.
+`npm test` runs the problem-matcher, theme, and online-change state unit tests
+and the TextMate grammar fixtures in `test/grammar/`. `test/theme.test.mjs`
+checks that both themes are contributed, define the required editor colors and
+token rules, use nine distinct category colors, and keep every role at or
+above the 4.5:1 contrast target. `test/online-change.test.mjs` bundles the pure
+`src/onlineChange/state.ts` and covers the status-line state machine, endpoint
+parsing and field whitelisting, redaction, and status formatting.
+`test:electron` additionally drives the online-change surface end to end on the
+sample: start, generation, attach, edit/swap, session teardown, and stop. The
+package step writes a `.vsix` next to `package.json`; `samples/**` is excluded
+by `.vscodeignore`.
 
 The Rust tests keep the grammar in step with the compiler tables:
 `cargo test -p stc-syntax` runs `grammar_covers_lexer_tables` against

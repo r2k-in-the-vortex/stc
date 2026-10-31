@@ -822,6 +822,7 @@ fn watch_rebuilds_and_deploys_a_code_change() {
             store_dir.to_str().unwrap(),
         ])
         .current_dir(&project.path)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -927,6 +928,7 @@ fn watch_stops_on_an_interrupt_with_exit_code_130() {
             store_dir.to_str().unwrap(),
         ])
         .current_dir(&project.path)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
@@ -958,6 +960,58 @@ fn interrupt(pid: u32) {
 }
 
 #[test]
+fn watch_stops_when_stdin_closes() {
+    let Some(clang) = clang() else {
+        eprintln!("note: clang not found; skipping watch stdin test");
+        return;
+    };
+    let runtime = runtime_artifact();
+    let project = TestDir::new("watch-stdin");
+    project.write(
+        "stc.toml",
+        &project_manifest("app", "\n[runtime]\nmanifest-dir = \"runtime\"\n"),
+    );
+    project.write("src/main.st", DOWNLOAD_SOURCE_V1);
+    let store_dir = project.path("runtime");
+    let mut child = Command::new(stc())
+        .args([
+            "run",
+            "--watch",
+            "--watch-timeout",
+            "30s",
+            "--clang",
+            clang,
+            "--runtime",
+            runtime.to_str().unwrap(),
+            "--store",
+            store_dir.to_str().unwrap(),
+        ])
+        .current_dir(&project.path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn watch");
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && !store_dir.join("current").is_file() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(store_dir.join("current").is_file(), "no initial baseline");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Closing the pipe is the IDE's graceful stop signal: the watch stops the
+    // host through its control channel and exits 0, not 130.
+    drop(child.stdin.take().expect("watch stdin"));
+    let output = wait_with_timeout(&mut child, Duration::from_secs(20)).expect("watch exited");
+    let text = format!("{}\n{}", stdout(&output), stderr(&output));
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    assert!(text.contains("watching for changes"), "{text}");
+    assert!(text.contains("watch stopped"), "{text}");
+    assert!(!text.contains("watch interrupted"), "{text}");
+}
+
+#[test]
 fn watch_keeps_the_old_generation_on_a_build_error() {
     let Some(clang) = clang() else {
         eprintln!("note: clang not found; skipping watch failure test");
@@ -985,6 +1039,7 @@ fn watch_keeps_the_old_generation_on_a_build_error() {
             store_dir.to_str().unwrap(),
         ])
         .current_dir(&project.path)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

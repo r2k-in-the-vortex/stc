@@ -6,8 +6,11 @@
 // with `--extensionTestsPath`. It proves the installed extension activates,
 // starts the real `stc lsp` language client, runs a `stc` task through the
 // contributed task provider and `$stc` matcher path, and launches a local
-// `stc dap` debug session. Deep language-server and debug-adapter behavior is
-// covered by the Rust `lsp_cli` and `dap_cli` suites; this smoke is about the
+// `stc dap` debug session. It also drives the online-change surface end to
+// end: start the extension-owned watch, observe the generation, attach the
+// debugger, edit a layout-preserving literal, observe the swap teardown, and
+// stop. Deep language-server and debug-adapter behavior is covered by the
+// Rust `lsp_cli`, `dap_cli`, and `debug_cli` suites; this smoke is about the
 // real editor wiring.
 
 const assert = require('node:assert');
@@ -20,6 +23,9 @@ const DIAGNOSTICS_SETTLE_MS = 3_000;
 const TASK_TIMEOUT_MS = 120_000;
 const DEBUG_START_TIMEOUT_MS = 180_000;
 const DEBUG_STOP_TIMEOUT_MS = 60_000;
+const ONLINE_CHANGE_TIMEOUT_MS = 180_000;
+const ONLINE_CHANGE_ATTACH_TIMEOUT_MS = 60_000;
+const ONLINE_CHANGE_STOP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 200;
 
 const extensionRoot = path.resolve(__dirname, '..', '..');
@@ -255,6 +261,181 @@ async function runDebugSession(folder) {
   }
 }
 
+async function onlineChangeStatus() {
+  return vscode.commands.executeCommand('stc.showOnlineChangeStatus');
+}
+
+async function waitForOnlineChange(what, timeoutMs, predicate) {
+  try {
+    return await poll(what, timeoutMs, async () => {
+      const snapshot = await onlineChangeStatus();
+      return snapshot !== undefined && predicate(snapshot) ? snapshot : undefined;
+    });
+  } catch (error) {
+    let last;
+    try {
+      last = await onlineChangeStatus();
+    } catch {
+      last = undefined;
+    }
+    const detail = last === undefined ? '' : ` (last status: ${JSON.stringify(last)})`;
+    throw new Error(`${error.message}${detail}`);
+  }
+}
+
+async function replaceDocumentText(document, needle, replacement) {
+  const text = document.getText();
+  const offset = text.indexOf(needle);
+  assert.notStrictEqual(offset, -1, `the document contains ${JSON.stringify(needle)}`);
+  const range = new vscode.Range(
+    document.positionAt(offset),
+    document.positionAt(offset + needle.length),
+  );
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(document.uri, range, replacement);
+  assert.ok(await vscode.workspace.applyEdit(edit), 'the online-change edit applies');
+  assert.ok(await document.save(), 'the online-change edit saves');
+}
+
+async function restoreDocument(document, original) {
+  if (document.getText() === original) {
+    return;
+  }
+  const current = document.getText();
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(
+    document.uri,
+    new vscode.Range(document.positionAt(0), document.positionAt(current.length)),
+    original,
+  );
+  assert.ok(await vscode.workspace.applyEdit(edit), 'the source restore applies');
+  assert.ok(await document.save(), 'the source restore saves');
+}
+
+async function stopOnlineChangeIfActive() {
+  try {
+    const snapshot = await onlineChangeStatus();
+    if (
+      snapshot === undefined ||
+      (snapshot.kind !== 'starting' && snapshot.kind !== 'running')
+    ) {
+      return;
+    }
+    await vscode.commands.executeCommand('stc.stopOnlineChange');
+    await waitForOnlineChange(
+      'the online change to stop during cleanup',
+      ONLINE_CHANGE_STOP_TIMEOUT_MS,
+      (current) => current.kind !== 'starting' && current.kind !== 'running',
+    ).catch(() => undefined);
+  } catch {
+    // Cleanup must not mask the original failure.
+  }
+}
+
+/**
+ * Drives the real online-change surface: start, read the active generation,
+ * attach, edit a layout-preserving literal, observe the swap-caused debug
+ * session end and the new generation, then stop gracefully.
+ */
+async function runOnlineChange(document) {
+  const original = document.getText();
+  let startListener;
+  let terminateListener;
+  let startedSession;
+  try {
+    console.log('stc smoke: online change start');
+    await vscode.commands.executeCommand('stc.startOnlineChange');
+    const active = await waitForOnlineChange(
+      'the online change to report an active generation',
+      ONLINE_CHANGE_TIMEOUT_MS,
+      (snapshot) =>
+        snapshot.kind === 'running' &&
+        snapshot.phase === 'active' &&
+        typeof snapshot.generation === 'number' &&
+        typeof snapshot.buildId === 'string' &&
+        snapshot.buildId.length > 0,
+    );
+    console.log(
+      `stc smoke: online change active at generation ${active.generation} (${active.buildId})`,
+    );
+
+    console.log('stc smoke: online change attach');
+    let resolveStarted;
+    const sessionStarted = new Promise((resolve) => {
+      resolveStarted = resolve;
+    });
+    startListener = vscode.debug.onDidStartDebugSession((session) => {
+      if (
+        session.type === 'stc' &&
+        session.configuration?.name === 'stc: Online Change'
+      ) {
+        resolveStarted(session);
+      }
+    });
+    await vscode.commands.executeCommand('stc.attachOnlineDebugger');
+    startedSession = await withTimeout(
+      sessionStarted,
+      ONLINE_CHANGE_ATTACH_TIMEOUT_MS,
+      'the online-change debug session to start',
+    );
+    assert.strictEqual(
+      startedSession.type,
+      'stc',
+      'the online-change debugger attaches through stc dap',
+    );
+
+    let resolveTerminated;
+    const sessionTerminated = new Promise((resolve) => {
+      resolveTerminated = resolve;
+    });
+    terminateListener = vscode.debug.onDidTerminateDebugSession((ended) => {
+      if (ended.id === startedSession.id) {
+        resolveTerminated();
+      }
+    });
+
+    console.log('stc smoke: online change edit and swap');
+    await replaceDocumentText(document, 'cycles := cycles + 1;', 'cycles := cycles + 2;');
+    await withTimeout(
+      sessionTerminated,
+      ONLINE_CHANGE_TIMEOUT_MS,
+      'the attached debug session to end on the swap',
+    );
+    const updated = await waitForOnlineChange(
+      'the online change to report the new generation',
+      ONLINE_CHANGE_TIMEOUT_MS,
+      (snapshot) =>
+        snapshot.kind === 'running' &&
+        typeof snapshot.generation === 'number' &&
+        snapshot.generation > active.generation &&
+        typeof snapshot.buildId === 'string' &&
+        snapshot.buildId !== active.buildId,
+    );
+    console.log(
+      `stc smoke: online change swapped to generation ${updated.generation} (${updated.buildId})`,
+    );
+
+    console.log('stc smoke: online change stop');
+    await vscode.commands.executeCommand('stc.stopOnlineChange');
+    const stopped = await waitForOnlineChange(
+      'the online change to stop',
+      ONLINE_CHANGE_STOP_TIMEOUT_MS,
+      (snapshot) =>
+        snapshot.kind === 'idle' ||
+        (snapshot.kind === 'stopped' && snapshot.reason === 'user'),
+    );
+    assert.ok(stopped, 'the online change reports a user stop');
+  } finally {
+    startListener?.dispose();
+    terminateListener?.dispose();
+    if (startedSession !== undefined) {
+      await vscode.debug.stopDebugging(startedSession).catch(() => undefined);
+    }
+    await stopOnlineChangeIfActive();
+    await restoreDocument(document, original);
+  }
+}
+
 async function run() {
   assert.ok(existsSync(path.join(sampleWorkspace, 'stc.toml')), `sample workspace at ${sampleWorkspace}`);
 
@@ -294,6 +475,8 @@ async function run() {
     await runCheckTask();
     console.log('stc smoke: stc dap launch');
     await runDebugSession(folder);
+    console.log('stc smoke: stc online change');
+    await runOnlineChange(document);
     console.log('stc smoke: passed');
   } finally {
     // The check and launch built the sample in place; remove the generated

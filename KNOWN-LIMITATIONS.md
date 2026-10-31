@@ -76,6 +76,10 @@ machine design as required by law and regulation.
 | The adapter advertises no conditional, hit-count, log, function, data, or instruction breakpoints; no exception breakpoints, restart, reverse debugging, multi-thread debugging, or `stopOnEntry` | Use source breakpoints and over/into/out stepping; traps end the session |
 | VS Code 1.82 or newer is required, distribution is VSIX-only, and v2.0.0 does not publish to the marketplace or sign the VSIX | Install the VSIX from the release artifacts; there is no telemetry or network access |
 | The compiler is not bundled with the extension | Install `stc` and put it on `PATH` or set `stc.path`; the extension logs a missing compiler instead of starting a server |
+| The online-change surface runs one session per editor window and has no cross-window coordination | Two windows can start two watches on the same project; the CLI does not lock a store. Stop one before starting another |
+| The IDE online-change surface presents the watch only: no cold-download, rollback, migration, write, or force action | Use `stc run --watch`/`stc online` for cold and recovery operations; the extension shows the active generation/build and surfaces the existing swap teardown |
+| An online-change stop closes the watch's stdin and waits five seconds; a watch that does not exit is killed as a process tree | A forced stop bypasses normal shutdown, so retained state may not be saved; the extension warns in the channel. Closing the window stops an owned watch the same way |
+| The extension reads the online-change generation/build from a private per-session debug endpoint file under extension storage; that file's token, endpoint, and audit path are never read or logged | This is the runtime's existing local user-only contract. Do not expect the file under `target/` or a configurable path; the endpoint path is internal |
 
 ## 5. Online change and manifests
 
@@ -86,8 +90,8 @@ machine design as required by law and regulation.
 | GOT manifest format 1 is rejected | The documented cold download is the only upgrade path; there is no migration tool (D-192) |
 | Debug and release forms have distinct identities and are not a supported hot-swap pair | Keep separate stores; a release candidate against a debug baseline selects a cold layout, and the reverse direction is classified compatible but is not a supported deployment path |
 | M4-era code-linked artifacts are not loadable | Rebuild with the current module model |
-| There is no remote/network deployment, multi-user scheduling, or deploy/rollback UI | v1 online change is a local host API/CLI capability |
-| `stc run --watch` and the control channel are local only | The debug protocol is a separate local endpoint |
+| There is no remote/network deployment, multi-user scheduling, or deploy/rollback UI; the IDE surface starts/stops the watch and shows the generation but offers no deploy/rollback controls | v1 online change is a local host API/CLI capability; use `stc run --watch` and `stc online` locally |
+| `stc run --watch`, the control channel, and the IDE online-change surface are local only | The debug protocol is a separate local endpoint; the extension adds no network path |
 | A missing, stale, or corrupt baseline forces a cold download | The runtime exports and downloads the active manifest; never execute manifest content |
 
 ## 6. State, I/O, and tests

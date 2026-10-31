@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28); WL-1.1 adds `stc lsp`, `stc dap`, and `--diagnostic-paths` (2026-10-30)
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28); WL-1.1 adds `stc lsp`, `stc dap`, and `--diagnostic-paths` (2026-10-30); WL-1.1 F-20 makes stdin EOF a default graceful stop for `stc run --watch` (D-213, 2026-10-31)
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md)
 
@@ -28,8 +28,10 @@ output goes to stdout.
 > exits 0/1/2. `run --watch` builds against the active baseline, launches the host with a local
 > user-only control endpoint, watches sources/manifests/history, deploys module/manifest pairs,
 > reports each compatibility result, retries once on a stale baseline, keeps the old generation
-> on failure, and exits 130 on Ctrl-C. `--store` also selects the watch store, and
-> `--watch-timeout <duration>` bounds a run for automation. `--message-format` supports
+> on failure, and exits 130 on Ctrl-C. The watch runs until interrupted, the watch timeout, or
+> standard-input EOF; EOF stops it gracefully with `[stc] watch stopped` and exit 0 (D-213). `--store`
+> also selects the watch store, and `--watch-timeout <duration>` bounds a run for automation.
+> `--message-format` supports
 > `human`, `json`, and `short`; exit codes follow §1.3. The loadable `module` with its
 > binary/JSON manifest and metadata, the thin `exe` launcher, and the embedding `lib` host
 > archive keep their M4.5 shapes, and `lib-type = "shared"` selects the shared host library.
@@ -125,6 +127,10 @@ adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `s
 | 3 | Internal compiler error (panic caught at the driver boundary) |
 | 4 | Trap or runtime failure in `stc run`/`stc test` |
 | 130 | Interrupted (Ctrl-C) |
+
+`stc run --watch` exits 0 for a graceful stdin-EOF stop, for a normal `--watch-timeout` expiry, and
+for a host exit with status 0; `--watch-timeout` otherwise returns the host's exit status, and a
+host exit returns that status. Ctrl-C remains 130 (§1.7).
 
 ### 1.4 Diagnostics
 
@@ -379,6 +385,19 @@ monitoring-only session (`STC-W-DEBUG-004`). `stc test` rejects `--release`, `--
 `--debug-protocol`, and the server-grant options. `stc run --watch` and `--debug-server` may
 coexist: the M6 control endpoint and the M6.5 debug endpoint have different names, tokens,
 protocols, and messages (D-155, D-173).
+
+**`stc run --watch` lifetime.** The watch runs until interrupted, the `--watch-timeout` bound, or
+standard-input EOF. It reads stdin only to detect EOF and never consumes commands from it. On EOF
+(a terminal Ctrl-D/Ctrl-Z, `/dev/null`, or a closed stdin pipe) it stops the host through the same
+control client as Ctrl-C, prints `[stc] watch stopped`, and exits 0; Ctrl-C prints `[stc] watch
+interrupted` and exits 130. `--watch-timeout` stops the host, prints `[stc] watch timeout reached`,
+and returns the host's exit status (0 for a clean stop). A host that exits on its own ends the
+watch with the host's status and prints `[stc] host exited with status <n>` (D-213). The watch does
+not run the stale-endpoint preparation that non-watch debug launches use: an explicit
+`--debug-endpoint` must be a fresh path for each watch run, or startup fails with
+`STC-E-DEBUG-020`/`STC-E-DEBUG-021`; a caller that uniquely names the path per run, as the VS Code
+extension does, is unaffected. IDE Integration §4.7 fixes the editor surface that uses this
+contract.
 
 ### 1.8 IDE servers (`stc lsp` and `stc dap`)
 

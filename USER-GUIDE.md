@@ -237,6 +237,10 @@ stc online diff target/stc/debug/<name>.stc-got.json --baseline active.json
   rejected or require a cold download.
 - A failed build, prepare, or compatibility check leaves the previous
   generation active.
+- `stc run --watch` runs until interrupted, the `--watch-timeout` bound, or
+  standard-input EOF. Ctrl-C stops it gracefully with exit 130; closing stdin
+  (Ctrl-D/Ctrl-Z in a terminal, `/dev/null`, or a closed pipe) stops it
+  gracefully with `[stc] watch stopped` and exit 0.
 - Every swap ends a debug session and clears forces/breakpoints.
 - Format-1 manifests are cold-download only; no migration is provided.
 - Debug and release forms have distinct identities and are not a supported
@@ -395,12 +399,43 @@ The local sample at
 attach configurations, tasks, a known breakpoint line, and known values, and is the fixture used by
 the automated tests.
 
-### 8.5 Non-safety
+### 8.5 Online change
+
+The extension can drive the same online-change workflow from the editor. Open a project and run
+**stc: Start Online Change** from the Command Palette. The extension starts an extension-owned
+`stc run --watch --debug-server --debug-endpoint <private per-session path>` child; the status bar
+shows `starting`, then `building` when a rebuild starts, then `gen <n> · <8 hex>` for the active
+generation and build. Click the status item or run **stc: Show Online Change Status** to open the
+**stc Online Change** channel, which prints the CLI's output with the control nonce, control
+endpoint, and the runtime's debug endpoint/audit path lines redacted. The runtime debug token is
+never read or logged.
+
+Run **stc: Attach Debugger to Online Change** to attach a read-only debug session to the running
+watch host. Saving a compatible change rebuilds and activates a new generation at a cycle
+boundary; the attached session ends with `STC-E-DEBUG-019` (shown in the Debug Console), and the
+extension offers **Attach Debugger** for the new generation. It does not reconnect automatically,
+and breakpoints, forces, and watches do not survive the swap.
+
+**stc: Stop Online Change** closes the watch's stdin, which the CLI treats as a graceful stop; the
+status returns to idle and the host saves retained state at normal shutdown. If the process does
+not exit within five seconds, the extension warns and kills the process tree, and retained state
+may not be saved. Closing the window stops an owned watch the same way.
+
+`stc.onlineChange.args` (string array, default empty) appends options such as `--release`,
+`--store`, or `--watch-timeout` to the watch. The extension owns the manifest, debug-server,
+endpoint, color, control, and quiet flags; a value for one of those is rejected. Only one
+online-change session runs per window, and there is no cross-window coordination. The surface is
+local only and offers no cold-download, rollback, or migration action; use the CLI for those. See
+the [extension README](editors/vscode/README.md) and
+[`IDE-Integration.md`](specification/Architecture/IDE-Integration.md) §4.7 for the full contract.
+
+### 8.6 Non-safety
 
 The extension is local only: no telemetry, network requests, remote debugging, or bundled compiler.
-Debug and force can stop the cycle and hold outputs indefinitely. `stc` is not a safety PLC and is
-not responsible for safety; safety must be provided by a separate safety system and machine design
-as required by law and regulation. See
+Debug and force can stop the cycle and hold outputs indefinitely, and an online change can activate
+new logic while the machine is running. `stc` is not a safety PLC and is not responsible for
+safety; safety must be provided by a separate safety system and machine design as required by law
+and regulation. See
 [`specification/Architecture/IDE-Integration.md`](specification/Architecture/IDE-Integration.md)
 and [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) for the complete contract.
 

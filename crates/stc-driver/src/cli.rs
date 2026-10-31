@@ -1400,6 +1400,10 @@ fn print_help() {
          authenticated debug session (or attaches with `--attach`), prints the\n\
          endpoint path on stderr, and never prints the session token. `stc run\n\
          --debug-server` starts the same local service beside the run loop.\n\
+         `stc run --watch` runs until interrupted, the watch timeout, or\n\
+         standard-input EOF. Ctrl-C stops the host through the control channel\n\
+         and exits 130; an EOF stop (Ctrl-D/Ctrl-Z or a closed stdin) stops it\n\
+         gracefully and exits 0.\n\
          Debug sessions are availability and operability features, not safety\n\
          functions: a stopped or forced controller may hold outputs\n\
          indefinitely. stc may control machinery, but it is not a safety PLC\n\

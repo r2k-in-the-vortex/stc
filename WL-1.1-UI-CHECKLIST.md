@@ -412,6 +412,18 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       activate a swap, view the generation/build state, or surface the session ending on swap.
       Consider a command/status item that invokes the online workflow and reports the generation.
       Acceptance: an online change can be started and inspected from the IDE.
+      Implemented 2026-10-31: `stc.startOnlineChange`, `stc.stopOnlineChange`,
+      `stc.showOnlineChangeStatus`, and `stc.attachOnlineDebugger`, one status-bar item, and the
+      **stc Online Change** channel; the extension owns `stc run --watch` with a private
+      per-session debug endpoint, reads only generation/build/mode/pid, redacts the control nonce,
+      control endpoint, and debug endpoint/audit path lines, attaches the existing debugger,
+      surfaces `STC-E-DEBUG-019` with a re-attach
+      action, and stops by closing stdin with a process-tree fallback. Evidence:
+      `test/online-change.test.mjs` (12 state/parse/redaction tests), `online_cli`
+      `watch_stops_when_stdin_closes` (14 total), and the extended headless smoke — generation 1 →
+      2 on a saved literal edit, attached session ended on the swap, clean user stop, 13.5 s
+      total (2026-10-31). The manual in-editor pass remains pending; automated evidence is not
+      claimed as the manual acceptance.
 
 - [ ] **F-3 — Stop the `stc: run` task's process tree.** Terminating the VS Code task kills the
       shell but leaves `stc run` and the launcher (`sample.exe`) running. Make task termination
@@ -482,5 +494,5 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 | F-17 | Pending | No way to debug a `{stc:test}` POU |
 | F-18 | Pending | No per-test run control (Testing view/code lens) in VS Code |
 | F-19 | Pending | `textDocument/rename` not exposed; F2 is silent in the IDE |
-| F-20 | Pending | Online change not exposed in the IDE |
+| F-20 | Implemented; manual pending | Four commands, status item, channel, attach, swap notification, and graceful stop added 2026-10-31; unit, Rust, and headless-smoke evidence (generation 1 → 2, session ended on swap); manual in-editor pass not yet run |
 | F-1 | Pending (implementation/tests done) | Scope families, `stc Dark`/`stc Light`, and automated grammar/theme/prelude tests complete 2026-10-31; Inspect Tokens color matrix in both built-in and shipped themes still pending |

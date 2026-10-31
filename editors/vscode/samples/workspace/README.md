@@ -129,6 +129,45 @@ not add a DAP request, so forcing remains a `stc debug` operation in v2.0.0.
 Release builds are monitoring-only: no breakpoints, stepping, or Locals
 scope. A `stc-debug/1`-only host has no Locals scope either.
 
+## Online change check
+
+The extension can run this project's online-change workflow directly:
+
+1. Run **stc: Start Online Change** from the Command Palette. The status bar
+   shows `starting`, then `gen 1 · <8 hex>` once the initial generation is
+   active. Click the status item (or run **stc: Show Online Change Status**) to
+   open the **stc Online Change** channel. The extension uses its own private
+   per-session endpoint under extension storage, not the sample's
+   `target/stc/debug/debug.endpoint.json`.
+2. Run **stc: Attach Debugger to Online Change**. This attaches through
+   `stc dap` with default read-only scopes; the Debug Console shows the
+   non-safety notice. Breakpoints and Globals work as in the attach example.
+3. Edit line 43 from `cycles := cycles + 1;` to `cycles := cycles + 2;` and
+   save. The watch rebuilds and activates the new generation at a cycle
+   boundary. The Debug Console shows `stc: the debug session ended: swap
+   (STC-E-DEBUG-019)`, the status bar shows the new generation and build, and
+   the extension offers **Attach Debugger** for the new generation. It never
+   reconnects automatically; breakpoints, forces, and watches do not migrate.
+4. Run **stc: Stop Online Change**. The extension closes the watch's stdin, the
+   CLI stops the host gracefully and prints `[stc] watch stopped`, and the
+   status returns to idle. Check that no `stc` or `sample` process remains. A
+   forced stop only happens after a five-second wait and warns that retained
+   state may not have been saved.
+
+The same edit is the automated smoke's swap. `stc.onlineChange.args` can add
+`--release`, `--store`, or `--watch-timeout` (and other `stc run` options) to
+the extension-owned watch; the extension owns the manifest, debug-server,
+endpoint, color, control, and quiet flags. The CLI equivalent remains:
+
+```sh
+stc run --watch --debug-server --debug-endpoint target/stc/debug/debug.endpoint.json
+```
+
+The endpoint path must be fresh for each watch run (the watch path does not
+rotate a stale endpoint or audit file), so prefer the extension or a unique
+path when repeating runs. One online-change session runs per editor window; two
+windows can start two watches on the same project.
+
 ## Non-safety
 
 `stc` can control real machinery, but it is not a safety PLC and is not

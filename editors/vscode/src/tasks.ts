@@ -27,7 +27,7 @@ const DIAGNOSTIC_COMMANDS: ReadonlySet<StcCommand> = new Set(['check', 'build', 
 const RELEASE_COMMANDS: ReadonlySet<StcCommand> = new Set(['build', 'run']);
 
 /** A project root and the workspace folder that owns it, when there is one. */
-interface ProjectRoot {
+export interface ProjectRoot {
   readonly folder: vscode.WorkspaceFolder | undefined;
   readonly root: string | undefined;
 }
@@ -126,7 +126,7 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
 }
 
 /** Finds `stc.toml` project roots in the workspace. */
-async function findProjectRoots(): Promise<ProjectRoot[]> {
+export async function findProjectRoots(): Promise<ProjectRoot[]> {
   const folders = vscode.workspace.workspaceFolders ?? [];
   const roots: ProjectRoot[] = [];
   for (const folder of folders) {

@@ -132,6 +132,7 @@ sign-off above; record evidence here for the v2.0.0 release.
 | 5 | Headless smoke | `@vscode/test-electron` installs the VSIX on the sample workspace, activates the extension, and exercises highlighting, diagnostics, definition, completion, formatting, a task, and a launch debug session; CI run ID and result recorded | `[ ]` |
 | 6 | Manual in-editor pass (Windows) | Install the VSIX, open `editors/vscode/samples/workspace`, and run the checks below | `[ ]` |
 | 7 | Manual in-editor pass (Linux) | The same pass on at least one supported Linux host | `[ ]` |
+| 8 | Online-change automated smoke | The same headless smoke starts the extension-owned watch, reports the generation/build, attaches, saves a layout-preserving literal edit, observes the swap-caused session end and the higher generation/different build, and stops; local pass 2026-10-31 (generation 1 → 2, session ended on swap, clean user stop, 13.5 s total). The CI `extension-smoke` job is the Linux record | `[x]` local 2026-10-31 |
 
 Manual in-editor checks for items 6 and 7:
 
@@ -154,8 +155,19 @@ Manual in-editor checks for items 6 and 7:
       **stc: Attach sample** stops at the breakpoint and leaves the host running after disconnect.
 - [ ] The non-safety notice appears in the debug console, and `setVariable` is refused unless
       `allowWrite` and `[debug].allow-write` are enabled.
-- [ ] The documentation set (`IDE-Integration.md`, `Debug-and-Monitoring.md` §13–§18, CLI §1,
-      README, USER-GUIDE, KNOWN-LIMITATIONS, extension README) matches the observed behavior.
+- [ ] **stc: Start Online Change** on the sample shows `starting`, then the initial generation and
+      build in the status bar; **stc: Show Online Change Status** opens the **stc Online Change**
+      channel. **stc: Attach Debugger to Online Change** attaches with read-only scopes; saving
+      line 43 `cycles := cycles + 1;` as `cycles := cycles + 2;` swaps to a higher generation and
+      different build, ends the session with `STC-E-DEBUG-019` in the Debug Console, and shows one
+      notification with **Attach Debugger**. **stc: Stop Online Change** returns the status to idle
+      and leaves no `stc` or `sample` process.
+- [ ] The online-change channel, notifications, and VS Code logs contain no control nonce, control
+      endpoint, runtime debug token, or debug endpoint/audit path; the per-session endpoint file is
+      user-only under extension storage.
+- [ ] The documentation set (`IDE-Integration.md` including §4.7, `Debug-and-Monitoring.md`
+      §13–§18, CLI §1, README, USER-GUIDE, KNOWN-LIMITATIONS, extension README) matches the
+      observed behavior.
 
 ## 8. Sign-off
 
