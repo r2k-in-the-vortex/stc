@@ -12,12 +12,11 @@ rejection-characterization theorems are in place. P0.3 is in progress (2026-10-2
 trap model, the small-step machine, the configuration typing, determinism, trap soundness, exact
 arithmetic agreement, and the sound/completeness results for the fuel interpreter are in place;
 `progress` is proved; `preservation`, `type_soundness`, and initial-state typing remain. Work was
-paused for alignment with M6.5. The compiler drift that prompted the pause has stabilized at `stc` 1.0.0;
-the §19.4 register was rechecked on 2026-10-31 and still holds, so P0.3 remains paused with its
-open questions unchanged. P0.4 is complete (review approved 2026-10-31) as WL-3 of
-[V2.0.0-PLAN.md](../../V2.0.0-PLAN.md); its scope decisions and execution record are in §20. P0.3
-resumed on 2026-10-31; the reevaluation is in §19.8. The open P0.3 semantic questions and the
-drift register are recorded in §19.
+paused for alignment with M6.5; P0.3 resumed on 2026-10-31. The compiler drift that prompted the
+pause has stabilized at `stc` 1.0.0, the §19.4 register was rechecked on 2026-10-31 and still
+holds, and the open questions were resolved in §19.8. P0.4 is complete (review approved 2026-10-31)
+as WL-3 of [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md); its scope decisions and execution record are in
+§20. The open P0.3 semantic questions and the drift register are recorded in §19.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -829,7 +828,8 @@ Phase 0 is done when:
 6. Build `stc-sem` against a small hand-written core dump before the full conformance harness.
 7. Add the core corpus and run the first conformance report.
 8. Schedule the P0.7 review once the source and target soundness theorems are proved.
-9. P0.3 remains paused (§19). P0.4 (WL-3) started 2026-10-31 with the scope decisions in §20.
+9. P0.3 is in progress and resumed on 2026-10-31 (§19). P0.4 (WL-3) is complete; its scope
+   decisions and execution record are in §20.
 
 ## 16. P0.0 execution record
 
