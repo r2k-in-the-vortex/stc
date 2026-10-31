@@ -245,10 +245,10 @@ required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan
 The close-out triage (required for WL-1.1, documented as unsupported, or deferred to a separate
 plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 
-- [ ] **F-1 — Highlighting scope and color scheme.** Required for WL-1.1 (plan §12.1);
-      sub-plan: [WL-1.1-F1-Plan.md](WL-1.1-F1-Plan.md). The grammar's scopes are correct for the
-      tested tokens (`keyword.declaration.st`, `constant.language.st`,
-      `string.quoted.double.st`), but the resulting palette is dominated by red and white.
+- [ ] **F-1 — Highlighting scope and color scheme.** Required for WL-1.1 (plan §12.1). The
+      grammar's scopes are correct for the tested tokens (`keyword.declaration.st`,
+      `constant.language.st`, `string.quoted.double.st`), but the resulting palette is dominated
+      by red and white.
       Enrich the grammar with standard semantic scopes — declared POU/type names
       (`entity.name.function.st` / `entity.name.type.st`), primitives
       (`support.type.primitives.st`), variables (`variable.name.st`), parameters and members
@@ -265,8 +265,10 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       and `support.class.st` for standard function blocks); `stc Dark`/`stc Light` ship in
       `editors/vscode/themes/`; `npm test` includes the theme and grammar tests, and
       `cargo test -p stc-syntax -p stc-sema` includes the primitive and prelude drift tests.
-      Acceptance stays open until the Inspect Tokens matrix and rendered colors are recorded in
-      Dark Modern, Light Modern, `stc Dark`, and `stc Light` (evidence table: plan §6.3).
+      Commits `ee242ce`/`695b296`; CI run `41163217237` is green. Acceptance stays open until the
+      Inspect Tokens matrix and rendered colors are recorded in Dark Modern, Light Modern,
+      `stc Dark`, and `stc Light` (evidence table: the sample README's highlighting check and
+      IDE-Integration §2.1/§6).
 
 - [x] **F-2 — Make the sample `stc: run` task debuggable.** Pass 2026-10-30: the task passes
       `--debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` (relative to the task

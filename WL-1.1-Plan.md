@@ -4,9 +4,11 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-29  
 Updated: 2026-10-31  
 Branch: `WL-1.1` (sub-plan of `v2.0.0-planning`)  
-Status: Phases 0–6 implemented and green in CI (2026-10-29/30); phase 7 close-out is pending.
-Manual VS Code verification complete 2026-10-31: 38 of 40 checklist entries pass; items 12 and 33
-fail. Required close-out items and deferred follow-ups are triaged in §12.  
+Status: Phases 0–6 implemented and green in CI (2026-10-29/30). Phase 7 close-out in progress:
+F-1 grammar scopes/themes implemented and green (commits `ee242ce`/`695b296`, CI run
+`41163217237`); the manual Inspect Tokens matrix is pending. The other required close-out items in
+§12.1 are pending. Manual VS Code verification 2026-10-31: 38 of 40 checklist entries pass; items
+12 and 33 fail. Required close-out items and deferred follow-ups are triaged in §12.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-1.1,
 [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
@@ -326,7 +328,7 @@ audit behavior.
 | 4 | Runtime `stc-debug/1.1` negotiation and `frame.locals`; `stc-dap`: framing, launch/attach, breakpoints, stepping, stack, scopes/variables, evaluate, write/force; `stc dap` command | Protocol 1.0 and 1.1 tests pass; DAP integration test stops at a breakpoint, steps, lists frames, and reads globals and locals |
 | 5 | Sample workspace, launch/task configurations, IDE-Integration spec, `stc-debug/1.1` spec update, CLI/README/USER-GUIDE/KNOWN-LIMITATIONS updates, release checklist | Extension and docs reviewed; sample workspace opens, navigates, formats, and debugs |
 | 6 | CI: LSP tests in the workspace matrix, DAP/protocol tests in the debug suite, extension package job and VSIX artifact, headless Electron smoke; record evidence | All jobs pass on the supported hosts; VSIX artifact and smoke evidence recorded |
-| 7 | Close-out: required items in §12.1 (F-1 highlighting palette/theme, F-3 task process tree, F-6 breakpoint removal, F-12 non-ST frame filtering, F-16 release monitoring surface, F-20 online-change command/status) and the §12.2 documentation actions | §12.1 closed, including a readable palette/theme and an online-change surface; §12.2 documented; the checklist is re-run to 40/40 pass |
+| 7 | Close-out: required items in §12.1 (F-1 highlighting palette/theme — implemented and green, manual matrix pending; F-3 task process tree; F-6 breakpoint removal; F-12 non-ST frame filtering; F-16 release monitoring surface; F-20 online-change command/status) and the §12.2 documentation actions | §12.1 closed, including a readable palette/theme and an online-change surface; §12.2 documented; the checklist is re-run to 40/40 pass |
 
 ## 8. Exit criteria
 
@@ -497,9 +499,11 @@ and the D-211 FB interface-access change. The remaining items are assigned to ex
 
 Notes:
 
-- F-1 has a dedicated sub-plan: [WL-1.1-F1-Plan.md](WL-1.1-F1-Plan.md). Its F1-Q1–F1-Q8
-  questions are recommendations pending owner answers; the grammar work can start before the
-  theme answer.
+- F-1 implementation is complete: standard TextMate scope families, `stc Dark`/`stc Light`,
+  grammar/theme/prelude drift tests, VSIX checks, and documentation (commits `ee242ce` and
+  `695b296`; CI run `41163217237` green). The manual Inspect Editor Tokens and Scopes matrix in
+  Dark Modern, Light Modern, `stc Dark`, and `stc Light` remains pending; checklist item 1/F-1
+  holds the expected scopes.
 - Owner decisions on 2026-10-31 added F-1 (highlighting) and F-20 (online change) to WL-1.1 and
   chose the implementation path for F-16; these are recorded in the change log.
 - F-3, F-6, F-12, and the adapter part of F-16 are bounded fixes. F-1 changes only the
@@ -538,3 +542,4 @@ Notes:
 | 2026-10-30 | Manual debugging verification fixed the DAP Globals view: hidden FB object roots are exposed through their aggregate paths, and manifest-assisted views expand with the runtime's flattened field shape and field names. The first-stop cycle offset is recorded as follow-up F-9. |
 | 2026-10-31 | Completed manual UI verification: 38/40 checklist entries pass; items 12 and 33 fail. Added §12 close-out triage: required F-3, F-6, F-12, F-16; documented F-10, F-11, F-13, F-14 and the I-7/I-9 unsupported set; deferred F-1, F-9, F-15, F-17–F-20 to follow-up plans. Updated the status, exit criteria, and documentation actions. |
 | 2026-10-31 | Owner decisions: F-1 (highlighting palette/theme), F-20 (online-change IDE surface), and F-16 (release monitoring implementation) are required for WL-1.1. D-212 amends D-173/D-175/D-179 so `[debug].session-timeout` is opt-in and disabled by default; manifest, runtime, CLI, host ABI, and specifications updated. Plan §1, §2, §6.3, §7, §8, and §12 updated. |
+| 2026-10-31 | F-1 implemented: standard highlighting scopes, `stc Dark`/`stc Light`, grammar/theme/prelude drift tests, VSIX CI content check, and documentation. Commits `ee242ce` and `695b296`; CI run `41163217237` green. The manual Inspect Tokens matrix remains pending; the working F-1 sub-plan was removed after its content moved to IDE-Integration, the extension README, and the checklist. |
