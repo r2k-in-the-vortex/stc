@@ -4,7 +4,9 @@ This fixture brings up a DIEWU EtherCAT-IO 16I/16O slave in OP on the
 `ecat-host` bench and confirms at frame level that IgH accepts and replies to
 every process-data frame. It is deliberately open-ended: the terminal blocks
 are unwired/unloaded, the program only copies inputs to outputs and advances a
-counter, and no physical input value or output measurement is asserted.
+counter, and no physical input value or output measurement is asserted. The
+host procedure and phase-3 evidence are in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md).
 
 Phase 3 does **not** cover cable unplug, power-cycle, loopback harnesses, fault
 injection, or any manual toggling/measuring. Those belong to phase 6.
@@ -49,18 +51,25 @@ boundary from the live master/domain state; they are read-only.
 ## Deploying with the CI-built package
 
 Never build `stc` on the bench host. Download the CI artifacts
-`stc-package-ubuntu-24.04` and `stc-io-ethercat-linux-x86_64`, then install
-them under a dedicated directory:
+`stc-package-ubuntu-24.04` and `stc-io-ethercat-linux-x86_64` on the build
+workstation, verify the package, and copy the unpacked files to the host
+under a dedicated directory:
 
 ```sh
-install -d "$HOME/stc-wl52/bin" "$HOME/stc-wl52/lib" "$HOME/stc-wl52/logs"
-tar -C "$HOME/stc-wl52" -xzf stc-package-ubuntu-24.04.tar.gz
-install -m 0755 libstc_io_ethercat.so "$HOME/stc-wl52/lib/"
-"$HOME/stc-wl52/bin/stc" --version
+gh run download <run-id> -n stc-package-ubuntu-24.04 -D artifacts/package
+gh run download <run-id> -n stc-io-ethercat-linux-x86_64 -D artifacts/shim
+package="$(cd artifacts/package/dist/stc-* && pwd)"
+(cd "$package" && sha256sum -c SHA256SUMS)
+ssh <user>@ecat-host 'install -d "$HOME/stc-wl52" "$HOME/stc-wl52/logs"'
+scp -r "$package/." <user>@ecat-host:~/stc-wl52/
+scp artifacts/shim/libstc_io_ethercat.so <user>@ecat-host:~/stc-wl52/lib/
+ssh <user>@ecat-host 'chmod 0755 "$HOME/stc-wl52/bin/stc"'
+ssh <user>@ecat-host '$HOME/stc-wl52/bin/stc --version'
 ```
 
 Copy this fixture directory (no `target/`) to the host, for example
-`~/stc-wl52/diewu`.
+`~/stc-wl52/diewu`. The full deployment and preflight procedure is in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md).
 
 `clang` must be available on the host for the fixture's user-project build
 (`clang --version`). If it is missing, stop: do not install packages. The
@@ -106,13 +115,25 @@ compiler or runtime.
    The script passes `--io ethercat`, `--cycles 600000`, `--cycle-time 1ms`,
    and `-v` (exit status summary). It does not pass `--rt`.
 
+   Run this from one SSH session and do not open other SSH sessions, poll from
+   another terminal, or run background commands on the host while the timed
+   run is active. This non-RT procedure does not pin the run or the IgH threads
+   to a dedicated CPU; the observed `EtherCAT-IDLE` thread is `SCHED_OTHER`
+   (class `TS`), and a login CPU burst can delay one frame. That is a
+   host-scheduling event, not a runtime send/receive error. If it happens, let
+   the run finish, confirm the master counters, and repeat the 10-minute run
+   in isolation.
+
 ## Frame-level success criteria
 
 The run succeeds when all of the following hold; physical I/O values are not
 verified:
 
-- The slave reaches OP (`ethercat slaves` during the run, and
-  `slave0.operational=1`, `slave0.al_state=8` in the status output).
+- The slave is operational: the runtime's health gate requires every configured
+  slave to be online and operational, so `faults=0` and `domain.wc_state=2`
+  with `master.slaves_responding=1` reflect OP. The operator status line does
+  not print the per-slave fields; the kernel log's slave-state transition and
+  `ethercat slaves` after release carry that evidence.
 - The runtime stays healthy: `state=running`, `faults=0`,
   `domain.wc_state=2` (WC complete), and `exchanges=600000` at exit.
 - No send/receive failures or startup errors in the log
@@ -120,18 +141,30 @@ verified:
   (`master.recoveries=0`, `input.stale=0`).
 - `ethercat master` after the run shows the same lost-frame and Tx-error
   counters as before (frame-level health; sample both, do not reset).
-- The process exits after the cycle count and release does not rewrite the
-  output image (the backend never writes outputs during shutdown).
+- After release, `ethercat slaves` shows PREOP; the process exits after the
+  cycle count and does not rewrite the output image (the backend never writes
+  outputs during shutdown).
 
 The `-v` summary line looks like:
 
 ```
-stc: status: io-backend ethercat devices=2 state=running exchanges=600000 faults=0 hash=0x... master.slaves_responding=1 master.link_up=1 domain.wc_state=2 domain.working_counter=... input.stale=0 master.recoveries=0 master.last_error=0
+stc: status: io-backend ethercat devices=2 state=running exchanges=600000 faults=0 hash=0x... domain.wc_state=2 domain.working_counter=3 input.stale=0 master.last_error=0 master.link_up=1 master.recoveries=0 master.slaves_responding=1
 ```
 
 Keep the raw logs in `~/stc-wl52/logs/` for the run report; do not commit
 them. Commit only the concise summary and the runbook procedure, with log
 paths and hashes.
+
+## Phase 3 result
+
+The acceptance run on 2026-10-31 completed 600000 requested 1 ms cycles in one
+SSH session with `state=running`, `exchanges=600000`, `faults=0`,
+`domain.wc_state=2`, and `master.recoveries=0`; the master's `Tx errors` and
+`Lost frames` counters stayed at 0, and the slave was PREOP after release. Raw
+logs remain on `ecat-host`; the run summary, hashes, and the earlier diagnostic
+run are in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md)
+§8. Physical I/O values were not verified.
 
 ## Troubleshooting
 
@@ -145,3 +178,8 @@ paths and hashes.
 - The slave never reaches OP or frames are rejected: capture the full log and
   `ethercat master`/`ethercat slaves` output, then diagnose the fixture or
   runtime. Do not power-cycle, unplug cables, or toggle I/O.
+- A steady-state `SKIPPED`/`UNMATCHED` datagram appears while another SSH
+  session is active: finish that session, confirm the master's lost-frame and
+  Tx-error counters did not increase, and repeat the 10-minute run with no
+  concurrent host activity. A steady-state WC/AL fault without such an event
+  is a frame-level failure and must be diagnosed before accepting the run.
