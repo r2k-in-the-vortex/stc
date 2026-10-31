@@ -708,6 +708,218 @@ theorem stepValue_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List F
           repeat' split
           all_goals simp
 
+/-! ## Progress support: frame completion and loop markers -/
+
+/-- A frame completion never gets stuck for a shaped stack. -/
+theorem completeFrame_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
+    (hf : c.frames = f :: rest) (hshape : FramesShape (f :: rest)) :
+    completeFrame u c ≠ .stuck := by
+  simp only [completeFrame, hf]
+  cases hk : f.kind with
+  | program =>
+      by_cases hle : c.cyclesLeft ≤ 1 <;> simp [hle]
+  | function index =>
+      have htail : rest ≠ [] := FramesShape.function_tail_ne_nil hshape ⟨index, hk⟩
+      cases rest with
+      | nil => exact absurd rfl htail
+      | cons g gs => simp
+
+/-- `findLoop` returns a loop marker. -/
+theorem findLoop_marker {k : List Cont} {cont : Cont} {rest : List Cont}
+    (h : findLoop k = some (cont, rest)) : cont.isLoopMarker = true := by
+  induction k with
+  | nil => simp [findLoop] at h
+  | cons c cs ih =>
+      by_cases hm : c.isLoopMarker = true
+      · simp [findLoop, hm] at h
+        rcases h with ⟨hc, _⟩
+        subst hc
+        exact hm
+      · simp [findLoop, hm] at h
+        exact ih h
+
+/-- The marker continuation kinds are the loop forms. -/
+theorem ContKind.loopMarker_cases {kind : ContKind} (h : kind.isLoopMarker = true) :
+    (∃ cond body, kind = .whileLoop cond body) ∨
+    (∃ body cond, kind = .repeatBody body cond) ∨
+    (∃ var stopVal stepVal body, kind = .forBody var stopVal stepVal body) := by
+  cases kind with
+  | whileLoop cond body => exact Or.inl ⟨cond, body, rfl⟩
+  | repeatBody body cond => exact Or.inr (Or.inl ⟨body, cond, rfl⟩)
+  | forBody var stopVal stepVal body =>
+      exact Or.inr (Or.inr ⟨var, stopVal, stepVal, body, rfl⟩)
+  | _ => simp [ContKind.isLoopMarker] at h
+
+/-- A typed statement never gets stuck. -/
+theorem stepStmt_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
+    {s : Stmt} {restStmts : List Stmt} {lc : LoopCtx}
+    (hf : c.frames = f :: rest) (hshape : FramesShape (f :: rest))
+    (hfm : FrameMatches u f)
+    (h : f.loopCtx = lc ∧ StackTyped (frameCtx u f.kind) f.k .unit lc ∧
+        StmtListHasType (frameCtx u f.kind) lc.depth lc.controlled (s :: restStmts) ∧
+        (lc.depth > 0 → StackHasLoop f.k)) :
+    stepStmt u c s restStmts lc ≠ .stuck := by
+  rcases h with ⟨hlc, hstack, hlist, hloop⟩
+  have hstmt : StmtHasType (frameCtx u f.kind) lc.depth lc.controlled s :=
+    hlist s (by simp)
+  simp only [stepStmt, hf]
+  cases s with
+  | assign place value span => simp
+  | call call callSpan =>
+      cases call with
+      | call callee args innerSpan =>
+          cases args with
+          | nil =>
+              obtain ⟨result, hcall⟩ : ∃ result,
+                  CallHasType (frameCtx u f.kind) callee [] result := by
+                cases hstmt with | call hc => exact ⟨_, hc⟩
+              cases callee with
+              | std fn sp =>
+                  simp only [performCall]
+                  split
+                  · simp
+                  · split <;> simp
+              | function index sp =>
+                  rcases callHasType_cases hcall with
+                    ⟨idx, cspan, sig, hcallee, hsig, hres, hargs⟩ |
+                    ⟨fn, cspan, ty, hcallee, hres, hstd⟩
+                  · cases hcallee
+                    obtain ⟨fn, hfn⟩ := frameCtx_functions_lookup hfm hsig
+                    simp [performCall, State.updateHead, hf, hfn]
+                  · cases hcallee
+          | cons arg more => simp
+      | _ => cases hstmt
+  | return_ span => exact completeFrame_not_stuck hf hshape
+  | exit span =>
+      have hdepth : 0 < lc.depth := by cases hstmt with | exit hd => exact hd
+      obtain ⟨k', hk'⟩ := StackHasLoop.dropToLoop_some (hloop hdepth)
+      simp only [hk']
+      simp
+  | continue_ span =>
+      have hdepth : 0 < lc.depth := by cases hstmt with | continue_ hd => exact hd
+      obtain ⟨cont, below, hfind⟩ := StackHasLoop.findLoop_some (hloop hdepth)
+      have hmarker : cont.isLoopMarker = true := findLoop_marker hfind
+      rcases ContKind.loopMarker_cases hmarker with
+        ⟨cond, body, hkind⟩ | ⟨body, cond, hkind⟩ |
+        ⟨var, stopVal, stepVal, body, hkind⟩
+      · rw [hfind]; simp [hkind]
+      · rw [hfind]; simp [hkind]
+      · rw [hfind]
+        simp only [hkind, forAdvance, forContinue]
+        repeat' split
+        all_goals simp
+  | empty span => simp
+  | ifThenElse arms elseBody span =>
+      cases arms with
+      | nil => simp
+      | cons arm remaining => simp
+  | case selector arms elseBody span => simp
+  | forLoop var start stop stepE body span => simp
+  | whileLoop cond body span => simp
+  | repeatLoop body cond span => simp
+
+/-- A typed statement list never gets stuck. -/
+theorem stepStmts_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
+    {ss : List Stmt} {lc : LoopCtx}
+    (hf : c.frames = f :: rest) (hshape : FramesShape (f :: rest))
+    (hfm : FrameMatches u f)
+    (h : f.loopCtx = lc ∧ StackTyped (frameCtx u f.kind) f.k .unit lc ∧
+        StmtListHasType (frameCtx u f.kind) lc.depth lc.controlled ss ∧
+        (lc.depth > 0 → StackHasLoop f.k)) :
+    stepStmts u c ss lc ≠ .stuck := by
+  simp only [stepStmts, hf]
+  cases ss with
+  | nil => simp
+  | cons s restStmts =>
+      exact stepStmt_not_stuck hf hshape hfm h
+
+/-- A typed resume focus never gets stuck. -/
+theorem stepResume_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
+    (hf : c.frames = f :: rest) (hshape : FramesShape (f :: rest))
+    (h : StackTyped (frameCtx u f.kind) f.k .unit f.loopCtx) :
+    stepResume u c ≠ .stuck := by
+  simp only [stepResume, hf]
+  cases hk : f.k with
+  | nil => exact completeFrame_not_stuck hf hshape
+  | cons cont rest =>
+      rw [hk] at h
+      simp only [hk]
+      cases h with
+      | seq hrest => simp
+      | whileLoop hdepth hctrl hcond hbody hrest => simp
+      | repeatBody hdepth hctrl hcond hbody hrest => simp
+      | forBody hdepth hctrl hvar hint hstop hstep hbody hrest =>
+          simp only [forAdvance, forContinue]
+          repeat' split
+          all_goals simp
+
+/-- A returned focus never gets stuck. -/
+theorem stepReturned_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
+    {rv : Option Value} (hf : c.frames = f :: rest)
+    (h : FocusTyped u f (.returned rv)) :
+    stepReturned u c rv ≠ .stuck := by
+  simp only [stepReturned, hf]
+  cases hk : f.k with
+  | nil => simp
+  | cons cont rest =>
+      simp only [hk]
+      by_cases hw : cont.wantsValue = true
+      · cases rv with
+        | none =>
+            exfalso
+            have hu : StackTyped (frameCtx u f.kind) (cont :: rest) .unit f.loopCtx := by
+              simpa [FocusTyped, hk] using h
+            have hfalse := StackTyped.unit_head hu
+            simp [hw] at hfalse
+        | some v => simp [hw]
+      · simp [hw]
+
+/-! ## Progress -/
+
+/-- A well-typed configuration is terminal or takes a step. -/
+theorem progress {u : HirUnit} {c : State} (h : ConfigTyped u c) :
+    Terminal u c ∨ ∃ c', Step u c c' := by
+  have hnot : step u c ≠ .stuck := by
+    obtain ⟨f, rest, hf⟩ := h.head_exists
+    have hfm := h.headMatch f rest hf
+    have hfocus := h.headFocus f rest hf
+    have hshape : FramesShape (f :: rest) := by simpa [hf] using h.shape
+    cases hfoc : c.focus with
+    | halted => simp [step, hfoc]
+    | trapped trap span => simp [step, hfoc]
+    | expr e =>
+        have he : ∃ T, ExprHasType (frameCtx u f.kind) e T ∧
+            StackTyped (frameCtx u f.kind) f.k (.value T) f.loopCtx := by
+          simpa [hfoc, FocusTyped] using hfocus
+        rw [show step u c = stepExpr u c e by simp [step, hfoc]]
+        exact stepExpr_not_stuck hf h hfm he
+    | value v =>
+        have hv : v.WellFormed ∧ ∃ T, v.ty = T ∧
+            StackTyped (frameCtx u f.kind) f.k (.value T) f.loopCtx := by
+          simpa [hfoc, FocusTyped] using hfocus
+        rw [show step u c = stepValue u c v by simp [step, hfoc]]
+        exact stepValue_not_stuck hf hfm hv
+    | stmts ss lc =>
+        have hs : f.loopCtx = lc ∧ StackTyped (frameCtx u f.kind) f.k .unit lc ∧
+            StmtListHasType (frameCtx u f.kind) lc.depth lc.controlled ss ∧
+            (lc.depth > 0 → StackHasLoop f.k) := by
+          simpa [hfoc, FocusTyped] using hfocus
+        rw [show step u c = stepStmts u c ss lc by simp [step, hfoc]]
+        exact stepStmts_not_stuck hf hshape hfm hs
+    | resume =>
+        have hs : StackTyped (frameCtx u f.kind) f.k .unit f.loopCtx := by
+          simpa [hfoc, FocusTyped] using hfocus
+        rw [show step u c = stepResume u c by simp [step, hfoc]]
+        exact stepResume_not_stuck hf hshape hs
+    | returned rv =>
+        have hs : FocusTyped u f (.returned rv) := by simpa [hfoc, FocusTyped] using hfocus
+        rw [show step u c = stepReturned u c rv by simp [step, hfoc]]
+        exact stepReturned_not_stuck hf hs
+  cases hs : step u c with
+  | halt => exact Or.inl hs
+  | step c' => exact Or.inr ⟨c', hs⟩
+  | stuck => exact False.elim (hnot hs)
+
 /-! ## Determinism -/
 
 /-- A terminal state has no successors. -/
