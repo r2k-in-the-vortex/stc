@@ -457,6 +457,67 @@ theorem StackHasLoop.findLoop_some {k : List Cont} (h : StackHasLoop k) :
         rcases ih htail with ⟨cont, rest', hk'⟩
         exact ⟨cont, rest', by simp [findLoop, hm, hk']⟩
 
+/-- The typing facts a loop marker exposes: its body is typed in the marker's
+outer loop context. -/
+def MarkerTyped (ctx : Ctx) (marker : Cont) : Prop :=
+  marker.isLoopMarker = true ∧
+    match marker.kind with
+    | .whileLoop cond body =>
+        ExprHasType ctx cond .bool ∧
+          StmtListHasType ctx (marker.after.depth + 1) marker.after.controlled body
+    | .repeatBody body cond =>
+        ExprHasType ctx cond .bool ∧
+          StmtListHasType ctx (marker.after.depth + 1) marker.after.controlled body
+    | .forBody var stopVal stepVal body =>
+        ∃ ty, ctx.lookup var.id = some ty ∧ ty.isInt = true ∧
+          stopVal.WellFormed ∧ stopVal.ty = ty ∧
+          stepVal.WellFormed ∧ stepVal.ty = ty ∧
+          StmtListHasType ctx (marker.after.depth + 1)
+            (var.id :: marker.after.controlled) body
+    | _ => True
+
+/-- The innermost loop marker found by `findLoop` is typed, and the stack below
+it is typed in the marker's outer loop context. -/
+theorem StackTyped.findLoop_marker {ctx : Ctx} {k below : List Cont} {marker : Cont}
+    {lc : LoopCtx} (h : StackTyped ctx k .unit lc)
+    (hfind : findLoop k = some (marker, below)) :
+    StackTyped ctx below .unit marker.after ∧ MarkerTyped ctx marker := by
+  induction k generalizing lc with
+  | nil => simp [findLoop] at hfind
+  | cons cont rest ih =>
+      cases h with
+      | whileLoop hdepth hctrl hcond hbody hloop hrest =>
+          simp only [findLoop, Cont.isLoopMarker, ContKind.isLoopMarker] at hfind
+          injection hfind with h1
+          injection h1 with h2 h3
+          subst marker
+          subst below
+          exact ⟨hrest, by
+            refine ⟨by simp [Cont.isLoopMarker, ContKind.isLoopMarker], ?_⟩
+            exact ⟨hcond, by simpa [hdepth, hctrl] using hbody⟩⟩
+      | repeatBody hdepth hctrl hcond hbody hloop hrest =>
+          simp only [findLoop, Cont.isLoopMarker, ContKind.isLoopMarker] at hfind
+          injection hfind with h1
+          injection h1 with h2 h3
+          subst marker
+          subst below
+          exact ⟨hrest, by
+            refine ⟨by simp [Cont.isLoopMarker, ContKind.isLoopMarker], ?_⟩
+            exact ⟨hcond, by simpa [hdepth, hctrl] using hbody⟩⟩
+      | forBody hdepth hctrl hvar hint hstop hstep hbody hloop hrest =>
+          simp only [findLoop, Cont.isLoopMarker, ContKind.isLoopMarker] at hfind
+          injection hfind with h1
+          injection h1 with h2 h3
+          subst marker
+          subst below
+          exact ⟨hrest, by
+            refine ⟨by simp [Cont.isLoopMarker, ContKind.isLoopMarker], ?_⟩
+            exact ⟨_, hvar, hint, hstop.1, hstop.2, hstep.1, hstep.2,
+              by simpa [hdepth, hctrl] using hbody⟩⟩
+      | seq hstmts hrest =>
+          simp only [findLoop, Cont.isLoopMarker, ContKind.isLoopMarker] at hfind
+          exact ih hrest hfind
+
 /-- The unit-wide function table of a function frame's context. -/
 theorem frameCtx_functions_ofFunction {u : HirUnit} {index : Nat} {fn : Function}
     (h : u.functions[index]? = some fn) :
