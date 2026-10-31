@@ -3,8 +3,8 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-31  
 Branch: `WL-10` (sub-plan of `v2.0.0-planning`)  
-Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phases 0–2 are
-complete; phase 3 is in progress.  
+Status: Locked 2026-10-31. Decisions C-1–C-14 are locked; no open questions. Phases 0–3 are
+complete; phase 4 is in progress.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-10)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-10,
 [Testing and Verification](specification/Architecture/Testing-and-Verification.md) §2,
@@ -495,7 +495,9 @@ summary in human mode; files are still written.
 - Add `examples/coverage/` with production functions that have known covered and uncovered
   statements, two or more tests covering disjoint parts, a README with the expected report, and a
   committed `stc.lock`. Extend the example smoke test to check it.
-- Add `crates/stc-driver/tests/coverage_cli.rs` with:
+- Extend `crates/stc-driver/tests/coverage_cli.rs` or add
+  `crates/stc-driver/tests/coverage_evidence.rs` with the evidence cases; phase 3 already covers
+  the functional CLI, report, sidecar, filter, timeout, quiet, write-failure, and clean cases:
   - Golden `coverage.json`, `coverage.info`, and human summary for the example, with
     `STC_UPDATE_SNAPSHOTS=1` regeneration like the UI snapshots.
   - Aggregation across tests with per-test `covered` arrays.
@@ -519,7 +521,8 @@ summary in human mode; files are still written.
 | 0 | Complete 2026-10-31 | Plan locked; parent linked; commit `d3655d5`; PR #8 CI run 41153573207 green. |
 | 1 | Complete 2026-10-31 | Codegen instrumentation, exclusions, verifier allowlist, 7 coverage tests; commit `132faaa`; CI run 41155573060 green. |
 | 2 | Complete 2026-10-31 | Host readout and raw writer, shared protocol constants, raw parser, 20 tests; commit `d58a58f`; CI run 41160138589 green. |
-| 3 | In progress | — |
+| 3 | Complete 2026-10-31 | Manifest/CLI enablement, driver aggregation, JSON/LCOV/human reports, warnings, clean, 22 tests; commits `5d1c4fe` and `0d14ea2`; CI run 41164663849 green. |
+| 4 | In progress | — |
 
 **Phase 1 note (2026-10-31).** The increment uses the element-indexing GEP shown in §6.1 rather
 than the earlier illustrative two-index form, because N is not final during lowering; the global
@@ -536,6 +539,16 @@ protocol, cap, ID range, ordering, and counts. GitHub did not create a pull-requ
 phase 2 push; the full matrix was dispatched manually on ref `WL-10` at the same head SHA
 (`d58a58f`), so PR #8's check list remains empty. Later phases must do the same fallback if no
 PR-triggered run appears.
+
+**Phase 3 note (2026-10-31).** The driver now reads `[test] coverage`, supports
+`--coverage`/`--no-coverage`/`--coverage-out` with the locked validation rules, instruments every
+non-test package file, validates each raw sidecar against the artifact site table, aggregates by
+canonical span, and writes `coverage.json`, `coverage.info`, and the human summary. The warning
+codes are registered (D-211) and `stc clean` removes the default coverage directory. Eleven
+driver integration tests and eleven `stc-test` unit tests cover the functional path. The first
+CI run failed rule traceability for `STC-W-COVERAGE-002`; the single repair extracted the site
+attribution loop and added a unit test that exercises the warning. The repair commit is
+`0d14ea2`; the final dispatched matrix run 41164663849 is green.
 
 ## 9. Exit criteria
 
@@ -610,3 +623,4 @@ None as of 2026-10-31. The plan is locked; new questions are appended only with 
 | 2026-10-31 | Locked C-13 and C-14: no report filter and an informational, non-gating overhead measurement. All decisions C-1–C-14 are locked; the plan has no open questions. |
 | 2026-10-31 | Phase 1 complete: codegen site table, span-deduped counters, exported global, verifier allowlist, exclusions, and tests; commit `132faaa`, CI green. Reconciled phase 2/3 acceptance for the end-to-end sidecar dependency. |
 | 2026-10-31 | Phase 2 complete: host counter readout and raw writer, shared protocol constants, and the raw parser with 20 tests; commit `d58a58f`, full matrix green via manual workflow dispatch at the same SHA. |
+| 2026-10-31 | Phase 3 complete: manifest/CLI enablement, driver aggregation, JSON/LCOV/human reports, warning codes D-211, clean behavior, and 22 tests; commits `5d1c4fe` and the single traceability repair `0d14ea2`, final CI run 41164663849 green. |

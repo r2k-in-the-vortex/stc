@@ -1,0 +1,86 @@
+{
+  "files": [
+    {
+      "covered": 3,
+      "file": "src/coverage.st",
+      "line_percent": 60.0,
+      "lines": 5,
+      "lines_covered": 3,
+      "percent": 60.0,
+      "sites": 5
+    }
+  ],
+  "filters": [],
+  "kind": "statement",
+  "package": "coverage-demo",
+  "profile": "stc-2013-oop-utf8-v1",
+  "protocol": "stc-coverage/1",
+  "sites": [
+    {
+      "column": 3,
+      "count": 1,
+      "file": "src/coverage.st",
+      "line": 15
+    },
+    {
+      "column": 3,
+      "count": 0,
+      "file": "src/coverage.st",
+      "line": 23
+    },
+    {
+      "column": 3,
+      "count": 1,
+      "file": "src/coverage.st",
+      "line": 30
+    },
+    {
+      "column": 5,
+      "count": 1,
+      "file": "src/coverage.st",
+      "line": 31
+    },
+    {
+      "column": 5,
+      "count": 0,
+      "file": "src/coverage.st",
+      "line": 33
+    }
+  ],
+  "tests": [
+    {
+      "coverage": "reported",
+      "covered": [
+        0
+      ],
+      "name": "AddWorks",
+      "sites_covered": 1,
+      "status": "pass"
+    },
+    {
+      "coverage": "reported",
+      "covered": [
+        2,
+        3
+      ],
+      "name": "ClassifyPositive",
+      "sites_covered": 2,
+      "status": "pass"
+    },
+    {
+      "coverage": "reported",
+      "covered": [],
+      "name": "ExcludedHelper",
+      "sites_covered": 0,
+      "status": "pass"
+    }
+  ],
+  "totals": {
+    "covered": 3,
+    "line_percent": 60.0,
+    "lines": 5,
+    "lines_covered": 3,
+    "percent": 60.0,
+    "sites": 5
+  }
+}

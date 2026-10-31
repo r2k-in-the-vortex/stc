@@ -1,0 +1,12 @@
+schema = 1
+
+[package]
+name = "coverage-demo"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+
+[test]
+sources = ["tests/**/*.st"]
