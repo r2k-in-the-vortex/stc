@@ -83,7 +83,7 @@ No other aggregate, floating-point, or vector type is part of the fragment.
 | `icmp P T A, B` | `Instr.icmp` | Comparisons, `BOOL` normalization, loop bounds | Semantics §3.1 |
 | `select i1 C, T A, B` | `Instr.select` | `FOR` bound selection; `SEL`/`MIN`/`MAX`/`LIMIT`/`MUX` lowering | Semantics §3.1 |
 | `zext`/`sext`/`trunc` | `Instr.cast` | Integer and character conversions; shift-count narrowing | Semantics §3.4 |
-| `phi T [V, %P], ...` | `Instr.phi` | `&&`/`||` short-circuit merges | Semantics §4.2 |
+| `phi T [V, %P], ...` | `Instr.phi` | Short-circuit `AND`/`OR` merges | Semantics §4.2 |
 | `call T @f(args)` | `Instr.call` | Intrinsics, compiler helpers, pre-attach accessor bodies | Plan-Phase0 §3.4 |
 | `call T %p(args)` | `Instr.callPtr` | User calls through `Function`/`Import` cells; trap calls | Online Change and GOT §3.1 |
 | `extractvalue { iN, i1 } V, 0/1` | `Instr.extractValue` | Checked-arithmetic result and overflow flag | Semantics §6 |
