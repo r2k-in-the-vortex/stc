@@ -1002,42 +1002,6 @@ def UnreachableGuarded (frag : IRFrag) : Prop :=
             fn.facts.originOf? name = some (.cell slot true) ∧
             frag.slots[slot]? = some .importCell)
 
-/-- Module-level facts for the target invariant. -/
-structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
-  wellFormed : WellFormed contract frag
-  allocsNonEmpty : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
-    ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty → 0 < allocSize ty
-  localTypesRepresentable : ∀ fn ∈ frag.functions, ∀ name ty,
-    fn.localType? name = some ty → ty.isRepresentable = true
-  originsTrusted : OriginsTrusted frag
-  stackOriginsTrusted : StackOriginsTrusted frag
-  callPtrOrigins : CallPtrOrigins frag
-  trapCodesSpecified : TrapCodesSpecified frag
-  unreachableGuarded : UnreachableGuarded frag
-
-/-- A local value realizes the builder-recorded pointer origin, or is still
-the initialization default (`.null`) before its defining instruction runs. -/
-def OriginHolds (contract : IRContract) (c : IRState) (f : IRFrame)
-    (name : String) (origin : PointerOrigin) : Prop :=
-  ∃ v, f.lookupLocal name = some v ∧ f.fn.localType? name = some .ptr ∧
-    (v = .null ∨
-    match origin with
-    | .cell slot false =>
-        v = .ptr (.cell slot) ∧
-          ∃ kind, c.slotKind? slot = some kind ∧
-            (kind.isStorage = true ∨ kind.isCallable = true)
-    | .cell slot true =>
-        ∃ kind, c.slotKind? slot = some kind ∧
-          ((kind.isStorage = true ∧ v = .ptr (.root slot 0)) ∨
-            (kind = .function ∧
-              ∃ fname, c.lookupFunction slot = some fname ∧
-                v = .ptr (.function fname) ∧
-                ∃ fn ∈ c.module.functions, fn.name = fname) ∨
-            (kind = .importCell ∧ v = .ptr (.importCell slot)))
-    | .global g =>
-        (∃ off, v = .ptr (.global g off)) ∧ g ∈ contract.localGlobals
-    | .vtableCode => False)
-
 /-- Bases of GEPs whose results are loaded as `.cell slot false` origin
 values. -/
 def SlotBases (fn : Function) : List Ssa :=
@@ -1086,6 +1050,83 @@ def SlotsBase (c : IRState) (f : IRFrame) : Prop :=
     f.lookupLocal gepName = some (.ptr (.slotEntry slot)) ∨
       f.lookupLocal gepName = some .null) ∧
   SlotsGlobalStored c f
+
+
+/-- Globals loaded to define a slot-table base. -/
+def SlotGlobalNames (fn : Function) : List String :=
+  (SlotBases fn).filterMap fun base =>
+    match defInstr? fn base with
+    | some (.load _ _ (.symbol g) _) => some g
+    | _ => none
+
+/-- No store targets the slots global. -/
+def SlotsGlobalReadOnly (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ g ∈ SlotGlobalNames fn,
+    (g, true) ∉ fn.facts.memoryGlobals
+
+/-- Every call forwards the caller's slot-table value to the callee's appended
+slots parameter (the caller's last parameter, or the loaded slots global). -/
+def CallSlots (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .call dest ret callee args →
+      ∃ name, args.getLast? = some (.local name) ∧
+        (fn.params.getLast? = some (IrType.ptr, name) ∨
+          fn.facts.originOf? name ≠ none)
+
+/-- Syntactic stack provenance: a local defined by an alloca or by a GEP from a
+stack-defined base. -/
+inductive StackDefined (fn : Function) : Ssa → Prop where
+  | alloca {dest : Ssa} {ty : IrType} :
+      defInstr? fn dest = some (.alloca dest ty) → StackDefined fn dest
+  | gep {dest base : Ssa} {ty : IrType} {indices : List (IrType × Operand)}
+      {inbounds : Bool} :
+      defInstr? fn dest = some (.gep dest ty (.local base) indices inbounds) →
+      StackDefined fn base → StackDefined fn dest
+
+/-- Return operands are never stack-defined. -/
+def ReturnNonStack (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ term, block.terminator = some term →
+    ∀ operand, term = .ret (some operand) →
+      ∀ name ∈ operand.localNames, ¬ StackDefined fn name
+
+/-- Module-level facts for the target invariant. -/
+structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
+  wellFormed : WellFormed contract frag
+  allocsNonEmpty : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
+    ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty → 0 < allocSize ty
+  localTypesRepresentable : ∀ fn ∈ frag.functions, ∀ name ty,
+    fn.localType? name = some ty → ty.isRepresentable = true
+  originsTrusted : OriginsTrusted frag
+  stackOriginsTrusted : StackOriginsTrusted frag
+  callPtrOrigins : CallPtrOrigins frag
+  trapCodesSpecified : TrapCodesSpecified frag
+  unreachableGuarded : UnreachableGuarded frag
+  callSlots : CallSlots frag
+  returnNonStack : ReturnNonStack frag
+  slotsGlobalReadOnly : SlotsGlobalReadOnly frag
+
+/-- A local value realizes the builder-recorded pointer origin, or is still
+the initialization default (`.null`) before its defining instruction runs. -/
+def OriginHolds (contract : IRContract) (c : IRState) (f : IRFrame)
+    (name : String) (origin : PointerOrigin) : Prop :=
+  ∃ v, f.lookupLocal name = some v ∧ f.fn.localType? name = some .ptr ∧
+    (v = .null ∨
+    match origin with
+    | .cell slot false =>
+        v = .ptr (.cell slot) ∧
+          ∃ kind, c.slotKind? slot = some kind ∧
+            (kind.isStorage = true ∨ kind.isCallable = true)
+    | .cell slot true =>
+        ∃ kind, c.slotKind? slot = some kind ∧
+          ((kind.isStorage = true ∧ v = .ptr (.root slot 0)) ∨
+            (kind = .function ∧
+              ∃ fname, c.lookupFunction slot = some fname ∧
+                v = .ptr (.function fname) ∧
+                ∃ fn ∈ c.module.functions, fn.name = fname) ∨
+            (kind = .importCell ∧ v = .ptr (.importCell slot)))
+    | .global g =>
+        (∃ off, v = .ptr (.global g off)) ∧ g ∈ contract.localGlobals
+    | .vtableCode => False)
 
 /-- A stored stack pointer is inside an allocated extent. -/
 def MemValuePtrBounded (c : IRState) (v : IRValue) : Prop :=

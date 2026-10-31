@@ -2085,24 +2085,38 @@ induction were approved and are implemented:
 2. **Stack-return safety (`StackReturnsSafe`).** Added to `WFState` and to `initState?_wf`
    as a builder/host hypothesis; its definition is below.
 
-Setting up `callFunction`/`irStepRet` revealed the next obstruction: the callee frame's
-invariants cannot be derived from the caller state alone, because the callee's slots base and
-return operands are program-level facts of the callee function. Three builder-trusted
-`WFProgram` facts are required:
+The three builder-trusted facts were approved and are now `WFProgram` fields:
+`CallSlots` (a call forwards the caller's slots value or a recorded slots-global
+value), `ReturnNonStack` (return operands are not `StackDefined` by an alloca or
+a GEP chain), and `SlotsGlobalReadOnly` (no store targets the slots global).
+The checkpoint adds `SlotGlobalNames`, `StackDefined`, and the three fields.
 
-1. **`CallSlots`** — at every call, the callee's appended `%slots` parameter receives the
-   caller's slot-table value (`.ptr .slotTable`), so the callee's `SlotsBase` holds. A
-   syntactic fact over the call instruction's argument list.
-2. **`ReturnNonStack`** — every `ret (some operand)` uses an operand that is not a stack
-   pointer (its origin is a cell/global value or a non-pointer), so the callee's
-   `StackReturnsSafe` holds and the caller's `StackPtrsBounded` survives the pop. A
-   builder-trusted fact over the return operand's origin.
-3. **`SlotsGlobalReadOnly`** — no store targets the slots global, so stores preserve
-   `SlotsGlobalStored`. A builder-trusted `memoryGlobals` exclusion.
+Using them in `irStep_wf` exposes the next obstruction: the static facts do not
+yet have dynamic counterparts in `WFState`.
 
-These are static program facts, not new state invariants; without them `irStep_wf` cannot
-establish the callee frame at a call or preserve the stack invariants at a return. No
-invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soundness theorems
+1. **Slots parameter value.** `CallSlots` identifies the forwarded SSA but does
+   not say its value is `.ptr .slotTable`. A new `WFState` field is needed:
+
+   ```lean
+   def SlotsParamsSafe (c : IRState) : Prop :=
+     ∀ f ∈ c.frames, ∀ p : IrType × String,
+       f.fn.params.getLast? = some p → p.2 = "%slots" →
+         f.lookupLocal p.2 = some (.ptr .slotTable)
+   ```
+
+   It is established at `initState?_wf` from a host hypothesis and preserved at
+   calls by `CallSlots` plus the caller's `SlotsParamsSafe`; a wrapper forwarding
+   a loaded slots-global value needs the `SlotsGlobalStored` entry. Owner
+   approval is requested for the new field.
+2. **Return-operand provenance.** `ReturnNonStack` excludes alloca/GEP-defined
+   return operands, but a return operand could be a load from memory containing
+   a stack pointer to the returning frame, or a select/phi of one. Preserving
+   `StackReturnsSafe` needs either a stronger trusted fact over every
+   return-operand definition (excluding loads/selects/phis whose value can be a
+   stack pointer) or a dynamic return-operand invariant. This is a design choice
+   for the owner; the current fact is necessary but not sufficient.
+
+No invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soundness theorems
 and the registry remain green.
 
 The compiling checkpoint is on `WL-3`; the eight soundness theorems and the registry remain
