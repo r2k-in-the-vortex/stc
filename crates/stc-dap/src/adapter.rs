@@ -1026,21 +1026,29 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             .and_then(Json::as_bool)
             .unwrap_or(false);
         let mut frames = Vec::new();
+        let mut top_resolved = false;
         if let Some(entries) = jget(&result, "frames").and_then(Json::as_array) {
-            for entry in entries {
+            for (position, entry) in entries.iter().enumerate() {
+                // Only frames with a resolved manifest function identity are
+                // ST frames. The runtime reports launcher/host frames outside
+                // the manifest code ranges with a null `function` (and
+                // `optimized_out: true`); they are not part of the ST program
+                // and must not appear in the call stack. Do not filter on
+                // `source`: resolved ST caller frames legitimately have no
+                // source location (F-11).
+                let Some(function) = jget(entry, "function").and_then(Json::as_str) else {
+                    continue;
+                };
+                let Some(name) = function_names.get(function).cloned() else {
+                    continue;
+                };
+                if position == 0 {
+                    top_resolved = true;
+                }
                 let index = jget(entry, "index")
                     .and_then(Json::as_number)
                     .and_then(|index| u64::try_from(index).ok())
                     .unwrap_or(0);
-                let symbol = jget(entry, "symbol")
-                    .and_then(Json::as_str)
-                    .unwrap_or("frame")
-                    .to_owned();
-                let name = jget(entry, "function")
-                    .and_then(Json::as_str)
-                    .and_then(|function| function_names.get(function))
-                    .cloned()
-                    .unwrap_or(symbol);
                 let source = jget(entry, "source");
                 let file = source
                     .and_then(|source| jget(source, "file"))
@@ -1064,6 +1072,13 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                     column,
                 });
             }
+        }
+        if !top_resolved {
+            // The stopped frame itself is not a resolved ST frame (for
+            // example the manifest is unavailable). Caller frames would then
+            // be misreported as the stop location, so list no frames and
+            // fabricate none; an empty `stackTrace` is valid DAP.
+            frames.clear();
         }
         self.frames = frames;
         let start = request

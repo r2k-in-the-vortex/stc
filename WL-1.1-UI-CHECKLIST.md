@@ -384,6 +384,23 @@ F-3, F-12, and F-16 are close-out fixes.
       `optimized_out:true`, so this is a presentation choice: stop the walk at the first address
       outside the manifest function ranges, or filter/label non-ST frames in `stc-dap`.
       Acceptance: the Call Stack lists only resolved ST frames for a sample stop.
+      **Implemented; manual verification pending.** Root cause (confirmed by the failing sample
+      test): `stack.list` returns the launcher/host frames after the ST program with
+      `function: null` (the runtime reports `optimized_out:true` for each return address outside
+      every manifest function range), and the adapter included every frame, falling back to
+      `symbol` and then `frame`. The adapter now keeps only frames whose runtime `function` is a
+      manifest function `GotId` in `function_names`, and preserves each kept frame's original
+      runtime `index` as its DAP frame id so `scopes`, `evaluate`, and `frame.locals` still
+      address the captured frame. The filter deliberately ignores `source` because resolved
+      caller frames legitimately have no source location (F-11). If the top frame itself is not
+      resolved, or no frame resolves (for example the manifest is unavailable), `stackTrace`
+      returns an empty list and `totalFrames` 0 rather than misreporting a caller as the stop
+      location or fabricating a frame. Regression coverage in
+      `crates/stc-driver/tests/dap_cli.rs::sample_workspace_launch_reads_known_values_and_steps`:
+      the Main stop (line 39) lists only `MAIN`; the AddStep stop (line 19) lists `ADDSTEP` above
+      `MAIN` with no host frames; `totalFrames` matches the filtered lists; and frame id 1 still
+      serves the caller's `scopes`/`frame.locals`. The new assertions failed before the fix with
+      `["MAIN", "frame", "frame"]`. Manual VS Code acceptance has not run.
 
 - [ ] **F-16 — Release monitoring has no IDE surface.** Required for WL-1.1; implementation chosen (plan §12.1). With `"release": true`, the session
       starts and warns that stopped-frame information is unavailable, but `stackTrace` fails
@@ -542,7 +559,7 @@ not a WL-1.1 code change.
 | --- | --- | --- |
 | F-1.1 | Required; pending | Default-theme ST token overlay; acceptance wording owner-approved 2026-10-31; plan §12.1 |
 | F-3 | Pending | Task termination does not stop the driver/host process tree |
-| F-12 | Pending | Unknown host frames appear as `frame`/Unknown Source |
+| F-12 | Implemented; manual verification pending | Call Stack lists only manifest-resolved ST frames; host/launcher `frame` entries filtered in `stc-dap` with original frame indices preserved; sample `dap_cli` test covers both stops, `totalFrames`, and the caller frame id |
 | F-16 | Pending | Release monitoring has no IDE surface; typed reads work only over the wire |
 
 ### Deferred follow-ups

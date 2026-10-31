@@ -408,6 +408,26 @@ fn breakpoint_arguments(project: &TestDir) -> Value {
     })
 }
 
+/// Returns the display names of a `stackTrace` response in stack order.
+fn stack_frame_names(stack: &Value) -> Vec<&str> {
+    stack["body"]["stackFrames"]
+        .as_array()
+        .expect("stack frames")
+        .iter()
+        .map(|frame| frame["name"].as_str().expect("frame name"))
+        .collect()
+}
+
+/// Returns the DAP frame ids of a `stackTrace` response in stack order.
+fn stack_frame_ids(stack: &Value) -> Vec<i64> {
+    stack["body"]["stackFrames"]
+        .as_array()
+        .expect("stack frames")
+        .iter()
+        .map(|frame| frame["id"].as_i64().expect("frame id"))
+        .collect()
+}
+
 fn scope_reference(scopes: &Value, name: &str) -> i64 {
     scopes["body"]["scopes"]
         .as_array()
@@ -730,6 +750,12 @@ fn sample_workspace_launch_reads_known_values_and_steps() {
     // the test only requires it to be a decimal integer.
     let (stack, scopes) = stop_at_line(&mut client, &project, first_statement);
     assert_eq!(stack["body"]["stackFrames"][0]["name"], "MAIN", "{stack}");
+    // F-12: the call stack lists only the resolved ST frame. Launcher/host
+    // frames have no manifest function identity and must not leak in as
+    // `frame`/Unknown Source entries.
+    assert_eq!(stack_frame_names(&stack), ["MAIN"], "{stack}");
+    assert_eq!(stack_frame_ids(&stack), [0], "{stack}");
+    assert_eq!(stack["body"]["totalFrames"], json!(1), "{stack}");
     assert_eq!(read_global(&mut client, &scopes, "INCREMENT"), "1");
     let total = read_global(&mut client, &scopes, "TOTAL");
     assert!(
@@ -818,6 +844,25 @@ fn sample_workspace_launch_reads_known_values_and_steps() {
         stack["body"]["stackFrames"][0]["name"], "ADDSTEP",
         "{stack}"
     );
+    // F-12: only the two resolved ST frames remain. `MAIN` has no source
+    // location yet (F-11) but keeps its resolved manifest identity, so the
+    // filter must not drop it for the missing source.
+    assert_eq!(stack_frame_names(&stack), ["ADDSTEP", "MAIN"], "{stack}");
+    assert_eq!(stack_frame_ids(&stack), [0, 1], "{stack}");
+    assert_eq!(stack["body"]["totalFrames"], json!(2), "{stack}");
+    assert!(
+        stack["body"]["stackFrames"][1].get("source").is_none(),
+        "the caller frame has no source location: {stack}"
+    );
+    // The kept runtime indices still address the captured frames: scopes and
+    // frame.locals for the caller (`MAIN`) succeed with its own index rather
+    // than a renumbered one.
+    let caller_scopes = client.request("scopes", json!({ "frameId": 1 }));
+    assert_eq!(caller_scopes["success"], true, "{caller_scopes}");
+    let caller_locals = scope_reference(&caller_scopes, "Locals");
+    let caller_variables =
+        client.request("variables", json!({ "variablesReference": caller_locals }));
+    assert_eq!(caller_variables["success"], true, "{caller_variables}");
     assert_eq!(
         read_local(&mut client, &function_scopes, "INCREMENTED"),
         "0"
