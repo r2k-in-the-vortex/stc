@@ -8,16 +8,15 @@ and semantics document skeleton are in place. P0.1 is complete (review approved 
 the token model, lossless CST contract, surface AST, `Derives` relation, coverage table, and
 `ast_span_wellformed` are in place. P0.2 is complete (2026-10-27): the typed HIR, declarative
 typing judgment, `checkCore`, conversion relation, HIR well-formedness, and the soundness and
-rejection-characterization theorems are in place. P0.3 is in progress (2026-10-27): the value and
-trap model, the small-step machine, the configuration typing, determinism, trap soundness, exact
-arithmetic agreement, and the sound/completeness results for the fuel interpreter are in place;
-`progress` and `preservation` are proved; initial-state typing and `type_soundness` were proved on
-2026-10-31, completing the P0.3 proof work. The P0.3 review is pending owner approval. Work was
+rejection-characterization theorems are in place. P0.3 is complete (review approved 2026-10-31):
+the value and trap model, the small-step machine, the configuration typing, determinism, trap
+soundness, exact arithmetic agreement, the sound/completeness results for the fuel interpreter,
+`progress`, `preservation`, initial-state typing, and `type_soundness` are in place. Work was
 paused for alignment with M6.5; P0.3 resumed on 2026-10-31. The compiler drift that prompted the
 pause has stabilized at `stc` 1.0.0, the §19.4 register was rechecked on 2026-10-31 and still
 holds, and the open questions were resolved in §19.8. P0.4 is complete (review approved 2026-10-31)
 as WL-3 of [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md); its scope decisions and execution record are in
-§20. The open P0.3 semantic questions and the drift register are recorded in §19.
+§20. The P0.3 completion record and sign-off are in §19.12; the drift register is in §19.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -829,8 +828,8 @@ Phase 0 is done when:
 6. Build `stc-sem` against a small hand-written core dump before the full conformance harness.
 7. Add the core corpus and run the first conformance report.
 8. Schedule the P0.7 review once the source and target soundness theorems are proved.
-9. P0.3 proof work is complete (2026-10-31); owner review is pending (§19.12). P0.4 (WL-3) is
-   complete; its scope decisions and execution record are in §20.
+9. P0.3 is complete and review-approved (2026-10-31); see §19.12. P0.4 (WL-3) is complete;
+   its scope decisions and execution record are in §20.
 
 ## 16. P0.0 execution record
 
@@ -954,14 +953,14 @@ proved in place of completeness, with the `FOR` over-rejection recorded; HIR wel
 defined and preserved by the checker; and the conversion relation is characterized against the
 analyzer's core conversions. The exact-model behaviour link is carried into P0.3.
 
-## 19. P0.3 execution record — complete, review pending
+## 19. P0.3 execution record — complete, review approved
 
-Date: 2026-10-27. Status: **complete 2026-10-31; owner review pending.** The definitions and the
+Date: 2026-10-27. Status: **complete 2026-10-31; review approved 2026-10-31.** The definitions and the
 soundness work are in place. The work was paused for alignment with M6.5; the drift register was
 rechecked on 2026-10-31 (§19.7), the open questions were resolved in §19.8, and the remaining
 proofs are recorded in §19.9–§19.12. There is no `sorry` or `admit`; `lake build` and the CI
-checks pass. The completion record and review checklist are in §19.12. Review approval is
-pending.
+checks pass. The completion record and review checklist are in §19.12. The owner approved the
+P0.3 review on 2026-10-31.
 
 ### 19.1 Deliverables
 
@@ -985,7 +984,7 @@ pending.
 The P0.3 exit criteria are **met**. `progress`, `preservation`, initial-state typing, and
 `type_soundness` are proved; there is no `sorry` or `admit`; `lake build` and the local CI checks
 pass. The completion record and review checklist are in §19.12. The proof work is committed on
-WL-3; owner review approval is pending.
+WL-3, and owner review approval was recorded on 2026-10-31.
 
 ### 19.3 Open questions
 
@@ -1218,7 +1217,7 @@ The remaining pieces are:
 - `type_soundness`: initial-state typing composed with `preservation` along
   `Steps`, and `progress` showing that no reachable configuration is stuck.
 
-**Review checklist (owner approval pending).** The reviewer should confirm:
+**Review checklist (approved 2026-10-31).** The reviewer confirmed:
 
 1. `ExprHasType.transport` is stated for arbitrary lookup- and
    function-table-agreeing contexts (not only the initializer pair), and its
@@ -1249,7 +1248,8 @@ python tools/ci/check_semantics_placeholder.py
 grep -rnwE 'sorry|admit' lean/Stc/Sem               # no matches
 ```
 
-Review approval is recorded here once the owner signs off.
+**Review approved by the owner on 2026-10-31.** The P0.3 exit criteria are met and the sign-off
+is recorded. P0.3 is complete; the next Phase 0 work is P0.5–P0.7 outside the v2.0.0 WL-3 scope.
 
 ## 20. P0.4 execution record — complete
 

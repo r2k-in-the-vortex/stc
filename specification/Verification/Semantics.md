@@ -9,7 +9,7 @@ model, lossless CST contract, surface AST, and `Derives` relation are defined, a
 `ast_span_wellformed` is proved. P0.2 is complete (2026-10-27): the typed HIR, the declarative
 typing judgment, the core checker `checkCore`, the conversion relation, HIR well-formedness, and
 the soundness and rejection-characterization theorems are defined and proved. P0.3 proof work is
-complete (2026-10-31; owner review pending): the value and trap model, the small-step machine, the
+complete (2026-10-31; review approved 2026-10-31): the value and trap model, the small-step machine, the
 configuration typing, determinism, trap soundness, guarded exact arithmetic, and the fuel
 interpreter's soundness and completeness are in place; `progress`, `preservation`, initial-state
 typing, and `type_soundness` are proved. The M6.5 compiler drift that paused P0.3 stabilized at
@@ -288,7 +288,7 @@ instruction sequence plus its trap path produces the same result or trap as the 
 
 The authoritative status of every entry is [`lean/verification-status.toml`](../../lean/verification-status.toml);
 `tools/ci/check_verification_registry.py` validates it and audits proved theorems. This section
-mirrors the registry while P0.3 awaits owner review and P0.4 is complete: the P0.1 and P0.2
+mirrors the registry while P0.3 is complete and review-approved and P0.4 is complete: the P0.1 and P0.2
 entries are proved except `core_check_complete`, which is descoped with the reason recorded in the
 registry; the P0.3 entries for determinism, progress, preservation, type soundness, trap
 soundness, guarded exact arithmetic, and the interpreter are proved; the P0.4 definitions and
@@ -411,7 +411,7 @@ construct is rejected.
 | 2026-10-31 | 1.0-draft | P0.3 (resumed) | Reevaluated Q1–Q7: keep the current machine and `ConfigTyped` invariant; keep the guarded exact form; record layout-only characters as a known Q3 gap; correct the `FOR` zero-step test to `step > 0` for signed loops and always-ascending for unsigned; confirm the initialization boundary and the `RANGE` power trap; commit WIP checkpoints. |
 | 2026-10-31 | 1.0-draft | P0.3 (progress) | Proved `progress`: a `ConfigTyped` configuration is terminal or takes a step, via the expression, value, statement, resume, and return no-stuck lemmas. `preservation`, initial-state typing, and `type_soundness` remain |
 | 2026-10-31 | 1.0-draft | P0.3 (preservation) | Proved `preservation` over every focus form, including the value/statement/resume/returned transitions and the FOR advance path. Fixed three machine bugs found by the proof: the call-argument continuation advanced past the wrong argument, `EXIT` kept the loop body's loop context, and `CONTINUE` on a `FOR` entered the increment in the body's loop context. Initial-state typing and `type_soundness` remain |
-| 2026-10-31 | 1.0-draft | P0.3 (complete) | Proved initial-state typing (`initBody_typed`, `initState_typed`) using `ExprHasType.transport`, a context-agreement lemma over the mutual typing recursor, and `type_soundness`: the initial configuration is typed, every reachable configuration stays typed, and no reachable configuration is stuck. P0.3 proof work is complete; the review is pending owner approval |
+| 2026-10-31 | 1.0-draft | P0.3 (complete) | Proved initial-state typing (`initBody_typed`, `initState_typed`) using `ExprHasType.transport`, a context-agreement lemma over the mutual typing recursor, and `type_soundness`: the initial configuration is typed, every reachable configuration stays typed, and no reachable configuration is stuck. P0.3 is complete; the review was approved 2026-10-31 |
 
 ## 10. Rust/Lean interface
 

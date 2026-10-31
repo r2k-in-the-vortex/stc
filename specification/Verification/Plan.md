@@ -909,7 +909,7 @@ turn it into the registry.
 | Feature | Phase | Target level | Key theorem | Current status |
 | --- | --- | --- | --- | --- |
 | AST, HIR, and IR fragment types | 0 | S | definitions plus `WellFormed` | Syntax, grammar, and HIR defined (P0.1–P0.2); IR fragment defined and review-approved (P0.4, 2026-10-31) |
-| Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review pending owner approval; see Plan-Phase0.md §19 |
+| Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31; see Plan-Phase0.md §19 |
 | Core typing judgment and checker | 0 | S | `core_check_sound`, `core_rejection_characterized` | Proved (P0.2) |
 | Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | Not started |
 | Reference interpreter and conformance | 0 | V0 | `lake exe semantics-conformance` report | Fuel interpreter sound/complete (P0.3); conformance harness pending (P0.6) |
