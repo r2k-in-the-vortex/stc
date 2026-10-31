@@ -2048,10 +2048,62 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
 
 ### 22.11 Remaining whole-run work
 
+**Owner decision (2026-10-31).** The owner chose the **full invariant**, not the reduced
+alternative. The whole-run bridge must keep every `WFState` field.
+
 **Status (2026-10-31, follow-up).** The `WFProgram.localTypesRepresentable` rule and the
 `default_type?` lemma are implemented as prerequisites. The initial-state, preservation, and
-reachability proofs are **not** complete; the concrete remaining obligations are below. This is
-the whole-run blocker for the P0.5 review; the eight target soundness theorems remain proved.
+reachability proofs are **not** complete. The full-invariant preservation proof is blocked on
+three provenance invariants that the approved `WFState` does not contain; without them the
+`originsMatch`, `stackPtrsBounded`, and `storagePtrsLive` fields are not preserved by `irStep`.
+No invariant was trimmed; the compiling checkpoint is `061da82` on `WL-3`. The three invariant
+extensions require owner approval:
+
+1. **Slots base (`SlotsBase`).** For every `.cell slot false` origin whose defining `load`
+   reads a `.slotTable` GEP, the GEP's base local holds `.ptr .slotTable`. The current
+   `OriginsTrusted` checks only the constant slot index, so an arbitrary pointer-typed base
+   (e.g. a stack pointer) could make the load read a value that does not have the recorded
+   `.cell slot` shape. `localsTyped` does not constrain the base's address. Proposed state
+   field:
+
+   ```lean
+   def SlotsBase (c : IRState) (f : IRFrame) : Prop :=
+     ∀ base slot, IsSlotTableGepBase f base slot →
+       f.lookupLocal base = some (.ptr .slotTable)
+   ```
+
+2. **Memory pointer bounds (`MemValuePtrBounded`).** `MemTyped` constrains a stack cell's value
+   type and extent but not the bounds of a stack pointer stored in that cell. A load can
+   therefore introduce an out-of-bounds stack pointer into a local, breaking
+   `StackPtrsBounded`. Proposed strengthening, as a conjunct of `MemTyped`:
+
+   ```lean
+   def MemValuePtrBounded (c : IRState) (v : IRValue) : Prop :=
+     match v with
+     | .ptr (.stack frame slot off) =>
+         ∃ g, c.frameById? frame = some g ∧
+           ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty
+     | _ => True
+   ```
+
+3. **Storage value liveness (`StorageValuesLive`).** `StoragePtrsLive` constrains only locals.
+   A load from persistent storage can return a storage pointer stored by the host; without an
+   invariant on storage contents, the destination local need not address a live storage entry.
+   Proposed state field:
+
+   ```lean
+   def StorageValuesLive (c : IRState) : Prop :=
+     ∀ id off v, c.lookupStorageAt id off = some v →
+       (∀ slot off', v = .ptr (.root slot off') →
+          ∃ values, c.lookupStorage (.root slot) = some values ∧ off' < values.length) ∧
+       (∀ g off', v = .ptr (.global g off') →
+          ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length)
+   ```
+
+The three extensions are proof obligations for the full invariant, not a reduction of it: the
+existing fields stay, and the new facts are added to `WFState` (and, where syntactic, to
+`WFProgram`). The initial-state/preservation/reachability work resumes once the owner approves
+them; the three soundness theorems and the registry remain proved.
 
 The three theorems are per-state, as approved. The initial-state proof, the preservation
 proof, and the reachability corollaries are not yet proved; they are the remaining P0.5
@@ -2104,5 +2156,7 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
 3. `ir_progress`, `ir_memory_safe`, and `ir_no_ub` are proved with only standard axioms; P0-T16,
    P0-T17, and P0-T22 are `proved` and P0-T15–P0-T22 are all `proved`.
 4. No `sorry`/`admit`; `lake build` is green; the registry, docs, and markdownlint checks pass.
-5. The whole-run bridge in §22.11 is acknowledged as the remaining P0.5 follow-up; none of it
-   changes the three proved statements.
+5. The owner's full-invariant decision is recorded, and the three §22.11 extension requirements
+   (`SlotsBase`, memory pointer bounds, storage value liveness) are acknowledged as the
+   whole-run blocker. They extend, not trim, `WFState`; none of them changes the three proved
+   statements.
