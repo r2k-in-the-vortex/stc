@@ -2678,6 +2678,8 @@ theorem forAdvance_preserves {u : HirUnit} {c c' : State} {f g : Frame}
     (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
     (hgKind : g.kind = f.kind) (hgm : FrameMatches u g)
     (hloopG : g.loopCtx.depth > 0 → StackHasLoop g.k)
+    (hs : forAdvance u { c with frames := g :: fr } cont below
+            var stopVal stepVal body = .step c')
     (hcontAfter : cont.after = lc) (hcontSpan : cont.span = span)
     (hvar : (frameCtx u f.kind).lookup var.id = some ty)
     (hint : ty.isInt = true)
@@ -2688,9 +2690,7 @@ theorem forAdvance_preserves {u : HirUnit} {c c' : State} {f g : Frame}
     (hbelow : StackTyped (frameCtx u f.kind) below .unit lc)
     (hloop : lc.depth > 0 → StackHasLoop below)
     (hcur : ∀ w, ({ c with frames := g :: fr }).lookupVar? var.id = some w →
-      w.ty = ty ∧ w.WellFormed)
-    (hs : forAdvance u { c with frames := g :: fr } cont below
-            var stopVal stepVal body = .step c') :
+      w.ty = ty ∧ w.WellFormed) :
     ConfigTyped u c' := by
   simp only [forAdvance, hcontAfter, hcontSpan] at hs
   generalize hcl : (({ c with frames := g :: fr }).lookupVar? var.id).getD stepVal = cur at hs
@@ -3214,9 +3214,9 @@ theorem stepStmt_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
                 (g := { f with k := below, loopCtx := marker.after })
                 (cont := marker) (lc := marker.after) (span := marker.span)
                 hc hf rfl (FrameMatches.updateKLoop hfm)
-                (by intro hd; exact hloopBelow hd) rfl rfl
+                (by intro hd; exact hloopBelow hd) hs rfl rfl
                 hvar hint ⟨hstopWF, hstopTy⟩ ⟨hstepWF, hstepTy⟩ hbodyk hbelow hloopBelow
-                hcur hs
+                hcur
           | _ => simp [hk] at hs
   | empty span =>
       cases hs
@@ -3349,6 +3349,121 @@ theorem stepStmt_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
             (FramesShape.updateHead (f := f) (rest := fr)
               (f' := { f with k := k', loopCtx := bodyLc }) hshape rfl)
             (by intro _; exact Or.inl rfl) rfl
+
+/-- A resume transition preserves configuration typing. -/
+theorem stepResume_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
+    {fr : List Frame}
+    (hunit : HasType u env) (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hfocus : FocusTyped u f .resume)
+    (hs : stepResume u c = .step c') : ConfigTyped u c' := by
+  have hfm := hc.headMatch f fr hf
+  have hshape : FramesShape (f :: fr) := by simpa [hf] using hc.shape
+  have hstack : StackTyped (frameCtx u f.kind) f.k .unit f.loopCtx := hfocus
+  simp only [stepResume, hf] at hs
+  cases hk : f.k with
+  | nil =>
+      simp only [hk] at hs
+      exact completeFrame_preserves hunit hc hf hs
+  | cons cont rest =>
+      rw [hk] at hstack
+      cases hstack with
+      | seq hstmts hrest =>
+          simp only [hk] at hs
+          cases hs
+          have hstep : f.loopCtx.depth > 0 → StackHasLoop rest := by
+            intro hd
+            have h := hc.headLoop f fr hf hd
+            rw [hk] at h
+            exact StackHasLoop.tail_of_not_marker h
+              (by simp [Cont.isLoopMarker, ContKind.isLoopMarker])
+          refine ConfigTyped.updateHeadFrame hc hf (FrameMatches.updateKLoop hfm)
+            ⟨rfl, hrest, hstmts, hstep⟩
+            (FramesShape.updateHead (f := f) (by simpa [hf] using hc.shape) rfl) hstep rfl
+      | whileLoop hdepth hctrl hcond hbody hloopRest hrest =>
+          simp only [hk] at hs
+          cases hs
+          refine ConfigTyped.updateHeadFrame hc hf (FrameMatches.updateKLoop hfm)
+            ⟨.bool, hcond, ?_⟩
+            (FramesShape.updateHead (f := f) (by simpa [hf] using hc.shape) rfl) ?_ rfl
+          · exact StackTyped.whileCond hcond (by simpa [hdepth, hctrl] using hbody) hrest
+          · intro hd
+            exact Or.inr (hloopRest hd)
+      | repeatBody hdepth hctrl hcond hbody hloopRest hrest =>
+          simp only [hk] at hs
+          cases hs
+          refine ConfigTyped.updateHeadFrame hc hf (FrameMatches.updateKLoop hfm)
+            ⟨.bool, hcond, ?_⟩
+            (FramesShape.updateHead (f := f) (by simpa [hf] using hc.shape) rfl) ?_ rfl
+          · exact StackTyped.repeatCond hcond (by simpa [hdepth, hctrl] using hbody) hrest
+          · intro hd
+            exact Or.inr (hloopRest hd)
+      | forBody hdepth hctrl hvar hint hstop hstep hbody hloopRest hrest =>
+          simp only [hk] at hs
+          have hCeq : ({ c with frames := f :: fr } : State) = c := by rw [← hf]
+          rw [← hCeq] at hs
+          exact forAdvance_preserves (c := c) (f := f) (fr := fr) (g := f)
+            hc hf rfl hfm (hc.headLoop f fr hf) hs rfl rfl
+            hvar hint hstop hstep (by simpa [hdepth, hctrl] using hbody) hrest hloopRest
+            (by
+              intro w hw
+              have hlookEq : ∀ id, ({ c with frames := f :: fr }).lookupVar? id =
+                  c.lookupVar? id := by
+                intro id
+                cases id <;> simp [State.lookupVar?, State.head?, hf]
+              rw [hlookEq] at hw
+              obtain ⟨v, hv, hty, hwf⟩ := ConfigTyped.lookupVar?_typed hc hf hvar
+              rw [hv] at hw
+              cases hw
+              exact ⟨hty, hwf⟩)
+
+/-- A returned-value transition preserves configuration typing. -/
+theorem stepReturned_preserves {u : HirUnit} {c c' : State} {f : Frame}
+    {fr : List Frame} {rv : Option Value}
+    (hc : ConfigTyped u c) (hf : c.frames = f :: fr)
+    (hfocus : FocusTyped u f (.returned rv))
+    (hs : stepReturned u c rv = .step c') : ConfigTyped u c' := by
+  simp only [stepReturned, hf] at hs
+  cases rv with
+  | none =>
+      have hstack : StackTyped (frameCtx u f.kind) f.k .unit f.loopCtx := hfocus
+      cases hk : f.k with
+      | nil =>
+          rw [hk] at hs
+          cases hs
+          simpa [hf] using ConfigTyped.updateFocus (focus := .resume) hc hf hstack
+      | cons cont rest =>
+          rw [hk] at hstack
+          rw [hk] at hs
+          have hwv : cont.wantsValue = false := StackTyped.unit_head hstack
+          simp [hwv] at hs
+          cases hs
+          simpa [hf] using ConfigTyped.updateFocus (focus := .resume) hc hf
+            (by show StackTyped (frameCtx u f.kind) f.k .unit f.loopCtx; rw [hk]; exact hstack)
+  | some v =>
+      rcases hfocus with ⟨hvwf, hstack | hstack⟩
+      · cases hk : f.k with
+        | nil => exact absurd hk (StackTyped.value_ne_nil hstack)
+        | cons cont rest =>
+            rw [hk] at hstack
+            rw [hk] at hs
+            have hwv : cont.wantsValue = true := StackTyped.value_head hstack
+            simp [hwv] at hs
+            cases hs
+            simpa [hf] using ConfigTyped.updateFocus (focus := .value v) hc hf
+              ⟨hvwf, v.ty, rfl, by rw [hk]; exact hstack⟩
+      · cases hk : f.k with
+        | nil =>
+            rw [hk] at hs
+            cases hs
+            simpa [hf] using ConfigTyped.updateFocus (focus := .resume) hc hf hstack
+        | cons cont rest =>
+            rw [hk] at hstack
+            rw [hk] at hs
+            have hwv : cont.wantsValue = false := StackTyped.unit_head hstack
+            simp [hwv] at hs
+            cases hs
+            simpa [hf] using ConfigTyped.updateFocus (focus := .resume) hc hf
+              (by show StackTyped (frameCtx u f.kind) f.k .unit f.loopCtx; rw [hk]; exact hstack)
 
 /-- A statement list transition preserves configuration typing. -/
 theorem stepStmts_preserves {u : HirUnit} {env : Env} {c c' : State} {f : Frame}
@@ -3531,6 +3646,42 @@ theorem stepReturned_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : Lis
             simp [hw] at hfalse
         | some v => simp [hw]
       · simp [hw]
+
+/-- Preservation: a well-typed configuration steps to a well-typed
+configuration. -/
+theorem preservation {u : HirUnit} {env : Env} {c c' : State}
+    (hunit : HasType u env) (hc : ConfigTyped u c) (hs : Step u c c') :
+    ConfigTyped u c' := by
+  obtain ⟨f, fr, hf⟩ := hc.head_exists
+  have hfocus := hc.headFocus f fr hf
+  have hstep : step u c = .step c' := hs
+  cases hfoc : c.focus with
+  | expr e =>
+      rw [hfoc] at hfocus
+      simp only [step, hfoc] at hstep
+      exact stepExpr_preserves hunit hc hf hfocus hstep
+  | value v =>
+      rw [hfoc] at hfocus
+      simp only [step, hfoc] at hstep
+      exact stepValue_preserves hunit hc hf hfocus hstep
+  | stmts ss lc =>
+      rw [hfoc] at hfocus
+      simp only [step, hfoc] at hstep
+      exact stepStmts_preserves hunit hc hf hfocus hstep
+  | resume =>
+      rw [hfoc] at hfocus
+      simp only [step, hfoc] at hstep
+      exact stepResume_preserves hunit hc hf hfocus hstep
+  | returned rv =>
+      rw [hfoc] at hfocus
+      simp only [step, hfoc] at hstep
+      exact stepReturned_preserves hc hf hfocus hstep
+  | trapped trap span =>
+      simp only [step, hfoc] at hstep
+      cases hstep
+  | halted =>
+      simp only [step, hfoc] at hstep
+      cases hstep
 
 /-! ## Progress -/
 
