@@ -11,7 +11,8 @@ typing judgment, `checkCore`, conversion relation, HIR well-formedness, and the 
 rejection-characterization theorems are in place. P0.3 is in progress (2026-10-27): the value and
 trap model, the small-step machine, the configuration typing, determinism, trap soundness, exact
 arithmetic agreement, and the sound/completeness results for the fuel interpreter are in place;
-`progress` is proved; `preservation`, `type_soundness`, and initial-state typing remain. Work was
+`progress` and `preservation` are proved; initial-state typing and `type_soundness` were proved on
+2026-10-31, completing the P0.3 proof work. The P0.3 review is pending owner approval. Work was
 paused for alignment with M6.5; P0.3 resumed on 2026-10-31. The compiler drift that prompted the
 pause has stabilized at `stc` 1.0.0, the §19.4 register was rechecked on 2026-10-31 and still
 holds, and the open questions were resolved in §19.8. P0.4 is complete (review approved 2026-10-31)
@@ -1188,13 +1189,64 @@ Proving preservation exposed three more machine bugs, now fixed:
   context; it now enters in the marker's outer context, matching the typing of
   the stack below the marker.
 
-Remaining for P0.3: initial-state typing (`HasType u env →
-ConfigTyped u (initState u cycles)`) and `type_soundness`. Initial-state
-typing needs a context-agreement lemma lifting the global-initializer typing
-from `Ctx.ofGlobals` to the program frame's `Ctx.ofProgram`; mutating only the
-local table must preserve `ExprHasType`/`CallHasType` derivations. After that,
-`type_soundness` follows from the proved initial-state typing, `preservation`,
-and `progress`, and the registry and semantics document are updated.
+### 19.12 P0.3 completion and review checklist (2026-10-31)
+
+Initial-state typing and `type_soundness` are proved. The missing piece was
+context agreement for global initializers: `GlobalTyped` checks a global
+initializer in `Ctx.ofGlobals env`, while the initialization statements run in
+the program frame's `Ctx.ofProgram env u.program`. `ExprHasType.transport`
+proves that contexts agreeing on variable lookups and the function table type
+the same expressions, by structural recursion on the expression using the
+mutual recursor `ExprHasType.rec` with one motive per mutually defined
+relation (an `induction` on the derivation is rejected because the judgment is
+mutually inductive, and mutual-recursion termination is unnecessary once the
+recursor supplies the induction hypotheses). The `ofGlobals`/`ofProgram` case
+needs only the global and function tables: a source param/local/result lookup
+is impossible because the globals context binds none of them.
+
+The remaining pieces are:
+
+- `initBody_typed`: `globalInitStmtsFrom_typed` and
+  `localInitStmtsFrom_typed` in the program context, plus
+  `StmtListHasType.append`.
+- `initState_typed`: `GlobalsTyped` and `FrameMatches` from
+  `Value.default_wellFormed` and `HirWellFormed`, with the cycle-zero halt
+  focus and the first-cycle statement focus.
+- `type_soundness`: initial-state typing composed with `preservation` along
+  `Steps`, and `progress` showing that no reachable configuration is stuck.
+
+**Review checklist (owner approval pending).** The reviewer should confirm:
+
+1. `ExprHasType.transport` is stated for arbitrary lookup- and
+   function-table-agreeing contexts (not only the initializer pair), and its
+   recursor motives cover all four mutually defined relations
+   (`ExprHasType`, `CallHasType`, `StdFnHasType`, `Forall2`).
+2. `initState_typed` covers both the zero-cycle (`.halted`) and positive-cycle
+   (`.stmts (initBody u) LoopCtx.top`) focuses, and `initBody_typed` covers
+   global initializers, program-field initializers, and the first cycle body
+   in that order.
+3. `type_soundness` states and proves exactly the P0.3 intent: the initial
+   configuration is typed, every reachable configuration is typed, and no
+   reachable configuration is stuck; trap documentation remains
+   `trap_soundness`.
+4. The registry entries P0-T09/P0-T10 are `proved`, the audit passes, and the
+   status rows in this plan, [Semantics.md](Semantics.md), [Plan.md](Plan.md),
+   and [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) agree.
+5. The three machine fixes recorded in §19.11 (call-argument advance, `EXIT`
+   loop context, `CONTINUE`-on-`FOR` context) match the intended source
+   semantics; any objection is a semantics change, not a proof change.
+
+Verification commands:
+
+```bash
+cd lean && lake build
+python tools/ci/check_verification_registry.py   # 45 records: 34 proved, 10 planned, 1 descoped
+python tools/ci/check_docs.py
+python tools/ci/check_semantics_placeholder.py
+grep -rnwE 'sorry|admit' lean/Stc/Sem               # no matches
+```
+
+Review approval is recorded here once the owner signs off.
 
 ## 20. P0.4 execution record — complete
 

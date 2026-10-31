@@ -1572,6 +1572,162 @@ theorem calleeFrameMatches {u : HirUnit} {index : Nat} {fn : Function} {args : L
         simp [hrt]
         exact ⟨rfl, Value.default_wellFormed (hcore.result ty hrt)⟩
 
+/-! ## Context transport for initializer typing -/
+
+/-- Contexts that agree on variable lookups and on the function table type the
+same expressions. Uses the mutual recursor of the typing judgment directly,
+with one motive per mutually defined relation. -/
+theorem ExprHasType.transport {ctx ctx' : Ctx}
+    (hlookup : ∀ {id : VarId} {T : Ty}, ctx.lookup id = some T → ctx'.lookup id = some T)
+    (hfun : ∀ {i : Nat} {sig : Signature},
+      ctx.functions[i]? = some sig → ctx'.functions[i]? = some sig)
+    {e : Expr} {T : Ty} (h : ExprHasType ctx e T) :
+    ExprHasType ctx' e T :=
+  ExprHasType.rec
+    (motive_1 := fun e T _ => ExprHasType ctx' e T)
+    (motive_2 := fun callee args result _ => CallHasType ctx' callee args result)
+    (motive_3 := fun fn args ty _ => StdFnHasType ctx' fn args ty)
+    (motive_4 := fun args tys _ => Forall2 (ExprHasType ctx') args tys)
+    (fun hwf => .literal hwf)
+    (fun hloc => .var (hlookup hloc))
+    (fun hop _ ih => .unary hop ih)
+    (fun hop _ _ ihl ihr => .binary hop ihl ihr)
+    (fun hcall ih => .call ih)
+    (fun _ hconv hcore ih => .cast ih hconv hcore)
+    (fun hsig _ ih => .function (hfun hsig) ih)
+    (fun hstd ih => .std ih)
+    (fun _ hres ih => .mk ih hres)
+    .nil
+    (fun h h' ih ihs => .cons ih ihs)
+    h
+
+/-- The globals context and the program context agree on every lookup that
+succeeds in the globals context. -/
+theorem Ctx.lookup_ofGlobals_ofProgram {env : Env} {p : Program} {id : VarId} {T : Ty}
+    (h : (Ctx.ofGlobals env).lookup id = some T) :
+    (Ctx.ofProgram env p).lookup id = some T := by
+  cases id with
+  | param i => cases h
+  | «local» i => cases h
+  | «global» i =>
+      simpa only [Ctx.lookup, Ctx.ofGlobals, Ctx.ofProgram] using h
+  | result => cases h
+
+/-- The program context and the globals context share the function table. -/
+theorem Ctx.functions_ofGlobals_ofProgram {env : Env} {p : Program} {i : Nat}
+    {sig : Signature} (h : (Ctx.ofGlobals env).functions[i]? = some sig) :
+    (Ctx.ofProgram env p).functions[i]? = some sig := by
+  simpa only [Ctx.ofGlobals, Ctx.ofProgram] using h
+
+/-- Statement lists concatenate. -/
+theorem StmtListHasType.append {ctx : Ctx} {depth : Nat} {controlled : List VarId}
+    {a b : List Stmt}
+    (ha : StmtListHasType ctx depth controlled a)
+    (hb : StmtListHasType ctx depth controlled b) :
+    StmtListHasType ctx depth controlled (a ++ b) := by
+  intro stmt hmem
+  rcases List.mem_append.mp hmem with h | h
+  · exact ha stmt h
+  · exact hb stmt h
+
+/-- The initialization sequence plus the first cycle body is typed in the
+program frame's context. -/
+theorem initBody_typed {u : HirUnit} {env : Env} (hunit : HasType u env) :
+    StmtListHasType (frameCtx u .program) 0 [] (initBody u) := by
+  have hprog : ProgramTyped (Env.ofUnit u) u.program := by
+    have := hunit.program
+    rwa [hunit.env_eq] at this
+  have hglob : ∀ glob ∈ u.globals, GlobalTyped (Env.ofUnit u) glob := by
+    intro glob hmem
+    have := hunit.globals glob hmem
+    rwa [hunit.env_eq] at this
+  have hglobals : StmtListHasType (frameCtx u .program) 0 [] (globalInitStmts u.globals) := by
+    have hdrop : (frameCtx u .program).globals.drop 0 = u.globals.map (·.ty) := by
+      simp [frameCtx_program, Ctx.ofProgram, Env.ofUnit]
+    exact globalInitStmtsFrom_typed 0 u.globals hdrop
+      (by
+        intro glob hmem expr hinit
+        exact ExprHasType.transport
+          (hlookup := fun {id} {T} h => Ctx.lookup_ofGlobals_ofProgram h)
+          (hfun := fun {i} {sig} h => Ctx.functions_ofGlobals_ofProgram h)
+          (hglob glob hmem expr hinit))
+  have hlocals : StmtListHasType (frameCtx u .program) 0 [] (localInitStmts u.program.locals) := by
+    have hinit := hprog.1
+    simpa [localInitStmts, frameCtx_program, Ctx.ofProgram, Env.ofUnit] using
+      localInitStmtsFrom_typed 0 u.program.locals rfl hinit
+  have hbody : StmtListHasType (frameCtx u .program) 0 [] u.program.body := by
+    have := hprog.2
+    simpa [frameCtx_program, Ctx.ofProgram] using this
+  rw [initBody, List.append_assoc]
+  exact StmtListHasType.append hglobals (StmtListHasType.append hlocals hbody)
+
+/-- The initial configuration is well typed. -/
+theorem initState_typed {u : HirUnit} {env : Env} (hunit : HasType u env) (cycles : Nat) :
+    ConfigTyped u (initState u cycles) := by
+  let pf : Frame :=
+    { kind := .program, params := [],
+      locals := u.program.locals.map (fun l => Value.default l.ty), result := none,
+      k := [], expect := none, loopCtx := LoopCtx.top }
+  have hglobals : GlobalsTyped u (u.globals.map (fun g => Value.default g.ty)) := by
+    refine ⟨by simp, ?_⟩
+    intro i v hv
+    obtain ⟨glob, hglob, hty⟩ := List.getElem?_map_eq_some hv
+    exact ⟨glob, hglob, by
+      show v.ty = glob.ty
+      rw [← hty]
+      rfl, by
+      show v.WellFormed
+      rw [← hty]
+      exact Value.default_wellFormed
+        (hunit.wellformed.globals glob (List.mem_of_getElem? hglob))⟩
+  have hfm : FrameMatches u pf := by
+    refine ⟨rfl, rfl, by simp [pf], ?_⟩
+    intro i v hv
+    obtain ⟨loc, hloc, hty⟩ := List.getElem?_map_eq_some hv
+    exact ⟨loc, hloc, by
+      show v.ty = loc.ty
+      rw [← hty]
+      rfl, by
+      show v.WellFormed
+      rw [← hty]
+      exact Value.default_wellFormed
+        (hunit.wellformed.program.locals loc (List.mem_of_getElem? hloc))⟩
+  have hfocus : FocusTyped u pf
+      (if cycles = 0 then .halted else .stmts (initBody u) LoopCtx.top) := by
+    by_cases hc0 : cycles = 0
+    · rw [if_pos hc0]
+      exact True.intro
+    · rw [if_neg hc0]
+      exact ⟨rfl, StackTyped.nil rfl rfl, initBody_typed hunit,
+        by intro hd; simp [LoopCtx.top] at hd⟩
+  have hframes : (initState u cycles).frames = [pf] := rfl
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa [initState] using hglobals
+  · rw [hframes]
+    exact FramesShape.last rfl
+  · intro f rest hf
+    rw [hframes] at hf
+    simp only [List.cons.injEq, List.nil_eq] at hf
+    rcases hf with ⟨rfl, rfl⟩
+    exact hfm
+  · intro f rest hf
+    rw [hframes] at hf
+    simp only [List.cons.injEq, List.nil_eq] at hf
+    rcases hf with ⟨rfl, rfl⟩
+    exact hfocus
+  · intro f rest hf
+    rw [hframes] at hf
+    simp only [List.cons.injEq, List.nil_eq] at hf
+    rcases hf with ⟨rfl, rfl⟩
+    exact trivial
+  · intro f rest hf hd
+    rw [hframes] at hf
+    simp only [List.cons.injEq, List.nil_eq] at hf
+    rcases hf with ⟨rfl, rfl⟩
+    simp [pf, LoopCtx.top] at hd
+  · rw [hframes]
+    exact trivial
+
 /-- A typed expression focus never gets stuck. -/
 theorem stepExpr_not_stuck {u : HirUnit} {c : State} {f : Frame} {rest : List Frame}
     {e : Expr} (hf : c.frames = f :: rest) (hctx : ConfigTyped u c)
@@ -3728,6 +3884,31 @@ theorem progress {u : HirUnit} {c : State} (h : ConfigTyped u c) :
   | halt => exact Or.inl hs
   | step c' => exact Or.inr ⟨c', hs⟩
   | stuck => exact False.elim (hnot hs)
+
+/-- Type soundness: the initial configuration is well typed, and every
+reachable configuration remains well typed and never gets stuck, so a run can
+only end at a halt or a documented trap. -/
+theorem type_soundness {u : HirUnit} {env : Env} (hunit : HasType u env) (cycles : Nat) :
+    ConfigTyped u (initState u cycles) ∧
+      ∀ c', Steps u (initState u cycles) c' →
+        ConfigTyped u c' ∧ step u c' ≠ .stuck := by
+  refine ⟨initState_typed hunit cycles, ?_⟩
+  have hstepsPres : ∀ {a b : State}, Steps u a b → ConfigTyped u a → ConfigTyped u b := by
+    intro a b hs
+    induction hs with
+    | refl => intro ha; exact ha
+    | step hstep hrest ih =>
+        intro ha
+        exact ih (preservation hunit ha hstep)
+  intro c' hsteps
+  have hc' : ConfigTyped u c' := hstepsPres hsteps (initState_typed hunit cycles)
+  refine ⟨hc', ?_⟩
+  intro hstuck
+  rcases progress hc' with ht | ⟨c'', hstep⟩
+  · rw [ht] at hstuck
+    cases hstuck
+  · rw [hstep] at hstuck
+    cases hstuck
 
 /-! ## Determinism -/
 
