@@ -143,6 +143,10 @@ END_PROGRAM
 const FIRST_STATEMENT_LINE: i64 = 20;
 /// First executable statement of `AddOne`.
 const FUNCTION_LINE: i64 = 8;
+/// The statement after `AddOne`'s first executable statement.
+const FUNCTION_NEXT_LINE: i64 = 9;
+/// The statement after `Main`'s first executable statement.
+const PROGRAM_SECOND_LINE: i64 = 21;
 
 fn scaffold(name: &str) -> TestDir {
     let project = TestDir::new(name);
@@ -428,6 +432,42 @@ fn find_variable<'a>(variables: &'a Value, name: &str) -> &'a Value {
 fn normalized_path(path: &std::path::Path) -> String {
     let text = path.to_string_lossy();
     text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
+/// Returns the normal (non-verbatim) spelling of a test path.
+///
+/// On Windows the test directory is canonicalized to `\\?\C:\...`; stripping
+/// the prefix gives the spelling a DAP client normally sends. Both spellings
+/// must map to the same adapter breakpoint key.
+fn plain_source_path(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        normalized_path(path)
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().into_owned()
+    }
+}
+
+/// Returns the Windows verbatim (`\\?\`) spelling of a test path.
+///
+/// Outside Windows there is no verbatim prefix; backslash separators still
+/// normalize to the same source key.
+fn verbatim_source_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if text.starts_with(r"\\?\") {
+            text.into_owned()
+        } else {
+            format!(r"\\?\{text}")
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        text.replace('/', "\\")
+    }
 }
 
 /// Waits for a breakpoint stop and checks the frame and source mapping.
@@ -833,6 +873,145 @@ fn launch_accepts_breakpoints_after_the_launch_request() {
     assert_eq!(configuration["success"], true, "{configuration}");
 
     let _ = stop_at_line(&mut client, &project, FIRST_STATEMENT_LINE);
+    let disconnect = client.request("disconnect", json!({ "terminateDebuggee": true }));
+    assert_eq!(disconnect["success"], true, "{disconnect}");
+    assert!(client.wait_exit(PROTOCOL_TIMEOUT).is_some());
+}
+
+/// F-6: removing breakpoints while stopped clears their host IDs, and
+/// re-adding a later breakpoint works without restarting the session.
+#[test]
+fn removing_breakpoints_while_stopped_clears_them_from_the_session() {
+    let Some(_clang) = clang() else {
+        return;
+    };
+    let project = scaffold("remove-stopped");
+    let mut client = DapClient::spawn(&project.path);
+    initialize(&mut client);
+
+    // The initial request uses the test directory's canonical spelling; the
+    // update below uses the normal spelling, so both must share one key.
+    let breakpoints = client.request("setBreakpoints", breakpoint_arguments(&project));
+    assert_eq!(breakpoints["success"], true, "{breakpoints}");
+    let launch = client.request("launch", launch_arguments(&project));
+    assert_eq!(launch["success"], true, "{launch}");
+    let configuration = client.request("configurationDone", json!({}));
+    assert_eq!(configuration["success"], true, "{configuration}");
+    let _ = stop_at_line(&mut client, &project, FIRST_STATEMENT_LINE);
+
+    // Remove every breakpoint while the target is stopped. The adapter must
+    // send `breakpoint.clear` for both previously applied host IDs.
+    let removed = client.request(
+        "setBreakpoints",
+        json!({
+            "source": { "path": plain_source_path(&project.source()) },
+            "breakpoints": [],
+        }),
+    );
+    assert_eq!(removed["success"], true, "{removed}");
+    assert_eq!(
+        removed["body"]["breakpoints"]
+            .as_array()
+            .expect("breakpoints")
+            .len(),
+        0,
+        "{removed}"
+    );
+
+    // Re-add a breakpoint at a later `AddOne` statement the target reaches in
+    // the same call. A stale host breakpoint would stop at the function's
+    // first statement instead.
+    let readded = client.request(
+        "setBreakpoints",
+        json!({
+            "source": { "path": verbatim_source_path(&project.source()) },
+            "breakpoints": [{ "line": FUNCTION_NEXT_LINE }],
+        }),
+    );
+    assert_eq!(readded["success"], true, "{readded}");
+    let readded_breakpoints = readded["body"]["breakpoints"]
+        .as_array()
+        .expect("breakpoints");
+    assert_eq!(readded_breakpoints.len(), 1, "{readded}");
+    assert_eq!(
+        readded_breakpoints[0]["line"], FUNCTION_NEXT_LINE,
+        "{readded}"
+    );
+    assert_eq!(readded_breakpoints[0]["verified"], true, "{readded}");
+
+    let continued = client.request("continue", json!({ "threadId": 1 }));
+    assert_eq!(continued["success"], true, "{continued}");
+    let _ = stop_at_line(&mut client, &project, FUNCTION_NEXT_LINE);
+
+    let disconnect = client.request("disconnect", json!({ "terminateDebuggee": true }));
+    assert_eq!(disconnect["success"], true, "{disconnect}");
+    assert!(client.wait_exit(PROTOCOL_TIMEOUT).is_some());
+}
+
+/// F-6: removing breakpoints while the target is running clears them, and a
+/// later breakpoint added in the same update stops on the next cycle.
+#[test]
+fn removing_breakpoints_while_running_clears_them_from_the_session() {
+    let Some(_clang) = clang() else {
+        return;
+    };
+    let project = scaffold("remove-running");
+    let mut client = DapClient::spawn(&project.path);
+    initialize(&mut client);
+
+    let breakpoints = client.request(
+        "setBreakpoints",
+        json!({
+            "source": { "path": project.source().to_string_lossy() },
+            "breakpoints": [{ "line": FIRST_STATEMENT_LINE }],
+        }),
+    );
+    assert_eq!(breakpoints["success"], true, "{breakpoints}");
+
+    // A one-second cycle leaves ample time for the update requests to reach
+    // the host between cycles; the assertion still checks deterministically
+    // which later-line stop occurs.
+    let launch = client.request(
+        "launch",
+        json!({
+            "project": project.manifest().to_string_lossy(),
+            "allowWrite": true,
+            "args": ["--cycles", "20000", "--cycle-time", "1s"],
+        }),
+    );
+    assert_eq!(launch["success"], true, "{launch}");
+    let configuration = client.request("configurationDone", json!({}));
+    assert_eq!(configuration["success"], true, "{configuration}");
+    let _ = stop_at_line(&mut client, &project, FIRST_STATEMENT_LINE);
+
+    // Resume so the target is running, then remove the first-statement
+    // breakpoint and add the next statement's. A stale host ID would stop at
+    // the first statement again in the next cycle.
+    let continued = client.request("continue", json!({ "threadId": 1 }));
+    assert_eq!(continued["success"], true, "{continued}");
+    let removed = client.request(
+        "setBreakpoints",
+        json!({
+            "source": { "path": plain_source_path(&project.source()) },
+            "breakpoints": [],
+        }),
+    );
+    assert_eq!(removed["success"], true, "{removed}");
+    let readded = client.request(
+        "setBreakpoints",
+        json!({
+            "source": { "path": verbatim_source_path(&project.source()) },
+            "breakpoints": [{ "line": PROGRAM_SECOND_LINE }],
+        }),
+    );
+    assert_eq!(readded["success"], true, "{readded}");
+    assert_eq!(
+        readded["body"]["breakpoints"][0]["verified"], true,
+        "{readded}"
+    );
+
+    let _ = stop_at_line(&mut client, &project, PROGRAM_SECOND_LINE);
+
     let disconnect = client.request("disconnect", json!({ "terminateDebuggee": true }));
     assert_eq!(disconnect["success"], true, "{disconnect}");
     assert!(client.wait_exit(PROTOCOL_TIMEOUT).is_some());

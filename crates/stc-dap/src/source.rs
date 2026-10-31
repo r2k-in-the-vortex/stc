@@ -335,6 +335,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn path_keys_normalize_one_source_spelling() {
+        let normal = path_key(Path::new("C:/work/app/src/main.st"));
+        assert_eq!(path_key(Path::new(r"C:\work\app\src\main.st")), normal);
+        assert_eq!(path_key(Path::new(r"\\?\C:\work\app\src\main.st")), normal);
+        assert_eq!(path_key(Path::new(r"\\?\C:\work\app\src\main.st\")), normal);
+        assert_eq!(path_key(Path::new("C:/work/app/src/main.st/")), normal);
+        if cfg!(windows) {
+            assert_eq!(path_key(Path::new("C:/WORK/App/SRC/Main.ST")), normal);
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn absolute_paths_strip_windows_verbatim_prefixes() {

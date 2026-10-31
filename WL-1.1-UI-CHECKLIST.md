@@ -369,7 +369,17 @@ F-3, F-6, F-12, and F-16 are close-out fixes.
       the adapter must clear the previous host `breakpoint_id`s for the source even when the new
       list is empty, and must use one path key for the normal and verbatim spellings. Acceptance:
       remove a breakpoint while running or stopped; the session no longer stops there; re-adding
-      it works without restarting.
+      it works without restarting. **Implemented; manual verification pending.** Root cause
+      (confirmed by a failing regression test): every `setBreakpoints` request replaced the
+      source's `SourceBreakpoints` entry, discarding the applied host `breakpoint_id`s, so
+      `apply_source_breakpoints` saw an empty previous list and never sent `breakpoint.clear`.
+      The adapter now updates the existing entry in place and clears the previous host IDs before
+      applying the new set, including an empty list; `source::path_key` keeps the normal and
+      `\\?\` spellings on one key. Regression tests:
+      `removing_breakpoints_while_stopped_clears_them_from_the_session` and
+      `removing_breakpoints_while_running_clears_them_from_the_session` in
+      `crates/stc-driver/tests/dap_cli.rs`, plus the `path_keys_normalize_one_source_spelling`
+      unit test in `crates/stc-dap/src/source.rs`. The manual VS Code acceptance has not run.
 
 - [ ] **F-12 — Unknown host frames appear as `frame` entries.** The frame-pointer walk continues
       past the ST program into the launcher/host, producing frames with no symbol/source that
@@ -534,7 +544,7 @@ not a WL-1.1 code change.
 | --- | --- | --- |
 | F-1.1 | Required; pending | Default-theme ST token overlay; acceptance wording owner-approved 2026-10-31; plan §12.1 |
 | F-3 | Pending | Task termination does not stop the driver/host process tree |
-| F-6 | Pending | Removing a breakpoint does not remove it from the running session |
+| F-6 | Implemented; manual verification pending | Removing breakpoints while stopped or running now clears the host IDs; re-adding works without restart; normal/`\\?\` spellings share one key. Tests: `dap_cli` stopped/running removal tests and `source::path_keys_normalize_one_source_spelling` |
 | F-12 | Pending | Unknown host frames appear as `frame`/Unknown Source |
 | F-16 | Pending | Release monitoring has no IDE surface; typed reads work only over the wire |
 

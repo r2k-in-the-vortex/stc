@@ -12,6 +12,7 @@
 //! applied before the adapter reports the session ready. A breakpoint on the
 //! first executable statement is therefore honored at the next checkpoint.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -634,15 +635,31 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 breakpoint.message = Some(message.to_owned());
             }
         }
-        self.breakpoints.insert(
-            key.clone(),
-            SourceBreakpoints {
-                absolute: absolute.clone(),
-                protocol_file,
-                requested,
-                applied: Vec::new(),
-            },
-        );
+        // Update an existing entry in place: `apply_source_breakpoints` needs
+        // the previous host `breakpoint_id`s so it can clear them, including
+        // when the new list is empty. Replacing the entry would drop those IDs
+        // and leave stale host breakpoints active in the live session.
+        match self.breakpoints.entry(key.clone()) {
+            Entry::Occupied(mut occupied) => {
+                let entry = occupied.get_mut();
+                entry.absolute = absolute.clone();
+                if protocol_file.is_some() {
+                    // Keep an already resolved mapping when this request
+                    // cannot resolve the source again, so the old host IDs
+                    // are still cleared.
+                    entry.protocol_file = protocol_file;
+                }
+                entry.requested = requested;
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(SourceBreakpoints {
+                    absolute: absolute.clone(),
+                    protocol_file,
+                    requested,
+                    applied: Vec::new(),
+                });
+            }
+        }
         if self.session.is_some() && self.breakpoints[&key].protocol_file.is_some() {
             self.apply_source_breakpoints(&key);
         } else if self.breakpoints[&key].protocol_file.is_some() {
