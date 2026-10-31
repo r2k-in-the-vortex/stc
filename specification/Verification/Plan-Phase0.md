@@ -1348,6 +1348,8 @@ follows:
 
 The invariant must be preserved by `irStep` before the three theorems can be stated as whole-run
 properties. That preservation proof, not the semantics definitions, is the remaining P0.5 work.
+The concrete proposal for the invariant and the four decisions is in §22; it is a design note
+awaiting owner approval, and no semantics or proof change has been made for it.
 
 ### 21.3 Deliverables and evidence
 
@@ -1380,3 +1382,607 @@ unaffected.
 4. The remaining three theorems are scoped by the §21.2 invariant, not by a weaker semantics.
 5. The plan, [Semantics.md](Semantics.md), [Plan.md](Plan.md), [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md),
    and the registry agree.
+
+## 22. P0.5 target state invariant — design proposal (awaiting owner approval)
+
+Date: 2026-10-31. Status: **design proposal; no machine-semantics or proof change has been
+made.** This section resolves the four open decisions for the shared invariant behind `ir_progress`
+(P0-T16), `ir_memory_safe` (P0-T17), and `ir_no_ub` (P0-T22). The owner must approve the
+proposal before the invariant is encoded and the three theorems are proved. The five theorems
+already proved (`ir_deterministic`, `ir_got_sound`, `ir_trap_sound`,
+`ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`) stay in place; the proposal notes
+exactly which statements change under the recommended alternatives.
+
+### 22.1 Invariant shape
+
+Two predicates separate the module-level facts from the per-state facts:
+
+- `WFProgram contract frag` holds the P0.4 `WellFormed` predicate plus the builder-recorded or
+  syntactically checkable facts that P0.4 deliberately trusts (the Phase 5 checker derives them):
+  non-empty allocations, pointer origins (cell, global, and stack shapes), indirect-call
+  targets, trap codes, and guarded `unreachable` blocks. Indirect-call signatures are host
+  state and live in `WFState` (D4).
+- `WFState contract c` holds `WFProgram contract c.module` plus the state-level frame, local,
+  memory, storage, binding, and return-link invariants below.
+
+`WFProgram` is the same for every state of one run; `WFState` is preserved by `irStep` and
+established by `initState?`. The proposed theorem statements quantify over `WFRunning`
+(`WFState` plus a running status and a non-empty stack); a reachability corollary composes
+`initState?_wf` with `irStep_wf` and the non-halting step property.
+
+```lean
+/-- Module-level facts for the target invariant. `WellFormed` is the P0.4
+predicate. The other fields are builder-recorded facts, trusted in P0.5 and
+derived from the emitted instructions by the Phase 5 checker. -/
+structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
+  wellFormed : WellFormed contract frag
+  allocsNonEmpty : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
+    ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty → 0 < allocSize ty
+  originsTrusted : OriginsTrusted frag
+  stackOriginsTrusted : StackOriginsTrusted frag
+  callPtrOrigins : CallPtrOrigins frag
+  trapCodesSpecified : TrapCodesSpecified frag
+  unreachableGuarded : UnreachableGuarded frag
+
+/-- A local value realizes the builder-recorded pointer origin. The slot table
+supplies the cell kind; `FunctionFacts.origins` supplies the SSA-to-origin
+mapping. -/
+def OriginHolds (contract : IRContract) (c : IRState) (f : IRFrame)
+    (name : String) (origin : PointerOrigin) : Prop :=
+  ∃ v, f.lookupLocal name = some v ∧ f.fn.localType? name = some .ptr ∧
+    match origin with
+    | .cell slot false =>
+        v = .ptr (.cell slot) ∧
+          ∃ kind, c.slotKind? slot = some kind ∧
+            (kind.isStorage = true ∨ kind.isCallable = true)
+    | .cell slot true =>
+        ∃ kind, c.slotKind? slot = some kind ∧
+          ((kind.isStorage = true ∧ v = .ptr (.root slot 0)) ∨
+            (kind = .function ∧
+              ∃ fname, c.lookupFunction slot = some fname ∧
+                v = .ptr (.function fname) ∧
+                ∃ fn ∈ c.module.functions, fn.name = fname) ∨
+            (kind = .importCell ∧ v = .ptr (.importCell slot)))
+    | .global g =>
+        (∃ off, v = .ptr (.global g off)) ∧ g ∈ contract.localGlobals
+    | .vtableCode => False
+
+/-- The state-level invariant. Each field is a separate preservation
+obligation; the comments name the concerned decision. -/
+structure WFState (contract : IRContract) (c : IRState) : Prop where
+  program : WFProgram contract c.module
+  frameIdsNodup : (c.frames.map (·.id)).Nodup
+  frameIdsBound : ∀ f ∈ c.frames, f.id < c.nextFrame
+  frameFunction : ∀ f ∈ c.frames, f.fn ∈ c.module.functions
+  frameBlock : ∀ f ∈ c.frames, ∃ block ∈ f.fn.blocks,
+    f.block = block ∧ f.terminator = block.terminator ∧
+      ∃ done, block.instrs = done ++ f.instrs
+  framePrev : ∀ f ∈ c.frames, PrevEdge c f
+  noBareUnreachable : ∀ f rest, c.frames = f :: rest → f.instrs = [] →
+    f.terminator ≠ some .unreachable
+  localsInitialized : ∀ f ∈ c.frames, ∀ name ty,
+    f.fn.localType? name = some ty → ∃ v, f.lookupLocal name = some v
+  localsTyped : ∀ f ∈ c.frames, ∀ name v,
+    f.lookupLocal name = some v → ∀ ty, f.fn.localType? name = some ty →
+      v.type? = some ty
+  originsMatch : ∀ f ∈ c.frames, ∀ entry ∈ f.fn.facts.origins,
+    OriginHolds contract c f entry.1 entry.2                   -- D3
+  allocsWellFormed : ∀ f ∈ c.frames, AllocsWellFormed f        -- D2
+  stackPtrsBounded : ∀ f ∈ c.frames, StackPtrsBounded c f      -- D2
+  memTyped : ∀ f ∈ c.frames, MemTyped c f                      -- D2
+  storagePtrsLive : ∀ f ∈ c.frames, StoragePtrsLive c f        -- D1
+  functionBindings : FunctionBindingsTyped c                   -- D3, D4
+  callTargets : CallTargetsTyped c                             -- D4
+  returnLink : ReturnLink c                                    -- D4
+  bottomRetDest : ∀ last, c.frames.getLast? = some last → last.retDest = none
+```
+
+The state invariant is status-agnostic so that successful steps into a halted
+or trapped state still preserve it (the frame fields are vacuous when the stack
+is empty). The three theorems run on the running restriction:
+
+```lean
+def WFRunning (contract : IRContract) (c : IRState) : Prop :=
+  WFState contract c ∧ c.status = .running ∧ c.frames ≠ []
+```
+
+The helper predicates are:
+
+```lean
+/-- The recorded predecessor is a real CFG edge, or the frame is at the entry
+block. -/
+def PrevEdge (c : IRState) (f : IRFrame) : Prop :=
+  (f.prev = none ∧ ∃ rest, f.fn.blocks = f.block :: rest) ∨
+  (∃ label block, f.prev = some label ∧ f.fn.block? label = some block ∧
+    f.block.label ∈ block.successors)
+
+/-- Allocation slots are unique, exactly the range `[0, nextAlloc)`, and every
+allocation has a non-empty element extent. -/
+def AllocsWellFormed (f : IRFrame) : Prop :=
+  (f.allocs.map (·.1)).Nodup ∧
+  (f.allocs.map (·.1)).Perm (List.range f.nextAlloc) ∧
+  ∀ slot ty, f.allocType? slot = some ty → 0 < allocSize ty
+
+/-- Every stack pointer held in a local is inside an allocated slot. -/
+def StackPtrsBounded (c : IRState) (f : IRFrame) : Prop :=
+  ∀ name v addr, f.lookupLocal name = some v → v = .ptr addr →
+    match addr with
+    | .stack frame slot off =>
+        ∃ g, c.frameById? frame = some g ∧
+          ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty
+    | _ => True
+
+/-- A stack cell's stored value matches the allocation element type. -/
+def MemValueTyped (ty : IrType) (v : IRValue) : Prop :=
+  match ty with
+  | .array elem _ => v.type? = some elem
+  | _ => v.type? = some ty
+
+def MemTyped (c : IRState) (f : IRFrame) : Prop :=
+  ∀ addr v, f.lookupMem addr = some v →
+    ∃ slot off ty, addr = .stack f.id slot off ∧
+      f.allocType? slot = some ty ∧ off < allocSize ty ∧ MemValueTyped ty v
+
+/-- Every persistent-storage pointer held in a local addresses a live storage
+entry (D1). -/
+def StoragePtrsLive (c : IRState) (f : IRFrame) : Prop :=
+  (∀ name v slot off, f.lookupLocal name = some v → v = .ptr (.root slot off) →
+    ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length) ∧
+  (∀ name v g off, f.lookupLocal name = some v → v = .ptr (.global g off) →
+    ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length)
+
+/-- The host's function-cell binding names a module function whose signature is
+the one recorded for the cell (D3, D4). Import bindings are checked at the
+call target, where the trap service is required. -/
+def FunctionBindingsTyped (c : IRState) : Prop :=
+  ∀ slot fname, c.lookupFunction slot = some fname →
+    ∃ fn ∈ c.module.functions, fn.name = fname ∧
+      c.lookupFunctionSignature slot = some fn.signature
+
+/-- Every indirect call agrees with the signature of the callable cell it
+targets: the call's result type is the signature's return type and its
+argument operands have the signature's parameter types. Import-cell calls are
+the trap service and return `void` (D4). -/
+def CallTargetsTyped (c : IRState) : Prop :=
+  ∀ fn ∈ c.module.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
+      ∃ name slot, callee = .local name ∧
+        fn.facts.originOf? name = some (.cell slot true) →
+        (∃ sig, c.lookupFunctionSignature slot = some sig ∧
+          sig.returnType = ret ∧
+          listForall₂ (fun arg ty => operandHasType fn ty arg) args sig.params) ∨
+        (c.slotKind? slot = some .importCell ∧
+          c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
+
+/-- The callee's return destination agrees with the caller's local type (D4). -/
+def ReturnLink (c : IRState) : Prop :=
+  ∀ callee caller rest, c.frames = callee :: caller :: rest →
+    match callee.retDest with
+    | none => True
+    | some dest =>
+        callee.fn.returnType ≠ .void ∧
+          caller.fn.localType? dest = some callee.fn.returnType
+```
+
+One-step readiness is deliberately **not** a `WFState` field. It is the source-check obligation
+that rules out an out-of-range dynamic index; `ir_progress` takes it as a premise, because it is
+not preserved by a step that is allowed to fault:
+
+```lean
+/-- The current instruction's operand values and computed addresses are in
+range. `AccessBoundedInstr` is the case analysis over the instruction that
+requires every operand evaluation and address computation used by `stepInstr`
+to succeed and every resulting load/store address to satisfy `AccessValid`.
+It is the stuck-freedom precondition. Discharged by the source checks except
+for the Q3 character path; see §22.4. -/
+def AccessBounded (contract : IRContract) (c : IRState) : Prop :=
+  ∀ f rest instr rest', c.frames = f :: rest → f.instrs = instr :: rest' →
+    AccessBoundedInstr contract c f instr
+```
+
+### 22.2 Proposed theorem statements
+
+The three statements are:
+
+```lean
+/-- P0-T16: a well-formed running state steps or traps; it does not get stuck
+or reach an undefined state. -/
+theorem ir_progress {contract : IRContract} {c : IRState}
+    (hwf : WFRunning contract c) (haccess : AccessBounded contract c) :
+    (∃ c', irStep c = .step c') ∨
+      (∃ trap c', irStep c = .trapped trap c')
+
+/-- P0-T17: every successful target load or store targets valid stack, GOT, or
+persistent storage of the right kind. -/
+theorem ir_memory_safe {contract : IRContract} {c : IRState}
+    (hwf : WFRunning contract c) :
+    (∀ addr ty v, StepLoad c addr ty v → AccessValid contract c addr false ty) ∧
+    (∀ addr ty v c', StepStore c addr ty v c' →
+      AccessValid contract c addr true ty)
+
+/-- P0-T22: a well-formed running state never reaches the undefined state. -/
+theorem ir_no_ub {contract : IRContract} {c c' : IRState}
+    (hwf : WFRunning contract c) : irStep c ≠ .ub c'
+```
+
+with the access predicates fixed by the step function:
+
+```lean
+/-- The current configuration performs this successful load. -/
+def StepLoad (c : IRState) (addr : IRAddr) (ty : IrType) (v : IRValue) : Prop :=
+  ∃ f rest dest ptr align,
+    c.frames = f :: rest ∧ f.instrs = .load dest ty ptr align :: rest ∧
+      evalOperand f ptr = some (.ptr addr) ∧ c.loadValue addr = some v
+
+/-- The current configuration performs this successful store. -/
+def StepStore (c : IRState) (addr : IRAddr) (ty : IrType) (v : IRValue)
+    (c' : IRState) : Prop :=
+  ∃ f rest value ptr align,
+    c.frames = f :: rest ∧ f.instrs = .store ty value ptr align :: rest ∧
+      evalOperand f value = some v ∧ evalOperand f ptr = some (.ptr addr) ∧
+      c.storeValue addr v = some c'
+
+/-- A successful access is to an allocated stack cell, a live GOT cell load, or
+a live persistent-storage entry. Cell stores are excluded. -/
+def AccessValid (contract : IRContract) (c : IRState) (addr : IRAddr)
+    (store : Bool) (ty : IrType) : Prop :=
+  match addr with
+  | .stack frame slot off =>
+      ∃ f, c.frameById? frame = some f ∧
+        ((∃ elem count, f.allocType? slot = some (.array elem count) ∧
+            ty = elem ∧ off < count) ∨
+          (f.allocType? slot = some ty ∧ off = 0))
+  | .slotEntry slot =>
+      store = false ∧ slot < c.module.slots.length
+  | .cell slot =>
+      store = false ∧ ∃ kind, c.slotKind? slot = some kind ∧
+        (kind.isStorage = true ∨
+          (kind = .function ∧ ∃ fname, c.lookupFunction slot = some fname) ∨
+          kind = .importCell)
+  | .root slot off =>
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length
+  | .global g off =>
+      g ∈ contract.localGlobals ∧
+        ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length
+  | _ => False
+```
+
+The cell case has to admit callable loads: `cell_value` loads a `Function` cell to obtain the
+callable or an `Import` cell to obtain the service identity, in addition to `Data`/`Direct`
+storage loads. `Descriptor` loads return `none` and so are never successful accesses.
+
+The memory-safety statement uses *successful* accesses: under the recommended D2 model an
+out-of-range access is a defined fault and is therefore not a performed access. The stronger
+"the program never even attempts an out-of-range access" is `AccessBounded`, which is the
+progress premise.
+
+### 22.3 Decision D1 — persistent storage
+
+**Gap.** `loadValue (.root slot)` currently returns `s.lookupRoot slot`, the `Data`/`Direct`
+cell value (the storage pointer), and `storeValue (.root slot)` replaces that cell value. A
+generated load or store through a storage pointer (`FunctionFacts.memoryAccesses` contains both
+loads and stores through `Data`/`Direct` cell values) is therefore interpreted as touching the
+GOT cell, not the persistent storage it points at. The same offset-blindness exists for
+`.globalOffset`. This must be resolved before `ir_memory_safe` can be stated honestly.
+
+**Option 1 — no-store-through-root restriction.** Add a P0.4-level restriction that generated
+code never stores through a `Data`/`Direct` cell value (`memoryAccesses` has `isStore = false`
+only), or the stronger restriction that it never dereferences one at all. The first still
+misinterprets loads; the second excludes persistent state access from the covered fragment. The
+compiler does emit both loads and stores through these cells, so the strong restriction does not
+cover the core cycle body. The affected theorem is a heavily weakened `ir_memory_safe` scoped to
+stack and GOT-cell loads only. Not recommended.
+
+**Option 2 — refined offset-aware persistent store (recommended).** Model the storage behind a
+`Data`/`Direct` cell as an addressable value sequence:
+
+- `StoreId` is `root (slot : Nat)` or `global (name : String)`; `IRState` gains
+  `storage : List (StoreId × List IRValue)`, with `lookupStorage id` and
+  `writeStorage id off value` (the write succeeds exactly when `off < values.length`).
+- `IRAddr.root` carries an offset: `.root (slot : Nat) (offset : Nat)`; `.global` and
+  `.globalOffset` unify to `.global (name : String) (offset : Nat)`. `evalGepAddr` adds the
+  summed indices to the base offset for both.
+- `loadValue (.root slot off)` and `loadValue (.global g off)` read
+  `lookupStorage (root slot) off` and `lookupStorage (global g) off`; `.cell` loads are
+  unchanged except that a storage cell yields `.ptr (.root slot 0)`. `storeValue` writes only
+  to `.stack`, `.root`, and `.global`; `.cell` remains non-writable.
+- GOT access shape: the builder emits two loads for every slot access (`slot_cell` then
+  `cell_value`). The current model collapses them: `.slotTable` GEP yields `.cell slot`
+  directly, so the first load already returns the cell content and the recorded
+  `cell slot false` origin does not describe the value the model stores in that SSA. Add
+  `IRAddr.slotEntry (slot : Nat)`, make `evalGepAddr (.slotTable) [index]` return
+  `.slotEntry index`, and define `loadValue (.slotEntry slot)` as
+  `some (.ptr (.cell slot))` when `slot < c.module.slots.length` (otherwise none, a defined
+  fault). The first load then produces the cell address (the `cell slot false` origin), and the
+  second load through `.cell slot` produces the cell content (the `cell slot true` origin).
+  `storeValue (.slotEntry slot)` is none (host-owned), and `AccessValid` admits only
+  `.slotEntry` loads. The slots-table base itself is the value of the slots global, which the
+  host seeds with `.ptr .slotTable`; this is part of the same storage contract.
+- `initState?`/`IRSem`/`irRun` take the host-supplied
+  `storage : List (StoreId × List IRValue)`; the `globals` parameter seeds the offset-0 global
+  entries. The host initialization boundary is responsible for the storage extents.
+- `ir_got_sound` changes only its storage-cell conclusion from `.ptr (.root slot)` to
+  `.ptr (.root slot 0)`.
+
+The affected statements: `ir_memory_safe` gains the `.root`/`.global` cases of `AccessValid`
+(shown in §22.2); `ir_progress` gains `StoragePtrsLive` and the `AccessBounded` obligation for
+storage offsets; `ir_no_ub` is unchanged because a missing or out-of-range storage entry is a
+defined fault, not undefined behavior. `ir_got_sound`, the smoke example, and the
+`initState?`/`IRSem`/`irRun` signatures are updated when the change is implemented.
+
+**Option 3 — keep the machine frozen and carve persistent dereferences out.** State
+`ir_memory_safe` only for stack and GOT-cell loads and record root/global dereferences as outside
+the modeled memory. This preserves the checkpoint but leaves the central persistent-state access
+pattern unverified and makes `ir_progress` conditional on functions with no `memoryAccesses`
+entries. Not recommended.
+
+**Recommendation: Option 2.** It matches the compiler's access pattern, fixes the root-map
+corruption, and gives persistent storage an explicit initialization obligation. If the owner
+prefers to keep the P0.5 machine frozen, Option 3 is the only honest fallback; Option 1 should be
+rejected because it either keeps the load mis-model or excludes core programs.
+
+### 22.4 Decision D2 — GEP bounds and undefined behavior
+
+**Gap.** `evalGepAddr` sums indices without checking the allocation extent; `loadValue (.stack
+...)` reads only initialized keys (a miss is `.stuck`), but `storeValue (.stack ...)` inserts
+arbitrary keys, so an out-of-range store is currently a successful modeled write. `IR` `WellFormed`
+has no allocation-extent facts, and the source checks are the only source of index bounds. The
+Q3 character model is layout-only: Unicode scalar validity and the `WCHAR_TO_UCHAR` and
+`UCHAR_TO_WCHAR` traps are not modeled (Semantics.md §3.1), so a character conversion that should
+trap can feed an index value; the character-string index path is therefore not covered by a
+source-bounds argument until Q3 is resolved.
+
+**Option 1 — bounds-checked memory operations (recommended).** Add extent checks at the point an
+address is formed or used:
+
+- In the `.gep` case, check the computed stack offset against the frame's allocation extent
+  (`off < allocSize ty`); an out-of-range GEP returns `.stuck`. Storage offsets are checked the
+  same way against `storage` lengths.
+- In `stepInstr`'s load/store cases (or typed variants of `loadValue`/`storeValue`), re-check
+  the extent and the element-type agreement for stack accesses; a mismatch or miss returns
+  `none`, which the step turns into `.stuck`.
+- Out-of-range access is a **defined fault** (`.stuck`), not `.ub`; `ir_no_ub` stays about the
+  undefined sources (`unreachable`, unknown trap codes, host imports, cell stores). The fragment
+  still excludes out-of-range accesses, and `ir_progress` excludes them through `AccessBounded`.
+- `StackPtrsBounded` and `AllocsWellFormed` encode the extent side; successful `.gep` steps
+  preserve them because the bounds check rejects the out-of-range result. `AccessBounded`
+  carries the dynamic-index obligation for the current instruction and is the Q3-dependent
+  premise: it is discharged by the source checks for ordinary arrays and by a `CharIndexBounded`
+  hypothesis (or exclusion from the initial coverage) for character indexing until Q3 is
+  resolved.
+
+**Option 2 — machine frozen, bounds as an assumption.** Keep `evalGepAddr` and the memory
+operations unchanged; put `StackPtrsBounded` and `AccessBounded` in the invariant and prove
+preservation only under the source-bounds assumption. The problem is the out-of-range store: the
+current model records it as a successful write, so `ir_memory_safe` cannot say "all stores are
+in-bounds" without already assuming `AccessBounded`, and the model itself has no defined fault
+for the case. This is weaker than Option 1 and does not fix the store.
+
+**Recommendation: Option 1.** Bounds-checked GEP and memory operations make out-of-range
+accesses defined faults, keep `ir_memory_safe` about successful accesses, and isolate the
+remaining source obligation in `AccessBounded`. The Q3 gap is recorded as a scope condition: the
+first `ir_progress` coverage excludes character-index-dependent accesses or carries the explicit
+`CharIndexBounded` hypothesis; resolving Q3 is the prerequisite for claiming them. `ir_no_ub` is
+not weakened by Q3 because an out-of-range character access is a defined fault.
+
+### 22.5 Decision D3 — indirect-call origins
+
+The P0.4 facts already give the needed link: `FunctionFacts.origins` maps SSA names to
+`PointerOrigin`, and `SlotRefsKindCorrect` requires every `indirectCalls` callee whose origin is
+`cell slot true` to name a callable slot. Two things are still missing: the origin-to-value link
+at run time, and the requirement that a callable value resolves to a real module function (or a
+trap import). The invariant adds:
+
+- `OriginsTrusted frag`: for each origin entry, the defining instruction matches the recorded
+  shape: a `.cell slot false` origin is a load whose pointer operand is a `.slotTable` GEP with
+  first index literal `slot` (the load produces `.ptr (.cell slot)`); a `.cell slot true` origin
+  is a load whose pointer operand is a `.cell slot false`-origin value; a `.global g` origin is
+  a symbol or global GEP; `vtableCode` origins are absent from core functions. This is
+  builder-trusted in P0.5 (P0.4 already records that deriving it is the Phase 5 checker's
+  obligation) and is a `WFProgram` field. It is not a new `WellFormed` rule.
+- `OriginHolds` (in §22.1) ties every recorded local to the value shape and slot kind. A
+  storage-kind cell value is the root pointer `.ptr (.root slot 0)`; a callable cell value is
+  the bound callable, and the `Function` binding must name a function in `c.module.functions`;
+  an Import cell value is the service identity `.ptr (.importCell slot)`, and
+  `CallTargetsTyped` requires the binding to be `ImportKind.trap` when the value is called
+  (host imports are outside the interpreted cycle body and would otherwise be a defined
+  `.stuck`).
+- `CallPtrOrigins frag`: every `.callPtr` callee operand is a local with a recorded
+  `.cell slot true` origin and a callable slot; this is the syntactic side of the same fact. It
+  excludes callable values from `symbol`, `vtableCode`, or unrecorded locals.
+
+```lean
+/-- Every indirect call's callee is a local with a callable cell origin. -/
+def CallPtrOrigins (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
+      ∃ name slot, callee = .local name ∧
+        fn.facts.originOf? name = some (.cell slot true)
+
+/-- Every call through an import cell passes a literal trap code 1, 2, or 3. -/
+def TrapCodesSpecified (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
+      (∃ name slot, callee = .local name ∧
+          fn.facts.originOf? name = some (.cell slot true) ∧
+          frag.slots[slot]? = some .importCell) →
+        ∃ code span, args = [.intLit (.int 32) code, span] ∧
+          (code = 1 ∨ code = 2 ∨ code = 3)
+
+/-- Every `unreachable` block ends in a call through a trap import cell. -/
+def UnreachableGuarded (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
+    block.terminator = some .unreachable →
+      ∃ instr, block.instrs.getLast? = some instr ∧
+        ∃ dest ret callee args, instr = .callPtr dest ret callee args ∧
+          (∃ name slot, callee = .local name ∧
+            fn.facts.originOf? name = some (.cell slot true) ∧
+            frag.slots[slot]? = some .importCell)
+```
+
+The preservation obligation is local: the slot-entry load produces `.ptr (.cell slot)` (the
+`cell slot false` shape), the cell load produces the content shape `OriginHolds` requires (via
+the slot kind, not a hard-coded host value), GEPs on storage pointers preserve the
+`.root`/`.global` shape with a new offset, and calls and returns do not change origins.
+`ir_progress` then knows that
+`callPtr` sees either `.ptr (.function fname)` with a module function, or
+`.ptr (.importCell slot)` with a trap import, so it is not stuck. `ir_memory_safe` is unaffected;
+`ir_no_ub` uses the same facts for the trap-service code paths.
+
+**Recommendation:** keep P0.4 frozen and put `OriginsTrusted`, `CallPtrOrigins`, and the
+`ImportKind.trap` requirement in `WFProgram`/`WFState`, recorded as builder-trusted. The
+alternative — adding an origins-consistency rule to `WellFormed` — is deferred to the Phase 5
+checker so the P0.4 review is not reopened.
+
+### 22.6 Decision D4 — return linkage
+
+The callee frame records `retDest : Option Ssa`; the caller's local-type environment records the
+destination type. The invariant is:
+
+```lean
+def ReturnLink (c : IRState) : Prop :=
+  ∀ callee caller rest, c.frames = callee :: caller :: rest →
+    match callee.retDest with
+    | none => True
+    | some dest =>
+        callee.fn.returnType ≠ .void ∧
+          caller.fn.localType? dest = some callee.fn.returnType
+```
+
+The bottom frame has `retDest = none` (shown in `WFState`). `retDest = none` covers void calls and
+statement calls whose value is ignored. When `retDest = some dest`, the callee must return a value
+of the caller's declared destination type, and `irStepRet`'s `some dest, none` stuck case is
+excluded by `returnType ≠ .void` plus `Terminator.WellTyped` (`ret none` requires a void return).
+
+Direct calls are already covered: `WellTyped` for `.call` requires the callee signature in
+`directCallEnv` to have `returnType = ret`, the module function's signature is that signature,
+and the call's `dest` is its unique local definition with result type `ret`. Indirect calls are
+not: `WellTyped` for `.callPtr` does not relate `ret` to the called function's return type, and
+`FunctionFacts` records only the callee SSA name.
+
+**Option A — host function bindings carry signatures (recommended).** `IRState` gains
+`functionSignatures : List (Nat × Signature)`, keyed by cell slot and supplied by the host at
+the initialization boundary, with `lookupFunctionSignature slot`. The two predicates in §22.1
+then close the link:
+
+- `FunctionBindingsTyped`: a Function-cell binding names a module function and the recorded
+  signature is exactly that function's `Function.signature`.
+- `CallTargetsTyped`: every `.callPtr` through a Function cell has its `ret` and argument
+  operand types checked against the cell's signature; every call through an Import cell is the
+  trap service (`ImportKind.trap`, `ret = .void`, `dest = none`), with `TrapCodesSpecified`
+  checking the code.
+
+At `callFunction` for a Function cell, `OriginHolds` gives `.ptr (.function fname)`,
+`FunctionBindingsTyped` gives `fname`'s module function with the cell's signature, and
+`CallTargetsTyped` gives `ret = signature.returnType`; with the call's destination local typed
+`ret`, `ReturnLink` is established. Import-cell calls have `dest = none`, so they impose no
+return-value obligation. This option changes the P0.5 state/API (the signature map and
+`lookupFunctionSignature`) but leaves P0.4 unchanged.
+
+**Option B — record call-site signatures in `FunctionFacts`.** Extend P0.4 with
+`indirectSignatures : List (String × Signature)` keyed by the callee SSA, recorded by `call_ptr`,
+and add a `WellFormed` rule checking the call's `ret` and argument types. This makes the
+call-site side syntactic, but it still does not relate the slot's host binding to the callee's
+actual signature; a state-level signature map (Option A) or a trusted GOT manifest is still
+needed for `FunctionBindingsTyped`. The P0.4 review would be reopened. Not preferred unless the
+owner wants the call-site check in `WellFormed`.
+
+**Option C — restrict indirect calls to statement/void calls.** Keep P0.4 frozen and require
+every `.callPtr` to have `dest = none` (the trap service and void services). This excludes
+value-returning callables and services from `ir_progress` coverage. Not recommended if the
+compiler emits value-returning calls through Function cells (it does).
+
+**Recommendation: Option A.** The GOT manifest already assigns a function type to each function
+cell, so carrying the signature in the host binding is the natural state model; it keeps P0.4
+frozen, covers value-returning callables and services, and makes `ReturnLink` a checked fact
+rather than an assumption. The owner should approve the `IRState.functionSignatures` addition
+(or choose Option C if the covered fragment is to be narrowed).
+
+### 22.7 Preservation obligations
+
+The three theorems are assembled from the following obligations, in this order:
+
+1. **Initial state.** `initState?_wf`: `WellFormed contract frag`, typed arguments, and
+   host-consistent `roots`/`functions`/`functionSignatures`/`imports`/`storage` establish
+   `WFState` and `WFRunning` for the entry frame (one frame, no allocs, `prev = none`,
+   `retDest = none`, `nextFrame = 1`).
+2. **Frame preservation.** `irStep_wf` shows every `.step` successor keeps the frame linkage:
+   the block/instruction suffix, the block terminator, `prev` as a CFG edge, unique/bounded
+   frame ids, `retDest` linkage, and the bottom-frame destination. Calls push a callee with
+   `prev = none`; returns pop the callee and restore the caller; jumps set `prev` to the source
+   edge; instruction steps shrink the suffix. A step that empties the stack or sets a terminal
+   status preserves `WFState`; `WFRunning` is preserved by any step whose successor is still
+   running.
+3. **Locals.** `localsInitialized` and `localsTyped` are preserved by every destination-defining
+   instruction using the P0.4 well-typed instructions and the operand typing; `initLocals`
+   covers parameters and SSA definitions; `setLocal` is monotone for initialization. Return
+   binding uses D4.
+4. **Origins.** `OriginsMatch` is preserved by cell loads (slot kind gives the value shape),
+   GEPs (origin and shape are propagated), and untouched locals (D3).
+5. **Stack memory.** `AllocsWellFormed`, `StackPtrsBounded`, and `MemTyped` are preserved by
+   `alloca` (new non-empty slot), `gep` (D2 bounds check), `store` (same slot, `MemValueTyped`),
+   and frame push/pop. `AccessBounded` is the separate current-instruction premise.
+6. **Persistent storage.** `StoragePtrsLive` is preserved by storage loads/stores and GEPs
+   (D1); the host extents make out-of-range accesses defined faults.
+7. **Bindings.** `functionBindings`, `callTargets`, and the trap-import requirement are
+   preserved because the step functions do not mutate
+   `functions`/`functionSignatures`/`imports`/`roots`; only the host initialization supplies
+   them.
+8. **Control invariants.** `TrapCodesSpecified` and `UnreachableGuarded` are program-level
+   facts. A trap block's last instruction is a trap-service `callPtr` with a literal code in
+   `1..3`, so its following `unreachable` is never reached; `noBareUnreachable` records the
+   corresponding state fact (`instrs = []` never meets an `unreachable` terminator). A store
+   through a cell address is excluded by `WellFormed.cellsNotWritten`, and a store through a
+   Function/Import cell value is excluded by `SlotRefsKindCorrect` (only storage kinds appear in
+   `memoryAccesses`). Pointer values without a recorded origin are the remaining case; the
+   proposal adds a builder-trusted `StackOriginsTrusted` shape (alloca or GEP from a stack
+   value) so stores through unrecorded slot-entry/address pointers are excluded. This is an
+   extra builder fact of the same kind as `OriginsTrusted`, not one of the four decisions.
+9. **One-step lemmas.** `stepInstr_progress`, `stepTerminator_progress`, `stepInstr_memory_safe`,
+   `stepInstr_no_ub`, and the corresponding terminator lemmas, by cases on the P0.4 construct
+   and using the P0.4 typing facts, `ir_got_sound`, and the invariants above.
+10. **Reachability.** `initState?_wf` + `irStep_wf` give the three theorems for every
+    `IRStepStar`-reachable state; `irRun` corollaries follow for the executable entry point.
+
+The only theorem premise that is not a state invariant is `AccessBounded` (dynamic index and
+storage extent bounds for the current instruction), because a step that violates it is a
+defined fault and has no `.step` successor to preserve it through.
+
+### 22.8 Effect on proved results and APIs
+
+- D1 (Option 2) changes `IRAddr.root`/`.global`, adds `.slotEntry` and `IRState.storage`, and
+  changes `evalGepAddr`, `loadValue`, `storeValue`, `initState?`, `IRSem`, and `irRun`.
+  `ir_got_sound`'s
+  storage-cell conclusion becomes `.ptr (.root slot 0)` and is reproved; the smoke example is
+  updated. `ir_deterministic`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, and the
+  `irExecRec` lemmas are memory-agnostic and should only need recompilation; the registry audit
+  is rerun.
+- D2 (Option 1) changes `evalGepAddr`/`loadValue`/`storeValue` only; no statement changes for the
+  five proved theorems.
+- D3 adds only `WFProgram`/`WFState` predicates; no existing statement changes.
+- D4 (Option A) adds `IRState.functionSignatures` and `lookupFunctionSignature`, and
+  `initState?`/`IRSem`/`irRun` take the signature map; P0.4 is unchanged. `ir_got_sound` and the
+  Function-cell load path keep using `lookupFunction`, so only the state constructor changes.
+  Option C leaves the state untouched but narrows the covered indirect-call fragment.
+
+### 22.9 Approval checklist
+
+1. D1: approve the refined offset-aware persistent store (Option 2), including the `.slotEntry`
+   level for the two-load GOT access shape and the associated `IRAddr`/`IRState`/`initState?`
+   changes, or choose Option 3 (frozen machine, persistent dereferences out of scope).
+2. D2: approve bounds-checked GEP/memory operations with out-of-range accesses as `.stuck`
+   (Option 1), and the Q3 character carve-out (`CharIndexBounded` or exclusion) for
+   `ir_progress`.
+3. D3: approve keeping origins, stack-origin, and call-target facts in the P0.5 `WFProgram`
+   predicate as builder-trusted, with no P0.4 change.
+4. D4: approve the `IRState.functionSignatures`/`lookupFunctionSignature` state addition and the
+   `FunctionBindingsTyped`/`CallTargetsTyped` checks (Option A), or choose Option C (restrict
+   indirect calls to `dest = none`).
+5. Approve the `WFState` field list, the `AccessBounded` premise, and the exact theorem
+   statements in §22.2.
+6. Confirm that an out-of-range stack or storage access is a defined fault (`.stuck`) rather
+   than undefined behavior; this is what keeps `ir_no_ub` independent of Q3.
+
+After approval, the implementation order is: D1/D2 model changes, D4 fact amendment if chosen,
+`WFProgram`/`WFState` encoding, initial-state and preservation proofs, one-step progress,
+memory-safety, and no-UB lemmas, then the reachability corollaries and registry updates.

@@ -331,11 +331,12 @@ PR #11 (merge commit `612f84d`): `progress`, `preservation`, initial-state typin
 confirmation. The P0.5 checkpoint defines the target machine, step relation, executor, and
 coverage table, and proves determinism, GOT soundness, trap soundness, checked-arithmetic
 refinement, and the recursive-model equivalence; progress, memory safety, and no-UB await the
-target state invariant. Core compiler features and the language are not expected to change, so
+target state invariant, whose design proposal is in Plan-Phase0 §22 and is awaiting owner
+approval. Core compiler features and the language are not expected to change, so
 further drift is not expected; only bug fixes are in scope. Detailed planning is in
 [V2.0.0-PLAN.md](V2.0.0-PLAN.md); the P0.4 scope decisions are in
 [Plan-Phase0.md](specification/Verification/Plan-Phase0.md) §20, the P0.3 completion record in
-§19.12, and the P0.5 checkpoint in §21.
+§19.12, the P0.5 checkpoint in §21, and the invariant design proposal in §22.
 
 **Why it matters.** Phase 0 was paused mid-P0.3 pending alignment with M6.5; P0.3 is now complete
 and review-approved. The earlier blocker — ongoing compiler changes — is resolved by the v1.0.0
@@ -1082,3 +1083,4 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-10-31 | Approved the P0.3 review; WL-3 remains in progress for P0.5 and is done only after owner confirmation. |
 | 2026-10-31 | Merged PR #11 (P0.3) into `v2.0.0-planning` as `612f84d`; WL-3 remains in progress for P0.5. |
 | 2026-10-31 | P0.5 checkpoint: target machine, step relation, executor, and coverage table defined; determinism, GOT soundness, trap soundness, checked-arithmetic refinement, and recursive-model equivalence proved. Progress, memory safety, and no-UB await the target state invariant; see Plan-Phase0 §21. |
+| 2026-10-31 | Drafted the P0.5 target-invariant design proposal in Plan-Phase0 §22 (invariant shape, exact theorem statements, preservation obligations, decisions D1–D4); awaiting owner approval before implementation. |

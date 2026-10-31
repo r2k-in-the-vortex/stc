@@ -263,9 +263,10 @@ soundness.
 
 P0.5 is in progress. `ir_deterministic`, `ir_got_sound`, `ir_trap_sound`,
 `ir_checked_arith_refines_exact`, and `ir_recursive_model_equiv` are proved. `ir_progress`,
-`ir_memory_safe`, and `ir_no_ub` are stated over reachable well-formed states and are waiting on
-the target state invariant (frame/local typing, allocated stack memory, GOT kind agreement, and
-precondition agreement with `WellFormed`); see `Plan-Phase0.md` §21.
+`ir_memory_safe`, and `ir_no_ub` are stated over reachable well-formed states and await the
+target state invariant. The invariant design proposal is in `Plan-Phase0.md` §22, covering the
+persistent-storage model, stack/GEP bounds and the Q3 character gap, indirect-call origins, and
+return linkage; it is awaiting owner approval before implementation. Earlier scoping is in §21.
 
 ### 4.6 Cycle and initialization boundary
 
@@ -285,8 +286,10 @@ The core has stack frames and persistent GOT cells. There is no heap, no general
 arithmetic, and no aliasing beyond GOT cells. Target values are integers, pointers, and the
 typed cell contents described by `WellFormed`. Stack memory is modeled per slot and array
 element. Globals and `Data`/`Direct` root values are modeled as whole values, so offsets into
-persistent storage are abstracted; whether the covered cycle body may store through a root
-pointer is part of the remaining P0.5 memory-safety work (`Plan-Phase0.md` §21.2).
+persistent storage are abstracted; the slot-table entry level of the two-load GOT access pattern
+is currently collapsed as well. The P0.5 invariant design proposal in `Plan-Phase0.md` §22
+recommends replacing both with the offset-aware store and the `.slotEntry` level; it is awaiting
+owner approval.
 
 ### 5.2 GOT root and slot model
 
@@ -299,7 +302,9 @@ excluded. The slot table is grouped in the canonical kind order; sorting within 
 `GotId`/service ID is Phase 3's `slots_canonical`. `ir_got_sound` is proved for the target
 `loadValue`: given the slot kind, a `Data`/`Direct` cell load returns the root pointer, a
 `Function` cell load returns the bound callable, an `Import` cell load returns the import cell
-identity, and a `Descriptor` cell load returns nothing.
+identity, and a `Descriptor` cell load returns nothing. The §22 proposal adds a `.slotEntry`
+address for the first of the builder's two GOT loads, so the cell address and the cell content
+have distinct model values and the recorded `PointerOrigin` stages match the state.
 
 ### 5.3 Traps
 
