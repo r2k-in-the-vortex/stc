@@ -173,8 +173,9 @@ run are in the
 The software-fault matrix (master already owned, wrong identity, missing position, startup
 timeout), the 14 PLC-visible status registers, and same-configuration versus changed-configuration
 online change were exercised on `ecat-host` without physical faults, root, or host changes; the
-master service stop/start case is a recorded privilege gap. Results and evidence hashes are in
-the [EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md) §9.
+master service stop/start case was then a recorded privilege gap, resolved by the phase-5
+wrappers below. Results and evidence hashes are in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md) §9.
 
 ## Phase 5 cycle-time sweep
 
@@ -187,10 +188,33 @@ build allowance. The script is user-writable and is executed as `r2k` with
 only `CAP_SYS_NICE` ambient by the privileged `stc-wl52-run` wrapper; it is
 never run as root and is not meant to be invoked directly. It exits 0 only
 for a frame-level pass: healthy status, `exchanges` equal to the completed
-cycle count, at least the requested window's worth of cycles, zero missed
-deadlines and skipped periods, and unchanged master Tx-error and lost-frame
-counters. The install and use procedure is in the
+cycle count, at least the requested window's worth of cycles, zero skipped
+periods, an execution p99 at most half the cycle time, unchanged master
+Tx-error and lost-frame counters, and PREOP after release. The strict
+missed-deadline counter is reported but not gated because it counts any
+positive wake lateness and is not a hard-miss count (see
+[KNOWN-LIMITATIONS.md](../../../KNOWN-LIMITATIONS.md)). The install and use procedure is in the
 [EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md) §10.
+
+## Phase 5 result
+
+The service wrapper was verified (status 0; an invalid verb and an extra argument exit 64
+without a systemd call). An idle stop/start unloaded and reloaded the modules, reset the master
+frame counters, and returned to Idle with link UP and the slave PREOP. A stop issued while a run
+owned the master returned 0 but left the unit `failed`: the module stayed loaded because it was
+in use, the runtime finished healthy at the timeout, and `start` restored the unit. No runtime
+fault, stale input, or recovery occurred because the module never went away; see the runbook
+§10.6.
+
+The sweep screened 1 ms and 500 µs at 60 s and stopped at the first failure. 1 ms passed
+(118311 cycles, zero skipped periods, execution p99 47.1 µs, master Tx/lost 0/0); 500 µs failed
+on 154 skipped periods in 77 events of 1.0-1.3 ms, spaced about every 3050 cycles and correlated
+with the 1 MiB RT-metrics flush, while the frame path stayed healthy (236481 exchanges, WC
+state 2, no faults, master Tx/lost 0/0); the 600 s confirmation at 1 ms passed (658325 cycles,
+zero skipped periods, execution p99 47.6 µs). The fastest maintainable cycle time is 1 ms;
+250 µs and below were not run, and the wrapper allowlist did not need extension. The strict
+missed-deadline counter equaled the cycle count in every run and is reported, not gated.
+Distributions and evidence hashes are in the runbook §10.7-§10.8.
 
 ## Troubleshooting
 

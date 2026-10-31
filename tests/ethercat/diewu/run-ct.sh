@@ -8,8 +8,10 @@
 #     counter, current (not stale) inputs, link up, one responding slave, no
 #     master error, and no recovery;
 #   * every completed cycle exchanged a frame (exchanges == cycles);
-#   * the RT metrics summary reports zero missed deadlines and zero skipped
-#     periods;
+#   * the RT metrics summary reports zero skipped periods and the per-cycle
+#     execution p99 is at most half the cycle time; the strict
+#     missed_deadline counter is reported but not gated because the project
+#     documents it as a non-hard counter (KNOWN-LIMITATIONS.md);
 #   * the IgH master's Tx-error and lost-frame counters did not increase.
 #
 # Physical input values and measured outputs are not checked; phases 3-5 are
@@ -41,6 +43,14 @@ readonly BUILD_ALLOWANCE_SECONDS=60
 
 log=
 metrics=
+exec_values=
+wake_values=
+
+cleanup() {
+    [[ -z $exec_values ]] || rm -f "$exec_values"
+    [[ -z $wake_values ]] || rm -f "$wake_values"
+}
+trap cleanup EXIT
 
 usage() {
     cat <<'EOF'
@@ -68,6 +78,16 @@ usage_error() {
     printf 'run-ct.sh: %s\n' "$*" >&2
     usage >&2
     exit 2
+}
+
+# Nearest-rank percentile of a sorted integer file: <file> <numerator> <denominator>.
+percentile() {
+    local file=$1 numerator=$2 denominator=$3 count rank
+    count=$(wc -l <"$file")
+    rank=$(( (numerator * count + denominator - 1) / denominator ))
+    (( rank > 0 )) || rank=1
+    (( rank <= count )) || rank=$count
+    sed -n "${rank}p" "$file"
 }
 
 if [[ $# -ne 3 ]]; then
@@ -148,14 +168,11 @@ printf 'run-ct: stc/timeout exit=%s\n' "$run_status" >>"$log"
 
 "$ETHERCAT" master >"$master_after" 2>&1 \
     || fail "cannot sample the EtherCAT master after the run"
-"$ETHERCAT" slaves >"$LOGS/$stem.slaves-after.txt" 2>&1 || true
 
 grep -q 'Phase: Idle' "$master_after" \
     || fail "the EtherCAT master is not Idle after the run"
 grep -q 'Active: no' "$master_after" \
     || fail "the EtherCAT master is still active after the run"
-grep -q 'PREOP' "$LOGS/$stem.slaves-after.txt" \
-    || fail "the configured slave is not PREOP after the run"
 
 status_line=$(grep -E '^stc: status: io-backend ethercat ' "$log" | tail -n 1 || true)
 [[ -n $status_line ]] \
@@ -192,13 +209,11 @@ case "$summary" in
     *) fail "RT metrics file has no summary record: $metrics" ;;
 esac
 case "$summary" in
-    *'"missed_deadlines":0'*) ;;
-    *) fail "missed deadlines in the RT summary: $summary" ;;
-esac
-case "$summary" in
     *'"skipped_periods":0'*) ;;
     *) fail "skipped periods in the RT summary: $summary" ;;
 esac
+strict_missed=$(sed -n 's/.*"missed_deadlines":\([0-9][0-9]*\).*/\1/p' <<<"$summary")
+[[ -n $strict_missed ]] || fail "RT summary has no missed_deadlines count: $summary"
 
 completed=$(sed -n 's/.*"cycles":\([0-9][0-9]*\).*/\1/p' <<<"$summary")
 [[ -n $completed && $completed -gt 0 ]] || fail "RT summary reports no completed cycles"
@@ -223,6 +238,34 @@ expected_cycles=$(( duration * 1000000000 / period_ns ))
 [[ $completed -ge $expected_cycles ]] \
     || fail "run covered $completed cycles; at least $expected_cycles are needed for ${duration}s at ${cycle_time}"
 
+# Timing evidence from the per-cycle records. The strict missed_deadline
+# counter is true for any positive wake lateness (KNOWN-LIMITATIONS.md); it is
+# reported, not used as a hard-miss gate. A step fails on a hard miss: a
+# skipped period, or an execution p99 that is not well below the cycle time
+# (at most half the period, WL-5.2-Plan.md section 6.9).
+exec_values=$(mktemp "${TMPDIR:-/tmp}/run-ct-exec.XXXXXX") \
+    || fail "cannot create a temporary file for the execution distribution"
+wake_values=$(mktemp "${TMPDIR:-/tmp}/run-ct-wake.XXXXXX") \
+    || fail "cannot create a temporary file for the wake-lateness distribution"
+sed -n 's/.*"execution_ns":\([0-9][0-9]*\).*/\1/p' "$metrics" >"$exec_values"
+sed -n 's/.*"wake_lateness_ns":\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$metrics" >"$wake_values"
+[[ -s $exec_values ]] || fail "no per-cycle execution records in $metrics"
+[[ -s $wake_values ]] || fail "no per-cycle wake-lateness records in $metrics"
+sort -n -o "$exec_values" "$exec_values"
+sort -n -o "$wake_values" "$wake_values"
+
+exec_p50=$(percentile "$exec_values" 50 100)
+exec_p99=$(percentile "$exec_values" 99 100)
+exec_p999=$(percentile "$exec_values" 999 1000)
+exec_max=$(tail -n 1 "$exec_values")
+wake_p50=$(percentile "$wake_values" 50 100)
+wake_p99=$(percentile "$wake_values" 99 100)
+wake_p999=$(percentile "$wake_values" 999 1000)
+wake_max=$(tail -n 1 "$wake_values")
+
+[[ $exec_p99 -le $(( period_ns / 2 )) ]] \
+    || fail "execution p99 ${exec_p99}ns is not at most half of the ${cycle_time} cycle (${period_ns}ns); p50=${exec_p50}ns p99.9=${exec_p999}ns max=${exec_max}ns"
+
 read_counter() {
     awk -v first="$2" -v second="$3" '$1 == first && $2 == second { print $3; exit }' "$1"
 }
@@ -241,7 +284,24 @@ done
 [[ $lost_frames_after == "$lost_frames_before" ]] \
     || fail "master lost frames changed: $lost_frames_before -> $lost_frames_after"
 
-printf 'run-ct: PASS cycle=%s duration=%s label=%s exchanges=%s cycles=%s missed=0 skipped=0\n' \
-    "$cycle_time" "$duration" "$label" "$exchanges" "$completed"
+# The slave transitions to PREOP asynchronously after the master is released;
+# poll briefly instead of depending on a single sample's timing.
+slave_ok=0
+for _ in {1..20}; do
+    "$ETHERCAT" slaves >"$LOGS/$stem.slaves-after.txt" 2>&1 || true
+    if grep -q 'PREOP' "$LOGS/$stem.slaves-after.txt"; then
+        slave_ok=1
+        break
+    fi
+    sleep 0.25
+done
+[[ $slave_ok == 1 ]] \
+    || fail "the configured slave is not PREOP after the run: $(cat "$LOGS/$stem.slaves-after.txt" 2>/dev/null)"
+
+printf 'run-ct: PASS cycle=%s duration=%s label=%s exchanges=%s cycles=%s skipped=0 strict_missed=%s\n' \
+    "$cycle_time" "$duration" "$label" "$exchanges" "$completed" "$strict_missed"
+printf 'run-ct: timing exec_ns p50=%s p99=%s p99.9=%s max=%s; wake_ns p50=%s p99=%s p99.9=%s max=%s\n' \
+    "$exec_p50" "$exec_p99" "$exec_p999" "$exec_max" \
+    "$wake_p50" "$wake_p99" "$wake_p999" "$wake_max"
 printf 'run-ct: log=%s metrics=%s master=%s,%s\n' \
     "$log" "$metrics" "$master_before" "$master_after"

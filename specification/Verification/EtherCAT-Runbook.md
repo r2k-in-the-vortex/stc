@@ -3,10 +3,11 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-31  
 Status: Draft. The phase-3 open-ended procedure plus the phase-4 software-fault, status-register,
-and online-change evidence are recorded here; phase 5 adds the privileged wrapper install and
-cycle-time procedure in §10, and phase 6 extends this runbook when it is executed. Results are
+and online-change evidence are recorded here; phase 5 records the privileged wrapper install, the
+service stop/start result, and the cycle-time sweep result in §10, and phase 6 extends this
+runbook when it is executed. Results are
 host- and hardware-specific; this is not a hard real-time guarantee and not a safety function.  
-Parent: [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 (phases 3–4)  
+Parent: [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 (phases 3–5)  
 Inputs: [I/O Routing and Backends](../Architecture/IO-Routing-and-Backends.md),
 [I/O and Devices](../Architecture/IO-and-Devices.md),
 [DIEWU fixture](../../tests/ethercat/diewu/README.md)
@@ -622,9 +623,10 @@ real-time claim is made.
 Phase 4 recorded the master service stop/start case as a privilege gap (§9.3).
 Phase 5 needs that transition plus a privileged RT launcher for the cycle-time
 sweep. Two root-owned fixed-command wrappers and one sudoers fragment are
-committed; a human installs them. This section is the install and use
-procedure. The wrappers were prepared but **not installed or executed** by the
-automated phase work.
+committed; the repository owner installed them on 2026-10-31. This section is
+the install and use procedure and the result. The automated phase work did not
+install them; after the install it used only the fixed `sudo -n` NOPASSWD
+entries, with no password and no broader sudo rule.
 
 ### 10.1 Files and installed paths
 
@@ -732,12 +734,161 @@ The script exits 0 only for a frame-level pass: the final
 `stc: status: io-backend ethercat` line reports `state=running`, `faults=0`,
 `domain.wc_state=2`, `input.stale=0`, no master error, link up, one responding
 slave, and no recovery; `exchanges` equals the completed cycle count; the
-metrics summary reports zero missed deadlines and zero skipped periods and at
-least the requested screening duration's worth of cycles; the master's Tx-error
-and lost-frame counters are unchanged from the before sample; and after release
-the master is `Phase: Idle` with `Active: no` and the slave is PREOP. Physical
-I/O values are not checked. A nonzero exit distinguishes a frame-level or run
-failure (1) from a usage or deployment error (2).
+metrics summary reports zero skipped periods, the per-cycle execution p99 is at
+most half the cycle time, and the run covers at least the requested screening
+duration's worth of cycles; the master's Tx-error and lost-frame counters are
+unchanged from the before sample; and after release the master is
+`Phase: Idle` with `Active: no` and the slave reaches PREOP. The strict
+`missed_deadlines` counter is reported but not gated: it is true for any
+positive wake lateness and equals the cycle count in every RT run on this host
+([KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §7), so skipped periods,
+frame-level health, and the execution distribution are the pass criteria.
+Physical I/O values are not checked. A nonzero exit distinguishes a frame-level
+or run failure (1) from a usage or deployment error (2).
+
+### 10.6 Service stop/start result (phase 5)
+
+The installed wrapper was verified first: `sudo -n /usr/local/sbin/stc-wl52-service status`
+returned 0 with the unit active, and the invalid verb `enable` and an extra argument both
+returned 64 without invoking systemd. Every privileged call below used only the installed
+`sudo -n` NOPASSWD entries.
+
+**Idle master.** With the master `Phase: Idle` and `Active: no`, the service wrapper's `stop`
+returned 0 and the unit became inactive; `/dev/EtherCAT0` disappeared and `ethercat master`
+failed with `Failed to open master device /dev/EtherCAT0`. The wrapper's `start` returned 0 and
+the unit became active; within about 3 s the master reported `Phase: Idle`, link UP, and one
+PREOP slave. Loading the modules resets the master's frame counters, so the sweep starts from a
+fresh counter baseline after this case.
+
+**Stop during an active run.** A 60 s 1 ms RT run (`ct 1ms 60 svc-stop`, release build, FIFO 90
+on CPU 3) owned the master (`Phase: Operation`, `Active: yes`) and was exchanging frames. The
+service wrapper's `stop` returned 0, but the unit ended `failed`: the IgH `ethercatctl stop`
+could not unload the master module while the runtime held the device. The module stayed loaded,
+`/dev/EtherCAT0` stayed present, and the master stayed `Phase: Operation`/`Active: yes` with
+the runtime continuing healthily to the timeout (`state=running`, `exchanges=118319`,
+`faults=0`, `input.stale=0`, `master.recoveries=0`). `systemctl is-active ethercat` reported
+`failed`; the wrapper's `start` returned 0 and restored the active unit. The runtime then shut
+down on the timeout and released the master, which returned to Idle. No runtime fault, stale
+input, or recovery was observed, because the module never went away; the kernel's in-use check
+is the observed refusal path. This is the exact behavior requested for the case where systemd
+cannot stop the module while the master is in use.
+
+The service was left active and the master Idle after the case. The slave was operational
+during the run and PREOP after release; the first version of the runner sampled the slave
+immediately and caught the asynchronous OP-to-PREOP transition, so the runner now polls for
+PREOP for up to 5 s.
+
+### 10.7 Cycle-time sweep result (phase 5)
+
+The sweep ran on 2026-10-31 through
+`sudo -n /usr/local/sbin/stc-wl52-run ct <cycle> <duration> <label>`, in the
+order 1 ms, 500 µs, and so on, and stopped at the first failing step. Each
+screening step was 60 s; the fastest passing step was repeated for 600 s. Every
+step used the release fixture, `SCHED_FIFO` 90 on CPU 3, an open-ended cycle
+count, and the master counters were not reset between steps. The table values
+come from the `stc-rt-metrics/1` per-cycle records (nearest-rank percentiles)
+and the master samples; execution and wake values are µs.
+
+| Cycle time | Window | Result | Exchanges = cycles | Skipped | Strict missed | Execution p99 / p99.9 / max | Wake p99 / p99.9 / max | Master Tx / lost | Slave after |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 ms | 60 s | pass | 118311 | 0 | 118311 | 47.1 / 54.7 / 59.2 | 19.7 / 27.6 / 870.8 | 0 / 0 | PREOP |
+| 500 µs | 60 s | **fail** | 236481 | 154 | 236481 | 52.4 / 60.7 / 68.2 | 22.3 / 30.6 / 1294.3 | 0 / 0 | PREOP |
+| 1 ms | 600 s | pass | 658325 | 0 | 658325 | 47.6 / 55.1 / 59.4 | 19.6 / 27.4 / 799.6 | 0 / 0 | PREOP |
+
+The 1 ms 60 s row is the second screening run (the first is noted below); the
+600 s row is the confirmation at the fastest passing step. The 500 µs row
+failed on skipped periods; its timing distribution is computed from the JSONL
+because the runner checks skipped periods before it computes distributions. In
+all three rows the runtime reported `state=running`, `faults=0`, WC state 2,
+current inputs, link up, one responding slave, no master error, and no
+recovery; every completed cycle exchanged a frame; and the configured slave was
+PREOP after release. The 500 µs step's runner-level failure was the first
+version's immediate PREOP sample, which caught the asynchronous OP-to-PREOP
+transition; the next check showed PREOP. The step is recorded as a failure on
+the independent skipped-period criterion, which the JSONL summary confirms; it
+was not rerun after the PREOP-only fix because it had already failed on
+skipped periods.
+
+**Strict deadline counter.** The `Strict missed` column equals the cycle count
+in every row. That is the documented behavior of `missed_deadline`, which is
+true for any positive wake lateness, not only for a hard overrun
+([KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §7; RT-Host.md §3.4). It is
+recorded and reported but is not a phase-5 pass gate. The first 1 ms screening
+run used strict zero as a gate and failed that gate alone (118315 cycles, zero
+skipped); after confirming the documented counter semantics, the gate was
+changed to skipped periods plus execution p99 at most half the period, and the
+step was rerun with the corrected runner under the same conditions.
+
+**500 µs failure analysis.** The 154 skipped periods are 77 events of two
+skipped periods each. At those events the wake lateness was 1.044–1.274 ms and
+the events were 3048–3066 cycles apart (1.52–1.53 s at 500 µs). The spacing
+matches the RT metrics writer's 1 MiB `BufWriter`
+(`crates/stc-runtime/src/rt.rs`), which flushes when the buffer fills (roughly
+every 3050 records) and stalls the RT thread for about 1–1.3 ms on this host.
+At 1 ms the largest wake lateness was 871 µs (screening) and 800 µs
+(confirmation), below the period, so the same periodic stall did not skip a
+period. The failure is attributed to the metrics instrumentation path, not the
+EtherCAT frame path: all 236481 exchanges completed with WC state 2, no faults,
+current inputs, unchanged master Tx/lost counters, and no recovery, and
+execution p99 was 52.4 µs (10.5% of the period). Phase 5 did not change the
+measurement method; separating the metrics flush from the RT thread is
+follow-up work.
+
+**Result and stopping point.** The fastest maintainable cycle time is 1 ms: it
+passed at 60 s and 600 s, and 500 µs is the first failing step. Per the
+stop-at-first-failure rule, 250 µs, 200 µs, 150 µs, 100 µs, 75 µs, 50 µs, and
+25 µs were not run. The runner allowlist already includes all of them; because
+the sweep stopped at 500 µs, the 25 µs extension check was not reached and the
+allowlist does not need to be extended in this phase.
+
+### 10.8 Phase 5 evidence hashes
+
+All files are under `/home/r2k/stc-wl52/logs/` on `ecat-host`; timestamps in
+the names are UTC. The console captures hold the runner's stdout; the failing
+steps' messages from `fail()` went to stderr and are not part of those files,
+so the 500 µs step is evidenced by its JSONL summary and the service step by
+its slave sample and the following status check.
+
+| Run | File | SHA-256 |
+| --- | --- | --- |
+| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.jsonl` | `a134d664d87c0073318c449947588bb7343c996a7252ac63e0a5e381f4748043` |
+| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.log` | `a1caf1b1e5df5b1a2a8fcbcebaca1c979acd42bea134f7de4e9d75f934116753` |
+| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.master-before.txt` | `e1cba4e21912183a61820c9f40b7748727fbbc71e0419e0d280dbeafcdabdf65` |
+| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.master-after.txt` | `b41440a6732f206c2fec1137de1f833b55417a8852d4b2473b925629d5e1fd6a` |
+| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.slaves-after.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
+| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.jsonl` | `1664d44a55bd5d0b0c1aeb18c12378b59d2c42918079f602190a185b4e0b0554` |
+| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.log` | `9ad7b45a6315521be5857d9cbd22245578c85c72967465cba81a35c2143c5940` |
+| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.master-before.txt` | `2cce9d6651dbd94a971a346c93a0e7c6796e6039946c03e0dbd3a1a174047534` |
+| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.master-after.txt` | `b59288c37159c14009f110bd6e690cdaa178c251fa2e13c56fd9a265793b18de` |
+| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.slaves-after.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
+| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.jsonl` | `ecba706d360390485e00e48bdee51a7fa3e7a09579ae19a07319b1bde3f3baf0` |
+| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.log` | `30ecae2a5a7abedc273224f5929f951093866da798f21d5595c657860780e554` |
+| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.master-before.txt` | `f716c86a30d37927b1bc526a8c3d145b300c1688f37367d79907b808fec5efe0` |
+| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.master-after.txt` | `d9fd0e8e39c212abe899f80ad943787ce776658a61f582517a1e7242797b8a3b` |
+| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.slaves-after.txt` | `7969853bfea69fb79a96f91266f2148efdeaea0e5bb1173231b650fdf7d812b8` |
+| 500 µs 60 s | `console-sweep-500us.log` | `2be9e91d5a917c6a16876e51eb017e58be3aa061ac4cb023de35d1101767db18` |
+| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.jsonl` | `a0b9e5b3fe38491b2ff764ff98c3c585b73c8dc861bfa530a63d02049c04ec99` |
+| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.log` | `9790459dbd26d9ba43f4bc491c7622c010231f8f0c20580707b3c41ce8938e3a` |
+| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.master-before.txt` | `bee155d7e4b0e7de1c8782ae2d8c73ceeaa14cd1dcd7f02dc07e1f3a8331ecb2` |
+| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.master-after.txt` | `c150bc6d18aa7750299496d707e79fa2374b73feea8c041def3932d2162870d0` |
+| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.slaves-after.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
+| 1 ms 600 s confirmation | `console-confirm-1ms-600s.log` | `587fe4ffaf099ad77ab959b9303eaf0bbcb67be8c6292df2f589f8124feec7a2` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.jsonl` | `cbf65b948baab5454d459cf44777fc447957921b07be4b116e2aacef6b684975` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.log` | `a1819cd35f85735f71b6c304315cf30d532a0e85a713ab6147485cfa951050eb` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.master-before.txt` | `8606cc4b26f21c5ab2f87ab48047fdab1cd1379356fd475d885c0ca4c678334f` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.master-after.txt` | `67f202c556b020da6e3acadf316f565556c1924cf858e3a05a49327edeb374ea` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.slaves-after.txt` | `7969853bfea69fb79a96f91266f2148efdeaea0e5bb1173231b650fdf7d812b8` |
+| Service stop/start | `svc-stop-run.out` | `6cd190556003c62af10e5edb51cd345dea698281f9d7a386355f424834a538a6` |
+
+The two `7969853b…` slave samples are the immediate OP sample taken by the
+first runner version; the later status check showed PREOP on both occasions
+(§10.6). The corrected runner and the confirmation record `4f94d506…`, the
+PREOP line. The runner `tests/ethercat/diewu/run-ct.sh`, deployed at
+`/home/r2k/stc-wl52/diewu/run-ct.sh`, is the committed version, SHA-256
+`16dbb2a20dfb8241c8f97115a9d1091785d020ad9e671fa0a6c6bbe22d281cb2`; it
+produced the 600 s confirmation. The earlier steps used the pre-fix versions:
+the first 1 ms screening gated on the strict counter alone, and the service
+test and 500 µs step sampled PREOP once immediately.
 
 ## 11. Cleanup
 
@@ -750,13 +901,15 @@ zero the outputs as part of cleanup.
 
 Phase 4 is recorded in §9: the software-fault matrix (master already owned, wrong identity,
 startup timeout), the PLC-visible status registers, the stale/recovery model, and online change.
-The master service stop/start case remains a recorded privilege gap.
+The master service stop/start case recorded as a privilege gap in §9.3 is resolved in §10.6.
 
 Phase 5 adds the cycle-time sweep from 1 ms down to 50 µs (extending below 50 µs if that passes),
 60 s screening per step, a 10-minute confirmation at the fastest passing step, release-build
-measurements, skipped-period/deadline checks, and the `stc-io-metrics/1` JSONL stream. The
-privileged wrappers that run the service transition and the sweep are installed by a human
-following §10; they are not installed or exercised by the automated phase work.
+measurements, skipped-period/deadline checks, and the `stc-rt-metrics/1` JSONL stream; the
+sweep result is §10.7 and its evidence hashes are §10.8. (The separate `stc-io-metrics/1` stream
+in the plan's §6.8 is not part of this sweep.) The privileged wrappers that run the service
+transition and the sweep were installed by the owner following §10 and were exercised only
+through their fixed `sudo -n` entries; the automated phase work did not install them.
 
 Phase 6 adds the loopback harness, the automated all-points matrix, physical fault injection
 (cable unplug/replug, slave power cycle, configured-slave reconnect), and the final report. Those
