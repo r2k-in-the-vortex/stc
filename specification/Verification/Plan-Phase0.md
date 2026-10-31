@@ -16,8 +16,8 @@ alignment with M6.5. The compiler drift that prompted the pause has stabilized a
 the §19.4 register was rechecked on 2026-10-31 and still holds, so P0.3 remains paused with its
 open questions unchanged. P0.4 is complete (review approved 2026-10-31) as WL-3 of
 [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md); its scope decisions and execution record are in §20. P0.3
-resumes after the P0.4 CI run. The open P0.3 semantic questions and the drift register are
-recorded in §19.
+resumed on 2026-10-31; the reevaluation is in §19.8. The open P0.3 semantic questions and the
+drift register are recorded in §19.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -955,11 +955,12 @@ analyzer's core conversions. The exact-model behaviour link is carried into P0.3
 
 ## 19. P0.3 execution record — in progress
 
-Date: 2026-10-27. Status: **in progress, not complete.** The definitions and part of the soundness
-work are in place. The remaining proof work was paused so the core subset and the open semantic
-questions could be aligned with M6.5. M6.5 has landed as `stc` 1.0.0, and the drift register was
-rechecked on 2026-10-31 (§19.7) without change; P0.3 remains paused while WL-3/P0.4 proceeds. This
-record is a status snapshot; it is not a completion claim.
+Date: 2026-10-27. Status: **resumed 2026-10-31; in progress, not complete.** The definitions and
+part of the soundness work are in place. The remaining proof work was paused so the core subset
+and the open semantic questions could be aligned with M6.5. M6.5 has landed as `stc` 1.0.0, the
+drift register was rechecked on 2026-10-31 (§19.7), and P0.3 is unpaused after the P0.4 review and
+CI. The open questions are resolved in §19.8. This record is a status snapshot; it is not a
+completion claim.
 
 ### 19.1 Deliverables
 
@@ -982,13 +983,14 @@ record is a status snapshot; it is not a completion claim.
 
 The P0.3 exit criteria are **not met**. `progress`, `preservation`, `type_soundness`, and
 initial-state typing are missing, and the semantics document still describes the dynamic semantics as
-future work in places. There is no `sorry` or `admit`; `lake build` and the local CI checks pass. The
-working tree is not committed as a completed sub-phase.
+future work in places. There is no `sorry` or `admit`; `lake build` and the local CI checks pass.
+P0.3 resumed on 2026-10-31 with the §19.8 decisions; the current definitions are committed as a
+WL-3 checkpoint.
 
 ### 19.3 Open questions
 
-These questions are deliberately open. They are recorded here so the alignment pass after M6.5 can
-resolve them with the updated compiler and specification in view.
+These questions were deliberately open. They are resolved in §19.8; the original statements are
+kept for the record.
 
 - **Q1 — Completion path.** Finish the current machine and `ConfigTyped` proofs, redesign the
   configuration invariant to make preservation smaller, or descope `progress`, `preservation`, and
@@ -1034,17 +1036,15 @@ recorded, not reconciled; the P0.3 alignment pass resolves them when that phase 
 
 | Area | Evidence | Current semantics | Resolution |
 | --- | --- | --- | --- |
-| `FOR` step evaluation and zero step | `lower_for` in `crates/stc-codegen/src/stmt.rs` | Start/stop/step once; zero takes the ascending test | Q4 |
+| `FOR` step evaluation and zero step | `lower_for` in `crates/stc-codegen/src/stmt.rs` | Start/stop/step once; signed loops use the ascending test only when `step > 0`, unsigned loops always ascend. The machine was corrected on 2026-10-31 to match. | Q4 resolved |
 | Character conversions | `specification/UTF8-Strings.md` §3.1 and the conversion table | Layout-only conversion; runs of surrogates preserved | Q3 |
 | Power trap code | `ensure_pow_helper` in `crates/stc-codegen/src/expr.rs`; `consteval.rs` | `RANGE` for a negative signed exponent | Q6 |
 | Initialization order | `emit_global_initializers`, `emit_instance_initializers` in `crates/stc-codegen/src/unit.rs` | Globals then program fields, declaration order, once | Q5 |
 
 ### 19.5 Resumption plan
 
-M6.5 has landed. When P0.3 resumes, re-align the core subset, the HIR dump, and this plan with M6.5
-(including ABI 2.3 and any HIR changes; later-phase version drift is reconciled by the phase that
-consumes it, not treated as a merge blocker). Then recheck the drift register (§19.7 is the first
-recheck), resolve Q1–Q6, and finish the remaining work:
+P0.3 resumed on 2026-10-31 after the P0.4 review and CI. The drift register was rechecked (§19.7)
+and the open questions are resolved (§19.8). The remaining work:
 
 1. `progress` and the supporting no-stuck lemmas (runtime lookup, loop-marker existence, frame
    completion, call performance), using `ConfigTyped.lookupVar?_some`, the `StackTyped`
@@ -1083,8 +1083,25 @@ rechecked against the released tree:
 | Power trap code | Unchanged: `ensure_pow_helper` traps `RANGE` for a negative signed exponent. Q6 remains open. |
 | Initialization order | Unchanged: global initializers then program-field initializers, declaration order, once. Q5 remains as recorded. |
 
-No new drift was found in the files the register covers. P0.3 stays paused; the remaining
-questions and the resumption plan are unchanged.
+No new drift was found in the files the register covers.
+
+### 19.8 Reevaluation (2026-10-31)
+
+P0.3 resumed after the P0.4 review and CI. The open questions are resolved as follows:
+
+| Question | Resolution |
+| --- | --- |
+| Q1 — completion path | Keep the current machine and `ConfigTyped` invariant and finish the proofs. Redesign only if preservation blocks; no descoping. |
+| Q2 — exact-model link | Keep the guarded `evalCast`/`evalStd` form for P0.3. The unguarded equality needs `convert_ok_fits` and standard-function fit lemmas; record it as a follow-up for P0.5/Phase 2. The semantics document states the guarded form. |
+| Q3 — character validity | Keep the layout-only character model in P0.3 and record Unicode scalar validity and the `WCHAR_TO_UCHAR`/`UCHAR_TO_WCHAR` traps as a known gap for the later string phase and P0.6 dump validation. |
+| Q4 — `FOR` zero step | Fixed in `Machine.forContinue`: signed loops use the ascending test only when `step > 0`; unsigned loops always ascend. This matches `lower_for`. |
+| Q5 — initialization boundary | Confirmed: global initializers, then program-field and local initializers, then the cycle body; `RETURN` ends the cycle and `cyclesLeft` persists program state. |
+| Q6 — negative signed exponent | Confirmed and implemented: `evalPow` traps `RANGE` for a signed negative exponent; constant evaluation rejects the constant case. |
+| Q7 — checkpoint policy | Commit the compiling work as WIP checkpoints on WL-3; the P0.4 commit is the first checkpoint. |
+
+The remaining work is the §19.5 sequence: `progress` and the no-stuck lemmas, `preservation` and
+the store-update lemmas, initial-state typing, then `type_soundness`, the registry and semantics
+document updates, and the P0.3 review.
 
 ## 20. P0.4 execution record — in progress
 

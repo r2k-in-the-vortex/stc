@@ -120,7 +120,7 @@ spec = "specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
 status = "planned"
-note = "In progress: see specification/Verification/Plan-Phase0.md §19 for the current state and the open semantic questions."
+note = "Resumed 2026-10-31: see specification/Verification/Plan-Phase0.md §19 and the §19.8 decisions for the current state."
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -133,7 +133,7 @@ spec = "specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
 status = "planned"
-note = "In progress: see specification/Verification/Plan-Phase0.md §19 for the current state and the open semantic questions."
+note = "Resumed 2026-10-31: see specification/Verification/Plan-Phase0.md §19 and the §19.8 decisions for the current state."
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]
@@ -146,7 +146,7 @@ spec = "specification/Verification/Plan-Phase0.md#7-theorem-inventory"
 module = "Stc.Sem.Eval"
 owner = "verification"
 status = "planned"
-note = "In progress: see specification/Verification/Plan-Phase0.md §19 for the current state and the open semantic questions."
+note = "Resumed 2026-10-31: see specification/Verification/Plan-Phase0.md §19 and the §19.8 decisions for the current state."
 tcb = "core Lean kernel; audited with #print axioms"
 
 [[records]]

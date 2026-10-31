@@ -362,8 +362,10 @@ def forContinue (u : HirUnit) (c : State) (cont : Cont) (rest : List Cont)
     (var : Place) (stopVal stepVal : Value) (body : List Stmt) : Outcome :=
   let current := (c.lookupVar? var.id).getD stopVal
   let keep :=
-    if 0 ≤ stepVal.value then decide (current.value ≤ stopVal.value)
-    else decide (stopVal.value ≤ current.value)
+    if stepVal.ty.layout.signed then
+      if 0 < stepVal.value then decide (current.value ≤ stopVal.value)
+      else decide (stopVal.value ≤ current.value)
+    else decide (current.value ≤ stopVal.value)
   let bodyLc := LoopCtx.body cont.after (var.id :: cont.after.controlled)
   if keep then
     .step { c with

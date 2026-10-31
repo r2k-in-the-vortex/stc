@@ -3,9 +3,9 @@
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-27
 Status: Approved 2026-10-27. P0.0 froze the scope and the claim. P0.1 and P0.2 are complete, P0.3
-is paused mid-proof with its drift register rechecked on 2026-10-31, and P0.4 is in progress
-(WL-3). The frozen target scope was revised on 2026-10-31 to remove `switch`; no other inclusion
-or exclusion changed.
+is resumed mid-proof (2026-10-31) with its drift register rechecked and open questions resolved,
+and P0.4 is complete and review-approved (2026-10-31). The frozen target scope was revised on
+2026-10-31 to remove `switch`; no other inclusion or exclusion changed.
 Parent: [Verification Program Plan](Plan.md)
 Phase plan: [Phase 0 Implementation Plan](Plan-Phase0.md)
 Semantics reference: [stc Semantics — Phase 0 Core](Semantics.md)
@@ -153,6 +153,12 @@ Included in Phase 0:
 A feature moves from this table only through a charter revision and a matching parent-plan
 update. The source and target semantics modules stay free of excluded features so that adding
 one later is an extension, not a rewrite.
+
+**Known semantic gap (2026-10-31).** P0.3 models `CHAR`, `WCHAR`, and `UCHAR` by layout only.
+Unicode scalar validity and the `WCHAR_TO_UCHAR`/`UCHAR_TO_WCHAR` traps specified in
+[UTF8-Strings.md](../UTF8-Strings.md) are not modeled; they are deferred to the later string
+phase and excluded from P0.6 conformance until then. This is a recorded gap, not a scope
+reduction: the character types remain in the core.
 
 ## 7. Phase 0 decisions
 

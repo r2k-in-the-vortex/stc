@@ -418,6 +418,59 @@ theorem StackTyped.hasLoop {ctx : Ctx} {c : Cont} {rest : List Cont} {input : Ex
     StackHasLoop (c :: rest) :=
   Or.inl hm
 
+/-- A stack with a loop marker has a `dropToLoop` result. -/
+theorem StackHasLoop.dropToLoop_some {k : List Cont} (h : StackHasLoop k) :
+    ∃ k', dropToLoop k = some k' := by
+  induction k with
+  | nil => cases h
+  | cons c rest ih =>
+      by_cases hm : c.isLoopMarker = true
+      · exact ⟨rest, by simp [dropToLoop, hm]⟩
+      · have htail : StackHasLoop rest := by
+          simpa [StackHasLoop, hm] using h
+        rcases ih htail with ⟨k', hk'⟩
+        exact ⟨k', by simp [dropToLoop, hm, hk']⟩
+
+/-- A stack with a loop marker has a `findLoop` result. -/
+theorem StackHasLoop.findLoop_some {k : List Cont} (h : StackHasLoop k) :
+    ∃ cont rest, findLoop k = some (cont, rest) := by
+  induction k with
+  | nil => cases h
+  | cons c rest ih =>
+      by_cases hm : c.isLoopMarker = true
+      · exact ⟨c, rest, by simp [findLoop, hm]⟩
+      · have htail : StackHasLoop rest := by
+          simpa [StackHasLoop, hm] using h
+        rcases ih htail with ⟨cont, rest', hk'⟩
+        exact ⟨cont, rest', by simp [findLoop, hm, hk']⟩
+
+/-- The unit-wide function table of a function frame's context. -/
+theorem frameCtx_functions_ofFunction {u : HirUnit} {index : Nat} {fn : Function}
+    (h : u.functions[index]? = some fn) :
+    (frameCtx u (.function index)).functions = (Env.ofUnit u).functions := by
+  simp [frameCtx, h, Ctx.ofFunction]
+
+/-- The unit-wide function table of the program context. -/
+theorem frameCtx_functions_program (u : HirUnit) :
+    (frameCtx u .program).functions = (Env.ofUnit u).functions := rfl
+
+/-- A function signature in the unit environment comes from the unit's function
+list. -/
+theorem Env.ofUnit_functions_getElem? {u : HirUnit} {index : Nat} {sig : Signature}
+    (h : (Env.ofUnit u).functions[index]? = some sig) :
+    ∃ fn, u.functions[index]? = some fn := by
+  simp only [Env.ofUnit] at h
+  rw [List.getElem?_map] at h
+  cases hl : u.functions[index]? with
+  | none => rw [hl] at h; cases h
+  | some fn => exact ⟨fn, rfl⟩
+
+/-- A shaped stack whose head is a function frame has a nonempty tail. -/
+theorem FramesShape.function_tail_ne_nil {f : Frame} {rest : List Frame}
+    (h : FramesShape (f :: rest)) (hf : ∃ index, f.kind = .function index) :
+    rest ≠ [] :=
+  FramesShape.tail_ne_nil h hf
+
 /-! ## Runtime store operations -/
 
 /-- A `Forall2` relation relates lists of equal length. -/
