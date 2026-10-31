@@ -719,7 +719,7 @@ a second failure stops the sequence for a human decision.
 | --- | --- | --- | --- |
 | 0 — schema/contracts | Done | `63b8a7e` | [41177379223](https://github.com/r2k-in-the-vortex/stc/actions/runs/41177379223) — success |
 | 1 — backend surface, routing, mapping | Done | `d254583` | [41181242085](https://github.com/r2k-in-the-vortex/stc/actions/runs/41181242085) — success |
-| 2 — shim, lifecycle, CI build | In progress — human-authorized third attempt; DC/status/warning decisions recorded | `e96ce71` + pending fix | [41203057703](https://github.com/r2k-in-the-vortex/stc/actions/runs/41203057703) — failure |
+| 2 — shim, lifecycle, CI build | In progress — human-authorized fourth attempt; anti-link script fix | `c2f8272` + pending fix | [41204656995](https://github.com/r2k-in-the-vortex/stc/actions/runs/41204656995) — failure |
 | 3 — HIL frame-level bring-up | Not started | — | — |
 | 4 — software fault, recovery, status | Not started | — | — |
 | 5 — CT sweep, draft report | Not started | — | — |
@@ -996,3 +996,5 @@ phase-0/1 defaults and do not change the scope.
 | 2026-10-31 | Owner confirmed raw profile text + SHA-256 and directed that unrouted PLC `%I`/`%Q` variables be warnings, not errors; an unrouted `%I` uses its default value and an unrouted `%Q` is discarded. Added E-16 and resumed phase 2 with the warning follow-up. |
 | 2026-10-31 | Phase 2 second CI run failed in the Linux shim build: `stc_ec_master_status`/`stc_ec_domain_status`/`stc_ec_slave_status` are used as both typedefs and exported functions. One fix was attempted (run 41203057703); no third attempt was made. Phase 2 blocked for a human decision. Also pending: `dc.assign-activate` type, lost-frame/Tx-error status channels, and E-16 warning gating. |
 | 2026-10-31 | Owner authorized a third phase-2 attempt. Set `dc.assign-activate` to u16 (E-17), removed lost-frame/Tx-error channels from the PLC status block (E-14; `ethercat master` at run boundaries), and kept E-16 warnings profile-gated. |
+| 2026-10-31 | Phase 2 third run: the shim compiles and the loader/lifecycle tests pass; the anti-link step fails because it looks for `libstc_runtime-*.rlib` while a clean `cargo build -p stc-runtime` produces `libstc_runtime.rlib`. Human decision needed for a fourth attempt; suggested fix is to match `libstc_runtime*.rlib`. |
+| 2026-10-31 | Owner authorized a fourth phase-2 attempt; fix the anti-link script to match the unhashed runtime rlib and rerun CI. |

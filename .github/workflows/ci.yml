@@ -724,7 +724,10 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --locked -p stc-runtime
-          binary="$(find target/debug/deps -maxdepth 1 -name 'libstc_runtime-*.rlib' -print -quit)"
+          # A clean `cargo build -p stc-runtime` emits the unhashed
+          # `libstc_runtime.rlib`; hashed rlibs appear only when another
+          # workspace crate builds it as a dependency. Accept both spellings.
+          binary="$(find target/debug -maxdepth 2 -name 'libstc_runtime*.rlib' -print -quit)"
           test -n "$binary"
           if nm -u "$binary" | grep -q 'ecrt_'; then
             echo "::error::stc-runtime references IgH ecrt symbols"
