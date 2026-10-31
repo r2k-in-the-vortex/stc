@@ -26,6 +26,46 @@ export function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boo
   });
 }
 
+/** Sends a signal to the child's process group, or to the child itself. */
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    // The child was spawned with `detached: true`, so its pid is its process
+    // group id; the negative pid reaches the launcher and host it started.
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // It exited between the check and the signal.
+    }
+  }
+}
+
+/** Returns `true` while any process remains in the child's process group. */
+function processGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    // A permission error means the group still exists; only `ESRCH` proves
+    // that every member is gone.
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+/** Waits up to `timeoutMs` for every process in the group to exit. */
+async function waitForGroupExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (processGroupAlive(pid)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));
+  }
+  return true;
+}
+
 function runTaskkill(pid: number): Promise<void> {
   return new Promise((resolve) => {
     let settled = false;
@@ -54,9 +94,10 @@ function runTaskkill(pid: number): Promise<void> {
  *
  * On Windows this uses `taskkill /T /F`; elsewhere it signals the process
  * group created by spawning the child with `detached: true`. It first sends
- * `SIGINT`, gives the child `graceMs` to stop normally, and only then escalates
- * to `SIGKILL`. Callers must mark the stop as forced: a forced stop bypasses
- * the host's normal shutdown and retained state may not have been saved.
+ * `SIGINT` to the group, gives every member `graceMs` to stop normally, and
+ * only then escalates to `SIGKILL`. Callers must mark the stop as forced: a
+ * forced stop bypasses the host's normal shutdown and retained state may not
+ * have been saved.
  */
 export async function killProcessTree(
   child: ChildProcess,
@@ -71,24 +112,15 @@ export async function killProcessTree(
     await waitForExit(child, 2_000);
     return;
   }
-  try {
-    process.kill(pid, 'SIGINT');
-  } catch {
-    // The child may already be gone.
-  }
-  if (await waitForExit(child, graceMs)) {
+  // Signal the whole group so the launcher receives the same stop request as
+  // the driver. Plain `stc run` has no stop handler and exits on SIGINT while
+  // the host it started handles the request; returning as soon as the driver
+  // exits would orphan that host.
+  signalGroup(pid, 'SIGINT');
+  if (await waitForGroupExit(pid, graceMs)) {
     return;
   }
-  // The child was spawned with `detached: true`, so its pid is its process
-  // group id; the negative pid reaches the launcher and host it started.
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      // It exited between the wait and the signal.
-    }
-  }
+  signalGroup(pid, 'SIGKILL');
   await waitForExit(child, 2_000);
+  await waitForGroupExit(pid, 2_000);
 }

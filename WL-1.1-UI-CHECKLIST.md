@@ -427,11 +427,13 @@ F-3 is the remaining close-out fix.
       executable (including the Windows `.cmd`/`.bat` shim case), spawns the same generated argv
       in the same project directory, streams stdout/stderr to the task terminal, forwards input,
       and fires `onDidClose` when the child exits. Terminal `close()` — the task API's
-      termination path — calls the existing `killProcessTree` helper, which sends SIGINT and
-      escalates to a process-group SIGKILL on POSIX or `taskkill /T /F` on Windows, then ends the
-      task with no exit code as VS Code's terminated-task contract requires. `check`, `build`,
-      `test`, and `fmt` keep `ShellExecution`, so their exit codes and problem-matcher behavior
-      are unchanged. Regression coverage in `editors/vscode/test/electron/suite.js`: the smoke
+      termination path — calls the existing `killProcessTree` helper, which signals the whole
+      process group with SIGINT (the host's stop handler and a driver that handles SIGINT both
+      receive it), waits for every group member to exit, and escalates to a process-group
+      SIGKILL on POSIX or `taskkill /T /F` on Windows, then ends the task with no exit code as
+      VS Code's terminated-task contract requires. `check`, `build`, `test`, and `fmt` keep
+      `ShellExecution`, so their exit codes and problem-matcher behavior are unchanged.
+      Regression coverage in `editors/vscode/test/electron/suite.js`: the smoke
       starts the configured `stc: run` task (with `--debug-server`), polls `tasklist`/`ps` until
       the `sample` host and a new `stc` driver exist, calls `execution.terminate()`, waits for
       `onDidEndTask`, then polls until no `sample` host and no non-baseline `stc` process remains
