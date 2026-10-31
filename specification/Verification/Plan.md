@@ -227,7 +227,10 @@ it preserves.
   standard function-block library are later phases; the exact standard functions are part of
   the core.
 - `Stc.Codegen.Ir`: the `IRFrag` syntax and the `WellFormed` predicate for the emitted IR
-  fragment. This is the target syntax that Phase 5's checker and Phase 7's simulation consume.
+  fragment. It covers the whole production module the compiler emits for the core, including the
+  generated entry-point wrappers and module globals, with the five GOT cell kinds and a slot
+  table grouped in canonical kind order. This is the target syntax that Phase 5's checker and
+  Phase 7's simulation consume.
 - `Stc.Codegen.Semantics`: an operational semantics for `IRFrag`: integer operations, memory,
   GOT cell loads and stores, indirect calls, traps, and the host ABI boundary, for the same core
   subset. Floating-point operations, descriptor/vtable dispatch, and the process image are later
@@ -615,6 +618,12 @@ semantics theorem.
 - Run the checker in CI over IR snapshots, the conformance corpus, examples, and execution-test
   artifacts; add negative fixtures for every rule.
 
+P0.4 already defines the core versions of these rules over the whole production module and proves
+the structural projections. Phase 5 extends the syntax to the full textual IR, adds
+descriptor/function-table content pairing, derives the `FunctionFacts` from the parsed IR rather
+than taking them from the builder, and implements the proved checker. Identity-sorted slot
+canonicality stays with Phase 3's `slots_canonical`; Phase 5 checks the grouped kind order.
+
 **Theorems to establish.**
 
 - `checkIR_sound : checkIR ir = .ok () → WellFormed ir`.
@@ -899,7 +908,7 @@ turn it into the registry.
 
 | Feature | Phase | Target level | Key theorem | Current status |
 | --- | --- | --- | --- | --- |
-| AST, HIR, and IR fragment types | 0 | S | definitions plus `WellFormed` | Syntax, grammar, and HIR defined (P0.1–P0.2); IR fragment pending (P0.4) |
+| AST, HIR, and IR fragment types | 0 | S | definitions plus `WellFormed` | Syntax, grammar, and HIR defined (P0.1–P0.2); IR fragment defined and review-approved (P0.4, 2026-10-31) |
 | Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | In progress (P0.3): values, machine, configuration typing, determinism, trap soundness, guarded exact arithmetic, and interpreter proved; `progress`, `preservation`, `type_soundness` pending; see Plan-Phase0.md §19 |
 | Core typing judgment and checker | 0 | S | `core_check_sound`, `core_rejection_characterized` | Proved (P0.2) |
 | Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | Not started |
