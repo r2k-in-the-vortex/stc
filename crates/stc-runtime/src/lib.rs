@@ -42,9 +42,9 @@
 //!   dispatch, route application, and per-backend fault isolation
 //!   (IO-Routing-and-Backends §3–§4);
 //! - [`io_mock`] is the protocol-neutral mock backend used by the coordinator
-//!   tests; on Linux `ethercat`/`ethercat-status` are served by [`io_ethercat`]
+//!   tests; on Linux `ethercat`/`ethercat-status` are served by `io_ethercat`
 //!   instead, and the mock remains the default elsewhere;
-//! - [`io_ethercat`] (Linux only) dynamically loads the project-owned IgH shim
+//! - `io_ethercat` (Linux only) dynamically loads the project-owned IgH shim
 //!   and owns EtherCAT configuration, startup, fault/recovery, and status;
 //! - `signal` installs the Ctrl-C/Ctrl-Break stop handlers;
 //! - `trap_boundary` provides the non-local trap exit around module calls.
@@ -66,6 +66,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) mod backend_defaults;
 pub mod catalog;
 pub mod compare;
 pub mod control;

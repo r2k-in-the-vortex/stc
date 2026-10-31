@@ -3239,7 +3239,7 @@ mod tests {
             .cold_start(&config(
                 vec![
                     device("one", "ethercat", Some(DATA_CONFIG), data_channels()),
-                    device("two", "ethercat", Some(DATA_CONFIG), Vec::new()),
+                    device("two", "ethercat", Some(DATA_CONFIG), data_channels()),
                 ],
                 Vec::new(),
                 1,

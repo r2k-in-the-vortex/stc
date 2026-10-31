@@ -337,30 +337,12 @@ impl BackendRegistry {
     }
 
     /// Creates the default registry: `ethercat` and `ethercat-status` share
-    /// one instance. On Linux the instance is the shim-backed backend from
-    /// [`crate::io_ethercat`]; elsewhere the phase-1 mock is registered so the
-    /// coordinator tests keep working without a shim.
+    /// one instance. Backend selection lives in the runtime platform layer:
+    /// Linux uses the shim-backed backend, other hosts use the phase-1 mock.
     #[must_use]
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
-        #[cfg(target_os = "linux")]
-        {
-            registry.register("ethercat", "ethercat", || {
-                Box::new(crate::io_ethercat::EthercatBackend::new())
-            });
-            registry.register("ethercat-status", "ethercat", || {
-                Box::new(crate::io_ethercat::EthercatBackend::new())
-            });
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            registry.register("ethercat", "ethercat", || {
-                Box::new(crate::io_mock::MockEthercatBackend::new())
-            });
-            registry.register("ethercat-status", "ethercat", || {
-                Box::new(crate::io_mock::MockEthercatBackend::new())
-            });
-        }
+        crate::backend_defaults::register_ethercat(&mut registry);
         registry
     }
 

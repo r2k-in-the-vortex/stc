@@ -683,7 +683,10 @@ jobs:
           test "$(git -C "$clone" rev-parse HEAD)" = "$IGH_COMMIT"
           cd "$clone"
           ./bootstrap
-          ./configure --disable-kernel --enable-userlib --prefix="$prefix"
+          # Keep `make install` inside the runner temp prefix; without this the
+          # systemd unit is installed under /usr/lib and needs root.
+          ./configure --disable-kernel --enable-userlib \
+            --with-systemdsystemunitdir=no --prefix="$prefix"
           make -j"$(nproc)"
           make install
       - name: Build the project shim

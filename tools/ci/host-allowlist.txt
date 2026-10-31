@@ -18,6 +18,7 @@ crates/stc-driver/src/toolchain.rs | MSVC and GNU link arguments
 crates/stc-driver/src/watch.rs | Windows named-pipe and Unix socket endpoint spelling
 
 # Runtime: platform modules.
+crates/stc-runtime/src/backend_defaults.rs | selects the shim-backed EtherCAT backend on Linux and the phase-1 mock elsewhere
 crates/stc-runtime/src/catalog.rs | host triple for the default catalog
 crates/stc-runtime/src/control.rs | Unix socket permission assertion and Windows endpoint test
 crates/stc-runtime/src/debug_server.rs | named-pipe and Unix-socket binding
