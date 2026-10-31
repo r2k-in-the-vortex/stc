@@ -2043,21 +2043,28 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
 
   The proofs use no `sorry`/`admit`. Registry records P0-T15–P0-T22 are all `proved`; the
   registry audit reports only the standard Lean axioms. The P0.5 target soundness exit
-  criterion is met.
+  criterion is met. For the whole-run follow-up, `WFProgram.localTypesRepresentable` and
+  `default_type?` are already implemented; the remaining obligations are §22.11.
 
 ### 22.11 Remaining whole-run work
+
+**Status (2026-10-31, follow-up).** The `WFProgram.localTypesRepresentable` rule and the
+`default_type?` lemma are implemented as prerequisites. The initial-state, preservation, and
+reachability proofs are **not** complete; the concrete remaining obligations are below. This is
+the whole-run blocker for the P0.5 review; the eight target soundness theorems remain proved.
 
 The three theorems are per-state, as approved. The initial-state proof, the preservation
 proof, and the reachability corollaries are not yet proved; they are the remaining P0.5
 follow-up, not blockers for the three registry theorems. The concrete obligations are:
 
 1. **Initial state (`initState?_wf`).** The one-frame state from `initState?` must satisfy
-   `WFState`/`WFRunning`. This needs: a typed-host-arguments predicate (parameter types match
-   the supplied `IRValue`s); a `WFProgram` rule that parameter/local-definition types are not
-   arrays or `void` (so `IRValue.default` has the declared type); host predicates for live
-   roots/storage, resolvable function bindings, and trap-only callable imports; and the
-   one-frame instantiations of `frameBlock`, `framePrev`, `localsInitialized`, and
-   `localsTyped`. The `.null` origin default (§22.10) makes `originsMatch` hold initially.
+   `WFState`/`WFRunning`. The `WFProgram.localTypesRepresentable` rule (parameter/local-definition
+   types are integers, pointers, or overflow results, not arrays or `void`) and the
+   `default_type?` lemma are implemented. Still needed: a typed-host-arguments predicate
+   (parameter types match the supplied `IRValue`s); host predicates for live roots/storage and
+   resolvable function bindings; and the one-frame instantiations of `frameBlock`, `framePrev`,
+   `localsInitialized`, and `localsTyped` (the latter needs `List.zip`/`find?`/`localDefs`
+   lemmas). The `.null` origin default (§22.10) makes `originsMatch` hold initially.
 2. **Preservation (`irStep_wf`).** Every `.step` successor must satisfy `WFState`. The
    remaining technical gaps found while implementing the invariant are:
    - a **slots-base invariant** (`%slots` holds `.ptr .slotTable`) so the `.slotEntry` load and

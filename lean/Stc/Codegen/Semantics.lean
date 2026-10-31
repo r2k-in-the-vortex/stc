@@ -142,6 +142,14 @@ def allocSize : IrType → Nat
   | .array _ count => count
   | _ => 1
 
+/-- Whether a type has a representable default `IRValue`: integers, pointers,
+and checked-overflow results. `void` and arrays do not. -/
+def IrType.isRepresentable : IrType → Bool
+  | .int _ => true
+  | .ptr => true
+  | .overflow _ => true
+  | _ => false
+
 /-! ## Frames and state -/
 
 /-- A keyed list lookup. -/
@@ -918,6 +926,11 @@ not vacuous. -/
 example :
     (IRSem minimalFrag "main" [] [] [] [] [] [] [] 0).isSome = true := by decide
 
+/-- The default value has the declared type for representable types. -/
+theorem default_type? {ty : IrType} (h : ty.isRepresentable = true) :
+    (IRValue.default ty).type? = some ty := by
+  cases ty <;> simp [IrType.isRepresentable, IRValue.default, IRValue.type?] at h ⊢
+
 /-! ## Target invariant (approved design, Plan-Phase0 §22) -/
 
 /-- The first instruction that defines an SSA name. -/
@@ -986,6 +999,8 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   wellFormed : WellFormed contract frag
   allocsNonEmpty : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
     ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty → 0 < allocSize ty
+  localTypesRepresentable : ∀ fn ∈ frag.functions, ∀ name ty,
+    fn.localType? name = some ty → ty.isRepresentable = true
   originsTrusted : OriginsTrusted frag
   stackOriginsTrusted : StackOriginsTrusted frag
   callPtrOrigins : CallPtrOrigins frag
