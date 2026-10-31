@@ -73,6 +73,9 @@ impl Lowerer<'_> {
     ) -> Res<()> {
         let stmt = self.hir.stmt(id).clone();
         self.set_debug_location(f, stmt.span);
+        // Instrument before the statement is lowered so the increment executes
+        // on entry to the statement (WL-10 C-1).
+        self.record_coverage(f, &stmt);
         if !matches!(stmt.kind, StmtKindHir::Empty) {
             let mut flags = crate::unit::checkpoint_flags::STATEMENT;
             if block_entry {

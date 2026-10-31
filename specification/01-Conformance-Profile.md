@@ -429,6 +429,8 @@ code is never reused. The owning specification is normative if a summary here di
 | `STC-E-RUN-003` | invalid `stc run` option or runtime scheduling configuration (for example a task without a guard); codegen configuration errors stay `STC-E-RUN-001/002` | Runtime and Execution §1.3 |
 | `STC-E-RUN-IO-001` | the file I/O backend cannot write its output image at shutdown | I/O and Devices §7 |
 | `STC-W-IO-004` | the file I/O backend input image is missing or unreadable; the run starts with defaults | I/O and Devices §7 |
+| `STC-W-COVERAGE-001` | a test's raw coverage data is missing, malformed, or inconsistent with the artifact's site table; the test is excluded from the aggregate | Testing and Verification §2.6 |
+| `STC-W-COVERAGE-002` | a coverage site cannot be attributed to a reportable source file; it is omitted from the report | Testing and Verification §2.6 |
 | `STC-W-PROJECT-001` | setting parsed but not honored until a later milestone (for example a configuration key reserved ahead of its milestone) | CLI and Manifest §2.2 |
 | `STC-W-PROJECT-002` | rename history has no baseline; the new key receives a fresh `GotId` | CLI and Manifest §3.1 |
 | `STC-W-ONLINE-007` | compatibility-report warning not covered by an existing online code | CLI and Manifest §1.6 |

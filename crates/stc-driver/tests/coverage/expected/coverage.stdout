@@ -1,0 +1,6 @@
+test AddWorks ... ok
+test ClassifyPositive ... ok
+test ExcludedHelper ... ok
+test result: ok. 3 passed; 0 failed; 0 timed out; 0 trapped
+coverage: 3/5 statements (60.0%), 3/5 lines (60.0%)
+  src/coverage.st: 3/5 statements (60.0%), 3/5 lines (60.0%)

@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 stc-diag = { path = "../stc-diag" }
+stc-got = { path = "../stc-got" }
 stc-manifest = { path = "../stc-manifest" }
 stc-parser = { path = "../stc-parser" }
 stc-span = { path = "../stc-span" }

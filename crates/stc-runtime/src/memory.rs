@@ -672,6 +672,8 @@ pub struct TransientAllocator {
     limits: MemoryLimits,
     blocks: BTreeMap<usize, AlignedStorage>,
     reserved_bytes: u64,
+    allocations: u64,
+    frees: u64,
 }
 
 impl TransientAllocator {
@@ -689,6 +691,8 @@ impl TransientAllocator {
             limits,
             blocks: BTreeMap::new(),
             reserved_bytes: 0,
+            allocations: 0,
+            frees: 0,
         }
     }
 
@@ -714,6 +718,12 @@ impl TransientAllocator {
     #[must_use]
     pub fn reserved_bytes(&self) -> u64 {
         self.reserved_bytes
+    }
+
+    /// Returns the successful allocation and free counts for this generation.
+    #[must_use]
+    pub fn counts(&self) -> (u64, u64) {
+        (self.allocations, self.frees)
     }
 
     /// Allocates a zeroed transient block and returns its address.
@@ -756,6 +766,7 @@ impl TransientAllocator {
         }
         self.blocks.insert(address, storage);
         self.reserved_bytes = total;
+        self.allocations = self.allocations.saturating_add(1);
         Ok(address)
     }
 
@@ -774,6 +785,7 @@ impl TransientAllocator {
         self.reserved_bytes = self
             .reserved_bytes
             .saturating_sub(u64::try_from(storage.allocated_len()).unwrap_or(u64::MAX));
+        self.frees = self.frees.saturating_add(1);
         Ok(())
     }
 
@@ -1171,6 +1183,19 @@ mod tests {
         assert!(!allocator.owns(first));
         assert!(allocator.owns(second));
         assert_eq!(allocator.reserved_bytes(), 50);
+    }
+
+    #[test]
+    fn transient_allocation_and_free_counts_are_tracked() {
+        let mut allocator = TransientAllocator::new(1);
+        assert_eq!(allocator.counts(), (0, 0));
+        let first = allocator.alloc(8, 8).expect("first");
+        let second = allocator.alloc(16, 8).expect("second");
+        assert_eq!(allocator.counts(), (2, 0));
+        allocator.free(first).expect("free first");
+        assert_eq!(allocator.counts(), (2, 1));
+        allocator.free(second).expect("free second");
+        assert_eq!(allocator.counts(), (2, 2));
     }
 
     #[test]

@@ -136,6 +136,21 @@ fn examples_work_end_to_end() {
     let manifest = manifest.to_string_lossy().into_owned();
     assert_success(&run(&motorlib, &manifest, &["check"]), "motorlib check");
 
+    // The coverage example is library/test-style: it has no configuration to
+    // run, so it is checked, tested, and format-checked like motorlib.
+    let coverage = directory.path("examples/coverage");
+    let manifest = coverage.join("stc.toml");
+    let manifest = manifest.to_string_lossy().into_owned();
+    assert_success(&run(&coverage, &manifest, &["check"]), "coverage check");
+    assert_success(
+        &run(&coverage, &manifest, &["test", "--runtime", &runtime]),
+        "coverage test",
+    );
+    assert_success(
+        &run(&coverage, &manifest, &["fmt", "--check"]),
+        "coverage fmt",
+    );
+
     for name in ["hello", "motor", "online-change"] {
         let example = directory.path(&format!("examples/{name}"));
         let manifest = example.join("stc.toml");

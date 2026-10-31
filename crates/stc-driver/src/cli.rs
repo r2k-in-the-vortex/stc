@@ -57,6 +57,10 @@ pub(crate) struct TestOptions {
     pub timeout_ns: Option<u64>,
     /// `-- --nocapture`: forward test-host output.
     pub nocapture: bool,
+    /// `--coverage`/`--no-coverage`; `None` uses `[test] coverage`.
+    pub coverage: Option<bool>,
+    /// `--coverage-out <dir>` report directory.
+    pub coverage_out: Option<String>,
 }
 
 /// Online-change command options.
@@ -270,6 +274,30 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             "--test" => clean_test = true,
             "--list" => test.list = true,
             "--no-run" => test.no_run = true,
+            "--coverage" => {
+                if test.coverage == Some(false) {
+                    return Err(
+                        "STC-E-PROJECT-010: `--coverage` and `--no-coverage` are mutually exclusive"
+                            .into(),
+                    );
+                }
+                test.coverage = Some(true);
+            }
+            "--no-coverage" => {
+                if test.coverage == Some(true) {
+                    return Err(
+                        "STC-E-PROJECT-010: `--coverage` and `--no-coverage` are mutually exclusive"
+                            .into(),
+                    );
+                }
+                test.coverage = Some(false);
+            }
+            "--coverage-out" => {
+                test.coverage_out = Some(next_value(args, &mut index, "--coverage-out")?);
+            }
+            other if other.starts_with("--coverage-out=") => {
+                test.coverage_out = Some(other["--coverage-out=".len()..].to_owned());
+            }
             "--timeout" => {
                 test.timeout_ns = Some(parse_cycle_time(&next_value(
                     args,
@@ -516,6 +544,33 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             }
             other if other.starts_with("--mock-clock=") => {
                 build.run.mock_clock_ns = Some(parse_cycle_time(&other["--mock-clock=".len()..])?);
+            }
+            "--rt" => build.run.rt = true,
+            "--rt-priority" => {
+                build.run.rt_priority = Some(parse_rt_priority(&next_value(
+                    args,
+                    &mut index,
+                    "--rt-priority",
+                )?)?);
+            }
+            other if other.starts_with("--rt-priority=") => {
+                build.run.rt_priority = Some(parse_rt_priority(&other["--rt-priority=".len()..])?);
+            }
+            "--rt-cpu" => {
+                build.run.rt_cpu = Some(parse_rt_cpu(&next_value(args, &mut index, "--rt-cpu")?)?);
+            }
+            other if other.starts_with("--rt-cpu=") => {
+                build.run.rt_cpu = Some(parse_rt_cpu(&other["--rt-cpu=".len()..])?);
+            }
+            "--rt-metrics" => {
+                build.run.rt_metrics = Some(parse_rt_metrics(&next_value(
+                    args,
+                    &mut index,
+                    "--rt-metrics",
+                )?)?);
+            }
+            other if other.starts_with("--rt-metrics=") => {
+                build.run.rt_metrics = Some(parse_rt_metrics(&other["--rt-metrics=".len()..])?);
             }
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
@@ -949,6 +1004,29 @@ fn validate(
                 .into(),
         );
     }
+    let rt_only = build.run.rt
+        || build.run.rt_priority.is_some()
+        || build.run.rt_cpu.is_some()
+        || build.run.rt_metrics.is_some();
+    if rt_only && command != Command::Run {
+        return Err(
+            "`--rt`, `--rt-priority`, `--rt-cpu`, and `--rt-metrics` are only valid with `stc run`"
+                .into(),
+        );
+    }
+    if !build.run.rt
+        && (build.run.rt_priority.is_some()
+            || build.run.rt_cpu.is_some()
+            || build.run.rt_metrics.is_some())
+    {
+        return Err("`--rt-priority`, `--rt-cpu`, and `--rt-metrics` require `--rt`".into());
+    }
+    if build.run.rt && build.run.mock_clock_ns.is_some() {
+        return Err("`--rt` cannot be combined with `--mock-clock`".into());
+    }
+    if build.run.rt && build.run.cycle_time_ns == Some(0) {
+        return Err("`--rt` requires a positive `--cycle-time`".into());
+    }
     let io_override = build.run.io.is_some() || build.run.io_file.is_some();
     if io_override && !matches!(command, Command::Run | Command::Test | Command::Debug) {
         return Err(
@@ -956,13 +1034,24 @@ fn validate(
                 .into(),
         );
     }
-    if (test.list || test.no_run || test.timeout_ns.is_some() || test.nocapture)
+    let coverage_flags = test.coverage.is_some() || test.coverage_out.is_some();
+    if (test.list || test.no_run || test.timeout_ns.is_some() || test.nocapture || coverage_flags)
         && command != Command::Test
     {
         return Err(
-            "`--list`, `--no-run`, `--timeout`, and `-- --nocapture` are only valid with `stc test`"
+            "`--list`, `--no-run`, `--timeout`, `--coverage`, `--no-coverage`, `--coverage-out`, \
+             and `-- --nocapture` are only valid with `stc test`"
                 .into(),
         );
+    }
+    if command == Command::Test && test.list && test.coverage == Some(true) {
+        return Err("STC-E-PROJECT-010: `--coverage` cannot be combined with `--list`".into());
+    }
+    if command == Command::Test && test.list && test.coverage_out.is_some() {
+        return Err("STC-E-PROJECT-010: `--coverage-out` cannot be combined with `--list`".into());
+    }
+    if command == Command::Test && test.coverage_out.is_some() && test.coverage == Some(false) {
+        return Err("STC-E-PROJECT-010: `--coverage-out` requires coverage to be enabled".into());
     }
     if build.out_dir.is_some()
         && !matches!(
@@ -1165,6 +1254,33 @@ fn parse_cycle_time(value: &str) -> Result<u64, String> {
         })
 }
 
+fn parse_rt_priority(value: &str) -> Result<u8, String> {
+    let priority: u8 = value
+        .parse()
+        .map_err(|_| format!("invalid RT priority `{value}`"))?;
+    if !(1..=99).contains(&priority) {
+        return Err("`--rt-priority` must be between 1 and 99".into());
+    }
+    Ok(priority)
+}
+
+fn parse_rt_cpu(value: &str) -> Result<u32, String> {
+    let cpu: u32 = value
+        .parse()
+        .map_err(|_| format!("invalid RT CPU `{value}`"))?;
+    if cpu > 63 {
+        return Err("`--rt-cpu` must be between 0 and 63".into());
+    }
+    Ok(cpu)
+}
+
+fn parse_rt_metrics(value: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Err("`--rt-metrics` requires a non-empty path".into());
+    }
+    Ok(value.to_owned())
+}
+
 fn parse_debug_protocol(value: &str) -> Result<DebugProtocol, String> {
     match value {
         "pipe" => Ok(DebugProtocol::Pipe),
@@ -1331,6 +1447,8 @@ fn print_help() {
          \x20         [--cycle-time <duration>] [--io null|memory|file]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--mock-clock <duration>] [--target <triple>]\n\
+         \x20         [--rt] [--rt-priority <1-99>] [--rt-cpu <0-63>]\n\
+         \x20         [--rt-metrics <path>]\n\
          \x20         [--clang <path>] [--runtime <path>]\n\
          \x20         [--diagnostic-paths package|absolute] [-v|-vv] [-q]\n\
          \x20 stc run --debug-server [--debug-endpoint <path>] [--allow-write]\n\
@@ -1349,6 +1467,7 @@ fn print_help() {
          \x20         [--message-format human|json] [-v|-vv] [-q]\n\
          \x20 stc test [<filter>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20          [--list] [--no-run] [--timeout <duration>]\n\
+         \x20          [--coverage|--no-coverage] [--coverage-out <dir>]\n\
          \x20          [--io null|memory|file] [--io-file <path>]\n\
          \x20          [--target <triple>] [--clang <path>] [--runtime <path>]\n\
          \x20          [--out-dir <dir>] [--relaxed]\n\
@@ -1525,6 +1644,64 @@ mod tests {
     }
 
     #[test]
+    fn rt_options_require_run_and_companion_flags() {
+        let run = invocation(&["run", "--rt", "--cycle-time", "1ms"]);
+        assert!(run.build.run.rt);
+        assert_eq!(run.build.run.cycle_time_ns, Some(1_000_000));
+
+        let full = invocation(&[
+            "run",
+            "--rt",
+            "--cycle-time",
+            "1ms",
+            "--rt-priority",
+            "90",
+            "--rt-cpu",
+            "3",
+            "--rt-metrics",
+            "metrics.jsonl",
+        ]);
+        assert_eq!(full.build.run.rt_priority, Some(90));
+        assert_eq!(full.build.run.rt_cpu, Some(3));
+        assert_eq!(full.build.run.rt_metrics.as_deref(), Some("metrics.jsonl"));
+
+        let parse_error = |args: &[&str]| {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            parse(&args).err().expect("the invocation must fail")
+        };
+        assert!(
+            parse_error(&["run", "--rt-priority", "90"]).contains("require `--rt`"),
+            "companion options need --rt"
+        );
+        assert!(
+            parse_error(&["build", "--rt"]).contains("only valid with `stc run`"),
+            "--rt is a run-only option"
+        );
+        assert!(
+            parse_error(&["run", "--rt", "--cycle-time", "1ms", "--mock-clock", "0ns"])
+                .contains("cannot be combined"),
+            "--rt and the mock clock are mutually exclusive"
+        );
+        assert!(
+            parse_error(&["run", "--rt", "--cycle-time", "0ns"]).contains("positive"),
+            "--rt requires a positive cycle time"
+        );
+        assert!(
+            parse_error(&["run", "--rt", "--cycle-time", "1ms", "--rt-priority", "0",])
+                .contains("between 1 and 99"),
+            "priority zero is rejected"
+        );
+        assert!(
+            parse_error(&["run", "--rt", "--cycle-time", "1ms", "--rt-cpu", "64",])
+                .contains("between 0 and 63"),
+            "CPU 64 is rejected"
+        );
+    }
+
+    #[test]
     fn debug_and_release_flags_conflict() {
         let args = ["build", "--debug", "--release"]
             .iter()
@@ -1559,6 +1736,66 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.starts_with("STC-E-PROJECT-010: "), "{error}");
+    }
+
+    #[test]
+    fn coverage_flags_are_parsed_and_validated() {
+        let default = invocation(&["test"]);
+        assert_eq!(default.test.coverage, None);
+        assert!(default.test.coverage_out.is_none());
+
+        assert_eq!(
+            invocation(&["test", "--coverage"]).test.coverage,
+            Some(true)
+        );
+        assert_eq!(
+            invocation(&["test", "--no-coverage"]).test.coverage,
+            Some(false)
+        );
+        assert_eq!(
+            invocation(&["test", "--coverage-out", "cov"])
+                .test
+                .coverage_out
+                .as_deref(),
+            Some("cov")
+        );
+        assert_eq!(
+            invocation(&["test", "--coverage-out=out/cov"])
+                .test
+                .coverage_out
+                .as_deref(),
+            Some("out/cov")
+        );
+
+        let parse_error = |args: &[&str]| {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            parse(&args).err().expect("the invocation must fail")
+        };
+        assert!(
+            parse_error(&["test", "--coverage", "--no-coverage"]).contains("mutually exclusive")
+        );
+        assert!(
+            parse_error(&["test", "--no-coverage", "--coverage"]).contains("mutually exclusive")
+        );
+        assert!(parse_error(&["test", "--coverage", "--list"]).contains("--list"));
+        assert!(parse_error(&["test", "--coverage-out", "cov", "--list"]).contains("--list"));
+        assert!(
+            parse_error(&["test", "--coverage-out", "cov", "--no-coverage"])
+                .contains("requires coverage")
+        );
+        assert!(parse_error(&["build", "--coverage"]).contains("only valid with `stc test`"));
+        assert!(
+            parse_error(&["build", "--coverage-out", "cov"]).contains("only valid with `stc test`")
+        );
+
+        // `--list` ignores the manifest default, so no explicit flag is needed;
+        // `--no-coverage` remains valid there.
+        let listed = invocation(&["test", "--list"]);
+        assert_eq!(listed.test.coverage, None);
+        assert!(invocation(&["test", "--list", "--no-coverage"]).test.list);
     }
 
     #[test]

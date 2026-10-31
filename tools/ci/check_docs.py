@@ -48,6 +48,7 @@ REQUIRED_DOCUMENTS = (
     "specification/Verification/Semantics-Charter.md",
     "specification/Verification/Semantics.md",
     "specification/Verification/Core-Coverage.md",
+    "specification/Verification/Core-IR-Coverage.md",
     "specification/Verification/Performance.md",
     "specification/Decisions.md",
     "specification/UTF8-Strings.md",

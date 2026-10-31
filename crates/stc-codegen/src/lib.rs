@@ -32,6 +32,7 @@ mod types;
 mod unit;
 pub mod verify;
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use stc_got::{Digest32, Endianness, GotId, Manifest, Rename, Target};
@@ -158,6 +159,43 @@ pub struct ProjectOptions {
     pub io: IoMetadataOptions,
 }
 
+/// What one coverage site measures (WL-10 §6.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverageKind {
+    /// One executable statement entry.
+    Statement,
+}
+
+/// One instrumented statement site in a generated module.
+///
+/// The ID is artifact-local: it indexes the module's
+/// `stc_coverage_counters` array and [`Output::coverage_sites`]. Reports map
+/// sites to canonical source spans and never depend on this local order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CoverageSite {
+    /// Artifact-local counter index.
+    pub id: u32,
+    /// Statement source span.
+    pub span: Span,
+    /// What the site measures.
+    pub kind: CoverageKind,
+}
+
+/// Test-build statement-coverage settings (WL-10 C-1–C-3).
+///
+/// Coverage is test tooling only. It is rejected outside a test build, is
+/// output-only, and never changes module identity, metadata, or the deployable
+/// ABI.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CoverageOptions {
+    /// Source files whose statements are instrumented.
+    ///
+    /// Test sources, the synthetic wrapper, prelude definitions, and
+    /// test-only definitions are excluded regardless of this list; the list
+    /// selects the production files that codegen may instrument.
+    pub files: BTreeSet<FileId>,
+}
+
 /// Code generation options.
 ///
 /// The `Default` implementation is the cold production form: unoptimised
@@ -200,6 +238,10 @@ pub struct Options<'a> {
     /// 2.2) and the test-only prelude lowering. Test artifacts are cold,
     /// non-deployable, and never part of `[build].emit`.
     pub test_build: bool,
+    /// Test-build statement coverage. `None` disables instrumentation and
+    /// leaves the emitted module byte-identical to a coverage-free build.
+    /// Coverage is an internal error outside a test build (§6.1).
+    pub coverage: Option<CoverageOptions>,
 }
 
 /// One harness-visible span-table entry.
@@ -268,6 +310,9 @@ pub struct Output {
     /// Frame identity/type hints; non-empty only for hook-emitting debug
     /// builds. The driver uses this to write `<name>.stc-frames.json`.
     pub frames: Vec<FrameFunctionHint>,
+    /// Instrumented statement sites in ID order; empty when coverage is
+    /// disabled or no statement was eligible.
+    pub coverage_sites: Vec<CoverageSite>,
 }
 
 /// A structured code generation failure.
@@ -378,6 +423,13 @@ impl fmt::Display for CodegenError {
 /// Returns every unsupported-construct, identity, projection, or internal
 /// error encountered.
 pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<CodegenError>> {
+    if options.coverage.is_some() && !options.test_build {
+        // Production and release builds must never instrument, even if a
+        // caller sets the option by mistake (WL-10 §6.1, §6.5).
+        return Err(vec![CodegenError::internal(
+            "statement coverage is only available in a test build",
+        )]);
+    }
     hir.check_invariants()
         .map_err(|message| vec![CodegenError::internal(message)])?;
     let target = resolve_target(options.target);

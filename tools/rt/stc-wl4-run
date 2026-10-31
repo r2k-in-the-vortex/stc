@@ -1,0 +1,89 @@
+#!/bin/bash
+# WL-4 privileged measurement wrapper (R-2).
+#
+# This file is installed root-owned at /usr/local/sbin/stc-wl4-run. The
+# sudoers rule grants the login user NOPASSWD access to this wrapper only.
+# Every subcommand and argument is fixed and validated; do not add a generic
+# command passthrough.
+
+set -euo pipefail
+
+readonly CAMPAIGN=/home/r2k/stc-rt/tools/rt/campaign.py
+
+usage() {
+    cat <<'EOF'
+usage: stc-wl4-run <command> [args]
+
+commands:
+  cyclictest <seconds>       FIFO:90 cyclictest, one thread per CPU
+  timerlat <time>            rtla timerlat histogram
+  osnoise <time>             rtla osnoise histogram
+  hwlat <time>               hwlatdetect hardware-latency test
+  perf <pid> <seconds>       perf stat on a running PID for a fixed interval
+  campaign <args...>         run the root-owned WL-4 campaign harness
+
+Durations are <n> with an optional s, m, h, or d suffix. No other commands or
+arguments are accepted.
+EOF
+}
+
+die() {
+    printf 'stc-wl4-run: %s\n' "$*" >&2
+    exit 64
+}
+
+require_time() {
+    [[ $1 =~ ^[0-9]+(s|m|h|d)?$ ]] || die "invalid duration: $1"
+}
+
+require_seconds() {
+    [[ $1 =~ ^[0-9]+$ ]] || die "invalid seconds: $1"
+}
+
+command=${1:-}
+case "$command" in
+    cyclictest)
+        [[ $# -eq 2 ]] || die "cyclictest needs exactly one duration in seconds"
+        require_seconds "$2"
+        exec /usr/bin/cyclictest -m -S -p90 -i200 -h1000 -D"$2" -q
+        ;;
+    timerlat)
+        [[ $# -eq 2 ]] || die "timerlat needs exactly one duration"
+        require_time "$2"
+        exec /usr/bin/rtla timerlat hist -d "$2"
+        ;;
+    osnoise)
+        [[ $# -eq 2 ]] || die "osnoise needs exactly one duration"
+        require_time "$2"
+        exec /usr/bin/rtla osnoise hist -d "$2"
+        ;;
+    hwlat)
+        [[ $# -eq 2 ]] || die "hwlat needs exactly one duration"
+        require_time "$2"
+        exec /usr/sbin/hwlatdetect --duration "$2"
+        ;;
+    perf)
+        [[ $# -eq 3 ]] || die "perf needs a PID and a duration in seconds"
+        [[ $2 =~ ^[0-9]+$ ]] || die "invalid PID: $2"
+        require_seconds "$3"
+        exec /usr/bin/perf stat -p "$2" \
+            -e cycles,instructions,page-faults,minor-faults,major-faults \
+            -- /usr/bin/sleep "$3"
+        ;;
+    campaign)
+        shift
+        [[ -f $CAMPAIGN ]] || die "campaign harness not installed: $CAMPAIGN"
+        [[ $(/usr/bin/stat -c '%U' "$CAMPAIGN") == root ]] \
+            || die "campaign harness is not owned by root: $CAMPAIGN"
+        [[ -z $(/usr/bin/find "$CAMPAIGN" -maxdepth 0 -perm /022 -print -quit) ]] \
+            || die "campaign harness is group/other writable: $CAMPAIGN"
+        exec /usr/bin/python3 "$CAMPAIGN" "$@"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        usage >&2
+        exit 64
+        ;;
+esac

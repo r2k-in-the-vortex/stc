@@ -35,7 +35,7 @@ use crate::metadata::{
 use crate::module::{FunctionTarget, ModuleArtifacts, ModuleOptions, RootTarget};
 use crate::stmt::LoopTarget;
 use crate::verify::{self, Contract, DescriptorSpec, FunctionTableSpec};
-use crate::{Metadata, Options, Output, SpanEntry};
+use crate::{CoverageSite, Metadata, Options, Output, SpanEntry};
 
 /// The code generation state for one build.
 pub(crate) struct Lowerer<'a> {
@@ -73,6 +73,15 @@ pub(crate) struct Lowerer<'a> {
     collect_checkpoints: bool,
     /// Identity/type hints for the additive frame sidecar (D-181).
     pub(crate) frame_hints: Vec<crate::FrameFunctionHint>,
+    /// Coverage counter index by statement span (WL-10 §6.1). A repeated span
+    /// reuses its counter instead of allocating a second site.
+    coverage_ids: BTreeMap<Span, u32>,
+    /// Instrumented sites in ID order.
+    coverage_sites: Vec<CoverageSite>,
+    /// Definition whose HIR body is currently being lowered. Generated bodies
+    /// (prepare, cycle, shutdown, synthesized standard FBs, ...) leave this
+    /// `None` and can never carry source coverage.
+    body_owner: Option<DefId>,
     pub errors: Vec<CodegenError>,
     seen_errors: BTreeSet<String>,
 }
@@ -197,6 +206,9 @@ pub(crate) fn generate(
         checkpoint_ordinal: 0,
         collect_checkpoints,
         frame_hints: Vec::new(),
+        coverage_ids: BTreeMap::new(),
+        coverage_sites: Vec::new(),
+        body_owner: None,
         errors: Vec::new(),
         seen_errors: BTreeSet::new(),
     };
@@ -292,6 +304,7 @@ pub(crate) fn generate(
         spans: lowerer.span_entries.clone(),
         got: lowerer.got.clone(),
         frames,
+        coverage_sites: lowerer.coverage_sites.clone(),
     })
 }
 
@@ -352,6 +365,79 @@ impl Lowerer<'_> {
         if self.seen_errors.insert(key) {
             self.errors.push(error);
         }
+    }
+
+    /// Returns `true` when `def` or an enclosing owner is test-only.
+    ///
+    /// A `{stc:test}` marker or a `[test].sources` file marks the definition
+    /// itself; members of a test-only POU reach it through `Def::parent`
+    /// (WL-10 §6.4).
+    fn def_is_test_only(&self, def: DefId) -> bool {
+        let mut current = Some(def);
+        while let Some(def) = current {
+            let data = &self.hir.defs[def.index()];
+            if data.test_only {
+                return true;
+            }
+            current = data.parent;
+        }
+        false
+    }
+
+    /// Instruments one statement entry with a counter increment.
+    ///
+    /// This is the single instrumentation point (WL-10 C-1): it runs after the
+    /// debug location is set and before the statement's own effects are
+    /// lowered. Coverage is gated to test builds by [`crate::generate`], to
+    /// the caller's file allow-list, to spans with source extent, to executable
+    /// statements, and to bodies whose owner is neither test-only nor
+    /// synthetic (§6.4). A repeated span reuses its counter and site; the
+    /// increment is emitted at every lowering so the counter records entry to
+    /// each executed statement.
+    pub(crate) fn record_coverage(&mut self, f: &mut Function, stmt: &stc_hir::StmtHir) {
+        let instrumented = self
+            .options
+            .coverage
+            .as_ref()
+            .is_some_and(|coverage| coverage.files.contains(&stmt.span.file));
+        if !instrumented {
+            return;
+        }
+        if matches!(stmt.kind, stc_hir::StmtKindHir::Empty) || stmt.span.is_empty() {
+            return;
+        }
+        let Some(owner) = self.body_owner else {
+            return;
+        };
+        if synthetic(self.hir, owner) || self.def_is_test_only(owner) {
+            return;
+        }
+        let id = match self.coverage_ids.get(&stmt.span) {
+            Some(id) => *id,
+            None => {
+                let id = u32::try_from(self.coverage_sites.len()).unwrap_or(u32::MAX);
+                self.coverage_ids.insert(stmt.span, id);
+                self.coverage_sites.push(CoverageSite {
+                    id,
+                    span: stmt.span,
+                    kind: crate::CoverageKind::Statement,
+                });
+                id
+            }
+        };
+        // The array length is not final while bodies are lowered, so index the
+        // element type directly. The computed address and bounds are identical
+        // to `getelementptr inbounds [N x i64], ptr @…, i64 0, i64 <id>`; the
+        // emitted global still has the exact `[N x i64]` type.
+        let pointer = f.gep(
+            "i64",
+            &Value::symbol(stc_got::descriptor::COVERAGE_COUNTERS),
+            &[format!("i64 {id}")],
+            true,
+        );
+        let old = f.load(IrType::Int(64), &pointer, Some(8));
+        let new = f.binop("add", &old, &Value::int(64, 1));
+        f.store(&new, &pointer, Some(8));
     }
 
     pub(crate) fn span_id(&self, span: Span) -> u32 {
@@ -736,6 +822,22 @@ impl Lowerer<'_> {
             constant: false,
             align: None,
         });
+        // Test-build coverage counters (WL-10 C-2). The array is ordinary
+        // module data exported under the shared internal symbol so the test
+        // host can read it after the scan loop; it is emitted only when at
+        // least one statement site exists, so coverage-disabled builds are
+        // unchanged.
+        if self.options.coverage.is_some() && !self.coverage_sites.is_empty() {
+            let count = self.coverage_sites.len();
+            self.module.add_global(GlobalDef {
+                name: stc_got::descriptor::COVERAGE_COUNTERS.into(),
+                attrs: SymbolAttrs::module_export(),
+                ty: format!("[{count} x i64]"),
+                init: "zeroinitializer".into(),
+                constant: false,
+                align: Some(8),
+            });
+        }
         self.module
             .add_descriptor(abi::module::DESCRIPTOR_DATA, &self.got.descriptor_bytes);
         let functions = self.got.function_table();
@@ -946,6 +1048,7 @@ impl Lowerer<'_> {
         let previous_checkpoint = self
             .checkpoint_function
             .replace(FunctionTarget::Function(def));
+        let previous_owner = self.body_owner.replace(def);
         let result = (|| -> Result<(), CodegenError> {
             self.lower_locals(&mut f, &mut info, &body.locals)?;
             let mut loops: Vec<LoopTarget> = Vec::new();
@@ -966,6 +1069,7 @@ impl Lowerer<'_> {
             self.module.add_function(f);
             Ok(())
         })();
+        self.body_owner = previous_owner;
         self.checkpoint_function = previous_checkpoint;
         self.current_slots = previous;
         result
@@ -1233,6 +1337,7 @@ impl Lowerer<'_> {
         let previous_checkpoint = self
             .checkpoint_function
             .replace(FunctionTarget::FbBody(def));
+        let previous_owner = self.body_owner.replace(def);
         let result = (|| -> Result<(), CodegenError> {
             self.lower_locals(&mut f, &mut info, &body.locals)?;
             let mut loops: Vec<LoopTarget> = Vec::new();
@@ -1246,6 +1351,7 @@ impl Lowerer<'_> {
             self.module.add_function(f);
             Ok(())
         })();
+        self.body_owner = previous_owner;
         self.checkpoint_function = previous_checkpoint;
         self.current_slots = previous;
         result
@@ -1379,6 +1485,7 @@ impl Lowerer<'_> {
         let previous_checkpoint = self
             .checkpoint_function
             .replace(FunctionTarget::Method(def));
+        let previous_owner = self.body_owner.replace(def);
         let result = (|| -> Result<(), CodegenError> {
             self.lower_locals(&mut f, &mut info, &body.locals)?;
             let mut loops: Vec<LoopTarget> = Vec::new();
@@ -1399,6 +1506,7 @@ impl Lowerer<'_> {
             self.module.add_function(f);
             Ok(())
         })();
+        self.body_owner = previous_owner;
         self.checkpoint_function = previous_checkpoint;
         self.current_slots = previous;
         result
@@ -1564,6 +1672,7 @@ impl Lowerer<'_> {
         let previous_checkpoint = self
             .checkpoint_function
             .replace(FunctionTarget::ProgramBody(program));
+        let previous_owner = self.body_owner.replace(program);
         let result = (|| -> Result<(), CodegenError> {
             if let Some(body) = &body {
                 self.lower_locals(&mut f, &mut info, &body.locals)?;
@@ -1579,6 +1688,7 @@ impl Lowerer<'_> {
             self.module.add_function(f);
             Ok(())
         })();
+        self.body_owner = previous_owner;
         self.checkpoint_function = previous_checkpoint;
         self.current_slots = previous;
         result
@@ -2552,6 +2662,14 @@ impl Lowerer<'_> {
             .insert(abi::module::SLOTS_GLOBAL.into());
         contract.local_globals.insert(symbols::RETAIN_BUFFER.into());
         contract.local_globals.insert(symbols::METADATA_DATA.into());
+        if self.options.coverage.is_some() {
+            // Instrumented bodies load and store the counter array directly;
+            // the structural verifier otherwise rejects direct module-global
+            // access (WL-10 §3.3, §6.1).
+            contract
+                .local_globals
+                .insert(stc_got::descriptor::COVERAGE_COUNTERS.into());
+        }
         contract.descriptor = Some(DescriptorSpec {
             symbol: abi::module::DESCRIPTOR_DATA.into(),
             size: self.got.descriptor_bytes.len(),

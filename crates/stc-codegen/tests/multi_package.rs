@@ -110,6 +110,7 @@ fn generate() -> (stc_codegen::Output, stc_sema::Analysis) {
         source_paths: Some(&source_paths),
         source_map: None,
         test_build: false,
+        coverage: None,
         module: stc_codegen::ModuleBuildOptions {
             compiler_version: "stc test".into(),
             source_fingerprint: fingerprint,
