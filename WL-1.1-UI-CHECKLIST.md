@@ -10,7 +10,7 @@ Compiler: the binary `stc.path` points at; use the latest debug or a rebuilt rel
 Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **N/A** =
 unsupported or intentionally out of scope.
 
-Summary 2026-10-31: 40/40 entries evaluated — 39 pass (97.5%), item 12 fails. The
+Summary 2026-10-31: 40/40 entries evaluated — 40 pass (100%). The
 required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 
 ## 0. Prerequisites
@@ -78,12 +78,12 @@ required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan
 11. [x] **Problem matcher** — pass 2026-10-30: `STC-E-NAME-001` on `src/main.st` line 41,
         columns 13–20, appears once (no duplicate with the language server), clicking it navigates
         to the line, and the entry clears when the edit is undone.
-12. [ ] **`stc: run` task** — FAIL on clean stop 2026-10-30. The task starts (the
-        `STC-W-MANIFEST-001` cold-layout warning is normal) and now passes
-        `--debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` so attach can be
-        retested (F-2). Terminating the task left `stc run` (PID 33308) and `sample.exe`
-        (PID 39704) running; they were killed manually with `taskkill /T /F`. Recorded as
-        follow-up **F-3**.
+12. [x] **`stc: run` task** — Pass 2026-10-31 (F-3). The task starts with the normal cold-layout
+        warning and passes `--debug-server --debug-endpoint target/stc/debug/debug.endpoint.json`
+        for attach. The run task now uses a custom-execution pseudoterminal; terminating the task
+        stops the whole process tree. Manual verification: before termination the `stc run` driver
+        (PID 51232) and `sample.exe` host (PID 34300) were present; after termination only the
+        `stc lsp` process (PID 41060) remained. The `stc: check` task still exits normally.
         Note: the provider returns all five detected tasks (`stc check, stc build, stc run,
         stc test, stc fmt`), but VS Code's default two-level picker shows only configured
         `tasks.json` entries. The configured `stc: run` task was added to the sample; setting
@@ -198,8 +198,9 @@ required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan
 31. [x] **Attach.** pass 2026-10-30 using the `stc: run` task, which now passes
         `--debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` (F-2). The
         **stc: Attach sample** session connected, a breakpoint stopped, and disconnect left the
-        host running. Stopping the run task still leaves its process tree (F-3), so the driver and
-        `sample.exe` were killed manually; the `stc lsp` process remained.
+        host running. Stopping the run task previously left its process tree (F-3, fixed
+        2026-10-31), so the driver and `sample.exe` were killed manually; the `stc lsp` process
+        remained.
 32. [x] **Conditional breakpoints.** Pass 2026-10-30: **Add Conditional Breakpoint** accepts a
         condition with no error at creation; at launch VS Code warns that this breakpoint type is
         not supported by the debugger and the breakpoint stops unconditionally. The condition is
@@ -399,10 +400,36 @@ Completed findings are feature history, not open follow-ups. The close-out triag
       Variables/Watch/Locals, breakpoints, or stepping are offered. Target paths use manifest
       keys (`SAMPLE::TOTAL` for the sample global, not `MAIN.TOTAL`).
 
+- [x] **F-3 — Stop the `stc: run` task's process tree.** Pass 2026-10-31. Terminating the VS Code
+      task previously killed the shell but left `stc run` and the launcher (`sample.exe`) running.
+      The `run` task now uses a `vscode.CustomExecution` with a pseudoterminal
+      (`editors/vscode/src/runTerminal.ts`) that resolves the same `stc.path` executable
+      (including the Windows `.cmd`/`.bat` shim case), spawns the same generated argv in the same
+      project directory, streams stdout/stderr to the task terminal, forwards input, and fires
+      `onDidClose` when the child exits. Terminal `close()` — the task API's termination path —
+      calls `killProcessTree`, which signals the whole process group with SIGINT (the host's stop
+      handler and a driver that handles SIGINT both receive it), waits for every group member to
+      exit, and escalates to a process-group SIGKILL on POSIX or `taskkill /T /F` on Windows, then
+      ends the task with no exit code as VS Code's terminated-task contract requires. `check`,
+      `build`, `test`, and `fmt` keep `ShellExecution`, so their exit codes and problem-matcher
+      behavior are unchanged. Manual verification 2026-10-31: before termination the `stc run`
+      driver (PID 51232) and `sample.exe` host (PID 34300) were present; after termination only
+      `stc lsp` (PID 41060) remained, and `stc: check` still exited normally. Implementation
+      commits `644e067`/`3a93260`; CI run `41239879013` green (38 jobs).
+      Regression coverage in `editors/vscode/test/electron/suite.js`: the smoke
+      starts the configured `stc: run` task (with `--debug-server`), polls `tasklist`/`ps` until
+      the `sample` host and a new `stc` driver exist, calls `execution.terminate()`, waits for
+      `onDidEndTask`, then polls until no `sample` host and no non-baseline `stc` process remains
+      (the language server's `stc` processes are allowed to survive). The smoke retains the
+      `stc check` exit-code-0 assertion and passes locally on Windows with `npm run typecheck`,
+      `npm test`, `npm run package`, and `npm run test:electron`. Manual VS Code verification
+      2026-10-31 passed: the `stc run` driver and `sample.exe` were present before termination;
+      after termination only `stc lsp` remained, and `stc: check` still exited normally.
+
 ### Required for WL-1.1
 
-These items are open and required for WL-1.1 (plan §12.1); F-1.1 is an implementation task, while
-F-3 is the remaining close-out fix.
+These items are open and required for WL-1.1 (plan §12.1); F-1.1 is the remaining required
+implementation task.
 
 - [ ] **F-1.1 — Default-theme ST token-color overlay.** Required for WL-1.1 (plan §12.1).
       F-1 ships `stc Dark`/`stc Light`, so the intended palette requires selecting a contributed
@@ -413,34 +440,6 @@ F-3 is the remaining close-out fix.
       in Default Dark Modern and Default Light Modern when the extension's ST token-color overlay
       is active; the overlay targets `.st` scopes, leaves other languages unchanged, and is
       documented and opt-out. Implementation pending.
-
-- [ ] **F-3 — Stop the `stc: run` task's process tree.** Terminating the VS Code task kills the
-      shell but leaves `stc run` and the launcher (`sample.exe`) running. Make task termination
-      stop the full tree (for example a custom execution that performs a process-tree kill, or a
-      driver-side Windows job object/signal handler that kills the launcher). Acceptance: after
-      terminating the task, `Get-Process stc,sample` shows no run driver or host; the language
-      server may remain.
-      **Implemented; manual verification pending.** Root cause: the task used
-      `vscode.ShellExecution`, so VS Code terminated only the shell it created, leaving `stc run`
-      and its host running as orphans. The `run` task now uses a `vscode.CustomExecution` with a
-      pseudoterminal (`editors/vscode/src/runTerminal.ts`) that resolves the same `stc.path`
-      executable (including the Windows `.cmd`/`.bat` shim case), spawns the same generated argv
-      in the same project directory, streams stdout/stderr to the task terminal, forwards input,
-      and fires `onDidClose` when the child exits. Terminal `close()` — the task API's
-      termination path — calls the existing `killProcessTree` helper, which signals the whole
-      process group with SIGINT (the host's stop handler and a driver that handles SIGINT both
-      receive it), waits for every group member to exit, and escalates to a process-group
-      SIGKILL on POSIX or `taskkill /T /F` on Windows, then ends the task with no exit code as
-      VS Code's terminated-task contract requires. `check`, `build`, `test`, and `fmt` keep
-      `ShellExecution`, so their exit codes and problem-matcher behavior are unchanged.
-      Regression coverage in `editors/vscode/test/electron/suite.js`: the smoke
-      starts the configured `stc: run` task (with `--debug-server`), polls `tasklist`/`ps` until
-      the `sample` host and a new `stc` driver exist, calls `execution.terminate()`, waits for
-      `onDidEndTask`, then polls until no `sample` host and no non-baseline `stc` process remains
-      (the language server's `stc` processes are allowed to survive). The smoke retains the
-      `stc check` exit-code-0 assertion and passes locally on Windows with `npm run typecheck`,
-      `npm test`, `npm run package`, and `npm run test:electron`. Manual VS Code acceptance has
-      not run.
 
 ### Deferred follow-ups
 
@@ -542,7 +541,7 @@ not a WL-1.1 code change.
 | 9 | Pass | Build exits 0; cold-layout warning expected; Problems empty |
 | 10 | Pass | `stc: fmt` rewrites the deviation; idempotent; Problems empty |
 | 11 | Pass | Single Problems entry, correct line, click navigates, clears on undo |
-| 12 | Fail (stop) | Run starts and now starts a debug server; terminating the task orphaned `stc run` + `sample.exe` (F-3) |
+| 12 | Pass | Pass 2026-10-31 (F-3): run task starts driver + `sample.exe`; terminating through the task API stopped both, leaving only `stc lsp`; `stc check` still exits normally |
 | 13 | Pass | F12 on `AddStep` at start/middle/end; verbatim tab was a stale unsupported route |
 | 14 | Pass | FB type and instance resolve; declaration F12 uses VS Code's reference fallback |
 | 15 | Pass | Variables, globals, and named labels resolve to declarations |
@@ -583,13 +582,13 @@ not a WL-1.1 code change.
 | F-6 | Pass | Manual 2026-10-31: removal while stopped/running clears host IDs; re-add works without restart; normal/`\\?\` spellings share one key; commit `dfda944`, CI `41209918428` green |
 | F-12 | Pass | Manual 2026-10-31: Main stop lists only `MAIN`; AddStep lists `ADDSTEP` above `MAIN`; no host frames; caller/scopes/Locals/stepping work; commit `68ecbfc`, CI `41212737785` green |
 | F-16 | Pass | Manual 2026-10-31: Debug-Console-only monitoring accepted; monitoring-only message, `INCREMENT = 1`, clear pause error, no fake stop; target paths use manifest keys; commit `d0abb12`, CI `41234800343` green |
+| F-3 | Pass | Manual 2026-10-31: run task driver 51232 + `sample.exe` 34300; terminating the task left only `stc lsp` 41060; `stc check` still exits normally; commits `644e067`/`3a93260`, CI `41239879013` green |
 
 ### Required items
 
 | Item | Result | Notes |
 | --- | --- | --- |
 | F-1.1 | Required; pending | Default-theme ST token overlay; acceptance wording owner-approved 2026-10-31; plan §12.1 |
-| F-3 | Implemented; manual verification pending | Run task uses a custom-execution pseudoterminal whose `close()` calls the process-tree kill; Electron smoke starts `stc: run`, terminates it through the task API, and polls that no `sample` host or non-baseline `stc` remains (language server allowed); `stc check` exit-code test retained; typecheck/test/package/smoke pass locally |
 
 ### Deferred follow-ups
 
