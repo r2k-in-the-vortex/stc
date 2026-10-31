@@ -1238,12 +1238,21 @@ def StorageValuesLive (c : IRState) : Prop :=
     (∀ g off', v = .ptr (.global g off') →
       ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length)
 
+/-- Every `@symbol` in a value position of the fragment. -/
+def fragValueSymbols (frag : IRFrag) : List String :=
+  frag.functions.flatMap fun fn =>
+    fn.blocks.flatMap fun block =>
+      block.instrs.flatMap instrValueSymbols ++
+        match block.terminator with
+        | some term => terminatorValueSymbols term
+        | none => []
+
 /-- The host storage domain: every `Data`/`Direct` root slot and every global
-referenced by a builder-recorded `@symbol` has a non-empty storage entry. -/
+that the code can produce as a value has a non-empty storage entry. -/
 def StorageDomain (c : IRState) : Prop :=
   (∀ slot kind, c.slotKind? slot = some kind → kind.isStorage = true →
     ∃ values, c.lookupStorage (.root slot) = some values ∧ 0 < values.length) ∧
-  (∀ g, (∃ fn ∈ c.module.functions, g ∈ fn.facts.symbolRefs) →
+  (∀ g, g ∈ fragValueSymbols c.module →
     ∃ values, c.lookupStorage (.global g) = some values ∧ 0 < values.length)
 
 /-- No local, stack cell, or persistent-storage value is a pointer to a slots
@@ -3750,6 +3759,444 @@ theorem storageDomain_writeStorage {s s' : IRState} {id : StoreId} {off : Nat}
             refine ⟨vs, ?_, hpos⟩
             rw [lookupStorage_setStorage_ne (beq_eq_false_iff_ne.mpr hid)]
             exact hvs
+      · rw [ite_eq_right hoff] at hw
+        simp at hw
+
+/-- State projections unaffected by a frame-list update. -/
+theorem lookupStorage_updateFrames (c : IRState) (fs : List IRFrame) (id : StoreId) :
+    ({ c with frames := fs } : IRState).lookupStorage id = c.lookupStorage id := rfl
+
+theorem lookupStorageAt_updateFrames (c : IRState) (fs : List IRFrame) (id : StoreId)
+    (off : Nat) :
+    ({ c with frames := fs } : IRState).lookupStorageAt id off = c.lookupStorageAt id off := rfl
+
+theorem lookupFunction_updateFrames (c : IRState) (fs : List IRFrame) (slot : Nat) :
+    ({ c with frames := fs } : IRState).lookupFunction slot = c.lookupFunction slot := rfl
+
+theorem slotKind?_updateFrames (c : IRState) (fs : List IRFrame) (slot : Nat) :
+    ({ c with frames := fs } : IRState).slotKind? slot = c.slotKind? slot := rfl
+
+theorem module_updateFrames (c : IRState) (fs : List IRFrame) :
+    ({ c with frames := fs } : IRState).module = c.module := rfl
+
+/-- The per-frame update of a successful stack store. -/
+def storeFrame (frame slot off : Nat) (v : IRValue) (g : IRFrame) : IRFrame :=
+  if g.id == frame then g.setMem (.stack frame slot off) v else g
+
+theorem wfState_storeFrames {contract : IRContract} {c : IRState}
+    {frame slot off : Nat} {v : IRValue} {ty : IrType} {g0 : IRFrame}
+    (hwf : WFState contract c)
+    (hfind : c.frameById? frame = some g0)
+    (halloc : g0.allocType? slot = some ty)
+    (hoff : off < allocSize ty)
+    (hvt : MemValueTyped ty v)
+    (hvb : MemValuePtrBounded c v)
+    (hnoSlotsV : ∀ gname off', v = .ptr (.global gname off') →
+      gname ∉ SlotsGlobals c.module) :
+    WFState contract
+      { c with frames := c.frames.map (storeFrame frame slot off v) } := by
+  have hFid : ∀ g, (storeFrame frame slot off v g).id = g.id := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFfn : ∀ g, (storeFrame frame slot off v g).fn = g.fn := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFblock : ∀ g, (storeFrame frame slot off v g).block = g.block := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFterm : ∀ g, (storeFrame frame slot off v g).terminator = g.terminator := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFinstrs : ∀ g, (storeFrame frame slot off v g).instrs = g.instrs := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFprev : ∀ g, (storeFrame frame slot off v g).prev = g.prev := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFret : ∀ g, (storeFrame frame slot off v g).retDest = g.retDest := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFlocals : ∀ g, (storeFrame frame slot off v g).locals = g.locals := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFallocs : ∀ g, (storeFrame frame slot off v g).allocs = g.allocs := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFnextAlloc : ∀ g, (storeFrame frame slot off v g).nextAlloc = g.nextAlloc := by
+    intro g; unfold storeFrame; split <;> rfl
+  have hFallocType : ∀ g slot' ty',
+      g.allocType? slot' = some ty' → (storeFrame frame slot off v g).allocType? slot' = some ty' := by
+    intro g slot' ty' hty
+    rw [show (storeFrame frame slot off v g).allocType? slot' = g.allocType? slot' from by
+      unfold storeFrame; split <;> rfl]
+    exact hty
+  have hlook : FrameLookupsPreserved c
+      { c with frames := c.frames.map (storeFrame frame slot off v) } :=
+    frameLookups_storeFrames c frame slot off v
+  constructor
+  · exact hwf.program
+  · have hmapid : (c.frames.map (storeFrame frame slot off v)).map (·.id) = c.frames.map (·.id) := by
+      rw [List.map_map]
+      exact List.map_congr_left (fun g _ => hFid g)
+    rw [hmapid]
+    exact hwf.frameIdsNodup
+  · intro f' hf'
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    rw [hFid]
+    exact hwf.frameIdsBound g hg
+  · intro f' hf'
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    rw [hFfn]
+    exact hwf.frameFunction g hg
+  · intro f' hf'
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    rcases hwf.frameBlock g hg with ⟨block, hb, hblock, hterm, done, hdone⟩
+    refine ⟨block, ?_, ?_, ?_, done, ?_⟩
+    · simpa [hFfn g] using hb
+    · rw [hFblock g]; exact hblock
+    · rw [hFterm g]; exact hterm
+    · rw [hFinstrs g]; exact hdone
+  · intro f' hf'
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    have h := hwf.framePrev g hg
+    simpa [PrevEdge, hFprev g, hFfn g, hFblock g] using h
+  · cases hframes : c.frames with
+    | nil =>
+        intro f' rest' heq
+        simp [hframes] at heq
+    | cons f0 rest0 =>
+        intro f' rest' heq hinst
+        simp only [hframes, List.map_cons, List.cons.injEq] at heq
+        rcases heq with ⟨hf', hrest'⟩
+        rw [← hf'] at hinst ⊢
+        rw [hFinstrs f0] at hinst
+        rw [hFterm f0]
+        exact hwf.noBareUnreachable f0 rest0 hframes hinst
+  · intro f' hf' name ty' hty
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    rw [hFfn g] at hty
+    rcases hwf.localsInitialized g hg name ty' hty with ⟨val, hval⟩
+    exact ⟨val, by simpa [IRFrame.lookupLocal, hFlocals g] using hval⟩
+  · intro f' hf' name val hv ty' hty
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    rw [hFfn g] at hty
+    have hv' : g.lookupLocal name = some val := by
+      simpa [IRFrame.lookupLocal, hFlocals g] using hv
+    exact hwf.localsTyped g hg name val hv' ty' hty
+  · intro f' hf' entry hentry
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    have h := hwf.originsMatch g hg entry (by simpa [hFfn g] using hentry)
+    simpa [OriginHolds, IRFrame.lookupLocal, hFlocals g, hFfn g, lookupFunction_updateFrames,
+      slotKind?_updateFrames, module_updateFrames] using h
+  · intro f' hf'
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    have h := hwf.allocsWellFormed g hg
+    refine ⟨?_, ?_, ?_⟩
+    · simpa [hFallocs g] using h.1
+    · simpa [hFallocs g, hFnextAlloc g] using h.2.1
+    · intro slot' ty' hty
+      rw [show (storeFrame frame slot off v g).allocType? slot' = g.allocType? slot' from by
+        unfold storeFrame; split <;> rfl] at hty
+      exact h.2.2 slot' ty' hty
+  · intro f' hf'
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    have hspg : StackPtrsBounded c (storeFrame frame slot off v g) := by
+      intro name val addr hv haddr
+      exact hwf.stackPtrsBounded g hg name val addr
+        (by simpa [IRFrame.lookupLocal, hFlocals g] using hv) haddr
+    exact stackPtrsBounded_of_frameLookups hlook hspg
+  · intro f' hf'
+    exact memTyped_storeFrames hwf.frameIdsNodup hwf.memTyped hfind halloc hoff hvt hvb f' hf'
+  · intro f' hf'
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    have h := hwf.storagePtrsLive g hg
+    simpa [StoragePtrsLive, IRFrame.lookupLocal, hFlocals g, lookupStorage_updateFrames] using h
+  · intro f' hf'
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    have h := hwf.slotsBase g hg
+    simpa [SlotsBase, SlotsGlobalStored, IRFrame.lookupLocal, hFlocals g, hFfn g,
+      lookupStorageAt_updateFrames] using h
+  · exact hwf.storageValuesLive
+  · exact hwf.storageDomain
+  · constructor
+    · intro f' hf' name val gname off' hv hval
+      rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+      exact hwf.noSlotsGlobalPointers.1 g hg name val gname off'
+        (by simpa [IRFrame.lookupLocal, hFlocals g] using hv) hval
+    · constructor
+      · intro f' hf' addr val gname off' hv hval
+        rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+        unfold storeFrame at hv
+        split at hv
+        · rename_i hgt
+          by_cases hsame : addr = .stack frame slot off
+          · rw [hsame] at hv
+            rw [lookupMem_setMem_eq] at hv
+            have hvalEq : val = v := (Option.some.inj hv).symm
+            subst hvalEq
+            exact hnoSlotsV gname off' hval
+          · exact hwf.noSlotsGlobalPointers.2.1 g hg addr val gname off'
+              (by
+                rw [← lookupMem_setMem_ne g (beq_eq_false_iff_ne.mpr hsame) v]
+                exact hv) hval
+        · rename_i hgt
+          exact hwf.noSlotsGlobalPointers.2.1 g hg addr val gname off' hv hval
+      · simpa [lookupStorageAt_updateFrames] using hwf.noSlotsGlobalPointers.2.2
+  · exact hwf.functionBindings
+  · exact hwf.callTargets
+  · intro pre callee caller suffix heq
+    rw [List.map_eq_append_iff] at heq
+    rcases heq with ⟨l1, l2, hl, hpre, hrest⟩
+    rw [List.map_eq_cons_iff] at hrest
+    rcases hrest with ⟨a, l2', hl2, hca, hrest2⟩
+    rw [List.map_eq_cons_iff] at hrest2
+    rcases hrest2 with ⟨b, l2'', hl2', hcb, hsuf⟩
+    have hf : c.frames = l1 ++ a :: b :: l2'' := by
+      rw [hl, hl2, hl2']
+    have h := hwf.returnLink l1 a b l2'' hf
+    rw [← hca, ← hcb, hFret a, hFfn a, hFfn b]
+    exact h
+  · intro last hlast
+    rw [List.getLast?_map] at hlast
+    cases hlast' : c.frames.getLast? with
+    | none => rw [hlast'] at hlast; simp at hlast
+    | some g =>
+        rw [hlast'] at hlast
+        have hgl : storeFrame frame slot off v g = last := by
+          have hmap : some (storeFrame frame slot off v g) = some last := by
+            simpa using hlast
+          exact Option.some.inj hmap
+        rw [← hgl, hFret g]
+        exact hwf.bottomRetDest g hlast'
+  · intro f' hf' operand val htermv heval frame slot' off' hv
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    rw [hFterm g] at htermv
+    have heval' : evalOperand g operand = some val := by
+      simpa [evalOperand, IRFrame.lookupLocal, hFlocals g] using heval
+    have h := hwf.stackReturnsSafe g hg operand val htermv heval' frame slot' off' hv
+    rw [hFid g]
+    exact h
+
+  · intro f' hf' p hp hname
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    rw [hFfn g] at hp
+    have h := hwf.slotsParamsSafe g hg p hp hname
+    simpa [IRFrame.lookupLocal, hFlocals g] using h
+
+theorem lookupStorageAt_setStorage_eq (s : IRState) (sid : StoreId)
+    (values : List IRValue) (off : Nat) :
+    ({ s with storage := setList s.storage sid values }).lookupStorageAt sid off =
+      if off < values.length then values[off]? else none := by
+  unfold IRState.lookupStorageAt
+  rw [lookupStorage_setStorage_eq]
+
+theorem lookupStorageAt_setStorage_ne {s : IRState} {sid sid' : StoreId}
+    {values : List IRValue} (h : (sid' == sid) = false) (off : Nat) :
+    ({ s with storage := setList s.storage sid values }).lookupStorageAt sid' off =
+      s.lookupStorageAt sid' off := by
+  unfold IRState.lookupStorageAt
+  rw [lookupStorage_setStorage_ne h]
+
+theorem writeStorage_eq {s s' : IRState} {sid : StoreId} {off : Nat} {v : IRValue}
+    {values : List IRValue} (hlook : s.lookupStorage sid = some values)
+    (hoff : off < values.length) (hw : s.writeStorage sid off v = some s') :
+    s' = { s with
+      storage := setList s.storage sid
+        (values.take off ++ v :: values.drop (off + 1)) } := by
+  unfold IRState.writeStorage at hw
+  simp only [hlook] at hw
+  rw [ite_eq_left hoff] at hw
+  cases hw
+  rfl
+
+theorem mem_take_cons_drop {values : List IRValue} {off : Nat} {v v0 : IRValue} :
+    v0 ∈ values.take off ++ v :: values.drop (off + 1) → v0 = v ∨ v0 ∈ values := by
+  intro h
+  rcases List.mem_append.mp h with h | h
+  · exact Or.inr (List.mem_of_mem_take h)
+  · rcases List.mem_cons.mp h with h | h
+    · exact Or.inl h
+    · exact Or.inr (List.mem_of_mem_drop h)
+
+theorem lookupStorageAt_setStorage_some_mem {s : IRState} {sid : StoreId}
+    {values : List IRValue} {sid' : StoreId} {off : Nat} {v0 : IRValue}
+    (h : ({ s with storage := setList s.storage sid values }).lookupStorageAt sid' off =
+      some v0) :
+    v0 ∈ values ∨ s.lookupStorageAt sid' off = some v0 := by
+  by_cases hid : (sid' == sid) = true
+  · have hEq : sid' = sid := beq_iff_eq.mp hid
+    rw [hEq] at h
+    rw [lookupStorageAt_setStorage_eq] at h
+    left
+    by_cases hoff : off < values.length
+    · rw [ite_eq_left hoff] at h
+      exact List.mem_of_getElem? h
+    · rw [ite_eq_right hoff] at h
+      cases h
+  · have hne : (sid' == sid) = false := by
+      rw [Bool.not_eq_true] at hid
+      exact hid
+    right
+    rwa [lookupStorageAt_setStorage_ne hne] at h
+
+theorem getElem?_take_cons_drop_self {values : List IRValue} {off : Nat}
+    (h : off < values.length) {v : IRValue} :
+    (values.take off ++ v :: values.drop (off + 1))[off]? = some v := by
+  rw [List.getElem?_append]
+  have hnot : ¬ off < (values.take off).length := by
+    rw [List.length_take]
+    omega
+  rw [ite_eq_right hnot]
+  have hsub : off - (values.take off).length = 0 := by
+    rw [List.length_take]
+    omega
+  rw [hsub, List.getElem?_cons_zero]
+
+theorem lookupStorage_setStorage_live {s : IRState} {sid : StoreId}
+    {newValues : List IRValue} {sid' : StoreId} {off' : Nat}
+    (h : ∃ vs, s.lookupStorage sid' = some vs ∧ off' < vs.length)
+    (hvalues : ∀ vs, s.lookupStorage sid = some vs → newValues.length = vs.length) :
+    ∃ vs, ({ s with storage := setList s.storage sid newValues }).lookupStorage sid' =
+      some vs ∧ off' < vs.length := by
+  rcases h with ⟨vs, hvs, hlt⟩
+  by_cases hid : (sid' == sid) = true
+  · have hEq : sid' = sid := beq_iff_eq.mp hid
+    rw [hEq] at hvs
+    have hlen : newValues.length = vs.length := hvalues vs hvs
+    refine ⟨newValues, ?_, ?_⟩
+    · rw [hEq]
+      exact lookupStorage_setStorage_eq s sid newValues
+    · rw [hlen]
+      exact hlt
+  · have hne : (sid' == sid) = false := by
+      rw [Bool.not_eq_true] at hid
+      exact hid
+    exact ⟨vs, by rwa [lookupStorage_setStorage_ne hne], hlt⟩
+
+
+namespace Stc.Codegen
+
+theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
+    {sid : StoreId} {off : Nat} {v : IRValue}
+    (hwf : WFState contract c)
+    (hw : c.writeStorage sid off v = some s')
+    (hvb : ∀ slot off', v = .ptr (.root slot off') →
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off' < values.length)
+    (hvg : ∀ g off', v = .ptr (.global g off') →
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length)
+    (hnoSlotsV : ∀ g off', v = .ptr (.global g off') → g ∉ SlotsGlobals c.module)
+    (hnotSlots : ∀ g, sid = .global g → g ∉ SlotsGlobals c.module) :
+    WFState contract s' := by
+  have hw0 := hw
+  unfold IRState.writeStorage at hw
+  cases hlook : c.lookupStorage sid with
+  | none => simp [hlook] at hw
+  | some values =>
+      simp only [hlook] at hw
+      by_cases hoff : off < values.length
+      · rw [ite_eq_left hoff] at hw
+        cases hw
+        have hvaluesLen : ∀ vs, c.lookupStorage sid = some vs →
+            (values.take off ++ v :: values.drop (off + 1)).length = vs.length := by
+          intro vs hvs
+          have hlook' := hlook
+          rw [hvs] at hlook'
+          have hvsEq : vs = values := Option.some.inj hlook'
+          rw [hvsEq, length_take_cons_drop hoff]
+        have hmemLive : ∀ w, w ∈ values →
+            (∀ slot offp, w = .ptr (.root slot offp) →
+              ∃ vs, c.lookupStorage (.root slot) = some vs ∧ offp < vs.length) ∧
+            (∀ g offp, w = .ptr (.global g offp) →
+              ∃ vs, c.lookupStorage (.global g) = some vs ∧ offp < vs.length) := by
+          intro w hwmem
+          obtain ⟨n, hn⟩ := List.getElem?_of_mem hwmem
+          have hnLt : n < values.length := (List.getElem?_eq_some_iff.mp hn).choose
+          have hlookAt : c.lookupStorageAt sid n = some w := by
+            unfold IRState.lookupStorageAt
+            simp only [hlook]
+            rw [ite_eq_left hnLt]
+            exact hn
+          exact hwf.storageValuesLive sid n w hlookAt
+        have hmemNoSlots : ∀ w, w ∈ values →
+            ∀ gname offp, w = .ptr (.global gname offp) →
+              gname ∉ SlotsGlobals c.module := by
+          intro w hwmem gname offp hptr
+          obtain ⟨n, hn⟩ := List.getElem?_of_mem hwmem
+          have hnLt : n < values.length := (List.getElem?_eq_some_iff.mp hn).choose
+          have hlookAt : c.lookupStorageAt sid n = some w := by
+            unfold IRState.lookupStorageAt
+            simp only [hlook]
+            rw [ite_eq_left hnLt]
+            exact hn
+          exact hwf.noSlotsGlobalPointers.2.2 sid n w gname offp hlookAt hptr
+        constructor
+        · exact hwf.program
+        · exact hwf.frameIdsNodup
+        · exact hwf.frameIdsBound
+        · exact hwf.frameFunction
+        · exact hwf.frameBlock
+        · exact hwf.framePrev
+        · exact hwf.noBareUnreachable
+        · exact hwf.localsInitialized
+        · exact hwf.localsTyped
+        · exact hwf.originsMatch
+        · exact hwf.allocsWellFormed
+        · exact hwf.stackPtrsBounded
+        · exact hwf.memTyped
+        · intro f hf
+          have h := hwf.storagePtrsLive f hf
+          constructor
+          · intro name val slot offp hv hptr
+            exact lookupStorage_setStorage_live
+              (h.1 name val slot offp hv hptr) hvaluesLen
+          · intro name val gname offp hv hptr
+            exact lookupStorage_setStorage_live
+              (h.2 name val gname offp hv hptr) hvaluesLen
+        · intro f hf
+          have h := hwf.slotsBase f hf
+          refine ⟨h.1, h.2.1, ?_⟩
+          intro base hbase g ty ptr align hdef hsym
+          have hg : g ∈ SlotGlobalNames f.fn := by
+            unfold SlotGlobalNames
+            rw [List.mem_filterMap]
+            exact ⟨base, hbase, by rw [hdef, hsym]⟩
+          have hgSlots : g ∈ SlotsGlobals c.module := by
+            unfold SlotsGlobals
+            rw [List.mem_flatMap]
+            exact ⟨f.fn, hwf.frameFunction f hf, hg⟩
+          have hsid : sid ≠ .global g := by
+            intro heq
+            exact (hnotSlots g heq) hgSlots
+          have hne : ((StoreId.global g) == sid) = false :=
+            beq_eq_false_iff_ne.mpr (Ne.symm hsid)
+          rw [lookupStorageAt_setStorage_ne hne]
+          exact h.2.2 base hbase g ty ptr align hdef hsym
+        · intro sid' off' v0 hlookAt
+          constructor
+          · intro slot offp hptr
+            rcases lookupStorageAt_setStorage_some_mem hlookAt with hmem | hold
+            · rcases mem_take_cons_drop hmem with rfl | hmem
+              · exact lookupStorage_setStorage_live (hvb slot offp hptr) hvaluesLen
+              · exact lookupStorage_setStorage_live
+                  ((hmemLive v0 hmem).1 slot offp hptr) hvaluesLen
+            · exact lookupStorage_setStorage_live
+                ((hwf.storageValuesLive sid' off' v0 hold).1 slot offp hptr) hvaluesLen
+          · intro gname offp hptr
+            rcases lookupStorageAt_setStorage_some_mem hlookAt with hmem | hold
+            · rcases mem_take_cons_drop hmem with rfl | hmem
+              · exact lookupStorage_setStorage_live (hvg gname offp hptr) hvaluesLen
+              · exact lookupStorage_setStorage_live
+                  ((hmemLive v0 hmem).2 gname offp hptr) hvaluesLen
+            · exact lookupStorage_setStorage_live
+                ((hwf.storageValuesLive sid' off' v0 hold).2 gname offp hptr) hvaluesLen
+        · exact storageDomain_writeStorage hwf.storageDomain hw0
+        · constructor
+          · exact hwf.noSlotsGlobalPointers.1
+          · constructor
+            · exact hwf.noSlotsGlobalPointers.2.1
+            · intro sid' off' v0 gname offp hlookAt hptr
+              rcases lookupStorageAt_setStorage_some_mem hlookAt with hmem | hold
+              · rcases mem_take_cons_drop hmem with rfl | hmem
+                · exact hnoSlotsV gname offp hptr
+                · exact hmemNoSlots v0 hmem gname offp hptr
+              · exact hwf.noSlotsGlobalPointers.2.2 sid' off' v0 gname offp hold hptr
+        · exact hwf.functionBindings
+        · exact hwf.callTargets
+        · exact hwf.returnLink
+        · exact hwf.bottomRetDest
+        · exact hwf.stackReturnsSafe
+        · exact hwf.slotsParamsSafe
       · rw [ite_eq_right hoff] at hw
         simp at hw
 

@@ -2147,8 +2147,17 @@ fields, with the frame-lookup relation transferring the state-dependent fields t
 of the stack, `WFState` is preserved. `wfState_withHeadInstrs` covers the store's instruction
 replacement as a corollary: given the new suffix's block decomposition and no-bare-unreachable
 fact, the head frame's instructions are replaced without disturbing the invariant. The
-`callFunction` and the three `irStepRet` forms, together with the `storeValue` frame/storage
-updates inside the store step, remain; Phases 2–3 remain as inventoried below.
+`callFunction` and the three `irStepRet` forms remain; Phases 2–3 remain as inventoried below.
+
+The store's `storeValue` updates are now proved as state-level form lemmas:
+`wfState_storeFrames` (the stack case: the frame map with `setMem`, including the
+`MemValuePtrBounded`/`MemTyped` preservation through `memTyped_storeFrames` and the
+`NoSlotsGlobalPointers` memory clause) and `wfState_storeStorage` (the persistent-storage case:
+`StorageValuesLive`, `StorageDomain`, `SlotsBase`'s `SlotsGlobalStored`, and the storage clause
+of `NoSlotsGlobalPointers` under `writeStorage`), with the supporting `writeStorage_eq`,
+`lookupStorageAt_setStorage_eq`/`_ne`, `lookupStorage_setStorage_live`,
+`lookupStorageAt_setStorage_some_mem`, and `mem_take_cons_drop` lemmas. The composed store-step
+form lemma and its operand-liveness/`NoSlotsGlobalPointers` extraction are the next step.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
