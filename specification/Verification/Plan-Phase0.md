@@ -8,16 +8,15 @@ and semantics document skeleton are in place. P0.1 is complete (review approved 
 the token model, lossless CST contract, surface AST, `Derives` relation, coverage table, and
 `ast_span_wellformed` are in place. P0.2 is complete (2026-10-27): the typed HIR, declarative
 typing judgment, `checkCore`, conversion relation, HIR well-formedness, and the soundness and
-rejection-characterization theorems are in place. P0.3 is in progress (2026-10-27): the value and
-trap model, the small-step machine, the configuration typing, determinism, trap soundness, exact
-arithmetic agreement, and the sound/completeness results for the fuel interpreter are in place;
-`progress`, `preservation`, `type_soundness`, and initial-state typing remain. Work is paused for
-alignment with M6.5. The compiler drift that prompted the pause has stabilized at `stc` 1.0.0;
-the §19.4 register was rechecked on 2026-10-31 and still holds, so P0.3 remains paused with its
-open questions unchanged. P0.4 is complete (review approved 2026-10-31) as WL-3 of
-[V2.0.0-PLAN.md](../../V2.0.0-PLAN.md); its scope decisions and execution record are in §20. P0.3
-resumed on 2026-10-31; the reevaluation is in §19.8. The open P0.3 semantic questions and the
-drift register are recorded in §19.
+rejection-characterization theorems are in place. P0.3 is complete (review approved 2026-10-31):
+the value and trap model, the small-step machine, the configuration typing, determinism, trap
+soundness, exact arithmetic agreement, the sound/completeness results for the fuel interpreter,
+`progress`, `preservation`, initial-state typing, and `type_soundness` are in place. Work was
+paused for alignment with M6.5; P0.3 resumed on 2026-10-31. The compiler drift that prompted the
+pause has stabilized at `stc` 1.0.0, the §19.4 register was rechecked on 2026-10-31 and still
+holds, and the open questions were resolved in §19.8. P0.4 is complete (review approved 2026-10-31)
+as WL-3 of [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md); its scope decisions and execution record are in
+§20. The P0.3 completion record and sign-off are in §19.12; the drift register is in §19.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -539,8 +538,8 @@ fixes the final preconditions and notation.
 | `conversion_legal_iff` | The core conversion relation accepts exactly the specified conversions | P0.2 | exact models |
 | `eval_deterministic` | `Eval e s v₁ → Eval e s v₂ → v₁ = v₂` | P0.3 | source semantics |
 | `progress` | Well-typed, well-formed configurations are terminal, trap, or step | P0.3 | source semantics |
-| `preservation` | `HasType c T → Step c c' → HasType c' T` | P0.3 | source semantics |
-| `type_soundness` | A well-typed expression evaluates to a value of its type or a documented trap | P0.3 | source semantics |
+| `preservation` | `ConfigTyped u c → Step u c c' → ConfigTyped u c'` | P0.3 | source semantics |
+| `type_soundness` | The initial configuration is typed; every reachable configuration is typed and not stuck, with trap documentation carried by `trap_soundness` | P0.3 | source semantics |
 | `trap_soundness` | Every terminal trap is in the specified trap set | P0.3 | source semantics |
 | `checked_arith_traps_exactly` | Checked arithmetic traps exactly on overflow or divide by zero | P0.3 | exact models |
 | `interpreter_sound` | `stcSem fuel e s = .ok v → EvalStar e s v` | P0.3 | interpreter |
@@ -829,7 +828,8 @@ Phase 0 is done when:
 6. Build `stc-sem` against a small hand-written core dump before the full conformance harness.
 7. Add the core corpus and run the first conformance report.
 8. Schedule the P0.7 review once the source and target soundness theorems are proved.
-9. P0.3 remains paused (§19). P0.4 (WL-3) started 2026-10-31 with the scope decisions in §20.
+9. P0.3 is complete and review-approved (2026-10-31); see §19.12. P0.4 (WL-3) is complete;
+   its scope decisions and execution record are in §20.
 
 ## 16. P0.0 execution record
 
@@ -953,14 +953,14 @@ proved in place of completeness, with the `FOR` over-rejection recorded; HIR wel
 defined and preserved by the checker; and the conversion relation is characterized against the
 analyzer's core conversions. The exact-model behaviour link is carried into P0.3.
 
-## 19. P0.3 execution record — in progress
+## 19. P0.3 execution record — complete, review approved
 
-Date: 2026-10-27. Status: **resumed 2026-10-31; in progress, not complete.** The definitions and
-part of the soundness work are in place. The remaining proof work was paused so the core subset
-and the open semantic questions could be aligned with M6.5. M6.5 has landed as `stc` 1.0.0, the
-drift register was rechecked on 2026-10-31 (§19.7), and P0.3 is unpaused after the P0.4 review and
-CI. The open questions are resolved in §19.8. This record is a status snapshot; it is not a
-completion claim.
+Date: 2026-10-27. Status: **complete 2026-10-31; review approved 2026-10-31.** The definitions and the
+soundness work are in place. The work was paused for alignment with M6.5; the drift register was
+rechecked on 2026-10-31 (§19.7), the open questions were resolved in §19.8, and the remaining
+proofs are recorded in §19.9–§19.12. There is no `sorry` or `admit`; `lake build` and the CI
+checks pass. The completion record and review checklist are in §19.12. The owner approved the
+P0.3 review on 2026-10-31.
 
 ### 19.1 Deliverables
 
@@ -973,19 +973,18 @@ completion claim.
 | `trap_soundness` | `Stc.Sem.Eval` | Proved |
 | `checked_arith_traps_exactly` | `Stc.Sem.Eval` | Proved in the guarded form described in Q2 |
 | Fuel interpreter `runFuel`/`stcSem` | [Interpreter.lean](../../lean/Verification/Semantics/Interpreter.lean) | Defined; `interpreter_sound` and `interpreter_complete` proved |
-| `progress` | — | Not proved |
-| `preservation` | — | Not proved |
-| `type_soundness` | — | Not proved; depends on preservation |
-| Initial-state typing (`ConfigTyped u (initState u n)` from `HasType u`) | — | Not proved; needs context agreement for global initializers |
-| Source-semantics sections of [Semantics.md](Semantics.md) | — | Partially updated; completion waits for the proofs |
+| `progress` | `Stc.Sem.Eval` | Proved (P0-T08) |
+| `preservation` | `Stc.Sem.Eval` | Proved (P0-T09) |
+| `type_soundness` | `Stc.Sem.Eval` | Proved (P0-T10) |
+| Initial-state typing (`ConfigTyped u (initState u n)` from `HasType u`) | `Stc.Sem.Eval` | Proved (`initState_typed`, `initBody_typed`) |
+| Source-semantics sections of [Semantics.md](Semantics.md) | — | Complete for P0.3; completion record in §19.12 |
 
 ### 19.2 Exit criteria assessment
 
-The P0.3 exit criteria are **not met**. `progress`, `preservation`, `type_soundness`, and
-initial-state typing are missing, and the semantics document still describes the dynamic semantics as
-future work in places. There is no `sorry` or `admit`; `lake build` and the local CI checks pass.
-P0.3 resumed on 2026-10-31 with the §19.8 decisions; the current definitions are committed as a
-WL-3 checkpoint.
+The P0.3 exit criteria are **met**. `progress`, `preservation`, initial-state typing, and
+`type_soundness` are proved; there is no `sorry` or `admit`; `lake build` and the local CI checks
+pass. The completion record and review checklist are in §19.12. The proof work is committed on
+WL-3, and owner review approval was recorded on 2026-10-31.
 
 ### 19.3 Open questions
 
@@ -1048,15 +1047,16 @@ and the open questions are resolved (§19.8). The remaining work:
 
 1. `progress` and the supporting no-stuck lemmas (runtime lookup, loop-marker existence, frame
    completion, call performance), using `ConfigTyped.lookupVar?_some`, the `StackTyped`
-   projections, and the `FramesShape` lemmas already present.
+   projections, and the `FramesShape` lemmas already present. **Done 2026-10-31.**
 2. `preservation` and the store-update lemmas for `FrameMatches`/`GlobalsTyped`, including the
    callee-frame construction, loop markers, and the cycle reset.
 3. Initial-state typing from `HasType`, including context agreement between `Ctx.ofGlobals` and
    `Ctx.ofProgram` for global initializers.
 4. `type_soundness`, then the registry and semantics-document updates, and the P0.3 review.
 
-The definitions in `Stc.Sem.Values`, `Stc.Sem.Machine`, and `Stc.Sem.Eval` are the starting point;
-the machine and typing design are not expected to change unless Q1 selects a redesign.
+This sequence is complete as of 2026-10-31; see §19.11 (preservation) and §19.12 (initial-state
+typing and type soundness). The definitions in `Stc.Sem.Values`, `Stc.Sem.Machine`, and
+`Stc.Sem.Eval` are the basis; the machine and typing design follow Q1 with no redesign.
 
 ### 19.6 Local evidence
 
@@ -1068,8 +1068,10 @@ python tools/ci/check_semantics_placeholder.py
 grep -rnwE 'sorry|admit' lean/Stc/Sem lean/Verification    # no matches
 ```
 
-The registry marks the five proved P0.3 theorems as `proved`; `progress`, `preservation`, and
-`type_soundness` remain `planned` with a note pointing at this section.
+The registry marks the eight proved P0.3 theorems as `proved`: determinism, progress,
+preservation, type soundness, trap soundness, guarded exact arithmetic, and the interpreter
+soundness and completeness results. `type_soundness` is P0-T10; the completion record is in
+§19.12.
 
 ### 19.7 Drift recheck (2026-10-31)
 
@@ -1099,11 +1101,158 @@ P0.3 resumed after the P0.4 review and CI. The open questions are resolved as fo
 | Q6 — negative signed exponent | Confirmed and implemented: `evalPow` traps `RANGE` for a signed negative exponent; constant evaluation rejects the constant case. |
 | Q7 — checkpoint policy | Commit the compiling work as WIP checkpoints on WL-3; the P0.4 commit is the first checkpoint. |
 
-The remaining work is the §19.5 sequence: `progress` and the no-stuck lemmas, `preservation` and
-the store-update lemmas, initial-state typing, then `type_soundness`, the registry and semantics
-document updates, and the P0.3 review.
+`progress` is done. The remaining work is the rest of the §19.5 sequence: `preservation` (with
+the value/statement/resume/returned transitions), initial-state typing, then `type_soundness`,
+the registry and semantics document updates, and the P0.3 review.
 
-## 20. P0.4 execution record — in progress
+### 19.9 Preservation checkpoint (2026-10-31)
+
+Preservation exposed five invariant gaps, now fixed:
+
+- `StackTyped.seq` carries `StmtListHasType` for the remaining statements, so
+  resuming a statement list reconstructs a typed `.stmts` focus.
+- `performCall` records a statement caller's expectation as `unit` (and an
+  expression caller's as the callee result type), matching the caller's
+  `StackTyped` expectation.
+- The assignment branch of `stepValue` pops the assignment continuation before
+  writing; previously the stack retained a value-consuming head and the next
+  `resume` was stuck.
+- `StackTyped.forInit` and `StackTyped.forStop` require the stack below them to
+  expect a unit; the machine leaves a unit-expecting stack below the `FOR`
+  continuations, so the old value expectation was wrong.
+- `ConfigTyped.headLoop` and the `FrameTyped` loop field record that a positive
+  loop depth has a loop marker in the frame's stack. Choosing an `IF`/`CASE`/loop
+  body after an expression step reconstructs a typed `.stmts` focus from it.
+
+The store/frame lemmas (`ConfigTyped.setVar`, the `FrameMatches` updates,
+`GlobalsTyped.setGlobal`), the typed variable lookup, `callArgsPush`, the
+`ConfigTyped` transition helpers (`updateFocus`, `updateHeadFocus`,
+`updateHeadFrame`, `pushFrame`), the initializer-typing lemmas, the callee-frame
+construction, and `stepExpr_preserves` are proved. Preservation itself remains
+open: the value/statement/resume/returned transition cases (including the
+completed-argument `performCall` frame construction), initial-state typing, and
+`type_soundness` remain, followed by the review. `preservation` stays planned
+(P0-T09). No `sorry` remains in the tree.
+
+### 19.10 Caller-expectation checkpoint (2026-10-31)
+
+`completeFrame` preservation exposed a missing configuration invariant: the
+caller's `expect` was not linked to the callee's declared result, so the
+`.returned` focus could not be typed when the callee returned. The fix adds:
+
+- `CallerExpects u f g` and `FramesCallerExpects u frames`, recording that every
+  suspended caller's `expect` is `none` (statement call) or the callee's declared
+  result type. The link uses the declaration, not the callee's current result
+  value, so result-variable writes preserve it.
+- `ConfigTyped.callers`, with corresponding proofs in `ConfigTyped.setVar`,
+  `updateHeadFocus`, `updateHeadFrame`, `updateFocus`, and `pushFrame`.
+- `FrameMatches.result_cases` and `FocusTyped.returned_of_caller`, which derive
+  the `.returned` focus typing from the link.
+- `ConfigTyped.updateCycles` and `completeFrame_preserves`; frame completion is
+  now proved for both function return and program cycle reset.
+
+The same checkpoint adds the loop-marker tail condition to
+`StackTyped.whileLoop`, `repeatBody`, and `forBody`, so a completed loop can
+reconstruct a typed resume or expression focus when an outer loop remains.
+`StackHasLoop` moves before `StackTyped` so the rule can refer to it.
+
+Remaining: `stepValue_preserves` (including the completed-argument
+`performCall`), `stepStmt`/`stepStmts` preservation, `stepResume_preserves`
+(including `forAdvance`/`forContinue`), `stepReturned_preserves`, assembling
+`preservation`, initial-state typing, and `type_soundness`. `preservation` and
+`type_soundness` remain planned.
+
+### 19.11 Preservation checkpoint (2026-10-31)
+
+`preservation` is proved (`P0-T09`). The checkpoint adds:
+
+- `stepValue_preserves`, with per-continuation helpers for assignment,
+  unary/binary/cast, `IF`/`CASE`, `WHILE`/`REPEAT`, `FOR` start/bound/step,
+  and call arguments. Completed-argument calls go through `performCall`
+  (standard and user functions) and `CalleeSignatureV.push`.
+- `stepStmt_preserves` and `stepStmts_preserves` for every statement form,
+  including `EXIT`/`CONTINUE`, and a statement-call `callArgsPushStmt`.
+- `stepResume_preserves` and `stepReturned_preserves`.
+- `forContinue_preserves` and `forAdvance_preserves` for the `FOR` increment
+  path, including the control-variable write, and `MarkerTyped` /
+  `StackTyped.findLoop_marker` for the innermost loop marker.
+
+Proving preservation exposed three more machine bugs, now fixed:
+
+- The `.callArgs` continuation re-focused the argument it had just consumed
+  instead of the following one, so multi-argument calls would re-evaluate the
+  first argument and never evaluate the rest. It now matches
+  `_ :: next :: more` and carries `next :: more`, matching the
+  `StackTyped.callArgs` invariant.
+- `EXIT` kept the loop body's loop context after dropping the marker; it now
+  resumes in the marker's outer context via `findLoop`. The now-unused
+  `dropToLoop` was removed.
+- `CONTINUE` on a `FOR` marker entered `forAdvance` in the body's loop
+  context; it now enters in the marker's outer context, matching the typing of
+  the stack below the marker.
+
+### 19.12 P0.3 completion and review checklist (2026-10-31)
+
+Initial-state typing and `type_soundness` are proved. The missing piece was
+context agreement for global initializers: `GlobalTyped` checks a global
+initializer in `Ctx.ofGlobals env`, while the initialization statements run in
+the program frame's `Ctx.ofProgram env u.program`. `ExprHasType.transport`
+proves that contexts agreeing on variable lookups and the function table type
+the same expressions, by structural recursion on the expression using the
+mutual recursor `ExprHasType.rec` with one motive per mutually defined
+relation (an `induction` on the derivation is rejected because the judgment is
+mutually inductive, and mutual-recursion termination is unnecessary once the
+recursor supplies the induction hypotheses). The `ofGlobals`/`ofProgram` case
+needs only the global and function tables: a source param/local/result lookup
+is impossible because the globals context binds none of them.
+
+The remaining pieces are:
+
+- `initBody_typed`: `globalInitStmtsFrom_typed` and
+  `localInitStmtsFrom_typed` in the program context, plus
+  `StmtListHasType.append`.
+- `initState_typed`: `GlobalsTyped` and `FrameMatches` from
+  `Value.default_wellFormed` and `HirWellFormed`, with the cycle-zero halt
+  focus and the first-cycle statement focus.
+- `type_soundness`: initial-state typing composed with `preservation` along
+  `Steps`, and `progress` showing that no reachable configuration is stuck.
+
+**Review checklist (approved 2026-10-31).** The reviewer confirmed:
+
+1. `ExprHasType.transport` is stated for arbitrary lookup- and
+   function-table-agreeing contexts (not only the initializer pair), and its
+   recursor motives cover all four mutually defined relations
+   (`ExprHasType`, `CallHasType`, `StdFnHasType`, `Forall2`).
+2. `initState_typed` covers both the zero-cycle (`.halted`) and positive-cycle
+   (`.stmts (initBody u) LoopCtx.top`) focuses, and `initBody_typed` covers
+   global initializers, program-field initializers, and the first cycle body
+   in that order.
+3. `type_soundness` states and proves exactly the P0.3 intent: the initial
+   configuration is typed, every reachable configuration is typed, and no
+   reachable configuration is stuck; trap documentation remains
+   `trap_soundness`.
+4. The registry entries P0-T09/P0-T10 are `proved`, the audit passes, and the
+   status rows in this plan, [Semantics.md](Semantics.md), [Plan.md](Plan.md),
+   and [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) agree.
+5. The three machine fixes recorded in §19.11 (call-argument advance, `EXIT`
+   loop context, `CONTINUE`-on-`FOR` context) match the intended source
+   semantics; any objection is a semantics change, not a proof change.
+
+Verification commands:
+
+```bash
+cd lean && lake build
+python tools/ci/check_verification_registry.py   # 45 records: 34 proved, 10 planned, 1 descoped
+python tools/ci/check_docs.py
+python tools/ci/check_semantics_placeholder.py
+grep -rnwE 'sorry|admit' lean/Stc/Sem               # no matches
+```
+
+**Review approved by the owner on 2026-10-31.** The P0.3 exit criteria are met and the sign-off
+is recorded. P0.3 is complete; WL-3 continues with P0.5, followed by P0.6–P0.7. WL-3 is done only
+after owner confirmation.
+
+## 20. P0.4 execution record — complete
 
 Date: 2026-10-31. Status: **complete; review approved 2026-10-31.** The scope decisions were
 taken before implementation:

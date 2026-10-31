@@ -1,6 +1,6 @@
 # Future Wishlist — v2.0.0
 
-Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, and WL-11. Completed: WL-4 (2026-10-30) and WL-10 (2026-10-31). In progress: WL-3 (started 2026-10-31).  
+Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, and WL-11. Completed: WL-4 (2026-10-30) and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; continuing with P0.5).  
 Date: 2026-10-29; revised 2026-10-31  
 Branch: `v2.0.0-planning`  
 Baseline: `stc` 1.0.0, released 2026-10-29  
@@ -87,7 +87,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-1.1 | Local VS Code integration and debugging | Tooling | L (staged) | Stable IDE/debug API | Locked |
 | WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Deferred |
 | WL-2 | Test coverage to 85% as reported by the existing CI coverage badge; CI pass gate | Quality | M/L | Existing coverage job/badge | Locked |
-| WL-3 | Expand the Lean specification per the verification plan; P0.4 complete, P0.3 resumed | Verification | M for P0.4 | Phase 0 P0.4 | In progress; P0.4 done, P0.3 resumed 2026-10-31 |
+| WL-3 | Expand the Lean specification per the verification plan; P0.4 and P0.3 complete, continuing with P0.5 | Verification | M for P0.4 | Phase 0 P0.4 | In progress; P0.4/P0.3 complete 2026-10-31 |
 | WL-4 | Run and verify RT performance on PREEMPT_RT Linux x86-64 | Runtime evidence | M | x86-64 RT run host and transferable artifacts | Done 2026-10-30 |
 | WL-5.1 | Modbus TCP server I/O on all supported hosts; non-real-time | Runtime/IO | M/L | None | Locked |
 | WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host; EtherCAT hardware | Locked |
@@ -325,15 +325,17 @@ wishlist for new language or core compiler features.
 
 **Selection.** Selected and locked for v2.0.0 on 2026-10-29 with the **P0.4** target (target
 syntax and `WellFormed`), and started on branch `WL-3` on 2026-10-31. P0.4 is complete and
-review-approved (2026-10-31); WL-3 continues with P0.3, resumed on 2026-10-31 with its open
-questions resolved in [Plan-Phase0 §19.8](specification/Verification/Plan-Phase0.md).
-Core compiler features and the language are not expected to change, so further
-drift is not expected; only bug fixes are in scope. Detailed planning is in
+review-approved (2026-10-31). P0.3 is complete and review-approved (2026-10-31): `progress`,
+`preservation`, initial-state typing, and `type_soundness` are proved. WL-3 remains in progress
+for P0.5 and is done only after owner confirmation. Core compiler features and the language are
+not expected to change, so further drift is not expected; only bug fixes are in scope. Detailed planning is in
 [V2.0.0-PLAN.md](V2.0.0-PLAN.md); the P0.4 scope decisions are in
-[Plan-Phase0.md](specification/Verification/Plan-Phase0.md) §20.
+[Plan-Phase0.md](specification/Verification/Plan-Phase0.md) §20 and the P0.3 completion record in
+§19.12.
 
-**Why it matters.** Phase 0 is paused mid-P0.3 pending alignment with M6.5. The earlier blocker —
-ongoing compiler changes — is resolved by the v1.0.0 release. The expensive parts are partly in
+**Why it matters.** Phase 0 was paused mid-P0.3 pending alignment with M6.5; P0.3 is now complete
+and review-approved. The earlier blocker — ongoing compiler changes — is resolved by the v1.0.0
+release. The expensive parts are partly in
 place: the token model, lossless CST contract, surface AST, grammar relation, typed HIR, core
 checker soundness, the value and trap model, determinism, trap soundness, and the fuel
 interpreter. The remaining Phase 0 theorems and the later phases are staged so each phase yields
@@ -1072,3 +1074,5 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-10-31 | Re-planned the v2.0.0 target set: deferred WL-9 (WebUI) and locked WL-5.2 (EtherCAT using IgH) now that WL-4 is complete and the EtherCAT hardware has arrived. |
 | 2026-10-31 | Marked WL-10 done and started WL-3 (P0.4) on branch `WL-3`; the compiler drift that paused P0.3 was rechecked against `stc` 1.0.0. |
 | 2026-10-31 | P0.4 is complete and review-approved; WL-3 continues with P0.3, which is resumed with the Q1–Q7 decisions recorded in Plan-Phase0 §19.8. |
+| 2026-10-31 | P0.3 proof work is complete: `progress`, `preservation`, initial-state typing, and `type_soundness` are proved; the review checklist is in Plan-Phase0 §19.12. |
+| 2026-10-31 | Approved the P0.3 review; WL-3 remains in progress for P0.5 and is done only after owner confirmation. |

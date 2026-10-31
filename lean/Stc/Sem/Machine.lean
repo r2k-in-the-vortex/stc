@@ -276,11 +276,6 @@ def frameCtx (u : HirUnit) : FrameKind → Ctx
           { globals := [], functions := [], params := [], locals := [], result := none }
   | .program => Ctx.ofProgram (Env.ofUnit u) u.program
 
-/-- Drop continuations down to and including the innermost loop marker. -/
-def dropToLoop : List Cont → Option (List Cont)
-  | [] => none
-  | c :: rest => if c.isLoopMarker then some rest else dropToLoop rest
-
 /-- Find the innermost loop marker and the stack below it. -/
 def findLoop : List Cont → Option (Cont × List Cont)
   | [] => none
@@ -298,25 +293,29 @@ def caseArmBody? : List CaseArm → Int → Option (List Stmt)
       if arm.labels.any (fun label => caseLabelContains label value) then some arm.body
       else caseArmBody? rest value
 
+/-- Statements that initialize a list of locals, starting at `index`. -/
+def localInitStmtsFrom (index : Nat) : List Local → List Stmt
+  | [] => []
+  | loc :: rest =>
+      (match loc.init with
+        | some e => [Stmt.assign ⟨.local index, loc.span⟩ e loc.span]
+        | none => []) ++ localInitStmtsFrom (index + 1) rest
+
 /-- Statements that initialize a list of locals. -/
 def localInitStmts (locals : List Local) : List Stmt :=
-  let rec go (index : Nat) : List Local → List Stmt
-    | [] => []
-    | loc :: rest =>
-        (match loc.init with
-          | some e => [Stmt.assign ⟨.local index, loc.span⟩ e loc.span]
-          | none => []) ++ go (index + 1) rest
-  go 0 locals
+  localInitStmtsFrom 0 locals
+
+/-- Statements that initialize a list of global roots, starting at `index`. -/
+def globalInitStmtsFrom (index : Nat) : List Global → List Stmt
+  | [] => []
+  | glob :: rest =>
+      (match glob.init with
+        | some e => [Stmt.assign ⟨.global index, glob.span⟩ e glob.span]
+        | none => []) ++ globalInitStmtsFrom (index + 1) rest
 
 /-- Statements that initialize global roots. -/
 def globalInitStmts (globals : List Global) : List Stmt :=
-  let rec go (index : Nat) : List Global → List Stmt
-    | [] => []
-    | glob :: rest =>
-        (match glob.init with
-          | some e => [Stmt.assign ⟨.global index, glob.span⟩ e glob.span]
-          | none => []) ++ go (index + 1) rest
-  go 0 globals
+  globalInitStmtsFrom 0 globals
 
 /-- The initialization sequence followed by the first cycle body. -/
 def initBody (u : HirUnit) : List Stmt :=
@@ -357,15 +356,18 @@ def completeFrame (u : HirUnit) (c : State) : Outcome :=
               frames := { f with k := [], expect := none, loopCtx := LoopCtx.top } :: rest
               focus := .stmts u.program.body LoopCtx.top }
 
+/-- Whether a `FOR` loop continues after its bound is evaluated. -/
+def forKeep (current stopVal stepVal : Value) : Bool :=
+  if stepVal.ty.layout.signed then
+    if 0 < stepVal.value then decide (current.value ≤ stopVal.value)
+    else decide (stopVal.value ≤ current.value)
+  else decide (current.value ≤ stopVal.value)
+
 /-- Push a `FOR` body or complete the loop, depending on the bound check. -/
 def forContinue (u : HirUnit) (c : State) (cont : Cont) (rest : List Cont)
     (var : Place) (stopVal stepVal : Value) (body : List Stmt) : Outcome :=
   let current := (c.lookupVar? var.id).getD stopVal
-  let keep :=
-    if stepVal.ty.layout.signed then
-      if 0 < stepVal.value then decide (current.value ≤ stopVal.value)
-      else decide (stopVal.value ≤ current.value)
-    else decide (current.value ≤ stopVal.value)
+  let keep := forKeep current stopVal stepVal
   let bodyLc := LoopCtx.body cont.after (var.id :: cont.after.controlled)
   if keep then
     .step { c with
@@ -407,7 +409,10 @@ def performCall (u : HirUnit) (c : State) (callee : Callee) (args : List Value)
               let calleeFrame : Frame :=
                 { kind := .function index, params := args, locals := fn.locals.map (fun l => Value.default l.ty), result := fn.resultType.map Value.default, k := [], expect := none, loopCtx := LoopCtx.top }
               .step { c with
-                frames := calleeFrame :: { caller with expect := fn.resultType } :: rest
+                -- A statement call discards the result, so the suspended caller's
+                -- expectation is `unit`; an expression call expects the result.
+                frames := calleeFrame ::
+                  { caller with expect := if isStmt then none else fn.resultType } :: rest
                 focus := .stmts (localInitStmts fn.locals ++ fn.body) LoopCtx.top }
 
 /-- Evaluate an expression. -/
@@ -473,9 +478,12 @@ def stepStmt (u : HirUnit) (c : State) (s : Stmt) (rest : List Stmt)
           | _ => .stuck
       | .return_ _ => completeFrame u c
       | .exit _ =>
-          match dropToLoop f.k with
-          | some k' => .step { c with focus := .resume, frames := { f with k := k', loopCtx := lc } :: fr }
+          match findLoop f.k with
           | none => .stuck
+          -- Exiting a loop resumes in the loop context the marker closes over,
+          -- not the body's loop context.
+          | some (marker, below) =>
+              .step { c with focus := .resume, frames := { f with k := below, loopCtx := marker.after } :: fr }
       | .continue_ _ =>
           match findLoop f.k with
           | none => .stuck
@@ -490,7 +498,8 @@ def stepStmt (u : HirUnit) (c : State) (s : Stmt) (rest : List Stmt)
                     focus := .expr cond
                     frames := { f with k := Cont.same (.repeatCond body cond) marker.after marker.span :: below, loopCtx := marker.after } :: fr }
               | .forBody var stopVal stepVal body =>
-                  forAdvance u { c with frames := { f with k := below } :: fr } marker below var stopVal stepVal body
+                  forAdvance u { c with frames := { f with k := below, loopCtx := marker.after } :: fr }
+                    marker below var stopVal stepVal body
               | _ => .stuck
       | .empty _ => .step { c with focus := .stmts rest lc }
       | .ifThenElse arms elseBody span =>
@@ -529,7 +538,10 @@ def stepValue (u : HirUnit) (c : State) (v : Value) : Outcome :=
       | [] => .stuck
       | cont :: rest =>
           match cont.kind with
-          | .assign place => .step { c.setVar place.id v with focus := .resume }
+          | .assign place =>
+              -- Pop the assignment continuation, then write the value.
+              .step { (c.updateHead { f with k := rest }).setVar place.id v with
+                focus := .resume }
           | .unary op =>
               match evalUnary op v.ty v.value with
               | .error trap => .step { c with focus := .trapped trap cont.span }
@@ -552,10 +564,12 @@ def stepValue (u : HirUnit) (c : State) (v : Value) : Outcome :=
               | [_] =>
                   performCall u { c with frames := { f with k := rest } :: fr }
                     callee (done ++ [v]) isStmt cont.span
-              | next :: more =>
+              -- The value just consumed belongs to `remaining`'s head, which the
+              -- continuation still carries; evaluate the argument after it.
+              | _ :: next :: more =>
                   .step { c with
                     focus := .expr next
-                    frames := { f with k := { kind := .callArgs callee (done ++ [v]) more isStmt, before := cont.before, after := cont.after, span := cont.span } :: rest } :: fr }
+                    frames := { f with k := { kind := .callArgs callee (done ++ [v]) (next :: more) isStmt, before := cont.before, after := cont.after, span := cont.span } :: rest } :: fr }
           | .ifCond arms elseBody =>
               match arms with
               | [] => .step { c with focus := .stmts elseBody cont.before, frames := { f with k := rest, loopCtx := cont.before } :: fr }
@@ -595,9 +609,17 @@ def stepValue (u : HirUnit) (c : State) (v : Value) : Outcome :=
               else
                 .step { c with focus := .resume, frames := { f with k := rest, loopCtx := cont.after } :: fr }
           | .forInit var stop stepE body =>
-              .step { c.setVar var.id v with
-                focus := .expr stop
-                frames := { f with k := Cont.same (.forStop var stepE body) cont.before cont.span :: rest, loopCtx := cont.before } :: fr }
+              -- Write the start value first; the continuation update must use the
+              -- updated head frame, not the original one, or the write is lost.
+              let c1 := c.setVar var.id v
+              match c1.frames with
+              | [] => .stuck
+              | f1 :: restFrames =>
+                  .step { c1 with
+                    focus := .expr stop
+                    frames := { f1 with
+                      k := Cont.same (.forStop var stepE body) cont.before cont.span :: rest,
+                      loopCtx := cont.before } :: restFrames }
           | .forStop var stepE body =>
               match stepE with
               | none =>
