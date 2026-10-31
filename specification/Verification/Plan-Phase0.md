@@ -2118,13 +2118,15 @@ and the registry remain green.
 The compiling checkpoint is on `WL-3`; the eight soundness theorems and the registry remain
 green. **Phase 1 progress (2026-10-31).** `setList` now stores the updated entry at the head and
 filters previous entries with the same key; keyed lookup is unchanged (the latest value wins
-for duplicate keys), and the representation change is internal. The lookup layer is proved:
+for duplicate keys), and the representation change is internal. `OriginsTrusted` now records
+that origin names are unique. The following helpers are proved:
 `find?_filter_of_imp`, `find?_setList_eq`/`_ne`, `lookupList_setList_eq`/`_ne`,
-`lookupLocal_setLocal_eq`/`_ne`, `lookupMem_setMem_eq`/`_ne`, `localsInitialized_setLocal`,
-and `localsTyped_setLocal`. Remaining Phase 1 helpers: `originsMatch` under `setLocal` (needs
-an origins-name uniqueness fact on `OriginsTrusted`), `MemTyped` under `setMem`/`storeValue`,
-`StackPtrsBounded` and `StoragePtrsLive` under `setLocal`, and `frameById?` under
-`withHead`/`withHeadInstrs` and frame maps. Phases 2–3 remain as inventoried below.
+`lookupLocal_setLocal_eq`/`_ne`, `lookupMem_setMem_eq`/`_ne`,
+`localsInitialized_setLocal`, `localsTyped_setLocal`, `originOf?_of_mem`,
+`originsMatch_setLocal`, `stackPtrsBounded_setLocal`, and `storagePtrsLive_setLocal`.
+Remaining Phase 1 helpers: `MemTyped` under `setMem`/`storeValue` (including
+`MemValuePtrBounded`) and `frameById?` under `withHead`/`withHeadInstrs` and frame maps.
+Phases 2–3 remain as inventoried below.
 
 **`irStep_wf` proof inventory (2026-10-31).** The remaining induction is a proof-engineering
 pass, not a design gap. The `.step` outcomes reduce to five state-update forms:

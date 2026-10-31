@@ -952,10 +952,12 @@ def defInstr? (fn : Function) (name : Ssa) : Option Instr :=
 /-- Builder-recorded origins attach to pointer locals with the expected
 defining instruction shape; vtable origins are outside the core fragment. -/
 def OriginsTrusted (frag : IRFrag) : Prop :=
-  ∀ fn ∈ frag.functions, ∀ entry ∈ fn.facts.origins,
-    fn.localType? entry.1 = some .ptr ∧
-      entry.1 ∉ fn.params.map (·.2) ∧
-      match entry.2 with
+  ∀ fn ∈ frag.functions,
+    (fn.facts.origins.map (·.1)).Nodup ∧
+    ∀ entry ∈ fn.facts.origins,
+      fn.localType? entry.1 = some .ptr ∧
+        entry.1 ∉ fn.params.map (·.2) ∧
+        match entry.2 with
       | .vtableCode => False
       | .cell _ false =>
           ∃ ty ptr align, defInstr? fn entry.1 = some (.load entry.1 ty ptr align)
@@ -2692,8 +2694,8 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
           · intro f hf entry he
             simp only [List.mem_singleton] at hf
             subst hf
-            rcases hprog.originsTrusted fn hfunMem entry he with
-              ⟨hlocTy, hnotParam, _⟩
+            rcases hprog.originsTrusted fn hfunMem with ⟨_, htrusted⟩
+            rcases htrusted entry he with ⟨hlocTy, hnotParam, _⟩
             have hfind := initLocals_lookup_default (args := args) hud hnotParam hlocTy
             refine ⟨.null, ?_, hlocTy, Or.inl rfl⟩
             simpa [IRFrame.lookupLocal, IRValue.default] using congrArg (Option.map (·.2)) hfind
@@ -2859,5 +2861,115 @@ theorem localsTyped_setLocal {f : IRFrame} {dest : String} {value : IRValue}
       rw [← lookupLocal_setLocal_ne f (beq_eq_false_iff_ne.mpr hname) value]
       exact hv
     exact h name v hvOld ty hty
+
+theorem originOf?_of_mem {facts : FunctionFacts}
+    (hnd : (facts.origins.map (·.1)).Nodup)
+    {name : String} {origin : PointerOrigin}
+    (hmem : (name, origin) ∈ facts.origins) :
+    facts.originOf? name = some origin := by
+  unfold FunctionFacts.originOf?
+  revert hnd hmem
+  induction facts.origins with
+  | nil => intro hnd hmem; simp at hmem
+  | cons hd tl ih =>
+      intro hnd hmem
+      rw [List.map_cons, List.nodup_cons] at hnd
+      rcases hd with ⟨a, b⟩
+      rcases List.mem_cons.mp hmem with hhead | htail
+      · cases hhead
+        rw [List.find?_cons_of_pos
+          (p := fun entry : String × PointerOrigin => entry.1 == name)
+          (a := (name, origin)) (beq_iff_eq.mpr rfl)]
+        rfl
+      · have hneq : (a == name) = false := by
+          rw [beq_eq_false_iff_ne]
+          intro h
+          exact hnd.1 (List.mem_map.mpr ⟨(name, origin), htail, by rw [h]⟩)
+        have hneg : ¬(a == name) = true := by
+          rw [hneq]
+          intro h
+          cases h
+        rw [List.find?_cons_of_neg
+          (p := fun entry : String × PointerOrigin => entry.1 == name)
+          (a := (a, b)) hneg]
+        exact ih hnd.2 htail
+
+theorem originsMatch_setLocal {contract : IRContract} {c : IRState}
+    {f : IRFrame} {dest : String} {value : IRValue}
+    (hnd : (f.fn.facts.origins.map (·.1)).Nodup)
+    (h : ∀ entry ∈ f.fn.facts.origins,
+      OriginHolds contract c f entry.1 entry.2)
+    (hnew : ∀ origin, f.fn.facts.originOf? dest = some origin →
+      OriginHolds contract c (f.setLocal dest value) dest origin) :
+    ∀ entry ∈ f.fn.facts.origins,
+      OriginHolds contract c (f.setLocal dest value) entry.1 entry.2 := by
+  intro entry he
+  by_cases hname : entry.1 = dest
+  · subst hname
+    exact hnew entry.2 (originOf?_of_mem hnd he)
+  · rcases h entry he with ⟨v, hv, hty, hshape⟩
+    refine ⟨v, ?_, hty, hshape⟩
+    rw [lookupLocal_setLocal_ne f (beq_eq_false_iff_ne.mpr hname) value]
+    exact hv
+
+theorem stackPtrsBounded_setLocal {c : IRState} {f : IRFrame}
+    {dest : String} {value : IRValue}
+    (h : StackPtrsBounded c f)
+    (hval : ∀ frame slot off, value = .ptr (.stack frame slot off) →
+      ∃ g, c.frameById? frame = some g ∧
+        ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty) :
+    StackPtrsBounded c (f.setLocal dest value) := by
+  intro name v addr hv haddr
+  by_cases hname : name = dest
+  · subst hname
+    rw [lookupLocal_setLocal_eq] at hv
+    have hvEq : v = value := (Option.some.inj hv).symm
+    subst hvEq
+    cases addr with
+    | stack frame slot off =>
+        exact hval frame slot off haddr
+    | slotEntry slot => trivial
+    | cell slot => trivial
+    | root slot off => trivial
+    | global name off => trivial
+    | slotTable => trivial
+    | function name => trivial
+    | importCell slot => trivial
+  · have hvOld : f.lookupLocal name = some v := by
+      rw [← lookupLocal_setLocal_ne f (beq_eq_false_iff_ne.mpr hname) value]
+      exact hv
+    exact h name v addr hvOld haddr
+
+theorem storagePtrsLive_setLocal {c : IRState} {f : IRFrame}
+    {dest : String} {value : IRValue}
+    (h : StoragePtrsLive c f)
+    (hroot : ∀ slot off, value = .ptr (.root slot off) →
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length)
+    (hglobal : ∀ g off, value = .ptr (.global g off) →
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length) :
+    StoragePtrsLive c (f.setLocal dest value) := by
+  constructor
+  · intro name v slot off hv hval
+    by_cases hname : name = dest
+    · subst hname
+      rw [lookupLocal_setLocal_eq] at hv
+      have hvEq : v = value := (Option.some.inj hv).symm
+      subst hvEq
+      exact hroot slot off hval
+    · have hvOld : f.lookupLocal name = some v := by
+        rw [← lookupLocal_setLocal_ne f (beq_eq_false_iff_ne.mpr hname) value]
+        exact hv
+      exact h.1 name v slot off hvOld hval
+  · intro name v g off hv hval
+    by_cases hname : name = dest
+    · subst hname
+      rw [lookupLocal_setLocal_eq] at hv
+      have hvEq : v = value := (Option.some.inj hv).symm
+      subst hvEq
+      exact hglobal g off hval
+    · have hvOld : f.lookupLocal name = some v := by
+        rw [← lookupLocal_setLocal_ne f (beq_eq_false_iff_ne.mpr hname) value]
+        exact hv
+      exact h.2 name v g off hvOld hval
 
 end Stc.Codegen
