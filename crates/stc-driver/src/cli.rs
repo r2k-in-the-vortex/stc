@@ -1157,9 +1157,9 @@ pub(crate) fn parse_break_spec(value: &str) -> Result<(String, u32, u32), String
 
 fn parse_io(value: &str) -> Result<String, String> {
     match value {
-        "null" | "memory" | "file" => Ok(value.to_owned()),
+        "null" | "memory" | "file" | "ethercat" => Ok(value.to_owned()),
         other => Err(format!(
-            "unknown I/O backend `{other}` (expected `null`, `memory`, or `file`)"
+            "unknown I/O backend `{other}` (expected `null`, `memory`, `file`, or `ethercat`)"
         )),
     }
 }
@@ -1242,7 +1242,7 @@ fn print_help() {
          \x20 stc compliance [--message-format human|json]\n\
          \x20 stc run [--manifest-path <stc.toml|dir>] [--locked] [--cycles <n>]\n\
          \x20         [--debug|--release]\n\
-         \x20         [--cycle-time <duration>] [--io null|memory|file]\n\
+         \x20         [--cycle-time <duration>] [--io null|memory|file|ethercat]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--mock-clock <duration>] [--target <triple>]\n\
          \x20         [--rt] [--rt-priority <1-99>] [--rt-cpu <0-63>]\n\
@@ -1258,13 +1258,13 @@ fn print_help() {
          \x20         [--watch <target>]... [--allow-write] [--allow-force]\n\
          \x20         [--session-timeout <duration>] [--debug-protocol pipe|socket]\n\
          \x20         [--debug|--release] [--manifest-path <stc.toml|dir>] [--locked]\n\
-         \x20         [--cycles <n>] [--cycle-time <duration>] [--io null|memory|file]\n\
+         \x20         [--cycles <n>] [--cycle-time <duration>] [--io null|memory|file|ethercat]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--mock-clock <duration>]\n\
          \x20         [--message-format human|json] [-v|-vv] [-q]\n\
          \x20 stc test [<filter>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20          [--list] [--no-run] [--timeout <duration>]\n\
-         \x20          [--io null|memory|file] [--io-file <path>]\n\
+         \x20          [--io null|memory|file|ethercat] [--io-file <path>]\n\
          \x20          [--target <triple>] [--clang <path>] [--runtime <path>]\n\
          \x20          [--out-dir <dir>] [--relaxed] [--message-format human|json]\n\
          \x20          [-v|-vv] [-q] [-- --nocapture]\n\

@@ -452,6 +452,9 @@ mod tests {
             area,
             offset_bits,
             width_bits,
+            device: None,
+            channel: None,
+            direction: None,
         }
     }
 

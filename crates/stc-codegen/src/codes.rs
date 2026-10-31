@@ -18,6 +18,12 @@ pub const RUN_TASK: &str = "STC-E-RUN-001";
 pub const RUN_PLAN: &str = "STC-E-RUN-002";
 /// Invalid I/O device, channel, or binding from `stc.toml`.
 pub const PROJECT_IO: &str = "STC-E-PROJECT-009";
+/// A route sink has more than one source (fan-in), or a binding and a route
+/// claim the same sink.
+pub const IO_BINDING_CONFLICT: &str = "STC-E-IO-BINDING-001";
+/// A route endpoint does not resolve, has the wrong direction, or its width
+/// does not match.
+pub const IO_BINDING_INVALID: &str = "STC-E-IO-BINDING-002";
 /// Project binding overrides a pragma hint.
 pub const W_PROJECT_OVERRIDES_HINT: &str = "STC-W-IO-003";
 /// Pragma names a device not declared in `stc.toml`.

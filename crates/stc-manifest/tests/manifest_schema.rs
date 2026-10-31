@@ -213,6 +213,41 @@ fn full_manifest_parses() {
 }
 
 #[test]
+fn io_ethercat_backend_and_profile_config_are_accepted() {
+    let text = MINIMAL.replace(
+        "[project]",
+        "[io]\nbackend = \"ethercat\"\nconfig = \"profiles/machine.toml\"\n\n[project]",
+    );
+    let parsed = parse_ok(&text);
+    assert_eq!(parsed.manifest.io.backend, IoBackend::Ethercat);
+    assert_eq!(
+        parsed.manifest.io.config.as_deref(),
+        Some("profiles/machine.toml")
+    );
+
+    let devices = parse_ok(&format!(
+        "{MINIMAL}\n[io]\n\n[[io.devices]]\nname = \"diewu\"\nkind = \"ethercat\"\n"
+    ));
+    assert_eq!(devices.manifest.io.devices.len(), 1);
+    assert_eq!(devices.manifest.io.devices[0].name, "diewu");
+    assert_eq!(devices.manifest.io.devices[0].kind, "ethercat");
+}
+
+#[test]
+fn io_config_path_must_stay_relative_inside_the_project() {
+    for value in [
+        "\"\"",
+        "\"/abs/machine.toml\"",
+        "\"../machine.toml\"",
+        "\"C:/machine.toml\"",
+    ] {
+        let text = MINIMAL.replace("[project]", &format!("[io]\nconfig = {value}\n\n[project]"));
+        let diagnostics = parse_err(&text);
+        assert_code(&diagnostics, "STC-E-PROJECT-009");
+    }
+}
+
+#[test]
 fn unknown_keys_get_did_you_mean_suggestions() {
     let text = format!("projet = 1\n{MINIMAL}");
     let diagnostics = parse_err(&text);

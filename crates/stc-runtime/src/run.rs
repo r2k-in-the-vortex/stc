@@ -33,6 +33,9 @@ pub enum IoBackend {
     Memory,
     /// Input image read at cold start; output image written at shutdown.
     File,
+    /// Hardware device backends own their bound ranges; unbound areas use the
+    /// `null` behavior (IO-Routing-and-Backends §4.1).
+    Ethercat,
 }
 
 impl IoBackend {
@@ -43,6 +46,7 @@ impl IoBackend {
             "null" => Some(Self::Null),
             "memory" => Some(Self::Memory),
             "file" => Some(Self::File),
+            "ethercat" => Some(Self::Ethercat),
             _ => None,
         }
     }
@@ -54,6 +58,7 @@ impl IoBackend {
             Self::Null => "null",
             Self::Memory => "memory",
             Self::File => "file",
+            Self::Ethercat => "ethercat",
         }
     }
 }

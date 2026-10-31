@@ -67,6 +67,9 @@ fn embedding_host_run_honors_options_and_stop_conditions() {
     // Backend and retained-state configuration exports validate their input.
     // SAFETY: the file pointers are null and no host generation is running.
     assert_eq!(unsafe { stc_host_configure_io(1, std::ptr::null()) }, 0);
+    // Numeric backend IDs follow the CLI spelling: 0 null, 1 memory, 2 file,
+    // 3 ethercat.
+    assert_eq!(unsafe { stc_host_configure_io(3, std::ptr::null()) }, 0);
     assert_eq!(unsafe { stc_host_configure_io(9, std::ptr::null()) }, 2);
     assert_eq!(
         unsafe { stc_host_configure_retain(std::ptr::null(), 0, 0) },

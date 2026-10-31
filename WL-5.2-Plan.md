@@ -715,8 +715,8 @@ a second failure stops the sequence for a human decision.
 
 | Phase | Status | Commit | CI |
 | --- | --- | --- | --- |
-| 0 — schema/contracts | In progress | — | — |
-| 1 — backend surface, routing, mapping | Not started | — | — |
+| 0 — schema/contracts | Done | `63b8a7e` | [41177379223](https://github.com/r2k-in-the-vortex/stc/actions/runs/41177379223) — success |
+| 1 — backend surface, routing, mapping | In progress | — | — |
 | 2 — shim, lifecycle, CI build | Not started | — | — |
 | 3 — HIL frame-level bring-up | Not started | — | — |
 | 4 — software fault, recovery, status | Not started | — | — |
@@ -986,3 +986,4 @@ phase-0/1 defaults and do not change the scope.
 | 2026-10-31 | Accepted E-3 per-device dispatch, E-4 routing rules, E-7 hash/cold online change, and E-11 licensing. Added E-15 and §6.3.1: fan-out routes, single-source sinks, physical→physical and PLC→PLC routing, route metadata, and boundary application. |
 | 2026-10-31 | Accepted the last route decisions: one-scan PLC→PLC delay, routes in the machine profile with the PDO map, and route cycles allowed without warning. All decisions E-1–E-15 are now accepted. |
 | 2026-10-31 | Moved all manual/physical tests to phase 6. Phases 3–5 run open-ended (unwired/unloaded) I/O and treat a frame accepted and replied by IgH as success; phase 6 runs the loopback harness, the all-points matrix, and physical fault injection. Updated E-9, the phase table, test matrix, risks, and exit criteria. |
+| 2026-10-31 | Phase 0 complete: commit `63b8a7e`, CI run 41177379223 green. The contract is locked in `specification/Architecture/IO-Routing-and-Backends.md`; phase 1 started. |

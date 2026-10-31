@@ -53,6 +53,8 @@ pub(crate) struct Lowerer<'a> {
     pub used_std: BTreeSet<DefId>,
     pub plan: Plan,
     pub image: ImageLayout,
+    /// Resolved machine-profile routes (IO-Routing-and-Backends §3).
+    pub routes: Vec<crate::metadata::RouteMetadata>,
     pub retain: RetainLayout,
     pub function_symbols: BTreeMap<DefId, String>,
     pub global_symbols: BTreeMap<DefId, String>,
@@ -162,8 +164,18 @@ pub(crate) fn generate(
     if !project_io.errors.is_empty() {
         return Err(project_io.errors);
     }
+    let route_io = config::resolve_routes(
+        hir,
+        &image,
+        &options.project.io.devices,
+        &options.project.io.routes,
+    );
+    if !route_io.errors.is_empty() {
+        return Err(route_io.errors);
+    }
     let mut got = got;
     got.diagnostics.extend(project_io.warnings);
+    got.diagnostics.extend(route_io.warnings);
     let (span_ids, span_entries) = build_span_table(hir);
     let debug = crate::debug::DebugInfo::new(options, target);
     let checkpoint_slot = got.import_slot(ImportService::DebugCheck);
@@ -183,6 +195,7 @@ pub(crate) fn generate(
         debug,
         plan,
         image,
+        routes: route_io.routes,
         retain,
         function_symbols: BTreeMap::new(),
         global_symbols: BTreeMap::new(),
@@ -2862,6 +2875,8 @@ impl Lowerer<'_> {
                 output_defaults_hex: hex(&self.image.output_defaults),
                 devices,
                 bindings,
+                profile: self.options.project.io.profile.clone(),
+                routes: self.routes.clone(),
                 var_access,
             },
             retain: crate::metadata::RetainMetadata {

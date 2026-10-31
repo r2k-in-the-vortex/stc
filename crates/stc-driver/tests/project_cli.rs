@@ -484,3 +484,176 @@ fn empty_source_glob_is_an_error() {
         stderr(&output)
     );
 }
+
+const IO_PROFILE: &str = r#"[device.diewu]
+vendor = 2
+
+[[routes]]
+source = { kind = "physical-input", device = "diewu", channel = "IN0" }
+sinks = [
+  { kind = "plc-input", variable = "shadow" },
+  { kind = "physical-output", device = "diewu", channel = "OUT0" },
+]
+
+[[routes]]
+source = { kind = "plc-output", variable = "drive" }
+sinks = [{ kind = "plc-input", variable = "shadow2" }]
+"#;
+
+const IO_SOURCE: &str = "\
+VAR_GLOBAL
+  shadow AT %IB0 : BYTE;
+  shadow2 AT %IB1 : BYTE;
+  drive AT %QB0 : BYTE;
+END_VAR
+PROGRAM Main
+VAR value : BYTE; END_VAR
+  value := shadow;
+  drive := shadow2;
+END_PROGRAM
+";
+
+fn io_project(project: &TestDir, profile_config: &str, profile_contents: Option<&str>) {
+    project.write(
+        "app/stc.toml",
+        &manifest(
+            "app",
+            &format!(
+                "[io]\nbackend = \"ethercat\"\nconfig = \"{profile_config}\"\n\n\
+                 [[io.devices]]\nname = \"diewu\"\nkind = \"ethercat\"\n\
+                 config = {{ vendor = 1, revision = 3 }}\n\n\
+                 [[io.devices.channels]]\nname = \"IN0\"\ndirection = \"input\"\nwidth = 8\n\n\
+                 [[io.devices.channels]]\nname = \"OUT0\"\ndirection = \"output\"\nwidth = 8"
+            ),
+            "",
+        ),
+    );
+    project.write("app/src/main.st", IO_SOURCE);
+    if let Some(profile) = profile_contents {
+        project.write(&format!("app/{profile_config}"), profile);
+    }
+}
+
+#[test]
+fn machine_profile_is_embedded_with_routes_and_device_precedence() {
+    let project = TestDir::new("io-profile");
+    io_project(&project, "profiles/machine.toml", Some(IO_PROFILE));
+    let output = project.run("app", &["build", "--emit", "ir,metadata"]);
+    assert!(output.status.success(), "stderr:\n{}", stderr(&output));
+
+    let text = std::fs::read_to_string(project.path("app/target/stc/debug/app.stc-meta.json"))
+        .expect("metadata");
+    let metadata: serde_json::Value = serde_json::from_str(&text).expect("metadata JSON");
+    let io = &metadata["io"];
+    assert_eq!(io["backend"], "ethercat");
+
+    let profile = &io["profile"];
+    assert_eq!(profile["path"], "profiles/machine.toml");
+    assert_eq!(profile["text"], IO_PROFILE);
+    let digest =
+        stc_got::Digest32::from_bytes(stc_got::sha256::sha256(IO_PROFILE.as_bytes())).to_hex();
+    assert_eq!(profile["digest"], digest);
+    assert_eq!(profile["devices"], serde_json::json!(["diewu"]));
+
+    // Profile device configuration wins field by field over the inline table.
+    let device = &io["devices"][0];
+    assert_eq!(device["name"], "diewu");
+    assert_eq!(device["kind"], "ethercat");
+    assert_eq!(device["config"]["vendor"], 2);
+    assert_eq!(device["config"]["revision"], 3);
+
+    let routes = io["routes"].as_array().expect("route array");
+    assert_eq!(routes.len(), 2);
+    assert_eq!(
+        routes[0]["source"],
+        serde_json::json!({
+            "area": null,
+            "channel": "IN0",
+            "device": "diewu",
+            "kind": "physical-input",
+            "offset_bits": null,
+            "variable": null,
+            "width_bits": 8,
+        })
+    );
+    assert_eq!(
+        routes[0]["sinks"],
+        serde_json::json!([
+            {
+                "area": "I",
+                "channel": null,
+                "device": null,
+                "kind": "plc-input",
+                "offset_bits": 0,
+                "variable": "shadow",
+                "width_bits": 8,
+            },
+            {
+                "area": null,
+                "channel": "OUT0",
+                "device": "diewu",
+                "kind": "physical-output",
+                "offset_bits": null,
+                "variable": null,
+                "width_bits": 8,
+            },
+        ])
+    );
+    assert_eq!(
+        routes[1]["source"],
+        serde_json::json!({
+            "area": "Q",
+            "channel": null,
+            "device": null,
+            "kind": "plc-output",
+            "offset_bits": 0,
+            "variable": "drive",
+            "width_bits": 8,
+        })
+    );
+    assert_eq!(
+        routes[1]["sinks"],
+        serde_json::json!([{
+            "area": "I",
+            "channel": null,
+            "device": null,
+            "kind": "plc-input",
+            "offset_bits": 8,
+            "variable": "shadow2",
+            "width_bits": 8,
+        }])
+    );
+}
+
+#[test]
+fn missing_or_invalid_machine_profile_fails_the_build() {
+    let missing = TestDir::new("io-profile-missing");
+    io_project(&missing, "profiles/machine.toml", None);
+    let output = missing.run("app", &["build", "--emit", "ir,metadata"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr:\n{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("STC-E-PROJECT-009"),
+        "{}",
+        stderr(&output)
+    );
+
+    let invalid = TestDir::new("io-profile-invalid");
+    io_project(&invalid, "profiles/machine.toml", Some("[device."));
+    let output = invalid.run("app", &["build", "--emit", "ir,metadata"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr:\n{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("STC-E-PROJECT-001"),
+        "{}",
+        stderr(&output)
+    );
+}

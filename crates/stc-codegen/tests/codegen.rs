@@ -585,6 +585,8 @@ fn project_options<'a>(
             ],
         }],
         bindings,
+        profile: None,
+        routes: Vec::new(),
     };
     options.project.retain = stc_codegen::RetainMetadataOptions {
         enabled: false,

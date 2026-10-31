@@ -184,7 +184,7 @@ impl IoRuntime {
         }
         let defaults = sized(&self.input_defaults, self.layout.inputs_bytes);
         match self.backend {
-            IoBackend::Null => {
+            IoBackend::Null | IoBackend::Ethercat => {
                 crate::image_with(|image| {
                     let area = &mut image[..inputs];
                     area.copy_from_slice(&defaults);
@@ -218,7 +218,7 @@ impl IoRuntime {
             return;
         }
         match self.backend {
-            IoBackend::Null => {
+            IoBackend::Null | IoBackend::Ethercat => {
                 crate::image_with(|image| {
                     let start = inputs.min(image.len());
                     let end = start.saturating_add(outputs).min(image.len());

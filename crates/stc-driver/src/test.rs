@@ -254,6 +254,19 @@ pub(crate) fn run(
         .io
         .clone()
         .unwrap_or_else(|| root.manifest.test.effective_io().as_str().to_owned());
+    // The machine profile is build-wide; embed it once before the per-test
+    // artifacts so every test module carries the same routes.
+    let mut profile_diagnostics = DiagnosticSink::new();
+    let mut project_settings = build::ProjectSettings::from_manifest(&root.manifest);
+    if !project_settings.embed_profile(
+        &root.root_dir,
+        &root.manifest,
+        &mut sources,
+        &mut profile_diagnostics,
+    ) {
+        report_sink(&profile_diagnostics, &sources, reporter, log);
+        return crate::project::diagnostic_exit(&profile_diagnostics).max(1);
+    }
     let io_file = request
         .run
         .io_file
@@ -327,7 +340,7 @@ pub(crate) fn run(
         test_request.manifest_target = root.manifest.build.target.clone();
         test_request.manifest_clang = root.manifest.build.clang.clone();
         test_request.manifest_runtime = root.manifest.build.runtime.clone();
-        test_request.project = build::ProjectSettings::from_manifest(&root.manifest);
+        test_request.project = project_settings.clone();
         test_request.project.retain_enabled = false;
         test_request.project.io_backend.clone_from(&effective_io);
         let out_dir = artifact_root.join(&artifact);

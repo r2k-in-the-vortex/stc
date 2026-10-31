@@ -26,6 +26,121 @@ pub struct DirectBinding {
     pub offset_bits: u64,
     /// Declared width in bits.
     pub width_bits: u64,
+    /// Effective physical device, when the binding names one.
+    pub device: Option<String>,
+    /// Effective physical channel, when the binding names one.
+    pub channel: Option<BindingChannel>,
+    /// `input`, `output`, or `inout`.
+    pub direction: Option<String>,
+}
+
+/// A binding's channel reference: declaration index or name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BindingChannel {
+    /// Zero-based channel declaration index.
+    Index(u32),
+    /// Channel name.
+    Name(String),
+}
+
+/// One declared device from the metadata sidecar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceInfo {
+    /// Device name.
+    pub name: String,
+    /// Backend kind.
+    pub kind: String,
+    /// Effective device configuration as compact JSON text.
+    pub config: Option<String>,
+    /// Declared channels in order.
+    pub channels: Vec<ChannelInfo>,
+}
+
+/// One declared device channel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelInfo {
+    /// Channel name.
+    pub name: String,
+    /// `input`, `output`, or `inout`.
+    pub direction: String,
+    /// Channel width in bits.
+    pub width_bits: u32,
+}
+
+/// One resolved route endpoint from the metadata sidecar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RouteEndpoint {
+    /// A physical input channel.
+    PhysicalInput {
+        /// Device name.
+        device: String,
+        /// Channel name.
+        channel: String,
+        /// Channel width in bits.
+        width_bits: u64,
+    },
+    /// A physical output channel.
+    PhysicalOutput {
+        /// Device name.
+        device: String,
+        /// Channel name.
+        channel: String,
+        /// Channel width in bits.
+        width_bits: u64,
+    },
+    /// A direct `%I` variable sink.
+    PlcInput {
+        /// Image area (1).
+        area: u8,
+        /// Area-relative start bit.
+        offset_bits: u64,
+        /// Variable width in bits.
+        width_bits: u64,
+    },
+    /// A direct `%Q` variable source.
+    PlcOutput {
+        /// Image area (2).
+        area: u8,
+        /// Area-relative start bit.
+        offset_bits: u64,
+        /// Variable width in bits.
+        width_bits: u64,
+    },
+}
+
+impl RouteEndpoint {
+    /// Returns the endpoint width in bits.
+    #[must_use]
+    pub const fn width_bits(&self) -> u64 {
+        match self {
+            Self::PhysicalInput { width_bits, .. }
+            | Self::PhysicalOutput { width_bits, .. }
+            | Self::PlcInput { width_bits, .. }
+            | Self::PlcOutput { width_bits, .. } => *width_bits,
+        }
+    }
+}
+
+/// One resolved route from the metadata sidecar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteInfo {
+    /// The single source endpoint.
+    pub source: RouteEndpoint,
+    /// The sink endpoints.
+    pub sinks: Vec<RouteEndpoint>,
+}
+
+/// The embedded machine profile summary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileInfo {
+    /// Project-relative profile path.
+    pub path: String,
+    /// Canonical profile text.
+    pub text: String,
+    /// SHA-256 digest of the text as `0x…`.
+    pub digest: String,
+    /// Device names the profile configures, in declaration order.
+    pub devices: Vec<String>,
 }
 
 /// Byte sizes of the three process-image areas.
@@ -101,6 +216,12 @@ pub struct ModuleInfo {
     pub markers_bytes: u64,
     /// Direct-variable bindings in metadata order.
     pub bindings: Vec<DirectBinding>,
+    /// Declared devices in declaration order.
+    pub devices: Vec<DeviceInfo>,
+    /// Effective routes from the embedded profile.
+    pub routes: Vec<RouteInfo>,
+    /// Embedded machine profile, when the project selects one.
+    pub profile: Option<ProfileInfo>,
     /// I/O backend selected by the project.
     pub backend: crate::run::IoBackend,
     /// File used by the `file` backend, as written in `stc.toml`.
@@ -129,6 +250,9 @@ impl Default for ModuleInfo {
             outputs_bytes: 0,
             markers_bytes: 0,
             bindings: Vec::new(),
+            devices: Vec::new(),
+            routes: Vec::new(),
+            profile: None,
             backend: crate::run::IoBackend::Null,
             io_file: None,
             input_defaults: Vec::new(),
@@ -489,6 +613,7 @@ impl ModuleInfo {
             Some("null") | None => crate::run::IoBackend::Null,
             Some("memory") => crate::run::IoBackend::Memory,
             Some("file") => crate::run::IoBackend::File,
+            Some("ethercat") => crate::run::IoBackend::Ethercat,
             Some(other) => {
                 return Err(Error::new(
                     codes::MODULE_INVALID,
@@ -590,19 +715,46 @@ impl ModuleInfo {
                     .and_then(|value| u64::try_from(value).ok())
                     .unwrap_or(8)
                     .max(1);
+                let device = match binding.get("device") {
+                    None | Some(Json::Null) => None,
+                    Some(Json::String(value)) => Some(value.clone()),
+                    Some(_) => return Err(metadata_error()),
+                };
+                let channel = match binding.get("channel") {
+                    None | Some(Json::Null) => None,
+                    Some(Json::Number(value)) => Some(BindingChannel::Index(
+                        u32::try_from(*value).map_err(|_| metadata_error())?,
+                    )),
+                    Some(Json::String(value)) => Some(BindingChannel::Name(value.clone())),
+                    Some(_) => return Err(metadata_error()),
+                };
+                let direction = match binding.get("direction") {
+                    None | Some(Json::Null) => None,
+                    Some(Json::String(value)) => Some(value.clone()),
+                    Some(_) => return Err(metadata_error()),
+                };
                 bindings.push(DirectBinding {
                     got_id,
                     area,
                     offset_bits,
                     width_bits,
+                    device,
+                    channel,
+                    direction,
                 });
             }
         }
+        let devices = parse_devices(io.get("devices"))?;
+        let routes = parse_routes(io.get("routes"))?;
+        let profile = parse_profile(io.get("profile"))?;
         Ok(Self {
             inputs_bytes,
             outputs_bytes,
             markers_bytes,
             bindings,
+            devices,
+            routes,
+            profile,
             backend,
             io_file,
             input_defaults,
@@ -633,6 +785,199 @@ impl ModuleInfo {
         })?;
         Self::parse(&text).map(Some)
     }
+}
+
+/// Parses the declared device tree.
+fn parse_devices(value: Option<&Json>) -> Result<Vec<DeviceInfo>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let Some(values) = value.as_array() else {
+        return Err(metadata_error());
+    };
+    let mut devices = Vec::with_capacity(values.len());
+    for value in values {
+        let object = value.as_object().ok_or_else(metadata_error)?;
+        let name = object
+            .get("name")
+            .and_then(Json::as_str)
+            .ok_or_else(metadata_error)?
+            .to_owned();
+        let kind = object
+            .get("kind")
+            .and_then(Json::as_str)
+            .ok_or_else(metadata_error)?
+            .to_owned();
+        let config = match object.get("config") {
+            None | Some(Json::Null) => None,
+            Some(value) => Some(value.render()),
+        };
+        let mut channels = Vec::new();
+        match object.get("channels") {
+            None | Some(Json::Null) => {}
+            Some(Json::Array(values)) => {
+                for value in values {
+                    let channel = value.as_object().ok_or_else(metadata_error)?;
+                    let name = channel
+                        .get("name")
+                        .and_then(Json::as_str)
+                        .ok_or_else(metadata_error)?
+                        .to_owned();
+                    let direction = channel
+                        .get("direction")
+                        .and_then(Json::as_str)
+                        .ok_or_else(metadata_error)?
+                        .to_owned();
+                    let width_bits = channel
+                        .get("width")
+                        .and_then(Json::as_number)
+                        .and_then(|value| u32::try_from(value).ok())
+                        .ok_or_else(metadata_error)?;
+                    channels.push(ChannelInfo {
+                        name,
+                        direction,
+                        width_bits,
+                    });
+                }
+            }
+            Some(_) => return Err(metadata_error()),
+        }
+        devices.push(DeviceInfo {
+            name,
+            kind,
+            config,
+            channels,
+        });
+    }
+    Ok(devices)
+}
+
+/// Parses the resolved route graph.
+fn parse_routes(value: Option<&Json>) -> Result<Vec<RouteInfo>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let Some(values) = value.as_array() else {
+        return Err(metadata_error());
+    };
+    let mut routes = Vec::with_capacity(values.len());
+    for value in values {
+        let object = value.as_object().ok_or_else(metadata_error)?;
+        let source = parse_route_endpoint(object.get("source"))?;
+        let sinks = match object.get("sinks").and_then(Json::as_array) {
+            Some(values) => values
+                .iter()
+                .map(|value| parse_route_endpoint(Some(value)))
+                .collect::<Result<Vec<_>>>()?,
+            None => return Err(metadata_error()),
+        };
+        if sinks.is_empty() {
+            return Err(metadata_error());
+        }
+        routes.push(RouteInfo { source, sinks });
+    }
+    Ok(routes)
+}
+
+/// Parses one resolved route endpoint object.
+fn parse_route_endpoint(value: Option<&Json>) -> Result<RouteEndpoint> {
+    let object = value.and_then(Json::as_object).ok_or_else(metadata_error)?;
+    let kind = object
+        .get("kind")
+        .and_then(Json::as_str)
+        .ok_or_else(metadata_error)?;
+    let width_bits = object
+        .get("width_bits")
+        .and_then(Json::as_number)
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(metadata_error)?;
+    match kind {
+        "physical-input" | "physical-output" => {
+            let device = object
+                .get("device")
+                .and_then(Json::as_str)
+                .ok_or_else(metadata_error)?
+                .to_owned();
+            let channel = object
+                .get("channel")
+                .and_then(Json::as_str)
+                .ok_or_else(metadata_error)?
+                .to_owned();
+            if kind == "physical-input" {
+                Ok(RouteEndpoint::PhysicalInput {
+                    device,
+                    channel,
+                    width_bits,
+                })
+            } else {
+                Ok(RouteEndpoint::PhysicalOutput {
+                    device,
+                    channel,
+                    width_bits,
+                })
+            }
+        }
+        "plc-input" | "plc-output" => {
+            let area = match object.get("area").and_then(Json::as_str) {
+                Some("I") => 1,
+                Some("Q") => 2,
+                _ => return Err(metadata_error()),
+            };
+            let offset_bits = object
+                .get("offset_bits")
+                .and_then(Json::as_number)
+                .and_then(|value| u64::try_from(value).ok())
+                .ok_or_else(metadata_error)?;
+            if kind == "plc-input" {
+                Ok(RouteEndpoint::PlcInput {
+                    area,
+                    offset_bits,
+                    width_bits,
+                })
+            } else {
+                Ok(RouteEndpoint::PlcOutput {
+                    area,
+                    offset_bits,
+                    width_bits,
+                })
+            }
+        }
+        _ => Err(metadata_error()),
+    }
+}
+
+/// Parses the embedded machine profile summary.
+fn parse_profile(value: Option<&Json>) -> Result<Option<ProfileInfo>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if matches!(value, Json::Null) {
+        return Ok(None);
+    }
+    let object = value.as_object().ok_or_else(metadata_error)?;
+    let text = |key: &str| {
+        object
+            .get(key)
+            .and_then(Json::as_str)
+            .map(str::to_owned)
+            .ok_or_else(metadata_error)
+    };
+    let path = text("path")?;
+    let text_value = text("text")?;
+    let digest = text("digest")?;
+    let devices = object
+        .get("devices")
+        .and_then(Json::as_array)
+        .ok_or_else(metadata_error)?
+        .iter()
+        .map(|value| value.as_str().map(str::to_owned).ok_or_else(metadata_error))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(ProfileInfo {
+        path,
+        text: text_value,
+        digest,
+        devices,
+    }))
 }
 
 fn metadata_error() -> Error {
@@ -919,5 +1264,198 @@ mod tests {
         let before = rebound.clone();
         rebound.bindings[0].offset_bits += 8;
         assert!(!before.layout_eq(&rebound));
+    }
+
+    const ROUTED: &str = r#"{
+        "io": {
+            "backend": "ethercat",
+            "image": {"inputs_bytes": 4, "outputs_bytes": 4, "markers_bytes": 0},
+            "devices": [
+                {
+                    "name": "diewu",
+                    "kind": "ethercat",
+                    "config": {"syncs": []},
+                    "channels": [
+                        {"name": "IN0", "direction": "input", "width": 8},
+                        {"name": "OUT0", "direction": "output", "width": 16}
+                    ]
+                },
+                {"name": "status", "kind": "ethercat-status", "channels": []}
+            ],
+            "routes": [{
+                "source": {
+                    "kind": "physical-input",
+                    "device": "diewu",
+                    "channel": "IN0",
+                    "width_bits": 8
+                },
+                "sinks": [
+                    {"kind": "plc-input", "area": "I", "offset_bits": 16, "width_bits": 8},
+                    {
+                        "kind": "physical-output",
+                        "device": "diewu",
+                        "channel": "OUT0",
+                        "width_bits": 16
+                    }
+                ]
+            }],
+            "profile": {
+                "path": "profiles/machine.toml",
+                "text": "[device.diewu]\nalias = 1\n",
+                "digest": "0xabc",
+                "devices": ["diewu"]
+            }
+        }
+    }"#;
+
+    #[test]
+    fn parses_devices_routes_and_the_embedded_profile() {
+        let info = ModuleInfo::parse(ROUTED).expect("routed metadata");
+        assert_eq!(info.backend, crate::run::IoBackend::Ethercat);
+        assert_eq!(info.devices.len(), 2);
+
+        let device = &info.devices[0];
+        assert_eq!(device.name, "diewu");
+        assert_eq!(device.kind, "ethercat");
+        let config = device.config.as_deref().expect("inline configuration");
+        assert!(config.contains("\"syncs\""), "{config}");
+        assert_eq!(device.channels.len(), 2);
+        assert_eq!(
+            device.channels[0],
+            ChannelInfo {
+                name: "IN0".into(),
+                direction: "input".into(),
+                width_bits: 8,
+            }
+        );
+        assert_eq!(device.channels[1].width_bits, 16);
+        assert_eq!(info.devices[1].kind, "ethercat-status");
+        assert!(info.devices[1].config.is_none());
+
+        assert_eq!(info.routes.len(), 1);
+        assert_eq!(
+            info.routes[0].source,
+            RouteEndpoint::PhysicalInput {
+                device: "diewu".into(),
+                channel: "IN0".into(),
+                width_bits: 8,
+            }
+        );
+        assert_eq!(
+            info.routes[0].sinks[0],
+            RouteEndpoint::PlcInput {
+                area: 1,
+                offset_bits: 16,
+                width_bits: 8,
+            }
+        );
+        assert_eq!(
+            info.routes[0].sinks[1],
+            RouteEndpoint::PhysicalOutput {
+                device: "diewu".into(),
+                channel: "OUT0".into(),
+                width_bits: 16,
+            }
+        );
+
+        assert_eq!(
+            info.profile,
+            Some(ProfileInfo {
+                path: "profiles/machine.toml".into(),
+                text: "[device.diewu]\nalias = 1\n".into(),
+                digest: "0xabc".into(),
+                devices: vec!["diewu".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_device_and_channel_binding_references() {
+        let info = ModuleInfo::parse(
+            r#"{
+                "io": {
+                    "image": {"inputs_bytes": 2, "outputs_bytes": 2, "markers_bytes": 0},
+                    "bindings": [
+                        {
+                            "got_id": "0x82daffe66a71a484b7cc7e234bed4347",
+                            "area": "I",
+                            "offset_bits": 0,
+                            "width_bits": 8,
+                            "device": "diewu",
+                            "channel": "IN0",
+                            "direction": "input"
+                        },
+                        {
+                            "got_id": "0x987a8ef0813b2598ec043ebdd6744b08",
+                            "area": "Q",
+                            "offset_bits": 0,
+                            "width_bits": 8,
+                            "device": "diewu",
+                            "channel": 1,
+                            "direction": "output"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .expect("bindings");
+        assert_eq!(info.bindings[0].device.as_deref(), Some("diewu"));
+        assert_eq!(
+            info.bindings[0].channel,
+            Some(BindingChannel::Name("IN0".into()))
+        );
+        assert_eq!(info.bindings[0].direction.as_deref(), Some("input"));
+        assert_eq!(info.bindings[1].channel, Some(BindingChannel::Index(1)));
+        assert!(
+            ModuleInfo::parse(
+                r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "profile":null}}"#
+            )
+            .expect("null profile")
+            .profile
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_device_route_and_profile_metadata() {
+        let cases = [
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "devices":{}}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "devices":[{"name":"diewu","kind":7}]}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "devices":[{"name":"diewu","kind":"ethercat",
+                    "channels":[{"name":"IN0","direction":"input"}]}]}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "routes":{}}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "routes":[{"source":{"kind":"physical-input","device":"diewu",
+                    "channel":"IN0","width_bits":8}}]}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "routes":[{"source":{"kind":"physical-input","device":"diewu",
+                    "channel":"IN0","width_bits":8},"sinks":[]}]}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "routes":[{"source":{"kind":"physical-input","channel":"IN0",
+                    "width_bits":8},"sinks":[{"kind":"plc-input","area":"I",
+                    "offset_bits":0,"width_bits":8}]}]}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "routes":[{"source":{"kind":"plc-output","area":"M","offset_bits":0,
+                    "width_bits":8},"sinks":[{"kind":"plc-input","area":"I",
+                    "offset_bits":0,"width_bits":8}]}]}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "routes":[{"source":{"kind":"virtual","width_bits":8},"sinks":[
+                    {"kind":"plc-input","area":"I","offset_bits":0,"width_bits":8}]}]}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "profile":{"path":"p.toml","text":"","devices":[]}}}"#,
+            r#"{"io":{"image":{"inputs_bytes":0,"outputs_bytes":0,"markers_bytes":0},
+                "profile":{"path":"p.toml","text":"","digest":"0x1","devices":[7]}}}"#,
+        ];
+        for text in cases {
+            assert!(
+                ModuleInfo::parse(text).is_err(),
+                "accepted malformed metadata: {text}"
+            );
+        }
     }
 }

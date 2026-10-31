@@ -249,6 +249,8 @@ impl EmitKind {
 pub struct IoConfig {
     /// Runtime backend.
     pub backend: IoBackend,
+    /// Machine profile path used by hardware backends.
+    pub config: Option<String>,
     /// File used by the `file` backend.
     pub file: Option<String>,
     /// Optional input image size in bytes.
@@ -267,6 +269,7 @@ impl Default for IoConfig {
     fn default() -> Self {
         Self {
             backend: IoBackend::Null,
+            config: None,
             file: None,
             input_bytes: None,
             output_bytes: None,
@@ -286,6 +289,8 @@ pub enum IoBackend {
     Memory,
     /// File-backed process image.
     File,
+    /// Hardware device backends selected by `[io.devices].kind`.
+    Ethercat,
 }
 
 impl IoBackend {
@@ -296,6 +301,7 @@ impl IoBackend {
             Self::Null => "null",
             Self::Memory => "memory",
             Self::File => "file",
+            Self::Ethercat => "ethercat",
         }
     }
 }

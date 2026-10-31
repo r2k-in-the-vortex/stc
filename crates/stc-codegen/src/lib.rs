@@ -40,8 +40,9 @@ use stc_span::{FileId, SourceMap, Span};
 
 pub use launcher::{generate_launcher, generate_test_launcher};
 pub use metadata::{
-    ChannelMetadata, DebugCheckpointMetadata, DebugMetadata, DeviceMetadata, Json, Metadata,
-    ProjectBinding, ProjectChannel, VarAccessMetadata,
+    ChannelMetadata, DebugCheckpointMetadata, DebugMetadata, DeviceMetadata, IoProfileMetadata,
+    IoRoute, IoRouteEndpoint, Json, Metadata, ProjectBinding, ProjectChannel,
+    RouteEndpointMetadata, RouteMetadata, VarAccessMetadata,
 };
 pub use module::{
     FunctionTarget, ModuleArtifacts, ModuleError, ModuleOptions, RootTarget, Severity, SlotBinding,
@@ -136,6 +137,10 @@ pub struct IoMetadataOptions {
     pub devices: Vec<DeviceMetadata>,
     /// Project bindings resolved against the HIR.
     pub bindings: Vec<ProjectBinding>,
+    /// Embedded machine profile, when `[io].config` selects one.
+    pub profile: Option<IoProfileMetadata>,
+    /// Profile routes to resolve against the HIR and device tree.
+    pub routes: Vec<IoRoute>,
 }
 
 impl Default for IoMetadataOptions {
@@ -145,6 +150,8 @@ impl Default for IoMetadataOptions {
             file: None,
             devices: Vec::new(),
             bindings: Vec::new(),
+            profile: None,
+            routes: Vec::new(),
         }
     }
 }

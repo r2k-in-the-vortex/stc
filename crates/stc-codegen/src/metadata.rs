@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use stc_span::Span;
+
 /// A JSON value with sorted object keys.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Json {
@@ -220,13 +222,114 @@ pub struct ChannelMetadata {
     pub width: u32,
 }
 
-/// A project binding channel reference.
+/// One project binding channel reference.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectChannel {
     /// Non-negative channel number.
     Index(u32),
     /// Declared channel name.
     Name(String),
+}
+
+/// One machine-profile route to resolve against the program and device tree
+/// (IO-Routing-and-Backends §3).
+#[derive(Clone, Debug)]
+pub struct IoRoute {
+    /// The single source endpoint.
+    pub source: IoRouteEndpoint,
+    /// The non-empty sink list.
+    pub sinks: Vec<IoRouteEndpoint>,
+}
+
+/// One profile route endpoint before variable resolution.
+#[derive(Clone, Debug)]
+pub enum IoRouteEndpoint {
+    /// A declared physical input channel.
+    PhysicalInput {
+        /// Device name.
+        device: String,
+        /// Channel name.
+        channel: String,
+        /// Profile span of the endpoint.
+        span: Span,
+    },
+    /// A declared physical output channel.
+    PhysicalOutput {
+        /// Device name.
+        device: String,
+        /// Channel name.
+        channel: String,
+        /// Profile span of the endpoint.
+        span: Span,
+    },
+    /// A direct `%I` variable, resolved against the image layout.
+    PlcInput {
+        /// Variable path as written in the profile.
+        variable: String,
+        /// Profile span of the endpoint.
+        span: Span,
+    },
+    /// A direct `%Q` variable, resolved against the image layout.
+    PlcOutput {
+        /// Variable path as written in the profile.
+        variable: String,
+        /// Profile span of the endpoint.
+        span: Span,
+    },
+}
+
+impl IoRouteEndpoint {
+    /// Returns the profile span.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::PhysicalInput { span, .. }
+            | Self::PhysicalOutput { span, .. }
+            | Self::PlcInput { span, .. }
+            | Self::PlcOutput { span, .. } => *span,
+        }
+    }
+}
+
+/// One resolved route endpoint.
+#[derive(Clone, Debug)]
+pub struct RouteEndpointMetadata {
+    /// `physical-input`, `physical-output`, `plc-input`, or `plc-output`.
+    pub kind: &'static str,
+    /// Physical device name.
+    pub device: Option<String>,
+    /// Physical channel name.
+    pub channel: Option<String>,
+    /// PLC variable path, in the image layout's canonical spelling.
+    pub variable: Option<String>,
+    /// PLC process-image area letter.
+    pub area: Option<char>,
+    /// PLC area-relative start bit.
+    pub offset_bits: Option<u64>,
+    /// Endpoint width in bits.
+    pub width_bits: u64,
+}
+
+/// One resolved route.
+#[derive(Clone, Debug)]
+pub struct RouteMetadata {
+    /// The source endpoint.
+    pub source: RouteEndpointMetadata,
+    /// The sink endpoints.
+    pub sinks: Vec<RouteEndpointMetadata>,
+}
+
+/// The embedded machine profile.
+#[derive(Clone, Debug)]
+pub struct IoProfileMetadata {
+    /// Project-relative profile path as selected by `[io].config`.
+    pub path: String,
+    /// Canonical profile text, embedded so the artifact is self-contained.
+    pub text: String,
+    /// SHA-256 digest of `text` as `0x…`.
+    pub digest: String,
+    /// Device names declared by the profile, in declaration order.
+    pub devices: Vec<String>,
 }
 
 /// One `[[io.bindings]]` entry the compiler resolves against HIR.
@@ -295,6 +398,10 @@ pub struct IoMetadata {
     pub devices: Vec<DeviceMetadata>,
     /// Bindings sorted by area and offset.
     pub bindings: Vec<IoBindingMetadata>,
+    /// Embedded machine profile, when `[io].config` selects one.
+    pub profile: Option<IoProfileMetadata>,
+    /// Resolved route graph from the profile.
+    pub routes: Vec<RouteMetadata>,
     /// Resolved `VAR_ACCESS` declarations.
     pub var_access: Vec<VarAccessMetadata>,
 }
@@ -668,6 +775,36 @@ fn io_json(io: &IoMetadata) -> Json {
             ])
         })
         .collect();
+    let routes = io
+        .routes
+        .iter()
+        .map(|route| {
+            Json::object([
+                (
+                    "sinks".into(),
+                    Json::Array(route.sinks.iter().map(route_endpoint_json).collect()),
+                ),
+                ("source".into(), route_endpoint_json(&route.source)),
+            ])
+        })
+        .collect();
+    let profile = io.profile.as_ref().map_or(Json::Null, |profile| {
+        Json::object([
+            (
+                "devices".into(),
+                Json::Array(
+                    profile
+                        .devices
+                        .iter()
+                        .map(|device| Json::String(device.clone()))
+                        .collect(),
+                ),
+            ),
+            ("digest".into(), Json::String(profile.digest.clone())),
+            ("path".into(), Json::String(profile.path.clone())),
+            ("text".into(), Json::String(profile.text.clone())),
+        ])
+    });
     Json::object([
         ("backend".into(), Json::String(io.backend.clone())),
         ("bindings".into(), Json::Array(bindings)),
@@ -685,7 +822,43 @@ fn io_json(io: &IoMetadata) -> Json {
             "output_defaults_hex".into(),
             Json::String(io.output_defaults_hex.clone()),
         ),
+        ("profile".into(), profile),
+        ("routes".into(), Json::Array(routes)),
         ("var_access".into(), Json::Array(var_access)),
+    ])
+}
+
+fn route_endpoint_json(endpoint: &RouteEndpointMetadata) -> Json {
+    Json::object([
+        (
+            "area".into(),
+            endpoint
+                .area
+                .map_or(Json::Null, |area| Json::String(area.to_string())),
+        ),
+        (
+            "channel".into(),
+            endpoint.channel.clone().map_or(Json::Null, Json::String),
+        ),
+        (
+            "device".into(),
+            endpoint.device.clone().map_or(Json::Null, Json::String),
+        ),
+        ("kind".into(), Json::String(endpoint.kind.into())),
+        (
+            "offset_bits".into(),
+            endpoint
+                .offset_bits
+                .map_or(Json::Null, |value| Json::Number(i128::from(value))),
+        ),
+        (
+            "variable".into(),
+            endpoint.variable.clone().map_or(Json::Null, Json::String),
+        ),
+        (
+            "width_bits".into(),
+            Json::Number(i128::from(endpoint.width_bits)),
+        ),
     ])
 }
 

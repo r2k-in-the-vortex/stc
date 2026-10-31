@@ -54,6 +54,7 @@ const BUILD_KEYS: &[&str] = &[
 ];
 const IO_KEYS: &[&str] = &[
     "backend",
+    "config",
     "file",
     "input-bytes",
     "output-bytes",
@@ -738,6 +739,18 @@ impl Parser {
                 .parse_io_backend(value, "STC-E-PROJECT-009", "backend")
                 .unwrap_or(IoBackend::Null);
         }
+        if let Some(value) = io.get("config")
+            && let Some(path) = self.expect_nonempty_string(value, "STC-E-PROJECT-009", "config")
+        {
+            if let Some(reason) = relative_path_problem(&path) {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!("invalid io `config` `{path}`: {reason}"),
+                    self.item_span(value),
+                );
+            }
+            config.config = Some(path);
+        }
         if let Some(value) = io.get("file") {
             config.file = self.expect_nonempty_string(value, "STC-E-PROJECT-009", "file");
         }
@@ -771,8 +784,15 @@ impl Parser {
             Some("null") => Some(IoBackend::Null),
             Some("memory") => Some(IoBackend::Memory),
             Some("file") => Some(IoBackend::File),
+            Some("ethercat") => Some(IoBackend::Ethercat),
             Some(other) => {
-                self.invalid_enum(code, key, other, "`null`, `memory`, or `file`", item);
+                self.invalid_enum(
+                    code,
+                    key,
+                    other,
+                    "`null`, `memory`, `file`, or `ethercat`",
+                    item,
+                );
                 None
             }
             None => {
