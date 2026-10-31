@@ -3498,4 +3498,39 @@ theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     · exact hwf.slotsParamsSafe f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
         p hp hname
 
+theorem wfState_withHeadInstrs {contract : IRContract} {c : IRState} {instrs : List Instr}
+    (hwf : WFState contract c)
+    (hblockNew : ∀ f rest, c.frames = f :: rest → ∃ block ∈ f.fn.blocks,
+      f.block = block ∧ f.terminator = block.terminator ∧
+      ∃ done, block.instrs = done ++ instrs)
+    (hnoBareNew : ∀ f rest, c.frames = f :: rest → instrs = [] →
+      f.terminator ≠ some .unreachable) :
+    WFState contract (c.withHeadInstrs instrs) := by
+  cases hframes : c.frames with
+  | nil =>
+      have hsame : c.withHeadInstrs instrs = c := by
+        simp [IRState.withHeadInstrs, hframes]
+      rw [hsame]
+      exact hwf
+  | cons f rest =>
+      have hsame : c.withHeadInstrs instrs = c.withHead { f with instrs := instrs } := by
+        simp [IRState.withHeadInstrs, IRState.withHead, hframes]
+      rw [hsame]
+      have hmem : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+      exact wfState_withHead hwf hframes rfl rfl rfl rfl rfl rfl
+        (fun slot ty hty => hty)
+        (hblockNew f rest hframes)
+        (hwf.framePrev f hmem)
+        (hnoBareNew f rest hframes)
+        (hwf.localsInitialized f hmem)
+        (hwf.localsTyped f hmem)
+        (hwf.originsMatch f hmem)
+        (hwf.allocsWellFormed f hmem)
+        (hwf.stackPtrsBounded f hmem)
+        (hwf.memTyped f hmem)
+        (hwf.storagePtrsLive f hmem)
+        (hwf.slotsBase f hmem)
+        (hwf.stackReturnsSafe f hmem)
+        (hwf.slotsParamsSafe f hmem)
+
 end Stc.Codegen
