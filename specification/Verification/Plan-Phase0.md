@@ -1249,7 +1249,8 @@ grep -rnwE 'sorry|admit' lean/Stc/Sem               # no matches
 ```
 
 **Review approved by the owner on 2026-10-31.** The P0.3 exit criteria are met and the sign-off
-is recorded. P0.3 is complete; the next Phase 0 work is P0.5–P0.7 outside the v2.0.0 WL-3 scope.
+is recorded. P0.3 is complete; WL-3 continues with P0.5, followed by P0.6–P0.7. WL-3 is done only
+after owner confirmation.
 
 ## 20. P0.4 execution record — complete
 
