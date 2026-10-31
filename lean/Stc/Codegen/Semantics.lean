@@ -3343,4 +3343,159 @@ theorem wfState_status {contract : IRContract} {c : IRState} (st : IRStatus)
   exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
     h17, h18, h19, h20, h21, h22⟩
 
+theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
+    {rest : List IRFrame}
+    (hwf : WFState contract c) (hframes : c.frames = f :: rest)
+    (hid : g.id = f.id) (hfn : g.fn = f.fn) (hblock : g.block = f.block)
+    (hterm : g.terminator = f.terminator) (hprev : g.prev = f.prev)
+    (hretDest : g.retDest = f.retDest)
+    (halloc : ∀ slot ty, f.allocType? slot = some ty → g.allocType? slot = some ty)
+    (hblockMem : ∃ block ∈ g.fn.blocks, g.block = block ∧
+      g.terminator = block.terminator ∧ ∃ done, block.instrs = done ++ g.instrs)
+    (hprevEdge : PrevEdge c g)
+    (hnoBare : g.instrs = [] → g.terminator ≠ some .unreachable)
+    (hlocalsInit : ∀ name ty, g.fn.localType? name = some ty →
+      ∃ v, g.lookupLocal name = some v)
+    (hlocalsTyped : ∀ name v, g.lookupLocal name = some v → ∀ ty,
+      g.fn.localType? name = some ty → v.type? = some ty)
+    (horigins : ∀ entry ∈ g.fn.facts.origins,
+      OriginHolds contract c g entry.1 entry.2)
+    (hallocs : AllocsWellFormed g)
+    (hstackPtrs : StackPtrsBounded c g)
+    (hmem : MemTyped c g)
+    (hstoragePtrs : StoragePtrsLive c g)
+    (hslotsBase : SlotsBase c g)
+    (hstackReturns : ∀ operand v, g.terminator = some (.ret (some operand)) →
+      evalOperand g operand = some v →
+      ∀ frame slot off, v = .ptr (.stack frame slot off) → frame ≠ g.id)
+    (hslotsParams : ∀ p : IrType × String, g.fn.params.getLast? = some p →
+      p.2 = "%slots" → g.lookupLocal p.2 = some (.ptr .slotTable)) :
+    WFState contract (c.withHead g) := by
+  have hhead : c.frames.head? = some f := by rw [hframes]; rfl
+  have hwithHead : c.withHead g = { c with frames := g :: rest } := by
+    simp [IRState.withHead, hframes]
+  rw [hwithHead]
+  have hlook : FrameLookupsPreserved c { c with frames := g :: rest } := by
+    rw [← hwithHead]
+    apply frameLookups_withHead
+    · intro g0 hg0
+      rw [hhead] at hg0
+      have hfg : g0 = f := (Option.some.inj hg0).symm
+      rw [hfg]
+      exact hid
+    · intro g0 hg0 slot ty hty
+      rw [hhead] at hg0
+      have hfg : g0 = f := (Option.some.inj hg0).symm
+      rw [hfg] at hty
+      exact halloc slot ty hty
+  constructor
+  · exact hwf.program
+  · have hmap : (g :: rest).map (·.id) = (f :: rest).map (·.id) := by
+      simp [hid]
+    rw [hmap, ← hframes]
+    exact hwf.frameIdsNodup
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · rw [hid]
+      exact hwf.frameIdsBound f (by rw [hframes]; exact List.mem_cons_self ..)
+    · exact hwf.frameIdsBound f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · rw [hfn]
+      exact hwf.frameFunction f (by rw [hframes]; exact List.mem_cons_self ..)
+    · exact hwf.frameFunction f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · exact hblockMem
+    · exact hwf.frameBlock f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · exact hprevEdge
+    · exact hwf.framePrev f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' rest' heq hinst
+    injection heq with hgf _
+    have hginst : g.instrs = [] := by rw [hgf]; exact hinst
+    have hgterm : g.terminator ≠ some .unreachable := hnoBare hginst
+    intro hterm
+    exact hgterm (by rw [hgf]; exact hterm)
+  · intro f' hf' name ty hty
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · exact hlocalsInit name ty hty
+    · exact hwf.localsInitialized f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+        name ty hty
+  · intro f' hf' name v hv ty hty
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · exact hlocalsTyped name v hv ty hty
+    · exact hwf.localsTyped f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+        name v hv ty hty
+  · intro f' hf' entry hentry
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · exact horigins entry hentry
+    · exact hwf.originsMatch f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+        entry hentry
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · exact hallocs
+    · exact hwf.allocsWellFormed f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · exact stackPtrsBounded_of_frameLookups hlook hstackPtrs
+    · exact stackPtrsBounded_of_frameLookups hlook
+        (hwf.stackPtrsBounded f' (by rw [hframes]; exact List.mem_cons_of_mem f hf'))
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · exact memTyped_of_frameLookups hlook hmem
+    · exact memTyped_of_frameLookups hlook
+        (hwf.memTyped f' (by rw [hframes]; exact List.mem_cons_of_mem f hf'))
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · exact hstoragePtrs
+    · exact hwf.storagePtrsLive f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · exact hslotsBase
+    · exact hwf.slotsBase f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · exact hwf.storageValuesLive
+  · exact hwf.functionBindings
+  · exact hwf.callTargets
+  · intro callee caller below heq
+    injection heq with hcallee hrest
+    rw [← hcallee]
+    rw [hretDest, hfn]
+    exact hwf.returnLink f caller below (by rw [hframes, hrest])
+  · intro last hlast
+    cases rest with
+    | nil =>
+        have hcf : c.frames.getLast? = some f := by rw [hframes]; rfl
+        have hfret : f.retDest = none := hwf.bottomRetDest f hcf
+        have hgl : last = g := by
+          have hg : (g :: ([] : List IRFrame)).getLast? = some g := rfl
+          rw [hg] at hlast
+          exact (Option.some.inj hlast).symm
+        rw [hgl, hretDest, hfret]
+    | cons h t =>
+        have hcf : c.frames.getLast? = some last := by
+          rw [hframes]
+          simpa using hlast
+        exact hwf.bottomRetDest last hcf
+  · intro f' hf' operand v htermv heval frame slot off hv
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · exact hstackReturns operand v htermv heval frame slot off hv
+    · exact hwf.stackReturnsSafe f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+        operand v htermv heval frame slot off hv
+  · intro f' hf' p hp hname
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · exact hslotsParams p hp hname
+    · exact hwf.slotsParamsSafe f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+        p hp hname
+
 end Stc.Codegen

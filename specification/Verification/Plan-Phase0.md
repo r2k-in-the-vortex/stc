@@ -2138,10 +2138,14 @@ equation `storeValue_stack_eq`; `memTyped_storeFrames` (the post-store frame map
 `memValuePtrBounded_of_evalOperand` (a stored operand value is a bounded stack pointer
 when it is one). Phase 1 is complete.
 
-**Phase 2 progress (2026-10-31).** `wfState_status` proves the empty-frame halt form: a
-status-only update preserves `WFState`, and the halt is the only `.step` outcome that changes
-the status. The `withHead`, `withHeadInstrs`, `callFunction`, and the three `irStepRet` forms
-remain; Phases 2–3 remain as inventoried below.
+**Phase 2 progress (2026-10-31).** Two of the five state-update forms are proved.
+`wfState_status` covers the empty-frame halt: a status-only update preserves `WFState`, and
+the halt is the only `.step` outcome that changes the status. `wfState_withHead` covers the
+`c.withHead g` form used by instruction steps and jumps: given the new head's frame identity,
+block decomposition, predecessor edge, no-bare-unreachable fact, and the per-frame invariant
+fields, with the frame-lookup relation transferring the state-dependent fields to the rest
+of the stack, `WFState` is preserved. The `withHeadInstrs`, `callFunction`, and the three
+`irStepRet` forms remain; Phases 2–3 remain as inventoried below.
 
 **`irStep_wf` proof inventory (2026-10-31).** The remaining induction is a proof-engineering
 pass, not a design gap. The `.step` outcomes reduce to five state-update forms:
