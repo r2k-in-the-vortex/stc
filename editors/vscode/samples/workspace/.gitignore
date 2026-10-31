@@ -2,3 +2,4 @@
 *.stcstate
 *.endpoint
 *.endpoint.audit.jsonl
+.vscode/settings.json

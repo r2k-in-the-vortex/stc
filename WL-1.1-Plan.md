@@ -5,10 +5,12 @@ Date: 2026-10-29
 Updated: 2026-10-31  
 Branch: `WL-1.1` (sub-plan of `v2.0.0-planning`)  
 Status: Phases 0–6 implemented and green in CI (2026-10-29/30). Phase 7 close-out in progress:
-F-1 grammar scopes/themes implemented and green (commits `ee242ce`/`695b296`, CI run
-`41163217237`); the manual Inspect Tokens matrix is pending. The other required close-out items in
-§12.1 are pending. Manual VS Code verification 2026-10-31: 38 of 40 checklist entries pass; items
-12 and 33 fail. Required close-out items and deferred follow-ups are triaged in §12.  
+F-1 grammar scopes/themes is complete (commits `ee242ce`/`695b296`, CI run `41163217237`;
+owner-confirmed manual color check 2026-10-31). F-20 is complete: implemented in commit `fd8c69e`
+(CI run `41201150443`, 37 jobs) and manually accepted 2026-10-31 (start, attach, and swap
+teardown observed; generation 1 -> 2 -> 3). The other required close-out items in §12.1 (F-3,
+F-6, F-12, F-16) are pending. Manual VS Code verification 2026-10-31: 38 of 40 checklist entries
+pass; items 12 and 33 fail. Required close-out items and deferred follow-ups are triaged in §12.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-1.1,
 [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
@@ -328,7 +330,7 @@ audit behavior.
 | 4 | Runtime `stc-debug/1.1` negotiation and `frame.locals`; `stc-dap`: framing, launch/attach, breakpoints, stepping, stack, scopes/variables, evaluate, write/force; `stc dap` command | Protocol 1.0 and 1.1 tests pass; DAP integration test stops at a breakpoint, steps, lists frames, and reads globals and locals |
 | 5 | Sample workspace, launch/task configurations, IDE-Integration spec, `stc-debug/1.1` spec update, CLI/README/USER-GUIDE/KNOWN-LIMITATIONS updates, release checklist | Extension and docs reviewed; sample workspace opens, navigates, formats, and debugs |
 | 6 | CI: LSP tests in the workspace matrix, DAP/protocol tests in the debug suite, extension package job and VSIX artifact, headless Electron smoke; record evidence | All jobs pass on the supported hosts; VSIX artifact and smoke evidence recorded |
-| 7 | Close-out: required items in §12.1 (F-1 highlighting palette/theme — implemented and green, manual matrix pending; F-3 task process tree; F-6 breakpoint removal; F-12 non-ST frame filtering; F-16 release monitoring surface; F-20 online-change command/status) and the §12.2 documentation actions | §12.1 closed, including a readable palette/theme and an online-change surface; §12.2 documented; the checklist is re-run to 40/40 pass |
+| 7 | Close-out: required items in §12.1 (F-1 highlighting palette/theme — complete; F-3 task process tree; F-6 breakpoint removal; F-12 non-ST frame filtering; F-16 release monitoring surface; F-20 online-change command/status — complete) and the §12.2 documentation actions | §12.1 closed, including a readable palette/theme and an online-change surface; §12.2 documented; the checklist is re-run to 40/40 pass |
 
 ## 8. Exit criteria
 
@@ -499,11 +501,21 @@ and the D-211 FB interface-access change. The remaining items are assigned to ex
 
 Notes:
 
-- F-1 implementation is complete: standard TextMate scope families, `stc Dark`/`stc Light`,
-  grammar/theme/prelude drift tests, VSIX checks, and documentation (commits `ee242ce` and
-  `695b296`; CI run `41163217237` green). The manual Inspect Editor Tokens and Scopes matrix in
-  Dark Modern, Light Modern, `stc Dark`, and `stc Light` remains pending; checklist item 1/F-1
-  holds the expected scopes.
+- F-1 is complete (owner-confirmed 2026-10-31): standard TextMate scope families, `stc Dark`/
+  `stc Light`, grammar/theme/prelude drift tests, VSIX checks, and documentation (commits
+  `ee242ce` and `695b296`; CI run `41163217237` green). The manual Inspect Editor Tokens and
+  Scopes matrix in Dark Modern, Light Modern, `stc Dark`, and `stc Light` was accepted by the
+  owner; checklist item 1/F-1 records the evidence.
+- F-20 is complete (commit `fd8c69e`; CI run `41201150443`, 37 jobs green): default
+  stdin-EOF watch stop (D-213), extension commands/status/child/private endpoint,
+  attach/swap handling, tests, and documentation. Manual in-editor acceptance 2026-10-31:
+  the watch started at generation 1, the debugger attached at generation 2, a saved edit
+  deployed generation 3, and the session ended with `STC-E-DEBUG-019`; the owner reports the
+  workflow works. Checklist F-20 records the evidence. The working F-20 sub-plan was removed
+  after its content moved to IDE-Integration §4.7, the extension README, USER-GUIDE,
+  KNOWN-LIMITATIONS, and the checklist. The owner also directed a workflow follow-up (F-21,
+  deferred): keep the runtime always on and choose cold download or online change on attach,
+  rather than requiring a file watch.
 - Owner decisions on 2026-10-31 added F-1 (highlighting) and F-20 (online change) to WL-1.1 and
   chose the implementation path for F-16; these are recorded in the change log.
 - F-3, F-6, F-12, and the adapter part of F-16 are bounded fixes. F-1 changes only the
@@ -530,6 +542,7 @@ Notes:
 | F-17 | There is no way to debug a `{stc:test}` POU; the launch configuration builds the project, not a per-test artifact. | Test-workflow plan: build the selected test with test metadata and start the test host under the debugger, or add a Testing-API Debug Test action. |
 | F-18 | `stc: test` runs the whole test source set through a task; there is no Testing view, code lens, or per-test command. | Test-workflow plan: a VS Code Testing API provider backed by `stc test` JSON results with Run and Debug actions. |
 | F-19 | Rename (F2) does nothing and prints no message, while the compiler/runtime already carry rename history. | Language-server refactoring plan: `textDocument/prepareRename`/`textDocument/rename` backed by the reference resolution; explicitly outside I-7. |
+| F-21 | F-20's online change is a local file-watch workflow: `stc run --watch` owns the host and deploys on every saved edit. The expected operating model is an always-on PLC runtime in the background (remote after v2.0.0), where online change is not coupled to a file watcher; when the user attaches a debug session and the source has changed, the IDE should offer a choice between a cold download and an online change. | Remote-runtime/workflow follow-up (WL-1.2): decouple the runtime lifetime and debug attach from the file watch; detect source/build drift on attach and present an explicit cold-download vs online-change choice (with cancel); define state preservation, rollback, and remote transport. WL-1.1 keeps the current watch surface as its local v1 limitation. |
 
 ## 13. Change log
 
@@ -543,3 +556,7 @@ Notes:
 | 2026-10-31 | Completed manual UI verification: 38/40 checklist entries pass; items 12 and 33 fail. Added §12 close-out triage: required F-3, F-6, F-12, F-16; documented F-10, F-11, F-13, F-14 and the I-7/I-9 unsupported set; deferred F-1, F-9, F-15, F-17–F-20 to follow-up plans. Updated the status, exit criteria, and documentation actions. |
 | 2026-10-31 | Owner decisions: F-1 (highlighting palette/theme), F-20 (online-change IDE surface), and F-16 (release monitoring implementation) are required for WL-1.1. D-212 amends D-173/D-175/D-179 so `[debug].session-timeout` is opt-in and disabled by default; manifest, runtime, CLI, host ABI, and specifications updated. Plan §1, §2, §6.3, §7, §8, and §12 updated. |
 | 2026-10-31 | F-1 implemented: standard highlighting scopes, `stc Dark`/`stc Light`, grammar/theme/prelude drift tests, VSIX CI content check, and documentation. Commits `ee242ce` and `695b296`; CI run `41163217237` green. The manual Inspect Tokens matrix remains pending; the working F-1 sub-plan was removed after its content moved to IDE-Integration, the extension README, and the checklist. |
+| 2026-10-31 | F-1 accepted complete by the owner after the manual color check; checklist F-1 marked pass, the working sub-plan remains removed, and the plan/phase status is updated. |
+| 2026-10-31 | F-20 plan decisions resolved: `stc run --watch` stops on stdin EOF by default with no flag (CLI docs amended), and the IDE may pass `--debug-server` with a private per-session endpoint to read generation/build and attach. F20-Q3–F20-Q5 use recommended defaults; implementation pending. |
+| 2026-10-31 | F-20 implemented: default stdin-EOF watch stop (D-213), extension commands/status/child/private endpoint, attach/swap handling, tests, and documentation. Commit `fd8c69e`; CI run `41201150443` green (37 jobs). Manual in-editor acceptance pending; the working F-20 sub-plan was removed after its content moved to permanent docs. |
+| 2026-10-31 | F-20 manually accepted: start at generation 1, attach at generation 2, saved edit deployed generation 3, and the attached session ended with `STC-E-DEBUG-019`; the owner reports the workflow works. Owner directed workflow follow-up F-21 (deferred): keep the PLC runtime always on in the background and, on attach with changed source, offer cold download or online change instead of requiring a file-watch online change. F-21 is recorded in §12.3 and the WL-1.2 follow-up plan. |

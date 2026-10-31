@@ -187,6 +187,10 @@ deployment, and remote source handling are different work from the local DAP ada
   sources matching the loaded artifact and reject mismatched builds.
 - Launch and attach configurations for remote hosts; connection loss, reconnection, and
   swap/rollback behavior.
+- Always-on runtime and attach-time deployment: keep the runtime independent of the editor and
+  file watcher; when an attach finds changed sources or artifacts, offer an explicit choice
+  between a cold download and an online change (with cancel), and define state preservation and
+  rollback for each.
 - Use the PREEMPT_RT host (WL-4) as the first target; direct-host and Remote-SSH or remote
   workspace paths are deployment options.
 - Evidence: remote session integration tests, authentication/TLS negative tests, reconnection
@@ -215,6 +219,8 @@ deployment, and remote source handling are different work from the local DAP ada
   TLS terminate?
 - How are remote source files mapped or fetched, and how is an artifact/build-ID mismatch
   handled?
+- On attach with changed sources, should the IDE always ask, remember a default, or infer
+  online change vs cold download from the compatibility result?
 - What happens to a remote session on network loss, swap, rollback, or runtime restart?
 - Is one remote session per host still the limit, or do deployments need multiple concurrent
   sessions?

@@ -4,6 +4,12 @@
   "description": "Local Structured Text support for stc: syntax highlighting, language features, tasks, compiler diagnostics, and debugging.",
   "version": "0.1.0",
   "publisher": "stc-local",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/r2k-in-the-vortex/stc.git",
+    "directory": "editors/vscode"
+  },
   "engines": {
     "vscode": "^1.82.0"
   },

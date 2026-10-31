@@ -35,9 +35,10 @@ required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan
        numbers/durations, pragmas, direct variables, and operators are scoped. The palette is
        dominated by red and white with the current theme; scope and color-scheme polish is
        recorded as follow-up **F-1**, not a manual-pass failure.
-       F-1 implementation (2026-10-31) adds the semantic scope families and the `stc Dark`/`stc
-       Light` themes. Expected scopes for this workspace are in
-       [F-1](#follow-ups-discovered-during-verification) and the sample README: declaration names
+       F-1 is complete (owner-confirmed 2026-10-31): the semantic scope families and the
+       `stc Dark`/`stc Light` themes are implemented and verified. Expected scopes for this
+       workspace are in [F-1](#follow-ups-discovered-during-verification) and the sample README:
+       declaration names
        `entity.name.function.st`/`entity.name.type.st`, primitives
        `support.type.primitives.st`, variables `variable.name.st`, parameters
        `variable.parameter.st`, members `variable.other.member.st`, control keywords
@@ -245,30 +246,27 @@ required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan
 The close-out triage (required for WL-1.1, documented as unsupported, or deferred to a separate
 plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 
-- [ ] **F-1 — Highlighting scope and color scheme.** Required for WL-1.1 (plan §12.1). The
-      grammar's scopes are correct for the tested tokens (`keyword.declaration.st`,
-      `constant.language.st`, `string.quoted.double.st`), but the resulting palette is dominated
-      by red and white.
-      Enrich the grammar with standard semantic scopes — declared POU/type names
-      (`entity.name.function.st` / `entity.name.type.st`), primitives
+- [x] **F-1 — Highlighting scope and color scheme.** Complete 2026-10-31 (owner-confirmed);
+      required for WL-1.1 (plan §12.1). The grammar's scopes are correct for the tested tokens
+      (`keyword.declaration.st`, `constant.language.st`, `string.quoted.double.st`), but the
+      resulting palette was dominated by red and white.
+      The implementation enriches the grammar with standard semantic scopes — declared POU/type
+      names (`entity.name.function.st` / `entity.name.type.st`), primitives
       (`support.type.primitives.st`), variables (`variable.name.st`), parameters and members
       (`variable.parameter.st`), control keywords (`keyword.control.*`), and built-in functions
       (`support.function.st`) — using
-      [Serhioromano/vscode-st](https://github.com/Serhioromano/vscode-st) as a reference. That
-      extension ships a grammar but no theme, so also decide whether to ship a small color theme
-      contribution or document a recommended theme. Acceptance: distinct
+      [Serhioromano/vscode-st](https://github.com/Serhioromano/vscode-st) as a reference, and
+      ships the `stc Dark`/`stc Light` themes. Acceptance: distinct
       keyword/type/declaration/variable/comment/string/number/pragma/direct-variable colors in a
       standard dark and a standard light theme, verified with **Developer: Inspect Editor Tokens
       and Scopes**.
-      **Implementation and automated tests complete 2026-10-31; manual verification pending.**
       The grammar emits the standard scopes above (plus `variable.language.st` for `THIS`/`SUPER`
       and `support.class.st` for standard function blocks); `stc Dark`/`stc Light` ship in
       `editors/vscode/themes/`; `npm test` includes the theme and grammar tests, and
       `cargo test -p stc-syntax -p stc-sema` includes the primitive and prelude drift tests.
-      Commits `ee242ce`/`695b296`; CI run `41163217237` is green. Acceptance stays open until the
-      Inspect Tokens matrix and rendered colors are recorded in Dark Modern, Light Modern,
-      `stc Dark`, and `stc Light` (evidence table: the sample README's highlighting check and
-      IDE-Integration §2.1/§6).
+      Commits `ee242ce`/`695b296`; CI run `41163217237` is green. The owner accepted the manual
+      color check in Dark Modern, Light Modern, `stc Dark`, and `stc Light` on 2026-10-31
+      (evidence: the sample README's highlighting check and IDE-Integration §2.1/§6).
 
 - [x] **F-2 — Make the sample `stc: run` task debuggable.** Pass 2026-10-30: the task passes
       `--debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` (relative to the task
@@ -407,7 +405,8 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       Acceptance: F2 on a field/function renames all references, and unsupported cases fail with
       a clear message.
 
-- [ ] **F-20 — Online change is not exposed in the IDE.** Required for WL-1.1 (plan §12.1). The compiler/runtime implement online
+- [x] **F-20 — Online change is not exposed in the IDE.** Required for WL-1.1 (plan §12.1).
+      The compiler/runtime implement online
       change and the CLI drives it, but the VS Code extension offers no command or status to
       activate a swap, view the generation/build state, or surface the session ending on swap.
       Consider a command/status item that invokes the online workflow and reports the generation.
@@ -422,8 +421,18 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
       `test/online-change.test.mjs` (12 state/parse/redaction tests), `online_cli`
       `watch_stops_when_stdin_closes` (14 total), and the extended headless smoke — generation 1 →
       2 on a saved literal edit, attached session ended on the swap, clean user stop, 13.5 s
-      total (2026-10-31). The manual in-editor pass remains pending; automated evidence is not
-      claimed as the manual acceptance.
+      total (2026-10-31). Commit `fd8c69e`; CI run `41201150443` green (37 jobs). Manual
+      in-editor acceptance 2026-10-31: the watch started at generation 1, the debugger attached
+      at generation 2, a saved edit deployed generation 3, and the session ended with
+      `STC-E-DEBUG-019`; the owner reports the workflow works.
+
+- [ ] **F-21 — Decouple online change from the file watch for an always-on runtime (deferred).**
+      F-20's local workflow starts `stc run --watch` and deploys on every saved edit. The expected
+      operating model is an always-on PLC runtime in the background (remote after v2.0.0), where
+      online change is not coupled to a file watcher. When the user attaches a debug session and
+      the source has changed, the IDE should offer an explicit choice between a cold download and
+      an online change (with cancel). Recorded as deferred in plan §12.3 and the WL-1.2 remote
+      workflow; not part of WL-1.1.
 
 - [ ] **F-3 — Stop the `stc: run` task's process tree.** Terminating the VS Code task kills the
       shell but leaves `stc run` and the launcher (`sample.exe`) running. Make task termination
@@ -440,7 +449,7 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 | 0.2 | Pass | Release path; binary 09:09, server PID 35220 started 09:16; end-of-word definition verified |
 | 0.3 | Pass | Sample workspace opened; `src/main.st` active |
 | 0.4 | Pass | Server serving; language mode Structured Text; Problems empty |
-| 1 | Pass (scopes) | Scopes correct; poor palette recorded as follow-up F-1. F-1 scopes/themes implemented 2026-10-31; manual color matrix pending |
+| 1 | Pass | Scopes correct; F-1 complete 2026-10-31 (scopes, `stc Dark`/`stc Light`, owner-confirmed color check) |
 | 2 | Pass | Line/multi-line/block/nested comment toggling; layout shortcut is `Ctrl+ä` |
 | 3 | Pass | Auto-close, comment/string suppression, bracket matching, surrounding pairs |
 | 4 | Pass | Format normalizes spacing/indentation; idempotent; no extra undo step |
@@ -494,5 +503,6 @@ plan) is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 | F-17 | Pending | No way to debug a `{stc:test}` POU |
 | F-18 | Pending | No per-test run control (Testing view/code lens) in VS Code |
 | F-19 | Pending | `textDocument/rename` not exposed; F2 is silent in the IDE |
-| F-20 | Implemented; manual pending | Four commands, status item, channel, attach, swap notification, and graceful stop added 2026-10-31; unit, Rust, and headless-smoke evidence (generation 1 → 2, session ended on swap); manual in-editor pass not yet run |
-| F-1 | Pending (implementation/tests done) | Scope families, `stc Dark`/`stc Light`, and automated grammar/theme/prelude tests complete 2026-10-31; Inspect Tokens color matrix in both built-in and shipped themes still pending |
+| F-20 | Pass | Manual 2026-10-31: start at gen 1, attach at gen 2, saved edit deployed gen 3, session ended with `STC-E-DEBUG-019`; commands/status/channel/swap evidence; commit `fd8c69e`, CI `41201150443` green |
+| F-21 | Deferred | Always-on runtime; attach-time cold-download vs online-change choice, no file-watch requirement; plan §12.3 / WL-1.2 |
+| F-1 | Pass | Complete 2026-10-31 (owner-confirmed): scope families, `stc Dark`/`stc Light`, automated grammar/theme/prelude tests, and manual color check |
