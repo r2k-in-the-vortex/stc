@@ -2114,7 +2114,45 @@ No invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soun
 and the registry remain green.
 
 The compiling checkpoint is on `WL-3`; the eight soundness theorems and the registry remain
-green. The three earlier extensions were required because without them the invariant was not
+green. **`irStep_wf` proof inventory (2026-10-31).** The remaining induction is a proof-engineering
+pass, not a design gap. The `.step` outcomes reduce to five state-update forms:
+
+1. the empty-frame halt: `{ c with status := .halted }`;
+2. `c.withHead g` for instruction steps and jumps, where `g` differs from the head frame in
+   `instrs` and `locals` (and in `mem`/`allocs`/`nextAlloc` for `alloca`);
+3. `s.withHeadInstrs rest` for a store, where `storeValue` may update any frame's `mem`;
+4. `callFunction`: the frames become `callee :: caller :: tail`;
+5. `irStepRet`: frames become `[]` (halt), `caller.setLocal v :: below`, or
+   `caller :: below`.
+
+The per-field obligations and missing helper lemmas are:
+
+- `lookupLocal_setLocal_eq`/`_ne`, `setLocal` preserves `id`/`fn`/`block`/`terminator`/
+  `prev`/`retDest`; `lookupMem_setMem`, `setMem` and `storeValue` frame updates;
+  `frameById?` under `withHead` and frame-list maps.
+- `localsInitialized`/`localsTyped` under `setLocal` (the latter via
+  `localType?_eq_resultType` and the per-instruction value type) and for the callee's
+  `initLocals` (coverage/typing/defaults are already proved).
+- `originsMatch` under a load/GEP destination (definitions and `SlotsBase`/`SlotsGlobalStored`
+  are in place) and unchanged names under `setLocal`.
+- `MemTyped` under `alloca`/`setMem`/`storeValue` using `MemValuePtrBounded`;
+  `StackPtrsBounded` under `setLocal`/`setMem`; `StoragePtrsLive` under `setLocal`/
+  `storeValue` using `StorageValuesLive`.
+- `ReturnLink` at calls (via `localType?_eq_resultType` and
+  `FunctionBindingsTyped`/`CallTargetsTyped`) and at `irStepRet`; `SlotsParamsSafe` at calls
+  via `CallSlots`; `StackReturnsSafe` via `SafeReturnValue`/`ReturnNonStack`;
+  `SlotsGlobalStored` under stores via `SlotsGlobalReadOnly`.
+- `noBareUnreachable` after instruction/jump/call/ret steps using `UnreachableGuarded` and
+  the fact that a trap-service call cannot step normally.
+- frame-list fields (`frameIdsNodup`/`frameIdsBound`/`frameFunction`/`framePrev`/
+  `frameBlock`), `functionBindings`, `callTargets`, and `bottomRetDest` under the five update
+  forms.
+
+This is the exact case matrix for the next focused pass; the supporting fact set is complete
+and no further design approval is needed. The compiling checkpoint is `6d45f2d` on `WL-3`.
+
+The three earlier extensions were required because without them the invariant was not
+preserved:The three earlier extensions were required because without them the invariant was not
 preserved:
 
 1. **Slots base (`SlotsBase`).** For every `.cell slot false` origin whose defining `load`
