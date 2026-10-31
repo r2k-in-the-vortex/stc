@@ -2972,4 +2972,366 @@ theorem storagePtrsLive_setLocal {c : IRState} {f : IRFrame}
         exact hv
       exact h.2 name v g off hvOld hval
 
+theorem allocType?_setLocal (f : IRFrame) (name : String) (value : IRValue) (slot : Nat) :
+    (f.setLocal name value).allocType? slot = f.allocType? slot := rfl
+
+theorem allocType?_setMem (f : IRFrame) (addr : IRAddr) (value : IRValue) (slot : Nat) :
+    (f.setMem addr value).allocType? slot = f.allocType? slot := rfl
+
+theorem allocType?_withInstrs (f : IRFrame) (instrs : List Instr) (slot : Nat) :
+    ({ f with instrs := instrs } : IRFrame).allocType? slot = f.allocType? slot := rfl
+
+theorem allocType?_alloca_old {f : IRFrame} {ty : IrType} {slot : Nat} {oldTy : IrType}
+    (h : f.allocType? slot = some oldTy) :
+    ({ f with
+       allocs := f.allocs ++ [(f.nextAlloc, ty)],
+       nextAlloc := f.nextAlloc + 1 } : IRFrame).allocType? slot = some oldTy := by
+  unfold IRFrame.allocType? at h ⊢
+  rw [List.find?_append]
+  cases hf : f.allocs.find? (fun entry => entry.1 == slot) with
+  | none => simp [hf] at h
+  | some entry => simpa [hf] using h
+
+theorem memValuePtrBounded_default (c : IRState) : ∀ ty : IrType,
+    MemValuePtrBounded c (IRValue.default ty)
+  | .int _ => trivial
+  | .ptr => trivial
+  | .overflow _ => trivial
+  | .array elem _ => memValuePtrBounded_default c elem
+  | .void => trivial
+
+/-- Proof helper: every frame lookup in the old state is found in the new state
+with the same allocation types. This is the frame view preserved by `MemTyped`,
+`MemValuePtrBounded`, and `StackPtrsBounded` across the state updates of `irStep`. -/
+def FrameLookupsPreserved (s s' : IRState) : Prop :=
+  ∀ id g, s.frameById? id = some g →
+    ∃ g', s'.frameById? id = some g' ∧
+      ∀ slot ty, g.allocType? slot = some ty → g'.allocType? slot = some ty
+
+theorem memValuePtrBounded_of_frameLookups {s s' : IRState}
+    (h : FrameLookupsPreserved s s') {v : IRValue}
+    (hv : MemValuePtrBounded s v) : MemValuePtrBounded s' v := by
+  cases v with
+  | int ty payload => trivial
+  | pair ty value overflow => trivial
+  | null => trivial
+  | ptr addr =>
+      cases addr with
+      | stack frame slot off =>
+          simp only [MemValuePtrBounded] at hv ⊢
+          rcases hv with ⟨g, hfind, ty, hty, hoff⟩
+          rcases h frame g hfind with ⟨g', hfind', halloc⟩
+          exact ⟨g', hfind', ty, halloc slot ty hty, hoff⟩
+      | slotEntry slot => trivial
+      | cell slot => trivial
+      | root slot off => trivial
+      | global name off => trivial
+      | slotTable => trivial
+      | function name => trivial
+      | importCell slot => trivial
+
+theorem memTyped_of_frameLookups {s s' : IRState} {f : IRFrame}
+    (h : FrameLookupsPreserved s s') (hm : MemTyped s f) : MemTyped s' f := by
+  intro addr v hv
+  rcases hm addr v hv with ⟨slot, off, ty, haddr, hty, hoff, hvt, hvb⟩
+  exact ⟨slot, off, ty, haddr, hty, hoff, hvt,
+    memValuePtrBounded_of_frameLookups h hvb⟩
+
+theorem stackPtrsBounded_of_frameLookups {s s' : IRState} {f : IRFrame}
+    (h : FrameLookupsPreserved s s') (hb : StackPtrsBounded s f) :
+    StackPtrsBounded s' f := by
+  intro name v addr hv haddr
+  have h' := hb name v addr hv haddr
+  cases addr with
+  | stack frame slot off =>
+      rcases h' with ⟨g, hfind, ty, hty, hoff⟩
+      rcases h frame g hfind with ⟨g', hfind', halloc⟩
+      exact ⟨g', hfind', ty, halloc slot ty hty, hoff⟩
+  | slotEntry slot => trivial
+  | cell slot => trivial
+  | root slot off => trivial
+  | global name off => trivial
+  | slotTable => trivial
+  | function name => trivial
+  | importCell slot => trivial
+
+theorem frameLookups_withHeadInstrs (s : IRState) (instrs : List Instr) :
+    FrameLookupsPreserved s (s.withHeadInstrs instrs) := by
+  intro id g hfind
+  cases hframes : s.frames with
+  | nil =>
+      exfalso
+      have hnone : s.frameById? id = none := by
+        unfold IRState.frameById?
+        rw [hframes]
+        rfl
+      rw [hnone] at hfind
+      cases hfind
+  | cons g0 rest =>
+      by_cases hgt : (g0.id == id) = true
+      · have hsome : s.frameById? id = some g0 := by
+          unfold IRState.frameById?
+          rw [hframes]
+          exact List.find?_cons_of_pos hgt
+        rw [hsome] at hfind
+        have hg : g = g0 := (Option.some.inj hfind).symm
+        subst g
+        refine ⟨{ g0 with instrs := instrs }, ?_, ?_⟩
+        · unfold IRState.withHeadInstrs IRState.frameById?
+          rw [hframes]
+          exact List.find?_cons_of_pos hgt
+        · intro slot ty hty
+          exact hty
+      · have hrest : rest.find? (fun f : IRFrame => f.id == id) = some g := by
+          unfold IRState.frameById? at hfind
+          rw [hframes, List.find?_cons_of_neg (p := fun f : IRFrame => f.id == id)
+            (a := g0) hgt] at hfind
+          exact hfind
+        refine ⟨g, ?_, ?_⟩
+        · unfold IRState.withHeadInstrs IRState.frameById?
+          rw [hframes]
+          rw [List.find?_cons_of_neg (p := fun f : IRFrame => f.id == id)
+            (a := { g0 with instrs := instrs }) ?_]
+          · exact hrest
+          · simpa using hgt
+        · intro slot ty hty
+          exact hty
+
+theorem frameLookups_withHead {s : IRState} {h : IRFrame}
+    (hid : ∀ g, s.frames.head? = some g → h.id = g.id)
+    (halloc : ∀ g, s.frames.head? = some g →
+      ∀ slot ty, g.allocType? slot = some ty → h.allocType? slot = some ty) :
+    FrameLookupsPreserved s (s.withHead h) := by
+  intro id g hfind
+  cases hframes : s.frames with
+  | nil =>
+      exfalso
+      have hnone : s.frameById? id = none := by
+        unfold IRState.frameById?
+        rw [hframes]
+        rfl
+      rw [hnone] at hfind
+      cases hfind
+  | cons g0 rest =>
+      have hhead : s.frames.head? = some g0 := by
+        rw [hframes]
+        rfl
+      have hidEq : h.id = g0.id := hid g0 hhead
+      by_cases hgt : (g0.id == id) = true
+      · have hsome : s.frameById? id = some g0 := by
+          unfold IRState.frameById?
+          rw [hframes]
+          exact List.find?_cons_of_pos hgt
+        rw [hsome] at hfind
+        have hg : g = g0 := (Option.some.inj hfind).symm
+        subst g
+        refine ⟨h, ?_, ?_⟩
+        · unfold IRState.withHead IRState.frameById?
+          rw [hframes]
+          exact List.find?_cons_of_pos (a := h) (p := fun f : IRFrame => f.id == id)
+            (by rw [hidEq]; exact hgt)
+        · intro slot ty hty
+          exact halloc g0 hhead slot ty hty
+      · have hrest : rest.find? (fun f : IRFrame => f.id == id) = some g := by
+          unfold IRState.frameById? at hfind
+          rw [hframes, List.find?_cons_of_neg (p := fun f : IRFrame => f.id == id)
+            (a := g0) hgt] at hfind
+          exact hfind
+        refine ⟨g, ?_, ?_⟩
+        · unfold IRState.withHead IRState.frameById?
+          rw [hframes]
+          rw [List.find?_cons_of_neg (p := fun f : IRFrame => f.id == id) (a := h) ?_]
+          · exact hrest
+          · rw [hidEq]
+            exact hgt
+        · intro slot ty hty
+          exact hty
+
+theorem frameLookups_storeFrames (s : IRState) (frame slot off : Nat) (value : IRValue) :
+    FrameLookupsPreserved s
+      { s with frames := s.frames.map fun g =>
+          if g.id == frame then g.setMem (.stack frame slot off) value else g } := by
+  intro id g hfind
+  unfold IRState.frameById? at hfind
+  let F : IRFrame → IRFrame :=
+    fun g => if g.id == frame then g.setMem (.stack frame slot off) value else g
+  have hFid : ∀ g, (F g).id = g.id := by
+    intro g
+    unfold F
+    split <;> rfl
+  refine ⟨F g, ?_, ?_⟩
+  · show ({ s with frames := s.frames.map F } : IRState).frameById? id = some (F g)
+    simp only [IRState.frameById?]
+    rw [List.find?_map]
+    have hpred : ((fun frame : IRFrame => frame.id == id) ∘ F) =
+        (fun a : IRFrame => a.id == id) := by
+      funext a
+      simp only [Function.comp_apply]
+      rw [hFid a]
+    rw [hpred, hfind]
+    rfl
+  · intro slot' ty hty
+    unfold F
+    by_cases hgt : (g.id == frame) = true
+    · rw [ite_eq_left hgt, allocType?_setMem]
+      exact hty
+    · rw [ite_eq_right hgt]
+      exact hty
+
+theorem frame_eq_of_mem_of_frameById? {l : List IRFrame} (hnd : (l.map (·.id)).Nodup)
+    {id : Nat} {g0 : IRFrame} (h0 : l.find? (fun f => f.id == id) = some g0)
+    {g : IRFrame} (hmem : g ∈ l) (hid : (g.id == id) = true) : g = g0 := by
+  have h0mem : g0 ∈ l :=
+    List.mem_of_find?_eq_some (p := fun f : IRFrame => f.id == id) (a := g0) h0
+  have h0id : g0.id = id := beq_iff_eq.mp
+    (List.find?_some (p := fun f : IRFrame => f.id == id) (a := g0) h0)
+  have hgid : g.id = id := beq_iff_eq.mp hid
+  obtain ⟨i, hi⟩ := List.getElem?_of_mem hmem
+  obtain ⟨j, hj⟩ := List.getElem?_of_mem h0mem
+  have hiLt : i < l.length := (List.getElem?_eq_some_iff.mp hi).choose
+  have hiMap : (l.map (·.id))[i]? = some g.id := by
+    rw [List.getElem?_map, hi]
+    rfl
+  have hjMap : (l.map (·.id))[j]? = some g0.id := by
+    rw [List.getElem?_map, hj]
+    rfl
+  have hEq : (l.map (·.id))[i]? = (l.map (·.id))[j]? := by
+    rw [hiMap, hjMap, hgid, h0id]
+  have hij : i = j := (hnd.getElem?_inj (by simpa using hiLt)).mp hEq
+  rw [hij] at hi
+  rw [hi] at hj
+  exact Option.some.inj hj
+
+theorem memTyped_setMem_stack {c : IRState} {f : IRFrame} {slot off : Nat}
+    {ty : IrType} {value : IRValue}
+    (h : MemTyped c f) (hty : f.allocType? slot = some ty)
+    (hoff : off < allocSize ty) (hvt : MemValueTyped ty value)
+    (hvb : MemValuePtrBounded c value) :
+    MemTyped c (f.setMem (.stack f.id slot off) value) := by
+  intro addr v hv
+  by_cases hsame : addr = .stack f.id slot off
+  · rw [hsame] at hv ⊢
+    rw [lookupMem_setMem_eq] at hv
+    have hvEq : v = value := (Option.some.inj hv).symm
+    subst hvEq
+    exact ⟨slot, off, ty, rfl, hty, hoff, hvt, hvb⟩
+  · have hvOld : f.lookupMem addr = some v := by
+      rw [← lookupMem_setMem_ne f (beq_eq_false_iff_ne.mpr hsame) value]
+      exact hv
+    exact h addr v hvOld
+
+theorem storeValue_stack_eq {s : IRState} {frame slot offset : Nat} {value : IRValue}
+    {g0 : IRFrame} {ty : IrType}
+    (hfind : s.frameById? frame = some g0)
+    (halloc : g0.allocType? slot = some ty)
+    (hoff : offset < allocSize ty) :
+    s.storeValue (.stack frame slot offset) value =
+      some { s with frames := s.frames.map fun g =>
+        if g.id == frame then g.setMem (.stack frame slot offset) value else g } := by
+  unfold IRState.storeValue
+  simp only [hfind, halloc]
+  simp [hoff]
+
+theorem memTyped_storeFrames {s : IRState} {frame slot off : Nat} {value : IRValue}
+    {ty : IrType} {g0 : IRFrame}
+    (hnd : (s.frames.map (·.id)).Nodup)
+    (hmem : ∀ g ∈ s.frames, MemTyped s g)
+    (hfind : s.frameById? frame = some g0)
+    (halloc : g0.allocType? slot = some ty)
+    (hoff : off < allocSize ty)
+    (hvt : MemValueTyped ty value)
+    (hvb : MemValuePtrBounded s value) :
+    ∀ g ∈ s.frames.map (fun g =>
+        if g.id == frame then g.setMem (.stack frame slot off) value else g),
+      MemTyped
+        { s with frames := s.frames.map fun g =>
+            if g.id == frame then g.setMem (.stack frame slot off) value else g } g := by
+  intro g' hg'
+  let F : IRFrame → IRFrame :=
+    fun g => if g.id == frame then g.setMem (.stack frame slot off) value else g
+  let s' : IRState := { s with frames := s.frames.map F }
+  have hlook : FrameLookupsPreserved s s' := frameLookups_storeFrames s frame slot off value
+  have hvb' : MemValuePtrBounded s' value := memValuePtrBounded_of_frameLookups hlook hvb
+  rcases List.mem_map.mp hg' with ⟨g, hgMem, hgEq⟩
+  rw [← hgEq]
+  show MemTyped s' (F g)
+  by_cases hgt : (g.id == frame) = true
+  · have hF : F g = g.setMem (.stack frame slot off) value := by
+      unfold F
+      rw [ite_eq_left hgt]
+    rw [hF]
+    have hgEq0 : g = g0 := frame_eq_of_mem_of_frameById? hnd hfind hgMem hgt
+    subst g
+    have hframeEq : frame = g0.id := (beq_iff_eq.mp hgt).symm
+    rw [hframeEq]
+    exact memTyped_setMem_stack (memTyped_of_frameLookups hlook (hmem g0 hgMem))
+      halloc hoff hvt hvb'
+  · have hF : F g = g := by
+      unfold F
+      rw [ite_eq_right hgt]
+    rw [hF]
+    exact memTyped_of_frameLookups hlook (hmem g hgMem)
+
+theorem memTyped_withHeadInstrs {s : IRState} {instrs : List Instr}
+    (h : ∀ g ∈ s.frames, MemTyped s g) :
+    ∀ g ∈ (s.withHeadInstrs instrs).frames, MemTyped (s.withHeadInstrs instrs) g := by
+  intro g' hg'
+  have hlook : FrameLookupsPreserved s (s.withHeadInstrs instrs) :=
+    frameLookups_withHeadInstrs s instrs
+  cases hframes : s.frames with
+  | nil =>
+      have hsame : s.withHeadInstrs instrs = s := by
+        simp [IRState.withHeadInstrs, hframes]
+      rw [hsame] at hg' ⊢
+      exact h g' hg'
+  | cons g0 rest =>
+      have hframes' : (s.withHeadInstrs instrs).frames =
+          { g0 with instrs := instrs } :: rest := by
+        simp [IRState.withHeadInstrs, hframes]
+      rw [hframes'] at hg'
+      rcases List.mem_cons.mp hg' with hhead | htail
+      · subst hhead
+        have hm : MemTyped s g0 := h g0 (by rw [hframes]; exact List.mem_cons_self ..)
+        exact memTyped_of_frameLookups hlook hm
+      · have hm : MemTyped s g' :=
+          h g' (by rw [hframes]; exact List.mem_cons_of_mem g0 htail)
+        exact memTyped_of_frameLookups hlook hm
+
+
+
+theorem memValuePtrBounded_of_evalOperand {c : IRState} {f : IRFrame}
+    (hstack : StackPtrsBounded c f) {operand : Operand} {v : IRValue}
+    (h : evalOperand f operand = some v) : MemValuePtrBounded c v := by
+  cases operand with
+  | «local» name =>
+      simp only [evalOperand] at h
+      cases v with
+      | int ty payload => trivial
+      | pair ty value overflow => trivial
+      | null => trivial
+      | ptr addr =>
+          cases addr with
+          | stack frame slot off =>
+              simp only [MemValuePtrBounded]
+              exact hstack name _ _ h rfl
+          | slotEntry slot => trivial
+          | cell slot => trivial
+          | root slot off => trivial
+          | global name off => trivial
+          | slotTable => trivial
+          | function name => trivial
+          | importCell slot => trivial
+  | intLit ty value =>
+      simp only [evalOperand] at h
+      cases h
+      trivial
+  | nullPtr =>
+      simp only [evalOperand] at h
+      cases h
+      trivial
+  | symbol name =>
+      simp only [evalOperand] at h
+      cases h
+      trivial
+
 end Stc.Codegen

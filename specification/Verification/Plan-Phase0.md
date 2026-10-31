@@ -2116,17 +2116,27 @@ No invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soun
 and the registry remain green.
 
 The compiling checkpoint is on `WL-3`; the eight soundness theorems and the registry remain
-green. **Phase 1 progress (2026-10-31).** `setList` now stores the updated entry at the head and
+green. **Phase 1 complete (2026-10-31).** `setList` now stores the updated entry at the head and
 filters previous entries with the same key; keyed lookup is unchanged (the latest value wins
 for duplicate keys), and the representation change is internal. `OriginsTrusted` now records
-that origin names are unique. The following helpers are proved:
+that origin names are unique. The lookup/local/origin layer is proved:
 `find?_filter_of_imp`, `find?_setList_eq`/`_ne`, `lookupList_setList_eq`/`_ne`,
 `lookupLocal_setLocal_eq`/`_ne`, `lookupMem_setMem_eq`/`_ne`,
 `localsInitialized_setLocal`, `localsTyped_setLocal`, `originOf?_of_mem`,
 `originsMatch_setLocal`, `stackPtrsBounded_setLocal`, and `storagePtrsLive_setLocal`.
-Remaining Phase 1 helpers: `MemTyped` under `setMem`/`storeValue` (including
-`MemValuePtrBounded`) and `frameById?` under `withHead`/`withHeadInstrs` and frame maps.
-Phases 2–3 remain as inventoried below.
+The memory/frame layer is also proved: the allocation-preservation helpers
+`allocType?_setLocal`, `allocType?_setMem`, `allocType?_withInstrs`, and
+`allocType?_alloca_old`; `memValuePtrBounded_default`; the frame-view relation
+`FrameLookupsPreserved` with its transfer lemmas
+`memValuePtrBounded_of_frameLookups`, `memTyped_of_frameLookups`, and
+`stackPtrsBounded_of_frameLookups`; the relation instances
+`frameLookups_withHeadInstrs`, `frameLookups_withHead`, and `frameLookups_storeFrames`
+(the `storeValue` frame map); the frame-id uniqueness lemma
+`frame_eq_of_mem_of_frameById?`; `memTyped_setMem_stack`; the `storeValue` stack-case
+equation `storeValue_stack_eq`; `memTyped_storeFrames` (the post-store frame map);
+`memTyped_withHeadInstrs` (the post-store instruction replacement); and
+`memValuePtrBounded_of_evalOperand` (a stored operand value is a bounded stack pointer
+when it is one). Phase 1 is complete; Phases 2–3 remain as inventoried below.
 
 **`irStep_wf` proof inventory (2026-10-31).** The remaining induction is a proof-engineering
 pass, not a design gap. The `.step` outcomes reduce to five state-update forms:
@@ -2272,3 +2282,8 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    (`SlotsBase`, memory pointer bounds, storage value liveness) are acknowledged as the
    whole-run blocker. They extend, not trim, `WFState`; none of them changes the three proved
    statements.
+6. The Phase 1 helper layer is complete and compiling: lookup/local/origin preservation, the
+   allocation-preservation and frame-lookup helpers, and the `setMem`/`storeValue` `MemTyped`
+   preservation lemmas listed in §22.11. Phase 2 (`irStep_wf`, one state-update form at a
+   time) and Phase 3 (reachability corollaries and the `irRun` lift) remain open and are the
+   remaining P0.5 review scope.
