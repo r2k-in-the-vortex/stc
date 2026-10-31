@@ -361,15 +361,18 @@ def completeFrame (u : HirUnit) (c : State) : Outcome :=
               frames := { f with k := [], expect := none, loopCtx := LoopCtx.top } :: rest
               focus := .stmts u.program.body LoopCtx.top }
 
+/-- Whether a `FOR` loop continues after its bound is evaluated. -/
+def forKeep (current stopVal stepVal : Value) : Bool :=
+  if stepVal.ty.layout.signed then
+    if 0 < stepVal.value then decide (current.value ≤ stopVal.value)
+    else decide (stopVal.value ≤ current.value)
+  else decide (current.value ≤ stopVal.value)
+
 /-- Push a `FOR` body or complete the loop, depending on the bound check. -/
 def forContinue (u : HirUnit) (c : State) (cont : Cont) (rest : List Cont)
     (var : Place) (stopVal stepVal : Value) (body : List Stmt) : Outcome :=
   let current := (c.lookupVar? var.id).getD stopVal
-  let keep :=
-    if stepVal.ty.layout.signed then
-      if 0 < stepVal.value then decide (current.value ≤ stopVal.value)
-      else decide (stopVal.value ≤ current.value)
-    else decide (current.value ≤ stopVal.value)
+  let keep := forKeep current stopVal stepVal
   let bodyLc := LoopCtx.body cont.after (var.id :: cont.after.controlled)
   if keep then
     .step { c with
@@ -562,10 +565,12 @@ def stepValue (u : HirUnit) (c : State) (v : Value) : Outcome :=
               | [_] =>
                   performCall u { c with frames := { f with k := rest } :: fr }
                     callee (done ++ [v]) isStmt cont.span
-              | next :: more =>
+              -- The value just consumed belongs to `remaining`'s head, which the
+              -- continuation still carries; evaluate the argument after it.
+              | _ :: next :: more =>
                   .step { c with
                     focus := .expr next
-                    frames := { f with k := { kind := .callArgs callee (done ++ [v]) more isStmt, before := cont.before, after := cont.after, span := cont.span } :: rest } :: fr }
+                    frames := { f with k := { kind := .callArgs callee (done ++ [v]) (next :: more) isStmt, before := cont.before, after := cont.after, span := cont.span } :: rest } :: fr }
           | .ifCond arms elseBody =>
               match arms with
               | [] => .step { c with focus := .stmts elseBody cont.before, frames := { f with k := rest, loopCtx := cont.before } :: fr }
@@ -605,9 +610,17 @@ def stepValue (u : HirUnit) (c : State) (v : Value) : Outcome :=
               else
                 .step { c with focus := .resume, frames := { f with k := rest, loopCtx := cont.after } :: fr }
           | .forInit var stop stepE body =>
-              .step { c.setVar var.id v with
-                focus := .expr stop
-                frames := { f with k := Cont.same (.forStop var stepE body) cont.before cont.span :: rest, loopCtx := cont.before } :: fr }
+              -- Write the start value first; the continuation update must use the
+              -- updated head frame, not the original one, or the write is lost.
+              let c1 := c.setVar var.id v
+              match c1.frames with
+              | [] => .stuck
+              | f1 :: restFrames =>
+                  .step { c1 with
+                    focus := .expr stop
+                    frames := { f1 with
+                      k := Cont.same (.forStop var stepE body) cont.before cont.span :: rest,
+                      loopCtx := cont.before } :: restFrames }
           | .forStop var stepE body =>
               match stepE with
               | none =>
