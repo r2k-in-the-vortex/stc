@@ -734,13 +734,19 @@ The script exits 0 only for a frame-level pass: the final
 `stc: status: io-backend ethercat` line reports `state=running`, `faults=0`,
 `domain.wc_state=2`, `input.stale=0`, no master error, link up, one responding
 slave, and no recovery; `exchanges` equals the completed cycle count; the
-metrics summary reports zero skipped periods, the per-cycle execution p99 is at
-most half the cycle time, and the run covers at least the requested screening
-duration's worth of cycles; the master's Tx-error and lost-frame counters are
-unchanged from the before sample; and after release the master is
-`Phase: Idle` with `Active: no` and the slave reaches PREOP. The strict
-`missed_deadlines` counter is reported but not gated: it is true for any
-positive wake lateness and equals the cycle count in every RT run on this host
+metrics summary reports zero skipped periods and zero dropped records; the
+per-cycle execution p99 is at most half the cycle time; the run covers at least
+the requested screening duration's worth of cycles; the master's Tx-error
+counter is unchanged and its lost-frame counter does not increase by more than
+one frame; and after release the master is `Phase: Idle` with `Active: no` and
+the slave reaches PREOP. The one-frame lost-frame allowance comes from the IgH
+tool: `CommandMaster.cpp` prints the cumulative Tx-minus-Rx difference and
+zeroes a difference of one because one frame may be travelling. With the
+master's large cumulative baseline, a travelling frame shifts the printed value
+by one in either direction, so the runner records the raw before/after values
+and rejects only an increase beyond one frame. The strict `missed_deadlines`
+counter is reported but not gated: it is true for any positive wake lateness and
+equals the cycle count in every RT run on this host
 ([KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §7), so skipped periods,
 frame-level health, and the execution distribution are the pass criteria.
 Physical I/O values are not checked. A nonzero exit distinguishes a frame-level
@@ -780,99 +786,129 @@ PREOP for up to 5 s.
 
 ### 10.7 Cycle-time sweep result (phase 5)
 
-The sweep ran on 2026-10-31 through
+The final sweep ran on 2026-11-01 (UTC) through
 `sudo -n /usr/local/sbin/stc-wl52-run ct <cycle> <duration> <label>`, in the
 order 1 ms, 500 µs, and so on, and stopped at the first failing step. Each
 screening step was 60 s; the fastest passing step was repeated for 600 s. Every
 step used the release fixture, `SCHED_FIFO` 90 on CPU 3, an open-ended cycle
 count, and the master counters were not reset between steps. The table values
 come from the `stc-rt-metrics/1` per-cycle records (nearest-rank percentiles)
-and the master samples; execution and wake values are µs.
+and the master samples; execution and wake values are µs, and the master column
+is Tx errors / lost frames before → after.
 
-| Cycle time | Window | Result | Exchanges = cycles | Skipped | Strict missed | Execution p99 / p99.9 / max | Wake p99 / p99.9 / max | Master Tx / lost | Slave after |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 ms | 60 s | pass | 118311 | 0 | 118311 | 47.1 / 54.7 / 59.2 | 19.7 / 27.6 / 870.8 | 0 / 0 | PREOP |
-| 500 µs | 60 s | **fail** | 236481 | 154 | 236481 | 52.4 / 60.7 / 68.2 | 22.3 / 30.6 / 1294.3 | 0 / 0 | PREOP |
-| 1 ms | 600 s | pass | 658325 | 0 | 658325 | 47.6 / 55.1 / 59.4 | 19.6 / 27.4 / 799.6 | 0 / 0 | PREOP |
+| Cycle time | Window | Result | Exchanges = cycles | Skipped | Dropped | Strict missed | Execution p50 / p99 / p99.9 / max | Wake p50 / p99 / p99.9 / max | Master Tx / lost | Slave after |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 ms | 60 s | pass | 118302 | 0 | 0 | 118302 | 40.2 / 49.3 / 56.9 / 60.7 | 10.6 / 19.8 / 27.4 / 30.8 | 0 / 1953 → 1953 | PREOP |
+| 500 µs | 60 s | pass | 236589 | 0 | 0 | 236589 | 39.4 / 48.8 / 56.5 / 61.7 | 10.4 / 20.4 / 27.9 / 31.9 | 0 / 1953 → 1953 | PREOP |
+| 250 µs | 60 s | pass | 473195 | 0 | 0 | 473195 | 39.3 / 47.9 / 55.8 / 63.9 | 10.6 / 20.3 / 28.2 / 32.1 | 0 / 1953 → 1953 | PREOP |
+| 200 µs | 60 s | pass | 591527 | 0 | 0 | 591527 | 39.4 / 47.1 / 55.3 / 61.4 | 10.4 / 21.3 / 28.0 / 32.0 | 0 / 1953 → 1953 | PREOP |
+| 150 µs | 60 s | pass | 788678 | 0 | 0 | 788678 | 38.9 / 47.8 / 55.8 / 68.3 | 10.4 / 18.3 / 28.3 / 96.8 | 0 / 1953 → 1953 | PREOP |
+| 100 µs | 60 s | **fail** | 1182738 | 283 | 0 | 1182738 | 38.8 / 48.8 / 55.1 / 60.6 | 10.3 / 20.6 / 45.8 / 133.3 | 0 / 1953 → 1953 | PREOP at post-sweep check |
+| 150 µs | 600 s | pass | 4388666 | 0 | 0 | 4388666 | 39.1 / 49.0 / 55.4 / 68.4 | 10.4 / 18.1 / 28.2 / 75.1 | 0 / 1953 → 1953 | PREOP |
 
-The 1 ms 60 s row is the second screening run (the first is noted below); the
-600 s row is the confirmation at the fastest passing step. The 500 µs row
-failed on skipped periods; its timing distribution is computed from the JSONL
-because the runner checks skipped periods before it computes distributions. In
-all three rows the runtime reported `state=running`, `faults=0`, WC state 2,
-current inputs, link up, one responding slave, no master error, and no
+In every passing row the runtime reported `state=running`, `faults=0`, WC
+state 2, current inputs, link up, one responding slave, no master error, and no
 recovery; every completed cycle exchanged a frame; and the configured slave was
-PREOP after release. The 500 µs step's runner-level failure was the first
-version's immediate PREOP sample, which caught the asynchronous OP-to-PREOP
-transition; the next check showed PREOP. The step is recorded as a failure on
-the independent skipped-period criterion, which the JSONL summary confirms; it
-was not rerun after the PREOP-only fix because it had already failed on
-skipped periods.
+PREOP after release. The 100 µs row passed all of those checks except skipped
+periods: it also reported 1182738 exchanges for 1182738 cycles, WC state 2, no
+faults, current inputs, and unchanged master Tx/lost counters. The runner
+checks skipped periods before it samples the slave after release, so that row
+has no `slaves-after.txt`; the host check immediately after the sweep showed
+the slave PREOP, as it did for every other row.
+
+**Metrics-writer fix.** The earlier sweep failed at 500 µs with 154 skipped
+periods in 77 events of two, spaced about every 3050 cycles, with wake lateness
+1.0–1.3 ms. The spacing and stall matched the 1 MiB `BufWriter` flush on the
+cycle thread. Commit `77cab14` moved the `stc-rt-metrics/1` writer to a
+dedicated `stc-rt-metrics` thread (`SCHED_OTHER`, nice 10, affinity off the
+cycle CPU) fed by an 8192-record bounded channel with non-blocking `try_send`
+and drop accounting; shutdown drains and joins the writer, and the summary adds
+`dropped_records`. With that runtime the 500 µs step passes, the sweep runs to
+150 µs, and every final run reports `dropped_records:0`. The earlier 1 ms and
+500 µs figures are superseded by this table.
+
+**100 µs failure analysis.** The step recorded 283 skipped periods in 283
+one-period events, from cycle 2 (the first cycle record) to cycle 1180001. The
+wake lateness at those events was 53.4–133.3 µs; the maximum exceeds the 100 µs
+period. The events are irregular: consecutive cycle gaps are 999–31000 cycles
+(mean 4184, about 0.1–3.1 s), so they are not a fixed-size buffer flush. The
+execution distribution stayed below the runner's half-period gate (p99 48.8 µs,
+p99.9 55.1 µs, max 60.6 µs), and the frame path stayed healthy: all 1182738
+exchanges completed with WC state 2, no faults, current inputs, unchanged
+master Tx/lost counters, and no recovery. The failure is therefore wake-side
+host scheduling jitter at a 100 µs period, not the metrics writer
+(`dropped_records:0`) and not the EtherCAT frame path.
 
 **Strict deadline counter.** The `Strict missed` column equals the cycle count
 in every row. That is the documented behavior of `missed_deadline`, which is
 true for any positive wake lateness, not only for a hard overrun
 ([KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §7; RT-Host.md §3.4). It is
-recorded and reported but is not a phase-5 pass gate. The first 1 ms screening
-run used strict zero as a gate and failed that gate alone (118315 cycles, zero
-skipped); after confirming the documented counter semantics, the gate was
-changed to skipped periods plus execution p99 at most half the period, and the
-step was rerun with the corrected runner under the same conditions.
+recorded and reported but is not a phase-5 pass gate.
 
-**500 µs failure analysis.** The 154 skipped periods are 77 events of two
-skipped periods each. At those events the wake lateness was 1.044–1.274 ms and
-the events were 3048–3066 cycles apart (1.52–1.53 s at 500 µs). The spacing
-matches the RT metrics writer's 1 MiB `BufWriter`
-(`crates/stc-runtime/src/rt.rs`), which flushes when the buffer fills (roughly
-every 3050 records) and stalls the RT thread for about 1–1.3 ms on this host.
-At 1 ms the largest wake lateness was 871 µs (screening) and 800 µs
-(confirmation), below the period, so the same periodic stall did not skip a
-period. The failure is attributed to the metrics instrumentation path, not the
-EtherCAT frame path: all 236481 exchanges completed with WC state 2, no faults,
-current inputs, unchanged master Tx/lost counters, and no recovery, and
-execution p99 was 52.4 µs (10.5% of the period). Phase 5 did not change the
-measurement method; separating the metrics flush from the RT thread is
-follow-up work.
+**Result and stopping point.** The fastest maintainable cycle time is 150 µs:
+it passed at 60 s and 600 s, and 100 µs is the first failing step. Per the
+stop-at-first-failure rule, 75 µs, 50 µs, and 25 µs were not run. The runner
+allowlist already includes all of them; because the sweep stopped at 100 µs,
+the 25 µs extension check was not reached and the allowlist does not need to be
+extended in this phase.
 
-**Result and stopping point.** The fastest maintainable cycle time is 1 ms: it
-passed at 60 s and 600 s, and 500 µs is the first failing step. Per the
-stop-at-first-failure rule, 250 µs, 200 µs, 150 µs, 100 µs, 75 µs, 50 µs, and
-25 µs were not run. The runner allowlist already includes all of them; because
-the sweep stopped at 500 µs, the 25 µs extension check was not reached and the
-allowlist does not need to be extended in this phase.
+**Runner corrections in this rerun.** Besides the dropped-records gate and the
+IgH one-frame travelling allowance described in §10.5, the distributions are now
+extracted from the JSONL with `grep -F ... | cut -d, -f8/f9 | cut -d: -f2`
+instead of a regex over every line: the regex took about 35 s per distribution
+at 60 s scale, while the field split takes under a second and yields the same
+values. The `read_counter()` helper is defined once near `percentile()`.
 
 ### 10.8 Phase 5 evidence hashes
 
 All files are under `/home/r2k/stc-wl52/logs/` on `ecat-host`; timestamps in
-the names are UTC. The console captures hold the runner's stdout; the failing
-steps' messages from `fail()` went to stderr and are not part of those files,
-so the 500 µs step is evidenced by its JSONL summary and the service step by
-its slave sample and the following status check.
+the names are UTC. The `console5-*.log` files are the runner's stdout captured
+on the build workstation and copied to the host. The failing 100 µs step's
+`fail()` message went to stderr and is included in its console capture. Every
+`slaves-before.txt` and every passing run's `slaves-after.txt` is the same
+PREOP sample, SHA-256
+`4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0`; the
+100 µs run stopped at the skipped-period check before sampling the slave after
+release, so it has only `slaves-before.txt`.
 
 | Run | File | SHA-256 |
 | --- | --- | --- |
-| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.jsonl` | `a134d664d87c0073318c449947588bb7343c996a7252ac63e0a5e381f4748043` |
-| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.log` | `a1caf1b1e5df5b1a2a8fcbcebaca1c979acd42bea134f7de4e9d75f934116753` |
-| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.master-before.txt` | `e1cba4e21912183a61820c9f40b7748727fbbc71e0419e0d280dbeafcdabdf65` |
-| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.master-after.txt` | `b41440a6732f206c2fec1137de1f833b55417a8852d4b2473b925629d5e1fd6a` |
-| 1 ms 60 s, first runner | `ct-1ms-60s-sweep-1ms-20261031T195416Z.slaves-after.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
-| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.jsonl` | `1664d44a55bd5d0b0c1aeb18c12378b59d2c42918079f602190a185b4e0b0554` |
-| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.log` | `9ad7b45a6315521be5857d9cbd22245578c85c72967465cba81a35c2143c5940` |
-| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.master-before.txt` | `2cce9d6651dbd94a971a346c93a0e7c6796e6039946c03e0dbd3a1a174047534` |
-| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.master-after.txt` | `b59288c37159c14009f110bd6e690cdaa178c251fa2e13c56fd9a265793b18de` |
-| 1 ms 60 s, corrected runner | `ct-1ms-60s-sweep-1ms-v2-20261031T195816Z.slaves-after.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
-| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.jsonl` | `ecba706d360390485e00e48bdee51a7fa3e7a09579ae19a07319b1bde3f3baf0` |
-| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.log` | `30ecae2a5a7abedc273224f5929f951093866da798f21d5595c657860780e554` |
-| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.master-before.txt` | `f716c86a30d37927b1bc526a8c3d145b300c1688f37367d79907b808fec5efe0` |
-| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.master-after.txt` | `d9fd0e8e39c212abe899f80ad943787ce776658a61f582517a1e7242797b8a3b` |
-| 500 µs 60 s | `ct-500us-60s-sweep-500us-20261031T200105Z.slaves-after.txt` | `7969853bfea69fb79a96f91266f2148efdeaea0e5bb1173231b650fdf7d812b8` |
-| 500 µs 60 s | `console-sweep-500us.log` | `2be9e91d5a917c6a16876e51eb017e58be3aa061ac4cb023de35d1101767db18` |
-| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.jsonl` | `a0b9e5b3fe38491b2ff764ff98c3c585b73c8dc861bfa530a63d02049c04ec99` |
-| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.log` | `9790459dbd26d9ba43f4bc491c7622c010231f8f0c20580707b3c41ce8938e3a` |
-| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.master-before.txt` | `bee155d7e4b0e7de1c8782ae2d8c73ceeaa14cd1dcd7f02dc07e1f3a8331ecb2` |
-| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.master-after.txt` | `c150bc6d18aa7750299496d707e79fa2374b73feea8c041def3932d2162870d0` |
-| 1 ms 600 s confirmation | `ct-1ms-600s-confirm-1ms-600s-20261031T200431Z.slaves-after.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
-| 1 ms 600 s confirmation | `console-confirm-1ms-600s.log` | `587fe4ffaf099ad77ab959b9303eaf0bbcb67be8c6292df2f589f8124feec7a2` |
+| 1 ms 60 s | `ct-1ms-60s-sweep5-1ms-20261101T001711Z.jsonl` | `6c3fa881735d047c444bad2357f8a83d1df31302ce8b5abbf2c735ccd0680025` |
+| 1 ms 60 s | `ct-1ms-60s-sweep5-1ms-20261101T001711Z.log` | `256c9e986d0d35808d3eea79364695e64b50ee15d41fb1db5774c3461260cea4` |
+| 1 ms 60 s | `ct-1ms-60s-sweep5-1ms-20261101T001711Z.master-before.txt` | `ee73649b8e51a3210ffbeaafb2c796d0993dd7c828383041da983c6a25858647` |
+| 1 ms 60 s | `ct-1ms-60s-sweep5-1ms-20261101T001711Z.master-after.txt` | `6b02c64f95aaa3d5b1f490cd9540cece7bb870a3ff4199762e7aceb28400794b` |
+| 1 ms 60 s | `console5-1ms-60s.log` | `16dc6080c7a837d357c5031b88c2f4240d7222c07d1c544fa1a31809feeaf781` |
+| 500 µs 60 s | `ct-500us-60s-sweep5-500us-20261101T001918Z.jsonl` | `596fef395260258c4ae6b7af8cfd24f2568afa40a170f57fe758e81038298e64` |
+| 500 µs 60 s | `ct-500us-60s-sweep5-500us-20261101T001918Z.log` | `464c3bf9cdfb657fbc52e1797f527c8a55c1c37c857892bd1c60b11bbc8c98fa` |
+| 500 µs 60 s | `ct-500us-60s-sweep5-500us-20261101T001918Z.master-before.txt` | `d3f12877a2dd5e29c36d3f5bb4efc1daaa16f77c7d8e29cc69df37a6018bf05d` |
+| 500 µs 60 s | `ct-500us-60s-sweep5-500us-20261101T001918Z.master-after.txt` | `d67fcfb4266c8b2240da5e06c485a316e91d8e08d0e557235628ae03499b6c2a` |
+| 500 µs 60 s | `console5-500us-60s.log` | `3d3275208d1fe3b13c1670fde2745a1c83d0e899b95934c74f0ccb4ed9a98a18` |
+| 250 µs 60 s | `ct-250us-60s-sweep5-250us-20261101T002125Z.jsonl` | `c17257228515cf86c388e1c577b7bd2a20383969b6e4b6b08659b5db779c5d86` |
+| 250 µs 60 s | `ct-250us-60s-sweep5-250us-20261101T002125Z.log` | `2f7fe47215b6721d32feac2ff508e16c29828b0c7532107b77498b8da07252db` |
+| 250 µs 60 s | `ct-250us-60s-sweep5-250us-20261101T002125Z.master-before.txt` | `6cf2cd4afed6fd4b4b6bba27d4d72bda22a3fb1eb000f1247a9064e81ba33951` |
+| 250 µs 60 s | `ct-250us-60s-sweep5-250us-20261101T002125Z.master-after.txt` | `47f13df6fcb7b2e9cf61930227abf526c328b131846edaa170a6f801459c7695` |
+| 250 µs 60 s | `console5-250us-60s.log` | `e0386de3e8254921b4ea78e99ef8fdeada2955c8068ac6e2836b5260703233ba` |
+| 200 µs 60 s | `ct-200us-60s-sweep5-200us-20261101T002334Z.jsonl` | `c7b9cf57394bdf190212216d829516c720429e3578444ee6635db4f39fef8055` |
+| 200 µs 60 s | `ct-200us-60s-sweep5-200us-20261101T002334Z.log` | `6847fcc8d1a0e93ed332b77abdfb134af3753e5f43a05a45da3660fbd14fda25` |
+| 200 µs 60 s | `ct-200us-60s-sweep5-200us-20261101T002334Z.master-before.txt` | `3aec2e113293534843fb5ae68ff2d993b721db96f68fd7ec0e8a17866e3ac040` |
+| 200 µs 60 s | `ct-200us-60s-sweep5-200us-20261101T002334Z.master-after.txt` | `37291e42210b19dd40d34522cddba9323d0cce336d9d19c60ef79b930dcd5041` |
+| 200 µs 60 s | `console5-200us-60s.log` | `a9990242872ef9a6b1fc1f76d380fb31f8baf3e0273d1f6d90531fc3ff1dad13` |
+| 150 µs 60 s | `ct-150us-60s-sweep5-150us-20261101T002545Z.jsonl` | `4efd88df8dd18d06f2ff30a427ac39e0aa841471d7fb3dc9b77e6f005bf50506` |
+| 150 µs 60 s | `ct-150us-60s-sweep5-150us-20261101T002545Z.log` | `2f51f8bdb2a350194621c308ef4c6b980e4b5a73f27f69877f6479ac94314e51` |
+| 150 µs 60 s | `ct-150us-60s-sweep5-150us-20261101T002545Z.master-before.txt` | `b29997efce4bd32f5a0d5aa51f44ed2b5c4b66a63b88c9a4d1a960f78f274267` |
+| 150 µs 60 s | `ct-150us-60s-sweep5-150us-20261101T002545Z.master-after.txt` | `4f82add572b1f8542b16e220f8c1518ea77bc679ed769374b57ac2002c6ca34c` |
+| 150 µs 60 s | `console5-150us-60s.log` | `f92643aa7d8e83e38cc026b9817f77a6b4028a016dc716995735fd5cb9cb2de1` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.jsonl` | `7c35bba3d0df92aad9a330d52075cfa5c8675354fbdbe9983031522661c3bf1b` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.log` | `5c2d06ef23914b0c33ed8a37a4883989011599f5d2800f2a989bd9d19ff2ff2e` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.master-before.txt` | `8076ae69a2d96fadf40ab232fc0904dba70bac36f0c9bffeace685feacf49e86` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.master-after.txt` | `3c8a9bbd570b9c2781738de820a80f837d8a4c66eb7def8e02775fafb987d093` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.slaves-before.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
+| 100 µs 60 s | `console5-100us-60s.log` | `2c080d966c7ed4a8b857e54b3b376c07f66c6bc4f1802f358127ca79c109cc7b` |
+| 150 µs 600 s | `ct-150us-600s-sweep5-confirm-150us-20261101T003012Z.jsonl` | `f64da4b0477a87386eb78ad0f31851669a18628a1f7c871e4886259ad82f5ed2` |
+| 150 µs 600 s | `ct-150us-600s-sweep5-confirm-150us-20261101T003012Z.log` | `a1dede5f7a98a348af724b8f4ba913a0cc79e8bf5d763d4197a6bdca3a929779` |
+| 150 µs 600 s | `ct-150us-600s-sweep5-confirm-150us-20261101T003012Z.master-before.txt` | `dd6f18c2d6b65e0b5bee81d03e31133a68a9d69cf5e8f2e218c44590af7a2ee6` |
+| 150 µs 600 s | `ct-150us-600s-sweep5-confirm-150us-20261101T003012Z.master-after.txt` | `6bdbc8dccd73cfc25bd65b7e1c4f28bcadd8878264771d749cacad9ab750b91f` |
+| 150 µs 600 s | `console5-150us-600s.log` | `4faee542bc6ccd12dd472e74d2ee81b9eabc537b1a9063762d776ffc704afce4` |
 | Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.jsonl` | `cbf65b948baab5454d459cf44777fc447957921b07be4b116e2aacef6b684975` |
 | Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.log` | `a1819cd35f85735f71b6c304315cf30d532a0e85a713ab6147485cfa951050eb` |
 | Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.master-before.txt` | `8606cc4b26f21c5ab2f87ab48047fdab1cd1379356fd475d885c0ca4c678334f` |
@@ -880,15 +916,16 @@ its slave sample and the following status check.
 | Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.slaves-after.txt` | `7969853bfea69fb79a96f91266f2148efdeaea0e5bb1173231b650fdf7d812b8` |
 | Service stop/start | `svc-stop-run.out` | `6cd190556003c62af10e5edb51cd345dea698281f9d7a386355f424834a538a6` |
 
-The two `7969853b…` slave samples are the immediate OP sample taken by the
-first runner version; the later status check showed PREOP on both occasions
-(§10.6). The corrected runner and the confirmation record `4f94d506…`, the
-PREOP line. The runner `tests/ethercat/diewu/run-ct.sh`, deployed at
-`/home/r2k/stc-wl52/diewu/run-ct.sh`, is the committed version, SHA-256
-`16dbb2a20dfb8241c8f97115a9d1091785d020ad9e671fa0a6c6bbe22d281cb2`; it
-produced the 600 s confirmation. The earlier steps used the pre-fix versions:
-the first 1 ms screening gated on the strict counter alone, and the service
-test and 500 µs step sampled PREOP once immediately.
+The service rows are from §10.6 and remain the phase-5 service evidence; their
+`slaves-after.txt` is the immediate OP sample (`7969853b…`) and the following
+status check showed PREOP. The deployed release package is from CI run
+41240860169 (commit `77cab14`): `stc` at `/home/r2k/stc-wl52/bin/stc`, SHA-256
+`391d2ea09ddb216efd7f0251324f91f50e363a09d927d023090a51a43cf5d65e`; the shim
+at `/home/r2k/stc-wl52/lib/libstc_io_ethercat.so`, SHA-256
+`bceeb6014076f41958b0ae4442f744fc3035af3544bcd5a046e278089e5df448`; and the
+deployed runner `/home/r2k/stc-wl52/diewu/run-ct.sh`, SHA-256
+`5947c8df033d1fb1080d77fb28a52146c8167d30bc8ecace96e8ba91d6ed59a0`, which
+produced the final sweep and confirmation.
 
 ## 11. Cleanup
 

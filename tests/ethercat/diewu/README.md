@@ -189,10 +189,11 @@ only `CAP_SYS_NICE` ambient by the privileged `stc-wl52-run` wrapper; it is
 never run as root and is not meant to be invoked directly. It exits 0 only
 for a frame-level pass: healthy status, `exchanges` equal to the completed
 cycle count, at least the requested window's worth of cycles, zero skipped
-periods, an execution p99 at most half the cycle time, unchanged master
-Tx-error and lost-frame counters, and PREOP after release. The strict
-missed-deadline counter is reported but not gated because it counts any
-positive wake lateness and is not a hard-miss count (see
+periods, zero dropped metrics records, an execution p99 at most half the cycle
+time, an unchanged master Tx-error counter, a lost-frame counter that does not
+increase by more than the tool's one-frame travelling allowance, and PREOP after
+release. The strict missed-deadline counter is reported but not gated because it
+counts any positive wake lateness and is not a hard-miss count (see
 [KNOWN-LIMITATIONS.md](../../../KNOWN-LIMITATIONS.md)). The install and use procedure is in the
 [EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md) §10.
 
@@ -206,15 +207,18 @@ in use, the runtime finished healthy at the timeout, and `start` restored the un
 fault, stale input, or recovery occurred because the module never went away; see the runbook
 §10.6.
 
-The sweep screened 1 ms and 500 µs at 60 s and stopped at the first failure. 1 ms passed
-(118311 cycles, zero skipped periods, execution p99 47.1 µs, master Tx/lost 0/0); 500 µs failed
-on 154 skipped periods in 77 events of 1.0-1.3 ms, spaced about every 3050 cycles and correlated
-with the 1 MiB RT-metrics flush, while the frame path stayed healthy (236481 exchanges, WC
-state 2, no faults, master Tx/lost 0/0); the 600 s confirmation at 1 ms passed (658325 cycles,
-zero skipped periods, execution p99 47.6 µs). The fastest maintainable cycle time is 1 ms;
-250 µs and below were not run, and the wrapper allowlist did not need extension. The strict
-missed-deadline counter equaled the cycle count in every run and is reported, not gated.
-Distributions and evidence hashes are in the runbook §10.7-§10.8.
+The sweep after the metrics-writer fix screened 1 ms, 500 µs, 250 µs, 200 µs, and 150 µs at
+60 s; all passed with zero skipped periods, zero dropped records, and execution p99 47.1-49.3 µs,
+and the 600 s confirmation at 150 µs passed (4388666 cycles, zero skipped periods, zero dropped
+records, execution p99 49.0 µs, master Tx/lost 0/1953->1953). The 100 µs step is the first
+failure: 283 skipped periods in 283 one-period events, wake lateness up to 133.3 µs, while
+execution p99 stayed 48.8 µs and the frame path stayed healthy (1182738 exchanges, WC state 2,
+no faults, master counters unchanged). The fastest maintainable cycle time is 150 µs; 75 µs and
+below were not run, and the wrapper allowlist did not need extension. The earlier 500 µs failure
+was the 1 MiB metrics-buffer flush on the cycle thread; commit `77cab14` moved the writer to a
+dedicated thread with a bounded non-blocking queue, and every final run reports zero dropped
+records. The strict missed-deadline counter equaled the cycle count in every run and is reported,
+not gated. Distributions and evidence hashes are in the runbook §10.7-§10.8.
 
 ## Troubleshooting
 

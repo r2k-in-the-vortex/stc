@@ -13,7 +13,13 @@
 #     time; the strict missed_deadline counter is reported but not gated
 #     because the project documents it as a non-hard counter
 #     (KNOWN-LIMITATIONS.md);
-#   * the IgH master's Tx-error and lost-frame counters did not increase.
+#   * the IgH master's Tx-error counter did not change and its lost-frame
+#     counter did not increase by more than the tool's one-frame travelling
+#     allowance. The tool prints "Lost frames" as the cumulative Tx-minus-Rx
+#     difference and its CommandMaster.cpp zeroes a difference of one because
+#     one frame may be travelling; with a larger baseline a travelling frame
+#     shifts the printed value by one, so a one-frame change is not evidence
+#     of a lost frame. The raw before/after values are recorded.
 #
 # Physical input values and measured outputs are not checked; phases 3-5 are
 # open-ended (unwired/unloaded) and the all-points matrix is phase 6.
@@ -89,6 +95,11 @@ percentile() {
     (( rank > 0 )) || rank=1
     (( rank <= count )) || rank=$count
     sed -n "${rank}p" "$file"
+}
+
+# Reads an integer counter from an `ethercat master` sample: <file> <first> <second>.
+read_counter() {
+    awk -v first="$2" -v second="$3" '$1 == first && $2 == second { print $3; exit }' "$1"
 }
 
 if [[ $# -ne 3 ]]; then
@@ -253,8 +264,13 @@ exec_values=$(mktemp "${TMPDIR:-/tmp}/run-ct-exec.XXXXXX") \
     || fail "cannot create a temporary file for the execution distribution"
 wake_values=$(mktemp "${TMPDIR:-/tmp}/run-ct-wake.XXXXXX") \
     || fail "cannot create a temporary file for the wake-lateness distribution"
-sed -n 's/.*"execution_ns":\([0-9][0-9]*\).*/\1/p' "$metrics" >"$exec_values"
-sed -n 's/.*"wake_lateness_ns":\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$metrics" >"$wake_values"
+# The writer emits each cycle record with a fixed field order (record, cycle,
+# generation, deadline, wake, scan start/end, wake lateness, execution, ...)
+# and no commas inside a value, so a field split is far faster than a regex
+# over every line. A schema change would move the percentiles and fail the
+# execution gate below.
+grep -F '"record":"cycle"' "$metrics" | cut -d, -f8 | cut -d: -f2 >"$wake_values"
+grep -F '"record":"cycle"' "$metrics" | cut -d, -f9 | cut -d: -f2 >"$exec_values"
 [[ -s $exec_values ]] || fail "no per-cycle execution records in $metrics"
 [[ -s $wake_values ]] || fail "no per-cycle wake-lateness records in $metrics"
 sort -n -o "$exec_values" "$exec_values"
@@ -272,10 +288,6 @@ wake_max=$(tail -n 1 "$wake_values")
 [[ $exec_p99 -le $(( period_ns / 2 )) ]] \
     || fail "execution p99 ${exec_p99}ns is not at most half of the ${cycle_time} cycle (${period_ns}ns); p50=${exec_p50}ns p99.9=${exec_p999}ns max=${exec_max}ns"
 
-read_counter() {
-    awk -v first="$2" -v second="$3" '$1 == first && $2 == second { print $3; exit }' "$1"
-}
-
 tx_errors_before=$(read_counter "$master_before" Tx errors:)
 lost_frames_before=$(read_counter "$master_before" Lost frames:)
 tx_errors_after=$(read_counter "$master_after" Tx errors:)
@@ -287,8 +299,8 @@ done
 
 [[ $tx_errors_after == "$tx_errors_before" ]] \
     || fail "master Tx errors changed: $tx_errors_before -> $tx_errors_after"
-[[ $lost_frames_after == "$lost_frames_before" ]] \
-    || fail "master lost frames changed: $lost_frames_before -> $lost_frames_after"
+[[ $lost_frames_after -le $(( lost_frames_before + 1 )) ]] \
+    || fail "master lost frames increased beyond the one-frame travelling allowance: $lost_frames_before -> $lost_frames_after"
 
 # The slave transitions to PREOP asynchronously after the master is released;
 # poll briefly instead of depending on a single sample's timing.
@@ -304,8 +316,9 @@ done
 [[ $slave_ok == 1 ]] \
     || fail "the configured slave is not PREOP after the run: $(cat "$LOGS/$stem.slaves-after.txt" 2>/dev/null)"
 
-printf 'run-ct: PASS cycle=%s duration=%s label=%s exchanges=%s cycles=%s skipped=0 dropped=0 strict_missed=%s\n' \
-    "$cycle_time" "$duration" "$label" "$exchanges" "$completed" "$strict_missed"
+printf 'run-ct: PASS cycle=%s duration=%s label=%s exchanges=%s cycles=%s skipped=0 dropped=0 strict_missed=%s master_lost=%s->%s master_txerr=%s\n' \
+    "$cycle_time" "$duration" "$label" "$exchanges" "$completed" "$strict_missed" \
+    "$lost_frames_before" "$lost_frames_after" "$tx_errors_after"
 printf 'run-ct: timing exec_ns p50=%s p99=%s p99.9=%s max=%s; wake_ns p50=%s p99=%s p99.9=%s max=%s\n' \
     "$exec_p50" "$exec_p99" "$exec_p999" "$exec_max" \
     "$wake_p50" "$wake_p99" "$wake_p999" "$wake_max"
