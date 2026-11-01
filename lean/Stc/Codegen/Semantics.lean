@@ -9024,4 +9024,384 @@ theorem wfState_extractValueStep {contract : IRContract} {c : IRState} {f : IRFr
     (by intro ty0 ptr align h; cases h)
     (by intro dest2 ty0 base indices inbounds h; cases h)
 
+/-! ## Intrinsic-name reservation and the checked/rotate call-result forms (P0.5) -/
+
+/-- An overflow-intrinsic signature's return type is its parsed overflow type. -/
+theorem parseChecked_returnType_overflow {sig : Signature}
+    (hsig : sig ∈ overflowIntrinsics) {info : CheckedInfo}
+    (hparse : parseChecked sig.name = some info) :
+    sig.returnType = .overflow info.bits := by
+  simp only [overflowIntrinsics, List.mem_flatMap, List.mem_map, List.mem_cons,
+    List.not_mem_nil] at hsig
+  rcases hsig with ⟨width, hw, op, hop, hsigEq⟩
+  subst sig
+  rcases hw with rfl | rfl | rfl | rfl | hwFalse <;> try cases hwFalse
+  all_goals
+    rcases hop with rfl | rfl | rfl | rfl | rfl | rfl | hopFalse <;> try cases hopFalse
+    all_goals
+      injection hparse with hi
+      rw [← hi]
+
+/-- A rotate-intrinsic signature does not parse as a checked intrinsic. -/
+theorem parseChecked_rotate_none {sig : Signature}
+    (hsig : sig ∈ rotateIntrinsics) : parseChecked sig.name = none := by
+  simp only [rotateIntrinsics, List.mem_flatMap, List.mem_map, List.mem_cons,
+    List.not_mem_nil] at hsig
+  rcases hsig with ⟨width, hw, op, hop, hsigEq⟩
+  subst sig
+  rcases hw with rfl | rfl | rfl | rfl | rfl | hwFalse <;> try cases hwFalse
+  all_goals
+    rcases hop with rfl | rfl | hopFalse <;> try cases hopFalse
+    all_goals rfl
+
+/-- A rotate-intrinsic signature's return type is its parsed integer type. -/
+theorem parseRotate_returnType_rotate {sig : Signature}
+    (hsig : sig ∈ rotateIntrinsics) {info : RotateInfo}
+    (hparse : parseRotate sig.name = some info) :
+    sig.returnType = .int info.bits := by
+  simp only [rotateIntrinsics, List.mem_flatMap, List.mem_map, List.mem_cons,
+    List.not_mem_nil] at hsig
+  rcases hsig with ⟨width, hw, op, hop, hsigEq⟩
+  subst sig
+  rcases hw with rfl | rfl | rfl | rfl | rfl | hwFalse <;> try cases hwFalse
+  all_goals
+    rcases hop with rfl | rfl | hopFalse <;> try cases hopFalse
+    all_goals
+      injection hparse with hi
+      rw [← hi]
+
+/-- An overflow-intrinsic signature does not parse as a rotate intrinsic. -/
+theorem parseRotate_overflow_none {sig : Signature}
+    (hsig : sig ∈ overflowIntrinsics) : parseRotate sig.name = none := by
+  simp only [overflowIntrinsics, List.mem_flatMap, List.mem_map, List.mem_cons,
+    List.not_mem_nil] at hsig
+  rcases hsig with ⟨width, hw, op, hop, hsigEq⟩
+  subst sig
+  rcases hw with rfl | rfl | rfl | rfl | hwFalse <;> try cases hwFalse
+  all_goals
+    rcases hop with rfl | rfl | rfl | rfl | rfl | rfl | hopFalse <;> try cases hopFalse
+    all_goals rfl
+
+/-- Every intrinsic signature's checked return type is the parsed overflow type. -/
+theorem parseChecked_returnType {sig : Signature}
+    (hsig : sig ∈ intrinsicSignatures) {info : CheckedInfo}
+    (hparse : parseChecked sig.name = some info) :
+    sig.returnType = .overflow info.bits := by
+  unfold intrinsicSignatures at hsig
+  rcases List.mem_append.mp hsig with hsig | hsig
+  · exact parseChecked_returnType_overflow hsig hparse
+  · have hnone := parseChecked_rotate_none hsig
+    rw [hnone] at hparse
+    cases hparse
+
+/-- Every intrinsic signature's rotate return type is the parsed integer type. -/
+theorem parseRotate_returnType {sig : Signature}
+    (hsig : sig ∈ intrinsicSignatures) {info : RotateInfo}
+    (hparse : parseRotate sig.name = some info) :
+    sig.returnType = .int info.bits := by
+  unfold intrinsicSignatures at hsig
+  rcases List.mem_append.mp hsig with hsig | hsig
+  · have hnone := parseRotate_overflow_none hsig
+    rw [hnone] at hparse
+    cases hparse
+  · exact parseRotate_returnType_rotate hsig hparse
+
+/-- A checked-intrinsic parse lands in the reserved intrinsic names. -/
+theorem parseChecked_mem_intrinsicNames {callee : String} {info : CheckedInfo}
+    (h : parseChecked callee = some info) :
+    callee ∈ intrinsicSignatures.map (·.name) := by
+  unfold parseChecked at h
+  rw [Option.map_eq_some_iff] at h
+  obtain ⟨⟨n, c⟩, hfind, hentry⟩ := h
+  have hbeq := List.find?_some hfind
+  have hn : n = callee := beq_iff_eq.mp hbeq
+  have hmem : (n, c) ∈ _ := List.mem_of_find?_eq_some hfind
+  have hfst : n ∈ _ := mem_left_of_zip hmem
+  rw [← hn]
+  unfold intrinsicSignatures
+  rw [List.map_append]
+  have hmem' : n ∈ overflowIntrinsics.map (·.name) := hfst
+  exact List.mem_append_left _ hmem'
+
+/-- A rotate-intrinsic parse lands in the reserved intrinsic names. -/
+theorem parseRotate_mem_intrinsicNames {callee : String} {info : RotateInfo}
+    (h : parseRotate callee = some info) :
+    callee ∈ intrinsicSignatures.map (·.name) := by
+  unfold parseRotate at h
+  rw [Option.map_eq_some_iff] at h
+  obtain ⟨⟨n, c⟩, hfind, hentry⟩ := h
+  have hbeq := List.find?_some hfind
+  have hn : n = callee := beq_iff_eq.mp hbeq
+  have hmem : (n, c) ∈ _ := List.mem_of_find?_eq_some hfind
+  have hfst : n ∈ _ := mem_left_of_zip hmem
+  rw [← hn]
+  unfold intrinsicSignatures
+  rw [List.map_append]
+  have hmem' : n ∈ rotateIntrinsics.map (·.name) := hfst
+  exact List.mem_append_right _ hmem'
+
+/-- A direct-call signature whose name parses as a checked intrinsic returns the
+intrinsic's overflow type. The module-function case is excluded by reserved
+intrinsic names; the declaration case and the intrinsic case use the intrinsic
+signature tables. -/
+theorem call_signature_returnType_checked {contract : IRContract} {frag : IRFrag}
+    (hprog : WFProgram contract frag) {sig : Signature}
+    (hsig : sig ∈ frag.directCallEnv) {callee : String} {info : CheckedInfo}
+    (hname : sig.name = callee) (hparse : parseChecked callee = some info) :
+    sig.returnType = .overflow info.bits := by
+  unfold IRFrag.directCallEnv at hsig
+  rcases List.mem_append.mp hsig with hsig | hsig
+  · rcases List.mem_append.mp hsig with hsig | hsig
+    · rcases List.mem_map.mp hsig with ⟨fn, hfn, hsigEq⟩
+      have hfnName : fn.name = callee := by
+        have hName := hname
+        rw [← hsigEq] at hName
+        simpa [Function.signature] using hName
+      have hmem := parseChecked_mem_intrinsicNames hparse
+      rw [← hfnName] at hmem
+      exact absurd hmem (hprog.intrinsicNamesReserved fn hfn)
+    · rcases List.mem_map.mp hsig with ⟨decl, hdecl, hsigEq⟩
+      have hdeclIntr : decl.signature ∈ intrinsicSignatures :=
+        (hprog.wellFormed.moduleShapes.declarationsWellFormed decl hdecl).2.2
+      rw [hsigEq] at hdeclIntr
+      have hparse' : parseChecked sig.name = some info := by
+        rw [hname]
+        exact hparse
+      exact parseChecked_returnType hdeclIntr hparse'
+  · have hparse' : parseChecked sig.name = some info := by
+      rw [hname]
+      exact hparse
+    exact parseChecked_returnType hsig hparse'
+
+/-- A direct-call signature whose name parses as a rotate intrinsic returns the
+intrinsic's integer type. -/
+theorem call_signature_returnType_rotate {contract : IRContract} {frag : IRFrag}
+    (hprog : WFProgram contract frag) {sig : Signature}
+    (hsig : sig ∈ frag.directCallEnv) {callee : String} {info : RotateInfo}
+    (hname : sig.name = callee) (hparse : parseRotate callee = some info) :
+    sig.returnType = .int info.bits := by
+  unfold IRFrag.directCallEnv at hsig
+  rcases List.mem_append.mp hsig with hsig | hsig
+  · rcases List.mem_append.mp hsig with hsig | hsig
+    · rcases List.mem_map.mp hsig with ⟨fn, hfn, hsigEq⟩
+      have hfnName : fn.name = callee := by
+        have hName := hname
+        rw [← hsigEq] at hName
+        simpa [Function.signature] using hName
+      have hmem := parseRotate_mem_intrinsicNames hparse
+      rw [← hfnName] at hmem
+      exact absurd hmem (hprog.intrinsicNamesReserved fn hfn)
+    · rcases List.mem_map.mp hsig with ⟨decl, hdecl, hsigEq⟩
+      have hdeclIntr : decl.signature ∈ intrinsicSignatures :=
+        (hprog.wellFormed.moduleShapes.declarationsWellFormed decl hdecl).2.2
+      rw [hsigEq] at hdeclIntr
+      have hparse' : parseRotate sig.name = some info := by
+        rw [hname]
+        exact hparse
+      exact parseRotate_returnType hdeclIntr hparse'
+  · have hparse' : parseRotate sig.name = some info := by
+      rw [hname]
+      exact hparse
+    exact parseRotate_returnType hsig hparse'
+
+/-- The checked-arithmetic intrinsic call-result form: the parse-first dispatch
+writes the checked pair, and the declared return type is the parsed overflow
+type by `call_signature_returnType_checked`. -/
+theorem wfState_checkedCallStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Ssa} {ret : IrType} {callee : String} {args : List Operand}
+    {info : CheckedInfo} {a b : Int}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .call (some dest) ret callee args :: restInstrs)
+    (hparse : parseChecked callee = some info) :
+    WFState contract
+      (c.withHead
+        { (f.setLocal dest
+            (.pair (.overflow info.bits) (checkedInt info a b).1 (checkedInt info a b).2))
+          with instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.call (some dest) ret callee args ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block.instrs[done.length]? = some (.call (some dest) ret callee args) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.call (some dest) ret callee args) restInstrs
+  have hblock? : f.fn.block? block.label = some block :=
+    block?_eq_some hnd hblock (by rw [← hblockEq])
+  have hwell := (hwf.program.wellFormed.typesCorrect f.fn hfunMem).instructions
+    block hblock (.call (some dest) ret callee args) hinstrMem
+  obtain ⟨_, hresultOK, sig, hsigMem, hsigName, hsigRet, _⟩ := hwell
+  have hretNe : ret ≠ .void := by
+    simpa [CallResultOK] using hresultOK
+  have hretEq : ret = .overflow info.bits := by
+    rw [← hsigRet]
+    exact call_signature_returnType_checked hwf.program hsigMem hsigName hparse
+  have hlocTy : f.fn.localType? dest = some ret :=
+    localType?_eq_resultType hud hblock? hidx rfl (by simp [Instr.resultType?, hretNe])
+  have hvalueType : ∀ ty, f.fn.localType? dest = some ty →
+      IRValue.type? (.pair (.overflow info.bits)
+        (checkedInt info a b).1 (checkedInt info a b).2) = some ty := by
+    intro ty hty
+    have hEq : ty = ret := Option.some.inj (hty.symm.trans hlocTy)
+    subst hEq
+    simp [IRValue.type?, hretEq]
+  have hnone : f.fn.facts.originOf? dest = none := by
+    have hnoneAll := call_dest_origin_none (dest := some dest) hwf.program hfunMem
+      hblock hinstrMem (instr := .call (some dest) ret callee args) rfl
+    exact hnoneAll dest rfl
+  refine wfState_setLocalStep hwf hframes hinstrs ?_ hvalueType ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
+  · intro _ hcp
+    rcases hcp with ⟨d, r, cl, a, h⟩
+    cases h
+  · intro origin horig
+    rw [hnone] at horig
+    cases horig
+  · intro frame slot off hval
+    cases hval
+  · intro slot off hval
+    cases hval
+  · intro g off hval
+    cases hval
+  · intro base hbase hbd
+    obtain ⟨ty0, align0, g, hdef⟩ :=
+      hwf.program.slotBasesLoadOnly f.fn hfunMem base hbase
+    rw [hbd] at hdef
+    have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hdef
+    cases hEq
+  · intro gepName slot hgep hgd
+    rcases slotEntry_gep hgep with
+      ⟨entry, hentry, d2, t2, a2, hloadDef, dest2, ty2, base, indices, inbounds, hgepDef⟩
+    rw [hgd] at hgepDef
+    have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hgepDef
+    cases hEq
+  · intro gname off hval
+    cases hval
+  · intro p hp hnm hpd
+    have hmemP : p.2 ∈ f.fn.params.map (·.2) :=
+      List.mem_map.mpr ⟨p, List.mem_of_getLast? hp, rfl⟩
+    exact notParam_of_mem_dests hud hblock hinstrMem rfl (hpd ▸ hmemP)
+  · intro operand w hterm heval frame slot off hw
+    by_cases hmemOp : dest ∈ operand.localNames
+    · have hop : operand = .local dest := by
+        cases operand with
+        | «local» name =>
+            simp only [Operand.localNames, List.mem_singleton] at hmemOp
+            rw [hmemOp]
+        | intLit _ _ => simp [Operand.localNames] at hmemOp
+        | nullPtr => simp [Operand.localNames] at hmemOp
+        | symbol _ => simp [Operand.localNames] at hmemOp
+      rw [hop] at heval
+      simp only [evalOperand, lookupLocal_setLocal_eq, Option.some.injEq] at heval
+      rw [← heval] at hw
+      cases hw
+    · have hevalOld : evalOperand f operand = some w := by
+        rw [evalOperand_setLocal_of_notMem (f := f) (dest := dest)
+          (value := .pair (.overflow info.bits)
+            (checkedInt info a b).1 (checkedInt info a b).2) hmemOp] at heval
+        exact heval
+      exact hwf.stackReturnsSafe f hf operand w hterm hevalOld frame slot off hw
+
+/-- The rotate intrinsic call-result form: the parse-first dispatch writes the
+rotated integer, and the declared return type is the parsed integer type by
+`call_signature_returnType_rotate`. -/
+theorem wfState_rotateCallStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Ssa} {ret : IrType} {callee : String} {args : List Operand}
+    {info : RotateInfo} {a b count : Int}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .call (some dest) ret callee args :: restInstrs)
+    (hparse : parseRotate callee = some info) :
+    WFState contract
+      (c.withHead
+        { (f.setLocal dest (evalRotate info a b count)) with instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.call (some dest) ret callee args ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block.instrs[done.length]? = some (.call (some dest) ret callee args) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.call (some dest) ret callee args) restInstrs
+  have hblock? : f.fn.block? block.label = some block :=
+    block?_eq_some hnd hblock (by rw [← hblockEq])
+  have hwell := (hwf.program.wellFormed.typesCorrect f.fn hfunMem).instructions
+    block hblock (.call (some dest) ret callee args) hinstrMem
+  obtain ⟨_, hresultOK, sig, hsigMem, hsigName, hsigRet, _⟩ := hwell
+  have hretNe : ret ≠ .void := by
+    simpa [CallResultOK] using hresultOK
+  have hretEq : ret = .int info.bits := by
+    rw [← hsigRet]
+    exact call_signature_returnType_rotate hwf.program hsigMem hsigName hparse
+  have hlocTy : f.fn.localType? dest = some ret :=
+    localType?_eq_resultType hud hblock? hidx rfl (by simp [Instr.resultType?, hretNe])
+  have hvalueType : ∀ ty, f.fn.localType? dest = some ty →
+      IRValue.type? (evalRotate info a b count) = some ty := by
+    intro ty hty
+    have hEq : ty = ret := Option.some.inj (hty.symm.trans hlocTy)
+    subst hEq
+    simp [IRValue.type?, evalRotate, hretEq]
+  have hnone : f.fn.facts.originOf? dest = none := by
+    have hnoneAll := call_dest_origin_none (dest := some dest) hwf.program hfunMem
+      hblock hinstrMem (instr := .call (some dest) ret callee args) rfl
+    exact hnoneAll dest rfl
+  refine wfState_setLocalStep hwf hframes hinstrs ?_ hvalueType ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
+  · intro _ hcp
+    rcases hcp with ⟨d, r, cl, a, h⟩
+    cases h
+  · intro origin horig
+    rw [hnone] at horig
+    cases horig
+  · intro frame slot off hval
+    cases hval
+  · intro slot off hval
+    cases hval
+  · intro g off hval
+    cases hval
+  · intro base hbase hbd
+    obtain ⟨ty0, align0, g, hdef⟩ :=
+      hwf.program.slotBasesLoadOnly f.fn hfunMem base hbase
+    rw [hbd] at hdef
+    have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hdef
+    cases hEq
+  · intro gepName slot hgep hgd
+    rcases slotEntry_gep hgep with
+      ⟨entry, hentry, d2, t2, a2, hloadDef, dest2, ty2, base, indices, inbounds, hgepDef⟩
+    rw [hgd] at hgepDef
+    have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hgepDef
+    cases hEq
+  · intro gname off hval
+    cases hval
+  · intro p hp hnm hpd
+    have hmemP : p.2 ∈ f.fn.params.map (·.2) :=
+      List.mem_map.mpr ⟨p, List.mem_of_getLast? hp, rfl⟩
+    exact notParam_of_mem_dests hud hblock hinstrMem rfl (hpd ▸ hmemP)
+  · intro operand w hterm heval frame slot off hw
+    by_cases hmemOp : dest ∈ operand.localNames
+    · have hop : operand = .local dest := by
+        cases operand with
+        | «local» name =>
+            simp only [Operand.localNames, List.mem_singleton] at hmemOp
+            rw [hmemOp]
+        | intLit _ _ => simp [Operand.localNames] at hmemOp
+        | nullPtr => simp [Operand.localNames] at hmemOp
+        | symbol _ => simp [Operand.localNames] at hmemOp
+      rw [hop] at heval
+      simp only [evalOperand, lookupLocal_setLocal_eq, Option.some.injEq] at heval
+      rw [← heval] at hw
+      cases hw
+    · have hevalOld : evalOperand f operand = some w := by
+        rw [evalOperand_setLocal_of_notMem (f := f) (dest := dest)
+          (value := evalRotate info a b count) hmemOp] at heval
+        exact heval
+      exact hwf.stackReturnsSafe f hf operand w hterm hevalOld frame slot off hw
+
 end Stc.Codegen
