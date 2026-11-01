@@ -49,7 +49,7 @@ the PLC logic decides. Safety must be provided by a separate system and machine 
 | Slave position | master 0, alias 0, position 0 |
 | Distributed clocks | Not used; DIEWU free-run by owner decision. DC is implemented and unit-tested, but no DC-capable slave was available |
 | Compiler | `clang` 18.1.3 on the host for the fixture's user-project build |
-| Deployed package | `stc 1.0.0`, phase-5 CI package `bin/stc` SHA-256 `391d2ea0…`; shim SHA-256 `bceeb601…`; unchanged in phase 6 |
+| Deployed package | `stc 1.0.0`, phase-5 CI package `bin/stc` SHA-256 `391d2ea0…`; shim SHA-256 `bceeb601…`; phase 6 added no runtime or shim code |
 | Shim source | [tools/ethercat](../../tools/ethercat/), built in CI against pinned IgH 1.6.13 |
 
 The host installation, kernel/IgH pairing, and service state are operator prerequisites documented

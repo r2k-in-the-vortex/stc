@@ -481,7 +481,7 @@ hashes are recorded here. Do not infer an all-points pass from this run.
 | --- | --- |
 | Date/time and operator | 2026-11-01, fault session 14:32:22–14:33:34 (host timestamp in the transcript filename); bench work by the owner/operator at login `r2k` |
 | Host, kernel, IgH version | `ecat-host`, kernel `6.12.115-ecat-rt` PREEMPT_RT, IgH 1.6.13, CPU 3 isolated |
-| Package version and package/shim SHA256 | `stc 1.0.0`; phase-5 deployment unchanged in phase 6: `bin/stc` `391d2ea09ddb216efd7f0251324f91f50e363a09d927d023090a51a43cf5d65e`, `lib/libstc_io_ethercat.so` `bceeb6014076f41958b0ae4442f744fc3035af3544bcd5a046e278089e5df448`. Debug session build `0x672c20bf1bc31fc0c76cbb939183e310`. |
+| Package version and package/shim SHA256 | `stc 1.0.0`; phase-5 deployment (phase 6 added no runtime or shim code): `bin/stc` `391d2ea09ddb216efd7f0251324f91f50e363a09d927d023090a51a43cf5d65e`, `lib/libstc_io_ethercat.so` `bceeb6014076f41958b0ae4442f744fc3035af3544bcd5a046e278089e5df448`. Debug session build `0x672c20bf1bc31fc0c76cbb939183e310`. |
 | Supply voltage (12 V or 24 V) | Module logic powered from the 24 V barrel jack. The separate output-stage `DC5-48V` supply was **not available**, so the input loop was unpowered. |
 | S1-S4 tied to supply positive | Wired to the output-stage `VCC`; that supply was unpowered during the run. |
 | All 16 wires checked against §2.2 | Owner confirmed the 16 OUTn→INn wires and S1–S4 commons before the run. The output walk was observed on the module LEDs; the input loop could not be energized. |
