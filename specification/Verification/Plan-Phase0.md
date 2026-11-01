@@ -2491,8 +2491,9 @@ v ≠ .ptr (.stack frame slot off')` — host-supplied at `initState?_wf` and pr
 or, equivalently, add a small `WFState` field with the same content. With it the load form's
 `StackPtrsBounded` case follows: stack loads take their bound from `MemTyped`, `.cell` loads
 produce `.root`/`.function`/`.importCell` addresses (not `.stack`), and `.root`/`.global` loads
-return storage values that are not frame pointers. No field is added pending approval; the ret
-forms remain proved and the build is green.
+return storage values that are not frame pointers. **Owner approved extending
+`StorageValuesLive` on 2026-11-01**; implementation follows, with no separate field. The ret
+forms are proved (`wfState_popRet`, `wfState_popSetLocal`) and the build is green at `56cc548`.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2659,8 +2660,13 @@ preserved:
        (∀ slot off', v = .ptr (.root slot off') →
           ∃ values, c.lookupStorage (.root slot) = some values ∧ off' < values.length) ∧
        (∀ g off', v = .ptr (.global g off') →
-          ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length)
+          ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length) ∧
+       (∀ frame slot off', v ≠ .ptr (.stack frame slot off'))
    ```
+
+   The third conjunct is the 2026-11-01 extension (obstruction 10): persistent storage never
+   holds a frame pointer. It is host-supplied at `initState?_wf` and preserved by `storeValue`
+   because `StoresNonPointer` keeps stored values non-pointer.
 
 The three extensions are proof obligations for the full invariant, not a reduction of it: the
 existing fields stay, and the new facts are added to `WFState` (and, where syntactic, to
@@ -2731,5 +2737,6 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    (`SlotBasesLoadOnly` as a `WFProgram` fact, `ReturnLink`'s `IsCallDest` conjunct, and the
    general symbol-pointer-load disjunct in `StackOriginsTrusted`). They are implemented and the
    ret value/none forms are proved (`wfState_popSetLocal`, `wfState_popRet`) with a green
-   build. The `load` form then exposed obstruction 10 (§22.11: storage values may be frame
-   pointers, pending owner approval), so `wfState_step`/`irStep_wf` and Phase 3 remain open.
+   build. The `load` form then exposed obstruction 10; the owner approved extending
+   `StorageValuesLive` to exclude frame pointers from storage on 2026-11-01, so
+   `wfState_step`/`irStep_wf` and Phase 3 resume after that implementation.
