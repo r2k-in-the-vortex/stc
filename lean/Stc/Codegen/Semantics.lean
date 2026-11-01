@@ -8961,4 +8961,55 @@ theorem wfState_phiStep {contract : IRContract} {c : IRState} {f : IRFrame}
     (by intro dest2 ty0 base indices inbounds h; cases h)
     hsymbol hbinopNe hicmpNe hcastNe hextractNe
 
+/-- The `extractvalue` instruction form for the overflow flag (index 1). The
+index-0 pair-payload write needs a payload-typing fact that the invariant does
+not yet provide; it is recorded as an obstruction in Plan-Phase0 §22.11. -/
+theorem wfState_extractValueStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Ssa} {aggregate : Operand} {index : Nat} {ty : IrType}
+    {pairTy : IrType} {payload : IRValue} {overflow : Bool}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .extractValue dest aggregate index ty :: restInstrs)
+    (hindex : index = 1)
+    (hpair : evalOperand f aggregate = some (.pair pairTy payload overflow)) :
+    WFState contract
+      (c.withHead
+        { (f.setLocal dest (.int (.int 1) (boolPayload overflow))) with
+          instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.extractValue dest aggregate index ty ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block.instrs[done.length]? = some (.extractValue dest aggregate index ty) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.extractValue dest aggregate index ty) restInstrs
+  have hblock? : f.fn.block? block.label = some block :=
+    block?_eq_some hnd hblock (by rw [← hblockEq])
+  have hwell := (hwf.program.wellFormed.typesCorrect f.fn hfunMem).instructions
+    block hblock (.extractValue dest aggregate index ty) hinstrMem
+  rcases hwell with ⟨bits, hagg, hdisj⟩
+  have htyEq : ty = .int 1 := by
+    rcases hdisj with ⟨h0, _⟩ | ⟨h1, hty⟩
+    · rw [hindex] at h0
+      exact absurd h0 (by decide)
+    · exact hty
+  have hlocTy : f.fn.localType? dest = some (.int 1) := by
+    have hloc : f.fn.localType? dest = some ty :=
+      localType?_eq_resultType hud hblock? hidx rfl rfl
+    rw [htyEq] at hloc
+    exact hloc
+  exact wfState_intValueStep (instr := .extractValue dest aggregate index ty)
+    (ty := .int 1) (v := boolPayload overflow) hwf hframes hinstrs
+    (by
+      intro _ h
+      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+    rfl hlocTy
+    (by intro ty0 ptr align h; cases h)
+    (by intro dest2 ty0 base indices inbounds h; cases h)
+
 end Stc.Codegen
