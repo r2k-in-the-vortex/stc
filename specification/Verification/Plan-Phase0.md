@@ -2567,6 +2567,35 @@ destination differs from every base/entry name). Supporting lemmas added:
 instruction is that instruction, by SSA uniqueness), `notParam_of_mem_dests`, and
 `getElem?_append_self`. `lake build` is green.
 
+**Phase 2 obstruction 12 (2026-11-01): the `extractvalue` pair payload is
+untyped.** Preparing the `extractvalue` instruction form exposes a typing gap in
+the pair payload. The step's index-0 case writes the payload component verbatim:
+`extractValue dest aggregate 0` produces `callResult s f rest (some dest) value`
+for `evalOperand f aggregate = some (.pair pairTy value overflow)`.
+`Instr.WellTyped`'s `extractValue` rule checks only `operandHasType fn
+(.overflow bits) aggregate` and the result type (`ty = .int bits` at index 0,
+`ty = .int 1` at index 1); `IRValue.type?` of a pair returns only the pair type,
+and no `WFState` field constrains the payload. Counterexample: a local `%p` of
+type `.overflow 32` holding `.pair (.overflow 32) (.ptr (.stack 99 0 0)) false`.
+Local typing holds (`type? = some (.overflow 32)`), and the pair value itself is
+not a pointer, so `NoSlotsGlobalPointers`, `StackPtrsBounded`, and
+`StoresNonPointer` (which constrains `v = .ptr`, not the payload) do not exclude
+it; the same value may sit in host storage at initialization, since
+`MemValueTyped (.overflow bits) v` and the `StorageValuesLive` conjuncts check
+only the outer `type?`/address shape. The index-0 extract then writes
+`%d = .ptr (.stack 99 0 0)`, violating `StackPtrsBounded` when frame 99 or its
+slot does not exist. The reachable semantics only manufactures pairs through
+`checkedInt` and `IRValue.default` (both with `.int (.int bits) _` payloads),
+but the per-state invariant does not record it. Proposed resolution (owner
+decision): add a payload-typing fact for overflow values, e.g. every local or
+memory value whose `type?` is `.overflow bits` is
+`.pair (.overflow bits) (.int (.int bits) _) _` (host-supplied at
+`initState?_wf`, preserved by stores/loads/calls), or add a builder-trusted rule
+tying `extractvalue` aggregates to `checkedInt`/default producers. The index-1
+(overflow flag) form is proved and pushed as `wfState_extractValueStep`; the
+index-0 form remains unproved pending the owner decision, and `irStep_wf`'s
+extractvalue case is blocked on it.
+
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
 obligations that the approved fact set does not discharge. No invariant change was applied;
