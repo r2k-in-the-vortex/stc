@@ -2596,6 +2596,38 @@ tying `extractvalue` aggregates to `checkedInt`/default producers. The index-1
 index-0 form remains unproved pending the owner decision, and `irStep_wf`'s
 extractvalue case is blocked on it.
 
+**Phase 2 obstruction 13 (2026-11-01): direct calls resolved by name are not
+tied to their intrinsic signatures.** Preparing the call-result instruction
+forms exposes a signature gap. The step's checked-arithmetic path parses the
+callee name (`parseChecked callee = some info`) and produces
+`.pair (.overflow info.bits) (.int (.int info.bits) _) overflow`; the rotate path
+(`parseRotate callee = some info`) produces `.int (.int info.bits) _`. The
+destination's local type, however, comes from the instruction's declared return
+type `ret` (`localType?_eq_resultType` over `resultType? (.call dest ret ...)`),
+and `Instr.WellTyped`'s call rule only requires *some* signature in
+`frag.directCallEnv` with that name and `sig.returnType = ret`.
+`directCallEnv` is `functions.map signature ++ declarations.map signature ++
+intrinsicSignatures`, and `ModuleShapes` constrains declarations but not
+functions: a module function may be named `llvm.sadd.with.overflow.i32` with
+`returnType = .int 32`. Counterexample: fragment functions `main` and a
+function named `llvm.sadd.with.overflow.i32 : i32(i32, i32)` whose signature is
+also in `directCallEnv`; `main` contains `%d = call i32
+@llvm.sadd.with.overflow.i32(%a, %b)`, which is well-typed against the shadow
+signature (and `declarationsWellFormed` still holds because there is no
+declaration). `WFProgram`/`WellFormed` hold, and the step (which parses
+`parseChecked` before consulting `module.function?`) produces
+`.pair (.overflow 32) ...` while `localType? %d = some (.int 32)`, so
+`localsTyped` fails in the successor. The same shadowing breaks the rotate
+path, and `parseChecked`/`parseRotate` are pure name parses that ignore the
+resolved signature entirely. Proposed resolution (owner decision): a
+builder-trusted fact excluding module-function names that occur in
+`intrinsicSignatures` (or, more generally, that `intrinsicSignatures` names are
+reserved), or a `WFProgram` fact that for every call instruction whose callee
+parses as checked/rotate, the declared return type equals the intrinsic return
+type. The module-function path of the call form (`callFunction`) is already
+proved; the checked and rotate result forms remain unproved pending the owner
+decision, and `irStep_wf`'s corresponding call cases are blocked on it.
+
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
 obligations that the approved fact set does not discharge. No invariant change was applied;
