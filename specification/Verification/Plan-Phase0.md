@@ -2185,6 +2185,24 @@ the frame-map or storage-write update, and the head-instruction replacement into
 and the `getLast?`/`writeStorage_frames` facts. The `callFunction` and `irStepRet` forms
 remain.
 
+**Phase 2 obstruction 3 (2026-11-01): slot-base parameters at calls.** Preparing the
+`callFunction` form exposes a third missing fact. The callee's `SlotsBase` requires, for every
+`base ∈ SlotBases fn`, `initLocals fn args` to give `base` the value `.ptr .slotTable` or
+`.null`. If `base` is a defined local, the initialization default is `.null` (given the GEP
+typing fixes `localType? base = some .ptr`), but if `base` is a *parameter*, `initLocals` gives
+it the caller's argument, and nothing in the approved facts forces that argument to be the
+slot table: `CallSlots` covers only the appended `%slots` parameter, and `ArgsTyped` constrains
+only the argument's type. A fragment whose slot base is a parameter therefore breaks
+`SlotsBase` after a call that passes a stack or storage pointer. Proposed extension: a
+builder-trusted `WFProgram` fact that no slot base is a parameter
+(`∀ fn, ∀ base ∈ SlotBases fn, base ∉ fn.params.map (·.2)`), analogous to the existing
+`OriginsTrusted` non-parameter fact; with it the callee's slot bases are defined locals whose
+default is `.null`. The `SlotEntries` results are already covered because they are GEP
+destinations, which `FunctionUsesDefined.allNodup` keeps distinct from parameter names. No
+invariant change is applied; the compiling checkpoint is `1d3a009`. The rest of the call form
+(typing, origins, liveness, stack bounds, return link, slots parameter) is prepared, and the
+`irStepRet` form needs no new fact.
+
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
 obligations that the approved fact set does not discharge. No invariant change was applied;
