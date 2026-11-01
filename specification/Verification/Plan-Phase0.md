@@ -1426,11 +1426,18 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   trapCodesSpecified : TrapCodesSpecified frag
   unreachableGuarded : UnreachableGuarded frag
   storesNonPointer : StoresNonPointer frag
+  slotBasesLoadOnly : SlotBasesLoadOnly frag
 
 /-- No store carries a pointer-typed value ("no aliasing beyond GOT cells"). -/
 def StoresNonPointer (frag : IRFrag) : Prop :=
   ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
     ∀ ty value ptr align, instr = .store ty value ptr align → ty ≠ .ptr
+
+/-- Every slot base is defined by a symbol-pointer load (the builder's slots
+global load). -/
+def SlotBasesLoadOnly (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ base ∈ SlotBases fn,
+    ∃ ty align g, defInstr? fn base = some (.load base ty (.symbol g) align)
 
 /-- A local value realizes the builder-recorded pointer origin. The slot table
 supplies the cell kind; `FunctionFacts.origins` supplies the SSA-to-origin
@@ -1577,6 +1584,12 @@ def CallTargetsTyped (c : IRState) : Prop :=
         (c.slotKind? slot = some .importCell ∧
           c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
 
+/-- `dest` is defined by a call or `callPtr` instruction. -/
+def IsCallDest (fn : Function) (dest : Ssa) : Prop :=
+  ∃ block ∈ fn.blocks, ∃ instr ∈ block.instrs, ∃ ret callee args,
+    instr = .call (some dest) ret callee args ∨
+      instr = .callPtr (some dest) ret callee args
+
 /-- The callee's return destination agrees with the caller's local type (D4). -/
 def ReturnLink (c : IRState) : Prop :=
   ∀ callee caller rest, c.frames = callee :: caller :: rest →
@@ -1586,7 +1599,8 @@ def ReturnLink (c : IRState) : Prop :=
         callee.fn.returnType ≠ .void ∧
           caller.fn.localType? dest = some callee.fn.returnType ∧
           caller.fn.facts.originOf? dest = none ∧
-          dest ∉ caller.fn.params.map (·.2)
+          dest ∉ caller.fn.params.map (·.2) ∧
+          IsCallDest caller.fn dest
 ```
 
 One-step readiness is deliberately **not** a `WFState` field. It is the source-check obligation
@@ -1862,7 +1876,8 @@ checker so the P0.4 review is not reopened.
 ### 22.6 Decision D4 — return linkage
 
 The callee frame records `retDest : Option Ssa`; the caller's local-type environment records the
-destination type. The invariant is:
+destination type. `IsCallDest fn dest` means `dest` is the destination of a `.call` or
+`.callPtr` instruction in `fn`. The invariant is:
 
 ```lean
 def ReturnLink (c : IRState) : Prop :=
@@ -1873,7 +1888,8 @@ def ReturnLink (c : IRState) : Prop :=
         callee.fn.returnType ≠ .void ∧
           caller.fn.localType? dest = some callee.fn.returnType ∧
           caller.fn.facts.originOf? dest = none ∧
-          dest ∉ caller.fn.params.map (·.2)
+          dest ∉ caller.fn.params.map (·.2) ∧
+          IsCallDest caller.fn dest
 ```
 
 The bottom frame has `retDest = none` (shown in `WFState`). `retDest = none` covers void calls and
@@ -1900,6 +1916,14 @@ disjointness (no uniqueness argument); `wfState_calleePush` takes it as `hretPar
 `FunctionUsesDefined.allNodup` makes parameter and destination names jointly unique, so the
 call's destination is outside the parameter list (`mem_dests_of_block` supplies the membership).
 This conjunct is the second 2026-11-01 extension.
+
+The destination is also recorded as a call destination (`IsCallDest caller.fn dest`, the third
+2026-11-01 extension). The state does not otherwise remember which instruction produced a
+suspended frame's `retDest`. Knowing it is a `call`/`callPtr` destination excludes slot-base and
+slot-entry locals (defined by loads and GEPs, and SSA-unique) and refutes `SafeReturnValue` when
+the caller returns the destination, which discharges `SlotsBase` and `StackReturnsSafe` at the
+ret value form. It is established at `callFunction` from `FunctionUsesDefined.allNodup` and the
+call instruction's `defSite?` existence.
 
 Direct calls are already covered: `WellTyped` for `.call` requires the callee signature in
 `directCallEnv` to have `returnType = ret`, the module function's signature is that signature,
@@ -2058,7 +2082,11 @@ The approved design is implemented in [`Stc.Codegen.Semantics`](../../lean/Stc/C
   trap-service codes, not cell stores; the design note's earlier listing of cell stores as UB
   is superseded by this implementation choice.
 - **D3 facts.** `OriginsTrusted`, `StackOriginsTrusted`, `CallPtrOrigins`,
-  `TrapCodesSpecified`, and `UnreachableGuarded` are `WFProgram` fields. **Correction:**
+  `TrapCodesSpecified`, and `UnreachableGuarded` are `WFProgram` fields. **Extension
+  (2026-11-01):** `StackOriginsTrusted` also admits pointer locals defined by a symbol-pointer
+  load (`defInstr? fn name = some (.load name ty (.symbol g) align)`), matching the builder's
+  `load @stc_module_slots`; such values point at global storage, never at a stack frame.
+  **Correction:**
   `OriginHolds` includes the `.null` initialization default as an allowed value, because a
   recorded origin local holds the default until its defining instruction executes; the origin
   shape is required once the local is non-default. This keeps `WFState` satisfiable at function
@@ -2421,9 +2449,11 @@ instruction of `caller.fn` — established at the call site from
 `FunctionUsesDefined.allNodup` and the call instruction's position (the same uniqueness
 argument as `call_dest_origin_none`, plus a `defSite?` existence lemma). Together (1) and (2)
 discharge `SlotsBase` and `StackReturnsSafe` at the ret value form; (3) optionally extend
-`StackOriginsTrusted` with the symbol-pointer-load disjunct noted above. No field is added and
-no invariant is weakened pending approval. The 27-field checkpoint is `d90584e`; `lake build`
-is green and the ret value/none forms, `irStep_wf`, and Phase 3 remain blocked.
+`StackOriginsTrusted` with the symbol-pointer-load disjunct noted above. **Owner approved all
+three on 2026-11-01:** `SlotBasesLoadOnly` becomes a `WFProgram` field; `ReturnLink` gains the
+`IsCallDest` conjunct; and `StackOriginsTrusted` gains the general symbol-pointer-load disjunct.
+Implementation follows. The 27-field checkpoint is `d90584e`; `lake build` is green and the ret
+value/none forms, `irStep_wf`, and Phase 3 remain blocked until implementation completes.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2658,7 +2688,8 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    preservation lemmas listed in §22.11. Phase 2 (`irStep_wf`, one state-update form at a
    time) and Phase 3 (reachability corollaries and the `irRun` lift) remain open and are the
    remaining P0.5 review scope.
-7. A pending owner decision is recorded in §22.11 as obstruction 9 (slot-base destinations and
-   the untracked call destination). The 27-field `WFState` implementation checkpoint is
-   `d90584e` with a green build; the ret value/none forms, `irStep_wf`, and Phase 3 remain open
-   until the owner decides on `SlotBasesLoadOnly`/the `ReturnLink` call-destination link.
+7. The §22.11 obstruction-9 extensions were owner-approved on 2026-11-01
+   (`SlotBasesLoadOnly` as a `WFProgram` fact, `ReturnLink`'s `IsCallDest` conjunct, and the
+   general symbol-pointer-load disjunct in `StackOriginsTrusted`). The 27-field `WFState`
+   implementation checkpoint is `d90584e` with a green build; implementation of the three
+   extensions, then the ret value/none forms, `irStep_wf`, and Phase 3 remain open.
