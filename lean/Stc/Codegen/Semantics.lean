@@ -8329,4 +8329,314 @@ theorem wfState_allocaStep {contract : IRContract} {c : IRState} {f : IRFrame}
   rw [hstate] at h2
   exact h2
 
+/-! ## Integer-valued instruction forms (P0.5 whole-run preservation) -/
+
+/-- An evaluated operand has the operand's declared type, using the frame's
+local typing. -/
+theorem evalOperand_type {fn : Function} {f : IRFrame}
+    (hlocals : ∀ name v, f.lookupLocal name = some v →
+      ∀ ty, fn.localType? name = some ty → v.type? = some ty)
+    {operand : Operand} {ty : IrType} {value : IRValue}
+    (htype : operandHasType fn ty operand) (heval : evalOperand f operand = some value) :
+    value.type? = some ty := by
+  cases operand with
+  | «local» name => exact hlocals name value heval ty htype
+  | intLit ty0 v =>
+      have hv : value = .int ty0 v := (Option.some.inj heval).symm
+      have ht : ty0 = ty := Option.some.inj htype
+      subst ht
+      rw [hv]
+      rfl
+  | nullPtr =>
+      have hv : value = .null := (Option.some.inj heval).symm
+      have ht : IrType.ptr = ty := Option.some.inj htype
+      subst ht
+      rw [hv]
+      rfl
+  | symbol name =>
+      have hv : value = .ptr (.global name 0) := (Option.some.inj heval).symm
+      have ht : IrType.ptr = ty := Option.some.inj htype
+      subst ht
+      rw [hv]
+      rfl
+
+/-- An instruction that is neither a load nor a GEP defines a local with no
+recorded pointer origin: recorded origins are load or GEP results. -/
+theorem originOf?_eq_none_of_not_load_gep {contract : IRContract} {frag : IRFrag}
+    {fn : Function} {block : Block} {instr : Instr} {dest : Ssa}
+    (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
+    (hblock : block ∈ fn.blocks) (hinstr : instr ∈ block.instrs)
+    (hdest : instr.dest? = some dest)
+    (hload : ∀ ty ptr align, instr ≠ .load dest ty ptr align)
+    (hgep : ∀ dest2 ty base indices inbounds, instr ≠ .gep dest2 ty base indices inbounds) :
+    fn.facts.originOf? dest = none := by
+  cases horig : fn.facts.originOf? dest with
+  | none => rfl
+  | some origin =>
+      exfalso
+      have hmem : (dest, origin) ∈ fn.facts.origins := mem_of_originOf? horig
+      cases origin with
+      | cell slot b =>
+          cases b with
+          | false =>
+              have hs := (hprog.originsTrusted fn hfn).2
+                (dest, PointerOrigin.cell slot false) hmem
+              rcases hs.2.2 with ⟨tyL, ptrL, alignL, hdef⟩
+              have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr hdest hdef
+              exact hload tyL ptrL alignL hEq.symm
+          | true =>
+              have hs := (hprog.originsTrusted fn hfn).2
+                (dest, PointerOrigin.cell slot true) hmem
+              rcases hs.2.2 with ⟨tyL, ptrL, alignL, hdef⟩
+              have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr hdest hdef
+              exact hload tyL ptrL alignL hEq.symm
+      | global g =>
+          have hs := (hprog.originsTrusted fn hfn).2
+            (dest, PointerOrigin.global g) hmem
+          rcases hs.2.2 with ⟨dest2, ty2, base, indices, inbounds, hdef⟩
+          have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr hdest hdef
+          exact hgep dest2 ty2 base indices inbounds hEq.symm
+      | vtableCode =>
+          have hs := (hprog.originsTrusted fn hfn).2
+            (dest, PointerOrigin.vtableCode) hmem
+          exact hs.2.2
+
+/-- A return operand whose name is defined by the executing instruction cannot
+be a stack pointer: every safe return value is a parameter, an origin-recorded
+pointer, or a `binop`/`icmp`/`cast`/`extractvalue` result, and the caller
+refutes those defining shapes. -/
+theorem stackReturnHead_false_of_safeReturnValue {contract : IRContract} {c : IRState}
+    {f : IRFrame} {block : Block} {instr : Instr} {dest : Ssa}
+    (hwf : WFState contract c) (hf : f ∈ c.frames)
+    (hblock : block ∈ f.fn.blocks) (hinstr : instr ∈ block.instrs)
+    (hdest : instr.dest? = some dest)
+    (hnone : f.fn.facts.originOf? dest = none)
+    (hblockTerm : block.terminator = some (.ret (some (.local dest))))
+    (hbinop : ∀ op ty lhs rhs,
+      defInstr? f.fn dest = some (.binop dest op ty lhs rhs) → False)
+    (hicmp : ∀ pred ty lhs rhs,
+      defInstr? f.fn dest = some (.icmp dest pred ty lhs rhs) → False)
+    (hcast : ∀ op value fromTy toTy,
+      defInstr? f.fn dest = some (.cast dest op value fromTy toTy) → False)
+    (hextract : ∀ aggregate index ty,
+      defInstr? f.fn dest = some (.extractValue dest aggregate index ty) → False) :
+    False := by
+  have hfnMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfnMem
+  have hsafe : SafeReturnValue f.fn dest :=
+    hwf.program.returnNonStack f.fn hfnMem block hblock
+      (.ret (some (.local dest))) hblockTerm (.local dest) rfl dest
+      (by simp [Operand.localNames])
+  cases hsafe with
+  | param hmemP =>
+      exact absurd hmemP (notParam_of_mem_dests hud hblock hinstr hdest)
+  | origin horig' =>
+      rw [hnone] at horig'
+      cases horig'
+  | binop hdef => exact hbinop _ _ _ _ hdef
+  | icmp hdef => exact hicmp _ _ _ _ hdef
+  | cast hdef => exact hcast _ _ _ _ hdef
+  | extractValue hdef => exact hextract _ _ _ hdef
+
+/-- A step writing an integer value to a local preserves the invariant: an
+integer value is never a pointer, the destination has no recorded origin, and
+its defining instruction is neither a load nor a GEP. -/
+theorem wfState_intValueStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr} {instr : Instr}
+    {dest : Ssa} {ty : IrType} {v : Int}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = instr :: restInstrs)
+    (hnoBareInst : restInstrs = [] →
+      ¬ ((∃ d r cl a, instr = .call d r cl a) ∨
+        (∃ d r cl a, instr = .callPtr d r cl a)))
+    (hdest : instr.dest? = some dest)
+    (hlocTy : f.fn.localType? dest = some ty)
+    (hloadShape : ∀ ty0 ptr align, instr ≠ .load dest ty0 ptr align)
+    (hgepShape : ∀ dest2 ty0 base indices inbounds,
+      instr ≠ .gep dest2 ty0 base indices inbounds) :
+    WFState contract
+      (c.withHead { (f.setLocal dest (.int ty v)) with instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : instr ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hnotBase : ∀ base ∈ SlotBases f.fn, base = dest → False := by
+    intro base hbase hbd
+    obtain ⟨ty0, align0, g, hdef⟩ := hwf.program.slotBasesLoadOnly f.fn hfunMem base hbase
+    rw [hbd] at hdef
+    have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem hdest hdef
+    exact hloadShape ty0 (.symbol g) align0 hEq.symm
+  have hnotEntry : ∀ gepName slot, (gepName, slot) ∈ SlotEntries f.fn →
+      gepName = dest → False := by
+    intro gepName slot hgep hgd
+    rcases slotEntry_gep hgep with
+      ⟨entry, hentry, d2, t2, a2, hloadDef, dest2, ty2, base, indices, inbounds, hgepDef⟩
+    rw [hgd] at hgepDef
+    have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem hdest hgepDef
+    exact hgepShape dest2 ty2 base indices inbounds hEq.symm
+  have hnone : f.fn.facts.originOf? dest = none :=
+    originOf?_eq_none_of_not_load_gep hwf.program hfunMem hblock hinstrMem hdest
+      hloadShape hgepShape
+  refine wfState_setLocalStep hwf hframes hinstrs hnoBareInst ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
+  · intro ty' hty'
+    have hEq : ty' = ty := Option.some.inj (hty'.symm.trans hlocTy)
+    subst hEq
+    rfl
+  · intro origin horig
+    rw [hnone] at horig
+    cases horig
+  · intro frame slot off hval
+    cases hval
+  · intro slot off hval
+    cases hval
+  · intro gname off hval
+    cases hval
+  · intro base hbase hbd
+    exact (hnotBase base hbase hbd).elim
+  · intro gepName slot hgep hgd
+    exact (hnotEntry gepName slot hgep hgd).elim
+  · intro gname off hval
+    cases hval
+  · intro p hp hname hpd
+    have hmemP : p.2 ∈ f.fn.params.map (·.2) :=
+      List.mem_map.mpr ⟨p, List.mem_of_getLast? hp, rfl⟩
+    exact notParam_of_mem_dests hud hblock hinstrMem hdest (hpd ▸ hmemP)
+  · intro operand w hterm heval frame slot off hw
+    by_cases hmemOp : dest ∈ operand.localNames
+    · have hop : operand = .local dest := by
+        cases operand with
+        | «local» name =>
+            simp only [Operand.localNames, List.mem_singleton] at hmemOp
+            rw [hmemOp]
+        | intLit _ _ => simp [Operand.localNames] at hmemOp
+        | nullPtr => simp [Operand.localNames] at hmemOp
+        | symbol _ => simp [Operand.localNames] at hmemOp
+      rw [hop] at heval
+      simp only [evalOperand, lookupLocal_setLocal_eq, Option.some.injEq] at heval
+      rw [← heval] at hw
+      cases hw
+    · have hevalOld : evalOperand f operand = some w := by
+        rw [evalOperand_setLocal_of_notMem (f := f) (dest := dest)
+          (value := IRValue.int ty v) hmemOp] at heval
+        exact heval
+      exact hwf.stackReturnsSafe f hf operand w hterm hevalOld frame slot off hw
+
+/-- The `binop` instruction form. -/
+theorem wfState_binopStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Ssa} {op : IntBinOp} {ty : IrType} {lhs rhs : Operand}
+    {bits : Nat} {a b : Int} {value : Int}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .binop dest op ty lhs rhs :: restInstrs)
+    (hlhs : evalOperandInt? f lhs = some a)
+    (hrhs : evalOperandInt? f rhs = some b)
+    (hbits : intBits? ty = some bits)
+    (hbin : evalBinop op bits a b = .ok value) :
+    WFState contract
+      (c.withHead { (f.setLocal dest (.int ty value)) with instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.binop dest op ty lhs rhs ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block.instrs[done.length]? = some (.binop dest op ty lhs rhs) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.binop dest op ty lhs rhs) restInstrs
+  have hblock? : f.fn.block? block.label = some block :=
+    block?_eq_some hnd hblock (by rw [← hblockEq])
+  have hlocTy : f.fn.localType? dest = some ty :=
+    localType?_eq_resultType hud hblock? hidx rfl rfl
+  exact wfState_intValueStep (instr := .binop dest op ty lhs rhs) hwf hframes hinstrs
+    (by
+      intro _ h
+      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+    rfl hlocTy
+    (by intro ty0 ptr align h; cases h)
+    (by intro dest2 ty0 base indices inbounds h; cases h)
+
+/-- The `icmp` instruction form. -/
+theorem wfState_icmpStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Ssa} {pred : ICmpPred} {ty : IrType} {lhs rhs : Operand}
+    {bits : Nat} {a b : Int}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .icmp dest pred ty lhs rhs :: restInstrs)
+    (hlhs : evalOperandInt? f lhs = some a)
+    (hrhs : evalOperandInt? f rhs = some b)
+    (hbits : intBits? ty = some bits) :
+    WFState contract
+      (c.withHead
+        { (f.setLocal dest (.int (.int 1) (boolPayload (evalICmp pred bits a b)))) with
+          instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.icmp dest pred ty lhs rhs ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block.instrs[done.length]? = some (.icmp dest pred ty lhs rhs) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.icmp dest pred ty lhs rhs) restInstrs
+  have hblock? : f.fn.block? block.label = some block :=
+    block?_eq_some hnd hblock (by rw [← hblockEq])
+  have hlocTy : f.fn.localType? dest = some (.int 1) :=
+    localType?_eq_resultType hud hblock? hidx rfl rfl
+  exact wfState_intValueStep (instr := .icmp dest pred ty lhs rhs)
+    (ty := .int 1) (v := boolPayload (evalICmp pred bits a b)) hwf hframes hinstrs
+    (by
+      intro _ h
+      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+    rfl hlocTy
+    (by intro ty0 ptr align h; cases h)
+    (by intro dest2 ty0 base indices inbounds h; cases h)
+
+/-- The `cast` instruction form. -/
+theorem wfState_castStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Ssa} {op : CastOp} {operand : Operand} {fromTy toTy : IrType}
+    {fromBits toBits : Nat} {a : Int}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .cast dest op operand fromTy toTy :: restInstrs)
+    (hval : evalOperandInt? f operand = some a)
+    (hfrom : intBits? fromTy = some fromBits)
+    (hto : intBits? toTy = some toBits) :
+    WFState contract
+      (c.withHead
+        { (f.setLocal dest (.int toTy (evalCastOp op fromBits toBits a))) with
+          instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.cast dest op operand fromTy toTy ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block.instrs[done.length]? = some (.cast dest op operand fromTy toTy) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.cast dest op operand fromTy toTy) restInstrs
+  have hblock? : f.fn.block? block.label = some block :=
+    block?_eq_some hnd hblock (by rw [← hblockEq])
+  have hlocTy : f.fn.localType? dest = some toTy :=
+    localType?_eq_resultType hud hblock? hidx rfl rfl
+  exact wfState_intValueStep (instr := .cast dest op operand fromTy toTy)
+    (ty := toTy) (v := evalCastOp op fromBits toBits a) hwf hframes hinstrs
+    (by
+      intro _ h
+      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+    rfl hlocTy
+    (by intro ty0 ptr align h; cases h)
+    (by intro dest2 ty0 base indices inbounds h; cases h)
+
 end Stc.Codegen
