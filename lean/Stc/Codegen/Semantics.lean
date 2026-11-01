@@ -1363,7 +1363,8 @@ def ReturnLink (c : IRState) : Prop :=
     | some dest =>
         callee.fn.returnType ≠ .void ∧
           caller.fn.localType? dest = some callee.fn.returnType ∧
-          caller.fn.facts.originOf? dest = none
+          caller.fn.facts.originOf? dest = none ∧
+          dest ∉ caller.fn.params.map (·.2)
 
 /-- The appended slots parameter of every frame holds the slot-table pointer. -/
 def SlotsParamsSafe (c : IRState) : Prop :=
@@ -4948,6 +4949,7 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
     (hretDest : ∀ d, dest = some d → fn.returnType ≠ .void ∧
       caller.fn.localType? d = some fn.returnType)
     (hretOrigin : ∀ d, dest = some d → caller.fn.facts.originOf? d = none)
+    (hretParam : ∀ d, dest = some d → d ∉ caller.fn.params.map (·.2))
     (hslotsParam : ∀ p, fn.params.getLast? = some p → p.2 = "%slots" →
       ∃ a, (p, a) ∈ fn.params.zip args ∧ a = .ptr .slotTable) :
     WFState contract
@@ -5169,7 +5171,8 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
         rw [show (calleeFrame c fn block args dest).retDest = dest from rfl]
         cases hd : dest with
         | none => trivial
-        | some d => exact ⟨(hretDest d hd).1, (hretDest d hd).2, hretOrigin d hd⟩
+        | some d =>
+            exact ⟨(hretDest d hd).1, (hretDest d hd).2, hretOrigin d hd, hretParam d hd⟩
     | cons a as =>
         simp only [List.cons_append] at heq
         injection heq with hcallee hrest
@@ -5444,5 +5447,37 @@ theorem wfState_retHalt {contract : IRContract} {c : IRState}
   · intro last hlast; simp at hlast
   · intro f hf; simp at hf
   · intro f hf; simp at hf
+
+/-- A direct call's destination is not a parameter. -/
+theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
+    {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
+    (hud : FunctionUsesDefined fn) (hblock : block ∈ fn.blocks)
+    (hinstr : instr ∈ block.instrs) (hcall : instr = .call dest ret callee args) :
+    ∀ d, dest = some d → d ∉ fn.params.map (·.2) := by
+  intro d hd hmem
+  have hdestCall : instr.dest? = some d := by
+    rw [hcall]
+    exact hd
+  have hdestMem : d ∈ fn.blocks.flatMap (fun b => b.instrs.filterMap Instr.dest?) :=
+    mem_dests_of_block hblock hinstr hdestCall
+  have hall := hud.allNodup
+  rw [List.nodup_append] at hall
+  exact hall.2.2 d hmem d hdestMem rfl
+
+/-- An indirect call's destination is not a parameter. -/
+theorem callPtr_dest_notParam {fn : Function} {block : Block} {instr : Instr}
+    {dest : Option Ssa} {ret : IrType} {callee : Operand} {args : List Operand}
+    (hud : FunctionUsesDefined fn) (hblock : block ∈ fn.blocks)
+    (hinstr : instr ∈ block.instrs) (hcall : instr = .callPtr dest ret callee args) :
+    ∀ d, dest = some d → d ∉ fn.params.map (·.2) := by
+  intro d hd hmem
+  have hdestCall : instr.dest? = some d := by
+    rw [hcall]
+    exact hd
+  have hdestMem : d ∈ fn.blocks.flatMap (fun b => b.instrs.filterMap Instr.dest?) :=
+    mem_dests_of_block hblock hinstr hdestCall
+  have hall := hud.allNodup
+  rw [List.nodup_append] at hall
+  exact hall.2.2 d hmem d hdestMem rfl
 
 end Stc.Codegen

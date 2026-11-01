@@ -1883,6 +1883,9 @@ extension; the origin conjunct is the 2026-11-01 extension.
 
 The destination is also not a parameter name (`dest ∉ caller.fn.params.map (·.2)`): overwriting
 a parameter — in particular the appended `%slots` parameter — would break `SlotsParamsSafe`.
+This conjunct is established at the call site by `call_dest_notParam`/`callPtr_dest_notParam`
+directly from `mem_dests_of_block` and `FunctionUsesDefined.allNodup`'s parameter/destination
+disjointness (no uniqueness argument); `wfState_calleePush` takes it as `hretParam`.
 `FunctionUsesDefined.allNodup` makes parameter and destination names jointly unique, so the
 call's destination is outside the parameter list (`mem_dests_of_block` supplies the membership).
 This conjunct is the second 2026-11-01 extension.
@@ -2318,9 +2321,35 @@ non-head frames are unchanged and the head has an empty prefix; at calls because
 is fresh and the old pointers target old frames (ids below `nextFrame`); at returns because the
 old decomposition with the removed callee prepended gives the new prefix's exclusion; and at the
 halt because the frame list is empty. **Owner approved the new field on 2026-11-01**; it is
-adopted in the `WFState` invariant and implementation follows. The ret-halt form is proved; the
-ret value/none forms, `irStep_wf`, and the Phase 3 corollaries were blocked on obstructions 6
-and 7.
+adopted in the `WFState` invariant. Obstruction 6 is resolved by the implemented `ReturnLink`
+non-parameter conjunct. The field is **not yet added** because obstruction 8 below shows the
+store step does not preserve it as stated. The ret-halt form is proved; the ret value/none
+forms, `irStep_wf`, and the Phase 3 corollaries remain blocked on obstruction 8.
+
+**Phase 2 obstruction 8 (2026-11-01): pointer stores into another frame's memory.** The
+approved `StackPtrsOrdered` field is not preserved by a store that writes a stack pointer into a
+frame other than the running one. Counterexample (representable and type-correct): frames
+`[callee, caller, grandparent]`; the callee receives a pointer argument to the caller's local
+array (element type `ptr`) and a pointer argument to the grandparent's local array (also `ptr`);
+it allocates a slot and executes `store ptr %slot, ptr %grandparentArray` (write its own stack
+pointer through the second argument). `Instr.WellTyped` admits pointer-typed stores,
+`stackStoreTypeOK` matches the grandparent array's element type, and `storeValue` succeeds. The
+successor's grandparent memory holds `.ptr (.stack callee.id slot 0)`, whose frame id lies in the
+grandparent's prefix, violating the memory clause of `StackPtrsOrdered`. The same value also
+makes `MemValuePtrBounded`/`MemTyped` fail when the callee later returns, independently of the
+ordering field. No current `WFProgram`/`WFState` fact excludes the pattern: arguments may be
+pointers to older frames' allocas, `Instr.WellTyped` allows `.ptr` store values, and
+`StackReturnsSafe` covers only return values. Proposed resolution (owner decision): a
+builder-trusted fact that stores never carry pointer-typed values
+(`∀ fn block instr ty value ptr align, instr ∈ block.instrs → instr = .store ty value ptr align →
+ty ≠ .ptr`), matching the "no aliasing beyond GOT cells" fragment statement. Then memory never
+holds a non-null pointer (allocation defaults are `.null`), the memory clauses of
+`StackPtrsOrdered` and `MemValuePtrBounded` are vacuous, the locals clause of `StackPtrsOrdered`
+is preserved by the approved argument, and the ret forms follow. Alternatives — a runtime
+lifetime discipline or excluding stack-pointer stores specifically — are more invasive. Until
+the owner decides, `StackPtrsOrdered` is not added to `WFState` (adding it would leave the store
+form unprovable), and the ret value/none forms, `irStep_wf`, and the Phase 3 corollaries remain
+blocked.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
