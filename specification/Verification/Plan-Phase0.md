@@ -1427,6 +1427,7 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   unreachableGuarded : UnreachableGuarded frag
   storesNonPointer : StoresNonPointer frag
   slotBasesLoadOnly : SlotBasesLoadOnly frag
+  cellOriginsSlotEntry : CellOriginsSlotEntry frag
 
 /-- No store carries a pointer-typed value ("no aliasing beyond GOT cells"). -/
 def StoresNonPointer (frag : IRFrag) : Prop :=
@@ -1438,6 +1439,23 @@ global load). -/
 def SlotBasesLoadOnly (frag : IRFrag) : Prop :=
   ∀ fn ∈ frag.functions, ∀ base ∈ SlotBases fn,
     ∃ ty align g, defInstr? fn base = some (.load base ty (.symbol g) align)
+
+/-- Cell origins are tied to the slot-entry GEP at the address stage and to a
+same-slot address local at the value stage. -/
+def CellOriginsSlotEntry (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ entry ∈ fn.facts.origins, ∀ slot b,
+    entry.2 = .cell slot b →
+      match b with
+      | false =>
+          ∃ ty align gepName,
+            defInstr? fn entry.1 = some (.load entry.1 ty (.local gepName) align) ∧
+            ∃ dest2 ty2 base indices inbounds,
+              defInstr? fn gepName = some (.gep dest2 ty2 (.local base) indices inbounds) ∧
+              indices = [(.int 64, .intLit (.int 64) (Int.ofNat slot))]
+      | true =>
+          ∃ ty align addrName,
+            defInstr? fn entry.1 = some (.load entry.1 ty (.local addrName) align) ∧
+            fn.facts.originOf? addrName = some (.cell slot false)
 
 /-- A local value realizes the builder-recorded pointer origin. The slot table
 supplies the cell kind; `FunctionFacts.origins` supplies the SSA-to-origin
@@ -2527,19 +2545,21 @@ forces a GEP that defines a recorded slot-entry result to be the producing instr
 base is `.ptr .slotTable` (giving `.ptr (.slotEntry slot)`).
 
 Proposed resolution (owner decision): a builder-trusted `WFProgram` fact
-`CellOriginsSlotEntry` — every `.cell slot b` origin is recorded on the load of a local GEP
-result with exactly the constant slot index:
-`∀ fn ∈ frag.functions, ∀ entry ∈ fn.facts.origins, ∀ slot b, entry.2 = .cell slot b →
-∃ ty align gepName, defInstr? fn entry.1 = some (.load entry.1 ty (.local gepName) align) ∧
-∃ dest2 ty2 base indices inbounds,
-defInstr? fn gepName = some (.gep dest2 ty2 (.local base) indices inbounds) ∧
-indices = [(.int 64, .intLit (.int 64) (Int.ofNat slot))]`. With it, at the load form the
-pointer local is a `SlotEntries` name, so `SlotsBase` clause 2 gives `.ptr (.slotEntry slot)`
-or `.null`; `loadValue (.slotEntry slot)` returns `.ptr (.cell slot)` (with
-`slot < slots.length` from `OriginSlotKinds`), satisfying `OriginHolds` for both `.cell` kinds
-by the recorded slot kind; and the GEP form's `.slotEntry` value follows from `SlotsBase`
-clause 1 (`base = .ptr .slotTable`) plus `evalGepAddr`. No field is added pending approval; the
-build is green at `27f6009`.
+`CellOriginsSlotEntry`. The first proposal — a universal rule requiring every `.cell slot b`
+load to come from a local GEP result with the exact constant slot index — is **not
+builder-faithful**: `slot_cell` emits the GEP load and records the address stage
+(`.cell slot false`), while `cell_value` emits a second load from that address local and records
+the value stage (`.cell slot true`). The approved two-case fact (§22.3) is: for
+`.cell slot false`, the defining load's pointer is a local GEP result with indices exactly
+`[(.int 64, .intLit (.int 64) slot)]`; for `.cell slot true`, the defining load's pointer is a
+local whose recorded origin is `.cell slot false` for the same slot. **Owner approved the
+two-case fact on 2026-11-01.** With it, at the load form the pointer local is a `SlotEntries`
+name, so `SlotsBase` clause 2 gives `.ptr (.slotEntry slot)` or `.null`;
+`loadValue (.slotEntry slot)` returns `.ptr (.cell slot)` (with `slot < slots.length` from
+`OriginSlotKinds`), satisfying `OriginHolds` for both `.cell` kinds by the recorded slot kind;
+and the GEP form's `.slotEntry` value follows from `SlotsBase` clause 1
+(`base = .ptr .slotTable`) plus `evalGepAddr`. Implementation follows; the build is green at
+`27f6009`.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2786,6 +2806,7 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    build. The `load` form then exposed obstruction 10; the owner approved extending
    `StorageValuesLive` to exclude frame pointers from storage on 2026-11-01, and the third
    conjunct plus `wfState_setLocalStep` are implemented with a green build. The `load`/`gep`
-   forms then exposed obstruction 11 (§22.11: `.cell` origins are not tied to their slot-entry
-   GEP; pending owner approval), so the remaining instruction forms, `wfState_step`/`irStep_wf`,
-   and Phase 3 remain open.
+   forms then exposed obstruction 11; the owner approved the corrected two-case
+   `CellOriginsSlotEntry` fact on 2026-11-01 (the universal GEP-load rule is not
+   builder-faithful for the value stage), so the remaining instruction forms,
+   `wfState_step`/`irStep_wf`, and Phase 3 resume after that implementation.
