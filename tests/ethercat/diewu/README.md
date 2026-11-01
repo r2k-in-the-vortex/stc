@@ -12,7 +12,8 @@ Phase 3 does **not** cover cable unplug, power-cycle, loopback harnesses, fault
 injection, or any manual toggling/measuring. Those belong to phase 6: the
 self-contained loopback project is [loopback/](loopback/), and the manual
 wiring, all-points, and physical fault procedure is
-[PHASE6.md](PHASE6.md). The phase-6 procedure is prepared but not executed.
+[PHASE6.md](PHASE6.md). The phase-6 procedure was executed on 2026-11-01 in
+the supply-limited variant; the observed results are in PHASE6.md §8.
 
 ## Bench
 
@@ -223,7 +224,7 @@ dedicated thread with a bounded non-blocking queue, and every final run reports 
 records. The strict missed-deadline counter equaled the cycle count in every run and is reported,
 not gated. Distributions and evidence hashes are in the runbook §10.7-§10.8.
 
-## Phase 6 loopback (prepared, not executed)
+## Phase 6 loopback (supply-limited execution, 2026-11-01)
 
 Phase 6 adds a separate, self-contained project in [loopback/](loopback/) with
 its own `stc.toml` and machine profile. It binds all 16 inputs and all 16
@@ -234,9 +235,18 @@ latches `Pass` and `FailMask`. `loopback_test.py` launches it through
 matrix. The manual wiring, supply/commons, all-points, physical
 fault-injection, evidence, and restore procedure is [PHASE6.md](PHASE6.md).
 
-The project and harness were added and compile-checked in CI; the procedure
-has not been executed and no phase-6 result is claimed. The open-ended
-fixture above is unchanged and remains the phase 3-5 frame-level evidence.
+The procedure was executed on 2026-11-01 in the supply-limited variant. The
+module's separate output-stage `DC5-48V` supply was unavailable, so the input
+loop was unpowered and the automated all-points matrix was **not** run; the 16
+physical input paths remain unverified. Fault A (host-end cable unplug/replug)
+and Fault B (DIEWU power cycle) passed: the runtime held `OUTPUTMASK=65535`
+through both faults, set `STATUSINPUTSTALE=true`, kept `SCANCOUNT` advancing,
+and recovered the same configured slave (`STATUSRECOVERIES` 1 then 2) without a
+cold download or host restart. Fault C is covered by Fault A. The restore
+state was `Phase: Idle` / `Active: no` / PREOP with no `stc` process. Observed
+values, the transcript hash, and the limitation are in PHASE6.md §8; the
+runbook summary is §13. The open-ended fixture above is unchanged and remains
+the phase 3-5 frame-level evidence.
 
 ## Troubleshooting
 

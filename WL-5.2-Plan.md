@@ -723,7 +723,17 @@ a second failure stops the sequence for a human decision.
 | 3 — HIL frame-level bring-up | Done | `021e12f`, `477176f` | [41215865030](https://github.com/r2k-in-the-vortex/stc/actions/runs/41215865030) — success |
 | 4 — software fault, recovery, status | Done (service stop/start completed in phase 5) | `938aa93`, `1fdd4ef` | [41219308011](https://github.com/r2k-in-the-vortex/stc/actions/runs/41219308011) — success |
 | 5 — CT sweep, draft report | Done (true floor 150 µs; 100 µs fails on host jitter) | `5af4e38`, `f7af882`, `77cab14`, `cfa5a7b` | [41258175770](https://github.com/r2k-in-the-vortex/stc/actions/runs/41258175770) — success |
-| 6 — harness, all manual tests, final report | In progress — preparation committed `58719ac`; awaiting owner manual execution | `58719ac` | [41260320350](https://github.com/r2k-in-the-vortex/stc/actions/runs/41260320350) — success |
+| 6 — harness, all manual tests, final report | Done (with limitation) — 2026-11-01 supply-limited run: Faults A/B passed, C covered by A, restore captured; all-points matrix skipped (no output-stage supply), so the 16 physical input paths remain unverified | `58719ac` + final evidence commit (change log) | [41260320350](https://github.com/r2k-in-the-vortex/stc/actions/runs/41260320350) — prep success |
+
+**Phase 6 outcome (2026-11-01).** Faults A and B passed in the supply-limited variant; Fault C is
+covered by A; the restore state was Idle/PREOP with no `stc` process. The automated all-points
+matrix was not executed because the module's separate output-stage supply was unavailable, so the
+16 physical input paths and output-driver-to-input-opto loops remain unverified. The phase-6
+acceptance item "all 16 inputs and 16 outputs are verified automatically" is therefore **not
+met**. The limitation is recorded in PHASE6.md §8, the runbook §13, the report
+[EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md), and KNOWN-LIMITATIONS §8. Do not
+describe this as a full phase-6 pass. The matrix can be rerun when a second 24 V supply is
+available; the procedure and harness are ready.
 
 Status values: Not started, In progress, Done, Blocked. The orchestrator updates this table after
 each phase; the next phase's commit carries the update.
@@ -784,10 +794,11 @@ evidence is single-slave (E-9).
   cannot be built).
 - Optional package artifact: `stc-io-ethercat` with the shim, sample configuration, notices, and
   SHA256.
-- Report: `specification/Verification/EtherCAT-Host.md` with host, IgH version, slave identity,
-  wiring, the CT-sweep table, the fastest maintainable CT, the first failing CT and failure
-  mode, transparent-fault evidence, status-register traces, distributions, faults, and limits.
-  It separates frame-level evidence (phases 3–5) from physical I/O evidence (phase 6).
+- Report: [specification/Verification/EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md)
+  with host, IgH version, slave identity, wiring, the CT-sweep table, the fastest maintainable
+  CT, the first failing CT and failure mode, transparent-fault evidence, status-register traces,
+  distributions, faults, and limits. It separates frame-level evidence (phases 3–5) from physical
+  I/O evidence (phase 6) and records the phase-6 all-points limitation.
 - Runbook: `specification/Verification/EtherCAT-Runbook.md` with prerequisites, shim install,
   fixture build, profile selection, the open-ended phase 3–5 procedure, the phase-6 harness and
   manual tests, physical fault injection, recovery, and cleanup.
@@ -1011,3 +1022,4 @@ phase-0/1 defaults and do not change the scope.
 | 2026-11-01 | Phase 6 preparation committed as `58719ac`, CI run 41260320350 green. The loopback all-points program, `PHASE6.md` manual checklist, harness, and CI compile check are ready; no manual/physical test has run. Added WL-12 (wake-up jitter) as deferred and out of scope for WL-5.2. |
 | 2026-10-31 | Phase 5 service test and CT sweep recorded. Idle stop/start restored the unit, Idle master, and PREOP slave; a stop during a run left the unit `failed` and the module loaded because it was in use, while the runtime stayed healthy, and `start` restored the unit. The 60 s sweep passed 1 ms (118311 cycles, zero skipped, execution p99 47.1 µs), failed at 500 µs on 154 skipped periods correlated with the 1 MiB metrics-buffer flush (frame path healthy, execution p99 52.4 µs), and the 600 s 1 ms confirmation passed (658325 cycles, zero skipped, execution p99 47.6 µs). Fastest maintainable CT 1 ms; first failing CT 500 µs; 250 µs and below not run; the wrapper allowlist is unchanged. Runbook §10.6–§10.8 and the DIEWU README are updated. |
 | 2026-11-01 | Phase 5 rerun after the metrics fix (commit `77cab14`, CI run 41240860169; deployed stc `391d2ea0…`, shim `bceeb601…`, runner `5947c8df…`). The 60 s sweep passed 1 ms, 500 µs, 250 µs, 200 µs, and 150 µs with zero skipped periods, zero dropped records, and execution p99 47.1–49.3 µs; the 600 s confirmation at 150 µs passed (4388666 cycles, zero skipped, zero dropped, execution p99 49.0 µs). The 100 µs step failed on 283 skipped periods in 283 one-period events (wake lateness up to 133.3 µs) while execution p99 stayed 48.8 µs and the frame path stayed healthy. Fastest maintainable CT 150 µs; first failing CT 100 µs; 75 µs and below not run; the wrapper allowlist is unchanged. The runner now also gates on zero dropped records, allows the IgH tool's one-frame travelling lost-frame allowance, and extracts distributions with `cut` instead of a slow regex. Runbook §10.5–§10.8 and the DIEWU README are updated. |
+| 2026-11-01 | Phase 6 executed in the supply-limited variant: module logic from the 24 V barrel jack, no separate output-stage `DC5-48V` supply, input loop unpowered. Fault A (host-end unplug/replug) and Fault B (DIEWU power cycle) passed: `OUTPUTMASK` stayed 65535 through both, `STATUSINPUTSTALE` was true during and false after, `SCANCOUNT` advanced through both link-down windows, and the same configured slave recovered (`STATUSRECOVERIES` 1 then 2) without a cold download or host restart. Fault C is covered by A. The all-points matrix was skipped and the 16 physical input paths remain unverified, so the phase-6 all-points acceptance item is **not met**; this is recorded as a limitation, not a pass. Restore: Idle/`Active: no`/PREOP, no `stc` process, Tx errors 0, lost frames 9476 cumulative with no before sample. Transcript SHA-256 `b0ca162d…`; report `EtherCAT-Host.md` added; runbook §13, PHASE6.md §8, the DIEWU READMEs, and KNOWN-LIMITATIONS §8 updated. |

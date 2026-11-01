@@ -2,9 +2,11 @@
 
 This is the manual procedure for the phase-6 loopback matrix on `ecat-host`.
 It is written to be executed by the owner or technician; the automated
-preparation commit adds the test program, harness, and this checklist but does
-**not** execute any part of it. The results table in §8 is intentionally
-blank.
+preparation commit adds the test program, harness, and this checklist. It was
+executed on 2026-11-01 in the supply-limited variant: §4 was skipped because no
+output-stage supply was available, Faults A and B were executed, Fault C was
+covered by Fault A, and the restore state was captured. The observed results
+are in §8.
 
 The procedure covers:
 
@@ -217,10 +219,18 @@ The harness closes the session and shuts the host down; do not kill processes.
 Record the log path, exit code, `Pass`, `FailMask`, `ObservedMask`, and the
 status values in §8.
 
+> **Supply-limited variant (2026-11-01).** If the output-stage supply is
+> unavailable, skip §4. The input loop is unpowered, so `INPUTMASK` is `0` at
+> the baseline and during faults; use `OUTPUTMASK`, the status fields, and
+> `SCANCOUNT` as the evidence. Record the skipped all-points matrix and the
+> unverified physical I/O in §8. Do not treat this variant as a pass of §4.
+
 ## 5. Physical fault injection
 
 All three cases use the same observation method and the same `Hold` mode.
-Run them only after the all-points matrix passed with `faults=0`.
+Normally run them after the all-points matrix passed with `faults=0`; with no
+output-stage supply, use the supply-limited variant above and expect
+`INPUTMASK=0`.
 
 ### 5.1 Observation method
 
@@ -287,8 +297,9 @@ print DIEWU-LOOPBACK::STATUSSLAVEOPERATIONAL
 print DIEWU-LOOPBACK::SCANCOUNT
 ```
 
-Expected baseline: `DONE=true`, `OUTPUTMASK=65535`, `INPUTMASK=65535`,
-`STATUSFAULTS=0`, `STATUSINPUTSTALE=false`, `STATUSRECOVERIES=0`,
+Expected baseline: `DONE=true`, `OUTPUTMASK=65535`, `INPUTMASK=65535`
+(`INPUTMASK=0` in the supply-limited variant), `STATUSFAULTS=0`,
+`STATUSINPUTSTALE=false`, `STATUSRECOVERIES=0`,
 `STATUSWCSTATE=2`, `STATUSLINKUP=true`, `STATUSSLAVEALSTATE=8`,
 `STATUSSLAVEOPERATIONAL=true`, and `SCANCOUNT` advancing. If any value differs,
 do not inject a fault: record the state and stop.
@@ -318,14 +329,15 @@ do not inject a fault: record the state and stop.
    not 2 (record 0 or 1), `STATUSLINKUP=false`, `STATUSSLAVEALSTATE` not 8
    (record the observed value), `STATUSSLAVEOPERATIONAL=false`, `SCANCOUNT`
    has advanced since the baseline (the PLC keeps running), `OUTPUTMASK=65535`
-   (the runtime image is unchanged), and `INPUTMASK=65535` (the last received
-   inputs are presented stale).
+   (the runtime image is unchanged), and `INPUTMASK=65535` (`0` when the
+   input loop is unpowered; the stale flag is then the input evidence).
 
 3. While still faulted, demonstrate the stale input image: type
    `set DIEWU-LOOPBACK::HOLD FALSE`, wait one second, then print
    `OUTPUTMASK` and `INPUTMASK`. Expect `OUTPUTMASK=0` (the PLC now drives all
-   outputs off) while `INPUTMASK` is still `65535` (the slave cannot receive
-   the new outputs and the runtime presents the last received image).
+   outputs off) while `INPUTMASK` is still `65535` (`0` in the supply-limited
+   variant; the slave cannot receive the new outputs and the runtime presents
+   the last received image).
 4. Replug the cable. Wait up to 10 seconds, then print the same status
    fields. Expected after recovery: `STATUSLINKUP=true`,
    `STATUSSLAVEOPERATIONAL=true`, `STATUSSLAVEALSTATE=8`,
@@ -343,7 +355,8 @@ Record the observed values and the recovery time in §8.
 1. Return to the baseline with the link healthy: confirm `STATUSINPUTSTALE`
    is false, `STATUSSLAVEOPERATIONAL` is true, and `STATUSWCSTATE=2`.
    Type `set DIEWU-LOOPBACK::HOLD TRUE`, wait one second, and confirm
-   `OUTPUTMASK=65535` and `INPUTMASK=65535`.
+   `OUTPUTMASK=65535` and `INPUTMASK=65535` (`0` in the supply-limited
+   variant).
 2. Switch off the DIEWU supply. Wait 5 seconds, then print the status fields
    in §5.3 step 2. Expected: a new fault episode (`STATUSFAULTS` increases by
    one), `STATUSINPUTSTALE=true`, `STATUSLINKUP=false`, the slave not
@@ -355,7 +368,8 @@ Record the observed values and the recovery time in §8.
    link up, slave online and operational with AL state 8, `STATUSWCSTATE=2`,
    `STATUSINPUTSTALE=false`, `STATUSRECOVERIES` increased by one,
    `SCANCOUNT` advancing, and `OUTPUTMASK=65535` with `INPUTMASK` returning to
-   `65535` (the held outputs resumed through the loopback).
+   `65535` (`0` in the supply-limited variant; the held outputs resumed at the
+   slave, observed through the output LEDs).
 4. Type `set DIEWU-LOOPBACK::HOLD FALSE`, wait one second, and confirm
    `OUTPUTMASK=0` and `INPUTMASK=0`.
 
@@ -368,6 +382,12 @@ stop, keep the log, and report.
 This case disconnects the same configured slave at the DIEWU IN port while the
 slave stays powered, then reconnects it. It is the hot-swap path E-6 allows;
 adding or removing a device would be a topology change and is out of scope.
+
+> **2026-11-01 execution note.** Fault C was not run separately. With a single
+> direct cable between the host NIC and the DIEWU IN port, unplugging either
+> end produces the same slave-side link loss, and Fault A (host-end unplug)
+> already reconnected the same configured slave while it stayed powered. The
+> §8.2 Fault C column records that this case is covered by Fault A.
 
 1. Return to the healthy baseline with Hold on (`OUTPUTMASK=65535`,
    `INPUTMASK=65535`, `STATUSINPUTSTALE=false`, `STATUSWCSTATE=2`).
@@ -447,57 +467,111 @@ the deployment, `uname -r`, and the IgH version (`ethercat version`). The
 all-points log contains the build ID and generation printed by the harness;
 the fault session log contains the status values in command order.
 
-## 8. Results (left for the owner to fill)
+## 8. Results
 
-Do not pre-fill this table. Record the observed values, not the expected ones.
-Use the absolute counters and deltas; the first fault in a fresh session is
-`faults=1`.
+Executed 2026-11-01 on `ecat-host` in the supply-limited variant. The
+all-points matrix (§4) was not run because no output-stage supply was
+available. Faults A and B were executed; Fault C is covered by Fault A. The
+restore state was captured. Raw logs remain on the host; only the summary and
+hashes are recorded here. Do not infer an all-points pass from this run.
 
 ### 8.1 Bench and wiring
 
 | Item | Record |
 | --- | --- |
-| Date/time and operator | |
-| Host, kernel, IgH version | |
-| Package version and package/shim SHA256 | |
-| Supply voltage (12 V or 24 V) | |
-| S1-S4 tied to supply positive | |
-| All 16 wires checked against §2.2 | |
-| Faults=0 and stale=false at the held baseline | |
-| All-points log path and SHA256 | |
-| All-points exit code | |
-| All-points `Pass` / `FailMask` / `ObservedMask` | |
-| All-points `faults` / `stale` / `wc_state` / `slave_al_state` | |
+| Date/time and operator | 2026-11-01, fault session 14:32:22–14:33:34 (host timestamp in the transcript filename); bench work by the owner/operator at login `r2k` |
+| Host, kernel, IgH version | `ecat-host`, kernel `6.12.115-ecat-rt` PREEMPT_RT, IgH 1.6.13, CPU 3 isolated |
+| Package version and package/shim SHA256 | `stc 1.0.0`; phase-5 deployment unchanged in phase 6: `bin/stc` `391d2ea09ddb216efd7f0251324f91f50e363a09d927d023090a51a43cf5d65e`, `lib/libstc_io_ethercat.so` `bceeb6014076f41958b0ae4442f744fc3035af3544bcd5a046e278089e5df448`. Debug session build `0x672c20bf1bc31fc0c76cbb939183e310`. |
+| Supply voltage (12 V or 24 V) | Module logic powered from the 24 V barrel jack. The separate output-stage `DC5-48V` supply was **not available**, so the input loop was unpowered. |
+| S1-S4 tied to supply positive | Wired to the output-stage `VCC`; that supply was unpowered during the run. |
+| All 16 wires checked against §2.2 | Owner confirmed the 16 OUTn→INn wires and S1–S4 commons before the run. The output walk was observed on the module LEDs; the input loop could not be energized. |
+| Faults=0 and stale=false at the held baseline | Yes: `STATUSFAULTS=0`, `STATUSINPUTSTALE=false`, `STATUSWCSTATE=2`, `STATUSWORKINGCOUNTER=3`, `STATUSLINKUP=true`, `STATUSSLAVEALSTATE=8`, `STATUSSLAVEOPERATIONAL=true`, `STATUSRECOVERIES=0`, `SCANCOUNT=18735`, `OUTPUTMASK=65535`, `INPUTMASK=0`. |
+| All-points log path and SHA256 | Not produced — §4 skipped (supply-limited variant). |
+| All-points exit code | Not applicable — §4 skipped. |
+| All-points `Pass` / `FailMask` / `ObservedMask` | Not measured — §4 skipped. Do not infer a pass or a wiring result from the unpowered fault session. |
+| All-points `faults` / `stale` / `wc_state` / `slave_al_state` | Not measured — §4 skipped; the fault-session baseline above is not a matrix result. |
+
+The loopback project blobs at `58719ac` used by the session were:
+
+| File | SHA256 |
+| --- | --- |
+| `stc.toml` | `6c85941e902d254652b4f34d412a9f585e66d4d365fd3c6a10bd742e05afd98d` |
+| `io/bench.toml` | `8208ffaf3b581adcd3cbe5444bcaeae5165cbbb522c0e21bf0c934d204a2aa85` |
+| `src/main.st` | `7dccdabd61492b70f5ded14d16b7e3c3839f9846fde85e48ecc7bf10d135a049` |
+| `loopback_test.py` | `4d77830dd15b5669cab11f9380d9f76525778137034c7ce7bf2c9f2170c5ee50` |
+| `build.sh` | `67ad1076fe49825d5e61e2cfeb738edcc4a07cceae7046f72d1a9626f18969b7` |
+| `run-loopback.sh` | `5bee642b69369f67367d3ea9df46baa5ed4df01e3f703b9afa5d53f9e391665c` |
+| `fault-session.sh` | `3dcb9e82cfc0acf64f41c44d4480c1b4691cfc137580c10a8e5274bac2f17578` |
 
 ### 8.2 Physical fault matrix
 
+The held baseline for both faults was the §8.1 row. A and B were run in one
+debug session; `STATUSFAULTS` is cumulative and `STATUSRECOVERIES` increments
+only when the link and slave return. `STATUSPHASE` stayed 2 (IgH Operation)
+during both faults; only the slave link was down.
+
 | Observation | Fault A: cable unplug/replug | Fault B: DIEWU power cycle | Fault C: slave-side reconnect |
 | --- | --- | --- | --- |
-| Fault start time | | | |
-| `STATUSFAULTS` before / during / after | | | |
-| `STATUSINPUTSTALE` during / after | | | |
-| `STATUSRECOVERIES` before / after | | | |
-| `STATUSWCSTATE` during / after | | | |
-| `STATUSLINKUP` during / after | | | |
-| `STATUSSLAVEALSTATE` during / after | | | |
-| `STATUSSLAVEOPERATIONAL` during / after | | | |
-| `SCANCOUNT` advancing during the fault (yes/no) | | | |
-| `OUTPUTMASK` during / after | | | |
-| `INPUTMASK` during / after | | | |
-| `INPUTMASK` after `HOLD FALSE` during the fault | | | |
-| Recovery time (s) | | | |
-| Result (pass/fail) and notes | | | |
+| Fault start time | 2026-11-01 ~14:32:5x (host log time) | ~14:33:2x (host log time) | Not run — covered by A |
+| `STATUSFAULTS` before / during / after | 0 / 1 / 1 | 1 / 2 / 2 | Covered by A |
+| `STATUSINPUTSTALE` during / after | true / false | true / false | Covered by A |
+| `STATUSRECOVERIES` before / after | 0 / 1 | 1 / 2 | Covered by A |
+| `STATUSWCSTATE` during / after | 0 / 2 | 0 / 2 | Covered by A |
+| `STATUSLINKUP` during / after | false / true | false / true | Covered by A |
+| `STATUSSLAVEALSTATE` during / after | 0 / 8 | 0 / 8 | Covered by A |
+| `STATUSSLAVEOPERATIONAL` during / after | false / true | false / true | Covered by A |
+| `SCANCOUNT` advancing during the fault (yes/no) | yes, 18735 → 26869 → 36216 | yes, 36216 → 59754 → 71306 | Covered by A |
+| `OUTPUTMASK` during / after | 65535 / 65535 | 65535 / 65535 | Covered by A |
+| `INPUTMASK` during / after | 0 / 0 | 0 / 0 | Covered by A |
+| `INPUTMASK` after `HOLD FALSE` during the fault | Not performed; 0 expected | Not performed; 0 expected | Not performed |
+| Recovery time (s) | Values read within the 10 s window after replug; exact time not measured | Values read within the 30 s window after repower; exact time not measured | — |
+| Result (pass/fail) and notes | Pass (supply-limited). Output LEDs cleared while the link was down and returned on replug with `OUTPUTMASK=65535`; the held image was re-sent to the same configured slave. | Pass (supply-limited). Output LEDs cleared while the slave was off and returned on repower with `OUTPUTMASK=65535`; no cold download or host restart. | Covered by A: one direct cable, so host-end and slave-end unplug are the same link-loss path; the slave stayed powered in A, which is the configured-slave reconnect case. |
+
+`SCANCOUNT` advanced +8134, +9347, +23538, and +11552 scans across the four
+observation intervals (1 ms task), including both link-down windows. The
+intervals include operator time, not recovery latency. `STATUSFAULTS` stayed at
+the fault-time value after recovery; the stale flag cleared and recoveries
+incremented. `INPUTMASK=0` throughout is the unpowered input loop, not a
+wiring result; `STATUSINPUTSTALE=true` is the stale-image evidence. The
+`HOLD FALSE`-during-fault step was skipped; with `INPUTMASK=0` it would not
+distinguish the stale image. The session exited with `HOLD` still true; the
+runtime shutdown/watchdog path handled the stopped frames, as in phase 3.
+`DONE` was not printed; the baseline was taken at cycle 18735, long after the
+16-channel walk would finish (about 0.4 s at 1 ms), but the flag value was not
+captured and is not used as evidence.
 
 ### 8.3 Restore state
 
 | Item | Record |
 | --- | --- |
-| `ethercat master` after the session (Phase, Active) | |
-| Tx errors / lost frames before vs after | |
-| `ethercat slaves` after release (PREOP) | |
-| Session log path and SHA256 | |
-| Fault-session transcript path and SHA256 | |
-| Remaining `stc` processes (none expected) | |
+| `ethercat master` after the session (Phase, Active) | `Phase: Idle`, `Active: no`, `Slaves: 1`, link UP |
+| Tx errors / lost frames before vs after | Before sample **not captured** (`master-phase6-before.txt` was not created). After: Tx errors **0**; Lost frames **9476** cumulative, loss rate 0/s and 0.0% at capture. The phase-5 sweep ended at lost frames 1953; the increase occurred after phase 5 and is consistent with frames sent during the fault sessions' link-down windows, and may include the earlier 14:28 attempt. The session delta is not established. |
+| `ethercat slaves` after release (PREOP) | `0 0:0 PREOP + DIEWU EtherCAT-IO (Digital 16-Input/16-Output)` |
+| Session log path and SHA256 | `/home/r2k/stc-wl52/logs/fault-session-20261101T143222.log` — `b0ca162d1af768805d0710601878847c1bedf468596e5669dfa4d7cc7b117148` |
+| Fault-session transcript path and SHA256 | Same file; it is the `tee` transcript of the debug session. |
+| Remaining `stc` processes (none expected) | None (`pgrep -a stc` empty). |
+
+Two earlier transcripts are also on the host:
+`fault-session-20261031T195031.log` (`16a81adec0bdedf2fc29b161c2ae17f9ade528aa04f629a6251262d10f45a6e7`)
+and `fault-session-20261101T142834.log`
+(`80b0db21d673b2620bbc77ed2bfa15da969cd4aec4b4e4e7dc569d0fbd8ab57f`). They
+are earlier attempts and are not the evidence for this table; the 14:32
+transcript was selected with `grep -l 'STATUSFAULTS] = 2'`.
+
+### 8.4 Outcome
+
+- Fault A and Fault B pass in the supply-limited variant: the runtime held the
+  PLC output image (`OUTPUTMASK=65535`) through both link-loss episodes,
+  presented stale inputs (`STATUSINPUTSTALE=true`), kept scanning
+  (`SCANCOUNT` advancing), and recovered the same configured slave without a
+  cold download or host restart (`STATUSRECOVERIES` 1 then 2).
+- Fault C is covered by Fault A; it was not run separately.
+- The all-points matrix was **not executed** because the output-stage supply
+  is unavailable. All 16 physical input paths and output-driver-to-input-opto
+  loops remain unverified. This is a limitation, not a pass.
+- The 2026-11-01 run does not complete the phase-6 all-points acceptance
+  criterion. It does complete the A/B fault-recovery evidence and the restore
+  state.
 
 ## 9. Stop conditions
 

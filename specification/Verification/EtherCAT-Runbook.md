@@ -1,14 +1,12 @@
 # EtherCAT HIL verification runbook — WL-5.2
 
 Profile: `stc-2013-oop-utf8-v1`  
-Date: 2026-10-31  
-Status: Draft. The phase-3 open-ended procedure plus the phase-4 software-fault, status-register,
-and online-change evidence are recorded here; phase 5 records the privileged wrapper install, the
-service stop/start result, and the cycle-time sweep result in §10. The phase-6 loopback procedure
-is recorded in [tests/ethercat/diewu/PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) and has not
-been executed. Results are
+Date: 2026-11-01  
+Status: Phase 3–5 evidence and the phase-6 fault/restore results are recorded. The phase-6
+all-points loopback matrix was not executed because the output-stage supply was unavailable; the
+supply-limited fault variant (A/B, C covered by A) and the restore state are in §13. Results are
 host- and hardware-specific; this is not a hard real-time guarantee and not a safety function.  
-Parent: [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 (phases 3–5)  
+Parent: [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 (phases 3–6)  
 Inputs: [I/O Routing and Backends](../Architecture/IO-Routing-and-Backends.md),
 [I/O and Devices](../Architecture/IO-and-Devices.md),
 [DIEWU fixture](../../tests/ethercat/diewu/README.md)
@@ -953,7 +951,71 @@ Phase 6 adds the loopback harness, the automated all-points matrix, physical fau
 (cable unplug/replug, slave power cycle, configured-slave reconnect), and the final report. The
 self-contained loopback project is
 [tests/ethercat/diewu/loopback](../../tests/ethercat/diewu/loopback/README.md); the wiring,
-all-points, physical fault-injection, evidence, and restore procedure with a blank results table
-is [tests/ethercat/diewu/PHASE6.md](../../tests/ethercat/diewu/PHASE6.md). That procedure has been
-recorded and its project is compile-checked in CI, but it has **not** been executed; no phase-6
-result is claimed here.
+all-points, physical fault-injection, evidence, and restore procedure is
+[tests/ethercat/diewu/PHASE6.md](../../tests/ethercat/diewu/PHASE6.md). The procedure was executed
+on 2026-11-01 in the supply-limited variant: the all-points matrix was skipped because no
+output-stage supply was available; Faults A and B passed, Fault C is covered by A, and the
+restore state was captured. The evidence is §13 and PHASE6.md §8. The all-points acceptance
+criterion is **not** met; see the limitation in §13.
+
+## 13. Phase 6 evidence (2026-11-01)
+
+The observed values are recorded in
+[tests/ethercat/diewu/PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) §8. This section is the
+runbook summary.
+
+**Supply-limited variant.** The module logic was powered from the 24 V barrel jack, but the
+separate output-stage `DC5-48V` supply was not available. The input loop was therefore unpowered
+and `INPUTMASK` was 0 throughout. The automated all-points matrix (§4 of the procedure) was not
+run, so the 16 physical input paths and the output-driver-to-input-opto loops remain unverified.
+This is a limitation, not a pass.
+
+**Fault/recovery result.** One `stc debug` session (1 ms, `--cycles 0`) held all outputs on
+(`HOLD TRUE`) and injected Fault A (host-end cable unplug/replug, slave powered) and Fault B
+(DIEWU power cycle). Fault C (slave-end unplug) was not run separately: with one direct cable,
+host-end and slave-end unplug are the same link-loss path, and Fault A reconnected the same
+configured slave while it stayed powered.
+
+| Observation | Baseline | A during | A after | B during | B after |
+| --- | --- | --- | --- | --- | --- |
+| `STATUSFAULTS` | 0 | 1 | 1 | 2 | 2 |
+| `STATUSINPUTSTALE` | false | true | false | true | false |
+| `STATUSRECOVERIES` | 0 | 0 | 1 | 1 | 2 |
+| `STATUSWCSTATE` | 2 | 0 | 2 | 0 | 2 |
+| `STATUSWORKINGCOUNTER` | 3 | 0 | 3 | 0 | 3 |
+| `STATUSLINKUP` | true | false | true | false | true |
+| `STATUSSLAVEALSTATE` | 8 | 0 | 8 | 0 | 8 |
+| `STATUSSLAVEOPERATIONAL` | true | false | true | false | true |
+| `SCANCOUNT` | 18735 | 26869 | 36216 | 59754 | 71306 |
+| `OUTPUTMASK` | 65535 | 65535 | 65535 | 65535 | 65535 |
+| `INPUTMASK` | 0 | 0 | 0 | 0 | 0 |
+
+`STATUSPHASE` stayed 2 (IgH Operation) during both faults. `SCANCOUNT` advanced +8134, +9347,
++23538, and +11552 scans across the observation intervals (1 ms task), so the cycle and PLC kept
+running through both link-down windows. `OUTPUTMASK` stayed 65535 through both faults: the
+runtime did not rewrite the PLC output image. `STATUSINPUTSTALE` was true during each fault and
+cleared on recovery; `STATUSRECOVERIES` incremented once per recovery; the same configured slave
+returned without a cold download or host restart. The physical output LEDs cleared during each
+fault and returned on replug/repower, consistent with the slave watchdog dropping the outputs and
+the master re-sending the held image on recovery.
+
+**Restore state.** After the session: `ethercat master` was `Phase: Idle`, `Active: no`, one
+slave; `ethercat slaves` was `0 0:0 PREOP + DIEWU ...`; `pgrep -a stc` was empty; Tx errors were
+0. Lost frames were 9476 cumulative at the restore sample (phase 5 ended at 1953); no before
+sample was captured for this session (`master-phase6-before.txt` was not created), so the session
+delta is not established. The increase is consistent with frames sent during the fault sessions'
+link-down windows and may include an earlier attempt. The master loss rate at capture was 0/s and
+0.0%.
+
+**Evidence.** The used transcript is
+`/home/r2k/stc-wl52/logs/fault-session-20261101T143222.log`, SHA-256
+`b0ca162d1af768805d0710601878847c1bedf468596e5669dfa4d7cc7b117148`. The loopback project blobs
+at `58719ac` are hashed in PHASE6.md §8.1. Two earlier transcripts
+(`fault-session-20261031T195031.log` `16a81ade…`,
+`fault-session-20261101T142834.log` `80b0db21…`) are earlier attempts and are not the evidence
+for this table.
+
+**Limitations.** No all-points matrix; no powered input path; no separate Fault C; the
+`HOLD FALSE`-during-fault step and the final `HOLD FALSE` step were not performed (the session
+exited with `HOLD` true and shutdown/watchdog handled the stopped frames); recovery time was not
+measured, only sampled within the procedure windows; one host, one slave. Not a safety function.
