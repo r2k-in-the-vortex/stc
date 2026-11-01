@@ -3745,8 +3745,7 @@ theorem wfState_status {contract : IRContract} {c : IRState} (st : IRStatus)
 theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     {rest : List IRFrame}
     (hwf : WFState contract c) (hframes : c.frames = f :: rest)
-    (hid : g.id = f.id) (hfn : g.fn = f.fn) (hblock : g.block = f.block)
-    (hterm : g.terminator = f.terminator) (hprev : g.prev = f.prev)
+    (hid : g.id = f.id) (hfn : g.fn = f.fn)
     (hretDest : g.retDest = f.retDest)
     (halloc : ∀ slot ty, f.allocType? slot = some ty → g.allocType? slot = some ty)
     (hblockMem : ∃ block ∈ g.fn.blocks, g.block = block ∧
@@ -3990,7 +3989,7 @@ theorem wfState_withHeadInstrs {contract : IRContract} {c : IRState} {instrs : L
         simp [IRState.withHeadInstrs, IRState.withHead, hframes]
       rw [hsame]
       have hmem : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
-      exact wfState_withHead hwf hframes rfl rfl rfl rfl rfl rfl
+      exact wfState_withHead hwf hframes rfl rfl rfl
         (fun slot ty hty => hty)
         (hblockNew f rest hframes)
         (hwf.framePrev f hmem)
@@ -5081,6 +5080,59 @@ theorem block?_eq_some {fn : Function} {label : Label} {block : Block}
       have hbeq : b = block :=
         eq_of_mem_of_nodup_map (f := Block.label) hnd hbmem hmem (by rw [hblabel, hlabel])
       rw [hbeq]
+
+/-- A jump to a successor block preserves the state invariant. Only the head
+frame's block, remaining instructions, terminator, and recorded predecessor
+change, so every fact about locals, memory, allocations, and the frame function
+carries over unchanged; the target block supplies the new block/terminator
+shape, the CFG edge supplies `PrevEdge`, and `UnreachableGuarded` supplies the
+no-bare-unreachable fact. -/
+theorem wfState_jumpStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {target : Label} {block : Block}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hblock? : f.fn.block? target = some block)
+    (hsucc : block.label ∈ f.block.successors) :
+    WFState contract
+      (c.withHead
+        { f with
+          block := block, instrs := block.instrs,
+          terminator := block.terminator, prev := some f.block.label }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  have hbmem : block ∈ f.fn.blocks := by
+    unfold Function.block? at hblock?
+    exact List.mem_of_find?_eq_some hblock?
+  rcases hwf.frameBlock f hf with ⟨block0, hblock0, hblockEq, htermEq, done, hdone⟩
+  have hfblock? : f.fn.block? f.block.label = some f.block :=
+    block?_eq_some hnd (by rw [hblockEq]; exact hblock0) rfl
+  refine wfState_withHead hwf hframes rfl rfl rfl (by intro slot ty hty; exact hty)
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
+  · exact ⟨block, hbmem, rfl, rfl, [], rfl⟩
+  · exact Or.inr ⟨f.block.label, f.block, rfl, hfblock?, hsucc⟩
+  · intro hinst htermU
+    change block.instrs = [] at hinst
+    change block.terminator = some .unreachable at htermU
+    rcases hwf.program.unreachableGuarded f.fn hfunMem block hbmem htermU with
+      ⟨instr, hlast, _⟩
+    rw [hinst] at hlast
+    simp at hlast
+  · exact hwf.localsInitialized f hf
+  · exact hwf.localsTyped f hf
+  · exact hwf.originsMatch f hf
+  · exact hwf.allocsWellFormed f hf
+  · exact hwf.stackPtrsBounded f hf
+  · exact hwf.memTyped f hf
+  · exact hwf.memNoPtr f hf
+  · exact hwf.storagePtrsLive f hf
+  · exact hwf.slotsBase f hf
+  · exact hwf.noSlotsGlobalPointers.1 f hf
+  · exact hwf.noSlotsGlobalPointers.2.1 f hf
+  · exact hwf.stackReturnsSafe f hf
+  · exact hwf.slotsParamsSafe f hf
+  · exact hwf.payloadsTyped.1 f hf
+  · exact hwf.payloadsTyped.2.1 f hf
 
 theorem firstIndex?_some {α : Type} {p : α → Bool} {l : List α} :
     ∀ {i : Nat}, firstIndex? p l = some i → ∃ h : i < l.length, p l[i] = true := by
@@ -6834,7 +6886,7 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
     have hv' : f.lookupMem addr = some v := by
       simpa [IRFrame.lookupMem, IRFrame.setLocal] using hv
     exact hwf.payloadsTyped.2.1 f hf addr v hv'
-  exact wfState_withHead hwf hframes rfl rfl rfl rfl rfl rfl
+  exact wfState_withHead hwf hframes rfl rfl rfl
     (fun slot ty hty => hty) hblockMem hprevEdge hnoBare hlocalsInit hlocalsTyped
     horigins (hwf.allocsWellFormed f hf) hstackPtrs (hwf.memTyped f hf)
     (hwf.memNoPtr f hf) hstoragePtrs hslotsBase hnoSlotsLocals
@@ -8422,9 +8474,6 @@ theorem wfState_allocFrame {contract : IRContract} {c : IRState} {f : IRFrame}
           nextAlloc := f.nextAlloc + 1 }) := by
   have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
   apply wfState_withHead hwf hframes
-  · rfl
-  · rfl
-  · rfl
   · rfl
   · rfl
   · rfl
