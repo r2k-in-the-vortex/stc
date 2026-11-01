@@ -7076,4 +7076,150 @@ theorem callPtr_dest_notParam {fn : Function} {block : Block} {instr : Instr}
   rw [List.nodup_append] at hall
   exact hall.2.2 d hmem d hdestMem rfl
 
+/-! ## GEP evaluation helpers (P0.5 whole-run preservation) -/
+
+/-- The element offset summed by `evalGepAddr`. -/
+def gepOffset (indices : List Int) : Nat :=
+  indices.foldl (fun acc index => acc + index.toNat) 0
+
+theorem evalGepAddr_stack (frame slot baseOffset : Nat) (indices : List Int) :
+    evalGepAddr (.stack frame slot baseOffset) indices =
+      some (.stack frame slot (baseOffset + gepOffset indices)) := rfl
+
+theorem evalGepAddr_root (slot baseOffset : Nat) (indices : List Int) :
+    evalGepAddr (.root slot baseOffset) indices =
+      some (.root slot (baseOffset + gepOffset indices)) := rfl
+
+theorem evalGepAddr_global (name : String) (baseOffset : Nat) (indices : List Int) :
+    evalGepAddr (.global name baseOffset) indices =
+      some (.global name (baseOffset + gepOffset indices)) := rfl
+
+theorem evalGepAddr_slotTable_cons (index : Int) (rest : List Int) :
+    evalGepAddr .slotTable (index :: rest) = some (.slotEntry index.toNat) := rfl
+
+theorem evalGepAddr_slotTable_nil : evalGepAddr .slotTable ([] : List Int) = none := rfl
+
+theorem evalGepAddr_cell (slot : Nat) (indices : List Int) :
+    evalGepAddr (.cell slot) indices = none := rfl
+
+theorem evalGepAddr_function (name : String) (indices : List Int) :
+    evalGepAddr (.function name) indices = none := rfl
+
+theorem evalGepAddr_importCell (slot : Nat) (indices : List Int) :
+    evalGepAddr (.importCell slot) indices = none := rfl
+
+/-- Only a `.global` base produces a `.global` GEP result. -/
+theorem evalGepAddr_global_cases {addr : IRAddr} {indices : List Int} {addr' : IRAddr}
+    {g : String} {off : Nat} (h : evalGepAddr addr indices = some addr')
+    (ha : addr' = .global g off) : ∃ off0, addr = .global g off0 := by
+  cases addr with
+  | stack frame slot baseOffset =>
+      rw [evalGepAddr_stack] at h
+      rw [ha] at h
+      cases h
+  | slotEntry slot =>
+      simp [evalGepAddr] at h
+  | cell slot =>
+      rw [evalGepAddr_cell] at h
+      cases h
+  | root slot baseOffset =>
+      rw [evalGepAddr_root] at h
+      rw [ha] at h
+      cases h
+  | global name baseOffset =>
+      rw [evalGepAddr_global] at h
+      rw [ha] at h
+      injection h with hEq
+      injection hEq with hname _
+      subst hname
+      exact ⟨baseOffset, rfl⟩
+  | slotTable =>
+      cases indices with
+      | nil =>
+          rw [evalGepAddr_slotTable_nil] at h
+          cases h
+      | cons index rest =>
+          rw [evalGepAddr_slotTable_cons] at h
+          rw [ha] at h
+          cases h
+  | function name =>
+      rw [evalGepAddr_function] at h
+      cases h
+  | importCell slot =>
+      rw [evalGepAddr_importCell] at h
+      cases h
+
+theorem gepInBounds_stack {s : IRState} {f : IRFrame} {frame slot off : Nat}
+    (h : gepInBounds s f (.stack frame slot off) = true) :
+    frame = f.id ∧ ∃ ty, f.allocType? slot = some ty ∧ off < allocSize ty := by
+  simp only [gepInBounds] at h
+  by_cases hfr : (frame == f.id) = true
+  · have hfeq : frame = f.id := beq_iff_eq.mp hfr
+    rw [if_pos hfr] at h
+    cases ht : f.allocType? slot with
+    | none => simp [ht] at h
+    | some ty =>
+        rw [ht] at h
+        exact ⟨hfeq, ty, rfl, decide_eq_true_eq.mp h⟩
+  · rw [if_neg hfr] at h
+    cases h
+
+theorem gepInBounds_slotEntry {s : IRState} {f : IRFrame} {slot : Nat}
+    (h : gepInBounds s f (.slotEntry slot) = true) : slot < s.module.slots.length := by
+  simp only [gepInBounds] at h
+  exact decide_eq_true_eq.mp h
+
+theorem gepInBounds_root {s : IRState} {f : IRFrame} {slot off : Nat}
+    (h : gepInBounds s f (.root slot off) = true) :
+    ∃ values, s.lookupStorage (.root slot) = some values ∧ off < values.length := by
+  simp only [gepInBounds] at h
+  cases hs : s.lookupStorage (.root slot) with
+  | none => simp [hs] at h
+  | some values =>
+      have h' : decide (off < values.length) = true := by
+        simpa [hs] using h
+      exact ⟨values, rfl, decide_eq_true_eq.mp h'⟩
+
+theorem gepInBounds_global {s : IRState} {f : IRFrame} {name : String} {off : Nat}
+    (h : gepInBounds s f (.global name off) = true) :
+    ∃ values, s.lookupStorage (.global name) = some values ∧ off < values.length := by
+  simp only [gepInBounds] at h
+  cases hs : s.lookupStorage (.global name) with
+  | none => simp [hs] at h
+  | some values =>
+      have h' : decide (off < values.length) = true := by
+        simpa [hs] using h
+      exact ⟨values, rfl, decide_eq_true_eq.mp h'⟩
+
+/-- A singleton integer-literal operand list evaluates to its payload. -/
+theorem evalOperandInts_intLit_single {f : IRFrame} {ty : IrType} {value : Int}
+    {values : List Int} (h : evalOperandInts f [.intLit ty value] = some values) :
+    values = [value] := by
+  simp only [evalOperandInts, evalOperandInt?, evalOperand] at h
+  exact (Option.some.inj h).symm
+
+/-- The default value is never a pointer. -/
+theorem default_ne_ptr (ty : IrType) (addr : IRAddr) : IRValue.default ty ≠ .ptr addr := by
+  induction ty with
+  | void => intro h; cases h
+  | int bits => intro h; cases h
+  | ptr => intro h; cases h
+  | overflow bits => intro h; cases h
+  | array elem count ih => simpa [IRValue.default] using ih
+
+/-- A frame found by membership under unique ids is found by its own id. -/
+theorem frameById?_of_mem {c : IRState} {f : IRFrame}
+    (hnd : (c.frames.map (·.id)).Nodup) (hf : f ∈ c.frames) :
+    c.frameById? f.id = some f := by
+  unfold IRState.frameById?
+  have hsome : (c.frames.find? (fun g => g.id == f.id)).isSome := by
+    rw [List.find?_isSome]
+    exact ⟨f, hf, by simp⟩
+  cases hfind : c.frames.find? (fun g => g.id == f.id) with
+  | none => simp [hfind] at hsome
+  | some g =>
+      have hg : f = g := frame_eq_of_mem_of_frameById? hnd hfind hf (by simp)
+      subst hg
+      rfl
+
 end Stc.Codegen
