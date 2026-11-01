@@ -1563,7 +1563,8 @@ def ReturnLink (c : IRState) : Prop :=
     | none => True
     | some dest =>
         callee.fn.returnType ≠ .void ∧
-          caller.fn.localType? dest = some callee.fn.returnType
+          caller.fn.localType? dest = some callee.fn.returnType ∧
+          caller.fn.facts.originOf? dest = none
 ```
 
 One-step readiness is deliberately **not** a `WFState` field. It is the source-check obligation
@@ -1848,13 +1849,19 @@ def ReturnLink (c : IRState) : Prop :=
     | none => True
     | some dest =>
         callee.fn.returnType ≠ .void ∧
-          caller.fn.localType? dest = some callee.fn.returnType
+          caller.fn.localType? dest = some callee.fn.returnType ∧
+          caller.fn.facts.originOf? dest = none
 ```
 
 The bottom frame has `retDest = none` (shown in `WFState`). `retDest = none` covers void calls and
 statement calls whose value is ignored. When `retDest = some dest`, the callee must return a value
 of the caller's declared destination type, and `irStepRet`'s `some dest, none` stuck case is
 excluded by `returnType ≠ .void` plus `Terminator.WellTyped` (`ret none` requires a void return).
+The destination is also originless (`caller.fn.facts.originOf? dest = none`): call destinations
+are not `load`/`gep` definitions, so the builder records no pointer origin for them, and the
+return value is only type-correct — it need not have the cell or global shape an origin would
+require. This conjunct is established at `callFunction` from `OriginsTrusted` and the call
+instruction's unique destination; the entry frame is vacuous since its `retDest` is `none`.
 
 Direct calls are already covered: `WellTyped` for `.call` requires the callee signature in
 `directCallEnv` to have `returnType = ret`, the module function's signature is that signature,
@@ -2221,10 +2228,11 @@ Proposed extension: add `caller.fn.facts.originOf? dest = none` to the `some des
 `ReturnLink` (D4). It is builder-faithful — call destinations are not load/GEP definitions, so
 no pointer origin is recorded for them — and it is established at `callFunction` from
 `OriginsTrusted` plus the call instruction's unique destination. `initState?_wf` is unaffected
-(the entry frame's `retDest` is `none`). No invariant change is applied; the compiling
-checkpoint is `dc342b1`. All other `irStepRet` obligations (locals typing from the callee's
-return typing, stack/storage pointer bounds, memory typing, the frame-list fields) are
-prepared and need no further fact.
+(the entry frame's `retDest` is `none`). **Owner approved the extension on 2026-11-01**, and it
+is adopted in §22.6 (D4); no extra invariant field is introduced. The compiling checkpoint
+before the change is `dc342b1`. All other `irStepRet` obligations (locals typing from the callee's
+return typing, stack/storage pointer bounds, memory typing, the frame-list fields) are prepared
+and need no further fact.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
