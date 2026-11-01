@@ -6610,6 +6610,108 @@ theorem loadValue_cell_cases {c : IRState} {slot : Nat} {v : IRValue}
           exact Or.inr (Or.inr ⟨(Option.some.inj h').symm, rfl⟩)
       | descriptor => simp [hsk] at h'
 
+/-- The loaded value realizes an address-stage `.cell slot false` origin. -/
+theorem originHolds_cellFalse_of_load {contract : IRContract} {c : IRState} {f : IRFrame}
+    {block : Block} {dest : Ssa} {ty : IrType} {ptr : Operand} {align : Option Nat}
+    {addr : IRAddr} {value : IRValue} {slot : Nat}
+    (hwf : WFState contract c) (hf : f ∈ c.frames)
+    (hblock : block ∈ f.fn.blocks)
+    (hinstrMem : Instr.load dest ty ptr align ∈ block.instrs)
+    (horig : f.fn.facts.originOf? dest = some (.cell slot false))
+    (hptr : evalOperand f ptr = some (.ptr addr))
+    (hload : c.loadValue addr = some value) :
+    OriginHolds contract c (f.setLocal dest value) dest (.cell slot false) := by
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hmem : (dest, PointerOrigin.cell slot false) ∈ f.fn.facts.origins :=
+    mem_of_originOf? horig
+  rcases (hwf.program.originsTrusted f.fn hfunMem).2
+    (dest, PointerOrigin.cell slot false) hmem with ⟨hlocPtr, _, _⟩
+  rcases hwf.program.cellOriginsSlotEntry f.fn hfunMem
+    (dest, PointerOrigin.cell slot false) hmem slot false rfl with
+    ⟨ty', align', gepName, hloadDef, dest2, ty2, base, indices, inbounds,
+      hgepDef, hindices⟩
+  have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hloadDef
+  injection hEq with _ htyEq hptrEq halignEq
+  have hptrG : ptr = .local gepName := hptrEq.symm
+  have hlookupG : f.lookupLocal gepName = some (.ptr addr) := by
+    have h' : evalOperand f (.local gepName) = some (.ptr addr) := by
+      rw [← hptrG]; exact hptr
+    exact h'
+  have hgepMem : (gepName, slot) ∈ SlotEntries f.fn := by
+    unfold SlotEntries
+    rw [List.mem_filterMap]
+    refine ⟨(dest, PointerOrigin.cell slot false), hmem, ?_⟩
+    simp [hloadDef, hgepDef, hindices]
+  have hslotE := (hwf.slotsBase f hf).2.1 gepName slot hgepMem
+  have haddrEq : addr = .slotEntry slot := by
+    rcases hslotE with h | h
+    · have hEq' : (some (.ptr (.slotEntry slot)) : Option IRValue) = some (.ptr addr) :=
+        h.symm.trans hlookupG
+      exact (IRValue.ptr.inj (Option.some.inj hEq')).symm
+    · have hEq' : (some .null : Option IRValue) = some (.ptr addr) := h.symm.trans hlookupG
+      cases hEq'
+  have hsv : value = .ptr (.cell slot) := by
+    rw [haddrEq] at hload
+    exact loadValue_slotEntry hload
+  rcases hwf.program.originSlotKinds f.fn hfunMem
+    (dest, PointerOrigin.cell slot false) hmem slot rfl with
+    ⟨kind, hkind, hstorCall⟩
+  exact ⟨value, lookupLocal_setLocal_eq f dest value, hlocPtr,
+    Or.inr ⟨hsv, ⟨kind, hkind, hstorCall⟩⟩⟩
+
+/-- The loaded value realizes a value-stage `.cell slot true` origin through its
+address-stage local. -/
+theorem originHolds_cellTrue_of_load {contract : IRContract} {c : IRState} {f : IRFrame}
+    {block : Block} {dest : Ssa} {ty : IrType} {ptr : Operand} {align : Option Nat}
+    {addr : IRAddr} {value : IRValue} {slot : Nat}
+    (hwf : WFState contract c) (hf : f ∈ c.frames)
+    (hblock : block ∈ f.fn.blocks)
+    (hinstrMem : Instr.load dest ty ptr align ∈ block.instrs)
+    (horig : f.fn.facts.originOf? dest = some (.cell slot true))
+    (hptr : evalOperand f ptr = some (.ptr addr))
+    (hload : c.loadValue addr = some value) :
+    OriginHolds contract c (f.setLocal dest value) dest (.cell slot true) := by
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hmem : (dest, PointerOrigin.cell slot true) ∈ f.fn.facts.origins :=
+    mem_of_originOf? horig
+  rcases (hwf.program.originsTrusted f.fn hfunMem).2
+    (dest, PointerOrigin.cell slot true) hmem with ⟨hlocPtr, _, _⟩
+  rcases hwf.program.cellOriginsSlotEntry f.fn hfunMem
+    (dest, PointerOrigin.cell slot true) hmem slot true rfl with
+    ⟨ty', align', addrName, hloadDef, horiginAddr⟩
+  have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hloadDef
+  injection hEq with _ htyEq hptrEq halignEq
+  have hptrA : ptr = .local addrName := hptrEq.symm
+  have hlookupA : f.lookupLocal addrName = some (.ptr addr) := by
+    have h' : evalOperand f (.local addrName) = some (.ptr addr) := by
+      rw [← hptrA]; exact hptr
+    exact h'
+  have hmemA : (addrName, PointerOrigin.cell slot false) ∈ f.fn.facts.origins :=
+    mem_of_originOf? horiginAddr
+  rcases hwf.originsMatch f hf (addrName, PointerOrigin.cell slot false) hmemA with
+    ⟨v0, hv0, _, horigShape⟩
+  have hv0Eq : v0 = .ptr addr := by
+    rw [hlookupA] at hv0
+    exact (Option.some.inj hv0).symm
+  rcases horigShape with hnull | ⟨hcellA, kind, hkind, hstorCall⟩
+  · rw [hv0Eq] at hnull
+    cases hnull
+  · have haddrEq : addr = .cell slot := by
+      have hEq' : (IRValue.ptr addr) = .ptr (.cell slot) := hv0Eq.symm.trans hcellA
+      exact IRValue.ptr.inj hEq'
+    rw [haddrEq] at hload
+    rcases loadValue_cell_cases hload with
+      ⟨hroot, k, hk, hkd⟩ | ⟨fname, hfun, hvfn, hkf⟩ | ⟨himp, hki⟩
+    · refine ⟨value, lookupLocal_setLocal_eq f dest value, hlocPtr,
+        Or.inr ⟨k, hk, Or.inl ⟨?_, hroot⟩⟩⟩
+      rcases hkd with rfl | rfl <;> rfl
+    · rcases hwf.functionBindings slot fname hfun with ⟨fn, hfnM, hname, _⟩
+      exact ⟨value, lookupLocal_setLocal_eq f dest value, hlocPtr,
+        Or.inr ⟨.function, hkf,
+          Or.inr (Or.inl ⟨rfl, ⟨fname, hfun, hvfn, ⟨fn, hfnM, hname⟩⟩⟩)⟩⟩
+    · exact ⟨value, lookupLocal_setLocal_eq f dest value, hlocPtr,
+        Or.inr ⟨.importCell, hki, Or.inr (Or.inr ⟨rfl, himp⟩)⟩⟩
+
 theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
     {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
     (hud : FunctionUsesDefined fn) (hblock : block ∈ fn.blocks)
