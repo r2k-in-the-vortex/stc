@@ -2232,14 +2232,15 @@ Proposed extension: add `caller.fn.facts.originOf? dest = none` to the `some des
 no pointer origin is recorded for them — and it is established at `callFunction` from
 `OriginsTrusted` plus the call instruction's unique destination. `initState?_wf` is unaffected
 (the entry frame's `retDest` is `none`). **Owner approved the extension on 2026-11-01**, and it
-is adopted in §22.6 (D4); no extra invariant field is introduced. The compiling checkpoint
-before the change is `dc342b1`. The extension is implemented: `ReturnLink` carries the origin
-conjunct, the `callFunction` form takes it as `hretOrigin`, `WFProgram` gains the builder-trusted
-`CallDestsNoOrigin` fact (call destinations carry no recorded pointer origin — the builder's
-side of the §22.6 rationale), with `call_dest_origin_none`/`callPtr_dest_origin_none`, and
-`initState?_wf` is vacuous for it. All other `irStepRet` obligations (locals typing from the
-callee's return typing, stack/storage pointer bounds, memory typing, the frame-list fields) are
-prepared.
+is adopted in §22.6 (D4). The first implementation checkpoint (`250b7f2`) added a
+builder-trusted `WFProgram` field `CallDestsNoOrigin` (with `call_dest_origin_none` /
+`callPtr_dest_origin_none`) because the SSA-position uniqueness derivation was not formalized.
+**On 2026-11-01 the owner required the derivation instead of a new trusted fact**, so the field
+is to be removed and `CallDestsNoOrigin` proved from `WFProgram.wellFormed`'s
+`FunctionUsesDefined.allNodup`, `OriginsTrusted`, `defSite?`, and `defInstr?`. The compiling
+checkpoint before the change is `dc342b1` (`250b7f2` is the checkpoint with the field). All
+other `irStepRet` obligations (locals typing from the callee's return typing, stack/storage
+pointer bounds, memory typing, the frame-list fields) are prepared.
 
 **Phase 2 obstruction 5 (2026-11-01): non-head bare-unreachable frames.** The `irStepRet`
 forms are now blocked by `noBareUnreachable`. The field constrains only the *head* frame
@@ -2250,14 +2251,14 @@ caller becomes the head; a `WFState`-satisfying state with `caller.instrs = []` 
 the head) would step to a bare-unreachable successor and break `WFState`. The reachable
 semantics cannot create such a caller (the call that pushed the callee would have been the
 block's last instruction, and `UnreachableGuarded` makes that a trap call, which never steps
-normally), but the per-state invariant must exclude it. Proposed extension: strengthen
-`noBareUnreachable` to all frames:
-`∀ f ∈ c.frames, f.instrs = [] → f.terminator ≠ some .unreachable`. It is preserved at
-instruction and store steps by `UnreachableGuarded` (the last instruction would be a trap call,
-which cannot produce a `.step`), at jumps and calls because an unreachable block has a
-non-empty instruction list, and at returns because the caller's condition is inherited from
-the pre-state. Until the owner decides, the three `irStepRet` forms, `irStep_wf`, and the
-Phase 3 corollaries remain blocked; no invariant change is applied.
+normally), but the per-state invariant must exclude it. **The owner approved the strengthening on
+2026-11-01:** `noBareUnreachable` becomes
+`∀ f ∈ c.frames, f.instrs = [] → f.terminator ≠ some .unreachable`, with no separate field. It
+is preserved at instruction and store steps by `UnreachableGuarded` (the last instruction would
+be a trap call, which cannot produce a `.step`), at jumps and calls because an unreachable block
+has a non-empty instruction list, and at returns because the caller's condition is inherited
+from the pre-state. The three `irStepRet` forms, `irStep_wf`, and the Phase 3 corollaries follow
+the implementation.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
