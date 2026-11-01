@@ -1190,15 +1190,6 @@ def OriginSlotKinds (frag : IRFrag) : Prop :=
       ∃ kind, frag.slots[slot]? = some kind ∧
         (kind.isStorage = true ∨ kind.isCallable = true)
 
-/-- Every call forwards the caller's slot-table value to the callee's appended
-slots parameter (the caller's last parameter, or the loaded slots global). -/
-def CallSlots (frag : IRFrag) : Prop :=
-  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
-    ∀ dest ret callee args, instr = .call dest ret callee args →
-      ∃ name, args.getLast? = some (.local name) ∧
-        (fn.params.getLast? = some (IrType.ptr, name) ∨
-          fn.facts.originOf? name ≠ none)
-
 /-- Syntactic stack provenance: a local defined by an alloca or by a GEP from a
 stack-defined base. -/
 inductive StackDefined (fn : Function) : Ssa → Prop where
@@ -1256,7 +1247,6 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   callPtrOrigins : CallPtrOrigins frag
   trapCodesSpecified : TrapCodesSpecified frag
   unreachableGuarded : UnreachableGuarded frag
-  callSlots : CallSlots frag
   returnNonStack : ReturnNonStack frag
   slotsGlobalReadOnly : SlotsGlobalReadOnly frag
   slotBasesNonParam : SlotBasesNonParam frag
@@ -1431,12 +1421,6 @@ def ReturnLink (c : IRState) : Prop :=
           dest ∉ caller.fn.params.map (·.2) ∧
           IsCallDest caller.fn dest
 
-/-- The appended slots parameter of every frame holds the slot-table pointer. -/
-def SlotsParamsSafe (c : IRState) : Prop :=
-  ∀ f ∈ c.frames, ∀ p : IrType × String,
-    f.fn.params.getLast? = some p → p.2 = "%slots" →
-      f.lookupLocal p.2 = some (.ptr .slotTable)
-
 /-- A return value does not point at the returning frame. The statement covers
 every block of the frame's function, so a jump to another block keeps it true
 without inspecting the target's terminator. -/
@@ -1590,7 +1574,6 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
   returnLink : ReturnLink c
   bottomRetDest : ∀ last, c.frames.getLast? = some last → last.retDest = none
   stackReturnsSafe : StackReturnsSafe c
-  slotsParamsSafe : SlotsParamsSafe c
   payloadsTyped : PayloadsTyped c
 
 /-- The running restriction used by the three soundness theorems. -/
@@ -2992,8 +2975,7 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
       v = .ptr (.global g off') → g ∉ SlotsGlobals module)
     (hbindings : FunctionBindingsTyped c)
     (hcallTargets : CallTargetsTyped c)
-    (hpayloads : PayloadsTyped c)
-    (hslotsParams : SlotsParamsSafe c) :
+    (hpayloads : PayloadsTyped c) :
     WFRunning contract c := by
   unfold initState? at hinit
   split at hinit
@@ -3140,7 +3122,6 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
             subst hf'
             exact (evalOperand_initLocals_not_stack (hargsLive fn hfn) rfl heval
               frame slot off hv).elim
-          · exact hslotsParams
           · exact hpayloads
         · simp
 
@@ -3772,8 +3753,6 @@ theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
       block.terminator = some (.ret (some operand)) →
       evalOperand g operand = some v →
       ∀ frame slot off, v = .ptr (.stack frame slot off) → frame ≠ g.id)
-    (hslotsParams : ∀ p : IrType × String, g.fn.params.getLast? = some p →
-      p.2 = "%slots" → g.lookupLocal p.2 = some (.ptr .slotTable))
     (hpayloadsLocals : ∀ name v, g.lookupLocal name = some v → PayloadsTypedValue v)
     (hpayloadsMem : ∀ addr v, g.lookupMem addr = some v → PayloadsTypedValue v) :
     WFState contract (c.withHead g) := by
@@ -3952,11 +3931,6 @@ theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
       exact hstackReturns retBlock hretBlock operand v htermv heval frame slot off hv
     · exact hwf.stackReturnsSafe f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
         retBlock hretBlock operand v htermv heval frame slot off hv
-  · intro f' hf' p hp hname
-    rcases List.mem_cons.mp hf' with rfl | hf'
-    · exact hslotsParams p hp hname
-    · exact hwf.slotsParamsSafe f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
-        p hp hname
   · refine ⟨?_, ?_, ?_⟩
     · intro f' hf' name v hv
       rcases List.mem_cons.mp hf' with rfl | hf'
@@ -4006,7 +3980,6 @@ theorem wfState_withHeadInstrs {contract : IRContract} {c : IRState} {instrs : L
         (hwf.noSlotsGlobalPointers.1 f hmem)
         (hwf.noSlotsGlobalPointers.2.1 f hmem)
         (hwf.stackReturnsSafe f hmem)
-        (hwf.slotsParamsSafe f hmem)
         (hwf.payloadsTyped.1 f hmem)
         (hwf.payloadsTyped.2.1 f hmem)
 
@@ -4337,11 +4310,6 @@ theorem wfState_storeFrames {contract : IRContract} {c : IRState}
     rw [hFid g]
     exact h
 
-  · intro f' hf' p hp hname
-    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
-    rw [hFfn g] at hp
-    have h := hwf.slotsParamsSafe g hg p hp hname
-    simpa [IRFrame.lookupLocal, hFlocals g] using h
   · refine ⟨?_, ?_, ?_⟩
     · intro f' hf' name val hv
       rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
@@ -4615,7 +4583,6 @@ theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
         · exact hwf.returnLink
         · exact hwf.bottomRetDest
         · exact hwf.stackReturnsSafe
-        · exact hwf.slotsParamsSafe
         · refine ⟨?_, ?_, ?_⟩
           · exact hwf.payloadsTyped.1
           · exact hwf.payloadsTyped.2.1
@@ -5108,7 +5075,7 @@ theorem wfState_jumpStep {contract : IRContract} {c : IRState} {f : IRFrame}
   have hfblock? : f.fn.block? f.block.label = some f.block :=
     block?_eq_some hnd (by rw [hblockEq]; exact hblock0) rfl
   refine wfState_withHead hwf hframes rfl rfl rfl (by intro slot ty hty; exact hty)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
   · exact ⟨block, hbmem, rfl, rfl, [], rfl⟩
   · exact Or.inr ⟨f.block.label, f.block, rfl, hfblock?, hsucc⟩
   · intro hinst htermU
@@ -5130,7 +5097,6 @@ theorem wfState_jumpStep {contract : IRContract} {c : IRState} {f : IRFrame}
   · exact hwf.noSlotsGlobalPointers.1 f hf
   · exact hwf.noSlotsGlobalPointers.2.1 f hf
   · exact hwf.stackReturnsSafe f hf
-  · exact hwf.slotsParamsSafe f hf
   · exact hwf.payloadsTyped.1 f hf
   · exact hwf.payloadsTyped.2.1 f hf
 
@@ -5424,9 +5390,7 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
       caller.fn.localType? d = some fn.returnType)
     (hretOrigin : ∀ d, dest = some d → caller.fn.facts.originOf? d = none)
     (hretParam : ∀ d, dest = some d → d ∉ caller.fn.params.map (·.2))
-    (hretCallDest : ∀ d, dest = some d → IsCallDest caller.fn d)
-    (hslotsParam : ∀ p, fn.params.getLast? = some p → p.2 = "%slots" →
-      ∃ a, (p, a) ∈ fn.params.zip args ∧ a = .ptr .slotTable) :
+    (hretCallDest : ∀ d, dest = some d → IsCallDest caller.fn d) :
     WFState contract
       { c with
         frames := calleeFrame c fn block args dest :: caller :: tail,
@@ -5749,18 +5713,6 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
           simp at hv
     · exact hwf.stackReturnsSafe f' hf' block' hblock' operand v htermv heval
         frame slot off hv
-  · intro f' hf' p hp hname
-    rw [hframes'] at hf'
-    rcases List.mem_cons.mp hf' with rfl | hf'
-    · rcases hslotsParam p hp hname with ⟨a, hzip, ha⟩
-      have hpMem : p ∈ fn.params := mem_left_of_zip hzip
-      have hfind := find?_initLocals_param hud hlen hpMem hzip
-      show (List.find? (fun entry => entry.1 == p.2) (initLocals fn args)).map
-        (fun x => x.snd) = some (IRValue.ptr IRAddr.slotTable)
-      rw [hfind]
-      rw [ha]
-      rfl
-    · exact hwf.slotsParamsSafe f' hf' p hp hname
   · refine ⟨?_, ?_, ?_⟩
     · intro f' hf' name v hv
       rw [hframes'] at hf'
@@ -5985,7 +5937,6 @@ theorem wfState_retHalt {contract : IRContract} {c : IRState}
   · intro pre callee caller suffix heq; simp at heq
   · intro last hlast; simp at hlast
   · intro f hf; simp at hf
-  · intro f hf; simp at hf
   · refine ⟨?_, ?_, ?_⟩
     · intro f hf; simp at hf
     · intro f hf; simp at hf
@@ -6167,9 +6118,6 @@ theorem wfState_popRet {contract : IRContract} {c : IRState} {f caller : IRFrame
   · intro f' hf' block hblock operand v htermv heval frame slot off hv
     exact hwf.stackReturnsSafe f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
       block hblock operand v htermv heval frame slot off hv
-  · intro f' hf' p hp hname
-    exact hwf.slotsParamsSafe f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
-      p hp hname
   · refine ⟨?_, ?_, ?_⟩
     · intro f' hf' name v hv
       exact hwf.payloadsTyped.1 f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
@@ -6642,18 +6590,6 @@ theorem wfState_popSetLocal {contract : IRContract} {c : IRState} {f caller : IR
     · exact hwf.stackReturnsSafe f'
         (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
         block hblock operand w htermv heval frame slot off hw
-  · intro f' hf' p hp hname
-    rcases List.mem_cons.mp hf' with rfl | hf'
-    · have hmemParam : p ∈ caller.fn.params := List.mem_of_getLast? hp
-      have hnotDest : p.2 ≠ dest := by
-        intro hpd
-        exact hretParam (hpd ▸ List.mem_map.mpr ⟨p, hmemParam, rfl⟩)
-      rw [lookupLocal_setLocal_ne (f := caller) (name := dest) (other := p.2)
-        (beq_eq_false_iff_ne.mpr hnotDest) v]
-      exact hwf.slotsParamsSafe caller hmemCaller p hp hname
-    · exact hwf.slotsParamsSafe f'
-        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
-        p hp hname
   · refine ⟨?_, ?_, ?_⟩
     · intro f' hf' name v' hv
       rcases List.mem_cons.mp hf' with rfl | hf'
@@ -6857,14 +6793,6 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
       rw [lookupLocal_setLocal_ne (f := f) (name := dest) (other := name)
         (beq_eq_false_iff_ne.mpr hname) value] at hv
       exact hwf.noSlotsGlobalPointers.1 f hf name v gname off hv hval
-  have hslotsParams : ∀ p, { (f.setLocal dest value) with instrs := restInstrs }.fn.params.getLast? =
-      some p → p.2 = "%slots" →
-      { (f.setLocal dest value) with instrs := restInstrs }.lookupLocal p.2 =
-        some (.ptr .slotTable) := by
-    intro p hp hname
-    rw [lookupLocal_withInstrs, lookupLocal_setLocal_ne (f := f) (name := dest)
-      (other := p.2) (beq_eq_false_iff_ne.mpr (hslotParamNe p hp hname)) value]
-    exact hwf.slotsParamsSafe f hf p hp hname
   have hpayloadsLocals : ∀ name v,
       { (f.setLocal dest value) with instrs := restInstrs }.lookupLocal name = some v →
         PayloadsTypedValue v := by
@@ -6890,7 +6818,7 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
     (fun slot ty hty => hty) hblockMem hprevEdge hnoBare hlocalsInit hlocalsTyped
     horigins (hwf.allocsWellFormed f hf) hstackPtrs (hwf.memTyped f hf)
     (hwf.memNoPtr f hf) hstoragePtrs hslotsBase hnoSlotsLocals
-    (hwf.noSlotsGlobalPointers.2.1 f hf) hstackReturns hslotsParams
+    (hwf.noSlotsGlobalPointers.2.1 f hf) hstackReturns
     hpayloadsLocals hpayloadsMem
 
 theorem loadValue_slotEntry {c : IRState} {slot : Nat} {v : IRValue}
@@ -8502,8 +8430,6 @@ theorem wfState_allocFrame {contract : IRContract} {c : IRState} {f : IRFrame}
   · exact noSlotsMem_alloca hwf hf
   · intro block0 hblock0 operand v htermv heval frame slot off hv
     exact hwf.stackReturnsSafe f hf block0 hblock0 operand v htermv heval frame slot off hv
-  · intro p hp hname
-    exact hwf.slotsParamsSafe f hf p hp hname
   · intro name v hv
     exact hwf.payloadsTyped.1 f hf name v hv
   · intro addr v hv
