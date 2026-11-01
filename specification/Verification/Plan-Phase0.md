@@ -1573,11 +1573,14 @@ def MemValueTyped (ty : IrType) (v : IRValue) : Prop :=
 def MemNoPtr (f : IRFrame) : Prop :=
   ∀ addr v, f.lookupMem addr = some v → ∀ a, v ≠ .ptr a
 
-/-- Overflow-typed values carry an integer payload of the underlying width. -/
+/-- Overflow-typed values carry an integer payload of the underlying width, or
+are an overflow-typed integer literal (which no successful `extractvalue` can
+consume). -/
 def PayloadsTypedValue (v : IRValue) : Prop :=
   match v.type? with
   | some (.overflow bits) =>
-      ∃ n b, v = .pair (.overflow bits) (.int (.int bits) n) b
+      (∃ n b, v = .pair (.overflow bits) (.int (.int bits) n) b) ∨
+        ∃ n, v = .int (.overflow bits) n
   | _ => True
 
 /-- Locals, frame memory, and persistent storage are payload-typed. -/
@@ -2686,10 +2689,11 @@ load, and the approved `PayloadsTyped` is preserved by store/load/select/phi;
 or (b) extend `PayloadsTypedValue` to also allow `.int (.overflow bits) _`.
 Option (b) still yields the index-0 `extractvalue` conclusion because the step
 is stuck on non-pair aggregates, so only pair payloads (still required to be
-`.int (.int bits) n`) are extracted, but it weakens the approved statement.
-**Recorded 2026-11-01 for owner decision; no field was added, and the
+`.int (.int bits) n`) are extracted, but it relaxes the approved statement.
+**Owner approved option (b) on 2026-11-01:** `PayloadsTypedValue` is extended to
+allow `.int (.overflow bits) n`, with no `NoOverflowLiterals` builder fact. The
 `PayloadsTyped` implementation, its dependent step forms (store/load/select/
-phi), and the index-0 `extractvalue` form wait on the decision.**
+phi), and the index-0 `extractvalue` form follow.
 
 **Phase 2 obstruction 15 (2026-11-01): jump targets invalidate
 `StackReturnsSafe`.** Preparing the `br`/`condBr` terminator form exposes a
@@ -2735,10 +2739,10 @@ takes `dest ∉ fn.params.map (·.2)` (the call sites already derive it with
 `notParam_of_mem_dests`), and used at the jump to refute `frame = f.id` against
 `frame < f.id`. Option (a) changes one approved field definition (a
 strengthening, not a weakening) with no field-count change; option (b) keeps the
-approved field and adds a 28th. **Recorded 2026-11-01 for owner decision; no
-field was added or changed, and `wfState_jumpStep`, the
-`wfState_step`/`irStep_wf` dispatch, and Phase 3 wait on the decision (together
-with obstructions 12/14).**
+approved field and adds a 28th. **Owner approved option (a) on 2026-11-01:**
+`StackReturnsSafe` is strengthened to every block of the frame's function, with
+no new field. The jump form, the `wfState_step`/`irStep_wf` dispatch, and
+Phase 3 follow (together with obstructions 12/14).
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2995,7 +2999,8 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    fact. `IntrinsicNamesReserved` and the checked/rotate call-result forms are implemented
    (`wfState_checkedCallStep`, `wfState_rotateCallStep`) with a green build. Obstruction 14
    (overflow-typed literals defeat `PayloadsTyped`) and obstruction 15 (a jump installs the
-   target block's terminator, whose return-safety fact no `WFState` field supplies) are recorded
-   in §22.11 and await the owner's decision. The extractValue index-0 form,
-   `wfState_step`/`irStep_wf`, and Phase 3 follow those decisions and are the open review
-   scope.
+   target block's terminator, whose return-safety fact no `WFState` field supplies) were then
+   owner-approved on 2026-11-01: `PayloadsTypedValue` is extended to allow
+   `.int (.overflow bits) n`, and `StackReturnsSafe` is strengthened to every block of the
+   frame's function. The extractValue index-0 form, `wfState_jumpStep`, `wfState_step`/`irStep_wf`,
+   and Phase 3 follow those implementations and are the open review scope.
