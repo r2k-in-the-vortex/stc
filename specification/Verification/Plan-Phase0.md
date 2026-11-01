@@ -1860,11 +1860,14 @@ excluded by `returnType ≠ .void` plus `Terminator.WellTyped` (`ret none` requi
 The destination is also originless (`caller.fn.facts.originOf? dest = none`): call destinations
 are not `load`/`gep` definitions, so the builder records no pointer origin for them, and the
 return value is only type-correct — it need not have the cell or global shape an origin would
-require. This conjunct is established at the call site from the builder-trusted
-`CallDestsNoOrigin` fact (call destinations are not `load`/`gep` definitions, so no pointer
-origin is recorded for them), via `call_dest_origin_none`/`callPtr_dest_origin_none`; the entry
-frame is vacuous since its `retDest` is `none`. The all-adjacent-pairs form is the
-2026-10-31 extension; the origin conjunct is the 2026-11-01 extension.
+require. This conjunct is established at the call site by
+`call_dest_origin_none`/`callPtr_dest_origin_none`, without a trusted field: if the destination
+had a recorded origin, `OriginsTrusted` would also give it a `load`/`gep` defining instruction,
+while the call instruction itself has the same `dest?`; `defInstr?_dest`/`mem_of_defInstr?` put
+both instructions in the flattened destination list, and `not_nodup_filterMap` turns the two
+distinct definitions into a duplicate, contradicting `FunctionUsesDefined.allNodup`. The entry
+frame is vacuous since its `retDest` is `none`. The all-adjacent-pairs form is the 2026-10-31
+extension; the origin conjunct is the 2026-11-01 extension.
 
 Direct calls are already covered: `WellTyped` for `.call` requires the callee signature in
 `directCallEnv` to have `returnType = ret`, the module function's signature is that signature,
@@ -2235,12 +2238,14 @@ no pointer origin is recorded for them — and it is established at `callFunctio
 is adopted in §22.6 (D4). The first implementation checkpoint (`250b7f2`) added a
 builder-trusted `WFProgram` field `CallDestsNoOrigin` (with `call_dest_origin_none` /
 `callPtr_dest_origin_none`) because the SSA-position uniqueness derivation was not formalized.
-**On 2026-11-01 the owner required the derivation instead of a new trusted fact**, so the field
-is to be removed and `CallDestsNoOrigin` proved from `WFProgram.wellFormed`'s
-`FunctionUsesDefined.allNodup`, `OriginsTrusted`, `defSite?`, and `defInstr?`. The compiling
-checkpoint before the change is `dc342b1` (`250b7f2` is the checkpoint with the field). All
-other `irStepRet` obligations (locals typing from the callee's return typing, stack/storage
-pointer bounds, memory typing, the frame-list fields) are prepared.
+**On 2026-11-01 the owner required the derivation instead of a new trusted fact.** The
+`CallDestsNoOrigin` field is removed and the fact is proved from
+`FunctionUsesDefined.allNodup`, `OriginsTrusted`, `defInstr?_dest`, `mem_of_defInstr?`, and the
+new list lemma `not_nodup_filterMap` (two distinct instructions with the same destination make
+the flattened destination list non-nodup), via `call_dest_origin_none`/
+`callPtr_dest_origin_none`. All other `irStepRet` obligations (locals typing from the callee's
+return typing, stack/storage pointer bounds, memory typing, the frame-list fields) are
+prepared.
 
 **Phase 2 obstruction 5 (2026-11-01): non-head bare-unreachable frames.** The `irStepRet`
 forms are now blocked by `noBareUnreachable`. The field constrains only the *head* frame
@@ -2257,8 +2262,45 @@ normally), but the per-state invariant must exclude it. **The owner approved the
 is preserved at instruction and store steps by `UnreachableGuarded` (the last instruction would
 be a trap call, which cannot produce a `.step`), at jumps and calls because an unreachable block
 has a non-empty instruction list, and at returns because the caller's condition is inherited
-from the pre-state. The three `irStepRet` forms, `irStep_wf`, and the Phase 3 corollaries follow
-the implementation.
+from the pre-state. The strengthening is implemented (no separate field): `initState?_wf`,
+`wfState_withHead`/`withHeadInstrs`, `wfState_storeFrames`/`storeStorage`/`storeStep`,
+`wfState_calleePush`, and the `ir_progress` consumer are updated and the build is green. The
+three `irStepRet` forms, `irStep_wf`, and the Phase 3 corollaries follow.
+
+**Phase 2 obstruction 6 (2026-11-01): return destination as the slots parameter.** The
+ret value form writes `caller.setLocal dest v`. `SlotsParamsSafe` requires the caller's last
+parameter, when it is named `%slots`, to hold `.ptr .slotTable`; if `dest` is that parameter
+name, the return value `v` (only typed `callee.fn.returnType` by `ReturnLink`) overwrites it and
+the field can fail. `ReturnLink`'s origin conjunct does not exclude destination names from
+parameters, and the state does not record that the destination is a call-instruction
+destination. Proposed extension: add `dest ∉ caller.fn.params.map (·.2)` to the `some dest`
+conjunct of `ReturnLink`. It is builder-faithful (call destinations are SSA definitions, and
+`FunctionUsesDefined.allNodup`'s disjointness of parameter and destination names excludes them)
+and is established at the call site directly from `mem_dests_of_block` plus that disjointness —
+no uniqueness argument is needed. The entry frame is vacuous (`retDest = none`). No invariant
+change is applied; the `irStepRet` value form, `irStep_wf`, and the Phase 3 corollaries remain
+blocked on this decision, together with the stack-pointer ordering gap below. The ret-halt form
+(`frames := [], status := .halted`) is proved (`wfState_retHalt`).
+
+**Phase 2 obstruction 7 (2026-11-01): stack pointers into a popped frame.** The ret
+value and ret-none forms remove the callee frame. `StackPtrsBounded` and `MemTyped` are
+state-wide over `c'.frames = caller :: below`, and their stack-pointer bounds use
+`frameById?`; in an artificial `WFState`-satisfying state a suspended caller (or a below frame)
+may hold a local or memory stack pointer into the running callee's frame, which
+`StackPtrsBounded`/`MemValuePtrBounded` permit while the callee exists. After the pop the frame
+id is gone and the bound fails, so the two forms are not provable from the current fields.
+Reachable semantics cannot create such pointers (arguments flow only to younger frames, and
+`StackReturnsSafe` blocks returning a frame's own pointer upward), but the per-state invariant
+must exclude them. Proposed extension: a `WFState` field `StackPtrsOrdered` stating that a
+frame's stack pointers target that frame or frames after it in the list — in prefix form, for
+every decomposition `c.frames = pre ++ f :: rest`, no local or memory stack pointer of `f`
+names the id of a frame in `pre`. It is preserved at instructions, jumps, and stores because
+non-head frames are unchanged and the head has an empty prefix; at calls because the new head id
+is fresh and the old pointers target old frames (ids below `nextFrame`); at returns because the
+old decomposition with the removed callee prepended gives the new prefix's exclusion; and at the
+halt because the frame list is empty. No invariant change is applied. The ret-halt form is
+proved; the ret value/none forms, `irStep_wf`, and the Phase 3 corollaries remain blocked on
+obstructions 6 and 7.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation

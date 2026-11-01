@@ -1200,15 +1200,6 @@ def ReturnNonStack (frag : IRFrag) : Prop :=
     ∀ operand, term = .ret (some operand) →
       ∀ name ∈ operand.localNames, SafeReturnValue fn name
 
-/-- Call destinations carry no builder-recorded pointer origin. -/
-def CallDestsNoOrigin (frag : IRFrag) : Prop :=
-  (∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
-    ∀ dest ret callee args, instr = .call dest ret callee args →
-      ∀ d, dest = some d → fn.facts.originOf? d = none) ∧
-  (∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
-    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
-      ∀ d, dest = some d → fn.facts.originOf? d = none)
-
 /-- Module-level facts for the target invariant. -/
 structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   wellFormed : WellFormed contract frag
@@ -1225,7 +1216,6 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   returnNonStack : ReturnNonStack frag
   slotsGlobalReadOnly : SlotsGlobalReadOnly frag
   slotBasesNonParam : SlotBasesNonParam frag
-  callDestsNoOrigin : CallDestsNoOrigin frag
   allocaRepresentable : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
     ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty →
       AllocaElementRepresentable ty
@@ -1398,7 +1388,7 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
     f.block = block ∧ f.terminator = block.terminator ∧
       ∃ done, block.instrs = done ++ f.instrs
   framePrev : ∀ f ∈ c.frames, PrevEdge c f
-  noBareUnreachable : ∀ f rest, c.frames = f :: rest → f.instrs = [] →
+  noBareUnreachable : ∀ f ∈ c.frames, f.instrs = [] →
     f.terminator ≠ some .unreachable
   localsInitialized : ∀ f ∈ c.frames, ∀ name ty,
     f.fn.localType? name = some ty → ∃ v, f.lookupLocal name = some v
@@ -2169,7 +2159,8 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
           | some term =>
               cases term with
               | unreachable =>
-                  exact hwf.noBareUnreachable f restFrames hframes hinstrs hterm
+                  exact hwf.noBareUnreachable f
+                    (by rw [hframes]; exact List.mem_cons_self ..) hinstrs hterm
               | ret v =>
                   cases v with
                   | none =>
@@ -2821,9 +2812,9 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
             simp only [List.mem_singleton] at hf
             subst hf
             exact Or.inl ⟨rfl, ⟨restBlocks, hblocks⟩⟩
-          · intro f rest hframes hinstrs hterm
-            simp only [List.mem_singleton, List.cons.injEq] at hframes
-            rcases hframes with ⟨rfl, rfl⟩
+          · intro f hf hinstrs hterm
+            simp only [List.mem_singleton] at hf
+            subst hf
             have hguard := hprog.unreachableGuarded fn hfunMem block hblockMem hterm
             rcases hguard with ⟨instr, hlast, _⟩
             have hinstrs' : block.instrs = [] := by simpa using hinstrs
@@ -3590,12 +3581,12 @@ theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     rcases List.mem_cons.mp hf'' with rfl | hf'
     · exact hprevEdge
     · exact hwf.framePrev f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
-  · intro f' rest' heq hinst
-    injection heq with hgf _
-    have hginst : g.instrs = [] := by rw [hgf]; exact hinst
-    have hgterm : g.terminator ≠ some .unreachable := hnoBare hginst
-    intro hterm
-    exact hgterm (by rw [hgf]; exact hterm)
+  · intro f' hf' hinst
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · exact hnoBare hinst
+    · exact hwf.noBareUnreachable f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f hf') hinst
   · intro f' hf' name ty hty
     rcases List.mem_cons.mp hf' with rfl | hf'
     · exact hlocalsInit name ty hty
@@ -3890,18 +3881,17 @@ theorem wfState_storeFrames {contract : IRContract} {c : IRState}
     rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
     have h := hwf.framePrev g hg
     simpa [PrevEdge, hFprev g, hFfn g, hFblock g] using h
-  · cases hframes : c.frames with
-    | nil =>
-        intro f' rest' heq
-        simp [hframes] at heq
-    | cons f0 rest0 =>
-        intro f' rest' heq hinst
-        simp only [hframes, List.map_cons, List.cons.injEq] at heq
-        rcases heq with ⟨hf', hrest'⟩
-        rw [← hf'] at hinst ⊢
-        rw [hFinstrs f0] at hinst
-        rw [hFterm f0]
-        exact hwf.noBareUnreachable f0 rest0 hframes hinst
+  · intro f' hf' hinst
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    have hgInstrs : g.instrs = [] := by
+      have h := hinst
+      unfold storeFrame at h
+      split at h <;> exact h
+    have hgterm := hwf.noBareUnreachable g hg hgInstrs
+    intro hterm
+    apply hgterm
+    unfold storeFrame at hterm
+    split at hterm <;> exact hterm
   · intro f' hf' name ty' hty
     rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
     rw [hFfn g] at hty
@@ -5018,16 +5008,17 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
     rcases List.mem_cons.mp hf' with rfl | hf'
     · exact Or.inl ⟨rfl, ⟨restBlocks, hblocks⟩⟩
     · exact hwf.framePrev f' hf'
-  · intro f' fs heq hinst hterm
-    rw [hframes'] at heq
-    injection heq with hf' _
-    rw [← hf'] at hinst hterm
-    have hinstrs : block.instrs = [] := hinst
-    have htermBlock : block.terminator = some .unreachable := hterm
-    rcases hwf.program.unreachableGuarded fn hfnMem block
-      (by rw [hblocks]; exact List.mem_cons_self ..) htermBlock with ⟨instr, hlast, _⟩
-    rw [hinstrs] at hlast
-    simp at hlast
+  · intro f' hf' hinst
+    rw [hframes'] at hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · intro hterm
+      have hinstrs : block.instrs = [] := hinst
+      have htermBlock : block.terminator = some .unreachable := hterm
+      rcases hwf.program.unreachableGuarded fn hfnMem block
+        (by rw [hblocks]; exact List.mem_cons_self ..) htermBlock with ⟨instr, hlast, _⟩
+      rw [hinstrs] at hlast
+      simp at hlast
+    · exact hwf.noBareUnreachable f' hf' hinst
   · intro f' hf' name ty hty
     rw [hframes'] at hf'
     rcases List.mem_cons.mp hf' with rfl | hf'
@@ -5248,22 +5239,210 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
       rfl
     · exact hwf.slotsParamsSafe f' hf' p hp hname
 
-/-- A direct call's destination has no recorded pointer origin. -/
-theorem call_dest_origin_none {contract : IRContract} {frag : IRFrag} {fn : Function}
-    {block : Block} {instr : Instr} {dest : Option Ssa} {ret : IrType} {callee : String}
-    {args : List Operand} (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
-    (hblock : block ∈ fn.blocks) (hinstr : instr ∈ block.instrs)
-    (hcall : instr = .call dest ret callee args) :
-    ∀ d, dest = some d → fn.facts.originOf? d = none :=
-  hprog.callDestsNoOrigin.1 fn hfn block hblock instr hinstr dest ret callee args hcall
+/-- Two distinct elements of a list whose `f`-images are the same value make
+`filterMap f` non-nodup. -/
+theorem not_nodup_filterMap_go {α β : Type} (f : α → Option β) :
+    ∀ (l : List α) (a b : α) (v : β), a ∈ l → b ∈ l → a ≠ b →
+      f a = some v → f b = some v → ¬ (l.filterMap f).Nodup
+  | [], a, b, v, ha, _, _, _, _ => by simp at ha
+  | x :: xs, a, b, v, ha, hb, hne, hfa, hfb => by
+      cases hx : f x with
+      | none =>
+          simp only [List.filterMap_cons, hx]
+          have ha' : a ∈ xs := by
+            rcases List.mem_cons.mp ha with rfl | h
+            · rw [hx] at hfa
+              cases hfa
+            · exact h
+          have hb' : b ∈ xs := by
+            rcases List.mem_cons.mp hb with rfl | h
+            · rw [hx] at hfb
+              cases hfb
+            · exact h
+          exact not_nodup_filterMap_go f xs a b v ha' hb' hne hfa hfb
+      | some y =>
+          simp only [List.filterMap_cons, hx]
+          intro hnodup
+          rw [List.nodup_cons] at hnodup
+          rcases List.mem_cons.mp ha with rfl | ha'
+          · have hyv : y = v := by
+              rw [hx] at hfa
+              exact Option.some.inj hfa
+            subst hyv
+            rcases List.mem_cons.mp hb with rfl | hb'
+            · exact hne rfl
+            · exact hnodup.1 (List.mem_filterMap.mpr ⟨b, hb', hfb⟩)
+          · rcases List.mem_cons.mp hb with rfl | hb'
+            · have hyv : y = v := by
+                rw [hx] at hfb
+                exact Option.some.inj hfb
+              subst hyv
+              exact hnodup.1 (List.mem_filterMap.mpr ⟨a, ha', hfa⟩)
+            · exact not_nodup_filterMap_go f xs a b v ha' hb' hne hfa hfb hnodup.2
 
-/-- An indirect call's destination has no recorded pointer origin. -/
+theorem not_nodup_filterMap {α β : Type} {f : α → Option β} {l : List α}
+    {a b : α} {v : β} (ha : a ∈ l) (hb : b ∈ l) (hne : a ≠ b)
+    (hfa : f a = some v) (hfb : f b = some v) :
+    ¬ (l.filterMap f).Nodup :=
+  not_nodup_filterMap_go f l a b v ha hb hne hfa hfb
+
+/-- The call destination has no recorded pointer origin, by SSA uniqueness:
+an origin-recorded destination would also be a `load`/`gep` destination, giving
+two distinct instructions with the same destination. -/
+theorem call_dest_origin_none {contract : IRContract} {frag : IRFrag} {fn : Function}
+    {block : Block} {instr : Instr} {dest : Option Ssa} {ret : IrType}
+    {callee : String} {args : List Operand} (hprog : WFProgram contract frag)
+    (hfn : fn ∈ frag.functions) (hblock : block ∈ fn.blocks)
+    (hinstr : instr ∈ block.instrs) (hcall : instr = .call dest ret callee args) :
+    ∀ d, dest = some d → fn.facts.originOf? d = none := by
+  intro d hd
+  cases horig : fn.facts.originOf? d with
+  | none => rfl
+  | some o =>
+      exfalso
+      have hmem : (d, o) ∈ fn.facts.origins := mem_of_originOf? horig
+      rcases hprog.originsTrusted fn hfn with ⟨_, htrusted⟩
+      rcases htrusted (d, o) hmem with ⟨hlocTy, hnotParam, hshape⟩
+      have hnd : (fn.blocks.map (·.label)).Nodup :=
+        (hprog.wellFormed.typesCorrect fn hfn).labelsUnique
+      have hud : FunctionUsesDefined fn := hprog.wellFormed.usesDefined fn hfn
+      have hshapeInstr : ∃ i0 : Instr, defInstr? fn d = some i0 ∧
+          ((∃ ty ptr align, i0 = .load d ty ptr align) ∨
+           (∃ dest0 ty base indices inbounds, i0 = .gep dest0 ty base indices inbounds)) := by
+        cases o with
+        | cell slot isTrue =>
+            cases isTrue with
+            | false =>
+                rcases hshape with ⟨ty, ptr, align, hdef⟩
+                exact ⟨.load d ty ptr align, hdef, Or.inl ⟨ty, ptr, align, rfl⟩⟩
+            | true =>
+                rcases hshape with ⟨ty, ptr, align, hdef⟩
+                exact ⟨.load d ty ptr align, hdef, Or.inl ⟨ty, ptr, align, rfl⟩⟩
+        | global g =>
+            rcases hshape with ⟨dest0, ty, base, indices, inbounds, hdef⟩
+            exact ⟨.gep dest0 ty base indices inbounds, hdef,
+              Or.inr ⟨dest0, ty, base, indices, inbounds, rfl⟩⟩
+        | vtableCode => exact False.elim hshape
+      rcases hshapeInstr with ⟨i0, hdef, hshape0⟩
+      have hdest0 : i0.dest? = some d := defInstr?_dest hnd hdef
+      rcases mem_of_defInstr? hdef with ⟨block0, hblock0, hinstr0⟩
+      have hdestCall : instr.dest? = some d := by
+        rw [hcall]
+        exact hd
+      by_cases hEq : instr = i0
+      · rw [hEq] at hcall
+        rcases hshape0 with ⟨ty, ptr, align, hi0⟩ | ⟨dest0, ty, base, indices, inbounds, hi0⟩
+        · rw [hi0] at hcall
+          cases hcall
+        · rw [hi0] at hcall
+          cases hcall
+      · have hall := hud.allNodup
+        rw [List.nodup_append] at hall
+        have hdup : ¬ ((fn.blocks.flatMap fun b => b.instrs).filterMap Instr.dest?).Nodup :=
+          not_nodup_filterMap
+            (List.mem_flatMap.mpr ⟨block, hblock, hinstr⟩)
+            (List.mem_flatMap.mpr ⟨block0, hblock0, hinstr0⟩)
+            hEq hdestCall hdest0
+        rw [List.filterMap_flatMap] at hdup
+        exact hdup hall.2.1
+
+
+/-- The callPtr destination has no recorded pointer origin, by SSA uniqueness:
+an origin-recorded destination would also be a `load`/`gep` destination, giving
+two distinct instructions with the same destination. -/
 theorem callPtr_dest_origin_none {contract : IRContract} {frag : IRFrag} {fn : Function}
-    {block : Block} {instr : Instr} {dest : Option Ssa} {ret : IrType} {callee : Operand}
-    {args : List Operand} (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
-    (hblock : block ∈ fn.blocks) (hinstr : instr ∈ block.instrs)
-    (hcall : instr = .callPtr dest ret callee args) :
-    ∀ d, dest = some d → fn.facts.originOf? d = none :=
-  hprog.callDestsNoOrigin.2 fn hfn block hblock instr hinstr dest ret callee args hcall
+    {block : Block} {instr : Instr} {dest : Option Ssa} {ret : IrType}
+    {callee : Operand} {args : List Operand} (hprog : WFProgram contract frag)
+    (hfn : fn ∈ frag.functions) (hblock : block ∈ fn.blocks)
+    (hinstr : instr ∈ block.instrs) (hcall : instr = .callPtr dest ret callee args) :
+    ∀ d, dest = some d → fn.facts.originOf? d = none := by
+  intro d hd
+  cases horig : fn.facts.originOf? d with
+  | none => rfl
+  | some o =>
+      exfalso
+      have hmem : (d, o) ∈ fn.facts.origins := mem_of_originOf? horig
+      rcases hprog.originsTrusted fn hfn with ⟨_, htrusted⟩
+      rcases htrusted (d, o) hmem with ⟨hlocTy, hnotParam, hshape⟩
+      have hnd : (fn.blocks.map (·.label)).Nodup :=
+        (hprog.wellFormed.typesCorrect fn hfn).labelsUnique
+      have hud : FunctionUsesDefined fn := hprog.wellFormed.usesDefined fn hfn
+      have hshapeInstr : ∃ i0 : Instr, defInstr? fn d = some i0 ∧
+          ((∃ ty ptr align, i0 = .load d ty ptr align) ∨
+           (∃ dest0 ty base indices inbounds, i0 = .gep dest0 ty base indices inbounds)) := by
+        cases o with
+        | cell slot isTrue =>
+            cases isTrue with
+            | false =>
+                rcases hshape with ⟨ty, ptr, align, hdef⟩
+                exact ⟨.load d ty ptr align, hdef, Or.inl ⟨ty, ptr, align, rfl⟩⟩
+            | true =>
+                rcases hshape with ⟨ty, ptr, align, hdef⟩
+                exact ⟨.load d ty ptr align, hdef, Or.inl ⟨ty, ptr, align, rfl⟩⟩
+        | global g =>
+            rcases hshape with ⟨dest0, ty, base, indices, inbounds, hdef⟩
+            exact ⟨.gep dest0 ty base indices inbounds, hdef,
+              Or.inr ⟨dest0, ty, base, indices, inbounds, rfl⟩⟩
+        | vtableCode => exact False.elim hshape
+      rcases hshapeInstr with ⟨i0, hdef, hshape0⟩
+      have hdest0 : i0.dest? = some d := defInstr?_dest hnd hdef
+      rcases mem_of_defInstr? hdef with ⟨block0, hblock0, hinstr0⟩
+      have hdestCall : instr.dest? = some d := by
+        rw [hcall]
+        exact hd
+      by_cases hEq : instr = i0
+      · rw [hEq] at hcall
+        rcases hshape0 with ⟨ty, ptr, align, hi0⟩ | ⟨dest0, ty, base, indices, inbounds, hi0⟩
+        · rw [hi0] at hcall
+          cases hcall
+        · rw [hi0] at hcall
+          cases hcall
+      · have hall := hud.allNodup
+        rw [List.nodup_append] at hall
+        have hdup : ¬ ((fn.blocks.flatMap fun b => b.instrs).filterMap Instr.dest?).Nodup :=
+          not_nodup_filterMap
+            (List.mem_flatMap.mpr ⟨block, hblock, hinstr⟩)
+            (List.mem_flatMap.mpr ⟨block0, hblock0, hinstr0⟩)
+            hEq hdestCall hdest0
+        rw [List.filterMap_flatMap] at hdup
+        exact hdup hall.2.1
+
+
+theorem lookupStorageAt_retHalt (c : IRState) (id : StoreId) (off : Nat) :
+    ({ c with frames := [], status := .halted } : IRState).lookupStorageAt id off =
+      c.lookupStorageAt id off := rfl
+
+theorem wfState_retHalt {contract : IRContract} {c : IRState}
+    (hwf : WFState contract c) :
+    WFState contract { c with frames := [], status := .halted } := by
+  constructor
+  · exact hwf.program
+  · simp
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
+  · exact hwf.slotsStorage
+  · exact hwf.storageValuesLive
+  · exact hwf.storageDomain
+  · refine ⟨?_, ?_, ?_⟩
+    · intro f hf; simp at hf
+    · intro f hf; simp at hf
+    · simpa [lookupStorageAt_retHalt] using hwf.noSlotsGlobalPointers.2.2
+  · exact hwf.functionBindings
+  · exact hwf.callTargets
+  · intro pre callee caller suffix heq; simp at heq
+  · intro last hlast; simp at hlast
+  · intro f hf; simp at hf
+  · intro f hf; simp at hf
 
 end Stc.Codegen
