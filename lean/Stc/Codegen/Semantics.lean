@@ -6712,6 +6712,31 @@ theorem originHolds_cellTrue_of_load {contract : IRContract} {c : IRState} {f : 
     · exact ⟨value, lookupLocal_setLocal_eq f dest value, hlocPtr,
         Or.inr ⟨.importCell, hki, Or.inr (Or.inr ⟨rfl, himp⟩)⟩⟩
 
+/-- A load destination has no `.global` origin: the recorded GEP definition would
+be the load instruction itself. -/
+theorem originOf?_ne_global_of_load {contract : IRContract} {frag : IRFrag}
+    {fn : Function} {block : Block} {dest : Ssa} {ty : IrType} {ptr : Operand}
+    {align : Option Nat} (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
+    (hblock : block ∈ fn.blocks) (hinstr : Instr.load dest ty ptr align ∈ block.instrs)
+    {g : String} : fn.facts.originOf? dest ≠ some (.global g) := by
+  intro horig
+  have hmem : (dest, PointerOrigin.global g) ∈ fn.facts.origins :=
+    mem_of_originOf? horig
+  rcases (hprog.originsTrusted fn hfn).2 (dest, PointerOrigin.global g) hmem with
+    ⟨_, _, hshape⟩
+  rcases hshape with ⟨dest2, ty2, base, indices, inbounds, hdef⟩
+  have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr rfl hdef
+  cases hEq
+
+/-- `vtableCode` origins are outside the core fragment. -/
+theorem originOf?_ne_vtable {contract : IRContract} {frag : IRFrag} {fn : Function}
+    {dest : Ssa} (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions) :
+    fn.facts.originOf? dest ≠ some .vtableCode := by
+  intro horig
+  have hmem : (dest, PointerOrigin.vtableCode) ∈ fn.facts.origins :=
+    mem_of_originOf? horig
+  exact (hprog.originsTrusted fn hfn).2 (dest, PointerOrigin.vtableCode) hmem |>.2.2
+
 theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
     {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
     (hud : FunctionUsesDefined fn) (hblock : block ∈ fn.blocks)
