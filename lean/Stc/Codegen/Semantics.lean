@@ -6874,6 +6874,177 @@ theorem slotParam_ne_of_load {fn : Function} (hud : FunctionUsesDefined fn)
     notParam_of_mem_dests hud hblock hinstr rfl
   exact hnotParam (List.mem_map.mpr ⟨p, List.mem_of_getLast? hp, hpd⟩)
 
+/-- The load instruction form. -/
+theorem wfState_loadStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Ssa} {ty : IrType} {ptr : Operand} {align : Option Nat}
+    {addr : IRAddr} {value : IRValue}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .load dest ty ptr align :: restInstrs)
+    (hptr : evalOperand f ptr = some (.ptr addr))
+    (hload : c.loadValue addr = some value)
+    (hty : (value.type? == some ty) = true) :
+    WFState contract (c.withHead { (f.setLocal dest value) with instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.load dest ty ptr align ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block.instrs[done.length]? = some (.load dest ty ptr align) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.load dest ty ptr align) restInstrs
+  have hblock? : f.fn.block? block.label = some block :=
+    block?_eq_some hnd hblock (by rw [← hblockEq])
+  have hlocTy : f.fn.localType? dest = some ty :=
+    localType?_eq_resultType hud hblock? hidx rfl rfl
+  have hvalueType : ∀ ty', f.fn.localType? dest = some ty' → value.type? = some ty' := by
+    intro ty' hty'
+    have hEq : ty' = ty := Option.some.inj (hty'.symm.trans hlocTy)
+    subst hEq
+    exact beq_iff_eq.mp hty
+  have hnotStack : ∀ frame sl off, value ≠ .ptr (.stack frame sl off) := by
+    intro frame sl off hval
+    cases addr with
+    | stack fm sl0 ofs =>
+        exact (loadValue_stack_notPtr_state hwf hload) (.stack frame sl off) hval
+    | slotEntry s => exact loadValue_slotEntry_notStack hload hval
+    | cell s => exact loadValue_cell_notStack hload hval
+    | root s ofs => exact loadValue_root_notStack hwf.storageValuesLive hload hval
+    | global n ofs => exact loadValue_global_notStack hwf.storageValuesLive hload hval
+    | slotTable => unfold IRState.loadValue at hload; simp at hload
+    | function n => unfold IRState.loadValue at hload; simp at hload
+    | importCell s => unfold IRState.loadValue at hload; simp at hload
+  have hnewOrigins : ∀ origin, f.fn.facts.originOf? dest = some origin →
+      OriginHolds contract c (f.setLocal dest value) dest origin := by
+    intro origin horig
+    cases origin with
+    | cell slot b =>
+        cases b with
+        | false =>
+            exact originHolds_cellFalse_of_load hwf hf hblock hinstrMem horig hptr hload
+        | true =>
+            exact originHolds_cellTrue_of_load hwf hf hblock hinstrMem horig hptr hload
+    | global g =>
+        exact absurd horig (originOf?_ne_global_of_load hwf.program hfunMem hblock hinstrMem)
+    | vtableCode =>
+        exact absurd horig (originOf?_ne_vtable hwf.program hfunMem)
+  have hstackValue : ∀ frame sl off, value = .ptr (.stack frame sl off) →
+      ∃ g0, c.frameById? frame = some g0 ∧ ∃ ty0, g0.allocType? sl = some ty0 ∧
+        off < allocSize ty0 := by
+    intro frame sl off hval
+    exact (hnotStack frame sl off hval).elim
+  have hstorageRoot : ∀ slot off, value = .ptr (.root slot off) →
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length := by
+    intro slot off hval
+    cases addr with
+    | stack fm sl0 ofs =>
+        exact absurd hval ((loadValue_stack_notPtr_state hwf hload) (.root slot off))
+    | slotEntry s =>
+        have hv := loadValue_slotEntry hload
+        rw [hv] at hval
+        cases hval
+    | cell s =>
+        rcases loadValue_cell_cases hload with
+          ⟨hroot, k, hk, hkd⟩ | ⟨fname, _, hfnv, _⟩ | ⟨himp, _⟩
+        · have hEq : (IRValue.ptr (.root s 0)) = .ptr (.root slot off) :=
+            hroot.symm.trans hval
+          have haddr : IRAddr.root s 0 = IRAddr.root slot off := IRValue.ptr.inj hEq
+          have hs : s = slot := (IRAddr.root.inj haddr).1
+          have hoff : 0 = off := (IRAddr.root.inj haddr).2
+          subst hs
+          rw [← hoff]
+          have hstor : k.isStorage = true := by
+            rcases hkd with rfl | rfl <;> rfl
+          exact loadValue_cell_root_live hwf.storageDomain hk hstor
+        · rw [hfnv] at hval; cases hval
+        · rw [himp] at hval; cases hval
+    | root s ofs => exact loadValue_root_live hwf.storageValuesLive hload hval
+    | global n ofs =>
+        have h' : c.lookupStorageAt (.global n) ofs = some value := hload
+        exact (hwf.storageValuesLive (.global n) ofs value h').1 slot off hval
+    | slotTable => unfold IRState.loadValue at hload; simp at hload
+    | function n => unfold IRState.loadValue at hload; simp at hload
+    | importCell s => unfold IRState.loadValue at hload; simp at hload
+  have hstorageGlobal : ∀ gname off, value = .ptr (.global gname off) →
+      ∃ values, c.lookupStorage (.global gname) = some values ∧ off < values.length := by
+    intro gname off hval
+    cases addr with
+    | stack fm sl0 ofs =>
+        exact absurd hval ((loadValue_stack_notPtr_state hwf hload) (.global gname off))
+    | slotEntry s =>
+        have hv := loadValue_slotEntry hload
+        rw [hv] at hval
+        cases hval
+    | cell s =>
+        rcases loadValue_cell_cases hload with
+          ⟨hroot, _, _, _⟩ | ⟨fname, _, hfnv, _⟩ | ⟨himp, _⟩
+        · rw [hroot] at hval; cases hval
+        · rw [hfnv] at hval; cases hval
+        · rw [himp] at hval; cases hval
+    | root s ofs =>
+        have h' : c.lookupStorageAt (.root s) ofs = some value := hload
+        exact (hwf.storageValuesLive (.root s) ofs value h').2.1 gname off hval
+    | global n ofs => exact loadValue_global_live hwf.storageValuesLive hload hval
+    | slotTable => unfold IRState.loadValue at hload; simp at hload
+    | function n => unfold IRState.loadValue at hload; simp at hload
+    | importCell s => unfold IRState.loadValue at hload; simp at hload
+  have hnoSlotsValue : ∀ gname off, value = .ptr (.global gname off) →
+      gname ∉ SlotsGlobals c.module := by
+    intro gname off hval
+    cases addr with
+    | stack fm sl0 ofs =>
+        exact absurd hval ((loadValue_stack_notPtr_state hwf hload) (.global gname off))
+    | slotEntry s =>
+        have hv := loadValue_slotEntry hload
+        rw [hv] at hval
+        cases hval
+    | cell s =>
+        rcases loadValue_cell_cases hload with
+          ⟨hroot, _, _, _⟩ | ⟨fname, _, hfnv, _⟩ | ⟨himp, _⟩
+        · rw [hroot] at hval; cases hval
+        · rw [hfnv] at hval; cases hval
+        · rw [himp] at hval; cases hval
+    | root s ofs => exact loadValue_root_noSlots hwf.noSlotsGlobalPointers hload hval
+    | global n ofs => exact loadValue_global_noSlots hwf.noSlotsGlobalPointers hload hval
+    | slotTable => unfold IRState.loadValue at hload; simp at hload
+    | function n => unfold IRState.loadValue at hload; simp at hload
+    | importCell s => unfold IRState.loadValue at hload; simp at hload
+  have hstackReturnsHead : ∀ operand w,
+      f.terminator = some (.ret (some operand)) →
+      evalOperand (f.setLocal dest value) operand = some w →
+      ∀ frame sl off, w = .ptr (.stack frame sl off) → frame ≠ f.id := by
+    intro operand w hterm heval frame sl off hw
+    by_cases hmemOp : dest ∈ operand.localNames
+    · have hop : operand = .local dest := by
+        cases operand with
+        | «local» name =>
+            simp only [Operand.localNames, List.mem_singleton] at hmemOp
+            rw [hmemOp]
+        | intLit _ _ => simp [Operand.localNames] at hmemOp
+        | nullPtr => simp [Operand.localNames] at hmemOp
+        | symbol _ => simp [Operand.localNames] at hmemOp
+      rw [hop] at heval
+      simp only [evalOperand, lookupLocal_setLocal_eq, Option.some.injEq] at heval
+      rw [← heval] at hw
+      exact absurd hw (hnotStack frame sl off)
+    · have hevalOld : evalOperand f operand = some w := by
+        rw [evalOperand_setLocal_of_notMem (f := f) (dest := dest) (value := value)
+          hmemOp] at heval
+        exact heval
+      exact hwf.stackReturnsSafe f hf operand w hterm hevalOld frame sl off hw
+  exact wfState_setLocalStep hwf hframes hinstrs
+    (fun _ => load_not_call_or_callPtr) hvalueType hnewOrigins hstackValue
+    hstorageRoot hstorageGlobal
+    (fun base hb hd =>
+      loadValue_slotBase_value (base := base) hwf hf hblock hinstrMem hptr hload hb hd)
+    (fun gepName slot hgep hgd =>
+      (slotEntry_ne_of_load hwf.program hfunMem hblock hinstrMem hgep hgd).elim)
+    hnoSlotsValue (slotParam_ne_of_load hud hblock hinstrMem) hstackReturnsHead
+
 theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
     {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
     (hud : FunctionUsesDefined fn) (hblock : block ∈ fn.blocks)
