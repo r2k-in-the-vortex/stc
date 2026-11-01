@@ -6809,6 +6809,71 @@ theorem loadValue_cell_root_live {c : IRState} (hdom : StorageDomain c)
     ∃ values, c.lookupStorage (.root slot) = some values ∧ 0 < values.length :=
   hdom.1 slot k hk hstor
 
+/-- A load whose destination is a slot base reads the table pointer from the
+slot global recorded by `SlotsGlobalStored`. -/
+theorem loadValue_slotBase_value {contract : IRContract} {c : IRState} {f : IRFrame}
+    {block : Block} {dest : Ssa} {ty : IrType} {ptr : Operand} {align : Option Nat}
+    {addr : IRAddr} {value : IRValue} {base : Ssa}
+    (hwf : WFState contract c) (hf : f ∈ c.frames)
+    (hblock : block ∈ f.fn.blocks)
+    (hinstr : Instr.load dest ty ptr align ∈ block.instrs)
+    (hptr : evalOperand f ptr = some (.ptr addr))
+    (hload : c.loadValue addr = some value)
+    (hbase : base ∈ SlotBases f.fn) (hbd : base = dest) :
+    value = .ptr .slotTable ∨ value = .null := by
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  obtain ⟨ty', align', g, hdef⟩ := hwf.program.slotBasesLoadOnly f.fn hfunMem base hbase
+  have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstr (by rw [hbd]; rfl) hdef
+  injection hEq with _ _ hptrEq _
+  have hptrSym : ptr = .symbol g := hptrEq.symm
+  have hptrEval : evalOperand f ptr = some (.ptr (.global g 0)) := by
+    rw [hptrSym]; rfl
+  have haddrG : addr = .global g 0 := by
+    have h' : (some (.ptr addr) : Option IRValue) = some (.ptr (.global g 0)) :=
+      hptr.symm.trans hptrEval
+    exact IRValue.ptr.inj (Option.some.inj h')
+  have hstored : c.lookupStorageAt (.global g) 0 = some (.ptr .slotTable) :=
+    (hwf.slotsBase f hf).2.2 base hbase g ty' (.symbol g) _ hdef rfl
+  have h' : c.lookupStorageAt (.global g) 0 = some value := by
+    rw [haddrG] at hload
+    exact hload
+  rw [hstored] at h'
+  exact Or.inl (Option.some.inj h').symm
+
+/-- A slot-entry name is not a load destination. -/
+theorem slotEntry_ne_of_load {contract : IRContract} {frag : IRFrag} {fn : Function}
+    {block : Block} {dest : Ssa} {ty : IrType} {ptr : Operand} {align : Option Nat}
+    (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
+    (hblock : block ∈ fn.blocks) (hinstr : Instr.load dest ty ptr align ∈ block.instrs)
+    {gepName : Ssa} {slot : Nat} (hgep : (gepName, slot) ∈ SlotEntries fn) :
+    gepName ≠ dest := by
+  intro hgd
+  rcases slotEntry_gep hgep with
+    ⟨entry, hentry, d2, t2, a2, hloadDef, dest2, ty2, base, indices, inbounds,
+      hgepDef⟩
+  rw [hgd] at hgepDef
+  have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr rfl hgepDef
+  cases hEq
+
+theorem load_not_call_or_callPtr {dest : Ssa} {ty : IrType} {ptr : Operand}
+    {align : Option Nat} :
+    ¬ ((∃ d r cl a, (Instr.load dest ty ptr align) = .call d r cl a) ∨
+      (∃ d r cl a, (Instr.load dest ty ptr align) = .callPtr d r cl a)) := by
+  intro h
+  rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h
+
+/-- The `%slots` parameter is not a load destination. -/
+theorem slotParam_ne_of_load {fn : Function} (hud : FunctionUsesDefined fn)
+    {block : Block} (hblock : block ∈ fn.blocks) {dest : Ssa} {ty : IrType}
+    {ptr : Operand} {align : Option Nat}
+    (hinstr : Instr.load dest ty ptr align ∈ block.instrs) :
+    ∀ p : IrType × String, fn.params.getLast? = some p → p.2 = "%slots" →
+      p.2 ≠ dest := by
+  intro p hp hname hpd
+  have hnotParam : dest ∉ fn.params.map (·.2) :=
+    notParam_of_mem_dests hud hblock hinstr rfl
+  exact hnotParam (List.mem_map.mpr ⟨p, List.mem_of_getLast? hp, hpd⟩)
+
 theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
     {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
     (hud : FunctionUsesDefined fn) (hblock : block ∈ fn.blocks)
