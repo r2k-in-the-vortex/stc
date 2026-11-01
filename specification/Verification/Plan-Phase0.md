@@ -2655,6 +2655,42 @@ form (`callFunction`) is already proved; the checked and rotate result forms
 follow the field's implementation, and `irStep_wf`'s corresponding call cases
 depend on them.
 
+**Phase 2 obstruction 14 (2026-11-01): overflow-typed integer literals defeat
+`PayloadsTyped`.** Preparing the approved `PayloadsTyped` field exposes a
+producer its definition excludes. `operandTypeOf? fn (.intLit ty _)` returns
+`some ty` for every `ty`, and `evalOperand f (.intLit ty v)` returns
+`some (.int ty v)`, so an overflow-typed literal is representable and
+well-typed: `Instr.WellTyped` only asks `operandHasType fn ty (.intLit ty v)`,
+which holds syntactically. Counterexample: `main` takes a host argument
+`%p : ptr` holding `.ptr (.root 0 0)` and runs
+`store .overflow 8 (.intLit (.overflow 8) 5), %p`. The store is type-correct
+(`(.overflow 8).isValue = true`; the literal has the store's type; `%p` is
+`.ptr`), the step's `v.type? == some (.overflow 8)` check passes,
+`stackStoreTypeOK` is `true` for non-stack addresses, and
+`storeValue (.root 0 0) (.int (.overflow 8) 5)` writes the literal into
+`lookupStorage (.root 0)`. The successor violates the storage conjunct of
+`PayloadsTypedValue`, which requires
+`.pair (.overflow 8) (.int (.int 8) n) b`. `PayloadsTyped` is host-supplied
+only at `initState?_wf`, and this store creates the offending value at run
+time, so no initial-state hypothesis excludes it. Frame memory has the same
+hole through an alloca of `.overflow bits`, and so do locals through
+`select`/`phi` whose chosen operand is an overflow literal (both steps write
+the evaluated operand verbatim). No `WFProgram` or `WellFormed` fact excludes
+overflow literals: `TrapCodesSpecified` constrains only the `callPtr`
+trap-code arguments and requires `.int 32` literals there. Proposed
+resolutions (owner decision): (a) add a builder-trusted syntactic field, e.g.
+`NoOverflowLiterals frag` — no `.intLit` operand of any instruction or
+terminator has an `.overflow` type — after which every overflow-typed value
+in a reachable state comes from `checkedInt`, `IRValue.default`, or a pair
+load, and the approved `PayloadsTyped` is preserved by store/load/select/phi;
+or (b) extend `PayloadsTypedValue` to also allow `.int (.overflow bits) _`.
+Option (b) still yields the index-0 `extractvalue` conclusion because the step
+is stuck on non-pair aggregates, so only pair payloads (still required to be
+`.int (.int bits) n`) are extracted, but it weakens the approved statement.
+**Recorded 2026-11-01 for owner decision; no field was added, and the
+`PayloadsTyped` implementation, its dependent step forms (store/load/select/
+phi), and the index-0 `extractvalue` form wait on the decision.**
+
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
 obligations that the approved fact set does not discharge. No invariant change was applied;
