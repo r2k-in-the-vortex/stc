@@ -8084,4 +8084,249 @@ theorem originOf?_eq_none_of_alloca {contract : IRContract} {frag : IRFrag}
             (dest, PointerOrigin.vtableCode) hmem
           exact hs.2.2
 
+/-- The allocation update of an `alloca` preserves the whole-state invariant,
+before the destination local is written. -/
+theorem wfState_allocFrame {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {dest : Ssa} {ty : IrType} {block : Block}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hblock : block ∈ f.fn.blocks)
+    (hblockEq : f.block = block)
+    (htermEq : f.terminator = block.terminator)
+    (hinstrMem : Instr.alloca dest ty ∈ block.instrs) :
+    WFState contract
+      (c.withHead
+        { f with
+          mem := initAllocMem f.id f.nextAlloc ty f.mem,
+          allocs := f.allocs ++ [(f.nextAlloc, ty)],
+          nextAlloc := f.nextAlloc + 1 }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  apply wfState_withHead hwf hframes
+  · rfl
+  · rfl
+  · rfl
+  · rfl
+  · rfl
+  · rfl
+  · intro slot ty0 hty
+    exact allocType?_alloca_old (ty := ty) hty
+  · rcases hwf.frameBlock f hf with
+      ⟨block0, hblock0, hblockEq0, htermEq0, done, hdone⟩
+    exact ⟨block0, hblock0, hblockEq0, htermEq0, done, hdone⟩
+  · exact hwf.framePrev f hf
+  · intro hinst hterm
+    exact hwf.noBareUnreachable f hf hinst hterm
+  · intro name ty0 hty
+    exact hwf.localsInitialized f hf name ty0 hty
+  · intro name v hv ty0 hty
+    exact hwf.localsTyped f hf name v hv ty0 hty
+  · intro entry hentry
+    exact hwf.originsMatch f hf entry hentry
+  · exact allocsWellFormed_alloca hwf hf hblock hinstrMem
+  · exact hwf.stackPtrsBounded f hf
+  · exact memTyped_alloca hwf hf hblock hinstrMem
+  · exact memNoPtr_alloca hwf hf
+  · exact hwf.storagePtrsLive f hf
+  · exact hwf.slotsBase f hf
+  · intro name v gname off hv hval
+    exact hwf.noSlotsGlobalPointers.1 f hf name v gname off hv hval
+  · exact noSlotsMem_alloca hwf hf
+  · intro operand v htermv heval frame slot off hv
+    exact hwf.stackReturnsSafe f hf operand v htermv heval frame slot off hv
+  · intro p hp hname
+    exact hwf.slotsParamsSafe f hf p hp hname
+
+/-- The `alloca` instruction form: the fresh allocation slot is initialized with
+default values and the destination receives the new stack address. -/
+theorem wfState_allocaStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Ssa} {ty : IrType}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .alloca dest ty :: restInstrs) :
+    WFState contract
+      (c.withHead
+        { (f.setLocal dest (.ptr (.stack f.id f.nextAlloc 0))) with
+          instrs := restInstrs,
+          mem := initAllocMem f.id f.nextAlloc ty f.mem,
+          allocs := f.allocs ++ [(f.nextAlloc, ty)],
+          nextAlloc := f.nextAlloc + 1 }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfnMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn :=
+    hwf.program.wellFormed.usesDefined f.fn hfnMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfnMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.alloca dest ty ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block.instrs[done.length]? = some (.alloca dest ty) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.alloca dest ty) restInstrs
+  have hblock? : f.fn.block? block.label = some block :=
+    block?_eq_some hnd hblock (by rw [← hblockEq])
+  have hlocTy : f.fn.localType? dest = some .ptr :=
+    localType?_eq_resultType hud hblock? hidx rfl rfl
+  let g1 : IRFrame :=
+    { f with
+      mem := initAllocMem f.id f.nextAlloc ty f.mem,
+      allocs := f.allocs ++ [(f.nextAlloc, ty)],
+      nextAlloc := f.nextAlloc + 1 }
+  let c1 : IRState := c.withHead g1
+  have hwf1 : WFState contract c1 :=
+    wfState_allocFrame hwf hframes hblock hblockEq htermEq hinstrMem
+  have hframes1 : c1.frames = g1 :: restFrames := by
+    simp [c1, g1, IRState.withHead, hframes]
+  have hinstrs1 : g1.instrs = .alloca dest ty :: restInstrs := hinstrs
+  have hpos : 0 < allocSize ty :=
+    hwf.program.allocsNonEmpty f.fn hfnMem block hblock
+      (.alloca dest ty) hinstrMem dest ty rfl
+  have hnoBareInst : restInstrs = [] →
+      ¬ ((∃ d r cl a, Instr.alloca dest ty = .call d r cl a) ∨
+        (∃ d r cl a, Instr.alloca dest ty = .callPtr d r cl a)) := by
+    intro _ h
+    rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h
+  have hvalueType : ∀ ty0, g1.fn.localType? dest = some ty0 →
+      (IRValue.ptr (.stack f.id f.nextAlloc 0)).type? = some ty0 := by
+    intro ty0 hty
+    have hEqTy : ty0 = .ptr := Option.some.inj (hty.symm.trans hlocTy)
+    subst hEqTy
+    rfl
+  have hnewOrigins : ∀ origin, g1.fn.facts.originOf? dest = some origin →
+      OriginHolds contract c1
+        (g1.setLocal dest (IRValue.ptr (.stack f.id f.nextAlloc 0)))
+        dest origin := by
+    intro origin horig
+    have hnone :=
+      originOf?_eq_none_of_alloca hwf.program hfnMem hblock hinstrMem
+    rw [hnone] at horig
+    cases horig
+  have hstackValue : ∀ frame slot off,
+      (IRValue.ptr (.stack f.id f.nextAlloc 0)) = IRValue.ptr (.stack frame slot off) →
+      ∃ g0, c1.frameById? frame = some g0 ∧
+        ∃ ty0, g0.allocType? slot = some ty0 ∧ off < allocSize ty0 := by
+    intro frame slot off hval
+    have haddr : (.stack f.id f.nextAlloc 0 : IRAddr) = .stack frame slot off :=
+      IRValue.ptr.inj hval
+    injection haddr with hframe hslot hoff
+    subst hframe
+    subst hslot
+    subst hoff
+    have hmem : g1 ∈ c1.frames := by
+      rw [hframes1]
+      exact List.mem_cons_self ..
+    refine ⟨g1, frameById?_of_mem hwf1.frameIdsNodup hmem, ty, ?_, hpos⟩
+    exact allocType?_alloca_new (hwf.allocsWellFormed f hf).2.1
+  have hstorageRoot : ∀ slot off,
+      (IRValue.ptr (.stack f.id f.nextAlloc 0)) = IRValue.ptr (.root slot off) →
+      ∃ values, c1.lookupStorage (.root slot) = some values ∧
+        off < values.length := by
+    intro slot off hval
+    have h := IRValue.ptr.inj hval
+    cases h
+  have hstorageGlobal : ∀ g off,
+      (IRValue.ptr (.stack f.id f.nextAlloc 0)) = IRValue.ptr (.global g off) →
+      ∃ values, c1.lookupStorage (.global g) = some values ∧
+        off < values.length := by
+    intro g off hval
+    have h := IRValue.ptr.inj hval
+    cases h
+  have hbaseOk : ∀ base ∈ SlotBases g1.fn, base = dest →
+      (IRValue.ptr (.stack f.id f.nextAlloc 0)) = IRValue.ptr .slotTable ∨
+        (IRValue.ptr (.stack f.id f.nextAlloc 0)) = IRValue.null := by
+    intro base hbaseMem hbaseDest
+    rcases hwf.program.slotBasesLoadOnly f.fn hfnMem base hbaseMem with
+      ⟨tyL, alignL, gL, hdef⟩
+    rw [hbaseDest] at hdef
+    have hEq := defInstr?_eq_of_mem hwf.program hfnMem hblock hinstrMem rfl hdef
+    cases hEq
+  have hentryOk : ∀ gepName slot, (gepName, slot) ∈ SlotEntries g1.fn →
+      gepName = dest →
+      (IRValue.ptr (.stack f.id f.nextAlloc 0)) = IRValue.ptr (.slotEntry slot) ∨
+        (IRValue.ptr (.stack f.id f.nextAlloc 0)) = IRValue.null := by
+    intro gepName slot hslot hgd
+    rw [hgd] at hslot
+    rcases slotEntry_gep hslot with
+      ⟨entry, hentry, destL, tyL, alignL, hload, dest2, ty2, base, indices,
+        inbounds, hdef⟩
+    have hEq := defInstr?_eq_of_mem hwf.program hfnMem hblock hinstrMem rfl hdef
+    cases hEq
+  have hnoSlotsValue : ∀ gname off,
+      (IRValue.ptr (.stack f.id f.nextAlloc 0)) = IRValue.ptr (.global gname off) →
+      gname ∉ SlotsGlobals c1.module := by
+    intro gname off hval
+    have h := IRValue.ptr.inj hval
+    cases h
+  have hslotParamNe : ∀ p : IrType × String, g1.fn.params.getLast? = some p →
+      p.2 = "%slots" → p.2 ≠ dest := by
+    intro p hp hname hpd
+    have hnotParam : dest ∉ f.fn.params.map (·.2) :=
+      notParam_of_mem_dests hud hblock hinstrMem rfl
+    exact hnotParam (List.mem_map.mpr ⟨p, List.mem_of_getLast? hp, hpd⟩)
+  have hstackReturnsHead : ∀ operand w,
+      g1.terminator = some (.ret (some operand)) →
+      evalOperand (g1.setLocal dest (IRValue.ptr (.stack f.id f.nextAlloc 0)))
+        operand = some w →
+      ∀ frame slot off, w = .ptr (.stack frame slot off) → frame ≠ g1.id := by
+    intro operand w hterm heval frame slot off hw
+    by_cases hmemOp : dest ∈ operand.localNames
+    · have hop : operand = .local dest := by
+        cases operand with
+        | «local» name =>
+            simp only [Operand.localNames, List.mem_singleton] at hmemOp
+            rw [hmemOp]
+        | intLit _ _ => simp [Operand.localNames] at hmemOp
+        | nullPtr => simp [Operand.localNames] at hmemOp
+        | symbol _ => simp [Operand.localNames] at hmemOp
+      rw [hop] at heval
+      have hnone :=
+        originOf?_eq_none_of_alloca hwf.program hfnMem hblock hinstrMem
+      have hblockTerm : block.terminator = some (.ret (some operand)) := by
+        rw [← htermEq]
+        exact hterm
+      have hsafe : SafeReturnValue f.fn dest :=
+        hwf.program.returnNonStack f.fn hfnMem block hblock
+          (.ret (some operand)) hblockTerm operand rfl dest hmemOp
+      cases hsafe with
+      | param hmemP =>
+          exact absurd hmemP (notParam_of_mem_dests hud hblock hinstrMem rfl)
+      | origin horig' =>
+          rw [hnone] at horig'
+          cases horig'
+      | binop hdef =>
+          have hEq := defInstr?_eq_of_mem hwf.program hfnMem hblock hinstrMem rfl hdef
+          cases hEq
+      | icmp hdef =>
+          have hEq := defInstr?_eq_of_mem hwf.program hfnMem hblock hinstrMem rfl hdef
+          cases hEq
+      | cast hdef =>
+          have hEq := defInstr?_eq_of_mem hwf.program hfnMem hblock hinstrMem rfl hdef
+          cases hEq
+      | extractValue hdef =>
+          have hEq := defInstr?_eq_of_mem hwf.program hfnMem hblock hinstrMem rfl hdef
+          cases hEq
+    · have hevalOld : evalOperand f operand = some w := by
+        rw [evalOperand_setLocal_of_notMem (f := g1) (dest := dest)
+          (value := IRValue.ptr (.stack f.id f.nextAlloc 0)) hmemOp] at heval
+        exact heval
+      exact hwf.stackReturnsSafe f hf operand w hterm hevalOld frame slot off hw
+  have h2 := wfState_setLocalStep (c := c1) (f := g1) (restFrames := restFrames)
+    (restInstrs := restInstrs) (instr := .alloca dest ty) (dest := dest)
+    (value := IRValue.ptr (.stack f.id f.nextAlloc 0))
+    hwf1 hframes1 hinstrs1 hnoBareInst hvalueType hnewOrigins hstackValue
+    hstorageRoot hstorageGlobal hbaseOk hentryOk hnoSlotsValue hslotParamNe
+    hstackReturnsHead
+  have hstate :
+      c1.withHead
+        { (g1.setLocal dest (IRValue.ptr (.stack f.id f.nextAlloc 0))) with
+          instrs := restInstrs } =
+      c.withHead
+        { (f.setLocal dest (IRValue.ptr (.stack f.id f.nextAlloc 0))) with
+          instrs := restInstrs,
+          mem := initAllocMem f.id f.nextAlloc ty f.mem,
+          allocs := f.allocs ++ [(f.nextAlloc, ty)],
+          nextAlloc := f.nextAlloc + 1 } := by
+    simp [c1, g1, IRState.withHead, IRFrame.setLocal, hframes]
+  rw [hstate] at h2
+  exact h2
+
 end Stc.Codegen
