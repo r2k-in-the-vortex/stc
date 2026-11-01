@@ -2503,7 +2503,43 @@ it discharges all `wfState_withHead` obligations for a head update of the form
 `{ f.setLocal dest value with instrs := rest }` from the value's type, stack-bound,
 storage-liveness, slot-base/entry, origin, and no-slots facts, plus
 `lookupLocal_withInstrs`. The remaining instruction forms instantiate it (or handle `alloca`,
-`load`/`gep` slot special cases, and calls separately); the build is green at `56cc548`.
+`load`/`gep` slot special cases, and calls separately); the build is green at `27f6009`.
+
+**Phase 2 obstruction 11 (2026-11-01): cell-origin loads are not tied to their slot-entry
+GEP.** Preparing the `load` and `gep` instruction forms exposes a provenance gap.
+`OriginsTrusted` gives a `.cell slot b` origin only the defining-load shape
+(`defInstr? entry.1 = some (.load entry.1 ty ptr align)`); it does not require the load's
+pointer operand to be the slot-entry GEP (a `.local gepName` whose GEP carries the constant
+index `slot`). `SlotBases`/`SlotEntries` are filters, not guarantees, so the invariant admits a
+`.cell` origin on a load from any pointer. Counterexample: a `WFProgram` with
+`%d = load ptr, ptr @g` and origin `(%d, .cell 0 false)`, slot 0 of kind `data`.
+`OriginsTrusted` holds (the load defines `%d`; `%d` is a non-parameter `.ptr` local),
+`OriginsMatch` holds in the pre-state through `%d = .null`, and
+`StorageValuesLive`/`StorageDomain`/`NoSlotsGlobalPointers`/`SlotsBase` hold with storage
+`(.root 7) ↦ […]`, `(.global g) ↦ [.ptr (.root 7 0)]` (`SlotBases`/`SlotEntries` are empty
+because the load's pointer is a symbol). The load succeeds (its value has type `.ptr`), but the
+successor's `%d = .ptr (.root 7 0)` does not satisfy `OriginHolds` for `.cell 0 false` (which
+requires `.null` or `.ptr (.cell 0)` with a storage/callable kind), so `originsMatch` fails. The
+reachable semantics cannot create the pattern (the builder records `.cell` origins only for
+`slot_cell` loads, whose pointer is the slot-entry GEP), but the per-state invariant must
+exclude it. The same missing link blocks the GEP form's `SlotEntries` value precision: nothing
+forces a GEP that defines a recorded slot-entry result to be the producing instruction whose
+base is `.ptr .slotTable` (giving `.ptr (.slotEntry slot)`).
+
+Proposed resolution (owner decision): a builder-trusted `WFProgram` fact
+`CellOriginsSlotEntry` — every `.cell slot b` origin is recorded on the load of a local GEP
+result with exactly the constant slot index:
+`∀ fn ∈ frag.functions, ∀ entry ∈ fn.facts.origins, ∀ slot b, entry.2 = .cell slot b →
+∃ ty align gepName, defInstr? fn entry.1 = some (.load entry.1 ty (.local gepName) align) ∧
+∃ dest2 ty2 base indices inbounds,
+defInstr? fn gepName = some (.gep dest2 ty2 (.local base) indices inbounds) ∧
+indices = [(.int 64, .intLit (.int 64) (Int.ofNat slot))]`. With it, at the load form the
+pointer local is a `SlotEntries` name, so `SlotsBase` clause 2 gives `.ptr (.slotEntry slot)`
+or `.null`; `loadValue (.slotEntry slot)` returns `.ptr (.cell slot)` (with
+`slot < slots.length` from `OriginSlotKinds`), satisfying `OriginHolds` for both `.cell` kinds
+by the recorded slot kind; and the GEP form's `.slotEntry` value follows from `SlotsBase`
+clause 1 (`base = .ptr .slotTable`) plus `evalGepAddr`. No field is added pending approval; the
+build is green at `27f6009`.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2749,5 +2785,7 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    ret value/none forms are proved (`wfState_popSetLocal`, `wfState_popRet`) with a green
    build. The `load` form then exposed obstruction 10; the owner approved extending
    `StorageValuesLive` to exclude frame pointers from storage on 2026-11-01, and the third
-   conjunct plus `wfState_setLocalStep` are implemented with a green build. The remaining
-   instruction forms, `wfState_step`/`irStep_wf`, and Phase 3 are the open review scope.
+   conjunct plus `wfState_setLocalStep` are implemented with a green build. The `load`/`gep`
+   forms then exposed obstruction 11 (§22.11: `.cell` origins are not tied to their slot-entry
+   GEP; pending owner approval), so the remaining instruction forms, `wfState_step`/`irStep_wf`,
+   and Phase 3 remain open.
