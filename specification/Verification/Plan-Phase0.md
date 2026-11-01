@@ -2813,9 +2813,15 @@ appended `%slots` parameter directly as the slot-cell GEP base (`unit.rs`
 appends `(IrType::Ptr, "%slots")` and passes `f.param_value(slots_index)` to
 `slot_value`; `ir.rs::slot_cell` GEPs from that value), so `SlotBases` contains
 `"%slots"`. Both merit a separate owner review before the whole-run theorems
-are claimed to cover builder output. The `wfState_step`/`irStep_wf` dispatch,
-the Phase 3 reachability corollaries, and the `irRun` lift remain blocked on
-this decision.
+are claimed to cover builder output. **Owner decision (2026-11-01): remove the
+appended `%slots` parameter and the extra call argument from the builder; every
+function loads `@stc_module_slots` itself, as the exported entry points already
+do.** This makes `SlotsParamsSafe` vacuous and removes `CallSlots` from the
+invariant; `SlotBasesNonParam`/`SlotBasesLoadOnly` then hold because slot bases
+are symbol-loaded locals, and the `RETAIN_LOAD` symbol-argument mismatch
+disappears with `CallSlots`. The builder change spans `crates/stc-codegen` and
+its tests; the Lean side drops the two fields and their premises, then the
+`wfState_step`/`irStep_wf` dispatch, Phase 3, and the docs pass resume.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -3078,6 +3084,8 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    frame's function. The extractValue index-0 form, `wfState_jumpStep`,
    `wfState_step`/`irStep_wf`, and Phase 3 follow those implementations.
    Preparing the call branches then exposed obstruction 16 (the callee's `%slots`
-   parameter is not tied to the forwarded argument on either call path), recorded in
-   §22.11 with proposed resolutions; the dispatch and Phase 3 remain blocked on the
-   owner's decision, with no field added and no statement weakened.
+   parameter is not tied to the forwarded argument on either call path). The owner decided on
+   2026-11-01 to remove the appended `%slots` parameter and extra call argument from the
+   builder; every function loads `@stc_module_slots` itself. The builder change and the Lean
+   removal of `SlotsParamsSafe`/`CallSlots` are the open implementation scope, after which the
+   call dispatch and Phase 3 resume.
