@@ -2744,6 +2744,79 @@ approved field and adds a 28th. **Owner approved option (a) on 2026-11-01:**
 no new field. The jump form, the `wfState_step`/`irStep_wf` dispatch, and
 Phase 3 follow (together with obstructions 12/14).
 
+**Phase 2 obstruction 16 (2026-11-01): the callee's `%slots` parameter is not
+tied to the forwarded argument.** Preparing the `.call` module-function and
+`.callPtr` function-target branches of the `wfState_step`/`irStep_wf` dispatch
+exposes a missing builder link. `wfState_calleePush` requires `hslotsParam`: if
+the callee's last parameter is the appended slots parameter
+(`fn.params.getLast? = some p`, `p.2 = "%slots"`), the corresponding argument in
+`fn.params.zip args` must be `.ptr .slotTable`, because the pushed frame's
+`SlotsParamsSafe` bullet reads that parameter's value from `initLocals fn args`
+and requires exactly `.ptr .slotTable`. `CallSlots` constrains a direct call
+only from the caller's side: the last argument is `.local name`, and `name` is
+either the caller's last parameter (with type `.ptr`) or a local with a
+recorded origin. Nothing relates `name` to the callee's `%slots` parameter, and
+the origin disjunct cannot supply the slot table: every `OriginHolds` case is
+`.null` or a `.cell`/`.root`/`.function`/`.importCell`/`.global` pointer, never
+`.ptr .slotTable`. The call typing fixes only the signature (`sig =
+fn.signature`, through `ModuleShapes` and `IntrinsicNamesReserved`) and the
+argument types. Counterexample: functions `main` (parameters `[(.ptr, "%x")]`,
+return `.void`, one block `[call void @g(ptr %x)]` with terminator `ret void`)
+and `g` (parameters `[(.ptr, "%slots")]`, return `.void`, one block with
+terminator `ret void`). `WFProgram` holds for a fragment containing them: both
+functions are type- and SSA-correct, module names are unique, the call forwards
+`main`'s last parameter so `CallSlots`' first disjunct holds, and the slot and
+origin facts are vacuous on these functions (the contract-conformance fields
+constrain the required entry points and tables, not these functions or the
+call). A one-frame `WFState` with `main`'s `%x = .null` satisfies every field;
+`SlotsParamsSafe` is vacuous because `main`'s last parameter is `%x`. The call
+step (`evalOperands = [.null]`, the `parseChecked`/`parseRotate` name parses
+miss, `module.function? "g" = some g`, equal argument lengths) pushes `g`'s
+frame with `initLocals g [.null] = [("%slots", .null)]`, so the successor
+violates `slotsParamsSafe` at `p = (.ptr, "%slots")`. The indirect path has the
+same hole: `.callPtr` resolves the callee at run time, and
+`CallTargetsTyped`/`FunctionBindingsTyped` relate the arguments to the called
+signature only through parameter *types*, so no static name rule covers it.
+Proposed resolutions (owner decision). (a) Replace `CallSlots`' caller-side
+disjunction with a callee-directed forwarding rule: for every direct call whose
+callee resolves to a module function whose last parameter is `%slots`, the
+caller's last parameter is `(IrType.ptr, "%slots")` and the last argument is
+`.local "%slots"`, with a companion builder-trusted rule for `callPtr` (the
+callee name is dynamic, so key it on the callee origin slot and
+`lookupFunctionSignature`). `hslotsParam` then follows from the caller's
+`SlotsParamsSafe` through `evalOperands`. This is builder-faithful for
+internal-to-internal calls, and it also drops the current requirement that
+*every* call's last argument be a local, which the builder violates anyway (see
+the first observation below); whether exported entries ever call a `%slots`
+callee is a builder property to confirm. Admitting a forwarded *loaded
+slots-global* local instead does not work inside the per-state invariant:
+`SlotsBase` allows the pre-load default `.null`, and `WFState` does not record
+the executed prefix, so an artificial state whose current instruction is the
+call may hold `.null` there. (b) Add a progress-aware `WFState` field relating
+each call site's last argument to the position of its defining load in the
+block prefix; this is a substantial invariant extension beyond the per-state
+facts. (c) Remove the appended `%slots` parameter from the builder: every
+function loads `@stc_module_slots` itself (as exported entries already do),
+making `SlotsParamsSafe` vacuous and eliminating both this obstruction and the
+slot-base mismatch below. No field was added and no statement was weakened; the
+last compiling commit is `59d5979`. Two related builder-faithfulness
+observations are pre-existing and separate from the proof obstruction (they
+make `WFProgram` false for current builder output, so the whole-run theorems
+would be vacuous rather than unsound). First, `CallSlots` requires the last
+argument to be `.local name`, but `emit_state_load` emits a direct call to a
+module function with a symbol argument
+(`f.call(IrType::Int(32), symbols::RETAIN_LOAD,
+&[Value::symbol(symbols::RETAIN_BUFFER)])` in `crates/stc-codegen/src/unit.rs`).
+Second, `SlotBasesNonParam` and `SlotBasesLoadOnly` assume slot bases are
+non-parameter locals defined by a symbol load, but internal functions use the
+appended `%slots` parameter directly as the slot-cell GEP base (`unit.rs`
+appends `(IrType::Ptr, "%slots")` and passes `f.param_value(slots_index)` to
+`slot_value`; `ir.rs::slot_cell` GEPs from that value), so `SlotBases` contains
+`"%slots"`. Both merit a separate owner review before the whole-run theorems
+are claimed to cover builder output. The `wfState_step`/`irStep_wf` dispatch,
+the Phase 3 reachability corollaries, and the `irRun` lift remain blocked on
+this decision.
+
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
 obligations that the approved fact set does not discharge. No invariant change was applied;
@@ -3002,5 +3075,9 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    target block's terminator, whose return-safety fact no `WFState` field supplies) were then
    owner-approved on 2026-11-01: `PayloadsTypedValue` is extended to allow
    `.int (.overflow bits) n`, and `StackReturnsSafe` is strengthened to every block of the
-   frame's function. The extractValue index-0 form, `wfState_jumpStep`, `wfState_step`/`irStep_wf`,
-   and Phase 3 follow those implementations and are the open review scope.
+   frame's function. The extractValue index-0 form, `wfState_jumpStep`,
+   `wfState_step`/`irStep_wf`, and Phase 3 follow those implementations.
+   Preparing the call branches then exposed obstruction 16 (the callee's `%slots`
+   parameter is not tied to the forwarded argument on either call path), recorded in
+   §22.11 with proposed resolutions; the dispatch and Phase 3 remain blocked on the
+   owner's decision, with no field added and no statement weakened.
