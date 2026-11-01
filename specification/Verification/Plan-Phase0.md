@@ -2361,8 +2361,15 @@ lifetime discipline or excluding stack-pointer stores specifically — are more 
 **Owner approved both parts on 2026-11-01:** `StoresNonPointer` becomes a `WFProgram` field, and
 `MemNoPtr` (`∀ addr v, f.lookupMem addr = some v → ∀ a, v ≠ .ptr a`) becomes a `WFState` field.
 `StackPtrsOrdered` is therefore added to `WFState` as approved, with its memory clause proved
-vacuous by `MemNoPtr`; implementation follows. Until then the ret value/none forms,
-`irStep_wf`, and the Phase 3 corollaries were blocked.
+vacuous by `MemNoPtr`. Both facts and the ordering field are now implemented: `initState?_wf`
+establishes `memNoPtr` (initial memory empty) and `stackPtrsOrdered` (single frame, empty prefix);
+`wfState_withHead` takes the incoming head's `MemNoPtr` and proves ordering (the head is the newest
+frame id); `wfState_storeFrames` takes the stored value's non-pointer fact and proves both
+(the new-entry local case is refuted by that fact, the memory case by `MemNoPtr`);
+`wfState_storeStorage` transfers both unchanged; `wfState_calleePush` proves both (fresh head id
+for ordering, empty callee memory for `MemNoPtr`); and `wfState_storeStep` derives the stored
+value's non-pointer fact from `StoresNonPointer` plus the store typing. `WFState` now has 27
+fields and `lake build` is green. The ret value/none forms, `irStep_wf`, and Phase 3 remain.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation

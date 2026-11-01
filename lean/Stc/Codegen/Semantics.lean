@@ -1200,6 +1200,11 @@ def ReturnNonStack (frag : IRFrag) : Prop :=
     ∀ operand, term = .ret (some operand) →
       ∀ name ∈ operand.localNames, SafeReturnValue fn name
 
+/-- Stores never carry pointer-typed values. -/
+def StoresNonPointer (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ ty value ptr align, instr = .store ty value ptr align → ty ≠ .ptr
+
 /-- Module-level facts for the target invariant. -/
 structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   wellFormed : WellFormed contract frag
@@ -1216,6 +1221,7 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   returnNonStack : ReturnNonStack frag
   slotsGlobalReadOnly : SlotsGlobalReadOnly frag
   slotBasesNonParam : SlotBasesNonParam frag
+  storesNonPointer : StoresNonPointer frag
   allocaRepresentable : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
     ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty →
       AllocaElementRepresentable ty
@@ -1313,6 +1319,20 @@ def StackPtrsBounded (c : IRState) (f : IRFrame) : Prop :=
           ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty
     | _ => True
 
+/-- No stack frame's memory holds a pointer value. -/
+def MemNoPtr (f : IRFrame) : Prop :=
+  ∀ addr v, f.lookupMem addr = some v → ∀ a, v ≠ .ptr a
+
+/-- Stack pointers held by a frame do not target frames above it: in every
+decomposition `pre ++ f :: rest`, `f`'s local or memory stack pointers name no
+frame in `pre`. -/
+def StackPtrsOrdered (c : IRState) : Prop :=
+  ∀ pre f rest, c.frames = pre ++ f :: rest →
+    (∀ name v frame slot off, f.lookupLocal name = some v →
+      v = .ptr (.stack frame slot off) → frame ∉ pre.map (·.id)) ∧
+    (∀ addr v frame slot off, f.lookupMem addr = some v →
+      v = .ptr (.stack frame slot off) → frame ∉ pre.map (·.id))
+
 /-- A stack cell's stored value matches the allocation element type. -/
 def MemValueTyped (ty : IrType) (v : IRValue) : Prop :=
   match ty with
@@ -1400,7 +1420,9 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
     OriginHolds contract c f entry.1 entry.2
   allocsWellFormed : ∀ f ∈ c.frames, AllocsWellFormed f
   stackPtrsBounded : ∀ f ∈ c.frames, StackPtrsBounded c f
+  stackPtrsOrdered : StackPtrsOrdered c
   memTyped : ∀ f ∈ c.frames, MemTyped c f
+  memNoPtr : ∀ f ∈ c.frames, MemNoPtr f
   storagePtrsLive : ∀ f ∈ c.frames, StoragePtrsLive c f
   slotsBase : ∀ f ∈ c.frames, SlotsBase c f
   slotsStorage : SlotsStorage c
@@ -2859,7 +2881,22 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
             | slotTable => trivial
             | function name => trivial
             | importCell slot => trivial
+          · intro pre f rest hframes
+            cases pre with
+            | nil => simp
+            | cons a as =>
+                simp only [List.cons_append, List.cons.injEq] at hframes
+                rcases hframes with ⟨_, hnil⟩
+                have hlen : (as ++ f :: rest).length = 0 := by
+                  rw [← hnil]
+                  rfl
+                simp only [List.length_append, List.length_cons] at hlen
+                omega
           · intro f hf addr v hmem
+            simp only [List.mem_singleton] at hf
+            subst hf
+            simp [IRFrame.lookupMem] at hmem
+          · intro f hf addr v hmem a
             simp only [List.mem_singleton] at hf
             subst hf
             simp [IRFrame.lookupMem] at hmem
@@ -3501,9 +3538,9 @@ state invariant. The halt is the only `.step` outcome that changes the status. -
 theorem wfState_status {contract : IRContract} {c : IRState} (st : IRStatus)
     (hwf : WFState contract c) : WFState contract { c with status := st } := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-    h17, h18, h19, h20, h21, h22, h23, h24, h25⟩ := hwf
+    h17, h18, h19, h20, h21, h22, h23, h24, h25, h26, h27⟩ := hwf
   exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-    h17, h18, h19, h20, h21, h22, h23, h24, h25⟩
+    h17, h18, h19, h20, h21, h22, h23, h24, h25, h26, h27⟩
 
 theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     {rest : List IRFrame}
@@ -3525,6 +3562,7 @@ theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     (hallocs : AllocsWellFormed g)
     (hstackPtrs : StackPtrsBounded c g)
     (hmem : MemTyped c g)
+    (hmemNoPtr : MemNoPtr g)
     (hstoragePtrs : StoragePtrsLive c g)
     (hslotsBase : SlotsBase c g)
     (hnoSlotsLocals : ∀ name v gname off, g.lookupLocal name = some v →
@@ -3614,12 +3652,40 @@ theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     · exact stackPtrsBounded_of_frameLookups hlook hstackPtrs
     · exact stackPtrsBounded_of_frameLookups hlook
         (hwf.stackPtrsBounded f' (by rw [hframes]; exact List.mem_cons_of_mem f hf'))
+  · intro pre f' rest' heq
+    cases pre with
+    | nil => simp
+    | cons a as =>
+        rw [List.cons_append] at heq
+        injection heq with hag has
+        subst hag
+        have hc : c.frames = (f :: as) ++ f' :: rest' := by
+          rw [hframes, List.cons_append, has]
+        have hold := hwf.stackPtrsOrdered (f :: as) f' rest' hc
+        have hmapg : (g :: as).map (·.id) = (f :: as).map (·.id) := by
+          rw [List.map_cons, List.map_cons, hid]
+        constructor
+        · intro name v frame slot off hv hval hmem
+          have hmem' : frame ∈ (f :: as).map (·.id) := by
+            rw [← hmapg]
+            exact hmem
+          exact hold.1 name v frame slot off hv hval hmem'
+        · intro addr v frame slot off hv hval hmem
+          have hmem' : frame ∈ (f :: as).map (·.id) := by
+            rw [← hmapg]
+            exact hmem
+          exact hold.2 addr v frame slot off hv hval hmem'
   · intro f' hf'
     have hf'' : f' ∈ g :: rest := by simpa using hf'
     rcases List.mem_cons.mp hf'' with rfl | hf'
     · exact memTyped_of_frameLookups hlook hmem
     · exact memTyped_of_frameLookups hlook
         (hwf.memTyped f' (by rw [hframes]; exact List.mem_cons_of_mem f hf'))
+  · intro f' hf'
+    have hf'' : f' ∈ g :: rest := by simpa using hf'
+    rcases List.mem_cons.mp hf'' with rfl | hf'
+    · exact hmemNoPtr
+    · exact hwf.memNoPtr f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
   · intro f' hf'
     have hf'' : f' ∈ g :: rest := by simpa using hf'
     rcases List.mem_cons.mp hf'' with rfl | hf'
@@ -3719,6 +3785,7 @@ theorem wfState_withHeadInstrs {contract : IRContract} {c : IRState} {instrs : L
         (hwf.allocsWellFormed f hmem)
         (hwf.stackPtrsBounded f hmem)
         (hwf.memTyped f hmem)
+        (hwf.memNoPtr f hmem)
         (hwf.storagePtrsLive f hmem)
         (hwf.slotsBase f hmem)
         (hwf.noSlotsGlobalPointers.1 f hmem)
@@ -3822,6 +3889,7 @@ theorem wfState_storeFrames {contract : IRContract} {c : IRState}
     (hoff : off < allocSize ty)
     (hvt : MemValueTyped ty v)
     (hvb : MemValuePtrBounded c v)
+    (hvNoPtr : ∀ a, v ≠ .ptr a)
     (hnoSlotsV : ∀ gname off', v = .ptr (.global gname off') →
       gname ∉ SlotsGlobals c.module) :
     WFState contract
@@ -3926,8 +3994,59 @@ theorem wfState_storeFrames {contract : IRContract} {c : IRState}
       exact hwf.stackPtrsBounded g hg name val addr
         (by simpa [IRFrame.lookupLocal, hFlocals g] using hv) haddr
     exact stackPtrsBounded_of_frameLookups hlook hspg
+  · intro pre f' rest' heq
+    rw [List.map_eq_append_iff] at heq
+    rcases heq with ⟨l1, l2, hl, hpre, hrest⟩
+    rw [List.map_eq_cons_iff] at hrest
+    rcases hrest with ⟨g, l2', hl2, hfg, hmap⟩
+    have hc : c.frames = l1 ++ g :: l2' := by rw [hl, hl2]
+    have hold := hwf.stackPtrsOrdered l1 g l2' hc
+    have hmem' : ∀ {x : Nat}, x ∈ pre.map (·.id) → x ∈ l1.map (·.id) := by
+      intro x hx
+      have h := hx
+      rw [← hpre, List.map_map] at h
+      simpa [Function.comp_apply, hFid] using h
+    constructor
+    · intro name val fid slot' off' hv hval hmem
+      have hv' : g.lookupLocal name = some val := by
+        rw [← hfg] at hv
+        simpa [IRFrame.lookupLocal, hFlocals g] using hv
+      exact hold.1 name val fid slot' off' hv' hval (hmem' hmem)
+    · intro addr val fid slot' off' hv hval hmem
+      rw [← hfg] at hv
+      unfold storeFrame at hv
+      split at hv
+      · rename_i hgt
+        by_cases hsame : addr = .stack frame slot off
+        · rw [hsame] at hv
+          rw [lookupMem_setMem_eq] at hv
+          have hveq : val = v := (Option.some.inj hv).symm
+          subst hveq
+          exact (hvNoPtr (.stack fid slot' off')) hval
+        · have hvold : g.lookupMem addr = some val := by
+            rw [← lookupMem_setMem_ne g (beq_eq_false_iff_ne.mpr hsame) v]
+            exact hv
+          exact hold.2 addr val fid slot' off' hvold hval (hmem' hmem)
+      · exact hold.2 addr val fid slot' off' hv hval (hmem' hmem)
   · intro f' hf'
     exact memTyped_storeFrames hwf.frameIdsNodup hwf.memTyped hfind halloc hoff hvt hvb f' hf'
+  · intro f' hf'
+    rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
+    intro addr val hv a hptr
+    unfold storeFrame at hv
+    split at hv
+    · rename_i hgt
+      by_cases hsame : addr = .stack frame slot off
+      · rw [hsame] at hv
+        rw [lookupMem_setMem_eq] at hv
+        have hveq : val = v := (Option.some.inj hv).symm
+        subst hveq
+        exact hvNoPtr a hptr
+      · have hvold : g.lookupMem addr = some val := by
+          rw [← lookupMem_setMem_ne g (beq_eq_false_iff_ne.mpr hsame) v]
+          exact hv
+        exact hwf.memNoPtr g hg addr val hvold a hptr
+    · exact hwf.memNoPtr g hg addr val hv a hptr
   · intro f' hf'
     rcases List.mem_map.mp hf' with ⟨g, hg, rfl⟩
     have h := hwf.storagePtrsLive g hg
@@ -4161,7 +4280,9 @@ theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
         · exact hwf.originsMatch
         · exact hwf.allocsWellFormed
         · exact hwf.stackPtrsBounded
+        · exact hwf.stackPtrsOrdered
         · exact hwf.memTyped
+        · exact hwf.memNoPtr
         · intro f hf
           have h := hwf.storagePtrsLive f hf
           constructor
@@ -4466,10 +4587,18 @@ theorem wfState_storeStep {contract : IRContract} {c s' : IRState} {f : IRFrame}
         intro gname off' hval
         exact noSlotsGlobal_of_evalOperand hnoSlotsLocals hsymsValue
           (by simpa [hval] using hvalue)
+      have htyNotPtr : ty ≠ .ptr :=
+        hwf.program.storesNonPointer f.fn hfunMem block hblock
+          (.store ty value ptr align) hinstrMem ty value ptr align rfl
+      have hvNoPtr : ∀ a, v ≠ .ptr a := by
+        intro a hptr
+        have h := htyped
+        rw [hptr] at h
+        exact htyNotPtr (Option.some.inj h).symm
       have hstate : WFState contract
           { c with frames := c.frames.map fun g =>
               if g.id == frame then g.setMem (.stack frame slot off) v else g } :=
-        wfState_storeFrames hwf hfind halloc hoff hvt hvb hnoSlotsV
+        wfState_storeFrames hwf hfind halloc hoff hvt hvb hvNoPtr hnoSlotsV
       rw [hs']
       apply wfState_withHeadInstrs hstate
       · intro f' fs heq
@@ -5076,12 +5205,56 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
         | importCell slot => trivial
       exact stackPtrsBounded_of_frameLookups hlook hb
     · exact stackPtrsBounded_of_frameLookups hlook (hwf.stackPtrsBounded f' hf')
+  · intro pre f' rest' heq
+    cases pre with
+    | nil => simp
+    | cons a as =>
+        rw [List.cons_append] at heq
+        injection heq with hag has
+        subst hag
+        have hc : c.frames = as ++ f' :: rest' := by
+          rw [hframes]
+          exact has
+        have hold := hwf.stackPtrsOrdered as f' rest' hc
+        have hf'c : f' ∈ c.frames := by
+          rw [hc]
+          exact List.mem_append.mpr (Or.inr (List.mem_cons_self ..))
+        constructor
+        · intro name v frame slot off hv hval hmem
+          have hframeNe : frame ≠ (calleeFrame c fn block args dest).id := by
+            intro heqid
+            have hb := hwf.stackPtrsBounded f' hf'c name v (.stack frame slot off) hv hval
+            rcases hb with ⟨g, hfind, ty', hty', hoff'⟩
+            have hgid : g.id = frame := beq_iff_eq.mp
+              (List.find?_some (p := fun f : IRFrame => f.id == frame) (a := g)
+                (by simpa [IRState.frameById?] using hfind))
+            have hlt : g.id < c.nextFrame := hwf.frameIdsBound g
+              (List.mem_of_find?_eq_some (by simpa [IRState.frameById?] using hfind))
+            have hcfid : (calleeFrame c fn block args dest).id = c.nextFrame := rfl
+            rw [hcfid] at heqid
+            rw [heqid] at hgid
+            rw [hgid] at hlt
+            omega
+          have hasmem : frame ∈ as.map (·.id) := by
+            rw [List.map_cons] at hmem
+            rcases List.mem_cons.mp hmem with h | h
+            · exact absurd h hframeNe
+            · exact h
+          exact hold.1 name v frame slot off hv hval hasmem
+        · intro addr v frame slot off hv hval hmem
+          exact absurd hval (hwf.memNoPtr f' hf'c addr v hv (.stack frame slot off))
   · intro f' hf'
     rw [hframes'] at hf'
     rcases List.mem_cons.mp hf' with rfl | hf'
     · intro addr v hmem
       simp [calleeFrame, IRFrame.lookupMem] at hmem
     · exact memTyped_of_frameLookups hlook (hwf.memTyped f' hf')
+  · intro f' hf'
+    rw [hframes'] at hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · intro addr v hmem a
+      simp [calleeFrame, IRFrame.lookupMem] at hmem
+    · exact hwf.memNoPtr f' hf'
   · intro f' hf'
     rw [hframes'] at hf'
     rcases List.mem_cons.mp hf' with rfl | hf'
@@ -5431,6 +5604,8 @@ theorem wfState_retHalt {contract : IRContract} {c : IRState}
   · intro f hf; simp at hf
   · intro f hf; simp at hf
   · intro f hf; simp at hf
+  · intro pre f rest heq; simp at heq
+  · intro f hf; simp at hf
   · intro f hf; simp at hf
   · intro f hf; simp at hf
   · intro f hf; simp at hf
@@ -5448,7 +5623,7 @@ theorem wfState_retHalt {contract : IRContract} {c : IRState}
   · intro f hf; simp at hf
   · intro f hf; simp at hf
 
-/-- A direct call's destination is not a parameter. -/
+
 theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
     {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
     (hud : FunctionUsesDefined fn) (hblock : block ∈ fn.blocks)
