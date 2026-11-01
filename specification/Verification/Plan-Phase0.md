@@ -1428,6 +1428,7 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   storesNonPointer : StoresNonPointer frag
   slotBasesLoadOnly : SlotBasesLoadOnly frag
   cellOriginsSlotEntry : CellOriginsSlotEntry frag
+  intrinsicNamesReserved : IntrinsicNamesReserved frag
 
 /-- No store carries a pointer-typed value ("no aliasing beyond GOT cells"). -/
 def StoresNonPointer (frag : IRFrag) : Prop :=
@@ -1456,6 +1457,11 @@ def CellOriginsSlotEntry (frag : IRFrag) : Prop :=
           ∃ ty align addrName,
             defInstr? fn entry.1 = some (.load entry.1 ty (.local addrName) align) ∧
             fn.facts.originOf? addrName = some (.cell slot false)
+
+/-- No module function shadows an intrinsic name; the step parses intrinsic
+names before module-function lookup. -/
+def IntrinsicNamesReserved (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, fn.name ∉ intrinsicSignatures.map (·.name)
 
 /-- A local value realizes the builder-recorded pointer origin. The slot table
 supplies the cell kind; `FunctionFacts.origins` supplies the SSA-to-origin
@@ -1505,6 +1511,7 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
   stackPtrsOrdered : StackPtrsOrdered c                        -- 2026-11-01
   memTyped : ∀ f ∈ c.frames, MemTyped c f                      -- D2
   memNoPtr : ∀ f ∈ c.frames, MemNoPtr f                        -- 2026-11-01
+  payloadsTyped : PayloadsTyped c                              -- 2026-11-01
   storagePtrsLive : ∀ f ∈ c.frames, StoragePtrsLive c f        -- D1
   functionBindings : FunctionBindingsTyped c                   -- D3, D4
   callTargets : CallTargetsTyped c                             -- D4
@@ -1565,6 +1572,19 @@ def MemValueTyped (ty : IrType) (v : IRValue) : Prop :=
 /-- Frame memory never holds a pointer value; allocation defaults are `.null`. -/
 def MemNoPtr (f : IRFrame) : Prop :=
   ∀ addr v, f.lookupMem addr = some v → ∀ a, v ≠ .ptr a
+
+/-- Overflow-typed values carry an integer payload of the underlying width. -/
+def PayloadsTypedValue (v : IRValue) : Prop :=
+  match v.type? with
+  | some (.overflow bits) =>
+      ∃ n b, v = .pair (.overflow bits) (.int (.int bits) n) b
+  | _ => True
+
+/-- Locals, frame memory, and persistent storage are payload-typed. -/
+def PayloadsTyped (c : IRState) : Prop :=
+  (∀ f ∈ c.frames, ∀ name v, f.lookupLocal name = some v → PayloadsTypedValue v) ∧
+  (∀ f ∈ c.frames, ∀ addr v, f.lookupMem addr = some v → PayloadsTypedValue v) ∧
+  (∀ id off v, c.lookupStorageAt id off = some v → PayloadsTypedValue v)
 
 def MemTyped (c : IRState) (f : IRFrame) : Prop :=
   ∀ addr v, f.lookupMem addr = some v →
@@ -2591,10 +2611,13 @@ decision): add a payload-typing fact for overflow values, e.g. every local or
 memory value whose `type?` is `.overflow bits` is
 `.pair (.overflow bits) (.int (.int bits) _) _` (host-supplied at
 `initState?_wf`, preserved by stores/loads/calls), or add a builder-trusted rule
-tying `extractvalue` aggregates to `checkedInt`/default producers. The index-1
-(overflow flag) form is proved and pushed as `wfState_extractValueStep`; the
-index-0 form remains unproved pending the owner decision, and `irStep_wf`'s
-extractvalue case is blocked on it.
+tying `extractvalue` aggregates to `checkedInt`/default producers. **Owner
+approved the state-wide `PayloadsTyped` field on 2026-11-01:** it covers locals,
+frame memory, and persistent storage (§22.3), is host-supplied at
+`initState?_wf`, and is preserved by stores/loads/calls. The index-1 (overflow
+flag) form is proved and pushed as `wfState_extractValueStep`; the index-0 form
+follows the field's implementation, and `irStep_wf`'s extractvalue case depends
+on it.
 
 **Phase 2 obstruction 13 (2026-11-01): direct calls resolved by name are not
 tied to their intrinsic signatures.** Preparing the call-result instruction
@@ -2624,9 +2647,13 @@ builder-trusted fact excluding module-function names that occur in
 `intrinsicSignatures` (or, more generally, that `intrinsicSignatures` names are
 reserved), or a `WFProgram` fact that for every call instruction whose callee
 parses as checked/rotate, the declared return type equals the intrinsic return
-type. The module-function path of the call form (`callFunction`) is already
-proved; the checked and rotate result forms remain unproved pending the owner
-decision, and `irStep_wf`'s corresponding call cases are blocked on it.
+type. **Owner approved reserving intrinsic names on 2026-11-01:**
+`IntrinsicNamesReserved` becomes a `WFProgram` field (§22.3), so no module
+function name occurs in `intrinsicSignatures.map (·.name)` and the parse-first
+dispatch cannot shadow a module function. The module-function path of the call
+form (`callFunction`) is already proved; the checked and rotate result forms
+follow the field's implementation, and `irStep_wf`'s corresponding call cases
+depend on them.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2875,7 +2902,11 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    conjunct plus `wfState_setLocalStep` are implemented with a green build. The `load`/`gep`
    forms then exposed obstruction 11; the owner approved the corrected two-case
    `CellOriginsSlotEntry` fact on 2026-11-01 (the universal GEP-load rule is not
-   builder-faithful for the value stage). The fact is implemented and
-   `wfState_setLocalStep` was generalized for origin-bearing destinations
-   (`hnewOrigins`, `hbaseOk`, `hentryOk`) with a green build; the remaining instruction
-   forms, `wfState_step`/`irStep_wf`, and Phase 3 are the open review scope.
+   builder-faithful for the value stage). The fact is implemented, `wfState_setLocalStep` was
+   generalized for origin-bearing destinations (`hnewOrigins`, `hbaseOk`, `hentryOk`), and the
+   load, GEP, and alloca forms plus binop/icmp/cast/select/phi are proved with a green build.
+   Obstructions 12 and 13 were then owner-approved on 2026-11-01: the state-wide
+   `PayloadsTyped` field (locals, memory, storage) and the `IntrinsicNamesReserved` WFProgram
+   fact. The extractValue index-0 form, the checked/rotate call-result forms,
+   `wfState_step`/`irStep_wf`, and Phase 3 follow their implementation and are the open review
+   scope.
