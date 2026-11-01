@@ -6543,6 +6543,73 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
     (hwf.memNoPtr f hf) hstoragePtrs hslotsBase hnoSlotsLocals
     (hwf.noSlotsGlobalPointers.2.1 f hf) hstackReturnsHead hslotsParams
 
+theorem loadValue_slotEntry {c : IRState} {slot : Nat} {v : IRValue}
+    (h : c.loadValue (.slotEntry slot) = some v) : v = .ptr (.cell slot) := by
+  have h' : (if slot < c.module.slots.length then some (.ptr (.cell slot)) else none) =
+      some v := h
+  by_cases hlt : slot < c.module.slots.length
+  · rw [ite_eq_left hlt] at h'
+    exact (Option.some.inj h').symm
+  · rw [ite_eq_right hlt] at h'
+    simp at h'
+
+theorem loadValue_stack_lookup {c : IRState} {fm sl ofs : Nat} {v : IRValue}
+    (h : c.loadValue (.stack fm sl ofs) = some v) :
+    ∃ f0, c.frameById? fm = some f0 ∧ f0.lookupMem (.stack fm sl ofs) = some v := by
+  have h' : (match c.frameById? fm with
+      | some f0 => f0.lookupMem (.stack fm sl ofs)
+      | none => none) = some v := h
+  cases hfind : c.frameById? fm with
+  | none => simp [hfind] at h'
+  | some f0 =>
+      have hmem : f0.lookupMem (.stack fm sl ofs) = some v := by
+        simpa [hfind] using h'
+      exact ⟨f0, rfl, hmem⟩
+
+theorem loadValue_stack_notPtr {c : IRState} {fm sl ofs : Nat} {v : IRValue}
+    (h : c.loadValue (.stack fm sl ofs) = some v)
+    (hnp : ∀ f0, c.frameById? fm = some f0 → MemNoPtr f0) :
+    ∀ a, v ≠ .ptr a := by
+  rcases loadValue_stack_lookup h with ⟨f0, hfind, hmem⟩
+  exact hnp f0 hfind _ v hmem
+
+/-- The value returned by a successful cell load, by the cell kind. -/
+theorem loadValue_cell_cases {c : IRState} {slot : Nat} {v : IRValue}
+    (h : c.loadValue (.cell slot) = some v) :
+    (v = .ptr (.root slot 0) ∧
+      ∃ k, c.slotKind? slot = some k ∧ (k = .data ∨ k = .direct)) ∨
+    (∃ fname, c.lookupFunction slot = some fname ∧ v = .ptr (.function fname) ∧
+      c.slotKind? slot = some .function) ∨
+    (v = .ptr (.importCell slot) ∧ c.slotKind? slot = some .importCell) := by
+  have h' : (match c.slotKind? slot with
+      | some .data => some (.ptr (.root slot 0))
+      | some .direct => some (.ptr (.root slot 0))
+      | some .function => (c.lookupFunction slot).map (fun name => .ptr (.function name))
+      | some .importCell => some (.ptr (.importCell slot))
+      | some .descriptor => none
+      | none => none) = some v := h
+  cases hsk : c.slotKind? slot with
+  | none => simp [hsk] at h'
+  | some k =>
+      cases k with
+      | data =>
+          simp only [hsk] at h'
+          exact Or.inl ⟨(Option.some.inj h').symm, ⟨.data, rfl, Or.inl rfl⟩⟩
+      | direct =>
+          simp only [hsk] at h'
+          exact Or.inl ⟨(Option.some.inj h').symm, ⟨.direct, rfl, Or.inr rfl⟩⟩
+      | function =>
+          simp only [hsk] at h'
+          cases hfun : c.lookupFunction slot with
+          | none => simp [hfun] at h'
+          | some fname =>
+              simp only [hfun, Option.map_some, Option.some.injEq] at h'
+              exact Or.inr (Or.inl ⟨fname, rfl, h'.symm, rfl⟩)
+      | importCell =>
+          simp only [hsk] at h'
+          exact Or.inr (Or.inr ⟨(Option.some.inj h').symm, rfl⟩)
+      | descriptor => simp [hsk] at h'
+
 theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
     {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
     (hud : FunctionUsesDefined fn) (hblock : block ∈ fn.blocks)
