@@ -1237,6 +1237,13 @@ def StoresNonPointer (frag : IRFrag) : Prop :=
   ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
     ∀ ty value ptr align, instr = .store ty value ptr align → ty ≠ .ptr
 
+/-- No module function shadows an intrinsic name. The step parses intrinsic
+names before consulting the module function table, so a shadowing module
+function would execute the intrinsic semantics against its own declared
+signature. -/
+def IntrinsicNamesReserved (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, fn.name ∉ intrinsicSignatures.map (·.name)
+
 /-- Module-level facts for the target invariant. -/
 structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   wellFormed : WellFormed contract frag
@@ -1262,6 +1269,7 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   originGlobals : OriginGlobalsLink contract frag
   originSlotKinds : OriginSlotKinds frag
   slotsSymbolsLoadOnly : SlotsSymbolsLoadOnly frag
+  intrinsicNamesReserved : IntrinsicNamesReserved frag
 
 /-- A local value realizes the builder-recorded pointer origin, or is still
 the initialization default (`.null`) before its defining instruction runs. -/
@@ -6406,8 +6414,7 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
     (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
     (hinstrs : f.instrs = instr :: restInstrs)
     (hnoBareInst : restInstrs = [] →
-      ¬ ((∃ d r cl a, instr = .call d r cl a) ∨
-        (∃ d r cl a, instr = .callPtr d r cl a)))
+      ¬ (∃ d r cl a, instr = .callPtr d r cl a))
     (hvalueType : ∀ ty, f.fn.localType? dest = some ty → value.type? = some ty)
     (hnewOrigins : ∀ origin, f.fn.facts.originOf? dest = some origin →
       OriginHolds contract c (f.setLocal dest value) dest origin)
@@ -6466,7 +6473,7 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
     have hinstrEq : instr = instr0 := by
       rw [hlast] at hlast0
       exact Option.some.inj hlast0
-    exact hnoBareInst hres (Or.inr ⟨d, r, cl, a, hinstrEq.trans hinstr0⟩)
+    exact hnoBareInst hres ⟨d, r, cl, a, hinstrEq.trans hinstr0⟩
   have hlocalsInit : ∀ name ty,
       { (f.setLocal dest value) with instrs := restInstrs }.fn.localType? name = some ty →
       ∃ v, { (f.setLocal dest value) with instrs := restInstrs }.lookupLocal name = some v :=
@@ -7037,7 +7044,7 @@ theorem wfState_loadStep {contract : IRContract} {c : IRState} {f : IRFrame}
         exact heval
       exact hwf.stackReturnsSafe f hf operand w hterm hevalOld frame sl off hw
   exact wfState_setLocalStep hwf hframes hinstrs
-    (fun _ => load_not_call_or_callPtr) hvalueType hnewOrigins hstackValue
+    (fun _ h => load_not_call_or_callPtr (Or.inr h)) hvalueType hnewOrigins hstackValue
     hstorageRoot hstorageGlobal
     (fun base hb hd =>
       loadValue_slotBase_value (base := base) hwf hf hblock hinstrMem hptr hload hb hd)
@@ -7631,7 +7638,8 @@ theorem wfState_gepStep {contract : IRContract} {c : IRState} {f : IRFrame}
           hmemOp] at heval
         exact heval
       exact hwf.stackReturnsSafe f hf operand w hterm hevalOld frame slot off hw
-  exact wfState_setLocalStep hwf hframes hinstrs (fun _ => gep_not_call_or_callPtr)
+  exact wfState_setLocalStep hwf hframes hinstrs
+    (fun _ h => gep_not_call_or_callPtr (Or.inr h))
     hvalueType hnewOrigins hstackValue hstorageRoot hstorageGlobal hbaseOk hentryOk
     hnoSlotsValue hslotParamNe hstackReturnsHead
 
@@ -8181,10 +8189,10 @@ theorem wfState_allocaStep {contract : IRContract} {c : IRState} {f : IRFrame}
     hwf.program.allocsNonEmpty f.fn hfnMem block hblock
       (.alloca dest ty) hinstrMem dest ty rfl
   have hnoBareInst : restInstrs = [] →
-      ¬ ((∃ d r cl a, Instr.alloca dest ty = .call d r cl a) ∨
-        (∃ d r cl a, Instr.alloca dest ty = .callPtr d r cl a)) := by
+      ¬ (∃ d r cl a, Instr.alloca dest ty = .callPtr d r cl a) := by
     intro _ h
-    rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h
+    rcases h with ⟨d, r, cl, a, h⟩
+    cases h
   have hvalueType : ∀ ty0, g1.fn.localType? dest = some ty0 →
       (IRValue.ptr (.stack f.id f.nextAlloc 0)).type? = some ty0 := by
     intro ty0 hty
@@ -8447,8 +8455,7 @@ theorem wfState_intValueStep {contract : IRContract} {c : IRState} {f : IRFrame}
     (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
     (hinstrs : f.instrs = instr :: restInstrs)
     (hnoBareInst : restInstrs = [] →
-      ¬ ((∃ d r cl a, instr = .call d r cl a) ∨
-        (∃ d r cl a, instr = .callPtr d r cl a)))
+      ¬ (∃ d r cl a, instr = .callPtr d r cl a))
     (hdest : instr.dest? = some dest)
     (hlocTy : f.fn.localType? dest = some ty)
     (hloadShape : ∀ ty0 ptr align, instr ≠ .load dest ty0 ptr align)
@@ -8556,7 +8563,8 @@ theorem wfState_binopStep {contract : IRContract} {c : IRState} {f : IRFrame}
   exact wfState_intValueStep (instr := .binop dest op ty lhs rhs) hwf hframes hinstrs
     (by
       intro _ h
-      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+      rcases h with ⟨d, r, cl, a, h⟩
+      cases h)
     rfl hlocTy
     (by intro ty0 ptr align h; cases h)
     (by intro dest2 ty0 base indices inbounds h; cases h)
@@ -8595,7 +8603,8 @@ theorem wfState_icmpStep {contract : IRContract} {c : IRState} {f : IRFrame}
     (ty := .int 1) (v := boolPayload (evalICmp pred bits a b)) hwf hframes hinstrs
     (by
       intro _ h
-      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+      rcases h with ⟨d, r, cl, a, h⟩
+      cases h)
     rfl hlocTy
     (by intro ty0 ptr align h; cases h)
     (by intro dest2 ty0 base indices inbounds h; cases h)
@@ -8634,7 +8643,8 @@ theorem wfState_castStep {contract : IRContract} {c : IRState} {f : IRFrame}
     (ty := toTy) (v := evalCastOp op fromBits toBits a) hwf hframes hinstrs
     (by
       intro _ h
-      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+      rcases h with ⟨d, r, cl, a, h⟩
+      cases h)
     rfl hlocTy
     (by intro ty0 ptr align h; cases h)
     (by intro dest2 ty0 base indices inbounds h; cases h)
@@ -8649,8 +8659,7 @@ theorem wfState_operandStep {contract : IRContract} {c : IRState} {f : IRFrame}
     (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
     (hinstrs : f.instrs = instr :: restInstrs)
     (hnoBareInst : restInstrs = [] →
-      ¬ ((∃ d r cl a, instr = .call d r cl a) ∨
-        (∃ d r cl a, instr = .callPtr d r cl a)))
+      ¬ (∃ d r cl a, instr = .callPtr d r cl a))
     (hdest : instr.dest? = some dest)
     (hlocTy : f.fn.localType? dest = some ty)
     (hoperand : operandHasType f.fn ty operand)
@@ -8888,7 +8897,8 @@ theorem wfState_selectStep {contract : IRContract} {c : IRState} {f : IRFrame}
     hwf hframes hinstrs
     (by
       intro _ h
-      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+      rcases h with ⟨d, r, cl, a, h⟩
+      cases h)
     rfl hlocTy hoperand heval
     (by intro ty0 ptr align h; cases h)
     (by intro dest2 ty0 base indices inbounds h; cases h)
@@ -8955,7 +8965,8 @@ theorem wfState_phiStep {contract : IRContract} {c : IRState} {f : IRFrame}
     hwf hframes hinstrs
     (by
       intro _ h
-      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+      rcases h with ⟨d, r, cl, a, h⟩
+      cases h)
     rfl hlocTy hoperand heval
     (by intro ty0 ptr align h; cases h)
     (by intro dest2 ty0 base indices inbounds h; cases h)
@@ -9007,7 +9018,8 @@ theorem wfState_extractValueStep {contract : IRContract} {c : IRState} {f : IRFr
     (ty := .int 1) (v := boolPayload overflow) hwf hframes hinstrs
     (by
       intro _ h
-      rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h)
+      rcases h with ⟨d, r, cl, a, h⟩
+      cases h)
     rfl hlocTy
     (by intro ty0 ptr align h; cases h)
     (by intro dest2 ty0 base indices inbounds h; cases h)
