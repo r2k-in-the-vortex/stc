@@ -7222,4 +7222,417 @@ theorem frameById?_of_mem {c : IRState} {f : IRFrame}
       subst hg
       rfl
 
+/-! ## GEP step helpers (P0.5 whole-run preservation) -/
+
+/-- A `gep` destination has no `.cell` origin: the recorded origin load would be
+the executing `gep`. -/
+theorem originOf?_ne_cell_of_gep {contract : IRContract} {frag : IRFrag} {fn : Function}
+    {block : Block} {dest : Ssa} {pointee : IrType} {base : Operand}
+    {indices : List (IrType × Operand)} {inbounds : Bool} {slot : Nat} {b : Bool}
+    (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
+    (hblock : block ∈ fn.blocks)
+    (hinstr : Instr.gep dest pointee base indices inbounds ∈ block.instrs) :
+    fn.facts.originOf? dest ≠ some (.cell slot b) := by
+  intro horig
+  have hmem : (dest, PointerOrigin.cell slot b) ∈ fn.facts.origins :=
+    mem_of_originOf? horig
+  have hshape := (hprog.originsTrusted fn hfn).2
+    (dest, PointerOrigin.cell slot b) hmem
+  cases b with
+  | false =>
+      rcases hshape.2.2 with ⟨ty, ptr, align, hdef⟩
+      have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr rfl hdef
+      cases hEq
+  | true =>
+      rcases hshape.2.2 with ⟨ty, ptr, align, hdef⟩
+      have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr rfl hdef
+      cases hEq
+
+/-- A GEP with a recorded `.global` origin produces a global address. -/
+theorem gep_addr_global_of_origin {contract : IRContract} {c : IRState} {f : IRFrame}
+    {block : Block} {dest : Ssa} {pointee : IrType} {base : Operand}
+    {indices : List (IrType × Operand)} {inbounds : Bool} {g : String}
+    {addr : IRAddr} {values : List Int} {addr' : IRAddr}
+    (hwf : WFState contract c) (hf : f ∈ c.frames)
+    (hblock : block ∈ f.fn.blocks)
+    (hinstrMem : Instr.gep dest pointee base indices inbounds ∈ block.instrs)
+    (horig : f.fn.facts.originOf? dest = some (.global g))
+    (hbase : evalOperand f base = some (.ptr addr))
+    (hgep : evalGepAddr addr values = some addr') :
+    ∃ off, addr' = .global g off := by
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hmem : (dest, PointerOrigin.global g) ∈ f.fn.facts.origins :=
+    mem_of_originOf? horig
+  rcases hwf.program.originGlobals f.fn hfunMem
+    (dest, PointerOrigin.global g) hmem g rfl with
+    ⟨_, dest0, ty0, base0, indices0, inbounds0, hdef, hform⟩
+  have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hdef
+  injection hEq with _ _ hbaseEq _ _
+  rw [hbaseEq] at hform
+  rcases hform with hsym | ⟨baseName, hbaseName, horigBase⟩
+  · rw [hsym] at hbase
+    have hbase' : some (.ptr (.global g 0) : IRValue) = some (.ptr addr) := by
+      simpa only [evalOperand] using hbase
+    have haddr : addr = .global g 0 :=
+      (IRValue.ptr.inj (Option.some.inj hbase')).symm
+    rw [haddr] at hgep
+    rw [evalGepAddr_global] at hgep
+    injection hgep with hEq'
+    exact ⟨0 + gepOffset values, hEq'.symm⟩
+  · rw [hbaseName] at hbase
+    have hlookup : f.lookupLocal baseName = some (.ptr addr) := by
+      simpa only [evalOperand] using hbase
+    have hOH := hwf.originsMatch f hf (baseName, PointerOrigin.global g)
+      (mem_of_originOf? horigBase)
+    rcases hOH with ⟨v, hv, _, hcase⟩
+    have hvEq : v = .ptr addr := Option.some.inj (hv.symm.trans hlookup)
+    rcases hcase with hvNull | ⟨⟨off, hvGlobal⟩, _⟩
+    · rw [hvNull] at hvEq
+      cases hvEq
+    · have haddr : addr = .global g off :=
+        IRValue.ptr.inj (hvEq.symm.trans hvGlobal)
+      rw [haddr] at hgep
+      rw [evalGepAddr_global] at hgep
+      injection hgep with hEq'
+      exact ⟨off + gepOffset values, hEq'.symm⟩
+
+/-- A GEP with a recorded `.global` origin realizes that origin after the write. -/
+theorem originHolds_global_of_gep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {block : Block} {dest : Ssa} {pointee : IrType} {base : Operand}
+    {indices : List (IrType × Operand)} {inbounds : Bool} {g : String}
+    {addr : IRAddr} {values : List Int} {addr' : IRAddr}
+    (hwf : WFState contract c) (hf : f ∈ c.frames)
+    (hblock : block ∈ f.fn.blocks)
+    (hinstrMem : Instr.gep dest pointee base indices inbounds ∈ block.instrs)
+    (horig : f.fn.facts.originOf? dest = some (.global g))
+    (hbase : evalOperand f base = some (.ptr addr))
+    (hgep : evalGepAddr addr values = some addr') :
+    OriginHolds contract c (f.setLocal dest (.ptr addr')) dest (.global g) := by
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hmem : (dest, PointerOrigin.global g) ∈ f.fn.facts.origins :=
+    mem_of_originOf? horig
+  rcases (hwf.program.originsTrusted f.fn hfunMem).2
+    (dest, PointerOrigin.global g) hmem with ⟨hlocTy, _, _⟩
+  rcases hwf.program.originGlobals f.fn hfunMem
+    (dest, PointerOrigin.global g) hmem g rfl with ⟨hgLocal, _⟩
+  rcases gep_addr_global_of_origin hwf hf hblock hinstrMem horig hbase hgep with
+    ⟨off, haddr⟩
+  refine ⟨.ptr addr', lookupLocal_setLocal_eq f dest (.ptr addr'), hlocTy, Or.inr ?_⟩
+  exact ⟨⟨off, by rw [haddr]⟩, hgLocal⟩
+
+/-- Detail decomposition of a slot-entry GEP: the origin load, the constant
+slot index, and membership of the GEP base among the slot bases. -/
+theorem slotEntry_gep_details {fn : Function} {gepName : String} {slot : Nat}
+    (h : (gepName, slot) ∈ SlotEntries fn) :
+    ∃ entryName dest ty align,
+      (entryName, PointerOrigin.cell slot false) ∈ fn.facts.origins ∧
+        defInstr? fn entryName = some (.load dest ty (.local gepName) align) ∧
+        ∃ dest2 ty2 base inbounds,
+          defInstr? fn gepName = some (.gep dest2 ty2 (.local base)
+            [(.int 64, .intLit (.int 64) (Int.ofNat slot))] inbounds) ∧
+            base ∈ SlotBases fn := by
+  unfold SlotEntries at h
+  rw [List.mem_filterMap] at h
+  rcases h with ⟨entry, hentry, hval⟩
+  rcases entry with ⟨name, origin⟩
+  cases origin with
+  | cell slot' isTrue =>
+      cases isTrue with
+      | true => simp at hval
+      | false =>
+          cases hload : defInstr? fn name with
+          | none => simp [hload] at hval
+          | some instr =>
+              simp only [hload] at hval
+              cases instr with
+              | load dest ty ptr align =>
+                  cases ptr with
+                  | «local» gepName' =>
+                      cases hgep : defInstr? fn gepName' with
+                      | none => simp [hgep] at hval
+                      | some gep =>
+                          simp only [hgep] at hval
+                          cases gep with
+                          | gep dest2 ty2 baseOp indices inbounds =>
+                              cases baseOp with
+                              | «local» baseName =>
+                                  simp only [] at hval
+                                  by_cases hcond : indices =
+                                      [(.int 64, .intLit (.int 64) (Int.ofNat slot'))]
+                                  · rw [ite_eq_left hcond] at hval
+                                    simp only [Option.some.injEq, Prod.mk.injEq] at hval
+                                    rcases hval with ⟨hgn, hslotEq⟩
+                                    rw [hgn] at hload hgep
+                                    rw [hslotEq] at hentry hcond
+                                    rw [hcond] at hgep
+                                    refine ⟨name, dest, ty, align, hentry, hload, dest2, ty2,
+                                      baseName, inbounds, hgep, ?_⟩
+                                    unfold SlotBases
+                                    rw [List.mem_filterMap]
+                                    refine ⟨(name, PointerOrigin.cell slot false), hentry, ?_⟩
+                                    simp [hload, hgep]
+                                  · rw [ite_eq_right hcond] at hval
+                                    simp at hval
+                              | intLit ty3 val => simp at hval
+                              | nullPtr => simp at hval
+                              | symbol name2 => simp at hval
+                          | alloca d t => simp at hval
+                          | store t v p a => simp at hval
+                          | load d t p a => simp at hval
+                          | binop d op t l r => simp at hval
+                          | icmp d pr t l r => simp at hval
+                          | select d t c tv ev => simp at hval
+                          | cast d op v ft tt => simp at hval
+                          | phi d t inc => simp at hval
+                          | call d r c a => simp at hval
+                          | callPtr d r c a => simp at hval
+                          | extractValue d agg i t => simp at hval
+                  | intLit ty2 val => simp at hval
+                  | nullPtr => simp at hval
+                  | symbol name2 => simp at hval
+              | alloca d t => simp at hval
+              | store t v p a => simp at hval
+              | gep d t b i ib => simp at hval
+              | binop d op t l r => simp at hval
+              | icmp d pr t l r => simp at hval
+              | select d t c tv ev => simp at hval
+              | cast d op v ft tt => simp at hval
+              | phi d t inc => simp at hval
+              | call d r c a => simp at hval
+              | callPtr d r c a => simp at hval
+              | extractValue d agg i t => simp at hval
+  | global g => simp at hval
+  | vtableCode => simp at hval
+
+/-- A GEP that is itself the recorded constant slot-entry GEP writes the slot
+entry address. -/
+theorem slotEntry_addr_of_gep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {block : Block} {dest : Ssa} {pointee : IrType} {base : Operand}
+    {indices : List (IrType × Operand)} {inbounds : Bool} {slot : Nat}
+    {addr : IRAddr} {values : List Int} {addr' : IRAddr}
+    (hwf : WFState contract c) (hf : f ∈ c.frames)
+    (hblock : block ∈ f.fn.blocks)
+    (hinstrMem : Instr.gep dest pointee base indices inbounds ∈ block.instrs)
+    (hslot : (dest, slot) ∈ SlotEntries f.fn)
+    (hbase : evalOperand f base = some (.ptr addr))
+    (hindices : evalOperandInts f (indices.map (·.2)) = some values)
+    (hgep : evalGepAddr addr values = some addr') :
+    addr' = .slotEntry slot := by
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  rcases slotEntry_gep_details hslot with
+    ⟨entryName, destL, tyL, alignL, hentry, hload, dest2, ty2, baseL, inbounds2,
+      hgepDef, hbaseMem⟩
+  have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hgepDef
+  injection hEq with _ _ hbaseEq hindicesEq _
+  rw [← hbaseEq] at hbase
+  rw [← hindicesEq] at hindices
+  have hlookup : f.lookupLocal baseL = some (.ptr addr) := by
+    simpa only [evalOperand] using hbase
+  have haddr : addr = .slotTable := by
+    rcases (hwf.slotsBase f hf).1 baseL hbaseMem with h | h
+    · exact (IRValue.ptr.inj (Option.some.inj (h.symm.trans hlookup))).symm
+    · have h' : (some .null : Option IRValue) = some (.ptr addr) := h.symm.trans hlookup
+      cases h'
+  have hvalues : values = [Int.ofNat slot] :=
+    evalOperandInts_intLit_single (by simpa using hindices)
+  rw [haddr] at hgep
+  rw [hvalues] at hgep
+  rw [evalGepAddr_slotTable_cons] at hgep
+  injection hgep with hEq'
+  rw [← hEq']
+  simp
+
+/-- A `gep` instruction is neither a direct nor an indirect call. -/
+theorem gep_not_call_or_callPtr {dest : Ssa} {pointee : IrType} {base : Operand}
+    {indices : List (IrType × Operand)} {inbounds : Bool} :
+    ¬ ((∃ d r cl a, (Instr.gep dest pointee base indices inbounds) = .call d r cl a) ∨
+      (∃ d r cl a, (Instr.gep dest pointee base indices inbounds) = .callPtr d r cl a)) := by
+  intro h
+  rcases h with ⟨d, r, cl, a, h⟩ | ⟨d, r, cl, a, h⟩ <;> cases h
+
+/-- The GEP instruction form. -/
+theorem wfState_gepStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Ssa} {pointee : IrType} {base : Operand}
+    {indices : List (IrType × Operand)} {inbounds : Bool}
+    {addr : IRAddr} {values : List Int} {addr' : IRAddr}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .gep dest pointee base indices inbounds :: restInstrs)
+    (hbase : evalOperand f base = some (.ptr addr))
+    (hindices : evalOperandInts f (indices.map (·.2)) = some values)
+    (hgep : evalGepAddr addr values = some addr')
+    (hbounds : gepInBounds c f addr' = true) :
+    WFState contract
+      (c.withHead { (f.setLocal dest (.ptr addr')) with instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.gep dest pointee base indices inbounds ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block.instrs[done.length]? =
+      some (.gep dest pointee base indices inbounds) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.gep dest pointee base indices inbounds) restInstrs
+  have hblock? : f.fn.block? block.label = some block :=
+    block?_eq_some hnd hblock (by rw [← hblockEq])
+  have hlocTy : f.fn.localType? dest = some .ptr :=
+    localType?_eq_resultType hud hblock? hidx rfl rfl
+  have hvalueType : ∀ ty, f.fn.localType? dest = some ty →
+      (IRValue.ptr addr').type? = some ty := by
+    intro ty hty
+    have hEqTy : ty = .ptr := Option.some.inj (hty.symm.trans hlocTy)
+    subst hEqTy
+    rfl
+  have hnewOrigins : ∀ origin, f.fn.facts.originOf? dest = some origin →
+      OriginHolds contract c (f.setLocal dest (.ptr addr')) dest origin := by
+    intro origin horig
+    cases origin with
+    | cell slot b =>
+        exact absurd horig
+          (originOf?_ne_cell_of_gep hwf.program hfunMem hblock hinstrMem)
+    | global g =>
+        exact originHolds_global_of_gep hwf hf hblock hinstrMem horig hbase hgep
+    | vtableCode =>
+        exact absurd horig (originOf?_ne_vtable hwf.program hfunMem)
+  have hstackValue : ∀ frame slot off,
+      (IRValue.ptr addr') = IRValue.ptr (.stack frame slot off) →
+      ∃ g0, c.frameById? frame = some g0 ∧ ∃ ty, g0.allocType? slot = some ty ∧
+        off < allocSize ty := by
+    intro frame slot off hval
+    have haddr : addr' = .stack frame slot off := IRValue.ptr.inj hval
+    rw [haddr] at hbounds
+    rcases gepInBounds_stack hbounds with ⟨hframe, ty0, hty0, hoff0⟩
+    subst hframe
+    exact ⟨f, frameById?_of_mem hwf.frameIdsNodup hf, ty0, hty0, hoff0⟩
+  have hstorageRoot : ∀ slot off,
+      (IRValue.ptr addr') = IRValue.ptr (.root slot off) →
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length := by
+    intro slot off hval
+    have haddr : addr' = .root slot off := IRValue.ptr.inj hval
+    rw [haddr] at hbounds
+    exact gepInBounds_root hbounds
+  have hstorageGlobal : ∀ g off,
+      (IRValue.ptr addr') = IRValue.ptr (.global g off) →
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length := by
+    intro g off hval
+    have haddr : addr' = .global g off := IRValue.ptr.inj hval
+    rw [haddr] at hbounds
+    exact gepInBounds_global hbounds
+  have hbaseOk : ∀ bsp ∈ SlotBases f.fn, bsp = dest →
+      (IRValue.ptr addr') = IRValue.ptr .slotTable ∨
+        (IRValue.ptr addr') = IRValue.null := by
+    intro bsp hbspMem hbspDest
+    rcases hwf.program.slotBasesLoadOnly f.fn hfunMem bsp hbspMem with
+      ⟨tyL, alignL, gL, hdef⟩
+    rw [hbspDest] at hdef
+    have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hdef
+    cases hEq
+  have hentryOk : ∀ gepName slot, (gepName, slot) ∈ SlotEntries f.fn → gepName = dest →
+      (IRValue.ptr addr') = IRValue.ptr (.slotEntry slot) ∨
+        (IRValue.ptr addr') = IRValue.null := by
+    intro gepName slot hslot hgd
+    rw [hgd] at hslot
+    have haddr : addr' = .slotEntry slot :=
+      slotEntry_addr_of_gep hwf hf hblock hinstrMem hslot hbase hindices hgep
+    exact Or.inl (by rw [haddr])
+  have hnoSlotsValue : ∀ gname off,
+      (IRValue.ptr addr') = IRValue.ptr (.global gname off) →
+      gname ∉ SlotsGlobals c.module := by
+    intro gname off hval
+    have haddr' : addr' = .global gname off := IRValue.ptr.inj hval
+    rcases evalGepAddr_global_cases hgep haddr' with ⟨off0, haddr⟩
+    cases base with
+    | «local» name =>
+        have hlookup : f.lookupLocal name = some (.ptr (.global gname off0)) := by
+          simpa only [evalOperand, haddr] using hbase
+        exact hwf.noSlotsGlobalPointers.1 f hf name (.ptr (.global gname off0))
+          gname off0 hlookup rfl
+    | intLit ty v => cases hbase
+    | nullPtr => cases hbase
+    | symbol h =>
+        have hbase' : some (.ptr (.global h 0) : IRValue) = some (.ptr addr) := by
+          simpa only [evalOperand] using hbase
+        have haddr0 : addr = .global h 0 :=
+          (IRValue.ptr.inj (Option.some.inj hbase')).symm
+        have hname : gname = h := by
+          have h' : (.global gname off0 : IRAddr) = .global h 0 := haddr.symm.trans haddr0
+          exact (IRAddr.global.inj h').1
+        rw [hname]
+        exact hwf.program.slotsSymbolsLoadOnly.1 f.fn hfunMem block hblock
+          (.gep dest pointee (.symbol h) indices inbounds) hinstrMem h
+          (by simp [instrValueSymbols, operandSymbols])
+  have hslotParamNe : ∀ p : IrType × String, f.fn.params.getLast? = some p →
+      p.2 = "%slots" → p.2 ≠ dest := by
+    intro p hp hname hpd
+    have hnotParam : dest ∉ f.fn.params.map (·.2) :=
+      notParam_of_mem_dests hud hblock hinstrMem rfl
+    exact hnotParam (List.mem_map.mpr ⟨p, List.mem_of_getLast? hp, hpd⟩)
+  have hstackReturnsHead : ∀ operand w,
+      f.terminator = some (.ret (some operand)) →
+      evalOperand (f.setLocal dest (.ptr addr')) operand = some w →
+      ∀ frame slot off, w = .ptr (.stack frame slot off) → frame ≠ f.id := by
+    intro operand w hterm heval frame slot off hw
+    by_cases hmemOp : dest ∈ operand.localNames
+    · have hop : operand = .local dest := by
+        cases operand with
+        | «local» name =>
+            simp only [Operand.localNames, List.mem_singleton] at hmemOp
+            rw [hmemOp]
+        | intLit _ _ => simp [Operand.localNames] at hmemOp
+        | nullPtr => simp [Operand.localNames] at hmemOp
+        | symbol _ => simp [Operand.localNames] at hmemOp
+      rw [hop] at heval
+      simp only [evalOperand, lookupLocal_setLocal_eq, Option.some.injEq] at heval
+      rw [← heval] at hw
+      cases horig : f.fn.facts.originOf? dest with
+      | some horigin =>
+          cases horigin with
+          | cell s b =>
+              exact absurd horig
+                (originOf?_ne_cell_of_gep hwf.program hfunMem hblock hinstrMem)
+          | global g =>
+              rcases gep_addr_global_of_origin hwf hf hblock hinstrMem horig hbase hgep with
+                ⟨off, haddr⟩
+              rw [haddr] at hw
+              cases hw
+          | vtableCode =>
+              exact absurd horig (originOf?_ne_vtable hwf.program hfunMem)
+      | none =>
+          have hblockTerm : block.terminator = some (.ret (some operand)) := by
+            rw [← htermEq]
+            exact hterm
+          have hsafe : SafeReturnValue f.fn dest :=
+            hwf.program.returnNonStack f.fn hfunMem block hblock
+              (.ret (some operand)) hblockTerm operand rfl dest hmemOp
+          cases hsafe with
+          | param hmemP =>
+              exact absurd hmemP (notParam_of_mem_dests hud hblock hinstrMem rfl)
+          | origin horig' =>
+              rw [horig] at horig'
+              cases horig'
+          | binop hdef =>
+              have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hdef
+              cases hEq
+          | icmp hdef =>
+              have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hdef
+              cases hEq
+          | cast hdef =>
+              have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hdef
+              cases hEq
+          | extractValue hdef =>
+              have hEq := defInstr?_eq_of_mem hwf.program hfunMem hblock hinstrMem rfl hdef
+              cases hEq
+    · have hevalOld : evalOperand f operand = some w := by
+        rw [evalOperand_setLocal_of_notMem (f := f) (dest := dest) (value := .ptr addr')
+          hmemOp] at heval
+        exact heval
+      exact hwf.stackReturnsSafe f hf operand w hterm hevalOld frame slot off hw
+  exact wfState_setLocalStep hwf hframes hinstrs (fun _ => gep_not_call_or_callPtr)
+    hvalueType hnewOrigins hstackValue hstorageRoot hstorageGlobal hbaseOk hentryOk
+    hnoSlotsValue hslotParamNe hstackReturnsHead
+
 end Stc.Codegen
