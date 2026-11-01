@@ -1425,6 +1425,12 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   callPtrOrigins : CallPtrOrigins frag
   trapCodesSpecified : TrapCodesSpecified frag
   unreachableGuarded : UnreachableGuarded frag
+  storesNonPointer : StoresNonPointer frag
+
+/-- No store carries a pointer-typed value ("no aliasing beyond GOT cells"). -/
+def StoresNonPointer (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ ty value ptr align, instr = .store ty value ptr align → ty ≠ .ptr
 
 /-- A local value realizes the builder-recorded pointer origin. The slot table
 supplies the cell kind; `FunctionFacts.origins` supplies the SSA-to-origin
@@ -1473,6 +1479,7 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
   stackPtrsBounded : ∀ f ∈ c.frames, StackPtrsBounded c f      -- D2
   stackPtrsOrdered : StackPtrsOrdered c                        -- 2026-11-01
   memTyped : ∀ f ∈ c.frames, MemTyped c f                      -- D2
+  memNoPtr : ∀ f ∈ c.frames, MemNoPtr f                        -- 2026-11-01
   storagePtrsLive : ∀ f ∈ c.frames, StoragePtrsLive c f        -- D1
   functionBindings : FunctionBindingsTyped c                   -- D3, D4
   callTargets : CallTargetsTyped c                             -- D4
@@ -1529,6 +1536,10 @@ def MemValueTyped (ty : IrType) (v : IRValue) : Prop :=
   match ty with
   | .array elem _ => v.type? = some elem
   | _ => v.type? = some ty
+
+/-- Frame memory never holds a pointer value; allocation defaults are `.null`. -/
+def MemNoPtr (f : IRFrame) : Prop :=
+  ∀ addr v, f.lookupMem addr = some v → ∀ a, v ≠ .ptr a
 
 def MemTyped (c : IRState) (f : IRFrame) : Prop :=
   ∀ addr v, f.lookupMem addr = some v →
@@ -2346,10 +2357,12 @@ ty ≠ .ptr`), matching the "no aliasing beyond GOT cells" fragment statement. T
 holds a non-null pointer (allocation defaults are `.null`), the memory clauses of
 `StackPtrsOrdered` and `MemValuePtrBounded` are vacuous, the locals clause of `StackPtrsOrdered`
 is preserved by the approved argument, and the ret forms follow. Alternatives — a runtime
-lifetime discipline or excluding stack-pointer stores specifically — are more invasive. Until
-the owner decides, `StackPtrsOrdered` is not added to `WFState` (adding it would leave the store
-form unprovable), and the ret value/none forms, `irStep_wf`, and the Phase 3 corollaries remain
-blocked.
+lifetime discipline or excluding stack-pointer stores specifically — are more invasive.
+**Owner approved both parts on 2026-11-01:** `StoresNonPointer` becomes a `WFProgram` field, and
+`MemNoPtr` (`∀ addr v, f.lookupMem addr = some v → ∀ a, v ≠ .ptr a`) becomes a `WFState` field.
+`StackPtrsOrdered` is therefore added to `WFState` as approved, with its memory clause proved
+vacuous by `MemNoPtr`; implementation follows. Until then the ret value/none forms,
+`irStep_wf`, and the Phase 3 corollaries were blocked.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
