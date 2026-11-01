@@ -1460,7 +1460,7 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
     f.block = block ∧ f.terminator = block.terminator ∧
       ∃ done, block.instrs = done ++ f.instrs
   framePrev : ∀ f ∈ c.frames, PrevEdge c f
-  noBareUnreachable : ∀ f rest, c.frames = f :: rest → f.instrs = [] →
+  noBareUnreachable : ∀ f ∈ c.frames, f.instrs = [] →
     f.terminator ≠ some .unreachable
   localsInitialized : ∀ f ∈ c.frames, ∀ name ty,
     f.fn.localType? name = some ty → ∃ v, f.lookupLocal name = some v
@@ -1471,6 +1471,7 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
     OriginHolds contract c f entry.1 entry.2                   -- D3
   allocsWellFormed : ∀ f ∈ c.frames, AllocsWellFormed f        -- D2
   stackPtrsBounded : ∀ f ∈ c.frames, StackPtrsBounded c f      -- D2
+  stackPtrsOrdered : StackPtrsOrdered c                        -- 2026-11-01
   memTyped : ∀ f ∈ c.frames, MemTyped c f                      -- D2
   storagePtrsLive : ∀ f ∈ c.frames, StoragePtrsLive c f        -- D1
   functionBindings : FunctionBindingsTyped c                   -- D3, D4
@@ -1513,6 +1514,15 @@ def StackPtrsBounded (c : IRState) (f : IRFrame) : Prop :=
         ∃ g, c.frameById? frame = some g ∧
           ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty
     | _ => True
+
+/-- A frame holds no stack pointer into a frame ahead of it in the list, which
+would be popped before the holder. -/
+def StackPtrsOrdered (c : IRState) : Prop :=
+  ∀ pre f rest, c.frames = pre ++ f :: rest →
+    (∀ name v frame slot off, f.lookupLocal name = some v →
+      v = .ptr (.stack frame slot off) → frame ∉ pre.map (·.id)) ∧
+    (∀ addr v frame slot off, f.lookupMem addr = some v →
+      v = .ptr (.stack frame slot off) → frame ∉ pre.map (·.id))
 
 /-- A stack cell's stored value matches the allocation element type. -/
 def MemValueTyped (ty : IrType) (v : IRValue) : Prop :=
@@ -1564,7 +1574,8 @@ def ReturnLink (c : IRState) : Prop :=
     | some dest =>
         callee.fn.returnType ≠ .void ∧
           caller.fn.localType? dest = some callee.fn.returnType ∧
-          caller.fn.facts.originOf? dest = none
+          caller.fn.facts.originOf? dest = none ∧
+          dest ∉ caller.fn.params.map (·.2)
 ```
 
 One-step readiness is deliberately **not** a `WFState` field. It is the source-check obligation
@@ -1850,7 +1861,8 @@ def ReturnLink (c : IRState) : Prop :=
     | some dest =>
         callee.fn.returnType ≠ .void ∧
           caller.fn.localType? dest = some callee.fn.returnType ∧
-          caller.fn.facts.originOf? dest = none
+          caller.fn.facts.originOf? dest = none ∧
+          dest ∉ caller.fn.params.map (·.2)
 ```
 
 The bottom frame has `retDest = none` (shown in `WFState`). `retDest = none` covers void calls and
@@ -1868,6 +1880,12 @@ both instructions in the flattened destination list, and `not_nodup_filterMap` t
 distinct definitions into a duplicate, contradicting `FunctionUsesDefined.allNodup`. The entry
 frame is vacuous since its `retDest` is `none`. The all-adjacent-pairs form is the 2026-10-31
 extension; the origin conjunct is the 2026-11-01 extension.
+
+The destination is also not a parameter name (`dest ∉ caller.fn.params.map (·.2)`): overwriting
+a parameter — in particular the appended `%slots` parameter — would break `SlotsParamsSafe`.
+`FunctionUsesDefined.allNodup` makes parameter and destination names jointly unique, so the
+call's destination is outside the parameter list (`mem_dests_of_block` supplies the membership).
+This conjunct is the second 2026-11-01 extension.
 
 Direct calls are already covered: `WellTyped` for `.call` requires the callee signature in
 `directCallEnv` to have `returnType = ret`, the module function's signature is that signature,
@@ -2277,10 +2295,11 @@ destination. Proposed extension: add `dest ∉ caller.fn.params.map (·.2)` to t
 conjunct of `ReturnLink`. It is builder-faithful (call destinations are SSA definitions, and
 `FunctionUsesDefined.allNodup`'s disjointness of parameter and destination names excludes them)
 and is established at the call site directly from `mem_dests_of_block` plus that disjointness —
-no uniqueness argument is needed. The entry frame is vacuous (`retDest = none`). No invariant
-change is applied; the `irStepRet` value form, `irStep_wf`, and the Phase 3 corollaries remain
-blocked on this decision, together with the stack-pointer ordering gap below. The ret-halt form
-(`frames := [], status := .halted`) is proved (`wfState_retHalt`).
+no uniqueness argument is needed. The entry frame is vacuous (`retDest = none`). **Owner
+approved the conjunct on 2026-11-01**; it is adopted in §22.6 (D4) and implementation follows.
+The ret-halt form (`frames := [], status := .halted`) is proved (`wfState_retHalt`); the
+`irStepRet` value form, `irStep_wf`, and the Phase 3 corollaries were blocked on this decision,
+together with the stack-pointer ordering gap below.
 
 **Phase 2 obstruction 7 (2026-11-01): stack pointers into a popped frame.** The ret
 value and ret-none forms remove the callee frame. `StackPtrsBounded` and `MemTyped` are
@@ -2298,9 +2317,10 @@ names the id of a frame in `pre`. It is preserved at instructions, jumps, and st
 non-head frames are unchanged and the head has an empty prefix; at calls because the new head id
 is fresh and the old pointers target old frames (ids below `nextFrame`); at returns because the
 old decomposition with the removed callee prepended gives the new prefix's exclusion; and at the
-halt because the frame list is empty. No invariant change is applied. The ret-halt form is
-proved; the ret value/none forms, `irStep_wf`, and the Phase 3 corollaries remain blocked on
-obstructions 6 and 7.
+halt because the frame list is empty. **Owner approved the new field on 2026-11-01**; it is
+adopted in the `WFState` invariant and implementation follows. The ret-halt form is proved; the
+ret value/none forms, `irStep_wf`, and the Phase 3 corollaries were blocked on obstructions 6
+and 7.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
