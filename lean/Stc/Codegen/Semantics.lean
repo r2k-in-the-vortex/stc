@@ -1043,6 +1043,24 @@ def SlotEntries (fn : Function) : List (Ssa × Nat) :=
         | _ => none
     | _ => none
 
+/-- Every `.cell` origin is recorded on the builder's load for its stage: an
+address-stage origin loads the constant slot-entry GEP result; a value-stage
+origin loads the address-stage local of the same slot. -/
+def CellOriginsSlotEntry (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ entry ∈ fn.facts.origins, ∀ slot b,
+    entry.2 = .cell slot b →
+      match b with
+      | false =>
+          ∃ ty align gepName,
+            defInstr? fn entry.1 = some (.load entry.1 ty (.local gepName) align) ∧
+            ∃ dest2 ty2 base indices inbounds,
+              defInstr? fn gepName = some (.gep dest2 ty2 (.local base) indices inbounds) ∧
+              indices = [(.int 64, .intLit (.int 64) (Int.ofNat slot))]
+      | true =>
+          ∃ ty align addrName,
+            defInstr? fn entry.1 = some (.load entry.1 ty (.local addrName) align) ∧
+            fn.facts.originOf? addrName = some (.cell slot false)
+
 /-- Every slot base is defined by a load through a symbol operand. -/
 def SlotBasesLoadOnly (frag : IRFrag) : Prop :=
   ∀ fn ∈ frag.functions, ∀ base ∈ SlotBases fn,
@@ -1236,6 +1254,7 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   slotsGlobalReadOnly : SlotsGlobalReadOnly frag
   slotBasesNonParam : SlotBasesNonParam frag
   slotBasesLoadOnly : SlotBasesLoadOnly frag
+  cellOriginsSlotEntry : CellOriginsSlotEntry frag
   storesNonPointer : StoresNonPointer frag
   allocaRepresentable : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
     ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty →
@@ -6335,6 +6354,49 @@ theorem wfState_popSetLocal {contract : IRContract} {c : IRState} {f caller : IR
 theorem lookupLocal_withInstrs (f : IRFrame) (instrs : List Instr) (name : String) :
     ({ f with instrs := instrs } : IRFrame).lookupLocal name = f.lookupLocal name := rfl
 
+theorem getElem?_append_self {α : Type} (l : List α) (a : α) (rest : List α) :
+    (l ++ a :: rest)[l.length]? = some a := by
+  rw [List.getElem?_append_right (Nat.le_refl _)]
+  simp
+
+/-- The defining instruction of a destination defined by a known instruction of
+the function is that instruction, by SSA uniqueness. -/
+theorem defInstr?_eq_of_mem {contract : IRContract} {frag : IRFrag} {fn : Function}
+    {block : Block} {instr : Instr} {dest : Ssa} {i0 : Instr}
+    (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
+    (hblock : block ∈ fn.blocks) (hinstr : instr ∈ block.instrs)
+    (hdest : instr.dest? = some dest) (hdef : defInstr? fn dest = some i0) :
+    i0 = instr := by
+  have hnd : (fn.blocks.map (·.label)).Nodup :=
+    (hprog.wellFormed.typesCorrect fn hfn).labelsUnique
+  have hud : FunctionUsesDefined fn := hprog.wellFormed.usesDefined fn hfn
+  have hdest0 : i0.dest? = some dest := defInstr?_dest hnd hdef
+  rcases mem_of_defInstr? hdef with ⟨block0, hblock0, hinstr0⟩
+  by_cases h : instr = i0
+  · exact h.symm
+  · exfalso
+    have hall := hud.allNodup
+    rw [List.nodup_append] at hall
+    have hdup : ¬ ((fn.blocks.flatMap fun b => b.instrs).filterMap Instr.dest?).Nodup :=
+      not_nodup_filterMap
+        (List.mem_flatMap.mpr ⟨block, hblock, hinstr⟩)
+        (List.mem_flatMap.mpr ⟨block0, hblock0, hinstr0⟩)
+        h hdest hdest0
+    rw [List.filterMap_flatMap] at hdup
+    exact hdup hall.2.1
+
+/-- An instruction destination is not a parameter. -/
+theorem notParam_of_mem_dests {fn : Function} (hud : FunctionUsesDefined fn)
+    {block : Block} (hblock : block ∈ fn.blocks) {instr : Instr}
+    (hinstr : instr ∈ block.instrs) {dest : Ssa} (hdest : instr.dest? = some dest) :
+    dest ∉ fn.params.map (·.2) := by
+  have hdestMem : dest ∈ fn.blocks.flatMap (fun b => b.instrs.filterMap Instr.dest?) :=
+    mem_dests_of_block hblock hinstr hdest
+  have hall := hud.allNodup
+  rw [List.nodup_append] at hall
+  intro hmem
+  exact hall.2.2 dest hmem dest hdestMem rfl
+
 /-- A general instruction step that only updates the head's instruction list and
 writes a value to a local: the `wfState_withHead` obligations are discharged from
 the old frame plus the value's facts. -/
@@ -6347,7 +6409,8 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
       ¬ ((∃ d r cl a, instr = .call d r cl a) ∨
         (∃ d r cl a, instr = .callPtr d r cl a)))
     (hvalueType : ∀ ty, f.fn.localType? dest = some ty → value.type? = some ty)
-    (hnoOrigin : f.fn.facts.originOf? dest = none)
+    (hnewOrigins : ∀ origin, f.fn.facts.originOf? dest = some origin →
+      OriginHolds contract c (f.setLocal dest value) dest origin)
     (hstackValue : ∀ frame slot off, value = .ptr (.stack frame slot off) →
       ∃ g0, c.frameById? frame = some g0 ∧ ∃ ty, g0.allocType? slot = some ty ∧
         off < allocSize ty)
@@ -6355,8 +6418,10 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
       ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length)
     (hstorageGlobal : ∀ g off, value = .ptr (.global g off) →
       ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length)
-    (hbaseNe : ∀ base ∈ SlotBases f.fn, base ≠ dest)
-    (hentryNe : ∀ gepName slot, (gepName, slot) ∈ SlotEntries f.fn → gepName ≠ dest)
+    (hbaseOk : ∀ base ∈ SlotBases f.fn, base = dest →
+      value = .ptr .slotTable ∨ value = .null)
+    (hentryOk : ∀ gepName slot, (gepName, slot) ∈ SlotEntries f.fn → gepName = dest →
+      value = .ptr (.slotEntry slot) ∨ value = .null)
     (hnoSlotsValue : ∀ gname off, value = .ptr (.global gname off) →
       gname ∉ SlotsGlobals c.module)
     (hslotParamNe : ∀ p : IrType × String, f.fn.params.getLast? = some p →
@@ -6417,10 +6482,7 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
       OriginHolds contract c { (f.setLocal dest value) with instrs := restInstrs }
         entry.1 entry.2 :=
     originsMatch_setLocal (contract := contract) (c := c) (f := f) (dest := dest)
-      (value := value) hndOrigins (hwf.originsMatch f hf) (by
-        intro origin horig
-        rw [hnoOrigin] at horig
-        cases horig)
+      (value := value) hndOrigins (hwf.originsMatch f hf) hnewOrigins
   have hstackPtrs : StackPtrsBounded c
       { (f.setLocal dest value) with instrs := restInstrs } :=
     stackPtrsBounded_setLocal (c := c) (f := f) (dest := dest) (value := value)
@@ -6434,13 +6496,23 @@ theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
     have h := hwf.slotsBase f hf
     refine ⟨?_, ?_, ?_⟩
     · intro base hbase
-      rw [lookupLocal_withInstrs, lookupLocal_setLocal_ne (f := f) (name := dest)
-        (other := base) (beq_eq_false_iff_ne.mpr (hbaseNe base hbase)) value]
-      exact h.1 base hbase
+      by_cases hb : base = dest
+      · rw [hb, lookupLocal_withInstrs, lookupLocal_setLocal_eq]
+        rcases hbaseOk base hbase hb with hv | hv
+        · exact Or.inl (by rw [hv])
+        · exact Or.inr (by rw [hv])
+      · rw [lookupLocal_withInstrs, lookupLocal_setLocal_ne (f := f) (name := dest)
+          (other := base) (beq_eq_false_iff_ne.mpr hb) value]
+        exact h.1 base hbase
     · intro gepName slot hgep
-      rw [lookupLocal_withInstrs, lookupLocal_setLocal_ne (f := f) (name := dest)
-        (other := gepName) (beq_eq_false_iff_ne.mpr (hentryNe gepName slot hgep)) value]
-      exact h.2.1 gepName slot hgep
+      by_cases hb : gepName = dest
+      · rw [hb, lookupLocal_withInstrs, lookupLocal_setLocal_eq]
+        rcases hentryOk gepName slot hgep hb with hv | hv
+        · exact Or.inl (by rw [hv])
+        · exact Or.inr (by rw [hv])
+      · rw [lookupLocal_withInstrs, lookupLocal_setLocal_ne (f := f) (name := dest)
+          (other := gepName) (beq_eq_false_iff_ne.mpr hb) value]
+        exact h.2.1 gepName slot hgep
     · exact h.2.2
   have hnoSlotsLocals : ∀ name v gname off,
       { (f.setLocal dest value) with instrs := restInstrs }.lookupLocal name = some v →

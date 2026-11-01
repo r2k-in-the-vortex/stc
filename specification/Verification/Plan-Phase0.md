@@ -2558,8 +2558,14 @@ name, so `SlotsBase` clause 2 gives `.ptr (.slotEntry slot)` or `.null`;
 `loadValue (.slotEntry slot)` returns `.ptr (.cell slot)` (with `slot < slots.length` from
 `OriginSlotKinds`), satisfying `OriginHolds` for both `.cell` kinds by the recorded slot kind;
 and the GEP form's `.slotEntry` value follows from `SlotsBase` clause 1
-(`base = .ptr .slotTable`) plus `evalGepAddr`. Implementation follows; the build is green at
-`27f6009`.
+(`base = .ptr .slotTable`) plus `evalGepAddr`. The approved two-case fact is implemented as the
+`WFProgram` field `cellOriginsSlotEntry`. `wfState_setLocalStep` was generalized for the
+origin-bearing forms: it now takes `(hnewOrigins : ...)` (instead of assuming the destination
+has no origin) and slot-base/entry cases `hbaseOk`/`hentryOk` (instead of assuming the
+destination differs from every base/entry name). Supporting lemmas added:
+`defInstr?_eq_of_mem` (any defining instruction of a destination defined by a known
+instruction is that instruction, by SSA uniqueness), `notParam_of_mem_dests`, and
+`getElem?_append_self`. `lake build` is green.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2808,5 +2814,7 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    conjunct plus `wfState_setLocalStep` are implemented with a green build. The `load`/`gep`
    forms then exposed obstruction 11; the owner approved the corrected two-case
    `CellOriginsSlotEntry` fact on 2026-11-01 (the universal GEP-load rule is not
-   builder-faithful for the value stage), so the remaining instruction forms,
-   `wfState_step`/`irStep_wf`, and Phase 3 resume after that implementation.
+   builder-faithful for the value stage). The fact is implemented and
+   `wfState_setLocalStep` was generalized for origin-bearing destinations
+   (`hnewOrigins`, `hbaseOk`, `hentryOk`) with a green build; the remaining instruction
+   forms, `wfState_step`/`irStep_wf`, and Phase 3 are the open review scope.
