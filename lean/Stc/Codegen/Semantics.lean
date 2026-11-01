@@ -1200,6 +1200,15 @@ def ReturnNonStack (frag : IRFrag) : Prop :=
     ∀ operand, term = .ret (some operand) →
       ∀ name ∈ operand.localNames, SafeReturnValue fn name
 
+/-- Call destinations carry no builder-recorded pointer origin. -/
+def CallDestsNoOrigin (frag : IRFrag) : Prop :=
+  (∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .call dest ret callee args →
+      ∀ d, dest = some d → fn.facts.originOf? d = none) ∧
+  (∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
+      ∀ d, dest = some d → fn.facts.originOf? d = none)
+
 /-- Module-level facts for the target invariant. -/
 structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   wellFormed : WellFormed contract frag
@@ -1216,6 +1225,7 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   returnNonStack : ReturnNonStack frag
   slotsGlobalReadOnly : SlotsGlobalReadOnly frag
   slotBasesNonParam : SlotBasesNonParam frag
+  callDestsNoOrigin : CallDestsNoOrigin frag
   allocaRepresentable : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
     ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty →
       AllocaElementRepresentable ty
@@ -1362,7 +1372,8 @@ def ReturnLink (c : IRState) : Prop :=
     | none => True
     | some dest =>
         callee.fn.returnType ≠ .void ∧
-          caller.fn.localType? dest = some callee.fn.returnType
+          caller.fn.localType? dest = some callee.fn.returnType ∧
+          caller.fn.facts.originOf? dest = none
 
 /-- The appended slots parameter of every frame holds the slot-table pointer. -/
 def SlotsParamsSafe (c : IRState) : Prop :=
@@ -4946,6 +4957,7 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
           off < allocSize ty)
     (hretDest : ∀ d, dest = some d → fn.returnType ≠ .void ∧
       caller.fn.localType? d = some fn.returnType)
+    (hretOrigin : ∀ d, dest = some d → caller.fn.facts.originOf? d = none)
     (hslotsParam : ∀ p, fn.params.getLast? = some p → p.2 = "%slots" →
       ∃ a, (p, a) ∈ fn.params.zip args ∧ a = .ptr .slotTable) :
     WFState contract
@@ -5166,7 +5178,7 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
         rw [show (calleeFrame c fn block args dest).retDest = dest from rfl]
         cases hd : dest with
         | none => trivial
-        | some d => exact hretDest d hd
+        | some d => exact ⟨(hretDest d hd).1, (hretDest d hd).2, hretOrigin d hd⟩
     | cons a as =>
         simp only [List.cons_append] at heq
         injection heq with hcallee hrest
@@ -5235,5 +5247,23 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
       rw [ha]
       rfl
     · exact hwf.slotsParamsSafe f' hf' p hp hname
+
+/-- A direct call's destination has no recorded pointer origin. -/
+theorem call_dest_origin_none {contract : IRContract} {frag : IRFrag} {fn : Function}
+    {block : Block} {instr : Instr} {dest : Option Ssa} {ret : IrType} {callee : String}
+    {args : List Operand} (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
+    (hblock : block ∈ fn.blocks) (hinstr : instr ∈ block.instrs)
+    (hcall : instr = .call dest ret callee args) :
+    ∀ d, dest = some d → fn.facts.originOf? d = none :=
+  hprog.callDestsNoOrigin.1 fn hfn block hblock instr hinstr dest ret callee args hcall
+
+/-- An indirect call's destination has no recorded pointer origin. -/
+theorem callPtr_dest_origin_none {contract : IRContract} {frag : IRFrag} {fn : Function}
+    {block : Block} {instr : Instr} {dest : Option Ssa} {ret : IrType} {callee : Operand}
+    {args : List Operand} (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
+    (hblock : block ∈ fn.blocks) (hinstr : instr ∈ block.instrs)
+    (hcall : instr = .callPtr dest ret callee args) :
+    ∀ d, dest = some d → fn.facts.originOf? d = none :=
+  hprog.callDestsNoOrigin.2 fn hfn block hblock instr hinstr dest ret callee args hcall
 
 end Stc.Codegen

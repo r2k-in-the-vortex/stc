@@ -1844,7 +1844,7 @@ destination type. The invariant is:
 
 ```lean
 def ReturnLink (c : IRState) : Prop :=
-  ∀ callee caller rest, c.frames = callee :: caller :: rest →
+  ∀ pre callee caller suffix, c.frames = pre ++ callee :: caller :: suffix →
     match callee.retDest with
     | none => True
     | some dest =>
@@ -1860,8 +1860,11 @@ excluded by `returnType ≠ .void` plus `Terminator.WellTyped` (`ret none` requi
 The destination is also originless (`caller.fn.facts.originOf? dest = none`): call destinations
 are not `load`/`gep` definitions, so the builder records no pointer origin for them, and the
 return value is only type-correct — it need not have the cell or global shape an origin would
-require. This conjunct is established at `callFunction` from `OriginsTrusted` and the call
-instruction's unique destination; the entry frame is vacuous since its `retDest` is `none`.
+require. This conjunct is established at the call site from the builder-trusted
+`CallDestsNoOrigin` fact (call destinations are not `load`/`gep` definitions, so no pointer
+origin is recorded for them), via `call_dest_origin_none`/`callPtr_dest_origin_none`; the entry
+frame is vacuous since its `retDest` is `none`. The all-adjacent-pairs form is the
+2026-10-31 extension; the origin conjunct is the 2026-11-01 extension.
 
 Direct calls are already covered: `WellTyped` for `.call` requires the callee signature in
 `directCallEnv` to have `returnType = ret`, the module function's signature is that signature,
@@ -2230,9 +2233,31 @@ no pointer origin is recorded for them — and it is established at `callFunctio
 `OriginsTrusted` plus the call instruction's unique destination. `initState?_wf` is unaffected
 (the entry frame's `retDest` is `none`). **Owner approved the extension on 2026-11-01**, and it
 is adopted in §22.6 (D4); no extra invariant field is introduced. The compiling checkpoint
-before the change is `dc342b1`. All other `irStepRet` obligations (locals typing from the callee's
-return typing, stack/storage pointer bounds, memory typing, the frame-list fields) are prepared
-and need no further fact.
+before the change is `dc342b1`. The extension is implemented: `ReturnLink` carries the origin
+conjunct, the `callFunction` form takes it as `hretOrigin`, `WFProgram` gains the builder-trusted
+`CallDestsNoOrigin` fact (call destinations carry no recorded pointer origin — the builder's
+side of the §22.6 rationale), with `call_dest_origin_none`/`callPtr_dest_origin_none`, and
+`initState?_wf` is vacuous for it. All other `irStepRet` obligations (locals typing from the
+callee's return typing, stack/storage pointer bounds, memory typing, the frame-list fields) are
+prepared.
+
+**Phase 2 obstruction 5 (2026-11-01): non-head bare-unreachable frames.** The `irStepRet`
+forms are now blocked by `noBareUnreachable`. The field constrains only the *head* frame
+(`∀ f rest, c.frames = f :: rest → f.instrs = [] → f.terminator ≠ some .unreachable`), so a
+suspended caller — the second frame while its callee runs — is unconstrained. At a return the
+caller becomes the head; a `WFState`-satisfying state with `caller.instrs = []` and
+`caller.terminator = some .unreachable` (permitted by every field, because the caller is not
+the head) would step to a bare-unreachable successor and break `WFState`. The reachable
+semantics cannot create such a caller (the call that pushed the callee would have been the
+block's last instruction, and `UnreachableGuarded` makes that a trap call, which never steps
+normally), but the per-state invariant must exclude it. Proposed extension: strengthen
+`noBareUnreachable` to all frames:
+`∀ f ∈ c.frames, f.instrs = [] → f.terminator ≠ some .unreachable`. It is preserved at
+instruction and store steps by `UnreachableGuarded` (the last instruction would be a trap call,
+which cannot produce a `.step`), at jumps and calls because an unreachable block has a
+non-empty instruction list, and at returns because the caller's condition is inherited from
+the pre-state. Until the owner decides, the three `irStepRet` forms, `irStep_wf`, and the
+Phase 3 corollaries remain blocked; no invariant change is applied.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
