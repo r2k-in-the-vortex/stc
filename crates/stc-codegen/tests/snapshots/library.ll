@@ -25,36 +25,37 @@ bb2:
   %t2 = getelementptr ptr, ptr %t0, i64 3
   %t3 = load ptr, ptr %t2, align 8
   %t4 = load ptr, ptr %t3, align 8
-  %t5 = call i32 %t4(i32 %a0, i32 %a1, ptr %t0)
+  %t5 = call i32 %t4(i32 %a0, i32 %a1)
   ret i32 %t5
 }
 
-define internal i32 @stc_fn__ROOT_n_TESTADD_9731bc2064eeb366(i32 %a0, i32 %a1, ptr %slots) uwtable {
+define internal i32 @stc_fn__ROOT_n_TESTADD_9731bc2064eeb366(i32 %a0, i32 %a1) uwtable {
 bb0:
-  %t0 = alloca i32
-  store i32 %a0, ptr %t0
+  %t0 = load ptr, ptr @stc_module_slots, align 8
   %t1 = alloca i32
-  store i32 %a1, ptr %t1
+  store i32 %a0, ptr %t1
   %t2 = alloca i32
-  store i32 0, ptr %t2
-  %t3 = load i32, ptr %t0
+  store i32 %a1, ptr %t2
+  %t3 = alloca i32
+  store i32 0, ptr %t3
   %t4 = load i32, ptr %t1
-  %t5 = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %t3, i32 %t4)
-  %t6 = extractvalue { i32, i1 } %t5, 0
-  %t7 = extractvalue { i32, i1 } %t5, 1
-  br i1 %t7, label %bb3, label %bb2
+  %t5 = load i32, ptr %t2
+  %t6 = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %t4, i32 %t5)
+  %t7 = extractvalue { i32, i1 } %t6, 0
+  %t8 = extractvalue { i32, i1 } %t6, 1
+  br i1 %t8, label %bb3, label %bb2
 bb3:
-  %t8 = getelementptr ptr, ptr %slots, i64 4
-  %t9 = load ptr, ptr %t8, align 8
+  %t9 = getelementptr ptr, ptr %t0, i64 4
   %t10 = load ptr, ptr %t9, align 8
-  call void %t10(i32 1, i32 6)
+  %t11 = load ptr, ptr %t10, align 8
+  call void %t11(i32 1, i32 6)
   unreachable
 bb2:
-  store i32 %t6, ptr %t2
+  store i32 %t7, ptr %t3
   br label %bb1
 bb1:
-  %t11 = load i32, ptr %t2
-  ret i32 %t11
+  %t12 = load i32, ptr %t3
+  ret i32 %t12
 }
 
 define dso_local dllexport ptr @stc_metadata_json() uwtable {
@@ -123,7 +124,7 @@ bb5:
   %t8 = getelementptr ptr, ptr %t0, i64 2
   %t9 = load ptr, ptr %t8, align 8
   %t10 = load ptr, ptr %t9, align 8
-  call void %t10(ptr %t6, ptr %t0)
+  call void %t10(ptr %t6)
   ret i32 0
 }
 
@@ -210,18 +211,19 @@ bb5:
   ret i32 0
 }
 
-define internal void @stc_prog__ROOT_n_MAIN_body(ptr %fields, ptr %slots) uwtable {
+define internal void @stc_prog__ROOT_n_MAIN_body(ptr %fields) uwtable {
 bb0:
-  %t0 = getelementptr inbounds [1 x ptr], ptr %fields, i64 0, i64 0
-  %t1 = load ptr, ptr %t0, align 8
-  %t2 = load i32, ptr %t1
-  %t3 = getelementptr ptr, ptr %slots, i64 3
-  %t4 = load ptr, ptr %t3, align 8
+  %t0 = load ptr, ptr @stc_module_slots, align 8
+  %t1 = getelementptr inbounds [1 x ptr], ptr %fields, i64 0, i64 0
+  %t2 = load ptr, ptr %t1, align 8
+  %t3 = load i32, ptr %t2
+  %t4 = getelementptr ptr, ptr %t0, i64 3
   %t5 = load ptr, ptr %t4, align 8
-  %t6 = call i32 %t5(i32 %t2, i32 1, ptr %slots)
-  %t7 = getelementptr inbounds [1 x ptr], ptr %fields, i64 0, i64 0
-  %t8 = load ptr, ptr %t7, align 8
-  store i32 %t6, ptr %t8
+  %t6 = load ptr, ptr %t5, align 8
+  %t7 = call i32 %t6(i32 %t3, i32 1)
+  %t8 = getelementptr inbounds [1 x ptr], ptr %fields, i64 0, i64 0
+  %t9 = load ptr, ptr %t8, align 8
+  store i32 %t7, ptr %t9
   br label %bb1
 bb1:
   ret void

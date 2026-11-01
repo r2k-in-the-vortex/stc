@@ -318,8 +318,7 @@ impl Lowerer<'_> {
                 let lhs_value = values
                     .pop()
                     .ok_or_else(|| CodegenError::internal("missing binary left operand"))?;
-                let value =
-                    self.lower_binary(f, info, op, lhs, rhs, lhs_value, rhs_value, expr.span)?;
+                let value = self.lower_binary(f, op, lhs, rhs, lhs_value, rhs_value, expr.span)?;
                 values.push(value);
             }
             ExprKindHir::Unary { op, operand } => {
@@ -980,7 +979,6 @@ impl Lowerer<'_> {
     fn lower_binary(
         &mut self,
         f: &mut Function,
-        info: &BodyInfo,
         op: BinOp,
         lhs: ExprId,
         rhs: ExprId,
@@ -1111,7 +1109,7 @@ impl Lowerer<'_> {
                         f, op, lhs_kind, rhs_kind, &lhs_value, &rhs_value, span,
                     );
                 }
-                self.lower_arithmetic(f, info, op, lhs_kind, &lhs_value, &rhs_value, span)
+                self.lower_arithmetic(f, op, lhs_kind, &lhs_value, &rhs_value, span)
             }
             BinOp::And => self.bit_op(f, "and", lhs_kind, &lhs_value, &rhs_value, span),
             BinOp::Or => self.bit_op(f, "or", lhs_kind, &lhs_value, &rhs_value, span),
@@ -1303,7 +1301,6 @@ impl Lowerer<'_> {
     pub(crate) fn lower_arithmetic(
         &mut self,
         f: &mut Function,
-        info: &BodyInfo,
         op: BinOp,
         kind: ScalarKind,
         lhs: &Value,
@@ -1355,7 +1352,7 @@ impl Lowerer<'_> {
                     f.call(
                         IrType::Int(width),
                         &name,
-                        &[lhs.clone(), rhs.clone(), span_value, info.slots.clone()],
+                        &[lhs.clone(), rhs.clone(), span_value],
                     )
                     .ok_or_else(|| CodegenError::internal("pow helper returned void"))
                 }
@@ -1722,17 +1719,16 @@ impl Lowerer<'_> {
                 (ty.clone(), "%a0".into()),
                 (ty.clone(), "%a1".into()),
                 (IrType::Int(32), "%a2".into()),
-                (IrType::Ptr, "%slots".into()),
             ],
         );
         helper.start_fresh_block();
+        let slots_value = self.slots_global(&mut helper);
         let base_ptr = helper.alloca(ty.clone());
         let exponent_ptr = helper.alloca(ty.clone());
         let result_ptr = helper.alloca(ty.clone());
         let base = helper.param_value(0);
         let exponent = helper.param_value(1);
         let span_value = helper.param_value(2);
-        let slots_value = helper.param_value(3);
         let trap_slot = self.import_slot(stc_got::catalog::ImportService::Trap)?;
         helper.store(&base, &base_ptr, None);
         helper.store(&exponent, &exponent_ptr, None);

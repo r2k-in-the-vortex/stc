@@ -357,7 +357,6 @@ impl Lowerer<'_> {
             call_args.push(temp.clone());
             result_temp = Some((temp, storage));
         }
-        call_args.push(info.slots.clone());
 
         let ret_storage = if aggregate_result {
             IrType::Void

@@ -129,19 +129,15 @@ fn descriptors_and_hidden_roots_emit_and_verify_with_clang() {
         "FB declarations get no handle root"
     );
 
-    // FB bodies and methods take `(handle, root table, slots)`.
+    // FB bodies and methods take `(handle, root table)`; the slot table is
+    // loaded from the module global inside each function.
     assert!(
-        module.contains(
-            "define internal void @stc_fb_body__ROOT_n_FB(ptr %this, ptr %table, ptr %slots)"
-        ),
+        module.contains("define internal void @stc_fb_body__ROOT_n_FB(ptr %this, ptr %table)"),
         "{}",
         module
     );
     assert!(
-        module
-            .matches("(ptr %this, ptr %table, ptr %slots)")
-            .count()
-            >= 2,
+        module.matches("(ptr %this, ptr %table)").count() >= 2,
         "object bodies use the handled ABI:
 {module}"
     );
@@ -1310,7 +1306,7 @@ END_CONFIGURATION
 "#;
     let output = generate(source, Mode::Executable);
     assert!(
-        output.module.contains("i16 2,"),
+        output.module.contains("i16 2)"),
         "default argument missing:
 {}",
         output.module
