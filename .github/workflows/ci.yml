@@ -830,6 +830,18 @@ jobs:
           done
           test -f stc.lock
           "$driver" build
+      # Compile-check the phase-6 loopback fixture with the packaged toolchain
+      # on the native Linux host. It is built but not run here: running it needs
+      # the DIEWU bench and the EtherCAT I/O shim. The final `ci` gate includes
+      # this job, so a broken fixture fails the required check.
+      - name: Compile-check the DIEWU loopback fixture
+        if: matrix.os == 'ubuntu-24.04'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(cd dist/stc-* && pwd)"
+          "$package/bin/stc" check --manifest-path tests/ethercat/diewu/loopback/stc.toml
+          "$package/bin/stc" build --manifest-path tests/ethercat/diewu/loopback/stc.toml
       - uses: actions/upload-artifact@v7
         with:
           name: stc-package-${{ matrix.os }}

@@ -4,8 +4,9 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-31  
 Status: Draft. The phase-3 open-ended procedure plus the phase-4 software-fault, status-register,
 and online-change evidence are recorded here; phase 5 records the privileged wrapper install, the
-service stop/start result, and the cycle-time sweep result in §10, and phase 6 extends this
-runbook when it is executed. Results are
+service stop/start result, and the cycle-time sweep result in §10. The phase-6 loopback procedure
+is recorded in [tests/ethercat/diewu/PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) and has not
+been executed. Results are
 host- and hardware-specific; this is not a hard real-time guarantee and not a safety function.  
 Parent: [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 (phases 3–5)  
 Inputs: [I/O Routing and Backends](../Architecture/IO-Routing-and-Backends.md),
@@ -949,5 +950,10 @@ transition and the sweep were installed by the owner following §10 and were exe
 through their fixed `sudo -n` entries; the automated phase work did not install them.
 
 Phase 6 adds the loopback harness, the automated all-points matrix, physical fault injection
-(cable unplug/replug, slave power cycle, configured-slave reconnect), and the final report. Those
-procedures will be recorded in this runbook before they are executed.
+(cable unplug/replug, slave power cycle, configured-slave reconnect), and the final report. The
+self-contained loopback project is
+[tests/ethercat/diewu/loopback](../../tests/ethercat/diewu/loopback/README.md); the wiring,
+all-points, physical fault-injection, evidence, and restore procedure with a blank results table
+is [tests/ethercat/diewu/PHASE6.md](../../tests/ethercat/diewu/PHASE6.md). That procedure has been
+recorded and its project is compile-checked in CI, but it has **not** been executed; no phase-6
+result is claimed here.

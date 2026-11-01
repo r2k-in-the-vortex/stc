@@ -9,7 +9,10 @@ host procedure and phase-3 evidence are in the
 [EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md).
 
 Phase 3 does **not** cover cable unplug, power-cycle, loopback harnesses, fault
-injection, or any manual toggling/measuring. Those belong to phase 6.
+injection, or any manual toggling/measuring. Those belong to phase 6: the
+self-contained loopback project is [loopback/](loopback/), and the manual
+wiring, all-points, and physical fault procedure is
+[PHASE6.md](PHASE6.md). The phase-6 procedure is prepared but not executed.
 
 ## Bench
 
@@ -219,6 +222,21 @@ was the 1 MiB metrics-buffer flush on the cycle thread; commit `77cab14` moved t
 dedicated thread with a bounded non-blocking queue, and every final run reports zero dropped
 records. The strict missed-deadline counter equaled the cycle count in every run and is reported,
 not gated. Distributions and evidence hashes are in the runbook §10.7-§10.8.
+
+## Phase 6 loopback (prepared, not executed)
+
+Phase 6 adds a separate, self-contained project in [loopback/](loopback/) with
+its own `stc.toml` and machine profile. It binds all 16 inputs and all 16
+outputs directly (no routes), drives a one-hot pattern across the outputs,
+waits 20 ms, reads all 16 inputs through the OUTn-to-INn bench harness, and
+latches `Pass` and `FailMask`. `loopback_test.py` launches it through
+`stc debug` and reads the result through `var.read`, printing a 16-channel
+matrix. The manual wiring, supply/commons, all-points, physical
+fault-injection, evidence, and restore procedure is [PHASE6.md](PHASE6.md).
+
+The project and harness were added and compile-checked in CI; the procedure
+has not been executed and no phase-6 result is claimed. The open-ended
+fixture above is unchanged and remains the phase 3-5 frame-level evidence.
 
 ## Troubleshooting
 
