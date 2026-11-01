@@ -7635,4 +7635,453 @@ theorem wfState_gepStep {contract : IRContract} {c : IRState} {f : IRFrame}
     hvalueType hnewOrigins hstackValue hstorageRoot hstorageGlobal hbaseOk hentryOk
     hnoSlotsValue hslotParamNe hstackReturnsHead
 
+/-! ## Alloca step helpers (P0.5 whole-run preservation) -/
+
+/-- A lookup after a keyed update either finds the written key or an old entry. -/
+theorem lookupList_setList_cases {α β : Type} [BEq α] [LawfulBEq α]
+    (entries : List (α × β)) (key : α) (value : β) {addr : α} {v : β}
+    (h : lookupList (setList entries key value) addr = some v) :
+    (addr = key ∧ v = value) ∨ lookupList entries addr = some v := by
+  by_cases hk : addr = key
+  · rw [hk] at h
+    exact Or.inl ⟨hk, Option.some.inj
+      (h.symm.trans (lookupList_setList_eq entries key value))⟩
+  · rw [lookupList_setList_ne entries value (beq_eq_false_iff_ne.mpr hk)] at h
+    exact Or.inr h
+
+/-- A lookup in the increasing fold that initializes an array allocation returns
+the element default for an offset inside the extent. -/
+theorem lookupList_foldl_range_lt {frame slot : Nat} {value : IRValue}
+    (mem : List (IRAddr × IRValue)) {count off : Nat} (h : off < count) :
+    lookupList ((List.range count).foldl
+        (fun mem o => setList mem (.stack frame slot o) value) mem)
+        (.stack frame slot off) = some value := by
+  induction count with
+  | zero => exact absurd h (Nat.not_lt_zero off)
+  | succ count ih =>
+      rw [List.range_succ, List.foldl_append]
+      simp only [List.foldl_cons, List.foldl_nil]
+      by_cases hoff : off < count
+      · rw [lookupList_setList_ne _ value (by
+          rw [beq_eq_false_iff_ne]
+          intro heq
+          injection heq with _ _ hoffEq
+          exact (Nat.ne_of_lt hoff) hoffEq)]
+        exact ih hoff
+      · have hoff' : off = count :=
+          Nat.le_antisymm (Nat.lt_succ_iff.mp h) (Nat.le_of_not_lt hoff)
+        subst hoff'
+        exact lookupList_setList_eq _ _ _
+
+/-- A lookup in the array-initialization fold at an offset outside the extent
+returns the previous entry. -/
+theorem lookupList_foldl_range_ge {frame slot : Nat} {value : IRValue}
+    (mem : List (IRAddr × IRValue)) {count off : Nat} (h : count ≤ off) :
+    lookupList ((List.range count).foldl
+        (fun mem o => setList mem (.stack frame slot o) value) mem)
+        (.stack frame slot off) = lookupList mem (.stack frame slot off) := by
+  induction count with
+  | zero => simp [List.range_zero]
+  | succ count ih =>
+      rw [List.range_succ, List.foldl_append]
+      simp only [List.foldl_cons, List.foldl_nil]
+      have hlt : count < off := Nat.lt_of_succ_le h
+      rw [lookupList_setList_ne _ value (by
+        rw [beq_eq_false_iff_ne]
+        intro heq
+        injection heq with _ _ hoffEq
+        exact (Nat.ne_of_lt hlt) hoffEq.symm)]
+      exact ih (Nat.le_of_lt hlt)
+
+/-- A lookup in the array-initialization fold at a key the fold never writes
+returns the previous entry. -/
+theorem lookupList_foldl_range_ne {frame slot : Nat} {value : IRValue}
+    (mem : List (IRAddr × IRValue)) {addr : IRAddr} {count : Nat}
+    (h : ∀ o, o < count → addr ≠ .stack frame slot o) :
+    lookupList ((List.range count).foldl
+        (fun mem o => setList mem (.stack frame slot o) value) mem) addr =
+        lookupList mem addr := by
+  induction count with
+  | zero => simp [List.range_zero]
+  | succ count ih =>
+      rw [List.range_succ, List.foldl_append]
+      simp only [List.foldl_cons, List.foldl_nil]
+      rw [lookupList_setList_ne _ value (by
+        rw [beq_eq_false_iff_ne]
+        exact h count (Nat.lt_succ_self count))]
+      exact ih (fun o ho => h o (Nat.lt_succ_of_lt ho))
+
+/-- A memory lookup after an allocation either returns a fresh default element
+of the allocated slot or an entry of the previous memory. -/
+theorem lookupList_initAllocMem {frame slot : Nat} {ty : IrType}
+    {mem : List (IRAddr × IRValue)} {addr : IRAddr} {v : IRValue}
+    (h : lookupList (initAllocMem frame slot ty mem) addr = some v) :
+    (match ty with
+      | .array elem count =>
+          ∃ off, addr = .stack frame slot off ∧ off < count ∧
+            v = IRValue.default elem
+      | _ => addr = .stack frame slot 0 ∧ v = IRValue.default ty) ∨
+    lookupList mem addr = some v := by
+  cases ty with
+  | array elem count =>
+      simp only [initAllocMem] at h
+      cases addr with
+      | stack fr sl off =>
+          by_cases hfs : fr = frame ∧ sl = slot
+          · rcases hfs with ⟨rfl, rfl⟩
+            by_cases hlt : off < count
+            · exact Or.inl ⟨off, rfl, hlt, Option.some.inj
+                (h.symm.trans (lookupList_foldl_range_lt mem hlt))⟩
+            · rw [lookupList_foldl_range_ge mem (Nat.le_of_not_lt hlt)] at h
+              exact Or.inr h
+          · have hne : ∀ o, o < count → (.stack fr sl off : IRAddr) ≠
+                .stack frame slot o := by
+              intro o _ heq
+              injection heq with hfr hsl _
+              exact hfs ⟨hfr, hsl⟩
+            rw [lookupList_foldl_range_ne (value := IRValue.default elem) mem
+              hne] at h
+            exact Or.inr h
+      | slotEntry s =>
+          rw [lookupList_foldl_range_ne (value := IRValue.default elem) mem
+            (by intro o _ heq; cases heq)] at h
+          exact Or.inr h
+      | cell s =>
+          rw [lookupList_foldl_range_ne (value := IRValue.default elem) mem
+            (by intro o _ heq; cases heq)] at h
+          exact Or.inr h
+      | root s o =>
+          rw [lookupList_foldl_range_ne (value := IRValue.default elem) mem
+            (by intro o _ heq; cases heq)] at h
+          exact Or.inr h
+      | global name o =>
+          rw [lookupList_foldl_range_ne (value := IRValue.default elem) mem
+            (by intro o _ heq; cases heq)] at h
+          exact Or.inr h
+      | slotTable =>
+          rw [lookupList_foldl_range_ne (value := IRValue.default elem) mem
+            (by intro o _ heq; cases heq)] at h
+          exact Or.inr h
+      | function name =>
+          rw [lookupList_foldl_range_ne (value := IRValue.default elem) mem
+            (by intro o _ heq; cases heq)] at h
+          exact Or.inr h
+      | importCell s =>
+          rw [lookupList_foldl_range_ne (value := IRValue.default elem) mem
+            (by intro o _ heq; cases heq)] at h
+          exact Or.inr h
+  | int bits =>
+      simp only [initAllocMem] at h
+      rcases lookupList_setList_cases mem (.stack frame slot 0)
+        (IRValue.default (.int bits)) h with ⟨haddr, hv⟩ | hold
+      · exact Or.inl ⟨haddr, hv⟩
+      · exact Or.inr hold
+  | ptr =>
+      simp only [initAllocMem] at h
+      rcases lookupList_setList_cases mem (.stack frame slot 0)
+        (IRValue.default .ptr) h with ⟨haddr, hv⟩ | hold
+      · exact Or.inl ⟨haddr, hv⟩
+      · exact Or.inr hold
+  | overflow bits =>
+      simp only [initAllocMem] at h
+      rcases lookupList_setList_cases mem (.stack frame slot 0)
+        (IRValue.default (.overflow bits)) h with ⟨haddr, hv⟩ | hold
+      · exact Or.inl ⟨haddr, hv⟩
+      · exact Or.inr hold
+  | void =>
+      simp only [initAllocMem] at h
+      rcases lookupList_setList_cases mem (.stack frame slot 0)
+        (IRValue.default .void) h with ⟨haddr, hv⟩ | hold
+      · exact Or.inl ⟨haddr, hv⟩
+      · exact Or.inr hold
+
+/-- The allocation just added by an `alloca` has the allocated type, given that
+the previous allocation ids were exactly the range `[0, nextAlloc)`. -/
+theorem allocType?_alloca_new {f : IRFrame} {ty : IrType}
+    (hperm : (f.allocs.map (·.1)).Perm (List.range f.nextAlloc)) :
+    ({ f with
+       allocs := f.allocs ++ [(f.nextAlloc, ty)],
+       nextAlloc := f.nextAlloc + 1 } : IRFrame).allocType? f.nextAlloc = some ty := by
+  unfold IRFrame.allocType?
+  rw [List.find?_append]
+  have hnone : f.allocs.find? (fun entry => entry.1 == f.nextAlloc) = none := by
+    rw [List.find?_eq_none]
+    intro x hx hbeq
+    have hmem : x.1 ∈ f.allocs.map (·.1) := List.mem_map.mpr ⟨x, hx, rfl⟩
+    have hlt : x.1 < f.nextAlloc := List.mem_range.mp ((hperm.mem_iff).mp hmem)
+    exact (Nat.ne_of_lt hlt) (beq_iff_eq.mp hbeq)
+  simp [hnone]
+
+/-- Allocation ids other than the new one keep their types after an `alloca`. -/
+theorem allocType?_alloca_other {f : IRFrame} {ty ty0 : IrType} {slot : Nat}
+    (hne : slot ≠ f.nextAlloc)
+    (h : ({ f with
+       allocs := f.allocs ++ [(f.nextAlloc, ty)],
+       nextAlloc := f.nextAlloc + 1 } : IRFrame).allocType? slot = some ty0) :
+    f.allocType? slot = some ty0 := by
+  unfold IRFrame.allocType? at h ⊢
+  rw [List.find?_append] at h
+  have hnone : [(f.nextAlloc, ty)].find? (fun entry => entry.1 == slot) = none := by
+    rw [List.find?_eq_none]
+    intro x hx hbeq
+    rw [List.mem_singleton] at hx
+    subst hx
+    exact hne (beq_iff_eq.mp hbeq).symm
+  simpa [hnone] using h
+
+/-- An `alloca` keeps the allocation table well formed: the new id extends the
+range, old ids keep their types, and the new element extent is non-empty. -/
+theorem allocsWellFormed_alloca {contract : IRContract} {c : IRState} {f : IRFrame}
+    {block : Block} {dest : Ssa} {ty : IrType}
+    (hwf : WFState contract c) (hf : f ∈ c.frames)
+    (hblock : block ∈ f.fn.blocks)
+    (hinstrMem : Instr.alloca dest ty ∈ block.instrs) :
+    AllocsWellFormed
+      ({ f with
+        mem := initAllocMem f.id f.nextAlloc ty f.mem,
+        allocs := f.allocs ++ [(f.nextAlloc, ty)],
+        nextAlloc := f.nextAlloc + 1 } : IRFrame) := by
+  have hfnMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  obtain ⟨hndOld, hpermOld, hposOld⟩ := hwf.allocsWellFormed f hf
+  have hpos : 0 < allocSize ty :=
+    hwf.program.allocsNonEmpty f.fn hfnMem block hblock
+      (.alloca dest ty) hinstrMem dest ty rfl
+  unfold AllocsWellFormed
+  constructor
+  · show (List.map (fun x => x.1) (f.allocs ++ [(f.nextAlloc, ty)])).Nodup
+    rw [List.map_append, List.nodup_append]
+    refine ⟨hndOld, by simp, ?_⟩
+    intro a ha b hb
+    simp only [List.map_cons, List.map_nil, List.mem_cons, List.not_mem_nil,
+      or_false] at hb
+    subst hb
+    have hlt : a < f.nextAlloc := List.mem_range.mp ((hpermOld.mem_iff).mp ha)
+    exact Nat.ne_of_lt hlt
+  · constructor
+    · show (List.map (fun x => x.1) (f.allocs ++ [(f.nextAlloc, ty)])).Perm
+        (List.range (f.nextAlloc + 1))
+      have hrange : List.range (f.nextAlloc + 1) =
+          List.range f.nextAlloc ++ [f.nextAlloc] := List.range_succ
+      rw [List.map_append, List.map_cons, List.map_nil, hrange]
+      exact hpermOld.append (List.Perm.refl [f.nextAlloc])
+    · intro slot ty0 hty
+      by_cases hslot : slot = f.nextAlloc
+      · subst hslot
+        have hnew : ({ f with
+            mem := initAllocMem f.id f.nextAlloc ty f.mem,
+            allocs := f.allocs ++ [(f.nextAlloc, ty)],
+            nextAlloc := f.nextAlloc + 1 } : IRFrame).allocType? f.nextAlloc = some ty :=
+          allocType?_alloca_new hpermOld
+        have hEqTy : ty0 = ty := Option.some.inj (hty.symm.trans hnew)
+        subst hEqTy
+        exact hpos
+      · exact hposOld slot ty0 (allocType?_alloca_other hslot hty)
+
+/-- An `alloca` keeps every stack cell typed: the fresh cells hold defaults of
+the allocated element type, and old cells keep their allocation types. -/
+theorem memTyped_alloca {contract : IRContract} {c : IRState} {f : IRFrame}
+    {block : Block} {dest : Ssa} {ty : IrType}
+    (hwf : WFState contract c) (hf : f ∈ c.frames)
+    (hblock : block ∈ f.fn.blocks)
+    (hinstrMem : Instr.alloca dest ty ∈ block.instrs) :
+    MemTyped c
+      ({ f with
+        mem := initAllocMem f.id f.nextAlloc ty f.mem,
+        allocs := f.allocs ++ [(f.nextAlloc, ty)],
+        nextAlloc := f.nextAlloc + 1 } : IRFrame) := by
+  have hfnMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hperm : (f.allocs.map (·.1)).Perm (List.range f.nextAlloc) :=
+    (hwf.allocsWellFormed f hf).2.1
+  have hrep : AllocaElementRepresentable ty :=
+    hwf.program.allocaRepresentable f.fn hfnMem block hblock
+      (.alloca dest ty) hinstrMem dest ty rfl
+  intro addr v hv
+  have hv' : lookupList (initAllocMem f.id f.nextAlloc ty f.mem) addr = some v := by
+    simpa [IRFrame.lookupMem, lookupList] using hv
+  cases ty with
+  | array elem count =>
+      rcases lookupList_initAllocMem (ty := .array elem count) hv' with
+        ⟨off, haddr, hoff, hvEq⟩ | hold
+      · refine ⟨f.nextAlloc, off, .array elem count, haddr, ?_, ?_, ?_, ?_⟩
+        · exact allocType?_alloca_new hperm
+        · simpa [allocSize] using hoff
+        · rw [hvEq]
+          exact default_type? (by simpa [AllocaElementRepresentable] using hrep)
+        · rw [hvEq]
+          exact memValuePtrBounded_default c elem
+      · rcases hwf.memTyped f hf addr v hold with
+          ⟨slot, off, ty0, haddr, hty0, hoff0, hvt, hvb⟩
+        exact ⟨slot, off, ty0, haddr,
+          allocType?_alloca_old (ty := .array elem count) hty0, hoff0, hvt, hvb⟩
+  | int bits =>
+      rcases lookupList_initAllocMem (ty := .int bits) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · refine ⟨f.nextAlloc, 0, .int bits, haddr, ?_, ?_, ?_, ?_⟩
+        · exact allocType?_alloca_new hperm
+        · simp [allocSize]
+        · rw [hvEq]
+          exact default_type? (by simpa [AllocaElementRepresentable] using hrep)
+        · rw [hvEq]
+          exact memValuePtrBounded_default c (.int bits)
+      · rcases hwf.memTyped f hf addr v hold with
+          ⟨slot, off, ty0, haddr, hty0, hoff0, hvt, hvb⟩
+        exact ⟨slot, off, ty0, haddr,
+          allocType?_alloca_old (ty := .int bits) hty0, hoff0, hvt, hvb⟩
+  | ptr =>
+      rcases lookupList_initAllocMem (ty := .ptr) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · refine ⟨f.nextAlloc, 0, .ptr, haddr, ?_, ?_, ?_, ?_⟩
+        · exact allocType?_alloca_new hperm
+        · simp [allocSize]
+        · rw [hvEq]
+          exact default_type? (by simpa [AllocaElementRepresentable] using hrep)
+        · rw [hvEq]
+          exact memValuePtrBounded_default c .ptr
+      · rcases hwf.memTyped f hf addr v hold with
+          ⟨slot, off, ty0, haddr, hty0, hoff0, hvt, hvb⟩
+        exact ⟨slot, off, ty0, haddr,
+          allocType?_alloca_old (ty := .ptr) hty0, hoff0, hvt, hvb⟩
+  | overflow bits =>
+      rcases lookupList_initAllocMem (ty := .overflow bits) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · refine ⟨f.nextAlloc, 0, .overflow bits, haddr, ?_, ?_, ?_, ?_⟩
+        · exact allocType?_alloca_new hperm
+        · simp [allocSize]
+        · rw [hvEq]
+          exact default_type? (by simpa [AllocaElementRepresentable] using hrep)
+        · rw [hvEq]
+          exact memValuePtrBounded_default c (.overflow bits)
+      · rcases hwf.memTyped f hf addr v hold with
+          ⟨slot, off, ty0, haddr, hty0, hoff0, hvt, hvb⟩
+        exact ⟨slot, off, ty0, haddr,
+          allocType?_alloca_old (ty := .overflow bits) hty0, hoff0, hvt, hvb⟩
+  | void =>
+      rcases lookupList_initAllocMem (ty := .void) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · exact absurd hrep (by
+          simp [AllocaElementRepresentable, IrType.isRepresentable])
+      · rcases hwf.memTyped f hf addr v hold with
+          ⟨slot, off, ty0, haddr, hty0, hoff0, hvt, hvb⟩
+        exact ⟨slot, off, ty0, haddr,
+          allocType?_alloca_old (ty := .void) hty0, hoff0, hvt, hvb⟩
+
+/-- The fresh default cells of an `alloca` are never pointers, so stack memory
+still holds no pointers. -/
+theorem memNoPtr_alloca {contract : IRContract} {c : IRState} {f : IRFrame}
+    {ty : IrType} (hwf : WFState contract c) (hf : f ∈ c.frames) :
+    MemNoPtr
+      ({ f with
+        mem := initAllocMem f.id f.nextAlloc ty f.mem,
+        allocs := f.allocs ++ [(f.nextAlloc, ty)],
+        nextAlloc := f.nextAlloc + 1 } : IRFrame) := by
+  intro addr v hv a
+  have hv' : lookupList (initAllocMem f.id f.nextAlloc ty f.mem) addr = some v := by
+    simpa [IRFrame.lookupMem, lookupList] using hv
+  cases ty with
+  | array elem count =>
+      rcases lookupList_initAllocMem (ty := .array elem count) hv' with
+        ⟨off, haddr, hoff, hvEq⟩ | hold
+      · rw [hvEq]; exact default_ne_ptr elem a
+      · exact hwf.memNoPtr f hf addr v hold a
+  | int bits =>
+      rcases lookupList_initAllocMem (ty := .int bits) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · rw [hvEq]; exact default_ne_ptr (.int bits) a
+      · exact hwf.memNoPtr f hf addr v hold a
+  | ptr =>
+      rcases lookupList_initAllocMem (ty := .ptr) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · rw [hvEq]; exact default_ne_ptr .ptr a
+      · exact hwf.memNoPtr f hf addr v hold a
+  | overflow bits =>
+      rcases lookupList_initAllocMem (ty := .overflow bits) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · rw [hvEq]; exact default_ne_ptr (.overflow bits) a
+      · exact hwf.memNoPtr f hf addr v hold a
+  | void =>
+      rcases lookupList_initAllocMem (ty := .void) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · rw [hvEq]; exact default_ne_ptr .void a
+      · exact hwf.memNoPtr f hf addr v hold a
+
+/-- The fresh default cells of an `alloca` hold no slots-global pointers. -/
+theorem noSlotsMem_alloca {contract : IRContract} {c : IRState} {f : IRFrame}
+    {ty : IrType} (hwf : WFState contract c) (hf : f ∈ c.frames) :
+    ∀ addr v gname off,
+      ({ f with
+        mem := initAllocMem f.id f.nextAlloc ty f.mem,
+        allocs := f.allocs ++ [(f.nextAlloc, ty)],
+        nextAlloc := f.nextAlloc + 1 } : IRFrame).lookupMem addr = some v →
+      v = .ptr (.global gname off) → gname ∉ SlotsGlobals c.module := by
+  intro addr v gname off hv hval
+  have hv' : lookupList (initAllocMem f.id f.nextAlloc ty f.mem) addr = some v := by
+    simpa [IRFrame.lookupMem, lookupList] using hv
+  cases ty with
+  | array elem count =>
+      rcases lookupList_initAllocMem (ty := .array elem count) hv' with
+        ⟨off', haddr, hoff, hvEq⟩ | hold
+      · exact absurd (hvEq.symm.trans hval) (default_ne_ptr elem (.global gname off))
+      · exact hwf.noSlotsGlobalPointers.2.1 f hf addr v gname off hold hval
+  | int bits =>
+      rcases lookupList_initAllocMem (ty := .int bits) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · exact absurd (hvEq.symm.trans hval) (default_ne_ptr (.int bits) (.global gname off))
+      · exact hwf.noSlotsGlobalPointers.2.1 f hf addr v gname off hold hval
+  | ptr =>
+      rcases lookupList_initAllocMem (ty := .ptr) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · exact absurd (hvEq.symm.trans hval) (default_ne_ptr .ptr (.global gname off))
+      · exact hwf.noSlotsGlobalPointers.2.1 f hf addr v gname off hold hval
+  | overflow bits =>
+      rcases lookupList_initAllocMem (ty := .overflow bits) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · exact absurd (hvEq.symm.trans hval) (default_ne_ptr (.overflow bits) (.global gname off))
+      · exact hwf.noSlotsGlobalPointers.2.1 f hf addr v gname off hold hval
+  | void =>
+      rcases lookupList_initAllocMem (ty := .void) hv' with
+        ⟨haddr, hvEq⟩ | hold
+      · exact absurd (hvEq.symm.trans hval) (default_ne_ptr .void (.global gname off))
+      · exact hwf.noSlotsGlobalPointers.2.1 f hf addr v gname off hold hval
+
+/-- An `alloca` destination has no recorded pointer origin: recorded origins are
+load or GEP results, and the destination's defining instruction is the `alloca`. -/
+theorem originOf?_eq_none_of_alloca {contract : IRContract} {frag : IRFrag}
+    {fn : Function} {block : Block} {dest : Ssa} {ty : IrType}
+    (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
+    (hblock : block ∈ fn.blocks)
+    (hinstr : Instr.alloca dest ty ∈ block.instrs) :
+    fn.facts.originOf? dest = none := by
+  cases horig : fn.facts.originOf? dest with
+  | none => rfl
+  | some origin =>
+      exfalso
+      have hmem : (dest, origin) ∈ fn.facts.origins := mem_of_originOf? horig
+      cases origin with
+      | cell slot b =>
+          cases b with
+          | false =>
+              have hs := (hprog.originsTrusted fn hfn).2
+                (dest, PointerOrigin.cell slot false) hmem
+              rcases hs.2.2 with ⟨tyL, ptrL, alignL, hdef⟩
+              have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr rfl hdef
+              cases hEq
+          | true =>
+              have hs := (hprog.originsTrusted fn hfn).2
+                (dest, PointerOrigin.cell slot true) hmem
+              rcases hs.2.2 with ⟨tyL, ptrL, alignL, hdef⟩
+              have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr rfl hdef
+              cases hEq
+      | global g =>
+          have hs := (hprog.originsTrusted fn hfn).2
+            (dest, PointerOrigin.global g) hmem
+          have hgep : ∃ dest2 ty2 base indices inbounds,
+              defInstr? fn dest = some (.gep dest2 ty2 base indices inbounds) := hs.2.2
+          rcases hgep with ⟨dest2, ty2, base, indices, inbounds, hdef⟩
+          have hEq := defInstr?_eq_of_mem hprog hfn hblock hinstr rfl hdef
+          cases hEq
+      | vtableCode =>
+          have hs := (hprog.originsTrusted fn hfn).2
+            (dest, PointerOrigin.vtableCode) hmem
+          exact hs.2.2
+
 end Stc.Codegen
