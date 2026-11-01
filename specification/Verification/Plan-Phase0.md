@@ -2465,8 +2465,34 @@ a call destination is that call, by SSA uniqueness), yielding
 `stackBound_popSetLocal`, `evalOperand_setLocal_of_notMem`, and `memValuePtrBounded_of_noPtr`.
 The `StackReturnsSafe` head case uses `ReturnNonStack` plus
 `not_safeReturnValue_of_isCallDest`; `SlotsBase` uses the two slot-membership exclusions plus
-SSA uniqueness of the defining load. `lake build` is green. The 27-field checkpoint is
-`d90584e`; `wfState_step`/`irStep_wf` and Phase 3 remain.
+SSA uniqueness of the defining load. `lake build` is green at `56cc548`. `wfState_step`/
+`irStep_wf` and Phase 3 remain.
+
+**Phase 2 obstruction 10 (2026-11-01): storage values may be frame pointers.** Preparing the
+`load` instruction form exposes a host-storage typing gap. `loadValue` reads `.root`/`.global`
+storage; `StorageValuesLive` constrains only that `.root`/`.global` pointers in storage are
+live, and `NoSlotsGlobalPointers` excludes slots-global pointers there, but no field excludes a
+frame pointer `.ptr (.stack frame slot off)` in storage. Counterexample: a `WFProgram` with the
+single instruction `%d = load ptr, ptr @g` (the load's `WellTyped` rule checks only
+`ty.isValue` and that the pointer operand has type `.ptr`; it does not relate the pointee type
+to the global's declaration), and a `WFState` with one entry frame holding `%d = .null` and
+storage `(.global g) ↦ [.ptr (.stack 99 0 0)]` where no frame `99` exists.
+`StorageValuesLive` holds vacuously for a `.stack` value, `StorageDomain` holds because the
+entry is non-empty, and `NoSlotsGlobalPointers`/`SlotsBase`/the frame fields are satisfied. The
+load succeeds (`loadValue (.global g 0) = some (.ptr (.stack 99 0 0))`, whose `type?` is
+`.ptr`), and the successor `f.setLocal %d (.ptr (.stack 99 0 0))` violates `StackPtrsBounded`
+because `frameById? 99 = none`. Stores cannot create the pattern (`StoresNonPointer` makes every
+stored value non-pointer, so `storeValue` writes no pointer into storage), and the real host
+has no frames at initialization, but the per-state invariant must exclude it. Proposed
+resolution (owner decision): extend `StorageValuesLive` with a third conjunct
+`∀ id off v frame slot off', c.lookupStorageAt id off = some v →
+v ≠ .ptr (.stack frame slot off')` — host-supplied at `initState?_wf` and preserved by
+`storeValue` because stored values are non-pointer and stack/cell stores do not touch storage —
+or, equivalently, add a small `WFState` field with the same content. With it the load form's
+`StackPtrsBounded` case follows: stack loads take their bound from `MemTyped`, `.cell` loads
+produce `.root`/`.function`/`.importCell` addresses (not `.stack`), and `.root`/`.global` loads
+return storage values that are not frame pointers. No field is added pending approval; the ret
+forms remain proved and the build is green.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2705,4 +2731,5 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    (`SlotBasesLoadOnly` as a `WFProgram` fact, `ReturnLink`'s `IsCallDest` conjunct, and the
    general symbol-pointer-load disjunct in `StackOriginsTrusted`). They are implemented and the
    ret value/none forms are proved (`wfState_popSetLocal`, `wfState_popRet`) with a green
-   build. `wfState_step`/`irStep_wf` and Phase 3 remain open.
+   build. The `load` form then exposed obstruction 10 (§22.11: storage values may be frame
+   pointers, pending owner approval), so `wfState_step`/`irStep_wf` and Phase 3 remain open.
