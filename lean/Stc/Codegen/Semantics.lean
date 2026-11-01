@@ -1520,6 +1520,40 @@ theorem payloadsTypedValue_rotate (info : RotateInfo) (a b count : Int) :
     PayloadsTypedValue (evalRotate info a b count) := by
   simp [PayloadsTypedValue, evalRotate, IRValue.type?]
 
+/-- An operand of overflow type that evaluates to a pair carries an integer
+payload of the underlying width. The aggregate is necessarily a local: a
+literal, `.null`, or `.symbol` evaluates to a non-pair value, and the local's
+`PayloadsTyped` shape plus `localsTyped` fixes the pair type and payload. -/
+theorem evalOperand_overflow_payload {f : IRFrame} {operand : Operand} {bits : Nat}
+    {pairTy : IrType} {payload : IRValue} {overflow : Bool}
+    (hlocalsTyped : ∀ name v, f.lookupLocal name = some v → ∀ ty,
+      f.fn.localType? name = some ty → v.type? = some ty)
+    (hpayloads : ∀ name v, f.lookupLocal name = some v → PayloadsTypedValue v)
+    (hagg : operandHasType f.fn (.overflow bits) operand)
+    (hpair : evalOperand f operand = some (.pair pairTy payload overflow)) :
+    ∃ n, payload = .int (.int bits) n := by
+  cases operand with
+  | «local» name =>
+      simp only [operandHasType, operandTypeOf?] at hagg
+      simp only [evalOperand] at hpair
+      have htype :=
+        hlocalsTyped name (.pair pairTy payload overflow) hpair (.overflow bits) hagg
+      simp only [IRValue.type?] at htype
+      injection htype with htype
+      subst htype
+      have hp := hpayloads name (.pair (.overflow bits) payload overflow) hpair
+      simp only [PayloadsTypedValue, IRValue.type?] at hp
+      rcases hp with ⟨n, b, heq⟩ | ⟨n, heq⟩
+      · injection heq with _ hpay _
+        exact ⟨n, hpay⟩
+      · cases heq
+  | intLit ty val =>
+      simp [evalOperand] at hpair
+  | nullPtr =>
+      simp [evalOperand] at hpair
+  | symbol name =>
+      simp [evalOperand] at hpair
+
 
 /-- The state-level target invariant. -/
 structure WFState (contract : IRContract) (c : IRState) : Prop where
@@ -9315,20 +9349,23 @@ theorem wfState_phiStep {contract : IRContract} {c : IRState} {f : IRFrame}
     (by intro dest2 ty0 base indices inbounds h; cases h)
     hsymbol hbinopNe hicmpNe hcastNe hextractNe
 
-/-- The `extractvalue` instruction form for the overflow flag (index 1). The
-index-0 pair-payload write needs a payload-typing fact that the invariant does
-not yet provide; it is recorded as an obstruction in Plan-Phase0 §22.11. -/
+/-- The `extractvalue` instruction form. Index 1 writes the overflow flag; index
+0 writes the pair payload, whose underlying-width integer type follows from the
+aggregate local's `PayloadsTyped` shape and `localsTyped`. -/
 theorem wfState_extractValueStep {contract : IRContract} {c : IRState} {f : IRFrame}
     {restFrames : List IRFrame} {restInstrs : List Instr}
     {dest : Ssa} {aggregate : Operand} {index : Nat} {ty : IrType}
     {pairTy : IrType} {payload : IRValue} {overflow : Bool}
     (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
     (hinstrs : f.instrs = .extractValue dest aggregate index ty :: restInstrs)
-    (hindex : index = 1)
+    (hindex : index = 0 ∨ index = 1)
     (hpair : evalOperand f aggregate = some (.pair pairTy payload overflow)) :
     WFState contract
       (c.withHead
-        { (f.setLocal dest (.int (.int 1) (boolPayload overflow))) with
+        { (f.setLocal dest
+            (match index with
+             | 0 => payload
+             | _ => .int (.int 1) (boolPayload overflow))) with
           instrs := restInstrs }) := by
   have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
   have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
@@ -9347,25 +9384,49 @@ theorem wfState_extractValueStep {contract : IRContract} {c : IRState} {f : IRFr
   have hwell := (hwf.program.wellFormed.typesCorrect f.fn hfunMem).instructions
     block hblock (.extractValue dest aggregate index ty) hinstrMem
   rcases hwell with ⟨bits, hagg, hdisj⟩
-  have htyEq : ty = .int 1 := by
-    rcases hdisj with ⟨h0, _⟩ | ⟨h1, hty⟩
-    · rw [hindex] at h0
-      exact absurd h0 (by decide)
-    · exact hty
-  have hlocTy : f.fn.localType? dest = some (.int 1) := by
-    have hloc : f.fn.localType? dest = some ty :=
-      localType?_eq_resultType hud hblock? hidx rfl rfl
-    rw [htyEq] at hloc
-    exact hloc
-  exact wfState_intValueStep (instr := .extractValue dest aggregate index ty)
-    (ty := .int 1) (v := boolPayload overflow) hwf hframes hinstrs
-    (by
-      intro _ h
-      rcases h with ⟨d, r, cl, a, h⟩
-      cases h)
-    rfl hlocTy
-    (by intro ty0 ptr align h; cases h)
-    (by intro dest2 ty0 base indices inbounds h; cases h)
+  rcases hindex with hzero | hone
+  · subst hzero
+    rcases hdisj with ⟨_, hty⟩ | ⟨hbad, _⟩
+    · have hpay :=
+        evalOperand_overflow_payload
+          (hlocalsTyped := fun name v hv ty0 hty0 =>
+            hwf.localsTyped f hf name v hv ty0 hty0)
+          (hpayloads := fun name v hv => hwf.payloadsTyped.1 f hf name v hv)
+          hagg hpair
+      rcases hpay with ⟨n, hn⟩
+      have hlocTy : f.fn.localType? dest = some (.int bits) := by
+        have hloc : f.fn.localType? dest = some ty :=
+          localType?_eq_resultType hud hblock? hidx rfl rfl
+        rw [hty] at hloc
+        exact hloc
+      rw [hn]
+      exact wfState_intValueStep (instr := .extractValue dest aggregate 0 ty)
+        (ty := .int bits) (v := n) hwf hframes hinstrs
+        (by
+          intro _ h
+          rcases h with ⟨d, r, cl, a, h⟩
+          cases h)
+        rfl hlocTy
+        (by intro ty0 ptr align h; cases h)
+        (by intro dest2 ty0 base indices inbounds h; cases h)
+    · exact absurd hbad (by decide)
+  · subst hone
+    rcases hdisj with ⟨hbad, _⟩ | ⟨_, hty⟩
+    · exact absurd hbad (by decide)
+    · have hlocTy : f.fn.localType? dest = some (.int 1) := by
+        have hloc : f.fn.localType? dest = some ty :=
+          localType?_eq_resultType hud hblock? hidx rfl rfl
+        rw [hty] at hloc
+        exact hloc
+      exact wfState_intValueStep (instr := .extractValue dest aggregate 1 ty)
+        (ty := .int 1) (v := boolPayload overflow) hwf hframes hinstrs
+        (by
+          intro _ h
+          rcases h with ⟨d, r, cl, a, h⟩
+          cases h)
+        rfl hlocTy
+        (by intro ty0 ptr align h; cases h)
+        (by intro dest2 ty0 base indices inbounds h; cases h)
 
 /-! ## Intrinsic-name reservation and the checked/rotate call-result forms (P0.5) -/
 
