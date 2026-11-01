@@ -2163,9 +2163,12 @@ at `initState?_wf` from a host hypothesis and preserved because the store exclus
 writes to the slots globals. The alternative is to require a static fact that every function
 reuses the entry function's slot globals; that is more restrictive and less direct. This fact
 is not the approved dynamic exclusion (which forbids *holding pointers to* a slots global), so
-it is recorded for owner approval before implementation. The remaining `callFunction` and
-`irStepRet` obligations are otherwise as inventoried; the store's state-update lemmas are
-already pushed in `5fa319b`.
+it was recorded for owner approval before implementation. **The owner approved the
+module-wide `SlotsStorage` field (2026-11-01).** It is implemented as a `WFState` field over
+all `fn ∈ c.module.functions`, established at `initState?_wf` from a host hypothesis, and
+preserved at stores because the store exclusion forbids writes to the slots globals. The
+remaining `callFunction` and `irStepRet` obligations are otherwise as inventoried; the store's
+state-update lemmas are already pushed in `5fa319b`.
 
 The store's `storeValue` updates are now proved as state-level form lemmas:
 `wfState_storeFrames` (the stack case: the frame map with `setMem`, including the

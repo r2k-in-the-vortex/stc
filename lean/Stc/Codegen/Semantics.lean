@@ -1061,6 +1061,12 @@ def SlotGlobalNames (fn : Function) : List String :=
     | some (.load _ _ (.symbol g) _) => some g
     | _ => none
 
+/-- The slot-table storage value for every module function's slot-base globals. -/
+def SlotsStorage (c : IRState) : Prop :=
+  ∀ fn ∈ c.module.functions, ∀ base ∈ SlotBases fn, ∀ g ty ptr align,
+    defInstr? fn base = some (.load base ty ptr align) → ptr = .symbol g →
+      c.lookupStorageAt (.global g) 0 = some (.ptr .slotTable)
+
 /-- No store targets the slots global. -/
 def SlotsGlobalReadOnly (frag : IRFrag) : Prop :=
   ∀ fn ∈ frag.functions, ∀ g ∈ SlotGlobalNames fn,
@@ -1101,6 +1107,19 @@ def terminatorValueSymbols : Terminator → List String
 /-- The slots globals of a fragment. -/
 def SlotsGlobals (frag : IRFrag) : List String :=
   frag.functions.flatMap SlotGlobalNames
+
+/-- Every slot-base global of a module function is a slots global. -/
+theorem mem_slotsGlobals_of_slotBase {module : IRFrag} {fn : Function} {base : Ssa}
+    {g : String} {ty : IrType} {ptr : Operand} {align : Option Nat}
+    (hfn : fn ∈ module.functions) (hbase : base ∈ SlotBases fn)
+    (hdef : defInstr? fn base = some (.load base ty ptr align)) (hsym : ptr = .symbol g) :
+    g ∈ SlotsGlobals module := by
+  unfold SlotsGlobals
+  rw [List.mem_flatMap]
+  refine ⟨fn, hfn, ?_⟩
+  unfold SlotGlobalNames
+  rw [List.mem_filterMap]
+  exact ⟨base, hbase, by rw [hdef, hsym]⟩
 
 /-- The slots globals never appear in value positions; they are only loaded. -/
 def SlotsSymbolsLoadOnly (frag : IRFrag) : Prop :=
@@ -1377,6 +1396,7 @@ structure WFState (contract : IRContract) (c : IRState) : Prop where
   memTyped : ∀ f ∈ c.frames, MemTyped c f
   storagePtrsLive : ∀ f ∈ c.frames, StoragePtrsLive c f
   slotsBase : ∀ f ∈ c.frames, SlotsBase c f
+  slotsStorage : SlotsStorage c
   storageValuesLive : StorageValuesLive c
   storageDomain : StorageDomain c
   noSlotsGlobalPointers : NoSlotsGlobalPointers c
@@ -2737,6 +2757,7 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
     (hargsTyped : ∀ fn, module.function? entry = some fn → ArgsTyped fn args)
     (hargsLive : ∀ fn, module.function? entry = some fn → HostArgsLive c fn args)
     (hslots : ∀ f ∈ c.frames, SlotsBase c f)
+    (hslotsStorage : SlotsStorage c)
     (hstorage : StorageValuesLive c)
     (hdomain : StorageDomain c)
     (hnoSlotsArgs : ∀ fn, module.function? entry = some fn → ∀ p a,
@@ -2845,6 +2866,7 @@ theorem initState?_wf {contract : IRContract} {module : IRFrag} {entry : String}
               exact initLocals_global_live (hargsLive fn hfn)
                 (lookupLocal_find?_eq hv) hval
           · exact hslots
+          · exact hslotsStorage
           · exact hstorage
           · exact hdomain
           · constructor
@@ -3471,9 +3493,9 @@ state invariant. The halt is the only `.step` outcome that changes the status. -
 theorem wfState_status {contract : IRContract} {c : IRState} (st : IRStatus)
     (hwf : WFState contract c) : WFState contract { c with status := st } := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-    h17, h18, h19, h20, h21, h22, h23, h24⟩ := hwf
+    h17, h18, h19, h20, h21, h22, h23, h24, h25⟩ := hwf
   exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-    h17, h18, h19, h20, h21, h22, h23, h24⟩
+    h17, h18, h19, h20, h21, h22, h23, h24, h25⟩
 
 theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     {rest : List IRFrame}
@@ -3600,6 +3622,7 @@ theorem wfState_withHead {contract : IRContract} {c : IRState} {f g : IRFrame}
     rcases List.mem_cons.mp hf'' with rfl | hf'
     · exact hslotsBase
     · exact hwf.slotsBase f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · exact hwf.slotsStorage
   · exact hwf.storageValuesLive
   · exact hwf.storageDomain
   · constructor
@@ -3907,6 +3930,7 @@ theorem wfState_storeFrames {contract : IRContract} {c : IRState}
     have h := hwf.slotsBase g hg
     simpa [SlotsBase, SlotsGlobalStored, IRFrame.lookupLocal, hFlocals g, hFfn g,
       lookupStorageAt_updateFrames] using h
+  · exact hwf.slotsStorage
   · exact hwf.storageValuesLive
   · exact hwf.storageDomain
   · constructor
@@ -4162,6 +4186,16 @@ theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
             beq_eq_false_iff_ne.mpr (Ne.symm hsid)
           rw [lookupStorageAt_setStorage_ne hne]
           exact h.2.2 base hbase g ty ptr align hdef hsym
+        · intro fn hfn base hbase g ty ptr align hdef hsym
+          have hgSlots : g ∈ SlotsGlobals c.module :=
+            mem_slotsGlobals_of_slotBase hfn hbase hdef hsym
+          have hsid : sid ≠ .global g := by
+            intro heq
+            exact (hnotSlots g heq) hgSlots
+          have hne : ((StoreId.global g) == sid) = false :=
+            beq_eq_false_iff_ne.mpr (Ne.symm hsid)
+          rw [lookupStorageAt_setStorage_ne hne]
+          exact hwf.slotsStorage fn hfn base hbase g ty ptr align hdef hsym
         · intro sid' off' v0 hlookAt
           constructor
           · intro slot offp hptr
