@@ -2199,9 +2199,14 @@ builder-trusted `WFProgram` fact that no slot base is a parameter
 `OriginsTrusted` non-parameter fact; with it the callee's slot bases are defined locals whose
 default is `.null`. The `SlotEntries` results are already covered because they are GEP
 destinations, which `FunctionUsesDefined.allNodup` keeps distinct from parameter names. No
-invariant change is applied; the compiling checkpoint is `1d3a009`. The rest of the call form
-(typing, origins, liveness, stack bounds, return link, slots parameter) is prepared, and the
-`irStepRet` form needs no new fact.
+invariant change is applied; the compiling checkpoint was `1d3a009`. **The owner approved the
+fact (2026-11-01).** It is implemented as the `WFProgram` field `slotBasesNonParam`, and the
+call form is proved: `wfState_calleePush` preserves every `WFState` field for the pushed
+callee, using the new extraction lemmas (`firstIndex?_some`, `defSite?_some`,
+`defInstr?_dest`, `mem_of_defInstr?`, `slotBase_gep`, `slotEntry_gep`), the slot-local typing
+facts (`slotBase_localType`, `slotEntry_localType`), and
+`slotEntry_name_notParam` (slot-entry results are GEP destinations, hence non-parameters
+by `FunctionUsesDefined.allNodup`). The `irStepRet` form needs no new fact.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
