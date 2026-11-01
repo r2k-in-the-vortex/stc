@@ -2691,6 +2691,55 @@ is stuck on non-pair aggregates, so only pair payloads (still required to be
 `PayloadsTyped` implementation, its dependent step forms (store/load/select/
 phi), and the index-0 `extractvalue` form wait on the decision.**
 
+**Phase 2 obstruction 15 (2026-11-01): jump targets invalidate
+`StackReturnsSafe`.** Preparing the `br`/`condBr` terminator form exposes a
+missing invariant. `irJump` replaces the head frame's `block`, `terminator`, and
+`prev` with the target block's, so the successor's `StackReturnsSafe` obligation
+is about the *target block's* terminator, while the approved field constrains
+only the frame's current terminator. (`wfState_withHead` cannot be reused for
+jumps either: it requires `g.block = f.block` and `g.terminator = f.terminator`.)
+`ReturnNonStack` supplies `SafeReturnValue` for every block's return operand, and
+that predicate admits the `param` constructor. The entry frame's arguments are
+constrained by `HostArgsLive` (no stack pointers at all) and a callee's by the
+`hargsBounded` premise of `wfState_calleePush` (stack pointers into older
+frames), but neither is a `WFState` field, so a `WFState`-satisfying state may
+hold `%p ↦ .ptr (.stack f.id 0 0)` at a parameter name. Counterexample: one
+frame with `id = 0`, `nextFrame = 1`, `fn.params = [(.ptr, "%p")]`,
+`fn.returnType = .ptr`, blocks `b0 = [] : br b1` and `b1 = [] : ret %p`,
+`allocs = [(0, .int 8)]`, `locals = [("%p", .ptr (.stack 0 0 0))]`, `mem = []`,
+`prev = none`, `retDest = none`. Every `WFState` field holds:
+`StackPtrsBounded` witnesses the frame itself (`frameById? 0 = some f`,
+`allocType? 0 = some (.int 8)`, `0 < allocSize (.int 8)`), `localsTyped` sees
+`v.type? = some .ptr = localType? "%p"`, and `StackReturnsSafe` is vacuous at the
+`br`. The other `SafeReturnValue` constructors are excluded (`origin` by
+`OriginHolds`'s `.null`/cell/global shapes; `binop`/`icmp`/`cast`/
+`extractValue` by their integer result types plus `localsTyped`), so the
+parameter constructor is the only hole. `irStep` executes the `br`
+(`block?_eq_some` finds `b1`), and the successor violates `StackReturnsSafe`
+with `frame = g.id = 0`. Proposed resolutions (owner decision): (a) strengthen
+the approved `StackReturnsSafe` field from the current terminator to every block
+of the frame's function:
+`∀ f ∈ c.frames, ∀ block ∈ f.fn.blocks, block.terminator = some (.ret (some operand)) → evalOperand f operand = some v → (∀ frame slot off, v = .ptr (.stack frame slot off) → frame ≠ f.id)`.
+It is preserved at `wfState_calleePush` by the same `initLocals` argument its
+current bullet already uses (the argument is block-independent), at
+`wfState_setLocalStep`/`wfState_popSetLocal` by the same per-block
+`SafeReturnValue` case analysis, and trivially at jumps (the locals do not
+change); at `initState?_wf` it is derivable from `HostArgsLive` because every
+initial local is non-stack, so it can replace the host hypothesis (or keep it as
+a redundant premise). (b) Add a `WFState` field tying parameter values to older
+frames, e.g.
+`paramsNotOwnStack : ∀ f ∈ c.frames, ∀ name ∈ f.fn.params.map (·.2), ∀ v, f.lookupLocal name = some v → (∀ frame slot off, v = .ptr (.stack frame slot off) → frame < f.id)`,
+established at `initState?_wf` from `HostArgsLive` and at `wfState_calleePush`
+from `hargsBounded`, preserved by instruction steps once `wfState_setLocalStep`
+takes `dest ∉ fn.params.map (·.2)` (the call sites already derive it with
+`notParam_of_mem_dests`), and used at the jump to refute `frame = f.id` against
+`frame < f.id`. Option (a) changes one approved field definition (a
+strengthening, not a weakening) with no field-count change; option (b) keeps the
+approved field and adds a 28th. **Recorded 2026-11-01 for owner decision; no
+field was added or changed, and `wfState_jumpStep`, the
+`wfState_step`/`irStep_wf` dispatch, and Phase 3 wait on the decision (together
+with obstructions 12/14).**
+
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
 obligations that the approved fact set does not discharge. No invariant change was applied;
@@ -2943,6 +2992,10 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    load, GEP, and alloca forms plus binop/icmp/cast/select/phi are proved with a green build.
    Obstructions 12 and 13 were then owner-approved on 2026-11-01: the state-wide
    `PayloadsTyped` field (locals, memory, storage) and the `IntrinsicNamesReserved` WFProgram
-   fact. The extractValue index-0 form, the checked/rotate call-result forms,
-   `wfState_step`/`irStep_wf`, and Phase 3 follow their implementation and are the open review
+   fact. `IntrinsicNamesReserved` and the checked/rotate call-result forms are implemented
+   (`wfState_checkedCallStep`, `wfState_rotateCallStep`) with a green build. Obstruction 14
+   (overflow-typed literals defeat `PayloadsTyped`) and obstruction 15 (a jump installs the
+   target block's terminator, whose return-safety fact no `WFState` field supplies) are recorded
+   in §22.11 and await the owner's decision. The extractValue index-0 form,
+   `wfState_step`/`irStep_wf`, and Phase 3 follow those decisions and are the open review
    scope.
