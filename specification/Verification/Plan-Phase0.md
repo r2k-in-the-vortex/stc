@@ -2492,8 +2492,18 @@ or, equivalently, add a small `WFState` field with the same content. With it the
 `StackPtrsBounded` case follows: stack loads take their bound from `MemTyped`, `.cell` loads
 produce `.root`/`.function`/`.importCell` addresses (not `.stack`), and `.root`/`.global` loads
 return storage values that are not frame pointers. **Owner approved extending
-`StorageValuesLive` on 2026-11-01**; implementation follows, with no separate field. The ret
-forms are proved (`wfState_popRet`, `wfState_popSetLocal`) and the build is green at `56cc548`.
+`StorageValuesLive` on 2026-11-01**; it is implemented as a third conjunct, with no separate
+field. It is host-supplied through `initState?_wf`'s existing `hstorage : StorageValuesLive c`
+hypothesis and preserved by `storeValue` because `StoresNonPointer` makes every stored value
+non-pointer (`wfState_storeStorage` now takes
+`(hvs : ∀ frame slot off', v ≠ .ptr (.stack frame slot off'))`, supplied from
+`StoresNonPointer` in `wfState_storeStep`). The ret forms are proved (`wfState_popRet`,
+`wfState_popSetLocal`) and the general instruction-step lemma `wfState_setLocalStep` is proved:
+it discharges all `wfState_withHead` obligations for a head update of the form
+`{ f.setLocal dest value with instrs := rest }` from the value's type, stack-bound,
+storage-liveness, slot-base/entry, origin, and no-slots facts, plus
+`lookupLocal_withInstrs`. The remaining instruction forms instantiate it (or handle `alloca`,
+`load`/`gep` slot special cases, and calls separately); the build is green at `56cc548`.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2738,5 +2748,6 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    general symbol-pointer-load disjunct in `StackOriginsTrusted`). They are implemented and the
    ret value/none forms are proved (`wfState_popSetLocal`, `wfState_popRet`) with a green
    build. The `load` form then exposed obstruction 10; the owner approved extending
-   `StorageValuesLive` to exclude frame pointers from storage on 2026-11-01, so
-   `wfState_step`/`irStep_wf` and Phase 3 resume after that implementation.
+   `StorageValuesLive` to exclude frame pointers from storage on 2026-11-01, and the third
+   conjunct plus `wfState_setLocalStep` are implemented with a green build. The remaining
+   instruction forms, `wfState_step`/`irStep_wf`, and Phase 3 are the open review scope.

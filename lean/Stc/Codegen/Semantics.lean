@@ -1275,13 +1275,15 @@ def MemValuePtrBounded (c : IRState) (v : IRValue) : Prop :=
         ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty
   | _ => True
 
-/-- Every storage-pointer value in persistent storage addresses a live entry. -/
+/-- Every storage-pointer value in persistent storage addresses a live entry, and
+storage never holds a frame pointer. -/
 def StorageValuesLive (c : IRState) : Prop :=
   ∀ id off v, c.lookupStorageAt id off = some v →
     (∀ slot off', v = .ptr (.root slot off') →
       ∃ values, c.lookupStorage (.root slot) = some values ∧ off' < values.length) ∧
     (∀ g off', v = .ptr (.global g off') →
-      ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length)
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length) ∧
+    (∀ frame slot off', v ≠ .ptr (.stack frame slot off'))
 
 /-- Every `@symbol` in a value position of the fragment. -/
 def fragValueSymbols (frag : IRFrag) : List String :=
@@ -4238,6 +4240,7 @@ theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
       ∃ values, c.lookupStorage (.root slot) = some values ∧ off' < values.length)
     (hvg : ∀ g off', v = .ptr (.global g off') →
       ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length)
+    (hvs : ∀ frame slot off', v ≠ .ptr (.stack frame slot off'))
     (hnoSlotsV : ∀ g off', v = .ptr (.global g off') → g ∉ SlotsGlobals c.module)
     (hnotSlots : ∀ g, sid = .global g → g ∉ SlotsGlobals c.module) :
     WFState contract s' := by
@@ -4261,7 +4264,8 @@ theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
             (∀ slot offp, w = .ptr (.root slot offp) →
               ∃ vs, c.lookupStorage (.root slot) = some vs ∧ offp < vs.length) ∧
             (∀ g offp, w = .ptr (.global g offp) →
-              ∃ vs, c.lookupStorage (.global g) = some vs ∧ offp < vs.length) := by
+              ∃ vs, c.lookupStorage (.global g) = some vs ∧ offp < vs.length) ∧
+            (∀ frame slot offp, w ≠ .ptr (.stack frame slot offp)) := by
           intro w hwmem
           obtain ⟨n, hn⟩ := List.getElem?_of_mem hwmem
           have hnLt : n < values.length := (List.getElem?_eq_some_iff.mp hn).choose
@@ -4338,7 +4342,7 @@ theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
           rw [lookupStorageAt_setStorage_ne hne]
           exact hwf.slotsStorage fn hfn base hbase g ty ptr align hdef hsym
         · intro sid' off' v0 hlookAt
-          constructor
+          refine ⟨?_, ?_, ?_⟩
           · intro slot offp hptr
             rcases lookupStorageAt_setStorage_some_mem hlookAt with hmem | hold
             · rcases mem_take_cons_drop hmem with rfl | hmem
@@ -4352,9 +4356,15 @@ theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
             · rcases mem_take_cons_drop hmem with rfl | hmem
               · exact lookupStorage_setStorage_live (hvg gname offp hptr) hvaluesLen
               · exact lookupStorage_setStorage_live
-                  ((hmemLive v0 hmem).2 gname offp hptr) hvaluesLen
+                  ((hmemLive v0 hmem).2.1 gname offp hptr) hvaluesLen
             · exact lookupStorage_setStorage_live
-                ((hwf.storageValuesLive sid' off' v0 hold).2 gname offp hptr) hvaluesLen
+                ((hwf.storageValuesLive sid' off' v0 hold).2.1 gname offp hptr) hvaluesLen
+          · intro frame slot offp hptr
+            rcases lookupStorageAt_setStorage_some_mem hlookAt with hmem | hold
+            · rcases mem_take_cons_drop hmem with rfl | hmem
+              · exact hvs frame slot offp hptr
+              · exact (hmemLive v0 hmem).2.2 frame slot offp hptr
+            · exact (hwf.storageValuesLive sid' off' v0 hold).2.2 frame slot offp hptr
         · exact storageDomain_writeStorage hwf.storageDomain hw0
         · constructor
           · exact hwf.noSlotsGlobalPointers.1
@@ -4651,9 +4661,19 @@ theorem wfState_storeStep {contract : IRContract} {c s' : IRState} {f : IRFrame}
           g ∉ SlotsGlobals c.module := by
         intro g heq
         cases heq
+      have htyNotPtr : ty ≠ .ptr :=
+        hwf.program.storesNonPointer f.fn hfunMem block hblock
+          (.store ty value ptr align) hinstrMem ty value ptr align rfl
+      have hvNoPtr : ∀ a, v ≠ .ptr a := by
+        intro a hptr
+        have h := htyped
+        rw [hptr] at h
+        exact htyNotPtr (Option.some.inj h).symm
       have hs'frames : s'.frames = c.frames := writeStorage_frames hw
       have hstate : WFState contract s' :=
-        wfState_storeStorage hwf hw hlive.1 hlive.2 hnoSlotsV hnotSlots
+        wfState_storeStorage hwf hw hlive.1 hlive.2
+          (fun frame slot off' hptr => hvNoPtr (.stack frame slot off') hptr)
+          hnoSlotsV hnotSlots
       apply wfState_withHeadInstrs hstate
       · intro f' fs heq
         rw [hs'frames, hframes] at heq
@@ -4686,9 +4706,19 @@ theorem wfState_storeStep {contract : IRContract} {c s' : IRState} {f : IRFrame}
         have hg : name = g := StoreId.global.inj heq
         rw [← hg]
         exact noSlotsGlobal_of_evalOperand hnoSlotsLocals hsymsPtr hptr
+      have htyNotPtr : ty ≠ .ptr :=
+        hwf.program.storesNonPointer f.fn hfunMem block hblock
+          (.store ty value ptr align) hinstrMem ty value ptr align rfl
+      have hvNoPtr : ∀ a, v ≠ .ptr a := by
+        intro a hptr
+        have h := htyped
+        rw [hptr] at h
+        exact htyNotPtr (Option.some.inj h).symm
       have hs'frames : s'.frames = c.frames := writeStorage_frames hw
       have hstate : WFState contract s' :=
-        wfState_storeStorage hwf hw hlive.1 hlive.2 hnoSlotsV hnotSlots
+        wfState_storeStorage hwf hw hlive.1 hlive.2
+          (fun frame slot off' hptr => hvNoPtr (.stack frame slot off') hptr)
+          hnoSlotsV hnotSlots
       apply wfState_withHeadInstrs hstate
       · intro f' fs heq
         rw [hs'frames, hframes] at heq
@@ -6301,6 +6331,145 @@ theorem wfState_popSetLocal {contract : IRContract} {c : IRState} {f caller : IR
     · exact hwf.slotsParamsSafe f'
         (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
         p hp hname
+
+theorem lookupLocal_withInstrs (f : IRFrame) (instrs : List Instr) (name : String) :
+    ({ f with instrs := instrs } : IRFrame).lookupLocal name = f.lookupLocal name := rfl
+
+/-- A general instruction step that only updates the head's instruction list and
+writes a value to a local: the `wfState_withHead` obligations are discharged from
+the old frame plus the value's facts. -/
+theorem wfState_setLocalStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr} {instr : Instr}
+    {dest : Ssa} {value : IRValue}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = instr :: restInstrs)
+    (hnoBareInst : restInstrs = [] →
+      ¬ ((∃ d r cl a, instr = .call d r cl a) ∨
+        (∃ d r cl a, instr = .callPtr d r cl a)))
+    (hvalueType : ∀ ty, f.fn.localType? dest = some ty → value.type? = some ty)
+    (hnoOrigin : f.fn.facts.originOf? dest = none)
+    (hstackValue : ∀ frame slot off, value = .ptr (.stack frame slot off) →
+      ∃ g0, c.frameById? frame = some g0 ∧ ∃ ty, g0.allocType? slot = some ty ∧
+        off < allocSize ty)
+    (hstorageRoot : ∀ slot off, value = .ptr (.root slot off) →
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length)
+    (hstorageGlobal : ∀ g off, value = .ptr (.global g off) →
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length)
+    (hbaseNe : ∀ base ∈ SlotBases f.fn, base ≠ dest)
+    (hentryNe : ∀ gepName slot, (gepName, slot) ∈ SlotEntries f.fn → gepName ≠ dest)
+    (hnoSlotsValue : ∀ gname off, value = .ptr (.global gname off) →
+      gname ∉ SlotsGlobals c.module)
+    (hslotParamNe : ∀ p : IrType × String, f.fn.params.getLast? = some p →
+      p.2 = "%slots" → p.2 ≠ dest)
+    (hstackReturnsHead : ∀ operand w,
+      f.terminator = some (.ret (some operand)) →
+      evalOperand (f.setLocal dest value) operand = some w →
+      ∀ frame slot off, w = .ptr (.stack frame slot off) → frame ≠ f.id) :
+    WFState contract
+      (c.withHead { (f.setLocal dest value) with instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hndOrigins : (f.fn.facts.origins.map (·.1)).Nodup :=
+    (hwf.program.originsTrusted f.fn hfunMem).1
+  have hgInstrs : { (f.setLocal dest value) with instrs := restInstrs }.instrs =
+      restInstrs := rfl
+  have hblockMem : ∃ block ∈
+      { (f.setLocal dest value) with instrs := restInstrs }.fn.blocks,
+      { (f.setLocal dest value) with instrs := restInstrs }.block = block ∧
+      { (f.setLocal dest value) with instrs := restInstrs }.terminator = block.terminator ∧
+      ∃ done, block.instrs = done ++
+        { (f.setLocal dest value) with instrs := restInstrs }.instrs := by
+    rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+    exact ⟨block, hblock, hblockEq, htermEq, done ++ [instr], by
+      rw [hdone, hinstrs, hgInstrs, List.append_assoc]; rfl⟩
+  have hprevEdge : PrevEdge c { (f.setLocal dest value) with instrs := restInstrs } := by
+    simpa [PrevEdge, IRFrame.setLocal] using hwf.framePrev f hf
+  have hnoBare : { (f.setLocal dest value) with instrs := restInstrs }.instrs = [] →
+      { (f.setLocal dest value) with instrs := restInstrs }.terminator ≠
+        some .unreachable := by
+    intro hres hterm
+    have hres' : restInstrs = [] := hres
+    rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+    have hlast : block.instrs.getLast? = some instr := by
+      rw [hdone, hinstrs, hres']
+      simpa using getLast?_append_singleton done instr
+    have htermBlock : block.terminator = some .unreachable := by
+      rw [← htermEq]
+      exact hterm
+    rcases hwf.program.unreachableGuarded f.fn hfunMem block hblock htermBlock with
+      ⟨instr0, hlast0, d, r, cl, a, hinstr0, _⟩
+    have hinstrEq : instr = instr0 := by
+      rw [hlast] at hlast0
+      exact Option.some.inj hlast0
+    exact hnoBareInst hres (Or.inr ⟨d, r, cl, a, hinstrEq.trans hinstr0⟩)
+  have hlocalsInit : ∀ name ty,
+      { (f.setLocal dest value) with instrs := restInstrs }.fn.localType? name = some ty →
+      ∃ v, { (f.setLocal dest value) with instrs := restInstrs }.lookupLocal name = some v :=
+    localsInitialized_setLocal (f := f) (dest := dest) (value := value)
+      (hwf.localsInitialized f hf)
+  have hlocalsTyped : ∀ name v,
+      { (f.setLocal dest value) with instrs := restInstrs }.lookupLocal name = some v →
+      ∀ ty, { (f.setLocal dest value) with instrs := restInstrs }.fn.localType? name = some ty →
+        v.type? = some ty :=
+    localsTyped_setLocal (f := f) (dest := dest) (value := value)
+      (hwf.localsTyped f hf) hvalueType
+  have horigins : ∀ entry ∈ { (f.setLocal dest value) with instrs := restInstrs }.fn.facts.origins,
+      OriginHolds contract c { (f.setLocal dest value) with instrs := restInstrs }
+        entry.1 entry.2 :=
+    originsMatch_setLocal (contract := contract) (c := c) (f := f) (dest := dest)
+      (value := value) hndOrigins (hwf.originsMatch f hf) (by
+        intro origin horig
+        rw [hnoOrigin] at horig
+        cases horig)
+  have hstackPtrs : StackPtrsBounded c
+      { (f.setLocal dest value) with instrs := restInstrs } :=
+    stackPtrsBounded_setLocal (c := c) (f := f) (dest := dest) (value := value)
+      (hwf.stackPtrsBounded f hf) hstackValue
+  have hstoragePtrs : StoragePtrsLive c
+      { (f.setLocal dest value) with instrs := restInstrs } :=
+    storagePtrsLive_setLocal (c := c) (f := f) (dest := dest) (value := value)
+      (hwf.storagePtrsLive f hf) hstorageRoot hstorageGlobal
+  have hslotsBase : SlotsBase c
+      { (f.setLocal dest value) with instrs := restInstrs } := by
+    have h := hwf.slotsBase f hf
+    refine ⟨?_, ?_, ?_⟩
+    · intro base hbase
+      rw [lookupLocal_withInstrs, lookupLocal_setLocal_ne (f := f) (name := dest)
+        (other := base) (beq_eq_false_iff_ne.mpr (hbaseNe base hbase)) value]
+      exact h.1 base hbase
+    · intro gepName slot hgep
+      rw [lookupLocal_withInstrs, lookupLocal_setLocal_ne (f := f) (name := dest)
+        (other := gepName) (beq_eq_false_iff_ne.mpr (hentryNe gepName slot hgep)) value]
+      exact h.2.1 gepName slot hgep
+    · exact h.2.2
+  have hnoSlotsLocals : ∀ name v gname off,
+      { (f.setLocal dest value) with instrs := restInstrs }.lookupLocal name = some v →
+      v = .ptr (.global gname off) → gname ∉ SlotsGlobals c.module := by
+    intro name v gname off hv hval
+    by_cases hname : name = dest
+    · rw [hname] at hv
+      rw [lookupLocal_withInstrs] at hv
+      rw [lookupLocal_setLocal_eq] at hv
+      have hvEq : v = value := (Option.some.inj hv).symm
+      subst hvEq
+      exact hnoSlotsValue gname off hval
+    · rw [lookupLocal_withInstrs] at hv
+      rw [lookupLocal_setLocal_ne (f := f) (name := dest) (other := name)
+        (beq_eq_false_iff_ne.mpr hname) value] at hv
+      exact hwf.noSlotsGlobalPointers.1 f hf name v gname off hv hval
+  have hslotsParams : ∀ p, { (f.setLocal dest value) with instrs := restInstrs }.fn.params.getLast? =
+      some p → p.2 = "%slots" →
+      { (f.setLocal dest value) with instrs := restInstrs }.lookupLocal p.2 =
+        some (.ptr .slotTable) := by
+    intro p hp hname
+    rw [lookupLocal_withInstrs, lookupLocal_setLocal_ne (f := f) (name := dest)
+      (other := p.2) (beq_eq_false_iff_ne.mpr (hslotParamNe p hp hname)) value]
+    exact hwf.slotsParamsSafe f hf p hp hname
+  exact wfState_withHead hwf hframes rfl rfl rfl rfl rfl rfl
+    (fun slot ty hty => hty) hblockMem hprevEdge hnoBare hlocalsInit hlocalsTyped
+    horigins (hwf.allocsWellFormed f hf) hstackPtrs (hwf.memTyped f hf)
+    (hwf.memNoPtr f hf) hstoragePtrs hslotsBase hnoSlotsLocals
+    (hwf.noSlotsGlobalPointers.2.1 f hf) hstackReturnsHead hslotsParams
 
 theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
     {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
