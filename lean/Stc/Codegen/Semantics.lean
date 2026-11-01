@@ -4088,9 +4088,6 @@ theorem lookupStorage_setStorage_live {s : IRState} {sid : StoreId}
       exact hid
     exact ⟨vs, by rwa [lookupStorage_setStorage_ne hne], hlt⟩
 
-
-namespace Stc.Codegen
-
 theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
     {sid : StoreId} {off : Nat} {v : IRValue}
     (hwf : WFState contract c)
@@ -4233,5 +4230,333 @@ theorem wfState_storeStorage {contract : IRContract} {c s' : IRState}
         · exact hwf.slotsParamsSafe
       · rw [ite_eq_right hoff] at hw
         simp at hw
+
+theorem mem_fragValueSymbols_of_instr {frag : IRFrag} {fn : Function} {block : Block}
+    {instr : Instr} (hfn : fn ∈ frag.functions) (hblock : block ∈ fn.blocks)
+    (hinstr : instr ∈ block.instrs) {g : String} (hg : g ∈ instrValueSymbols instr) :
+    g ∈ fragValueSymbols frag := by
+  unfold fragValueSymbols
+  rw [List.mem_flatMap]
+  refine ⟨fn, hfn, ?_⟩
+  rw [List.mem_flatMap]
+  refine ⟨block, hblock, ?_⟩
+  rw [List.mem_append]
+  left
+  rw [List.mem_flatMap]
+  exact ⟨instr, hinstr, hg⟩
+
+theorem mem_instrValueSymbols_store_value {ty : IrType} {value ptr : Operand}
+    {align : Option Nat} {g : String} (h : g ∈ operandSymbols value) :
+    g ∈ instrValueSymbols (.store ty value ptr align) := by
+  unfold instrValueSymbols
+  rw [List.mem_append]
+  exact Or.inl h
+
+theorem mem_instrValueSymbols_store_ptr {ty : IrType} {value ptr : Operand}
+    {align : Option Nat} {g : String} (h : g ∈ operandSymbols ptr) :
+    g ∈ instrValueSymbols (.store ty value ptr align) := by
+  unfold instrValueSymbols
+  rw [List.mem_append]
+  exact Or.inr h
+
+theorem noSlotsGlobal_of_evalOperand {c : IRState} {f : IRFrame}
+    (hlocals : ∀ name v g off, f.lookupLocal name = some v →
+      v = .ptr (.global g off) → g ∉ SlotsGlobals c.module)
+    {operand : Operand} {g : String} {off : Nat}
+    (hsyms : ∀ h, h ∈ operandSymbols operand → h ∉ SlotsGlobals c.module)
+    (h : evalOperand f operand = some (.ptr (.global g off))) :
+    g ∉ SlotsGlobals c.module := by
+  cases operand with
+  | «local» name => exact hlocals name _ g off h rfl
+  | intLit ty val => simp [evalOperand] at h
+  | nullPtr => simp [evalOperand] at h
+  | symbol hname =>
+      simp only [evalOperand, Option.some.injEq] at h
+      have haddr : IRAddr.global hname 0 = IRAddr.global g off := IRValue.ptr.inj h
+      have hnameEq : hname = g := (IRAddr.global.inj haddr).1
+      have h' := hsyms hname (by simp [operandSymbols])
+      rwa [hnameEq] at h'
+
+theorem storageLive_of_evalOperand {c : IRState} {f : IRFrame}
+    (hlocals : StoragePtrsLive c f) (hdoms : StorageDomain c)
+    {operand : Operand} {v : IRValue}
+    (hsyms : ∀ g, g ∈ operandSymbols operand → g ∈ fragValueSymbols c.module)
+    (h : evalOperand f operand = some v) :
+    (∀ slot off, v = .ptr (.root slot off) →
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length) ∧
+    (∀ g off, v = .ptr (.global g off) →
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length) := by
+  cases operand with
+  | «local» name =>
+      simp only [evalOperand] at h
+      exact ⟨fun slot off hp => hlocals.1 name v slot off h hp,
+        fun g off hp => hlocals.2 name v g off h hp⟩
+  | intLit ty val =>
+      simp only [evalOperand, Option.some.injEq] at h
+      subst h
+      exact ⟨fun slot off hp => by simp at hp, fun g off hp => by simp at hp⟩
+  | nullPtr =>
+      simp only [evalOperand, Option.some.injEq] at h
+      subst h
+      exact ⟨fun slot off hp => by simp at hp, fun g off hp => by simp at hp⟩
+  | symbol hname =>
+      simp only [evalOperand, Option.some.injEq] at h
+      subst h
+      refine ⟨fun slot off hp => by simp at hp, fun g off hp => ?_⟩
+      have haddr : IRAddr.global hname 0 = IRAddr.global g off := IRValue.ptr.inj hp
+      have hnameEq : hname = g := (IRAddr.global.inj haddr).1
+      have hoff : off = 0 := (IRAddr.global.inj haddr).2.symm
+      have hdom := hdoms.2 hname (hsyms hname (by simp [operandSymbols]))
+      rw [hnameEq] at hdom
+      rcases hdom with ⟨values, hlook, hpos⟩
+      exact ⟨values, hlook, by rw [hoff]; exact hpos⟩
+
+theorem memValueTyped_of_stackStoreTypeOK {c : IRState} {frame slot off : Nat} {ty : IrType}
+    {v : IRValue} {g0 : IRFrame} {allocTy : IrType}
+    (hfind : c.frameById? frame = some g0) (halloc : g0.allocType? slot = some allocTy)
+    (hok : stackStoreTypeOK c (.stack frame slot off) ty = true)
+    (htyped : v.type? = some ty) : MemValueTyped allocTy v := by
+  simp only [stackStoreTypeOK, hfind] at hok
+  simp only [halloc] at hok
+  cases allocTy with
+  | array elem count =>
+      simp only [] at hok
+      have hty : ty = elem := beq_iff_eq.mp hok
+      simp [MemValueTyped, htyped, hty]
+  | int bits =>
+      simp only [] at hok
+      have hty : ty = .int bits := beq_iff_eq.mp hok
+      simp [MemValueTyped, htyped, hty]
+  | ptr =>
+      simp only [] at hok
+      have hty : ty = .ptr := beq_iff_eq.mp hok
+      simp [MemValueTyped, htyped, hty]
+  | overflow bits =>
+      simp only [] at hok
+      have hty : ty = .overflow bits := beq_iff_eq.mp hok
+      simp [MemValueTyped, htyped, hty]
+  | void =>
+      simp only [] at hok
+      have hty : ty = .void := beq_iff_eq.mp hok
+      simp [MemValueTyped, htyped, hty]
+
+theorem getLast?_append_singleton (l : List Instr) (a : Instr) :
+    (l ++ [a]).getLast? = some a := by
+  induction l with
+  | nil => rfl
+  | cons x xs ih =>
+      simp only [List.cons_append]
+      cases xs with
+      | nil => rfl
+      | cons y ys => simpa using ih
+
+
+
+theorem storeFrame_fn (frame slot off : Nat) (v : IRValue) (g : IRFrame) :
+    (storeFrame frame slot off v g).fn = g.fn := by
+  unfold storeFrame; split <;> rfl
+
+theorem storeFrame_block (frame slot off : Nat) (v : IRValue) (g : IRFrame) :
+    (storeFrame frame slot off v g).block = g.block := by
+  unfold storeFrame; split <;> rfl
+
+theorem storeFrame_terminator (frame slot off : Nat) (v : IRValue) (g : IRFrame) :
+    (storeFrame frame slot off v g).terminator = g.terminator := by
+  unfold storeFrame; split <;> rfl
+
+theorem storeValue_stack_cases {s s' : IRState} {frame slot off : Nat} {v : IRValue}
+    (hw : s.storeValue (.stack frame slot off) v = some s') :
+    ∃ g0 allocTy, s.frameById? frame = some g0 ∧ g0.allocType? slot = some allocTy ∧
+      off < allocSize allocTy ∧
+      s' = { s with frames := s.frames.map fun g =>
+        if g.id == frame then g.setMem (.stack frame slot off) v else g } := by
+  unfold IRState.storeValue at hw
+  cases hlook : s.frameById? frame with
+  | none => simp [hlook] at hw
+  | some g0 =>
+      simp only [hlook] at hw
+      cases halloc : g0.allocType? slot with
+      | none => simp [halloc] at hw
+      | some allocTy =>
+          simp only [halloc] at hw
+          by_cases hoff : off < allocSize allocTy
+          · rw [ite_eq_left hoff] at hw
+            cases hw
+            exact ⟨g0, allocTy, rfl, halloc, hoff, rfl⟩
+          · rw [ite_eq_right hoff] at hw
+            simp at hw
+
+
+
+theorem writeStorage_frames {s s' : IRState} {sid : StoreId} {off : Nat} {v : IRValue}
+    (hw : s.writeStorage sid off v = some s') : s'.frames = s.frames := by
+  unfold IRState.writeStorage at hw
+  cases hlook : s.lookupStorage sid with
+  | none => simp [hlook] at hw
+  | some values =>
+      simp only [hlook] at hw
+      by_cases hoff : off < values.length
+      · rw [ite_eq_left hoff] at hw
+        cases hw
+        rfl
+      · rw [ite_eq_right hoff] at hw
+        simp at hw
+
+theorem wfState_storeStep {contract : IRContract} {c s' : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {ty : IrType} {value ptr : Operand} {align : Option Nat} {v : IRValue} {addr : IRAddr}
+    (hwf : WFState contract c)
+    (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .store ty value ptr align :: restInstrs)
+    (hvalue : evalOperand f value = some v)
+    (hptr : evalOperand f ptr = some (.ptr addr))
+    (hcond : ((v.type? == some ty) && stackStoreTypeOK c addr ty) = true)
+    (hstore : c.storeValue addr v = some s') :
+    WFState contract (s'.withHeadInstrs restInstrs) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.store ty value ptr align ∈ block.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hslotsSyms := hwf.program.slotsSymbolsLoadOnly.1 f.fn hfunMem block hblock
+    (.store ty value ptr align) hinstrMem
+  have hsymsValue : ∀ g, g ∈ operandSymbols value → g ∉ SlotsGlobals c.module :=
+    fun g hg => hslotsSyms g (mem_instrValueSymbols_store_value hg)
+  have hsymsPtr : ∀ g, g ∈ operandSymbols ptr → g ∉ SlotsGlobals c.module :=
+    fun g hg => hslotsSyms g (mem_instrValueSymbols_store_ptr hg)
+  have hsymsValueFrag : ∀ g, g ∈ operandSymbols value → g ∈ fragValueSymbols c.module :=
+    fun g hg => mem_fragValueSymbols_of_instr hfunMem hblock hinstrMem
+      (mem_instrValueSymbols_store_value hg)
+  have htyped : v.type? = some ty :=
+    beq_iff_eq.mp (Bool.and_eq_true_iff.mp hcond).1
+  have hnoSlotsLocals := hwf.noSlotsGlobalPointers.1 f hf
+  have hblockShape : block.instrs = (done ++ [.store ty value ptr align]) ++ restInstrs := by
+    rw [hdone, hinstrs, List.append_assoc]
+    rfl
+  have hnoBareInst : restInstrs = [] → block.terminator ≠ some .unreachable := by
+    intro hres htermblock
+    have hlast : block.instrs.getLast? = some (.store ty value ptr align) := by
+      rw [hblockShape, hres]
+      simpa using getLast?_append_singleton done (.store ty value ptr align)
+    rcases hwf.program.unreachableGuarded f.fn hfunMem block hblock htermblock with
+      ⟨instr0, hlast0, dest, ret, callee, args, hinstr0, _⟩
+    rw [hlast] at hlast0
+    have hinstrEq : Instr.store ty value ptr align = instr0 := Option.some.inj hlast0
+    rw [← hinstrEq] at hinstr0
+    cases hinstr0
+  cases addr with
+  | stack frame slot off =>
+      rcases storeValue_stack_cases hstore with
+        ⟨g0, allocTy, hfind, halloc, hoff, hs'⟩
+      have hvt : MemValueTyped allocTy v :=
+        memValueTyped_of_stackStoreTypeOK hfind halloc
+          (Bool.and_eq_true_iff.mp hcond).2 htyped
+      have hvb : MemValuePtrBounded c v :=
+        memValuePtrBounded_of_evalOperand (hwf.stackPtrsBounded f hf) hvalue
+      have hnoSlotsV : ∀ gname off', v = .ptr (.global gname off') →
+          gname ∉ SlotsGlobals c.module := by
+        intro gname off' hval
+        exact noSlotsGlobal_of_evalOperand hnoSlotsLocals hsymsValue
+          (by simpa [hval] using hvalue)
+      have hstate : WFState contract
+          { c with frames := c.frames.map fun g =>
+              if g.id == frame then g.setMem (.stack frame slot off) v else g } :=
+        wfState_storeFrames hwf hfind halloc hoff hvt hvb hnoSlotsV
+      rw [hs']
+      apply wfState_withHeadInstrs hstate
+      · intro f' fs heq
+        rw [hframes] at heq
+        simp only [List.map_cons, List.cons.injEq] at heq
+        rcases heq with ⟨hf', _⟩
+        rw [← hf']
+        refine ⟨block, ?_, ?_, ?_, done ++ [.store ty value ptr align], hblockShape⟩
+        · split <;> exact hblock
+        · split <;> exact hblockEq
+        · split <;> exact htermEq
+      · intro f' fs heq hres hterm
+        rw [hframes] at heq
+        simp only [List.map_cons, List.cons.injEq] at heq
+        rcases heq with ⟨hf', _⟩
+        have htermf : f.terminator = some .unreachable := by
+          rw [← hf'] at hterm
+          split at hterm
+          · rwa [show (f.setMem (IRAddr.stack frame slot off) v).terminator =
+              f.terminator from rfl] at hterm
+          · exact hterm
+        exact hnoBareInst hres (by rw [← htermEq]; exact htermf)
+  | root slot off =>
+      have hw : c.writeStorage (.root slot) off v = some s' := by
+        simpa [IRState.storeValue] using hstore
+      have hlive := storageLive_of_evalOperand (hwf.storagePtrsLive f hf)
+        hwf.storageDomain hsymsValueFrag hvalue
+      have hnoSlotsV : ∀ gname off', v = .ptr (.global gname off') →
+          gname ∉ SlotsGlobals c.module := by
+        intro gname off' hval
+        exact noSlotsGlobal_of_evalOperand hnoSlotsLocals hsymsValue
+          (by simpa [hval] using hvalue)
+      have hnotSlots : ∀ g, (StoreId.root slot) = .global g →
+          g ∉ SlotsGlobals c.module := by
+        intro g heq
+        cases heq
+      have hs'frames : s'.frames = c.frames := writeStorage_frames hw
+      have hstate : WFState contract s' :=
+        wfState_storeStorage hwf hw hlive.1 hlive.2 hnoSlotsV hnotSlots
+      apply wfState_withHeadInstrs hstate
+      · intro f' fs heq
+        rw [hs'frames, hframes] at heq
+        simp only [List.cons.injEq] at heq
+        rcases heq with ⟨hf', _⟩
+        rw [← hf']
+        exact ⟨block, hblock, hblockEq, htermEq,
+          done ++ [.store ty value ptr align], hblockShape⟩
+      · intro f' fs heq hres hterm
+        rw [hs'frames, hframes] at heq
+        simp only [List.cons.injEq] at heq
+        rcases heq with ⟨hf', _⟩
+        have htermf : f.terminator = some .unreachable := by
+          rw [← hf'] at hterm
+          exact hterm
+        exact hnoBareInst hres (by rw [← htermEq]; exact htermf)
+  | global name off =>
+      have hw : c.writeStorage (.global name) off v = some s' := by
+        simpa [IRState.storeValue] using hstore
+      have hlive := storageLive_of_evalOperand (hwf.storagePtrsLive f hf)
+        hwf.storageDomain hsymsValueFrag hvalue
+      have hnoSlotsV : ∀ gname off', v = .ptr (.global gname off') →
+          gname ∉ SlotsGlobals c.module := by
+        intro gname off' hval
+        exact noSlotsGlobal_of_evalOperand hnoSlotsLocals hsymsValue
+          (by simpa [hval] using hvalue)
+      have hnotSlots : ∀ g, (StoreId.global name) = .global g →
+          g ∉ SlotsGlobals c.module := by
+        intro g heq
+        have hg : name = g := StoreId.global.inj heq
+        rw [← hg]
+        exact noSlotsGlobal_of_evalOperand hnoSlotsLocals hsymsPtr hptr
+      have hs'frames : s'.frames = c.frames := writeStorage_frames hw
+      have hstate : WFState contract s' :=
+        wfState_storeStorage hwf hw hlive.1 hlive.2 hnoSlotsV hnotSlots
+      apply wfState_withHeadInstrs hstate
+      · intro f' fs heq
+        rw [hs'frames, hframes] at heq
+        simp only [List.cons.injEq] at heq
+        rcases heq with ⟨hf', _⟩
+        rw [← hf']
+        exact ⟨block, hblock, hblockEq, htermEq,
+          done ++ [.store ty value ptr align], hblockShape⟩
+      · intro f' fs heq hres hterm
+        rw [hs'frames, hframes] at heq
+        simp only [List.cons.injEq] at heq
+        rcases heq with ⟨hf', _⟩
+        have htermf : f.terminator = some .unreachable := by
+          rw [← hf'] at hterm
+          exact hterm
+        exact hnoBareInst hres (by rw [← htermEq]; exact htermf)
+  | slotEntry slot => simp [IRState.storeValue] at hstore
+  | cell slot => simp [IRState.storeValue] at hstore
+  | slotTable => simp [IRState.storeValue] at hstore
+  | function name => simp [IRState.storeValue] at hstore
+  | importCell slot => simp [IRState.storeValue] at hstore
 
 end Stc.Codegen

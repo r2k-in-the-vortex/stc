@@ -2178,7 +2178,12 @@ The store's `storeValue` updates are now proved as state-level form lemmas:
 of `NoSlotsGlobalPointers` under `writeStorage`), with the supporting `writeStorage_eq`,
 `lookupStorageAt_setStorage_eq`/`_ne`, `lookupStorage_setStorage_live`,
 `lookupStorageAt_setStorage_some_mem`, and `mem_take_cons_drop` lemmas. The composed store-step
-form lemma and its operand-liveness/`NoSlotsGlobalPointers` extraction are the next step.
+form lemma is proved: `wfState_storeStep` composes the checked store's operand evaluation,
+the frame-map or storage-write update, and the head-instruction replacement into the full
+`WFState` of the store successor, using `memValueTyped_of_stackStoreTypeOK`,
+`noSlotsGlobal_of_evalOperand`, `storageLive_of_evalOperand`, `mem_fragValueSymbols_of_instr`,
+and the `getLast?`/`writeStorage_frames` facts. The `callFunction` and `irStepRet` forms
+remain.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
