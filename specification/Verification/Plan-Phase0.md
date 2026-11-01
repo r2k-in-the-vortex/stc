@@ -2371,6 +2371,60 @@ for ordering, empty callee memory for `MemNoPtr`); and `wfState_storeStep` deriv
 value's non-pointer fact from `StoresNonPointer` plus the store typing. `WFState` now has 27
 fields and `lake build` is green. The ret value/none forms, `irStep_wf`, and Phase 3 remain.
 
+**Phase 2 obstruction 9 (2026-11-01): slot-base destinations and the untracked call
+destination.** Preparing the ret value form exposes a gap that also affects ordinary
+instruction steps, not only returns. Neither `WFProgram` nor `WFState` ties a `SlotBases`
+member or a `SlotEntries` name to the instruction that defines it, and the per-state invariant
+does not record that a return destination is a call-instruction destination (the gap noted in
+obstruction 6, which the approved non-parameter conjunct covers only for `SlotsParamsSafe`).
+
+*Counterexample A (alloca instruction step).* Let `caller.fn` have parameters
+`[]`, locals `%d : ptr`, `%g : ptr`, `%l : ptr`, one entry block
+`%d = alloca [1 x ptr]; %g = gep ptr, ptr %d, i64 0; %l = load ptr, ptr %g; ret void`, and origin
+`(%l, .cell slot false)` with `slotKind? slot` storage. `SlotBases` contains `%d` (the gep base)
+and `SlotEntries` contains `(%g, slot)`. `StackOriginsTrusted` holds for `%d` (alloca-defined)
+and `%g` (GEP-defined); `AllocaElementRepresentable` holds for the `ptr` element; everything
+else in `WFProgram`/`WFState` is satisfied by the entry frame with `%d = %g = %l = .null`
+(`SlotsBase` holds through its `.null` disjuncts; the alloca has not executed). Executing the
+alloca sets `%d = .ptr (.stack caller.id 0 0)`, which is neither `.ptr .slotTable` nor `.null`,
+so `SlotsBase` clause 1 fails. The same argument applies to any instruction whose destination
+is a slot base (a `load` from a non-symbol pointer, a `gep`, etc.); `SlotEntries` names are
+safe at instruction steps because SSA uniqueness forces the executing instruction to be the
+recorded `gep`, whose value is the `.slotEntry` pointer.
+
+*Counterexample B (ret value form).* `ReturnLink` constrains `dest` by local type, origin
+absence, and non-parameter status only. If `dest ∈ caller.fn`'s `SlotBases` (respectively
+`SlotEntries`), the successor `caller.setLocal dest v` overwrites the slot-base (entry) local
+with the callee's return value `v`, which is only typed; unless `v` happens to be
+`.ptr .slotTable` (`.ptr (.slotEntry slot)`) or `.null`, `SlotsBase` fails. The callee can
+return a stack or storage pointer typed `.ptr` from an argument or local, so this is reachable
+in `WFState`-satisfying states: `StackOriginsTrusted` allows `dest` to be alloca- or GEP-defined
+when `originOf? dest = none`, and nothing excludes `dest = base` or `dest = gepName`. The same
+missing link blocks the `StackReturnsSafe` preservation argument: refuting `SafeReturnValue
+caller.fn dest` (needed when `caller`'s terminator returns `.local dest`) requires knowing that
+`dest` is defined by the original call instruction, which the state does not record. A related
+observation for the owner: the builder obtains the slot table with `load @stc_module_slots`
+(`crates/stc-codegen/src/unit.rs`, `slots_global`), whose result has no recorded origin;
+`StackOriginsTrusted` as stated (parameters/allocas/GEPs) would therefore not hold for
+production functions unless the load result is origin-recorded or the fact is extended with a
+symbol-pointer-load disjunct. The load-defined value is still not a `SafeReturnValue`
+constructor, so the `StackReturnsSafe` refutation goal is unaffected.
+
+Proposed resolution (owner decision): (1) a builder-trusted `WFProgram` fact
+`SlotBasesLoadOnly` — every slot base is defined by a load through a symbol operand
+(`∀ fn, ∀ base ∈ SlotBases fn, ∃ ty align g, defInstr? fn base = some (.load base ty (.symbol g)
+align)`), matching the builder's `load @stc_module_slots`; with `SlotsGlobalStored`/`SlotsStorage`
+the defining load produces `.ptr .slotTable`, and every other instruction with that destination
+is excluded by SSA uniqueness; (2) extend `ReturnLink`'s `some dest` conjunct with the
+call-instruction destination link — `dest` is the destination of a `call` or `callPtr`
+instruction of `caller.fn` — established at the call site from
+`FunctionUsesDefined.allNodup` and the call instruction's position (the same uniqueness
+argument as `call_dest_origin_none`, plus a `defSite?` existence lemma). Together (1) and (2)
+discharge `SlotsBase` and `StackReturnsSafe` at the ret value form; (3) optionally extend
+`StackOriginsTrusted` with the symbol-pointer-load disjunct noted above. No field is added and
+no invariant is weakened pending approval. The 27-field checkpoint is `d90584e`; `lake build`
+is green and the ret value/none forms, `irStep_wf`, and Phase 3 remain blocked.
+
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
 obligations that the approved fact set does not discharge. No invariant change was applied;
@@ -2604,3 +2658,7 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    preservation lemmas listed in §22.11. Phase 2 (`irStep_wf`, one state-update form at a
    time) and Phase 3 (reachability corollaries and the `irRun` lift) remain open and are the
    remaining P0.5 review scope.
+7. A pending owner decision is recorded in §22.11 as obstruction 9 (slot-base destinations and
+   the untracked call destination). The 27-field `WFState` implementation checkpoint is
+   `d90584e` with a green build; the ret value/none forms, `irStep_wf`, and Phase 3 remain open
+   until the owner decides on `SlotBasesLoadOnly`/the `ReturnLink` call-destination link.
