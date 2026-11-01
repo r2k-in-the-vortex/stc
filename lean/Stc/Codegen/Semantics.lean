@@ -6737,6 +6737,78 @@ theorem originOf?_ne_vtable {contract : IRContract} {frag : IRFrag} {fn : Functi
     mem_of_originOf? horig
   exact (hprog.originsTrusted fn hfn).2 (dest, PointerOrigin.vtableCode) hmem |>.2.2
 
+/-- A stack load's value is a non-pointer in an invariant-satisfying state. -/
+theorem loadValue_stack_notPtr_state {contract : IRContract} {c : IRState}
+    (hwf : WFState contract c) {fm sl ofs : Nat} {v : IRValue}
+    (h : c.loadValue (.stack fm sl ofs) = some v) : ∀ a, v ≠ .ptr a :=
+  loadValue_stack_notPtr h (fun f0 hfind => hwf.memNoPtr f0 (mem_of_frameById? hfind))
+
+theorem loadValue_root_live {c : IRState} (hsv : StorageValuesLive c)
+    {slot ofs : Nat} {v : IRValue} (h : c.loadValue (.root slot ofs) = some v)
+    {slot' off' : Nat} (hv : v = .ptr (.root slot' off')) :
+    ∃ values, c.lookupStorage (.root slot') = some values ∧ off' < values.length := by
+  have h' : c.lookupStorageAt (.root slot) ofs = some v := h
+  exact (hsv (.root slot) ofs v h').1 slot' off' hv
+
+theorem loadValue_global_live {c : IRState} (hsv : StorageValuesLive c)
+    {name : String} {ofs : Nat} {v : IRValue}
+    (h : c.loadValue (.global name ofs) = some v)
+    {gname : String} {gofs : Nat} (hv : v = .ptr (.global gname gofs)) :
+    ∃ values, c.lookupStorage (.global gname) = some values ∧ gofs < values.length := by
+  have h' : c.lookupStorageAt (.global name) ofs = some v := h
+  exact (hsv (.global name) ofs v h').2.1 gname gofs hv
+
+theorem loadValue_root_noSlots {c : IRState} (hns : NoSlotsGlobalPointers c)
+    {slot ofs : Nat} {v : IRValue} {gname : String} {gofs : Nat}
+    (h : c.loadValue (.root slot ofs) = some v) (hv : v = .ptr (.global gname gofs)) :
+    gname ∉ SlotsGlobals c.module := by
+  have h' : c.lookupStorageAt (.root slot) ofs = some v := h
+  exact hns.2.2 (.root slot) ofs v gname gofs h' hv
+
+theorem loadValue_global_noSlots {c : IRState} (hns : NoSlotsGlobalPointers c)
+    {name : String} {ofs : Nat} {v : IRValue} {gname : String} {gofs : Nat}
+    (h : c.loadValue (.global name ofs) = some v) (hv : v = .ptr (.global gname gofs)) :
+    gname ∉ SlotsGlobals c.module := by
+  have h' : c.lookupStorageAt (.global name) ofs = some v := h
+  exact hns.2.2 (.global name) ofs v gname gofs h' hv
+
+theorem loadValue_root_notStack {c : IRState} (hsv : StorageValuesLive c)
+    {slot ofs : Nat} {v : IRValue} {frame sl off : Nat}
+    (h : c.loadValue (.root slot ofs) = some v) (hv : v = .ptr (.stack frame sl off)) :
+    False := by
+  have h' : c.lookupStorageAt (.root slot) ofs = some v := h
+  exact (hsv (.root slot) ofs v h').2.2 frame sl off hv
+
+theorem loadValue_global_notStack {c : IRState} (hsv : StorageValuesLive c)
+    {name : String} {ofs : Nat} {v : IRValue} {frame sl off : Nat}
+    (h : c.loadValue (.global name ofs) = some v) (hv : v = .ptr (.stack frame sl off)) :
+    False := by
+  have h' : c.lookupStorageAt (.global name) ofs = some v := h
+  exact (hsv (.global name) ofs v h').2.2 frame sl off hv
+
+theorem loadValue_slotEntry_notStack {c : IRState} {slot : Nat} {v : IRValue}
+    (h : c.loadValue (.slotEntry slot) = some v) {frame sl off : Nat}
+    (hv : v = .ptr (.stack frame sl off)) : False := by
+  rw [loadValue_slotEntry h] at hv
+  cases hv
+
+theorem loadValue_cell_notStack {c : IRState} {slot : Nat} {v : IRValue}
+    (h : c.loadValue (.cell slot) = some v) {frame sl off : Nat}
+    (hv : v = .ptr (.stack frame sl off)) : False := by
+  rcases loadValue_cell_cases h with ⟨hroot, _, _, _⟩ | ⟨fname, _, hfun, _⟩ | ⟨himp, _⟩
+  · rw [hroot] at hv
+    cases hv
+  · rw [hfun] at hv
+    cases hv
+  · rw [himp] at hv
+    cases hv
+
+theorem loadValue_cell_root_live {c : IRState} (hdom : StorageDomain c)
+    {slot : Nat} {k : CellKind} (hk : c.slotKind? slot = some k)
+    (hstor : k.isStorage = true) :
+    ∃ values, c.lookupStorage (.root slot) = some values ∧ 0 < values.length :=
+  hdom.1 slot k hk hstor
+
 theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
     {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
     (hud : FunctionUsesDefined fn) (hblock : block ∈ fn.blocks)
