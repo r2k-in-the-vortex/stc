@@ -2452,8 +2452,21 @@ discharge `SlotsBase` and `StackReturnsSafe` at the ret value form; (3) optional
 `StackOriginsTrusted` with the symbol-pointer-load disjunct noted above. **Owner approved all
 three on 2026-11-01:** `SlotBasesLoadOnly` becomes a `WFProgram` field; `ReturnLink` gains the
 `IsCallDest` conjunct; and `StackOriginsTrusted` gains the general symbol-pointer-load disjunct.
-Implementation follows. The 27-field checkpoint is `d90584e`; `lake build` is green and the ret
-value/none forms, `irStep_wf`, and Phase 3 remain blocked until implementation completes.
+They are implemented: `SlotBasesLoadOnly` is a `WFProgram` field; `IsCallDest` is a static
+predicate (the direct and indirect call constructors bind different callee types, so the two
+shapes are separate existentials) and is the final conjunct of `ReturnLink`'s `some dest` case;
+`StackOriginsTrusted` carries the symbol-pointer-load disjunct. `wfState_calleePush` takes
+`(hretCallDest : ∀ d, dest = some d → IsCallDest caller.fn d)` and carries it into
+`ReturnLink`. The key derivation is `defInstr?_eq_of_isCallDest` (any defining instruction of
+a call destination is that call, by SSA uniqueness), yielding
+`not_mem_slotBases_of_isCallDest`, `not_mem_slotEntries_of_isCallDest`, and
+`not_safeReturnValue_of_isCallDest`. The ret-none and ret value forms are proved:
+`wfState_popRet` and `wfState_popSetLocal`, with helpers `frameById?_id`, `frameById?_pop`,
+`stackBound_popSetLocal`, `evalOperand_setLocal_of_notMem`, and `memValuePtrBounded_of_noPtr`.
+The `StackReturnsSafe` head case uses `ReturnNonStack` plus
+`not_safeReturnValue_of_isCallDest`; `SlotsBase` uses the two slot-membership exclusions plus
+SSA uniqueness of the defining load. `lake build` is green. The 27-field checkpoint is
+`d90584e`; `wfState_step`/`irStep_wf` and Phase 3 remain.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2690,6 +2703,6 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    remaining P0.5 review scope.
 7. The §22.11 obstruction-9 extensions were owner-approved on 2026-11-01
    (`SlotBasesLoadOnly` as a `WFProgram` fact, `ReturnLink`'s `IsCallDest` conjunct, and the
-   general symbol-pointer-load disjunct in `StackOriginsTrusted`). The 27-field `WFState`
-   implementation checkpoint is `d90584e` with a green build; implementation of the three
-   extensions, then the ret value/none forms, `irStep_wf`, and Phase 3 remain open.
+   general symbol-pointer-load disjunct in `StackOriginsTrusted`). They are implemented and the
+   ret value/none forms are proved (`wfState_popSetLocal`, `wfState_popRet`) with a green
+   build. `wfState_step`/`irStep_wf` and Phase 3 remain open.

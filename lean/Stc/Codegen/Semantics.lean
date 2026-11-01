@@ -967,15 +967,24 @@ def OriginsTrusted (frag : IRFrag) : Prop :=
           ∃ dest ty base indices inbounds,
             defInstr? fn entry.1 = some (.gep dest ty base indices inbounds)
 
-/-- Pointer locals without a recorded origin are parameters, allocas, or GEP
-results. -/
+/-- Pointer locals without a recorded origin are parameters, allocas, GEP
+results, or symbol-pointer loads (the slot-table global is loaded this way). -/
 def StackOriginsTrusted (frag : IRFrag) : Prop :=
   ∀ fn ∈ frag.functions, ∀ name,
     fn.facts.originOf? name = none → fn.localType? name = some .ptr →
       name ∈ fn.params.map (·.2) ∨
         (∃ ty, defInstr? fn name = some (.alloca name ty)) ∨
         (∃ dest ty base indices inbounds,
-          defInstr? fn name = some (.gep dest ty base indices inbounds))
+          defInstr? fn name = some (.gep dest ty base indices inbounds)) ∨
+        (∃ ty align g, defInstr? fn name = some (.load name ty (.symbol g) align))
+
+/-- A local is the destination of a direct or indirect call instruction of the
+function. The direct and indirect call constructors bind different callee
+types, so the two shapes are quantified separately. -/
+def IsCallDest (fn : Function) (dest : Ssa) : Prop :=
+  ∃ block ∈ fn.blocks, ∃ instr ∈ block.instrs,
+    (∃ ret callee args, instr = .call (some dest) ret callee args) ∨
+    (∃ ret callee args, instr = .callPtr (some dest) ret callee args)
 
 /-- Every indirect call is a local with a callable-cell origin. -/
 def CallPtrOrigins (frag : IRFrag) : Prop :=
@@ -1033,6 +1042,11 @@ def SlotEntries (fn : Function) : List (Ssa × Nat) :=
             | _ => none
         | _ => none
     | _ => none
+
+/-- Every slot base is defined by a load through a symbol operand. -/
+def SlotBasesLoadOnly (frag : IRFrag) : Prop :=
+  ∀ fn ∈ frag.functions, ∀ base ∈ SlotBases fn,
+    ∃ ty align g, defInstr? fn base = some (.load base ty (.symbol g) align)
 
 /-- The slots-global storage entry for a base defined by a load is the
 slot-table pointer. -/
@@ -1221,6 +1235,7 @@ structure WFProgram (contract : IRContract) (frag : IRFrag) : Prop where
   returnNonStack : ReturnNonStack frag
   slotsGlobalReadOnly : SlotsGlobalReadOnly frag
   slotBasesNonParam : SlotBasesNonParam frag
+  slotBasesLoadOnly : SlotBasesLoadOnly frag
   storesNonPointer : StoresNonPointer frag
   allocaRepresentable : ∀ fn ∈ frag.functions, ∀ block ∈ fn.blocks,
     ∀ instr ∈ block.instrs, ∀ dest ty, instr = .alloca dest ty →
@@ -1384,7 +1399,8 @@ def ReturnLink (c : IRState) : Prop :=
         callee.fn.returnType ≠ .void ∧
           caller.fn.localType? dest = some callee.fn.returnType ∧
           caller.fn.facts.originOf? dest = none ∧
-          dest ∉ caller.fn.params.map (·.2)
+          dest ∉ caller.fn.params.map (·.2) ∧
+          IsCallDest caller.fn dest
 
 /-- The appended slots parameter of every frame holds the slot-table pointer. -/
 def SlotsParamsSafe (c : IRState) : Prop :=
@@ -5079,6 +5095,7 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
       caller.fn.localType? d = some fn.returnType)
     (hretOrigin : ∀ d, dest = some d → caller.fn.facts.originOf? d = none)
     (hretParam : ∀ d, dest = some d → d ∉ caller.fn.params.map (·.2))
+    (hretCallDest : ∀ d, dest = some d → IsCallDest caller.fn d)
     (hslotsParam : ∀ p, fn.params.getLast? = some p → p.2 = "%slots" →
       ∃ a, (p, a) ∈ fn.params.zip args ∧ a = .ptr .slotTable) :
     WFState contract
@@ -5345,7 +5362,8 @@ theorem wfState_calleePush {contract : IRContract} {c : IRState} {caller : IRFra
         cases hd : dest with
         | none => trivial
         | some d =>
-            exact ⟨(hretDest d hd).1, (hretDest d hd).2, hretOrigin d hd, hretParam d hd⟩
+            exact ⟨(hretDest d hd).1, (hretDest d hd).2, hretOrigin d hd,
+              hretParam d hd, hretCallDest d hd⟩
     | cons a as =>
         simp only [List.cons_append] at heq
         injection heq with hcallee hrest
@@ -5623,6 +5641,666 @@ theorem wfState_retHalt {contract : IRContract} {c : IRState}
   · intro f hf; simp at hf
   · intro f hf; simp at hf
 
+/-- A frame found by id has that id. -/
+theorem frameById?_id {c : IRState} {id : Nat} {g : IRFrame}
+    (h : c.frameById? id = some g) : g.id = id := by
+  unfold IRState.frameById? at h
+  exact beq_iff_eq.mp (List.find?_some (p := fun g : IRFrame => g.id == id) (a := g) h)
+
+/-- Popping the head frame preserves a frame lookup whose result is not the
+popped frame. -/
+theorem frameById?_pop {c : IRState} {f caller : IRFrame} {below : List IRFrame}
+    (hframes : c.frames = f :: caller :: below) {id : Nat} {g : IRFrame}
+    (hfind : c.frameById? id = some g) (hne : g.id ≠ f.id) :
+    ({ c with frames := caller :: below } : IRState).frameById? id = some g := by
+  unfold IRState.frameById? at hfind ⊢
+  rw [hframes] at hfind
+  have hgid : g.id = id := beq_iff_eq.mp
+    (List.find?_some (p := fun g : IRFrame => g.id == id) (a := g) hfind)
+  have hneg : ¬ ((f.id == id) = true) := by
+    intro hb
+    exact hne (hgid.trans (beq_iff_eq.mp hb).symm)
+  rw [List.find?_cons_of_neg (p := fun g : IRFrame => g.id == id) (a := f) hneg] at hfind
+  exact hfind
+
+/-- A local update for a name outside an operand does not change the operand's
+value. -/
+theorem evalOperand_setLocal_of_notMem {f : IRFrame} {dest : String} {value : IRValue}
+    {operand : Operand} (h : dest ∉ operand.localNames) :
+    evalOperand (f.setLocal dest value) operand = evalOperand f operand := by
+  cases operand with
+  | «local» name =>
+      simp only [Operand.localNames, List.mem_singleton] at h
+      simp only [evalOperand]
+      rw [lookupLocal_setLocal_ne f (beq_eq_false_iff_ne.mpr (fun hd => h hd.symm)) value]
+  | intLit ty val => simp [evalOperand]
+  | nullPtr => simp [evalOperand]
+  | symbol name => simp [evalOperand]
+
+/-- A non-pointer value satisfies every stack-pointer bound. -/
+theorem memValuePtrBounded_of_noPtr {c : IRState} {v : IRValue}
+    (h : ∀ a, v ≠ .ptr a) : MemValuePtrBounded c v := by
+  cases v with
+  | int ty payload => trivial
+  | pair ty value overflow => trivial
+  | null => trivial
+  | ptr addr =>
+      cases addr with
+      | stack frame slot off =>
+          exact absurd rfl (h (.stack frame slot off))
+      | slotEntry slot => trivial
+      | cell slot => trivial
+      | root slot off => trivial
+      | global name off => trivial
+      | slotTable => trivial
+      | function name => trivial
+      | importCell slot => trivial
+
+/-- The ret-none form: removing the returning head frame preserves the state
+invariant. -/
+theorem wfState_popRet {contract : IRContract} {c : IRState} {f caller : IRFrame}
+    {below : List IRFrame} (hwf : WFState contract c)
+    (hframes : c.frames = f :: caller :: below) :
+    WFState contract { c with frames := caller :: below } := by
+  constructor
+  · exact hwf.program
+  · have h := hwf.frameIdsNodup
+    rw [hframes] at h
+    simpa using (List.nodup_cons.mp h).2
+  · intro f' hf'
+    exact hwf.frameIdsBound f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    exact hwf.frameFunction f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    exact hwf.frameBlock f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    exact hwf.framePrev f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf' hinst
+    exact hwf.noBareUnreachable f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+      hinst
+  · intro f' hf' name ty hty
+    exact hwf.localsInitialized f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+      name ty hty
+  · intro f' hf' name v hv ty hty
+    exact hwf.localsTyped f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+      name v hv ty hty
+  · intro f' hf' entry hentry
+    exact hwf.originsMatch f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+      entry hentry
+  · intro f' hf'
+    exact hwf.allocsWellFormed f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    have hmem : f' ∈ c.frames := by
+      rw [hframes]; exact List.mem_cons_of_mem f hf'
+    have hb := hwf.stackPtrsBounded f' hmem
+    have hf'' : f' ∈ caller :: below := hf'
+    obtain ⟨pre0, rest0, hsplit⟩ := List.mem_iff_append.mp hf''
+    have hc : c.frames = (f :: pre0) ++ f' :: rest0 := by
+      rw [hframes, hsplit]; rfl
+    have hold := hwf.stackPtrsOrdered (f :: pre0) f' rest0 hc
+    intro name v addr hv haddr
+    cases addr with
+    | stack frame slot off =>
+        rcases hb name v (.stack frame slot off) hv haddr with
+          ⟨g, hfind, ty, hty, hoff⟩
+        have hgid : g.id = frame := frameById?_id hfind
+        have hne : g.id ≠ f.id := by
+          intro heq
+          have hframe : frame = f.id := hgid.symm.trans heq
+          have hmemPrefix : frame ∈ (f :: pre0).map (·.id) := by
+            rw [hframe]; exact List.mem_cons_self ..
+          exact hold.1 name v frame slot off hv haddr hmemPrefix
+        exact ⟨g, frameById?_pop hframes hfind hne, ty, hty, hoff⟩
+    | slotEntry slot => trivial
+    | cell slot => trivial
+    | root slot off => trivial
+    | global name off => trivial
+    | slotTable => trivial
+    | function name => trivial
+    | importCell slot => trivial
+  · intro pre f' rest' heq
+    cases pre with
+    | nil =>
+        constructor
+        · intro name v frame slot off hv hval hmem
+          simp at hmem
+        · intro addr v frame slot off hv hval hmem
+          simp at hmem
+    | cons a as =>
+        simp only [List.cons_append] at heq
+        injection heq with hag has
+        subst hag
+        have hc : c.frames = (f :: caller :: as) ++ f' :: rest' := by
+          rw [hframes, has]; rfl
+        have hold := hwf.stackPtrsOrdered (f :: caller :: as) f' rest' hc
+        constructor
+        · intro name v frame slot off hv hval hmem
+          exact hold.1 name v frame slot off hv hval (List.mem_cons_of_mem f.id hmem)
+        · intro addr v frame slot off hv hval hmem
+          exact hold.2 addr v frame slot off hv hval (List.mem_cons_of_mem f.id hmem)
+  · intro f' hf'
+    have hmem : f' ∈ c.frames := by
+      rw [hframes]; exact List.mem_cons_of_mem f hf'
+    have hm := hwf.memTyped f' hmem
+    have hnp := hwf.memNoPtr f' hmem
+    intro addr v hv
+    rcases hm addr v hv with ⟨slot, off, ty, haddr, hty, hoff, hvt, hvb⟩
+    exact ⟨slot, off, ty, haddr, hty, hoff, hvt,
+      memValuePtrBounded_of_noPtr (fun a ha => hnp addr v hv a ha)⟩
+  · intro f' hf'
+    exact hwf.memNoPtr f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    exact hwf.storagePtrsLive f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · intro f' hf'
+    exact hwf.slotsBase f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+  · exact hwf.slotsStorage
+  · exact hwf.storageValuesLive
+  · exact hwf.storageDomain
+  · constructor
+    · intro f' hf' name v gname off hv hval
+      exact hwf.noSlotsGlobalPointers.1 f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f hf') name v gname off hv hval
+    · constructor
+      · intro f' hf' addr v gname off hv hval
+        exact hwf.noSlotsGlobalPointers.2.1 f'
+          (by rw [hframes]; exact List.mem_cons_of_mem f hf') addr v gname off hv hval
+      · exact hwf.noSlotsGlobalPointers.2.2
+  · exact hwf.functionBindings
+  · exact hwf.callTargets
+  · intro pre callee caller2 suffix heq
+    have heq' : caller :: below = pre ++ callee :: caller2 :: suffix := heq
+    have hc : c.frames = (f :: pre) ++ callee :: caller2 :: suffix := by
+      rw [hframes, heq']; rfl
+    exact hwf.returnLink (f :: pre) callee caller2 suffix hc
+  · intro last hlast
+    exact hwf.bottomRetDest last (by rw [hframes]; simpa using hlast)
+  · intro f' hf' operand v htermv heval frame slot off hv
+    exact hwf.stackReturnsSafe f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+      operand v htermv heval frame slot off hv
+  · intro f' hf' p hp hname
+    exact hwf.slotsParamsSafe f' (by rw [hframes]; exact List.mem_cons_of_mem f hf')
+      p hp hname
+
+
+/-- Any defining instruction of a call destination is that call instruction,
+by SSA uniqueness. -/
+theorem defInstr?_eq_of_isCallDest {contract : IRContract} {frag : IRFrag} {fn : Function}
+    {dest : Ssa} (hprog : WFProgram contract frag) (hfn : fn ∈ frag.functions)
+    (hcall : IsCallDest fn dest) {i0 : Instr} (hdef : defInstr? fn dest = some i0) :
+    (∃ ret callee args, i0 = .call (some dest) ret callee args) ∨
+      (∃ ret callee args, i0 = .callPtr (some dest) ret callee args) := by
+  rcases hcall with ⟨block1, hblock1, instr1, hinstr1, hshape⟩
+  have hdest1 : instr1.dest? = some dest := by
+    rcases hshape with ⟨ret, callee, args, hi⟩ | ⟨ret, callee, args, hi⟩
+    · rw [hi]; rfl
+    · rw [hi]; rfl
+  have hnd : (fn.blocks.map (·.label)).Nodup :=
+    (hprog.wellFormed.typesCorrect fn hfn).labelsUnique
+  have hud : FunctionUsesDefined fn := hprog.wellFormed.usesDefined fn hfn
+  have hdest0 : i0.dest? = some dest := defInstr?_dest hnd hdef
+  rcases mem_of_defInstr? hdef with ⟨block0, hblock0, hinstr0⟩
+  have hEq : instr1 = i0 := by
+    by_cases h : instr1 = i0
+    · exact h
+    · exfalso
+      have hall := hud.allNodup
+      rw [List.nodup_append] at hall
+      have hdup : ¬ ((fn.blocks.flatMap fun b => b.instrs).filterMap Instr.dest?).Nodup :=
+        not_nodup_filterMap
+          (List.mem_flatMap.mpr ⟨block1, hblock1, hinstr1⟩)
+          (List.mem_flatMap.mpr ⟨block0, hblock0, hinstr0⟩)
+          h hdest1 hdest0
+      rw [List.filterMap_flatMap] at hdup
+      exact hdup hall.2.1
+  rw [← hEq]
+  exact hshape
+
+/-- A call destination is not a slot base. -/
+theorem not_mem_slotBases_of_isCallDest {contract : IRContract} {frag : IRFrag}
+    {fn : Function} {base : Ssa} (hprog : WFProgram contract frag)
+    (hfn : fn ∈ frag.functions) (hbase : base ∈ SlotBases fn)
+    (hcall : IsCallDest fn base) : False := by
+  obtain ⟨ty, align, g, hdef⟩ := hprog.slotBasesLoadOnly fn hfn base hbase
+  rcases defInstr?_eq_of_isCallDest hprog hfn hcall hdef with
+    ⟨ret, callee, args, heq⟩ | ⟨ret, callee, args, heq⟩
+  · cases heq
+  · cases heq
+
+/-- A call destination is not a slot-entry GEP result. -/
+theorem not_mem_slotEntries_of_isCallDest {contract : IRContract} {frag : IRFrag}
+    {fn : Function} {gepName : Ssa} {slot : Nat} (hprog : WFProgram contract frag)
+    (hfn : fn ∈ frag.functions) (hgep : (gepName, slot) ∈ SlotEntries fn)
+    (hcall : IsCallDest fn gepName) : False := by
+  rcases slotEntry_gep hgep with
+    ⟨entry, hentry, dest, ty, align, hload, dest2, ty2, base, indices, inbounds, hdef⟩
+  rcases defInstr?_eq_of_isCallDest hprog hfn hcall hdef with
+    ⟨ret, callee, args, heq⟩ | ⟨ret, callee, args, heq⟩
+  · cases heq
+  · cases heq
+
+/-- A call destination is not a safe return value. -/
+theorem not_safeReturnValue_of_isCallDest {contract : IRContract} {frag : IRFrag}
+    {fn : Function} {dest : Ssa} (hprog : WFProgram contract frag)
+    (hfn : fn ∈ frag.functions) (hcall : IsCallDest fn dest)
+    (hparam : dest ∉ fn.params.map (·.2))
+    (horigin : fn.facts.originOf? dest = none) : ¬ SafeReturnValue fn dest := by
+  intro hs
+  cases hs with
+  | param hmem => exact hparam hmem
+  | origin horig =>
+      rw [horigin] at horig
+      cases horig
+  | binop hdef =>
+      rcases defInstr?_eq_of_isCallDest hprog hfn hcall hdef with
+        ⟨ret, callee, args, heq⟩ | ⟨ret, callee, args, heq⟩
+      · cases heq
+      · cases heq
+  | icmp hdef =>
+      rcases defInstr?_eq_of_isCallDest hprog hfn hcall hdef with
+        ⟨ret, callee, args, heq⟩ | ⟨ret, callee, args, heq⟩
+      · cases heq
+      · cases heq
+  | cast hdef =>
+      rcases defInstr?_eq_of_isCallDest hprog hfn hcall hdef with
+        ⟨ret, callee, args, heq⟩ | ⟨ret, callee, args, heq⟩
+      · cases heq
+      · cases heq
+  | extractValue hdef =>
+      rcases defInstr?_eq_of_isCallDest hprog hfn hcall hdef with
+        ⟨ret, callee, args, heq⟩ | ⟨ret, callee, args, heq⟩
+      · cases heq
+      · cases heq
+
+/-- A stack-pointer bound whose target is not the popped frame is preserved when
+the head is replaced by a local update of the caller frame. -/
+theorem stackBound_popSetLocal {c : IRState} {f caller : IRFrame} {below : List IRFrame}
+    (hnd : (c.frames.map (·.id)).Nodup) (hframes : c.frames = f :: caller :: below)
+    (dest : String) (value : IRValue) {frame slot off : Nat}
+    (hbound : ∃ g, c.frameById? frame = some g ∧ ∃ ty, g.allocType? slot = some ty ∧
+      off < allocSize ty)
+    (hne : frame ≠ f.id) :
+    ∃ g, ({ c with frames := caller.setLocal dest value :: below } : IRState).frameById? frame =
+        some g ∧
+      ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty := by
+  rcases hbound with ⟨g, hfind, ty, hty, hoff⟩
+  have hgid : g.id = frame := frameById?_id hfind
+  have hgmem : g ∈ c.frames := mem_of_frameById? hfind
+  have hgmem' : g ∈ caller :: below := by
+    rw [hframes] at hgmem
+    rcases List.mem_cons.mp hgmem with hgf | hg
+    · exfalso
+      exact hne ((hgf ▸ hgid).symm)
+    · exact hg
+  have hneF : ¬ ((f.id == frame) = true) := by
+    intro hfi
+    exact hne (beq_iff_eq.mp hfi).symm
+  have hfindTail : (caller :: below).find? (fun h : IRFrame => h.id == frame) = some g := by
+    unfold IRState.frameById? at hfind
+    rw [hframes] at hfind
+    rw [List.find?_cons_of_neg (p := fun h : IRFrame => h.id == frame) (a := f) hneF]
+      at hfind
+    exact hfind
+  rcases List.mem_cons.mp hgmem' with hgc | hgb
+  · refine ⟨caller.setLocal dest value, ?_, ty, ?_, hoff⟩
+    · unfold IRState.frameById?
+      have hcallerId : caller.id = frame := hgc ▸ hgid
+      have hhead : ((caller.setLocal dest value).id == frame) = true := by
+        rw [beq_iff_eq]
+        simpa [IRFrame.setLocal] using hcallerId
+      rw [List.find?_cons_of_pos (p := fun h : IRFrame => h.id == frame)
+        (a := caller.setLocal dest value) hhead]
+    · rw [hgc] at hty
+      exact hty
+  · have hcallerNe : caller.id ≠ g.id := by
+      intro heq
+      have hndTail : ((caller :: below).map (·.id)).Nodup := by
+        have h := hnd
+        rw [hframes] at h
+        exact (List.nodup_cons.mp h).2
+      have hEqFG : caller = g := eq_of_mem_of_nodup_map (f := fun h : IRFrame => h.id)
+        hndTail (List.mem_cons_self ..) (List.mem_cons_of_mem caller hgb) heq
+      have hmemBelow : caller ∈ below := hEqFG.symm ▸ hgb
+      have hnotMem : caller.id ∉ (below.map (·.id)) :=
+        (List.nodup_cons.mp hndTail).1
+      exact hnotMem (List.mem_map.mpr ⟨caller, hmemBelow, rfl⟩)
+    have hheadFalse : ¬ (((caller.setLocal dest value).id == frame) = true) := by
+      intro hid
+      exact hcallerNe ((beq_iff_eq.mp hid).trans hgid.symm)
+    have hcallerFalse : ¬ ((caller.id == frame) = true) := by
+      intro hid
+      exact hcallerNe ((beq_iff_eq.mp hid).trans hgid.symm)
+    refine ⟨g, ?_, ty, hty, hoff⟩
+    unfold IRState.frameById?
+    rw [List.find?_cons_of_neg (p := fun h : IRFrame => h.id == frame)
+      (a := caller.setLocal dest value) hheadFalse]
+    rw [List.find?_cons_of_neg (p := fun h : IRFrame => h.id == frame)
+      (a := caller) hcallerFalse] at hfindTail
+    exact hfindTail
+
+/-- The ret value form: removing the returning head frame and writing its value
+to the caller's destination preserves the state invariant. -/
+theorem wfState_popSetLocal {contract : IRContract} {c : IRState} {f caller : IRFrame}
+    {below : List IRFrame} {dest : Ssa} {v : IRValue}
+    (hwf : WFState contract c) (hframes : c.frames = f :: caller :: below)
+    (hretDest : f.retDest = some dest)
+    (hretType : caller.fn.localType? dest = some f.fn.returnType)
+    (hretOrigin : caller.fn.facts.originOf? dest = none)
+    (hretParam : dest ∉ caller.fn.params.map (·.2))
+    (hretCallDest : IsCallDest caller.fn dest)
+    (hvType : v.type? = some f.fn.returnType)
+    (hvStack : ∀ frame slot off, v = .ptr (.stack frame slot off) → frame ≠ f.id)
+    (hvBounded : ∀ frame slot off, v = .ptr (.stack frame slot off) →
+      ∃ g, c.frameById? frame = some g ∧ ∃ ty, g.allocType? slot = some ty ∧
+        off < allocSize ty)
+    (hvRoot : ∀ slot off, v = .ptr (.root slot off) →
+      ∃ values, c.lookupStorage (.root slot) = some values ∧ off < values.length)
+    (hvGlobal : ∀ g off, v = .ptr (.global g off) →
+      ∃ values, c.lookupStorage (.global g) = some values ∧ off < values.length)
+    (hvNoSlots : ∀ g off, v = .ptr (.global g off) → g ∉ SlotsGlobals c.module) :
+    WFState contract { c with frames := caller.setLocal dest v :: below } := by
+  have hmemCaller : caller ∈ c.frames := by
+    rw [hframes]
+    exact List.mem_cons_of_mem f (List.mem_cons_self ..)
+  have hfnMem : caller.fn ∈ c.module.functions := hwf.frameFunction caller hmemCaller
+  have hndOrigins : (caller.fn.facts.origins.map (·.1)).Nodup :=
+    (hwf.program.originsTrusted caller.fn hfnMem).1
+  constructor
+  · exact hwf.program
+  · have h := hwf.frameIdsNodup
+    rw [hframes] at h
+    simpa [IRFrame.setLocal] using (List.nodup_cons.mp h).2
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · have hb := hwf.frameIdsBound caller hmemCaller
+      simpa [IRFrame.setLocal] using hb
+    · exact hwf.frameIdsBound f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · have hb := hwf.frameFunction caller hmemCaller
+      simpa [IRFrame.setLocal] using hb
+    · exact hwf.frameFunction f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · rcases hwf.frameBlock caller hmemCaller with
+        ⟨block, hblock, hblockEq, hterm, done, hinstrs⟩
+      exact ⟨block, hblock, hblockEq, by simpa [IRFrame.setLocal] using hterm,
+        done, by simpa [IRFrame.setLocal] using hinstrs⟩
+    · exact hwf.frameBlock f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · have hb := hwf.framePrev caller hmemCaller
+      simpa [PrevEdge, IRFrame.setLocal] using hb
+    · exact hwf.framePrev f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+  · intro f' hf' hinst
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · have hb := hwf.noBareUnreachable caller hmemCaller
+        (by simpa [IRFrame.setLocal] using hinst)
+      simpa [IRFrame.setLocal] using hb
+    · exact hwf.noBareUnreachable f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+        hinst
+  · intro f' hf' name ty hty
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · exact localsInitialized_setLocal (f := caller) (dest := dest) (value := v)
+        (hwf.localsInitialized caller hmemCaller) name ty hty
+    · exact hwf.localsInitialized f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+        name ty hty
+  · intro f' hf' name v' hv ty hty
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · refine localsTyped_setLocal (f := caller) (dest := dest) (value := v)
+        (hwf.localsTyped caller hmemCaller) ?_ name v' hv ty hty
+      intro ty' hty'
+      have htyEq : ty' = f.fn.returnType :=
+        Option.some.inj (hty'.symm.trans hretType)
+      subst htyEq
+      exact hvType
+    · exact hwf.localsTyped f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+        name v' hv ty hty
+  · intro f' hf' entry hentry
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · refine originsMatch_setLocal (contract := contract) (c := c) (f := caller)
+        (dest := dest) (value := v) hndOrigins
+        (hwf.originsMatch caller hmemCaller) ?_ entry hentry
+      intro origin horig
+      rw [hretOrigin] at horig
+      cases horig
+    · exact hwf.originsMatch f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+        entry hentry
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · exact hwf.allocsWellFormed caller hmemCaller
+    · exact hwf.allocsWellFormed f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · have hb := hwf.stackPtrsBounded caller hmemCaller
+      have hord := hwf.stackPtrsOrdered [f] caller below (by rw [hframes]; rfl)
+      intro name v' addr hv haddr
+      by_cases hname : name = dest
+      · rw [hname] at hv
+        rw [lookupLocal_setLocal_eq] at hv
+        have hvEq : v' = v := (Option.some.inj hv).symm
+        rw [hvEq] at haddr
+        cases addr with
+        | stack frame slot off =>
+            exact stackBound_popSetLocal hwf.frameIdsNodup hframes dest v
+              (hvBounded frame slot off haddr) (hvStack frame slot off haddr)
+        | slotEntry slot => trivial
+        | cell slot => trivial
+        | root slot off => trivial
+        | global name off => trivial
+        | slotTable => trivial
+        | function name => trivial
+        | importCell slot => trivial
+      · rw [lookupLocal_setLocal_ne (f := caller) (name := dest) (other := name)
+          (beq_eq_false_iff_ne.mpr hname) v] at hv
+        cases addr with
+        | stack frame slot off =>
+            refine stackBound_popSetLocal hwf.frameIdsNodup hframes dest v
+              (hb name v' (.stack frame slot off) hv haddr) ?_
+            intro hframe
+            have hmemPrefix : frame ∈ ([f] : List IRFrame).map (·.id) := by
+              rw [hframe]; exact List.mem_cons_self ..
+            exact hord.1 name v' frame slot off hv haddr hmemPrefix
+        | slotEntry slot => trivial
+        | cell slot => trivial
+        | root slot off => trivial
+        | global name off => trivial
+        | slotTable => trivial
+        | function name => trivial
+        | importCell slot => trivial
+    · have hmem : f' ∈ c.frames := by
+        rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf')
+      have hb := hwf.stackPtrsBounded f' hmem
+      have hf'' : f' ∈ caller :: below := List.mem_cons_of_mem caller hf'
+      obtain ⟨pre0, rest0, hsplit⟩ := List.mem_iff_append.mp hf''
+      have hc : c.frames = (f :: pre0) ++ f' :: rest0 := by
+        rw [hframes, hsplit]; rfl
+      have hold := hwf.stackPtrsOrdered (f :: pre0) f' rest0 hc
+      intro name v' addr hv haddr
+      cases addr with
+      | stack frame slot off =>
+          refine stackBound_popSetLocal hwf.frameIdsNodup hframes dest v
+            (hb name v' (.stack frame slot off) hv haddr) ?_
+          intro hframe
+          have hmemPrefix : frame ∈ (f :: pre0).map (·.id) := by
+            rw [hframe]; exact List.mem_cons_self ..
+          exact hold.1 name v' frame slot off hv haddr hmemPrefix
+      | slotEntry slot => trivial
+      | cell slot => trivial
+      | root slot off => trivial
+      | global name off => trivial
+      | slotTable => trivial
+      | function name => trivial
+      | importCell slot => trivial
+  · intro pre f' rest' heq
+    cases pre with
+    | nil =>
+        constructor
+        · intro name v' frame slot off hv hval hmem
+          simp at hmem
+        · intro addr v' frame slot off hv hval hmem
+          simp at hmem
+    | cons a as =>
+        simp only [List.cons_append] at heq
+        injection heq with hag has
+        subst hag
+        have hc : c.frames = (f :: caller :: as) ++ f' :: rest' := by
+          rw [hframes, has]; rfl
+        have hold := hwf.stackPtrsOrdered (f :: caller :: as) f' rest' hc
+        constructor
+        · intro name v' frame slot off hv hval hmem
+          apply hold.1 name v' frame slot off hv hval
+          simpa [IRFrame.setLocal] using (List.mem_cons_of_mem f.id hmem)
+        · intro addr v' frame slot off hv hval hmem
+          apply hold.2 addr v' frame slot off hv hval
+          simpa [IRFrame.setLocal] using (List.mem_cons_of_mem f.id hmem)
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · have hm := hwf.memTyped caller hmemCaller
+      have hnp := hwf.memNoPtr caller hmemCaller
+      intro addr v' hv
+      rcases hm addr v' hv with ⟨slot, off, ty, haddr, hty, hoff, hvt, hvb⟩
+      exact ⟨slot, off, ty, haddr, hty, hoff, hvt,
+        memValuePtrBounded_of_noPtr (fun a ha => hnp addr v' hv a ha)⟩
+    · have hmem : f' ∈ c.frames := by
+        rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf')
+      have hm := hwf.memTyped f' hmem
+      have hnp := hwf.memNoPtr f' hmem
+      intro addr v' hv
+      rcases hm addr v' hv with ⟨slot, off, ty, haddr, hty, hoff, hvt, hvb⟩
+      exact ⟨slot, off, ty, haddr, hty, hoff, hvt,
+        memValuePtrBounded_of_noPtr (fun a ha => hnp addr v' hv a ha)⟩
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · exact hwf.memNoPtr caller hmemCaller
+    · exact hwf.memNoPtr f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · exact storagePtrsLive_setLocal (c := c) (f := caller) (dest := dest)
+        (value := v) (hwf.storagePtrsLive caller hmemCaller) hvRoot hvGlobal
+    · exact hwf.storagePtrsLive f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+  · intro f' hf'
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · have h := hwf.slotsBase caller hmemCaller
+      refine ⟨?_, ?_, ?_⟩
+      · intro base hbase
+        have hne : (base == dest) = false := by
+          rw [beq_eq_false_iff_ne]
+          intro hbd
+          have hcallB : IsCallDest caller.fn base := by rw [hbd]; exact hretCallDest
+          exact not_mem_slotBases_of_isCallDest hwf.program hfnMem hbase hcallB
+        rw [lookupLocal_setLocal_ne (f := caller) (name := dest) (other := base) hne v]
+        exact h.1 base hbase
+      · intro gepName slot hgep
+        have hne : (gepName == dest) = false := by
+          rw [beq_eq_false_iff_ne]
+          intro hgd
+          have hcallG : IsCallDest caller.fn gepName := by rw [hgd]; exact hretCallDest
+          exact not_mem_slotEntries_of_isCallDest hwf.program hfnMem hgep hcallG
+        rw [lookupLocal_setLocal_ne (f := caller) (name := dest) (other := gepName) hne v]
+        exact h.2.1 gepName slot hgep
+      · exact h.2.2
+    · exact hwf.slotsBase f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+  · exact hwf.slotsStorage
+  · exact hwf.storageValuesLive
+  · exact hwf.storageDomain
+  · constructor
+    · intro f' hf' name v' gname off hv hval
+      rcases List.mem_cons.mp hf' with rfl | hf'
+      · by_cases hname : name = dest
+        · subst hname
+          rw [lookupLocal_setLocal_eq] at hv
+          have hvEq : v' = v := (Option.some.inj hv).symm
+          subst hvEq
+          exact hvNoSlots gname off hval
+        · rw [lookupLocal_setLocal_ne (f := caller) (name := dest) (other := name)
+            (beq_eq_false_iff_ne.mpr hname) v] at hv
+          exact hwf.noSlotsGlobalPointers.1 caller hmemCaller name v' gname off hv hval
+      · exact hwf.noSlotsGlobalPointers.1 f'
+          (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+          name v' gname off hv hval
+    · constructor
+      · intro f' hf' addr v' gname off hv hval
+        rcases List.mem_cons.mp hf' with rfl | hf'
+        · exact hwf.noSlotsGlobalPointers.2.1 caller hmemCaller addr v' gname off hv hval
+        · exact hwf.noSlotsGlobalPointers.2.1 f'
+            (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+            addr v' gname off hv hval
+      · exact hwf.noSlotsGlobalPointers.2.2
+  · exact hwf.functionBindings
+  · exact hwf.callTargets
+  · intro pre callee' caller' suffix heq
+    have heq' : caller.setLocal dest v :: below = pre ++ callee' :: caller' :: suffix := heq
+    cases pre with
+    | nil =>
+        simp only [List.nil_append] at heq'
+        injection heq' with hhead htail
+        subst hhead
+        have hc : c.frames = (f :: []) ++ caller :: caller' :: suffix := by
+          rw [hframes, htail]; rfl
+        have hold := hwf.returnLink (f :: []) caller caller' suffix hc
+        simpa [IRFrame.setLocal] using hold
+    | cons a as =>
+        simp only [List.cons_append] at heq'
+        injection heq' with _ htail
+        have hc : c.frames = (f :: caller :: as) ++ callee' :: caller' :: suffix := by
+          rw [hframes, htail]; rfl
+        exact hwf.returnLink (f :: caller :: as) callee' caller' suffix hc
+  · intro last hlast
+    cases below with
+    | nil =>
+        have hlast' : caller.setLocal dest v = last := by simpa using hlast
+        subst hlast'
+        exact hwf.bottomRetDest caller (by rw [hframes]; rfl)
+    | cons g rest =>
+        exact hwf.bottomRetDest last (by rw [hframes]; simpa using hlast)
+  · intro f' hf' operand w htermv heval frame slot off hw
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · have htermCaller : caller.terminator = some (.ret (some operand)) := by
+        simpa [IRFrame.setLocal] using htermv
+      rcases hwf.frameBlock caller hmemCaller with
+        ⟨block, hblock, hblockEq, htermEq, done, hinstrs⟩
+      have htermBlock : block.terminator = some (.ret (some operand)) := by
+        rw [← htermEq]; exact htermCaller
+      have hnotmem : dest ∉ operand.localNames := by
+        intro hmem
+        have hsafe : SafeReturnValue caller.fn dest :=
+          hwf.program.returnNonStack caller.fn hfnMem block hblock (.ret (some operand))
+            htermBlock operand rfl dest hmem
+        exact not_safeReturnValue_of_isCallDest hwf.program hfnMem hretCallDest
+          hretParam hretOrigin hsafe
+      have hevalCaller : evalOperand caller operand = some w := by
+        rw [evalOperand_setLocal_of_notMem (f := caller) (dest := dest) (value := v)
+          hnotmem] at heval
+        exact heval
+      exact hwf.stackReturnsSafe caller hmemCaller operand w htermCaller hevalCaller
+        frame slot off hw
+    · exact hwf.stackReturnsSafe f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+        operand w htermv heval frame slot off hw
+  · intro f' hf' p hp hname
+    rcases List.mem_cons.mp hf' with rfl | hf'
+    · have hmemParam : p ∈ caller.fn.params := List.mem_of_getLast? hp
+      have hnotDest : p.2 ≠ dest := by
+        intro hpd
+        exact hretParam (hpd ▸ List.mem_map.mpr ⟨p, hmemParam, rfl⟩)
+      rw [lookupLocal_setLocal_ne (f := caller) (name := dest) (other := p.2)
+        (beq_eq_false_iff_ne.mpr hnotDest) v]
+      exact hwf.slotsParamsSafe caller hmemCaller p hp hname
+    · exact hwf.slotsParamsSafe f'
+        (by rw [hframes]; exact List.mem_cons_of_mem f (List.mem_cons_of_mem caller hf'))
+        p hp hname
 
 theorem call_dest_notParam {fn : Function} {block : Block} {instr : Instr}
     {dest : Option Ssa} {ret : IrType} {callee : String} {args : List Operand}
