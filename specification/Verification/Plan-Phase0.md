@@ -2208,6 +2208,24 @@ facts (`slotBase_localType`, `slotEntry_localType`), and
 `slotEntry_name_notParam` (slot-entry results are GEP destinations, hence non-parameters
 by `FunctionUsesDefined.allNodup`). The `irStepRet` form needs no new fact.
 
+**Phase 2 obstruction 4 (2026-11-01): return-destination origins.** Preparing the
+`irStepRet` value form exposes a final missing link. The step writes the callee's return value
+into `caller.setLocal dest v`; `originsMatch` for the caller must hold for `dest` if
+`caller.fn.facts.originOf? dest = some origin`. `ReturnLink` records only the *type*
+(`caller.fn.localType? dest = some callee.fn.returnType`), and the state carries no fact that
+the running callee's `retDest` is a call destination of the caller's code. A state whose
+callee has `retDest = some dest` where `dest` happens to be an origin-recorded pointer name
+(there is no constraint preventing this) would break `OriginHolds` after the return: the
+return value is only type-correct, not the specific cell/global shape the origin requires.
+Proposed extension: add `caller.fn.facts.originOf? dest = none` to the `some dest` conjunct of
+`ReturnLink` (D4). It is builder-faithful — call destinations are not load/GEP definitions, so
+no pointer origin is recorded for them — and it is established at `callFunction` from
+`OriginsTrusted` plus the call instruction's unique destination. `initState?_wf` is unaffected
+(the entry frame's `retDest` is `none`). No invariant change is applied; the compiling
+checkpoint is `dc342b1`. All other `irStepRet` obligations (locals typing from the callee's
+return typing, stack/storage pointer bounds, memory typing, the frame-list fields) are
+prepared and need no further fact.
+
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
 obligations that the approved fact set does not discharge. No invariant change was applied;
