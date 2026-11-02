@@ -12,8 +12,9 @@ Phase 3 does **not** cover cable unplug, power-cycle, loopback harnesses, fault
 injection, or any manual toggling/measuring. Those belong to phase 6: the
 self-contained loopback project is [loopback/](loopback/), and the manual
 wiring, all-points, and physical fault procedure is
-[PHASE6.md](PHASE6.md). The phase-6 procedure was executed on 2026-11-01 in
-the supply-limited variant; the observed results are in PHASE6.md §8.
+[PHASE6.md](PHASE6.md). The phase-6 procedure was executed on 2026-11-01
+(host time) with a second 24 V output-stage supply; the all-points and powered
+fault matrices passed, and the observed results are in PHASE6.md §8.
 
 ## Bench
 
@@ -224,7 +225,7 @@ dedicated thread with a bounded non-blocking queue, and every final run reports 
 records. The strict missed-deadline counter equaled the cycle count in every run and is reported,
 not gated. Distributions and evidence hashes are in the runbook §10.7-§10.8.
 
-## Phase 6 loopback (supply-limited execution, 2026-11-01)
+## Phase 6 loopback (powered execution, 2026-11-01)
 
 Phase 6 adds a separate, self-contained project in [loopback/](loopback/) with
 its own `stc.toml` and machine profile. It binds all 16 inputs and all 16
@@ -235,18 +236,24 @@ latches `Pass` and `FailMask`. `loopback_test.py` launches it through
 matrix. The manual wiring, supply/commons, all-points, physical
 fault-injection, evidence, and restore procedure is [PHASE6.md](PHASE6.md).
 
-The procedure was executed on 2026-11-01 in the supply-limited variant. The
-module's separate output-stage `DC5-48V` supply was unavailable, so the input
-loop was unpowered and the automated all-points matrix was **not** run; the 16
-physical input paths remain unverified. Fault A (host-end cable unplug/replug)
-and Fault B (DIEWU power cycle) passed: the runtime held `OUTPUTMASK=65535`
-through both faults, set `STATUSINPUTSTALE=true`, kept `SCANCOUNT` advancing,
-and recovered the same configured slave (`STATUSRECOVERIES` 1 then 2) without a
-cold download or host restart. Fault C is covered by Fault A. The restore
-state was `Phase: Idle` / `Active: no` / PREOP with no `stc` process. Observed
-values, the transcript hash, and the limitation are in PHASE6.md §8; the
-runbook summary is §13. The open-ended fixture above is unchanged and remains
-the phase 3-5 frame-level evidence.
+The procedure was executed on 2026-11-01 host time with a second 24 V supply on
+the output stage. The automated all-points matrix passed 16/16 (exit 0,
+`FailMask=0x0000`, `ObservedMask=0xFFFF`); every output driver turned on its
+corresponding input opto. Fault A (host-end unplug/replug) and Fault B (DIEWU
+power cycle) passed on the fixed package: the runtime held `OUTPUTMASK=65535`,
+presented `INPUTMASK=65535` as stale during each fault, kept `SCANCOUNT`
+advancing, and recovered the same configured slave (`STATUSRECOVERIES` 1 → 2 →
+3) without a cold download or host restart. `HOLD FALSE` during the first
+recorded fault gave `OUTPUTMASK=0`, `INPUTMASK=65535`. Fault C is covered by
+Fault A. Restore was `Phase: Idle` / `Active: no` / PREOP with no `stc` process.
+
+An earlier supply-limited run found a coordinator stale-input defect, fixed in
+`d694266` and verified by the final run. The fault session recorded one extra,
+unobserved episode, so its cumulative counters are 1/1 at the post-HOLD
+baseline and 3/3 at the end; this manual counter deviation is recorded in
+PHASE6 §8.2. Observed values and hashes are in PHASE6.md §8; the runbook summary
+is §13. The open-ended fixture above is unchanged and remains the phase 3-5
+frame-level evidence.
 
 ## Troubleshooting
 

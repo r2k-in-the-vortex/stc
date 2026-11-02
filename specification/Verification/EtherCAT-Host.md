@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-11-01  
-Status: Final for WL-5.2, with a recorded phase-6 physical-I/O limitation.  
+Status: Final for WL-5.2; the phase-6 powered loopback and fault matrix passed on the fixed package.  
 Parent: [WL-5.2-Plan.md](../../WL-5.2-Plan.md)  
 Evidence: [EtherCAT-Runbook.md](EtherCAT-Runbook.md) §8–§13,
 [PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) §8
@@ -17,10 +17,10 @@ source-controlled machine profile; the runtime embeds the profile and hashes it 
 change.
 
 The evidence covers one host and one slave: `ecat-host` and the DIEWU 16I/16O digital I/O module.
-Frame-level success (phases 3–5) is met. The phase-6 physical fault/recovery cases A and B pass in
-a supply-limited variant; the automated all-points loopback matrix was not executed because the
-module's separate output-stage supply was unavailable, so the 16 physical input paths and the
-output-driver-to-input-opto loops remain unverified. That is a recorded limitation, not a pass.
+Frame-level success (phases 3–5) is met. The phase-6 powered all-points matrix passed 16/16, and
+the powered physical fault/recovery cases A and B passed on the fixed package. An earlier
+supply-limited attempt exposed a coordinator stale-input defect; the fix was verified on hardware
+with the final package. All phase-6 acceptance items are met.
 
 The fastest maintainable cycle time is **150 µs** (60 s screening and 600 s confirmation). The
 first failing step is **100 µs**, where the host failed to wake the cycle thread on time (283
@@ -49,7 +49,7 @@ the PLC logic decides. Safety must be provided by a separate system and machine 
 | Slave position | master 0, alias 0, position 0 |
 | Distributed clocks | Not used; DIEWU free-run by owner decision. DC is implemented and unit-tested, but no DC-capable slave was available |
 | Compiler | `clang` 18.1.3 on the host for the fixture's user-project build |
-| Deployed package | `stc 1.0.0`, phase-5 CI package `bin/stc` SHA-256 `391d2ea0…`; shim SHA-256 `bceeb601…`; phase 6 added no runtime or shim code |
+| Deployed package | `stc 1.0.0`, fixed package `bin/stc` SHA-256 `f5c50648…`; `lib/libstc_runtime.so` SHA-256 `3e73b73d…`; shim SHA-256 `bceeb601…` (unchanged) |
 | Shim source | [tools/ethercat](../../tools/ethercat/), built in CI against pinned IgH 1.6.13 |
 
 The host installation, kernel/IgH pairing, and service state are operator prerequisites documented
@@ -169,12 +169,11 @@ and the input opto between S and IN is the load, so a driven output reads back a
 No external load is allowed on the bench.
 
 The module logic is powered from the 24 V barrel jack. The output stage requires a separate
-`DC5-48V` supply; the 2-pin connector is not a power output. No second 24 V supply was available
-for the 2026-11-01 run, so the input loop was unpowered: `INPUTMASK` was 0 at the baseline and
-during both faults, and the automated all-points matrix (§4 of the procedure) was skipped. The
-output LEDs walked and held correctly because they show the PDO/logic state; they do not prove
-the output driver or the input opto. **All 16 physical input paths and the
-output-driver-to-input-opto loops remain unverified.** This is a limitation, not a pass.
+`DC5-48V` supply; the 2-pin connector is not a power output. The final 2026-11-01 run used a second
+24 V supply on the output stage, with S1–S4 tied to its `VCC`. The automated all-points matrix then
+passed 16/16: every output driver turned on its corresponding input opto (`FailMask=0`,
+`ObservedMask=0xFFFF`), and the 16 physical input paths are verified. An earlier attempt without
+the second supply is retained only as the defect history below.
 
 ### 5.2 Fault and recovery
 
@@ -183,56 +182,73 @@ unplug/replug, slave powered) and Fault B (DIEWU power cycle). Fault C (slave-en
 run separately: with one direct cable, host-end and slave-end unplug are the same link-loss path,
 and Fault A reconnected the same configured slave while it stayed powered.
 
-| Observation | Baseline | A during | A after | B during | B after |
+The session recorded one extra, unobserved fault/recovery episode before the first post-HOLD
+block. The pre-HOLD block was `faults=0`/`recoveries=0`/`OUTPUTMASK=0`/`INPUTMASK=0`; the
+post-HOLD baseline was `faults=1`/`recoveries=1`/65535/65535. The recorded Fault A is episode 2
+and Fault B is episode 3. This is a manual-sequence deviation, accepted by the owner, not a
+product failure.
+
+| Observation | Baseline (post-HOLD) | A during (ep. 2) | A after | B during (ep. 3) | B after |
 | --- | --- | --- | --- | --- | --- |
-| `STATUSFAULTS` | 0 | 1 | 1 | 2 | 2 |
+| `STATUSFAULTS` | 1 | 2 | 2 | 3 | 3 |
 | `STATUSINPUTSTALE` | false | true | false | true | false |
-| `STATUSRECOVERIES` | 0 | 0 | 1 | 1 | 2 |
+| `STATUSRECOVERIES` | 1 | 1 | 2 | 2 | 3 |
 | `STATUSWCSTATE` | 2 | 0 | 2 | 0 | 2 |
 | `STATUSWORKINGCOUNTER` | 3 | 0 | 3 | 0 | 3 |
 | `STATUSLINKUP` | true | false | true | false | true |
 | `STATUSSLAVEALSTATE` | 8 | 0 | 8 | 0 | 8 |
 | `STATUSSLAVEOPERATIONAL` | true | false | true | false | true |
-| `SCANCOUNT` | 18735 | 26869 | 36216 | 59754 | 71306 |
-| `OUTPUTMASK` | 65535 | 65535 | 65535 | 65535 | 65535 |
-| `INPUTMASK` | 0 | 0 | 0 | 0 | 0 |
+| `SCANCOUNT` | 51872 | 70591 | 119703 | 183096 | 196078 |
+| `OUTPUTMASK` | 65535 | 65535 | 0 | 65535 | 65535 |
+| `INPUTMASK` | 65535 | **65535** | 0 | **65535** | 65535 |
 
-`STATUSPHASE` stayed 2 (IgH Operation) during both faults. `SCANCOUNT` advanced +8134, +9347,
-+23538, and +11552 scans across the observation intervals (1 ms task), so the cycle and PLC kept
-running through both link-down windows. `OUTPUTMASK` stayed 65535 through both faults: the runtime
-did not rewrite the PLC output image. `STATUSINPUTSTALE` was true during each fault and cleared on
-recovery; `STATUSRECOVERIES` incremented once per recovery; the same configured slave returned
-without a cold download or host restart. The physical output LEDs cleared during each fault and
-returned on replug/repower, consistent with the slave watchdog dropping the outputs and the
-master re-sending the held image on recovery. `INPUTMASK=0` is the unpowered input loop, not a
-wiring result; the stale flag is the input evidence in this variant.
+`STATUSPHASE` stayed 2 (IgH Operation) during both faults. `SCANCOUNT` advanced through every
+interval, so the cycle and PLC kept running through both link-down windows. `OUTPUTMASK` stayed
+65535 through both faults: the runtime did not rewrite the PLC output image. `INPUTMASK` stayed
+65535 through both recorded faults: the runtime presented the last received image as stale.
+`HOLD FALSE` during episode 2 gave `OUTPUTMASK=0`, `INPUTMASK=65535`. `STATUSINPUTSTALE` was true
+during each fault and cleared on recovery; `STATUSRECOVERIES` incremented once per recovery; the
+same configured slave returned without a cold download or host restart. The physical output LEDs
+cleared during each fault and returned on replug/repower, consistent with the slave watchdog
+dropping the outputs and the master re-sending the held image on recovery.
+
+**Stale-input defect and fix.** An earlier powered run on the phase-5 package showed
+`STATUSINPUTSTALE=true` but `INPUTMASK=0` during both faults. The coordinator applied the global
+input defaults to the whole input area for `Null`/`Ethercat` global backends; a faulted backend
+skips its input copy, so the bound inputs were zeroed before the stale flag was exposed. The fix
+(commit `d694266`, CI run 41367423862) builds a `claimed_input` map and applies defaults only to
+unclaimed input bits; the regression test covers a fault under an `Ethercat` global backend. The
+final run on the fixed package verifies the corrected behavior.
 
 Restore state after the session: `ethercat master` was `Phase: Idle`, `Active: no`, one slave;
-`ethercat slaves` was `0 0:0 PREOP + DIEWU ...`; no `stc` process remained; Tx errors were 0.
-Lost frames were 9476 cumulative at the restore sample (phase 5 ended at 1953); no before sample
-was captured for this session, so the session delta is not established. The increase is
-consistent with frames sent during the fault sessions' link-down windows and may include an
-earlier attempt.
-The master loss rate at capture was 0/s and 0.0%.
+`ethercat slaves` was `0 0:0 PREOP + DIEWU ...`; no `stc` process remained; Tx errors were 0 in
+all four boundary samples. Lost frames were 18856 → 18856 for the all-points run (delta 0) and
+18856 → 24426 for the fault session (delta 5570); the fault-session increase is the frames sent
+during the link-down and power-off windows.
 
-The used transcript is `/home/r2k/stc-wl52/logs/fault-session-20261101T143222.log`, SHA-256
-`b0ca162d1af768805d0710601878847c1bedf468596e5669dfa4d7cc7b117148`. The procedure and the
-filled results tables are [PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) §8; the runbook
-summary is [EtherCAT-Runbook.md](EtherCAT-Runbook.md) §13.
+The final all-points log is `/home/r2k/stc-wl52/logs/loopback-fix-20261101T174924.log`, SHA-256
+`06d295c5f45c4fcaf468d365bc98873e3164a5c1e4da1818aa3c7fc131e85b41`; the final fault transcript is
+`/home/r2k/stc-wl52/logs/fault-session-fix-20261101T174958.log`, SHA-256
+`14d7689bed749aa12770196722ed8c6e696e0cff7d9afe3e305717cd00b3de6e`. The earlier
+`fault-session-20261101T172040.log` (`b9f11faa…`) is the phase-5-package run that exposed the
+defect. The procedure and the filled results tables are
+[PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) §8; the runbook summary is
+[EtherCAT-Runbook.md](EtherCAT-Runbook.md) §13.
 
 ### 5.3 What this proves and what it does not
 
-Proved: the runtime holds the PLC output image through link loss and slave power loss, keeps
-scanning, presents stale inputs, exposes the fault in the status registers, recovers the same
+Proved: the 16 output drivers turn on the 16 input optos (all-points 16/16); the runtime holds the
+PLC output image through link loss and slave power loss, keeps scanning, presents the last
+received input image as stale, exposes the fault in the status registers, recovers the same
 configured slave without a cold download or host restart, and returns the master/slave/service
 state to Idle/PREOP with no runtime process left. The physical output LEDs dropped during each
-fault and returned on recovery, consistent with the slave watchdog and the held image.
+fault and returned on recovery, consistent with the slave watchdog and the held image. The
+all-points acceptance criterion in [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 is met.
 
-Not proved: the 16 input paths, output driver/opto behavior, load capacity, input threshold
-margins, isolation, field devices, a fail-safe output state, recovery time (only sampled within
-the procedure windows), separate Fault C, the `HOLD FALSE`-during-fault and final `HOLD FALSE`
-steps, multi-slave behavior, or servo/DC hardware. The all-points acceptance criterion in
-[WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 is not met.
+Not proved: output load capacity, input threshold margins, isolation, field devices, a fail-safe
+output state, recovery time (only sampled within the procedure windows), separate Fault C,
+multi-slave behavior, or servo/DC hardware. The manual fault-session counters carry the extra
+unobserved episode; that is a test-record deviation, not a product limitation.
 
 ## 6. Status and diagnostics
 
@@ -258,14 +274,13 @@ The full list is [KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §8. The mai
   mock tests, not HIL.
 - No servo hardware. The generic PDO/DC path is implemented and unit-tested; the DIEWU runs
   free-run, so distributed clocks were not exercised on hardware.
-- The all-points loopback matrix was not executed because the output-stage supply was unavailable;
-  the physical input path and output driver/opto loops are unverified. This is the phase-6
-  acceptance gap; the rest of phase 6 (faults A/B, restore) is recorded.
-- Fault C is covered by A; the `HOLD FALSE` steps were not performed; recovery time was not
-  measured.
+- Fault C is covered by A rather than run separately; recovery time was sampled within the
+  procedure windows, not measured. The fault-session counters carry the extra unobserved episode
+  (a manual-sequence deviation, not a product failure).
 - The fastest maintainable CT is 150 µs on this host; 100 µs fails on host wake jitter; 75/50/25 µs
   were not run. The debug build uses most of a 1 ms budget; release is the timing evidence.
-- The master lost-frame counter is cumulative and was not sampled before the phase-6 session.
+- The master lost-frame counter is cumulative; the phase-6 samples are 18856 → 18856 for the
+  all-points run and 18856 → 24426 for the fault session (delta 5570).
 - IgH is an operator-installed host prerequisite coupled to the kernel; the repository does not
   distribute kernel modules.
 - The backend is not a safety function, not a motion controller, and not a substitute for a
@@ -276,8 +291,9 @@ The full list is [KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §8. The mai
 - Phase 3: runbook §8.2–§8.3 (run log, master samples, package/shim and fixture hashes).
 - Phase 4: runbook §9.1–§9.7 (fault matrix, status values, online change, samples and hashes).
 - Phase 5: runbook §10.6–§10.8 (service stop/start, CT sweep, distributions, per-run hashes).
-- Phase 6: runbook §13 and [PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) §8 (fault matrix,
-  restore state, transcript hash, loopback file hashes).
+- Phase 6: runbook §13 and [PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) §8 (all-points 16/16,
+  powered fault matrix, restore state, log/transcript hashes, loopback file hashes); the
+  stale-input fix is commit `d694266`, CI run 41367423862.
 - Packaging: CI-built `stc-io-ethercat` artifact and committed shim source in
   [tools/ethercat](../../tools/ethercat/).
 
@@ -289,10 +305,11 @@ the runbook and procedure identify the retained evidence.
 WL-5.2 delivers a working IgH EtherCAT backend with the multi-backend seam, the source-controlled
 machine profile and route graph, the PLC-visible status device, transparent fault/recovery, and
 online-change protection. Frame-level criteria (phases 3–5) are met, including a 600000-cycle
-clean run at 1 ms and a 150 µs maintainable cycle time. The phase-6 fault/recovery cases A and B
-pass in the supply-limited variant. The automated all-points loopback matrix is the one unmet
-phase-6 acceptance item; it was skipped because the output-stage supply was unavailable, and the
-unverified physical input paths are recorded as a limitation rather than claimed as a pass. The
-matrix can be rerun when a second 24 V supply is available; the procedure and harness are ready.
+clean run at 1 ms and a 150 µs maintainable cycle time. The phase-6 powered all-points matrix
+passed 16/16, and the powered fault/recovery cases A and B passed on the fixed package; the
+earlier supply-limited attempt exposed a coordinator stale-input defect that was fixed in
+`d694266` and re-verified on hardware. All phase-6 acceptance items are met. The remaining limits
+are scope limits: one host and one slave, no servo hardware, DIEWU free-run/DC not exercised,
+the 150 µs CT floor, x86-64-only HIL, and the manual counter deviation in the fault session.
 
-Accept WL-5.2 with that recorded limitation. No safety claim is made.
+Accept WL-5.2 with those scope limits. No safety claim is made.
