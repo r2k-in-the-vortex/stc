@@ -1,7 +1,7 @@
 # Core HIR Dump — Format `0.1.0`
 
 Profile: `stc-2013-oop-utf8-v1`
-Date: 2026-11-01
+Date: 2026-11-02
 Dump format: `stc-core-hir` version `0.1.0` (frozen by P0.6)
 Semantics version: `1.0-draft`
 Status: P0.6. The format, emitter, validator, and CLI command are implemented; the Lean reader
@@ -255,6 +255,13 @@ conversion is expected to have been lowered to a `cast` expression by the checke
 An accepted dump's function callee names must resolve to a function in `unit.functions`; the
 validator enforces this. An unresolved target is tagged `call.target-missing` and rejected.
 
+**Known gap.** A call to a function whose `result` is null cannot be represented in `0.1.0`:
+every call expression carries a `type`, and a result-less call has none. The checker tags such an
+expression `type.error`, so the dump is rejected even though the source and codegen support the
+call. A result-bearing call in statement position is represented by the `call` statement.
+Representing a result-less call requires a new dump format version; it is recorded as exclusion
+E1 and triage T1 in [Semantics-Cases.md](Semantics-Cases.md) §7.
+
 ## 10. Canonical lowering decisions
 
 These choices fix how the Rust HIR maps onto the Lean core unit. They are part of the `0.1.0`
@@ -389,3 +396,4 @@ accepts no input files, and emit mode requires at least one input file.
 | 2026-11-01 | `0.1.0` | P0.6 first milestone: defined and froze the core-HIR dump, implemented the emitter and validator in `stc-hir`, added `stc hir-dump`, and recorded the schema here. Replaces the `0.1-draft` placeholder in Semantics.md §9.2 |
 | 2026-11-01 | `0.1.0` | P0.6 second milestone: added the strict Lean reader and `lake exe stc-sem`, and split the case and result schemas into [Semantics-Cases.md](Semantics-Cases.md). The dump format is unchanged; the differential harness remains |
 | 2026-11-02 | `0.1.0` | P0.6 third milestone: `lake exe semantics-conformance` consumes the dump for the seeded core corpus, maps dump globals to their `_ROOT::NAME` GOT roots in the launcher snapshot, and compares them with the reference result. The dump format is unchanged; corpus expansion and the committed report remain |
+| 2026-11-02 | `0.1.0` | P0.6 fourth milestone: documented the result-less call gap in §9 (exclusion E1, triage T1) and recorded the fixed `MIN`/`MAX`/`LIMIT` magnitude typing in [Semantics-Cases.md](Semantics-Cases.md). The dump format is unchanged; the 74-case corpus and committed report are complete |

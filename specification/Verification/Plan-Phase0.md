@@ -457,10 +457,14 @@ a sound, small semantics, exclude it and record the gap.
 **Status (2026-11-02).** The core-HIR dump `0.1.0`, `stc hir-dump`, the `stc-core-case`
 `0.1.0` schema, and `lake exe stc-sem` are implemented. The compiled-artifact launcher has the
 opt-in `--snapshot` surface (backed by `Host::debug_read` and manifest roots), and
-`lake exe semantics-conformance` runs the seeded five-case corpus through the dump, the
-reference interpreter, and the compiled artifact in CI. The report schema is frozen at
-`stc-sem-conformance-report` `0.1.0`. Corpus expansion, disagreement triage, and the committed
-report remain.
+`lake exe semantics-conformance` runs the 74-case corpus through the dump, the reference
+interpreter, and the compiled artifact in CI. The report schema is frozen at
+`stc-sem-conformance-report` `0.1.0`; the byte-stable report is committed at
+`tests/verification/semantics/conformance-report.json`, and the corpus gate regenerates it and
+rejects a stale copy. The corpus inventory in
+[Semantics-Cases.md](Semantics-Cases.md) §7 maps every item claimed in §3.3 to a case or a
+justified exclusion; the triage log records the one fixed source-analyzer bug (`MIN`/`MAX`
+magnitude typing) and the documented exclusions. The P0.6 exit criteria are met.
 
 **Work.**
 
@@ -495,10 +499,13 @@ with an empty corpus; the differential harness, corpus seeding, CI wiring of the
 the report remained.
 
 **Progress (2026-11-02).** The opt-in `--snapshot` launcher surface, the differential harness,
-the frozen `stc-sem-conformance-report` `0.1.0`, the five-case core corpus, and the CI wiring
-are complete. All five cases agree across the dump, `stc-sem`, and the compiled artifact. The
-corpus is a seed; expansion to every core feature and trap, the triage log, and the committed
-report remain.
+the frozen `stc-sem-conformance-report` `0.1.0`, the core corpus, and the CI wiring are
+complete. The corpus grew from the initial five cases to 74 cases covering every claimed core
+type, operator and exact standard function, statement form, conversion, trap, GOT access, and
+program shape, or a written exclusion; all 74 agree across the dump, `stc-sem`, and the compiled
+artifact. The coverage inventory and triage log are in
+[Semantics-Cases.md](Semantics-Cases.md) §7, the report is committed, and the gate rejects a
+stale report.
 
 **Exit criteria.** The harness runs the full core corpus deterministically; all cases agree or
 have a documented exclusion; the report is committed; a disagreement is filed with a
@@ -737,12 +744,13 @@ goal.
    and snapshot versions and per-case feature tags. The report labels the run as V0
    differential evidence, not a refinement proof.
 
-The corpus lives in `tests/verification/semantics/<case>/` and currently covers a value result,
-a `DIV_ZERO` trap, declaration-order globals, nested control flow, and a GOT access. It must
-grow from the existing conformance and execution cases plus targeted cases for every core type,
-operator, statement, conversion, trap, and GOT access. Cases outside the core are tagged and
-excluded explicitly. CI builds the Rust compiler and the uninstrumented test runtime and runs
-the corpus gate; an empty corpus exits `3` and is never reported as agreement.
+The corpus lives in `tests/verification/semantics/<case>/` and holds 74 cases covering every
+core type, operator and exact standard function, statement form, conversion, trap, GOT access,
+and program shape claimed in §3.3, or a justified exclusion recorded in
+[Semantics-Cases.md](Semantics-Cases.md) §7. Cases outside the core are tagged and excluded
+explicitly. The passing report is committed; CI builds the Rust compiler and the uninstrumented
+test runtime, runs the corpus gate, and rejects a committed report that differs byte-for-byte
+from the regenerated one. An empty corpus exits `3` and is never reported as agreement.
 
 ### 9.4 Disagreement triage
 
@@ -754,7 +762,8 @@ Every disagreement is classified as one of:
 - unmodeled or excluded feature.
 
 The case is fixed or excluded with a written reason. A silent exclusion is a Phase 0 exit
-failure. The triage log is part of `Phase0-Report.md`.
+failure. The P0.6 triage log is recorded in
+[Semantics-Cases.md](Semantics-Cases.md) §7.3 and is carried into `Phase0-Report.md` at P0.7.
 
 ## 10. Semantics document
 

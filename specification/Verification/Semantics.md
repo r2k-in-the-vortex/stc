@@ -492,6 +492,7 @@ an unknown version or an unmodeled construct is rejected, never interpreted.
 | 2026-10-31 | 1.0-draft | P0.3 (complete) | Proved initial-state typing (`initBody_typed`, `initState_typed`) using `ExprHasType.transport`, a context-agreement lemma over the mutual typing recursor, and `type_soundness`: the initial configuration is typed, every reachable configuration stays typed, and no reachable configuration is stuck. P0.3 is complete; the review was approved 2026-10-31 |
 | 2026-11-01 | 1.0-draft | P0.6 (dump) | Defined and froze dump format `0.1.0` in [HIR-Dump.md](HIR-Dump.md): canonical names and positions, function signatures, globals with GOT keys, the single program, statements, expressions and places, explicit casts, call targets, literal values, spans, and the feature-tag vocabulary for rejection. Implemented the emitter and validator in `crates/stc-hir/src/core_dump.rs`, added `stc hir-dump` with emit/verify modes, and added determinism, versioning, and unmodeled-construct tests. The Lean reader, case corpus, and differential harness remain |
 | 2026-11-01 | 1.0-draft | P0.6 (reference) | Added the strict Lean reader for dump `0.1.0` and defined the `stc-core-case` `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` in [Semantics-Cases.md](Semantics-Cases.md); the reader validates header/version/profile/semantics, status/features, names, positions, callees, arities, literals, and depth, and rejects unmodeled constructs. Added unit tests and temporary-fixture CLI tests (`lake exe stc-sem-tests`); no corpus case is committed while the harness is a fail-closed placeholder. The differential harness and corpus remain |
+| 2026-11-02 | 1.0-draft | P0.6 (corpus and report) | Expanded the corpus to 74 cases covering every claimed core item or a justified exclusion, with the coverage inventory and triage log in `Semantics-Cases.md` §7; fixed `MIN`/`MAX`/`LIMIT` magnitude typing for bit strings and characters; committed the byte-stable `stc-sem-conformance-report` `0.1.0` report and made the corpus gate reject a stale copy. The semantics definitions, case/result formats, and comparison rule are unchanged |
 | 2026-11-02 | 1.0-draft | P0.6 (harness) | Added the opt-in launcher `--snapshot` surface backed by `Host::debug_read` and manifest roots, the differential harness, the frozen `stc-sem-conformance-report` `0.1.0`, and the five-case core corpus; CI builds the Rust compiler and test runtime and runs the corpus gate. The corpus expansion, triage log, and committed report remain |
 
 ## 10. Rust/Lean interface
@@ -535,17 +536,20 @@ differential label. The schema, command line, exit codes, and the test-only snap
 are normative in [Semantics-Cases.md](Semantics-Cases.md) §8.
 
 CI builds the Rust compiler and the uninstrumented test runtime and runs the fail-closed corpus
-gate, so every committed case is exercised on each change. The seeded corpus covers a value
-result, a `DIV_ZERO` trap, declaration-order globals, nested control flow, and a GOT access; it
-is a seed, not full coverage, and must grow to every core type, operator, statement, conversion,
-trap, and GOT access before P0.6 exits. An empty corpus still exits `3` and is never reported as
-agreement. Agreement is evidence, not a refinement proof.
+gate, so every committed case is exercised on each change. The gate also regenerates the report
+and rejects a committed report that is not byte-identical, so the committed evidence cannot drift
+from the corpus. The corpus holds 74 cases and covers every core type, operator and exact
+standard function, statement form, conversion, trap, GOT access, and program shape claimed in
+Plan-Phase0 §3.3, or records a justified exclusion in
+[Semantics-Cases.md](Semantics-Cases.md) §7. An empty corpus still exits `3` and is never
+reported as agreement. Agreement is evidence, not a refinement proof.
 
 ### 10.4 Disagreement triage
 
 Every disagreement is classified as a Lean semantics bug, a Rust compiler bug, a dump bug, or an
 unmodeled or excluded feature. The case is fixed or excluded with a written reason; a silent
-exclusion is a Phase 0 exit failure. The triage log is part of `Phase0-Report.md`.
+exclusion is a Phase 0 exit failure. The P0.6 triage log is recorded in
+[Semantics-Cases.md](Semantics-Cases.md) §7.3 and is carried into `Phase0-Report.md` at P0.7.
 
 ## 11. References
 
