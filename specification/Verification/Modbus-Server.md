@@ -391,7 +391,7 @@ network stack. Results are host-specific and indicative only.
 | Profile schema documentation | [CLI and Manifest](../Architecture/CLI-and-Manifest.md) §2.2.1 |
 | Decisions | [Decisions](../Decisions.md) §2, D-229–D-243 |
 | Known limitations | [KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §10 |
-| Plan and CI index | [WL-5.1-Plan.md](../../WL-5.1-Plan.md) |
+| Working plan | Retired after the WL-5.1 pull request merged; the permanent contract is [IO Routing and Backends](../Architecture/IO-Routing-and-Backends.md) §4.5. |
 | Parent plan | [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) §4 |
 
 ## 13. Limitations

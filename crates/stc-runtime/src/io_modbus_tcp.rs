@@ -5,8 +5,8 @@
 //! kind. The cycle thread only copies values between the bank and the process
 //! image; listeners and connection threads perform all socket I/O.
 //!
-//! The locked contract is WL-5.1-Plan.md §5 (M-2, M-3, M-6, M-7) and
-//! §6.2–§6.8. Addresses are zero-based: address 0 is the first element of every
+//! The locked contract is IO-Routing-and-Backends §4.5 and Decisions
+//! D-229–D-243. Addresses are zero-based: address 0 is the first element of every
 //! table (vendor reference `00001`/`10001`/`30001`/`40001`), and the configured
 //! address is written into the PDU without an off-by-one conversion.
 

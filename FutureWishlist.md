@@ -1,6 +1,6 @@
 # Future Wishlist — v2.0.0
 
-Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3 + P0.5), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, WL-11, and WL-12. Completed: WL-4 (2026-10-30), WL-5.1 (2026-11-02), WL-5.2 (2026-11-02), and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; P0.5 target soundness and whole-run bridge complete 2026-11-02, awaiting owner review).  
+Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3 + P0.5), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, WL-11, WL-12, WL-13, and WL-14. Completed: WL-4 (2026-10-30), WL-5.1 (2026-11-02), WL-5.2 (2026-11-02), and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; P0.5 target soundness and whole-run bridge complete 2026-11-02, awaiting owner review).
 Date: 2026-10-29; revised 2026-11-02  
 Branch: `v2.0.0-planning`  
 Baseline: `stc` 1.0.0, released 2026-10-29  
@@ -98,6 +98,8 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-10 | Coverage emission for the ST test suite | Test tooling | M/L | Test runner; span mapping | Done 2026-10-31 |
 | WL-11 | Modbus TCP client capability; separate from WL-5.1 server | Runtime/IO | M/L | WL-5.1 backend contract | Deferred |
 | WL-12 | Reduce cycle-thread wake-up jitter at sub-millisecond cycle times | Runtime/RT | M/L | WL-5.2 CT-sweep evidence; RT host | Deferred |
+| WL-13 | Lean security verification for the Modbus TCP server boundary | Verification/security | L/XL | WL-3 Lean infrastructure; WL-5.1 server | Deferred |
+| WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4/WL-12 harness; CI runners; macOS test-only | Deferred |
 
 ## 5. Candidate items
 
@@ -1079,6 +1081,143 @@ deliverable.
 **Tentative size.** M/L, dominated by the measurement campaign, trace correlation, and host
 tuning experiments.
 
+### WL-13 — Lean security verification for the Modbus TCP server boundary
+
+**Intent.** Extend the Lean verification program to the WL-5.1 Modbus TCP server's untrusted
+network boundary: model the decoder, function dispatch, address/width validation, and
+register-bank write rules, and prove security properties for malformed input and client writes.
+
+**Selection.** Deferred on 2026-11-02, beyond v2.0.0. Recorded after WL-5.1 shipped because the
+server is the project's first network-facing backend and its tests are not a proof.
+
+**Why it matters.** Any reachable client can send arbitrary MBAP/PDU bytes and write every
+input-mapped coil or register. WL-5.1 has unit, property, fuzz-smoke, loopback, and cross-host
+tests, but those are samples. A Lean model can prove the bounded properties that matter at this
+boundary: the decoder is total on bounded frames, no accepted request can panic or write outside
+its table/image range, output and read-only channels are never written, 8-bit byte placement and
+wider spans are preserved, and multi-write requests are all-or-none at the latch boundary. The
+properties fit the existing WL-3 Lean infrastructure and create a reusable model for WL-11 and
+future protocol work.
+
+**Candidate scope.**
+
+- Model the externally reachable server boundary: MBAP framing, PDU decode, function-code
+  dispatch, quantity/byte-count checks, table/address/span validation, unit filtering, 8-bit
+  low/high placement, device/per-channel word order, and the register bank's read/write rules.
+  Abstract sockets, threads, timeouts, and the OS scheduler; this item is about the protocol and
+  image transformation, not the network stack.
+- Prove, with no `sorry`:
+  - decoder totality and boundedness: every accepted frame is at most 260 bytes, has a
+    well-formed PDU, and cannot produce an out-of-range slice or arithmetic overflow;
+  - write authorization: a write can affect only an input-mapped channel of the addressed table;
+    output/read-only/unmapped addresses and partial 32/64-bit spans are rejected; an 8-bit input
+    byte is preserved when an output byte shares its register;
+  - image isolation: no write leaves the configured channel span or crosses a server/backend
+    boundary;
+  - atomicity: a multi-address write is all-or-none at the latch boundary;
+  - counters and status remain within their bounded domains and are not mistaken for a safety
+    signal.
+- Connect the model to the Rust implementation by a documented refinement argument, an extracted
+  core, or a bounded review; the connection method is an open question, not assumed.
+- Add the proofs to the verification registry and report, cross-check against the Rust tests and
+  fuzz corpus, and state what the model does not cover. No production behavior change and no
+  safety or real-time claim.
+
+**Constraints and current state.**
+
+- WL-3 provides the Lean project, registry, and proof-review pattern. WL-5.1 is complete; its
+  permanent contract is [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md)
+  §4.5 and [Decisions](specification/Decisions.md) D-229–D-243.
+- The server is unauthenticated by design. The item proves protocol and write-authorization
+  invariants, not authentication, TLS, or a trusted-network assumption.
+- The runtime is Rust with safe code at this boundary; the proof is about the protocol state
+  machine and image mapping, not a general memory-safety proof of the whole runtime.
+
+**Open questions.**
+
+- Model the protocol/bank in Lean, extract a verified core, or prove a refinement of the Rust
+  functions?
+- Which properties are worth proving first, and what is the exact theorem set?
+- How should sockets, threads, timeouts, and fault/retry state be abstracted?
+- Should the status device, counters, and unit filtering be in the first slice?
+- How is the model kept in sync with future Modbus changes and WL-11?
+- Does the proof need a machine-checked link to the Rust code, or is a reviewed refinement
+  argument sufficient for the claimed evidence level?
+
+**Related.** [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md)
+§4.5, [Modbus-Server.md](specification/Verification/Modbus-Server.md),
+[Decisions](specification/Decisions.md) D-229–D-243, WL-3, WL-5.1, WL-11. Inspiration:
+[external discussion](https://chat.deepseek.com/share/7f57f70kv31kawzx5f) (not a project
+dependency or evidence).
+
+**Tentative size.** L/XL, dominated by the protocol/image model and the refinement connection.
+
+### WL-14 — macOS CI and Windows/macOS soft-real-time scheduling for tests
+
+**Intent.** Add macOS ARM64 and x86-64 to the CI test matrix and use the operating system's
+soft-real-time scheduling facilities on macOS and Windows to improve test and benchmark behavior,
+without adding macOS as a supported production host or claiming hard real-time behavior.
+
+**Selection.** Deferred on 2026-11-02, beyond v2.0.0. The supported native hosts remain Windows
+x86-64, Linux x86-64, and Linux AArch64; macOS is test-only. This item is inspired by the
+audio/pro-audio use of thread priorities and time-constraint policies on Windows and macOS.
+
+**Why it matters.** The current matrix has no macOS coverage, so portability regressions in the
+driver, runtime, or test harness can go unnoticed on a second soft-real-time-capable Unix. Windows
+has `SetThreadPriority`/`THREAD_PRIORITY_TIME_CRITICAL` and MMCSS for audio-style workloads; macOS
+has Mach thread policies and QoS classes for audio and time-constrained work. Using these for
+tests can reduce cycle jitter and expose scheduling assumptions without changing the production
+support matrix. The RT evidence remains host-specific and not a guarantee.
+
+**Candidate scope.**
+
+- Add macOS ARM64 and x86-64 CI jobs on GitHub-hosted runners for the functional, project,
+  execution, and selected I/O tests; keep release packaging and the supported-host claim
+  unchanged. Document macOS as test-only.
+- Add an opt-in test/benchmark scheduling mode:
+  - Windows: raise the cycle/test thread to `THREAD_PRIORITY_TIME_CRITICAL`, and optionally use
+    MMCSS (`AvSetMmThreadCharacteristics` with an audio task, then revert) with explicit scope
+    and cleanup; avoid requiring administrator privileges.
+  - macOS: apply a Mach `THREAD_TIME_CONSTRAINT_POLICY` or appropriate QoS/priority to the
+    cycle/test thread; document entitlement or privilege requirements and ARM64/x86-64
+    differences.
+- Measure cycle timing, wake lateness, and request/scan jitter with the WL-4/WL-12 harness on
+  Windows and macOS; compare baseline against scheduling mode; record host, OS, build form,
+  metric, and sample.
+- Update the CI matrix, runbooks, and known limitations; state that macOS is test-only and that
+  neither platform becomes a hard-real-time or safety platform.
+- Keep production scheduler behavior unchanged unless measured evidence and owner review approve
+  an opt-in runtime mode.
+
+**Constraints and current state.**
+
+- GitHub-hosted macOS runner availability, architecture coverage, cost, and scheduling
+  privileges are unknown and need a planning check. macOS runners may not allow the needed Mach
+  policy without entitlements.
+- Windows MMCSS is designed for audio; its behavior for a PLC cycle thread must be measured, not
+  assumed. Thread priority alone is not a real-time guarantee.
+- The item does not add macOS to the supported-host list, change the language profile, or make a
+  safety claim.
+
+**Open questions.**
+
+- Which macOS runner images and architectures should the matrix use, and what is the CI budget?
+- Do the Mach time-constraint APIs work in GitHub-hosted macOS runners and in a normal app?
+- Is MMCSS appropriate for a cycle thread, or is `THREAD_PRIORITY_TIME_CRITICAL` sufficient?
+- Which tests run on macOS: full workspace, driver/project, selected runtime, or a smoke subset?
+- What metric and threshold justify an opt-in scheduling mode, and does it need a runtime flag?
+- Does this depend on WL-12's wake-jitter work, or can it run independently?
+
+**Related.** [RT-Host.md](specification/Verification/RT-Host.md),
+[RT-Runbook.md](specification/Verification/RT-Runbook.md),
+[EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md),
+[Performance.md](specification/Verification/Performance.md), WL-4, WL-5.1, WL-5.2, WL-12.
+Inspiration: [external discussion](https://chat.deepseek.com/share/7308oh9yx127s4kogv) (not a
+project dependency or evidence).
+
+**Tentative size.** M/L, dominated by CI matrix work, platform scheduling experiments, and
+measurement.
+
 ## 6. Cross-cutting notes
 
 - WL-4, WL-5.1, and WL-5.2 are locked v2.0.0 targets: RT timing, Modbus TCP server I/O, and
@@ -1094,6 +1233,12 @@ tuning experiments.
   wake jitter after the metrics-writer flush was moved off the cycle thread. It is a host/runtime
   scheduling investigation, reuses the WL-5.2 fixture and WL-4 tooling, and does not change the
   EtherCAT backend or the safety stance.
+- WL-13 is deferred. It extends the WL-3 Lean program to the WL-5.1 protocol/register-bank
+  boundary; it verifies protocol and write-authorization invariants, not authentication or TLS,
+  and it does not make the server a safety function.
+- WL-14 is deferred. macOS is test-only and does not become a supported production host; the item
+  combines CI coverage with opt-in Windows/macOS scheduling experiments and does not make a
+  hard-real-time or safety claim.
 - WL-4 and WL-5.2 reinforce each other: EtherCAT cyclic process data is best verified on the
   PREEMPT_RT host, and WL-5.2 should not assume the host exists without a fallback test path.
 - WL-6 is deferred to a future version. If revived, it reuses robot-sim's `robot-motion` and its
@@ -1159,3 +1304,6 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-11-01 | Added WL-12 (cycle-thread wake-up jitter at sub-millisecond cycle times) as deferred. WL-5.2's CT sweep found 150 µs maintainable and 100 µs failing on host wake jitter after the metrics-writer flush moved off the cycle thread; the follow-up is out of scope for WL-5.2. |
 | 2026-11-02 | Completed the P0.5 whole-run bridge on `WL-3`; P0.5 is ready for owner review. WL-5.2 is complete; its decisions are [Decisions.md](specification/Decisions.md) D-211–D-228 and its evidence is [EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md). |
 | 2026-11-02 | WL-5.1 is complete: the Modbus TCP server backend is implemented, verified on all CI hosts and the bench host, and documented. Decisions are [Decisions.md](specification/Decisions.md) D-229–D-243 and the evidence is [Modbus-Server.md](specification/Verification/Modbus-Server.md). |
+| 2026-11-02 | Added WL-13 (Lean security verification for the Modbus TCP server boundary) as deferred beyond v2.0.0. |
+| 2026-11-02 | Added WL-14 (macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests) as deferred beyond v2.0.0. |
+| 2026-11-02 | Retired the WL-5.1 working plan after PR #15 merged; the permanent contract is [IO Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) §4.5, decisions D-229–D-243, and [Modbus-Server.md](specification/Verification/Modbus-Server.md). |
