@@ -84,6 +84,7 @@ pub mod io;
 #[cfg(target_os = "linux")]
 pub mod io_ethercat;
 pub mod io_mock;
+pub mod io_modbus_tcp;
 pub mod loader;
 pub mod memory;
 pub mod migration;
@@ -143,6 +144,7 @@ pub use io::{IoNotice, IoRuntime};
 #[cfg(target_os = "linux")]
 pub use io_ethercat::{EthercatBackend, SHIM_ENV, SHIM_LIBRARY, ShimInfo, probe_shim};
 pub use io_mock::{MockEthercatBackend, MockWire};
+pub use io_modbus_tcp::ModbusTcpBackend;
 pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
 pub use migration::{PlanDecision, validate_deployable, validate_plan};

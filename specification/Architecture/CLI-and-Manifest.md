@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28)
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28); WL-5.1 adds the Modbus TCP profile schema and records the implemented `--io`/shim/status surface (2026-11-02)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md)
 
@@ -51,6 +51,13 @@ output goes to stdout.
 > `lcov.info` (LCOV) default to `target/stc/coverage`; the human summary follows the test
 > summary. Production artifacts, the host ABI, GOT/manifest, metadata, and test-result shapes are
 > unchanged. The model is in [Testing](Testing-and-Verification.md) §2.6.
+>
+> **WL-5.1 status (2026-11-02):** Modbus TCP is selected by `kind = "modbus-tcp"` (and the
+> optional `kind = "modbus-tcp-status"`), not by a global backend value; the profile schema is
+> §2.2.1. Only `--io` and `--io-file` are parsed for I/O; the formerly documented `--io-config`
+> and `--io-ethercat-lib` flags do not exist. The EtherCAT shim path comes from the
+> `STC_ETHERCAT_LIBRARY` environment variable. The control `Status` JSON does not include I/O
+> reports; the verbose launcher output (`stc run -v`) is the implemented operator surface.
 
 | Command | Purpose |
 | --- | --- |
@@ -86,7 +93,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--clang <path>` | clang executable |
 | `--runtime <path>` | Runtime host archive used when linking `exe`/`lib` |
 | `--out-dir <path>` | Artifact directory; default `target/stc/debug` (debug) or `target/stc/release` (release); an explicit value is used verbatim for both modes; `[build].out-dir` overrides the project default; for `stc clean`, selects exactly the given directory |
-| `--io <backend>` | Override `[io].backend` for `run`/`test` (`null`, `memory`, `file`) |
+| `--io <backend>` | Override `[io].backend` for `run`/`test` (`null`, `memory`, `file`, `ethercat`); `ethercat` means hardware device backends own their bound ranges and unbound areas keep the null behavior. Modbus is selected only by device `kind`, not by this option |
 | `--io-file <path>` | File used by the file backend |
 | `--relaxed` | Accept the documented semicolon-relaxation syntax superset |
 | `--state-file <path>` | Retained-state file for this run |
@@ -127,6 +134,12 @@ adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `s
 `--debug-server` surface are implemented in M6.5; §1.7 fixes the contract. WL-10 implements
 `--coverage`, `--no-coverage`, and `--coverage-out` for `stc test`, plus the `[test] coverage`
 project default (§2.4).
+
+The implemented I/O overrides are exactly `--io` and `--io-file`. There is no `--io-config`
+runtime profile override: the profile selected by `[io].config` is embedded at build time and is
+authoritative. There is no `--io-ethercat-lib` flag either; the shim loader reads
+`STC_ETHERCAT_LIBRARY` (falling back to the platform library name). These gaps are recorded here
+and in [I/O Routing and Backends](IO-Routing-and-Backends.md) §2.3; WL-5.1 does not add a flag.
 
 ### 1.3 Exit codes
 
@@ -635,12 +648,14 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   passes `--out-dir`. The default is `target/stc/debug` (debug) or `target/stc/release`
   (release). An explicit out-dir is used verbatim for both modes; building both modes into one
   explicit directory is not a supported layout because manifest/metadata names collide (D-178).
-- `[io]` is optional. `backend` is `null`, `memory`, or `file` in v1; hardware backend names are
-  runtime-defined in v2. `file` names the file used by the file backend.
-  `input-bytes`/`output-bytes`/`marker-bytes` are optional; the compiler computes them from `AT`
-  declarations when omitted. `[test] io` overrides the backend for test runs. The v2.0.0
-  machine-profile key `[io].config`, the `--io-config` diagnostic override, and the profile and
-  route schemas are fixed in [I/O Routing and Backends](IO-Routing-and-Backends.md).
+- `[io]` is optional. `backend` is `null`, `memory`, `file`, or `ethercat`; `ethercat` selects
+  the hardware-device path where devices of a registered `kind` own their bound ranges and
+  unbound areas keep the null behavior. It does **not** select Modbus: Modbus devices use
+  `kind = "modbus-tcp"` and leave `backend` unset or `null`. `file` names the file used by the
+  file backend. `input-bytes`/`output-bytes`/`marker-bytes` are optional; the compiler computes
+  them from `AT` declarations when omitted. `[test] io` overrides the backend for test runs. The
+  v2.0.0 machine-profile key `[io].config`, the profile schema (including Modbus in §2.2.1), and
+  the route schema are fixed in [I/O Routing and Backends](IO-Routing-and-Backends.md).
 - `[[io.devices]]` declares a device tree. `name` is unique; `kind` is an opaque string;
   `config` is opaque TOML copied to metadata. `[[io.devices.channels]]` is optional and gives the
   compiler enough information to validate hints (`name`, `direction`, `width`).
@@ -688,6 +703,127 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
 - `[dependencies]` is part of v1 for local path dependencies. A dependency entry without `path`
   is an error until/unless a registry resolver is added (beyond v1, A-009); unknown dependency
   keys are errors.
+
+#### 2.2.1 Modbus TCP profile schema
+
+A device with `kind = "modbus-tcp"` is a Modbus TCP **server**. Its protocol-side configuration
+lives in the machine profile selected by `[io].config`; it has no addressing in inline
+`[io.devices].config`. Every declared channel must have exactly one mapping, and every mapping
+must name a declared channel. An optional `kind = "modbus-tcp-status"` device has no profile
+entry and uses inline `config = { layout = 1 }`.
+
+The compiler validates structure only: key types, the non-empty `bind` array, literal
+`ip:port` entries, the unit/connection/timeout ranges, `word-order` spellings or integer lists,
+the channel-map shape, and the `byte` value. It reports structural errors as
+`STC-E-PROJECT-009`. The runtime validates semantics at cold start with `STC-E-IO-MODTCP-001`
+and `STC-E-IO-MODTCP-003`: declared/mapped name agreement, table/direction/width agreement,
+overlapping spans, byte placement, and image ranges.
+
+Device keys:
+
+| Key | Type and default | Meaning |
+| --- | --- | --- |
+| `bind` | non-empty array of strings; required | Literal IPv4/IPv6 `"ip:port"` entries. IPv6 uses `[address]:port`; hostnames are rejected. One listener per entry; all binds share one bank. Port 0 gets an ephemeral port. |
+| `unit` | integer 1..=247; optional | Requests for another unit id get exception 0x0B. When absent, the unit id is accepted and echoed. |
+| `max-connections` | integer 1..=128; default 8 | Total across all binds of the server. |
+| `idle-timeout` | positive duration string; default `"60s"` | Closes a connection with no complete request for the interval, including a partial frame. |
+| `word-order` | `"high-first"` (default) or `"low-first"` | Device default for 32/64-bit register channels. |
+| `[[device.<name>.channels]]` | array of tables; required | One entry per declared channel. |
+
+Channel-map keys:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `name` | string, unique | Must match a declared `[[io.devices.channels]]` name. Direction and width come from `stc.toml`. |
+| `table` | `"coil"`, `"discrete-input"`, `"holding-register"`, `"input-register"` | Modbus data table. |
+| `address` | integer 0..=65535 | **Zero-based** first address of the channel. |
+| `byte` | `"low"` (default) or `"high"` | Valid only for 8-bit register channels; selects one byte of the register. |
+| `word-order` | named order or integer list | Optional override for 32/64-bit register channels: `"high-first"`, `"low-first"`, `"abcd"`, `"cdab"`, `"dcba"`, `"badc"`, or a permutation of length `width/8`. |
+
+Example:
+
+```toml
+[device.modbus0]
+bind = ["127.0.0.1:15020", "192.168.1.7:502"]
+unit = 1
+max-connections = 8
+idle-timeout = "60s"
+word-order = "high-first"
+
+# Addresses are zero-based: address 0 is the first element of the table.
+# Vendor reference numbers 00001/10001/30001/40001 are one-based; subtract one.
+[[device.modbus0.channels]]
+name = "CoilIn0"
+table = "coil"
+address = 0
+
+[[device.modbus0.channels]]
+name = "ByteInLo"
+table = "holding-register"
+address = 0
+byte = "low"
+
+[[device.modbus0.channels]]
+name = "ByteInHi"
+table = "holding-register"
+address = 0
+byte = "high"
+
+[[device.modbus0.channels]]
+name = "DwordIn0"
+table = "holding-register"
+address = 20
+word-order = "dcba"
+
+[[device.modbus0.channels]]
+name = "LwordOut0"
+table = "input-register"
+address = 30
+word-order = [6, 7, 4, 5, 2, 3, 0, 1]
+```
+
+Zero-based addressing and width rules:
+
+- The four tables are independent address spaces. `address = 0` is the first coil, discrete
+  input, input register, or holding register. Vendor `00001`/`10001`/`30001`/`40001` notation is
+  one-based and is converted by subtracting one. The profile never accepts vendor notation.
+- `coil` and `discrete-input` channels are 1 bit. `holding-register` and `input-register`
+  channels are 8, 16, 32, or 64 bits; a boolean in a register is a 16-bit channel.
+- A register channel occupies 1 (8/16-bit), 2 (32-bit), or 4 (64-bit) consecutive registers
+  starting at `address`. Spans must stay in 0..=65535 and must not overlap, except one low and
+  one high 8-bit channel in the same register.
+- `holding-register` and `coil` accept input (client-writable) and output (PLC-published)
+  channels. `input-register` and `discrete-input` accept only output channels because Modbus has
+  no write function for those tables.
+- Writes must cover complete input-mapped channels. A write range with an unmapped, read-only,
+  or output-only address returns exception 0x02 and applies nothing; a write that partially
+  covers a 32/64-bit channel is also rejected with 0x02. FC15/FC16 are atomic under one bank
+  lock.
+- For 8-bit channels, `byte = "low"` is the least significant byte of the register and
+  `"high"` the most significant. For register value `0x1234`, low is `0x34` and high is `0x12`.
+- A 16-bit register is big-endian on the wire. Device `word-order` and per-channel overrides
+  control the order of the 16-bit words and, for the named/index forms, the value bytes. Device
+  `low-first` at 64 bits reverses all four words (GHEFCDAB); per-channel `cdab` is the per-half
+  pattern (CDABGHEF).
+
+The status device is read-only and has no profile entry:
+
+```toml
+[[io.devices]]
+name = "MBStatus"
+kind = "modbus-tcp-status"
+config = { layout = 1 }
+
+[[io.devices.channels]]
+name = "server0.listening"
+direction = "input"
+width = 1
+```
+
+Layout 1 exposes `server<N>.listening`, `listeners`, `bound_listeners`, `connections`,
+`requests`, `writes`, `exceptions`, `malformed`, and `last_error`; unknown layouts or channels
+and width/direction mismatches fail closed. The full contract, diagnostics, fault policy, and
+security boundary are in [I/O Routing and Backends](IO-Routing-and-Backends.md) §4.5.
 
 ### 2.3 Source discovery
 

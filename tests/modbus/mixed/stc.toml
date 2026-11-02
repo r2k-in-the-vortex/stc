@@ -1,0 +1,704 @@
+schema = 1
+
+[package]
+name = "mixed-bench"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+configuration = "MixedBench"
+
+[build]
+emit = ["module", "metadata"]
+
+[run]
+# 0 runs until interrupted; the bench script and manual procedure override it.
+cycles = 0
+cycle-time = "1ms"
+
+[retain]
+enabled = false
+
+[io]
+# One coordinator owns both hardware backends; each device `kind` selects its
+# backend. There is no global Modbus spelling. The bench script passes
+# `--io ethercat` so unbound image areas keep the established global default.
+config = "io/bench.toml"
+
+# ---------------------------------------------------------------------------
+# DIEWU EtherCAT-IO 16I/16O at position 0 (see tests/ethercat/diewu).
+# ---------------------------------------------------------------------------
+[[io.devices]]
+name = "diewu"
+kind = "ethercat"
+
+  [[io.devices.channels]]
+  name = "IN0"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN1"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN2"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN3"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN4"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN5"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN6"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN7"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN8"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN9"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN10"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN11"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN12"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN13"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN14"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "IN15"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT0"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT1"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT2"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT3"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT4"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT5"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT6"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT7"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT8"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT9"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT10"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT11"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT12"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT13"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT14"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "OUT15"
+  direction = "output"
+  width = 1
+
+[[io.devices]]
+name = "ethercat-status"
+kind = "ethercat-status"
+config = { layout = 1 }
+
+  [[io.devices.channels]]
+  name = "master.phase"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "master.active"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "master.slaves_responding"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "master.link_up"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "master.last_error"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "master.recoveries"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "domain.wc_state"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "domain.working_counter"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "input.stale"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "cycle.exchanges"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "cycle.faults"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "slave0.al_state"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "slave0.online"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "slave0.operational"
+  direction = "input"
+  width = 1
+
+# ---------------------------------------------------------------------------
+# Modbus TCP server on the bench LAN. Zero-based addresses: HR 0/1 and coils
+# 0/1. The network client writes BenchCmd/BenchBit and reads BenchSeen/BenchOut.
+# ---------------------------------------------------------------------------
+[[io.devices]]
+name = "modbus0"
+kind = "modbus-tcp"
+
+  [[io.devices.channels]]
+  name = "BenchCmd"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "BenchBit"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "BenchSeen"
+  direction = "output"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "BenchOut"
+  direction = "output"
+  width = 1
+
+[[io.devices]]
+name = "MBStatus"
+kind = "modbus-tcp-status"
+config = { layout = 1 }
+
+  [[io.devices.channels]]
+  name = "server0.listening"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "server0.listeners"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "server0.bound_listeners"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "server0.connections"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "server0.requests"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "server0.writes"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "server0.exceptions"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "server0.malformed"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "server0.last_error"
+  direction = "input"
+  width = 32
+
+# EtherCAT data and status bindings (same layout as tests/ethercat/diewu).
+[[io.bindings]]
+variable = "In0"
+device = "diewu"
+channel = "IN0"
+direction = "input"
+
+[[io.bindings]]
+variable = "In1"
+device = "diewu"
+channel = "IN1"
+direction = "input"
+
+[[io.bindings]]
+variable = "In2"
+device = "diewu"
+channel = "IN2"
+direction = "input"
+
+[[io.bindings]]
+variable = "In3"
+device = "diewu"
+channel = "IN3"
+direction = "input"
+
+[[io.bindings]]
+variable = "In4"
+device = "diewu"
+channel = "IN4"
+direction = "input"
+
+[[io.bindings]]
+variable = "In5"
+device = "diewu"
+channel = "IN5"
+direction = "input"
+
+[[io.bindings]]
+variable = "In6"
+device = "diewu"
+channel = "IN6"
+direction = "input"
+
+[[io.bindings]]
+variable = "In7"
+device = "diewu"
+channel = "IN7"
+direction = "input"
+
+[[io.bindings]]
+variable = "In8"
+device = "diewu"
+channel = "IN8"
+direction = "input"
+
+[[io.bindings]]
+variable = "In9"
+device = "diewu"
+channel = "IN9"
+direction = "input"
+
+[[io.bindings]]
+variable = "In10"
+device = "diewu"
+channel = "IN10"
+direction = "input"
+
+[[io.bindings]]
+variable = "In11"
+device = "diewu"
+channel = "IN11"
+direction = "input"
+
+[[io.bindings]]
+variable = "In12"
+device = "diewu"
+channel = "IN12"
+direction = "input"
+
+[[io.bindings]]
+variable = "In13"
+device = "diewu"
+channel = "IN13"
+direction = "input"
+
+[[io.bindings]]
+variable = "In14"
+device = "diewu"
+channel = "IN14"
+direction = "input"
+
+[[io.bindings]]
+variable = "In15"
+device = "diewu"
+channel = "IN15"
+direction = "input"
+
+[[io.bindings]]
+variable = "Out0"
+device = "diewu"
+channel = "OUT0"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out1"
+device = "diewu"
+channel = "OUT1"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out2"
+device = "diewu"
+channel = "OUT2"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out3"
+device = "diewu"
+channel = "OUT3"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out4"
+device = "diewu"
+channel = "OUT4"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out5"
+device = "diewu"
+channel = "OUT5"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out6"
+device = "diewu"
+channel = "OUT6"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out7"
+device = "diewu"
+channel = "OUT7"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out8"
+device = "diewu"
+channel = "OUT8"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out9"
+device = "diewu"
+channel = "OUT9"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out10"
+device = "diewu"
+channel = "OUT10"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out11"
+device = "diewu"
+channel = "OUT11"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out12"
+device = "diewu"
+channel = "OUT12"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out13"
+device = "diewu"
+channel = "OUT13"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out14"
+device = "diewu"
+channel = "OUT14"
+direction = "output"
+
+[[io.bindings]]
+variable = "Out15"
+device = "diewu"
+channel = "OUT15"
+direction = "output"
+
+[[io.bindings]]
+variable = "StatusPhase"
+device = "ethercat-status"
+channel = "master.phase"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusMasterActive"
+device = "ethercat-status"
+channel = "master.active"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusSlavesResponding"
+device = "ethercat-status"
+channel = "master.slaves_responding"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusLinkUp"
+device = "ethercat-status"
+channel = "master.link_up"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusLastError"
+device = "ethercat-status"
+channel = "master.last_error"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusRecoveries"
+device = "ethercat-status"
+channel = "master.recoveries"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusWcState"
+device = "ethercat-status"
+channel = "domain.wc_state"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusWorkingCounter"
+device = "ethercat-status"
+channel = "domain.working_counter"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusInputStale"
+device = "ethercat-status"
+channel = "input.stale"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusExchanges"
+device = "ethercat-status"
+channel = "cycle.exchanges"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusFaults"
+device = "ethercat-status"
+channel = "cycle.faults"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusSlaveAlState"
+device = "ethercat-status"
+channel = "slave0.al_state"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusSlaveOnline"
+device = "ethercat-status"
+channel = "slave0.online"
+direction = "input"
+
+[[io.bindings]]
+variable = "StatusSlaveOperational"
+device = "ethercat-status"
+channel = "slave0.operational"
+direction = "input"
+
+# Modbus data channels.
+[[io.bindings]]
+variable = "BenchCmd"
+device = "modbus0"
+channel = "BenchCmd"
+direction = "input"
+
+[[io.bindings]]
+variable = "BenchBit"
+device = "modbus0"
+channel = "BenchBit"
+direction = "input"
+
+[[io.bindings]]
+variable = "BenchSeen"
+device = "modbus0"
+channel = "BenchSeen"
+direction = "output"
+
+[[io.bindings]]
+variable = "BenchOut"
+device = "modbus0"
+channel = "BenchOut"
+direction = "output"
+
+# Modbus status channels (PLC-visible mirror; not Modbus-addressable).
+[[io.bindings]]
+variable = "MbListening"
+device = "MBStatus"
+channel = "server0.listening"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbListeners"
+device = "MBStatus"
+channel = "server0.listeners"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbBoundListeners"
+device = "MBStatus"
+channel = "server0.bound_listeners"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbConnections"
+device = "MBStatus"
+channel = "server0.connections"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbRequests"
+device = "MBStatus"
+channel = "server0.requests"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbWrites"
+device = "MBStatus"
+channel = "server0.writes"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbExceptions"
+device = "MBStatus"
+channel = "server0.exceptions"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbMalformed"
+device = "MBStatus"
+channel = "server0.malformed"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbLastError"
+device = "MBStatus"
+channel = "server0.last_error"
+direction = "input"

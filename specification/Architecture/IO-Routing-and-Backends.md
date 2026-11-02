@@ -1,7 +1,8 @@
 # I/O Routing and Backends
 
 Status: WL-5.2 phase 0 contract lock (2026-10-31); the WL-5.2 EtherCAT implementation and
-hardware evidence are complete (2026-11-01); WL-5.1 Modbus is not started  
+hardware evidence are complete (2026-11-01); the WL-5.1 Modbus TCP server implementation and
+evidence are complete (2026-11-02)  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [I/O and Devices](IO-and-Devices.md), [Runtime and Execution](Runtime-and-Execution.md),
 [CLI and Manifest](CLI-and-Manifest.md), [Online Change and GOT](Online-Change-and-GOT.md),
@@ -13,13 +14,13 @@ Related: [I/O and Devices](IO-and-Devices.md), [Runtime and Execution](Runtime-a
 This document fixes the v2.0.0 hardware-I/O contract: the machine-profile schema and selection,
 the route graph, the multi-backend coordinator, the EtherCAT status device, transparent fault and
 recovery behavior, online-change compatibility, and the evidence sequencing for the backend
-campaign. WL-5.2 implements the EtherCAT backend; WL-5.1 adds a Modbus backend to the same
-contract.
+campaign. WL-5.2 implements the EtherCAT backend; WL-5.1 implements the Modbus TCP server
+backend under the same coordinator contract (§4.5).
 
 The accepted decisions and their rationale are in [Decisions](../Decisions.md) §2, WL-5.2
-EtherCAT decisions D-211–D-228. This document records the resulting contract and fixes the
-schema. If implementation finds a conflict, the decision register is amended first and this
-document follows.
+EtherCAT decisions D-211–D-228 and WL-5.1 Modbus TCP decisions D-229–D-243. This document
+records the resulting contract and fixes the schema. If implementation finds a conflict, the
+decision register is amended first and this document follows.
 
 The v1 backends (`null`, `memory`, `file`) and the v1 binding precedence remain as specified in
 [I/O and Devices](IO-and-Devices.md) and [CLI and Manifest](CLI-and-Manifest.md). The contract
@@ -173,16 +174,20 @@ defines it.
 The effective device configuration is resolved field by field with this precedence, highest
 first:
 
-1. Runtime override (`--io-config <path>`).
-2. The selected source profile (`[io].config`).
-3. Inline `[io.devices].config` in `stc.toml`.
+1. The selected source profile (`[io].config`).
+2. Inline `[io.devices].config` in `stc.toml`.
 
 Inline device `config` remains valid as a default for projects without a profile and for fields
-the profile omits. `--io-config <path>` is an addressing-only diagnostic override: it may
-override master/slave addressing for the selected devices, but it cannot add or remove devices,
-change channel bindings, or change routes in v2.0.0. Routes always come from the profile
-embedded in the artifact. The runtime override is recorded in status output so a diagnostic run
-is distinguishable from the committed configuration.
+the profile omits. The profile and inline values are embedded in the artifact metadata, so the
+deployed artifact does not read a source profile at runtime. Routes always come from the profile
+embedded in the artifact.
+
+No runtime configuration override is exposed by the shipped CLI. The formerly documented
+`--io-config <path>` diagnostic override is **not implemented**; the CLI parses only `--io` and
+`--io-file`, and the embedded profile is authoritative. Likewise, the EtherCAT shim path is not a
+flag: the loader reads the `STC_ETHERCAT_LIBRARY` environment variable, falling back to the
+default library name. The specification previously described both as flags; this paragraph
+records the implemented surface and the gap. WL-5.1 does not add a runtime override (D-243).
 
 ## 3. Route graph
 
@@ -295,7 +300,8 @@ Hardware backends are selected per device `kind`, not by one global selector:
   project is a project whose devices share one kind, not a separate runtime path.
 - WL-5.2 registers the kinds `ethercat` and `ethercat-status`; both are served by the same
   EtherCAT backend instance, so the status device reads the same master and slave state as the
-  data devices. WL-5.1 registers `modbus` as another backend instance.
+  data devices. WL-5.1 registers `modbus-tcp` and `modbus-tcp-status` as one Modbus TCP server
+  backend instance (§4.5); there is no `modbus` or global `[io].backend = "modbus-tcp"` spelling.
 - A device whose `kind` has no registered backend is a cold-start error; the run never begins.
 - A declared device of a registered kind is configured by default even when it has no bindings,
   so its health is visible; its unbound output entries are zeroed at configuration time. A
@@ -324,9 +330,11 @@ trait DeviceBackend {
 - `latch_inputs` writes only the instance's bound `%I` ranges and its status-device block.
   `publish_outputs` reads only the instance's bound `%Q` ranges. The coordinator applies routes,
   never a backend.
-- `status` returns a per-backend summary for `--status` and the control/status surface: backend
-  name, device count, state, exchange and fault counters, last fault, and the configuration
-  hash. A second backend adds its own entry without changing the EtherCAT fields.
+- `status` returns a per-backend summary for the launcher's verbose status output
+  (`stc run -v`): backend name, device count, state, exchange and fault counters, last fault,
+  and the configuration hash. The control `Status` JSON does not include I/O reports in
+  v2.0.0; the verbose launcher output is the implemented operator surface. A second backend
+  adds its own entry without changing the EtherCAT fields.
 - A runtime failure reports a fault status and does not abort the run. Backends are not
   safety-rated and do not implement a fail-safe output state.
 
@@ -363,6 +371,242 @@ shutdown. It is deterministic and is covered by coordinator tests.
 - Output publication runs on every cycle attempt, including a rolled-back or faulted cycle, so
   a fieldbus watchdog is not tripped by a missing frame. The values sent are the PLC's values,
   unchanged.
+
+### 4.5 Modbus TCP backend contract
+
+WL-5.1 implements a Modbus TCP **server** backend in
+`crates/stc-runtime/src/io_modbus_tcp.rs`. It uses `std::net` and `std::thread` only: no new
+crate, optional artifact, host prerequisite, or C shim. The coordinator, `DeviceBackend` trait,
+cycle order, route graph, configuration hash, EtherCAT backend, and host ABI are unchanged.
+Device `kind` dispatch selects the backend, exactly as for EtherCAT.
+
+#### 4.5.1 Kinds and profile schema
+
+- `kind = "modbus-tcp"` is a data device. One backend instance serves every Modbus data device
+  and status device in the project.
+- `kind = "modbus-tcp-status"` is the optional read-only status device (§4.5.6).
+- There is no `[io].backend = "modbus-tcp"`, no `--io` value, and no `[test] io` value. A
+  Modbus-only project omits `[io].backend` or leaves it `null`; unbound image areas keep the
+  null behavior (D-241).
+- A `modbus-tcp` data device has no inline addressing. Its configuration is the selected
+  machine profile, and the profile must map every declared channel. There is no profile-less or
+  runtime-override bind path (D-243).
+
+Profile keys for `[device.<name>]`:
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `bind` | yes | Non-empty TOML array of literal `"ip:port"` strings; one listener per entry. IPv6 uses `[address]:port`. Hostnames are rejected. Port 0 is allowed and gets an ephemeral port. |
+| `unit` | no | 1..=247. When present, a request for another unit id returns exception 0x0B. When absent, the unit id is accepted and echoed. One unit applies to all binds of the server. |
+| `max-connections` | no | Total across all binds; default 8, range 1..=128. At the limit a new connection is accepted and closed immediately. |
+| `idle-timeout` | no | Positive duration; default 60 s. Closes a connection with no complete request for the interval, including a partial frame. |
+| `word-order` | no | Device default for 32/64-bit register channels: `high-first` (default) or `low-first`. |
+| `[[device.<name>.channels]]` | yes | One entry per declared channel: `name`, `table`, zero-based `address`, optional `byte` for 8-bit register channels, optional per-channel `word-order`. |
+
+`table` is `coil`, `discrete-input`, `holding-register`, or `input-register`. `byte` is `low`
+(default) or `high` and is valid only for 8-bit register channels. A per-channel `word-order`
+accepts `high-first`, `low-first`, `abcd`, `cdab`, `dcba`, `badc`, or an integer permutation
+list of length `width/8`. Duplicate channel names, undeclared names, missing mappings,
+width/table mismatches, overlapping spans, and out-of-range spans fail closed. The only allowed
+overlap is a low/high 8-bit pair sharing one register.
+
+Reduced example:
+
+```toml
+[device.modbus0]
+bind = ["192.168.1.7:15020", "192.168.2.7:567"]
+unit = 1
+max-connections = 8
+idle-timeout = "60s"
+word-order = "high-first"
+
+[[device.modbus0.channels]]
+name = "CoilIn0"
+table = "coil"
+address = 0
+
+[[device.modbus0.channels]]
+name = "DwordIn0"
+table = "holding-register"
+address = 20
+word-order = "dcba"
+
+[[device.modbus0.channels]]
+name = "LwordOut0"
+table = "input-register"
+address = 30
+word-order = [6, 7, 4, 5, 2, 3, 0, 1]
+```
+
+A `modbus-tcp` device rejects EtherCAT keys (`master`, `syncs`, `pdo-channels`, `dc`, and the
+identity/startup keys) with `STC-E-IO-MODTCP-001`. The compiler validates profile structure and
+reports structural errors as `STC-E-PROJECT-009`; the runtime validates semantics with the
+Modbus codes in §4.5.7.
+
+#### 4.5.2 Zero-based addressing and mapping
+
+The four Modbus tables are independent address spaces, and **every address in the profile and
+on the wire is zero-based**:
+
+| Table | First element | `address = 0` | `address = 1` | `address = 1024` | Functions |
+| --- | --- | --- | --- | --- | --- |
+| `coil` | first coil | vendor 00001 | vendor 00002 | vendor 01025 | FC1 read; FC5/FC15 write |
+| `discrete-input` | first input | vendor 10001 | vendor 10002 | vendor 11025 | FC2 read only |
+| `input-register` | first register | vendor 30001 | vendor 30002 | vendor 31025 | FC4 read only |
+| `holding-register` | first register | vendor 40001 | vendor 40002 | vendor 41025 | FC3 read; FC6/FC16 write |
+
+Vendor reference numbers are one-based and must be converted by subtracting one before they are
+written as `address`. For example vendor holding register `40021` is `address = 20`; a 32-bit
+channel there covers addresses 20..21 (vendor `40021..40022`). The configured address is placed
+directly into the PDU; no layer adds or subtracts one. The profile never accepts vendor
+notation, and documentation labels one-based values only as vendor reference numbers.
+
+Direction and width:
+
+| Table | `input` channel (client → PLC) | `output` channel (PLC → client) |
+| --- | --- | --- |
+| `coil` | FC5/FC15 write; FC1 read; latched to `%I` | FC1 read from published `%Q`; writes return 0x02 |
+| `discrete-input` | Rejected: no write function | FC2 read from published `%Q` |
+| `holding-register` | FC6/FC16 write; FC3 read; latched to `%I` | FC3 read from published `%Q`; writes return 0x02 |
+| `input-register` | Rejected: no write function | FC4 read from published `%Q` |
+
+- `coil` and `discrete-input` carry 1-bit `BOOL` channels only.
+- `holding-register` and `input-register` carry 8-, 16-, 32-, or 64-bit channels. A boolean in a
+  register is a 16-bit channel, not a 1-bit channel.
+- A register channel occupies `ceil(width/16)` registers: 1 for 8/16 bits, 2 for 32 bits, and 4
+  for 64 bits. The span must fit in the 16-bit address space and must not overlap, except for one
+  low/high 8-bit pair.
+- An 8-bit channel selects one byte of its register with `byte = "low"` (default) or `"high"`.
+  For register value `0x1234`, low is `0x34` and high is `0x12`. A write updates input-claimed
+  bytes, preserves output-claimed bytes, and ignores unclaimed bytes; unclaimed bytes read zero.
+- A write must cover complete input-mapped channels. FC6 cannot write part of a 32/64-bit
+  channel; FC16 must cover the whole span. A partially covered wide channel returns 0x02 and
+  applies nothing. A write range containing any unmapped, read-only, or output-only address
+  returns 0x02 and applies nothing.
+- Reads may address any mapped register, including part of a wider channel; the selected words
+  are returned in the configured order. A read range containing an unmapped address returns
+  0x02 with no partial data.
+- Never-written input channels read zero. Last writer wins between clients.
+
+#### 4.5.3 Byte and word order
+
+Every 16-bit register is big-endian on the wire. The process image is little-endian, and the
+backend converts the numeric value rather than raw image bytes. Device `word-order` selects the
+default for 32/64-bit channels; a per-channel `word-order` overrides it. Letters A..H denote the
+value bytes from most significant to least significant; the table gives wire order from the
+lowest register address upward.
+
+| `word-order` | 32-bit wire order | 64-bit wire order | 32-bit index list |
+| --- | --- | --- | --- |
+| `high-first` | A B C D | A B C D E F G H | `[0, 1, 2, 3]` |
+| `low-first` | C D A B | G H E F C D A B | `[2, 3, 0, 1]` |
+| `abcd` | A B C D | A B C D E F G H | `[0, 1, 2, 3]` |
+| `cdab` | C D A B | C D A B G H E F | `[2, 3, 0, 1]` |
+| `dcba` | D C B A | D C B A H G F E | `[3, 2, 1, 0]` |
+| `badc` | B A D C | B A D C F E H G | `[1, 0, 3, 2]` |
+
+Named letter forms are 4-byte patterns applied per 32-bit half for 64-bit values. Device
+`low-first` at 64 bits reverses all four 16-bit words (GHEFCDAB), while per-channel `cdab` is
+the per-half pattern (CDABGHEF). An explicit list is a permutation of `0..n-1`, length 4 or 8,
+where 0 is the most significant value byte; duplicates, out-of-range values, and the wrong
+length are rejected with `STC-E-IO-MODTCP-001`. Coils and discrete-input bits are packed
+LSB-first in responses.
+
+#### 4.5.4 Binds, connections, and the cycle boundary
+
+- `bind` is required and explicit; there is no wildcard default. Every entry gets one listener
+  thread, and all entries of a server share one register bank, channel map, counters, and
+  connection budget. A concrete duplicate `ip:port` is rejected within and across devices;
+  port-0 entries receive distinct ephemeral ports reported in diagnostics.
+- Each accepted connection gets one thread, blocking socket reads with a read/write timeout,
+  `TCP_NODELAY`, and an idle timeout. A per-server slot guard enforces `max-connections` across
+  all listeners and is released on every exit path. One client's error or disconnect affects
+  neither another connection nor another listener.
+- The cycle thread performs only the bank/image copies under a mutex. No `accept`, `read`,
+  `write`, flush, or DNS resolution runs on it. PDU decode/encode happens on the connection
+  thread; only the bank apply is under the lock.
+- A client write completed before `latch_inputs` is visible to the following scan; a later write
+  is visible to the next scan. A PLC output published by `publish_outputs` is visible to clients
+  after the boundary. A read racing with the copy sees the previous or new bank, never a partial
+  publish.
+- FC15/FC16 apply under one bank lock, so a latch cannot observe half a multi-write. Client
+  disconnects do not clear, zero, or stale the last committed inputs.
+
+#### 4.5.5 Cold start and fault policy
+
+- Cold start parses and validates every device config, channel map, direction, width, span,
+  byte placement, and image range; binds every configured address; and only then spawns
+  listener threads and seeds the bank to zero. Any bind/listen failure is **all-or-nothing** and
+  fatal with `STC-E-IO-MODTCP-002`; listeners already bound by the instance are closed and the
+  run never begins. `cold_start` is idempotent and tears down a previous start first.
+- At runtime each listener is isolated. A failed listener is marked `Faulted`, reported as
+  `STC-W-IO-MODTCP-002`, and retried with backoff; the other listeners of the server and other
+  server devices keep serving. `server<N>.listening` is false until every listener is accepting,
+  and the aggregate backend state stays `Faulted` while any listener is faulted.
+- Malformed frames, unsupported functions, illegal addresses/values, timeouts, and disconnects
+  are normal server events: they update counters and return an exception where possible. They
+  never fault the backend, change the image, or stop the scan. There is no stale-input flag.
+- Shutdown stops accepting, closes listeners, wakes and joins connection threads, and sets
+  `Stopped`. It is idempotent and is also called from `Drop`; it never rewrites image values.
+- This is not a safety function. The PLC decides what to do when the server is not listening.
+
+#### 4.5.6 Status device and diagnostics
+
+The optional `modbus-tcp-status` device has no profile entry and uses
+`config = { layout = 1 }`. Only read-only `AT %I` bindings are allowed; unknown layouts,
+unknown channels, and width or direction mismatches fail closed. `<N>` is the zero-based index
+of the configured Modbus data device in declaration order; status devices are not counted.
+Unbound fields cost no image bytes, and the backend fills bound ranges at the input boundary.
+
+| Channel | Type | Meaning |
+| --- | --- | --- |
+| `server<N>.listening` | `BOOL` | Every configured listener is bound and accepting. |
+| `server<N>.listeners` | `UINT` | Number of configured listeners. |
+| `server<N>.bound_listeners` | `UINT` | Number of listeners currently accepting. |
+| `server<N>.connections` | `UINT` | Current live connections across all listeners. |
+| `server<N>.requests` | `UDINT` | Complete ADUs processed. |
+| `server<N>.writes` | `UDINT` | Successful writes. |
+| `server<N>.exceptions` | `UDINT` | Exception responses sent. |
+| `server<N>.malformed` | `UDINT` | Framing errors that closed a connection. |
+| `server<N>.last_error` | `UDINT` | Last backend/listener error code. |
+
+The launcher's verbose status (`stc run -v`) prints one `io-backend modbus-tcp` line with
+`server<N>.bind`, `listeners`, `bound_listeners`, `connections`, `peak_connections`, `requests`,
+`reads`, `writes`, `exceptions`, `malformed`, `unbound`, `last_error`, and per-listener
+`server<N>.listener<M>.{bind,state,connections,last_error}`. Counters are since start and
+saturate rather than wrap. `last_error` is 0 (none), 1 (bind/listen), 2 (accept), or 3
+(internal). The control `Status` JSON has no I/O reports in v2.0.0; the verbose launcher output
+is the operator surface. Status values are diagnostic, not safety-rated.
+
+#### 4.5.7 Modbus diagnostic codes
+
+| Code | Condition |
+| --- | --- |
+| `STC-E-IO-MODTCP-001` | The Modbus device or channel configuration is invalid (unknown keys, bad word-order/byte value, wrong permutation length, duplicate or overlapping map entries). |
+| `STC-E-IO-MODTCP-002` | A bind/listen failed at cold start; the server is not started. |
+| `STC-E-IO-MODTCP-003` | A bound channel does not resolve, or its direction, width, or image range disagrees with the declaration. |
+| `STC-W-IO-MODTCP-001` | A declared Modbus channel is unbound. The condition is recorded in diagnostics; the locked `DeviceBackend` interface has no notice channel, so it is not emitted as a warning (traceability allowlist). |
+| `STC-W-IO-MODTCP-002` | A runtime listener failed and is retrying. |
+
+Per-request protocol exceptions are counters, not diagnostics. Structural profile errors use
+`STC-E-PROJECT-009`; a changed Modbus configuration during online change uses
+`STC-E-ONLINE-IO-001`.
+
+#### 4.5.8 Security and online change
+
+Modbus TCP has no standard authentication or encryption. Every input-mapped coil/register on
+every bind is writable by any client that can reach any bound address. Bind explicitly, audit
+the whole array, use a trusted or segmented network or host firewall on every bind, and treat
+network input as untrusted field input. Connection limits and idle timeouts bound resource use
+but do not prevent a determined denial of service. The server is not a safety function and
+provides no fail-safe output state; see [NON-SAFETY.md](../../NON-SAFETY.md).
+
+The existing configuration hash covers the profile digest, device kinds/configs/channels,
+bindings, and routes. A code-only swap or a same-configuration swap keeps the Modbus instance,
+listeners, live connections, and counters. Any change to the bind array, unit, word order, byte
+placement, table, address, width/span, channel map, or binding changes the hash and returns
+`STC-E-ONLINE-IO-001`; a cold download is required. A client connect/disconnect is not a
+configuration change, and no Modbus-specific image remap exists.
 
 ## 5. EtherCAT status device
 
@@ -421,9 +665,9 @@ channels. The runbook and report read them from `ethercat master` at run boundar
   unknown channels are never silently ignored.
 - The backend fills the block from master, domain, and slave state each cycle. A project that
   binds no status channels incurs no image cost.
-- `--status` and the control/status surface print the same information for operators. The
-  status block and the operator output are diagnostic, not safety-rated, and do not implement a
-  fail-safe output state.
+- `stc run -v` prints the same diagnostic information for operators. The control `Status` JSON
+  does not include I/O reports in v2.0.0. The status block and the operator output are
+  diagnostic, not safety-rated, and do not implement a fail-safe output state.
 
 ## 6. Transparent fault and recovery behavior
 
@@ -450,7 +694,7 @@ not process-image values.
 - A runtime fault is non-fatal and retries indefinitely. A startup failure is fatal and the run
   never begins. A fieldbus fault is reported as `STC-W-IO-ETH-003`; the transparent policy
   replaces the removed persistent-fault error.
-- Fault state is per backend. This section fixes the EtherCAT policy; WL-5.1 defines the Modbus
+- Fault state is per backend. This section fixes the EtherCAT policy; §4.5.5 fixes the Modbus
   policy. The coordinator keeps one backend's fault from masking or silently changing another
   backend's data.
 - This behavior is not a safety function. The PLC logic must use `input.stale` and the status
@@ -480,7 +724,9 @@ The hash is carried in the backend status and compared when a candidate generati
   ([Online Change and GOT](Online-Change-and-GOT.md)); a change that affects a bound backend
   range is a configuration change, not a remap.
 - The policy is backend-neutral: a mixed project includes every backend's configuration in the
-  hash.
+  hash. For Modbus, an unchanged hash preserves the server's listeners, live connections, and
+  counters; a change to the bind array, unit, word order, byte placement, table,
+  address/span, channel map, or binding requires a cold download (§4.5.8).
 
 ## 8. Evidence sequencing
 
@@ -502,6 +748,14 @@ The backend campaign is split so that frame-level evidence is gathered without p
   Frame-level success is not physical I/O proof.
 - There is no CI timing gate. Timing results are host- and hardware-specific, and no hard
   real-time or safety claim is made.
+- **WL-5.1 Modbus TCP evidence** is functional and cross-host, not physical. The workspace CI
+  matrix runs the codec, backend, error-path, lifecycle, online-change, and end-to-end fixture
+  tests on Windows x86-64, Linux x86-64, and Linux AArch64. A real mixed bench run on
+  `ecat-host` had the DIEWU EtherCAT slave and the Modbus TCP server active concurrently with
+  zero backend faults, but it did **not** connect a Modbus signal to an EtherCAT signal;
+  cross-backend routing is proven by the mixed mock test, and the no-cross-wiring limitation is
+  recorded. No independent third-party Modbus client was run. See
+  [Modbus TCP Server](../Verification/Modbus-Server.md).
 
 ## 9. Compiler and runtime boundary
 
@@ -550,11 +804,16 @@ allowlist.
 | `STC-W-IO-ETH-001` | A declared EtherCAT channel is unbound. |
 | `STC-W-IO-ETH-002` | Distributed clocks were requested but no `assign-activate` is configured. |
 | `STC-W-IO-ETH-003` | Fieldbus fault: outputs unchanged, inputs stale, status registers updated; recovery continues. |
+| `STC-E-IO-MODTCP-001` | The Modbus device or channel configuration is invalid. |
+| `STC-E-IO-MODTCP-002` | A Modbus bind/listen failed at cold start; the server is not started. |
+| `STC-E-IO-MODTCP-003` | A bound Modbus channel does not resolve, or its direction, width, or image range mismatches. |
+| `STC-W-IO-MODTCP-001` | A declared Modbus channel is unbound; recorded in diagnostics (no notice path). |
+| `STC-W-IO-MODTCP-002` | A runtime Modbus listener failed and is retrying. |
 | `STC-E-ONLINE-IO-001` | The I/O configuration changed and a cold download is required. |
 
 ## 11. Open questions
 
-No design questions remain as of 2026-10-31; the WL-5.2 decisions are
-[Decisions](../Decisions.md) §2, D-211–D-228. The exact Rust type names and metadata JSON key
-spellings are implementation defaults fixed in phase 1; they do not change the contract in this
-document.
+No design questions remain as of 2026-11-02. The WL-5.2 decisions are
+[Decisions](../Decisions.md) §2, D-211–D-228; the WL-5.1 Modbus TCP decisions are D-229–D-243.
+The exact Rust type names and metadata JSON key spellings are implementation defaults fixed in
+phase 1; they do not change the contract in this document.

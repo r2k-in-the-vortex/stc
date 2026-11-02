@@ -1,0 +1,328 @@
+schema = 1
+
+[package]
+name = "modbus-bench"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+configuration = "ModbusBench"
+
+[build]
+emit = ["module", "metadata"]
+
+[run]
+# 0 runs until interrupted; scripts and the Rust end-to-end test override it.
+cycles = 0
+cycle-time = "1ms"
+
+[retain]
+enabled = false
+
+[io]
+# Device `kind` selects the backend. There is no global Modbus spelling:
+# omitting `backend` keeps the default `null` behavior for unbound areas, and
+# `kind = "modbus-tcp"` selects the Modbus TCP server (M-13).
+config = "io/bench.toml"
+
+[[io.devices]]
+name = "modbus0"
+kind = "modbus-tcp"
+
+  [[io.devices.channels]]
+  name = "CoilIn0"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "CoilIn1"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "CoilIn2"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "ByteInLo"
+  direction = "input"
+  width = 8
+
+  [[io.devices.channels]]
+  name = "ByteInHi"
+  direction = "input"
+  width = 8
+
+  [[io.devices.channels]]
+  name = "WordIn"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "DwordIn"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "DwordSwapIn"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "LwordIn"
+  direction = "input"
+  width = 64
+
+  [[io.devices.channels]]
+  name = "CoilOut"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "DiOut"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "ByteOutLo"
+  direction = "output"
+  width = 8
+
+  [[io.devices.channels]]
+  name = "ByteOutHi"
+  direction = "output"
+  width = 8
+
+  [[io.devices.channels]]
+  name = "WordOut"
+  direction = "output"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "DwordOut"
+  direction = "output"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "DwordSwapOut"
+  direction = "output"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "LwordOut"
+  direction = "output"
+  width = 64
+
+# Optional PLC-visible status device. It has no profile entry and fills the
+# bound %I ranges at the input boundary (M-10, layout 1).
+[[io.devices]]
+name = "MBStatus"
+kind = "modbus-tcp-status"
+config = { layout = 1 }
+
+  [[io.devices.channels]]
+  name = "server0.listening"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "server0.listeners"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "server0.bound_listeners"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "server0.connections"
+  direction = "input"
+  width = 16
+
+  [[io.devices.channels]]
+  name = "server0.requests"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "server0.writes"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "server0.exceptions"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "server0.malformed"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "server0.last_error"
+  direction = "input"
+  width = 32
+
+# Input channels: a client write enters the register bank and is latched into
+# these process-image inputs at the next input boundary.
+[[io.bindings]]
+variable = "CoilIn0"
+device = "modbus0"
+channel = "CoilIn0"
+direction = "input"
+
+[[io.bindings]]
+variable = "CoilIn1"
+device = "modbus0"
+channel = "CoilIn1"
+direction = "input"
+
+[[io.bindings]]
+variable = "CoilIn2"
+device = "modbus0"
+channel = "CoilIn2"
+direction = "input"
+
+[[io.bindings]]
+variable = "ByteInLo"
+device = "modbus0"
+channel = "ByteInLo"
+direction = "input"
+
+[[io.bindings]]
+variable = "ByteInHi"
+device = "modbus0"
+channel = "ByteInHi"
+direction = "input"
+
+[[io.bindings]]
+variable = "WordIn"
+device = "modbus0"
+channel = "WordIn"
+direction = "input"
+
+[[io.bindings]]
+variable = "DwordIn"
+device = "modbus0"
+channel = "DwordIn"
+direction = "input"
+
+[[io.bindings]]
+variable = "DwordSwapIn"
+device = "modbus0"
+channel = "DwordSwapIn"
+direction = "input"
+
+[[io.bindings]]
+variable = "LwordIn"
+device = "modbus0"
+channel = "LwordIn"
+direction = "input"
+
+# Output channels: the program's %Q values are published into the register
+# bank after the scan and become readable by clients.
+[[io.bindings]]
+variable = "CoilOut"
+device = "modbus0"
+channel = "CoilOut"
+direction = "output"
+
+[[io.bindings]]
+variable = "DiOut"
+device = "modbus0"
+channel = "DiOut"
+direction = "output"
+
+[[io.bindings]]
+variable = "ByteOutLo"
+device = "modbus0"
+channel = "ByteOutLo"
+direction = "output"
+
+[[io.bindings]]
+variable = "ByteOutHi"
+device = "modbus0"
+channel = "ByteOutHi"
+direction = "output"
+
+[[io.bindings]]
+variable = "WordOut"
+device = "modbus0"
+channel = "WordOut"
+direction = "output"
+
+[[io.bindings]]
+variable = "DwordOut"
+device = "modbus0"
+channel = "DwordOut"
+direction = "output"
+
+[[io.bindings]]
+variable = "DwordSwapOut"
+device = "modbus0"
+channel = "DwordSwapOut"
+direction = "output"
+
+[[io.bindings]]
+variable = "LwordOut"
+device = "modbus0"
+channel = "LwordOut"
+direction = "output"
+
+[[io.bindings]]
+variable = "MbListening"
+device = "MBStatus"
+channel = "server0.listening"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbListeners"
+device = "MBStatus"
+channel = "server0.listeners"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbBoundListeners"
+device = "MBStatus"
+channel = "server0.bound_listeners"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbConnections"
+device = "MBStatus"
+channel = "server0.connections"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbRequests"
+device = "MBStatus"
+channel = "server0.requests"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbWrites"
+device = "MBStatus"
+channel = "server0.writes"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbExceptions"
+device = "MBStatus"
+channel = "server0.exceptions"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbMalformed"
+device = "MBStatus"
+channel = "server0.malformed"
+direction = "input"
+
+[[io.bindings]]
+variable = "MbLastError"
+device = "MBStatus"
+channel = "server0.last_error"
+direction = "input"

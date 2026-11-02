@@ -38,3 +38,8 @@ reason = "The locked DeviceBackend interface has no configuration-warning channe
 id = "STC-W-IO-ETH-002"
 status = "not-implemented"
 reason = "The locked DeviceBackend interface has no configuration-warning channel; a DC table without assign-activate runs free-run and is otherwise silent."
+
+[[rule]]
+id = "STC-W-IO-MODTCP-001"
+status = "not-implemented"
+reason = "The locked DeviceBackend interface has no configuration-warning channel; unbound declared Modbus channels are counted in server<N>.unbound diagnostics instead of emitting this warning (I/O Routing and Backends §4.5.7)."

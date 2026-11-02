@@ -1,0 +1,265 @@
+# Mixed DIEWU EtherCAT + Modbus TCP bench profile.
+#
+# EtherCAT: identity, sync/PDO tree, and channel map from `ethercat cstruct
+# -p 0` on ecat-host (tests/ethercat/diewu/io/bench.toml). DC is omitted; the
+# SII has no AssignActivate value and the slave runs free-run (D-215/E-5 and
+# D-227/E-17).
+#
+# Modbus TCP: one server for the network client. Addressing is zero-based:
+# holding-register address 0 is vendor reference 40001, coil address 0 is
+# 00001. The server binds all interfaces so the bench workstation can reach
+# it; bench hosts are lab machines on an isolated network, and this backend
+# has no authentication or encryption by contract.
+
+[device.diewu]
+master = 0
+alias = 0
+position = 0
+vendor = "0x00000b95"
+product = "0x00010200"
+revision = 1
+startup-timeout = "10s"
+recovery-cycles = 3
+
+# SM0: output byte 0 (OUT0..OUT7), watchdog enabled.
+[[device.diewu.syncs]]
+index = 0
+direction = "output"
+watchdog = "enable"
+
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3101"
+subindex = 1
+bits = 8
+
+# SM1: output byte 1 (OUT8..OUT15), watchdog enabled.
+[[device.diewu.syncs]]
+index = 1
+direction = "output"
+watchdog = "enable"
+
+[[device.diewu.syncs.pdos]]
+index = "0x1a01"
+
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3101"
+subindex = 2
+bits = 8
+
+# SM2: input bytes 0 and 1 (IN0..IN15), watchdog disabled.
+[[device.diewu.syncs]]
+index = 2
+direction = "input"
+watchdog = "disable"
+
+[[device.diewu.syncs.pdos]]
+index = "0x1600"
+
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 1
+bits = 8
+
+[[device.diewu.syncs.pdos]]
+index = "0x1601"
+
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 2
+bits = 8
+
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 1 }
+bit = 0
+
+[[device.diewu.pdo-channels]]
+name = "IN1"
+entry = { index = "0x3001", subindex = 1 }
+bit = 1
+
+[[device.diewu.pdo-channels]]
+name = "IN2"
+entry = { index = "0x3001", subindex = 1 }
+bit = 2
+
+[[device.diewu.pdo-channels]]
+name = "IN3"
+entry = { index = "0x3001", subindex = 1 }
+bit = 3
+
+[[device.diewu.pdo-channels]]
+name = "IN4"
+entry = { index = "0x3001", subindex = 1 }
+bit = 4
+
+[[device.diewu.pdo-channels]]
+name = "IN5"
+entry = { index = "0x3001", subindex = 1 }
+bit = 5
+
+[[device.diewu.pdo-channels]]
+name = "IN6"
+entry = { index = "0x3001", subindex = 1 }
+bit = 6
+
+[[device.diewu.pdo-channels]]
+name = "IN7"
+entry = { index = "0x3001", subindex = 1 }
+bit = 7
+
+[[device.diewu.pdo-channels]]
+name = "IN8"
+entry = { index = "0x3001", subindex = 2 }
+bit = 0
+
+[[device.diewu.pdo-channels]]
+name = "IN9"
+entry = { index = "0x3001", subindex = 2 }
+bit = 1
+
+[[device.diewu.pdo-channels]]
+name = "IN10"
+entry = { index = "0x3001", subindex = 2 }
+bit = 2
+
+[[device.diewu.pdo-channels]]
+name = "IN11"
+entry = { index = "0x3001", subindex = 2 }
+bit = 3
+
+[[device.diewu.pdo-channels]]
+name = "IN12"
+entry = { index = "0x3001", subindex = 2 }
+bit = 4
+
+[[device.diewu.pdo-channels]]
+name = "IN13"
+entry = { index = "0x3001", subindex = 2 }
+bit = 5
+
+[[device.diewu.pdo-channels]]
+name = "IN14"
+entry = { index = "0x3001", subindex = 2 }
+bit = 6
+
+[[device.diewu.pdo-channels]]
+name = "IN15"
+entry = { index = "0x3001", subindex = 2 }
+bit = 7
+
+[[device.diewu.pdo-channels]]
+name = "OUT0"
+entry = { index = "0x3101", subindex = 1 }
+bit = 0
+
+[[device.diewu.pdo-channels]]
+name = "OUT1"
+entry = { index = "0x3101", subindex = 1 }
+bit = 1
+
+[[device.diewu.pdo-channels]]
+name = "OUT2"
+entry = { index = "0x3101", subindex = 1 }
+bit = 2
+
+[[device.diewu.pdo-channels]]
+name = "OUT3"
+entry = { index = "0x3101", subindex = 1 }
+bit = 3
+
+[[device.diewu.pdo-channels]]
+name = "OUT4"
+entry = { index = "0x3101", subindex = 1 }
+bit = 4
+
+[[device.diewu.pdo-channels]]
+name = "OUT5"
+entry = { index = "0x3101", subindex = 1 }
+bit = 5
+
+[[device.diewu.pdo-channels]]
+name = "OUT6"
+entry = { index = "0x3101", subindex = 1 }
+bit = 6
+
+[[device.diewu.pdo-channels]]
+name = "OUT7"
+entry = { index = "0x3101", subindex = 1 }
+bit = 7
+
+[[device.diewu.pdo-channels]]
+name = "OUT8"
+entry = { index = "0x3101", subindex = 2 }
+bit = 0
+
+[[device.diewu.pdo-channels]]
+name = "OUT9"
+entry = { index = "0x3101", subindex = 2 }
+bit = 1
+
+[[device.diewu.pdo-channels]]
+name = "OUT10"
+entry = { index = "0x3101", subindex = 2 }
+bit = 2
+
+[[device.diewu.pdo-channels]]
+name = "OUT11"
+entry = { index = "0x3101", subindex = 2 }
+bit = 3
+
+[[device.diewu.pdo-channels]]
+name = "OUT12"
+entry = { index = "0x3101", subindex = 2 }
+bit = 4
+
+[[device.diewu.pdo-channels]]
+name = "OUT13"
+entry = { index = "0x3101", subindex = 2 }
+bit = 5
+
+[[device.diewu.pdo-channels]]
+name = "OUT14"
+entry = { index = "0x3101", subindex = 2 }
+bit = 6
+
+[[device.diewu.pdo-channels]]
+name = "OUT15"
+entry = { index = "0x3101", subindex = 2 }
+bit = 7
+
+# No routes: every EtherCAT channel is directly bound, and the Modbus channels
+# are not wired to EtherCAT. Cross-backend routing is covered by the mixed
+# coordinator mock test in crates/stc-runtime/src/io_modbus_tcp.rs.
+
+[device.modbus0]
+bind = ["0.0.0.0:15030"]
+unit = 1
+max-connections = 8
+idle-timeout = "60s"
+word-order = "high-first"
+
+# The network client writes command word 0 and coil 0; the PLC adds one and
+# copies the bit, so the client reads the results at register 1 and coil 1.
+[[device.modbus0.channels]]
+name = "BenchCmd"
+table = "holding-register"
+address = 0
+
+[[device.modbus0.channels]]
+name = "BenchBit"
+table = "coil"
+address = 0
+
+[[device.modbus0.channels]]
+name = "BenchSeen"
+table = "holding-register"
+address = 1
+
+[[device.modbus0.channels]]
+name = "BenchOut"
+table = "coil"
+address = 1
