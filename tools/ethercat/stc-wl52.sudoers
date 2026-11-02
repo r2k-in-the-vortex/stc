@@ -1,0 +1,9 @@
+# WL-5.2 privileged EtherCAT wrappers (phase 5).
+#
+# Installed root-owned at /etc/sudoers.d/stc-wl52 with mode 0440 and
+# validated with `visudo -cf`. Only these two fixed-command wrappers are
+# allowed; both validate their subcommands and arguments and expose no
+# generic passthrough.
+
+r2k ALL=(root) NOPASSWD: /usr/local/sbin/stc-wl52-service
+r2k ALL=(root) NOPASSWD: /usr/local/sbin/stc-wl52-run

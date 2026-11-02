@@ -7,6 +7,9 @@
 **/*.rs.bk
 *.profraw
 
+# CI artifact downloads for local verification
+/artifacts/
+
 # Lean build artifacts
 /lean/.lake/
 

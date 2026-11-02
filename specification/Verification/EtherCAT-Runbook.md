@@ -1,0 +1,1043 @@
+# EtherCAT HIL verification runbook — WL-5.2
+
+Profile: `stc-2013-oop-utf8-v1`  
+Date: 2026-11-01  
+Status: Phase 3–5 evidence and the full phase-6 powered loopback/fault results are recorded. The
+all-points matrix passed 16/16 on the fixed package; the powered fault matrix passed after the
+stale-input fix. An earlier supply-limited run and the fix history are in §13. Results are
+host- and hardware-specific; this is not a hard real-time guarantee and not a safety function.  
+Parent: [EtherCAT-Host.md](EtherCAT-Host.md) (WL-5.2 report)  
+Inputs: [I/O Routing and Backends](../Architecture/IO-Routing-and-Backends.md),
+[I/O and Devices](../Architecture/IO-and-Devices.md),
+[DIEWU fixture](../../tests/ethercat/diewu/README.md)
+
+## 1. Protocol and scope
+
+The phase-3 procedure brings up the delivered DIEWU 16I/16O EtherCAT slave on `ecat-host` with
+open-ended (unwired/unloaded) I/O and runs a non-CPU-bound PLC program for 600000 cycles at 1 ms.
+The target is **frame-level** success only:
+
+- the slave is operational (OP) and the domain working counter is complete;
+- `ecrt_master_send` accepts every cycle's frame and the receive/process path sees the reply;
+- the runtime reports no send/receive errors and no unexplained fault episodes;
+- the IgH master's lost-frame and Tx-error counters do not increase across the run.
+
+Physical input values and measured output behaviour are **not** verified in phase 3. The terminal
+blocks stay unwired/unloaded, and the procedure does not toggle, measure, unplug, power-cycle, or
+inject faults. The all-points matrix, loopback harness, and physical fault injection are phase 6.
+Phases 3–5 use this same open-ended, frame-level protocol.
+
+The run is not a hard real-time measurement. It does not pass `--rt`, and the host is not changed.
+The reference host, its tuned boot profile, and its IgH installation are inputs to this runbook;
+this repository does not install or modify IgH on the host.
+
+## 2. Host and prerequisites
+
+| Item | Reference value |
+| --- | --- |
+| Host | `ecat-host`, Dell Wyse 5070, Intel Celeron J4105, 8 GiB RAM, bare metal |
+| OS | Ubuntu Server 24.04.5 LTS, x86-64 |
+| Kernel | `6.12.115-ecat-rt`, `CONFIG_PREEMPT_RT=y` |
+| IgH master | 1.6.13, commit `61cc654f5b721ddd54df0f58bdd34106d91c5359`, at `/usr/local/etherlab` |
+| IgH userspace | `libethercat.so.1.2.0`, `ecrt.h` version 1.6 |
+| Device | `/dev/EtherCAT0`, `crw-rw---- root:ethercat`; the login user is in `ethercat` |
+| Slave | DIEWU `DIEWU_EtherCAT_DIO_16`, vendor `0x00000b95`, product `0x00010200`, revision `1` |
+| Slave position | master 0, alias 0, position 0; free-run, no distributed clocks |
+| Compiler | `clang` on the host for the fixture's user-project build |
+| Artifact source | CI package and shim built on `ubuntu-24.04`; never build `stc` on the host |
+
+The login user opens `/dev/EtherCAT0` directly. Do not use `sudo` to work around a permission
+error: if the device is not accessible to the login user, stop and report. Do not read, copy, or
+store credentials or local access notes in the repository.
+
+Before a run, record the host state and confirm that no other application owns the master:
+
+```sh
+uname -a
+cat /etc/os-release
+ethercat version
+clang --version
+ethercat master
+ethercat slaves
+```
+
+`ethercat master` must show `Phase: Idle`, link up, one responding slave, and zero Tx errors and
+lost frames. `ethercat slaves` must show the DIEWU slave in PREOP. If another application is
+holding the master, stop and report; do not kill or restart it.
+
+The host reserves CPU 3 with `isolcpus`, but this non-RT procedure does not pin the run or the IgH
+threads, and the observed `EtherCAT-IDLE` thread has scheduling class `TS`, not a real-time class.
+An SSH login or a burst of unrelated CPU work on CPUs 0–2 can therefore delay a frame. Run the
+timed procedure from the single SSH session that starts it, and do not open other sessions, poll
+from another terminal, or run background commands on the host while the run is in progress.
+§8.1 records what happened when the run was monitored from separate SSH sessions.
+
+## 3. Build and transfer
+
+The base `stc` package has no IgH dependency. The optional shim artifact is loaded only when an
+EtherCAT device is configured. CI builds both artifacts; the host receives the finished files.
+
+### 3.1 Trigger the manual CI run
+
+The workflow is manually dispatched on the `WL-5.2` branch. Trigger it and wait for the run whose
+head is the commit under test:
+
+```sh
+gh workflow run ci.yml --ref WL-5.2
+gh run list --workflow ci.yml --branch WL-5.2 --limit 5
+gh run watch <run-id> --exit-status
+```
+
+The run must be green before its artifacts are used. The two artifacts are
+`stc-package-ubuntu-24.04` and `stc-io-ethercat-linux-x86_64`.
+
+### 3.2 Download and verify
+
+On the build workstation, download both artifacts into an empty staging directory:
+
+```sh
+gh run download <run-id> -n stc-package-ubuntu-24.04 -D artifacts/package
+gh run download <run-id> -n stc-io-ethercat-linux-x86_64 -D artifacts/shim
+```
+
+The package artifact expands to
+`artifacts/package/dist/stc-<version>-x86_64-unknown-linux-gnu/` containing `bin/`, `lib/`,
+`docs/`, `package.json`, and `SHA256SUMS`; the shim artifact contains `libstc_io_ethercat.so`.
+Verify the package checksums before transferring it:
+
+```sh
+package="$(cd artifacts/package/dist/stc-* && pwd)"
+(cd "$package" && sha256sum -c SHA256SUMS)
+```
+
+Transfer the package contents, the shim, and the fixture directory (without `target/`) to the
+host:
+
+```sh
+package="$(cd artifacts/package/dist/stc-* && pwd)"
+ssh <user>@ecat-host 'install -d "$HOME/stc-wl52" "$HOME/stc-wl52/logs"'
+scp -r "$package/." <user>@ecat-host:~/stc-wl52/
+scp artifacts/shim/libstc_io_ethercat.so <user>@ecat-host:~/stc-wl52/lib/
+ssh <user>@ecat-host 'rm -rf "$HOME/stc-wl52/diewu"'
+scp -r tests/ethercat/diewu <user>@ecat-host:~/stc-wl52/
+ssh <user>@ecat-host 'cd "$HOME/stc-wl52" && sha256sum -c SHA256SUMS'
+ssh <user>@ecat-host 'chmod 0755 "$HOME/stc-wl52/bin/stc"'
+```
+
+Artifact downloads do not preserve the executable bit; the `chmod` restores it for the package
+binary. The fixture scripts are invoked with `bash`, so their mode is not significant.
+
+The working directories on the host are `~/stc-wl52/bin`, `~/stc-wl52/lib`, and
+`~/stc-wl52/diewu`. Raw logs stay under `~/stc-wl52/logs`. Do not commit the artifacts, logs, or
+the fixture's `target/` directory. The `rm -rf` target is only the fixture copy; it never touches
+`~/stc-wl52/logs` or the package files, and the fixture can be rebuilt from source.
+
+### 3.3 Verify the deployed files on the host
+
+```sh
+~/stc-wl52/bin/stc --version
+ldd ~/stc-wl52/lib/libstc_io_ethercat.so | grep ethercat
+```
+
+`stc --version` must report the packaged version. `ldd` must resolve `libethercat.so.1` through
+`/usr/local/etherlab/lib`; if it does not, add that directory to `LD_LIBRARY_PATH` for the run.
+Do not rebuild `stc`, the runtime, or the shim on the host. Building the user-project fixture with
+the packaged `stc` is the intended use of the package.
+
+If `clang` is missing on the host, stop and report. Do not install packages without
+authorization.
+
+## 4. Fixture
+
+The fixture is source-controlled at `tests/ethercat/diewu/`. Its manifest declares sixteen BOOL
+inputs and sixteen BOOL outputs on the EtherCAT device, a read-only `ethercat-status` device with
+layout 1, the direct `%I`/`%Q` bindings, and `[io].config = "io/bench.toml"`. The selected machine
+profile supplies the DIEWU identity, the sync manager and PDO map, the 32-channel map, and the
+routes. The program copies `In0..In13` to `Out0..Out13`, toggles a state bit from `In14`, and
+increments a counter; it is not CPU-bound.
+
+The profile is selected by `[io].config` in the manifest and embedded in the built artifact. The
+`--io-config` runtime option is a diagnostic path override; it does not change the profile's
+routes or bindings. The source-controlled `io/bench.toml` is the profile under test.
+
+Build the fixture with the deployed package:
+
+```sh
+export STC="$HOME/stc-wl52/bin/stc"
+bash "$HOME/stc-wl52/diewu/build.sh"
+```
+
+The build emits the module and metadata under `diewu/target/stc/`. The package's runtime library
+is used from the package `lib/`; set `STC_ETHERCAT_LIBRARY` and `LD_LIBRARY_PATH` when running.
+
+## 5. Open-ended run
+
+The run uses `stc run --io ethercat` without `--rt`. The script sets 600000 cycles at `1ms`
+(`--cycles 600000 --cycle-time 1ms`), passes `-v`, and stops after the cycle count. It does not
+write outputs during shutdown; the backend releases the master and the slave's process-data
+watchdog handles the stopped frames.
+
+1. Open one SSH session and keep it open for the whole run. Do not open another session while
+   the run is active. The one exception is the initial session setup, which finishes before the
+   run starts.
+
+2. In that session, sample the master and the slave state, then run the script in the foreground:
+
+   ```sh
+   cd "$HOME/stc-wl52"
+   mkdir -p logs
+   ethercat master > logs/master-before.txt
+   ethercat slaves > logs/slaves-before.txt
+   export STC="$HOME/stc-wl52/bin/stc"
+   export STC_ETHERCAT_LIBRARY="$HOME/stc-wl52/lib/libstc_io_ethercat.so"
+   export LD_LIBRARY_PATH="/usr/local/etherlab/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+   bash diewu/run-open-ended.sh > "logs/open-ended-$(date +%Y%m%dT%H%M%S).log" 2>&1
+   ethercat master > logs/master-after.txt
+   ethercat slaves > logs/slaves-after.txt
+   ```
+
+   The script exits when the 600000 cycles complete. If it fails before the cycle count, keep
+   the log and the master/slave outputs and diagnose the cause; do not start a second run while
+   another process owns the master.
+
+3. Keep the raw log, both master samples, and both slave samples on the host. Record their paths
+   and SHA256 values in the run summary. Do not commit the raw logs, and do not reset the master
+   counters.
+
+4. After the run, `ethercat master` must be back in `Phase: Idle` and `ethercat slaves` must show
+   the slave in PREOP. The slave's output watchdog handles the stopped frames; the runtime does
+   not write the output image on shutdown.
+
+## 6. Frame-level success criteria
+
+The run is accepted when all of the following hold. Physical I/O values are not part of this
+check.
+
+| Check | Evidence |
+| --- | --- |
+| Slave reaches and stays operational | The backend health gate requires every configured slave to be online and operational; `faults=0`, `domain.wc_state=2`, and `master.slaves_responding=1` reflect OP. The kernel log shows the slave-state transition, and `ethercat slaves` after release shows PREOP. |
+| Domain working counter complete | `domain.wc_state=2` and a stable working counter in the status line |
+| Every cycle's frame accepted and replied | `exchanges=600000`; no `STC-E-IO-ETH-*` send/receive error; no startup timeout |
+| No unexplained runtime fault | `faults=0`, `master.recoveries=0`, `input.stale=0`, `master.last_error=0` at exit |
+| Master counters unchanged | `Tx errors` and `Lost frames` in `logs/master-before.txt` and `logs/master-after.txt` are equal |
+| Kernel log clean during the run | no `Working counter changed to 0/3`, no `SKIPPED`, and no `UNMATCHED` after the activation phase |
+| Shutdown is non-writing | master released; slave PREOP; output image not rewritten by the runtime |
+
+The expected `-v` status line is:
+
+```text
+stc: status: io-backend ethercat devices=2 state=running exchanges=600000 faults=0 hash=0x... domain.wc_state=2 domain.working_counter=3 input.stale=0 master.last_error=0 master.link_up=1 master.recoveries=0 master.slaves_responding=1
+```
+
+The `hash` value is the configuration hash for the selected profile and bindings. It must match
+the committed fixture and profile; record it in the run summary.
+
+IgH may print activation-phase messages such as `1 datagram UNMATCHED!` and
+`No application time received up to now` before the first complete domain cycle. These occur
+during `ecrt_master_activate` and the PREOP/SAFEOP/OP transition, not during the steady-state
+process-data run. Record them in the run summary; a warning in the steady-state window is a
+frame-level fault and must be diagnosed.
+
+## 7. Troubleshooting
+
+- `STC_ETHERCAT_LIBRARY` unset or wrong: the runtime fails to load the shim. Check the status
+  line's `last-fault` and the log; do not rebuild the shim on the host.
+- `libethercat.so.1` not found: set `LD_LIBRARY_PATH=/usr/local/etherlab/lib` for the run.
+- `/dev/EtherCAT0` permission denied: stop and report; do not use `sudo` or change device
+  permissions.
+- `ethercat master` cannot open the master: another application owns it. Stop and report; do not
+  kill the other process.
+- Startup timeout or identity mismatch: compare the fixture's vendor, product, revision, alias,
+  and position with `ethercat slaves -v`; fix the fixture, not the host.
+- A single skipped/unmatched datagram while another SSH session is active: finish that session,
+  confirm the master counters did not increase, and repeat the 10-minute run in one session. The
+  master threads are `SCHED_OTHER`; login CPU bursts can exceed one cycle.
+- Any steady-state WC or AL fault: keep the logs and the master/slave samples, and stop before
+  changing the host. Do not power-cycle, unplug cables, or toggle I/O in phase 3.
+
+## 8. Phase 3 evidence
+
+Two 10-minute runs were made on 2026-10-31 with the same package, shim, and fixture. The first was
+monitored from separate SSH sessions and recorded one transient working-counter fault during a
+login CPU burst; it is retained as a diagnostic run but is not the acceptance run. The second ran
+from a single SSH session with no other host activity and is the phase-3 acceptance run. The slave
+was open-ended (unwired/unloaded); physical input values and measured output behaviour were not
+tested. Raw logs stay on `ecat-host` under `~/stc-wl52/logs/`; this section is the committed
+summary and hash record.
+
+### 8.1 First diagnostic run (fault under concurrent SSH activity)
+
+The command, environment, and cycle count were the same as §5: `bash diewu/run-open-ended.sh`
+with `STC=~/stc-wl52/bin/stc`,
+`STC_ETHERCAT_LIBRARY=~/stc-wl52/lib/libstc_io_ethercat.so`, and
+`LD_LIBRARY_PATH=/usr/local/etherlab/lib`, 600000 cycles at 1 ms, debug module. The run occupied
+09:11:40–09:22:29 (-06:00) and exited 0 with log `logs/open-ended-20261031T091140.log`.
+
+| Field | Observed |
+| --- | --- |
+| Exchanges | 600000 |
+| Runtime state at exit | `state=running`, `faults=1`, `recoveries=1`, `input.stale=0` |
+| Domain at exit | `domain.wc_state=2`, `domain.working_counter=3` |
+| Last fault | `STC-W-IO-ETH-003: fieldbus is not operational` |
+| Master before | Phase Idle, 1 slave, Tx frames 60951966, Rx frames 60951965, Tx errors 0, Lost frames 0 |
+| Master after | Phase Idle, 1 slave, Tx frames 61556753, Rx frames 61556752, Tx errors 0, Lost frames 0 |
+| Slave state | OP after activation; no state change in the fault window; PREOP after release at 09:22:29 |
+| Kernel fault window | 09:15:27 WC changed to 0/3; 09:15:28 `1 datagram UNMATCHED!`, `domain0-0-main` SKIPPED 1 time; WC changed to 3/3 |
+
+The fault window coincides with a separate monitoring login: journal session 201 opened at
+09:15:26 and closed at 09:15:28, and the session scope consumed 1.092 s CPU time. The observed
+`EtherCAT-IDLE` thread is `SCHED_OTHER` (`TS`), and this non-RT procedure does not pin the run or
+the IgH threads, so a login CPU burst can delay a reply past one cycle. The runtime's health gate
+saw the incomplete working counter, entered fault, kept the cycle running, and recovered after
+three consecutive healthy samples; the slave stayed OP, and the master's Tx-error and lost-frame
+counters stayed at zero. This is consistent with host scheduling, not a runtime send/receive
+error. Because the run was monitored from separate sessions, it is not used as the acceptance
+run; the clean run in §8.2 repeats the procedure in isolation.
+
+### 8.2 Clean acceptance run
+
+The acceptance run was started and left alone in a single SSH session. It occupied
+09:26:09–09:36:57 (-06:00), exited 0, and wrote `logs/open-ended-clean-20261031T092609.log`.
+No other host login or background command ran during the window. The status line was:
+
+```text
+stc: status: io-backend ethercat devices=2 state=running exchanges=600000 faults=0 hash=0x9325a55375832b4fb39ed3bbfd3cc7a0d38dbd1b7ecb44dfaf52ab3f6174681c domain.wc_state=2 domain.working_counter=3 input.stale=0 master.last_error=0 master.link_up=1 master.recoveries=0 master.slaves_responding=1
+```
+
+| Criterion | Evidence |
+| --- | --- |
+| Slave operational | `faults=0`, `domain.wc_state=2`, `master.slaves_responding=1`; kernel `Slave states on main device: OP` at 09:26:11; after release `ethercat slaves` reports `0 0:0 PREOP + DIEWU EtherCAT-IO (Digital 16-Input/16-Output)` |
+| Domain working counter complete | `domain.wc_state=2`, `domain.working_counter=3` |
+| Frames accepted and replied | `exchanges=600000`; no `STC-E-IO-ETH-*` send/receive error; no startup timeout |
+| No runtime fault | `faults=0`, `master.recoveries=0`, `input.stale=0`, `master.last_error=0` |
+| Master counters unchanged | Tx errors 0 and Lost frames 0 in both samples below |
+| Kernel log clean | activation-phase `UNMATCHED` and `No application time` warnings at 09:26:11 only; WC 3/3 and OP follow; no WC change, `SKIPPED`, or `UNMATCHED` after activation |
+| Shutdown non-writing | master Idle, `Active: no`; slave PREOP; the runtime does not write outputs on shutdown; physical outputs were not measured |
+
+| Master sample | Phase | Slaves | Tx frames | Rx frames | Tx errors | Lost frames |
+| --- | --- | --- | --- | --- | --- | --- |
+| Before (09:26:09) | Idle | 1 | 61768039 | 61768038 | 0 | 0 |
+| After (09:36:57) | Idle | 1 | 62369519 | 62369518 | 0 | 0 |
+
+The frame counters advanced by 601480 with no lost frame and no Tx error. The 600000 requested
+1 ms cycles took 648 s of wall time (about 1.08 ms effective), consistent with the non-RT pacing
+and the debug module; phase 3 checks frame acceptance, not cycle jitter. The run is accepted as
+the phase-3 frame-level acceptance run. OP is inferred from the health gate, the kernel state
+transition, and the post-release state because the operator status line does not print per-slave
+fields. Physical I/O values were not verified.
+
+### 8.3 Artifacts, fixture, and log hashes
+
+The deployed package is CI artifact `stc-package-ubuntu-24.04` from run
+[41212625765](https://github.com/r2k-in-the-vortex/stc/actions/runs/41212625765) at head
+`021e12f6dbfe8957952f7bb4d09d72acd9eb256a`; the shim is artifact
+`stc-io-ethercat-linux-x86_64` from the same run. The package is
+`stc-1.0.0-x86_64-unknown-linux-gnu` (`debug_contract: dwarf`, host
+`x86_64-unknown-linux-gnu`). The deployed files on the host matched the package:
+
+| Artifact | SHA256 |
+| --- | --- |
+| `bin/stc` | `b05c2b5bd4b76bb9728fca0ed451b90b127d5838acde5ac8f9453b4771214ff0` |
+| `lib/libstc_runtime.so` | `fbe4764f3f608b6fb3663bfb583d378828579a919aed500e66eb41ff3af6a090` |
+| `lib/libstc_runtime.a` | `002bf66b3269fe6d874dca2f81d98c906e56fb8f1d45cbb49bbae08d01d61b2d` |
+| `lib/libstc_io_ethercat.so` | `bceeb6014076f41958b0ae4442f744fc3035af3544bcd5a046e278089e5df448` |
+| `package.json` | `dd3e5d37e936331c5876ccf50e5b5dcc920765212665d3f91c41e80abc405dbb` |
+| `SHA256SUMS` | `9a7e878617d2e58ceb92429d6caec9dc80a5d59e85b71f4f0008a8392c00958b` |
+| `compliance.json` | `a015ba95f5eecfeca7db724cb8aa18f19593bc2bc79c5de3d08d23f4a77eedad` |
+
+The fixture files used by both runs:
+
+| File | SHA256 |
+| --- | --- |
+| `diewu/stc.toml` | `c50d43a6df3df9edfca9353512b8b71e8c7b0bc55139029414f48a66d2f36f9b` |
+| `diewu/io/bench.toml` | `5638fb28969b6931cec7b19947c35472e16bf0ffa1ad814161de0d2fedcdb20a` |
+| `diewu/src/main.st` | `3d70b4d46b391aa754e0dae51a1b03400a8d5a6935da946b2b2f419049ce8522` |
+| `diewu/build.sh` | `141b15c77f4f4827b580e96ee77700ab372c2fb44c6f298a087a48b41ccd658d` |
+| `diewu/run-open-ended.sh` | `eba6c5244eb86d5446999a983f7542db6a06ce5c7727c61dec017a83deeeba66` |
+
+Raw log hashes, relative to `~/stc-wl52/` on `ecat-host`:
+
+| File | SHA256 |
+| --- | --- |
+| `logs/open-ended-clean-20261031T092609.log` | `aa77b1b322e591fe6883fb9dd6561cd8a5c6453d314e8be34f894bff441da80d` |
+| `logs/kernel-clean.log` | `7272c1e373d1ab50fa1ca4a847652bee6aa380f4f177c93276d80022286f529a` |
+| `logs/master-clean-before.txt` | `10693d9b189b064020636c330267e52bee418b3143eb8e82e8cae85917fbce72` |
+| `logs/master-clean-after.txt` | `17f66537a94ea6c80d105ea79c7e011c88ceb839280ab6bec824c6b9c362d3b6` |
+| `logs/host-clean.txt` | `7976f5a361ee6979ab2e4c7c79b63c68d3a11c0f84b10ab4e8618777d05b7ebd` |
+| `logs/run-clean-start.txt` | `2bfff3dceb77316f24076fe61b84e8533cd49b1f753d44a177640977b233bd64` |
+| `logs/run-clean-result.txt` | `dc16d4c2e8c3bd20fa4fb2ebb3ee31efc62b3ced964b86bfc574f53e8242373a` |
+| `logs/open-ended-20261031T091140.log` | `290139b590321a6d6bdef3803911a17d5462e0530cbf368613c6189a5520ab25` |
+| `logs/master-before.txt` | `c173ebbb3c6916d991c545463c067a2946ad150ac499811a5293c1ba8d82ecf6` |
+| `logs/master-after.txt` | `c34805366c550dba46d276ac5ead6251e000e61fb25d1049311e9f353b9f4e81` |
+
+The host record also reports kernel `6.12.115-ecat-rt #2 SMP PREEMPT_RT`, `nproc: 3` (the boot
+profile isolates CPU 3), `stc 1.0.0`, IgH 1.6.13, and clang 18.1.3. The raw logs and the
+deployment are not committed; the hashes above identify the retained evidence.
+
+## 9. Phase 4 evidence
+
+Phase 4 exercises the software-fault matrix, the PLC-visible status device, and online change on
+`ecat-host`. No physical fault was injected: no cable was unplugged or reconnected, the slave was
+not power-cycled, no loopback harness was used, and no input or output was toggled or measured;
+those remain phase 6. The master service was not stopped or restarted (§9.3). Every run used the
+prebuilt package; nothing was rebuilt on the host, and no `sudo` command was used.
+
+The package is CI run
+[41217639207](https://github.com/r2k-in-the-vortex/stc/actions/runs/41217639207) at head
+`938aa937d40b5a277a3c1142390596177b5a5c3e` (`stc-1.0.0-x86_64-unknown-linux-gnu`). The deployed
+files matched the run's artifacts:
+
+| Artifact | SHA256 |
+| --- | --- |
+| `bin/stc` | `c68055ca99876770e49fb1466a5d0576546d33a0e79e0009aed0082a3455640e` |
+| `lib/libstc_runtime.so` | `600f7348555c4e7bfb6e0f08f461b1876e395595548168ad6f00652cdcc46e7f` |
+| `lib/libstc_runtime.a` | `11070b1f6add9ea8df047b576effec6b851e047196077e98a52c20e96a866ae1` |
+| `lib/libstc_io_ethercat.so` | `bceeb6014076f41958b0ae4442f744fc3035af3544bcd5a046e278089e5df448` |
+| `package.json` | `dd3e5d37e936331c5876ccf50e5b5dcc920765212665d3f91c41e80abc405dbb` |
+| `SHA256SUMS` | `77ff67dcbbcf49afa795f3c87e06d3d6b70b2945ca749797c64c336ddaa1700e` |
+
+The run's `compliance.json` metadata is unchanged from phase 3 (`a015ba95f5eecfeca7db724cb8aa18f19593bc2bc79c5de3d08d23f4a77eedad`).
+The shim binary is byte-identical to the phase-3 artifact; phase 4 changed the runtime, not the
+shim. The fixture files stayed at their §8.3 hashes: `stc.toml` `c50d43a6...`, `io/bench.toml`
+`5638fb28...`, `src/main.st` `3d70b4d4...`, `build.sh` `141b15c7...`, and `run-open-ended.sh`
+`eba6c524...`. The master-owned case uses the new helper `diewu/holder/holder.c`
+(`1051c8f7f8663c3f7a064f9548687456cdbb21e77abcb87c8a583331c362ab8a`); the host-compiled binary
+is `f41dc457ea92ea3875e136530f2806db7c759881240a6119f543d2420941b53d`.
+
+### 9.1 Master already owned
+
+`holder.c` is a small ordinary-user application that calls `ecrt_request_master(0)` and pauses; it
+reproduces the master-owned condition without root. The host binary was compiled from the
+committed source, and the host source hash equals the repository hash.
+
+Procedure: run the holder as the login user, confirm `ethercat master` shows `Phase: Operation`,
+start the fixture with `--cycles 10 --cycle-time 1ms`, then terminate the holder with SIGTERM.
+The runtime failed closed:
+
+```text
+Failed to reserve master: Device or resource busy
+stc: cannot install module ...: STC-E-IO-ETH-002: shim master open failed: cannot request EtherCAT master 0 (code 2)
+```
+
+The process exited 1. While the holder owned the master, `ethercat master` reported `Phase:
+Operation`, `Active: no`, and one slave; the runtime published no `stc: status: io-backend` line
+and never entered the run loop, so no outputs were written. After the holder exited, the master
+returned to `Phase: Idle` and the slave remained PREOP. The runtime does not contend for or take
+over a master that another application owns. The same result was observed with the phase-3
+package before this re-run with the phase-4 package.
+
+### 9.2 Wrong identity and startup timeout
+
+Three copies of the fixture profile changed one field each; the committed fixture was not
+modified. Every run used 10 cycles at 1 ms with `--no-retain --status`.
+
+| Case | Profile change | Runtime diagnostic | Master after | Slave after |
+| --- | --- | --- | --- | --- |
+| Wrong identity | `vendor` `0x00000b95` -> `0x00000b96` | exit 1, `STC-E-IO-ETH-008: EtherCAT startup timed out after 10000 ms: fieldbus is not operational` | Idle | PREOP |
+| Wrong position | `position` 0 -> 1 | exit 1, `STC-E-IO-ETH-003: shim slave configure failed: cannot read slave 1 identity (-22) (code 3)` | Idle | PREOP |
+| Startup timeout | `startup-timeout` `10s` -> `1us` | exit 1, `STC-E-IO-ETH-008: EtherCAT startup timed out after 0 ms: fieldbus is not operational` | Idle | PREOP |
+
+IgH accepts the slave configuration for a non-matching vendor/product but leaves the slave
+unconfigured, so the failure surfaces as the configured startup timeout (ETH-008), not as an
+identity error; the 1 us profile prints as `0 ms` because the diagnostic is reported in whole
+milliseconds. A position with no slave fails identity lookup (ETH-003; IgH logs
+`Failed to get slave info: Invalid argument`). In all three cases the runtime opened no run,
+released the master, and left the slave in PREOP; no outputs were published. Each case is
+fail-closed and returns to `Phase: Idle`.
+
+### 9.3 Master service stop/start (recorded privilege gap)
+
+The matrix entry for stopping and restarting the EtherCAT master service was not executed.
+`sudo -n -l` on the host lists a password-gated `(ALL : ALL) ALL` entry and one NOPASSWD entry,
+`(root) NOPASSWD: /usr/local/sbin/stc-wl4-run`, which does not cover `systemctl stop` or
+`systemctl start ethercat`. The phase rules forbid privilege escalation and host changes, so this
+case is recorded as a privilege gap instead of being tested; no `sudo` command was run. The
+runtime-visible behavior it would exercise (backend fault, last inputs presented stale, recovery
+after the window, unchanged outputs, and another backend remaining unaffected) is covered by the
+Linux CI tests in §9.4. Testing the service transition directly needs a human decision to widen
+the NOPASSWD policy.
+
+### 9.4 Runtime fault, stale inputs, and recovery
+
+No physical link fault was injected in phase 4. The runtime semantics are supported by the phase-3
+diagnostic run in §8.1, which observed a real working-counter fault under host CPU load
+(`faults=1`, `recoveries=1`, `input.stale=0` at exit; the fault cleared after three healthy
+exchanges, outputs were not rewritten, and the master counters stayed at zero), and by the Linux
+CI job for the phase-4 head. The following tests passed in run 41217639207:
+
+- `io_ethercat::tests::status_device_is_filled_from_master_domain_and_slave_state`
+- `io_ethercat::tests::fault_keeps_last_inputs_stale_and_recovers_after_the_window`
+- `io_ethercat::tests::faulted_publish_still_sends_plc_outputs_unchanged`
+- `io_ethercat::tests::startup_timeout_is_eth_008_and_opens_no_run`
+- `io_ethercat::tests::removed_frame_counters_are_rejected_as_status_channels`
+- `coordinator::tests::one_backend_fault_does_not_touch_another_backends_data`
+- `io_mock::tests::fault_injection_reports_and_clears_a_faulted_backend`
+
+These cover the D-216 policy: a non-fatal runtime fault keeps the cycle running, leaves the output
+image unchanged, presents the last input image as stale, publishes the status registers every
+cycle, and clears staleness only after `recovery-cycles` consecutive healthy exchanges. The
+coordinator test shows that one backend's fault does not touch another backend's data.
+
+### 9.5 PLC-visible status registers
+
+The fixture's `ethercat-status` device (D-224, layout 1) occupies 14 read-only `%I` channels. In a
+healthy open-ended run (`--cycles 600000 --cycle-time 1ms`) with the debug endpoint attached, each
+channel was read with `var.read` on `DIEWU-HIL::STATUS...`. The values at runtime cycles 46–61:
+
+| Variable | Type | Observed | Meaning |
+| --- | --- | --- | --- |
+| `STATUSPHASE` | UINT | 2 | master phase Operation |
+| `STATUSMASTERACTIVE` | BOOL | true | master active |
+| `STATUSSLAVESRESPONDING` | UINT | 1 | one slave responding |
+| `STATUSLINKUP` | BOOL | true | link up |
+| `STATUSLASTERROR` | UDINT | 0 | no master error |
+| `STATUSRECOVERIES` | UDINT | 0 | no recoveries |
+| `STATUSWCSTATE` | UINT | 2 | domain working counter complete |
+| `STATUSWORKINGCOUNTER` | UINT | 3 | working counter 3 (expected) |
+| `STATUSINPUTSTALE` | BOOL | false | input image current |
+| `STATUSEXCHANGES` | UDINT | 56 | successful exchanges |
+| `STATUSFAULTS` | UDINT | 0 | no faults |
+| `STATUSSLAVEALSTATE` | UINT | 8 | slave AL state OP |
+| `STATUSSLAVEONLINE` | BOOL | true | slave online |
+| `STATUSSLAVEOPERATIONAL` | BOOL | true | slave operational |
+
+The control status endpoint reported `cycles` 144 before and 2093 after the reads (the host cycle
+counter is per generation); the run's final status line reported `cycles 2184`,
+`exchanges=2184`, `faults=0`, `domain.wc_state=2`, `domain.working_counter=3`, `input.stale=0`,
+`master.last_error=0`, `master.link_up=1`, `master.recoveries=0`,
+`master.slaves_responding=1`, and
+`hash=0xb9a6ddf4daaa2b6e6676a896a1d420c88d8d980c54dde792384187103fc6b8a1`. While running,
+`ethercat master` reported `Phase: Operation`, `Active: yes`; after the clean stop it reported
+`Phase: Idle`, `Active: no`, with Tx errors and lost frames unchanged at zero, and the slave
+returned to PREOP. The `master.lost_frames`, `master.tx_errors`, and `master.frame_loss_permille`
+fields are intentionally not status channels; the CLI samples them at run boundaries, and
+`ethercat master` is the evidence of record.
+
+The `hash` is `0xb9a6...` rather than the §8.2 `0x9325...` because the phase-4 head refines the
+D-217 configuration hash to cover the effective bindings and routes; the phase-3 run predates that
+change. The observed status layout and channel set are the committed fixture's.
+
+### 9.6 Online change
+
+Online change used the packaged runtime in watch mode (`stc run --watch -v`) with the fixture's
+debug and control endpoints. The fixture was restored to its committed hashes after the test.
+
+**Code-only change.** A source-comment-only edit to `src/main.st` was rebuilt by the packaged
+compiler into build `0x6ea2a4622ad0b9bdfc3329d56ddac264` from baseline
+`0x536dc3bbd8d3409af91f85898f922dd6`. The watch build was compatible (`preserved 6 allocated 45
+dropped 0 retired 0 rejected 0`), deployed online (`deployed build
+0x6ea2a4622ad0b9bdfc3329d56ddac264`), and the active generation switched without reopening the
+master: status `STATUSEXCHANGES` advanced 260 -> 1060 across the swap while the per-generation
+host cycle counter reset 342 -> 308, and all 14 status values stayed healthy (phase 2, active
+true, WC state 2, WC 3, stale false, faults 0, slave OP). The EtherCAT backend and its
+master/domain were preserved.
+
+**Changed configuration.** A temporary profile edit (`startup-timeout` `10s` -> `9s`, then
+restored) produced candidate `0x81e5ad05bb7a6ec93749e1e2499791e9` from baseline
+`0x6ea2a4622ad0b9bdfc3329d56ddac264`. The deploy was rejected:
+
+```json
+{"code":"STC-E-ONLINE-IO-001","cold_required":true,"id":1,"message":"the I/O configuration changed (active 0xb9a6ddf4daaa2b6e6676a896a1d420c88d8d980c54dde792384187103fc6b8a1, candidate 0x7be1ca1042aa0628639d1bd3749394a54f2e6f717542c8a90d1d3ff0ae31c346); a cold download is required","ok":false,"prepare_ns":4685930,"protocol":1,"report":{"baseline_build_id":"0x6ea2a4622ad0b9bdfc3329d56ddac264","candidate_build_id":"0x81e5ad05bb7a6ec93749e1e2499791e9","counts":{"allocated":45,"dropped":0,"preserved":6,"rejected":0,"retired":0},"rejections":[],"verdict":"compatible"}}
+```
+
+The response's report also carried the baseline-source-fingerprint warning that the watch log
+shows; it did not affect compatibility. The active generation continued: the watch logged `stale
+baseline; rebuilding against the active manifest`, re-prepared against the active manifest, and
+then logged `keeping generation
+0x6ea2a4622ad0b9bdfc3329d56ddac264; candidate was rejected`. The control status recorded
+`last_rejection` as the same `STC-E-ONLINE-IO-001` message with `pending_build: null`, and the
+status values after the rejection stayed healthy (`STATUSEXCHANGES` 3292, `STATUSFAULTS` 0,
+`STATUSINPUTSTALE` false, slave OP). The watch exited 0 on stop; the master returned to Idle and
+the slave to PREOP. The active generation continued across every rejection.
+
+Topology, binding, PDO, and profile mutations are covered by the same configuration hash. The
+Linux CI test `online_change_rejects_a_changed_io_configuration` mutates each of those fields and
+asserts `STC-E-ONLINE-IO-001`, unchanged active generation and build, no pending generation, an
+unchanged manifest, and a continuing cycle. `configuration_hash_covers_backend_config_and_ignores_unbound_remaps`
+and `io_configuration_rejection_marks_cold_required` passed in the same run. A same-configuration
+reload is still allowed to remap unbound direct cells; the phase-8 image-remap test covers that
+path. Cross-backend isolation is covered by
+`coordinator::tests::one_backend_fault_does_not_touch_another_backends_data`.
+
+### 9.7 Evidence hashes
+
+Raw logs and samples remain on `ecat-host` under `~/stc-wl52/`; the hashes below identify them.
+They are not committed.
+
+| File (relative to `~/stc-wl52/`) | SHA256 |
+| --- | --- |
+| `logs/phase4-fault-matrix-before-20261031T101338.txt` | `f143b27abed69524b3bfb6eed96f0f605d9ca3fff69e70cd531022fe354d5c49` |
+| `logs/phase4-fault-matrix-slaves-before-20261031T101338.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
+| `logs/phase4-bad-identity-20261031T101338.log` | `598e8f2a7f7c1f718c7af84ffb4496e300e5becaca77fffca3c19f49d4e5fa44` |
+| `logs/phase4-bad-identity-master-after-20261031T101338.txt` | `1537521519ef32132c5a2d84ad6aaffc849d3d6a550c9366f5d91440685a026c` |
+| `logs/phase4-bad-position-20261031T101338.log` | `80da868761923d3aa60ec273e101e59d36c5b48bfc73ff6d2c0d95844396e8c1` |
+| `logs/phase4-bad-position-master-after-20261031T101338.txt` | `9cd5865fff826f76fbef27ccbc2b021c4b41a3150d195d87f3e6a205eaa2f647` |
+| `logs/phase4-startup-timeout-20261031T101338.log` | `b600aa43fa368f595775af02dc04c93a3b8c84a3965c85a5f8f45b2dd5da44bb` |
+| `logs/phase4-startup-timeout-master-after-20261031T101338.txt` | `d89f524e76cbcf261d6fbfbee6c81c2852ccbda1db61446d9d4f5455d4be88a7` |
+| `logs/phase4-master-owned-run-20261031T101635.log` | `204660cdd27de5f7264de574ac35fed1aad6ffbc7793cc58b3d23cac45ebde3d` |
+| `logs/phase4-master-owned-holder-20261031T101635.txt` | `3edf00ec22198959df1d2865a7c4a189e88e57d25e9fb422a0a33b674769e925` |
+| `logs/phase4-master-owned-during-20261031T101635.txt` | `418385d94a57df16edb7efb39e3abb8cbc53e56815795597662b4ad2e8b980af` |
+| `logs/phase4-master-owned-after-failure-20261031T101635.txt` | `ba13ed10ec02bcc1355ac51120238d7d6fe49a963e3fb0d6e1ee6df1f1a075e4` |
+| `logs/phase4-master-owned-after-release-20261031T101635.txt` | `4afa4e1910c2678cf8c5c548f6866906162f1d38f0102ecbe61842a81cd0a6c1` |
+| `logs/phase4-status-run-20261031T101417.log` | `9df72b9d367535d984f546653a04c1d2b3b44497a166e4d66b6819d97a4a8803` |
+| `logs/phase4-status-values-20261031T101417.json` | `f64e654b089cbc3c9f2b90b3b45a2438ce9a82d427603962adfcf8d0d8d69486` |
+| `logs/phase4-status-control-before-20261031T101417.json` | `b206b2f2ae7dea551d77d00e521e5e8118f18025c2c877f6d868365f329c0844` |
+| `logs/phase4-status-control-after-20261031T101417.json` | `e11f3a7be8e4207bf65adbdf9574c65f9a96ce9547e7bad136412f25556ac319` |
+| `logs/phase4-status-master-during-20261031T101417.txt` | `e13d2cac78e37924bab557fd45f12b2e35a238c1f04b3939f457724718818766` |
+| `logs/phase4-status-master-after-20261031T101417.txt` | `cc89569a9d13499ec0a9e5483952705c58c865a2beccc1302ef2f903bcbae3b0` |
+| `logs/phase4-status-debug-20261031T101417.err` | `4247b0dd344212746c8257f580623927fba5f88b6c5f087ab0e5c91073ae8d68` |
+| `logs/phase4-online-watch-20261031T101515.log` | `5c24e7b3af6b296a48825978e82a4e16a0e205892d6ea19626c4f6cec503c0ed` |
+| `logs/phase4-online-control-before-20261031T101515.json` | `454abb441d665d7108c34efdf6b221d0d0bfa20c3cb7f9a67157d55e6c6cd88e` |
+| `logs/phase4-online-control-after-code-20261031T101515.json` | `4f07cf1da7bc6564ced8689b0a1df9657477f5ac9acb00ca57ba54b0cec45ab6` |
+| `logs/phase4-online-control-after-reject-20261031T101515.json` | `ad453050a05aea4378cabea238c3b279b5d273add0da37f510ece63b8752f61f` |
+| `logs/phase4-online-deploy-response-20261031T101515.json` | `93c0266917e9db8f4dcf0a8e41ccda39015e278279895c6b3f4e95da378a9c7a` |
+| `logs/phase4-online-before-20261031T101515.json` | `6111f5a2d0d24def562a4b18e70e8ac76d734a17bc4fae58d4f3c421e708ab52` |
+| `logs/phase4-online-after-code-20261031T101515.json` | `5a6d23b04fc9bf88ab8ea0b3e8c750e6e0904218ae40f43463d42ac6081b0375` |
+| `logs/phase4-online-after-reject-20261031T101515.json` | `6e9ae6b243a537533c38eedde1fc2be5db052f5ac871ea6e424438eaf0869340` |
+| `logs/phase4-online-master-after-20261031T101515.txt` | `c091a46a78e31b8b3af29a573c4f0f4ee1ad5014a0cd28f0b890217f15537c85` |
+| `logs/phase4-online-slaves-after-20261031T101515.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
+| `logs/phase4-status-control-stop-20261031T101417.json` | `758011a4122a9955fe58adbea76db699b9115eeac4de77f8201819780c18e6a8` |
+| `logs/phase4-online-stop-20261031T101515.json` | `758011a4122a9955fe58adbea76db699b9115eeac4de77f8201819780c18e6a8` |
+
+The host-side phase-4 helpers are `holder/holder.c` and `holder/holder`, under
+`~/stc-wl52/`; the control client and status batch are `phase4/ctl.py`
+(`aa32581217ff3e491d4e8dcfc59ef4275cac4bb20bb31134821d3dd37f8e1603`) and
+`phase4/status-batch.json`
+(`177fd9894a718f8d0d75f61a17f919b6de6fec75271118f7ffe374cac832d162`). They are reproduced by the
+committed `holder/holder.c` and the runbook's debug/control protocol; they are not committed.
+
+### 9.8 Limitations
+
+Phase 4 is a software-fault matrix only. It does not inject physical link, slave-power, or
+input/output faults, and it does not measure physical I/O; those are phase 6. The healthy status
+run verifies the register layout, values, and visibility, not the behavior under a physical
+disconnect. The master service stop/start case is blocked by the host privilege policy (§9.3).
+The identity and timeout cases used profile copies, and the committed fixture was restored to its
+committed hashes afterwards. The online-change test used one code-only edit and one profile edit;
+the remaining configuration classes are covered by CI tests on the same hash policy. No timing or
+real-time claim is made.
+
+## 10. Phase 5 privileged wrappers
+
+Phase 4 recorded the master service stop/start case as a privilege gap (§9.3).
+Phase 5 needs that transition plus a privileged RT launcher for the cycle-time
+sweep. Two root-owned fixed-command wrappers and one sudoers fragment are
+committed; the repository owner installed them on 2026-10-31. This section is
+the install and use procedure and the result. The automated phase work did not
+install them; after the install it used only the fixed `sudo -n` NOPASSWD
+entries, with no password and no broader sudo rule.
+
+### 10.1 Files and installed paths
+
+| Repository file | Installed path | Mode | Purpose |
+| --- | --- | --- | --- |
+| `tools/ethercat/stc-wl52-service` | `/usr/local/sbin/stc-wl52-service` | `0755` root:root | Fixed `systemctl stop\|start\|restart\|status ethercat` |
+| `tools/ethercat/stc-wl52-run` | `/usr/local/sbin/stc-wl52-run` | `0755` root:root | Fixed `ct <cycle-time> <duration> <label>` sweep step |
+| `tools/ethercat/stc-wl52.sudoers` | `/etc/sudoers.d/stc-wl52` | `0440` root:root | NOPASSWD for exactly the two installed paths |
+
+The runner itself is `tests/ethercat/diewu/run-ct.sh`, deployed with the
+fixture at `/home/r2k/stc-wl52/diewu/run-ct.sh`. It is user-writable and is
+executed as `r2k`, never as root.
+
+### 10.2 Install
+
+Stage the files on the host, then install them from an interactive `r2k`
+session. The `install` commands, the `0440` sudoers mode, and the `visudo -cf`
+validation are required.
+
+```sh
+# From the repository checkout:
+ssh r2k@ecat-host 'mkdir -p ~/stc-wl52/install'
+scp tools/ethercat/stc-wl52-service tools/ethercat/stc-wl52-run \
+    tools/ethercat/stc-wl52.sudoers r2k@ecat-host:~/stc-wl52/install/
+scp tests/ethercat/diewu/run-ct.sh r2k@ecat-host:~/stc-wl52/diewu/run-ct.sh
+ssh r2k@ecat-host 'chmod 0755 ~/stc-wl52/diewu/run-ct.sh'
+
+# On ecat-host, as r2k:
+visudo -cf ~/stc-wl52/install/stc-wl52.sudoers
+sudo install -o root -g root -m 0755 ~/stc-wl52/install/stc-wl52-service \
+    /usr/local/sbin/stc-wl52-service
+sudo install -o root -g root -m 0755 ~/stc-wl52/install/stc-wl52-run \
+    /usr/local/sbin/stc-wl52-run
+sudo install -o root -g root -m 0440 ~/stc-wl52/install/stc-wl52.sudoers \
+    /etc/sudoers.d/stc-wl52
+sudo visudo -cf /etc/sudoers.d/stc-wl52
+sudo -n -l
+```
+
+`sudo -n -l` must list the two NOPASSWD wrapper paths; no broader rule is
+added for this phase. If `visudo -cf` fails, remove or correct
+`/etc/sudoers.d/stc-wl52` before running another `sudo` command.
+
+### 10.3 Use
+
+```sh
+sudo -n /usr/local/sbin/stc-wl52-service status
+sudo -n /usr/local/sbin/stc-wl52-service stop
+sudo -n /usr/local/sbin/stc-wl52-service start
+sudo -n /usr/local/sbin/stc-wl52-run ct 1ms 60 screen-1ms
+```
+
+The service wrapper accepts only the four verbs with exactly one argument and
+runs `systemctl <verb> ethercat`; it has no generic passthrough. The run
+wrapper accepts only `ct`, the cycle times `1ms`, `500us`, `250us`, `200us`,
+`150us`, `100us`, `75us`, `50us`, `25us`, the durations `60` and `600`, and a
+`[a-z0-9-]{1,32}` label. Any other command, path, or extra argument is
+rejected with exit status 64.
+
+### 10.4 Privilege model
+
+`stc-wl52-run` validates the fixed launcher, fixture, shim, and log directory,
+then drops to `r2k` with `setpriv`:
+
+```text
+setpriv --reuid=1000 --regid=1000 --init-groups --no-new-privs \
+    --inh-caps=+sys_nice --ambient-caps=+sys_nice --bounding-set=+sys_nice \
+    -- /bin/bash /home/r2k/stc-wl52/diewu/run-ct.sh <cycle> <duration> <label>
+```
+
+`--init-groups` initializes the supplementary groups for `r2k`, so the
+`ethercat` group (gid 1001) is retained for `/dev/EtherCAT0`. `CAP_SYS_NICE`
+is the only ambient capability; it lets the cycle thread enter `SCHED_FIFO`
+priority 90, and it carries across exec into the packaged `stc` launcher.
+`no_new_privs` prevents the user-writable script or its children from gaining
+privileges through exec. No user-writable file is executed as root.
+
+Host values checked read-only on 2026-10-31: `r2k` uid/gid `1000`/`1000`,
+`getent group ethercat` -> `ethercat:x:1001:r2k`, `setpriv` from util-linux
+2.39.3, and `capsh` from libcap as an alternative. `setpriv` was chosen
+because it is available and expresses the uid/gid drop, supplementary groups,
+and ambient capability in one fixed command; `capsh` is not used.
+
+### 10.5 Cycle-time runner
+
+`run-ct.sh` invokes the packaged launcher with:
+
+```text
+stc run --release --manifest-path /home/r2k/stc-wl52/diewu/stc.toml \
+    --io ethercat --cycles 0 --cycle-time <cycle> \
+    --rt --rt-priority 90 --rt-cpu 3 --rt-metrics <log>.jsonl -v
+```
+
+with `STC_ETHERCAT_LIBRARY=/home/r2k/stc-wl52/lib/libstc_io_ethercat.so` and
+`LD_LIBRARY_PATH=/usr/local/etherlab/lib`, bounded by
+`timeout --signal=TERM --kill-after=30 --preserve-status <duration + 60 s>`.
+The 60 s allowance covers the in-process release build; the timeout is a
+safety limit, not additional measurement time. Logs, metrics, and master
+samples are written under `/home/r2k/stc-wl52/logs/`:
+`ct-<cycle>-<duration>s-<label>-<UTC stamp>.log`, `.jsonl`,
+`.master-before.txt`, `.master-after.txt`, `.slaves-before.txt`, and
+`.slaves-after.txt`.
+
+The script exits 0 only for a frame-level pass: the final
+`stc: status: io-backend ethercat` line reports `state=running`, `faults=0`,
+`domain.wc_state=2`, `input.stale=0`, no master error, link up, one responding
+slave, and no recovery; `exchanges` equals the completed cycle count; the
+metrics summary reports zero skipped periods and zero dropped records; the
+per-cycle execution p99 is at most half the cycle time; the run covers at least
+the requested screening duration's worth of cycles; the master's Tx-error
+counter is unchanged and its lost-frame counter does not increase by more than
+one frame; and after release the master is `Phase: Idle` with `Active: no` and
+the slave reaches PREOP. The one-frame lost-frame allowance comes from the IgH
+tool: `CommandMaster.cpp` prints the cumulative Tx-minus-Rx difference and
+zeroes a difference of one because one frame may be travelling. With the
+master's large cumulative baseline, a travelling frame shifts the printed value
+by one in either direction, so the runner records the raw before/after values
+and rejects only an increase beyond one frame. The strict `missed_deadlines`
+counter is reported but not gated: it is true for any positive wake lateness and
+equals the cycle count in every RT run on this host
+([KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §7), so skipped periods,
+frame-level health, and the execution distribution are the pass criteria.
+Physical I/O values are not checked. A nonzero exit distinguishes a frame-level
+or run failure (1) from a usage or deployment error (2).
+
+### 10.6 Service stop/start result (phase 5)
+
+The installed wrapper was verified first: `sudo -n /usr/local/sbin/stc-wl52-service status`
+returned 0 with the unit active, and the invalid verb `enable` and an extra argument both
+returned 64 without invoking systemd. Every privileged call below used only the installed
+`sudo -n` NOPASSWD entries.
+
+**Idle master.** With the master `Phase: Idle` and `Active: no`, the service wrapper's `stop`
+returned 0 and the unit became inactive; `/dev/EtherCAT0` disappeared and `ethercat master`
+failed with `Failed to open master device /dev/EtherCAT0`. The wrapper's `start` returned 0 and
+the unit became active; within about 3 s the master reported `Phase: Idle`, link UP, and one
+PREOP slave. Loading the modules resets the master's frame counters, so the sweep starts from a
+fresh counter baseline after this case.
+
+**Stop during an active run.** A 60 s 1 ms RT run (`ct 1ms 60 svc-stop`, release build, FIFO 90
+on CPU 3) owned the master (`Phase: Operation`, `Active: yes`) and was exchanging frames. The
+service wrapper's `stop` returned 0, but the unit ended `failed`: the IgH `ethercatctl stop`
+could not unload the master module while the runtime held the device. The module stayed loaded,
+`/dev/EtherCAT0` stayed present, and the master stayed `Phase: Operation`/`Active: yes` with
+the runtime continuing healthily to the timeout (`state=running`, `exchanges=118319`,
+`faults=0`, `input.stale=0`, `master.recoveries=0`). `systemctl is-active ethercat` reported
+`failed`; the wrapper's `start` returned 0 and restored the active unit. The runtime then shut
+down on the timeout and released the master, which returned to Idle. No runtime fault, stale
+input, or recovery was observed, because the module never went away; the kernel's in-use check
+is the observed refusal path. This is the exact behavior requested for the case where systemd
+cannot stop the module while the master is in use.
+
+The service was left active and the master Idle after the case. The slave was operational
+during the run and PREOP after release; the first version of the runner sampled the slave
+immediately and caught the asynchronous OP-to-PREOP transition, so the runner now polls for
+PREOP for up to 5 s.
+
+### 10.7 Cycle-time sweep result (phase 5)
+
+The final sweep ran on 2026-11-01 (UTC) through
+`sudo -n /usr/local/sbin/stc-wl52-run ct <cycle> <duration> <label>`, in the
+order 1 ms, 500 µs, and so on, and stopped at the first failing step. Each
+screening step was 60 s; the fastest passing step was repeated for 600 s. Every
+step used the release fixture, `SCHED_FIFO` 90 on CPU 3, an open-ended cycle
+count, and the master counters were not reset between steps. The table values
+come from the `stc-rt-metrics/1` per-cycle records (nearest-rank percentiles)
+and the master samples; execution and wake values are µs, and the master column
+is Tx errors / lost frames before → after.
+
+| Cycle time | Window | Result | Exchanges = cycles | Skipped | Dropped | Strict missed | Execution p50 / p99 / p99.9 / max | Wake p50 / p99 / p99.9 / max | Master Tx / lost | Slave after |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 ms | 60 s | pass | 118302 | 0 | 0 | 118302 | 40.2 / 49.3 / 56.9 / 60.7 | 10.6 / 19.8 / 27.4 / 30.8 | 0 / 1953 → 1953 | PREOP |
+| 500 µs | 60 s | pass | 236589 | 0 | 0 | 236589 | 39.4 / 48.8 / 56.5 / 61.7 | 10.4 / 20.4 / 27.9 / 31.9 | 0 / 1953 → 1953 | PREOP |
+| 250 µs | 60 s | pass | 473195 | 0 | 0 | 473195 | 39.3 / 47.9 / 55.8 / 63.9 | 10.6 / 20.3 / 28.2 / 32.1 | 0 / 1953 → 1953 | PREOP |
+| 200 µs | 60 s | pass | 591527 | 0 | 0 | 591527 | 39.4 / 47.1 / 55.3 / 61.4 | 10.4 / 21.3 / 28.0 / 32.0 | 0 / 1953 → 1953 | PREOP |
+| 150 µs | 60 s | pass | 788678 | 0 | 0 | 788678 | 38.9 / 47.8 / 55.8 / 68.3 | 10.4 / 18.3 / 28.3 / 96.8 | 0 / 1953 → 1953 | PREOP |
+| 100 µs | 60 s | **fail** | 1182738 | 283 | 0 | 1182738 | 38.8 / 48.8 / 55.1 / 60.6 | 10.3 / 20.6 / 45.8 / 133.3 | 0 / 1953 → 1953 | PREOP at post-sweep check |
+| 150 µs | 600 s | pass | 4388666 | 0 | 0 | 4388666 | 39.1 / 49.0 / 55.4 / 68.4 | 10.4 / 18.1 / 28.2 / 75.1 | 0 / 1953 → 1953 | PREOP |
+
+In every passing row the runtime reported `state=running`, `faults=0`, WC
+state 2, current inputs, link up, one responding slave, no master error, and no
+recovery; every completed cycle exchanged a frame; and the configured slave was
+PREOP after release. The 100 µs row passed all of those checks except skipped
+periods: it also reported 1182738 exchanges for 1182738 cycles, WC state 2, no
+faults, current inputs, and unchanged master Tx/lost counters. The runner
+checks skipped periods before it samples the slave after release, so that row
+has no `slaves-after.txt`; the host check immediately after the sweep showed
+the slave PREOP, as it did for every other row.
+
+**Metrics-writer fix.** The earlier sweep failed at 500 µs with 154 skipped
+periods in 77 events of two, spaced about every 3050 cycles, with wake lateness
+1.0–1.3 ms. The spacing and stall matched the 1 MiB `BufWriter` flush on the
+cycle thread. Commit `77cab14` moved the `stc-rt-metrics/1` writer to a
+dedicated `stc-rt-metrics` thread (`SCHED_OTHER`, nice 10, affinity off the
+cycle CPU) fed by an 8192-record bounded channel with non-blocking `try_send`
+and drop accounting; shutdown drains and joins the writer, and the summary adds
+`dropped_records`. With that runtime the 500 µs step passes, the sweep runs to
+150 µs, and every final run reports `dropped_records:0`. The earlier 1 ms and
+500 µs figures are superseded by this table.
+
+**100 µs failure analysis.** The step recorded 283 skipped periods in 283
+one-period events, from cycle 2 (the first cycle record) to cycle 1180001. The
+wake lateness at those events was 53.4–133.3 µs; the maximum exceeds the 100 µs
+period. The events are irregular: consecutive cycle gaps are 999–31000 cycles
+(mean 4184, about 0.1–3.1 s), so they are not a fixed-size buffer flush. The
+execution distribution stayed below the runner's half-period gate (p99 48.8 µs,
+p99.9 55.1 µs, max 60.6 µs), and the frame path stayed healthy: all 1182738
+exchanges completed with WC state 2, no faults, current inputs, unchanged
+master Tx/lost counters, and no recovery. The failure is therefore wake-side
+host scheduling jitter at a 100 µs period, not the metrics writer
+(`dropped_records:0`) and not the EtherCAT frame path.
+
+**Strict deadline counter.** The `Strict missed` column equals the cycle count
+in every row. That is the documented behavior of `missed_deadline`, which is
+true for any positive wake lateness, not only for a hard overrun
+([KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §7; RT-Host.md §3.4). It is
+recorded and reported but is not a phase-5 pass gate.
+
+**Result and stopping point.** The fastest maintainable cycle time is 150 µs:
+it passed at 60 s and 600 s, and 100 µs is the first failing step. Per the
+stop-at-first-failure rule, 75 µs, 50 µs, and 25 µs were not run. The runner
+allowlist already includes all of them; because the sweep stopped at 100 µs,
+the 25 µs extension check was not reached and the allowlist does not need to be
+extended in this phase.
+
+**Runner corrections in this rerun.** Besides the dropped-records gate and the
+IgH one-frame travelling allowance described in §10.5, the distributions are now
+extracted from the JSONL with `grep -F ... | cut -d, -f8/f9 | cut -d: -f2`
+instead of a regex over every line: the regex took about 35 s per distribution
+at 60 s scale, while the field split takes under a second and yields the same
+values. The `read_counter()` helper is defined once near `percentile()`.
+
+### 10.8 Phase 5 evidence hashes
+
+All files are under `/home/r2k/stc-wl52/logs/` on `ecat-host`; timestamps in
+the names are UTC. The `console5-*.log` files are the runner's stdout captured
+on the build workstation and copied to the host. The failing 100 µs step's
+`fail()` message went to stderr and is included in its console capture. Every
+`slaves-before.txt` and every passing run's `slaves-after.txt` is the same
+PREOP sample, SHA-256
+`4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0`; the
+100 µs run stopped at the skipped-period check before sampling the slave after
+release, so it has only `slaves-before.txt`.
+
+| Run | File | SHA-256 |
+| --- | --- | --- |
+| 1 ms 60 s | `ct-1ms-60s-sweep5-1ms-20261101T001711Z.jsonl` | `6c3fa881735d047c444bad2357f8a83d1df31302ce8b5abbf2c735ccd0680025` |
+| 1 ms 60 s | `ct-1ms-60s-sweep5-1ms-20261101T001711Z.log` | `256c9e986d0d35808d3eea79364695e64b50ee15d41fb1db5774c3461260cea4` |
+| 1 ms 60 s | `ct-1ms-60s-sweep5-1ms-20261101T001711Z.master-before.txt` | `ee73649b8e51a3210ffbeaafb2c796d0993dd7c828383041da983c6a25858647` |
+| 1 ms 60 s | `ct-1ms-60s-sweep5-1ms-20261101T001711Z.master-after.txt` | `6b02c64f95aaa3d5b1f490cd9540cece7bb870a3ff4199762e7aceb28400794b` |
+| 1 ms 60 s | `console5-1ms-60s.log` | `16dc6080c7a837d357c5031b88c2f4240d7222c07d1c544fa1a31809feeaf781` |
+| 500 µs 60 s | `ct-500us-60s-sweep5-500us-20261101T001918Z.jsonl` | `596fef395260258c4ae6b7af8cfd24f2568afa40a170f57fe758e81038298e64` |
+| 500 µs 60 s | `ct-500us-60s-sweep5-500us-20261101T001918Z.log` | `464c3bf9cdfb657fbc52e1797f527c8a55c1c37c857892bd1c60b11bbc8c98fa` |
+| 500 µs 60 s | `ct-500us-60s-sweep5-500us-20261101T001918Z.master-before.txt` | `d3f12877a2dd5e29c36d3f5bb4efc1daaa16f77c7d8e29cc69df37a6018bf05d` |
+| 500 µs 60 s | `ct-500us-60s-sweep5-500us-20261101T001918Z.master-after.txt` | `d67fcfb4266c8b2240da5e06c485a316e91d8e08d0e557235628ae03499b6c2a` |
+| 500 µs 60 s | `console5-500us-60s.log` | `3d3275208d1fe3b13c1670fde2745a1c83d0e899b95934c74f0ccb4ed9a98a18` |
+| 250 µs 60 s | `ct-250us-60s-sweep5-250us-20261101T002125Z.jsonl` | `c17257228515cf86c388e1c577b7bd2a20383969b6e4b6b08659b5db779c5d86` |
+| 250 µs 60 s | `ct-250us-60s-sweep5-250us-20261101T002125Z.log` | `2f7fe47215b6721d32feac2ff508e16c29828b0c7532107b77498b8da07252db` |
+| 250 µs 60 s | `ct-250us-60s-sweep5-250us-20261101T002125Z.master-before.txt` | `6cf2cd4afed6fd4b4b6bba27d4d72bda22a3fb1eb000f1247a9064e81ba33951` |
+| 250 µs 60 s | `ct-250us-60s-sweep5-250us-20261101T002125Z.master-after.txt` | `47f13df6fcb7b2e9cf61930227abf526c328b131846edaa170a6f801459c7695` |
+| 250 µs 60 s | `console5-250us-60s.log` | `e0386de3e8254921b4ea78e99ef8fdeada2955c8068ac6e2836b5260703233ba` |
+| 200 µs 60 s | `ct-200us-60s-sweep5-200us-20261101T002334Z.jsonl` | `c7b9cf57394bdf190212216d829516c720429e3578444ee6635db4f39fef8055` |
+| 200 µs 60 s | `ct-200us-60s-sweep5-200us-20261101T002334Z.log` | `6847fcc8d1a0e93ed332b77abdfb134af3753e5f43a05a45da3660fbd14fda25` |
+| 200 µs 60 s | `ct-200us-60s-sweep5-200us-20261101T002334Z.master-before.txt` | `3aec2e113293534843fb5ae68ff2d993b721db96f68fd7ec0e8a17866e3ac040` |
+| 200 µs 60 s | `ct-200us-60s-sweep5-200us-20261101T002334Z.master-after.txt` | `37291e42210b19dd40d34522cddba9323d0cce336d9d19c60ef79b930dcd5041` |
+| 200 µs 60 s | `console5-200us-60s.log` | `a9990242872ef9a6b1fc1f76d380fb31f8baf3e0273d1f6d90531fc3ff1dad13` |
+| 150 µs 60 s | `ct-150us-60s-sweep5-150us-20261101T002545Z.jsonl` | `4efd88df8dd18d06f2ff30a427ac39e0aa841471d7fb3dc9b77e6f005bf50506` |
+| 150 µs 60 s | `ct-150us-60s-sweep5-150us-20261101T002545Z.log` | `2f51f8bdb2a350194621c308ef4c6b980e4b5a73f27f69877f6479ac94314e51` |
+| 150 µs 60 s | `ct-150us-60s-sweep5-150us-20261101T002545Z.master-before.txt` | `b29997efce4bd32f5a0d5aa51f44ed2b5c4b66a63b88c9a4d1a960f78f274267` |
+| 150 µs 60 s | `ct-150us-60s-sweep5-150us-20261101T002545Z.master-after.txt` | `4f82add572b1f8542b16e220f8c1518ea77bc679ed769374b57ac2002c6ca34c` |
+| 150 µs 60 s | `console5-150us-60s.log` | `f92643aa7d8e83e38cc026b9817f77a6b4028a016dc716995735fd5cb9cb2de1` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.jsonl` | `7c35bba3d0df92aad9a330d52075cfa5c8675354fbdbe9983031522661c3bf1b` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.log` | `5c2d06ef23914b0c33ed8a37a4883989011599f5d2800f2a989bd9d19ff2ff2e` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.master-before.txt` | `8076ae69a2d96fadf40ab232fc0904dba70bac36f0c9bffeace685feacf49e86` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.master-after.txt` | `3c8a9bbd570b9c2781738de820a80f837d8a4c66eb7def8e02775fafb987d093` |
+| 100 µs 60 s | `ct-100us-60s-sweep5-100us-20261101T002757Z.slaves-before.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
+| 100 µs 60 s | `console5-100us-60s.log` | `2c080d966c7ed4a8b857e54b3b376c07f66c6bc4f1802f358127ca79c109cc7b` |
+| 150 µs 600 s | `ct-150us-600s-sweep5-confirm-150us-20261101T003012Z.jsonl` | `f64da4b0477a87386eb78ad0f31851669a18628a1f7c871e4886259ad82f5ed2` |
+| 150 µs 600 s | `ct-150us-600s-sweep5-confirm-150us-20261101T003012Z.log` | `a1dede5f7a98a348af724b8f4ba913a0cc79e8bf5d763d4197a6bdca3a929779` |
+| 150 µs 600 s | `ct-150us-600s-sweep5-confirm-150us-20261101T003012Z.master-before.txt` | `dd6f18c2d6b65e0b5bee81d03e31133a68a9d69cf5e8f2e218c44590af7a2ee6` |
+| 150 µs 600 s | `ct-150us-600s-sweep5-confirm-150us-20261101T003012Z.master-after.txt` | `6bdbc8dccd73cfc25bd65b7e1c4f28bcadd8878264771d749cacad9ab750b91f` |
+| 150 µs 600 s | `console5-150us-600s.log` | `4faee542bc6ccd12dd472e74d2ee81b9eabc537b1a9063762d776ffc704afce4` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.jsonl` | `cbf65b948baab5454d459cf44777fc447957921b07be4b116e2aacef6b684975` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.log` | `a1819cd35f85735f71b6c304315cf30d532a0e85a713ab6147485cfa951050eb` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.master-before.txt` | `8606cc4b26f21c5ab2f87ab48047fdab1cd1379356fd475d885c0ca4c678334f` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.master-after.txt` | `67f202c556b020da6e3acadf316f565556c1924cf858e3a05a49327edeb374ea` |
+| Service stop/start | `ct-1ms-60s-svc-stop-20261031T195036Z.slaves-after.txt` | `7969853bfea69fb79a96f91266f2148efdeaea0e5bb1173231b650fdf7d812b8` |
+| Service stop/start | `svc-stop-run.out` | `6cd190556003c62af10e5edb51cd345dea698281f9d7a386355f424834a538a6` |
+
+The service rows are from §10.6 and remain the phase-5 service evidence; their
+`slaves-after.txt` is the immediate OP sample (`7969853b…`) and the following
+status check showed PREOP. The deployed release package is from CI run
+41240860169 (commit `77cab14`): `stc` at `/home/r2k/stc-wl52/bin/stc`, SHA-256
+`391d2ea09ddb216efd7f0251324f91f50e363a09d927d023090a51a43cf5d65e`; the shim
+at `/home/r2k/stc-wl52/lib/libstc_io_ethercat.so`, SHA-256
+`bceeb6014076f41958b0ae4442f744fc3035af3544bcd5a046e278089e5df448`; and the
+deployed runner `/home/r2k/stc-wl52/diewu/run-ct.sh`, SHA-256
+`5947c8df033d1fb1080d77fb28a52146c8167d30bc8ecace96e8ba91d6ed59a0`, which
+produced the final sweep and confirmation.
+
+## 11. Cleanup
+
+The run releases the master on exit. Confirm `ethercat master` is `Phase: Idle` and
+`ethercat slaves` shows PREOP. Keep the logs under `~/stc-wl52/logs/`; leave the host's IgH
+installation, boot profile, and service state unchanged. Do not rewrite the output image or
+zero the outputs as part of cleanup.
+
+## 12. Phase 5–6 extensions
+
+Phase 4 is recorded in §9: the software-fault matrix (master already owned, wrong identity,
+startup timeout), the PLC-visible status registers, the stale/recovery model, and online change.
+The master service stop/start case recorded as a privilege gap in §9.3 is resolved in §10.6.
+
+Phase 5 adds the cycle-time sweep from 1 ms down to 50 µs (extending below 50 µs if that passes),
+60 s screening per step, a 10-minute confirmation at the fastest passing step, release-build
+measurements, skipped-period/deadline checks, and the `stc-rt-metrics/1` JSONL stream; the
+sweep result is §10.7 and its evidence hashes are §10.8. (The separate `stc-io-metrics/1` stream
+described in the WL-5.2 design is not implemented and is not part of this sweep; see
+[KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §8.) The privileged wrappers that run the service
+transition and the sweep were installed by the owner following §10 and were exercised only
+through their fixed `sudo -n` entries; the automated phase work did not install them.
+
+Phase 6 adds the loopback harness, the automated all-points matrix, physical fault injection
+(cable unplug/replug, slave power cycle, configured-slave reconnect), and the final report. The
+self-contained loopback project is
+[tests/ethercat/diewu/loopback](../../tests/ethercat/diewu/loopback/README.md); the wiring,
+all-points, physical fault-injection, evidence, and restore procedure is
+[tests/ethercat/diewu/PHASE6.md](../../tests/ethercat/diewu/PHASE6.md). The procedure was executed
+on 2026-11-01 (host log time) with a second 24 V supply on the output stage: the all-points matrix
+passed 16/16, Faults A and B passed on the fixed package, Fault C is covered by A, and the
+restore state was captured. An earlier supply-limited run found a coordinator stale-input defect,
+fixed in `d694266` and verified by the final run. The evidence is §13 and PHASE6.md §8.
+
+## 13. Phase 6 evidence (2026-11-01)
+
+The observed values are recorded in
+[tests/ethercat/diewu/PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) §8. This section is the
+runbook summary.
+
+**Powered harness and all-points result.** The module logic was powered from the 24 V barrel jack
+and the output stage from a second 24 V supply, with S1–S4 tied to its `VCC`. The automated
+all-points matrix passed 16/16 on the fixed package: exit 0, `Pass=True`, `FailMask=0x0000`,
+`ObservedMask=0xFFFF`, `OutputMask=0`, `Channel=16`, `Scans=390`, `exchanges=401`,
+`faults=0`, `stale=false`, WC state 2, working counter 3, link up, master phase 2, slave AL 8,
+online and operational. The master Tx-error/lost-frame counters were 18856 → 18856 (delta 0).
+Log `loopback-fix-20261101T174924.log`, SHA-256
+`06d295c5f45c4fcaf468d365bc98873e3164a5c1e4da1818aa3c7fc131e85b41`.
+
+**Fault/recovery result.** One `stc debug` session (1 ms, `--cycles 0`) held all outputs on
+(`HOLD TRUE`) and injected Fault A (host-end cable unplug/replug, slave powered) and Fault B
+(DIEWU power cycle). Fault C (slave-end unplug) was not run separately: with one direct cable,
+host-end and slave-end unplug are the same link-loss path, and Fault A reconnected the same
+configured slave while it stayed powered.
+
+The session recorded one extra, unobserved fault/recovery episode before the first post-HOLD
+block. The counters therefore start at `faults=1`/`recoveries=1`; the recorded Fault A is episode
+2 and Fault B is episode 3. This is a manual-sequence deviation, accepted by the owner, not a
+product failure. The pre-HOLD block was `faults=0`, `recoveries=0`, `OUTPUTMASK=0`,
+`INPUTMASK=0`; the post-HOLD block was `faults=1`, `recoveries=1`, `OUTPUTMASK=65535`,
+`INPUTMASK=65535`.
+
+| Observation | A during (ep. 2) | A after | B during (ep. 3) | B after |
+| --- | --- | --- | --- | --- |
+| `STATUSFAULTS` | 2 | 2 | 3 | 3 |
+| `STATUSINPUTSTALE` | true | false | true | false |
+| `STATUSRECOVERIES` | 1 | 2 | 2 | 3 |
+| `STATUSWCSTATE` | 0 | 2 | 0 | 2 |
+| `STATUSWORKINGCOUNTER` | 0 | 3 | 0 | 3 |
+| `STATUSLINKUP` | false | true | false | true |
+| `STATUSSLAVEALSTATE` | 0 | 8 | 0 | 8 |
+| `STATUSSLAVEOPERATIONAL` | false | true | false | true |
+| `SCANCOUNT` | 70591 | 119703 | 183096 | 196078 |
+| `OUTPUTMASK` | 65535 | 0 | 65535 | 65535 |
+| `INPUTMASK` | **65535** | 0 | **65535** | 65535 |
+
+`STATUSPHASE` stayed 2 (IgH Operation) during both faults. `SCANCOUNT` advanced through every
+interval, so the cycle and PLC kept running through both link-down windows. `OUTPUTMASK` stayed
+65535 through both faults: the runtime did not rewrite the PLC output image. `INPUTMASK` stayed
+65535 through both recorded faults: the runtime presented the last received image as stale.
+`HOLD FALSE` during episode 2 gave `OUTPUTMASK=0`, `INPUTMASK=65535`. `STATUSINPUTSTALE` was true
+during each fault and cleared on recovery; `STATUSRECOVERIES` incremented once per recovery; the
+same configured slave returned without a cold download or host restart. The physical output LEDs
+cleared during each fault and returned on replug/repower, consistent with the slave watchdog
+dropping the outputs and the master re-sending the held image on recovery.
+
+**Stale-input defect and fix.** The earlier powered run on the phase-5 package showed
+`STATUSINPUTSTALE=true` but `INPUTMASK=0` during both faults. The coordinator applied the global
+input defaults to the whole input area for `Null`/`Ethercat` global backends; a faulted backend
+skips its input copy, so the bound inputs were zeroed before the stale flag was exposed. The fix
+(commit `d694266`, CI run 41367423862) builds a `claimed_input` map and applies defaults only to
+unclaimed input bits; the regression test covers a fault under an `Ethercat` global backend. The
+final run on the fixed package (above) verifies the corrected behavior. The fixed package hashes
+are in PHASE6.md §8.1.
+
+**Restore state.** After the session: `ethercat master` was `Phase: Idle`, `Active: no`, one
+slave; `ethercat slaves` was `0 0:0 PREOP + DIEWU ...`; `pgrep -a stc` was empty; Tx errors were
+0 in all four boundary samples. Lost frames were 18856 → 18856 for the all-points run (delta 0)
+and 18856 → 24426 for the fault session (delta 5570); the fault-session increase is the frames
+sent during the link-down and power-off windows.
+
+**Evidence.** Final logs:
+`/home/r2k/stc-wl52/logs/loopback-fix-20261101T174924.log`, SHA-256
+`06d295c5f45c4fcaf468d365bc98873e3164a5c1e4da1818aa3c7fc131e85b41`; and
+`/home/r2k/stc-wl52/logs/fault-session-fix-20261101T174958.log`, SHA-256
+`14d7689bed749aa12770196722ed8c6e696e0cff7d9afe3e305717cd00b3de6e`. The earlier
+`fault-session-20261101T172040.log` (`b9f11faa…`) is the phase-5-package run that exposed the
+defect; the supply-limited `fault-session-20261101T143222.log` (`b0ca162d…`) and the phase-5
+all-points log `loopback-20261101T171644.log` (`fe3a8d6e…`) are retained for history. The
+loopback project blobs at `58719ac` are hashed in PHASE6.md §8.1.
+
+**Limitations.** Fault C is covered by A rather than run separately; recovery time was sampled
+within the procedure windows, not measured; the fault-session counters carry the extra
+unobserved episode; one host, one slave. The remaining scope limits (single DIEWU, no servo
+hardware, DIEWU free-run/DC not exercised, 150 µs CT floor, x86-64-only HIL) are in
+[KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §8. Not a safety function.

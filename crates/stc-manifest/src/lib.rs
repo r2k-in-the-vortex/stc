@@ -19,6 +19,7 @@ mod host;
 mod lock;
 mod model;
 mod parse;
+mod profile;
 mod renames;
 
 pub use graph::{
@@ -36,6 +37,7 @@ pub use model::{
 pub use parse::is_known_lint_code;
 pub use parse::parse_duration;
 pub use parse::{ParsedManifest, parse_manifest};
+pub use profile::{Profile, ProfileDevice, ProfileEndpoint, ProfileRoute, parse_profile};
 pub use renames::{
     RenameEntry, RenameHistory, RenameHistoryError, append_rename, load_rename_history,
     merge_renames, parse_rename_history, render_rename_history,

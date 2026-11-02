@@ -260,6 +260,15 @@ pub(crate) fn run(
     request.manifest_clang = root.manifest.build.clang.clone();
     request.manifest_runtime = root.manifest.build.runtime.clone();
     request.project = build::ProjectSettings::from_manifest(&root.manifest);
+    if !request.project.embed_profile(
+        &root.root_dir,
+        &root.manifest,
+        &mut sources,
+        &mut diagnostics,
+    ) {
+        report_sink(&diagnostics, &sources, reporter, log);
+        return diagnostic_exit(&diagnostics).max(1);
+    }
     let manifest_out_dir_explicit = root.manifest.build.out_dir_explicit;
     if request.out_dir.is_none() {
         let configured = if manifest_out_dir_explicit {
@@ -439,7 +448,7 @@ fn report_sink(sink: &DiagnosticSink, sources: &SourceMap, reporter: &mut Report
 }
 
 /// Returns 2 for project/lockfile errors, 1 for compile errors, and 0.
-fn diagnostic_exit(sink: &DiagnosticSink) -> u8 {
+pub(crate) fn diagnostic_exit(sink: &DiagnosticSink) -> u8 {
     if sink.suppressed_errors() > 0 {
         return 1;
     }
