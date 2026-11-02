@@ -47,6 +47,8 @@ def coreDumpMaxDepth : Nat := 512
 structure CoreUnit where
   /-- The parsed core HIR unit. -/
   unit : HirUnit
+  /-- The GOT key of each global, in the same order as `unit.globals`. -/
+  globalKeys : Array String
   /-- Source paths by `FileId.id`; the spans in `unit` index this array. -/
   files : Array String
 
@@ -561,7 +563,7 @@ private def parseLocal (j : Json) (scope : Scope) (functions : Array FunctionSig
   pure ⟨name, ty, init, span⟩
 
 private def parseGlobal (j : Json) (scope : Scope) (functions : Array FunctionSig)
-    (ctx : String) : ParseM Global := do
+    (ctx : String) : ParseM (Global × String) := do
   let name ← jsonString j "name" ctx
   checkName name s!"{ctx}.name" true
   let key ← jsonString j "gotKey" ctx
@@ -576,7 +578,7 @@ private def parseGlobal (j : Json) (scope : Scope) (functions : Array FunctionSi
     else
       pure (some (← parseExpr initJson scope functions 1 s!"{ctx}.init"))
   let span ← parseSpanField j "span" ctx
-  pure ⟨name, ty, init, span⟩
+  pure (⟨name, ty, init, span⟩, key)
 
 private def duplicateName? (names : Array String) : Option String :=
   let rec go (seen : Array String) (index : Nat) : Option String :=
@@ -678,7 +680,7 @@ private def parseGlobalNames (globalsJson : Array Json) : ParseM (Array String) 
     names := names.push name
   pure names
 
-private def parseRoot (root : Json) : ParseM HirUnit := do
+private def parseRoot (root : Json) : ParseM (HirUnit × Array String) := do
   let format ← jsonString root "format" "dump"
   if format != coreDumpFormat then
     fail s!"dump.format: unknown format `{format}` (expected `{coreDumpFormat}`)"
@@ -734,17 +736,17 @@ private def parseRoot (root : Json) : ParseM HirUnit := do
     parseFunction function package globalNames signatures s!"unit.functions[{index}]"
   let program ← parseProgram programJson package globalNames signatures "unit.program"
   let unitSpan ← parseSpanField unitJson "span" "unit"
-  pure {
-    globals
+  pure ({
+    globals := globals.map Prod.fst
     functions
     program
     span := unitSpan
-  }
+  }, (globals.map Prod.snd).toArray)
 
 /-- Parse and validate a `stc-core-hir` `0.1.0` dump. -/
 def parseCoreDump (text : String) : Except String CoreUnit := do
   let json ← Json.parse text
-  let (unit, files) ← (parseRoot json).run #[]
-  pure { unit, files }
+  let ((unit, globalKeys), files) ← (parseRoot json).run #[]
+  pure { unit, globalKeys, files }
 
 end Verification.Semantics
