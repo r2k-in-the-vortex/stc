@@ -1399,13 +1399,13 @@ targets. -/
 def CallTargetsTyped (c : IRState) : Prop :=
   ∀ fn ∈ c.module.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
     ∀ dest ret callee args, instr = .callPtr dest ret callee args →
-      ∃ name slot, callee = .local name ∧
+      ∀ name slot, callee = .local name →
         fn.facts.originOf? name = some (.cell slot true) →
-        (∃ sig, c.lookupFunctionSignature slot = some sig ∧
-          sig.returnType = ret ∧
-          listForall₂ (fun arg ty => operandHasType fn ty arg) args sig.params) ∨
-        (c.slotKind? slot = some .importCell ∧
-          c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
+          (∃ sig, c.lookupFunctionSignature slot = some sig ∧
+            sig.returnType = ret ∧
+            listForall₂ (fun arg ty => operandHasType fn ty arg) args sig.params) ∨
+          (c.slotKind? slot = some .importCell ∧
+            c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
 
 /-- The callee's return destination agrees with the caller's local type, for
 every adjacent frame pair in the stack. -/
@@ -10131,5 +10131,257 @@ theorem wfState_moduleCallStep {contract : IRContract} {c : IRState} {f : IRFram
     (tail := restFrames) hwf2 hframes2 hfnMem2 hblocks hlen hargsTyped hargsLive
     hargsNoSlots hargsBounded hargsPayloads hretDest hretOrigin hretParam hretCallDest
   simpa [IRState.withHeadInstrs, hframes, calleeFrame] using hpush
+
+/-- The function-cell `callPtr` form: a resolved `.ptr (.function …)` callee
+pushes the frame of its module function. `CallTargetsTyped` ties the call's
+result and argument types to the cell's host signature, and `FunctionBindingsTyped`
+ties that signature to the resolved function. -/
+theorem wfState_callPtrFunctionStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {dest : Option Ssa} {ret : IrType} {callee : Operand} {args : List Operand}
+    {values : List IRValue} {fname : String} {fn : Function} {block : Block}
+    {restBlocks : List Block}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .callPtr dest ret callee args :: restInstrs)
+    (hvalues : evalOperands f args = some values)
+    (hcallee : evalOperand f callee = some (.ptr (.function fname)))
+    (hfn : c.module.function? fname = some fn)
+    (hblocks : fn.blocks = block :: restBlocks) :
+    WFState contract
+      { c with
+        frames := calleeFrame c fn block values dest ::
+          { f with instrs := restInstrs } :: c.frames.tail,
+        nextFrame := c.nextFrame + 1 } := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  have hud : FunctionUsesDefined f.fn := hwf.program.wellFormed.usesDefined f.fn hfunMem
+  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+  rcases hwf.frameBlock f hf with ⟨block0, hblock0, hblockEq, htermEq, done, hdone⟩
+  have hinstrMem : Instr.callPtr dest ret callee args ∈ block0.instrs := by
+    rw [hdone, hinstrs]
+    exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hidx : block0.instrs[done.length]? = some (.callPtr dest ret callee args) := by
+    rw [hdone, hinstrs]
+    exact getElem?_append_self done (.callPtr dest ret callee args) restInstrs
+  have hblock? : f.fn.block? block0.label = some block0 :=
+    block?_eq_some hnd hblock0 (by rw [← hblockEq])
+  have hwell := (hwf.program.wellFormed.typesCorrect f.fn hfunMem).instructions
+    block0 hblock0 (.callPtr dest ret callee args) hinstrMem
+  obtain ⟨_, hresultOK, _, _⟩ := hwell
+  rcases hwf.program.callPtrOrigins f.fn hfunMem block0 hblock0
+    (.callPtr dest ret callee args) hinstrMem dest ret callee args rfl with
+    ⟨name, slot, hcalleeEq, horigin⟩
+  have hmemorig := mem_of_originOf? horigin
+  rcases hwf.originsMatch f hf (name, .cell slot true) hmemorig with
+    ⟨v, hlookup, _, hkindcase⟩
+  rw [hcalleeEq] at hcallee
+  simp only [evalOperand] at hcallee
+  have hvFun : v = .ptr (.function fname) := by
+    rw [hcallee] at hlookup
+    exact (Option.some.inj hlookup).symm
+  rcases hkindcase with hdefault | hkindcase
+  · rw [hvFun] at hdefault
+    cases hdefault
+  · rcases hkindcase with ⟨kind, hkind, hcase⟩
+    rcases hcase with ⟨_, hroot⟩
+      | ⟨hkindFn, hvfname, hfnlook, hfnval, _⟩
+      | ⟨_, hval⟩
+    · rw [hvFun] at hroot
+      cases hroot
+    · have hfnameEq : hvfname = fname := by
+        rw [hvFun] at hfnval
+        cases hfnval
+        rfl
+      have hfnName : fn.name = fname := function?_name hfn
+      have hfnMem2 : fn ∈ c.module.functions := mem_of_function? hfn
+      obtain ⟨fnb, hfnbMem, hfnbName, hsig⟩ := hwf.functionBindings slot hvfname hfnlook
+      have hfnbEq : fnb = fn :=
+        eq_of_mem_of_nodup_map hwf.program.wellFormed.moduleShapes.functionNames
+          hfnbMem hfnMem2 (by rw [hfnbName, hfnName, hfnameEq])
+      rw [hfnbEq] at hsig
+      have hct := hwf.callTargets f.fn hfunMem block0 hblock0
+        (.callPtr dest ret callee args) hinstrMem dest ret callee args rfl
+        name slot hcalleeEq horigin
+      rcases hct with ⟨sig, hsigSlot, hsigRet, hargsTy⟩ | ⟨hkindImp, _, _, _⟩
+      · have hsigEq : sig = fn.signature :=
+          Option.some.inj (hsigSlot.symm.trans hsig)
+        have hretEq : ret = fn.returnType :=
+          hsigRet.symm.trans (congrArg Signature.returnType hsigEq)
+        have hparamsEq : sig.params = fn.params.map (·.1) := by
+          rw [hsigEq]
+          rfl
+        have hlocalsTyped := hwf.localsTyped f hf
+        have hvaluesTyped :
+            listForall₂ (fun v ty => v.type? = some ty) values sig.params :=
+          listForall2_evalOperands_type hlocalsTyped hargsTy hvalues
+        have hvaluesTyped' : listForall₂ (fun v ty => v.type? = some ty) values
+            (fn.params.map (·.1)) := by
+          rw [← hparamsEq]
+          exact hvaluesTyped
+        have hargsTyped : ArgsTyped fn values :=
+          listForall2_params_of_values fn.params values hvaluesTyped'
+        have hlen : values.length = fn.params.length :=
+          listForall2_params_length fn.params values hargsTyped
+        have hslotsSyms := hwf.program.slotsSymbolsLoadOnly.1 f.fn hfunMem block0 hblock0
+          (.callPtr dest ret callee args) hinstrMem
+        have hargEval := evalOperands_exists_evalOperand hvalues
+        have hargsLiveC : ∀ p a, (p, a) ∈ fn.params.zip values →
+            (∀ slot off, a = .ptr (.root slot off) →
+              ∃ vals, c.lookupStorage (.root slot) = some vals ∧ off < vals.length) ∧
+            (∀ g off, a = .ptr (.global g off) →
+              ∃ vals, c.lookupStorage (.global g) = some vals ∧ off < vals.length) := by
+          intro p a hpa
+          obtain ⟨arg, hargMem, heval⟩ := hargEval a (mem_right_of_zip hpa)
+          have hsyms : ∀ g, g ∈ operandSymbols arg → g ∈ fragValueSymbols c.module :=
+            fun g hg => mem_fragValueSymbols_of_instr hfunMem hblock0 hinstrMem
+              (show g ∈ instrValueSymbols (.callPtr dest ret callee args) from
+                List.mem_append_right _
+                  (List.mem_flatMap.mpr ⟨arg, hargMem, hg⟩))
+          exact storageLive_of_evalOperand (hwf.storagePtrsLive f hf) hwf.storageDomain
+            hsyms heval
+        have hargsNoSlotsC : ∀ p a, (p, a) ∈ fn.params.zip values → ∀ g off,
+            a = .ptr (.global g off) → g ∉ SlotsGlobals c.module := by
+          intro p a hpa g off hga
+          obtain ⟨arg, hargMem, heval⟩ := hargEval a (mem_right_of_zip hpa)
+          have hsyms : ∀ h, h ∈ operandSymbols arg → h ∉ SlotsGlobals c.module :=
+            fun h hh => hslotsSyms h
+              (show h ∈ instrValueSymbols (.callPtr dest ret callee args) from
+                List.mem_append_right _
+                  (List.mem_flatMap.mpr ⟨arg, hargMem, hh⟩))
+          exact noSlotsGlobal_of_evalOperand (hwf.noSlotsGlobalPointers.1 f hf) hsyms
+            (by simpa [hga] using heval)
+        have hargsPayloads : ∀ p a, (p, a) ∈ fn.params.zip values →
+            PayloadsTypedValue a := by
+          intro p a hpa
+          obtain ⟨arg, hargMem, heval⟩ := hargEval a (mem_right_of_zip hpa)
+          exact payloadsTypedValue_evalOperand (hwf.payloadsTyped.1 f hf) heval
+        have hretDest : ∀ d, dest = some d → fn.returnType ≠ .void ∧
+            f.fn.localType? d = some fn.returnType := by
+          intro d hd
+          have hretNe : ret ≠ .void := by
+            cases hd
+            simpa [CallResultOK] using hresultOK
+          have hresTy : Instr.resultType? (.callPtr dest ret callee args) = some ret := by
+            rw [hd]
+            simp [Instr.resultType?, hretNe]
+          have hlocTy : f.fn.localType? d = some ret :=
+            localType?_eq_resultType hud hblock? hidx hd hresTy
+          exact ⟨by rw [← hretEq]; exact hretNe, by rw [← hretEq]; exact hlocTy⟩
+        have hretOrigin : ∀ d, dest = some d → f.fn.facts.originOf? d = none :=
+          callPtr_dest_origin_none hwf.program hfunMem hblock0 hinstrMem rfl
+        have hretParam : ∀ d, dest = some d → d ∉ f.fn.params.map (·.2) := by
+          intro d hd
+          exact notParam_of_mem_dests hud hblock0 hinstrMem hd
+        have hretCallDest : ∀ d, dest = some d → IsCallDest f.fn d := by
+          intro d hd
+          exact ⟨block0, hblock0, .callPtr dest ret callee args, hinstrMem,
+            Or.inr ⟨ret, callee, args, by rw [hd]⟩⟩
+        have hblockShape : block0.instrs =
+            (done ++ [.callPtr dest ret callee args]) ++ restInstrs := by
+          rw [hdone, hinstrs, List.append_assoc]
+          rfl
+        have hblockNew : ∀ f' rest, c.frames = f' :: rest →
+            ∃ b ∈ f'.fn.blocks, f'.block = b ∧ f'.terminator = b.terminator ∧
+              ∃ done', b.instrs = done' ++ restInstrs := by
+          intro f' rest hfr
+          rw [hframes] at hfr
+          have hf' : f' = f := (List.cons.inj hfr).1.symm
+          rw [hf']
+          exact ⟨block0, hblock0, hblockEq, htermEq,
+            done ++ [.callPtr dest ret callee args], hblockShape⟩
+        have hnoBareNew : ∀ f' rest, c.frames = f' :: rest → restInstrs = [] →
+            f'.terminator ≠ some .unreachable := by
+          intro f' rest hfr hres hterm
+          rw [hframes] at hfr
+          have hf' : f' = f := (List.cons.inj hfr).1.symm
+          have htermf : f.terminator = some .unreachable := by
+            rw [← hf']
+            exact hterm
+          have htermBlock : block0.terminator = some .unreachable := by
+            rw [← htermEq]
+            exact htermf
+          have hlast : block0.instrs.getLast? = some (.callPtr dest ret callee args) := by
+            rw [hdone, hinstrs, hres]
+            exact getLast?_append_singleton done (.callPtr dest ret callee args)
+          rcases hwf.program.unreachableGuarded f.fn hfunMem block0 hblock0 htermBlock with
+            ⟨instr0, hlast0, d0, r0, cl0, a0, hinstr0, himpCell⟩
+          have hinstrEq : Instr.callPtr dest ret callee args = instr0 := by
+            rw [hlast] at hlast0
+            exact Option.some.inj hlast0
+          rw [← hinstrEq] at hinstr0
+          cases hinstr0
+          rcases himpCell with ⟨iname, islot, hcalleeIn, horiginIn, hkindIn⟩
+          rw [hcalleeEq] at hcalleeIn
+          cases hcalleeIn
+          have hslotEq : islot = slot := by
+            have h := horiginIn.symm.trans horigin
+            cases h
+            rfl
+          rw [hslotEq] at hkindIn
+          have hkindIn' : c.slotKind? slot = some .importCell := by
+            simpa [IRState.slotKind?] using hkindIn
+          rw [hkindFn] at hkind
+          rw [hkind] at hkindIn'
+          cases hkindIn'
+        have hwf2 : WFState contract (c.withHeadInstrs restInstrs) :=
+          wfState_withHeadInstrs hwf hblockNew hnoBareNew
+        have hframes2 : (c.withHeadInstrs restInstrs).frames =
+            { f with instrs := restInstrs } :: restFrames := by
+          simp [IRState.withHeadInstrs, hframes]
+        have hmodule2 : (c.withHeadInstrs restInstrs).module = c.module := by
+          simp [IRState.withHeadInstrs, hframes]
+        have hlookup2 : ∀ id, (c.withHeadInstrs restInstrs).lookupStorage id =
+            c.lookupStorage id := by
+          intro id
+          simp only [IRState.withHeadInstrs, hframes]
+          rfl
+        have hfnMem2 : fn ∈ (c.withHeadInstrs restInstrs).module.functions := by
+          rw [hmodule2]
+          exact mem_of_function? hfn
+        have hargsLive : ∀ p a, (p, a) ∈ fn.params.zip values →
+            (∀ slot off, a = .ptr (.root slot off) →
+              ∃ vals, (c.withHeadInstrs restInstrs).lookupStorage (.root slot) =
+                some vals ∧ off < vals.length) ∧
+            (∀ g off, a = .ptr (.global g off) →
+              ∃ vals, (c.withHeadInstrs restInstrs).lookupStorage (.global g) =
+                some vals ∧ off < vals.length) := by
+          intro p a hpa
+          have hc := hargsLiveC p a hpa
+          constructor
+          · intro slot off hp
+            obtain ⟨vals, hlook, hoff⟩ := hc.1 slot off hp
+            exact ⟨vals, by rw [hlookup2]; exact hlook, hoff⟩
+          · intro g off hp
+            obtain ⟨vals, hlook, hoff⟩ := hc.2 g off hp
+            exact ⟨vals, by rw [hlookup2]; exact hlook, hoff⟩
+        have hargsNoSlots : ∀ p a, (p, a) ∈ fn.params.zip values → ∀ g off,
+            a = .ptr (.global g off) →
+              g ∉ SlotsGlobals (c.withHeadInstrs restInstrs).module := by
+          intro p a hpa g off hga
+          rw [hmodule2]
+          exact hargsNoSlotsC p a hpa g off hga
+        have hstack2 : StackPtrsBounded (c.withHeadInstrs restInstrs) f :=
+          stackPtrsBounded_of_frameLookups (frameLookups_withHeadInstrs c restInstrs)
+            (hwf.stackPtrsBounded f hf)
+        have hargsBounded : ∀ p a, (p, a) ∈ fn.params.zip values → ∀ frame slot off,
+            a = .ptr (.stack frame slot off) →
+              ∃ g, (c.withHeadInstrs restInstrs).frameById? frame = some g ∧
+                ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty := by
+          intro p a hpa frame slot off hva
+          obtain ⟨arg, hargMem, heval⟩ := hargEval a (mem_right_of_zip hpa)
+          have hb := memValuePtrBounded_of_evalOperand hstack2 heval
+          rw [hva] at hb
+          exact hb
+        have hpush := wfState_calleePush (contract := contract)
+          (c := c.withHeadInstrs restInstrs) (caller := { f with instrs := restInstrs })
+          (tail := restFrames) hwf2 hframes2 hfnMem2 hblocks hlen hargsTyped hargsLive
+          hargsNoSlots hargsBounded hargsPayloads hretDest hretOrigin hretParam hretCallDest
+        simpa [IRState.withHeadInstrs, hframes, calleeFrame] using hpush
+      · rw [hkindFn] at hkind
+        rw [hkind] at hkindImp
+        cases hkindImp
+    · rw [hvFun] at hval
+      cases hval
 
 end Stc.Codegen
