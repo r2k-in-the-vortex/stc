@@ -364,13 +364,15 @@ Phase 1 produces no large correctness proofs; it produces the bridge and the too
   with one record per target: phase, level, theorem name, specification section or rule ID,
   status, owner, and TCB note. Add an `xtask` check that every record resolves to a theorem and
   every top-level theorem is registered.
-- Extend the Phase 0 `IRFrag` to the full emitted LLVM IR fragment for Phase 5 and Phase 7: the
-  exact instructions, types, control-flow constructs, GOT access patterns, calls, traps,
-  globals, and descriptor/function table shape that codegen may emit. Anything outside the
-  fragment is out of scope until the fragment is extended.
-- Fix the first end-to-end subset (D-V6), building on the Phase 0 core subset: recommended as
-  scalar types, expressions, assignments, control flow, functions, programs, and GOT globals,
-  without OOP, references, strings, or aggregates.
+- Freeze and document the **boundary** of the full emitted LLVM IR fragment for Phase 5 and
+  Phase 7: the exact instructions, types, control-flow constructs, GOT access patterns, calls,
+  traps, globals, and descriptor/function table shape that codegen may emit. Phase 1 implements
+  only the fragment slice needed by the bridge and D-V6; Phase 5 owns the full Lean `IRFrag`
+  extension. Anything outside the frozen boundary is out of scope until the fragment is extended.
+  (Owner decision 2026-11-02.)
+- Fix the first end-to-end subset (D-V6), building on the Phase 0 core subset: scalar types,
+  expressions, assignments, control flow, functions, programs, and GOT globals, without OOP,
+  references, strings, or aggregates. (Owner-approved 2026-11-02.)
 - Write the TCB and claim-language document (D-V4).
 
 **Exit criteria.** Bridge spike report exists; D-V1 through D-V10 are resolved; the Phase 0

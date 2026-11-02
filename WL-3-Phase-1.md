@@ -103,6 +103,9 @@ not as a blanket "adopt Aeneas" statement.
 
 ### 4.2 Toolchain policy
 
+- **Owner decision (2026-11-02):** install and evaluate Aeneas/Charon in user space on the
+  Ubuntu host; inventory and pin exact versions; add them to CI only after the spike evidence is
+  reviewed. No system-wide changes without a separate approval.
 - Check whether `aeneas`/`charon` are available on the development/CI platform; record exact
   versions and installation path.
 - Pin the toolchain and generated-Lean location; generated models must be reproducible.
@@ -113,10 +116,13 @@ not as a blanket "adopt Aeneas" statement.
 
 ### 4.3 Full IR fragment and first end-to-end subset
 
-- Extend `IRFrag`/`WellFormed` from the Phase 0 core to the full emitted LLVM IR fragment needed
-  by Phases 5 and 7; this is a versioned extension, not a reinterpretation.
-- Fix D-V6's first end-to-end subset: recommended scalar types, expressions, assignments,
-  control flow, functions, programs, and GOT globals; no OOP, references, strings, or aggregates.
+- **Owner decision (2026-11-02):** Phase 1 freezes and documents the full emitted-LLVM-IR
+  fragment boundary, but implements only the fragment pieces needed by the bridge and the D-V6
+  subset. Phase 5 owns the full Lean `IRFrag`/`WellFormed` extension. This is a boundary/spec
+  freeze now, not a reinterpretation of the frozen `1.0` core.
+- **Owner decision (2026-11-02):** approve the D-V6 first end-to-end subset: scalar types,
+  expressions, assignments, control flow, functions, programs, and GOT globals; no OOP,
+  references, strings, or aggregates.
 - Record both the fragment boundary and the subset in the program plan and the Phase 1 report.
 
 ### 4.4 TCB and claim language
@@ -124,6 +130,18 @@ not as a blanket "adopt Aeneas" statement.
 Write the TCB/claim-language document (D-V4): what is trusted, what each level means, which
 claims are permitted, and what evidence a level change requires. Reuse the Phase 0 TCB and extend
 it with the bridge toolchain/translation boundary.
+
+### 4.5 Owner decisions resolved 2026-11-02
+
+| Gate | Resolution |
+| --- | --- |
+| Aeneas/Charon toolchain | Install/evaluate in user space on the Ubuntu host; pin exact versions; add to CI only after spike evidence review; no system-wide changes without separate approval. |
+| Full IR fragment | Freeze and document the full emitted-fragment boundary in Phase 1; implement only the bridge/D-V6 slice; Phase 5 owns the full Lean `IRFrag` extension. |
+| D-V6 subset | Approved: scalar types, expressions, assignments, control flow, functions, programs, GOT globals; no OOP, references, strings, or aggregates. |
+| Claim level | No new claims: all Phase 1 bridge/tooling work stays V0; Phase 0's S-level semantics remains the only reviewed claim. |
+
+Remaining open gates: the bridge choice per target class (after M1–M3), CI adoption of the bridge
+toolchain (after spike evidence), and Phase 1 report acceptance/retirement (after M7).
 
 ## 5. Work breakdown
 
@@ -134,7 +152,7 @@ it with the bridge toolchain/translation boundary.
 | M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Keys-spike section; evidence and gap list. |
 | M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Codec-spike section; bridge recommendation. |
 | M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | Bridge decision section; module skeleton; owner decision request for toolchain adoption. |
-| M5 — IR fragment and D-V6 subset | Extend `IRFrag`/`WellFormed` to the full emitted fragment (versioned); write D-V6's first end-to-end subset; update coverage tables. | Updated Lean modules/coverage; program-plan and report text. |
+| M5 — IR boundary and D-V6 subset | Freeze and document the full emitted-fragment boundary; implement only the bridge/D-V6 slice; write D-V6's first end-to-end subset; leave the full Lean `IRFrag` extension to Phase 5; update coverage tables. | Boundary document, updated coverage, program-plan/report text. |
 | M6 — CI and registry | Extend the registry for bridge/toolchain records; add no-`sorry`, axiom, vector-regeneration, and oracle checks; add Aeneas regeneration drift checks if the bridge is adopted; document CI budget. | CI changes and a green run; registry entries. |
 | M7 — Report and retirement | Write `specification/Verification/Reports/Phase1-Report.md`; move durable decisions to the program plan/TCB/claim doc/registry; delete stale working notes and retire this file. | Durable report; Phase 1 review package; working file deleted. |
 
@@ -206,14 +224,14 @@ untracked credentials.
 
 ## 9. Owner decision gates
 
-Stop for an owner decision before:
-
-1. adopting Aeneas/Charon versions and adding them to the build/CI toolchain;
-2. choosing the bridge for each target class (especially where the preferred path fails);
-3. freezing the full emitted-IR fragment boundary or changing a versioned format;
-4. fixing the D-V6 first end-to-end subset;
-5. raising any component above V0 or asserting a refinement/translation-validation claim;
-6. accepting the Phase 1 report and retiring this working plan.
+| Gate | Status |
+| --- | --- |
+| Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; CI adoption remains open until spike evidence. |
+| Bridge choice per target class | Open; decide after M1–M3 using the decision matrix. |
+| Full emitted-IR fragment boundary / versioned format | Boundary freeze approved 2026-11-02; full Lean extension is Phase 5; any versioned-format change still requires approval. |
+| D-V6 first end-to-end subset | Approved 2026-11-02 as the program-plan recommendation. |
+| Claim level increase or refinement/translation-validation claim | Closed for Phase 1: no new claims; V0 evidence only, Phase 0 S remains the only reviewed claim. |
+| Phase 1 report acceptance and working-plan retirement | Open; after M7. |
 
 ## 10. Retirement protocol
 
@@ -229,12 +247,12 @@ On Phase 1 sign-off:
 
 | Item | State |
 | --- | --- |
-| M0 baseline and toolchain inventory | In progress — Ubuntu host baseline recorded; Rust/Lean/Aeneas/Charon not installed |
+| M0 baseline and toolchain inventory | In progress — Ubuntu host baseline recorded; owner decisions resolved; toolchain bootstrap not started |
 | M1 exact bridge spike | Not started |
 | M2 keys bridge spike | Not started |
 | M3 codec bridge spike | Not started |
 | M4 bridge decision and architecture | Not started |
-| M5 full IR fragment and D-V6 subset | Not started |
+| M5 IR boundary and D-V6 subset | Not started |
 | M6 CI and registry | Not started |
 | M7 report and retirement | Not started |
-| Owner decision gates | Pending |
+| Owner decision gates | Toolchain install, IR boundary, D-V6, and no-new-claims resolved 2026-11-02; bridge choice, CI adoption, and report acceptance open |
