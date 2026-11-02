@@ -11,6 +11,9 @@ Phase report: `specification/Verification/Reports/Phase1-Report.md` (durable)
 Phase 0 inputs: [Semantics](specification/Verification/Semantics.md),
 [Phase 0 Report](specification/Verification/Reports/Phase0-Report.md),
 [Phase 0 Design](specification/Verification/Reports/Phase0-Design.md)
+Execution host: Ubuntu PREEMPT_RT host `ecat`, described only in the gitignored
+`.env/RT_Host.md`. Long-running toolchain, bridge, and proof jobs run there; connection details and
+credentials must never be committed or copied into tracked documentation.
 
 ## 1. Goal
 
@@ -26,6 +29,33 @@ Program-plan exit criteria:
 - the registry, no-`sorry` check, vector-regeneration check, and oracle harness run in CI;
 - the full IR fragment and the first end-to-end subset are written down;
 - no component is claimed above V0 except the S-level Phase 0 semantics.
+
+## 1.1 Execution environment
+
+Baseline recorded 2026-11-02 on the Ubuntu host:
+
+- Linux 6.12 PREEMPT_RT, x86-64, 3 CPUs, 7.6 GiB RAM, 37 GiB free disk.
+- `git`, `clang`, `python3`, and `tmux` are present; `rustc`, `cargo`, `lake`/`lean`, `aeneas`,
+  and `charon` are not installed.
+- Windows remains the editing host and runs short local checks; the Ubuntu host runs toolchain
+  setup, Aeneas/Charon generation, full proof builds, workspace tests, and overnight jobs.
+- Remote work uses the SSH alias/instructions in the gitignored `.env/RT_Host.md`; no host
+  credential, key, or private address is recorded in this file, the report, or any tracked file.
+- Long jobs run under `tmux` with a log file; the worktree is synced through the Git repository,
+  not ad-hoc copies. Do not force-push or leave uncommitted remote work.
+- Record exact OS, compiler, Lean, Rust, Aeneas/Charon, and clang versions and the host resource
+  envelope in the Phase 1 report. Do not raise a bridge claim from a run whose toolchain is not
+  pinned and recorded.
+
+Bootstrap order for M0:
+
+1. Install the pinned Rust toolchain from `rust-toolchain.toml` with `rustup` in the user account.
+2. Install the pinned Lean toolchain from `lean/lean-toolchain` with `elan`/`lake`.
+3. Verify the Phase 0 baseline on the host: `lake build`, `lake exe stc-sem-tests`, the
+   conformance corpus gate, and `cargo test --workspace --locked`.
+4. Evaluate Aeneas/Charon installation in user space (OCaml/opam or release artifacts); record the
+   exact versions, install path, and disk/build cost. Do not make a bridge decision merely because
+   installation succeeds.
 
 ## 2. Non-goals and claim discipline
 
@@ -99,7 +129,7 @@ it with the bridge toolchain/translation boundary.
 
 | Milestone | Work | Deliverable/evidence |
 | --- | --- | --- |
-| M0 — Baseline | Confirm Phase 0 records, CI, registry, and Rust baselines; inventory the three bridge targets and their dependencies; record available toolchains. | Baseline note in this file; no claim change. |
+| M0 — Baseline | Confirm Phase 0 records, CI, registry, and Rust baselines; inventory the three bridge targets and their dependencies; record available toolchains. Establish the Ubuntu execution host baseline, bootstrap the pinned Rust/Lean toolchains, and verify the Phase 0 checks there. | Baseline note in this file; host/toolchain record; no claim change. |
 | M1 — Exact bridge spike | Run Aeneas/Charon on `crates/stc-codegen/src/exact.rs` (or the feasible subset). Measure translation coverage, generated Lean readability, proof obligations, and gaps versus `Stc.Exact`. | Exact-spike section in `Phase1-Report.md`; generated model + pins if feasible. |
 | M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Keys-spike section; evidence and gap list. |
 | M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Codec-spike section; bridge recommendation. |
@@ -145,6 +175,21 @@ cargo fmt --all -- --check
 Bridge-specific commands and toolchain versions are recorded in the Phase 1 report as they are
 established.
 
+On the Ubuntu host, run the same checks from a clean, pushed worktree under `tmux`, with a
+timestamped log, for example:
+
+```text
+ssh <alias-from-.env/RT_Host.md>
+cd <clean-worktree>
+tmux new -s wl3-p1
+cd lean && lake build -j2 2>&1 | tee ../phase1-lake.log
+cd .. && cargo test --workspace --locked 2>&1 | tee phase1-cargo-test.log
+```
+
+Use `-j2` on the 3-CPU host, monitor memory, and leave long Aeneas/Charon or proof jobs running
+overnight. Commit/push results from the host or fetch them back through Git; do not sync secrets or
+untracked credentials.
+
 ## 8. Risks and mitigations
 
 | Risk | Impact | Mitigation |
@@ -156,6 +201,8 @@ established.
 | Full IR fragment grows unbounded | Scope creep | Freeze the emitted-fragment boundary; versioned extension; exclude uncovered constructs explicitly. |
 | Claim inflation | Overclaiming V1/V4 | Enforce the claim-language document; no level increase without registered evidence and review. |
 | Toolchain/license/build-time cost | CI and maintenance burden | Measure; pin; nightly long job; document the TCB. |
+| Ubuntu host capacity (3 CPUs, 7.6 GiB RAM, 37 GiB free) | Lean/Aeneas builds may OOM or fill disk | Use `-j2`, monitor memory/disk, clean caches, run long jobs overnight with logs, and record the resource envelope. |
+| Remote credential leakage or untracked remote work | Security/consistency risk | Keep connection details in the gitignored `.env/RT_Host.md`; never commit keys/addresses; sync through Git and check `git status` before/after remote runs. |
 
 ## 9. Owner decision gates
 
@@ -182,7 +229,7 @@ On Phase 1 sign-off:
 
 | Item | State |
 | --- | --- |
-| M0 baseline and toolchain inventory | Not started |
+| M0 baseline and toolchain inventory | In progress — Ubuntu host baseline recorded; Rust/Lean/Aeneas/Charon not installed |
 | M1 exact bridge spike | Not started |
 | M2 keys bridge spike | Not started |
 | M3 codec bridge spike | Not started |
