@@ -2,13 +2,12 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Status: Draft for review. Phase 0 is in progress: P0.0–P0.5 are complete and reviewed (P0.5
-approved 2026-11-02 and merged through PR #12); P0.6's corpus, triage, and report exit criteria
-are met: the canonical core-HIR dump format `0.1.0`, `stc hir-dump`, the reference interpreter,
-the opt-in snapshot surface, the differential harness, the conformance report schema, the
-74-case corpus, and the committed byte-stable report all run in CI. P0.7 follows. The proved
-claims are the records in `lean/verification-status.toml`; no claim beyond them is made by
-this document.
+Status: Draft for review. Phase 0 is in progress: P0.0–P0.6 are complete and reviewed (P0.5
+approved 2026-11-02 and merged through PR #12; P0.6 approved 2026-11-02). P0.6 delivered the
+canonical core-HIR dump format `0.1.0`, `stc hir-dump`, the reference interpreter, the opt-in
+snapshot surface, the differential harness, the conformance report schema, the 74-case corpus,
+and the committed byte-stable report, all run in CI. P0.7 follows. The proved claims are the
+records in `lean/verification-status.toml`; no claim beyond them is made by this document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
 [GOT Artifacts and Schemas](../Architecture/GOT-Artifacts.md),
@@ -916,7 +915,7 @@ turn it into the registry.
 | Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31 and merged into v2.0.0-planning via PR #11 (612f84d); see Plan-Phase0.md §19 |
 | Core typing judgment and checker | 0 | S | `core_check_sound`, `core_rejection_characterized` | Proved (P0.2) |
 | Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | P0.5 target soundness proved: target machine, step relation, executor, coverage table, and all eight soundness theorems (`ir_deterministic`, `ir_progress`, `ir_memory_safe`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`, `ir_no_ub`) proved against the implemented invariant; `initState?_wf`, `irStep_wf`/`irStepStar_wf`, the reachability corollaries, and `irRun_halt_wf` complete the whole-run bridge (Plan-Phase0.md §22.10–§22.11; checkpoint §21); P0.5 review approved 2026-11-02 and merged via PR #12 (92e113f) |
-| Reference interpreter and conformance | 0 | V0 | `lake exe semantics-conformance` report | Core-HIR dump `0.1.0` and `stc hir-dump` complete (P0.6); fuel interpreter sound/complete (P0.3); `stc-sem`, the opt-in snapshot surface, the differential harness, the `stc-sem-conformance-report` `0.1.0`, a 74-case corpus covering every claimed core item or a justified exclusion, and the committed byte-stable report complete and checked in CI (P0.6); the triage log records the one fixed source-analyzer bug and the documented exclusions |
+| Reference interpreter and conformance | 0 | V0 | `lake exe semantics-conformance` report | Core-HIR dump `0.1.0` and `stc hir-dump` complete (P0.6); fuel interpreter sound/complete (P0.3); `stc-sem`, the opt-in snapshot surface, the differential harness, the `stc-sem-conformance-report` `0.1.0`, a 74-case corpus covering every claimed core item or a justified exclusion, and the committed byte-stable report complete and checked in CI (P0.6); the triage log records the one fixed source-analyzer bug and the documented exclusions; P0.6 approved 2026-11-02 |
 | Checked integer arithmetic | 2 | V1 | `add_ok_iff`, overflow/div-zero lemmas | Model + vectors (V0) |
 | Bitwise, shifts, rotates | 2 | V1 | range, masking, inverse lemmas | Model + vectors (V0) |
 | Conversions, comparisons, selection | 2 | V1 | conversion and selection lemmas | Model + vectors (V0) |

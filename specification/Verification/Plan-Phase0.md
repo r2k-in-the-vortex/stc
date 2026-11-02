@@ -2,16 +2,14 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Status: Phase 0 is in progress. P0.0–P0.5 are complete and reviewed; P0.5 was approved on
-2026-11-02 and merged through PR #12 (merge commit `92e113f`). P0.6 is in progress: the
-versioned core-HIR dump format `0.1.0` and `stc hir-dump`, the strict Lean reader, the
-`stc-core-case`/`stc-sem-result` `0.1.0` formats, and `lake exe stc-sem` are complete
-(2026-11-01); the opt-in launcher snapshot surface, the differential harness, the
-`stc-sem-conformance-report` `0.1.0`, and the five-case core corpus are complete and run in CI
-(2026-11-02). Corpus expansion to every core feature and trap, disagreement triage, and the
-committed report remain before P0.6 exits. P0.7 follows. Completion
-records and sign-offs are in §16–§22; `lean/verification-status.toml` is authoritative for
-proved claims.
+Status: Phase 0 is in progress. P0.0–P0.6 are complete and reviewed; P0.5 was approved on
+2026-11-02 and merged through PR #12 (merge commit `92e113f`); P0.6 was approved on 2026-11-02.
+P0.6 delivered the versioned core-HIR dump `0.1.0` and `stc hir-dump`, the strict Lean reader,
+the `stc-core-case`/`stc-sem-result`/`stc-sem-conformance-report` `0.1.0` formats, `lake exe
+stc-sem`, the opt-in snapshot surface, the differential harness, a 74-case corpus with a
+coverage inventory and triage log, and the committed byte-stable report checked in CI. P0.7
+(document review, versioning, and handoff) is next. Completion records and sign-offs are in
+§16–§22; `lean/verification-status.toml` is authoritative for proved claims.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -465,6 +463,9 @@ rejects a stale copy. The corpus inventory in
 [Semantics-Cases.md](Semantics-Cases.md) §7 maps every item claimed in §3.3 to a case or a
 justified exclusion; the triage log records the one fixed source-analyzer bug (`MIN`/`MAX`
 magnitude typing) and the documented exclusions. The P0.6 exit criteria are met.
+**Owner sign-off (2026-11-02).** P0.6 was approved at `4b90802`: 74/74 cases agree, the
+committed report matches regeneration, and the triage log and exclusions are documented.
+P0-T24 is approved as `evidence`/`tested`. P0.6 is complete; P0.7 is next.
 
 **Work.**
 

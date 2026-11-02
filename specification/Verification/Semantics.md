@@ -1,33 +1,16 @@
 # stc Semantics — Phase 0 Core
 
 Profile: `stc-2013-oop-utf8-v1`
-Date: 2026-10-27
+Date: 2026-11-02
 Semantics version: `1.0-draft` (frozen at `1.0` in P0.7)
 HIR dump format version: `0.1.0` (frozen with the core dump in P0.6)
-Status: Skeleton approved 2026-10-27. P0.1 is complete (review approved 2026-10-27): the token
-model, lossless CST contract, surface AST, and `Derives` relation are defined, and
-`ast_span_wellformed` is proved. P0.2 is complete (2026-10-27): the typed HIR, the declarative
-typing judgment, the core checker `checkCore`, the conversion relation, HIR well-formedness, and
-the soundness and rejection-characterization theorems are defined and proved. P0.3 proof work is
-complete (2026-10-31; review approved 2026-10-31): the value and trap model, the small-step machine, the
-configuration typing, determinism, trap soundness, guarded exact arithmetic, and the fuel
-interpreter's soundness and completeness are in place; `progress`, `preservation`, initial-state
-typing, and `type_soundness` are proved. The M6.5 compiler drift that paused P0.3 stabilized at
-`stc` 1.0.0; the drift register was rechecked on 2026-10-31 and still holds, and the open
-questions were resolved in [Plan-Phase0.md](Plan-Phase0.md) §19.8. P0.4 is complete (review
-approved 2026-10-31, WL-3): `IRFrag`, `IRContract`, `WellFormed`, and the structural lemmas are
-defined and proved. P0.5 definitions and proofs follow and are reviewed in P0.7. P0.6's first
-milestone is complete (2026-11-01): the canonical core-HIR dump format `0.1.0`, its emitter and
-validator, and `stc hir-dump` are defined and frozen in [HIR-Dump.md](HIR-Dump.md). P0.6's
-second milestone is complete (2026-11-01): the strict Lean dump reader, the `stc-core-case`
-`0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` are implemented
-and specified in [Semantics-Cases.md](Semantics-Cases.md). P0.6's third milestone is complete
-(2026-11-02): the launcher's opt-in snapshot surface, the differential harness, the frozen
-`stc-sem-conformance-report` `0.1.0`, and a five-case core corpus are implemented, and CI runs
-the corpus. The corpus must still expand to every core feature and trap, and the report must be
-committed, before P0.6 exits. The P0.3
-completion record and review checklist are in §19.12, the drift register in §19, and the P0.4
-scope decisions in §20. This document does not yet make the full Phase 0 soundness claim.
+Status: Phase 0 is in progress. P0.0–P0.6 are complete and reviewed; P0.5 was approved on
+2026-11-02, and P0.6 was approved on 2026-11-02 with a 74-case differential corpus, a
+committed conformance report, and the documented exclusions and triage. The semantics version
+stays `1.0-draft` until the P0.7 review. P0.7 (document review, versioning, and handoff) is
+next. The P0.3 completion record and review checklist are in Plan-Phase0.md §19.12, the drift
+register in §19, the P0.4 scope decisions in §20, and the P0.5 completion record in §22.11. This
+document does not yet make the full Phase 0 soundness claim.
 Charter: [Semantics Charter](Semantics-Charter.md)
 Plan: [Phase 0 Implementation Plan](Plan-Phase0.md) · [Verification Program Plan](Plan.md)
 
@@ -490,10 +473,9 @@ an unknown version or an unmodeled construct is rejected, never interpreted.
 | 2026-10-31 | 1.0-draft | P0.3 (progress) | Proved `progress`: a `ConfigTyped` configuration is terminal or takes a step, via the expression, value, statement, resume, and return no-stuck lemmas. `preservation`, initial-state typing, and `type_soundness` remain |
 | 2026-10-31 | 1.0-draft | P0.3 (preservation) | Proved `preservation` over every focus form, including the value/statement/resume/returned transitions and the FOR advance path. Fixed three machine bugs found by the proof: the call-argument continuation advanced past the wrong argument, `EXIT` kept the loop body's loop context, and `CONTINUE` on a `FOR` entered the increment in the body's loop context. Initial-state typing and `type_soundness` remain |
 | 2026-10-31 | 1.0-draft | P0.3 (complete) | Proved initial-state typing (`initBody_typed`, `initState_typed`) using `ExprHasType.transport`, a context-agreement lemma over the mutual typing recursor, and `type_soundness`: the initial configuration is typed, every reachable configuration stays typed, and no reachable configuration is stuck. P0.3 is complete; the review was approved 2026-10-31 |
-| 2026-11-01 | 1.0-draft | P0.6 (dump) | Defined and froze dump format `0.1.0` in [HIR-Dump.md](HIR-Dump.md): canonical names and positions, function signatures, globals with GOT keys, the single program, statements, expressions and places, explicit casts, call targets, literal values, spans, and the feature-tag vocabulary for rejection. Implemented the emitter and validator in `crates/stc-hir/src/core_dump.rs`, added `stc hir-dump` with emit/verify modes, and added determinism, versioning, and unmodeled-construct tests. The Lean reader, case corpus, and differential harness remain |
-| 2026-11-01 | 1.0-draft | P0.6 (reference) | Added the strict Lean reader for dump `0.1.0` and defined the `stc-core-case` `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` in [Semantics-Cases.md](Semantics-Cases.md); the reader validates header/version/profile/semantics, status/features, names, positions, callees, arities, literals, and depth, and rejects unmodeled constructs. Added unit tests and temporary-fixture CLI tests (`lake exe stc-sem-tests`); no corpus case is committed while the harness is a fail-closed placeholder. The differential harness and corpus remain |
-| 2026-11-02 | 1.0-draft | P0.6 (corpus and report) | Expanded the corpus to 74 cases covering every claimed core item or a justified exclusion, with the coverage inventory and triage log in `Semantics-Cases.md` §7; fixed `MIN`/`MAX`/`LIMIT` magnitude typing for bit strings and characters; committed the byte-stable `stc-sem-conformance-report` `0.1.0` report and made the corpus gate reject a stale copy. The semantics definitions, case/result formats, and comparison rule are unchanged |
-| 2026-11-02 | 1.0-draft | P0.6 (harness) | Added the opt-in launcher `--snapshot` surface backed by `Host::debug_read` and manifest roots, the differential harness, the frozen `stc-sem-conformance-report` `0.1.0`, and the five-case core corpus; CI builds the Rust compiler and test runtime and runs the corpus gate. The corpus expansion, triage log, and committed report remain |
+| 2026-11-01 | 1.0-draft | P0.6 (dump) | Defined and froze dump format `0.1.0` in [HIR-Dump.md](HIR-Dump.md): canonical names and positions, function signatures, globals with GOT keys, the single program, statements, expressions and places, explicit casts, call targets, literal values, spans, and the feature-tag vocabulary for rejection. Implemented the emitter and validator in `crates/stc-hir/src/core_dump.rs`, added `stc hir-dump` with emit/verify modes, and added determinism, versioning, and unmodeled-construct tests. The Lean reader, case corpus, and differential harness followed. |
+| 2026-11-01 | 1.0-draft | P0.6 (reference) | Added the strict Lean reader for dump `0.1.0` and defined the `stc-core-case` `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` in [Semantics-Cases.md](Semantics-Cases.md); the reader validates header/version/profile/semantics, status/features, names, positions, callees, arities, literals, and depth, and rejects unmodeled constructs. Added unit tests and temporary-fixture CLI tests (`lake exe stc-sem-tests`); no corpus case was committed while the harness was a fail-closed placeholder. The differential harness and corpus followed. |
+| 2026-11-02 | 1.0-draft | P0.6 (complete) | Added the opt-in launcher `--snapshot` surface backed by `Host::debug_read` and manifest roots, the differential harness, and the frozen `stc-sem-conformance-report` `0.1.0`; expanded the corpus to 74 cases covering every claimed core item or a justified exclusion, with the coverage inventory and triage log in `Semantics-Cases.md` §7; fixed `MIN`/`MAX`/`LIMIT` magnitude typing for bit strings and characters; committed the byte-stable report and made the corpus gate reject a stale copy. P0.6 approved 2026-11-02; the V0 differential-evidence label is unchanged |
 
 ## 10. Rust/Lean interface
 

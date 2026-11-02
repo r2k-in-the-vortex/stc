@@ -5,7 +5,7 @@ Date: 2026-11-02
 Semantics version: `1.0-draft`
 Case format: `stc-core-case` version `0.1.0`
 Result format: `stc-sem-result` version `0.1.0`
-Status: P0.6 fourth milestone. The corpus under `tests/verification/semantics/` holds 74 cases;
+Status: P0.6 complete (approved 2026-11-02). The corpus under `tests/verification/semantics/` holds 74 cases;
 the frozen dump, the reference interpreter, and the compiled artifact agree on every case. The
 coverage inventory, justified exclusions, and triage log are in §7. The byte-stable report is
 committed as `tests/verification/semantics/conformance-report.json`, and CI regenerates it and
