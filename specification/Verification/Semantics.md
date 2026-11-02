@@ -5,11 +5,10 @@ Date: 2026-11-02
 Semantics version: `1.0` (frozen by P0.7; freeze commit
 `7aad70d41e1dc4b47606f13cd7818b638fd45927`)
 HIR dump format version: `0.1.0` (frozen with the core dump in P0.6)
-Status: Phase 0 is complete through P0.6, and each sub-phase through P0.6 is owner-approved. P0.7
-(document review, versioning, and handoff) has completed its preparation: this document is
-complete against the P0.7 checklist, the semantics version is frozen at `1.0`, and the
-[Phase 0 Report](Phase0-Report.md) records the proof and evidence summary, the known gaps, and
-the handoff to later phases. The P0.7 owner review and sign-off are pending. The soundness
+Status: Phase 0 is complete. P0.0–P0.7 are complete and owner-approved; P0.7 was approved on
+2026-11-02, this document is complete against the P0.7 checklist, the semantics version is frozen
+at `1.0`, and the [Phase 0 Report](Phase0-Report.md) records the proof and evidence summary, the
+known gaps, and the handoff to later phases. The soundness
 results stated here are the P0.0–P0.5 theorems plus the P0.6 conformance evidence; they are not a
 refinement claim, and the V0 differential evidence and TCB boundaries are explicit in §7, §8, and
 §10. The P0.3 completion record and review checklist are in Plan-Phase0.md §19.12, the drift

@@ -2,15 +2,14 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Status: Draft for review. Phase 0 is in progress: P0.0–P0.6 are complete and reviewed (P0.5
-approved 2026-11-02 and merged through PR #12; P0.6 approved 2026-11-02). P0.6 delivered the
+Status: Draft for review. Phase 0 is complete: P0.0–P0.7 are complete and owner-approved (P0.5
+approved 2026-11-02 and merged through PR #12; P0.6 approved 2026-11-02 and merged through PR #13; P0.7 approved 2026-11-02, freezing
+`semantics_version` at `1.0`). P0.6 delivered the
 canonical core-HIR dump format `0.1.0`, `stc hir-dump`, the reference interpreter, the opt-in
 snapshot surface, the differential harness, the conformance report schema, the 74-case corpus,
-and the committed byte-stable report, all run in CI. P0.7 preparation is complete: the semantics
-is frozen at `1.0`, `Semantics.md` and `Phase0-Report.md` are complete, the registry and versioned
-fixtures are updated, and the handoff is recorded. The P0.7 owner review and sign-off are
-pending. The proved claims are the records in `lean/verification-status.toml`; no claim beyond
-them is made by this document.
+and the committed byte-stable report; P0.7 completed `Semantics.md`, `Phase0-Report.md`, the
+version freeze, and the handoff. The Phase 1 bridge spike is next. The proved claims are the
+records in `lean/verification-status.toml`; no claim beyond them is made by this document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
 [GOT Artifacts and Schemas](../Architecture/GOT-Artifacts.md),

@@ -4,10 +4,10 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
 Semantics version: `1.0` (frozen by P0.7; freeze commit
 `7aad70d41e1dc4b47606f13cd7818b638fd45927`)
-Status: P0.7 preparation is complete; the owner review and sign-off are pending. P0.0–P0.6 are
-complete and owner-approved through P0.6. This report records what Phase 0 established, the
-conformance evidence, the known gaps, the trusted computing base, the version freeze, and the
-handoff to later phases. It does not claim a refinement proof or a review that has not happened.
+Status: P0.7 was approved on 2026-11-02; Phase 0 is complete. P0.0–P0.7 are owner-approved.
+This report records what Phase 0 established, the conformance evidence, the known gaps, the
+trusted computing base, the version freeze, and the handoff to later phases. It does not claim a
+refinement proof; the review and sign-off are recorded in §9.
 Companion: [Semantics](Semantics.md) · [Semantics Charter](Semantics-Charter.md) ·
 [Core HIR Dump](HIR-Dump.md) · [Core Semantics Cases](Semantics-Cases.md) ·
 [Phase 0 Implementation Plan](Plan-Phase0.md) · [Verification Program Plan](Plan.md)
@@ -302,8 +302,8 @@ The refinement target is explicit and must be consumed as follows.
 
 ## 9. Review status and checklist
 
-The P0.7 owner review has not occurred. The preparation is complete, and the following checklist
-is the proposed review scope.
+The owner reviewed and approved P0.7 on 2026-11-02. The checklist below is the accepted review
+scope and record.
 
 | Area | Check |
 | --- | --- |
@@ -315,6 +315,9 @@ is the proposed review scope.
 | Tests and CI | `lake exe stc-sem-tests` passes; the registry, docs, placeholder/conformance gate, Markdown, Rust test/clippy/fmt, and corpus checks pass. |
 | Claim boundary | The V0 differential label, the TCB, the exclusions, and the non-refinement statement are explicit in the semantics document, the report, and the dump/case/report schemas. |
 | Owner decisions | No semantic definition or theorem change was needed and no version-bump incompatibility surfaced. Open items for owner awareness remain Q3 (layout-only characters), Q2 (guarded exact form), Q5 (initializer ordering), `core_check_complete` (descoped to Phase 2), and E1/T1 (result-less call dump gap). |
+
+**Owner sign-off (2026-11-02).** The owner approved P0.7 and Phase 0 completion at `0cece10`;
+this checklist and the documented gaps are accepted.
 
 ## 10. References
 

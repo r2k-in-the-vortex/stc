@@ -2,18 +2,17 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Status: Phase 0 is in progress, with P0.7 preparation complete and the owner review pending.
-P0.0–P0.6 are complete and reviewed; P0.5 was approved on 2026-11-02 and merged through PR #12
-(merge commit `92e113f`); P0.6 was approved on 2026-11-02. P0.6 delivered the versioned core-HIR
+Status: Phase 0 is complete. P0.0–P0.7 are complete and owner-approved; P0.5 was approved on
+2026-11-02 and merged through PR #12 (merge commit `92e113f`); P0.6 was approved on 2026-11-02
+and merged through PR #13 (merge commit `a7bf0da`); P0.7 was approved on 2026-11-02 and froze
+`semantics_version` at `1.0` (freeze commit `7aad70d`). P0.6 delivered the versioned core-HIR
 dump `0.1.0` and `stc hir-dump`, the strict Lean reader, the
 `stc-core-case`/`stc-sem-result`/`stc-sem-conformance-report` `0.1.0` formats, `lake exe stc-sem`,
 the opt-in snapshot surface, the differential harness, a 74-case corpus with a coverage inventory
-and triage log, and the committed byte-stable report checked in CI. P0.7 (document review,
-versioning, and handoff) has frozen `semantics_version` at `1.0`, completed
+and triage log, and the committed byte-stable report checked in CI. P0.7 completed
 [Semantics.md](Semantics.md) and [Phase0-Report.md](Phase0-Report.md), updated the registry, and
-recorded the handoff; the owner review and sign-off are pending. Completion records and sign-offs
-are in §16–§22, the P0.6 sign-off is in the P0.6 section, and the P0.7 record and review checklist
-are in §23; `lean/verification-status.toml` is authoritative for proved claims.
+recorded the handoff. Completion records and sign-offs are in §16–§23, and
+`lean/verification-status.toml` is authoritative for proved claims.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -2385,12 +2384,12 @@ are not weakened.
    verification of the full theorem list, the builder `%slots` change, the invariant field
    set, and the Q3 caveat.
 
-## 23. P0.7 execution record — preparation complete, review pending
+## 23. P0.7 execution record — complete
 
 Date: 2026-11-02.
 
 P0.7 turned the definitions and proofs into a reviewed, versioned artifact that later phases can
-cite. Preparation is complete; the owner review and sign-off have not occurred.
+cite. Preparation is complete, and the owner approved the review and sign-off on 2026-11-02.
 
 | Deliverable | Location | State |
 | --- | --- | --- |
@@ -2450,8 +2449,8 @@ incompatibility surfaced.
 7. Tests: Lean build and `stc-sem-tests`; Rust workspace tests, clippy with `-D warnings`, and
    fmt; registry, docs, Markdown, and the corpus/report gate.
 8. Claim boundary: the V0 differential label, TCB, exclusions, and non-refinement statement are
-   explicit in the semantics document, the report, and the formats; no refinement or owner
-   sign-off is claimed.
+   explicit in the semantics document, the report, and the formats; no refinement claim is made.
+   The owner approved the review on 2026-11-02.
 9. Handoff: Phases 1, 2, 4, 5, 6, 7, and 8 have a stated consumption list, extension and
    version-bump rules, and the refinement handoff covering recursive models, loop-shaped step
    relations, explicit state/control-flow encoding, termination/fuel obligations, and the
@@ -2459,4 +2458,8 @@ incompatibility surfaced.
 
 Open items for owner awareness, unchanged by P0.7: Q3 layout-only characters, Q2 guarded exact
 arithmetic, Q5 initializer ordering, the descoped `core_check_complete`, and E1/T1 result-less
-call dump gap. No new owner decision is required to complete the freeze.
+call dump gap. No new owner decision was required to complete the freeze.
+
+**Owner sign-off (2026-11-02).** The owner approved P0.7 and Phase 0 completion at `0cece10`;
+this record, the review checklist, and the documented gaps are accepted as the reviewed Phase 0
+artifact.
