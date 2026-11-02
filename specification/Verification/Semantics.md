@@ -268,9 +268,13 @@ All eight P0.5 target soundness theorems are now proved. `ir_progress`, `ir_memo
 `ir_no_ub` are stated over the `WFRunning` target invariant, which is implemented in
 `Stc.Codegen.Semantics` together with the offset-aware storage, `.slotEntry`, bounds-checked
 memory operations, origin/binding facts, and return-link predicates.  The approved design and
-implementation record is in `Plan-Phase0.md` §22. `initState?_wf` is proved; the preservation
-proof and the reachability corollaries remain as the whole-run follow-up; the three registry theorems are
-per-state and do not depend on them. Earlier scoping is in §21.
+implementation record is in `Plan-Phase0.md` §22. `initState?_wf`, `irStep_wf`/`irStepStar_wf`,
+and the reachability corollaries (`irStepStar_wfRunning`, `initState?_reachable_wfRunning`,
+`ir_progress_reachable`, `ir_memory_safe_reachable`, `ir_no_ub_reachable`) are proved, and
+`irRun_halt_wf` lifts the invariant to a halting `irRun`. `AccessBounded` remains the
+source-check premise of `ir_progress`: the character-index path needs an explicit
+`CharIndexBounded` hypothesis (or exclusion from the covered fragment) until Q3 is resolved.
+Earlier scoping is in §21.
 
 ### 4.6 Cycle and initialization boundary
 
@@ -326,8 +330,10 @@ undefined sources are an executed `unreachable` and an unspecified trap-service 
 are excluded by the trusted trap-code/guarded-unreachable facts. Out-of-range stack and storage
 accesses are defined `.stuck` faults, as are stores through host-owned cells/slot entries, so
 they are not undefined behavior. This is a property of the modeled fragment, not a general LLVM
-result; lifting it from states to reachable runs is the whole-run follow-up in `Plan-Phase0.md`
-§22.11.
+result; lifting it from states to reachable runs is `ir_no_ub_reachable` (with
+`irStepStar_wfRunning`), and the executable-entry form follows from `irRun_halt_wf`
+(`Plan-Phase0.md` §22.11). Q3 does not weaken this statement: an out-of-range character access
+is a defined fault, not undefined behavior.
 
 ## 6. Exact arithmetic connection
 
@@ -351,8 +357,9 @@ entries for determinism, progress, preservation, type soundness, trap soundness,
 arithmetic, and the interpreter are proved; the P0.4 definitions and structural lemmas are
 proved. P0.5 target soundness is proved: determinism, progress, memory safety, GOT soundness,
 trap soundness, checked-arithmetic refinement, the recursive-model equivalence, and no-UB are
-all proved against the implemented invariant. The initial-state/preservation proofs and the
-reachability corollaries remain as the whole-run follow-up. Open P0.3 questions are recorded in
+all proved against the implemented invariant. The initial-state proof, the preservation proof,
+and the reachability/`irRun` corollaries are also proved (`Plan-Phase0.md` §22.11). Open P0.3
+questions are recorded in
 [Plan-Phase0.md](Plan-Phase0.md) §19, the P0.4 decisions in §20, the P0.5 checkpoint in §21, and
 the P0.5 design/implementation record in §22. The registry is regenerated into this section at
 P0.7.

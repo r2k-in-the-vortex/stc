@@ -1321,11 +1321,10 @@ state; instruction-level results cannot halt. Registry records P0-T15/T18/T19/T2
 `proved` and the audit reports only the standard Lean axioms. `lake build` passes with no
 `sorry`/`admit`.
 
-### 21.2 Remaining P0.5 work
+### 21.2 P0.5 whole-run work (completed)
 
 P0-T16 `ir_progress`, P0-T17 `ir_memory_safe`, and P0-T22 `ir_no_ub` are stated over reachable
-well-formed target states and are not yet proved. They need one shared invariant, staged as
-follows:
+well-formed target states and are proved against one shared invariant, staged as follows:
 
 - module/frame agreement: the head frame's function is a `WellFormed` module function (or the
   entry function), its block/instruction/terminator triple is the current block, and every branch
@@ -1346,11 +1345,11 @@ follows:
   are excluded from the covered reachable fragment; module-global stores stay within
   `LocalGlobalsAllowed`.
 
-The invariant must be preserved by `irStep` before the three theorems can be stated as whole-run
-properties. The concrete proposal for the invariant and the four decisions is in §22; the owner
-approved it on 2026-10-31, the model and invariant are implemented, and the three per-state
-theorems are proved (§22.10). The initial-state/preservation proofs and the reachability
-corollaries remain as the whole-run follow-up (§22.11).
+The invariant is preserved by `irStep`, so the three theorems hold as whole-run properties. The
+concrete proposal for the invariant and the four decisions is in §22; the owner approved it on
+2026-10-31, the model and invariant are implemented, and the three per-state theorems are proved
+(§22.10). The initial-state proof, the preservation proof, and the reachability corollaries are
+also complete (§22.11).
 
 ### 21.3 Deliverables and evidence
 
@@ -1358,12 +1357,12 @@ corollaries remain as the whole-run follow-up (§22.11).
 - Target semantics coverage table: [Semantics.md §4.4](Semantics.md#44-target-small-step-relation-irstep).
 - Smoke check: `(IRSem minimalFrag "main" [] [] [] [] [] 0).isSome = true` by `decide`, so the
   initializer is non-vacuous on the P0.4 smoke fragment.
-- Registry: P0-T15/T18/T19/T20/T21 `proved`; P0-T16/T17/T22 remain `planned`.
+- Registry: P0-T15–P0-T22 `proved` (P0-T16/T17/T22 included).
 - Local evidence:
 
 ```text
 cd lean && lake build
-PYTHONUTF8=1 python tools/ci/check_verification_registry.py   # 45 records: 39 proved, 5 planned, 1 descoped
+PYTHONUTF8=1 python tools/ci/check_verification_registry.py   # 45 records: 42 proved, 2 planned, 1 descoped
 python tools/ci/check_docs.py
 python tools/ci/check_semantics_placeholder.py
 grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
@@ -1389,8 +1388,8 @@ unaffected.
 Date: 2026-10-31. Status: **approved by the owner on 2026-10-31 and implemented.** The four
 decisions are resolved below, the model changes are in `Stc.Codegen.Semantics`, and
 `ir_progress`, `ir_memory_safe`, and `ir_no_ub` are proved against the invariant (§22.10). All
-eight P0.5 target soundness theorems are now proved. The initial-state and preservation proofs
-and the reachability corollaries remain open (§22.11). The five theorems proved before this
+eight P0.5 target soundness theorems are now proved, and so are the initial-state and preservation
+proofs and the reachability corollaries (§22.11). The five theorems proved before this
 section (`ir_deterministic`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`,
 `ir_recursive_model_equiv`) remain proved; `ir_got_sound` was updated for the offset-aware
 storage model.
@@ -1950,7 +1949,8 @@ frame is vacuous since its `retDest` is `none`. The all-adjacent-pairs form is t
 extension; the origin conjunct is the 2026-11-01 extension.
 
 The destination is also not a parameter name (`dest ∉ caller.fn.params.map (·.2)`): overwriting
-a parameter — in particular the appended `%slots` parameter — would break `SlotsParamsSafe`.
+a parameter would break the parameter-typing facts. (Before obstruction 16 this also protected
+the appended `%slots` parameter's `SlotsParamsSafe` value; `04cd781` removed that field.)
 This conjunct is established at the call site by `call_dest_notParam`/`callPtr_dest_notParam`
 directly from `mem_dests_of_block` and `FunctionUsesDefined.allNodup`'s parameter/destination
 disjointness (no uniqueness argument); `wfState_calleePush` takes it as `hretParam`.
@@ -2157,8 +2157,9 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
 
   The proofs use no `sorry`/`admit`. Registry records P0-T15–P0-T22 are all `proved`; the
   registry audit reports only the standard Lean axioms. The P0.5 target soundness exit
-  criterion is met. For the whole-run follow-up, `WFProgram.localTypesRepresentable` and
-  `default_type?` are already implemented; the remaining obligations are §22.11.
+  criterion is met. The whole-run follow-up is also complete:
+  `WFProgram.localTypesRepresentable` and `default_type?` are implemented, and §22.11 records
+  the preservation and reachability results.
 
   **Machine fix (2026-10-31).** The store step used the pre-store head frame in
   `withHead`, so a store to the current frame's stack memory was discarded. The step now
@@ -2168,11 +2169,26 @@ theorem ir_no_ub {contract : IRContract} {c c' : IRState}
   `setList` representation was also changed to a head-update form with identical keyed lookup
   semantics.
 
-### 22.11 Remaining whole-run work
+### 22.11 Whole-run bridge — completion record
 
 **Owner decision (2026-10-31).** The owner chose the **full invariant**, not the reduced
 alternative, and then approved the three provenance extensions below. The whole-run bridge
 keeps every `WFState` field and adds the extensions; no invariant was trimmed.
+
+**Completion (2026-11-02).** The whole-run bridge is proved on `WL-3`. The Phase 2 dispatch
+covers every instruction and terminator: the module-function and indirect call steps
+(`fa7fd08`, `7c0dac1`), the per-instruction dispatch (`18f7cf5`), the terminator dispatch
+(`0d62426`), and `wfState_step`/`irStep_wf`/`irStepStar_wf` (`3834458`). The Phase 3
+corollaries (`eeeb92f`) add `irStep_wfRunning`, `irStepStar_wfRunning`, `initState?_reachable_wfRunning`,
+`ir_progress_reachable`, `ir_memory_safe_reachable`, `ir_no_ub_reachable`, `irExecRec_halt_wf`,
+and `irRun_halt_wf`. Every state reachable by `IRStepStar` from an `initState?` state while still
+running therefore satisfies the three per-state theorems, and a halting `irRun` result is well
+formed. `AccessBounded` remains the source-check premise of `ir_progress`, and the Q3 caveat is
+unchanged: the character-index path needs an explicit `CharIndexBounded` hypothesis (or exclusion
+from the covered fragment) until Q3 is resolved; `ir_memory_safe` and `ir_no_ub` are not weakened
+by Q3. Obstruction 16 is implemented on both sides (`8194013` builder, `04cd781` Lean) and
+obstruction 17's universal `CallTargetsTyped` restatement is implemented (`4cfb238` records the
+approval; `7c0dac1` restates the definition and proves the `.callPtr` function-target step).
 
 **Status (2026-10-31, follow-up).** The three provenance extensions are part of the model:
 `SlotsBase` (default-aware) and `StorageValuesLive` are `WFState` fields, and `MemTyped` includes
@@ -2190,8 +2206,8 @@ fact, `StorageValuesLive`, `FunctionBindingsTyped`, and `CallTargetsTyped`, and 
 `WFRunning` for the one-frame initial state. The host predicates are the initialization-boundary
 contract; the slots-global storage fact is included through the `SlotsBase` hypothesis.
 
-The remaining bridge work is the per-instruction `irStep_wf` induction for the 18 `WFState`
-fields and the reachability/`irRun` corollaries. The two provenance gaps found during the
+The per-instruction `irStep_wf` induction over the `WFState` fields and the reachability/`irRun`
+corollaries are proved (completion record above). The two provenance gaps found during the
 induction were approved and are implemented:
 
 1. **Slot-entry value precision (`SlotsBase` extension).** `SlotsBase` now also constrains
@@ -2220,17 +2236,12 @@ Both dynamic counterparts were approved and are implemented:
   stack pointer to the returning frame are excluded. It is the static fact used
   to preserve `StackReturnsSafe` at `irStepRet`.
 
-The remaining work is the `irStep_wf` per-instruction/terminator/halt induction
-over the 22 `WFState` fields, then the reachability corollaries and the `irRun`
-lift with the Q3 `CharIndexBounded`/exclusion caveat. No further design approval
-is needed for those steps; they are the proof-engineering pass over the
-instruction/terminator case matrix.
+The `irStep_wf` per-instruction/terminator/halt induction over the `WFState` fields and the
+reachability corollaries and `irRun` lift are proved (completion record above), with the Q3
+`CharIndexBounded`/exclusion caveat documented there and in `Semantics.md` §4.5.
 
-No invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soundness theoremsNo invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soundness theorems
-and the registry remain green.
-
-The compiling checkpoint is on `WL-3`; the eight soundness theorems and the registry remain
-green. **Phase 1 complete (2026-10-31).** `setList` now stores the updated entry at the head and
+No invariant was weakened. The compiling checkpoint is on `WL-3`; the eight soundness theorems
+and the registry remain green. **Phase 1 complete (2026-10-31).** `setList` now stores the updated entry at the head and
 filters previous entries with the same key; keyed lookup is unchanged (the latest value wins
 for duplicate keys), and the representation change is internal. `OriginsTrusted` now records
 that origin names are unique. The lookup/local/origin layer is proved:
@@ -2261,7 +2272,8 @@ fields, with the frame-lookup relation transferring the state-dependent fields t
 of the stack, `WFState` is preserved. `wfState_withHeadInstrs` covers the store's instruction
 replacement as a corollary: given the new suffix's block decomposition and no-bare-unreachable
 fact, the head frame's instructions are replaced without disturbing the invariant. The
-`callFunction` and the three `irStepRet` forms remain; Phases 2–3 remain as inventoried below.
+`callFunction` and the three `irStepRet` forms remained at this checkpoint; Phases 2–3 are now
+complete (see the §22.11 completion record).
 
 **Phase 2 obstruction 2 (2026-10-31): module-wide slots storage at calls.** The
 `callFunction` form exposes a fact the approved set does not carry. `SlotsBase c f` includes
@@ -2742,7 +2754,7 @@ strengthening, not a weakening) with no field-count change; option (b) keeps the
 approved field and adds a 28th. **Owner approved option (a) on 2026-11-01:**
 `StackReturnsSafe` is strengthened to every block of the frame's function, with
 no new field. The jump form, the `wfState_step`/`irStep_wf` dispatch, and
-Phase 3 follow (together with obstructions 12/14).
+Phase 3 followed (together with obstructions 12/14).
 
 **Phase 2 obstruction 16 (2026-11-01): the callee's `%slots` parameter is not
 tied to the forwarded argument.** Preparing the `.call` module-function and
@@ -2820,8 +2832,9 @@ do.** This makes `SlotsParamsSafe` vacuous and removes `CallSlots` from the
 invariant; `SlotBasesNonParam`/`SlotBasesLoadOnly` then hold because slot bases
 are symbol-loaded locals, and the `RETAIN_LOAD` symbol-argument mismatch
 disappears with `CallSlots`. The builder change spans `crates/stc-codegen` and
-its tests; the Lean side drops the two fields and their premises, then the
-`wfState_step`/`irStep_wf` dispatch, Phase 3, and the docs pass resume.
+its tests and is implemented as `8194013`; the Lean side drops the two fields and
+their premises in `04cd781`, and the `wfState_step`/`irStep_wf` dispatch, Phase 3,
+and this docs pass followed.
 
 **Phase 2 obstruction 17 (2026-11-02): `CallTargetsTyped`'s existential does
 not scope over the call agreement.** The module-function `.call` step is proved
@@ -2876,9 +2889,11 @@ def CallTargetsTyped (c : IRState) : Prop :=
 
 This is a strengthening, not a weakening (the current statement is vacuous),
 and it changes an owner-approved definition. **Owner approved the universal
-restatement on 2026-11-02;** it is adopted in §22.6 (D4) and the `.callPtr`
-function-target branch and remaining dispatch follow. No code outside the
-definition changes; the last compiling commit is `fa7fd08`.
+restatement on 2026-11-02;** it is adopted in §22.6 (D4). The restatement is
+implemented (`4cfb238` records the approval; `7c0dac1` restates `CallTargetsTyped`
+and proves the `.callPtr` function-target step), and the remaining dispatch,
+`wfState_step`/`irStep_wf`, and Phase 3 followed (`0d62426`, `3834458`,
+`eeeb92f`). No code outside the definition changed.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -2989,20 +3004,21 @@ The per-field obligations and missing helper lemmas are:
   `StackPtrsBounded` under `setLocal`/`setMem`; `StoragePtrsLive` under `setLocal`/
   `storeValue` using `StorageValuesLive`.
 - `ReturnLink` at calls (via `localType?_eq_resultType` and
-  `FunctionBindingsTyped`/`CallTargetsTyped`) and at `irStepRet`; `SlotsParamsSafe` at calls
-  via `CallSlots`; `StackReturnsSafe` via `SafeReturnValue`/`ReturnNonStack`;
-  `SlotsGlobalStored` under stores via `SlotsGlobalReadOnly`.
+  `FunctionBindingsTyped`/`CallTargetsTyped`) and at `irStepRet`; `StackReturnsSafe` via
+  `SafeReturnValue`/`ReturnNonStack`; `SlotsGlobalStored` under stores via
+  `SlotsGlobalReadOnly`. (`SlotsParamsSafe`/`CallSlots` were removed by obstruction 16,
+  `04cd781`.)
 - `noBareUnreachable` after instruction/jump/call/ret steps using `UnreachableGuarded` and
   the fact that a trap-service call cannot step normally.
 - frame-list fields (`frameIdsNodup`/`frameIdsBound`/`frameFunction`/`framePrev`/
   `frameBlock`), `functionBindings`, `callTargets`, and `bottomRetDest` under the five update
   forms.
 
-This is the exact case matrix for the next focused pass; the supporting fact set is complete
-and no further design approval is needed. The compiling checkpoint is `6d45f2d` on `WL-3`.
+This was the case matrix for the focused pass, which is complete (completion record above); the
+supporting fact set was complete and no further design approval was needed. The checkpoint was
+`6d45f2d` on `WL-3`.
 
 The three earlier extensions were required because without them the invariant was not
-preserved:The three earlier extensions were required because without them the invariant was not
 preserved:
 
 1. **Slots base (`SlotsBase`).** For every `.cell slot false` origin whose defining `load`
@@ -3055,23 +3071,24 @@ preserved:
 
 The three extensions are proof obligations for the full invariant, not a reduction of it: the
 existing fields stay, and the new facts are added to `WFState` (and, where syntactic, to
-`WFProgram`). The initial-state/preservation/reachability work resumes once the owner approves
-them; the three soundness theorems and the registry remain proved.
+`WFProgram`). They were approved and are implemented; the initial-state, preservation, and
+reachability proofs are complete (completion record above).
 
 The three theorems are per-state, as approved. The initial-state proof, the preservation
-proof, and the reachability corollaries are not yet proved; they are the remaining P0.5
-follow-up, not blockers for the three registry theorems. The concrete obligations are:
+proof, and the reachability corollaries are now proved; they were the remaining P0.5
+follow-up, not blockers for the three registry theorems. The concrete obligations were (all
+discharged; the proving lemmas are in `Stc.Codegen.Semantics`):
 
 1. **Initial state (`initState?_wf`).** The one-frame state from `initState?` must satisfy
    `WFState`/`WFRunning`. The `WFProgram.localTypesRepresentable` rule (parameter/local-definition
    types are integers, pointers, or overflow results, not arrays or `void`) and the
-   `default_type?` lemma are implemented. Still needed: a typed-host-arguments predicate
+   `default_type?` lemma are implemented. The proof required: a typed-host-arguments predicate
    (parameter types match the supplied `IRValue`s); host predicates for live roots/storage and
    resolvable function bindings; and the one-frame instantiations of `frameBlock`, `framePrev`,
    `localsInitialized`, and `localsTyped` (the latter needs `List.zip`/`find?`/`localDefs`
    lemmas). The `.null` origin default (§22.10) makes `originsMatch` hold initially.
 2. **Preservation (`irStep_wf`).** Every `.step` successor must satisfy `WFState`. The
-   remaining technical gaps found while implementing the invariant are:
+   technical gaps found while implementing the invariant were:
    - a **slots-base invariant** (`%slots` holds `.ptr .slotTable`) so the `.slotEntry` load and
      the `.cell slot false` origin shape are produced; the value is a function parameter or
      slots-global load and is never redefined;
@@ -3084,10 +3101,11 @@ follow-up, not blockers for the three registry theorems. The concrete obligation
      `FunctionBindingsTyped`/`CallTargetsTyped` for indirect calls;
    - **no-bare-unreachable preservation** using `UnreachableGuarded` (a trap-service call
      cannot step normally, so the following `unreachable` is not reached).
-3. **Reachability corollaries.** Compose `initState?_wf` with `irStep_wf` and the three
-   per-state theorems, then lift to `irRun` for the executable entry point. The Q3 carve-out
-   remains: `AccessBounded` is the source-check premise and the character-index path needs
-   `CharIndexBounded` or exclusion until Q3 is resolved.
+3. **Reachability corollaries (proved 2026-11-02).** `initState?_wf` composes with `irStep_wf`
+   and the three per-state theorems, then lifts to `irRun` for the executable entry point via
+   `irStepStar_wfRunning`, `initState?_reachable_wfRunning`, and `irRun_halt_wf`. The Q3
+   carve-out remains: `AccessBounded` is the source-check premise and the character-index path
+   needs `CharIndexBounded` or exclusion until Q3 is resolved.
 
 Evidence for this record:
 
@@ -3110,14 +3128,15 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    P0-T17, and P0-T22 are `proved` and P0-T15–P0-T22 are all `proved`.
 4. No `sorry`/`admit`; `lake build` is green; the registry, docs, and markdownlint checks pass.
 5. The owner's full-invariant decision is recorded, and the three §22.11 extension requirements
-   (`SlotsBase`, memory pointer bounds, storage value liveness) are acknowledged as the
-   whole-run blocker. They extend, not trim, `WFState`; none of them changes the three proved
+   (`SlotsBase`, memory pointer bounds, storage value liveness) are implemented and preserved
+   by `irStep_wf`. They extend, not trim, `WFState`; none of them changes the three proved
    statements.
 6. The Phase 1 helper layer is complete and compiling: lookup/local/origin preservation, the
    allocation-preservation and frame-lookup helpers, and the `setMem`/`storeValue` `MemTyped`
    preservation lemmas listed in §22.11. Phase 2 (`irStep_wf`, one state-update form at a
-   time) and Phase 3 (reachability corollaries and the `irRun` lift) remain open and are the
-   remaining P0.5 review scope.
+   time; commits `fa7fd08`, `7c0dac1`, `18f7cf5`, `0d62426`, `3834458`) and Phase 3 (reachability
+   corollaries and the `irRun` lift; commit `eeeb92f`) are complete and are the P0.5 review
+   scope.
 7. The §22.11 obstruction-9 extensions were owner-approved on 2026-11-01
    (`SlotBasesLoadOnly` as a `WFProgram` fact, `ReturnLink`'s `IsCallDest` conjunct, and the
    general symbol-pointer-load disjunct in `StackOriginsTrusted`). They are implemented and the
@@ -3139,7 +3158,7 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    owner-approved on 2026-11-01: `PayloadsTypedValue` is extended to allow
    `.int (.overflow bits) n`, and `StackReturnsSafe` is strengthened to every block of the
    frame's function. The extractValue index-0 form, `wfState_jumpStep`,
-   `wfState_step`/`irStep_wf`, and Phase 3 follow those implementations.
+   `wfState_step`/`irStep_wf` (`3834458`), and Phase 3 (`eeeb92f`) are proved.
    Preparing the call branches then exposed obstruction 16 (the callee's `%slots`
    parameter is not tied to the forwarded argument on either call path). The owner decided on
    2026-11-01 to remove the appended `%slots` parameter and extra call argument from the
@@ -3148,5 +3167,7 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    Preparing the `.callPtr` function-target branch then exposed obstruction 17: the
    `CallTargetsTyped` existential does not scope its witnesses over the call agreement, so the
    fact is vacuous and cannot supply the resolved callee's signature. The owner approved the
-   universal restatement on 2026-11-02; the `.callPtr` branch, terminator dispatch,
-   `wfState_step`/`irStep_wf`, and Phase 3 follow that implementation.
+   universal restatement on 2026-11-02; `4cfb238` records it, `7c0dac1` restates
+   `CallTargetsTyped` and proves the `.callPtr` function-target step, and the terminator
+   dispatch (`0d62426`), `wfState_step`/`irStep_wf` (`3834458`), and Phase 3 (`eeeb92f`)
+   followed.
