@@ -1,0 +1,10 @@
+VAR_GLOBAL
+  R : DINT;
+END_VAR
+PROGRAM Main
+VAR
+  z : DINT;
+END_VAR
+  z := 0;
+  R := 5 MOD z;
+END_PROGRAM
