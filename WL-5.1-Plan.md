@@ -3,7 +3,7 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-11-01; revised 2026-11-02 (owner decisions accepted; phase 0 contracts gate closed)  
 Branch: `WL-5.1` (sub-plan of `v2.0.0-planning`)  
-Status: Phases 0–2 complete 2026-11-02; phase 3 in progress. WL-5.2 is complete and its
+Status: Phases 0–3 complete 2026-11-02; phase 4 in progress. WL-5.2 is complete and its
 multi-backend I/O system is the baseline. The owner accepted M-1–M-15 and resolved Q-1–Q-22 on
 2026-11-02; the decisions in §5 are the locked contract. Phases are handed one at a time to
 subagents; each phase ends with a commit, push, and green CI, and this agent updates §7.1 before
@@ -1020,8 +1020,8 @@ orchestrator (§7.4).
 | 0 — contracts | Done | `3547e58` | [41473961570](https://github.com/r2k-in-the-vortex/stc/actions/runs/41473961570) — success |
 | 1 — protocol core and bank | Done | `ebfbbc6` | [41478485216](https://github.com/r2k-in-the-vortex/stc/actions/runs/41478485216) — success |
 | 2 — backend and coordinator integration | Done | `6c55414` | [41483247583](https://github.com/r2k-in-the-vortex/stc/actions/runs/41483247583) — success |
-| 3 — error paths, lifecycle, online change | In progress | — | — |
-| 4 — cross-host and end-to-end | Not started | — | — |
+| 3 — error paths, lifecycle, online change | Done | `97c592d` | [41488899175](https://github.com/r2k-in-the-vortex/stc/actions/runs/41488899175) — success |
+| 4 — cross-host and end-to-end | In progress | — | — |
 | 5 — overhead, documentation consolidation, PR | Not started | — | — |
 
 Status values: Not started, In progress, Done, Blocked. The orchestrator (this agent) updates this
@@ -1282,4 +1282,5 @@ After the gate:
 | 2026-11-02 | Phase 0 complete: commit `3547e58`, CI run 41473961570 success. The contracts are locked; phase 1 (protocol core and register bank) handed to a subagent. |
 | 2026-11-02 | Phase 1 complete: commit `ebfbbc6`, CI run 41478485216 success. The protocol core and register bank have 44 new tests; phase 2 (backend and coordinator integration) handed to a subagent. |
 | 2026-11-02 | Phase 2 complete: commit `6c55414`, CI run 41483247583 success. The backend, registration, profile validation, loopback integration, and mixed mock-EtherCAT tests are in place; phase 3 (error paths, lifecycle, online change) handed to a subagent. |
+| 2026-11-02 | Phase 3 complete: commit `97c592d`, CI run 41488899175 success. Error/lifecycle and host online-change tests are in place; phase 4 (cross-host end-to-end and real mixed bench) handed to a subagent. |
 | 2026-11-02 | Phase 0 contracts gate closed. Verified M-1–M-15 and Q-1–Q-22 against the profile schema, protocol surface, scheduling/fault/status/diagnostics contracts, phase plan, file-change list, test matrix, and evidence plan. Clarified the word-order/code-validation boundary, the 8-bit mixed input/output write rule, the aggregate fault state during a listener retry, the profile-only Modbus data-device configuration path, and the mixed-bench evidence status; no implementation code was started. |

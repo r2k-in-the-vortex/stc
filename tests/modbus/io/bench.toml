@@ -1,0 +1,138 @@
+# Modbus TCP bench profile for tests/modbus/stc.toml.
+#
+# Addressing is zero-based: address 0 is the first element of the table. The
+# vendor reference numbers 00001/10001/30001/40001 are one-based and are
+# converted by subtracting one before they are written here. This file never
+# uses vendor notation.
+#
+# Two loopback binds share one register bank and channel map (M-4, M-5). The
+# end-to-end test copies this file to a temporary project and replaces the two
+# ports with free loopback ports. For a manual run, keep the ports below and
+# run tests/modbus/client.py against 127.0.0.1:15020 and 127.0.0.1:15021.
+
+[device.modbus0]
+bind = ["127.0.0.1:15020", "127.0.0.1:15021"]
+unit = 1
+max-connections = 8
+idle-timeout = "60s"
+# Device-level default for 32- and 64-bit channels. The test suite also covers
+# the implicit high-first default; this fixture selects low-first so the
+# device setting itself is exercised. Per-channel overrides below win.
+word-order = "low-first"
+
+# ---- Inputs: client writes, PLC reads ------------------------------------
+# 1-bit coils, zero-based addresses 0..2 (vendor 00001..00003). FC5/FC15.
+[[device.modbus0.channels]]
+name = "CoilIn0"
+table = "coil"
+address = 0
+
+[[device.modbus0.channels]]
+name = "CoilIn1"
+table = "coil"
+address = 1
+
+[[device.modbus0.channels]]
+name = "CoilIn2"
+table = "coil"
+address = 2
+
+# An 8-bit low/high pair sharing the first holding register (zero-based
+# address 0, vendor 40001). The register value 0x1234 sets low = 0x34 and
+# high = 0x12.
+[[device.modbus0.channels]]
+name = "ByteInLo"
+table = "holding-register"
+address = 0
+byte = "low"
+
+[[device.modbus0.channels]]
+name = "ByteInHi"
+table = "holding-register"
+address = 0
+byte = "high"
+
+# 16-bit input at zero-based address 2 (vendor 40003).
+[[device.modbus0.channels]]
+name = "WordIn"
+table = "holding-register"
+address = 2
+
+# 32-bit input at zero-based addresses 4..5 (vendor 40005..40006), device
+# default low-first: value AABBCCDD is CC DD AA BB on the wire.
+[[device.modbus0.channels]]
+name = "DwordIn"
+table = "holding-register"
+address = 4
+
+# 32-bit input at zero-based addresses 6..7 with a named per-channel
+# override: "dcba" writes the value bytes least-significant first.
+[[device.modbus0.channels]]
+name = "DwordSwapIn"
+table = "holding-register"
+address = 6
+word-order = "dcba"
+
+# 64-bit input at zero-based addresses 12..15 (vendor 40013..40016). The
+# integer list is an explicit permutation: value bytes E F G H A B C D. It is
+# deliberately different from the device low-first order (G H E F C D A B).
+[[device.modbus0.channels]]
+name = "LwordIn"
+table = "holding-register"
+address = 12
+word-order = [4, 5, 6, 7, 0, 1, 2, 3]
+
+# ---- Outputs: PLC writes, client reads -----------------------------------
+# 1-bit output coil at zero-based address 1024 (vendor 01025).
+[[device.modbus0.channels]]
+name = "CoilOut"
+table = "coil"
+address = 1024
+
+# 1-bit output on the read-only discrete-input table, zero-based address 0
+# (vendor 10001). Only output channels may map here (M-3).
+[[device.modbus0.channels]]
+name = "DiOut"
+table = "discrete-input"
+address = 0
+
+# 8-bit output pair at zero-based address 8 (vendor 40009).
+[[device.modbus0.channels]]
+name = "ByteOutLo"
+table = "holding-register"
+address = 8
+byte = "low"
+
+[[device.modbus0.channels]]
+name = "ByteOutHi"
+table = "holding-register"
+address = 8
+byte = "high"
+
+# 16-bit output at zero-based address 10 (vendor 40011).
+[[device.modbus0.channels]]
+name = "WordOut"
+table = "holding-register"
+address = 10
+
+# 32-bit output on the read-only input-register table, zero-based addresses
+# 0..1 (vendor 30001..30002), device default low-first.
+[[device.modbus0.channels]]
+name = "DwordOut"
+table = "input-register"
+address = 0
+
+# 32-bit output at zero-based addresses 2..3 with the "dcba" override.
+[[device.modbus0.channels]]
+name = "DwordSwapOut"
+table = "input-register"
+address = 2
+word-order = "dcba"
+
+# 64-bit output at zero-based addresses 4..7 (vendor 30005..30008) with the
+# same explicit integer permutation as the input channel.
+[[device.modbus0.channels]]
+name = "LwordOut"
+table = "input-register"
+address = 4
+word-order = [4, 5, 6, 7, 0, 1, 2, 3]
