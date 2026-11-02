@@ -1,12 +1,12 @@
 # I/O Routing and Backends
 
-Status: WL-5.2 phase 0 contract lock (2026-10-31); v2.0.0 hardware-backend implementation not
-started  
+Status: WL-5.2 phase 0 contract lock (2026-10-31); the WL-5.2 EtherCAT implementation and
+hardware evidence are complete (2026-11-01); WL-5.1 Modbus is not started  
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [I/O and Devices](IO-and-Devices.md), [Runtime and Execution](Runtime-and-Execution.md),
 [CLI and Manifest](CLI-and-Manifest.md), [Online Change and GOT](Online-Change-and-GOT.md),
-[Architecture](Architecture.md), [WL-5.2 plan](../../WL-5.2-Plan.md),
-[v2.0.0 plan](../../V2.0.0-PLAN.md)
+[Architecture](Architecture.md), [WL-5.2 report](../Verification/EtherCAT-Host.md),
+[Decisions](../Decisions.md), [v2.0.0 plan](../../V2.0.0-PLAN.md)
 
 ## 1. Scope and authority
 
@@ -16,10 +16,10 @@ recovery behavior, online-change compatibility, and the evidence sequencing for 
 campaign. WL-5.2 implements the EtherCAT backend; WL-5.1 adds a Modbus backend to the same
 contract.
 
-The accepted decisions and their rationale are in the [WL-5.2 plan](../../WL-5.2-Plan.md) §5
-(E-1–E-17), §6.3–§6.3.1, and §6.4–§6.7. This document records the resulting contract; where the
-plan gives only the shape, this document fixes the schema. If implementation finds a conflict,
-the plan is amended first and this document follows.
+The accepted decisions and their rationale are in [Decisions](../Decisions.md) §2, WL-5.2
+EtherCAT decisions D-211–D-228. This document records the resulting contract and fixes the
+schema. If implementation finds a conflict, the decision register is amended first and this
+document follows.
 
 The v1 backends (`null`, `memory`, `file`) and the v1 binding precedence remain as specified in
 [I/O and Devices](IO-and-Devices.md) and [CLI and Manifest](CLI-and-Manifest.md). The contract
@@ -161,7 +161,7 @@ defines it.
   `sync1-cycle`, and `sync1-shift` in the same units as the IgH distributed-clock API.
   `assign-activate` is the vendor-specific `u16` AssignActivate word passed to
   `ecrt_slave_config_dc`; the schema accepts integers in `0..=65535` and rejects booleans,
-  strings, and out-of-range values (E-17). Distributed clocks are configured only when
+  strings, and out-of-range values (D-227). Distributed clocks are configured only when
   `assign-activate` is present; without it the device runs free-run. A `dc` table that
   requests synchronization but omits `assign-activate` is `STC-W-IO-ETH-002`. The DIEWU
   profile omits `dc` by owner decision.
@@ -408,7 +408,7 @@ counted. For example, `slave0.al_state` is the first configured data device and
 | `cycle.faults` | `UDINT` | Fault episodes since start. |
 
 ecrt 1.6.13 exposes no lost-frame, Tx-error, or frame-loss counter, so these are not status
-channels. The runbook and report read them from `ethercat master` at run boundaries (E-14).
+channels. The runbook and report read them from `ethercat master` at run boundaries (D-224).
 
 ### 5.2 Binding and versioning
 
@@ -554,7 +554,7 @@ allowlist.
 
 ## 11. Open questions
 
-No design questions remain as of 2026-10-31; E-1–E-17 in the
-[WL-5.2 plan](../../WL-5.2-Plan.md) are accepted. The exact Rust type names and metadata JSON
-key spellings are implementation defaults fixed in phase 1; they do not change the contract in
-this document.
+No design questions remain as of 2026-10-31; the WL-5.2 decisions are
+[Decisions](../Decisions.md) §2, D-211–D-228. The exact Rust type names and metadata JSON key
+spellings are implementation defaults fixed in phase 1; they do not change the contract in this
+document.

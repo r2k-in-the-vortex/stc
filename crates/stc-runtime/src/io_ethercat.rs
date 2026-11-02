@@ -11,12 +11,12 @@
 //! module owns configuration validation, domain mapping, startup timing,
 //! fault/recovery policy, and the status block.
 //!
-//! The shim path follows decision E-8: `STC_ETHERCAT_LIBRARY` when set,
+//! The shim path follows decision D-218: `STC_ETHERCAT_LIBRARY` when set,
 //! otherwise the bare `libstc_io_ethercat.so` loader search path. No
 //! EtherCAT master is required to probe the ABI; only cold start opens one.
 //!
 //! Distributed-clock configuration is only applied when `dc.assign-activate`
-//! is the numeric IgH AssignActivate word (E-17, a `u16`). The profile schema
+//! is the numeric IgH AssignActivate word (D-227, a `u16`). The profile schema
 //! accepts `0..=65535`; a boolean or an out-of-range value fails cold start
 //! with `STC-E-IO-ETH-006` rather than silently changing the request.
 
@@ -56,7 +56,7 @@ pub mod codes {
     pub const W_ETHERCAT_FAULT: &str = "STC-W-IO-ETH-003";
 }
 
-/// Environment variable naming the shim shared object (decision E-8).
+/// Environment variable naming the shim shared object (decision D-218).
 pub const SHIM_ENV: &str = "STC_ETHERCAT_LIBRARY";
 
 /// Bare loader name used when [`SHIM_ENV`] is not set.

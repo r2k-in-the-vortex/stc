@@ -1093,7 +1093,7 @@ fn plc_binding_index(
     })
 }
 
-/// Builds the E-16 warnings for direct variables that no route drives.
+/// Builds the D-226 warnings for direct variables that no route drives.
 ///
 /// A binding is routed when it carries the single-sink `device`/`channel`
 /// shorthand or when it is the PLC endpoint of a resolved route. Unrouted

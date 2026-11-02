@@ -3,7 +3,7 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-11-01  
 Status: Final for WL-5.2; the phase-6 powered loopback and fault matrix passed on the fixed package.  
-Parent: [WL-5.2-Plan.md](../../WL-5.2-Plan.md)  
+Parent: [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) (WL-5.2)  
 Evidence: [EtherCAT-Runbook.md](EtherCAT-Runbook.md) §8–§13,
 [PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) §8
 
@@ -88,7 +88,7 @@ modules on the host.
 
 The locked contract is
 [IO-Routing-and-Backends.md](../Architecture/IO-Routing-and-Backends.md); the decisions are
-recorded in [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §5.
+recorded in [Decisions.md](../Decisions.md) §2, D-211–D-228.
 
 ## 4. Frame-level evidence (phases 3–5)
 
@@ -243,7 +243,7 @@ received input image as stale, exposes the fault in the status registers, recove
 configured slave without a cold download or host restart, and returns the master/slave/service
 state to Idle/PREOP with no runtime process left. The physical output LEDs dropped during each
 fault and returned on recovery, consistent with the slave watchdog and the held image. The
-all-points acceptance criterion in [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 is met.
+all-points acceptance criterion is met.
 
 Not proved: output load capacity, input threshold margins, isolation, field devices, a fail-safe
 output state, recovery time (only sampled within the procedure windows), separate Fault C,

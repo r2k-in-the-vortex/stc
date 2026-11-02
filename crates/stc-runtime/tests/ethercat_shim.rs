@@ -2,7 +2,7 @@
 //!
 //! The test only performs the version and symbol handshake; it never opens a
 //! master, so CI does not need EtherCAT hardware or kernel modules. The shim
-//! path comes from `STC_ETHERCAT_LIBRARY` (decision E-8). When the variable is
+//! path comes from `STC_ETHERCAT_LIBRARY` (decision D-218). When the variable is
 //! unset the test is skipped so a plain Linux `cargo test` still passes.
 
 #![cfg(target_os = "linux")]

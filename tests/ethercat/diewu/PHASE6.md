@@ -386,7 +386,7 @@ stop, keep the log, and report.
 ### 5.5 Fault C: configured-slave reconnect (slave-side link loss)
 
 This case disconnects the same configured slave at the DIEWU IN port while the
-slave stays powered, then reconnects it. It is the hot-swap path E-6 allows;
+slave stays powered, then reconnects it. It is the hot-swap path D-216 allows;
 adding or removing a device would be a topology change and is out of scope.
 
 > **2026-11-01 execution note.** Fault C was not run separately. With a single
@@ -413,7 +413,7 @@ Record the observed values and the recovery time.
 
 ### 5.6 What "outputs unchanged" means here
 
-E-6 says the master never rewrites the data it exchanges: on a fault it keeps
+D-216 says the master never rewrites the data it exchanges: on a fault it keeps
 sending the PLC's output values unchanged and keeps presenting the last
 received inputs as stale. In this procedure the runtime image is observed
 through `OUTPUTMASK` (the PLC values the program drives) and the status

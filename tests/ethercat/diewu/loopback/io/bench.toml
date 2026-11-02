@@ -12,7 +12,7 @@
 # actual mapping.
 #
 # DC is omitted: the SII has no AssignActivate value and the slave runs
-# free-run (plan decision E-17).
+# free-run (D-215); the u16 spelling is D-227 in specification/Decisions.md.
 
 [device.diewu]
 master = 0

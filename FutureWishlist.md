@@ -1048,9 +1048,10 @@ deliverable.
 - Is a tuned boot profile acceptable, or should the runtime work within the current profile?
 - Can the platform meet the target, or is the 150 µs floor hardware-limited?
 
-**Related.** [WL-5.2 Plan](WL-5.2-Plan.md) §6.9/§10, [RT-Host.md](specification/Verification/RT-Host.md),
+**Related.** [EtherCAT Host report](specification/Verification/EtherCAT-Host.md),
+[EtherCAT Runbook](specification/Verification/EtherCAT-Runbook.md) §10.7,
+[RT-Host.md](specification/Verification/RT-Host.md),
 [RT-Runbook.md](specification/Verification/RT-Runbook.md),
-[EtherCAT Runbook](specification/Verification/EtherCAT-Runbook.md),
 [Performance](specification/Verification/Performance.md), WL-4, WL-5.2.
 
 **Tentative size.** M/L, dominated by the measurement campaign, trace correlation, and host

@@ -1,13 +1,13 @@
 # DIEWU EtherCAT-IO 16I/16O bench profile for open-ended HIL bring-up.
 #
 # The identity, sync/PDO tree, and channel map come from
-# `ethercat cstruct -p 0` on ecat-host (see WL-5.2-Plan.md §3.3 and
+# `ethercat cstruct -p 0` on ecat-host (see the EtherCAT runbook §4 and
 # tests/ethercat/diewu/README.md). The vendor numbers its RxPDOs 0x1a00/0x1a01
 # and TxPDOs 0x1600/0x1601, which is reversed relative to the usual
 # convention; the map below is the device's actual mapping.
 #
 # DC is omitted: the SII has no AssignActivate value and the slave runs
-# free-run (plan decision E-17).
+# free-run (decisions D-215/E-5 and D-227/E-17 in specification/Decisions.md).
 
 [device.diewu]
 master = 0

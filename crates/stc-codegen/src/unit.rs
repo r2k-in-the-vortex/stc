@@ -173,7 +173,7 @@ pub(crate) fn generate(
     if !route_io.errors.is_empty() {
         return Err(route_io.errors);
     }
-    // E-16 applies only to builds that select a machine profile: a v1 project
+    // D-226 applies only to builds that select a machine profile: a v1 project
     // with no route graph keeps its existing direct-variable behavior.
     let route_warnings = if options.project.io.profile.is_some() {
         config::unrouted_warnings(hir, &image, &options.project.io.routes)

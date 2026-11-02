@@ -25,7 +25,8 @@ fault matrices passed, and the observed results are in PHASE6.md §8.
 - Slave: DIEWU 16I/16O at position 0, alias 0.
   Vendor `0x00000b95`, product `0x00010200`, revision 1.
 - DC: not configured. The SII has no `<Dc>` section; free-run is the owner
-  decision (WL-5.2-Plan.md E-17).
+  decision ([Decisions.md](../../../specification/Decisions.md) D-215/E-5;
+  the u16 spelling is D-227/E-17).
 
 ## Files
 
@@ -184,7 +185,7 @@ wrappers below. Results and evidence hashes are in the
 
 ## Phase 5 cycle-time sweep
 
-Phase 5 adds `run-ct.sh`, which runs one step of the plan's §6.9 sweep with the
+Phase 5 adds `run-ct.sh`, which runs one step of the runbook §10.7 sweep with the
 packaged release launcher (`stc run --release --rt --rt-priority 90
 --rt-cpu 3 --cycle-time <cycle> --cycles 0 --rt-metrics <log>.jsonl -v`). It
 sets `STC_ETHERCAT_LIBRARY` and `LD_LIBRARY_PATH=/usr/local/etherlab/lib` and

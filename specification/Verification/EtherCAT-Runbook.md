@@ -6,7 +6,7 @@ Status: Phase 3–5 evidence and the full phase-6 powered loopback/fault results
 all-points matrix passed 16/16 on the fixed package; the powered fault matrix passed after the
 stale-input fix. An earlier supply-limited run and the fix history are in §13. Results are
 host- and hardware-specific; this is not a hard real-time guarantee and not a safety function.  
-Parent: [WL-5.2-Plan.md](../../WL-5.2-Plan.md) §7 (phases 3–6)  
+Parent: [EtherCAT-Host.md](EtherCAT-Host.md) (WL-5.2 report)  
 Inputs: [I/O Routing and Backends](../Architecture/IO-Routing-and-Backends.md),
 [I/O and Devices](../Architecture/IO-and-Devices.md),
 [DIEWU fixture](../../tests/ethercat/diewu/README.md)
@@ -473,14 +473,14 @@ CI job for the phase-4 head. The following tests passed in run 41217639207:
 - `coordinator::tests::one_backend_fault_does_not_touch_another_backends_data`
 - `io_mock::tests::fault_injection_reports_and_clears_a_faulted_backend`
 
-These cover the E-6 policy: a non-fatal runtime fault keeps the cycle running, leaves the output
+These cover the D-216 policy: a non-fatal runtime fault keeps the cycle running, leaves the output
 image unchanged, presents the last input image as stale, publishes the status registers every
 cycle, and clears staleness only after `recovery-cycles` consecutive healthy exchanges. The
 coordinator test shows that one backend's fault does not touch another backend's data.
 
 ### 9.5 PLC-visible status registers
 
-The fixture's `ethercat-status` device (E-14, layout 1) occupies 14 read-only `%I` channels. In a
+The fixture's `ethercat-status` device (D-224, layout 1) occupies 14 read-only `%I` channels. In a
 healthy open-ended run (`--cycles 600000 --cycle-time 1ms`) with the debug endpoint attached, each
 channel was read with `var.read` on `DIEWU-HIL::STATUS...`. The values at runtime cycles 46–61:
 
@@ -514,7 +514,7 @@ fields are intentionally not status channels; the CLI samples them at run bounda
 `ethercat master` is the evidence of record.
 
 The `hash` is `0xb9a6...` rather than the §8.2 `0x9325...` because the phase-4 head refines the
-E-7 configuration hash to cover the effective bindings and routes; the phase-3 run predates that
+D-217 configuration hash to cover the effective bindings and routes; the phase-3 run predates that
 change. The observed status layout and channel set are the committed fixture's.
 
 ### 9.6 Online change
@@ -943,7 +943,8 @@ Phase 5 adds the cycle-time sweep from 1 ms down to 50 µs (extending below 50 �
 60 s screening per step, a 10-minute confirmation at the fastest passing step, release-build
 measurements, skipped-period/deadline checks, and the `stc-rt-metrics/1` JSONL stream; the
 sweep result is §10.7 and its evidence hashes are §10.8. (The separate `stc-io-metrics/1` stream
-in the plan's §6.8 is not part of this sweep.) The privileged wrappers that run the service
+described in the WL-5.2 design is not implemented and is not part of this sweep; see
+[KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §8.) The privileged wrappers that run the service
 transition and the sweep were installed by the owner following §10 and were exercised only
 through their fixed `sudo -n` entries; the automated phase work did not install them.
 
