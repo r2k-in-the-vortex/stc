@@ -10707,4 +10707,213 @@ theorem wfState_stepInstr {contract : IRContract} {c c' : IRState} {f : IRFrame}
           | ptr addr => simp only [hagg] at hstep; cases hstep
           | null => simp only [hagg] at hstep; cases hstep
 
+/-- A symbol in a terminator's value position is a fragment value symbol. -/
+theorem mem_fragValueSymbols_of_terminator {frag : IRFrag} {fn : Function} {block : Block}
+    {term : Terminator} (hfn : fn ∈ frag.functions) (hblock : block ∈ fn.blocks)
+    (hterm : block.terminator = some term) {g : String}
+    (hg : g ∈ terminatorValueSymbols term) :
+    g ∈ fragValueSymbols frag := by
+  unfold fragValueSymbols
+  rw [List.mem_flatMap]
+  refine ⟨fn, hfn, ?_⟩
+  rw [List.mem_flatMap]
+  refine ⟨block, hblock, ?_⟩
+  rw [List.mem_append]
+  right
+  rw [hterm]
+  exact hg
+
+/-- Every successful terminator step preserves the state invariant: a return
+halts or delivers its value to the caller, a branch jumps to a successor, and
+the remaining forms are stuck or undefined behavior. -/
+theorem wfState_stepTerminator {contract : IRContract} {c c' : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {term : Terminator}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hterm : f.terminator = some term)
+    (hstep : stepTerminator c f = .step c') :
+    WFState contract c' := by
+  cases term with
+  | «ret» value =>
+      cases value with
+      | none =>
+          simp only [stepTerminator, hterm, irStepRet, hframes] at hstep
+          cases restFrames with
+          | nil =>
+              cases hstep
+              exact wfState_retHalt hwf
+          | cons caller below =>
+              cases hdest : f.retDest with
+              | none =>
+                  simp only [hdest] at hstep
+                  cases hstep
+                  exact wfState_popRet hwf hframes
+              | some dest =>
+                  simp only [hdest] at hstep
+                  cases hstep
+      | some operand =>
+          cases hval : evalOperand f operand with
+          | none =>
+              simp only [stepTerminator, hterm, hval] at hstep
+              cases hstep
+          | some v =>
+              simp only [stepTerminator, hterm, irStepRet, hframes, hval] at hstep
+              cases restFrames with
+              | nil =>
+                  cases hstep
+                  exact wfState_retHalt hwf
+              | cons caller below =>
+                  cases hdest : f.retDest with
+                  | none =>
+                      simp only [hdest] at hstep
+                      cases hstep
+                      exact wfState_popRet hwf hframes
+                  | some dest =>
+                      simp only [hdest] at hstep
+                      cases hstep
+                      have hfmem : f ∈ c.frames := by
+                        rw [hframes]
+                        exact List.mem_cons_self ..
+                      have hfunMem : f.fn ∈ c.module.functions :=
+                        hwf.frameFunction f hfmem
+                      rcases hwf.frameBlock f hfmem with
+                        ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+                      have htermBlock : block.terminator = some (.ret (some operand)) := by
+                        rw [← htermEq]
+                        exact hterm
+                      have hret := hwf.returnLink [] f caller below (by simpa using hframes)
+                      simp only [hdest] at hret
+                      rcases hret with ⟨hretNe, hretType, hretOrigin, hretParam, hretCallDest⟩
+                      have hwell :=
+                        (hwf.program.wellFormed.typesCorrect f.fn hfunMem).terminators
+                          block hblock (.ret (some operand)) htermBlock
+                      have htype : operandHasType f.fn f.fn.returnType operand := hwell.2
+                      have hvType : v.type? = some f.fn.returnType :=
+                        evalOperand_type
+                          (fun name w hw ty hty => hwf.localsTyped f hfmem name w hw ty hty)
+                          htype hval
+                      have hvPayload : PayloadsTypedValue v :=
+                        payloadsTypedValue_evalOperand (hwf.payloadsTyped.1 f hfmem) hval
+                      have hvStack : ∀ frame slot off, v = .ptr (.stack frame slot off) →
+                          frame ≠ f.id := by
+                        intro frame slot off hval'
+                        exact hwf.stackReturnsSafe f hfmem block hblock operand v
+                          htermBlock hval frame slot off hval'
+                      have hvBounded : ∀ frame slot off, v = .ptr (.stack frame slot off) →
+                          ∃ g, c.frameById? frame = some g ∧ ∃ ty,
+                            g.allocType? slot = some ty ∧ off < allocSize ty := by
+                        intro frame slot off hval'
+                        have hb := memValuePtrBounded_of_evalOperand
+                          (hwf.stackPtrsBounded f hfmem) hval
+                        rw [hval'] at hb
+                        exact hb
+                      have hsyms : ∀ g, g ∈ operandSymbols operand →
+                          g ∈ fragValueSymbols c.module := by
+                        intro g hg
+                        exact mem_fragValueSymbols_of_terminator hfunMem hblock
+                          htermBlock hg
+                      have hlive := storageLive_of_evalOperand
+                        (hwf.storagePtrsLive f hfmem) hwf.storageDomain hsyms hval
+                      have hvRoot : ∀ slot off, v = .ptr (.root slot off) →
+                          ∃ values, c.lookupStorage (.root slot) = some values ∧
+                            off < values.length := hlive.1
+                      have hvGlobal : ∀ g off, v = .ptr (.global g off) →
+                          ∃ values, c.lookupStorage (.global g) = some values ∧
+                            off < values.length := hlive.2
+                      have hnoSlots : ∀ g, g ∈ operandSymbols operand →
+                          g ∉ SlotsGlobals c.module := by
+                        intro g hg
+                        exact hwf.program.slotsSymbolsLoadOnly.2 f.fn hfunMem block hblock
+                          (.ret (some operand)) htermBlock g hg
+                      have hvNoSlots : ∀ g off, v = .ptr (.global g off) →
+                          g ∉ SlotsGlobals c.module := by
+                        intro g off hval'
+                        exact noSlotsGlobal_of_evalOperand
+                          (hwf.noSlotsGlobalPointers.1 f hfmem) hnoSlots
+                          (by simpa [hval'] using hval)
+                      exact wfState_popSetLocal hwf hframes hdest hretType hretOrigin
+                        hretParam hretCallDest hvType hvPayload hvStack hvBounded hvRoot
+                        hvGlobal hvNoSlots
+  | br target =>
+      simp only [stepTerminator, hterm] at hstep
+      cases hblock? : f.fn.block? target with
+      | none =>
+          simp only [irJump, hblock?] at hstep
+          cases hstep
+      | some block =>
+          simp only [irJump, hblock?] at hstep
+          cases hstep
+          have hfmem : f ∈ c.frames := by
+            rw [hframes]
+            exact List.mem_cons_self ..
+          have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hfmem
+          have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+            (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+          rcases hwf.frameBlock f hfmem with ⟨block0, hblock0, hblockEq, htermEq, done, hdone⟩
+          have htermBlock : block0.terminator = some (.br target) := by
+            rw [← htermEq]
+            exact hterm
+          have hblabel : block.label = target := by
+            unfold Function.block? at hblock?
+            exact beq_iff_eq.mp (List.find?_some (p := fun b : Block => b.label == target)
+              hblock?)
+          have hsucc : block.label ∈ f.block.successors := by
+            rw [hblockEq]
+            simp only [Block.successors, htermBlock]
+            rw [hblabel]
+            simp
+          exact wfState_jumpStep hwf hframes hblock? hsucc
+  | condBr cond thenTarget elseTarget =>
+      simp only [stepTerminator, hterm] at hstep
+      cases hcond : evalOperand f cond with
+      | none =>
+          simp only [hcond] at hstep
+          cases hstep
+      | some cv =>
+          cases cv with
+          | int cty value =>
+              simp only [hcond] at hstep
+              cases hblock? : f.fn.block? (if value == 0 then elseTarget else thenTarget) with
+              | none =>
+                  simp only [irJump, hblock?] at hstep
+                  cases hstep
+              | some block =>
+                  simp only [irJump, hblock?] at hstep
+                  cases hstep
+                  have hfmem : f ∈ c.frames := by
+                    rw [hframes]
+                    exact List.mem_cons_self ..
+                  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hfmem
+                  have hnd : (f.fn.blocks.map (·.label)).Nodup :=
+                    (hwf.program.wellFormed.typesCorrect f.fn hfunMem).labelsUnique
+                  rcases hwf.frameBlock f hfmem with
+                    ⟨block0, hblock0, hblockEq, htermEq, done, hdone⟩
+                  have htermBlock : block0.terminator =
+                      some (.condBr cond thenTarget elseTarget) := by
+                    rw [← htermEq]
+                    exact hterm
+                  have hblabel : block.label =
+                      (if value == 0 then elseTarget else thenTarget) := by
+                    unfold Function.block? at hblock?
+                    exact beq_iff_eq.mp (List.find?_some
+                      (p := fun b : Block => b.label ==
+                        (if value == 0 then elseTarget else thenTarget)) hblock?)
+                  have hsucc : block.label ∈ f.block.successors := by
+                    rw [hblockEq]
+                    simp only [Block.successors, htermBlock]
+                    rw [hblabel]
+                    by_cases hc : value == 0 <;> simp [hc]
+                  exact wfState_jumpStep hwf hframes hblock? hsucc
+          | ptr addr =>
+              simp only [hcond] at hstep
+              cases hstep
+          | pair ty0 p o =>
+              simp only [hcond] at hstep
+              cases hstep
+          | null =>
+              simp only [hcond] at hstep
+              cases hstep
+  | unreachable =>
+      simp only [stepTerminator, hterm] at hstep
+      cases hstep
+
 end Stc.Codegen
