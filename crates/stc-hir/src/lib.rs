@@ -6,12 +6,17 @@
 
 #![forbid(unsafe_code)]
 
+mod core_dump;
 mod dump;
 mod hir;
 mod id;
 mod interner;
 mod ty;
 
+pub use core_dump::{
+    CORE_DUMP_FORMAT, CORE_DUMP_FORMAT_VERSION, CORE_DUMP_PROFILE, CORE_DUMP_SEMANTICS_VERSION,
+    CoreDumpSummary, dump_core_hir, verify_core_dump,
+};
 pub use dump::dump_hir;
 pub use hir::{
     ArgDirection, ArgHir, BinOp, BindingHir, Body, CalleeHir, CaseArmHir, CaseLabelHir, CastKind,

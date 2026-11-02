@@ -3,9 +3,11 @@
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
 Status: Phase 0 is in progress. P0.0–P0.5 are complete and reviewed; P0.5 was approved on
-2026-11-02 and merged through PR #12 (merge commit `92e113f`). P0.6 (reference interpreter and
-conformance harness) is next, followed by P0.7. Completion records and sign-offs are in §16–§22;
-`lean/verification-status.toml` is authoritative for proved claims.
+2026-11-02 and merged through PR #12 (merge commit `92e113f`). P0.6 is in progress: the
+versioned core-HIR dump format `0.1.0` and `stc hir-dump` are complete (2026-11-01), and the
+reference interpreter, case corpus, and differential harness remain. P0.7 follows. Completion
+records and sign-offs are in §16–§22; `lean/verification-status.toml` is authoritative for
+proved claims.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),

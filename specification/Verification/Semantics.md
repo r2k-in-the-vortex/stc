@@ -3,7 +3,7 @@
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-27
 Semantics version: `1.0-draft` (frozen at `1.0` in P0.7)
-HIR dump format version: `0.1-draft` (frozen with the core dump in P0.6)
+HIR dump format version: `0.1.0` (frozen with the core dump in P0.6)
 Status: Skeleton approved 2026-10-27. P0.1 is complete (review approved 2026-10-27): the token
 model, lossless CST contract, surface AST, and `Derives` relation are defined, and
 `ast_span_wellformed` is proved. P0.2 is complete (2026-10-27): the typed HIR, the declarative
@@ -16,7 +16,10 @@ typing, and `type_soundness` are proved. The M6.5 compiler drift that paused P0.
 `stc` 1.0.0; the drift register was rechecked on 2026-10-31 and still holds, and the open
 questions were resolved in [Plan-Phase0.md](Plan-Phase0.md) §19.8. P0.4 is complete (review
 approved 2026-10-31, WL-3): `IRFrag`, `IRContract`, `WellFormed`, and the structural lemmas are
-defined and proved. P0.5 definitions and proofs follow and are reviewed in P0.7. The P0.3
+defined and proved. P0.5 definitions and proofs follow and are reviewed in P0.7. P0.6's first
+milestone is complete (2026-11-01): the canonical core-HIR dump format `0.1.0`, its emitter and
+validator, and `stc hir-dump` are defined and frozen in [HIR-Dump.md](HIR-Dump.md); the reference
+interpreter and differential harness remain. The P0.3
 completion record and review checklist are in §19.12, the drift register in §19, and the P0.4
 scope decisions in §20. This document does not yet make the full Phase 0 soundness claim.
 Charter: [Semantics Charter](Semantics-Charter.md)
@@ -463,9 +466,10 @@ or theorem after the freeze requires a version bump and a registry update.
 
 ### 9.2 HIR dump format version
 
-The dump format is `0.1-draft` until P0.6 defines and validates the core schema; P0.6 freezes it
-for the core subset and every report records it. A dump with an unknown version or an unmodeled
-construct is rejected.
+The dump format is `0.1.0`, frozen by P0.6 for the core subset; the exact schema, feature-tag
+vocabulary, and versioning policy are normative in [HIR-Dump.md](HIR-Dump.md). Every dump and
+every conformance report records the dump-format version and the semantics version. A dump with
+an unknown version or an unmodeled construct is rejected, never interpreted.
 
 ### 9.3 Changelog
 
@@ -480,19 +484,22 @@ construct is rejected.
 | 2026-10-31 | 1.0-draft | P0.3 (progress) | Proved `progress`: a `ConfigTyped` configuration is terminal or takes a step, via the expression, value, statement, resume, and return no-stuck lemmas. `preservation`, initial-state typing, and `type_soundness` remain |
 | 2026-10-31 | 1.0-draft | P0.3 (preservation) | Proved `preservation` over every focus form, including the value/statement/resume/returned transitions and the FOR advance path. Fixed three machine bugs found by the proof: the call-argument continuation advanced past the wrong argument, `EXIT` kept the loop body's loop context, and `CONTINUE` on a `FOR` entered the increment in the body's loop context. Initial-state typing and `type_soundness` remain |
 | 2026-10-31 | 1.0-draft | P0.3 (complete) | Proved initial-state typing (`initBody_typed`, `initState_typed`) using `ExprHasType.transport`, a context-agreement lemma over the mutual typing recursor, and `type_soundness`: the initial configuration is typed, every reachable configuration stays typed, and no reachable configuration is stuck. P0.3 is complete; the review was approved 2026-10-31 |
+| 2026-11-01 | 1.0-draft | P0.6 (dump) | Defined and froze dump format `0.1.0` in [HIR-Dump.md](HIR-Dump.md): canonical names and positions, function signatures, globals with GOT keys, the single program, statements, expressions and places, explicit casts, call targets, literal values, spans, and the feature-tag vocabulary for rejection. Implemented the emitter and validator in `crates/stc-hir/src/core_dump.rs`, added `stc hir-dump` with emit/verify modes, and added determinism, versioning, and unmodeled-construct tests. The Lean reader, case corpus, and differential harness remain |
 
 ## 10. Rust/Lean interface
 
 ### 10.1 HIR dump
 
 The reference interpreter consumes a stable, versioned JSON dump of the core HIR, not source
-text. P0.6 defines the schema. It records the dump-format version and the semantics version; the
-core module with functions, programs, globals, and types; signatures and parameter/local
-declarations; statements and expressions with resolved places, explicit casts, call targets, and
-constant values; GOT root keys and scalar program fields; source spans for traps; and a feature
-tag for every construct outside the core. It exposes no Rust `DefId`s, arena indices, or debug
-text as stable identity. Unknown versions and unmodeled constructs are rejected, not
-interpreted.
+text. The schema and versioning policy are normative in [HIR-Dump.md](HIR-Dump.md): format
+`stc-core-hir` version `0.1.0` records the semantics version; the core module with functions,
+programs, globals, and types; signatures and parameter/local declarations; statements and
+expressions with resolved places, explicit casts, call targets, and constant values; GOT root
+keys and scalar program fields; source spans for traps; and a feature tag for every construct
+outside the core. It exposes no Rust `DefId`s, arena indices, or debug text as stable identity.
+Unknown versions and unmodeled constructs are rejected, not interpreted. The emitter and
+validator are `stc_hir::dump_core_hir` and `stc_hir::verify_core_dump`; `stc hir-dump` exposes
+them with emit and verify modes.
 
 ### 10.2 Reference interpreter
 
@@ -520,6 +527,7 @@ exclusion is a Phase 0 exit failure. The triage log is part of `Phase0-Report.md
 ## 11. References
 
 - [Semantics Charter](Semantics-Charter.md)
+- [Core HIR Dump](HIR-Dump.md)
 - [Core Syntax Coverage](Core-Coverage.md)
 - [Core IR Coverage](Core-IR-Coverage.md)
 - [Phase 0 Implementation Plan](Plan-Phase0.md)
