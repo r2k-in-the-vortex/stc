@@ -1,6 +1,6 @@
 # Future Wishlist — v2.0.0
 
-Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3 + P0.5), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, WL-11, and WL-12. Completed: WL-4 (2026-10-30), WL-5.2 (2026-11-02), and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; P0.5 target soundness and whole-run bridge complete 2026-11-02, awaiting owner review).  
+Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3 + P0.5), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, WL-11, and WL-12. Completed: WL-4 (2026-10-30), WL-5.1 (2026-11-02), WL-5.2 (2026-11-02), and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; P0.5 target soundness and whole-run bridge complete 2026-11-02, awaiting owner review).  
 Date: 2026-10-29; revised 2026-11-02  
 Branch: `v2.0.0-planning`  
 Baseline: `stc` 1.0.0, released 2026-10-29  
@@ -89,7 +89,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-2 | Test coverage to 85% as reported by the existing CI coverage badge; CI pass gate | Quality | M/L | Existing coverage job/badge | Locked |
 | WL-3 | Expand the Lean specification per the verification plan; P0.4 and P0.3 complete and merged, P0.5 target soundness proved | Verification | M for P0.4 | Phase 0 P0.4 | In progress; P0.4/P0.3 complete and merged 2026-10-31; P0.5 all eight soundness theorems proved, whole-run bridge pending |
 | WL-4 | Run and verify RT performance on PREEMPT_RT Linux x86-64 | Runtime evidence | M | x86-64 RT run host and transferable artifacts | Done 2026-10-30 |
-| WL-5.1 | Modbus TCP server I/O on all supported hosts; non-real-time | Runtime/IO | M/L | None | Locked |
+| WL-5.1 | Modbus TCP server I/O on all supported hosts; non-real-time | Runtime/IO | M/L | None | Done 2026-11-02 |
 | WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host; EtherCAT hardware | Locked |
 | WL-6 | Motion controller: coordinated multi-axis interpolated motion | Motion | L/XL | WL-5.2, WL-7, WL-4; robot-sim reuse | Deferred |
 | WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Deferred |
@@ -506,14 +506,29 @@ Motion (WL-6) is deferred and would depend on EtherCAT (WL-5.2, locked for v2.0.
   measurements, and updates to the I/O specification and
   [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md).
 
+**Status.** Implemented for v2.0.0 and verified on 2026-11-02 on all CI hosts and on the bench
+host. The contract is
+[I/O Routing and Backends §4.5](specification/Architecture/IO-Routing-and-Backends.md), the
+profile schema is [CLI and Manifest §2.2.1](specification/Architecture/CLI-and-Manifest.md), and
+the decisions are [Decisions.md](specification/Decisions.md) D-229–D-243. The evidence report is
+[Modbus-Server.md](specification/Verification/Modbus-Server.md); the end-to-end fixture is
+[tests/modbus/](tests/modbus/README.md), the real mixed bench result is
+[tests/modbus/mixed/RESULTS.md](tests/modbus/mixed/RESULTS.md), and the raw overhead run is
+[tests/modbus/overhead/](tests/modbus/overhead/). The open questions below are resolved by
+D-229–D-243: the initial function-code set is FC1/2/3/4/5/6/15/16 with 1/8/16/32/64-bit widths;
+connections are unbounded with no idle timeout and per-request fault isolation; requests are
+served against the register bank and become visible at the cycle boundary; server ranges use the
+existing binding model plus a profile channel map; cross-host tests use the in-process fixture and
+CI matrix. MQTT is not part of v2.0.0.
+
 **Constraints and current state.**
 
 - The compiler parses `AT`, assigns process-image offsets, emits metadata, and validates
   pragma/binding shape; it never opens devices. The runtime owns backend scheduling and may
   override hints.
 - Binding precedence and the `null`/`memory`/`file` semantics are specified. The runtime override
-  format is still an open question in
-  [I/O and Device Linking](specification/Architecture/IO-and-Devices.md).
+  format was resolved for WL-5.1: device configuration comes from the profile, and no runtime
+  rebinding flag is implemented (D-243).
 - Modbus TCP has no standard authentication or encryption. Assume a trusted or segmented network
   and document the risk; transport security is a separate decision, not part of this backend.
 - Server request latency and connection handling are part of the cycle behavior. The backend is
@@ -525,16 +540,11 @@ Motion (WL-6) is deferred and would depend on EtherCAT (WL-5.2, locked for v2.0.
 - Device and channel bindings must be validated when the device tree is optional and runtime
   overrides can rebind.
 
-**Open questions.**
-
-- Which server function codes, data widths, and byte/word order are required first?
-- How many concurrent client connections are supported, and what are the timeout, idle, and
-  failure policies?
-- How are incoming requests queued and served relative to the input latch and output publish?
-- Do server-exposed ranges use the existing `[[io.bindings]]` model, or a separate server mapping?
-- Which simulator and cross-host CI strategy prove the backend?
-- Should MQTT remain a v2 candidate? It is neither Modbus nor EtherCAT and is not covered here.
-- How are bindings validated across optional device trees and runtime rebinding?
+**Resolved questions (2026-11-02).** The questions recorded during selection are resolved by
+D-229–D-243 and the contract in
+[I/O Routing and Backends §4.5](specification/Architecture/IO-Routing-and-Backends.md): the first
+function-code set, connection and timeout behavior, request scheduling, mapping model, test
+strategy, MQTT scope, and binding validation are fixed there. MQTT is not part of v2.0.0.
 
 **Related.** [I/O and Device Linking](specification/Architecture/IO-and-Devices.md),
 [Runtime and Execution](specification/Architecture/Runtime-and-Execution.md),
@@ -1148,3 +1158,4 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-10-31 | Owner approved the §22 design; implemented the offset-aware storage, `.slotEntry`, bounds-checked memory operations, origin/binding facts, and the `WFProgram`/`WFState`/`AccessBounded` invariant; proved `ir_progress`, `ir_memory_safe`, and `ir_no_ub`. All eight P0.5 target soundness theorems (P0-T15–P0-T22) are proved; initial-state/preservation/reachability remain as the whole-run follow-up. |
 | 2026-11-01 | Added WL-12 (cycle-thread wake-up jitter at sub-millisecond cycle times) as deferred. WL-5.2's CT sweep found 150 µs maintainable and 100 µs failing on host wake jitter after the metrics-writer flush moved off the cycle thread; the follow-up is out of scope for WL-5.2. |
 | 2026-11-02 | Completed the P0.5 whole-run bridge on `WL-3`; P0.5 is ready for owner review. WL-5.2 is complete; its decisions are [Decisions.md](specification/Decisions.md) D-211–D-228 and its evidence is [EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md). |
+| 2026-11-02 | WL-5.1 is complete: the Modbus TCP server backend is implemented, verified on all CI hosts and the bench host, and documented. Decisions are [Decisions.md](specification/Decisions.md) D-229–D-243 and the evidence is [Modbus-Server.md](specification/Verification/Modbus-Server.md). |

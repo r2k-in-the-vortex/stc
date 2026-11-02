@@ -1,7 +1,7 @@
 # Known limitations — `stc` 1.0.0
 
 Profile: `stc-2013-oop-utf8-v1`  
-Date: 2026-10-29
+Date: 2026-10-29; revised 2026-11-02
 
 This list is part of the release contract. Each entry is either an explicit
 v1 profile boundary or a tested limitation with a documented workaround.
@@ -23,7 +23,7 @@ machine design as required by law and regulation.
 | Vendor project import (TIA Portal, CODESYS), the SIMATIC AX preprocessor, and vendor pragma semantics are not supported | Use plain ST against this profile |
 | A registry, version solver, or network package resolution is not provided | Local path dependencies plus a committed `stc.lock`; `--locked` is enforced in CI |
 | `PERSISTENT` is not a keyword; periodic or crash-time retained-state saves are not provided | `RETAIN` is saved at normal shutdown only |
-| Hardware I/O backends (EtherCAT, Modbus, MQTT) are v2 work | v1 uses `null`, `memory`, and `file` backends |
+| Hardware I/O backends: the EtherCAT backend and the Modbus TCP server are implemented for v2.0.0; MQTT remains deferred | v1 uses `null`, `memory`, and `file` backends; see §8 and §10 for the v2.0.0 hardware boundaries |
 | Multi-threaded ST task execution is not provided | One cooperative cycle thread executes ST; the control and debug service threads never execute ST |
 | `ARRAY [*]` is a conformant-parameter form only | Dynamic locals, globals, and function results are rejected |
 | `stc fmt` has one fixed style and no configuration | `--check` reports a diff; post-v1 work adds configuration |
@@ -87,7 +87,7 @@ machine design as required by law and regulation.
 
 | Limitation | Status |
 | --- | --- |
-| Four non-debug rules are documented as not implemented: `STC-E-ONLINE-STATE-001`, `STC-W-ONLINE-STATE-001`, `STC-W-ONLINE-004`, `STC-W-RUN-001` | In `tools/ci/traceability-allowlist.toml`; no debug rule is allowlisted |
+| Four online-change/state rules and three hardware-warning rules are documented as not implemented: `STC-E-ONLINE-STATE-001`, `STC-W-ONLINE-STATE-001`, `STC-W-ONLINE-004`, `STC-W-RUN-001`, `STC-W-IO-ETH-001`, `STC-W-IO-ETH-002`, `STC-W-IO-MODTCP-001` | In `tools/ci/traceability-allowlist.toml`; no debug rule is allowlisted |
 | Timing measurements are not CI gates | The `performance` and `debug_overhead` tests are ignored by default and run explicitly |
 | `Debug overhead` workflow dispatch becomes available only after the workflow exists on the default branch | Run the same ignored test locally or in a dispatched `debug` job meanwhile |
 | Flaky process/timing tests are treated as bugs, not fixed by widening deadlines | See D-198 and [`RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md) |
@@ -129,7 +129,7 @@ are in [EtherCAT-Runbook.md](specification/Verification/EtherCAT-Runbook.md) and
 | The master lost-frame counter is cumulative; the phase-6 samples are 18856 → 18856 for the all-points run and 18856 → 24426 for the fault session (delta 5570) | The fault-session delta is frames sent during the link-down/power-off windows. Record `ethercat master` before and after each future run |
 | The optional per-backend `stc-io-metrics/1` stream from the WL-5.2 design is not implemented | Timing evidence uses `stc-rt-metrics/1` plus `ethercat master` boundary samples; a per-backend stream is deferred |
 | The fastest maintainable cycle time is 150 µs on this host; 100 µs fails on host wake jitter (283 skipped periods, wake lateness 53.4–133.3 µs), and 75/50/25 µs were not run | Host- and configuration-specific, not a hard real-time guarantee. Release is the timing evidence; the debug build uses most of a 1 ms budget |
-| Mixed real backends in one run are not HIL-tested in WL-5.2 | The coordinator and per-device `kind` dispatch are tested with EtherCAT plus a mock backend; WL-5.1 Modbus TCP attaches as a second real backend without changing the EtherCAT backend |
+| Mixed real backends in one run were not HIL-tested in WL-5.2 | WL-5.1 ran the DIEWU EtherCAT slave and a Modbus TCP server concurrently in one coordinator for 60000 cycles with zero backend faults, but without an external Modbus↔EtherCAT signal connection; cross-backend routing is proven by the mixed mock test, not by that bench run (see §10) |
 | IgH is an operator-installed host prerequisite and is coupled to the kernel | Pin the kernel/IgH pairing in the runbook and rebuild the modules after a kernel update; the repository does not redistribute kernel modules |
 | The base `stc` package has no IgH dependency; the backend is an optional `stc-io-ethercat` shim loaded with `dlopen` | The shim loads only when an EtherCAT device is configured; the shim source is committed and the library is dynamically linked LGPL userspace |
 | Transparent fault behavior is not a safety function and the status block is not a safety signal | The runtime holds outputs, presents stale inputs, and exposes status; the PLC decides. Provide safety separately as required by law and regulation |
@@ -150,3 +150,28 @@ the test artifacts; the model and formats are in
 | There is no per-package or per-file coverage filter in v2.0.0 | Filter `coverage.json` in external tooling; all production packages are reported |
 | There is no fail-under threshold, coverage gate, or HTML report | Consume `coverage.json` or `lcov.info` in external tooling; see Testing and Verification §2.6 |
 | Coverage is not correctness evidence and is not rule-level traceability | Correctness is established by tests and by the rule traceability check; coverage only records executed statements |
+
+## 10. Modbus TCP server I/O (WL-5.1, v2.0.0 work)
+
+Added 2026-11-02. WL-5.1 implements a Modbus TCP **server** backend in the runtime; it is not a
+client, not Modbus RTU, and not a safety function. The contract is in
+[I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) §4.5; the
+evidence is in [Modbus-Server.md](specification/Verification/Modbus-Server.md), with the real
+mixed bench in [tests/modbus/mixed/RESULTS.md](tests/modbus/mixed/RESULTS.md).
+
+| Limitation | Status / workaround |
+| --- | --- |
+| Non-real-time and best-effort; no hard deadline, timing certification, or safety claim | Do not use Modbus as an interpolated motion channel or as a safety function; provide safety separately and verify the cycle budget on the target host |
+| No authentication, authorization, or encryption; every input-mapped coil/register on every bind is writable by any reachable client | Bind explicit interfaces only, audit the whole `bind` array, and use a trusted/segmented network or host firewall on every bind; connection limits and idle timeouts do not prevent determined denial of service |
+| `BOOL` maps only to coils/discrete inputs; a boolean in a register must be a 16-bit channel | Use a 16-bit register channel for 0/1 flags; 1-bit channels on register tables are rejected |
+| Addresses are zero-based; vendor `00001`/`10001`/`30001`/`40001` reference numbers are one-based | Subtract one when converting vendor documentation; confirm ambiguous "register 1" wording against a known value or PDU trace. The profile never accepts vendor notation |
+| Width and span scope: only 1/8/16/32/64-bit values; 32/64-bit channels span 2/4 registers; partial writes of a wide channel are rejected (0x02) | Use complete-channel writes and the documented byte/word orders; floating point, strings, and arbitrary per-register layouts are not supported |
+| Byte/word order support is limited to device `high-first`/`low-first` and per-channel `high-first`/`low-first`/`abcd`/`cdab`/`dcba`/`badc`/index list | Confirm the vendor's register order against a known value; the named 64-bit forms are per-half patterns, and device `low-first` reverses all four words |
+| No external Modbus↔EtherCAT cross-wiring evidence. The real mixed bench ran both backends concurrently but did not connect a Modbus client signal to an EtherCAT channel | Cross-backend routing over one process image is proven by the mixed mock test; a physical Modbus-to-EtherCAT (or reverse) transfer is not claimed |
+| The optional independent third-party Modbus client check was not run; `mbpoll`, `modpoll`, and `pymodbus` were not installed | All client evidence uses the in-repo stdlib client; third-party interoperability is not claimed |
+| Overhead evidence is one Windows x86-64 host with the public `latch_inputs`/`publish_outputs` seam, not a full coordinator scan; no CI timing gate | Results are host-specific and indicative, not bounds; rerun the ignored release harness on the target host |
+| A runtime listener failure is retried indefinitely and the backend state stays `Faulted` until every listener is accepting | The PLC must decide what to do when `server<N>.listening` is false; there is no stale-input flag and no fail-safe output state |
+| Unbound declared channels are counted in `server<N>.unbound` but `STC-W-IO-MODTCP-001` is not emitted because the `DeviceBackend` interface has no notice channel | Inspect the diagnostics/status; the code is traceability-allowlisted as not implemented |
+| The control `Status` JSON has no `io_reports`; only the verbose launcher output (`stc run -v`) prints backend diagnostics | Use `stc run -v` or the optional `modbus-tcp-status` device; extending the control JSON is not part of WL-5.1 |
+| On Unix, ports below 1024 (including the standard Modbus port 502 and the example port 567) require `CAP_NET_BIND_SERVICE` or a privileged service manager | Prefer an unprivileged high port or grant the capability deliberately; the standard port is not assumed |
+| Modbus TCP client/master, RTU/serial, TLS, gateways, FC8/FC22/FC23/FC43, and broadcast are not implemented | Use the supported server function codes on a TCP network; WL-11 remains the separate client item |

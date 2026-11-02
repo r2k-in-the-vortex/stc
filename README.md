@@ -232,7 +232,7 @@ test runner, and inspectable artifacts.
 | Projects | `stc.toml` packages, local path dependencies, `stc.lock`, dependency graph, package-aware namespaces |
 | Testing | `{stc:test}` POUs; tests may live in a separate test project that depends on the code under test |
 | I/O | Runtime-owned linking; TwinCAT-like device tree in `stc.toml`; `{stc:io {...}}` hints on `AT`; unbound inputs use type defaults, unbound outputs do nothing |
-| I/O backends | v1: null/memory/file; v2 planned: EtherCAT, Modbus, MQTT |
+| I/O backends | v1: null/memory/file; v2.0.0 implemented: EtherCAT and Modbus TCP server; MQTT deferred |
 | Persistence | File-backed `RETAIN` state; warm restart restores, cold start initializes; layout hash + CRC |
 | Tooling API | Stable append-only `SyntaxKind`; public CST/IDE API planned for v2/v3 |
 | AX role | Syntax/UX inspiration only; AX preprocessor and vendor pragmas are out of profile |
@@ -438,6 +438,83 @@ and [I/O and Devices](specification/Architecture/IO-and-Devices.md). Online-chan
 schema details are in
 [Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md) and
 [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md).
+
+## Modbus TCP server I/O (v2.0.0)
+
+WL-5.1 adds a built-in Modbus TCP **server** backend to the v2.0.0 runtime. A project declares
+`kind = "modbus-tcp"` devices; the selected machine profile maps each declared channel to one of
+the four Modbus tables with a **zero-based** address. All addresses are zero-based: address 0 is
+the first coil, discrete input, input register, or holding register. Vendor reference numbers
+(00001/10001/30001/40001) are one-based and must be converted by subtracting one.
+
+- Supported function codes: 1, 2, 3, 4, 5, 6, 15, and 16.
+- Channel widths: 1 bit on coils/discrete inputs; 8, 16, 32, or 64 bits on register tables.
+  32- and 64-bit channels span 2 and 4 registers.
+- One or more explicit `bind` addresses per server, all sharing one register bank; an optional
+  `modbus-tcp-status` device exposes health and counters to the PLC.
+- The server is non-real-time and has no authentication or encryption. Use a trusted/segmented
+  network, audit every bind, and do not use it as a safety function or motion channel.
+
+```toml
+# stc.toml
+[io]
+config = "io/bench.toml"            # selected machine profile, embedded at build time
+
+[[io.devices]]
+name = "modbus0"
+kind = "modbus-tcp"
+
+  [[io.devices.channels]]
+  name = "CoilIn0"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "WordOut0"
+  direction = "output"
+  width = 16
+
+[[io.bindings]]
+variable = "Main.CoilIn0"
+device = "modbus0"
+channel = "CoilIn0"
+direction = "input"
+
+[[io.bindings]]
+variable = "Main.WordOut0"
+device = "modbus0"
+channel = "WordOut0"
+direction = "output"
+```
+
+```toml
+# io/bench.toml
+[device.modbus0]
+bind = ["127.0.0.1:15020"]
+unit = 1
+max-connections = 8
+idle-timeout = "60s"
+word-order = "high-first"
+
+# Zero-based: coil address 0 is vendor 00001; holding register address 0 is
+# vendor 40001. A client write reaches %I at the next input boundary; a %Q
+# value is readable here after the publish boundary.
+[[device.modbus0.channels]]
+name = "CoilIn0"
+table = "coil"
+address = 0
+
+[[device.modbus0.channels]]
+name = "WordOut0"
+table = "holding-register"
+address = 0
+```
+
+The full profile schema, word/byte orders, fault policy, diagnostics, and status-device layout
+are in [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) §4.5
+and [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) §2.2.1. A runnable
+two-listener fixture and client are in [tests/modbus/](tests/modbus/README.md); the evidence
+report is [Modbus-Server.md](specification/Verification/Modbus-Server.md).
 
 ## Repository layout
 
