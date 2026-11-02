@@ -2,8 +2,8 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Semantics version: `1.0` (frozen by P0.7; freeze commit `PENDING: P0.7 freeze commit`, finalized
-in the follow-up commit)
+Semantics version: `1.0` (frozen by P0.7; freeze commit
+`7aad70d41e1dc4b47606f13cd7818b638fd45927`)
 Status: P0.7 preparation is complete; the owner review and sign-off are pending. P0.0–P0.6 are
 complete and owner-approved through P0.6. This report records what Phase 0 established, the
 conformance evidence, the known gaps, the trusted computing base, the version freeze, and the
@@ -213,11 +213,12 @@ case descriptors, reference results, and conformance report. The format versions
 P0.6 values: `stc-core-hir` `0.1.0`, `stc-core-case` `0.1.0`, `stc-sem-result` `0.1.0`,
 `stc-sem-conformance-report` `0.1.0`, and `stc-runtime-snapshot` `0.1.0`.
 
-The freeze commit is recorded in [`lean/verification-status.toml`](../../lean/verification-status.toml)
-and here. A commit cannot name itself, so the freeze commit carries the same marked placeholder
-in both files; the immediately following commit records the exact hash. The committed report was
-regenerated from the frozen corpus and toolchain and matches the gate byte-for-byte; the case
-descriptors and the Rust/Lean version constants and tests carry `1.0`.
+The freeze commit is `7aad70d41e1dc4b47606f13cd7818b638fd45927`, recorded in
+[`lean/verification-status.toml`](../../lean/verification-status.toml) and here. The freeze commit
+itself carried a marked placeholder because a commit cannot name itself; the immediately following
+commit records the exact hash. The committed report was regenerated from the frozen corpus and
+toolchain and matches the gate byte-for-byte; the case descriptors and the Rust/Lean version
+constants and tests carry `1.0`.
 
 No semantic definition or theorem statement was changed to perform the freeze, and no
 incompatibility requiring an owner decision surfaced. The version bump changed only the version

@@ -2397,7 +2397,7 @@ cite. Preparation is complete; the owner review and sign-off have not occurred.
 | Completed semantics document | [Semantics.md](Semantics.md) | Complete against the P0.7 checklist; stale draft/status text removed; final changelog row added |
 | Phase 0 report | [Phase0-Report.md](Phase0-Report.md) | Complete: proved results, 74/74 conformance evidence, gaps and exclusions, T2 fix, TCB, freeze record, handoff, and review checklist |
 | Handoff note | Phase0-Report.md §8 | Phases 1, 2, 4, 5, 6, 7, and 8 consumption; extension and version-bump rules; refinement handoff for recursive models, loop-shaped relations, explicit state/control flow, and fuel obligations |
-| Semantics version | `lean/verification-status.toml`, all versioned fixtures, and the committed report | Frozen at `1.0`; formats remain at `0.1.0`; freeze commit recorded with a marked placeholder and finalized in the follow-up commit |
+| Semantics version | `lean/verification-status.toml`, all versioned fixtures, and the committed report | Frozen at `1.0`; formats remain at `0.1.0`; freeze commit `7aad70d41e1dc4b47606f13cd7818b638fd45927` recorded (the freeze commit carried a marked placeholder, finalized in the follow-up commit) |
 | Parent-plan and registry updates | [Plan.md](Plan.md), this plan, registry | P0.7 in progress with final review pending; no sign-off claimed |
 
 **Version freeze.** `semantics_version` changed from `1.0-draft` to `1.0` in the registry, the

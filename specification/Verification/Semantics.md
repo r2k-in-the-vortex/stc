@@ -2,8 +2,8 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Semantics version: `1.0` (frozen by P0.7; freeze commit `PENDING: P0.7 freeze commit`, finalized
-in the follow-up commit)
+Semantics version: `1.0` (frozen by P0.7; freeze commit
+`7aad70d41e1dc4b47606f13cd7818b638fd45927`)
 HIR dump format version: `0.1.0` (frozen with the core dump in P0.6)
 Status: Phase 0 is complete through P0.6, and each sub-phase through P0.6 is owner-approved. P0.7
 (document review, versioning, and handoff) has completed its preparation: this document is
@@ -453,12 +453,13 @@ Assumptions that must be stated with any published claim:
 
 ### 9.1 Semantics version
 
-`semantics_version` is frozen at `1.0` by P0.7. The freeze commit is recorded in
+`semantics_version` is frozen at `1.0` by P0.7. The freeze commit is
+`7aad70d41e1dc4b47606f13cd7818b638fd45927`, recorded in
 [`lean/verification-status.toml`](../../lean/verification-status.toml) and in
-[Phase0-Report.md](Phase0-Report.md); the commit that performs the freeze carries a marked
-placeholder because a commit cannot name itself, and the immediately following commit records the
-exact hash. A change to any core definition or theorem after the freeze requires a version bump, a
-registry update, a changelog entry here, and a review of the affected phase claims.
+[Phase0-Report.md](Phase0-Report.md). The freeze commit itself carried a marked placeholder
+because a commit cannot name itself; the immediately following commit records the exact hash. A
+change to any core definition or theorem after the freeze requires a version bump, a registry
+update, a changelog entry here, and a review of the affected phase claims.
 
 ### 9.2 HIR dump format version
 

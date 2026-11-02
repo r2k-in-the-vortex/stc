@@ -28,7 +28,7 @@ dump_format_version = "0.1.0"
 # itself, so the freeze commit is committed with a marked placeholder and the
 # placeholder is replaced by the exact hash in the immediately following
 # commit. Phase0-Report.md records the same value.
-semantics_freeze_commit = "pending (finalized in the follow-up commit)"
+semantics_freeze_commit = "7aad70d41e1dc4b47606f13cd7818b638fd45927"
 
 [[records]]
 id = "P0-T01"
