@@ -1,7 +1,7 @@
 /-
 Core HIR type and value-shape definitions (P0.2).
 
-The types are the scalar core of `Plan-Phase0.md` §3.3: `BOOL`, signed and
+The types are the scalar core of `Semantics.md` §1: `BOOL`, signed and
 unsigned integers, bit strings, and the character types. Widths and conversion
 rules stay in step with `Stc.Exact`. Every type has a canonical `IntType`
 layout: `BOOL` is the one-bit unsigned layout, integers carry their declared

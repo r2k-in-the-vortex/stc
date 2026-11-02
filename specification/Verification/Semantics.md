@@ -7,20 +7,20 @@ Semantics version: `1.0` (frozen by P0.7; freeze commit
 HIR dump format version: `0.1.0` (frozen with the core dump in P0.6)
 Status: Phase 0 is complete. P0.0–P0.7 are complete and owner-approved; P0.7 was approved on
 2026-11-02, this document is complete against the P0.7 checklist, the semantics version is frozen
-at `1.0`, and the [Phase 0 Report](Phase0-Report.md) records the proof and evidence summary, the
+at `1.0`, and the [Phase 0 Report](Reports/Phase0-Report.md) records the proof and evidence summary, the
 known gaps, and the handoff to later phases. The soundness
 results stated here are the P0.0–P0.5 theorems plus the P0.6 conformance evidence; they are not a
 refinement claim, and the V0 differential evidence and TCB boundaries are explicit in §7, §8, and
-§10. The P0.3 completion record and review checklist are in Plan-Phase0.md §19.12, the drift
-register in §19, the P0.4 scope decisions in §20, the P0.5 completion record in §22.11, the P0.6
-completion record and sign-off in the Plan-Phase0.md P0.6 section, and the P0.7 execution record
-and review checklist in §23.
+§10. The P0.3 completion summary is in [Phase0-Report.md](Reports/Phase0-Report.md) §3, the
+drift and open-question record in [Phase0-Design.md](Reports/Phase0-Design.md) §3, the P0.4
+scope decisions in §2 of the design record, the P0.5 invariant/design record in §4–§6, and the
+P0.6/P0.7 results and review in [Phase0-Report.md](Reports/Phase0-Report.md).
 Charter: [Semantics Charter](Semantics-Charter.md)
-Plan: [Phase 0 Implementation Plan](Plan-Phase0.md) · [Verification Program Plan](Plan.md)
+Plan: [Phase 0 Report](Reports/Phase0-Report.md) · [Verification Program Plan](VerificationProgramPlan.md)
 
 ## 1. Scope, core subset, and exclusions
 
-The semantics covers the frozen core in [Plan-Phase0.md](Plan-Phase0.md) §3.3 and §3.4. The
+The semantics covers the frozen core in §1. The
 source subset is scalar: `BOOL`, signed and unsigned integers, bit strings, and character types;
 scalar variables, globals, functions, and one program; exact operators and standard functions;
 structured control flow without `VAR_OUTPUT`, `VAR_IN_OUT`, or aliasing; and the `OVERFLOW`,
@@ -116,7 +116,8 @@ the later string phase and excluded from P0.6 conformance until it is modeled. T
 soundness result is therefore relative to the layout-only character model. For P0.5, this is why
 target `ir_progress` carries the `AccessBounded` source-check premise instead of deriving it:
 the character-index path needs `CharIndexBounded` or exclusion until Q3 is resolved (see
-`Plan-Phase0.md` §22.4 and §22.11).
+[Phase0-Design.md](Reports/Phase0-Design.md) §5 (D2) and
+[Phase0-Report.md](Reports/Phase0-Report.md) §3).
 
 HIR typing is monomorphic. The declarative operator rules require arithmetic operands to be the
 same integer type, bitwise operands to be the same `BOOL`/bit-string type, and comparison
@@ -264,7 +265,7 @@ All eight P0.5 target soundness theorems are now proved. `ir_progress`, `ir_memo
 `ir_no_ub` are stated over the `WFRunning` target invariant, which is implemented in
 `Stc.Codegen.Semantics` together with the offset-aware storage, `.slotEntry`, bounds-checked
 memory operations, origin/binding facts, and return-link predicates.  The approved design and
-implementation record is in `Plan-Phase0.md` §22. `initState?_wf`, `irStep_wf`/`irStepStar_wf`,
+implementation record is in [Phase0-Design.md](Reports/Phase0-Design.md) §4–§6. `initState?_wf`, `irStep_wf`/`irStepStar_wf`,
 and the reachability corollaries (`irStepStar_wfRunning`, `initState?_reachable_wfRunning`,
 `ir_progress_reachable`, `ir_memory_safe_reachable`, `ir_no_ub_reachable`) are proved, and
 `irRun_halt_wf` lifts the invariant to a halting `irRun`. `AccessBounded` remains the
@@ -293,7 +294,8 @@ element. Persistent storage behind a `Data`/`Direct` root or a module global is 
 value sequence keyed by store id and offset; the builder's two-load GOT access pattern is
 modeled with a distinct `.slotEntry` address, so the cell address and the cell content have
 different state values and the recorded `PointerOrigin` stages match the state. The model,
-bounds checks, and fault policy are the approved D1/D2 design in `Plan-Phase0.md` §22.
+bounds checks, and fault policy are the approved D1/D2 design in
+[Phase0-Design.md](Reports/Phase0-Design.md) §5.
 
 ### 5.2 GOT root and slot model
 
@@ -328,7 +330,7 @@ accesses are defined `.stuck` faults, as are stores through host-owned cells/slo
 they are not undefined behavior. This is a property of the modeled fragment, not a general LLVM
 result; lifting it from states to reachable runs is `ir_no_ub_reachable` (with
 `irStepStar_wfRunning`), and the executable-entry form follows from `irRun_halt_wf`
-(`Plan-Phase0.md` §22.11). Q3 does not weaken this statement: an out-of-range character access
+([Phase0-Report.md](Reports/Phase0-Report.md) §3). Q3 does not weaken this statement: an out-of-range character access
 is a defined fault, not undefined behavior.
 
 ## 6. Exact arithmetic connection
@@ -337,7 +339,7 @@ The source and target integer operations are defined against the existing `Stc.E
 `checked_arith_traps_exactly` states that source checked arithmetic agrees with the `Stc.Exact`
 models, including checked conversions and the exact standard functions. `evalCast` and
 `evalStd` re-check their results with the exact checked wrapper. P0.3 keeps this guarded form
-(Q2 resolved in [Plan-Phase0.md](Plan-Phase0.md) §19.8); the guard is redundant for representable
+(Q2 resolved in [Phase0-Design.md](Reports/Phase0-Design.md) §3); the guard is redundant for representable
 inputs but the unguarded equality needs the `convert_ok_fits` and standard-function fit lemmas,
 which are recorded as a P0.5/Phase 2 follow-up. `ir_checked_arith_refines_exact` states that the IR
 instruction sequence plus its trap path produces the same result or trap as the exact model.
@@ -353,11 +355,12 @@ arithmetic, and the interpreter are proved; the P0.4 definitions and structural 
 proved. P0.5 target soundness is proved: determinism, progress, memory safety, GOT soundness,
 trap soundness, checked-arithmetic refinement, the recursive-model equivalence, and no-UB are all
 proved against the implemented invariant. The initial-state proof, the preservation proof, and
-the reachability/`irRun` corollaries are also proved (`Plan-Phase0.md` §22.11). P0.6's
+the reachability/`irRun` corollaries are also proved (§3 of the [Phase0-Report.md](Reports/Phase0-Report.md)). P0.6's
 versioning and conformance claims are evidence, not theorems, and are recorded as `tested`; the
 committed report is the artifact. Open P0.3 questions are recorded in
-[Plan-Phase0.md](Plan-Phase0.md) §19, the P0.4 decisions in §20, the P0.5 checkpoint in §21, the
-P0.5 design/implementation record in §22, and the P0.6 completion record in §23.
+[Phase0-Design.md](Reports/Phase0-Design.md) §3, the P0.4 decisions in §2 of the design record,
+the P0.5 design/implementation record in §4–§6, and the P0.6/P0.7 results in
+[Phase0-Report.md](Reports/Phase0-Report.md).
 
 ### 7.1 Source soundness
 
@@ -380,7 +383,7 @@ P0.5 design/implementation record in §22, and the P0.6 completion record in §2
 
 P0.4 defines the production-module fragment and its well-formedness predicate. The structural
 lemmas are projections of `Stc.Codegen.WellFormed`; the full inventory and shapes are in
-[Plan-Phase0 §7.1](Plan-Phase0.md#71-p04-structural-lemmas).
+§7.7 below.
 
 | Lemma | Module | Sub-phase | Status |
 | --- | --- | --- | --- |
@@ -430,6 +433,64 @@ lemmas are projections of `Stc.Codegen.WellFormed`; the full inventory and shape
 The conformance result is evidence, not a theorem. The report must not describe it as a proof
 that the Rust compiler refines the semantics.
 
+### 7.6 Theorem statement shapes
+
+The registry fixes names and status; the statement shapes are:
+
+| Theorem | Shape |
+| --- | --- |
+| `ast_span_wellformed` | AST nodes carry spans that map to the CST/source. |
+| `core_check_sound` | `checkCore p = .ok env → HasType p env`. |
+| `core_check_complete` | Descoped: `HasType p env → ∃ env', checkCore p = .ok env'` where intended. |
+| `core_rejection_characterized` | Every rejected core program fails a named typing rule. |
+| `hir_wellformed` | `checkCore p = .ok env → HirWellFormed p`. |
+| `conversion_legal_iff` | The core conversion relation accepts exactly the specified conversions. |
+| `eval_deterministic` | `Eval e s v₁ → Eval e s v₂ → v₁ = v₂`. |
+| `progress` | Well-typed, well-formed configurations are terminal, trap, or step. |
+| `preservation` | `ConfigTyped u c → Step u c c' → ConfigTyped u c'`. |
+| `type_soundness` | The initial configuration is typed; every reachable configuration is typed and not stuck, with traps covered by `trap_soundness`. |
+| `trap_soundness` | Every terminal trap is in the specified trap set. |
+| `checked_arith_traps_exactly` | Checked arithmetic traps exactly on overflow or divide by zero (guarded exact form, Q2). |
+| `interpreter_sound` | `stcSem fuel e s = .ok v → EvalStar e s v`. |
+| `interpreter_complete` | Terminating runs within fuel are reproduced by the interpreter. |
+| `ir_deterministic` | `IRStep ir s s₁ → IRStep ir s s₂ → s₁ = s₂`. |
+| `ir_progress` | Well-formed non-terminal IR states step or trap. |
+| `ir_memory_safe` | Well-formed IR accesses only valid stack/GOT/storage of the right kind. |
+| `ir_got_sound` | GOT loads return the root value recorded by the slot table. |
+| `ir_trap_sound` | Every IR trap is on a specified trap path. |
+| `ir_checked_arith_refines_exact` | IR checked arithmetic plus trap equals `Stc.Exact`. |
+| `ir_recursive_model_equiv` | `irExecRec ir s = r ↔ IRStepStar ir s r`. |
+| `ir_no_ub` | `WellFormed ir → ¬ UB ir` on the covered fragment. |
+| `semantics_conformance` | The harness reports agreement for every core corpus case or a documented exclusion. |
+| `semantics_versioned` | Every report and dump carries the semantics and format versions. |
+
+### 7.7 P0.4 structural lemma shapes
+
+| Lemma | Shape | Depends on |
+| --- | --- | --- |
+| `wellFormed_blocks_have_terminators` | Every block in a well-formed function has exactly one terminator after its instructions. | `IRFrag`, `WellFormed` |
+| `wellFormed_phis_first` | Every `phi` precedes all non-`phi` instructions in its block. | `IRFrag`, `WellFormed` |
+| `wellFormed_phi_predecessors_match` | A `phi` has exactly one incoming pair per CFG predecessor of its block, and no other labels. | `IRFrag`, `WellFormed` |
+| `wellFormed_types_correct` | Every instruction and terminator is type-correct for the core IR types, and `ret` matches the function signature. | `IRFrag`, `WellFormed` |
+| `wellFormed_uses_defined` | Every local operand is a parameter or a dominating definition, and parameter/definition names are unique. | `IRFrag`, `WellFormed` |
+| `wellFormed_module_shapes` | Type-definition, global, declaration, and function names are unique; type definitions, global initializers, and declarations are well-typed; declarations are known intrinsics. | `IRFrag`, `WellFormed` |
+| `wellFormed_slot_refs_in_range` | Every slot index is below the slot-table length. | `IRFrag`, `IRContract`, `WellFormed` |
+| `wellFormed_slot_refs_kind_correct` | Calls use `Function`/`Import` cells, loads and stores use `Data`/`Direct` cells, and cell addresses are never stored. | `IRFrag`, `IRContract`, `WellFormed` |
+| `wellFormed_slot_table_canonical` | The slot table's cell kinds are non-decreasing in the canonical `Data`, `Function`, `Descriptor`, `Direct`, `Import` group order. | `IRFrag`, `WellFormed` |
+| `wellFormed_entry_points_match_contract` | The required entry points exist with the host ABI 2 production signatures and external linkage. | `IRFrag`, `IRContract`, `WellFormed` |
+| `wellFormed_no_direct_root_or_callable` | No body or global initializer names a persistent root or user callable directly; the function table is the only exception. | `IRFrag`, `IRContract`, `WellFormed` |
+| `wellFormed_pre_attach_clean` | The descriptor and function accessors do not use the slot table or make indirect calls. | `IRFrag`, `IRContract`, `WellFormed` |
+| `wellFormed_local_globals_allowed` | Direct global loads and stores target only the contract's local-global allowlist. | `IRFrag`, `IRContract`, `WellFormed` |
+| `wellFormed_cells_not_written` | No instruction stores through a cell address. | `IRFrag`, `IRContract`, `WellFormed` |
+| `wellFormed_descriptor_and_table` | The descriptor blob and function table have the contract's constant/internal array shapes, and the table entries match the fragment's function-table list. | `IRFrag`, `IRContract`, `WellFormed` |
+
+`slots_canonical` and `slot_table_valid_iff_canonical` remain Phase 3 theorems; P0.4 defines only
+the grouped kind order. Descriptor/function-table content pairing remains Phase 5's
+`descriptor_and_table_pair`. The source recursive-model equivalence is the pair
+`interpreter_sound` and `interpreter_complete`; the target recursive-model equivalence is
+`ir_recursive_model_equiv`. These are the internal Lean equivalences that Phase 1 will use as
+refinement targets.
+
 ## 8. Trusted computing base and assumptions
 
 The trusted base is recorded in the [charter](Semantics-Charter.md#3-trusted-computing-base).
@@ -455,7 +516,7 @@ Assumptions that must be stated with any published claim:
 `semantics_version` is frozen at `1.0` by P0.7. The freeze commit is
 `7aad70d41e1dc4b47606f13cd7818b638fd45927`, recorded in
 [`lean/verification-status.toml`](../../lean/verification-status.toml) and in
-[Phase0-Report.md](Phase0-Report.md). The freeze commit itself carried a marked placeholder
+[Phase0-Report.md](Reports/Phase0-Report.md). The freeze commit itself carried a marked placeholder
 because a commit cannot name itself; the immediately following commit records the exact hash. A
 change to any core definition or theorem after the freeze requires a version bump, a registry
 update, a changelog entry here, and a review of the affected phase claims.
@@ -474,7 +535,7 @@ an unknown version or an unmodeled construct is rejected, never interpreted.
 | 2026-10-27 | 1.0-draft | P0.0 | Created the skeleton; froze the core scope and exclusions in the charter |
 | 2026-10-27 | 1.0-draft | P0.1 | Defined tokens, trivia, spans, the lossless CST contract, the surface AST, and `Derives`; proved `ast_span_wellformed` and the root source-span lemmas; added the [Core Syntax Coverage](Core-Coverage.md) table |
 | 2026-10-27 | 1.0-draft | P0.2 | Defined the typed HIR, the declarative typing judgment, `checkCore`, `HirWellFormed`, and the conversion relation; proved `core_check_sound`, `core_rejection_characterized`, `hir_wellformed`, and `conversion_legal_iff`; descoped `core_check_complete` with the `FOR` over-rejection recorded |
-| 2026-10-27 | 1.0-draft | P0.3 (in progress) | Defined values and traps, the small-step machine, the configuration typing, and the fuel interpreter; proved `eval_deterministic`, `trap_soundness`, guarded `checked_arith_traps_exactly`, `interpreter_sound`, and `interpreter_complete`; `progress`, `preservation`, `type_soundness`, and initial-state typing remain; open questions Q1–Q7 and the drift register are recorded in Plan-Phase0.md §19 |
+| 2026-10-27 | 1.0-draft | P0.3 (in progress) | Defined values and traps, the small-step machine, the configuration typing, and the fuel interpreter; proved `eval_deterministic`, `trap_soundness`, guarded `checked_arith_traps_exactly`, `interpreter_sound`, and `interpreter_complete`; `progress`, `preservation`, `type_soundness`, and initial-state typing remain; open questions Q1–Q7 and the drift register are recorded in Reports/Phase0-Design.md §3 |
 | 2026-10-31 | 1.0-draft | P0.4 (complete) | Started WL-3. Fixed the production-module fragment: five GOT cell kinds, a grouped slot table, the overflow-result and fixed-array types, rotate intrinsics, `extractvalue`, and `unreachable`; removed `switch` (CASE lowers to branches). Defined `IRFrag`, `IRContract`, `ModuleShapes`, `WellFormed`, and the structural lemmas, and proved the P0.4 lemmas with the standard Lean axioms; the definition-to-emission map is the [Core IR Coverage](Core-IR-Coverage.md) table. The P0.4 review was approved 2026-10-31 |
 | 2026-10-31 | 1.0-draft | P0.3 (resumed) | Reevaluated Q1–Q7: keep the current machine and `ConfigTyped` invariant; keep the guarded exact form; record layout-only characters as a known Q3 gap; correct the `FOR` zero-step test to `step > 0` for signed loops and always-ascending for unsigned; confirm the initialization boundary and the `RANGE` power trap; commit WIP checkpoints. |
 | 2026-10-31 | 1.0-draft | P0.3 (progress) | Proved `progress`: a `ConfigTyped` configuration is terminal or takes a step, via the expression, value, statement, resume, and return no-stuck lemmas. `preservation`, initial-state typing, and `type_soundness` remain |
@@ -483,7 +544,7 @@ an unknown version or an unmodeled construct is rejected, never interpreted.
 | 2026-11-01 | 1.0-draft | P0.6 (dump) | Defined and froze dump format `0.1.0` in [HIR-Dump.md](HIR-Dump.md): canonical names and positions, function signatures, globals with GOT keys, the single program, statements, expressions and places, explicit casts, call targets, literal values, spans, and the feature-tag vocabulary for rejection. Implemented the emitter and validator in `crates/stc-hir/src/core_dump.rs`, added `stc hir-dump` with emit/verify modes, and added determinism, versioning, and unmodeled-construct tests. The Lean reader, case corpus, and differential harness followed. |
 | 2026-11-01 | 1.0-draft | P0.6 (reference) | Added the strict Lean reader for dump `0.1.0` and defined the `stc-core-case` `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` in [Semantics-Cases.md](Semantics-Cases.md); the reader validates header/version/profile/semantics, status/features, names, positions, callees, arities, literals, and depth, and rejects unmodeled constructs. Added unit tests and temporary-fixture CLI tests (`lake exe stc-sem-tests`); no corpus case was committed while the harness was a fail-closed placeholder. The differential harness and corpus followed. |
 | 2026-11-02 | 1.0-draft | P0.6 (complete) | Added the opt-in launcher `--snapshot` surface backed by `Host::debug_read` and manifest roots, the differential harness, and the frozen `stc-sem-conformance-report` `0.1.0`; expanded the corpus to 74 cases covering every claimed core item or a justified exclusion, with the coverage inventory and triage log in `Semantics-Cases.md` §7; fixed `MIN`/`MAX`/`LIMIT` magnitude typing for bit strings and characters; committed the byte-stable report and made the corpus gate reject a stale copy. P0.6 approved 2026-11-02; the V0 differential-evidence label is unchanged |
-| 2026-11-02 | 1.0 | P0.7 | Froze `semantics_version` at `1.0` in the registry, the HIR dump, the case descriptors, the result and report metadata, and the Rust/Lean constants and tests; the dump, case, result, and report formats remain `0.1.0`. Completed this document against the P0.7 checklist, corrected the `semantics_versioned` status to tested evidence, and added the [Phase 0 Report](Phase0-Report.md) with the proof and evidence summary, known gaps and exclusions, TCB, freeze record, and the handoff to Phases 1, 2, 4, 5, 6, 7, and 8. P0.7 preparation is complete; the owner review and sign-off are pending |
+| 2026-11-02 | 1.0 | P0.7 | Froze `semantics_version` at `1.0` in the registry, the HIR dump, the case descriptors, the result and report metadata, and the Rust/Lean constants and tests; the dump, case, result, and report formats remain `0.1.0`. Completed this document against the P0.7 checklist, corrected the `semantics_versioned` status to tested evidence, and added the [Phase 0 Report](Reports/Phase0-Report.md) with the proof and evidence summary, known gaps and exclusions, TCB, freeze record, and the handoff to Phases 1, 2, 4, 5, 6, 7, and 8. P0.7 preparation is complete; the owner review and sign-off are pending |
 
 ## 10. Rust/Lean interface
 
@@ -530,7 +591,7 @@ gate, so every committed case is exercised on each change. The gate also regener
 and rejects a committed report that is not byte-identical, so the committed evidence cannot drift
 from the corpus. The corpus holds 74 cases and covers every core type, operator and exact
 standard function, statement form, conversion, trap, GOT access, and program shape claimed in
-Plan-Phase0 §3.3, or records a justified exclusion in
+§1 of this document, or records a justified exclusion in
 [Semantics-Cases.md](Semantics-Cases.md) §7. An empty corpus still exits `3` and is never
 reported as agreement. Agreement is evidence, not a refinement proof.
 
@@ -540,18 +601,19 @@ Every disagreement is classified as a Lean semantics bug, a Rust compiler bug, a
 unmodeled or excluded feature. The case is fixed or excluded with a written reason; a silent
 exclusion is a Phase 0 exit failure. The P0.6 triage log is recorded in
 [Semantics-Cases.md](Semantics-Cases.md) §7.3 and is carried into
-[Phase0-Report.md](Phase0-Report.md) §5.
+[Phase0-Report.md](Reports/Phase0-Report.md) §5.
 
 ## 11. References
 
 - [Semantics Charter](Semantics-Charter.md)
-- [Phase 0 Report](Phase0-Report.md)
+- [Phase 0 Report](Reports/Phase0-Report.md)
 - [Core HIR Dump](HIR-Dump.md)
 - [Core Semantics Cases](Semantics-Cases.md)
 - [Core Syntax Coverage](Core-Coverage.md)
 - [Core IR Coverage](Core-IR-Coverage.md)
-- [Phase 0 Implementation Plan](Plan-Phase0.md)
-- [Verification Program Plan](Plan.md)
+- [Phase 0 Report](Reports/Phase0-Report.md)
+- [Phase 0 Design and Decision Record](Reports/Phase0-Design.md)
+- [Verification Program Plan](VerificationProgramPlan.md)
 - [Testing and Verification](../Architecture/Testing-and-Verification.md)
 - [Architecture](../Architecture/Architecture.md)
 - [AST, CST, and HIR](../AST/AST.md)

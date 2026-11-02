@@ -192,8 +192,8 @@ any phase and still have a true, published claim.
 
 ### Phase 0 — Formal semantics foundation and soundness
 
-Detailed execution plan: [Plan-Phase0.md](Plan-Phase0.md). Its decisions P0-D1 through P0-D10
-are resolved.
+Detailed Phase 0 record: [Phase0-Report.md](Reports/Phase0-Report.md) and
+[Phase0-Design.md](Reports/Phase0-Design.md). Its decisions P0-D1 through P0-D10 are resolved.
 
 **Goal.** Deliver a standalone, machine-checked formal semantics of the stc core language and
 the emitted IR fragment, with the soundness results that make the semantics trustworthy. This
@@ -915,9 +915,9 @@ turn it into the registry.
 | --- | --- | --- | --- | --- |
 | Semantics document and version | 0 | S | `semantics_version` `1.0`; registry and conformance evidence | P0.7 preparation complete: `Semantics.md` and `Phase0-Report.md` complete, `semantics_version` frozen at `1.0`, registry and all versioned fixtures updated, handoff recorded; owner review and sign-off pending |
 | AST, HIR, and IR fragment types | 0 | S | definitions plus `WellFormed` | Syntax, grammar, and HIR defined (P0.1–P0.2); IR fragment defined and review-approved (P0.4, 2026-10-31) |
-| Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31 and merged into v2.0.0-planning via PR #11 (612f84d); see Plan-Phase0.md §19 |
+| Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31 and merged into v2.0.0-planning via PR #11 (612f84d); see [Phase0-Report.md](Reports/Phase0-Report.md) §3 |
 | Core typing judgment and checker | 0 | S | `core_check_sound`, `core_rejection_characterized` | Proved (P0.2) |
-| Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | P0.5 target soundness proved: target machine, step relation, executor, coverage table, and all eight soundness theorems (`ir_deterministic`, `ir_progress`, `ir_memory_safe`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`, `ir_no_ub`) proved against the implemented invariant; `initState?_wf`, `irStep_wf`/`irStepStar_wf`, the reachability corollaries, and `irRun_halt_wf` complete the whole-run bridge (Plan-Phase0.md §22.10–§22.11; checkpoint §21); P0.5 review approved 2026-11-02 and merged via PR #12 (92e113f) |
+| Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | P0.5 target soundness proved: target machine, step relation, executor, coverage table, and all eight soundness theorems (`ir_deterministic`, `ir_progress`, `ir_memory_safe`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`, `ir_no_ub`) proved against the implemented invariant; `initState?_wf`, `irStep_wf`/`irStepStar_wf`, the reachability corollaries, and `irRun_halt_wf` complete the whole-run bridge ([Phase0-Design.md](Reports/Phase0-Design.md) §4–§6 and [Phase0-Report.md](Reports/Phase0-Report.md) §3); P0.5 review approved 2026-11-02 and merged via PR #12 (92e113f) |
 | Reference interpreter and conformance | 0 | V0 | `lake exe semantics-conformance` report | Core-HIR dump `0.1.0` and `stc hir-dump` complete (P0.6); fuel interpreter sound/complete (P0.3); `stc-sem`, the opt-in snapshot surface, the differential harness, the `stc-sem-conformance-report` `0.1.0`, a 74-case corpus covering every claimed core item or a justified exclusion, and the committed byte-stable report complete and checked in CI (P0.6); the triage log records the one fixed source-analyzer bug and the documented exclusions; P0.6 approved 2026-11-02 |
 | Checked integer arithmetic | 2 | V1 | `add_ok_iff`, overflow/div-zero lemmas | Model + vectors (V0) |
 | Bitwise, shifts, rotates | 2 | V1 | range, masking, inverse lemmas | Model + vectors (V0) |

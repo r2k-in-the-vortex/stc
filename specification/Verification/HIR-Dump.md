@@ -11,7 +11,7 @@ for the frozen 74-case core corpus. The differential harness maps the dump's glo
 roots in the launcher snapshot. The case descriptor, reference result, and conformance report are
 specified in [Semantics-Cases.md](Semantics-Cases.md).
 Companion: [Semantics](Semantics.md) · [Core Semantics Cases](Semantics-Cases.md) ·
-[Phase 0 Implementation Plan](Plan-Phase0.md)
+[Phase 0 report](Reports/Phase0-Report.md)
 
 This document is the normative schema of the core-HIR JSON dump consumed by the reference
 interpreter and the conformance harness. The dump is **V0 differential evidence, not a
@@ -22,7 +22,7 @@ semantics.
 ## 1. Purpose and non-goals
 
 The dump is a canonical projection of the frozen core subset defined in
-[Plan-Phase0.md](Plan-Phase0.md) §3.3–§3.4 and [Semantics.md](Semantics.md) §1. It is the only
+[Semantics.md](Semantics.md) §1 and [Semantics.md](Semantics.md) §1. It is the only
 HIR input of `lake exe stc-sem`; the reference tools never parse source text and never consume
 the Rust compiler's debug text dump.
 

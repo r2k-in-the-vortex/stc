@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the fail-closed semantics-conformance gate (Plan-Phase0.md P0.6).
+"""Check the fail-closed semantics-conformance gate (the Phase 0 report P0.6).
 
 Usage:
     python tools/ci/check_semantics_placeholder.py [repository-root]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Phase 0 verification registry (Plan-Phase0.md §7, §11).
+"""Validate the Phase 0 verification registry (Semantics.md §7 and Phase0-Report.md).
 
 Usage:
     python tools/ci/check_verification_registry.py [repository-root]

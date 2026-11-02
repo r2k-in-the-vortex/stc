@@ -13,7 +13,7 @@ exclusions, and triage log are in §7. The report is committed as
 `tests/verification/semantics/conformance-report.json`, and CI regenerates it and rejects a stale
 copy (§8.2). This is V0 differential evidence, not a refinement proof.
 Companion: [Core HIR Dump](HIR-Dump.md) · [Semantics](Semantics.md) ·
-[Phase 0 Implementation Plan](Plan-Phase0.md)
+[Phase 0 report](Reports/Phase0-Report.md)
 
 This document defines the two machine-readable artifacts of the reference-interpreter path: the
 case descriptor read by `lake exe stc-sem` and the result object it writes. It is **V0
@@ -293,7 +293,7 @@ claimed core item to those cases, the justified exclusions, and the disagreement
 
 ### 7.1 Coverage inventory
 
-The inventory covers the P0.6 claim in [Plan-Phase0.md](Plan-Phase0.md) §3.3 and the exact
+The inventory covers the P0.6 claim in [Semantics.md](Semantics.md) §1 and the exact
 standard functions and conversion categories in [Semantics.md](Semantics.md) §3.1-§3.2. Each row
 names at least one case; one case can support several rows. Tags are coverage labels (§3.3), not
 constructs the harness interprets.
@@ -424,7 +424,7 @@ rule, not a semantics or compiler defect.
 
 E3 — **Shift and rotate.** The core HIR has no shift or rotate operator or standard function;
 `stc hir-dump` rejects `SHL`/`SHR`/`ROL`/`ROR` with `call.std-function-*`. Shift and rotate are
-part of the exact target model and target IR ([Plan-Phase0.md](Plan-Phase0.md) §3.4), not the
+part of the exact target model and target IR ([Semantics.md](Semantics.md) §1), not the
 P0.6 source corpus, so they carry no core case.
 
 E4 — **Direct program-field root observation.** The harness compares global values only; the
@@ -445,7 +445,7 @@ excluded from P0.6 ([Semantics.md](Semantics.md) §3.1). Corpus cases use valid 
 E7 — **Types, statements, and traps outside the frozen core.** `REAL`/`LREAL`, time/date,
 strings, arrays, structs, enums, references, pointers, OOP, function blocks, tasks, I/O, retained
 state, additional standard libraries, and traps other than `OVERFLOW`, `DIV_ZERO`, and `RANGE`
-are excluded by [Semantics-Charter.md](Semantics-Charter.md) §6 and Plan-Phase0 §3.3. They have
+are excluded by [Semantics-Charter.md](Semantics-Charter.md) §6 and Semantics.md §1. They have
 no case and no claim in this report.
 
 ### 7.3 Triage log
