@@ -1,22 +1,11 @@
 # Phase 0 Implementation Plan — Formal Semantics Foundation and Soundness
 
 Profile: `stc-2013-oop-utf8-v1`
-Date: 2026-10-27
-Status: Draft for review. Phase 0 decisions P0-D1 through P0-D10 are resolved (2026-10-27).
-P0.0 is complete (review approved 2026-10-27): the charter, module skeleton, registry, CI checks,
-and semantics document skeleton are in place. P0.1 is complete (review approved 2026-10-27):
-the token model, lossless CST contract, surface AST, `Derives` relation, coverage table, and
-`ast_span_wellformed` are in place. P0.2 is complete (2026-10-27): the typed HIR, declarative
-typing judgment, `checkCore`, conversion relation, HIR well-formedness, and the soundness and
-rejection-characterization theorems are in place. P0.3 is complete (review approved 2026-10-31):
-the value and trap model, the small-step machine, the configuration typing, determinism, trap
-soundness, exact arithmetic agreement, the sound/completeness results for the fuel interpreter,
-`progress`, `preservation`, initial-state typing, and `type_soundness` are in place. Work was
-paused for alignment with M6.5; P0.3 resumed on 2026-10-31. The compiler drift that prompted the
-pause has stabilized at `stc` 1.0.0, the §19.4 register was rechecked on 2026-10-31 and still
-holds, and the open questions were resolved in §19.8. P0.4 is complete (review approved 2026-10-31)
-as WL-3 of [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md); its scope decisions and execution record are in
-§20. The P0.3 completion record and sign-off are in §19.12; the drift register is in §19.
+Date: 2026-11-02
+Status: Phase 0 is in progress. P0.0–P0.5 are complete and reviewed; P0.5 was approved on
+2026-11-02 and merged through PR #12 (merge commit `92e113f`). P0.6 (reference interpreter and
+conformance harness) is next, followed by P0.7. Completion records and sign-offs are in §16–§22;
+`lean/verification-status.toml` is authoritative for proved claims.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -819,17 +808,12 @@ Phase 0 is done when:
 
 ## 15. Immediate next steps
 
-1. Review this plan; decisions P0-D1 through P0-D10 are resolved.
-2. Freeze §3.3 and §3.4 and open the registry entries.
-3. Create the Lean module skeleton and CI checks from P0.0.
-4. Write the `Semantics.md` skeleton and the core grammar/AST mapping table.
-5. P0.1 is complete; start P0.2 and prototype the HIR dump in parallel once P0.2's types are
-   stable.
-6. Build `stc-sem` against a small hand-written core dump before the full conformance harness.
-7. Add the core corpus and run the first conformance report.
-8. Schedule the P0.7 review once the source and target soundness theorems are proved.
-9. P0.3 is complete and review-approved (2026-10-31); see §19.12. P0.4 (WL-3) is complete;
-   its scope decisions and execution record are in §20.
+1. P0.0–P0.5 are complete; their completion records are §16–§22.
+2. Start P0.6: define the versioned HIR dump, implement `lake exe stc-sem` and the
+   `tests/verification/semantics/<case>/case.json` format, build `lake exe
+   semantics-conformance`, seed the core corpus, and document disagreement triage.
+3. Run P0.7: complete and review `Semantics.md`, version the semantics, and hand off the
+   artifact with its TCB note.
 
 ## 16. P0.0 execution record
 
@@ -852,7 +836,7 @@ Local evidence:
 ```text
 cd lean && lake build
 cd lean && lake exe semantics-conformance            # exit 3: no corpus cases (fail-closed)
-python tools/ci/check_verification_registry.py       # 24 records: 24 planned
+python tools/ci/check_verification_registry.py
 python tools/ci/check_semantics_placeholder.py       # placeholder fails closed as required
 python tools/ci/check_docs.py
 ```
@@ -887,7 +871,7 @@ Local evidence:
 cd lean && lake build                                   # 34 jobs, including Stc.Grammar.Examples
 cd lean && lake env lean ...                            # type-checked during development
 cd lean && #print axioms Stc.Syntax.ast_span_wellformed # does not depend on any axioms
-python tools/ci/check_verification_registry.py          # 24 records: 1 proved, 23 planned
+python tools/ci/check_verification_registry.py
 python tools/ci/check_docs.py                           # 22 required documents, Core-Coverage.md included
 ```
 
@@ -944,7 +928,7 @@ cd lean && #print axioms Stc.Sem.core_check_sound        # no axioms
 cd lean && #print axioms Stc.Sem.core_rejection_characterized
 cd lean && #print axioms Stc.Sem.hir_wellformed
 cd lean && #print axioms Stc.Sem.conversion_legal_iff
-python tools/ci/check_verification_registry.py          # 24 records: 5 proved, 1 descoped, 18 planned
+python tools/ci/check_verification_registry.py
 python tools/ci/check_docs.py
 ```
 
@@ -1242,16 +1226,16 @@ Verification commands:
 
 ```bash
 cd lean && lake build
-python tools/ci/check_verification_registry.py   # 45 records: 34 proved, 10 planned, 1 descoped
+python tools/ci/check_verification_registry.py
 python tools/ci/check_docs.py
 python tools/ci/check_semantics_placeholder.py
 grep -rnwE 'sorry|admit' lean/Stc/Sem               # no matches
 ```
 
-**Review approved by the owner on 2026-10-31.** The P0.3 exit criteria are met and the sign-off
-is recorded. P0.3 is complete and was merged into `v2.0.0-planning` through PR #11 (merge commit
-`612f84d`). WL-3 remains in progress for P0.5, followed by P0.6–P0.7. WL-3 completion is still
-subject to owner confirmation.
+**Review approved by the owner on 2026-10-31.** P0.3 is complete and was merged into
+`v2.0.0-planning` through PR #11 (merge commit `612f84d`). P0.4 was merged through PR #10
+(`409e444`). P0.5 is complete and review-approved (2026-11-02), merged through PR #12
+(`92e113f`). P0.6 is next.
 
 ## 20. P0.4 execution record — complete
 
@@ -1277,7 +1261,7 @@ Local evidence:
 
 ```text
 cd lean && lake build
-python tools/ci/check_verification_registry.py   # 45 records: 31 proved, 13 planned, 1 descoped
+python tools/ci/check_verification_registry.py
 python tools/ci/check_docs.py
 grep -rnwE 'sorry|admit' lean/Stc/Codegen lean/Verification    # no matches
 ```
@@ -1293,11 +1277,10 @@ review confirmed:
 - the smoke inhabitant `minimalFrag` is an adequate non-vacuity check for `WellFormed`;
 - any definition change from the review is reflected in the registry and this record.
 
-## 21. P0.5 execution record — in progress
+## 21. P0.5 execution record — complete
 
-Date: 2026-10-31. Status: **in progress; checkpoint ready for review.** P0.3 was merged into
-`v2.0.0-planning` through PR #11 (merge commit `612f84d`); WL-3 remains in progress for P0.5, and
-WL-3 completion is still subject to owner confirmation.
+Date: 2026-10-31; completed 2026-11-02. Status: **complete; review approved 2026-11-02; merged
+through PR #12 (merge commit `92e113f`).**
 
 P0.5 defines the target machine in [`Stc.Codegen.Semantics`](../../lean/Stc/Codegen/Semantics.lean):
 `IRState`/`IRFrame`/`IRAddr`/`IRValue`, the total step function `irStep` with `IROutcome`
@@ -1306,7 +1289,7 @@ P0.5 defines the target machine in [`Stc.Codegen.Semantics`](../../lean/Stc/Code
 P0.4 instruction and terminator has a semantics clause; the construct table is in
 [Semantics.md §4.4](Semantics.md#44-target-small-step-relation-irstep).
 
-### 21.1 Proved in this checkpoint
+### 21.1 Per-state soundness
 
 | Registry | Theorem | Statement |
 | --- | --- | --- |
@@ -1321,7 +1304,7 @@ state; instruction-level results cannot halt. Registry records P0-T15/T18/T19/T2
 `proved` and the audit reports only the standard Lean axioms. `lake build` passes with no
 `sorry`/`admit`.
 
-### 21.2 P0.5 whole-run work (completed)
+### 21.2 P0.5 whole-run work
 
 P0-T16 `ir_progress`, P0-T17 `ir_memory_safe`, and P0-T22 `ir_no_ub` are stated over reachable
 well-formed target states and are proved against one shared invariant, staged as follows:
@@ -1333,10 +1316,9 @@ well-formed target states and are proved against one shared invariant, staged as
   operand evaluation and the integer/pointer discriminations used by `stepInstr` succeed;
 - stack memory: every `alloca` slot is allocated and initialized, stores preserve the slot type,
   and computed `gep` addresses stay within the allocation or produce a defined fault;
-- persistent storage: the current model treats a `Data`/`Direct` root address as the root map
-  entry and ignores offsets into globals; the invariant must either show the covered cycle body
-  never stores through a root pointer or refine the storage model before `ir_memory_safe` can
-  claim persistent-storage safety;
+- persistent storage: the model treats a `Data`/`Direct` root address as the root map
+  entry; the invariant's storage-domain and storage-value predicates cover the root-map model
+  used by the covered fragment;
 - GOT agreement: every resolved cell load agrees with the slot kind (`ir_got_sound` gives the
   load half) and generated code never stores through a cell;
 - call resolution: every direct/indirect callee resolves to a module function or a specified
@@ -1353,7 +1335,8 @@ also complete (§22.11).
 
 ### 21.3 Deliverables and evidence
 
-- `Stc.Codegen.Semantics` with the definitions and the five proofs above; no `sorry`/`admit`.
+- `Stc.Codegen.Semantics` with the definitions, the per-state soundness proofs, and the
+  whole-run bridge; no `sorry`/`admit`.
 - Target semantics coverage table: [Semantics.md §4.4](Semantics.md#44-target-small-step-relation-irstep).
 - Smoke check: `(IRSem minimalFrag "main" [] [] [] [] [] 0).isSome = true` by `decide`, so the
   initializer is non-vacuous on the P0.4 smoke fragment.
@@ -1376,10 +1359,11 @@ unaffected.
 
 1. The semantics covers every P0.4 construct and the `IRStepResult`/`IROutcome` split matches the
    halt-as-status design.
-2. The five proved statements match the P0.5 intent in §7 and the registry.
+2. All eight P0.5 target soundness theorems match the P0.5 intent in §7 and the registry.
 3. `ir_recursive_model_equiv` uses the halting-run form (`IRStepStar` plus `irStep r = .halt r`);
    the executor returns the input state on halt.
-4. The remaining three theorems are scoped by the §21.2 invariant, not by a weaker semantics.
+4. The three whole-run theorems are scoped by the §21.2/§22 invariant, not by a weaker
+   semantics.
 5. The plan, [Semantics.md](Semantics.md), [Plan.md](Plan.md), [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md),
    and the registry agree.
 
@@ -2280,847 +2264,42 @@ fact, the head frame's instructions are replaced without disturbing the invarian
 `callFunction` and the three `irStepRet` forms remained at this checkpoint; Phases 2–3 are now
 complete (see the §22.11 completion record).
 
-**Phase 2 obstruction 2 (2026-10-31): module-wide slots storage at calls.** The
-`callFunction` form exposes a fact the approved set does not carry. `SlotsBase c f` includes
-`SlotsGlobalStored c f`, which constrains `c.lookupStorageAt (.global g) 0` for the slot-global
-names of that frame's *function*. A pushed callee has a possibly different function, so its
-`SlotsBase` requires the same slot-table storage fact for the callee function's slot globals,
-and the caller frame's `SlotsGlobalStored` only covers the caller function's names. At the
-initial state the `initState?_wf` hypothesis covers only the entry frame's function. Proposed
-extension: a state-level `SlotsStorage` fact over all module functions — for every
-`fn ∈ c.module.functions`, every slot-base global loaded by `fn` has
-`c.lookupStorageAt (.global g) 0 = some (.ptr .slotTable)` — as a `WFState` field, established
-at `initState?_wf` from a host hypothesis and preserved because the store exclusion forbids
-writes to the slots globals. The alternative is to require a static fact that every function
-reuses the entry function's slot globals; that is more restrictive and less direct. This fact
-is not the approved dynamic exclusion (which forbids *holding pointers to* a slots global), so
-it was recorded for owner approval before implementation. **The owner approved the
-module-wide `SlotsStorage` field (2026-11-01).** It is implemented as a `WFState` field over
-all `fn ∈ c.module.functions`, established at `initState?_wf` from a host hypothesis, and
-preserved at stores because the store exclusion forbids writes to the slots globals. The
-remaining `callFunction` and `irStepRet` obligations are otherwise as inventoried; the store's
-state-update lemmas are already pushed in `5fa319b`.
+**Resolved-obstruction history (2026-10-31 to 2026-11-02).** The proof pass found
+seventeen obstruction groups; every one was owner-approved and is implemented. The completion
+record and sign-off above are authoritative; the detailed proposals and counterexamples are
+preserved in the git history. The gaps were:
 
-The store's `storeValue` updates are now proved as state-level form lemmas:
-`wfState_storeFrames` (the stack case: the frame map with `setMem`, including the
-`MemValuePtrBounded`/`MemTyped` preservation through `memTyped_storeFrames` and the
-`NoSlotsGlobalPointers` memory clause) and `wfState_storeStorage` (the persistent-storage case:
-`StorageValuesLive`, `StorageDomain`, `SlotsBase`'s `SlotsGlobalStored`, and the storage clause
-of `NoSlotsGlobalPointers` under `writeStorage`), with the supporting `writeStorage_eq`,
-`lookupStorageAt_setStorage_eq`/`_ne`, `lookupStorage_setStorage_live`,
-`lookupStorageAt_setStorage_some_mem`, and `mem_take_cons_drop` lemmas. The composed store-step
-form lemma is proved: `wfState_storeStep` composes the checked store's operand evaluation,
-the frame-map or storage-write update, and the head-instruction replacement into the full
-`WFState` of the store successor, using `memValueTyped_of_stackStoreTypeOK`,
-`noSlotsGlobal_of_evalOperand`, `storageLive_of_evalOperand`, `mem_fragValueSymbols_of_instr`,
-and the `getLast?`/`writeStorage_frames` facts. The `callFunction` and `irStepRet` forms
-remain.
+1. The initial inventory: `ReturnLink` scope, storage-domain liveness, slots-global read-only,
+   alloca representability, origin `.global` linkage, and descriptor-cell origins.
+2. Module-wide slots storage at calls.
+3. Slot-base parameters at calls.
+4. Return-destination origins.
+5. Non-head bare-unreachable frames.
+6. Return destination as the slots parameter.
+7. Stack pointers into a popped frame.
+8. Pointer stores into another frame's memory.
+9. Slot-base destinations and the untracked call destination.
+10. Storage values as frame pointers.
+11. Cell-origin loads and slot-entry GEPs.
+12. `extractvalue` pair-payload typing.
+13. Direct calls versus intrinsic signatures.
+14. Overflow-typed literals.
+15. Jump-target return safety.
+16. Callee `%slots` parameter forwarding.
+17. `CallTargetsTyped` quantifier scoping.
 
-**Phase 2 obstruction 3 (2026-11-01): slot-base parameters at calls.** Preparing the
-`callFunction` form exposes a third missing fact. The callee's `SlotsBase` requires, for every
-`base ∈ SlotBases fn`, `initLocals fn args` to give `base` the value `.ptr .slotTable` or
-`.null`. If `base` is a defined local, the initialization default is `.null` (given the GEP
-typing fixes `localType? base = some .ptr`), but if `base` is a *parameter*, `initLocals` gives
-it the caller's argument, and nothing in the approved facts forces that argument to be the
-slot table: `CallSlots` covers only the appended `%slots` parameter, and `ArgsTyped` constrains
-only the argument's type. A fragment whose slot base is a parameter therefore breaks
-`SlotsBase` after a call that passes a stack or storage pointer. Proposed extension: a
-builder-trusted `WFProgram` fact that no slot base is a parameter
-(`∀ fn, ∀ base ∈ SlotBases fn, base ∉ fn.params.map (·.2)`), analogous to the existing
-`OriginsTrusted` non-parameter fact; with it the callee's slot bases are defined locals whose
-default is `.null`. The `SlotEntries` results are already covered because they are GEP
-destinations, which `FunctionUsesDefined.allNodup` keeps distinct from parameter names. No
-invariant change is applied; the compiling checkpoint was `1d3a009`. **The owner approved the
-fact (2026-11-01).** It is implemented as the `WFProgram` field `slotBasesNonParam`, and the
-call form is proved: `wfState_calleePush` preserves every `WFState` field for the pushed
-callee, using the new extraction lemmas (`firstIndex?_some`, `defSite?_some`,
-`defInstr?_dest`, `mem_of_defInstr?`, `slotBase_gep`, `slotEntry_gep`), the slot-local typing
-facts (`slotBase_localType`, `slotEntry_localType`), and
-`slotEntry_name_notParam` (slot-entry results are GEP destinations, hence non-parameters
-by `FunctionUsesDefined.allNodup`). The `irStepRet` form needs no new fact.
+**Resolutions.** The invariant extensions are the fields and predicates in §22.1–§22.6:
+`ReturnLink` (all adjacent pairs, with origin, non-parameter, and call-destination conjuncts),
+`StackPtrsOrdered`, `MemNoPtr`, `PayloadsTyped`, the `StorageValuesLive` frame-pointer exclusion,
+the two-case `CellOriginsSlotEntry`, `IntrinsicNamesReserved`, `SlotBasesLoadOnly`, the
+all-blocks `StackReturnsSafe`, and the all-frames `noBareUnreachable`. The builder slots ABI was
+removed (`8194013`); the Lean `SlotsParamsSafe`/`CallSlots` fields were removed (`04cd781`); and
+`CallTargetsTyped` was restated universally (`4cfb238`, `7c0dac1`). The dispatch and reachability
+proofs are `3834458` and `eeeb92f`. No obstruction is open.
 
-**Phase 2 obstruction 4 (2026-11-01): return-destination origins.** Preparing the
-`irStepRet` value form exposes a final missing link. The step writes the callee's return value
-into `caller.setLocal dest v`; `originsMatch` for the caller must hold for `dest` if
-`caller.fn.facts.originOf? dest = some origin`. `ReturnLink` records only the *type*
-(`caller.fn.localType? dest = some callee.fn.returnType`), and the state carries no fact that
-the running callee's `retDest` is a call destination of the caller's code. A state whose
-callee has `retDest = some dest` where `dest` happens to be an origin-recorded pointer name
-(there is no constraint preventing this) would break `OriginHolds` after the return: the
-return value is only type-correct, not the specific cell/global shape the origin requires.
-Proposed extension: add `caller.fn.facts.originOf? dest = none` to the `some dest` conjunct of
-`ReturnLink` (D4). It is builder-faithful — call destinations are not load/GEP definitions, so
-no pointer origin is recorded for them — and it is established at `callFunction` from
-`OriginsTrusted` plus the call instruction's unique destination. `initState?_wf` is unaffected
-(the entry frame's `retDest` is `none`). **Owner approved the extension on 2026-11-01**, and it
-is adopted in §22.6 (D4). The first implementation checkpoint (`250b7f2`) added a
-builder-trusted `WFProgram` field `CallDestsNoOrigin` (with `call_dest_origin_none` /
-`callPtr_dest_origin_none`) because the SSA-position uniqueness derivation was not formalized.
-**On 2026-11-01 the owner required the derivation instead of a new trusted fact.** The
-`CallDestsNoOrigin` field is removed and the fact is proved from
-`FunctionUsesDefined.allNodup`, `OriginsTrusted`, `defInstr?_dest`, `mem_of_defInstr?`, and the
-new list lemma `not_nodup_filterMap` (two distinct instructions with the same destination make
-the flattened destination list non-nodup), via `call_dest_origin_none`/
-`callPtr_dest_origin_none`. All other `irStepRet` obligations (locals typing from the callee's
-return typing, stack/storage pointer bounds, memory typing, the frame-list fields) are
-prepared.
-
-**Phase 2 obstruction 5 (2026-11-01): non-head bare-unreachable frames.** The `irStepRet`
-forms are now blocked by `noBareUnreachable`. The field constrains only the *head* frame
-(`∀ f rest, c.frames = f :: rest → f.instrs = [] → f.terminator ≠ some .unreachable`), so a
-suspended caller — the second frame while its callee runs — is unconstrained. At a return the
-caller becomes the head; a `WFState`-satisfying state with `caller.instrs = []` and
-`caller.terminator = some .unreachable` (permitted by every field, because the caller is not
-the head) would step to a bare-unreachable successor and break `WFState`. The reachable
-semantics cannot create such a caller (the call that pushed the callee would have been the
-block's last instruction, and `UnreachableGuarded` makes that a trap call, which never steps
-normally), but the per-state invariant must exclude it. **The owner approved the strengthening on
-2026-11-01:** `noBareUnreachable` becomes
-`∀ f ∈ c.frames, f.instrs = [] → f.terminator ≠ some .unreachable`, with no separate field. It
-is preserved at instruction and store steps by `UnreachableGuarded` (the last instruction would
-be a trap call, which cannot produce a `.step`), at jumps and calls because an unreachable block
-has a non-empty instruction list, and at returns because the caller's condition is inherited
-from the pre-state. The strengthening is implemented (no separate field): `initState?_wf`,
-`wfState_withHead`/`withHeadInstrs`, `wfState_storeFrames`/`storeStorage`/`storeStep`,
-`wfState_calleePush`, and the `ir_progress` consumer are updated and the build is green. The
-three `irStepRet` forms, `irStep_wf`, and the Phase 3 corollaries follow.
-
-**Phase 2 obstruction 6 (2026-11-01): return destination as the slots parameter.** The
-ret value form writes `caller.setLocal dest v`. `SlotsParamsSafe` requires the caller's last
-parameter, when it is named `%slots`, to hold `.ptr .slotTable`; if `dest` is that parameter
-name, the return value `v` (only typed `callee.fn.returnType` by `ReturnLink`) overwrites it and
-the field can fail. `ReturnLink`'s origin conjunct does not exclude destination names from
-parameters, and the state does not record that the destination is a call-instruction
-destination. Proposed extension: add `dest ∉ caller.fn.params.map (·.2)` to the `some dest`
-conjunct of `ReturnLink`. It is builder-faithful (call destinations are SSA definitions, and
-`FunctionUsesDefined.allNodup`'s disjointness of parameter and destination names excludes them)
-and is established at the call site directly from `mem_dests_of_block` plus that disjointness —
-no uniqueness argument is needed. The entry frame is vacuous (`retDest = none`). **Owner
-approved the conjunct on 2026-11-01**; it is adopted in §22.6 (D4) and implementation follows.
-The ret-halt form (`frames := [], status := .halted`) is proved (`wfState_retHalt`); the
-`irStepRet` value form, `irStep_wf`, and the Phase 3 corollaries were blocked on this decision,
-together with the stack-pointer ordering gap below.
-
-**Phase 2 obstruction 7 (2026-11-01): stack pointers into a popped frame.** The ret
-value and ret-none forms remove the callee frame. `StackPtrsBounded` and `MemTyped` are
-state-wide over `c'.frames = caller :: below`, and their stack-pointer bounds use
-`frameById?`; in an artificial `WFState`-satisfying state a suspended caller (or a below frame)
-may hold a local or memory stack pointer into the running callee's frame, which
-`StackPtrsBounded`/`MemValuePtrBounded` permit while the callee exists. After the pop the frame
-id is gone and the bound fails, so the two forms are not provable from the current fields.
-Reachable semantics cannot create such pointers (arguments flow only to younger frames, and
-`StackReturnsSafe` blocks returning a frame's own pointer upward), but the per-state invariant
-must exclude them. Proposed extension: a `WFState` field `StackPtrsOrdered` stating that a
-frame's stack pointers target that frame or frames after it in the list — in prefix form, for
-every decomposition `c.frames = pre ++ f :: rest`, no local or memory stack pointer of `f`
-names the id of a frame in `pre`. It is preserved at instructions, jumps, and stores because
-non-head frames are unchanged and the head has an empty prefix; at calls because the new head id
-is fresh and the old pointers target old frames (ids below `nextFrame`); at returns because the
-old decomposition with the removed callee prepended gives the new prefix's exclusion; and at the
-halt because the frame list is empty. **Owner approved the new field on 2026-11-01**; it is
-adopted in the `WFState` invariant. Obstruction 6 is resolved by the implemented `ReturnLink`
-non-parameter conjunct. The field is **not yet added** because obstruction 8 below shows the
-store step does not preserve it as stated. The ret-halt form is proved; the ret value/none
-forms, `irStep_wf`, and the Phase 3 corollaries remain blocked on obstruction 8.
-
-**Phase 2 obstruction 8 (2026-11-01): pointer stores into another frame's memory.** The
-approved `StackPtrsOrdered` field is not preserved by a store that writes a stack pointer into a
-frame other than the running one. Counterexample (representable and type-correct): frames
-`[callee, caller, grandparent]`; the callee receives a pointer argument to the caller's local
-array (element type `ptr`) and a pointer argument to the grandparent's local array (also `ptr`);
-it allocates a slot and executes `store ptr %slot, ptr %grandparentArray` (write its own stack
-pointer through the second argument). `Instr.WellTyped` admits pointer-typed stores,
-`stackStoreTypeOK` matches the grandparent array's element type, and `storeValue` succeeds. The
-successor's grandparent memory holds `.ptr (.stack callee.id slot 0)`, whose frame id lies in the
-grandparent's prefix, violating the memory clause of `StackPtrsOrdered`. The same value also
-makes `MemValuePtrBounded`/`MemTyped` fail when the callee later returns, independently of the
-ordering field. No current `WFProgram`/`WFState` fact excludes the pattern: arguments may be
-pointers to older frames' allocas, `Instr.WellTyped` allows `.ptr` store values, and
-`StackReturnsSafe` covers only return values. Proposed resolution (owner decision): a
-builder-trusted fact that stores never carry pointer-typed values
-(`∀ fn block instr ty value ptr align, instr ∈ block.instrs → instr = .store ty value ptr align →
-ty ≠ .ptr`), matching the "no aliasing beyond GOT cells" fragment statement. Then memory never
-holds a non-null pointer (allocation defaults are `.null`), the memory clauses of
-`StackPtrsOrdered` and `MemValuePtrBounded` are vacuous, the locals clause of `StackPtrsOrdered`
-is preserved by the approved argument, and the ret forms follow. Alternatives — a runtime
-lifetime discipline or excluding stack-pointer stores specifically — are more invasive.
-**Owner approved both parts on 2026-11-01:** `StoresNonPointer` becomes a `WFProgram` field, and
-`MemNoPtr` (`∀ addr v, f.lookupMem addr = some v → ∀ a, v ≠ .ptr a`) becomes a `WFState` field.
-`StackPtrsOrdered` is therefore added to `WFState` as approved, with its memory clause proved
-vacuous by `MemNoPtr`. Both facts and the ordering field are now implemented: `initState?_wf`
-establishes `memNoPtr` (initial memory empty) and `stackPtrsOrdered` (single frame, empty prefix);
-`wfState_withHead` takes the incoming head's `MemNoPtr` and proves ordering (the head is the newest
-frame id); `wfState_storeFrames` takes the stored value's non-pointer fact and proves both
-(the new-entry local case is refuted by that fact, the memory case by `MemNoPtr`);
-`wfState_storeStorage` transfers both unchanged; `wfState_calleePush` proves both (fresh head id
-for ordering, empty callee memory for `MemNoPtr`); and `wfState_storeStep` derives the stored
-value's non-pointer fact from `StoresNonPointer` plus the store typing. `WFState` now has 27
-fields and `lake build` is green. The ret value/none forms, `irStep_wf`, and Phase 3 remain.
-
-**Phase 2 obstruction 9 (2026-11-01): slot-base destinations and the untracked call
-destination.** Preparing the ret value form exposes a gap that also affects ordinary
-instruction steps, not only returns. Neither `WFProgram` nor `WFState` ties a `SlotBases`
-member or a `SlotEntries` name to the instruction that defines it, and the per-state invariant
-does not record that a return destination is a call-instruction destination (the gap noted in
-obstruction 6, which the approved non-parameter conjunct covers only for `SlotsParamsSafe`).
-
-*Counterexample A (alloca instruction step).* Let `caller.fn` have parameters
-`[]`, locals `%d : ptr`, `%g : ptr`, `%l : ptr`, one entry block
-`%d = alloca [1 x ptr]; %g = gep ptr, ptr %d, i64 0; %l = load ptr, ptr %g; ret void`, and origin
-`(%l, .cell slot false)` with `slotKind? slot` storage. `SlotBases` contains `%d` (the gep base)
-and `SlotEntries` contains `(%g, slot)`. `StackOriginsTrusted` holds for `%d` (alloca-defined)
-and `%g` (GEP-defined); `AllocaElementRepresentable` holds for the `ptr` element; everything
-else in `WFProgram`/`WFState` is satisfied by the entry frame with `%d = %g = %l = .null`
-(`SlotsBase` holds through its `.null` disjuncts; the alloca has not executed). Executing the
-alloca sets `%d = .ptr (.stack caller.id 0 0)`, which is neither `.ptr .slotTable` nor `.null`,
-so `SlotsBase` clause 1 fails. The same argument applies to any instruction whose destination
-is a slot base (a `load` from a non-symbol pointer, a `gep`, etc.); `SlotEntries` names are
-safe at instruction steps because SSA uniqueness forces the executing instruction to be the
-recorded `gep`, whose value is the `.slotEntry` pointer.
-
-*Counterexample B (ret value form).* `ReturnLink` constrains `dest` by local type, origin
-absence, and non-parameter status only. If `dest ∈ caller.fn`'s `SlotBases` (respectively
-`SlotEntries`), the successor `caller.setLocal dest v` overwrites the slot-base (entry) local
-with the callee's return value `v`, which is only typed; unless `v` happens to be
-`.ptr .slotTable` (`.ptr (.slotEntry slot)`) or `.null`, `SlotsBase` fails. The callee can
-return a stack or storage pointer typed `.ptr` from an argument or local, so this is reachable
-in `WFState`-satisfying states: `StackOriginsTrusted` allows `dest` to be alloca- or GEP-defined
-when `originOf? dest = none`, and nothing excludes `dest = base` or `dest = gepName`. The same
-missing link blocks the `StackReturnsSafe` preservation argument: refuting `SafeReturnValue
-caller.fn dest` (needed when `caller`'s terminator returns `.local dest`) requires knowing that
-`dest` is defined by the original call instruction, which the state does not record. A related
-observation for the owner: the builder obtains the slot table with `load @stc_module_slots`
-(`crates/stc-codegen/src/unit.rs`, `slots_global`), whose result has no recorded origin;
-`StackOriginsTrusted` as stated (parameters/allocas/GEPs) would therefore not hold for
-production functions unless the load result is origin-recorded or the fact is extended with a
-symbol-pointer-load disjunct. The load-defined value is still not a `SafeReturnValue`
-constructor, so the `StackReturnsSafe` refutation goal is unaffected.
-
-Proposed resolution (owner decision): (1) a builder-trusted `WFProgram` fact
-`SlotBasesLoadOnly` — every slot base is defined by a load through a symbol operand
-(`∀ fn, ∀ base ∈ SlotBases fn, ∃ ty align g, defInstr? fn base = some (.load base ty (.symbol g)
-align)`), matching the builder's `load @stc_module_slots`; with `SlotsGlobalStored`/`SlotsStorage`
-the defining load produces `.ptr .slotTable`, and every other instruction with that destination
-is excluded by SSA uniqueness; (2) extend `ReturnLink`'s `some dest` conjunct with the
-call-instruction destination link — `dest` is the destination of a `call` or `callPtr`
-instruction of `caller.fn` — established at the call site from
-`FunctionUsesDefined.allNodup` and the call instruction's position (the same uniqueness
-argument as `call_dest_origin_none`, plus a `defSite?` existence lemma). Together (1) and (2)
-discharge `SlotsBase` and `StackReturnsSafe` at the ret value form; (3) optionally extend
-`StackOriginsTrusted` with the symbol-pointer-load disjunct noted above. **Owner approved all
-three on 2026-11-01:** `SlotBasesLoadOnly` becomes a `WFProgram` field; `ReturnLink` gains the
-`IsCallDest` conjunct; and `StackOriginsTrusted` gains the general symbol-pointer-load disjunct.
-They are implemented: `SlotBasesLoadOnly` is a `WFProgram` field; `IsCallDest` is a static
-predicate (the direct and indirect call constructors bind different callee types, so the two
-shapes are separate existentials) and is the final conjunct of `ReturnLink`'s `some dest` case;
-`StackOriginsTrusted` carries the symbol-pointer-load disjunct. `wfState_calleePush` takes
-`(hretCallDest : ∀ d, dest = some d → IsCallDest caller.fn d)` and carries it into
-`ReturnLink`. The key derivation is `defInstr?_eq_of_isCallDest` (any defining instruction of
-a call destination is that call, by SSA uniqueness), yielding
-`not_mem_slotBases_of_isCallDest`, `not_mem_slotEntries_of_isCallDest`, and
-`not_safeReturnValue_of_isCallDest`. The ret-none and ret value forms are proved:
-`wfState_popRet` and `wfState_popSetLocal`, with helpers `frameById?_id`, `frameById?_pop`,
-`stackBound_popSetLocal`, `evalOperand_setLocal_of_notMem`, and `memValuePtrBounded_of_noPtr`.
-The `StackReturnsSafe` head case uses `ReturnNonStack` plus
-`not_safeReturnValue_of_isCallDest`; `SlotsBase` uses the two slot-membership exclusions plus
-SSA uniqueness of the defining load. `lake build` is green at `56cc548`. `wfState_step`/
-`irStep_wf` and Phase 3 remain.
-
-**Phase 2 obstruction 10 (2026-11-01): storage values may be frame pointers.** Preparing the
-`load` instruction form exposes a host-storage typing gap. `loadValue` reads `.root`/`.global`
-storage; `StorageValuesLive` constrains only that `.root`/`.global` pointers in storage are
-live, and `NoSlotsGlobalPointers` excludes slots-global pointers there, but no field excludes a
-frame pointer `.ptr (.stack frame slot off)` in storage. Counterexample: a `WFProgram` with the
-single instruction `%d = load ptr, ptr @g` (the load's `WellTyped` rule checks only
-`ty.isValue` and that the pointer operand has type `.ptr`; it does not relate the pointee type
-to the global's declaration), and a `WFState` with one entry frame holding `%d = .null` and
-storage `(.global g) ↦ [.ptr (.stack 99 0 0)]` where no frame `99` exists.
-`StorageValuesLive` holds vacuously for a `.stack` value, `StorageDomain` holds because the
-entry is non-empty, and `NoSlotsGlobalPointers`/`SlotsBase`/the frame fields are satisfied. The
-load succeeds (`loadValue (.global g 0) = some (.ptr (.stack 99 0 0))`, whose `type?` is
-`.ptr`), and the successor `f.setLocal %d (.ptr (.stack 99 0 0))` violates `StackPtrsBounded`
-because `frameById? 99 = none`. Stores cannot create the pattern (`StoresNonPointer` makes every
-stored value non-pointer, so `storeValue` writes no pointer into storage), and the real host
-has no frames at initialization, but the per-state invariant must exclude it. Proposed
-resolution (owner decision): extend `StorageValuesLive` with a third conjunct
-`∀ id off v frame slot off', c.lookupStorageAt id off = some v →
-v ≠ .ptr (.stack frame slot off')` — host-supplied at `initState?_wf` and preserved by
-`storeValue` because stored values are non-pointer and stack/cell stores do not touch storage —
-or, equivalently, add a small `WFState` field with the same content. With it the load form's
-`StackPtrsBounded` case follows: stack loads take their bound from `MemTyped`, `.cell` loads
-produce `.root`/`.function`/`.importCell` addresses (not `.stack`), and `.root`/`.global` loads
-return storage values that are not frame pointers. **Owner approved extending
-`StorageValuesLive` on 2026-11-01**; it is implemented as a third conjunct, with no separate
-field. It is host-supplied through `initState?_wf`'s existing `hstorage : StorageValuesLive c`
-hypothesis and preserved by `storeValue` because `StoresNonPointer` makes every stored value
-non-pointer (`wfState_storeStorage` now takes
-`(hvs : ∀ frame slot off', v ≠ .ptr (.stack frame slot off'))`, supplied from
-`StoresNonPointer` in `wfState_storeStep`). The ret forms are proved (`wfState_popRet`,
-`wfState_popSetLocal`) and the general instruction-step lemma `wfState_setLocalStep` is proved:
-it discharges all `wfState_withHead` obligations for a head update of the form
-`{ f.setLocal dest value with instrs := rest }` from the value's type, stack-bound,
-storage-liveness, slot-base/entry, origin, and no-slots facts, plus
-`lookupLocal_withInstrs`. The remaining instruction forms instantiate it (or handle `alloca`,
-`load`/`gep` slot special cases, and calls separately); the build is green at `27f6009`.
-
-**Phase 2 obstruction 11 (2026-11-01): cell-origin loads are not tied to their slot-entry
-GEP.** Preparing the `load` and `gep` instruction forms exposes a provenance gap.
-`OriginsTrusted` gives a `.cell slot b` origin only the defining-load shape
-(`defInstr? entry.1 = some (.load entry.1 ty ptr align)`); it does not require the load's
-pointer operand to be the slot-entry GEP (a `.local gepName` whose GEP carries the constant
-index `slot`). `SlotBases`/`SlotEntries` are filters, not guarantees, so the invariant admits a
-`.cell` origin on a load from any pointer. Counterexample: a `WFProgram` with
-`%d = load ptr, ptr @g` and origin `(%d, .cell 0 false)`, slot 0 of kind `data`.
-`OriginsTrusted` holds (the load defines `%d`; `%d` is a non-parameter `.ptr` local),
-`OriginsMatch` holds in the pre-state through `%d = .null`, and
-`StorageValuesLive`/`StorageDomain`/`NoSlotsGlobalPointers`/`SlotsBase` hold with storage
-`(.root 7) ↦ […]`, `(.global g) ↦ [.ptr (.root 7 0)]` (`SlotBases`/`SlotEntries` are empty
-because the load's pointer is a symbol). The load succeeds (its value has type `.ptr`), but the
-successor's `%d = .ptr (.root 7 0)` does not satisfy `OriginHolds` for `.cell 0 false` (which
-requires `.null` or `.ptr (.cell 0)` with a storage/callable kind), so `originsMatch` fails. The
-reachable semantics cannot create the pattern (the builder records `.cell` origins only for
-`slot_cell` loads, whose pointer is the slot-entry GEP), but the per-state invariant must
-exclude it. The same missing link blocks the GEP form's `SlotEntries` value precision: nothing
-forces a GEP that defines a recorded slot-entry result to be the producing instruction whose
-base is `.ptr .slotTable` (giving `.ptr (.slotEntry slot)`).
-
-Proposed resolution (owner decision): a builder-trusted `WFProgram` fact
-`CellOriginsSlotEntry`. The first proposal — a universal rule requiring every `.cell slot b`
-load to come from a local GEP result with the exact constant slot index — is **not
-builder-faithful**: `slot_cell` emits the GEP load and records the address stage
-(`.cell slot false`), while `cell_value` emits a second load from that address local and records
-the value stage (`.cell slot true`). The approved two-case fact (§22.3) is: for
-`.cell slot false`, the defining load's pointer is a local GEP result with indices exactly
-`[(.int 64, .intLit (.int 64) slot)]`; for `.cell slot true`, the defining load's pointer is a
-local whose recorded origin is `.cell slot false` for the same slot. **Owner approved the
-two-case fact on 2026-11-01.** With it, at the load form the pointer local is a `SlotEntries`
-name, so `SlotsBase` clause 2 gives `.ptr (.slotEntry slot)` or `.null`;
-`loadValue (.slotEntry slot)` returns `.ptr (.cell slot)` (with `slot < slots.length` from
-`OriginSlotKinds`), satisfying `OriginHolds` for both `.cell` kinds by the recorded slot kind;
-and the GEP form's `.slotEntry` value follows from `SlotsBase` clause 1
-(`base = .ptr .slotTable`) plus `evalGepAddr`. The approved two-case fact is implemented as the
-`WFProgram` field `cellOriginsSlotEntry`. `wfState_setLocalStep` was generalized for the
-origin-bearing forms: it now takes `(hnewOrigins : ...)` (instead of assuming the destination
-has no origin) and slot-base/entry cases `hbaseOk`/`hentryOk` (instead of assuming the
-destination differs from every base/entry name). Supporting lemmas added:
-`defInstr?_eq_of_mem` (any defining instruction of a destination defined by a known
-instruction is that instruction, by SSA uniqueness), `notParam_of_mem_dests`, and
-`getElem?_append_self`. `lake build` is green.
-
-**Phase 2 obstruction 12 (2026-11-01): the `extractvalue` pair payload is
-untyped.** Preparing the `extractvalue` instruction form exposes a typing gap in
-the pair payload. The step's index-0 case writes the payload component verbatim:
-`extractValue dest aggregate 0` produces `callResult s f rest (some dest) value`
-for `evalOperand f aggregate = some (.pair pairTy value overflow)`.
-`Instr.WellTyped`'s `extractValue` rule checks only `operandHasType fn
-(.overflow bits) aggregate` and the result type (`ty = .int bits` at index 0,
-`ty = .int 1` at index 1); `IRValue.type?` of a pair returns only the pair type,
-and no `WFState` field constrains the payload. Counterexample: a local `%p` of
-type `.overflow 32` holding `.pair (.overflow 32) (.ptr (.stack 99 0 0)) false`.
-Local typing holds (`type? = some (.overflow 32)`), and the pair value itself is
-not a pointer, so `NoSlotsGlobalPointers`, `StackPtrsBounded`, and
-`StoresNonPointer` (which constrains `v = .ptr`, not the payload) do not exclude
-it; the same value may sit in host storage at initialization, since
-`MemValueTyped (.overflow bits) v` and the `StorageValuesLive` conjuncts check
-only the outer `type?`/address shape. The index-0 extract then writes
-`%d = .ptr (.stack 99 0 0)`, violating `StackPtrsBounded` when frame 99 or its
-slot does not exist. The reachable semantics only manufactures pairs through
-`checkedInt` and `IRValue.default` (both with `.int (.int bits) _` payloads),
-but the per-state invariant does not record it. Proposed resolution (owner
-decision): add a payload-typing fact for overflow values, e.g. every local or
-memory value whose `type?` is `.overflow bits` is
-`.pair (.overflow bits) (.int (.int bits) _) _` (host-supplied at
-`initState?_wf`, preserved by stores/loads/calls), or add a builder-trusted rule
-tying `extractvalue` aggregates to `checkedInt`/default producers. **Owner
-approved the state-wide `PayloadsTyped` field on 2026-11-01:** it covers locals,
-frame memory, and persistent storage (§22.3), is host-supplied at
-`initState?_wf`, and is preserved by stores/loads/calls. The index-1 (overflow
-flag) form is proved and pushed as `wfState_extractValueStep`; the index-0 form
-follows the field's implementation, and `irStep_wf`'s extractvalue case depends
-on it.
-
-**Phase 2 obstruction 13 (2026-11-01): direct calls resolved by name are not
-tied to their intrinsic signatures.** Preparing the call-result instruction
-forms exposes a signature gap. The step's checked-arithmetic path parses the
-callee name (`parseChecked callee = some info`) and produces
-`.pair (.overflow info.bits) (.int (.int info.bits) _) overflow`; the rotate path
-(`parseRotate callee = some info`) produces `.int (.int info.bits) _`. The
-destination's local type, however, comes from the instruction's declared return
-type `ret` (`localType?_eq_resultType` over `resultType? (.call dest ret ...)`),
-and `Instr.WellTyped`'s call rule only requires *some* signature in
-`frag.directCallEnv` with that name and `sig.returnType = ret`.
-`directCallEnv` is `functions.map signature ++ declarations.map signature ++
-intrinsicSignatures`, and `ModuleShapes` constrains declarations but not
-functions: a module function may be named `llvm.sadd.with.overflow.i32` with
-`returnType = .int 32`. Counterexample: fragment functions `main` and a
-function named `llvm.sadd.with.overflow.i32 : i32(i32, i32)` whose signature is
-also in `directCallEnv`; `main` contains `%d = call i32
-@llvm.sadd.with.overflow.i32(%a, %b)`, which is well-typed against the shadow
-signature (and `declarationsWellFormed` still holds because there is no
-declaration). `WFProgram`/`WellFormed` hold, and the step (which parses
-`parseChecked` before consulting `module.function?`) produces
-`.pair (.overflow 32) ...` while `localType? %d = some (.int 32)`, so
-`localsTyped` fails in the successor. The same shadowing breaks the rotate
-path, and `parseChecked`/`parseRotate` are pure name parses that ignore the
-resolved signature entirely. Proposed resolution (owner decision): a
-builder-trusted fact excluding module-function names that occur in
-`intrinsicSignatures` (or, more generally, that `intrinsicSignatures` names are
-reserved), or a `WFProgram` fact that for every call instruction whose callee
-parses as checked/rotate, the declared return type equals the intrinsic return
-type. **Owner approved reserving intrinsic names on 2026-11-01:**
-`IntrinsicNamesReserved` becomes a `WFProgram` field (§22.3), so no module
-function name occurs in `intrinsicSignatures.map (·.name)` and the parse-first
-dispatch cannot shadow a module function. The module-function path of the call
-form (`callFunction`) is already proved; the checked and rotate result forms
-follow the field's implementation, and `irStep_wf`'s corresponding call cases
-depend on them.
-
-**Phase 2 obstruction 14 (2026-11-01): overflow-typed integer literals defeat
-`PayloadsTyped`.** Preparing the approved `PayloadsTyped` field exposes a
-producer its definition excludes. `operandTypeOf? fn (.intLit ty _)` returns
-`some ty` for every `ty`, and `evalOperand f (.intLit ty v)` returns
-`some (.int ty v)`, so an overflow-typed literal is representable and
-well-typed: `Instr.WellTyped` only asks `operandHasType fn ty (.intLit ty v)`,
-which holds syntactically. Counterexample: `main` takes a host argument
-`%p : ptr` holding `.ptr (.root 0 0)` and runs
-`store .overflow 8 (.intLit (.overflow 8) 5), %p`. The store is type-correct
-(`(.overflow 8).isValue = true`; the literal has the store's type; `%p` is
-`.ptr`), the step's `v.type? == some (.overflow 8)` check passes,
-`stackStoreTypeOK` is `true` for non-stack addresses, and
-`storeValue (.root 0 0) (.int (.overflow 8) 5)` writes the literal into
-`lookupStorage (.root 0)`. The successor violates the storage conjunct of
-`PayloadsTypedValue`, which requires
-`.pair (.overflow 8) (.int (.int 8) n) b`. `PayloadsTyped` is host-supplied
-only at `initState?_wf`, and this store creates the offending value at run
-time, so no initial-state hypothesis excludes it. Frame memory has the same
-hole through an alloca of `.overflow bits`, and so do locals through
-`select`/`phi` whose chosen operand is an overflow literal (both steps write
-the evaluated operand verbatim). No `WFProgram` or `WellFormed` fact excludes
-overflow literals: `TrapCodesSpecified` constrains only the `callPtr`
-trap-code arguments and requires `.int 32` literals there. Proposed
-resolutions (owner decision): (a) add a builder-trusted syntactic field, e.g.
-`NoOverflowLiterals frag` — no `.intLit` operand of any instruction or
-terminator has an `.overflow` type — after which every overflow-typed value
-in a reachable state comes from `checkedInt`, `IRValue.default`, or a pair
-load, and the approved `PayloadsTyped` is preserved by store/load/select/phi;
-or (b) extend `PayloadsTypedValue` to also allow `.int (.overflow bits) _`.
-Option (b) still yields the index-0 `extractvalue` conclusion because the step
-is stuck on non-pair aggregates, so only pair payloads (still required to be
-`.int (.int bits) n`) are extracted, but it relaxes the approved statement.
-**Owner approved option (b) on 2026-11-01:** `PayloadsTypedValue` is extended to
-allow `.int (.overflow bits) n`, with no `NoOverflowLiterals` builder fact. The
-`PayloadsTyped` implementation, its dependent step forms (store/load/select/
-phi), and the index-0 `extractvalue` form follow.
-
-**Phase 2 obstruction 15 (2026-11-01): jump targets invalidate
-`StackReturnsSafe`.** Preparing the `br`/`condBr` terminator form exposes a
-missing invariant. `irJump` replaces the head frame's `block`, `terminator`, and
-`prev` with the target block's, so the successor's `StackReturnsSafe` obligation
-is about the *target block's* terminator, while the approved field constrains
-only the frame's current terminator. (`wfState_withHead` cannot be reused for
-jumps either: it requires `g.block = f.block` and `g.terminator = f.terminator`.)
-`ReturnNonStack` supplies `SafeReturnValue` for every block's return operand, and
-that predicate admits the `param` constructor. The entry frame's arguments are
-constrained by `HostArgsLive` (no stack pointers at all) and a callee's by the
-`hargsBounded` premise of `wfState_calleePush` (stack pointers into older
-frames), but neither is a `WFState` field, so a `WFState`-satisfying state may
-hold `%p ↦ .ptr (.stack f.id 0 0)` at a parameter name. Counterexample: one
-frame with `id = 0`, `nextFrame = 1`, `fn.params = [(.ptr, "%p")]`,
-`fn.returnType = .ptr`, blocks `b0 = [] : br b1` and `b1 = [] : ret %p`,
-`allocs = [(0, .int 8)]`, `locals = [("%p", .ptr (.stack 0 0 0))]`, `mem = []`,
-`prev = none`, `retDest = none`. Every `WFState` field holds:
-`StackPtrsBounded` witnesses the frame itself (`frameById? 0 = some f`,
-`allocType? 0 = some (.int 8)`, `0 < allocSize (.int 8)`), `localsTyped` sees
-`v.type? = some .ptr = localType? "%p"`, and `StackReturnsSafe` is vacuous at the
-`br`. The other `SafeReturnValue` constructors are excluded (`origin` by
-`OriginHolds`'s `.null`/cell/global shapes; `binop`/`icmp`/`cast`/
-`extractValue` by their integer result types plus `localsTyped`), so the
-parameter constructor is the only hole. `irStep` executes the `br`
-(`block?_eq_some` finds `b1`), and the successor violates `StackReturnsSafe`
-with `frame = g.id = 0`. Proposed resolutions (owner decision): (a) strengthen
-the approved `StackReturnsSafe` field from the current terminator to every block
-of the frame's function:
-`∀ f ∈ c.frames, ∀ block ∈ f.fn.blocks, block.terminator = some (.ret (some operand)) → evalOperand f operand = some v → (∀ frame slot off, v = .ptr (.stack frame slot off) → frame ≠ f.id)`.
-It is preserved at `wfState_calleePush` by the same `initLocals` argument its
-current bullet already uses (the argument is block-independent), at
-`wfState_setLocalStep`/`wfState_popSetLocal` by the same per-block
-`SafeReturnValue` case analysis, and trivially at jumps (the locals do not
-change); at `initState?_wf` it is derivable from `HostArgsLive` because every
-initial local is non-stack, so it can replace the host hypothesis (or keep it as
-a redundant premise). (b) Add a `WFState` field tying parameter values to older
-frames, e.g.
-`paramsNotOwnStack : ∀ f ∈ c.frames, ∀ name ∈ f.fn.params.map (·.2), ∀ v, f.lookupLocal name = some v → (∀ frame slot off, v = .ptr (.stack frame slot off) → frame < f.id)`,
-established at `initState?_wf` from `HostArgsLive` and at `wfState_calleePush`
-from `hargsBounded`, preserved by instruction steps once `wfState_setLocalStep`
-takes `dest ∉ fn.params.map (·.2)` (the call sites already derive it with
-`notParam_of_mem_dests`), and used at the jump to refute `frame = f.id` against
-`frame < f.id`. Option (a) changes one approved field definition (a
-strengthening, not a weakening) with no field-count change; option (b) keeps the
-approved field and adds a 28th. **Owner approved option (a) on 2026-11-01:**
-`StackReturnsSafe` is strengthened to every block of the frame's function, with
-no new field. The jump form, the `wfState_step`/`irStep_wf` dispatch, and
-Phase 3 followed (together with obstructions 12/14).
-
-**Phase 2 obstruction 16 (2026-11-01): the callee's `%slots` parameter is not
-tied to the forwarded argument.** Preparing the `.call` module-function and
-`.callPtr` function-target branches of the `wfState_step`/`irStep_wf` dispatch
-exposes a missing builder link. `wfState_calleePush` requires `hslotsParam`: if
-the callee's last parameter is the appended slots parameter
-(`fn.params.getLast? = some p`, `p.2 = "%slots"`), the corresponding argument in
-`fn.params.zip args` must be `.ptr .slotTable`, because the pushed frame's
-`SlotsParamsSafe` bullet reads that parameter's value from `initLocals fn args`
-and requires exactly `.ptr .slotTable`. `CallSlots` constrains a direct call
-only from the caller's side: the last argument is `.local name`, and `name` is
-either the caller's last parameter (with type `.ptr`) or a local with a
-recorded origin. Nothing relates `name` to the callee's `%slots` parameter, and
-the origin disjunct cannot supply the slot table: every `OriginHolds` case is
-`.null` or a `.cell`/`.root`/`.function`/`.importCell`/`.global` pointer, never
-`.ptr .slotTable`. The call typing fixes only the signature (`sig =
-fn.signature`, through `ModuleShapes` and `IntrinsicNamesReserved`) and the
-argument types. Counterexample: functions `main` (parameters `[(.ptr, "%x")]`,
-return `.void`, one block `[call void @g(ptr %x)]` with terminator `ret void`)
-and `g` (parameters `[(.ptr, "%slots")]`, return `.void`, one block with
-terminator `ret void`). `WFProgram` holds for a fragment containing them: both
-functions are type- and SSA-correct, module names are unique, the call forwards
-`main`'s last parameter so `CallSlots`' first disjunct holds, and the slot and
-origin facts are vacuous on these functions (the contract-conformance fields
-constrain the required entry points and tables, not these functions or the
-call). A one-frame `WFState` with `main`'s `%x = .null` satisfies every field;
-`SlotsParamsSafe` is vacuous because `main`'s last parameter is `%x`. The call
-step (`evalOperands = [.null]`, the `parseChecked`/`parseRotate` name parses
-miss, `module.function? "g" = some g`, equal argument lengths) pushes `g`'s
-frame with `initLocals g [.null] = [("%slots", .null)]`, so the successor
-violates `slotsParamsSafe` at `p = (.ptr, "%slots")`. The indirect path has the
-same hole: `.callPtr` resolves the callee at run time, and
-`CallTargetsTyped`/`FunctionBindingsTyped` relate the arguments to the called
-signature only through parameter *types*, so no static name rule covers it.
-Proposed resolutions (owner decision). (a) Replace `CallSlots`' caller-side
-disjunction with a callee-directed forwarding rule: for every direct call whose
-callee resolves to a module function whose last parameter is `%slots`, the
-caller's last parameter is `(IrType.ptr, "%slots")` and the last argument is
-`.local "%slots"`, with a companion builder-trusted rule for `callPtr` (the
-callee name is dynamic, so key it on the callee origin slot and
-`lookupFunctionSignature`). `hslotsParam` then follows from the caller's
-`SlotsParamsSafe` through `evalOperands`. This is builder-faithful for
-internal-to-internal calls, and it also drops the current requirement that
-*every* call's last argument be a local, which the builder violates anyway (see
-the first observation below); whether exported entries ever call a `%slots`
-callee is a builder property to confirm. Admitting a forwarded *loaded
-slots-global* local instead does not work inside the per-state invariant:
-`SlotsBase` allows the pre-load default `.null`, and `WFState` does not record
-the executed prefix, so an artificial state whose current instruction is the
-call may hold `.null` there. (b) Add a progress-aware `WFState` field relating
-each call site's last argument to the position of its defining load in the
-block prefix; this is a substantial invariant extension beyond the per-state
-facts. (c) Remove the appended `%slots` parameter from the builder: every
-function loads `@stc_module_slots` itself (as exported entries already do),
-making `SlotsParamsSafe` vacuous and eliminating both this obstruction and the
-slot-base mismatch below. No field was added and no statement was weakened; the
-last compiling commit is `59d5979`. Two related builder-faithfulness
-observations are pre-existing and separate from the proof obstruction (they
-make `WFProgram` false for current builder output, so the whole-run theorems
-would be vacuous rather than unsound). First, `CallSlots` requires the last
-argument to be `.local name`, but `emit_state_load` emits a direct call to a
-module function with a symbol argument
-(`f.call(IrType::Int(32), symbols::RETAIN_LOAD,
-&[Value::symbol(symbols::RETAIN_BUFFER)])` in `crates/stc-codegen/src/unit.rs`).
-Second, `SlotBasesNonParam` and `SlotBasesLoadOnly` assume slot bases are
-non-parameter locals defined by a symbol load, but internal functions use the
-appended `%slots` parameter directly as the slot-cell GEP base (`unit.rs`
-appends `(IrType::Ptr, "%slots")` and passes `f.param_value(slots_index)` to
-`slot_value`; `ir.rs::slot_cell` GEPs from that value), so `SlotBases` contains
-`"%slots"`. Both merit a separate owner review before the whole-run theorems
-are claimed to cover builder output. **Owner decision (2026-11-01): remove the
-appended `%slots` parameter and the extra call argument from the builder; every
-function loads `@stc_module_slots` itself, as the exported entry points already
-do.** This makes `SlotsParamsSafe` vacuous and removes `CallSlots` from the
-invariant; `SlotBasesNonParam`/`SlotBasesLoadOnly` then hold because slot bases
-are symbol-loaded locals, and the `RETAIN_LOAD` symbol-argument mismatch
-disappears with `CallSlots`. The builder change spans `crates/stc-codegen` and
-its tests and is implemented as `8194013`; the Lean side drops the two fields and
-their premises in `04cd781`, and the `wfState_step`/`irStep_wf` dispatch, Phase 3,
-and this docs pass followed.
-
-**Phase 2 obstruction 17 (2026-11-02): `CallTargetsTyped`'s existential does
-not scope over the call agreement.** The module-function `.call` step is proved
-(`wfState_moduleCallStep`, commit `fa7fd08`; no slots premises). The `.callPtr`
-function-target branch needs the resolved callee's signature: with
-`evalOperand f callee = some (.ptr (.function fname))` and
-`c.module.function? fname = some fn`, the pushed frame requires
-`ret = fn.returnType` (for `ReturnLink`'s destination type and the callee's
-`localsTyped`) and argument values matching `fn.params` (for `ArgsTyped`, hence
-`hlen` and the callee's initial locals). The P0.4 `.callPtr` typing rule
-supplies neither: it gives `ret.isCore`, `CallResultOK dest ret`, a `.ptr`-typed
-callee operand, and some type for each argument. `CallTargetsTyped` is the
-intended source, but its Lean body parses as
-`∃ name slot, ((callee = .local name ∧ fn.facts.originOf? name = some (.cell slot true)) → (C1 slot ∨ C2 slot))`,
-because the `∃` binder body extends to the end of the expression and `→` binds
-looser than `∧`. The witness pair is chosen by the prover, not read from the
-call, so the statement constrains no actual call site; it is satisfiable in
-every state (choose a name different from the callee local's name, or any name
-when the callee is not a local), and the D4 prose—"every `.callPtr` through a
-Function cell has its `ret` and argument operand types checked against the
-cell's signature"—is not expressed. `CallPtrOrigins` supplies the actual
-`(name, slot)`, `originsMatch`/`OriginHolds` give
-`slotKind? slot = some .function` and the `.ptr (.function fname)` value, and
-`FunctionBindingsTyped` plus function-name uniqueness give
-`lookupFunctionSignature slot = some callee.signature`; nothing relates that
-signature to `ret` or to the argument types. Counterexample: a function whose
-block contains `%d = callPtr i64 %cell(ptr %x)`, where `%cell` has origin
-`.cell slot true`, the host binding is `.function fname`, and
-`lookupFunctionSignature slot = some σ` with `σ.returnType = i32`. `.callPtr`
-typing accepts `ret = i64` (`isCore`, `CallResultOK`), the caller's `%d` is
-typed `i64` by its result type, `CallTargetsTyped` holds vacuously, and the
-call step pushes a callee frame with `retDest = some %d` and
-`returnType = i32`, breaking `ReturnLink` in the successor. The argument side
-is the same hole: `.callPtr` typing admits any typed argument operands
-regardless of the signature. Proposed minimal fix (owner decision): quantify
-`name` and `slot` in the statement's binder list so they scope over the
-disjunction, making the fact apply to every recorded origin of the callee
-local, and add no field:
-
-```lean
-def CallTargetsTyped (c : IRState) : Prop :=
-  ∀ fn ∈ c.module.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
-    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
-      ∀ name slot, callee = .local name →
-        fn.facts.originOf? name = some (.cell slot true) →
-          (∃ sig, c.lookupFunctionSignature slot = some sig ∧
-            sig.returnType = ret ∧
-            listForall₂ (fun arg ty => operandHasType fn ty arg) args sig.params) ∨
-          (c.slotKind? slot = some .importCell ∧
-            c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
-```
-
-This is a strengthening, not a weakening (the current statement is vacuous),
-and it changes an owner-approved definition. **Owner approved the universal
-restatement on 2026-11-02;** it is adopted in §22.6 (D4). The restatement is
-implemented (`4cfb238` records the approval; `7c0dac1` restates `CallTargetsTyped`
-and proves the `.callPtr` function-target step), and the remaining dispatch,
-`wfState_step`/`irStep_wf`, and Phase 3 followed (`0d62426`, `3834458`,
-`eeeb92f`). No code outside the definition changed.
-
-**Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
-frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
-obligations that the approved fact set does not discharge. No invariant change was applied;
-the compiling checkpoints are `b2fefde` (`wfState_status`), `d214201` (`wfState_withHead`), and
-`8fe020f` (`wfState_withHeadInstrs`). The six obligations, each with the failing step, are:
-
-1. **`ReturnLink` covers only the head pair.** `ReturnLink c` constrains only the first two
-   frames (`∀ callee caller rest, c.frames = callee :: caller :: rest → ...`). At `irStepRet`
-   with `c.frames = callee :: caller :: below`, the successor's head pair is
-   `(caller, below.head)`, which `ReturnLink c` does not record (it records `(callee, caller)`);
-   a call step likewise cannot preserve the pre-existing `(caller, below.head)` pair while the
-   callee is pushed. Proposed extension: the all-adjacent-pairs form
-   `∀ prefix callee caller suffix, c.frames = prefix ++ callee :: caller :: suffix → ...`.
-   Calls establish the new head pair from the call typing and leave the other pairs unchanged;
-   returns restore a pair that was already present in the pre-state.
-2. **Storage-domain liveness.** `StoragePtrsLive`/`StorageValuesLive` require every storage
-   pointer to address a live entry, but nothing guarantees entries exist: (a) a `.cell` load of
-   a `Data`/`Direct` slot yields `.ptr (.root slot 0)` in a local (`ir_got_sound`), yet
-   `lookupStorage (.root slot)` need not exist; (b) a `.symbol g` value is `.ptr (.global g 0)`,
-   and storing it to `.root`/`.global`, passing it as a call argument, or returning it puts it in
-   a local or in storage, requiring `lookupStorage (.global g)` to be non-empty. Proposed
-   extension: a state-level `StorageDomain` field (every `Data`/`Direct` slot root has a
-   non-empty entry; every module global referenced by `fn.facts.symbolRefs` has a non-empty
-   entry), host-supplied at `initState?_wf` and preserved because `writeStorage` preserves keys
-   and lengths and no step removes storage ids.
-3. **`SlotsGlobalReadOnly` is static only.** The state has no fact connecting an executed
-   store's `.global g` address to `fn.facts.memoryGlobals`, so a `StorageValuesLive`-admitted
-   pointer loaded from storage can target a slot global and overwrite its offset-0 entry,
-   breaking `SlotsGlobalStored` and then `SlotsBase`. Proposed resolutions: exclude pointers to
-   `SlotGlobalNames` from storage values and locals (dynamic exclusion facts) together with the
-   syntactic `.symbol`-store exclusion, or narrow the covered fragment to exclude stores through
-   dynamically obtained global pointers.
-4. **Alloca element representability.** `initAllocMem` fills array cells with
-   `IRValue.default elem`, and `MemTyped` requires `v.type? = some elem`, i.e.
-   `default_type?` needs `elem.isRepresentable`. `Instr.WellTyped` admits any `ty.isValue =
-   true`, which includes `.array .void n` and nested arrays, for which `IRValue.default elem`
-   is not `MemValueTyped`. Proposed extension: a builder-trusted `WFProgram` fact that every
-   alloca element type is representable (or a strengthened P0.4 alloca rule).
-5. **Origin `.global g` runtime/base link.** `OriginsTrusted`'s `.global _` case checks only
-   that the defining instruction is a GEP; `OriginHolds` requires the value to be
-   `.ptr (.global g off)` with `g ∈ contract.localGlobals`. Nothing ties the recorded `g` to the
-   GEP's base value or to `contract.localGlobals`. Proposed extension: require a `.symbol g`
-   base (or a same-global GEP chain) in `OriginsTrusted`, plus a contract-membership fact for
-   recorded origin globals.
-6. **`.cell slot false` origin for descriptor slots.** The `.slotEntry` load yields
-   `.ptr (.cell slot)` for any in-range slot, but `OriginHolds` requires the slot kind to be
-   storage or callable; a descriptor slot (neither) satisfies every current fact, so the
-   load's destination local breaks `originsMatch`. Proposed extension: extend the
-   builder-trusted slot-kind facts to `.cell slot false` origin slots
-   (`kind.isStorage = true ∨ kind.isCallable = true`).
-
-Items 1–3, 5, and 6 extend `WFState`/`WFProgram`/`originsTrusted` and item 2 changes
-`initState?_wf`'s host hypotheses; item 4 extends `WFProgram`. They extend, not trim, the
-approved invariant, but they change structures and proofs the owner has already approved, so
-they are recorded here for owner approval before implementation. The `callFunction` and
-`irStepRet` frame-shape and typing obligations are otherwise the ones inventoried below; the
-only blockers are these facts.
-
-**Owner decision (2026-10-31).** The owner approved all five direct extensions and chose
-dynamic exclusion for item 3. The implementation is:
-
-- item 1: the all-adjacent-pairs `ReturnLink` form;
-- item 2: a host-supplied `StorageDomain` fact (a `WFState` field, established at
-  `initState?_wf` from a host hypothesis);
-- item 4: a builder-trusted alloca element-representability fact in `WFProgram`;
-- item 5: the origin `.global g` symbol/contract membership link (a `WFProgram` fact
-  requiring a `.symbol g` base or a same-global base origin, plus `g ∈ contract.localGlobals`);
-- item 6: builder-trusted origin-slot kind facts excluding descriptor slots;
-- item 3: a dynamic slot-global exclusion invariant over locals, stack memory, and storage
-  (`NoSlotsGlobalPointers`), with its preservation. The invariant also covers stack memory:
-  a `.global` pointer returned to a local by a stack load would otherwise bypass it. Its
-  preservation uses a builder fact that `.symbol g` operands naming a slots global appear only
-  as the pointer operand of a `load` (never as a GEP base, store value, call argument, or
-  return operand), together with the dynamic exclusion itself.
-
-These extend the approved invariant; no fact is weakened. The definition-level
-implementation is on `WL-3`: `ReturnLink` is the all-adjacent-pairs form; `StorageDomain` and
-`NoSlotsGlobalPointers` are `WFState` fields (with host hypotheses for `initState?_wf`);
-`WFProgram` gains `allocaRepresentable`, `originGlobals`, `originSlotKinds`, and
-`slotsSymbolsLoadOnly`; the `SlotsGlobals`, `instrValueSymbols`/`terminatorValueSymbols`
-helpers and the storage-write lemmas (`lookupStorage_setStorage_eq`/`_ne`,
-`length_take_cons_drop`, `storageDomain_writeStorage`) are proved. The preservation proofs
-for the new fields are part of the remaining Phase 2 forms.
-
-**`irStep_wf` proof inventory (2026-10-31).** The remaining induction is a proof-engineering
-pass, not a design gap. The `.step` outcomes reduce to five state-update forms:
-
-1. the empty-frame halt: `{ c with status := .halted }`;
-2. `c.withHead g` for instruction steps and jumps, where `g` differs from the head frame in
-   `instrs` and `locals` (and in `mem`/`allocs`/`nextAlloc` for `alloca`);
-3. `s.withHeadInstrs rest` for a store, where `storeValue` may update any frame's `mem`;
-4. `callFunction`: the frames become `callee :: caller :: tail`;
-5. `irStepRet`: frames become `[]` (halt), `caller.setLocal v :: below`, or
-   `caller :: below`.
-
-The per-field obligations and missing helper lemmas are:
-
-- `lookupLocal_setLocal_eq`/`_ne`, `setLocal` preserves `id`/`fn`/`block`/`terminator`/
-  `prev`/`retDest`; `lookupMem_setMem`, `setMem` and `storeValue` frame updates;
-  `frameById?` under `withHead` and frame-list maps.
-- `localsInitialized`/`localsTyped` under `setLocal` (the latter via
-  `localType?_eq_resultType` and the per-instruction value type) and for the callee's
-  `initLocals` (coverage/typing/defaults are already proved).
-- `originsMatch` under a load/GEP destination (definitions and `SlotsBase`/`SlotsGlobalStored`
-  are in place) and unchanged names under `setLocal`.
-- `MemTyped` under `alloca`/`setMem`/`storeValue` using `MemValuePtrBounded`;
-  `StackPtrsBounded` under `setLocal`/`setMem`; `StoragePtrsLive` under `setLocal`/
-  `storeValue` using `StorageValuesLive`.
-- `ReturnLink` at calls (via `localType?_eq_resultType` and
-  `FunctionBindingsTyped`/`CallTargetsTyped`) and at `irStepRet`; `StackReturnsSafe` via
-  `SafeReturnValue`/`ReturnNonStack`; `SlotsGlobalStored` under stores via
-  `SlotsGlobalReadOnly`. (`SlotsParamsSafe`/`CallSlots` were removed by obstruction 16,
-  `04cd781`.)
-- `noBareUnreachable` after instruction/jump/call/ret steps using `UnreachableGuarded` and
-  the fact that a trap-service call cannot step normally.
-- frame-list fields (`frameIdsNodup`/`frameIdsBound`/`frameFunction`/`framePrev`/
-  `frameBlock`), `functionBindings`, `callTargets`, and `bottomRetDest` under the five update
-  forms.
-
-This was the case matrix for the focused pass, which is complete (completion record above); the
-supporting fact set was complete and no further design approval was needed. The checkpoint was
-`6d45f2d` on `WL-3`.
-
-The three earlier extensions were required because without them the invariant was not
-preserved:
-
-1. **Slots base (`SlotsBase`).** For every `.cell slot false` origin whose defining `load`
-   reads a `.slotTable` GEP, the GEP's base local holds `.ptr .slotTable`. The current
-   `OriginsTrusted` checks only the constant slot index, so an arbitrary pointer-typed base
-   (e.g. a stack pointer) could make the load read a value that does not have the recorded
-   `.cell slot` shape. `localsTyped` does not constrain the base's address. Implemented
-   state field (`SlotBases` collects the bases of the slot-cell GEPs; the default disjunct
-   covers a base that is still `.null` before its defining load):
-
-   ```lean
-   def SlotsBase (c : IRState) (f : IRFrame) : Prop :=
-     ∀ base ∈ SlotBases f.fn,
-       f.lookupLocal base = some (.ptr .slotTable) ∨
-       f.lookupLocal base = some .null
-   ```
-
-2. **Memory pointer bounds (`MemValuePtrBounded`).** `MemTyped` constrains a stack cell's value
-   type and extent but not the bounds of a stack pointer stored in that cell. A load can
-   therefore introduce an out-of-bounds stack pointer into a local, breaking
-   `StackPtrsBounded`. Implemented strengthening, as a conjunct of `MemTyped`:
-
-   ```lean
-   def MemValuePtrBounded (c : IRState) (v : IRValue) : Prop :=
-     match v with
-     | .ptr (.stack frame slot off) =>
-         ∃ g, c.frameById? frame = some g ∧
-           ∃ ty, g.allocType? slot = some ty ∧ off < allocSize ty
-     | _ => True
-   ```
-
-3. **Storage value liveness (`StorageValuesLive`).** `StoragePtrsLive` constrains only locals.
-   A load from persistent storage can return a storage pointer stored by the host; without an
-   invariant on storage contents, the destination local need not address a live storage entry.
-   Implemented state field:
-
-   ```lean
-   def StorageValuesLive (c : IRState) : Prop :=
-     ∀ id off v, c.lookupStorageAt id off = some v →
-       (∀ slot off', v = .ptr (.root slot off') →
-          ∃ values, c.lookupStorage (.root slot) = some values ∧ off' < values.length) ∧
-       (∀ g off', v = .ptr (.global g off') →
-          ∃ values, c.lookupStorage (.global g) = some values ∧ off' < values.length) ∧
-       (∀ frame slot off', v ≠ .ptr (.stack frame slot off'))
-   ```
-
-   The third conjunct is the 2026-11-01 extension (obstruction 10): persistent storage never
-   holds a frame pointer. It is host-supplied at `initState?_wf` and preserved by `storeValue`
-   because `StoresNonPointer` keeps stored values non-pointer.
-
-The three extensions are proof obligations for the full invariant, not a reduction of it: the
-existing fields stay, and the new facts are added to `WFState` (and, where syntactic, to
-`WFProgram`). They were approved and are implemented; the initial-state, preservation, and
-reachability proofs are complete (completion record above).
-
-The three theorems are per-state, as approved. The initial-state proof, the preservation
-proof, and the reachability corollaries are now proved; they were the remaining P0.5
-follow-up, not blockers for the three registry theorems. The concrete obligations were (all
-discharged; the proving lemmas are in `Stc.Codegen.Semantics`):
-
-1. **Initial state (`initState?_wf`).** The one-frame state from `initState?` must satisfy
-   `WFState`/`WFRunning`. The `WFProgram.localTypesRepresentable` rule (parameter/local-definition
-   types are integers, pointers, or overflow results, not arrays or `void`) and the
-   `default_type?` lemma are implemented. The proof required: a typed-host-arguments predicate
-   (parameter types match the supplied `IRValue`s); host predicates for live roots/storage and
-   resolvable function bindings; and the one-frame instantiations of `frameBlock`, `framePrev`,
-   `localsInitialized`, and `localsTyped` (the latter needs `List.zip`/`find?`/`localDefs`
-   lemmas). The `.null` origin default (§22.10) makes `originsMatch` hold initially.
-2. **Preservation (`irStep_wf`).** Every `.step` successor must satisfy `WFState`. The
-   technical gaps found while implementing the invariant were:
-   - a **slots-base invariant** (`%slots` holds `.ptr .slotTable`) so the `.slotEntry` load and
-     the `.cell slot false` origin shape are produced; the value is a function parameter or
-     slots-global load and is never redefined;
-   - a **syntactic local-type lemma**: from `FunctionUsesDefined.allNodup` and the defining
-     instruction, `fn.localType? dest = resultType` for every destination, so `localsTyped`
-     follows from the instruction's type check;
-   - a strengthened **memory-value invariant** that also bounds stack pointers stored in
-     memory (the current `MemTyped` constrains types and extents but not pointer provenance);
-   - **return-link preservation** using the local-type lemma for direct calls and
-     `FunctionBindingsTyped`/`CallTargetsTyped` for indirect calls;
-   - **no-bare-unreachable preservation** using `UnreachableGuarded` (a trap-service call
-     cannot step normally, so the following `unreachable` is not reached).
-3. **Reachability corollaries (proved 2026-11-02).** `initState?_wf` composes with `irStep_wf`
-   and the three per-state theorems, then lifts to `irRun` for the executable entry point via
-   `irStepStar_wfRunning`, `initState?_reachable_wfRunning`, and `irRun_halt_wf`. The Q3
-   carve-out remains: `AccessBounded` is the source-check premise and the character-index path
-   needs `CharIndexBounded` or exclusion until Q3 is resolved.
-
-Evidence for this record:
-
-```text
-cd lean && lake build
-PYTHONUTF8=1 python tools/ci/check_verification_registry.py   # 45 records: 42 proved, 2 planned, 1 descoped
-python tools/ci/check_docs.py
-python tools/ci/check_semantics_placeholder.py
-grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
-```
+The Q3 caveat is unchanged: `AccessBounded` is the source-check premise, and the character-index
+path needs `CharIndexBounded` or exclusion until Q3 is resolved; `ir_memory_safe` and `ir_no_ub`
+are not weakened.
 
 ### 22.12 P0.5 review checklist
 
@@ -3142,40 +2321,13 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    time; commits `fa7fd08`, `7c0dac1`, `18f7cf5`, `0d62426`, `3834458`) and Phase 3 (reachability
    corollaries and the `irRun` lift; commit `eeeb92f`) are complete and are the P0.5 review
    scope.
-7. The §22.11 obstruction-9 extensions were owner-approved on 2026-11-01
-   (`SlotBasesLoadOnly` as a `WFProgram` fact, `ReturnLink`'s `IsCallDest` conjunct, and the
-   general symbol-pointer-load disjunct in `StackOriginsTrusted`). They are implemented and the
-   ret value/none forms are proved (`wfState_popSetLocal`, `wfState_popRet`) with a green
-   build. The `load` form then exposed obstruction 10; the owner approved extending
-   `StorageValuesLive` to exclude frame pointers from storage on 2026-11-01, and the third
-   conjunct plus `wfState_setLocalStep` are implemented with a green build. The `load`/`gep`
-   forms then exposed obstruction 11; the owner approved the corrected two-case
-   `CellOriginsSlotEntry` fact on 2026-11-01 (the universal GEP-load rule is not
-   builder-faithful for the value stage). The fact is implemented, `wfState_setLocalStep` was
-   generalized for origin-bearing destinations (`hnewOrigins`, `hbaseOk`, `hentryOk`), and the
-   load, GEP, and alloca forms plus binop/icmp/cast/select/phi are proved with a green build.
-   Obstructions 12 and 13 were then owner-approved on 2026-11-01: the state-wide
-   `PayloadsTyped` field (locals, memory, storage) and the `IntrinsicNamesReserved` WFProgram
-   fact. `IntrinsicNamesReserved` and the checked/rotate call-result forms are implemented
-   (`wfState_checkedCallStep`, `wfState_rotateCallStep`) with a green build. Obstruction 14
-   (overflow-typed literals defeat `PayloadsTyped`) and obstruction 15 (a jump installs the
-   target block's terminator, whose return-safety fact no `WFState` field supplies) were then
-   owner-approved on 2026-11-01: `PayloadsTypedValue` is extended to allow
-   `.int (.overflow bits) n`, and `StackReturnsSafe` is strengthened to every block of the
-   frame's function. The extractValue index-0 form, `wfState_jumpStep`,
-   `wfState_step`/`irStep_wf` (`3834458`), and Phase 3 (`eeeb92f`) are proved.
-   Preparing the call branches then exposed obstruction 16 (the callee's `%slots`
-   parameter is not tied to the forwarded argument on either call path). The owner decided on
-   2026-11-01 to remove the appended `%slots` parameter and extra call argument from the
-   builder; every function loads `@stc_module_slots` itself. This is implemented on the builder
-   side (`8194013`) and the Lean side (`04cd781`, which removed `SlotsParamsSafe`/`CallSlots`).
-   Preparing the `.callPtr` function-target branch then exposed obstruction 17: the
-   `CallTargetsTyped` existential does not scope its witnesses over the call agreement, so the
-   fact is vacuous and cannot supply the resolved callee's signature. The owner approved the
-   universal restatement on 2026-11-02; `4cfb238` records it, `7c0dac1` restates
-   `CallTargetsTyped` and proves the `.callPtr` function-target step, and the terminator
-   dispatch (`0d62426`), `wfState_step`/`irStep_wf` (`3834458`), and Phase 3 (`eeeb92f`)
-   followed.
+7. All §22.11 obstruction extensions are implemented and proved: `SlotBasesLoadOnly`,
+   `IsCallDest` in `ReturnLink`, the symbol-load `StackOriginsTrusted` disjunct, the
+   frame-pointer exclusion in `StorageValuesLive`, the two-case `CellOriginsSlotEntry`,
+   `PayloadsTyped` (with the overflow-literal allowance), `IntrinsicNamesReserved`, and the
+   all-blocks `StackReturnsSafe`. The builder `%slots` ABI was removed (`8194013`) and the
+   Lean slots fields dropped (`04cd781`); `CallTargetsTyped` was restated non-vacuously
+   (`4cfb238`, `7c0dac1`). No obstruction remains open.
 8. **Owner sign-off (2026-11-02).** The owner approved P0.5 at `31394c2` after independent
    verification of the full theorem list, the builder `%slots` change, the invariant field
    set, and the Q3 caveat.
