@@ -2823,6 +2823,62 @@ disappears with `CallSlots`. The builder change spans `crates/stc-codegen` and
 its tests; the Lean side drops the two fields and their premises, then the
 `wfState_step`/`irStep_wf` dispatch, Phase 3, and the docs pass resume.
 
+**Phase 2 obstruction 17 (2026-11-02): `CallTargetsTyped`'s existential does
+not scope over the call agreement.** The module-function `.call` step is proved
+(`wfState_moduleCallStep`, commit `fa7fd08`; no slots premises). The `.callPtr`
+function-target branch needs the resolved callee's signature: with
+`evalOperand f callee = some (.ptr (.function fname))` and
+`c.module.function? fname = some fn`, the pushed frame requires
+`ret = fn.returnType` (for `ReturnLink`'s destination type and the callee's
+`localsTyped`) and argument values matching `fn.params` (for `ArgsTyped`, hence
+`hlen` and the callee's initial locals). The P0.4 `.callPtr` typing rule
+supplies neither: it gives `ret.isCore`, `CallResultOK dest ret`, a `.ptr`-typed
+callee operand, and some type for each argument. `CallTargetsTyped` is the
+intended source, but its Lean body parses as
+`∃ name slot, ((callee = .local name ∧ fn.facts.originOf? name = some (.cell slot true)) → (C1 slot ∨ C2 slot))`,
+because the `∃` binder body extends to the end of the expression and `→` binds
+looser than `∧`. The witness pair is chosen by the prover, not read from the
+call, so the statement constrains no actual call site; it is satisfiable in
+every state (choose a name different from the callee local's name, or any name
+when the callee is not a local), and the D4 prose—"every `.callPtr` through a
+Function cell has its `ret` and argument operand types checked against the
+cell's signature"—is not expressed. `CallPtrOrigins` supplies the actual
+`(name, slot)`, `originsMatch`/`OriginHolds` give
+`slotKind? slot = some .function` and the `.ptr (.function fname)` value, and
+`FunctionBindingsTyped` plus function-name uniqueness give
+`lookupFunctionSignature slot = some callee.signature`; nothing relates that
+signature to `ret` or to the argument types. Counterexample: a function whose
+block contains `%d = callPtr i64 %cell(ptr %x)`, where `%cell` has origin
+`.cell slot true`, the host binding is `.function fname`, and
+`lookupFunctionSignature slot = some σ` with `σ.returnType = i32`. `.callPtr`
+typing accepts `ret = i64` (`isCore`, `CallResultOK`), the caller's `%d` is
+typed `i64` by its result type, `CallTargetsTyped` holds vacuously, and the
+call step pushes a callee frame with `retDest = some %d` and
+`returnType = i32`, breaking `ReturnLink` in the successor. The argument side
+is the same hole: `.callPtr` typing admits any typed argument operands
+regardless of the signature. Proposed minimal fix (owner decision): quantify
+`name` and `slot` in the statement's binder list so they scope over the
+disjunction, making the fact apply to every recorded origin of the callee
+local, and add no field:
+
+```lean
+def CallTargetsTyped (c : IRState) : Prop :=
+  ∀ fn ∈ c.module.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
+    ∀ dest ret callee args, instr = .callPtr dest ret callee args →
+      ∀ name slot, callee = .local name →
+        fn.facts.originOf? name = some (.cell slot true) →
+          (∃ sig, c.lookupFunctionSignature slot = some sig ∧
+            sig.returnType = ret ∧
+            listForall₂ (fun arg ty => operandHasType fn ty arg) args sig.params) ∨
+          (c.slotKind? slot = some .importCell ∧
+            c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
+```
+
+This is a strengthening, not a weakening (the current statement is vacuous),
+and it changes an owner-approved definition, so it needs approval before the
+`.callPtr` function-target branch and the remaining dispatch resume. No code
+outside the definition changes; the last compiling commit is `fa7fd08`.
+
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
 obligations that the approved fact set does not discharge. No invariant change was applied;
@@ -3088,4 +3144,10 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    2026-11-01 to remove the appended `%slots` parameter and extra call argument from the
    builder; every function loads `@stc_module_slots` itself. The builder change and the Lean
    removal of `SlotsParamsSafe`/`CallSlots` are the open implementation scope, after which the
-   call dispatch and Phase 3 resume.
+   call dispatch and Phase 3 resume. Preparing the `.callPtr` function-target branch then
+   exposed obstruction 17: the `CallTargetsTyped` existential does not scope its witnesses over
+   the call agreement, so the fact is vacuous and cannot supply the resolved callee's signature
+   (the `.callPtr` branch needs `ret = fn.returnType` and argument types for `fn.params`). The
+   §22.11 minimal fix (quantify `name`/`slot` in the binder list so they scope over the
+   disjunction) awaits owner approval; the `.callPtr` branch, terminator dispatch,
+   `wfState_step`/`irStep_wf`, and Phase 3 follow that approval.
