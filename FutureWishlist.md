@@ -90,7 +90,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-3 | Expand the Lean specification per the verification plan; P0.4 and P0.3 complete and merged, P0.5 target soundness proved | Verification | M for P0.4 | Phase 0 P0.4 | In progress; P0.4/P0.3 complete and merged 2026-10-31; P0.5 all eight soundness theorems proved, whole-run bridge pending |
 | WL-4 | Run and verify RT performance on PREEMPT_RT Linux x86-64 | Runtime evidence | M | x86-64 RT run host and transferable artifacts | Done 2026-10-30 |
 | WL-5.1 | Modbus TCP server I/O on all supported hosts; non-real-time | Runtime/IO | M/L | None | Done 2026-11-02 |
-| WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host; EtherCAT hardware | Locked |
+| WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host; EtherCAT hardware | Done 2026-11-02 |
 | WL-6 | Motion controller: coordinated multi-axis interpolated motion | Motion | L/XL | WL-5.2, WL-7, WL-4; robot-sim reuse | Deferred |
 | WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Deferred |
 | WL-8 | Tracing UI to watch and graph PLC variables | Tooling/observability | M/L | WL-9 WebUI | Deferred |
@@ -563,8 +563,9 @@ evidence work.
 including cyclic process data and servo-drive integration. Implementing an EtherCAT master, a
 slave stack, or a raw EtherCAT protocol engine is explicitly out of scope.
 
-**Selection.** Selected and locked for v2.0.0 on 2026-10-31; WL-4 is complete and the EtherCAT
-hardware has arrived. Detailed planning is in [V2.0.0-PLAN.md](V2.0.0-PLAN.md).
+**Selection.** Selected and locked for v2.0.0 on 2026-10-31; completed and merged 2026-11-02.
+Detailed planning is in [V2.0.0-PLAN.md](V2.0.0-PLAN.md); the evidence is
+[EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md).
 
 **Why it matters.** EtherCAT provides cyclic, deterministic process data and is the practical
 fieldbus for interpolated multi-axis motion. IgH is a kernel-module plus userspace-library stack,
