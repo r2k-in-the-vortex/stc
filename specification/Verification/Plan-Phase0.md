@@ -2190,6 +2190,11 @@ by Q3. Obstruction 16 is implemented on both sides (`8194013` builder, `04cd781`
 obstruction 17's universal `CallTargetsTyped` restatement is implemented (`4cfb238` records the
 approval; `7c0dac1` restates the definition and proves the `.callPtr` function-target step).
 
+**Owner sign-off (2026-11-02).** The owner approved P0.5 at `31394c2` after independent
+verification: build, registry, docs, semantics placeholder, and markdownlint all pass with no
+`sorry`/`admit`, and the Q3 caveat and builder `%slots` change are part of the signed-off
+result.
+
 **Status (2026-10-31, follow-up).** The three provenance extensions are part of the model:
 `SlotsBase` (default-aware) and `StorageValuesLive` are `WFState` fields, and `MemTyped` includes
 `MemValuePtrBounded`. The `WFProgram.localTypesRepresentable` rule and `default_type?` are
@@ -3171,3 +3176,6 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    `CallTargetsTyped` and proves the `.callPtr` function-target step, and the terminator
    dispatch (`0d62426`), `wfState_step`/`irStep_wf` (`3834458`), and Phase 3 (`eeeb92f`)
    followed.
+8. **Owner sign-off (2026-11-02).** The owner approved P0.5 at `31394c2` after independent
+   verification of the full theorem list, the builder `%slots` change, the invariant field
+   set, and the Q3 caveat.
