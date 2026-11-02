@@ -101,7 +101,7 @@ fn accepted_core_dump_is_deterministic_and_versioned() {
 
     assert_eq!(value["format"], "stc-core-hir");
     assert_eq!(value["formatVersion"], "0.1.0");
-    assert_eq!(value["semanticsVersion"], "1.0-draft");
+    assert_eq!(value["semanticsVersion"], "1.0");
     assert_eq!(value["profile"], "stc-2013-oop-utf8-v1");
     assert_eq!(value["status"], "ok");
     assert_eq!(value["features"], Value::Array(Vec::new()));
@@ -238,7 +238,7 @@ fn unknown_versions_and_malformed_dumps_are_rejected() {
     assert!(error.contains("format version"), "{error}");
 
     let wrong_semantics = text.replace(
-        "\"semanticsVersion\":\"1.0-draft\"",
+        "\"semanticsVersion\":\"1.0\"",
         "\"semanticsVersion\":\"2.0\"",
     );
     let error = verify_core_dump(&wrong_semantics).expect_err("unknown semantics must fail");

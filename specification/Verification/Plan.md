@@ -2,11 +2,13 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Status: Draft for review. Phase 0 is in progress: P0.0–P0.6 are complete and reviewed (P0.5
-approved 2026-11-02 and merged through PR #12; P0.6 approved 2026-11-02). P0.6 delivered the
+Status: Draft for review. Phase 0 is complete: P0.0–P0.7 are complete and owner-approved (P0.5
+approved 2026-11-02 and merged through PR #12; P0.6 approved 2026-11-02 and merged through PR #13; P0.7 approved 2026-11-02, freezing
+`semantics_version` at `1.0`). P0.6 delivered the
 canonical core-HIR dump format `0.1.0`, `stc hir-dump`, the reference interpreter, the opt-in
 snapshot surface, the differential harness, the conformance report schema, the 74-case corpus,
-and the committed byte-stable report, all run in CI. P0.7 follows. The proved claims are the
+and the committed byte-stable report; P0.7 completed `Semantics.md`, `Phase0-Report.md`, the
+version freeze, and the handoff. The Phase 1 bridge spike is next. The proved claims are the
 records in `lean/verification-status.toml`; no claim beyond them is made by this document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -911,6 +913,7 @@ turn it into the registry.
 
 | Feature | Phase | Target level | Key theorem | Current status |
 | --- | --- | --- | --- | --- |
+| Semantics document and version | 0 | S | `semantics_version` `1.0`; registry and conformance evidence | P0.7 preparation complete: `Semantics.md` and `Phase0-Report.md` complete, `semantics_version` frozen at `1.0`, registry and all versioned fixtures updated, handoff recorded; owner review and sign-off pending |
 | AST, HIR, and IR fragment types | 0 | S | definitions plus `WellFormed` | Syntax, grammar, and HIR defined (P0.1–P0.2); IR fragment defined and review-approved (P0.4, 2026-10-31) |
 | Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31 and merged into v2.0.0-planning via PR #11 (612f84d); see Plan-Phase0.md §19 |
 | Core typing judgment and checker | 0 | S | `core_check_sound`, `core_rejection_characterized` | Proved (P0.2) |
@@ -1058,12 +1061,14 @@ The program is done when:
 
 ## 14. Immediate next steps
 
-1. P0.6's corpus, triage, and report exit criteria are met: the versioned HIR dump,
-   `lake exe stc-sem`, the case format, the differential harness, the report schema, the
-   74-case corpus, and the committed byte-stable report are complete and checked in CI.
-2. Run the P0.7 semantics-document review, version the semantics, and hand it off with the
-   TCB note.
-3. Continue the Phase 1 bridge spike in parallel: Aeneas/Charon on `exact.rs`, `keys.rs`, and one
-   codec path; write the spike report with measured effort and coverage.
+1. P0.0–P0.6 are complete, including the versioned HIR dump, `lake exe stc-sem`, the case format,
+   the differential harness, the report schema, the 74-case corpus, and the committed byte-stable
+   report checked in CI.
+2. Complete the P0.7 owner review and sign-off: `Semantics.md` and `Phase0-Report.md` are
+   complete, `semantics_version` is frozen at `1.0`, and the registry, fixtures, and handoff are
+   updated; the review checklist is in `Phase0-Report.md` §9.
+3. After sign-off, close Phase 0 and continue the Phase 1 bridge spike: Aeneas/Charon on
+   `exact.rs`, `keys.rs`, and one codec path; write the spike report with measured effort and
+   coverage.
 4. Extend the exact vectors to every operation and type, add the constant-evaluation oracle, and
    prototype `lake exe check-ir` against `stc_codegen::verify`.

@@ -2,15 +2,19 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Semantics version: `1.0-draft` (frozen at `1.0` in P0.7)
+Semantics version: `1.0` (frozen by P0.7; freeze commit
+`7aad70d41e1dc4b47606f13cd7818b638fd45927`)
 HIR dump format version: `0.1.0` (frozen with the core dump in P0.6)
-Status: Phase 0 is in progress. P0.0–P0.6 are complete and reviewed; P0.5 was approved on
-2026-11-02, and P0.6 was approved on 2026-11-02 with a 74-case differential corpus, a
-committed conformance report, and the documented exclusions and triage. The semantics version
-stays `1.0-draft` until the P0.7 review. P0.7 (document review, versioning, and handoff) is
-next. The P0.3 completion record and review checklist are in Plan-Phase0.md §19.12, the drift
-register in §19, the P0.4 scope decisions in §20, and the P0.5 completion record in §22.11. This
-document does not yet make the full Phase 0 soundness claim.
+Status: Phase 0 is complete. P0.0–P0.7 are complete and owner-approved; P0.7 was approved on
+2026-11-02, this document is complete against the P0.7 checklist, the semantics version is frozen
+at `1.0`, and the [Phase 0 Report](Phase0-Report.md) records the proof and evidence summary, the
+known gaps, and the handoff to later phases. The soundness
+results stated here are the P0.0–P0.5 theorems plus the P0.6 conformance evidence; they are not a
+refinement claim, and the V0 differential evidence and TCB boundaries are explicit in §7, §8, and
+§10. The P0.3 completion record and review checklist are in Plan-Phase0.md §19.12, the drift
+register in §19, the P0.4 scope decisions in §20, the P0.5 completion record in §22.11, the P0.6
+completion record and sign-off in the Plan-Phase0.md P0.6 section, and the P0.7 execution record
+and review checklist in §23.
 Charter: [Semantics Charter](Semantics-Charter.md)
 Plan: [Phase 0 Implementation Plan](Plan-Phase0.md) · [Verification Program Plan](Plan.md)
 
@@ -342,19 +346,18 @@ instruction sequence plus its trap path produces the same result or trap as the 
 
 The authoritative status of every entry is [`lean/verification-status.toml`](../../lean/verification-status.toml);
 `tools/ci/check_verification_registry.py` validates it and audits proved theorems. This section
-mirrors the registry while P0.3 is complete, review-approved, and merged into
-`v2.0.0-planning`, and P0.4 is complete: the P0.1 and P0.2 entries are proved except
+mirrors the registry at the P0.7 freeze. The P0.1 and P0.2 entries are proved except
 `core_check_complete`, which is descoped with the reason recorded in the registry; the P0.3
 entries for determinism, progress, preservation, type soundness, trap soundness, guarded exact
 arithmetic, and the interpreter are proved; the P0.4 definitions and structural lemmas are
 proved. P0.5 target soundness is proved: determinism, progress, memory safety, GOT soundness,
-trap soundness, checked-arithmetic refinement, the recursive-model equivalence, and no-UB are
-all proved against the implemented invariant. The initial-state proof, the preservation proof,
-and the reachability/`irRun` corollaries are also proved (`Plan-Phase0.md` §22.11). Open P0.3
-questions are recorded in
-[Plan-Phase0.md](Plan-Phase0.md) §19, the P0.4 decisions in §20, the P0.5 checkpoint in §21, and
-the P0.5 design/implementation record in §22. The registry is regenerated into this section at
-P0.7.
+trap soundness, checked-arithmetic refinement, the recursive-model equivalence, and no-UB are all
+proved against the implemented invariant. The initial-state proof, the preservation proof, and
+the reachability/`irRun` corollaries are also proved (`Plan-Phase0.md` §22.11). P0.6's
+versioning and conformance claims are evidence, not theorems, and are recorded as `tested`; the
+committed report is the artifact. Open P0.3 questions are recorded in
+[Plan-Phase0.md](Plan-Phase0.md) §19, the P0.4 decisions in §20, the P0.5 checkpoint in §21, the
+P0.5 design/implementation record in §22, and the P0.6 completion record in §23.
 
 ### 7.1 Source soundness
 
@@ -412,11 +415,11 @@ lemmas are projections of `Stc.Codegen.WellFormed`; the full inventory and shape
 
 ### 7.4 Interpreter equivalence and harness properties
 
-| Theorem | Module | Sub-phase | Status |
+| Claim | Module | Sub-phase | Status |
 | --- | --- | --- | --- |
 | `Verification.Semantics.interpreter_sound` | `Verification.Semantics.Interpreter` | P0.3 | proved |
 | `Verification.Semantics.interpreter_complete` | `Verification.Semantics.Interpreter` | P0.3 | proved |
-| `Verification.Semantics.semantics_versioned` | `Verification.Semantics.Conformance` | P0.6 | planned |
+| `Verification.Semantics.semantics_versioned` | `Verification.Semantics.Conformance` | P0.6 | tested (evidence) |
 
 ### 7.5 Conformance evidence
 
@@ -449,9 +452,13 @@ Assumptions that must be stated with any published claim:
 
 ### 9.1 Semantics version
 
-`semantics_version` is `1.0-draft` during Phase 0 and becomes `1.0` at the P0.7 freeze. The
-freeze commit is recorded in the registry and `Phase0-Report.md`. A change to any core definition
-or theorem after the freeze requires a version bump and a registry update.
+`semantics_version` is frozen at `1.0` by P0.7. The freeze commit is
+`7aad70d41e1dc4b47606f13cd7818b638fd45927`, recorded in
+[`lean/verification-status.toml`](../../lean/verification-status.toml) and in
+[Phase0-Report.md](Phase0-Report.md). The freeze commit itself carried a marked placeholder
+because a commit cannot name itself; the immediately following commit records the exact hash. A
+change to any core definition or theorem after the freeze requires a version bump, a registry
+update, a changelog entry here, and a review of the affected phase claims.
 
 ### 9.2 HIR dump format version
 
@@ -476,6 +483,7 @@ an unknown version or an unmodeled construct is rejected, never interpreted.
 | 2026-11-01 | 1.0-draft | P0.6 (dump) | Defined and froze dump format `0.1.0` in [HIR-Dump.md](HIR-Dump.md): canonical names and positions, function signatures, globals with GOT keys, the single program, statements, expressions and places, explicit casts, call targets, literal values, spans, and the feature-tag vocabulary for rejection. Implemented the emitter and validator in `crates/stc-hir/src/core_dump.rs`, added `stc hir-dump` with emit/verify modes, and added determinism, versioning, and unmodeled-construct tests. The Lean reader, case corpus, and differential harness followed. |
 | 2026-11-01 | 1.0-draft | P0.6 (reference) | Added the strict Lean reader for dump `0.1.0` and defined the `stc-core-case` `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` in [Semantics-Cases.md](Semantics-Cases.md); the reader validates header/version/profile/semantics, status/features, names, positions, callees, arities, literals, and depth, and rejects unmodeled constructs. Added unit tests and temporary-fixture CLI tests (`lake exe stc-sem-tests`); no corpus case was committed while the harness was a fail-closed placeholder. The differential harness and corpus followed. |
 | 2026-11-02 | 1.0-draft | P0.6 (complete) | Added the opt-in launcher `--snapshot` surface backed by `Host::debug_read` and manifest roots, the differential harness, and the frozen `stc-sem-conformance-report` `0.1.0`; expanded the corpus to 74 cases covering every claimed core item or a justified exclusion, with the coverage inventory and triage log in `Semantics-Cases.md` §7; fixed `MIN`/`MAX`/`LIMIT` magnitude typing for bit strings and characters; committed the byte-stable report and made the corpus gate reject a stale copy. P0.6 approved 2026-11-02; the V0 differential-evidence label is unchanged |
+| 2026-11-02 | 1.0 | P0.7 | Froze `semantics_version` at `1.0` in the registry, the HIR dump, the case descriptors, the result and report metadata, and the Rust/Lean constants and tests; the dump, case, result, and report formats remain `0.1.0`. Completed this document against the P0.7 checklist, corrected the `semantics_versioned` status to tested evidence, and added the [Phase 0 Report](Phase0-Report.md) with the proof and evidence summary, known gaps and exclusions, TCB, freeze record, and the handoff to Phases 1, 2, 4, 5, 6, 7, and 8. P0.7 preparation is complete; the owner review and sign-off are pending |
 
 ## 10. Rust/Lean interface
 
@@ -531,11 +539,13 @@ reported as agreement. Agreement is evidence, not a refinement proof.
 Every disagreement is classified as a Lean semantics bug, a Rust compiler bug, a dump bug, or an
 unmodeled or excluded feature. The case is fixed or excluded with a written reason; a silent
 exclusion is a Phase 0 exit failure. The P0.6 triage log is recorded in
-[Semantics-Cases.md](Semantics-Cases.md) §7.3 and is carried into `Phase0-Report.md` at P0.7.
+[Semantics-Cases.md](Semantics-Cases.md) §7.3 and is carried into
+[Phase0-Report.md](Phase0-Report.md) §5.
 
 ## 11. References
 
 - [Semantics Charter](Semantics-Charter.md)
+- [Phase 0 Report](Phase0-Report.md)
 - [Core HIR Dump](HIR-Dump.md)
 - [Core Semantics Cases](Semantics-Cases.md)
 - [Core Syntax Coverage](Core-Coverage.md)

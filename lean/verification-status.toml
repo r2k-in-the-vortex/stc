@@ -22,8 +22,13 @@
 
 schema_version = 1
 profile = "stc-2013-oop-utf8-v1"
-semantics_version = "1.0-draft"
-dump_format_version = "0.1-draft"
+semantics_version = "1.0"
+dump_format_version = "0.1.0"
+# The commit that froze semantics_version 1.0 (P0.7). A commit cannot name
+# itself, so the freeze commit is committed with a marked placeholder and the
+# placeholder is replaced by the exact hash in the immediately following
+# commit. Phase0-Report.md records the same value.
+semantics_freeze_commit = "7aad70d41e1dc4b47606f13cd7818b638fd45927"
 
 [[records]]
 id = "P0-T01"
