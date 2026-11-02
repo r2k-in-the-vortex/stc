@@ -3,8 +3,9 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-11-01; completed 2026-11-02  
 Branch: `WL-5.1` (sub-plan of `v2.0.0-planning`)  
-Status: Done 2026-11-02. Phases 0–5 are complete; the implementation, documentation, overhead
-evidence, and pull request are the phase-5 result. The permanent contract is in
+Status: Implementation and documentation complete 2026-11-02; pull request #15 is open and all
+checks pass. Owner review and merge are pending; the working plan is retired after merge. The
+permanent contract is in
 [I/O Routing and Backends §4.5](specification/Architecture/IO-Routing-and-Backends.md) and
 [CLI and Manifest §2.2.1](specification/Architecture/CLI-and-Manifest.md); the evidence report is
 [Modbus-Server.md](specification/Verification/Modbus-Server.md). This working plan is retained
@@ -77,6 +78,9 @@ there; this index is for navigation only.
 
 ## 4. Evidence
 
+- **Pull request:** [#15](https://github.com/r2k-in-the-vortex/stc/pull/15) from `WL-5.1` into
+  `v2.0.0-planning`; final head `dc7ac8d`; PR checks
+  [41504762316](https://github.com/r2k-in-the-vortex/stc/actions/runs/41504762316) — success.
 - **Contract:** [IO-Routing-and-Backends §4.5](specification/Architecture/IO-Routing-and-Backends.md)
   (profile schema, zero-based mapping, widths/orders, scheduling, fault policy, status,
   diagnostics, security, online change) and
@@ -122,7 +126,7 @@ there; this index is for navigation only.
 | 2 — backend and coordinator integration | Done | `6c55414` | [41483247583](https://github.com/r2k-in-the-vortex/stc/actions/runs/41483247583) — success |
 | 3 — error paths, lifecycle, online change | Done | `97c592d` | [41488899175](https://github.com/r2k-in-the-vortex/stc/actions/runs/41488899175) — success |
 | 4 — cross-host and end-to-end | Done | `bf3e7fa` | [41493523376](https://github.com/r2k-in-the-vortex/stc/actions/runs/41493523376) — success |
-| 5 — overhead, documentation consolidation, PR | Done | `13bbbed`, `5ceb9df` | [41500681839](https://github.com/r2k-in-the-vortex/stc/actions/runs/41500681839) — success |
+| 5 — overhead, documentation consolidation, PR | Done — PR #15 open; owner review/merge pending | `13bbbed`, `5ceb9df`; head `dc7ac8d` | [41500681839](https://github.com/r2k-in-the-vortex/stc/actions/runs/41500681839) (phase), [41504762316](https://github.com/r2k-in-the-vortex/stc/actions/runs/41504762316) (PR) — success |
 
 ## 6. Exit criteria
 
@@ -147,7 +151,8 @@ there; this index is for navigation only.
   are implemented, validated, and documented.
 - Cycle-boundary overhead is measured and reported; no hard real-time or safety claim is made.
 - Permanent documentation is consolidated in `specification/`; this plan is clean; V2.0.0-PLAN.md
-  and FutureWishlist.md record completion; the pull request is green and owner-approved.
+  and FutureWishlist.md record completion; pull request #15 is green; owner review and merge are
+  the remaining step.
 
 ## 7. Change log
 
@@ -156,3 +161,4 @@ there; this index is for navigation only.
 | 2026-11-01 | Created the WL-5.1 working plan on the post-WL-5.2 baseline. Proposed the explicit profile channel map, table/direction semantics, dedicated-thread scheduling, protocol surface, fault policy, status device, online-change behavior, and evidence plan; no implementation started. |
 | 2026-11-02 | Recorded the owner's answers and accepted M-1–M-15 as the locked contract; phases 0–4 completed with commits `3547e58`, `ebfbbc6`, `6c55414`, `97c592d`, and `bf3e7fa`, each with green cross-host CI. |
 | 2026-11-02 | Phase 5 complete: `13bbbed` consolidated the permanent documentation and overhead evidence, and `5ceb9df` fixed the ARM e2e discrete-input read race exposed by the first phase-5 CI run. Final run 41500681839 succeeded on all three hosts; the final state is delivered in the `WL-5.1` → `v2.0.0-planning` pull request. |
+| 2026-11-02 | Pull request #15 opened from `WL-5.1` into `v2.0.0-planning`; final head `dc7ac8d`; PR checks run 41504762316 succeeded on the full cross-host matrix. Owner review and merge are pending; the working plan is retired after merge. |
