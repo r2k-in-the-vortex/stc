@@ -84,6 +84,7 @@ pub mod io;
 #[cfg(target_os = "linux")]
 pub mod io_ethercat;
 pub mod io_mock;
+pub mod io_modbus_tcp;
 pub mod loader;
 pub mod memory;
 pub mod migration;
