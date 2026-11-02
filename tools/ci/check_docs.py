@@ -47,6 +47,7 @@ REQUIRED_DOCUMENTS = (
     "specification/Verification/Plan-Phase0.md",
     "specification/Verification/Semantics-Charter.md",
     "specification/Verification/Semantics.md",
+    "specification/Verification/Phase0-Report.md",
     "specification/Verification/HIR-Dump.md",
     "specification/Verification/Semantics-Cases.md",
     "specification/Verification/Core-Coverage.md",

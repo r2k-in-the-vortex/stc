@@ -2,14 +2,18 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Status: Phase 0 is in progress. P0.0–P0.6 are complete and reviewed; P0.5 was approved on
-2026-11-02 and merged through PR #12 (merge commit `92e113f`); P0.6 was approved on 2026-11-02.
-P0.6 delivered the versioned core-HIR dump `0.1.0` and `stc hir-dump`, the strict Lean reader,
-the `stc-core-case`/`stc-sem-result`/`stc-sem-conformance-report` `0.1.0` formats, `lake exe
-stc-sem`, the opt-in snapshot surface, the differential harness, a 74-case corpus with a
-coverage inventory and triage log, and the committed byte-stable report checked in CI. P0.7
-(document review, versioning, and handoff) is next. Completion records and sign-offs are in
-§16–§22; `lean/verification-status.toml` is authoritative for proved claims.
+Status: Phase 0 is in progress, with P0.7 preparation complete and the owner review pending.
+P0.0–P0.6 are complete and reviewed; P0.5 was approved on 2026-11-02 and merged through PR #12
+(merge commit `92e113f`); P0.6 was approved on 2026-11-02. P0.6 delivered the versioned core-HIR
+dump `0.1.0` and `stc hir-dump`, the strict Lean reader, the
+`stc-core-case`/`stc-sem-result`/`stc-sem-conformance-report` `0.1.0` formats, `lake exe stc-sem`,
+the opt-in snapshot surface, the differential harness, a 74-case corpus with a coverage inventory
+and triage log, and the committed byte-stable report checked in CI. P0.7 (document review,
+versioning, and handoff) has frozen `semantics_version` at `1.0`, completed
+[Semantics.md](Semantics.md) and [Phase0-Report.md](Phase0-Report.md), updated the registry, and
+recorded the handoff; the owner review and sign-off are pending. Completion records and sign-offs
+are in §16–§22, the P0.6 sign-off is in the P0.6 section, and the P0.7 record and review checklist
+are in §23; `lean/verification-status.toml` is authoritative for proved claims.
 Parent: [Verification Program Plan](Plan.md)
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -764,7 +768,8 @@ Every disagreement is classified as one of:
 
 The case is fixed or excluded with a written reason. A silent exclusion is a Phase 0 exit
 failure. The P0.6 triage log is recorded in
-[Semantics-Cases.md](Semantics-Cases.md) §7.3 and is carried into `Phase0-Report.md` at P0.7.
+[Semantics-Cases.md](Semantics-Cases.md) §7.3 and carried into
+[Phase0-Report.md](Phase0-Report.md) §5.3.
 
 ## 10. Semantics document
 
@@ -853,13 +858,15 @@ Phase 0 is done when:
 
 ## 15. Immediate next steps
 
-1. P0.0–P0.5 are complete; their completion records are §16–§22.
-2. Continue P0.6: the versioned dump, `lake exe stc-sem`, the case format, the snapshot surface,
-   the differential harness, the report schema, and a five-case corpus are complete and run in
-   CI. Expand the corpus to every core feature and trap, triage every disagreement, and commit
-   the report.
-3. Run P0.7: complete and review `Semantics.md`, version the semantics, and hand off the
-   artifact with its TCB note.
+1. P0.0–P0.6 are complete; their completion records are §16–§22, and the P0.6 sign-off is in the
+   P0.6 section.
+2. P0.7 is in progress: [Semantics.md](Semantics.md) and [Phase0-Report.md](Phase0-Report.md) are
+   complete, `semantics_version` is frozen at `1.0`, the registry and all versioned fixtures are
+   updated, and the handoff is recorded. The owner review and sign-off are pending; the review
+   checklist is §23.
+3. After P0.7 sign-off, close Phase 0 and start Phase 1: the bridge spike on `exact.rs`,
+   `keys.rs`, and one `stc-got` codec path, using the Phase 0 recursive models and step relations
+   as the refinement targets.
 
 ## 16. P0.0 execution record
 
@@ -2377,3 +2384,79 @@ are not weakened.
 8. **Owner sign-off (2026-11-02).** The owner approved P0.5 at `31394c2` after independent
    verification of the full theorem list, the builder `%slots` change, the invariant field
    set, and the Q3 caveat.
+
+## 23. P0.7 execution record — preparation complete, review pending
+
+Date: 2026-11-02.
+
+P0.7 turned the definitions and proofs into a reviewed, versioned artifact that later phases can
+cite. Preparation is complete; the owner review and sign-off have not occurred.
+
+| Deliverable | Location | State |
+| --- | --- | --- |
+| Completed semantics document | [Semantics.md](Semantics.md) | Complete against the P0.7 checklist; stale draft/status text removed; final changelog row added |
+| Phase 0 report | [Phase0-Report.md](Phase0-Report.md) | Complete: proved results, 74/74 conformance evidence, gaps and exclusions, T2 fix, TCB, freeze record, handoff, and review checklist |
+| Handoff note | Phase0-Report.md §8 | Phases 1, 2, 4, 5, 6, 7, and 8 consumption; extension and version-bump rules; refinement handoff for recursive models, loop-shaped relations, explicit state/control flow, and fuel obligations |
+| Semantics version | `lean/verification-status.toml`, all versioned fixtures, and the committed report | Frozen at `1.0`; formats remain at `0.1.0`; freeze commit recorded with a marked placeholder and finalized in the follow-up commit |
+| Parent-plan and registry updates | [Plan.md](Plan.md), this plan, registry | P0.7 in progress with final review pending; no sign-off claimed |
+
+**Version freeze.** `semantics_version` changed from `1.0-draft` to `1.0` in the registry, the
+Rust emitter (`crates/stc-hir/src/core_dump.rs`) and its tests, the Lean reader
+(`Verification.Semantics.CoreDump`), the embedded fixtures and wrong-version test in
+`ReferenceTests`, all 74 `case.json` descriptors, the documentation, and the regenerated
+conformance report. `dump_format_version` in the registry was corrected from the stale
+`0.1-draft` to the frozen `0.1.0`. The HIR dump, case, result, report, and snapshot formats were
+not changed. The committed report's only diff is the semantics-version field: 74 cases, 74
+passed, 0 failed. No semantic definition or theorem statement changed, and no version-bump
+incompatibility surfaced.
+
+**Verification (2026-11-02).**
+
+- `lake build`: build completed successfully (65 jobs).
+- `lake exe stc-sem-tests`: OK (11 test groups).
+- `PYTHONUTF8=1 python tools/ci/check_verification_registry.py`: OK (45 records: 1 descoped, 0
+  planned, 42 proved, 2 tested; `semantics_version` 1.0); the axiom audit is part of this check.
+- `python tools/ci/check_docs.py`: OK (26 required documents, 541 relative links, profile
+  `stc-2013-oop-utf8-v1`); `Phase0-Report.md` is now a required document, so the docs check
+  covers it.
+- `npx --yes markdownlint-cli2@0.24.0`: 0 issues in 0 files (33 files linted).
+- `STC_CLANG=... python tools/ci/check_semantics_placeholder.py`: OK (74 corpus cases ran; report
+  matches).
+- `cargo test --workspace --locked`: exit 0.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: pass.
+- `cargo fmt --all -- --check`: pass.
+- No `sorry` or `admit` in `lean` sources outside `.lake`.
+
+### 23.1 P0.7 review checklist
+
+1. `Semantics.md` covers the P0.7 checklist: scope and core subset; grammar/AST/HIR/IR mapping;
+   static and dynamic judgments; memory and GOT; trap and UB policy; theorem inventory with proof
+   status; TCB and assumptions; exact-arithmetic link; conformance evidence; references; and the
+   final changelog row. The current Phase 0 state is stated accurately, and no stale
+   draft/pending claim remains outside the dated changelog history.
+2. `Semantics.md` §7 mirrors the registry: `semantics_versioned` is tested evidence, not planned;
+   `core_check_complete` is marked descoped; the P0.4 and P0.5 inventories match the proved
+   records.
+3. `Phase0-Report.md` records what P0.0–P0.6 established, the 74/74 result and all artifact
+   versions, E1–E7, Q2/Q3/Q5, `core_check_complete`, T1, the T2 analyzer bug and fix, TCB and
+   assumptions, the platform caveat, the freeze record, the handoff, and the review checklist.
+4. The registry has `semantics_version = "1.0"` and `dump_format_version = "0.1.0"`, every Phase 0
+   theorem/definition/evidence item has a specification reference and an honest status, and the
+   freeze commit is recorded (placeholder in the freeze commit, exact hash in the follow-up).
+5. Versioned artifacts agree on `1.0`: Rust constant and tests, Lean constant and fixtures, all
+   74 case descriptors, and the regenerated report; unknown versions are still rejected.
+6. Proof audit: no `sorry`/`admit`; `#print axioms` reports only `propext`, `Classical.choice`,
+   and `Quot.sound`; no unregistered top-level theorem.
+7. Tests: Lean build and `stc-sem-tests`; Rust workspace tests, clippy with `-D warnings`, and
+   fmt; registry, docs, Markdown, and the corpus/report gate.
+8. Claim boundary: the V0 differential label, TCB, exclusions, and non-refinement statement are
+   explicit in the semantics document, the report, and the formats; no refinement or owner
+   sign-off is claimed.
+9. Handoff: Phases 1, 2, 4, 5, 6, 7, and 8 have a stated consumption list, extension and
+   version-bump rules, and the refinement handoff covering recursive models, loop-shaped step
+   relations, explicit state/control-flow encoding, termination/fuel obligations, and the
+   intended Phase 1 bridge points.
+
+Open items for owner awareness, unchanged by P0.7: Q3 layout-only characters, Q2 guarded exact
+arithmetic, Q5 initializer ordering, the descoped `core_check_complete`, and E1/T1 result-less
+call dump gap. No new owner decision is required to complete the freeze.

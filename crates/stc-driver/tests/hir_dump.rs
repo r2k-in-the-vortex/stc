@@ -81,7 +81,7 @@ fn emit_writes_an_accepted_dump_to_stdout() {
     let dump = json(&stdout(&output));
     assert_eq!(dump["format"], "stc-core-hir");
     assert_eq!(dump["formatVersion"], "0.1.0");
-    assert_eq!(dump["semanticsVersion"], "1.0-draft");
+    assert_eq!(dump["semanticsVersion"], "1.0");
     assert_eq!(dump["profile"], "stc-2013-oop-utf8-v1");
     assert_eq!(dump["status"], "ok");
     assert_eq!(dump["features"], Value::Array(Vec::new()));
@@ -109,7 +109,7 @@ fn emit_can_write_the_dump_to_a_file() {
     assert_eq!(checked.status.code(), Some(0), "{}", stderr(&checked));
     let summary = stdout(&checked);
     assert!(summary.contains("format stc-core-hir 0.1.0"), "{summary}");
-    assert!(summary.contains("semantics 1.0-draft"), "{summary}");
+    assert!(summary.contains("semantics 1.0"), "{summary}");
     assert!(summary.contains("status ok"), "{summary}");
     let _ = std::fs::remove_file(&dump_path);
 }

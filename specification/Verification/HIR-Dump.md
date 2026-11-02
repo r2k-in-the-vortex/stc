@@ -3,12 +3,13 @@
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
 Dump format: `stc-core-hir` version `0.1.0` (frozen by P0.6)
-Semantics version: `1.0-draft`
-Status: P0.6. The format, emitter, validator, and CLI command are implemented; the Lean reader
-consumes it in `lake exe stc-sem`, and `lake exe semantics-conformance` consumes it for the
-seeded core corpus. The differential harness maps the dump's globals to their GOT roots in the
-launcher snapshot. The case descriptor, reference result, and conformance report are specified
-in [Semantics-Cases.md](Semantics-Cases.md).
+Semantics version: `1.0` (frozen by P0.7)
+Status: P0.7. The format, emitter, validator, and CLI command are implemented and the format
+remains `0.1.0`, unchanged by the P0.7 semantics freeze; `semanticsVersion` is `1.0`. The Lean
+reader consumes the dump in `lake exe stc-sem`, and `lake exe semantics-conformance` consumes it
+for the frozen 74-case core corpus. The differential harness maps the dump's globals to their GOT
+roots in the launcher snapshot. The case descriptor, reference result, and conformance report are
+specified in [Semantics-Cases.md](Semantics-Cases.md).
 Companion: [Semantics](Semantics.md) · [Core Semantics Cases](Semantics-Cases.md) ·
 [Phase 0 Implementation Plan](Plan-Phase0.md)
 
@@ -72,7 +73,7 @@ different dump bytes. Consumers compare observable semantics, never dump text ac
 | --- | --- | --- |
 | `format` | string | Exactly `stc-core-hir` |
 | `formatVersion` | string | Exactly `0.1.0` |
-| `semanticsVersion` | string | Exactly `1.0-draft` |
+| `semanticsVersion` | string | Exactly `1.0` |
 | `profile` | string | Exactly `stc-2013-oop-utf8-v1` |
 | `package` | string | Canonical root package name, uppercase (normally `_ROOT`) |
 | `unit` | object | The core unit, §4 |
@@ -397,3 +398,4 @@ accepts no input files, and emit mode requires at least one input file.
 | 2026-11-01 | `0.1.0` | P0.6 second milestone: added the strict Lean reader and `lake exe stc-sem`, and split the case and result schemas into [Semantics-Cases.md](Semantics-Cases.md). The dump format is unchanged; the differential harness remains |
 | 2026-11-02 | `0.1.0` | P0.6 third milestone: `lake exe semantics-conformance` consumes the dump for the seeded core corpus, maps dump globals to their `_ROOT::NAME` GOT roots in the launcher snapshot, and compares them with the reference result. The dump format is unchanged; corpus expansion and the committed report remain |
 | 2026-11-02 | `0.1.0` | P0.6 fourth milestone: documented the result-less call gap in §9 (exclusion E1, triage T1) and recorded the fixed `MIN`/`MAX`/`LIMIT` magnitude typing in [Semantics-Cases.md](Semantics-Cases.md). The dump format is unchanged; the 74-case corpus and committed report are complete |
+| 2026-11-02 | `0.1.0` | P0.7: froze `semanticsVersion` at `1.0` in the schema, the emitter, the Lean reader, and the case descriptors. The dump format `0.1.0` is unchanged, and the byte-stable conformance report was regenerated with the frozen version |

@@ -27,7 +27,7 @@ pub const CORE_DUMP_FORMAT: &str = "stc-core-hir";
 /// Frozen dump format version.
 pub const CORE_DUMP_FORMAT_VERSION: &str = "0.1.0";
 /// Semantics version recorded in every dump.
-pub const CORE_DUMP_SEMANTICS_VERSION: &str = "1.0-draft";
+pub const CORE_DUMP_SEMANTICS_VERSION: &str = "1.0";
 /// Conformance profile recorded in every dump.
 pub const CORE_DUMP_PROFILE: &str = "stc-2013-oop-utf8-v1";
 

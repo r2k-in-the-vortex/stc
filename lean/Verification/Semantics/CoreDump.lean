@@ -33,7 +33,7 @@ def coreDumpFormat : String := "stc-core-hir"
 def coreDumpFormatVersion : String := "0.1.0"
 
 /-- The exact semantics version understood by this reader. -/
-def coreDumpSemanticsVersion : String := "1.0-draft"
+def coreDumpSemanticsVersion : String := "1.0"
 
 /-- The exact conformance profile understood by this reader. -/
 def coreDumpProfile : String := "stc-2013-oop-utf8-v1"
