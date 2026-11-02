@@ -10916,4 +10916,64 @@ theorem wfState_stepTerminator {contract : IRContract} {c c' : IRState} {f : IRF
       simp only [stepTerminator, hterm] at hstep
       cases hstep
 
+/-- A `.step` outcome comes from a `.step` instruction result. -/
+theorem toOutcome_step {r : IRStepResult} {c' : IRState}
+    (h : r.toOutcome = .step c') : r = .step c' := by
+  cases r <;> simp_all [IRStepResult.toOutcome]
+
+/-- Every successful single target step preserves the state invariant: dispatch
+on the status, the empty stack (halt), the current instruction or terminator,
+and the empty instruction list. -/
+theorem wfState_step {contract : IRContract} {c c' : IRState}
+    (hwf : WFState contract c) (hstep : IRStep c c') :
+    WFState contract c' := by
+  unfold IRStep at hstep
+  unfold irStep at hstep
+  cases hstatus : c.status with
+  | halted =>
+      simp only [hstatus] at hstep
+      cases hstep
+  | trapped trap =>
+      simp only [hstatus] at hstep
+      cases hstep
+  | ub =>
+      simp only [hstatus] at hstep
+      cases hstep
+  | running =>
+      cases hframes : c.frames with
+      | nil =>
+          simp only [hstatus, hframes] at hstep
+          cases hstep
+          simpa [hframes] using wfState_retHalt hwf
+      | cons f rest =>
+          simp only [hstatus, hframes] at hstep
+          cases hinstrs : f.instrs with
+          | nil =>
+              simp only [hinstrs] at hstep
+              cases hterm : f.terminator with
+              | none =>
+                  simp only [stepTerminator, hterm] at hstep
+                  cases hstep
+              | some term =>
+                  exact wfState_stepTerminator hwf hframes hterm
+                    (toOutcome_step hstep)
+          | cons instr restInstrs =>
+              simp only [hinstrs] at hstep
+              exact wfState_stepInstr hwf hframes hinstrs (toOutcome_step hstep)
+
+/-- The step-preservation theorem: every `.step` successor of a state satisfying
+`WFState` satisfies `WFState`. -/
+theorem irStep_wf {contract : IRContract} {c c' : IRState}
+    (hwf : WFState contract c) (hstep : IRStep c c') :
+    WFState contract c' :=
+  wfState_step hwf hstep
+
+/-- State-invariant preservation along a run. -/
+theorem irStepStar_wf {contract : IRContract} {c c' : IRState}
+    (hwf : WFState contract c) (h : IRStepStar c c') :
+    WFState contract c' := by
+  induction h with
+  | refl => exact hwf
+  | step hstep _ ih => exact ih (irStep_wf hwf hstep)
+
 end Stc.Codegen
