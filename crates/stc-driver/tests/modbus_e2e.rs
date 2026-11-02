@@ -412,11 +412,15 @@ fn fixture_serves_all_tables_and_word_orders_through_two_binds() {
         vec![true],
     );
     expect("FC1 coil output 1024", coil, vec![true]);
-    expect(
-        "FC2 discrete input 0",
-        second.read_bits(2, 0, 1),
+    // FC5 and FC15 may straddle an input boundary: FC5 updates CoilIn0
+    // first, so CoilOut can be readable before CoilIn1 (DiOut) has been
+    // latched. Poll the discrete-input table like the register tables below.
+    let discrete = poll_until(
+        "discrete input output 0",
+        || second.read_bits(2, 0, 1),
         vec![true],
     );
+    expect("FC2 discrete input 0", discrete, vec![true]);
 
     let expected_outputs = vec![
         0x1234, 0xA1B2, // holding registers 8 and 10 (8- and 16-bit outputs)
