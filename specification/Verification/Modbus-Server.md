@@ -2,8 +2,9 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-11-02  
-Status: Final for WL-5.1; all phases complete on `WL-5.1`; phase-5 CI is recorded on the pull
-request and in [WL-5.1-Plan.md](../../WL-5.1-Plan.md).  
+Status: Final for WL-5.1; all phases complete on `WL-5.1`; final phase-5 CI run
+[41500681839](https://github.com/r2k-in-the-vortex/stc/actions/runs/41500681839) succeeded on all
+three hosts.  
 Parent: [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) (WL-5.1)  
 Contract: [I/O Routing and Backends](../Architecture/IO-Routing-and-Backends.md) §4.5,
 [CLI and Manifest](../Architecture/CLI-and-Manifest.md) §2.2.1  
@@ -251,7 +252,7 @@ workflow or timing gate was added.
 | 2 — backend and coordinator | `6c55414` | [41483247583](https://github.com/r2k-in-the-vortex/stc/actions/runs/41483247583) | Success |
 | 3 — error paths, lifecycle, online change | `97c592d` | [41488899175](https://github.com/r2k-in-the-vortex/stc/actions/runs/41488899175) | Success |
 | 4 — cross-host end-to-end and mixed bench | `bf3e7fa` | [41493523376](https://github.com/r2k-in-the-vortex/stc/actions/runs/41493523376) | Success |
-| 5 — overhead, documentation, PR | phase-5 commit on `WL-5.1` | recorded on the pull request and in [WL-5.1-Plan.md](../../WL-5.1-Plan.md) | See PR |
+| 5 — overhead, documentation, PR | `13bbbed`, `5ceb9df` | [41500681839](https://github.com/r2k-in-the-vortex/stc/actions/runs/41500681839) | Success |
 
 Each run includes the `Rust test (windows-2025)`, `Rust test (ubuntu-24.04)`, and
 `Rust test (ubuntu-24.04-arm)` jobs, plus formatting, clippy, docs/specification, traceability,

@@ -122,7 +122,7 @@ there; this index is for navigation only.
 | 2 — backend and coordinator integration | Done | `6c55414` | [41483247583](https://github.com/r2k-in-the-vortex/stc/actions/runs/41483247583) — success |
 | 3 — error paths, lifecycle, online change | Done | `97c592d` | [41488899175](https://github.com/r2k-in-the-vortex/stc/actions/runs/41488899175) — success |
 | 4 — cross-host and end-to-end | Done | `bf3e7fa` | [41493523376](https://github.com/r2k-in-the-vortex/stc/actions/runs/41493523376) — success |
-| 5 — overhead, documentation consolidation, PR | In progress | — | — |
+| 5 — overhead, documentation consolidation, PR | Done | `13bbbed`, `5ceb9df` | [41500681839](https://github.com/r2k-in-the-vortex/stc/actions/runs/41500681839) — success |
 
 ## 6. Exit criteria
 
@@ -155,4 +155,4 @@ there; this index is for navigation only.
 | --- | --- |
 | 2026-11-01 | Created the WL-5.1 working plan on the post-WL-5.2 baseline. Proposed the explicit profile channel map, table/direction semantics, dedicated-thread scheduling, protocol surface, fault policy, status device, online-change behavior, and evidence plan; no implementation started. |
 | 2026-11-02 | Recorded the owner's answers and accepted M-1–M-15 as the locked contract; phases 0–4 completed with commits `3547e58`, `ebfbbc6`, `6c55414`, `97c592d`, and `bf3e7fa`, each with green cross-host CI. |
-| 2026-11-02 | Phase 5 consolidated the permanent contract and evidence into `specification/`, recorded D-229–D-243, added the release overhead report, updated the parent plan and wishlist, and removed the working-only content from this plan. |
+| 2026-11-02 | Phase 5 complete: `13bbbed` consolidated the permanent documentation and overhead evidence, and `5ceb9df` fixed the ARM e2e discrete-input read race exposed by the first phase-5 CI run. Final run 41500681839 succeeded on all three hosts; the final state is delivered in the `WL-5.1` → `v2.0.0-planning` pull request. |
