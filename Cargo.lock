@@ -157,6 +157,7 @@ version = "1.0.0"
 name = "stc-hir"
 version = "1.0.0"
 dependencies = [
+ "serde_json",
  "stc-span",
 ]
 
@@ -205,6 +206,7 @@ dependencies = [
 name = "stc-sema"
 version = "1.0.0"
 dependencies = [
+ "serde_json",
  "stc-diag",
  "stc-hir",
  "stc-lexer",

@@ -1,0 +1,10 @@
+VAR_GLOBAL
+  R : BYTE;
+END_VAR
+PROGRAM Main
+VAR
+  x : INT;
+END_VAR
+  x := INT#300;
+  R := INT_TO_BYTE(x);
+END_PROGRAM

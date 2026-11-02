@@ -122,7 +122,11 @@ fn run_stc(args: &[&str]) -> Output {
 }
 
 fn build_executable(directory: &TestDir, source_name: &str, artifact: &str) {
-    let source = directory.write_source(source_name, source_name_source(source_name));
+    build_executable_source(directory, source_name_source(source_name), artifact);
+}
+
+fn build_executable_source(directory: &TestDir, text: &str, artifact: &str) {
+    let source = directory.write_source(artifact, text);
     let runtime = runtime_artifact();
     let output = run_stc(&[
         "build",
@@ -375,6 +379,290 @@ fn executable_runs_a_no_op_cycle() {
         .output()
         .expect("run executable");
     assert_eq!(invalid_io.status.code(), Some(2));
+}
+
+const SNAPSHOT_GLOBALS: &str = r#"
+VAR_GLOBAL
+  Result : DINT;
+  Flag : BOOL;
+END_VAR
+
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+  x := 40;
+  x := x + 2;
+  Result := x;
+  Flag := Result > 40;
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+const SNAPSHOT_EMPTY: &str = r#"
+PROGRAM Main
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+const SNAPSHOT_RETAIN: &str = r#"
+VAR_GLOBAL RETAIN
+  Saved : DINT;
+END_VAR
+VAR_GLOBAL
+  Counter : DINT;
+END_VAR
+
+PROGRAM Main
+  Counter := Counter + 1;
+  Saved := Saved + 1;
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+const SNAPSHOT_TRAP: &str = r#"
+VAR_GLOBAL
+  Before : DINT;
+END_VAR
+
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+  Before := 7;
+  x := 1 / 0;
+END_PROGRAM
+CONFIGURATION C
+RESOURCE R ON Cpu
+  PROGRAM inst : Main;
+END_RESOURCE
+END_CONFIGURATION
+"#;
+
+fn read_snapshot(path: &Path) -> stc_got::Json {
+    let text = std::fs::read_to_string(path).expect("read snapshot");
+    stc_got::json::parse(&text).expect("parse snapshot")
+}
+
+fn snapshot_field<'a>(json: &'a stc_got::Json, name: &str) -> &'a stc_got::Json {
+    json.as_object()
+        .and_then(|object| object.get(name))
+        .unwrap_or_else(|| panic!("snapshot field `{name}` is missing"))
+}
+
+fn snapshot_roots(json: &stc_got::Json) -> &[stc_got::Json] {
+    snapshot_field(json, "roots")
+        .as_array()
+        .expect("roots array")
+}
+
+fn snapshot_root<'a>(json: &'a stc_got::Json, key: &str) -> &'a stc_got::Json {
+    snapshot_roots(json)
+        .iter()
+        .find(|root| snapshot_field(root, "key").as_str() == Some(key))
+        .unwrap_or_else(|| panic!("snapshot root `{key}` is missing"))
+}
+
+#[test]
+fn snapshot_records_global_roots() {
+    let directory = TestDir::new("snapshot-globals");
+    build_executable_source(&directory, SNAPSHOT_GLOBALS, "snapshot-globals");
+    let path = directory.path.join("snapshot.json");
+    let output = Command::new(exe_path(&directory.path, "snapshot-globals"))
+        .args(["--cycles", "1", "--snapshot"])
+        .arg(&path)
+        .output()
+        .expect("run executable");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot = read_snapshot(&path);
+    assert_eq!(
+        snapshot_field(&snapshot, "format").as_str(),
+        Some("stc-runtime-snapshot")
+    );
+    assert_eq!(
+        snapshot_field(&snapshot, "formatVersion").as_str(),
+        Some("0.1.0")
+    );
+    assert_eq!(snapshot_field(&snapshot, "generation").as_number(), Some(1));
+    assert_eq!(snapshot_field(&snapshot, "cycles").as_number(), Some(1));
+    let build = snapshot_field(&snapshot, "build")
+        .as_str()
+        .expect("build string");
+    assert_eq!(build.len(), 34, "{build}");
+    assert!(build.starts_with("0x"), "{build}");
+    let roots = snapshot_roots(&snapshot);
+    assert!(
+        roots.iter().any(|root| {
+            snapshot_field(root, "key").as_str() == Some("_ROOT::MAIN.X#C/R/INST")
+                && snapshot_field(root, "rootKind").as_str() == Some("program_field")
+        }),
+        "program-field roots are part of the manifest surface: {snapshot:?}"
+    );
+    let result = snapshot_root(&snapshot, "_ROOT::RESULT");
+    assert_eq!(snapshot_field(result, "type").as_str(), Some("DINT"));
+    assert_eq!(snapshot_field(result, "rootKind").as_str(), Some("global"));
+    assert_eq!(snapshot_field(result, "retention").as_str(), Some("none"));
+    assert_eq!(snapshot_field(result, "protected").as_bool(), Some(false));
+    assert_eq!(snapshot_field(result, "atomic").as_bool(), Some(true));
+    assert_eq!(snapshot_field(result, "consistent").as_bool(), Some(true));
+    assert_eq!(snapshot_field(result, "value").as_str(), Some("42"));
+    let flag = snapshot_root(&snapshot, "_ROOT::FLAG");
+    assert_eq!(snapshot_field(flag, "type").as_str(), Some("BOOL"));
+    assert_eq!(snapshot_field(flag, "value").as_bool(), Some(true));
+}
+
+#[test]
+fn snapshot_is_deterministic() {
+    let directory = TestDir::new("snapshot-deterministic");
+    build_executable_source(&directory, SNAPSHOT_GLOBALS, "snapshot-det");
+    let first = directory.path.join("first.json");
+    let second = directory.path.join("second.json");
+    for path in [&first, &second] {
+        let output = Command::new(exe_path(&directory.path, "snapshot-det"))
+            .args(["--cycles", "2", "--snapshot"])
+            .arg(path)
+            .output()
+            .expect("run executable");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let first_bytes = std::fs::read(&first).expect("first snapshot");
+    let second_bytes = std::fs::read(&second).expect("second snapshot");
+    assert_eq!(first_bytes, second_bytes);
+    assert_eq!(read_snapshot(&first), read_snapshot(&second));
+}
+
+#[test]
+fn snapshot_reports_an_empty_root_set() {
+    let directory = TestDir::new("snapshot-empty");
+    build_executable_source(&directory, SNAPSHOT_EMPTY, "snapshot-empty");
+    let path = directory.path.join("snapshot.json");
+    let output = Command::new(exe_path(&directory.path, "snapshot-empty"))
+        .args(["--cycles", "1", "--snapshot"])
+        .arg(&path)
+        .output()
+        .expect("run executable");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot = read_snapshot(&path);
+    let roots = snapshot_roots(&snapshot);
+    assert!(
+        roots
+            .iter()
+            .all(|root| { snapshot_field(root, "rootKind").as_str() != Some("global") }),
+        "a program without globals has no global roots: {snapshot:?}"
+    );
+    assert!(
+        roots
+            .iter()
+            .any(|root| { snapshot_field(root, "rootKind").as_str() == Some("task_guard") }),
+        "the default task guard is still a manifest root: {snapshot:?}"
+    );
+}
+
+#[test]
+fn snapshot_marks_protected_retain_roots() {
+    let directory = TestDir::new("snapshot-retain");
+    build_executable_source(&directory, SNAPSHOT_RETAIN, "snapshot-retain");
+    let path = directory.path.join("snapshot.json");
+    let output = Command::new(exe_path(&directory.path, "snapshot-retain"))
+        .args(["--cycles", "1", "--snapshot"])
+        .arg(&path)
+        .output()
+        .expect("run executable");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot = read_snapshot(&path);
+    let saved = snapshot_root(&snapshot, "_ROOT::SAVED");
+    assert_eq!(snapshot_field(saved, "retention").as_str(), Some("retain"));
+    assert_eq!(snapshot_field(saved, "protected").as_bool(), Some(true));
+    assert_eq!(snapshot_field(saved, "value").as_str(), Some("1"));
+    let counter = snapshot_root(&snapshot, "_ROOT::COUNTER");
+    assert_eq!(snapshot_field(counter, "retention").as_str(), Some("none"));
+    assert_eq!(snapshot_field(counter, "protected").as_bool(), Some(false));
+}
+
+#[test]
+fn snapshot_is_written_for_a_trapping_run() {
+    let directory = TestDir::new("snapshot-trap");
+    build_executable_source(&directory, SNAPSHOT_TRAP, "snapshot-trap");
+    let path = directory.path.join("snapshot.json");
+    let output = Command::new(exe_path(&directory.path, "snapshot-trap"))
+        .args(["--cycles", "1", "--snapshot"])
+        .arg(&path)
+        .output()
+        .expect("run executable");
+    assert_eq!(output.status.code(), Some(4));
+    let snapshot = read_snapshot(&path);
+    assert_eq!(snapshot_field(&snapshot, "cycles").as_number(), Some(0));
+    let before = snapshot_root(&snapshot, "_ROOT::BEFORE");
+    assert_eq!(snapshot_field(before, "value").as_str(), Some("7"));
+}
+
+#[test]
+fn snapshot_argument_errors_exit_two() {
+    let directory = TestDir::new("snapshot-errors");
+    build_executable_source(&directory, SNAPSHOT_EMPTY, "snapshot-errors");
+    let missing = Command::new(exe_path(&directory.path, "snapshot-errors"))
+        .arg("--snapshot")
+        .output()
+        .expect("run executable");
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("requires a value"),
+        "{}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    let empty = Command::new(exe_path(&directory.path, "snapshot-errors"))
+        .args(["--snapshot", ""])
+        .output()
+        .expect("run executable");
+    assert_eq!(empty.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&empty.stderr).contains("non-empty path"),
+        "{}",
+        String::from_utf8_lossy(&empty.stderr)
+    );
+    let unwritable = Command::new(exe_path(&directory.path, "snapshot-errors"))
+        .args(["--cycles", "1", "--snapshot"])
+        .arg(directory.path.join("missing-dir").join("snapshot.json"))
+        .output()
+        .expect("run executable");
+    assert_eq!(unwritable.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&unwritable.stderr).contains("snapshot failed"),
+        "{}",
+        String::from_utf8_lossy(&unwritable.stderr)
+    );
 }
 
 #[test]

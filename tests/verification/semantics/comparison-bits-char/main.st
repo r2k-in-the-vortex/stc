@@ -1,0 +1,10 @@
+VAR_GLOBAL
+  A : BOOL;
+  B : BOOL;
+  C : BOOL;
+END_VAR
+PROGRAM Main
+  A := WORD#16#00FF < WORD#16#0100;
+  B := CHAR#'A' < CHAR#'B';
+  C := WORD#1 = WORD#2;
+END_PROGRAM

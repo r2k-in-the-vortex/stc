@@ -256,6 +256,25 @@ END_PROGRAM
 }
 
 #[test]
+fn magnitude_standard_functions_accept_bit_strings_and_characters() {
+    assert_clean(
+        "PROGRAM P
+VAR
+  w : WORD;
+  c : CHAR;
+  wc : WCHAR;
+END_VAR
+  w := MIN(WORD#16#0010, WORD#16#000F);
+  w := MAX(w, WORD#16#0100);
+  w := LIMIT(WORD#16#0000, w, WORD#16#FFFF);
+  c := MIN(CHAR#'A', CHAR#'B');
+  wc := MAX(WCHAR#16#0041, WCHAR#16#20AC);
+END_PROGRAM
+",
+    );
+}
+
+#[test]
 fn duration_arithmetic_analyzes_cleanly() {
     assert_clean(
         "PROGRAM P

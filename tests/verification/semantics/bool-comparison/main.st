@@ -1,0 +1,8 @@
+VAR_GLOBAL
+  A : BOOL;
+  B : BOOL;
+END_VAR
+PROGRAM Main
+  A := TRUE = FALSE;
+  B := TRUE <> FALSE;
+END_PROGRAM
