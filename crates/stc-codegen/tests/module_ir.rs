@@ -304,20 +304,21 @@ fn direct_and_descriptor_cells_keep_their_kinds() {
         "stc_read_direct",
         SymbolAttrs::internal(),
         IrType::Void,
-        &[("%slots", IrType::Ptr)],
+        &[],
     );
     body.start_fresh_block();
-    let slots = body.param_value(0);
+    let slots = body.load(IrType::Ptr, &Value::symbol(SLOTS), Some(8));
     let storage = body.slot_value(&slots, 0);
     let value = body.load(IrType::Int(32), &storage, Some(4));
     body.store(&value, &storage, Some(4));
     body.ret(None);
     module.add_function(body);
 
-    let contract = Contract {
+    let mut contract = Contract {
         slots: vec![CellKind::Direct, CellKind::Descriptor],
         ..Contract::default()
     };
+    contract.local_globals.insert(SLOTS.into());
     assert!(verify(&module, &contract).is_ok());
 }
 
@@ -436,10 +437,10 @@ fn call_through_a_data_cell_is_rejected() {
         "stc_bad_data_call",
         SymbolAttrs::internal(),
         IrType::Void,
-        &[("%slots", IrType::Ptr)],
+        &[],
     );
     body.start_fresh_block();
-    let slots = body.param_value(0);
+    let slots = body.load(IrType::Ptr, &Value::symbol(SLOTS), Some(8));
     let storage = body.slot_value(&slots, 0);
     let _ = body.call_ptr(IrType::Void, &storage, &[]);
     body.ret(None);
@@ -454,10 +455,10 @@ fn storage_access_through_a_function_cell_is_rejected() {
         "stc_bad_function_load",
         SymbolAttrs::internal(),
         IrType::Void,
-        &[("%slots", IrType::Ptr)],
+        &[],
     );
     body.start_fresh_block();
-    let slots = body.param_value(0);
+    let slots = body.load(IrType::Ptr, &Value::symbol(SLOTS), Some(8));
     let code = body.slot_value(&slots, 1);
     let _ = body.load(IrType::Int(32), &code, Some(4));
     body.ret(None);
@@ -472,10 +473,10 @@ fn writing_a_got_cell_is_rejected() {
         "stc_bad_cell_write",
         SymbolAttrs::internal(),
         IrType::Void,
-        &[("%slots", IrType::Ptr)],
+        &[],
     );
     body.start_fresh_block();
-    let slots = body.param_value(0);
+    let slots = body.load(IrType::Ptr, &Value::symbol(SLOTS), Some(8));
     let cell = body.slot_cell(&slots, 0);
     body.store(&Value::null_ptr(), &cell, Some(8));
     body.ret(None);
@@ -506,14 +507,9 @@ fn pre_attach_entry_points_must_not_use_the_slot_table() {
 #[test]
 fn out_of_range_slots_are_rejected() {
     let mut module = module_fixture();
-    let mut body = function(
-        "stc_bad_slot",
-        SymbolAttrs::internal(),
-        IrType::Void,
-        &[("%slots", IrType::Ptr)],
-    );
+    let mut body = function("stc_bad_slot", SymbolAttrs::internal(), IrType::Void, &[]);
     body.start_fresh_block();
-    let slots = body.param_value(0);
+    let slots = body.load(IrType::Ptr, &Value::symbol(SLOTS), Some(8));
     let storage = body.slot_value(&slots, 9);
     let _ = body.load(IrType::Int(32), &storage, Some(4));
     body.ret(None);

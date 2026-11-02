@@ -857,7 +857,7 @@ impl Lowerer<'_> {
             .add_function_table(abi::module::FUNCTION_TABLE, &symbols);
     }
 
-    fn slots_global(&mut self, f: &mut Function) -> Value {
+    pub(crate) fn slots_global(&mut self, f: &mut Function) -> Value {
         f.load(
             IrType::Ptr,
             &Value::symbol(abi::module::SLOTS_GLOBAL),
@@ -997,8 +997,6 @@ impl Lowerer<'_> {
         if aggregate_result {
             fn_params.push((IrType::Ptr, "%sret".into()));
         }
-        let slots_index = fn_params.len();
-        fn_params.push((IrType::Ptr, "%slots".into()));
         let ret_ty = result_abi.clone().unwrap_or(IrType::Void);
         let mut f = Function::new(symbol, SymbolAttrs::internal(), ret_ty, fn_params);
         f.start_fresh_block();
@@ -1012,7 +1010,7 @@ impl Lowerer<'_> {
             &body.locals,
             body.span,
         )?;
-        let slots = f.param_value(slots_index);
+        let slots = self.slots_global(&mut f);
         let mut info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
@@ -1309,12 +1307,11 @@ impl Lowerer<'_> {
             vec![
                 (IrType::Ptr, "%this".into()),
                 (IrType::Ptr, "%table".into()),
-                (IrType::Ptr, "%slots".into()),
             ],
         );
         f.start_fresh_block();
         let ordinals = self.object_ordinals(&layout);
-        let slots = f.param_value(2);
+        let slots = self.slots_global(&mut f);
         let mut info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
@@ -1428,13 +1425,11 @@ impl Lowerer<'_> {
         } else {
             None
         };
-        let slots_index = fn_params.len();
-        fn_params.push((IrType::Ptr, "%slots".into()));
         let ret_ty = result_abi.clone().unwrap_or(IrType::Void);
         let mut f = Function::new(symbol, SymbolAttrs::internal(), ret_ty, fn_params);
         f.start_fresh_block();
         let ordinals = self.object_ordinals(&layout);
-        let slots = f.param_value(slots_index);
+        let slots = self.slots_global(&mut f);
         let mut info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
@@ -1576,12 +1571,10 @@ impl Lowerer<'_> {
         if aggregate_result {
             fn_params.push((IrType::Ptr, "%sret".into()));
         }
-        let slots_index = fn_params.len();
-        fn_params.push((IrType::Ptr, "%slots".into()));
         let ret_ty = result_abi.unwrap_or(IrType::Void);
         let mut f = Function::new(symbol, SymbolAttrs::internal(), ret_ty, fn_params);
         f.start_fresh_block();
-        let slots = f.param_value(slots_index);
+        let slots = self.slots_global(&mut f);
         let previous = self.current_slots.replace(slots.clone());
         let result = (|| -> Result<(), CodegenError> {
             let slot = self.import_slot(ImportService::Trap)?;
@@ -1622,10 +1615,7 @@ impl Lowerer<'_> {
             symbol,
             SymbolAttrs::internal(),
             IrType::Void,
-            vec![
-                (IrType::Ptr, "%fields".into()),
-                (IrType::Ptr, "%slots".into()),
-            ],
+            vec![(IrType::Ptr, "%fields".into())],
         );
         f.start_fresh_block();
         let layout = self
@@ -1640,7 +1630,7 @@ impl Lowerer<'_> {
             .filter_map(|leaf| leaf.at.clone().map(|at| (leaf.segments.clone(), at)))
             .collect();
         let body = body.map(|body_id| self.hir.bodies[body_id.index()].clone());
-        let slots = f.param_value(1);
+        let slots = self.slots_global(&mut f);
         let mut info = BodyInfo {
             params: BTreeMap::new(),
             locals: BTreeMap::new(),
@@ -2197,7 +2187,7 @@ impl Lowerer<'_> {
         }
         let slot = self.function_slot(FunctionTarget::ProgramBody(instance.program))?;
         let body = Self::slot_storage(f, &local, slot);
-        f.call_ptr(IrType::Void, &body, &[field_pointer, local.slots.clone()]);
+        f.call_ptr(IrType::Void, &body, &[field_pointer]);
         for binding in instance.bindings.iter().filter(|binding| binding.output) {
             let value = self.lower_expr(f, &local, binding.target)?;
             self.write_place(f, &local, binding.source, value)?;
@@ -2461,10 +2451,9 @@ impl Lowerer<'_> {
         f.start_block(&call);
         let slot = self.function_slot(FunctionTarget::Function(def))?;
         let callee = Self::slot_storage(f, info, slot);
-        let mut args = (0..argc)
+        let args = (0..argc)
             .map(|index| f.param_value(index))
             .collect::<Vec<_>>();
-        args.push(info.slots.clone());
         let value = f.call_ptr(ret_ty.clone(), &callee, &args);
         match (&ret_ty, value) {
             (IrType::Void, _) => f.ret(None),

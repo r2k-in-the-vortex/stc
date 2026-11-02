@@ -3692,8 +3692,7 @@ impl Lowerer<'_> {
                 };
                 let mut accumulator = supplied[0].clone();
                 for value in &supplied[1..] {
-                    accumulator =
-                        self.lower_arithmetic(f, info, op, kind, &accumulator, value, span)?;
+                    accumulator = self.lower_arithmetic(f, op, kind, &accumulator, value, span)?;
                 }
                 Ok(accumulator)
             }
@@ -3711,7 +3710,7 @@ impl Lowerer<'_> {
                 } else {
                     stc_hir::BinOp::Mod
                 };
-                self.lower_arithmetic(f, info, op, kind, &supplied[0], &supplied[1], span)
+                self.lower_arithmetic(f, op, kind, &supplied[0], &supplied[1], span)
             }
             StdFnKind::And | StdFnKind::Or | StdFnKind::Xor => {
                 let facts = facts_of(self, 0)?;
