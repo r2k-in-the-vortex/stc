@@ -10384,4 +10384,327 @@ theorem wfState_callPtrFunctionStep {contract : IRContract} {c : IRState} {f : I
     · rw [hvFun] at hval
       cases hval
 
+/-- The `ret none` continuation of a `call` with no result: advancing past
+the call changes only the instruction list. -/
+theorem wfState_callTailStep {contract : IRContract} {c : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {restInstrs : List Instr}
+    {ret : IrType} {callee : String} {args : List Operand}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = .call none ret callee args :: restInstrs) :
+    WFState contract (c.withHead { f with instrs := restInstrs }) := by
+  have hf : f ∈ c.frames := by rw [hframes]; exact List.mem_cons_self ..
+  have hfunMem : f.fn ∈ c.module.functions := hwf.frameFunction f hf
+  rcases hwf.frameBlock f hf with ⟨block, hblock, hblockEq, htermEq, done, hdone⟩
+  have hblockShape : block.instrs =
+      (done ++ [.call none ret callee args]) ++ restInstrs := by
+    rw [hdone, hinstrs, List.append_assoc]
+    rfl
+  have hblockNew : ∀ f' rest, c.frames = f' :: rest →
+      ∃ b ∈ f'.fn.blocks, f'.block = b ∧ f'.terminator = b.terminator ∧
+        ∃ done', b.instrs = done' ++ restInstrs := by
+    intro f' rest hfr
+    rw [hframes] at hfr
+    have hf' : f' = f := (List.cons.inj hfr).1.symm
+    rw [hf']
+    exact ⟨block, hblock, hblockEq, htermEq,
+      done ++ [.call none ret callee args], hblockShape⟩
+  have hnoBareNew : ∀ f' rest, c.frames = f' :: rest → restInstrs = [] →
+      f'.terminator ≠ some .unreachable := by
+    intro f' rest hfr hres hterm
+    rw [hframes] at hfr
+    have hf' : f' = f := (List.cons.inj hfr).1.symm
+    have htermf : f.terminator = some .unreachable := by
+      rw [← hf']
+      exact hterm
+    have htermBlock : block.terminator = some .unreachable := by
+      rw [← htermEq]
+      exact htermf
+    have hlast : block.instrs.getLast? = some (.call none ret callee args) := by
+      rw [hdone, hinstrs, hres]
+      exact getLast?_append_singleton done (.call none ret callee args)
+    rcases hwf.program.unreachableGuarded f.fn hfunMem block hblock htermBlock with
+      ⟨instr0, hlast0, d0, r0, cl0, a0, hinstr0, _⟩
+    have hinstrEq : Instr.call none ret callee args = instr0 := by
+      rw [hlast] at hlast0
+      exact Option.some.inj hlast0
+    rw [← hinstrEq] at hinstr0
+    cases hinstr0
+  have hwf2 : WFState contract (c.withHeadInstrs restInstrs) :=
+    wfState_withHeadInstrs hwf hblockNew hnoBareNew
+  simpa [IRState.withHeadInstrs, IRState.withHead, hframes] using hwf2
+
+/-- Every successful instruction step preserves the state invariant. The
+instruction is dispatched on its shape; the stuck and trapped results are
+inconsistent with a `.step` result, and each success form is the corresponding
+per-instruction lemma. -/
+theorem wfState_stepInstr {contract : IRContract} {c c' : IRState} {f : IRFrame}
+    {restFrames : List IRFrame} {instr : Instr} {restInstrs : List Instr}
+    (hwf : WFState contract c) (hframes : c.frames = f :: restFrames)
+    (hinstrs : f.instrs = instr :: restInstrs)
+    (hstep : stepInstr c f instr restInstrs = .step c') :
+    WFState contract c' := by
+  cases instr with
+  | alloca dest ty =>
+      simp only [stepInstr] at hstep
+      cases hstep
+      exact wfState_allocaStep hwf hframes hinstrs
+  | load dest ty ptr align =>
+      simp only [stepInstr] at hstep
+      cases hptr : evalOperand f ptr with
+      | none => simp only [hptr] at hstep; cases hstep
+      | some v =>
+          cases v with
+          | int ty0 n => simp only [hptr] at hstep; cases hstep
+          | ptr addr =>
+              cases hload : c.loadValue addr with
+              | none => simp only [hptr, hload] at hstep; cases hstep
+              | some value =>
+                  cases hty : (value.type? == some ty) with
+                  | false => simp only [hptr, hload, hty] at hstep; cases hstep
+                  | true =>
+                      simp only [hptr, hload, hty] at hstep
+                      cases hstep
+                      exact wfState_loadStep hwf hframes hinstrs hptr hload hty
+          | pair ty0 p o => simp only [hptr] at hstep; cases hstep
+          | null => simp only [hptr] at hstep; cases hstep
+  | store ty value ptr align =>
+      simp only [stepInstr] at hstep
+      cases hvalue : evalOperand f value with
+      | none => simp only [hvalue] at hstep; cases hstep
+      | some v =>
+          cases hptr : evalOperand f ptr with
+          | none => simp only [hvalue, hptr] at hstep; cases hstep
+          | some pv =>
+              cases pv with
+              | int ty0 n => simp only [hvalue, hptr] at hstep; cases hstep
+              | ptr addr =>
+                  cases hcond : (v.type? == some ty && stackStoreTypeOK c addr ty) with
+                  | false => simp only [hvalue, hptr, hcond] at hstep; cases hstep
+                  | true =>
+                      cases hstore : c.storeValue addr v with
+                      | none => simp only [hvalue, hptr, hcond, hstore] at hstep; cases hstep
+                      | some s' =>
+                          simp only [hvalue, hptr, hcond, hstore] at hstep
+                          cases hstep
+                          exact wfState_storeStep hwf hframes hinstrs hvalue hptr hcond hstore
+              | pair ty0 p o => simp only [hvalue, hptr] at hstep; cases hstep
+              | null => simp only [hvalue, hptr] at hstep; cases hstep
+  | gep dest pointee base indices inbounds =>
+      simp only [stepInstr] at hstep
+      cases hbase : evalOperand f base with
+      | none => simp only [hbase] at hstep; cases hstep
+      | some bv =>
+          cases bv with
+          | ptr addr =>
+              cases hindices : evalOperandInts f (indices.map (fun p => p.2)) with
+              | none => simp only [hbase, hindices] at hstep; cases hstep
+              | some values =>
+                  cases hgep : evalGepAddr addr values with
+                  | none => simp only [hbase, hindices, hgep] at hstep; cases hstep
+                  | some addr' =>
+                      cases hbounds : gepInBounds c f addr' with
+                      | false => simp only [hbase, hindices, hgep, hbounds] at hstep; cases hstep
+                      | true =>
+                          simp only [hbase, hindices, hgep, hbounds] at hstep
+                          cases hstep
+                          exact wfState_gepStep hwf hframes hinstrs hbase hindices hgep hbounds
+          | int ty0 n => simp only [hbase] at hstep; cases hstep
+          | pair ty0 p o => simp only [hbase] at hstep; cases hstep
+          | null => simp only [hbase] at hstep; cases hstep
+  | binop dest op ty lhs rhs =>
+      simp only [stepInstr] at hstep
+      cases hlhs : evalOperandInt? f lhs with
+      | none => simp only [hlhs] at hstep; cases hstep
+      | some a =>
+          cases hrhs : evalOperandInt? f rhs with
+          | none => simp only [hlhs, hrhs] at hstep; cases hstep
+          | some b =>
+              cases hbits : intBits? ty with
+              | none => simp only [hlhs, hrhs, hbits] at hstep; cases hstep
+              | some bits =>
+                  cases hbin : evalBinop op bits a b with
+                  | ok value =>
+                      simp only [hlhs, hrhs, hbits, hbin] at hstep
+                      cases hstep
+                      exact wfState_binopStep hwf hframes hinstrs hlhs hrhs hbits hbin
+                  | error trap =>
+                      simp only [hlhs, hrhs, hbits, hbin] at hstep
+                      cases hstep
+  | icmp dest pred ty lhs rhs =>
+      simp only [stepInstr] at hstep
+      cases hlhs : evalOperandInt? f lhs with
+      | none => simp only [hlhs] at hstep; cases hstep
+      | some a =>
+          cases hrhs : evalOperandInt? f rhs with
+          | none => simp only [hlhs, hrhs] at hstep; cases hstep
+          | some b =>
+              cases hbits : intBits? ty with
+              | none => simp only [hlhs, hrhs, hbits] at hstep; cases hstep
+              | some bits =>
+                  simp only [hlhs, hrhs, hbits] at hstep
+                  cases hstep
+                  exact wfState_icmpStep hwf hframes hinstrs hlhs hrhs hbits
+  | select dest ty cond thenValue elseValue =>
+      simp only [stepInstr] at hstep
+      cases hcond : evalOperand f cond with
+      | none => simp only [hcond] at hstep; cases hstep
+      | some cv =>
+          cases cv with
+          | int cty condition =>
+              cases heval : evalOperand f (if condition == 0 then elseValue else thenValue) with
+              | none => simp only [hcond, heval] at hstep; cases hstep
+              | some value =>
+                  simp only [hcond, heval] at hstep
+                  cases hstep
+                  exact wfState_selectStep hwf hframes hinstrs hcond heval
+          | ptr addr => simp only [hcond] at hstep; cases hstep
+          | pair ty0 p o => simp only [hcond] at hstep; cases hstep
+          | null => simp only [hcond] at hstep; cases hstep
+  | cast dest op value fromTy toTy =>
+      simp only [stepInstr] at hstep
+      cases hval : evalOperandInt? f value with
+      | none => simp only [hval] at hstep; cases hstep
+      | some a =>
+          cases hfrom : intBits? fromTy with
+          | none => simp only [hval, hfrom] at hstep; cases hstep
+          | some fromBits =>
+              cases hto : intBits? toTy with
+              | none => simp only [hval, hfrom, hto] at hstep; cases hstep
+              | some toBits =>
+                  simp only [hval, hfrom, hto] at hstep
+                  cases hstep
+                  exact wfState_castStep hwf hframes hinstrs hval hfrom hto
+  | phi dest ty incoming =>
+      simp only [stepInstr] at hstep
+      cases hfind : incoming.find? (fun inc => f.prev == some inc.predecessor) with
+      | none => simp only [hfind] at hstep; cases hstep
+      | some inc =>
+          cases heval : evalOperand f inc.value with
+          | none => simp only [hfind, heval] at hstep; cases hstep
+          | some value =>
+              simp only [hfind, heval] at hstep
+              cases hstep
+              exact wfState_phiStep hwf hframes hinstrs hfind heval
+  | call dest ret callee args =>
+      simp only [stepInstr] at hstep
+      cases hvals : evalOperands f args with
+      | none => simp only [hvals] at hstep; cases hstep
+      | some values =>
+          cases hparse : parseChecked callee with
+          | some info =>
+              simp only [hvals, hparse] at hstep
+              split at hstep
+              · cases hdest : dest with
+                | none =>
+                    simp only [callResult, hdest] at hstep
+                    cases hstep
+                    exact wfState_callTailStep hwf hframes (by rw [hinstrs, hdest])
+                | some d =>
+                    simp only [callResult, hdest] at hstep
+                    cases hstep
+                    exact wfState_checkedCallStep hwf hframes (by rw [hinstrs, hdest]) hparse
+              · cases hstep
+          | none =>
+              cases hrotate : parseRotate callee with
+              | some info =>
+                  simp only [hvals, hparse, hrotate] at hstep
+                  split at hstep
+                  · cases hdest : dest with
+                    | none =>
+                        simp only [callResult, hdest] at hstep
+                        cases hstep
+                        exact wfState_callTailStep hwf hframes (by rw [hinstrs, hdest])
+                    | some d =>
+                        simp only [callResult, hdest] at hstep
+                        cases hstep
+                        exact wfState_rotateCallStep hwf hframes (by rw [hinstrs, hdest]) hrotate
+                  · cases hstep
+              | none =>
+                  cases hfn : c.module.function? callee with
+                  | none => simp only [hvals, hparse, hrotate, hfn] at hstep; cases hstep
+                  | some fn =>
+                      cases hblocks : fn.blocks with
+                      | nil =>
+                          simp only [hvals, hparse, hrotate, hfn, hblocks, callFunction] at hstep
+                          cases hstep
+                      | cons block restBlocks =>
+                          by_cases hlen : values.length = fn.params.length
+                          · simp only [hvals, hparse, hrotate, hfn, hblocks, callFunction, if_pos hlen] at hstep
+                            cases hstep
+                            exact wfState_moduleCallStep hwf hframes hinstrs hvals hfn hblocks
+                          · simp only [hvals, hparse, hrotate, hfn, hblocks, callFunction, if_neg hlen] at hstep
+                            cases hstep
+  | callPtr dest ret callee args =>
+      simp only [stepInstr] at hstep
+      cases hargs : evalOperands f args with
+      | none => simp only [hargs] at hstep; cases hstep
+      | some values =>
+          cases hcallee : evalOperand f callee with
+          | none => simp only [hargs, hcallee] at hstep; cases hstep
+          | some cv =>
+              cases cv with
+              | ptr addr =>
+                  cases addr with
+                  | function fname =>
+                      cases hfn : c.module.function? fname with
+                      | none => simp only [hargs, hcallee, hfn] at hstep; cases hstep
+                      | some fn =>
+                          cases hblocks : fn.blocks with
+                          | nil =>
+                              simp only [hargs, hcallee, hfn, hblocks, callFunction] at hstep
+                              cases hstep
+                          | cons block restBlocks =>
+                              by_cases hlen : values.length = fn.params.length
+                              · simp only [hargs, hcallee, hfn, hblocks, callFunction, if_pos hlen] at hstep
+                                cases hstep
+                                exact wfState_callPtrFunctionStep hwf hframes hinstrs hargs hcallee hfn hblocks
+                              · simp only [hargs, hcallee, hfn, hblocks, callFunction, if_neg hlen] at hstep
+                                cases hstep
+                  | importCell slot =>
+                      cases himp : c.lookupImport slot with
+                      | none => simp only [hargs, hcallee, himp] at hstep; cases hstep
+                      | some service =>
+                          cases service with
+                          | trap =>
+                              simp only [hargs, hcallee, himp, trapOutcome] at hstep
+                              repeat' split at hstep
+                              all_goals cases hstep
+                          | host => simp only [hargs, hcallee, himp] at hstep; cases hstep
+                  | stack frame slot off => simp only [hargs, hcallee] at hstep; cases hstep
+                  | slotEntry slot => simp only [hargs, hcallee] at hstep; cases hstep
+                  | cell slot => simp only [hargs, hcallee] at hstep; cases hstep
+                  | root slot off => simp only [hargs, hcallee] at hstep; cases hstep
+                  | global name off => simp only [hargs, hcallee] at hstep; cases hstep
+                  | slotTable => simp only [hargs, hcallee] at hstep; cases hstep
+              | int ty0 n => simp only [hargs, hcallee] at hstep; cases hstep
+              | pair ty0 p o => simp only [hargs, hcallee] at hstep; cases hstep
+              | null => simp only [hargs, hcallee] at hstep; cases hstep
+  | extractValue dest aggregate index ty =>
+      simp only [stepInstr] at hstep
+      cases hagg : evalOperand f aggregate with
+      | none => simp only [hagg] at hstep; cases hstep
+      | some av =>
+          cases av with
+          | pair pairTy payload overflow =>
+              cases hindex : index with
+              | zero =>
+                  simp only [hagg, hindex, callResult] at hstep
+                  cases hstep
+                  subst hindex
+                  exact wfState_extractValueStep hwf hframes hinstrs (Or.inl rfl) hagg
+              | succ n =>
+                  cases hn : n with
+                  | zero =>
+                      simp only [hagg, hindex, hn, callResult] at hstep
+                      cases hstep
+                      subst hindex
+                      subst hn
+                      exact wfState_extractValueStep hwf hframes hinstrs (Or.inr rfl) hagg
+                  | succ m =>
+                      simp only [hagg, hindex, hn] at hstep
+                      cases hstep
+          | int ty0 n => simp only [hagg] at hstep; cases hstep
+          | ptr addr => simp only [hagg] at hstep; cases hstep
+          | null => simp only [hagg] at hstep; cases hstep
+
 end Stc.Codegen
