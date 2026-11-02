@@ -4,9 +4,12 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
 Status: Phase 0 is in progress. P0.0–P0.5 are complete and reviewed; P0.5 was approved on
 2026-11-02 and merged through PR #12 (merge commit `92e113f`). P0.6 is in progress: the
-versioned core-HIR dump format `0.1.0` and `stc hir-dump` are complete (2026-11-01), and the
-strict Lean reader, the `stc-core-case`/`stc-sem-result` `0.1.0` formats, and `lake exe stc-sem`
-are complete (2026-11-01); the differential harness and corpus remain. P0.7 follows. Completion
+versioned core-HIR dump format `0.1.0` and `stc hir-dump`, the strict Lean reader, the
+`stc-core-case`/`stc-sem-result` `0.1.0` formats, and `lake exe stc-sem` are complete
+(2026-11-01); the opt-in launcher snapshot surface, the differential harness, the
+`stc-sem-conformance-report` `0.1.0`, and the five-case core corpus are complete and run in CI
+(2026-11-02). Corpus expansion to every core feature and trap, disagreement triage, and the
+committed report remain before P0.6 exits. P0.7 follows. Completion
 records and sign-offs are in §16–§22; `lean/verification-status.toml` is authoritative for
 proved claims.
 Parent: [Verification Program Plan](Plan.md)
@@ -452,10 +455,12 @@ a sound, small semantics, exclude it and record the gap.
 **Goal.** Make the semantics executable and compare it with the Rust compiler on the core corpus.
 
 **Status (2026-11-02).** The core-HIR dump `0.1.0`, `stc hir-dump`, the `stc-core-case`
-`0.1.0` schema, and `lake exe stc-sem` are implemented. The differential harness will add a
-test-host/launcher snapshot surface (`--snapshot`, backed by `Host::debug_read` and manifest
-roots) so global snapshots are compared against the compiled artifact; the report schema and
-core corpus follow.
+`0.1.0` schema, and `lake exe stc-sem` are implemented. The compiled-artifact launcher has the
+opt-in `--snapshot` surface (backed by `Host::debug_read` and manifest roots), and
+`lake exe semantics-conformance` runs the seeded five-case corpus through the dump, the
+reference interpreter, and the compiled artifact in CI. The report schema is frozen at
+`stc-sem-conformance-report` `0.1.0`. Corpus expansion, disagreement triage, and the committed
+report remain.
 
 **Work.**
 
@@ -484,10 +489,16 @@ corpus; committed report.
 **Progress (2026-11-01).** The dump, emitter, validator, and `stc hir-dump` are complete and
 frozen at `0.1.0` ([HIR-Dump.md](HIR-Dump.md)). The strict Lean reader, the case descriptor
 `stc-core-case` `0.1.0`, the result `stc-sem-result` `0.1.0`, `lake exe stc-sem`, and the
-`lake exe stc-sem-tests` unit tests are complete ([Semantics-Cases.md](Semantics-Cases.md)). No
-corpus `case.json` is committed; the fail-closed placeholder gate stays green with an empty
-corpus. The differential harness, corpus seeding, CI wiring of the corpus run, and the report
-remain.
+`lake exe stc-sem-tests` unit tests were complete ([Semantics-Cases.md](Semantics-Cases.md)). At
+that point no corpus `case.json` was committed, so the fail-closed placeholder gate stayed green
+with an empty corpus; the differential harness, corpus seeding, CI wiring of the corpus run, and
+the report remained.
+
+**Progress (2026-11-02).** The opt-in `--snapshot` launcher surface, the differential harness,
+the frozen `stc-sem-conformance-report` `0.1.0`, the five-case core corpus, and the CI wiring
+are complete. All five cases agree across the dump, `stc-sem`, and the compiled artifact. The
+corpus is a seed; expansion to every core feature and trap, the triage log, and the committed
+report remain.
 
 **Exit criteria.** The harness runs the full core corpus deterministically; all cases agree or
 have a documented exclusion; the report is committed; a disagreement is filed with a
@@ -716,15 +727,22 @@ goal.
 
 `lake exe semantics-conformance` orchestrates the comparison:
 
-1. Run the Rust compiler to produce the core HIR dump and a runnable artifact.
-2. Run `stc-sem` on the dump and case inputs.
-3. Run the compiled artifact or the existing test host and capture its observable result.
-4. Compare values, traps, and global snapshots.
-5. Emit a report keyed by case and feature, with the semantics and format versions.
+1. Run `stc hir-dump` over the case sources and read the frozen dump with the strict reader.
+2. Run `stc-sem` on the dump and the case descriptor.
+3. Build a runnable artifact with `stc build --emit=exe`, run it with the case's cycle count and
+   the opt-in `--snapshot` surface, and read the snapshot.
+4. Compare status, trap, global values in declaration order, and cycles for both paths against
+   the descriptor's expected observation.
+5. Emit the frozen `stc-sem-conformance-report` `0.1.0` with the semantics, dump, case, result,
+   and snapshot versions and per-case feature tags. The report labels the run as V0
+   differential evidence, not a refinement proof.
 
-The corpus starts from existing conformance and execution cases that fit the core subset, plus
-targeted cases for every core type, operator, statement, conversion, trap, and GOT access.
-Cases outside the core are tagged and excluded explicitly.
+The corpus lives in `tests/verification/semantics/<case>/` and currently covers a value result,
+a `DIV_ZERO` trap, declaration-order globals, nested control flow, and a GOT access. It must
+grow from the existing conformance and execution cases plus targeted cases for every core type,
+operator, statement, conversion, trap, and GOT access. Cases outside the core are tagged and
+excluded explicitly. CI builds the Rust compiler and the uninstrumented test runtime and runs
+the corpus gate; an empty corpus exits `3` and is never reported as agreement.
 
 ### 9.4 Disagreement triage
 
@@ -826,10 +844,10 @@ Phase 0 is done when:
 ## 15. Immediate next steps
 
 1. P0.0–P0.5 are complete; their completion records are §16–§22.
-2. Continue P0.6: the versioned dump, `lake exe stc-sem`, and the
-   `tests/verification/semantics/<case>/case.json` format are complete. Build `lake exe
-   semantics-conformance` into the differential harness, seed the core corpus, document
-   disagreement triage, and commit the report.
+2. Continue P0.6: the versioned dump, `lake exe stc-sem`, the case format, the snapshot surface,
+   the differential harness, the report schema, and a five-case corpus are complete and run in
+   CI. Expand the corpus to every core feature and trap, triage every disagreement, and commit
+   the report.
 3. Run P0.7: complete and review `Semantics.md`, version the semantics, and hand off the
    artifact with its TCB note.
 

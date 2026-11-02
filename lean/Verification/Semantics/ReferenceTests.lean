@@ -2,8 +2,9 @@
 Unit tests for the `stc-sem` reference path (P0.6).
 
 The fixtures are temporary: `lake exe stc-sem-tests` builds JSON documents in
-memory or writes them to a temporary directory. No `case.json` is committed, so
-the fail-closed `semantics-conformance` placeholder stays green.
+memory or writes them to a temporary directory. The committed corpus under
+`tests/verification/semantics` is exercised by `lake exe semantics-conformance`,
+not by this suite.
 -/
 import Lean.Data.Json
 import Verification.Semantics.ReferenceCli

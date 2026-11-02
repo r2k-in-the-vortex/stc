@@ -301,7 +301,7 @@ level = "V0"
 spec = "specification/Verification/Plan-Phase0.md#93-conformance-harness"
 module = "Verification.Semantics.Conformance"
 owner = "verification"
-status = "planned"
+status = "tested"
 tcb = "differential evidence, not a refinement proof"
 
 [[records]]

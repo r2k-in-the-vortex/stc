@@ -296,12 +296,75 @@ harness exits zero, or if any `case.json` exists and the harness exits nonzero, 
 never be added to a harness that does not run it and an empty corpus can never pass. Every case
 must pass or carry a written exclusion.
 
-## 8. Versioning policy
+## 8. Conformance report `stc-sem-conformance-report` `0.1.0`
+
+The harness command line is:
+
+```text
+lake exe semantics-conformance [--corpus DIR] [--stc PATH] [--stc-sem PATH]
+                               [--runtime PATH] [--clang PATH] [--report PATH]
+```
+
+`--corpus` defaults to `tests/verification/semantics`. The tool paths fall back to `STC`,
+`STC_SEM`, `STC_RUNTIME`, and `STC_CLANG`, then to known build paths, then to a `PATH` probe
+for the two programs; the runtime library has no `PATH` probe. One report object is written
+to stdout, and to `--report <path>` when given. Exit `0` means every case passed; exit `1`
+means at least one case disagreed; exit `2` is a usage or tool failure; exit `3` means the
+corpus is empty.
+
+The report has these members:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `format` | string | Exactly `stc-sem-conformance-report` |
+| `formatVersion` | string | Exactly `0.1.0` |
+| `semanticsVersion` | string | The compared semantics version, `1.0-draft` |
+| `profile` | string | `stc-2013-oop-utf8-v1` |
+| `dumpFormat`, `dumpFormatVersion` | string | `stc-core-hir`, `0.1.0` |
+| `caseFormat`, `caseFormatVersion` | string | `stc-core-case`, `0.1.0` |
+| `resultFormat`, `resultFormatVersion` | string | `stc-sem-result`, `0.1.0` |
+| `snapshotFormat`, `snapshotFormatVersion` | string | `stc-runtime-snapshot`, `0.1.0` |
+| `evidence` | string | Fixed text labelling the run as V0 differential evidence, not a refinement proof |
+| `cases` | array | One entry per descriptor, §8.1 |
+| `summary` | object | `{"total": n, "passed": n, "failed": n}` |
+
+The report carries no timestamp, temporary path, or build identifier, so equal inputs and
+equal tool versions produce equal report bytes. The report format is frozen at `0.1.0`: a
+change to a field name, shape, meaning, or the feature-tag placement requires a new
+`formatVersion`.
+
+### 8.1 Case entry
+
+Each case entry has the following members:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name` | string | Case name from the descriptor |
+| `features` | array of strings | Coverage tags from the descriptor, in order |
+| `status` | string | `pass` or `fail` |
+| `failures` | array of strings | Empty on `pass`; otherwise, one line per disagreed observation |
+| `expected` | object | The descriptor's expected observation |
+| `reference` | object or null | The reference observation, or null when that path failed |
+| `artifact` | object or null | The compiled artifact's observation, or null when that path failed |
+
+`expected`, `reference`, and `artifact` use the four compared fields `status`, `trap`,
+`globals`, and `cycles`. The artifact entry additionally has `exitCode`, the launcher's
+process status (`0` normal, `4` trap), so a report distinguishes an agreeing trap from an
+unexpected launcher failure that never produced an observation.
+
+The compiled artifact is run with the opt-in, test-only `--snapshot` surface. The launcher
+reads every manifest root through `Host::debug_read` after the run loop and never writes,
+forces, or retargets a root; the surface is not a production debug service. The harness maps
+the dump's globals to their `_ROOT::NAME` roots in declaration order and rejects a missing or
+inconsistent root.
+
+## 9. Versioning policy
 
 - `format` names the family and never changes within `0.x`; `formatVersion` is exact.
-- Both `0.1.0` formats are frozen for the P0.6 core subset. A change to a field name, meaning,
-  shape, canonical-name rule, ordering rule, status vocabulary, trap vocabulary, or comparison
-  rule requires a new `formatVersion`.
+- The case, result, report, and snapshot `0.1.0` formats are frozen for the P0.6 core subset.
+  A change to a field name, meaning, shape, canonical-name rule, ordering rule, status
+  vocabulary, trap vocabulary, or comparison rule requires a new `formatVersion` for that
+  format.
 - Adding a feature tag to a case is compatible within `0.1.0` because tags are coverage labels.
   Adding a new status or trap name requires a version bump.
 - `semanticsVersion` is independent and exact. A case whose semantics version differs from the
@@ -309,9 +372,9 @@ must pass or carry a written exclusion.
   P0.7.
 - Consumers compare header strings exactly and never apply best-effort reading.
 
-## 9. Changelog
+## 10. Changelog
 
 | Date | Version | Change |
 | --- | --- | --- |
-| 2026-11-02 | `0.1.0` | P0.6 third milestone: seeded the core corpus with `value-result`, `trap-div-zero`, `globals-order`, `control-flow`, and `got-access`; the differential harness runs all five and the placeholder gate requires a non-empty passing corpus. The formats, comparison rule, and versioning policy are unchanged |
+| 2026-11-02 | `0.1.0` | P0.6 third milestone: seeded the core corpus with `value-result`, `trap-div-zero`, `globals-order`, `control-flow`, and `got-access`; the differential harness runs all five in CI and the placeholder gate requires a non-empty passing corpus. Froze the `stc-sem-conformance-report` `0.1.0` schema, including per-case feature tags and the explicit V0 differential label. The case and result formats and the comparison rule are unchanged |
 | 2026-11-01 | `0.1.0` | P0.6 second milestone: defined the `stc-core-case` descriptor and `stc-sem-result` object, froze both at `0.1.0`, recorded the CLI contract and exit codes, the four-observation comparison, the corpus layout, and the fail-closed gating rule. No corpus case is committed yet |

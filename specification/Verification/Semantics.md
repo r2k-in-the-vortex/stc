@@ -21,8 +21,11 @@ milestone is complete (2026-11-01): the canonical core-HIR dump format `0.1.0`, 
 validator, and `stc hir-dump` are defined and frozen in [HIR-Dump.md](HIR-Dump.md). P0.6's
 second milestone is complete (2026-11-01): the strict Lean dump reader, the `stc-core-case`
 `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` are implemented
-and specified in [Semantics-Cases.md](Semantics-Cases.md); the differential harness and corpus
-remain. The P0.3
+and specified in [Semantics-Cases.md](Semantics-Cases.md). P0.6's third milestone is complete
+(2026-11-02): the launcher's opt-in snapshot surface, the differential harness, the frozen
+`stc-sem-conformance-report` `0.1.0`, and a five-case core corpus are implemented, and CI runs
+the corpus. The corpus must still expand to every core feature and trap, and the report must be
+committed, before P0.6 exits. The P0.3
 completion record and review checklist are in §19.12, the drift register in §19, and the P0.4
 scope decisions in §20. This document does not yet make the full Phase 0 soundness claim.
 Charter: [Semantics Charter](Semantics-Charter.md)
@@ -436,7 +439,7 @@ lemmas are projections of `Stc.Codegen.WellFormed`; the full inventory and shape
 
 | Evidence | Artifact | Sub-phase | Status |
 | --- | --- | --- | --- |
-| `Verification.Semantics.semantics_conformance` | `lake exe semantics-conformance` | P0.6 | planned |
+| `Verification.Semantics.semantics_conformance` | `lake exe semantics-conformance` | P0.6 | tested |
 
 The conformance result is evidence, not a theorem. The report must not describe it as a proof
 that the Rust compiler refines the semantics.
@@ -489,6 +492,7 @@ an unknown version or an unmodeled construct is rejected, never interpreted.
 | 2026-10-31 | 1.0-draft | P0.3 (complete) | Proved initial-state typing (`initBody_typed`, `initState_typed`) using `ExprHasType.transport`, a context-agreement lemma over the mutual typing recursor, and `type_soundness`: the initial configuration is typed, every reachable configuration stays typed, and no reachable configuration is stuck. P0.3 is complete; the review was approved 2026-10-31 |
 | 2026-11-01 | 1.0-draft | P0.6 (dump) | Defined and froze dump format `0.1.0` in [HIR-Dump.md](HIR-Dump.md): canonical names and positions, function signatures, globals with GOT keys, the single program, statements, expressions and places, explicit casts, call targets, literal values, spans, and the feature-tag vocabulary for rejection. Implemented the emitter and validator in `crates/stc-hir/src/core_dump.rs`, added `stc hir-dump` with emit/verify modes, and added determinism, versioning, and unmodeled-construct tests. The Lean reader, case corpus, and differential harness remain |
 | 2026-11-01 | 1.0-draft | P0.6 (reference) | Added the strict Lean reader for dump `0.1.0` and defined the `stc-core-case` `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` in [Semantics-Cases.md](Semantics-Cases.md); the reader validates header/version/profile/semantics, status/features, names, positions, callees, arities, literals, and depth, and rejects unmodeled constructs. Added unit tests and temporary-fixture CLI tests (`lake exe stc-sem-tests`); no corpus case is committed while the harness is a fail-closed placeholder. The differential harness and corpus remain |
+| 2026-11-02 | 1.0-draft | P0.6 (harness) | Added the opt-in launcher `--snapshot` surface backed by `Host::debug_read` and manifest roots, the differential harness, the frozen `stc-sem-conformance-report` `0.1.0`, and the five-case core corpus; CI builds the Rust compiler and test runtime and runs the corpus gate. The corpus expansion, triage log, and committed report remain |
 
 ## 10. Rust/Lean interface
 
@@ -520,13 +524,22 @@ never interprets a construct it does not model.
 
 ### 10.3 Conformance harness
 
-`lake exe semantics-conformance` orchestrates the comparison: it builds the dump and a runnable
-artifact with the Rust compiler, runs `stc-sem`, runs the compiled artifact or test host,
-compares values, traps, and global snapshots, and emits a report keyed by case and feature with
-the semantics and dump-format versions. The corpus starts from the existing conformance and
-execution cases that fit the core, plus targeted cases for every core type, operator, statement,
-conversion, trap, and GOT access. Until the corpus exists, the P0.0 placeholder exits nonzero so
-an empty run can never be reported as agreement.
+`lake exe semantics-conformance` is the V0 differential-evidence producer. For each descriptor
+under `tests/verification/semantics/`, it runs `stc hir-dump` and reads the frozen dump with the
+strict reader, runs `stc-sem`, builds a runnable artifact with `stc build --emit=exe`, runs the
+artifact with the case's cycle count and the opt-in test-host `--snapshot` surface, and compares
+the reference and artifact `status`, `trap`, globals in declaration order, and `cycles` against
+the descriptor. It emits the frozen `stc-sem-conformance-report` `0.1.0` object with the
+semantics, dump, case, result, and snapshot versions, per-case feature tags, and an explicit V0
+differential label. The schema, command line, exit codes, and the test-only snapshot restriction
+are normative in [Semantics-Cases.md](Semantics-Cases.md) §8.
+
+CI builds the Rust compiler and the uninstrumented test runtime and runs the fail-closed corpus
+gate, so every committed case is exercised on each change. The seeded corpus covers a value
+result, a `DIV_ZERO` trap, declaration-order globals, nested control flow, and a GOT access; it
+is a seed, not full coverage, and must grow to every core type, operator, statement, conversion,
+trap, and GOT access before P0.6 exits. An empty corpus still exits `3` and is never reported as
+agreement. Agreement is evidence, not a refinement proof.
 
 ### 10.4 Disagreement triage
 
