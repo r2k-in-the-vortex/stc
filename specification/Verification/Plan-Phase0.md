@@ -1617,13 +1617,13 @@ the trap service and return `void` (D4). -/
 def CallTargetsTyped (c : IRState) : Prop :=
   ∀ fn ∈ c.module.functions, ∀ block ∈ fn.blocks, ∀ instr ∈ block.instrs,
     ∀ dest ret callee args, instr = .callPtr dest ret callee args →
-      ∃ name slot, callee = .local name ∧
+      ∀ name slot, callee = .local name →
         fn.facts.originOf? name = some (.cell slot true) →
-        (∃ sig, c.lookupFunctionSignature slot = some sig ∧
-          sig.returnType = ret ∧
-          listForall₂ (fun arg ty => operandHasType fn ty arg) args sig.params) ∨
-        (c.slotKind? slot = some .importCell ∧
-          c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
+          (∃ sig, c.lookupFunctionSignature slot = some sig ∧
+            sig.returnType = ret ∧
+            listForall₂ (fun arg ty => operandHasType fn ty arg) args sig.params) ∨
+          (c.slotKind? slot = some .importCell ∧
+            c.lookupImport slot = some .trap ∧ ret = .void ∧ dest = none)
 
 /-- `dest` is defined by a call or `callPtr` instruction. -/
 def IsCallDest (fn : Function) (dest : Ssa) : Prop :=
@@ -2875,9 +2875,10 @@ def CallTargetsTyped (c : IRState) : Prop :=
 ```
 
 This is a strengthening, not a weakening (the current statement is vacuous),
-and it changes an owner-approved definition, so it needs approval before the
-`.callPtr` function-target branch and the remaining dispatch resume. No code
-outside the definition changes; the last compiling commit is `fa7fd08`.
+and it changes an owner-approved definition. **Owner approved the universal
+restatement on 2026-11-02;** it is adopted in §22.6 (D4) and the `.callPtr`
+function-target branch and remaining dispatch follow. No code outside the
+definition changes; the last compiling commit is `fa7fd08`.
 
 **Phase 2 obstruction (2026-10-31).** The remaining forms (the store's `storeValue`
 frame/storage updates, `callFunction`, and the three `irStepRet` forms) expose preservation
@@ -3142,12 +3143,10 @@ grep -rnwE 'sorry|admit' lean/Stc/Codegen/Semantics.lean      # no matches
    Preparing the call branches then exposed obstruction 16 (the callee's `%slots`
    parameter is not tied to the forwarded argument on either call path). The owner decided on
    2026-11-01 to remove the appended `%slots` parameter and extra call argument from the
-   builder; every function loads `@stc_module_slots` itself. The builder change and the Lean
-   removal of `SlotsParamsSafe`/`CallSlots` are the open implementation scope, after which the
-   call dispatch and Phase 3 resume. Preparing the `.callPtr` function-target branch then
-   exposed obstruction 17: the `CallTargetsTyped` existential does not scope its witnesses over
-   the call agreement, so the fact is vacuous and cannot supply the resolved callee's signature
-   (the `.callPtr` branch needs `ret = fn.returnType` and argument types for `fn.params`). The
-   §22.11 minimal fix (quantify `name`/`slot` in the binder list so they scope over the
-   disjunction) awaits owner approval; the `.callPtr` branch, terminator dispatch,
-   `wfState_step`/`irStep_wf`, and Phase 3 follow that approval.
+   builder; every function loads `@stc_module_slots` itself. This is implemented on the builder
+   side (`8194013`) and the Lean side (`04cd781`, which removed `SlotsParamsSafe`/`CallSlots`).
+   Preparing the `.callPtr` function-target branch then exposed obstruction 17: the
+   `CallTargetsTyped` existential does not scope its witnesses over the call agreement, so the
+   fact is vacuous and cannot supply the resolved callee's signature. The owner approved the
+   universal restatement on 2026-11-02; the `.callPtr` branch, terminator dispatch,
+   `wfState_step`/`irStep_wf`, and Phase 3 follow that implementation.
