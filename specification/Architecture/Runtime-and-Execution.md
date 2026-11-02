@@ -2,7 +2,7 @@
 
 Status: M4.5 persistent host and ABI 2 module execution, M5 OOP descriptors, M6 scheduler, run loop, file-backed state, I/O, and control-channel work, M6.5 debug/monitoring, and M7 release packaging/hardening implemented (2026-10-28)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
+Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [I/O Routing and Backends](IO-Routing-and-Backends.md), [Conformance](../01-Conformance-Profile.md), [Decisions](../Decisions.md)
 
 This document defines how generated code executes, what the host runtime provides, and how
 module, executable, and embedding-library artifacts differ.
@@ -386,7 +386,8 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
 - Tests use a memory backend with explicit input/output images; unbound inputs still receive
   defaults unless the test overrides them.
 - Hardware backends (EtherCAT, Modbus, MQTT) and their schedules are v2; the compiler only emits
-  process-image metadata and binding hints. See [I/O and Devices](IO-and-Devices.md).
+  process-image metadata and binding hints. See [I/O and Devices](IO-and-Devices.md) and the v2
+  contract in [I/O Routing and Backends](IO-Routing-and-Backends.md).
 - Direct variables inside functions/FB bodies are deprecated by the 2013 standard; `stc` accepts
   them with a warning (`STC-W-RUN-001`) and documents that they refer to the same process image.
 

@@ -1,7 +1,7 @@
 # Future Wishlist — v2.0.0
 
-Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, and WL-11. Completed: WL-4 (2026-10-30) and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; continuing with P0.5).  
-Date: 2026-10-29; revised 2026-10-31  
+Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3 + P0.5), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, WL-11, and WL-12. Completed: WL-4 (2026-10-30), WL-5.2 (2026-11-02), and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; P0.5 target soundness and whole-run bridge complete 2026-11-02, awaiting owner review).  
+Date: 2026-10-29; revised 2026-11-02  
 Branch: `v2.0.0-planning`  
 Baseline: `stc` 1.0.0, released 2026-10-29  
 Profile: `stc-2013-oop-utf8-v1`
@@ -87,7 +87,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-1.1 | Local VS Code integration and debugging | Tooling | L (staged) | Stable IDE/debug API | Locked |
 | WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Deferred |
 | WL-2 | Test coverage to 85% as reported by the existing CI coverage badge; CI pass gate | Quality | M/L | Existing coverage job/badge | Locked |
-| WL-3 | Expand the Lean specification per the verification plan; P0.4 and P0.3 complete, continuing with P0.5 | Verification | M for P0.4 | Phase 0 P0.4 | In progress; P0.4/P0.3 complete 2026-10-31 |
+| WL-3 | Expand the Lean specification per the verification plan; P0.4 and P0.3 complete and merged, P0.5 target soundness proved | Verification | M for P0.4 | Phase 0 P0.4 | In progress; P0.4/P0.3 complete and merged 2026-10-31; P0.5 all eight soundness theorems proved, whole-run bridge pending |
 | WL-4 | Run and verify RT performance on PREEMPT_RT Linux x86-64 | Runtime evidence | M | x86-64 RT run host and transferable artifacts | Done 2026-10-30 |
 | WL-5.1 | Modbus TCP server I/O on all supported hosts; non-real-time | Runtime/IO | M/L | None | Locked |
 | WL-5.2 | EtherCAT I/O on Linux using IgH | Runtime/IO | L | IgH; Linux host; EtherCAT hardware | Locked |
@@ -97,6 +97,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-9 | WebUI for basic runtime control | Tooling/operations | M/L | Runtime control API; network security | Deferred |
 | WL-10 | Coverage emission for the ST test suite | Test tooling | M/L | Test runner; span mapping | Done 2026-10-31 |
 | WL-11 | Modbus TCP client capability; separate from WL-5.1 server | Runtime/IO | M/L | WL-5.1 backend contract | Deferred |
+| WL-12 | Reduce cycle-thread wake-up jitter at sub-millisecond cycle times | Runtime/RT | M/L | WL-5.2 CT-sweep evidence; RT host | Deferred |
 
 ## 5. Candidate items
 
@@ -331,13 +332,19 @@ wishlist for new language or core compiler features.
 
 **Selection.** Selected and locked for v2.0.0 on 2026-10-29 with the **P0.4** target (target
 syntax and `WellFormed`), and started on branch `WL-3` on 2026-10-31. P0.4 is complete and
-review-approved (2026-10-31). P0.3 is complete and review-approved (2026-10-31): `progress`,
-`preservation`, initial-state typing, and `type_soundness` are proved. WL-3 remains in progress
-for P0.5 and is done only after owner confirmation. Core compiler features and the language are
-not expected to change, so further drift is not expected; only bug fixes are in scope. Detailed planning is in
-[V2.0.0-PLAN.md](V2.0.0-PLAN.md); the P0.4 scope decisions are in
-[Plan-Phase0.md](specification/Verification/Plan-Phase0.md) §20 and the P0.3 completion record in
-§19.12.
+review-approved (2026-10-31). P0.3 is complete, review-approved (2026-10-31), and merged through
+PR #11 (merge commit `612f84d`): `progress`, `preservation`, initial-state typing, and
+`type_soundness` are proved. WL-3 remains in progress for P0.5 and is done only after owner
+confirmation. The P0.5 checkpoint defines the target machine, step relation, executor, and
+coverage table. The owner approved the state-invariant design in Plan-Phase0 §22 on 2026-10-31,
+the model and invariant are implemented, and all eight target soundness theorems are proved
+(determinism, progress, memory safety, GOT soundness, trap soundness, checked-arithmetic
+refinement, recursive-model equivalence, and no-UB). The initial-state/preservation proofs and
+reachability corollaries remain as the whole-run follow-up. Core compiler features and the
+language are not expected to change, so further drift is not expected; only bug fixes are in
+scope. Detailed planning is in [V2.0.0-PLAN.md](V2.0.0-PLAN.md); the P0.4 scope decisions are in
+[Plan-Phase0.md](specification/Verification/Plan-Phase0.md) §20, the P0.3 completion record in
+§19.12, the P0.5 checkpoint in §21, and the approved design/implementation record in §22.
 
 **Why it matters.** Phase 0 was paused mid-P0.3 pending alignment with M6.5; P0.3 is now complete
 and review-approved. The earlier blocker — ongoing compiler changes — is resolved by the v1.0.0
@@ -1013,6 +1020,61 @@ reconnect/backoff, and partial-failure handling with different scheduling implic
 
 **Tentative size.** M/L, dominated by scheduling, connection management, and failure handling.
 
+### WL-12 — Reduce cycle-thread wake-up jitter at sub-millisecond cycle times
+
+**Intent.** Investigate and reduce the host/runtime wake-up jitter that limits the maintainable
+cycle time below 150 µs on the WL-4/WL-5.2 PREEMPT_RT host. This is a scheduling and platform
+investigation, not an EtherCAT protocol or backend change.
+
+**Selection.** Deferred on 2026-11-01. It is explicitly out of scope for WL-5.2 and the locked
+v2.0.0 target set. It is recorded because the WL-5.2 phase-5 CT sweep produced reproducible
+evidence that the remaining limit is wake-side scheduling, not the fieldbus.
+
+**Why it matters.** WL-5.2's instrumented sweep maintained 150 µs with zero skipped periods,
+while 100 µs failed with 283 skipped periods. The 100 µs events had 53.4–133.3 µs wake lateness
+and only 38.3–53.9 µs execution, so the frame path stayed healthy but the cycle thread woke late.
+The metrics-writer 1 MiB flush was a separate artifact and has been moved off the cycle thread.
+Faster cycle times matter for motion and high-channel-count I/O, but they are not a WL-5.2
+deliverable.
+
+**Candidate scope.**
+
+- Reproduce the 150/100/75/50 µs sweep with the WL-5.2 DIEWU fixture and the installed wrappers.
+- Instrument wake-up sources with `rtla timerlat`/`osnoise`, `cyclictest`, `perf sched`, and
+  tracepoints; correlate wake lateness with the IgH master thread and IRQs, the runtime
+  control/status/debug/metrics threads, C-states, isolation, and the timer source.
+- Evaluate host and runtime measures: IRQ affinity, `isolcpus`/`nohz_full`/`rcu_nocbs`, C-state
+  limits, governor/frequency, RT throttling, `skew_tick`, thread priority/affinity, and moving
+  any remaining service work off the cycle CPU.
+- Define a wake-lateness budget and a repeatable campaign; report distributions, skipped
+  periods, and the first failing cycle time, host- and configuration-specific.
+- Keep the EtherCAT backend semantics and the `stc-rt-metrics/1` schema stable; instrumentation
+  and scheduling changes are additive.
+
+**Constraints and current state.**
+
+- The WL-5.2 result already separates the metrics-writer artifact from host wake jitter; the
+  remaining limit is not a fieldbus correctness problem.
+- The host is a fixed 1.5 GHz J4105 with CPU 3 isolated, RT throttling off, and the IgH master
+  active. Results must not be generalized to other hardware.
+- This item does not create a hard real-time guarantee or a safety function.
+
+**Open questions.**
+
+- What target cycle time or wake-lateness budget is worth pursuing?
+- Which runtime threads or IgH IRQs can be moved without changing the I/O contract?
+- Is a tuned boot profile acceptable, or should the runtime work within the current profile?
+- Can the platform meet the target, or is the 150 µs floor hardware-limited?
+
+**Related.** [EtherCAT Host report](specification/Verification/EtherCAT-Host.md),
+[EtherCAT Runbook](specification/Verification/EtherCAT-Runbook.md) §10.7,
+[RT-Host.md](specification/Verification/RT-Host.md),
+[RT-Runbook.md](specification/Verification/RT-Runbook.md),
+[Performance](specification/Verification/Performance.md), WL-4, WL-5.2.
+
+**Tentative size.** M/L, dominated by the measurement campaign, trace correlation, and host
+tuning experiments.
+
 ## 6. Cross-cutting notes
 
 - WL-4, WL-5.1, and WL-5.2 are locked v2.0.0 targets: RT timing, Modbus TCP server I/O, and
@@ -1024,6 +1086,10 @@ reconnect/backoff, and partial-failure handling with different scheduling implic
   WL-7 in practice.
 - WL-11 is deferred. It is the Modbus TCP client counterpart to WL-5.1; the server role is
   selected first, while the client has different outbound scheduling and failure behavior.
+- WL-12 is deferred. WL-5.2's CT sweep found 150 µs maintainable and 100 µs failing on host
+  wake jitter after the metrics-writer flush was moved off the cycle thread. It is a host/runtime
+  scheduling investigation, reuses the WL-5.2 fixture and WL-4 tooling, and does not change the
+  EtherCAT backend or the safety stance.
 - WL-4 and WL-5.2 reinforce each other: EtherCAT cyclic process data is best verified on the
   PREEMPT_RT host, and WL-5.2 should not assume the host exists without a fallback test path.
 - WL-6 is deferred to a future version. If revived, it reuses robot-sim's `robot-motion` and its
@@ -1082,3 +1148,9 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-10-31 | P0.4 is complete and review-approved; WL-3 continues with P0.3, which is resumed with the Q1–Q7 decisions recorded in Plan-Phase0 §19.8. |
 | 2026-10-31 | P0.3 proof work is complete: `progress`, `preservation`, initial-state typing, and `type_soundness` are proved; the review checklist is in Plan-Phase0 §19.12. |
 | 2026-10-31 | Approved the P0.3 review; WL-3 remains in progress for P0.5 and is done only after owner confirmation. |
+| 2026-10-31 | Merged PR #11 (P0.3) into `v2.0.0-planning` as `612f84d`; WL-3 remains in progress for P0.5. |
+| 2026-10-31 | P0.5 checkpoint: target machine, step relation, executor, and coverage table defined; determinism, GOT soundness, trap soundness, checked-arithmetic refinement, and recursive-model equivalence proved. Progress, memory safety, and no-UB await the target state invariant; see Plan-Phase0 §21. |
+| 2026-10-31 | Drafted the P0.5 target-invariant design proposal in Plan-Phase0 §22 (invariant shape, exact theorem statements, preservation obligations, decisions D1–D4); awaiting owner approval before implementation. |
+| 2026-10-31 | Owner approved the §22 design; implemented the offset-aware storage, `.slotEntry`, bounds-checked memory operations, origin/binding facts, and the `WFProgram`/`WFState`/`AccessBounded` invariant; proved `ir_progress`, `ir_memory_safe`, and `ir_no_ub`. All eight P0.5 target soundness theorems (P0-T15–P0-T22) are proved; initial-state/preservation/reachability remain as the whole-run follow-up. |
+| 2026-11-01 | Added WL-12 (cycle-thread wake-up jitter at sub-millisecond cycle times) as deferred. WL-5.2's CT sweep found 150 µs maintainable and 100 µs failing on host wake jitter after the metrics-writer flush moved off the cycle thread; the follow-up is out of scope for WL-5.2. |
+| 2026-11-02 | Completed the P0.5 whole-run bridge on `WL-3`; P0.5 is ready for owner review. WL-5.2 is complete; its decisions are [Decisions.md](specification/Decisions.md) D-211–D-228 and its evidence is [EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md). |

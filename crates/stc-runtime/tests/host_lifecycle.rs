@@ -1087,6 +1087,9 @@ fn direct_info(artifacts: &stc_codegen::module::ModuleArtifacts, inputs: u64) ->
             area: 1,
             offset_bits: 0,
             width_bits: 8,
+            device: None,
+            channel: None,
+            direction: None,
         }],
         ..ModuleInfo::default()
     }

@@ -2,7 +2,7 @@
 
 Status: M4.5 scalar process image and online remap, M5 aggregate leaves, and M6 device metadata plus `null`/`memory`/`file` backends implemented (2026-10-27)  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Tokenization](../Syntax/Tokenization.md)
+Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [I/O Routing and Backends](IO-Routing-and-Backends.md), [Tokenization](../Syntax/Tokenization.md)
 
 ## 1. Responsibility split
 
@@ -248,7 +248,11 @@ A runtime override may bind a variable that has no pragma, or rebind one that do
   (D-163). Tests use memory.
 - The runtime API exposes the process image (`stc_rt_io_image`) and an optional backend vtable.
 
-### 6.2 v2 device backends (not designed yet)
+### 6.2 v2 device backends
+
+The v2.0.0 hardware contract — machine profiles selected by `[io].config`, the route graph, the
+multi-backend coordinator, the EtherCAT status device, and transparent fault behavior — is fixed
+in [I/O Routing and Backends](IO-Routing-and-Backends.md).
 
 Planned primary backends:
 

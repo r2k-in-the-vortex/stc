@@ -14,7 +14,10 @@ use crate::codes;
 use crate::ir::IrType;
 use crate::layout::{self, ScalarKind};
 use crate::mangle;
-use crate::metadata::{DeviceMetadata, ProjectBinding, ProjectChannel};
+use crate::metadata::{
+    ChannelMetadata, DeviceMetadata, IoRoute, IoRouteEndpoint, ProjectBinding, ProjectChannel,
+    RouteEndpointMetadata, RouteMetadata,
+};
 use crate::module::ModuleError;
 use crate::types::{RootSegment, StorageLayout, TypeCategory, TypeSystem};
 
@@ -238,6 +241,8 @@ pub(crate) struct IoBinding {
     pub init: Option<ExprId>,
     /// Owning declaration, when the binding comes from an `AT` declaration.
     pub target: Option<IoRootTarget>,
+    /// Declaration span, used for route and binding diagnostics.
+    pub span: Span,
 }
 
 impl IoBinding {
@@ -749,6 +754,7 @@ pub(crate) fn image_layout(
                         target: Some(IoRootTarget::Global(DefId::new(
                             u32::try_from(index).unwrap_or(u32::MAX),
                         ))),
+                        span: def.span,
                     };
                     binding.apply_hint();
                     bindings.push(binding);
@@ -794,6 +800,7 @@ pub(crate) fn image_layout(
                                 instance: instance.name,
                                 field: *field,
                             }),
+                            span: data.span,
                         };
                         binding.apply_hint();
                         bindings.push(binding);
@@ -854,6 +861,504 @@ pub(crate) fn image_layout(
         Ok(image)
     } else {
         Err(errors)
+    }
+}
+
+/// Result of resolving the machine-profile route graph.
+#[derive(Default)]
+pub(crate) struct IoRouteResult {
+    /// Resolved routes in profile order.
+    pub routes: Vec<RouteMetadata>,
+    /// Route resolution errors (`STC-E-IO-BINDING-001`/`002`).
+    pub errors: Vec<CodegenError>,
+    /// Non-fatal diagnostics.
+    pub warnings: Vec<ModuleError>,
+}
+
+/// Resolves profile routes against the program and the device tree
+/// (IO-Routing-and-Backends §3).
+///
+/// The profile parser has already checked endpoint spelling and source/sink
+/// pairing. This step resolves PLC endpoints against the image layout,
+/// resolves physical endpoints against the declared device/channel tree,
+/// checks width equality, and rejects fan-in and sink conflicts across routes
+/// and project/pragma bindings.
+pub(crate) fn resolve_routes(
+    hir: &HirCrate,
+    image: &ImageLayout,
+    devices: &[DeviceMetadata],
+    routes: &[IoRoute],
+) -> IoRouteResult {
+    let mut result = IoRouteResult::default();
+    if routes.is_empty() {
+        // A project without a selected profile keeps the v1 binding behavior
+        // unchanged; there is no route graph to validate.
+        return result;
+    }
+    // Sink claims are one namespace across project bindings and routes
+    // (IO-Routing-and-Backends §3.3). Only a binding with a device/channel is
+    // a single-sink shorthand; a raw `AT` variable on its own claims nothing.
+    let empty = Span::empty(stc_span::FileId::new(0), 0);
+    let mut claims: BTreeMap<String, String> = BTreeMap::new();
+    for binding in &image.bindings {
+        let Some(device_name) = &binding.device else {
+            continue;
+        };
+        let Some(channel_ref) = binding.channel.as_ref() else {
+            continue;
+        };
+        let description = format!("binding `{}`", binding.variable);
+        let key = match binding.area {
+            DirectArea::Input => format!("plc-input:{}", binding.start_bit),
+            DirectArea::Output => {
+                let Some(device) = devices.iter().find(|device| device.name == *device_name) else {
+                    // An undeclared pragma device is already a warning, and the
+                    // runtime may add it; it claims no known physical sink.
+                    continue;
+                };
+                let Ok(channel) = resolve_channel(device, channel_ref) else {
+                    // Existing binding validation owns this error.
+                    continue;
+                };
+                format!("physical-output:{}.{}", device.name, channel.name)
+            }
+            DirectArea::Memory => continue,
+        };
+        if let Some(previous) = claims.get(&key) {
+            result.errors.push(CodegenError::unsupported(
+                codes::IO_BINDING_CONFLICT,
+                format!("{description} and {previous} claim the same sink"),
+                empty,
+            ));
+        } else {
+            claims.insert(key, description);
+        }
+    }
+
+    for route in routes {
+        let Some(source) = resolve_endpoint(hir, image, devices, &route.source, true, &mut result)
+        else {
+            continue;
+        };
+        let mut sinks = Vec::with_capacity(route.sinks.len());
+        for sink in &route.sinks {
+            let Some(resolved) = resolve_endpoint(hir, image, devices, sink, false, &mut result)
+            else {
+                continue;
+            };
+            if source.width_bits != resolved.width_bits {
+                result.errors.push(CodegenError::unsupported(
+                    codes::IO_BINDING_INVALID,
+                    format!(
+                        "route source is {} bits wide but sink `{}` is {} bits wide",
+                        source.width_bits,
+                        describe_endpoint(&resolved),
+                        resolved.width_bits
+                    ),
+                    sink.span(),
+                ));
+                continue;
+            }
+            let key = sink_claim(&resolved);
+            if let Some(previous) = claims.get(&key) {
+                result.push_route_error(
+                    codes::IO_BINDING_CONFLICT,
+                    format!(
+                        "route sink `{}` is fan-in: it is already written by {previous}",
+                        describe_endpoint(&resolved)
+                    ),
+                    sink.span(),
+                );
+                continue;
+            }
+            claims.insert(
+                key,
+                format!("route source `{}`", describe_endpoint(&source)),
+            );
+            sinks.push(resolved);
+        }
+        result.routes.push(RouteMetadata { source, sinks });
+    }
+    result
+}
+
+impl IoRouteResult {
+    fn push_route_error(&mut self, code: &'static str, message: String, span: Span) {
+        self.errors
+            .push(CodegenError::unsupported(code, message, span));
+    }
+}
+
+fn resolve_endpoint(
+    hir: &HirCrate,
+    image: &ImageLayout,
+    devices: &[DeviceMetadata],
+    endpoint: &IoRouteEndpoint,
+    source: bool,
+    result: &mut IoRouteResult,
+) -> Option<RouteEndpointMetadata> {
+    match endpoint {
+        IoRouteEndpoint::PlcInput { variable, span } => {
+            if source {
+                result.push_route_error(
+                    codes::IO_BINDING_INVALID,
+                    "a `plc-input` endpoint cannot be a route source".into(),
+                    *span,
+                );
+                return None;
+            }
+            let Some(binding) = resolve_plc_variable(hir, image, variable, DirectArea::Input)
+            else {
+                result.push_route_error(
+                    codes::IO_BINDING_INVALID,
+                    format!("route endpoint `{variable}` does not name a direct `%I` variable"),
+                    *span,
+                );
+                return None;
+            };
+            Some(plc_endpoint("plc-input", binding))
+        }
+        IoRouteEndpoint::PlcOutput { variable, span } => {
+            if !source {
+                result.push_route_error(
+                    codes::IO_BINDING_INVALID,
+                    "a `plc-output` endpoint cannot be a route sink".into(),
+                    *span,
+                );
+                return None;
+            }
+            let Some(binding) = resolve_plc_variable(hir, image, variable, DirectArea::Output)
+            else {
+                result.push_route_error(
+                    codes::IO_BINDING_INVALID,
+                    format!("route endpoint `{variable}` does not name a direct `%Q` variable"),
+                    *span,
+                );
+                return None;
+            };
+            Some(plc_endpoint("plc-output", binding))
+        }
+        IoRouteEndpoint::PhysicalInput {
+            device,
+            channel,
+            span,
+        } => resolve_physical_endpoint(
+            devices,
+            device,
+            channel,
+            "input",
+            "physical-input",
+            *span,
+            result,
+        ),
+        IoRouteEndpoint::PhysicalOutput {
+            device,
+            channel,
+            span,
+        } => resolve_physical_endpoint(
+            devices,
+            device,
+            channel,
+            "output",
+            "physical-output",
+            *span,
+            result,
+        ),
+    }
+}
+
+fn resolve_plc_variable<'a>(
+    hir: &HirCrate,
+    image: &'a ImageLayout,
+    variable: &str,
+    area: DirectArea,
+) -> Option<&'a IoBinding> {
+    // A PLC route endpoint must name a direct variable. The lookup is total;
+    // `resolve_endpoint` reports the failure at the profile span.
+    plc_binding_index(hir, image, variable, area).map(|index| &image.bindings[index])
+}
+
+/// Returns the image binding a PLC route endpoint names.
+fn plc_binding_index(
+    hir: &HirCrate,
+    image: &ImageLayout,
+    variable: &str,
+    area: DirectArea,
+) -> Option<usize> {
+    image.bindings.iter().position(|binding| {
+        binding.area == area
+            && binding_names(hir, binding)
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(variable))
+    })
+}
+
+/// Builds the D-226 warnings for direct variables that no route drives.
+///
+/// A binding is routed when it carries the single-sink `device`/`channel`
+/// shorthand or when it is the PLC endpoint of a resolved route. Unrouted
+/// inputs keep their default image value; unrouted outputs are discarded.
+/// Only builds that select a machine profile emit these warnings, so v1
+/// projects keep their existing behavior.
+pub(crate) fn unrouted_warnings(
+    hir: &HirCrate,
+    image: &ImageLayout,
+    routes: &[IoRoute],
+) -> Vec<ModuleError> {
+    let mut routed = vec![false; image.bindings.len()];
+    for (index, binding) in image.bindings.iter().enumerate() {
+        if binding.device.is_some() && binding.channel.is_some() {
+            routed[index] = true;
+        }
+    }
+    for route in routes {
+        if let IoRouteEndpoint::PlcOutput { variable, .. } = &route.source
+            && let Some(index) = plc_binding_index(hir, image, variable, DirectArea::Output)
+        {
+            routed[index] = true;
+        }
+        for sink in &route.sinks {
+            if let IoRouteEndpoint::PlcInput { variable, .. } = sink
+                && let Some(index) = plc_binding_index(hir, image, variable, DirectArea::Input)
+            {
+                routed[index] = true;
+            }
+        }
+    }
+
+    let mut warnings = Vec::new();
+    for (binding, routed) in image.bindings.iter().zip(routed) {
+        if routed {
+            continue;
+        }
+        let (code, message) = match binding.area {
+            DirectArea::Input => (
+                codes::W_IO_ROUTE_INPUT,
+                format!(
+                    "unrouted `%I` variable `{}` (%I{}) is not driven by any route and keeps its \
+                     default value {}",
+                    binding.variable,
+                    binding.address,
+                    binding_default(image, binding),
+                ),
+            ),
+            DirectArea::Output => (
+                codes::W_IO_ROUTE_OUTPUT,
+                format!(
+                    "unrouted `%Q` variable `{}` (%Q{}) is not consumed by any route; its value \
+                     is discarded",
+                    binding.variable, binding.address,
+                ),
+            ),
+            DirectArea::Memory => continue,
+        };
+        warnings.push(ModuleError {
+            code,
+            severity: crate::module::Severity::Warning,
+            message,
+            span: Some(binding.span),
+            got_id: None,
+            old_key: None,
+            new_key: None,
+        });
+    }
+    warnings
+}
+
+/// Decodes one binding's effective default from the input image.
+fn binding_default(image: &ImageLayout, binding: &IoBinding) -> String {
+    let start_bit = usize::try_from(binding.start_bit).unwrap_or(usize::MAX);
+    let byte_index = start_bit / 8;
+    if binding.kind == ScalarKind::Bool {
+        let bit = u8::try_from(start_bit % 8).unwrap_or(0);
+        let set = image
+            .input_defaults
+            .get(byte_index)
+            .is_some_and(|value| value & (1 << bit) != 0);
+        return if set { "TRUE" } else { "FALSE" }.into();
+    }
+
+    let mut bytes = [0_u8; 8];
+    let width = usize::try_from(binding.kind.size_bytes())
+        .unwrap_or(0)
+        .min(bytes.len());
+    if let Some(slice) = image
+        .input_defaults
+        .get(byte_index..byte_index.saturating_add(width))
+    {
+        bytes[..width].copy_from_slice(slice);
+    }
+    match binding.kind {
+        ScalarKind::Bool => unreachable!("BOOL defaults are handled above"),
+        ScalarKind::Int { signed, width } => {
+            if signed {
+                signed_default(&bytes, width).to_string()
+            } else {
+                unsigned_default(&bytes, width).to_string()
+            }
+        }
+        ScalarKind::Char { width } => unsigned_default(&bytes, width).to_string(),
+        ScalarKind::Real { width: 32 } => format!(
+            "{:?}",
+            f32::from_bits(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        ),
+        ScalarKind::Real { .. } => {
+            format!("{:?}", f64::from_bits(u64::from_le_bytes(bytes)))
+        }
+        ScalarKind::Time | ScalarKind::Date(_) => i64::from_le_bytes(bytes).to_string(),
+    }
+}
+
+fn unsigned_default(bytes: &[u8; 8], width: u16) -> u64 {
+    let width = u32::from(width).clamp(1, 64);
+    let raw = u64::from_le_bytes(*bytes);
+    if width == 64 {
+        raw
+    } else {
+        raw & ((1_u64 << width) - 1)
+    }
+}
+
+fn signed_default(bytes: &[u8; 8], width: u16) -> i64 {
+    let width = u32::from(width).clamp(1, 64);
+    let raw = unsigned_default(bytes, u16::try_from(width).unwrap_or(64));
+    if width == 64 {
+        raw as i64
+    } else {
+        ((raw << (64 - width)) as i64) >> (64 - width)
+    }
+}
+
+fn plc_endpoint(kind: &'static str, binding: &IoBinding) -> RouteEndpointMetadata {
+    RouteEndpointMetadata {
+        kind,
+        device: None,
+        channel: None,
+        variable: Some(binding.variable.clone()),
+        area: Some(binding.area.as_char()),
+        offset_bits: Some(binding.start_bit),
+        width_bits: binding.kind.occupancy_bits(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_physical_endpoint(
+    devices: &[DeviceMetadata],
+    device_name: &str,
+    channel_name: &str,
+    expected: &str,
+    kind: &'static str,
+    span: Span,
+    result: &mut IoRouteResult,
+) -> Option<RouteEndpointMetadata> {
+    let Some(device) = devices.iter().find(|device| device.name == device_name) else {
+        result.push_route_error(
+            codes::IO_BINDING_INVALID,
+            format!("route endpoint names undeclared device `{device_name}`"),
+            span,
+        );
+        return None;
+    };
+    let Some(channel) = device
+        .channels
+        .iter()
+        .find(|channel| channel.name == channel_name)
+    else {
+        result.push_route_error(
+            codes::IO_BINDING_INVALID,
+            format!(
+                "route endpoint names undeclared channel `{channel_name}` on device `{device_name}`"
+            ),
+            span,
+        );
+        return None;
+    };
+    if channel.direction != expected && channel.direction != "inout" {
+        result.push_route_error(
+            codes::IO_BINDING_INVALID,
+            format!(
+                "route endpoint channel `{channel_name}` on device `{device_name}` has direction \
+                 `{}`, expected `{expected}`",
+                channel.direction
+            ),
+            span,
+        );
+        return None;
+    }
+    if channel.width == 0 {
+        result.push_route_error(
+            codes::IO_BINDING_INVALID,
+            format!(
+                "route endpoint channel `{channel_name}` on device `{device_name}` has zero width"
+            ),
+            span,
+        );
+        return None;
+    }
+    Some(RouteEndpointMetadata {
+        kind,
+        device: Some(device.name.clone()),
+        channel: Some(channel.name.clone()),
+        variable: None,
+        area: None,
+        offset_bits: None,
+        width_bits: u64::from(channel.width),
+    })
+}
+
+fn resolve_channel<'a>(
+    device: &'a DeviceMetadata,
+    channel: &ProjectChannel,
+) -> Result<&'a ChannelMetadata, String> {
+    match channel {
+        ProjectChannel::Name(name) => device
+            .channels
+            .iter()
+            .find(|channel| channel.name == *name)
+            .ok_or_else(|| {
+                format!(
+                    "I/O binding names undeclared channel `{name}` on device `{}`",
+                    device.name
+                )
+            }),
+        ProjectChannel::Index(index) => usize::try_from(*index)
+            .ok()
+            .and_then(|index| device.channels.get(index))
+            .ok_or_else(|| {
+                format!(
+                    "I/O binding names channel {index}, which device `{}` does not declare",
+                    device.name
+                )
+            }),
+    }
+}
+
+/// Returns the sink identity for one resolved route endpoint.
+fn sink_claim(endpoint: &RouteEndpointMetadata) -> String {
+    match endpoint.kind {
+        "physical-output" => format!(
+            "physical-output:{}.{}",
+            endpoint.device.as_deref().unwrap_or_default(),
+            endpoint.channel.as_deref().unwrap_or_default()
+        ),
+        "plc-input" => format!("plc-input:{}", endpoint.offset_bits.unwrap_or_default()),
+        _ => describe_endpoint(endpoint),
+    }
+}
+
+fn describe_endpoint(endpoint: &RouteEndpointMetadata) -> String {
+    match endpoint.kind {
+        "physical-input" | "physical-output" => format!(
+            "{} {}.{}",
+            endpoint.kind,
+            endpoint.device.as_deref().unwrap_or_default(),
+            endpoint.channel.as_deref().unwrap_or_default()
+        ),
+        _ => format!(
+            "{} {}",
+            endpoint.kind,
+            endpoint.variable.as_deref().unwrap_or_default()
+        ),
     }
 }
 
@@ -1431,5 +1936,416 @@ mod tests {
             var_access: Vec::new(),
         };
         assert_eq!(plan.cycle_instances(), vec![1, 0, 2]);
+    }
+
+    fn route_span() -> Span {
+        Span::empty(stc_span::FileId::new(0), 0)
+    }
+
+    fn int8() -> ScalarKind {
+        ScalarKind::Int {
+            signed: false,
+            width: 8,
+        }
+    }
+
+    fn int16() -> ScalarKind {
+        ScalarKind::Int {
+            signed: false,
+            width: 16,
+        }
+    }
+
+    fn image_binding(
+        variable: &str,
+        area: DirectArea,
+        start_bit: u64,
+        kind: ScalarKind,
+    ) -> IoBinding {
+        IoBinding {
+            variable: variable.into(),
+            address: String::new(),
+            area,
+            start_bit,
+            kind,
+            hint: None,
+            device: None,
+            channel: None,
+            direction: None,
+            source: "project",
+            init: None,
+            target: None,
+            span: route_span(),
+        }
+    }
+
+    fn physical_binding(
+        variable: &str,
+        area: DirectArea,
+        start_bit: u64,
+        kind: ScalarKind,
+        device: &str,
+        channel: &str,
+        direction: &'static str,
+    ) -> IoBinding {
+        let mut binding = image_binding(variable, area, start_bit, kind);
+        binding.device = Some(device.into());
+        binding.channel = Some(ProjectChannel::Name(channel.into()));
+        binding.direction = Some(direction);
+        binding
+    }
+
+    fn route_image(bindings: Vec<IoBinding>) -> ImageLayout {
+        ImageLayout {
+            inputs_bytes: 4,
+            outputs_bytes: 4,
+            markers_bytes: 0,
+            input_defaults: Vec::new(),
+            output_defaults: Vec::new(),
+            bindings,
+        }
+    }
+
+    fn device_tree() -> Vec<DeviceMetadata> {
+        vec![DeviceMetadata {
+            name: "diewu".into(),
+            kind: "ethercat".into(),
+            config: None,
+            channels: vec![
+                ChannelMetadata {
+                    name: "IN0".into(),
+                    direction: "input".into(),
+                    width: 8,
+                },
+                ChannelMetadata {
+                    name: "IN1".into(),
+                    direction: "input".into(),
+                    width: 8,
+                },
+                ChannelMetadata {
+                    name: "OUT0".into(),
+                    direction: "output".into(),
+                    width: 8,
+                },
+                ChannelMetadata {
+                    name: "OUT1".into(),
+                    direction: "output".into(),
+                    width: 8,
+                },
+                ChannelMetadata {
+                    name: "OUT16".into(),
+                    direction: "output".into(),
+                    width: 16,
+                },
+                ChannelMetadata {
+                    name: "ZERO".into(),
+                    direction: "input".into(),
+                    width: 0,
+                },
+            ],
+        }]
+    }
+
+    fn phys_input(device: &str, channel: &str) -> IoRouteEndpoint {
+        IoRouteEndpoint::PhysicalInput {
+            device: device.into(),
+            channel: channel.into(),
+            span: route_span(),
+        }
+    }
+
+    fn phys_output(device: &str, channel: &str) -> IoRouteEndpoint {
+        IoRouteEndpoint::PhysicalOutput {
+            device: device.into(),
+            channel: channel.into(),
+            span: route_span(),
+        }
+    }
+
+    fn plc_in(variable: &str) -> IoRouteEndpoint {
+        IoRouteEndpoint::PlcInput {
+            variable: variable.into(),
+            span: route_span(),
+        }
+    }
+
+    fn plc_out(variable: &str) -> IoRouteEndpoint {
+        IoRouteEndpoint::PlcOutput {
+            variable: variable.into(),
+            span: route_span(),
+        }
+    }
+
+    fn route(source: IoRouteEndpoint, sinks: Vec<IoRouteEndpoint>) -> IoRoute {
+        IoRoute { source, sinks }
+    }
+
+    fn assert_route_error(result: &IoRouteResult, code: &'static str, needle: &str) {
+        let found = result
+            .errors
+            .iter()
+            .find(|error| error.code() == code && error.message().contains(needle));
+        assert!(
+            found.is_some(),
+            "expected {code} containing `{needle}`, got {:?}",
+            result
+                .errors
+                .iter()
+                .map(|error| (error.code(), error.message()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn routes_resolve_fan_out_into_metadata() {
+        let hir = HirCrate::new("app", "app");
+        let image = route_image(vec![
+            image_binding("shadow", DirectArea::Input, 8, int8()),
+            image_binding("shadow2", DirectArea::Input, 16, int8()),
+            image_binding("drive", DirectArea::Output, 0, int8()),
+        ]);
+        let routes = vec![
+            route(
+                phys_input("diewu", "IN0"),
+                vec![plc_in("shadow"), phys_output("diewu", "OUT0")],
+            ),
+            route(
+                plc_out("drive"),
+                vec![plc_in("shadow2"), phys_output("diewu", "OUT1")],
+            ),
+        ];
+        let result = resolve_routes(&hir, &image, &device_tree(), &routes);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(result.warnings.is_empty());
+        assert_eq!(result.routes.len(), 2);
+
+        let first = &result.routes[0];
+        assert_eq!(first.source.kind, "physical-input");
+        assert_eq!(first.source.device.as_deref(), Some("diewu"));
+        assert_eq!(first.source.channel.as_deref(), Some("IN0"));
+        assert_eq!(first.source.width_bits, 8);
+        assert_eq!(first.sinks.len(), 2);
+        assert_eq!(first.sinks[0].kind, "plc-input");
+        assert_eq!(first.sinks[0].variable.as_deref(), Some("shadow"));
+        assert_eq!(first.sinks[0].area, Some('I'));
+        assert_eq!(first.sinks[0].offset_bits, Some(8));
+        assert_eq!(first.sinks[0].width_bits, 8);
+        assert_eq!(first.sinks[1].kind, "physical-output");
+        assert_eq!(first.sinks[1].device.as_deref(), Some("diewu"));
+        assert_eq!(first.sinks[1].channel.as_deref(), Some("OUT0"));
+
+        let second = &result.routes[1];
+        assert_eq!(second.source.kind, "plc-output");
+        assert_eq!(second.source.variable.as_deref(), Some("drive"));
+        assert_eq!(second.source.area, Some('Q'));
+        assert_eq!(second.source.offset_bits, Some(0));
+        assert_eq!(second.source.width_bits, 8);
+        assert_eq!(second.sinks[0].kind, "plc-input");
+        assert_eq!(second.sinks[0].offset_bits, Some(16));
+        assert_eq!(second.sinks[1].kind, "physical-output");
+        assert_eq!(second.sinks[1].channel.as_deref(), Some("OUT1"));
+    }
+
+    #[test]
+    fn routes_reject_fan_in_and_binding_sink_conflicts() {
+        let hir = HirCrate::new("app", "app");
+        let image = route_image(vec![image_binding("shadow", DirectArea::Input, 8, int8())]);
+        let fan_in = vec![
+            route(phys_input("diewu", "IN0"), vec![plc_in("shadow")]),
+            route(phys_input("diewu", "IN1"), vec![plc_in("shadow")]),
+        ];
+        let result = resolve_routes(&hir, &image, &device_tree(), &fan_in);
+        assert_route_error(&result, codes::IO_BINDING_CONFLICT, "fan-in");
+
+        let image = route_image(vec![
+            physical_binding(
+                "out",
+                DirectArea::Output,
+                0,
+                int8(),
+                "diewu",
+                "OUT0",
+                "output",
+            ),
+            physical_binding(
+                "shadow",
+                DirectArea::Input,
+                8,
+                int8(),
+                "diewu",
+                "IN0",
+                "input",
+            ),
+        ]);
+        let routes = vec![
+            route(
+                phys_input("diewu", "IN0"),
+                vec![phys_output("diewu", "OUT0")],
+            ),
+            route(phys_input("diewu", "IN0"), vec![plc_in("shadow")]),
+        ];
+        let result = resolve_routes(&hir, &image, &device_tree(), &routes);
+        assert_route_error(&result, codes::IO_BINDING_CONFLICT, "is fan-in");
+        assert_route_error(&result, codes::IO_BINDING_CONFLICT, "binding `out`");
+        assert_route_error(&result, codes::IO_BINDING_CONFLICT, "binding `shadow`");
+        assert_eq!(
+            result
+                .errors
+                .iter()
+                .filter(|error| error.code() == codes::IO_BINDING_CONFLICT)
+                .count(),
+            2,
+            "both the physical output and the PLC input are claimed"
+        );
+    }
+
+    #[test]
+    fn routes_reject_invalid_endpoints_and_widths() {
+        let hir = HirCrate::new("app", "app");
+        let image = route_image(vec![
+            image_binding("shadow", DirectArea::Input, 8, int8()),
+            image_binding("wide_in", DirectArea::Input, 16, int16()),
+            image_binding("drive", DirectArea::Output, 0, int8()),
+        ]);
+        let devices = device_tree();
+
+        let cases = [
+            (
+                vec![route(plc_in("shadow"), vec![plc_in("shadow")])],
+                "cannot be a route source",
+            ),
+            (
+                vec![route(plc_out("drive"), vec![plc_out("drive")])],
+                "cannot be a route sink",
+            ),
+            (
+                vec![route(plc_out("missing"), vec![plc_in("shadow")])],
+                "does not name a direct `%Q` variable",
+            ),
+            (
+                vec![route(plc_out("shadow"), vec![plc_in("shadow")])],
+                "does not name a direct `%Q` variable",
+            ),
+            (
+                vec![route(phys_input("ghost", "IN0"), vec![plc_in("shadow")])],
+                "undeclared device",
+            ),
+            (
+                vec![route(phys_input("diewu", "GHOST"), vec![plc_in("shadow")])],
+                "undeclared channel",
+            ),
+            (
+                vec![route(phys_input("diewu", "OUT0"), vec![plc_in("shadow")])],
+                "has direction `output`, expected `input`",
+            ),
+            (
+                vec![route(phys_input("diewu", "ZERO"), vec![plc_in("shadow")])],
+                "has zero width",
+            ),
+            (
+                vec![route(
+                    phys_input("diewu", "IN0"),
+                    vec![phys_output("diewu", "OUT16")],
+                )],
+                "route source is 8 bits wide",
+            ),
+            (
+                vec![route(phys_input("diewu", "IN0"), vec![plc_in("wide_in")])],
+                "route source is 8 bits wide",
+            ),
+            (
+                vec![route(
+                    phys_input("diewu", "IN0"),
+                    vec![phys_output("ghost", "OUT0")],
+                )],
+                "undeclared device",
+            ),
+            (
+                vec![route(
+                    phys_input("diewu", "IN0"),
+                    vec![phys_output("diewu", "IN0")],
+                )],
+                "has direction `input`, expected `output`",
+            ),
+        ];
+        for (routes, needle) in cases {
+            let result = resolve_routes(&hir, &image, &devices, &routes);
+            assert_route_error(&result, codes::IO_BINDING_INVALID, needle);
+        }
+    }
+
+    #[test]
+    fn unrouted_inputs_keep_their_default_and_outputs_are_discarded() {
+        let hir = HirCrate::new("app", "app");
+        let mut image = route_image(vec![
+            image_binding("seen", DirectArea::Input, 0, int16()),
+            image_binding(
+                "defaulted",
+                DirectArea::Input,
+                16,
+                ScalarKind::Int {
+                    signed: true,
+                    width: 16,
+                },
+            ),
+            image_binding("driven", DirectArea::Output, 0, int16()),
+            image_binding("lost", DirectArea::Output, 16, int16()),
+            physical_binding(
+                "shorthand",
+                DirectArea::Input,
+                32,
+                int8(),
+                "diewu",
+                "IN0",
+                "input",
+            ),
+        ]);
+        // -5 as little-endian INT at bit 16.
+        image.input_defaults = vec![0, 0, 0xFB, 0xFF, 0, 0, 0, 0];
+        let routes = vec![
+            route(phys_input("diewu", "IN0"), vec![plc_in("seen")]),
+            route(plc_out("driven"), vec![phys_output("diewu", "OUT0")]),
+        ];
+
+        let warnings = unrouted_warnings(&hir, &image, &routes);
+        assert_eq!(warnings.len(), 2, "{warnings:#?}");
+        let input = warnings
+            .iter()
+            .find(|warning| warning.code == codes::W_IO_ROUTE_INPUT)
+            .expect("unrouted input warning");
+        assert!(input.message.contains("defaulted"), "{}", input.message);
+        assert!(input.message.contains("-5"), "{}", input.message);
+        assert_eq!(input.span, Some(route_span()));
+        let output = warnings
+            .iter()
+            .find(|warning| warning.code == codes::W_IO_ROUTE_OUTPUT)
+            .expect("unrouted output warning");
+        assert!(output.message.contains("lost"), "{}", output.message);
+        assert!(output.message.contains("discarded"), "{}", output.message);
+    }
+
+    #[test]
+    fn unrouted_bool_input_reports_its_effective_default() {
+        let hir = HirCrate::new("app", "app");
+        let mut image = route_image(vec![
+            image_binding("flag", DirectArea::Input, 1, ScalarKind::Bool),
+            physical_binding(
+                "claimed",
+                DirectArea::Input,
+                2,
+                ScalarKind::Bool,
+                "diewu",
+                "IN0",
+                "input",
+            ),
+        ]);
+        // The binding has no route, but the physical shorthand leaves it alone.
+        image.input_defaults = vec![0b10];
+
+        let warnings = unrouted_warnings(&hir, &image, &[]);
+        assert_eq!(warnings.len(), 1, "{warnings:#?}");
+        assert_eq!(warnings[0].code, codes::W_IO_ROUTE_INPUT);
+        assert!(warnings[0].message.contains("`flag`"));
+        assert!(warnings[0].message.contains("TRUE"));
     }
 }

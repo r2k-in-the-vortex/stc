@@ -117,7 +117,10 @@ requires `WCHAR_TO_UCHAR` to trap on lone surrogates and `UCHAR_TO_WCHAR` to tra
 and defines `UCHAR` as a Unicode scalar. P0.3 does not enforce scalar validity and does not model
 those conversion traps; the conversions are integer layout conversions. This gap is deferred to
 the later string phase and excluded from P0.6 conformance until it is modeled. The source type
-soundness result is therefore relative to the layout-only character model.
+soundness result is therefore relative to the layout-only character model. For P0.5, this is why
+target `ir_progress` carries the `AccessBounded` source-check premise instead of deriving it:
+the character-index path needs `CharIndexBounded` or exclusion until Q3 is resolved (see
+`Plan-Phase0.md` §22.4 and §22.11).
 
 HIR typing is monomorphic. The declarative operator rules require arithmetic operands to be the
 same integer type, bitwise operands to be the same `BOOL`/bit-string type, and comparison
@@ -221,16 +224,57 @@ exception. `interpreter_sound` (every reported result is reachable by `Steps` an
 
 ### 4.4 Target small-step relation `IRStep`
 
-P0.5 defines `IRStep` for the covered instructions, including checked arithmetic, trap calls,
-loads and stores through GOT cells, and direct and indirect calls. `IRState` records the program
-counter, stack frame, local memory, GOT root map, slot table, function cells, call stack, and
-trap state.
+P0.5 defines `IRState` and `IRStep` for the covered instructions, including checked arithmetic,
+trap calls, loads and stores through GOT cells, and direct and indirect calls. `IRState` records
+the module, the call stack of `IRFrame`s (block, remaining instructions, terminator, local map,
+stack memory, allocation table, `phi` predecessor, and return destination), the GOT root map,
+function and import bindings, globals, the cycle counters, the next frame id, and the machine
+status (running, halted, trapped, or UB).
+
+`irStep` is a total function from `IRState` to `IROutcome`: `step` to a successor, `halt`,
+`trapped trap`, `ub`, or `stuck` (a structural precondition failed). Instruction and terminator
+execution returns `IRStepResult`, which has no `halt` case; halting is a machine-status
+transition, so a `halt` outcome always reports the input state. `IRStep c c'` is
+`irStep c = .step c'` and `IRStepStar` is its reflexive-transitive closure. Every instruction and
+terminator of the P0.4 fragment has a semantics clause:
+
+| Construct | Semantics |
+| --- | --- |
+| `alloca` | Allocates a fresh stack slot, initializes it element-wise, and binds the destination to its address. |
+| `load` / `store` | Reads or writes stack memory, a GOT cell, or a module global; a GOT cell load follows the slot kind. |
+| `gep` | Adds the element offsets to a stack, global, slot-table, or cell address; a slot-table index yields a cell address. |
+| `binop` | Wrapping integer arithmetic; `sdiv`/`udiv`/`srem`/`urem` trap on zero and on the signed minimum divided by `-1`. |
+| `icmp` | Signed or unsigned integer comparison; the result is an `i1` payload. |
+| `select` | Chooses by the zero test of the `i1` condition. |
+| `cast` | `zext`/`sext`/`trunc` on the bit pattern. |
+| `phi` | Selects the incoming value for the recorded predecessor block. |
+| `call` | Checked overflow and rotate intrinsics, or a direct call to a module function. |
+| `callPtr` | Indirect call through a function cell, or the trap service through an import cell. |
+| `extractValue` | Projects value `0` or the overflow flag `1` from the checked result. |
+| `ret` | Returns to the caller, binds the caller's destination, and halts after the outermost frame. |
+| `br` / `condBr` | Jumps to an existing block and records the predecessor for `phi`. |
+| `unreachable` | Reaches the undefined state. |
 
 ### 4.5 Recursive target executor `irExecRec`
 
-P0.5 defines the recursive executor `irExecRec` and proves `ir_recursive_model_equiv` against
-the reflexive-transitive closure of `IRStep`. The recursive model is the preferred Phase 1
-refinement target; the step relation remains the reference for progress and memory soundness.
+P0.5 defines `irExecRec`, `IRSem`/`initState?`, and `irRun`, and proves
+`ir_recursive_model_equiv`: a halting executor result is exactly a finite `IRStepStar` run to a
+state whose own step is `.halt`. The executor soundness and completeness lemmas are
+`irExecRec_halt_sound` and `irExecRec_halt_complete`. The recursive model is the preferred
+Phase 1 refinement target; the step relation remains the reference for progress and memory
+soundness.
+
+All eight P0.5 target soundness theorems are now proved. `ir_progress`, `ir_memory_safe`, and
+`ir_no_ub` are stated over the `WFRunning` target invariant, which is implemented in
+`Stc.Codegen.Semantics` together with the offset-aware storage, `.slotEntry`, bounds-checked
+memory operations, origin/binding facts, and return-link predicates.  The approved design and
+implementation record is in `Plan-Phase0.md` §22. `initState?_wf`, `irStep_wf`/`irStepStar_wf`,
+and the reachability corollaries (`irStepStar_wfRunning`, `initState?_reachable_wfRunning`,
+`ir_progress_reachable`, `ir_memory_safe_reachable`, `ir_no_ub_reachable`) are proved, and
+`irRun_halt_wf` lifts the invariant to a halting `irRun`. `AccessBounded` remains the
+source-check premise of `ir_progress`: the character-index path needs an explicit
+`CharIndexBounded` hypothesis (or exclusion from the covered fragment) until Q3 is resolved.
+Earlier scoping is in §21.
 
 ### 4.6 Cycle and initialization boundary
 
@@ -248,7 +292,12 @@ activate, commit, rollback, and unload beyond the initialization boundary are Ph
 
 The core has stack frames and persistent GOT cells. There is no heap, no general pointer
 arithmetic, and no aliasing beyond GOT cells. Target values are integers, pointers, and the
-typed cell contents described by `WellFormed`.
+typed cell contents described by `WellFormed`. Stack memory is modeled per slot and array
+element. Persistent storage behind a `Data`/`Direct` root or a module global is an addressable
+value sequence keyed by store id and offset; the builder's two-load GOT access pattern is
+modeled with a distinct `.slotEntry` address, so the cell address and the cell content have
+different state values and the recorded `PointerOrigin` stages match the state. The model,
+bounds checks, and fault policy are the approved D1/D2 design in `Plan-Phase0.md` §22.
 
 ### 5.2 GOT root and slot model
 
@@ -258,20 +307,33 @@ A GOT cell is an index, not an arbitrary pointer. The target state carries a roo
 store, and call. The cell kinds are `Data`, `Function`, `Descriptor`, `Direct`, and `Import`;
 `Descriptor` cells are structurally representable but semantically out of the core because OOP is
 excluded. The slot table is grouped in the canonical kind order; sorting within a group by
-`GotId`/service ID is Phase 3's `slots_canonical`. `ir_got_sound` states that a load returns the
-root value recorded by the slot table.
+`GotId`/service ID is Phase 3's `slots_canonical`. `ir_got_sound` is proved for the target
+`loadValue`: given the slot kind, a `Data`/`Direct` cell load returns the root pointer, a
+`Function` cell load returns the bound callable, an `Import` cell load returns the import cell
+identity, and a `Descriptor` cell load returns nothing. The model adds a `.slotEntry` address
+for the first of the builder's two GOT loads, so the cell address and the cell content have
+distinct state values and the recorded `PointerOrigin` stages match the state.
 
 ### 5.3 Traps
 
 Traps are explicit terminal states with a trap code and a source span. The core trap set is
 `OVERFLOW`, `DIV_ZERO`, and `RANGE`. `trap_soundness` and `ir_trap_sound` state that every
-terminal trap is in the specified set and occurs only on the specified path.
+terminal trap is in the specified set and occurs only on the specified path. `ir_trap_sound` is
+proved for every target `trapped` outcome; the source-path half is carried by the checked
+arithmetic and range-check clauses that produce those outcomes.
 
 ### 5.4 Undefined-behavior policy
 
 The covered fragment excludes poison and `undef`, out-of-bounds stack access, misaligned access,
-and raw pointer arithmetic. `ir_no_ub` states that `WellFormed` IR cannot reach an undefined
-state on the fragment. This is a property of the modeled fragment, not a general LLVM result.
+and raw pointer arithmetic. `ir_no_ub` is proved for every `WFRunning` state: the only modeled
+undefined sources are an executed `unreachable` and an unspecified trap-service code, and both
+are excluded by the trusted trap-code/guarded-unreachable facts. Out-of-range stack and storage
+accesses are defined `.stuck` faults, as are stores through host-owned cells/slot entries, so
+they are not undefined behavior. This is a property of the modeled fragment, not a general LLVM
+result; lifting it from states to reachable runs is `ir_no_ub_reachable` (with
+`irStepStar_wfRunning`), and the executable-entry form follows from `irRun_halt_wf`
+(`Plan-Phase0.md` §22.11). Q3 does not weaken this statement: an out-of-range character access
+is a defined fault, not undefined behavior.
 
 ## 6. Exact arithmetic connection
 
@@ -288,13 +350,19 @@ instruction sequence plus its trap path produces the same result or trap as the 
 
 The authoritative status of every entry is [`lean/verification-status.toml`](../../lean/verification-status.toml);
 `tools/ci/check_verification_registry.py` validates it and audits proved theorems. This section
-mirrors the registry while P0.3 is complete and review-approved and P0.4 is complete: the P0.1 and P0.2
-entries are proved except `core_check_complete`, which is descoped with the reason recorded in the
-registry; the P0.3 entries for determinism, progress, preservation, type soundness, trap
-soundness, guarded exact arithmetic, and the interpreter are proved; the P0.4 definitions and
-structural lemmas are proved. Open P0.3 questions are recorded in
-[Plan-Phase0.md](Plan-Phase0.md) §19 and the P0.4 decisions in §20. The registry is regenerated
-into this section at P0.7.
+mirrors the registry while P0.3 is complete, review-approved, and merged into
+`v2.0.0-planning`, and P0.4 is complete: the P0.1 and P0.2 entries are proved except
+`core_check_complete`, which is descoped with the reason recorded in the registry; the P0.3
+entries for determinism, progress, preservation, type soundness, trap soundness, guarded exact
+arithmetic, and the interpreter are proved; the P0.4 definitions and structural lemmas are
+proved. P0.5 target soundness is proved: determinism, progress, memory safety, GOT soundness,
+trap soundness, checked-arithmetic refinement, the recursive-model equivalence, and no-UB are
+all proved against the implemented invariant. The initial-state proof, the preservation proof,
+and the reachability/`irRun` corollaries are also proved (`Plan-Phase0.md` §22.11). Open P0.3
+questions are recorded in
+[Plan-Phase0.md](Plan-Phase0.md) §19, the P0.4 decisions in §20, the P0.5 checkpoint in §21, and
+the P0.5 design/implementation record in §22. The registry is regenerated into this section at
+P0.7.
 
 ### 7.1 Source soundness
 
@@ -341,14 +409,14 @@ lemmas are projections of `Stc.Codegen.WellFormed`; the full inventory and shape
 
 | Theorem | Module | Sub-phase | Status |
 | --- | --- | --- | --- |
-| `Stc.Codegen.ir_deterministic` | `Stc.Codegen.Semantics` | P0.5 | planned |
-| `Stc.Codegen.ir_progress` | `Stc.Codegen.Semantics` | P0.5 | planned |
-| `Stc.Codegen.ir_memory_safe` | `Stc.Codegen.Semantics` | P0.5 | planned |
-| `Stc.Codegen.ir_got_sound` | `Stc.Codegen.Semantics` | P0.5 | planned |
-| `Stc.Codegen.ir_trap_sound` | `Stc.Codegen.Semantics` | P0.5 | planned |
-| `Stc.Codegen.ir_checked_arith_refines_exact` | `Stc.Codegen.Semantics` | P0.5 | planned |
-| `Stc.Codegen.ir_recursive_model_equiv` | `Stc.Codegen.Semantics` | P0.5 | planned |
-| `Stc.Codegen.ir_no_ub` | `Stc.Codegen.Semantics` | P0.5 | planned |
+| `Stc.Codegen.ir_deterministic` | `Stc.Codegen.Semantics` | P0.5 | proved |
+| `Stc.Codegen.ir_progress` | `Stc.Codegen.Semantics` | P0.5 | proved |
+| `Stc.Codegen.ir_memory_safe` | `Stc.Codegen.Semantics` | P0.5 | proved |
+| `Stc.Codegen.ir_got_sound` | `Stc.Codegen.Semantics` | P0.5 | proved |
+| `Stc.Codegen.ir_trap_sound` | `Stc.Codegen.Semantics` | P0.5 | proved |
+| `Stc.Codegen.ir_checked_arith_refines_exact` | `Stc.Codegen.Semantics` | P0.5 | proved |
+| `Stc.Codegen.ir_recursive_model_equiv` | `Stc.Codegen.Semantics` | P0.5 | proved |
+| `Stc.Codegen.ir_no_ub` | `Stc.Codegen.Semantics` | P0.5 | proved |
 
 ### 7.4 Interpreter equivalence and harness properties
 

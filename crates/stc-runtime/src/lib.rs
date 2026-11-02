@@ -38,6 +38,14 @@
 //!   the process-wide ABI 2 state services;
 //! - [`io`] owns the `null`/`memory`/`file` process-image backends and the
 //!   per-scan input latch/output publish;
+//! - [`coordinator`] owns the shared process image, per-device backend
+//!   dispatch, route application, and per-backend fault isolation
+//!   (IO-Routing-and-Backends §3–§4);
+//! - [`io_mock`] is the protocol-neutral mock backend used by the coordinator
+//!   tests; on Linux `ethercat`/`ethercat-status` are served by `io_ethercat`
+//!   instead, and the mock remains the default elsewhere;
+//! - `io_ethercat` (Linux only) dynamically loads the project-owned IgH shim
+//!   and owns EtherCAT configuration, startup, fault/recovery, and status;
 //! - `signal` installs the Ctrl-C/Ctrl-Break stop handlers;
 //! - `trap_boundary` provides the non-local trap exit around module calls.
 //!
@@ -58,9 +66,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) mod backend_defaults;
 pub mod catalog;
 pub mod compare;
 pub mod control;
+pub mod coordinator;
 pub mod debug;
 pub mod debug_server;
 pub mod debug_view;
@@ -71,6 +81,9 @@ pub mod host;
 pub mod host_api;
 pub mod image;
 pub mod io;
+#[cfg(target_os = "linux")]
+pub mod io_ethercat;
+pub mod io_mock;
 pub mod loader;
 pub mod memory;
 pub mod migration;
@@ -95,6 +108,11 @@ pub use compare::compare_manifests;
 pub use control::{
     CONTROL_UNAVAILABLE, ControlClient, ControlOp, ControlRequest, ControlServer, ControlSignal,
     DEPLOY_REJECTED, PROTOCOL_VERSION,
+};
+pub use coordinator::{
+    BackendBinding, BackendChannel, BackendConfig, BackendDeviceConfig, BackendRegistry,
+    BackendReport, BackendState, BackendStatus, Coordinator, DeviceBackend, ImageRange,
+    ProcessImage,
 };
 pub use debug::{
     AuditEvent, AuditOutcome, AuditSink, AuditTarget, DebugBatch, DebugEndReason, DebugError,
@@ -122,6 +140,9 @@ pub use host::{
 pub use host_api::{ABI_VERSION, HOST_API, HostApi, TrapRecord};
 pub use image::{DirectRemap, MAX_IMAGE_BYTES};
 pub use io::{IoNotice, IoRuntime};
+#[cfg(target_os = "linux")]
+pub use io_ethercat::{EthercatBackend, SHIM_ENV, SHIM_LIBRARY, ShimInfo, probe_shim};
+pub use io_mock::{MockEthercatBackend, MockWire};
 pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
 pub use migration::{PlanDecision, validate_deployable, validate_plan};
@@ -304,7 +325,9 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
             "--io" => {
                 let text = value("--io")?;
                 run.io = Some(IoBackend::parse(&text).ok_or_else(|| {
-                    format!("unknown I/O backend `{text}` (expected null, memory, or file)")
+                    format!(
+                        "unknown I/O backend `{text}` (expected null, memory, file, or ethercat)"
+                    )
                 })?);
             }
             "--io-file" => {
@@ -687,6 +710,29 @@ fn print_host_status(host: &Host) {
         .file()
         .map_or_else(String::new, |file| format!(" file={}", file.display()));
     eprintln!("stc: status: io {}{io_file}", io.backend().name());
+    for report in host.io_reports() {
+        let details = report
+            .diagnostics
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let fault = report
+            .last_fault
+            .as_deref()
+            .map_or_else(String::new, |fault| format!(" last-fault={fault}"));
+        eprintln!(
+            "stc: status: io-backend {} devices={} state={} exchanges={} faults={} \
+             hash={}{fault}{}{details}",
+            report.name,
+            report.devices,
+            report.state.as_str(),
+            report.exchanges,
+            report.faults,
+            report.config_hash,
+            if details.is_empty() { "" } else { " " },
+        );
+    }
     let retain = host.retain_config();
     eprintln!(
         "stc: status: retain {} policy {}{}",
@@ -1143,7 +1189,8 @@ pub unsafe extern "C" fn stc_host_load_module(module_path: *const c_char, mode: 
 /// Selects the embedding host's process-image backend.
 ///
 /// `backend` is `-1` (keep the module metadata's backend), `0` `null`, `1`
-/// `memory`, or `2` `file`. `file` is null to keep the metadata/default file.
+/// `memory`, `2` `file`, or `3` `ethercat`. `file` is null to keep the
+/// metadata/default file.
 /// Returns `0` on success and `2` for an unknown backend. The setting applies
 /// to subsequent loads and the current host's next cycles.
 ///
@@ -1157,6 +1204,7 @@ pub unsafe extern "C" fn stc_host_configure_io(backend: i32, file: *const c_char
         0 => Some(IoBackend::Null),
         1 => Some(IoBackend::Memory),
         2 => Some(IoBackend::File),
+        3 => Some(IoBackend::Ethercat),
         _ => return 2,
     };
     // SAFETY: the caller contract requires a NUL-terminated string.
@@ -1376,6 +1424,7 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
         0 => Some(IoBackend::Null),
         1 => Some(IoBackend::Memory),
         2 => Some(IoBackend::File),
+        3 => Some(IoBackend::Ethercat),
         other => {
             eprintln!("stc: unknown I/O backend {other}");
             return 2;
