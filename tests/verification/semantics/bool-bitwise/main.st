@@ -1,0 +1,12 @@
+VAR_GLOBAL
+  AndR : BOOL;
+  OrR : BOOL;
+  XorR : BOOL;
+  NotR : BOOL;
+END_VAR
+PROGRAM Main
+  AndR := TRUE AND TRUE;
+  OrR := FALSE OR TRUE;
+  XorR := TRUE XOR FALSE;
+  NotR := NOT (TRUE AND FALSE);
+END_PROGRAM

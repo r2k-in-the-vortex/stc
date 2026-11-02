@@ -93,6 +93,7 @@ mod rt;
 pub mod run;
 pub mod scheduler;
 pub mod signal;
+mod snapshot;
 pub mod state;
 mod stop;
 pub mod store;
@@ -244,7 +245,10 @@ pub extern "C" fn stc_abi_version() -> i32 {
 /// Accepted options: `--cycles <n>` (zero runs until interrupted),
 /// `--cycle-time <duration>`, `--io null|memory|file`, `--io-file <path>`,
 /// `--state-file <path>`, `--reset-retain`, `--no-retain`,
-/// `--mock-clock <duration>`, `--status`, and `--module <path>`.
+/// `--mock-clock <duration>`, `--status`, `--module <path>`, and the
+/// differential-testing `--snapshot <path>` (writes the active generation's
+/// manifest roots after the run; protected roots are included and marked, and
+/// a snapshot write failure exits 2).
 ///
 /// A relative `--state-file`/`--io-file`, or a relative `retain.file`/
 /// `io.file` from the metadata sidecar, resolves against the module directory
@@ -286,6 +290,7 @@ struct LauncherOptions {
     debug_allow_write: bool,
     debug_allow_force: bool,
     debug_session_timeout_ns: Option<u64>,
+    snapshot: Option<PathBuf>,
 }
 
 fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
@@ -299,6 +304,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     let mut debug_allow_write = false;
     let mut debug_allow_force = false;
     let mut debug_session_timeout_ns = None;
+    let mut snapshot = None;
     let mut index = usize::from(!args.is_empty());
     while index < args.len() {
         let argument = args[index].as_str();
@@ -366,6 +372,13 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
                 run.rt_metrics = Some(parse_rt_metrics_path(&other["--rt-metrics=".len()..])?);
             }
             "--status" => run.status = true,
+            "--snapshot" => {
+                let path = value("--snapshot")?;
+                if path.is_empty() {
+                    return Err("`--snapshot` requires a non-empty path".into());
+                }
+                snapshot = Some(PathBuf::from(path));
+            }
             "--module" => {
                 module = Some(value("--module")?);
             }
@@ -441,6 +454,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
         debug_allow_write,
         debug_allow_force,
         debug_session_timeout_ns,
+        snapshot,
     })
 }
 
@@ -575,29 +589,32 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
     } else {
         run::run_loop(&mut host, &options.run)
     };
-    match outcome {
-        Ok(_) => {
-            if options.run.status {
-                print_host_status(&host);
-            }
-            if let Err(error) = host.shutdown() {
-                eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
-                return 1;
-            }
-            0
-        }
+    if options.run.status {
+        print_host_status(&host);
+    }
+    let mut code = match &outcome {
+        Ok(_) => 0,
         Err(error) => {
-            if options.run.status {
-                print_host_status(&host);
-            }
-            report_run_error(&error);
-            let code = error.exit_code();
-            if let Err(error) = host.shutdown() {
-                eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
-            }
-            code
+            report_run_error(error);
+            error.exit_code()
+        }
+    };
+    if let Some(path) = options.snapshot.as_deref() {
+        // The snapshot is written before shutdown retires the active
+        // generation. A write failure makes the run unusable for the
+        // differential harness, so it replaces the run exit code.
+        if let Err(message) = crate::snapshot::write_snapshot(path, &host) {
+            eprintln!("stc: snapshot failed: {message}");
+            code = 2;
         }
     }
+    if let Err(error) = host.shutdown() {
+        eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
+        if code == 0 {
+            return 1;
+        }
+    }
+    code
 }
 
 /// Configures retained state and the I/O backend for a launcher run.

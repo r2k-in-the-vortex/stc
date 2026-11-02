@@ -1,0 +1,10 @@
+FUNCTION Inc : DINT
+VAR_INPUT
+  x : DINT;
+END_VAR
+  Inc := x + 1;
+END_FUNCTION
+
+PROGRAM Main
+  Inc(5);
+END_PROGRAM

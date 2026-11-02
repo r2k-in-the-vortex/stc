@@ -1,0 +1,11 @@
+VAR_GLOBAL
+  Hits : DINT;
+END_VAR
+PROGRAM Main
+VAR
+  i : DINT;
+END_VAR
+  FOR i := 1 TO 0 DO
+    Hits := Hits + 1;
+  END_FOR;
+END_PROGRAM

@@ -1,10 +1,13 @@
 # Verification Program Plan — Lean Verification of stc
 
 Profile: `stc-2013-oop-utf8-v1`
-Date: 2026-10-27
-Status: Draft for review. Phase 0 is in progress: P0.0 is complete (review approved 2026-10-27)
-and P0.1 is next; no verification claim beyond the existing exact-function models is made by this
-document.
+Date: 2026-11-02
+Status: Draft for review. Phase 0 is in progress: P0.0–P0.6 are complete and reviewed (P0.5
+approved 2026-11-02 and merged through PR #12; P0.6 approved 2026-11-02). P0.6 delivered the
+canonical core-HIR dump format `0.1.0`, `stc hir-dump`, the reference interpreter, the opt-in
+snapshot surface, the differential harness, the conformance report schema, the 74-case corpus,
+and the committed byte-stable report, all run in CI. P0.7 follows. The proved claims are the
+records in `lean/verification-status.toml`; no claim beyond them is made by this document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
 [GOT Artifacts and Schemas](../Architecture/GOT-Artifacts.md),
@@ -911,8 +914,8 @@ turn it into the registry.
 | AST, HIR, and IR fragment types | 0 | S | definitions plus `WellFormed` | Syntax, grammar, and HIR defined (P0.1–P0.2); IR fragment defined and review-approved (P0.4, 2026-10-31) |
 | Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31 and merged into v2.0.0-planning via PR #11 (612f84d); see Plan-Phase0.md §19 |
 | Core typing judgment and checker | 0 | S | `core_check_sound`, `core_rejection_characterized` | Proved (P0.2) |
-| Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | P0.5 target soundness proved: target machine, step relation, executor, coverage table, and all eight soundness theorems (`ir_deterministic`, `ir_progress`, `ir_memory_safe`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`, `ir_no_ub`) proved against the implemented invariant; `initState?_wf`, `irStep_wf`/`irStepStar_wf`, the reachability corollaries, and `irRun_halt_wf` complete the whole-run bridge (Plan-Phase0.md §22.10–§22.11; checkpoint §21) |
-| Reference interpreter and conformance | 0 | V0 | `lake exe semantics-conformance` report | Fuel interpreter sound/complete (P0.3); conformance harness pending (P0.6) |
+| Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | P0.5 target soundness proved: target machine, step relation, executor, coverage table, and all eight soundness theorems (`ir_deterministic`, `ir_progress`, `ir_memory_safe`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`, `ir_no_ub`) proved against the implemented invariant; `initState?_wf`, `irStep_wf`/`irStepStar_wf`, the reachability corollaries, and `irRun_halt_wf` complete the whole-run bridge (Plan-Phase0.md §22.10–§22.11; checkpoint §21); P0.5 review approved 2026-11-02 and merged via PR #12 (92e113f) |
+| Reference interpreter and conformance | 0 | V0 | `lake exe semantics-conformance` report | Core-HIR dump `0.1.0` and `stc hir-dump` complete (P0.6); fuel interpreter sound/complete (P0.3); `stc-sem`, the opt-in snapshot surface, the differential harness, the `stc-sem-conformance-report` `0.1.0`, a 74-case corpus covering every claimed core item or a justified exclusion, and the committed byte-stable report complete and checked in CI (P0.6); the triage log records the one fixed source-analyzer bug and the documented exclusions; P0.6 approved 2026-11-02 |
 | Checked integer arithmetic | 2 | V1 | `add_ok_iff`, overflow/div-zero lemmas | Model + vectors (V0) |
 | Bitwise, shifts, rotates | 2 | V1 | range, masking, inverse lemmas | Model + vectors (V0) |
 | Conversions, comparisons, selection | 2 | V1 | conversion and selection lemmas | Model + vectors (V0) |
@@ -1055,17 +1058,12 @@ The program is done when:
 
 ## 14. Immediate next steps
 
-1. Review this plan and resolve D-V1 through D-V10.
-2. Start Phase 0 by following [Plan-Phase0.md](Plan-Phase0.md): create `Stc.Syntax`, `Stc.Hir`,
-   `Stc.Sem`, `Stc.Codegen.Ir`, and `Stc.Codegen.Semantics`; write the semantics document and
-   fix the core subset boundary.
-3. Build `lake exe stc-sem` and `lake exe semantics-conformance`; run the core subset of the
-   conformance and execution corpus and commit the report.
-4. Run the Phase 1 bridge spike in parallel: Aeneas/Charon on `exact.rs`, `keys.rs`, and one
+1. P0.6's corpus, triage, and report exit criteria are met: the versioned HIR dump,
+   `lake exe stc-sem`, the case format, the differential harness, the report schema, the
+   74-case corpus, and the committed byte-stable report are complete and checked in CI.
+2. Run the P0.7 semantics-document review, version the semantics, and hand it off with the
+   TCB note.
+3. Continue the Phase 1 bridge spike in parallel: Aeneas/Charon on `exact.rs`, `keys.rs`, and one
    codec path; write the spike report with measured effort and coverage.
-5. Create the `Stc.ConstEval`, `Stc.Got`, and `Stc.Verification` skeletons, the registry, and
-   the no-sorry/axiom/registry CI checks.
-6. Extend the exact vectors to every operation and type, then add the constant-evaluation
-   oracle.
-7. Prototype `lake exe check-ir` on one emitted module and compare it with
-   `stc_codegen::verify`.
+4. Extend the exact vectors to every operation and type, add the constant-evaluation oracle, and
+   prototype `lake exe check-ir` against `stc_codegen::verify`.

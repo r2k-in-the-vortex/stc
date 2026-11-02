@@ -1,0 +1,7 @@
+VAR_GLOBAL
+  G : DINT := 5;
+  H : INT := -2;
+END_VAR
+PROGRAM Main
+  G := G + H;
+END_PROGRAM

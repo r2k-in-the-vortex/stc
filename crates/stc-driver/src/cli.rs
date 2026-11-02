@@ -40,6 +40,17 @@ pub(crate) enum Command {
     OnlineDiff,
     /// Source-aware tracked rename.
     Rename,
+    /// Emit or verify the canonical core-HIR dump (P0.6).
+    HirDump,
+}
+
+/// `stc hir-dump` options.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HirDumpOptions {
+    /// `--output <path>`: write the dump instead of stdout.
+    pub(crate) output: Option<String>,
+    /// `--verify <path>`: validate a dump without emitting one.
+    pub(crate) verify: Option<String>,
 }
 
 /// `stc test` options.
@@ -145,6 +156,8 @@ pub(crate) struct Invocation {
     pub(crate) test: TestOptions,
     /// Debug-session options.
     pub(crate) debug: DebugOptions,
+    /// `stc hir-dump` options.
+    pub(crate) hir_dump: HirDumpOptions,
 }
 
 /// Parses argv.
@@ -181,6 +194,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         "metadata" => Command::Metadata,
         "compliance" => Command::Compliance,
         "rename" => Command::Rename,
+        "hir-dump" => Command::HirDump,
         "online" => {
             let subcommand = args
                 .get(1)
@@ -217,6 +231,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     let mut clean_test = false;
     let mut test = TestOptions::default();
     let mut debug = DebugOptions::default();
+    let mut hir_dump = HirDumpOptions::default();
     let mut paths = Vec::new();
     let mut build = Request::default();
 
@@ -421,6 +436,18 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
                 build.out_dir = Some(other["--out-dir=".len()..].to_owned());
                 build.out_dir_explicit = true;
             }
+            "--output" => {
+                hir_dump.output = Some(next_value(args, &mut index, "--output")?);
+            }
+            other if other.starts_with("--output=") => {
+                hir_dump.output = Some(other["--output=".len()..].to_owned());
+            }
+            "--verify" => {
+                hir_dump.verify = Some(next_value(args, &mut index, "--verify")?);
+            }
+            other if other.starts_with("--verify=") => {
+                hir_dump.verify = Some(other["--verify=".len()..].to_owned());
+            }
             "--out" => online.out = Some(next_value(args, &mut index, "--out")?),
             other if other.starts_with("--out=") => {
                 online.out = Some(other["--out=".len()..].to_owned());
@@ -571,6 +598,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         &test,
         format,
         &debug,
+        &hir_dump,
     )?;
     for spec in &debug.breaks {
         parse_break_spec(spec)?;
@@ -602,6 +630,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         build,
         test,
         debug,
+        hir_dump,
     }))
 }
 
@@ -653,6 +682,7 @@ fn validate(
     test: &TestOptions,
     format: Format,
     debug: &DebugOptions,
+    hir_dump: &HirDumpOptions,
 ) -> Result<(), String> {
     let debug_command_only = debug.attach.is_some()
         || debug.endpoint.is_some()
@@ -933,6 +963,23 @@ fn validate(
     if dry_run && command != Command::Rename {
         return Err("`--dry-run` is only valid with `stc rename`".into());
     }
+    if hir_dump.output.is_some() && command != Command::HirDump {
+        return Err("`--output` is only valid with `stc hir-dump`".into());
+    }
+    if hir_dump.verify.is_some() && command != Command::HirDump {
+        return Err("`--verify` is only valid with `stc hir-dump`".into());
+    }
+    if hir_dump.output.is_some() && hir_dump.verify.is_some() {
+        return Err("`--output` and `--verify` are mutually exclusive".into());
+    }
+    if command == Command::HirDump {
+        if hir_dump.verify.is_some() && !paths.is_empty() {
+            return Err("`stc hir-dump --verify` does not accept input files".into());
+        }
+        if hir_dump.verify.is_none() && paths.is_empty() {
+            return Err("`stc hir-dump` needs at least one input file".into());
+        }
+    }
     if online.out.is_some() && command != Command::OnlineDownload {
         return Err("`--out` is only valid with `stc online download`".into());
     }
@@ -978,10 +1025,13 @@ fn validate(
                 | Command::Metadata
                 | Command::Test
                 | Command::Debug
+                | Command::HirDump
         )
     {
         return Err(
-            "`--relaxed` is only valid with parse, check, build, metadata, test, or debug".into(),
+            "`--relaxed` is only valid with parse, check, build, metadata, test, debug, or \
+             hir-dump"
+                .into(),
         );
     }
     if manifest.is_some() {
@@ -1037,6 +1087,8 @@ fn validate(
         Command::OnlineDiff => path_count == 1,
         // Test positional arguments are substring filters.
         Command::Check | Command::Build | Command::Fmt | Command::Test => true,
+        // Input files in emit mode; verify mode is checked above.
+        Command::HirDump => true,
         Command::Run
         | Command::Clean
         | Command::Metadata
@@ -1255,6 +1307,7 @@ fn command_name(command: Command) -> &'static str {
         Command::OnlineDownload => "online download",
         Command::OnlineDiff => "online diff",
         Command::Rename => "rename",
+        Command::HirDump => "hir-dump",
     }
 }
 
@@ -1318,6 +1371,9 @@ fn print_help() {
          \x20         [--locked] [--debug|--release]\n\
          \x20         [--message-format human|json|short] [-v|-vv]\n\
          \x20 stc rename <old> <new> [--dry-run] [--manifest-path <stc.toml|dir>] [--locked]\n\
+         \x20 stc hir-dump <file>... [--output <path>] [--relaxed]\n\
+         \x20              [--message-format human|json]\n\
+         \x20 stc hir-dump --verify <dump.json> [--message-format human|json]\n\
          \x20 stc --version\n\
          \x20 stc --help\n\
          \n\
@@ -1361,7 +1417,10 @@ fn print_help() {
          envelope; `online diff` compares a candidate manifest with the active\n\
          baseline (or `--baseline`) and exits 0 compatible, 1 incompatible,\n\
          2 usage/parse. `rename` rewrites a sema-resolved declaration and its\n\
-         references and records the mapping in `stc.renames.toml`.\n\
+         references and records the mapping in `stc.renames.toml`. `hir-dump`\n\
+         emits the versioned canonical core-HIR JSON dump (HIR-Dump.md), or\n\
+         validates one with `--verify`; exit 0 accepted, 1 rejected or compile\n\
+         error, 2 malformed dump, usage, or I/O error.\n\
          Exit codes: 0 success, 1 compile error, 2 usage/manifest/toolchain error,\n\
          3 internal error, 4 runtime trap, 130 interrupted.",
         env!("CARGO_PKG_VERSION")
