@@ -1,0 +1,18 @@
+VAR_GLOBAL
+  A : DINT;
+  B : UDINT;
+  C : SINT;
+  D : USINT;
+END_VAR
+PROGRAM Main
+VAR
+  s : SINT;
+  u : USINT;
+END_VAR
+  s := SINT#-1;
+  A := SINT_TO_INT(s);
+  u := SINT_TO_USINT(s);
+  B := USINT_TO_UDINT(u);
+  C := USINT_TO_SINT(USINT#255);
+  D := USINT#200;
+END_PROGRAM

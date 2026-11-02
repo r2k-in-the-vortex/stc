@@ -1,0 +1,8 @@
+VAR_GLOBAL
+  W : WORD;
+  I : INT;
+END_VAR
+PROGRAM Main
+  W := INT_TO_WORD(INT#-2);
+  I := WORD_TO_INT(W);
+END_PROGRAM

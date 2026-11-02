@@ -1,0 +1,8 @@
+VAR_GLOBAL
+  R : DINT;
+END_VAR
+PROGRAM Main
+  R := R + 1;
+  RETURN;
+  R := 100;
+END_PROGRAM
