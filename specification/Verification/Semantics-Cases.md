@@ -328,8 +328,9 @@ The report has these members:
 | `cases` | array | One entry per descriptor, §8.1 |
 | `summary` | object | `{"total": n, "passed": n, "failed": n}` |
 
-The report carries no timestamp, temporary path, or build identifier, so equal inputs and
-equal tool versions produce equal report bytes. The report format is frozen at `0.1.0`: a
+A passing report carries no timestamp, temporary path, or build identifier, so repeated passing
+runs produce equal report bytes; a failure diagnostic may name the temporary case directory.
+The report format is frozen at `0.1.0`: a
 change to a field name, shape, meaning, or the feature-tag placement requires a new
 `formatVersion`.
 
