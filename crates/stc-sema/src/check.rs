@@ -4154,6 +4154,12 @@ impl Analyzer<'_> {
                 let any_real = tys
                     .iter()
                     .any(|ty| matches!(self.hir.types.get(self.scalar_base(*ty)), Ty::Real(_)));
+                let all_bits = tys.iter().all(|ty| {
+                    matches!(self.hir.types.get(self.scalar_base(*ty)), Ty::BitString(_))
+                });
+                let all_chars = tys
+                    .iter()
+                    .all(|ty| matches!(self.hir.types.get(self.scalar_base(*ty)), Ty::Char(_)));
                 if any_real {
                     let lreal = tys.iter().any(|ty| {
                         matches!(
@@ -4166,6 +4172,22 @@ impl Analyzer<'_> {
                     } else {
                         self.hir.types.real(stc_hir::RealTy::Real)
                     };
+                } else if matches!(kind, stc_hir::StdFnKind::Max | stc_hir::StdFnKind::Min)
+                    && all_bits
+                {
+                    let width = tys
+                        .iter()
+                        .filter_map(|ty| match self.hir.types.get(self.scalar_base(*ty)) {
+                            Ty::BitString(width) => Some(*width),
+                            _ => None,
+                        })
+                        .max()
+                        .unwrap_or(8);
+                    result = self.hir.types.bit_string(width);
+                } else if matches!(kind, stc_hir::StdFnKind::Max | stc_hir::StdFnKind::Min)
+                    && all_chars
+                {
+                    result = tys[0];
                 } else {
                     result = self.promoted_int(&tys);
                 }
