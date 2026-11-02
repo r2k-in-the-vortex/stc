@@ -386,6 +386,15 @@ private def collectGlobals (core : CoreUnit) (snapshot : Snapshot) : CaseM (List
         values := values ++ [← decodeGlobalValue root global.ty]
   pure values
 
+/-- Removes the quotes of the artifact's debug-formatted trap name. -/
+private def unquoteTrap (token : String) : String :=
+  match token.toList with
+  | '"' :: rest =>
+      match rest.reverse with
+      | '"' :: middle => String.mk middle.reverse
+      | _ => token
+  | _ => token
+
 /-- The trap tag the compiled artifact printed on stderr, if any. -/
 private def trapFromStderr (text : String) : Option String :=
   let rec go : List String → Option String
@@ -395,7 +404,7 @@ private def trapFromStderr (text : String) : Option String :=
         if line.startsWith "stc: runtime trap: " then
           let after := (line.drop "stc: runtime trap: ".length).toString
           match after.splitOn " " with
-          | tag :: _ => some tag
+          | tag :: _ => some (unquoteTrap tag)
           | [] => none
         else
           go rest
@@ -717,7 +726,8 @@ private def resolveClang (explicit : Option String) : IO (Option String) := do
 
 private def resolveToolchain (options : Options) : IO (Except String Toolchain) := do
   let cwd ← IO.currentDir
-  let exe (stem : String) : String := stem ++ System.FilePath.exeExtension
+  let exe (stem : String) : String :=
+    stem ++ (if System.Platform.isWindows then ".exe" else "")
   let stcCandidates : List System.FilePath := [
     cwd / ".." / "target" / "debug" / exe "stc",
     cwd / "target" / "debug" / exe "stc",

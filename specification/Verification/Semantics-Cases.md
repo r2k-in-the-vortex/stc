@@ -5,9 +5,10 @@ Date: 2026-11-01
 Semantics version: `1.0-draft`
 Case format: `stc-core-case` version `0.1.0`
 Result format: `stc-sem-result` version `0.1.0`
-Status: P0.6 second milestone. The `stc-sem` reference-interpreter path is implemented; the
-differential harness and corpus seeding are later P0.6 work. No corpus `case.json` is committed
-until `lake exe semantics-conformance` can run it.
+Status: P0.6 third milestone. The `stc-sem` reference-interpreter path and the differential harness
+are implemented, and the seeded corpus under `tests/verification/semantics/` passes: the frozen
+dump, the reference interpreter, and the compiled artifact agree on every case. This is V0
+differential evidence, not a refinement proof.
 Companion: [Core HIR Dump](HIR-Dump.md) · [Semantics](Semantics.md) ·
 [Phase 0 Implementation Plan](Plan-Phase0.md)
 
@@ -269,7 +270,7 @@ The case name, entry point, versions, and profile are provenance; they are check
 not compared as observations. An entry name that differs from the dump program is an input error
 (exit `3`), never a mismatch. The optional trace is diagnostic and is not part of the comparison.
 
-Comparison against the compiled Rust artifact will use the same four observations, but its
+Comparison against the compiled Rust artifact uses the same four observations; its
 `requestedCycles` and fuel are harness inputs and are not Rust program inputs. The compiled
 artifact's global snapshot is compared by declaration position and value, which is why the dump
 fixes global order.
@@ -277,14 +278,22 @@ fixes global order.
 ## 7. Corpus layout and gating
 
 A corpus case is the directory `tests/verification/semantics/<case>/` containing `case.json` and
-the core source file or files the dump is produced from. The harness will derive the dump with
-`stc hir-dump` and run `stc-sem` against it; neither the case descriptor nor the reference
-interpreter reads source text.
+the core source file or files the dump is produced from. The harness derives the dump with
+`stc hir-dump` and runs `stc-sem` against it; neither the case descriptor nor the reference
+interpreter reads source text. Each seeded case has one `.st` source and one cycle, so every
+comparison includes exactly one completed cycle unless the case traps during it.
 
-No corpus case is committed while the differential harness is a fail-closed placeholder. The
-P0.0 gate in `tools/ci/check_semantics_placeholder.py` fails CI if any `case.json` exists while
-`lake exe semantics-conformance` exits nonzero, so a case can never be added to a harness that
-does not run it. The corpus is seeded only after the harness runs cases, and every case then
+| Case | Coverage |
+| --- | --- |
+| `value-result` | a function call and arithmetic produce a global value; halted |
+| `trap-div-zero` | a division by zero after a global write; traps with `DIV_ZERO` |
+| `globals-order` | two `DINT` globals and a `BOOL` global compared in declaration order |
+| `control-flow` | `FOR` and `IF` nest within a single program cycle |
+| `got-access` | a function reads a global through its GOT root |
+
+The P0.0 gate in `tools/ci/check_semantics_placeholder.py` fails CI if the corpus is empty and the
+harness exits zero, or if any `case.json` exists and the harness exits nonzero, so a case can
+never be added to a harness that does not run it and an empty corpus can never pass. Every case
 must pass or carry a written exclusion.
 
 ## 8. Versioning policy
@@ -304,4 +313,5 @@ must pass or carry a written exclusion.
 
 | Date | Version | Change |
 | --- | --- | --- |
+| 2026-11-02 | `0.1.0` | P0.6 third milestone: seeded the core corpus with `value-result`, `trap-div-zero`, `globals-order`, `control-flow`, and `got-access`; the differential harness runs all five and the placeholder gate requires a non-empty passing corpus. The formats, comparison rule, and versioning policy are unchanged |
 | 2026-11-01 | `0.1.0` | P0.6 second milestone: defined the `stc-core-case` descriptor and `stc-sem-result` object, froze both at `0.1.0`, recorded the CLI contract and exit codes, the four-observation comparison, the corpus layout, and the fail-closed gating rule. No corpus case is committed yet |
