@@ -451,6 +451,12 @@ a sound, small semantics, exclude it and record the gap.
 
 **Goal.** Make the semantics executable and compare it with the Rust compiler on the core corpus.
 
+**Status (2026-11-02).** The core-HIR dump `0.1.0`, `stc hir-dump`, the `stc-core-case`
+`0.1.0` schema, and `lake exe stc-sem` are implemented. The differential harness will add a
+test-host/launcher snapshot surface (`--snapshot`, backed by `Host::debug_read` and manifest
+roots) so global snapshots are compared against the compiled artifact; the report schema and
+core corpus follow.
+
 **Work.**
 
 - Define a stable, versioned HIR dump for the core subset. Start from
