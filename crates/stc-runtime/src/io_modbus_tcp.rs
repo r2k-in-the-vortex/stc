@@ -1797,6 +1797,21 @@ struct ListenerRuntime {
     connections: AtomicUsize,
     fault_episodes: AtomicU64,
     effective_bind: Mutex<String>,
+    #[cfg(test)]
+    fault_injection: ListenerFaultInjection,
+}
+
+/// Deterministic accept-failure hook used only by lifecycle tests.
+///
+/// `inject` makes the listener observe one synthetic accept error on its next
+/// loop iteration; `hold` keeps it in the faulted/retry state until the test
+/// releases it, so the partial-listening state can be observed without racing
+/// the retry backoff.
+#[cfg(test)]
+#[derive(Default)]
+struct ListenerFaultInjection {
+    inject: AtomicBool,
+    hold: AtomicBool,
 }
 
 impl ListenerRuntime {
@@ -1807,6 +1822,8 @@ impl ListenerRuntime {
             connections: AtomicUsize::new(0),
             fault_episodes: AtomicU64::new(0),
             effective_bind: Mutex::new(effective_bind),
+            #[cfg(test)]
+            fault_injection: ListenerFaultInjection::default(),
         }
     }
 
@@ -1911,6 +1928,27 @@ impl ModbusTcpBackend {
     #[must_use]
     pub fn unbound_channels(&self) -> usize {
         self.servers.iter().map(|server| server.unbound).sum()
+    }
+
+    /// Forces one listener to observe a synthetic accept failure and holds it
+    /// in the faulted/retry state until [`release_listener_fault`] is called.
+    #[cfg(test)]
+    fn inject_listener_fault(&self, server_index: usize, listener_index: usize) {
+        let listener = &self.servers[server_index].runtime.listeners[listener_index];
+        listener.fault_injection.hold.store(true, Ordering::SeqCst);
+        listener
+            .fault_injection
+            .inject
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Lets an injected listener leave the retry hold and bind again.
+    #[cfg(test)]
+    fn release_listener_fault(&self, server_index: usize, listener_index: usize) {
+        self.servers[server_index].runtime.listeners[listener_index]
+            .fault_injection
+            .hold
+            .store(false, Ordering::SeqCst);
     }
 
     fn fault_episodes(&self) -> u64 {
@@ -2962,12 +3000,44 @@ fn run_listener(task: ListenerTask) {
         if task.stop.load(Ordering::SeqCst) {
             break;
         }
+        #[cfg(test)]
+        if task
+            .runtime
+            .fault_injection
+            .inject
+            .swap(false, Ordering::SeqCst)
+        {
+            task.runtime.state.store(LISTENER_FAULTED, Ordering::SeqCst);
+            task.runtime.last_error.store(2, Ordering::SeqCst);
+            task.server.counters.last_error.store(2, Ordering::SeqCst);
+            task.runtime.fault_episodes.fetch_add(1, Ordering::SeqCst);
+            note_fault(
+                &task.server,
+                format!(
+                    "{}: listener {} accept failed: injected test fault",
+                    codes::LISTENER_FAULT,
+                    task.configured
+                ),
+            );
+            current = None;
+        }
         if current.is_none() {
             let mut backoff = RETRY_BACKOFF_MIN;
             while current.is_none() {
                 sleep_interruptible(backoff, &task.stop);
                 if task.stop.load(Ordering::SeqCst) {
                     break 'serve;
+                }
+                #[cfg(test)]
+                {
+                    while task.runtime.fault_injection.hold.load(Ordering::SeqCst)
+                        && !task.stop.load(Ordering::SeqCst)
+                    {
+                        std::thread::sleep(ACCEPT_POLL);
+                    }
+                    if task.stop.load(Ordering::SeqCst) {
+                        break 'serve;
+                    }
                 }
                 match TcpListener::bind(task.configured) {
                     Ok(listener) => {
@@ -5728,5 +5798,2047 @@ mod tests {
             BackendState::Running
         );
         coordinator.shutdown().expect("shutdown");
+    }
+
+    // ---- Phase 3 error, lifecycle, and online-change tests ----------------
+
+    use crate::coordinator::configuration_hash;
+    use crate::module_info::{BindingChannel, ProfileInfo};
+
+    const DEFAULT_MAPPING: &str = r#"{"name":"in0","table":"holding-register","address":0}"#;
+
+    fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if condition() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn diagnostic(backend: &ModbusTcpBackend, key: &str) -> String {
+        backend
+            .diagnostics()
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing diagnostic `{key}`"))
+    }
+
+    fn diagnostic_number(backend: &ModbusTcpBackend, key: &str) -> u64 {
+        diagnostic(backend, key)
+            .parse()
+            .unwrap_or_else(|_| panic!("diagnostic `{key}` is not a number"))
+    }
+
+    fn listener_bind_at(backend: &ModbusTcpBackend, server: usize, listener: usize) -> String {
+        diagnostic(backend, &format!("server{server}.listener{listener}.bind"))
+    }
+
+    fn assert_connection_closed(stream: &mut TcpStream) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .expect("close read timeout");
+        let mut byte = [0_u8; 1];
+        match stream.read(&mut byte) {
+            Ok(0) => {}
+            Ok(count) => panic!("expected a closed connection, read {count} byte(s)"),
+            Err(error) => assert!(
+                !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ),
+                "the connection stayed open: {error}"
+            ),
+        }
+    }
+
+    fn bindings_for(device: &str, channels: &[BackendChannel]) -> Vec<BackendBinding> {
+        channels
+            .iter()
+            .filter_map(|channel| {
+                channel.image.map(|image| BackendBinding {
+                    device: device.into(),
+                    channel: channel.name.clone(),
+                    image,
+                    direction: channel.direction.clone(),
+                })
+            })
+            .collect()
+    }
+
+    fn server_config_json(binds: &[&str], extra: &str, mappings: &[&str]) -> String {
+        let binds = binds
+            .iter()
+            .map(|bind| format!("\"{bind}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\"bind\":[{binds}]{extra},\"channels\":[{}]}}",
+            mappings.join(",")
+        )
+    }
+
+    fn default_layout() -> ImageLayout {
+        ImageLayout {
+            inputs_bytes: 2,
+            outputs_bytes: 0,
+            markers_bytes: 0,
+        }
+    }
+
+    fn input_channel(name: &str, offset_bits: u64, width_bits: u32) -> BackendChannel {
+        backend_channel(
+            name,
+            "input",
+            width_bits,
+            Some(at(1, offset_bits, u64::from(width_bits))),
+        )
+    }
+
+    fn output_channel(name: &str, offset_bits: u64, width_bits: u32) -> BackendChannel {
+        backend_channel(
+            name,
+            "output",
+            width_bits,
+            Some(at(2, offset_bits, u64::from(width_bits))),
+        )
+    }
+
+    fn single_modbus_config(
+        binds: &[&str],
+        extra: &str,
+        mappings: &[&str],
+        channels: Vec<BackendChannel>,
+        layout: ImageLayout,
+    ) -> BackendConfig {
+        let config = server_config_json(binds, extra, mappings);
+        let bindings = bindings_for("mb", &channels);
+        BackendConfig {
+            name: "modbus-tcp".into(),
+            devices: vec![BackendDeviceConfig {
+                name: "mb".into(),
+                kind: MODBUS_TCP_KIND.into(),
+                config: Some(config),
+                channels,
+            }],
+            bindings,
+            layout,
+            profile: None,
+        }
+    }
+
+    fn default_input_config(binds: &[&str]) -> BackendConfig {
+        single_modbus_config(
+            binds,
+            "",
+            &[DEFAULT_MAPPING],
+            vec![input_channel("in0", 0, 16)],
+            default_layout(),
+        )
+    }
+
+    fn raw_config(config: &str, channels: Vec<BackendChannel>) -> BackendConfig {
+        let bindings = bindings_for("mb", &channels);
+        BackendConfig {
+            name: "modbus-tcp".into(),
+            devices: vec![BackendDeviceConfig {
+                name: "mb".into(),
+                kind: MODBUS_TCP_KIND.into(),
+                config: Some(config.into()),
+                channels,
+            }],
+            bindings,
+            layout: default_layout(),
+            profile: None,
+        }
+    }
+
+    fn cold_start_error(config: &BackendConfig) -> Error {
+        let mut backend = ModbusTcpBackend::new();
+        let error = backend
+            .cold_start(config)
+            .expect_err("cold start must fail closed");
+        assert_eq!(backend.status().state, BackendState::Stopped);
+        assert!(
+            backend.diagnostics().is_empty(),
+            "a failed cold start leaves no server diagnostics"
+        );
+        error
+    }
+
+    #[test]
+    fn malformed_framing_closes_connections_and_counts_once() {
+        let config = default_input_config(&["127.0.0.1:0"]);
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        let bind = listener_bind_at(&backend, 0, 0);
+        let mut malformed = 0_u64;
+        let mut requests = 0_u64;
+
+        // A non-zero protocol id is a framing error.
+        let mut client = test_client(&bind);
+        client
+            .write_all(&[0, 1, 0, 1, 0, 6, UNIT, 0x03, 0, 0, 0, 1])
+            .expect("protocol id request");
+        assert!(wait_until(|| diagnostic_number(
+            &backend,
+            "server0.malformed"
+        ) > malformed));
+        malformed += 1;
+        assert_eq!(diagnostic_number(&backend, "server0.malformed"), malformed);
+        assert_connection_closed(&mut client);
+
+        // The MBAP length must be 2..=254.
+        let mut client = test_client(&bind);
+        client
+            .write_all(&[0, 2, 0, 0, 0, 1, UNIT, 0x03])
+            .expect("short length request");
+        assert!(wait_until(|| diagnostic_number(
+            &backend,
+            "server0.malformed"
+        ) > malformed));
+        malformed += 1;
+        assert_connection_closed(&mut client);
+
+        // A length above 254 is an oversized ADU.
+        let mut client = test_client(&bind);
+        client
+            .write_all(&[0, 3, 0, 0, 0, 255, UNIT, 0x03])
+            .expect("oversized request");
+        assert!(wait_until(|| diagnostic_number(
+            &backend,
+            "server0.malformed"
+        ) > malformed));
+        malformed += 1;
+        assert_connection_closed(&mut client);
+
+        // Closing with a partial ADU is a truncated frame.
+        let mut client = test_client(&bind);
+        client
+            .write_all(&[0, 4, 0, 0, 0, 6, UNIT, 0x03, 0])
+            .expect("partial request");
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("half close");
+        assert!(wait_until(|| diagnostic_number(
+            &backend,
+            "server0.malformed"
+        ) > malformed));
+        malformed += 1;
+        assert_connection_closed(&mut client);
+
+        // A valid pipelined ADU is answered before the invalid frame closes.
+        let mut client = test_client(&bind);
+        let mut pipelined = encode_adu(5, UNIT, &read_pdu(0x03, 0, 1)).expect("valid adu");
+        pipelined.extend_from_slice(&[0, 6, 0, 7, 0, 6, UNIT, 0x03, 0, 0, 0, 1]);
+        client.write_all(&pipelined).expect("pipelined request");
+        assert_eq!(response_words(&read_response(&mut client)), vec![0]);
+        requests += 1;
+        assert!(wait_until(|| diagnostic_number(
+            &backend,
+            "server0.malformed"
+        ) > malformed));
+        malformed += 1;
+        assert_eq!(diagnostic_number(&backend, "server0.requests"), requests);
+        assert_connection_closed(&mut client);
+
+        // The largest legal length is incomplete when the peer closes.
+        let mut client = test_client(&bind);
+        client
+            .write_all(&[0, 7, 0, 0, 0, 254, UNIT])
+            .expect("max length partial request");
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("half close");
+        assert!(wait_until(|| diagnostic_number(
+            &backend,
+            "server0.malformed"
+        ) > malformed));
+        malformed += 1;
+        assert_connection_closed(&mut client);
+
+        assert_eq!(diagnostic_number(&backend, "server0.malformed"), malformed);
+        assert_eq!(diagnostic_number(&backend, "server0.last_error"), 0);
+        assert_eq!(backend.status().faults, 0);
+        assert_eq!(backend.status().state, BackendState::Ready);
+
+        // Framing errors are client-level events: the listener keeps serving.
+        let mut client = test_client(&bind);
+        assert_eq!(
+            response_words(&exchange(&mut client, 8, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0]
+        );
+        backend.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn semantic_errors_return_exceptions_and_preserve_values() {
+        let channels = vec![
+            input_channel("in16", 0, 16),
+            input_channel("in32", 16, 32),
+            backend_channel("coil_in", "input", 1, Some(at(1, 48, 1))),
+            input_channel("in8_low", 56, 8),
+            input_channel("in8_high", 64, 8),
+            output_channel("out16", 0, 16),
+            backend_channel("coil_out", "output", 1, Some(at(2, 16, 1))),
+        ];
+        let mappings = [
+            r#"{"name":"in16","table":"holding-register","address":0}"#,
+            r#"{"name":"in32","table":"holding-register","address":2}"#,
+            r#"{"name":"coil_in","table":"coil","address":0}"#,
+            r#"{"name":"in8_low","table":"holding-register","address":6,"byte":"low"}"#,
+            r#"{"name":"in8_high","table":"holding-register","address":6,"byte":"high"}"#,
+            r#"{"name":"out16","table":"holding-register","address":10}"#,
+            r#"{"name":"coil_out","table":"coil","address":5}"#,
+        ];
+        let layout = ImageLayout {
+            inputs_bytes: 9,
+            outputs_bytes: 3,
+            markers_bytes: 0,
+        };
+        let config = single_modbus_config(
+            &["127.0.0.1:0"],
+            ",\"unit\":7,\"max-connections\":4",
+            &mappings,
+            channels,
+            layout,
+        );
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        let bind = listener_bind_at(&backend, 0, 0);
+        let mut image = ProcessImage::new(layout);
+        let mut client = test_client(&bind);
+
+        // Seed one value in every writable table, then publish an output.
+        assert_eq!(
+            exchange(&mut client, 1, UNIT, &write_single_pdu(0x06, 0, 0x1234)),
+            write_single_pdu(0x06, 0, 0x1234)
+        );
+        exchange(
+            &mut client,
+            2,
+            UNIT,
+            &write_registers_pdu(2, &[0xAAAA, 0xBBBB]),
+        );
+        exchange(&mut client, 3, UNIT, &write_single_pdu(0x06, 6, 0xAABB));
+        exchange(&mut client, 4, UNIT, &write_single_pdu(0x05, 0, 0xFF00));
+        assert!(image.write_bits(2, 0, 16, 0x5678));
+        backend.publish_outputs(&image).expect("publish");
+        assert_eq!(
+            response_words(&exchange(&mut client, 5, UNIT, &read_pdu(0x03, 10, 1))),
+            vec![0x5678]
+        );
+        let reads_before = diagnostic_number(&backend, "server0.reads");
+        let writes_before = diagnostic_number(&backend, "server0.writes");
+        let requests_before = diagnostic_number(&backend, "server0.requests");
+        let mut exceptions = 0_u64;
+        let mut expect_exception =
+            |client: &mut TcpStream, transaction: u16, pdu: &[u8], function: u8, code| {
+                let response = exchange(client, transaction, UNIT, pdu);
+                assert_exception(&response, function, code);
+                exceptions += 1;
+            };
+
+        // Unsupported function codes are 0x01 and keep the connection open.
+        expect_exception(
+            &mut client,
+            10,
+            &[0x07],
+            0x07,
+            ExceptionCode::IllegalFunction,
+        );
+        expect_exception(
+            &mut client,
+            11,
+            &[0x2B, 0x0E, 0x01, 0x00],
+            0x2B,
+            ExceptionCode::IllegalFunction,
+        );
+        // Quantity limits and PDU shapes are 0x03.
+        expect_exception(
+            &mut client,
+            12,
+            &read_pdu(0x01, 0, 0),
+            0x01,
+            ExceptionCode::IllegalDataValue,
+        );
+        expect_exception(
+            &mut client,
+            13,
+            &read_pdu(0x01, 0, 2001),
+            0x01,
+            ExceptionCode::IllegalDataValue,
+        );
+        expect_exception(
+            &mut client,
+            14,
+            &read_pdu(0x03, 0, 0),
+            0x03,
+            ExceptionCode::IllegalDataValue,
+        );
+        expect_exception(
+            &mut client,
+            15,
+            &read_pdu(0x03, 0, 126),
+            0x03,
+            ExceptionCode::IllegalDataValue,
+        );
+        expect_exception(
+            &mut client,
+            16,
+            &write_single_pdu(0x05, 0, 0x1234),
+            0x05,
+            ExceptionCode::IllegalDataValue,
+        );
+        expect_exception(
+            &mut client,
+            17,
+            &[0x0F, 0, 0, 0, 8, 2, 0, 0],
+            0x0F,
+            ExceptionCode::IllegalDataValue,
+        );
+        expect_exception(
+            &mut client,
+            18,
+            &[0x10, 0, 0, 0, 1, 4, 0, 1, 0, 2],
+            0x10,
+            ExceptionCode::IllegalDataValue,
+        );
+        // Unmapped, read-only-table, and output-only writes are 0x02.
+        expect_exception(
+            &mut client,
+            19,
+            &write_single_pdu(0x06, 100, 1),
+            0x06,
+            ExceptionCode::IllegalDataAddress,
+        );
+        expect_exception(
+            &mut client,
+            20,
+            &write_single_pdu(0x06, 10, 1),
+            0x06,
+            ExceptionCode::IllegalDataAddress,
+        );
+        expect_exception(
+            &mut client,
+            21,
+            &write_single_pdu(0x06, 2, 0xFFFF),
+            0x06,
+            ExceptionCode::IllegalDataAddress,
+        );
+        expect_exception(
+            &mut client,
+            22,
+            &write_registers_pdu(2, &[0xFFFF]),
+            0x10,
+            ExceptionCode::IllegalDataAddress,
+        );
+        expect_exception(
+            &mut client,
+            23,
+            &write_registers_pdu(0, &[0x9999, 0x8888, 0x7777]),
+            0x10,
+            ExceptionCode::IllegalDataAddress,
+        );
+        expect_exception(
+            &mut client,
+            24,
+            &[0x0F, 0, 5, 0, 1, 1, 1],
+            0x0F,
+            ExceptionCode::IllegalDataAddress,
+        );
+        expect_exception(
+            &mut client,
+            25,
+            &read_pdu(0x04, 0, 1),
+            0x04,
+            ExceptionCode::IllegalDataAddress,
+        );
+        expect_exception(
+            &mut client,
+            26,
+            &read_pdu(0x01, 0, 2),
+            0x01,
+            ExceptionCode::IllegalDataAddress,
+        );
+        expect_exception(
+            &mut client,
+            27,
+            &write_registers_pdu(65535, &[1, 2]),
+            0x10,
+            ExceptionCode::IllegalDataAddress,
+        );
+        expect_exception(
+            &mut client,
+            28,
+            &write_single_pdu(0x06, 65535, 1),
+            0x06,
+            ExceptionCode::IllegalDataAddress,
+        );
+        // A configured unit id rejects every other unit with 0x0B.
+        let response = exchange(&mut client, 29, 8, &read_pdu(0x03, 0, 1));
+        assert_exception(&response, 0x03, ExceptionCode::WrongUnitId);
+        exceptions += 1;
+
+        // The connection is still healthy and no failed write applied.
+        assert_eq!(
+            response_words(&exchange(&mut client, 30, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0x1234]
+        );
+        assert_eq!(
+            response_words(&exchange(&mut client, 31, UNIT, &read_pdu(0x03, 2, 2))),
+            vec![0xAAAA, 0xBBBB]
+        );
+        assert_eq!(
+            response_words(&exchange(&mut client, 32, UNIT, &read_pdu(0x03, 6, 1))),
+            vec![0xAABB]
+        );
+        assert_eq!(
+            response_bits(&exchange(&mut client, 33, UNIT, &read_pdu(0x01, 0, 1)), 1),
+            vec![true]
+        );
+        assert_eq!(
+            response_words(&exchange(&mut client, 34, UNIT, &read_pdu(0x03, 10, 1))),
+            vec![0x5678]
+        );
+
+        assert_eq!(
+            diagnostic_number(&backend, "server0.exceptions"),
+            exceptions
+        );
+        assert_eq!(
+            diagnostic_number(&backend, "server0.reads"),
+            reads_before + 5
+        );
+        assert_eq!(diagnostic_number(&backend, "server0.writes"), writes_before);
+        assert_eq!(
+            diagnostic_number(&backend, "server0.requests"),
+            requests_before + exceptions + 5
+        );
+        assert_eq!(diagnostic_number(&backend, "server0.malformed"), 0);
+        assert_eq!(diagnostic_number(&backend, "server0.last_error"), 0);
+        assert_eq!(backend.status().faults, 0);
+        backend.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn connection_limit_is_shared_across_binds() {
+        let config = single_modbus_config(
+            &["127.0.0.1:0", "127.0.0.1:0"],
+            ",\"max-connections\":2",
+            &[DEFAULT_MAPPING],
+            vec![input_channel("in0", 0, 16)],
+            default_layout(),
+        );
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        let first_bind = listener_bind_at(&backend, 0, 0);
+        let second_bind = listener_bind_at(&backend, 0, 1);
+        assert_ne!(first_bind, second_bind, "port-0 listeners are distinct");
+
+        let mut first = test_client(&first_bind);
+        let mut second = test_client(&second_bind);
+        assert!(wait_until(|| {
+            diagnostic_number(&backend, "server0.connections") == 2
+        }));
+        // An absent unit accepts any request unit.
+        exchange(&mut first, 1, 200, &read_pdu(0x03, 0, 1));
+        exchange(&mut second, 2, 0, &read_pdu(0x03, 0, 1));
+        assert_eq!(diagnostic_number(&backend, "server0.peak_connections"), 2);
+        assert_eq!(
+            diagnostic_number(&backend, "server0.listener0.connections"),
+            1
+        );
+        assert_eq!(
+            diagnostic_number(&backend, "server0.listener1.connections"),
+            1
+        );
+
+        // The third connection is accepted and closed immediately.
+        let mut third = test_client(&first_bind);
+        assert_connection_closed(&mut third);
+        assert_eq!(diagnostic_number(&backend, "server0.connections"), 2);
+        assert_eq!(diagnostic_number(&backend, "server0.peak_connections"), 2);
+
+        // Releasing one slot admits a new connection on either bind.
+        drop(first);
+        assert!(wait_until(|| {
+            diagnostic_number(&backend, "server0.connections") == 1
+        }));
+        let mut fourth = test_client(&second_bind);
+        assert!(wait_until(|| {
+            diagnostic_number(&backend, "server0.connections") == 2
+        }));
+        exchange(&mut fourth, 3, UNIT, &read_pdu(0x03, 0, 1));
+        assert_eq!(diagnostic_number(&backend, "server0.peak_connections"), 2);
+        backend.shutdown().expect("shutdown");
+        drop(second);
+        drop(fourth);
+    }
+
+    #[test]
+    fn idle_timeout_closes_silent_slow_and_partial_clients() {
+        let config = single_modbus_config(
+            &["127.0.0.1:0"],
+            ",\"idle-timeout\":\"500ms\",\"max-connections\":4",
+            &[DEFAULT_MAPPING],
+            vec![input_channel("in0", 0, 16)],
+            default_layout(),
+        );
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        let bind = listener_bind_at(&backend, 0, 0);
+        let malformed_before = diagnostic_number(&backend, "server0.malformed");
+
+        // A silent connection is closed after the idle interval.
+        let mut silent = test_client(&bind);
+        assert_connection_closed(&mut silent);
+        assert_eq!(
+            diagnostic_number(&backend, "server0.malformed"),
+            malformed_before
+        );
+
+        // A partial ADU that stops mid-frame closes under the same timeout and
+        // is counted as malformed.
+        let mut partial = test_client(&bind);
+        let adu = encode_adu(1, UNIT, &read_pdu(0x03, 0, 1)).expect("adu");
+        partial.write_all(&adu[..4]).expect("partial request");
+        assert!(wait_until(|| {
+            diagnostic_number(&backend, "server0.malformed") > malformed_before
+        }));
+        assert_eq!(
+            diagnostic_number(&backend, "server0.malformed"),
+            malformed_before + 1
+        );
+        assert_connection_closed(&mut partial);
+
+        // A slow but complete request is served, and traffic below the idle
+        // interval keeps one connection alive across the timeout.
+        let mut slow = test_client(&bind);
+        for chunk in adu.chunks(3) {
+            slow.write_all(chunk).expect("slow chunk");
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        assert_eq!(response_words(&read_response(&mut slow)), vec![0]);
+        for transaction in 2..8 {
+            assert_eq!(
+                response_words(&exchange(
+                    &mut slow,
+                    transaction,
+                    UNIT,
+                    &read_pdu(0x03, 0, 1)
+                )),
+                vec![0]
+            );
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        assert_connection_closed(&mut slow);
+        assert_eq!(
+            diagnostic_number(&backend, "server0.malformed"),
+            malformed_before + 1
+        );
+
+        // Reconnecting after an idle close works.
+        let mut reconnected = test_client(&bind);
+        assert_eq!(
+            response_words(&exchange(&mut reconnected, 9, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0]
+        );
+        assert_eq!(backend.status().faults, 0);
+        backend.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn abrupt_disconnects_do_not_fault_or_leak_connections() {
+        let config = default_input_config(&["127.0.0.1:0"]);
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        let bind = listener_bind_at(&backend, 0, 0);
+        for transaction in 0..4 {
+            let mut client = test_client(&bind);
+            assert!(wait_until(|| {
+                diagnostic_number(&backend, "server0.connections") == 1
+            }));
+            assert_eq!(
+                response_words(&exchange(
+                    &mut client,
+                    transaction,
+                    UNIT,
+                    &read_pdu(0x03, 0, 1)
+                )),
+                vec![0]
+            );
+            // Drop without an explicit shutdown; the slot must be released.
+            drop(client);
+            assert!(wait_until(|| {
+                diagnostic_number(&backend, "server0.connections") == 0
+            }));
+        }
+        // A client that vanishes mid-frame is counted once as malformed and
+        // releases its slot.
+        let mut partial = test_client(&bind);
+        let adu = encode_adu(9, UNIT, &read_pdu(0x03, 0, 1)).expect("adu");
+        partial.write_all(&adu[..5]).expect("partial request");
+        drop(partial);
+        assert!(wait_until(|| {
+            diagnostic_number(&backend, "server0.connections") == 0
+                && diagnostic_number(&backend, "server0.malformed") == 1
+        }));
+        assert_eq!(backend.status().state, BackendState::Ready);
+        assert_eq!(backend.status().faults, 0);
+        assert_eq!(diagnostic_number(&backend, "server0.last_error"), 0);
+        assert_eq!(diagnostic_number(&backend, "server0.malformed"), 1);
+        assert_eq!(diagnostic_number(&backend, "server0.connections"), 0);
+        let mut client = test_client(&bind);
+        assert_eq!(
+            response_words(&exchange(&mut client, 9, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0]
+        );
+        backend.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn multi_writes_are_atomic_and_last_writer_wins_under_a_racing_latch() {
+        let channels = vec![
+            input_channel("pair_a", 0, 16),
+            input_channel("pair_b", 16, 16),
+            input_channel("wide", 32, 32),
+        ];
+        let mappings = [
+            r#"{"name":"pair_a","table":"holding-register","address":0}"#,
+            r#"{"name":"pair_b","table":"holding-register","address":1}"#,
+            r#"{"name":"wide","table":"holding-register","address":2}"#,
+        ];
+        let layout = ImageLayout {
+            inputs_bytes: 8,
+            outputs_bytes: 0,
+            markers_bytes: 0,
+        };
+        let config = single_modbus_config(
+            &["127.0.0.1:0"],
+            ",\"max-connections\":4",
+            &mappings,
+            channels,
+            layout,
+        );
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        let bind = listener_bind_at(&backend, 0, 0);
+        let mut first = test_client(&bind);
+        let mut second = test_client(&bind);
+
+        // Last writer wins across independent connections.
+        exchange(
+            &mut first,
+            1,
+            UNIT,
+            &write_registers_pdu(0, &[0x1111, 0x2222]),
+        );
+        assert_eq!(
+            response_words(&exchange(&mut second, 2, UNIT, &read_pdu(0x03, 0, 2))),
+            vec![0x1111, 0x2222]
+        );
+        exchange(
+            &mut second,
+            3,
+            UNIT,
+            &write_registers_pdu(0, &[0x3333, 0x4444]),
+        );
+        assert_eq!(
+            response_words(&exchange(&mut first, 4, UNIT, &read_pdu(0x03, 0, 2))),
+            vec![0x3333, 0x4444]
+        );
+
+        // A whole 32-bit span round-trips through the device default order.
+        exchange(
+            &mut first,
+            5,
+            UNIT,
+            &write_registers_pdu(2, &[0xAAAA, 0xBBBB]),
+        );
+        assert_eq!(
+            response_words(&exchange(&mut second, 6, UNIT, &read_pdu(0x03, 2, 2))),
+            vec![0xAAAA, 0xBBBB]
+        );
+
+        // A multi-address write that partially covers the 32-bit channel is
+        // rejected without applying any word.
+        assert_exception(
+            &exchange(
+                &mut second,
+                7,
+                UNIT,
+                &write_registers_pdu(1, &[0x9999, 0x8888]),
+            ),
+            0x10,
+            ExceptionCode::IllegalDataAddress,
+        );
+        assert_eq!(
+            response_words(&exchange(&mut first, 8, UNIT, &read_pdu(0x03, 0, 2))),
+            vec![0x3333, 0x4444]
+        );
+        assert_eq!(
+            response_words(&exchange(&mut first, 9, UNIT, &read_pdu(0x03, 2, 2))),
+            vec![0xAAAA, 0xBBBB]
+        );
+
+        // A racing latch must see whole FC16 requests only.
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer_stop = stop.clone();
+        let writer_bind = bind.clone();
+        let writer = std::thread::spawn(move || {
+            let mut client = test_client(&writer_bind);
+            let patterns = [
+                ([0x1111_u16, 0x2222], [0xAAAA_u16, 0xBBBB]),
+                ([0x3333, 0x4444], [0xCCCC, 0xDDDD]),
+            ];
+            let mut transaction = 100_u16;
+            while !writer_stop.load(Ordering::SeqCst) {
+                for &(pair, wide) in &patterns {
+                    let _ = exchange(
+                        &mut client,
+                        transaction,
+                        UNIT,
+                        &write_registers_pdu(0, &pair),
+                    );
+                    transaction = transaction.wrapping_add(1);
+                    let _ = exchange(
+                        &mut client,
+                        transaction,
+                        UNIT,
+                        &write_registers_pdu(2, &wide),
+                    );
+                    transaction = transaction.wrapping_add(1);
+                }
+            }
+        });
+        let mut image = ProcessImage::new(layout);
+        for _ in 0..100 {
+            backend.latch_inputs(&mut image).expect("latch");
+            let pair_a = image_value(&image, 1, 0, 16);
+            let pair_b = image_value(&image, 1, 16, 16);
+            assert!(
+                matches!(
+                    (pair_a, pair_b),
+                    (0, 0) | (0x1111, 0x2222) | (0x3333, 0x4444)
+                ),
+                "torn multi-address write {pair_a:#06x}/{pair_b:#06x}"
+            );
+            let wide = image_value(&image, 1, 32, 32);
+            assert!(
+                matches!(wide, 0 | 0xAAAA_BBBB | 0xCCCC_DDDD),
+                "torn 32-bit write {wide:#010x}"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        stop.store(true, Ordering::SeqCst);
+        writer.join().expect("writer thread");
+        assert_eq!(diagnostic_number(&backend, "server0.malformed"), 0);
+        assert_eq!(backend.status().faults, 0);
+        backend.shutdown().expect("shutdown");
+    }
+
+    fn two_server_config() -> BackendConfig {
+        let mb0_channels = vec![input_channel("in0", 0, 16)];
+        let mb1_channels = vec![input_channel("in1", 16, 16)];
+        let status_channels = vec![
+            status_channel("server0.listening", 1, 32),
+            status_channel("server0.listeners", 16, 40),
+            status_channel("server0.bound_listeners", 16, 56),
+            status_channel("server1.listening", 1, 72),
+            status_channel("server0.requests", 32, 80),
+            status_channel("server1.requests", 32, 112),
+            status_channel("server0.last_error", 32, 144),
+        ];
+        let mb0_config = server_config_json(
+            &["127.0.0.1:0", "127.0.0.1:0"],
+            "",
+            &[r#"{"name":"in0","table":"holding-register","address":0}"#],
+        );
+        let mb1_config = server_config_json(
+            &["127.0.0.1:0"],
+            "",
+            &[r#"{"name":"in1","table":"holding-register","address":0}"#],
+        );
+        let mut bindings = bindings_for("mb0", &mb0_channels);
+        bindings.extend(bindings_for("mb1", &mb1_channels));
+        bindings.extend(bindings_for("status", &status_channels));
+        BackendConfig {
+            name: "modbus-tcp".into(),
+            devices: vec![
+                BackendDeviceConfig {
+                    name: "mb0".into(),
+                    kind: MODBUS_TCP_KIND.into(),
+                    config: Some(mb0_config),
+                    channels: mb0_channels,
+                },
+                BackendDeviceConfig {
+                    name: "mb1".into(),
+                    kind: MODBUS_TCP_KIND.into(),
+                    config: Some(mb1_config),
+                    channels: mb1_channels,
+                },
+                BackendDeviceConfig {
+                    name: "status".into(),
+                    kind: MODBUS_TCP_STATUS_KIND.into(),
+                    config: Some("{\"layout\":1}".into()),
+                    channels: status_channels,
+                },
+            ],
+            bindings,
+            layout: ImageLayout {
+                inputs_bytes: 22,
+                outputs_bytes: 0,
+                markers_bytes: 0,
+            },
+            profile: None,
+        }
+    }
+
+    #[test]
+    fn listener_faults_are_isolated_and_partial_listening_is_observable() {
+        let config = two_server_config();
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        assert_eq!(diagnostic_number(&backend, "server0.listeners"), 2);
+        assert_eq!(diagnostic_number(&backend, "server1.listeners"), 1);
+        let s0_first = listener_bind_at(&backend, 0, 0);
+        let s0_second = listener_bind_at(&backend, 0, 1);
+        let s1_bind = listener_bind_at(&backend, 1, 0);
+        let mut client0 = test_client(&s0_first);
+        let mut client0_second = test_client(&s0_second);
+        let mut client1 = test_client(&s1_bind);
+        exchange(&mut client0, 1, UNIT, &write_single_pdu(0x06, 0, 0x1111));
+        exchange(
+            &mut client0_second,
+            2,
+            UNIT,
+            &write_single_pdu(0x06, 0, 0x2222),
+        );
+        exchange(&mut client1, 3, UNIT, &write_single_pdu(0x06, 0, 0x3333));
+        let mut image = ProcessImage::new(config.layout);
+        backend.latch_inputs(&mut image).expect("latch");
+        assert_eq!(image_value(&image, 1, 0, 16), 0x2222);
+        assert_eq!(image_value(&image, 1, 16, 16), 0x3333);
+        assert_eq!(image_value(&image, 1, 32, 1), 1);
+        assert_eq!(image_value(&image, 1, 40, 16), 2);
+        assert_eq!(image_value(&image, 1, 56, 16), 2);
+        assert_eq!(image_value(&image, 1, 72, 1), 1);
+        assert_eq!(image_value(&image, 1, 80, 32), 2);
+        assert_eq!(image_value(&image, 1, 112, 32), 1);
+        assert_eq!(backend.status().state, BackendState::Running);
+
+        // Fault both listeners of server0; server1 must keep serving.
+        backend.inject_listener_fault(0, 0);
+        backend.inject_listener_fault(0, 1);
+        assert!(wait_until(|| {
+            diagnostic(&backend, "server0.listener0.state") == "faulted"
+                && diagnostic(&backend, "server0.listener1.state") == "faulted"
+        }));
+        assert_eq!(diagnostic_number(&backend, "server0.bound_listeners"), 0);
+        assert_eq!(diagnostic_number(&backend, "server1.bound_listeners"), 1);
+        assert_eq!(diagnostic(&backend, "server1.listener0.state"), "listening");
+        assert_eq!(
+            diagnostic_number(&backend, "server0.listener0.last_error"),
+            2
+        );
+        assert_eq!(
+            diagnostic_number(&backend, "server0.listener1.last_error"),
+            2
+        );
+        assert_eq!(backend.status().state, BackendState::Faulted);
+        assert_eq!(backend.status().faults, 2);
+        let last_fault = backend.status().last_fault.expect("fault message");
+        assert!(last_fault.contains(codes::LISTENER_FAULT), "{last_fault}");
+
+        // The other server and the already accepted connections keep serving.
+        assert_eq!(
+            response_words(&exchange(&mut client1, 4, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0x3333]
+        );
+        assert_eq!(
+            response_words(&exchange(&mut client0, 5, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0x2222]
+        );
+        backend.latch_inputs(&mut image).expect("latch status");
+        assert_eq!(image_value(&image, 1, 32, 1), 0);
+        assert_eq!(image_value(&image, 1, 56, 16), 0);
+        assert_eq!(image_value(&image, 1, 72, 1), 1);
+        assert_eq!(image_value(&image, 1, 144, 32), 2);
+
+        // One listener recovers while the other is still faulted: the server is
+        // not listening yet, and the aggregate state stays Faulted.
+        backend.release_listener_fault(0, 0);
+        assert!(wait_until(|| {
+            diagnostic(&backend, "server0.listener0.state") == "listening"
+        }));
+        assert_eq!(diagnostic_number(&backend, "server0.bound_listeners"), 1);
+        assert_eq!(backend.status().state, BackendState::Faulted);
+        backend.latch_inputs(&mut image).expect("latch partial");
+        assert_eq!(image_value(&image, 1, 32, 1), 0);
+        assert_eq!(image_value(&image, 1, 56, 16), 1);
+
+        // Releasing the second listener restores Running and full listening.
+        backend.release_listener_fault(0, 1);
+        assert!(wait_until(|| {
+            diagnostic_number(&backend, "server0.bound_listeners") == 2
+                && backend.status().state == BackendState::Running
+        }));
+        assert_eq!(
+            diagnostic_number(&backend, "server0.listener0.last_error"),
+            2
+        );
+        backend.latch_inputs(&mut image).expect("latch recovered");
+        assert_eq!(image_value(&image, 1, 32, 1), 1);
+        assert_eq!(image_value(&image, 1, 56, 16), 2);
+        assert_eq!(backend.status().faults, 2);
+
+        // A new connection is accepted on the rebound listener.
+        let rebind = listener_bind_at(&backend, 0, 0);
+        let mut recovered = test_client(&rebind);
+        assert_eq!(
+            response_words(&exchange(&mut recovered, 6, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0x2222]
+        );
+        backend.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn socket_write_failure_ends_only_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("pair listener");
+        let address = listener.local_addr().expect("pair address");
+        let mut client = TcpStream::connect(address).expect("pair client");
+        let (server_stream, _) = listener.accept().expect("pair server");
+        client
+            .write_all(&encode_adu(1, UNIT, &read_pdu(0x03, 0, 1)).expect("adu"))
+            .expect("request");
+        // Make every server write fail without involving a real peer failure.
+        server_stream
+            .shutdown(std::net::Shutdown::Write)
+            .expect("shut down server write half");
+        let runtime = Arc::new(ServerRuntime {
+            counters: ServerCounters::default(),
+            listeners: vec![Arc::new(ListenerRuntime::new(address.to_string()))],
+            fault: Mutex::new(None),
+        });
+        let bank = Mutex::new(simple(
+            "in0",
+            Direction::Input,
+            16,
+            Table::HoldingRegister,
+            0,
+        ));
+        serve_connection(
+            server_stream,
+            &runtime,
+            &bank,
+            None,
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+        );
+        // The request was served and counted; only the reply write failed.
+        assert_eq!(runtime.counters.requests.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.counters.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.counters.exceptions.load(Ordering::SeqCst), 0);
+        assert_eq!(runtime.counters.last_error.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            runtime.listeners[0].state.load(Ordering::SeqCst),
+            LISTENER_LISTENING
+        );
+        assert_eq!(runtime.listeners[0].last_error.load(Ordering::SeqCst), 0);
+        assert_connection_closed(&mut client);
+    }
+
+    #[test]
+    fn cold_start_bind_failure_is_all_or_nothing() {
+        // Occupy the second address; the first address is free and concrete.
+        let occupied = TcpListener::bind("127.0.0.1:0").expect("occupy a port");
+        let occupied_address = occupied.local_addr().expect("occupied address");
+        let free = TcpListener::bind("127.0.0.1:0").expect("reserve a port");
+        let free_address = free.local_addr().expect("free address");
+        drop(free);
+        let first = free_address.to_string();
+        let second = occupied_address.to_string();
+        let config = default_input_config(&[&first, &second]);
+
+        let error = cold_start_error(&config);
+        assert_eq!(error.code, codes::BIND_FAILURE);
+        assert!(error.message.contains("mb"), "{}", error.message);
+        assert!(
+            error.message.contains(&second),
+            "the error names the failing address: {}",
+            error.message
+        );
+        // The listener bound before the failure was closed again.
+        TcpListener::bind(free_address).expect("the partial listener set must be released");
+
+        // A failure on the very first bind leaves no listener either.
+        let config = default_input_config(&[&second, &first]);
+        let error = cold_start_error(&config);
+        assert_eq!(error.code, codes::BIND_FAILURE);
+        TcpListener::bind(free_address).expect("no listener was left behind");
+
+        // Once the conflict clears, the same configuration starts normally.
+        drop(occupied);
+        let config = default_input_config(&[&first, &second]);
+        let mut backend = ModbusTcpBackend::new();
+        backend
+            .cold_start(&config)
+            .expect("cold start after the conflict");
+        assert_eq!(backend.status().state, BackendState::Ready);
+        assert_eq!(diagnostic_number(&backend, "server0.bound_listeners"), 2);
+        let first_bind = listener_bind_at(&backend, 0, 0);
+        let second_bind = listener_bind_at(&backend, 0, 1);
+        assert_eq!(
+            first_bind.parse::<SocketAddr>().expect("first bind"),
+            free_address
+        );
+        assert_eq!(
+            second_bind.parse::<SocketAddr>().expect("second bind"),
+            occupied_address
+        );
+        let mut client = test_client(&first_bind);
+        assert_eq!(
+            response_words(&exchange(&mut client, 1, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0]
+        );
+        backend.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn shutdown_and_drop_stop_listeners_without_rewriting_the_image() {
+        let config = default_input_config(&["127.0.0.1:0"]);
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        let bind = listener_bind_at(&backend, 0, 0);
+        let address: SocketAddr = bind.parse().expect("effective bind");
+        let mut client = test_client(&bind);
+        exchange(&mut client, 1, UNIT, &write_single_pdu(0x06, 0, 0x1357));
+        let mut image = ProcessImage::new(config.layout);
+        backend.latch_inputs(&mut image).expect("latch");
+        assert_eq!(image_value(&image, 1, 0, 16), 0x1357);
+
+        backend.shutdown().expect("shutdown");
+        assert_eq!(backend.status().state, BackendState::Stopped);
+        // Shutdown itself must not rewrite the image.
+        assert_eq!(image_value(&image, 1, 0, 16), 0x1357);
+        assert_eq!(diagnostic(&backend, "server0.listener0.state"), "stopped");
+        assert_eq!(diagnostic_number(&backend, "server0.bound_listeners"), 0);
+        assert_connection_closed(&mut client);
+        assert!(
+            TcpStream::connect(address).is_err(),
+            "a stopped listener refuses new connections"
+        );
+
+        // Shutdown is idempotent, and a later latch still sees the last value.
+        backend.shutdown().expect("second shutdown");
+        backend.latch_inputs(&mut image).expect("latch after stop");
+        assert_eq!(image_value(&image, 1, 0, 16), 0x1357);
+        assert_eq!(backend.status().state, BackendState::Stopped);
+
+        // The same instance can cold start again with a fresh bank.
+        backend.cold_start(&config).expect("restart");
+        assert_eq!(backend.status().state, BackendState::Ready);
+        let rebind = listener_bind_at(&backend, 0, 0);
+        let mut restarted = test_client(&rebind);
+        assert_eq!(
+            response_words(&exchange(&mut restarted, 2, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0]
+        );
+        backend.shutdown().expect("shutdown");
+
+        // Drop without an explicit shutdown stops the threads and keeps the
+        // process image unchanged.
+        let mut dropped_image = ProcessImage::new(config.layout);
+        let drop_bind = {
+            let mut other = ModbusTcpBackend::new();
+            other.cold_start(&config).expect("cold start for drop");
+            let bind = listener_bind_at(&other, 0, 0);
+            let mut other_client = test_client(&bind);
+            exchange(
+                &mut other_client,
+                1,
+                UNIT,
+                &write_single_pdu(0x06, 0, 0x2468),
+            );
+            other.latch_inputs(&mut dropped_image).expect("latch");
+            bind
+        };
+        assert_eq!(image_value(&dropped_image, 1, 0, 16), 0x2468);
+        let drop_address: SocketAddr = drop_bind.parse().expect("drop bind");
+        assert!(
+            TcpStream::connect(drop_address).is_err(),
+            "drop stops the listener"
+        );
+        TcpListener::bind(drop_address).expect("drop releases the listener address");
+    }
+
+    fn status_backend(
+        data_devices: usize,
+        status_channels: Vec<BackendChannel>,
+        config: Option<&str>,
+        layout: ImageLayout,
+    ) -> BackendConfig {
+        let mut devices = Vec::new();
+        let mut bindings = Vec::new();
+        for index in 0..data_devices {
+            let name = format!("mb{index}");
+            let channel_name = format!("in{index}");
+            let mapping = format!(
+                "{{\"name\":\"{channel_name}\",\"table\":\"holding-register\",\"address\":0}}"
+            );
+            let channel = input_channel(&channel_name, 0, 16);
+            bindings.extend(bindings_for(&name, std::slice::from_ref(&channel)));
+            devices.push(BackendDeviceConfig {
+                name,
+                kind: MODBUS_TCP_KIND.into(),
+                config: Some(server_config_json(&["127.0.0.1:0"], "", &[&mapping])),
+                channels: vec![channel],
+            });
+        }
+        let status = BackendDeviceConfig {
+            name: "status".into(),
+            kind: MODBUS_TCP_STATUS_KIND.into(),
+            config: config.map(str::to_owned),
+            channels: status_channels.clone(),
+        };
+        bindings.extend(bindings_for("status", &status_channels));
+        devices.push(status);
+        BackendConfig {
+            name: "modbus-tcp".into(),
+            devices,
+            bindings,
+            layout,
+            profile: None,
+        }
+    }
+
+    fn status_layout(bits: u64) -> ImageLayout {
+        ImageLayout {
+            inputs_bytes: bits.div_ceil(8),
+            outputs_bytes: 0,
+            markers_bytes: 0,
+        }
+    }
+
+    fn assert_config_failure(config: &BackendConfig, code: &str, label: &str) {
+        let error = cold_start_error(config);
+        assert_eq!(error.code, code, "{label}: {}", error.message);
+    }
+
+    #[test]
+    fn status_fields_reflect_live_counters_and_listener_state() {
+        let status_channels = vec![
+            status_channel("server0.listening", 1, 32),
+            status_channel("server0.listeners", 16, 40),
+            status_channel("server0.bound_listeners", 16, 56),
+            status_channel("server0.connections", 16, 72),
+            status_channel("server0.requests", 32, 88),
+            status_channel("server0.writes", 32, 120),
+            status_channel("server0.exceptions", 32, 152),
+            status_channel("server0.malformed", 32, 184),
+            status_channel("server0.last_error", 32, 216),
+        ];
+        let layout = status_layout(248);
+        let config = status_backend(1, status_channels, Some("{\"layout\":1}"), layout);
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        let bind = listener_bind_at(&backend, 0, 0);
+        let mut client = test_client(&bind);
+        assert_eq!(
+            exchange(&mut client, 1, UNIT, &write_single_pdu(0x06, 0, 0x0102)),
+            write_single_pdu(0x06, 0, 0x0102)
+        );
+        assert_eq!(
+            response_words(&exchange(&mut client, 2, UNIT, &read_pdu(0x03, 0, 1))),
+            vec![0x0102]
+        );
+        assert_exception(
+            &exchange(&mut client, 3, UNIT, &[0x07]),
+            0x07,
+            ExceptionCode::IllegalFunction,
+        );
+        let mut malformed = test_client(&bind);
+        malformed
+            .write_all(&[0, 4, 0, 1, 0, 6, UNIT, 0x03, 0, 0, 0, 1])
+            .expect("bad protocol id");
+        assert!(wait_until(|| {
+            diagnostic_number(&backend, "server0.malformed") == 1
+        }));
+        assert_connection_closed(&mut malformed);
+        drop(malformed);
+        assert!(wait_until(|| {
+            diagnostic_number(&backend, "server0.connections") == 1
+        }));
+
+        let mut image = ProcessImage::new(layout);
+        backend.latch_inputs(&mut image).expect("latch");
+        assert_eq!(image_value(&image, 1, 32, 1), 1);
+        assert_eq!(image_value(&image, 1, 40, 16), 1);
+        assert_eq!(image_value(&image, 1, 56, 16), 1);
+        assert_eq!(image_value(&image, 1, 72, 16), 1);
+        assert_eq!(image_value(&image, 1, 88, 32), 3);
+        assert_eq!(image_value(&image, 1, 120, 32), 1);
+        assert_eq!(image_value(&image, 1, 152, 32), 1);
+        assert_eq!(image_value(&image, 1, 184, 32), 1);
+        assert_eq!(image_value(&image, 1, 216, 32), 0);
+        assert_eq!(diagnostic_number(&backend, "server0.requests"), 3);
+        assert_eq!(diagnostic_number(&backend, "server0.reads"), 1);
+        assert_eq!(diagnostic_number(&backend, "server0.writes"), 1);
+        assert_eq!(diagnostic_number(&backend, "server0.exceptions"), 1);
+        assert_eq!(diagnostic_number(&backend, "server0.malformed"), 1);
+        assert_eq!(diagnostic_number(&backend, "server0.last_error"), 0);
+
+        drop(client);
+        assert!(wait_until(|| {
+            diagnostic_number(&backend, "server0.connections") == 0
+        }));
+        backend.latch_inputs(&mut image).expect("latch after close");
+        assert_eq!(image_value(&image, 1, 72, 16), 0);
+        assert_eq!(image_value(&image, 1, 88, 32), 3);
+        backend.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn status_device_accepts_optional_unbound_fields() {
+        let status_channels = vec![
+            status_channel("server0.listening", 1, 16),
+            backend_channel("server0.requests", "input", 32, None),
+        ];
+        let layout = status_layout(24);
+        let config = status_backend(1, status_channels, None, layout);
+        let mut backend = ModbusTcpBackend::new();
+        backend
+            .cold_start(&config)
+            .expect("status device without config");
+        assert_eq!(backend.unbound_channels(), 0);
+        assert_eq!(backend.status().devices, 2);
+        let mut image = ProcessImage::new(layout);
+        backend.latch_inputs(&mut image).expect("latch");
+        assert_eq!(image_value(&image, 1, 0, 16), 0);
+        assert_eq!(image_value(&image, 1, 16, 1), 1);
+        backend.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn status_device_validation_fails_closed() {
+        let layout = status_layout(64);
+        let listening = || status_channel("server0.listening", 1, 0);
+        assert_config_failure(
+            &status_backend(1, vec![listening()], Some("{\"layout\":2}"), layout),
+            codes::INVALID_CONFIG,
+            "unknown status layout",
+        );
+        assert_config_failure(
+            &status_backend(1, vec![listening()], Some("{\"layout\":\"1\"}"), layout),
+            codes::INVALID_CONFIG,
+            "status layout must be a number",
+        );
+        assert_config_failure(
+            &status_backend(1, vec![listening()], Some("[]"), layout),
+            codes::INVALID_CONFIG,
+            "status config must be an object",
+        );
+        assert_config_failure(
+            &status_backend(1, vec![listening()], Some("{"), layout),
+            codes::INVALID_CONFIG,
+            "status config must be JSON",
+        );
+        assert_config_failure(
+            &status_backend(
+                1,
+                vec![backend_channel(
+                    "server0.bogus",
+                    "input",
+                    16,
+                    Some(at(1, 0, 16)),
+                )],
+                None,
+                layout,
+            ),
+            codes::INVALID_CONFIG,
+            "unknown status channel",
+        );
+        assert_config_failure(
+            &status_backend(
+                1,
+                vec![backend_channel(
+                    "server.listening",
+                    "input",
+                    1,
+                    Some(at(1, 0, 1)),
+                )],
+                None,
+                layout,
+            ),
+            codes::INVALID_CONFIG,
+            "malformed status channel name",
+        );
+        assert_config_failure(
+            &status_backend(
+                1,
+                vec![status_channel("server0.listening", 16, 0)],
+                None,
+                layout,
+            ),
+            codes::INVALID_CONFIG,
+            "status channel width differs from layout 1",
+        );
+        assert_config_failure(
+            &status_backend(
+                1,
+                vec![backend_channel(
+                    "server0.listening",
+                    "output",
+                    1,
+                    Some(at(1, 0, 1)),
+                )],
+                None,
+                layout,
+            ),
+            codes::INVALID_CONFIG,
+            "status channels are read-only",
+        );
+        assert_config_failure(
+            &status_backend(
+                1,
+                vec![status_channel("server1.listening", 1, 0)],
+                None,
+                layout,
+            ),
+            codes::INVALID_CONFIG,
+            "status server index out of range",
+        );
+        assert_config_failure(
+            &status_backend(0, vec![listening()], None, layout),
+            codes::INVALID_CONFIG,
+            "status device without a data device",
+        );
+        assert_config_failure(
+            &status_backend(1, vec![listening(), listening()], None, layout),
+            codes::INVALID_CONFIG,
+            "duplicate status channel",
+        );
+        assert_config_failure(
+            &status_backend(
+                1,
+                vec![backend_channel(
+                    "server0.listening",
+                    "input",
+                    1,
+                    Some(at(2, 0, 1)),
+                )],
+                None,
+                layout,
+            ),
+            codes::INVALID_CONFIG,
+            "status channel must bind %I",
+        );
+        assert_config_failure(
+            &status_backend(
+                1,
+                vec![backend_channel(
+                    "server0.listening",
+                    "input",
+                    1,
+                    Some(at(1, 0, 2)),
+                )],
+                None,
+                layout,
+            ),
+            codes::CHANNEL_RESOLVE,
+            "status image width differs from the channel",
+        );
+        assert_config_failure(
+            &status_backend(
+                1,
+                vec![backend_channel(
+                    "server0.listeners",
+                    "input",
+                    16,
+                    Some(at(1, 4, 16)),
+                )],
+                None,
+                layout,
+            ),
+            codes::CHANNEL_RESOLVE,
+            "status image range is not byte aligned",
+        );
+        assert_config_failure(
+            &status_backend(
+                1,
+                vec![status_channel("server0.listeners", 16, 56)],
+                None,
+                layout,
+            ),
+            codes::CHANNEL_RESOLVE,
+            "status image range leaves the image",
+        );
+
+        let channels = vec![listening()];
+        let mut config = status_backend(1, channels.clone(), None, layout);
+        config.bindings[1].image.width_bits = 2;
+        assert_config_failure(
+            &config,
+            codes::CHANNEL_RESOLVE,
+            "binding image disagrees with the status channel",
+        );
+
+        let mut config = status_backend(1, channels.clone(), None, layout);
+        config.bindings[1].direction = "output".into();
+        assert_config_failure(
+            &config,
+            codes::CHANNEL_RESOLVE,
+            "binding direction disagrees with the status channel",
+        );
+
+        let mut config = status_backend(1, channels.clone(), None, layout);
+        config.bindings.push(BackendBinding {
+            device: "status".into(),
+            channel: "server0.requests".into(),
+            image: at(1, 8, 32),
+            direction: "input".into(),
+        });
+        assert_config_failure(
+            &config,
+            codes::CHANNEL_RESOLVE,
+            "binding names an undeclared status channel",
+        );
+
+        let mut config = status_backend(1, channels, None, layout);
+        let duplicate = config.bindings[1].clone();
+        config.bindings.push(duplicate);
+        assert_config_failure(&config, codes::CHANNEL_RESOLVE, "duplicate status binding");
+    }
+
+    fn server_config_text(binds: &str, extra: &str, channels: &str) -> String {
+        format!("{{\"bind\":{binds}{extra},\"channels\":{channels}}}")
+    }
+
+    fn server_validation_channels() -> Vec<BackendChannel> {
+        vec![input_channel("in0", 0, 16)]
+    }
+
+    fn server_config_failure(config: &str, channels: Vec<BackendChannel>, label: &str) {
+        let config = raw_config(config, channels);
+        assert_config_failure(&config, codes::INVALID_CONFIG, label);
+    }
+
+    #[test]
+    fn server_configuration_validation_fails_closed() {
+        let channels = || server_validation_channels();
+        let mapping = r#"[{"name":"in0","table":"holding-register","address":0}]"#;
+        server_config_failure("{}", channels(), "missing bind");
+        server_config_failure("[]", channels(), "config must be an object");
+        server_config_failure("{", channels(), "config must be JSON");
+        server_config_failure(
+            &server_config_text("[]", "", mapping),
+            channels(),
+            "empty bind array",
+        );
+        server_config_failure(
+            &server_config_text("\"127.0.0.1:0\"", "", mapping),
+            channels(),
+            "bind must be an array",
+        );
+        server_config_failure(
+            &server_config_text("[1]", "", mapping),
+            channels(),
+            "bind entries must be strings",
+        );
+        server_config_failure(
+            &server_config_text("[\"\"]", "", mapping),
+            channels(),
+            "empty bind entry",
+        );
+        server_config_failure(
+            &server_config_text("[\"localhost:502\"]", "", mapping),
+            channels(),
+            "bind must be a literal address",
+        );
+        for key in ["syncs", "pdo-channels", "dc"] {
+            server_config_failure(
+                &server_config_text("[\"127.0.0.1:0\"]", &format!(",\"{key}\":[]"), mapping),
+                channels(),
+                "EtherCAT key on a Modbus device",
+            );
+        }
+        for unit in ["0", "248", "\"7\""] {
+            server_config_failure(
+                &server_config_text("[\"127.0.0.1:0\"]", &format!(",\"unit\":{unit}"), mapping),
+                channels(),
+                "invalid unit",
+            );
+        }
+        for limit in ["0", "129", "\"4\""] {
+            server_config_failure(
+                &server_config_text(
+                    "[\"127.0.0.1:0\"]",
+                    &format!(",\"max-connections\":{limit}"),
+                    mapping,
+                ),
+                channels(),
+                "invalid max-connections",
+            );
+        }
+        for timeout in ["\"0s\"", "\"soon\"", "5"] {
+            server_config_failure(
+                &server_config_text(
+                    "[\"127.0.0.1:0\"]",
+                    &format!(",\"idle-timeout\":{timeout}"),
+                    mapping,
+                ),
+                channels(),
+                "invalid idle-timeout",
+            );
+        }
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                ",\"word-order\":\"middle-first\"",
+                mapping,
+            ),
+            channels(),
+            "invalid device word order",
+        );
+        server_config_failure(
+            &server_config_text("[\"127.0.0.1:0\"]", "", "{}"),
+            channels(),
+            "channels must be an array",
+        );
+        server_config_failure(
+            &server_config_text("[\"127.0.0.1:0\"]", "", "[1]"),
+            channels(),
+            "channel entries must be tables",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"table":"holding-register","address":0}]"#,
+            ),
+            channels(),
+            "missing channel name",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"register","address":0}]"#,
+            ),
+            channels(),
+            "unknown table",
+        );
+        for address in ["65536", "\"0\"", "-1"] {
+            server_config_failure(
+                &server_config_text(
+                    "[\"127.0.0.1:0\"]",
+                    "",
+                    &format!(
+                        "[{{\"name\":\"in0\",\"table\":\"holding-register\",\"address\":{address}}}]"
+                    ),
+                ),
+                channels(),
+                "invalid address",
+            );
+        }
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0,"byte":"middle"}]"#,
+            ),
+            channels(),
+            "invalid byte placement",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0,"word-order":"sideways"}]"#,
+            ),
+            channels(),
+            "invalid channel word order",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0,"word-order":5}]"#,
+            ),
+            channels(),
+            "channel word order must be a spelling or list",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0},
+                    {"name":"in0","table":"holding-register","address":1}]"#,
+            ),
+            channels(),
+            "duplicate channel map entry",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"ghost","table":"holding-register","address":0}]"#,
+            ),
+            channels(),
+            "channel map entry must be declared",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0}]"#,
+            ),
+            vec![input_channel("in0", 0, 16), input_channel("in1", 16, 16)],
+            "declared channel without a mapping",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0},
+                    {"name":"in1","table":"holding-register","address":0}]"#,
+            ),
+            vec![input_channel("in0", 0, 16), input_channel("in1", 16, 16)],
+            "overlapping register spans",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"c0","table":"coil","address":0},
+                    {"name":"c1","table":"coil","address":0}]"#,
+            ),
+            vec![
+                backend_channel("c0", "input", 1, Some(at(1, 0, 1))),
+                backend_channel("c1", "input", 1, Some(at(1, 1, 1))),
+            ],
+            "overlapping coil channels",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"input-register","address":0}]"#,
+            ),
+            channels(),
+            "input channel on a read-only table",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"c0","table":"coil","address":0}]"#,
+            ),
+            vec![backend_channel("c0", "input", 16, Some(at(1, 0, 16)))],
+            "coil channel must be one bit",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"c0","table":"coil","address":0,"byte":"low"}]"#,
+            ),
+            vec![backend_channel("c0", "input", 1, Some(at(1, 0, 1)))],
+            "coil channel cannot use byte placement",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0,"byte":"low"}]"#,
+            ),
+            channels(),
+            "byte placement is only for 8-bit channels",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0,"word-order":"cdab"}]"#,
+            ),
+            channels(),
+            "word order is only for 32/64-bit channels",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0}]"#,
+            ),
+            vec![input_channel("in0", 0, 12)],
+            "unsupported channel width",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in32","table":"holding-register","address":65535}]"#,
+            ),
+            vec![input_channel("in32", 0, 32)],
+            "span leaves the 16-bit address space",
+        );
+        server_config_failure(
+            &server_config_text(
+                "[\"127.0.0.1:0\"]",
+                "",
+                r#"[{"name":"in0","table":"holding-register","address":0}]"#,
+            ),
+            vec![backend_channel("in0", "sideways", 16, Some(at(1, 0, 16)))],
+            "declared direction must be input or output",
+        );
+
+        // Duplicate concrete bind entries are rejected; port 0 entries are
+        // allowed and bind distinct ports.
+        assert_config_failure(
+            &raw_config(
+                &server_config_text("[\"127.0.0.1:1502\",\"127.0.0.1:1502\"]", "", mapping),
+                channels(),
+            ),
+            codes::INVALID_CONFIG,
+            "duplicate concrete bind address",
+        );
+
+        // Image-resolution failures use the channel/image code.
+        let mut config = raw_config(
+            &server_config_text("[\"127.0.0.1:0\"]", "", mapping),
+            channels(),
+        );
+        config.devices[0].channels[0].image = Some(at(2, 0, 16));
+        assert_config_failure(
+            &config,
+            codes::CHANNEL_RESOLVE,
+            "input channel bound to an output image range",
+        );
+        let mut config = raw_config(
+            &server_config_text("[\"127.0.0.1:0\"]", "", mapping),
+            channels(),
+        );
+        config.devices[0].channels[0].image = Some(at(1, 0, 8));
+        assert_config_failure(
+            &config,
+            codes::CHANNEL_RESOLVE,
+            "image width differs from the channel",
+        );
+        let mut config = raw_config(
+            &server_config_text("[\"127.0.0.1:0\"]", "", mapping),
+            channels(),
+        );
+        config.devices[0].channels[0].image = Some(at(1, 24, 16));
+        assert_config_failure(
+            &config,
+            codes::CHANNEL_RESOLVE,
+            "image range leaves the image",
+        );
+    }
+
+    const HASH_CONFIG: &str = concat!(
+        r#"{"bind":["127.0.0.1:1502"],"unit":7,"word-order":"high-first","#,
+        r#""max-connections":8,"idle-timeout":"60s","channels":["#,
+        r#"{"name":"in0","table":"holding-register","address":0},"#,
+        r#"{"name":"in8","table":"holding-register","address":1,"byte":"low"},"#,
+        r#"{"name":"in32","table":"holding-register","address":2},"#,
+        r#"{"name":"coil_in","table":"coil","address":0}"#,
+        r#"]}"#
+    );
+
+    fn hash_info(config: Option<&str>) -> ModuleInfo {
+        ModuleInfo {
+            devices: vec![DeviceInfo {
+                name: "mb".into(),
+                kind: "modbus-tcp".into(),
+                config: config.map(str::to_owned),
+                channels: vec![
+                    ChannelInfo {
+                        name: "in0".into(),
+                        direction: "input".into(),
+                        width_bits: 16,
+                    },
+                    ChannelInfo {
+                        name: "in8".into(),
+                        direction: "input".into(),
+                        width_bits: 8,
+                    },
+                    ChannelInfo {
+                        name: "in32".into(),
+                        direction: "input".into(),
+                        width_bits: 32,
+                    },
+                    ChannelInfo {
+                        name: "coil_in".into(),
+                        direction: "input".into(),
+                        width_bits: 1,
+                    },
+                ],
+            }],
+            bindings: vec![DirectBinding {
+                got_id: GotId::from_bytes([0x11; 16]),
+                area: 1,
+                offset_bits: 0,
+                width_bits: 16,
+                device: Some("mb".into()),
+                channel: Some(BindingChannel::Name("in0".into())),
+                direction: Some("input".into()),
+            }],
+            ..ModuleInfo::default()
+        }
+    }
+
+    fn hash_with(config: &str) -> String {
+        configuration_hash(Some(&hash_info(Some(config))))
+    }
+
+    #[test]
+    fn configuration_hash_covers_the_modbus_configuration() {
+        let info = hash_info(Some(HASH_CONFIG));
+        let base = configuration_hash(Some(&info));
+        assert_eq!(
+            base,
+            configuration_hash(Some(&hash_info(Some(HASH_CONFIG)))),
+            "the hash is deterministic"
+        );
+        assert_eq!(
+            configuration_hash(None),
+            configuration_hash(None),
+            "an absent module has a stable hash"
+        );
+
+        // Every detail of the device configuration text takes part.
+        let config_mutations = [
+            (
+                "bind port",
+                HASH_CONFIG.replace("127.0.0.1:1502", "127.0.0.1:1503"),
+            ),
+            (
+                "bind array",
+                HASH_CONFIG.replace(
+                    "\"127.0.0.1:1502\"",
+                    "\"127.0.0.1:1502\",\"127.0.0.1:1504\"",
+                ),
+            ),
+            ("unit", HASH_CONFIG.replace("\"unit\":7", "\"unit\":8")),
+            (
+                "device word order",
+                HASH_CONFIG.replace("high-first", "low-first"),
+            ),
+            (
+                "byte placement",
+                HASH_CONFIG.replace("\"byte\":\"low\"", "\"byte\":\"high\""),
+            ),
+            (
+                "table",
+                HASH_CONFIG.replace(
+                    "{\"name\":\"in0\",\"table\":\"holding-register\"",
+                    "{\"name\":\"in0\",\"table\":\"input-register\"",
+                ),
+            ),
+            (
+                "address",
+                HASH_CONFIG.replace(
+                    "{\"name\":\"in32\",\"table\":\"holding-register\",\"address\":2}",
+                    "{\"name\":\"in32\",\"table\":\"holding-register\",\"address\":4}",
+                ),
+            ),
+            (
+                "per-channel word order",
+                HASH_CONFIG.replace(
+                    "{\"name\":\"in32\",\"table\":\"holding-register\",\"address\":2}",
+                    "{\"name\":\"in32\",\"table\":\"holding-register\",\"address\":2,\
+                     \"word-order\":\"cdab\"}",
+                ),
+            ),
+            (
+                "max connections",
+                HASH_CONFIG.replace("\"max-connections\":8", "\"max-connections\":16"),
+            ),
+            (
+                "idle timeout",
+                HASH_CONFIG.replace("\"idle-timeout\":\"60s\"", "\"idle-timeout\":\"5s\""),
+            ),
+        ];
+        for (label, text) in config_mutations {
+            assert_ne!(
+                hash_with(&text),
+                base,
+                "changing `{label}` must change the configuration hash"
+            );
+        }
+
+        let assert_changed = |label: &str, changed: ModuleInfo| {
+            assert_ne!(
+                configuration_hash(Some(&changed)),
+                base,
+                "changing `{label}` must change the configuration hash"
+            );
+        };
+
+        let mut changed = info.clone();
+        changed.devices[0].name = "mb-renamed".into();
+        assert_changed("device name", changed);
+        let mut changed = info.clone();
+        changed.devices[0].kind = "modbus-tcp-status".into();
+        assert_changed("device kind", changed);
+        let mut changed = info.clone();
+        changed.devices[0].config = None;
+        assert_changed("device configuration presence", changed);
+        let mut changed = info.clone();
+        changed.devices[0].channels[0].name = "renamed".into();
+        assert_changed("channel name", changed);
+        let mut changed = info.clone();
+        changed.devices[0].channels[0].direction = "output".into();
+        assert_changed("channel direction", changed);
+        let mut changed = info.clone();
+        changed.devices[0].channels[2].width_bits = 64;
+        assert_changed("channel width and register span", changed);
+
+        let mut changed = info.clone();
+        changed.profile = Some(ProfileInfo {
+            path: "profiles/machine.toml".into(),
+            text: "[[io.devices]]".into(),
+            digest: "0x1234".into(),
+            devices: vec!["mb".into()],
+        });
+        assert_changed("profile digest", changed);
+
+        let mut changed = info.clone();
+        changed.bindings[0].got_id = GotId::from_bytes([0x22; 16]);
+        assert_changed("binding identity", changed);
+        let mut changed = info.clone();
+        changed.bindings[0].area = 2;
+        assert_changed("binding area", changed);
+        let mut changed = info.clone();
+        changed.bindings[0].offset_bits = 8;
+        assert_changed("binding offset", changed);
+        let mut changed = info.clone();
+        changed.bindings[0].width_bits = 8;
+        assert_changed("binding width", changed);
+        let mut changed = info.clone();
+        changed.bindings[0].device = Some("mb-other".into());
+        assert_changed("binding device", changed);
+        let mut changed = info.clone();
+        changed.bindings[0].channel = Some(BindingChannel::Name("in8".into()));
+        assert_changed("binding channel name", changed);
+        let mut changed = info.clone();
+        changed.bindings[0].channel = Some(BindingChannel::Index(0));
+        assert_changed("binding channel reference form", changed);
+        let mut changed = info.clone();
+        changed.bindings[0].direction = Some("output".into());
+        assert_changed("binding direction", changed);
+
+        // Metadata text that does not describe the I/O configuration is not
+        // part of the hash; this is what lets a code-only swap stay online.
+        let mut unrelated = info.clone();
+        unrelated.text = "{\"code\":\"new build\"}".into();
+        unrelated.debug = Some(Json::Null);
+        assert_eq!(configuration_hash(Some(&unrelated)), base);
     }
 }
