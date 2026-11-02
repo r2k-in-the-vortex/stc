@@ -1,17 +1,31 @@
-//! Modbus TCP protocol core and register bank (WL-5.1 phase 1).
+//! Modbus TCP protocol core, register bank, and `DeviceBackend`.
 //!
 //! This module implements the wire codec, function-code handling, channel map,
-//! and register bank for the `modbus-tcp` device kind. It deliberately owns no
-//! sockets, threads, or coordinator types: phase 2 wraps [`RegisterBank`] in a
-//! mutex and adapts [`ChannelMap`] channels to `BackendChannel`/`ImageRange`.
+//! register bank, and the socket-serving backend for the `modbus-tcp` device
+//! kind. The cycle thread only copies values between the bank and the process
+//! image; listeners and connection threads perform all socket I/O.
 //!
 //! The locked contract is WL-5.1-Plan.md §5 (M-2, M-3, M-6, M-7) and
-//! §6.2–§6.5. Addresses are zero-based: address 0 is the first element of every
+//! §6.2–§6.8. Addresses are zero-based: address 0 is the first element of every
 //! table (vendor reference `00001`/`10001`/`30001`/`40001`), and the configured
 //! address is written into the PDU without an off-by-one conversion.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use stc_got::error::Error;
+use stc_got::json::{self, Json};
+
+use crate::coordinator::{
+    BackendChannel, BackendConfig, BackendDeviceConfig, BackendState, BackendStatus, DeviceBackend,
+    ImageRange, ProcessImage,
+};
+use crate::module_info::ImageLayout;
 
 /// Stable diagnostic codes owned by the Modbus TCP backend.
 ///
@@ -1688,6 +1702,1527 @@ impl FrameDecoder {
     /// Discards buffered bytes.
     pub fn clear(&mut self) {
         self.buffer.clear();
+    }
+}
+
+/// The data-device kind served by the Modbus TCP backend.
+pub const MODBUS_TCP_KIND: &str = "modbus-tcp";
+
+/// The optional read-only status kind served by the same instance.
+pub const MODBUS_TCP_STATUS_KIND: &str = "modbus-tcp-status";
+
+/// Default total connection limit for one server device.
+const DEFAULT_MAX_CONNECTIONS: usize = 8;
+
+/// Largest accepted `max-connections` value.
+const MAX_CONNECTIONS_LIMIT: usize = 128;
+
+/// Default per-connection idle timeout.
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Listener accept poll interval; shutdown observes the stop flag within this.
+const ACCEPT_POLL: Duration = Duration::from_millis(10);
+
+/// Connection read poll cap so shutdown does not wait for an idle client.
+const CONNECTION_POLL: Duration = Duration::from_millis(100);
+
+/// Per-write socket timeout so a stalled client cannot block shutdown.
+const WRITE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// First retry delay after a runtime listener fault.
+const RETRY_BACKOFF_MIN: Duration = Duration::from_millis(100);
+
+/// Upper bound on the listener retry delay.
+const RETRY_BACKOFF_MAX: Duration = Duration::from_secs(5);
+
+const LISTENER_LISTENING: u8 = 0;
+const LISTENER_FAULTED: u8 = 1;
+const LISTENER_STOPPED: u8 = 2;
+
+/// One Modbus data device after configuration validation.
+struct ServerPlan {
+    name: String,
+    unit: Option<u8>,
+    max_connections: usize,
+    idle_timeout: Duration,
+    bind: Vec<SocketAddr>,
+    bank: RegisterBank,
+    inputs: Vec<BoundChannel>,
+    outputs: Vec<BoundChannel>,
+    unbound: usize,
+}
+
+/// One channel bound to a process-image range.
+struct BoundChannel {
+    name: String,
+    image: ImageRange,
+}
+
+/// One channel of a `modbus-tcp-status` device bound to an image range.
+#[derive(Clone, Copy)]
+struct StatusBinding {
+    server: usize,
+    field: StatusField,
+    image: ImageRange,
+}
+
+#[derive(Clone, Copy)]
+enum StatusField {
+    Listening,
+    Listeners,
+    BoundListeners,
+    Connections,
+    Requests,
+    Writes,
+    Exceptions,
+    Malformed,
+    LastError,
+}
+
+#[derive(Default)]
+struct ServerCounters {
+    connections: AtomicUsize,
+    peak_connections: AtomicUsize,
+    requests: AtomicU64,
+    reads: AtomicU64,
+    writes: AtomicU64,
+    exceptions: AtomicU64,
+    malformed: AtomicU64,
+    last_error: AtomicU32,
+}
+
+struct ListenerRuntime {
+    state: AtomicU8,
+    last_error: AtomicU32,
+    connections: AtomicUsize,
+    fault_episodes: AtomicU64,
+    effective_bind: Mutex<String>,
+}
+
+impl ListenerRuntime {
+    fn new(effective_bind: String) -> Self {
+        Self {
+            state: AtomicU8::new(LISTENER_LISTENING),
+            last_error: AtomicU32::new(0),
+            connections: AtomicUsize::new(0),
+            fault_episodes: AtomicU64::new(0),
+            effective_bind: Mutex::new(effective_bind),
+        }
+    }
+
+    fn state_name(&self) -> &'static str {
+        match self.state.load(Ordering::SeqCst) {
+            LISTENER_LISTENING => "listening",
+            LISTENER_FAULTED => "faulted",
+            _ => "stopped",
+        }
+    }
+
+    fn is_listening(&self) -> bool {
+        self.state.load(Ordering::SeqCst) == LISTENER_LISTENING
+    }
+}
+
+struct ServerRuntime {
+    counters: ServerCounters,
+    listeners: Vec<Arc<ListenerRuntime>>,
+    fault: Mutex<Option<String>>,
+}
+
+struct ListenerHandle {
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+struct Server {
+    name: String,
+    bank: Arc<Mutex<RegisterBank>>,
+    inputs: Vec<BoundChannel>,
+    outputs: Vec<BoundChannel>,
+    unbound: usize,
+    runtime: Arc<ServerRuntime>,
+    listeners: Vec<ListenerHandle>,
+}
+
+impl Server {
+    fn bound_listeners(&self) -> usize {
+        self.runtime
+            .listeners
+            .iter()
+            .filter(|listener| listener.is_listening())
+            .count()
+    }
+
+    fn is_listening(&self) -> bool {
+        !self.runtime.listeners.is_empty() && self.bound_listeners() == self.runtime.listeners.len()
+    }
+
+    fn connections(&self) -> usize {
+        self.runtime.counters.connections.load(Ordering::SeqCst)
+    }
+
+    fn effective_binds(&self) -> String {
+        self.runtime
+            .listeners
+            .iter()
+            .map(|listener| lock_mutex(&listener.effective_bind).clone())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+/// The Modbus TCP `DeviceBackend`.
+///
+/// One instance serves every `modbus-tcp` data device and every optional
+/// `modbus-tcp-status` device. Each data device owns a register bank, one
+/// listener per configured bind, and connection threads bounded by its total
+/// `max-connections`. The cycle thread only copies bank values at the two
+/// boundaries; no socket operation runs there.
+pub struct ModbusTcpBackend {
+    servers: Vec<Server>,
+    status_bindings: Vec<StatusBinding>,
+    status: BackendStatus,
+    stop: Arc<AtomicBool>,
+    started: bool,
+    cycled: bool,
+}
+
+impl Default for ModbusTcpBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ModbusTcpBackend {
+    /// Creates an unstarted backend.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            servers: Vec::new(),
+            status_bindings: Vec::new(),
+            status: BackendStatus::default(),
+            stop: Arc::new(AtomicBool::new(false)),
+            started: false,
+            cycled: false,
+        }
+    }
+
+    /// Returns the number of declared Modbus channels without an image
+    /// binding, summed across data devices.
+    #[must_use]
+    pub fn unbound_channels(&self) -> usize {
+        self.servers.iter().map(|server| server.unbound).sum()
+    }
+
+    fn fault_episodes(&self) -> u64 {
+        self.servers
+            .iter()
+            .flat_map(|server| &server.runtime.listeners)
+            .map(|listener| listener.fault_episodes.load(Ordering::SeqCst))
+            .fold(0, u64::saturating_add)
+    }
+
+    fn last_fault(&self) -> Option<String> {
+        self.servers
+            .iter()
+            .find_map(|server| lock_mutex(&server.runtime.fault).clone())
+    }
+
+    fn compute_state(&self) -> BackendState {
+        if !self.started {
+            return BackendState::Stopped;
+        }
+        if self
+            .servers
+            .iter()
+            .flat_map(|server| &server.runtime.listeners)
+            .any(|listener| listener.state.load(Ordering::SeqCst) == LISTENER_FAULTED)
+        {
+            return BackendState::Faulted;
+        }
+        if self.cycled {
+            BackendState::Running
+        } else {
+            BackendState::Ready
+        }
+    }
+
+    fn refresh_state(&mut self) {
+        self.status.state = self.compute_state();
+    }
+
+    fn status_value(&self, server_index: usize, field: StatusField) -> u64 {
+        let Some(server) = self.servers.get(server_index) else {
+            return 0;
+        };
+        match field {
+            StatusField::Listening => u64::from(server.is_listening()),
+            StatusField::Listeners => server.runtime.listeners.len() as u64,
+            StatusField::BoundListeners => server.bound_listeners() as u64,
+            StatusField::Connections => server.connections() as u64,
+            StatusField::Requests => server.runtime.counters.requests.load(Ordering::SeqCst),
+            StatusField::Writes => server.runtime.counters.writes.load(Ordering::SeqCst),
+            StatusField::Exceptions => server.runtime.counters.exceptions.load(Ordering::SeqCst),
+            StatusField::Malformed => server.runtime.counters.malformed.load(Ordering::SeqCst),
+            StatusField::LastError => {
+                u64::from(server.runtime.counters.last_error.load(Ordering::SeqCst))
+            }
+        }
+    }
+}
+
+impl Drop for ModbusTcpBackend {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+impl DeviceBackend for ModbusTcpBackend {
+    fn cold_start(&mut self, config: &BackendConfig) -> std::result::Result<(), Error> {
+        let _ = self.shutdown();
+        self.servers.clear();
+        self.status_bindings.clear();
+        self.cycled = false;
+        self.status = BackendStatus {
+            name: config.name.clone(),
+            devices: config.devices.len(),
+            state: BackendState::Ready,
+            exchanges: 0,
+            faults: 0,
+            last_fault: None,
+        };
+
+        let (plans, status_bindings) = parse_backend_config(config)?;
+
+        // All-or-nothing: bind every configured address before any listener
+        // thread is spawned. Dropping a partial set closes it.
+        let mut bound: Vec<Vec<(SocketAddr, TcpListener, String)>> = Vec::new();
+        for plan in &plans {
+            let mut listeners = Vec::with_capacity(plan.bind.len());
+            for &address in &plan.bind {
+                let listener = TcpListener::bind(address).map_err(|error| {
+                    Error::new(
+                        codes::BIND_FAILURE,
+                        format!(
+                            "Modbus device `{}` cannot bind {address}: {error}",
+                            plan.name
+                        ),
+                    )
+                })?;
+                listener.set_nonblocking(true).map_err(|error| {
+                    Error::new(
+                        codes::BIND_FAILURE,
+                        format!(
+                            "Modbus device `{}` cannot configure listener {address}: {error}",
+                            plan.name
+                        ),
+                    )
+                })?;
+                let effective = listener
+                    .local_addr()
+                    .map_or_else(|_| address.to_string(), |bound| bound.to_string());
+                listeners.push((address, listener, effective));
+            }
+            bound.push(listeners);
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut servers: Vec<Server> = Vec::with_capacity(plans.len());
+        for (plan, bound_listeners) in plans.into_iter().zip(bound) {
+            let listener_runtimes: Vec<Arc<ListenerRuntime>> = bound_listeners
+                .iter()
+                .map(|(_, _, effective)| Arc::new(ListenerRuntime::new(effective.clone())))
+                .collect();
+            let runtime = Arc::new(ServerRuntime {
+                counters: ServerCounters::default(),
+                listeners: listener_runtimes.clone(),
+                fault: Mutex::new(None),
+            });
+            let bank = Arc::new(Mutex::new(plan.bank));
+            let mut handles = Vec::with_capacity(bound_listeners.len());
+            for (listener_index, ((configured, listener, _), listener_runtime)) in bound_listeners
+                .into_iter()
+                .zip(listener_runtimes)
+                .enumerate()
+            {
+                let task = ListenerTask {
+                    server_index: servers.len(),
+                    listener_index,
+                    configured,
+                    listener,
+                    runtime: listener_runtime,
+                    server: runtime.clone(),
+                    bank: bank.clone(),
+                    unit: plan.unit,
+                    max_connections: plan.max_connections,
+                    idle_timeout: plan.idle_timeout,
+                    stop: stop.clone(),
+                };
+                let name = format!("stc-modbus-{}-{listener_index}", plan.name);
+                match std::thread::Builder::new().name(name).spawn(move || {
+                    run_listener(task);
+                }) {
+                    Ok(handle) => handles.push(ListenerHandle {
+                        thread: Some(handle),
+                    }),
+                    Err(error) => {
+                        stop.store(true, Ordering::SeqCst);
+                        for handle in handles {
+                            if let Some(thread) = handle.thread {
+                                let _ = thread.join();
+                            }
+                        }
+                        for mut server in servers {
+                            for listener in &mut server.listeners {
+                                if let Some(thread) = listener.thread.take() {
+                                    let _ = thread.join();
+                                }
+                            }
+                        }
+                        return Err(Error::new(
+                            codes::BIND_FAILURE,
+                            format!(
+                                "Modbus device `{}` cannot start a listener thread: {error}",
+                                plan.name
+                            ),
+                        ));
+                    }
+                }
+            }
+            servers.push(Server {
+                name: plan.name,
+                bank,
+                inputs: plan.inputs,
+                outputs: plan.outputs,
+                unbound: plan.unbound,
+                runtime,
+                listeners: handles,
+            });
+        }
+
+        self.stop = stop;
+        self.status_bindings = status_bindings;
+        self.servers = servers;
+        self.started = true;
+        Ok(())
+    }
+
+    fn latch_inputs(&mut self, image: &mut ProcessImage) -> std::result::Result<(), Error> {
+        for server in &self.servers {
+            let bank = lock_mutex(&server.bank);
+            for channel in &server.inputs {
+                let value = bank.read_channel(&channel.name).ok_or_else(|| {
+                    channel_resolve(format!(
+                        "input channel `{}` on device `{}` has no bank value",
+                        channel.name, server.name
+                    ))
+                })?;
+                if !image.write_bits(
+                    channel.image.area,
+                    channel.image.offset_bits,
+                    channel.image.width_bits,
+                    value,
+                ) {
+                    return Err(channel_resolve(format!(
+                        "input channel `{}` on device `{}` leaves the process image",
+                        channel.name, server.name
+                    )));
+                }
+            }
+        }
+        for binding in &self.status_bindings {
+            let value = self.status_value(binding.server, binding.field);
+            if !image.write_bits(
+                binding.image.area,
+                binding.image.offset_bits,
+                binding.image.width_bits,
+                value,
+            ) {
+                return Err(channel_resolve(format!(
+                    "status channel for server{} leaves the process image",
+                    binding.server
+                )));
+            }
+        }
+        self.cycled = true;
+        self.refresh_state();
+        Ok(())
+    }
+
+    fn publish_outputs(&mut self, image: &ProcessImage) -> std::result::Result<(), Error> {
+        for server in &self.servers {
+            let mut bank = lock_mutex(&server.bank);
+            for channel in &server.outputs {
+                let value = image
+                    .read_bits(
+                        channel.image.area,
+                        channel.image.offset_bits,
+                        channel.image.width_bits,
+                    )
+                    .ok_or_else(|| {
+                        channel_resolve(format!(
+                            "output channel `{}` on device `{}` leaves the process image",
+                            channel.name, server.name
+                        ))
+                    })?;
+                if !bank.write_channel(&channel.name, value) {
+                    return Err(channel_resolve(format!(
+                        "output channel `{}` on device `{}` does not fit the register bank",
+                        channel.name, server.name
+                    )));
+                }
+            }
+        }
+        self.status.exchanges = self.status.exchanges.saturating_add(1);
+        self.refresh_state();
+        Ok(())
+    }
+
+    fn status(&self) -> BackendStatus {
+        let mut status = self.status.clone();
+        status.state = self.compute_state();
+        status.faults = self.fault_episodes();
+        status.last_fault = self.last_fault();
+        status
+    }
+
+    fn diagnostics(&self) -> BTreeMap<String, String> {
+        let mut values = BTreeMap::new();
+        for (index, server) in self.servers.iter().enumerate() {
+            let prefix = format!("server{index}");
+            values.insert(format!("{prefix}.bind"), server.effective_binds());
+            values.insert(
+                format!("{prefix}.listeners"),
+                server.runtime.listeners.len().to_string(),
+            );
+            values.insert(
+                format!("{prefix}.bound_listeners"),
+                server.bound_listeners().to_string(),
+            );
+            values.insert(
+                format!("{prefix}.connections"),
+                server.connections().to_string(),
+            );
+            values.insert(
+                format!("{prefix}.peak_connections"),
+                server
+                    .runtime
+                    .counters
+                    .peak_connections
+                    .load(Ordering::SeqCst)
+                    .to_string(),
+            );
+            values.insert(
+                format!("{prefix}.requests"),
+                server
+                    .runtime
+                    .counters
+                    .requests
+                    .load(Ordering::SeqCst)
+                    .to_string(),
+            );
+            values.insert(
+                format!("{prefix}.reads"),
+                server
+                    .runtime
+                    .counters
+                    .reads
+                    .load(Ordering::SeqCst)
+                    .to_string(),
+            );
+            values.insert(
+                format!("{prefix}.writes"),
+                server
+                    .runtime
+                    .counters
+                    .writes
+                    .load(Ordering::SeqCst)
+                    .to_string(),
+            );
+            values.insert(
+                format!("{prefix}.exceptions"),
+                server
+                    .runtime
+                    .counters
+                    .exceptions
+                    .load(Ordering::SeqCst)
+                    .to_string(),
+            );
+            values.insert(
+                format!("{prefix}.malformed"),
+                server
+                    .runtime
+                    .counters
+                    .malformed
+                    .load(Ordering::SeqCst)
+                    .to_string(),
+            );
+            values.insert(format!("{prefix}.unbound"), server.unbound.to_string());
+            values.insert(
+                format!("{prefix}.last_error"),
+                server
+                    .runtime
+                    .counters
+                    .last_error
+                    .load(Ordering::SeqCst)
+                    .to_string(),
+            );
+            for (listener_index, listener) in server.runtime.listeners.iter().enumerate() {
+                let listener_prefix = format!("{prefix}.listener{listener_index}");
+                values.insert(
+                    format!("{listener_prefix}.bind"),
+                    lock_mutex(&listener.effective_bind).clone(),
+                );
+                values.insert(
+                    format!("{listener_prefix}.state"),
+                    listener.state_name().to_owned(),
+                );
+                values.insert(
+                    format!("{listener_prefix}.connections"),
+                    listener.connections.load(Ordering::SeqCst).to_string(),
+                );
+                values.insert(
+                    format!("{listener_prefix}.last_error"),
+                    listener.last_error.load(Ordering::SeqCst).to_string(),
+                );
+            }
+        }
+        values
+    }
+
+    fn shutdown(&mut self) -> std::result::Result<(), Error> {
+        if self.started {
+            self.stop.store(true, Ordering::SeqCst);
+            for server in &mut self.servers {
+                for listener in &mut server.listeners {
+                    if let Some(thread) = listener.thread.take() {
+                        let _ = thread.join();
+                    }
+                }
+            }
+            self.started = false;
+        }
+        self.status.state = BackendState::Stopped;
+        Ok(())
+    }
+}
+
+fn invalid(message: impl Into<String>) -> Error {
+    Error::new(codes::INVALID_CONFIG, message)
+}
+
+fn channel_resolve(message: impl Into<String>) -> Error {
+    Error::new(codes::CHANNEL_RESOLVE, message)
+}
+
+fn lock_mutex<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn parse_backend_config(
+    config: &BackendConfig,
+) -> std::result::Result<(Vec<ServerPlan>, Vec<StatusBinding>), Error> {
+    let mut names = BTreeSet::new();
+    for device in &config.devices {
+        if !names.insert(device.name.as_str()) {
+            return Err(invalid(format!(
+                "backend `{}` owns device `{}` more than once",
+                config.name, device.name
+            )));
+        }
+    }
+    let data_devices = config
+        .devices
+        .iter()
+        .filter(|device| device.kind != MODBUS_TCP_STATUS_KIND)
+        .count();
+
+    let mut plans = Vec::new();
+    let mut status_bindings = Vec::new();
+    for device in &config.devices {
+        if device.kind == MODBUS_TCP_STATUS_KIND {
+            status_bindings.extend(parse_status_device(device, data_devices, &config.layout)?);
+        } else {
+            plans.push(parse_server_device(device, &config.layout)?);
+        }
+    }
+
+    let mut concrete = BTreeSet::new();
+    for plan in &plans {
+        for &address in &plan.bind {
+            if address.port() != 0 && !concrete.insert(address) {
+                return Err(invalid(format!(
+                    "Modbus bind address {address} is configured more than once"
+                )));
+            }
+        }
+    }
+
+    validate_bindings(config)?;
+    Ok((plans, status_bindings))
+}
+
+fn parse_server_device(
+    device: &BackendDeviceConfig,
+    layout: &ImageLayout,
+) -> std::result::Result<ServerPlan, Error> {
+    let Some(config) = device.config.as_deref() else {
+        return Err(invalid(format!(
+            "Modbus device `{}` has no profile or inline configuration",
+            device.name
+        )));
+    };
+    let root = json::parse(config).map_err(|error| {
+        invalid(format!(
+            "device `{}` configuration is not valid JSON: {}",
+            device.name, error.message
+        ))
+    })?;
+    let object = root.as_object().ok_or_else(|| {
+        invalid(format!(
+            "device `{}` configuration is not a JSON object",
+            device.name
+        ))
+    })?;
+    for key in ["syncs", "pdo-channels", "dc"] {
+        if object.contains_key(key) {
+            return Err(invalid(format!(
+                "Modbus device `{}` uses the EtherCAT key `{key}`",
+                device.name
+            )));
+        }
+    }
+
+    let bind_value = object.get("bind").ok_or_else(|| {
+        invalid(format!(
+            "Modbus device `{}` is missing its `bind` array",
+            device.name
+        ))
+    })?;
+    let entries = bind_value.as_array().ok_or_else(|| {
+        invalid(format!(
+            "Modbus device `{}` `bind` must be an array of address:port strings",
+            device.name
+        ))
+    })?;
+    if entries.is_empty() {
+        return Err(invalid(format!(
+            "Modbus device `{}` `bind` must contain at least one address",
+            device.name
+        )));
+    }
+    let mut bind = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let text = entry.as_str().ok_or_else(|| {
+            invalid(format!(
+                "Modbus device `{}` `bind` entries must be strings",
+                device.name
+            ))
+        })?;
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(invalid(format!(
+                "Modbus device `{}` has an empty `bind` entry",
+                device.name
+            )));
+        }
+        let address = text.parse::<SocketAddr>().map_err(|_| {
+            invalid(format!(
+                "Modbus device `{}` `bind` entry `{text}` is not a literal IP address:port",
+                device.name
+            ))
+        })?;
+        bind.push(address);
+    }
+
+    let unit = match object.get("unit") {
+        None => None,
+        Some(Json::Number(value)) => match u8::try_from(*value) {
+            Ok(unit) if (1..=247).contains(&unit) => Some(unit),
+            _ => {
+                return Err(invalid(format!(
+                    "Modbus device `{}` `unit` must be an integer in 1..=247",
+                    device.name
+                )));
+            }
+        },
+        Some(_) => {
+            return Err(invalid(format!(
+                "Modbus device `{}` `unit` must be an integer in 1..=247",
+                device.name
+            )));
+        }
+    };
+
+    let max_connections = match object.get("max-connections") {
+        None => DEFAULT_MAX_CONNECTIONS,
+        Some(Json::Number(value)) => match usize::try_from(*value) {
+            Ok(limit) if (1..=MAX_CONNECTIONS_LIMIT).contains(&limit) => limit,
+            _ => {
+                return Err(invalid(format!(
+                    "Modbus device `{}` `max-connections` must be an integer in 1..=128",
+                    device.name
+                )));
+            }
+        },
+        Some(_) => {
+            return Err(invalid(format!(
+                "Modbus device `{}` `max-connections` must be an integer in 1..=128",
+                device.name
+            )));
+        }
+    };
+
+    let idle_timeout = match object.get("idle-timeout") {
+        None => DEFAULT_IDLE_TIMEOUT,
+        Some(Json::String(text)) => parse_duration(text).ok_or_else(|| {
+            invalid(format!(
+                "Modbus device `{}` `idle-timeout` must be a positive duration such as `60s`",
+                device.name
+            ))
+        })?,
+        Some(_) => {
+            return Err(invalid(format!(
+                "Modbus device `{}` `idle-timeout` must be a positive duration such as `60s`",
+                device.name
+            )));
+        }
+    };
+
+    let device_order = match object.get("word-order") {
+        None => DeviceWordOrder::HighFirst,
+        Some(Json::String(text)) => DeviceWordOrder::parse(text).ok_or_else(|| {
+            invalid(format!(
+                "Modbus device `{}` `word-order` must be `high-first` or `low-first`",
+                device.name
+            ))
+        })?,
+        Some(_) => {
+            return Err(invalid(format!(
+                "Modbus device `{}` `word-order` must be `high-first` or `low-first`",
+                device.name
+            )));
+        }
+    };
+
+    let mapped = match object.get("channels") {
+        None => Vec::new(),
+        Some(value) => parse_mapped_channels(device, value)?,
+    };
+    let declarations = device
+        .channels
+        .iter()
+        .map(|channel| {
+            let direction = Direction::parse(&channel.direction).ok_or_else(|| {
+                invalid(format!(
+                    "channel `{}` on device `{}` has direction `{}`; expected `input` or `output`",
+                    channel.name, device.name, channel.direction
+                ))
+            })?;
+            Ok(ChannelDeclaration::new(
+                channel.name.clone(),
+                direction,
+                channel.width_bits,
+            ))
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let map = ChannelMap::build(&declarations, &mapped, device_order).map_err(|error| {
+        Error::new(
+            error.code,
+            format!("device `{}`: {}", device.name, error.message),
+        )
+    })?;
+
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    let mut unbound = 0;
+    for channel in &device.channels {
+        let info = map.channel(&channel.name).ok_or_else(|| {
+            channel_resolve(format!(
+                "channel `{}` on device `{}` has no channel-map entry",
+                channel.name, device.name
+            ))
+        })?;
+        if info.width_bits != channel.width_bits {
+            return Err(channel_resolve(format!(
+                "channel `{}` on device `{}` is declared as {} bits but mapped as {} bits",
+                channel.name, device.name, channel.width_bits, info.width_bits
+            )));
+        }
+        let Some(image) = channel.image else {
+            unbound += 1;
+            continue;
+        };
+        validate_image(device, channel, image, layout, info.direction)?;
+        let bound = BoundChannel {
+            name: channel.name.clone(),
+            image,
+        };
+        if info.direction.is_input() {
+            inputs.push(bound);
+        } else {
+            outputs.push(bound);
+        }
+    }
+
+    Ok(ServerPlan {
+        name: device.name.clone(),
+        unit,
+        max_connections,
+        idle_timeout,
+        bind,
+        bank: RegisterBank::new(map),
+        inputs,
+        outputs,
+        unbound,
+    })
+}
+
+fn parse_mapped_channels(
+    device: &BackendDeviceConfig,
+    value: &Json,
+) -> std::result::Result<Vec<MappedChannel>, Error> {
+    let entries = value.as_array().ok_or_else(|| {
+        invalid(format!(
+            "Modbus device `{}` `channels` must be an array of tables",
+            device.name
+        ))
+    })?;
+    let mut mapped = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let entry = entry.as_object().ok_or_else(|| {
+            invalid(format!(
+                "Modbus device `{}` has a `channels` entry that is not a table",
+                device.name
+            ))
+        })?;
+        let name = entry
+            .get("name")
+            .and_then(Json::as_str)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "Modbus device `{}` has a channel map entry without a `name`",
+                    device.name
+                ))
+            })?
+            .to_owned();
+        let table = entry
+            .get("table")
+            .and_then(Json::as_str)
+            .and_then(Table::parse)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "channel `{name}` on device `{}` has an unknown `table`",
+                    device.name
+                ))
+            })?;
+        let address = match entry.get("address") {
+            Some(Json::Number(value)) => u16::try_from(*value).map_err(|_| {
+                invalid(format!(
+                    "channel `{name}` on device `{}` `address` must be in 0..=65535",
+                    device.name
+                ))
+            })?,
+            _ => {
+                return Err(invalid(format!(
+                    "channel `{name}` on device `{}` `address` must be an integer in 0..=65535",
+                    device.name
+                )));
+            }
+        };
+        let byte = match entry.get("byte") {
+            None => None,
+            Some(Json::String(text)) => match BytePlacement::parse(text) {
+                Some(byte) => Some(byte),
+                None => {
+                    return Err(invalid(format!(
+                        "channel `{name}` on device `{}` `byte` must be `low` or `high`",
+                        device.name
+                    )));
+                }
+            },
+            Some(_) => {
+                return Err(invalid(format!(
+                    "channel `{name}` on device `{}` `byte` must be `low` or `high`",
+                    device.name
+                )));
+            }
+        };
+        let word_order = match entry.get("word-order") {
+            None => None,
+            Some(Json::String(text)) => match WordOrder::parse(text) {
+                Some(order) => Some(order),
+                None => {
+                    return Err(invalid(format!(
+                        "channel `{name}` on device `{}` has an unknown `word-order`",
+                        device.name
+                    )));
+                }
+            },
+            Some(Json::Array(values)) => {
+                let mut order = Vec::with_capacity(values.len());
+                for value in values {
+                    let Some(position) = value
+                        .as_number()
+                        .and_then(|number| u8::try_from(number).ok())
+                    else {
+                        return Err(invalid(format!(
+                            "channel `{name}` on device `{}` `word-order` list must contain \
+                             non-negative byte positions",
+                            device.name
+                        )));
+                    };
+                    order.push(position);
+                }
+                Some(WordOrder::Explicit(order))
+            }
+            Some(_) => {
+                return Err(invalid(format!(
+                    "channel `{name}` on device `{}` `word-order` must be a spelling or an \
+                     integer list",
+                    device.name
+                )));
+            }
+        };
+        mapped.push(MappedChannel {
+            name,
+            table,
+            address,
+            byte,
+            word_order,
+        });
+    }
+    Ok(mapped)
+}
+
+fn validate_image(
+    device: &BackendDeviceConfig,
+    channel: &BackendChannel,
+    image: ImageRange,
+    layout: &ImageLayout,
+    direction: Direction,
+) -> std::result::Result<(), Error> {
+    if image.width_bits != u64::from(channel.width_bits) {
+        return Err(channel_resolve(format!(
+            "channel `{}` on device `{}` is bound as {} bits but declares {} bits",
+            channel.name, device.name, image.width_bits, channel.width_bits
+        )));
+    }
+    if direction.is_input() {
+        if image.area != 1 {
+            return Err(channel_resolve(format!(
+                "channel `{}` on device `{}` has direction `input` but image area {}",
+                channel.name, device.name, image.area
+            )));
+        }
+    } else if !matches!(image.area, 1 | 2) {
+        return Err(channel_resolve(format!(
+            "channel `{}` on device `{}` has direction `output` but image area {}",
+            channel.name, device.name, image.area
+        )));
+    }
+    if image.width_bits > 1 && !image.offset_bits.is_multiple_of(8) {
+        return Err(channel_resolve(format!(
+            "channel `{}` on device `{}` is not byte-aligned in the process image",
+            channel.name, device.name
+        )));
+    }
+    if !image_fits(layout, image) {
+        return Err(channel_resolve(format!(
+            "channel `{}` on device `{}` leaves the process image",
+            channel.name, device.name
+        )));
+    }
+    Ok(())
+}
+
+fn image_fits(layout: &ImageLayout, image: ImageRange) -> bool {
+    layout.area(image.area).is_some_and(|(_, bytes)| {
+        bytes
+            .checked_mul(8)
+            .and_then(|bits| {
+                image
+                    .offset_bits
+                    .checked_add(image.width_bits)
+                    .map(|end| end <= bits)
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn parse_status_device(
+    device: &BackendDeviceConfig,
+    data_devices: usize,
+    layout: &ImageLayout,
+) -> std::result::Result<Vec<StatusBinding>, Error> {
+    if let Some(config) = device.config.as_deref() {
+        let root = json::parse(config).map_err(|error| {
+            invalid(format!(
+                "status device `{}` configuration is not valid JSON: {}",
+                device.name, error.message
+            ))
+        })?;
+        let object = root.as_object().ok_or_else(|| {
+            invalid(format!(
+                "status device `{}` configuration is not a JSON object",
+                device.name
+            ))
+        })?;
+        if let Some(layout) = object.get("layout")
+            && layout.as_number() != Some(1)
+        {
+            return Err(invalid(format!(
+                "status device `{}` has an unknown layout; expected 1",
+                device.name
+            )));
+        }
+    }
+    let mut names = BTreeSet::new();
+    let mut bindings = Vec::new();
+    for channel in &device.channels {
+        if !names.insert(channel.name.as_str()) {
+            return Err(invalid(format!(
+                "status device `{}` declares channel `{}` more than once",
+                device.name, channel.name
+            )));
+        }
+        if channel.direction != "input" {
+            return Err(invalid(format!(
+                "status device `{}` channel `{}` must be read-only (direction `input`)",
+                device.name, channel.name
+            )));
+        }
+        let Some((server, field, width)) = status_field(&channel.name) else {
+            return Err(invalid(format!(
+                "status device `{}` names unknown status channel `{}`",
+                device.name, channel.name
+            )));
+        };
+        if server >= data_devices {
+            return Err(invalid(format!(
+                "status device `{}` channel `{}` names server{server}, but only {data_devices} \
+                 Modbus data devices are declared",
+                device.name, channel.name
+            )));
+        }
+        if channel.width_bits != width {
+            return Err(invalid(format!(
+                "status device `{}` channel `{}` is {} bits; the status layout uses {width} bits",
+                device.name, channel.name, channel.width_bits
+            )));
+        }
+        let Some(image) = channel.image else {
+            continue;
+        };
+        if image.area != 1 {
+            return Err(invalid(format!(
+                "status device `{}` channel `{}` must be bound to an `%I` range",
+                device.name, channel.name
+            )));
+        }
+        if image.width_bits != u64::from(width) {
+            return Err(channel_resolve(format!(
+                "status device `{}` channel `{}` is bound as {} bits but the status layout uses \
+                 {width} bits",
+                device.name, channel.name, image.width_bits
+            )));
+        }
+        if image.width_bits > 1 && !image.offset_bits.is_multiple_of(8) {
+            return Err(channel_resolve(format!(
+                "status device `{}` channel `{}` is not byte-aligned in the process image",
+                device.name, channel.name
+            )));
+        }
+        if !image_fits(layout, image) {
+            return Err(channel_resolve(format!(
+                "status device `{}` channel `{}` leaves the process image",
+                device.name, channel.name
+            )));
+        }
+        bindings.push(StatusBinding {
+            server,
+            field,
+            image,
+        });
+    }
+    Ok(bindings)
+}
+
+fn status_field(name: &str) -> Option<(usize, StatusField, u32)> {
+    let (prefix, field) = name.rsplit_once('.')?;
+    let server = prefix.strip_prefix("server")?.parse::<usize>().ok()?;
+    let (field, width) = match field {
+        "listening" => (StatusField::Listening, 1),
+        "listeners" => (StatusField::Listeners, 16),
+        "bound_listeners" => (StatusField::BoundListeners, 16),
+        "connections" => (StatusField::Connections, 16),
+        "requests" => (StatusField::Requests, 32),
+        "writes" => (StatusField::Writes, 32),
+        "exceptions" => (StatusField::Exceptions, 32),
+        "malformed" => (StatusField::Malformed, 32),
+        "last_error" => (StatusField::LastError, 32),
+        _ => return None,
+    };
+    Some((server, field, width))
+}
+
+fn validate_bindings(config: &BackendConfig) -> std::result::Result<(), Error> {
+    let mut channels = BTreeMap::new();
+    for device in &config.devices {
+        for channel in &device.channels {
+            channels.insert(
+                (device.name.clone(), channel.name.clone()),
+                (
+                    channel.image,
+                    channel.direction.as_str(),
+                    channel.width_bits,
+                ),
+            );
+        }
+    }
+    let mut seen = BTreeSet::new();
+    for binding in &config.bindings {
+        let key = (binding.device.clone(), binding.channel.clone());
+        let Some((image, direction, width_bits)) = channels.get(&key) else {
+            return Err(channel_resolve(format!(
+                "binding names channel `{}` on device `{}`, which is not declared",
+                binding.channel, binding.device
+            )));
+        };
+        if *image != Some(binding.image) {
+            return Err(channel_resolve(format!(
+                "binding for channel `{}` on device `{}` disagrees with the channel image range",
+                binding.channel, binding.device
+            )));
+        }
+        if *direction != binding.direction {
+            return Err(channel_resolve(format!(
+                "binding for channel `{}` on device `{}` has direction `{}`, but the channel has \
+                 `{direction}`",
+                binding.channel, binding.device, binding.direction
+            )));
+        }
+        if binding.image.width_bits != u64::from(*width_bits) {
+            return Err(channel_resolve(format!(
+                "binding for channel `{}` on device `{}` is {} bits but the channel is {} bits",
+                binding.channel, binding.device, binding.image.width_bits, width_bits
+            )));
+        }
+        if !seen.insert(key) {
+            return Err(channel_resolve(format!(
+                "channel `{}` on device `{}` is bound more than once",
+                binding.channel, binding.device
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn parse_duration(text: &str) -> Option<Duration> {
+    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
+    if split == 0 {
+        return None;
+    }
+    let number: u64 = text.get(..split)?.parse().ok()?;
+    let factor = match text.get(split..)? {
+        "ns" => 1_u64,
+        "us" | "µs" => 1_000,
+        "ms" => 1_000_000,
+        "s" => 1_000_000_000,
+        "m" => 60_000_000_000,
+        "h" => 3_600_000_000_000,
+        _ => return None,
+    };
+    let nanos = number.checked_mul(factor)?;
+    if nanos == 0 {
+        return None;
+    }
+    Some(Duration::from_nanos(nanos))
+}
+
+struct ListenerTask {
+    server_index: usize,
+    listener_index: usize,
+    configured: SocketAddr,
+    listener: TcpListener,
+    runtime: Arc<ListenerRuntime>,
+    server: Arc<ServerRuntime>,
+    bank: Arc<Mutex<RegisterBank>>,
+    unit: Option<u8>,
+    max_connections: usize,
+    idle_timeout: Duration,
+    stop: Arc<AtomicBool>,
+}
+
+fn run_listener(task: ListenerTask) {
+    let mut current = Some(task.listener);
+    let mut children: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    'serve: loop {
+        if task.stop.load(Ordering::SeqCst) {
+            break;
+        }
+        if current.is_none() {
+            let mut backoff = RETRY_BACKOFF_MIN;
+            while current.is_none() {
+                sleep_interruptible(backoff, &task.stop);
+                if task.stop.load(Ordering::SeqCst) {
+                    break 'serve;
+                }
+                match TcpListener::bind(task.configured) {
+                    Ok(listener) => {
+                        if let Err(error) = listener.set_nonblocking(true) {
+                            task.runtime.state.store(LISTENER_FAULTED, Ordering::SeqCst);
+                            task.runtime.last_error.store(3, Ordering::SeqCst);
+                            task.server.counters.last_error.store(3, Ordering::SeqCst);
+                            note_fault(
+                                &task.server,
+                                format!(
+                                    "{}: listener {} cannot be configured: {error}",
+                                    codes::LISTENER_FAULT,
+                                    task.configured
+                                ),
+                            );
+                            backoff = backoff.saturating_mul(2).min(RETRY_BACKOFF_MAX);
+                            continue;
+                        }
+                        let effective = listener.local_addr().map_or_else(
+                            |_| task.configured.to_string(),
+                            |bound| bound.to_string(),
+                        );
+                        *lock_mutex(&task.runtime.effective_bind) = effective;
+                        task.runtime
+                            .state
+                            .store(LISTENER_LISTENING, Ordering::SeqCst);
+                        current = Some(listener);
+                    }
+                    Err(error) => {
+                        task.runtime.state.store(LISTENER_FAULTED, Ordering::SeqCst);
+                        task.runtime.last_error.store(1, Ordering::SeqCst);
+                        task.server.counters.last_error.store(1, Ordering::SeqCst);
+                        note_fault(
+                            &task.server,
+                            format!(
+                                "{}: listener {} rebind failed: {error}",
+                                codes::LISTENER_FAULT,
+                                task.configured
+                            ),
+                        );
+                        backoff = backoff.saturating_mul(2).min(RETRY_BACKOFF_MAX);
+                    }
+                }
+            }
+        }
+        let Some(listener) = current.as_ref() else {
+            continue;
+        };
+        match listener.accept() {
+            Ok((stream, _peer)) => {
+                children.retain(|handle| !handle.is_finished());
+                if let Some(guard) = acquire_connection(&task.server, task.max_connections) {
+                    task.runtime.connections.fetch_add(1, Ordering::SeqCst);
+                    let guard = ConnectionGuard {
+                        listener: task.runtime.clone(),
+                        _slot: guard,
+                    };
+                    let server = task.server.clone();
+                    let bank = task.bank.clone();
+                    let stop = task.stop.clone();
+                    let idle_timeout = task.idle_timeout;
+                    let unit = task.unit;
+                    let name = format!(
+                        "stc-modbus-conn-{}-{}",
+                        task.server_index, task.listener_index
+                    );
+                    let spawned = std::thread::Builder::new().name(name).spawn(move || {
+                        let _guard = guard;
+                        serve_connection(stream, &server, &bank, unit, idle_timeout, &stop);
+                    });
+                    if let Err(_error) = spawned {
+                        // The closure and its connection guard were dropped.
+                    }
+                }
+                // At the connection limit the stream is closed immediately.
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                children.retain(|handle| !handle.is_finished());
+                std::thread::sleep(ACCEPT_POLL);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                children.retain(|handle| !handle.is_finished());
+                task.runtime.state.store(LISTENER_FAULTED, Ordering::SeqCst);
+                task.runtime.last_error.store(2, Ordering::SeqCst);
+                task.server.counters.last_error.store(2, Ordering::SeqCst);
+                task.runtime.fault_episodes.fetch_add(1, Ordering::SeqCst);
+                note_fault(
+                    &task.server,
+                    format!(
+                        "{}: listener {} accept failed: {error}",
+                        codes::LISTENER_FAULT,
+                        task.configured
+                    ),
+                );
+                current = None;
+            }
+        }
+    }
+    task.runtime.state.store(LISTENER_STOPPED, Ordering::SeqCst);
+    for child in children {
+        let _ = child.join();
+    }
+}
+
+fn sleep_interruptible(duration: Duration, stop: &AtomicBool) {
+    let deadline = Instant::now() + duration;
+    while !stop.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        std::thread::sleep((deadline - now).min(ACCEPT_POLL));
+    }
+}
+
+fn note_fault(server: &ServerRuntime, message: String) {
+    *lock_mutex(&server.fault) = Some(message);
+}
+
+struct ConnectionGuard {
+    listener: Arc<ListenerRuntime>,
+    _slot: SlotGuard,
+}
+
+struct SlotGuard(Arc<ServerRuntime>);
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        self.0.counters.connections.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.listener.connections.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Reserves one connection slot for the server; `None` at the limit.
+fn acquire_connection(server: &Arc<ServerRuntime>, max: usize) -> Option<SlotGuard> {
+    let counters = &server.counters;
+    loop {
+        let current = counters.connections.load(Ordering::SeqCst);
+        if current >= max {
+            return None;
+        }
+        if counters
+            .connections
+            .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            counters
+                .peak_connections
+                .fetch_max(current + 1, Ordering::SeqCst);
+            return Some(SlotGuard(server.clone()));
+        }
+    }
+}
+
+fn serve_connection(
+    mut stream: TcpStream,
+    server: &ServerRuntime,
+    bank: &Mutex<RegisterBank>,
+    unit: Option<u8>,
+    idle_timeout: Duration,
+    stop: &AtomicBool,
+) {
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+    let mut decoder = FrameDecoder::new();
+    let mut buffer = [0_u8; 1024];
+    let mut last_request = Instant::now();
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            return;
+        }
+        let idle = last_request.elapsed();
+        if idle >= idle_timeout {
+            finish_connection(&mut decoder, server);
+            return;
+        }
+        let timeout = (idle_timeout - idle).min(CONNECTION_POLL);
+        if stream.set_read_timeout(Some(timeout)).is_err() {
+            return;
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => {
+                finish_connection(&mut decoder, server);
+                return;
+            }
+            Ok(count) => {
+                decoder.push(&buffer[..count]);
+                loop {
+                    match decoder.next_frame() {
+                        Ok(Some(frame)) => {
+                            last_request = Instant::now();
+                            server.counters.requests.fetch_add(1, Ordering::SeqCst);
+                            let response = {
+                                let mut bank = lock_mutex(bank);
+                                handle_request(&mut bank, unit, frame.unit_id, &frame.pdu)
+                            };
+                            count_response(&server.counters, &frame.pdu, &response);
+                            let Ok(adu) =
+                                encode_adu(frame.transaction_id, frame.unit_id, &response)
+                            else {
+                                server.counters.last_error.store(3, Ordering::SeqCst);
+                                return;
+                            };
+                            if stream.write_all(&adu).is_err() {
+                                return;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => {
+                            server.counters.malformed.fetch_add(1, Ordering::SeqCst);
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => {
+                finish_connection(&mut decoder, server);
+                return;
+            }
+        }
+    }
+}
+
+fn finish_connection(decoder: &mut FrameDecoder, server: &ServerRuntime) {
+    if decoder.finish().is_err() {
+        server.counters.malformed.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn count_response(counters: &ServerCounters, request: &[u8], response: &[u8]) {
+    let function = request.first().copied().unwrap_or(0);
+    if response.first().is_some_and(|first| first & 0x80 != 0) {
+        counters.exceptions.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    match function {
+        0x01..=0x04 => {
+            counters.reads.fetch_add(1, Ordering::SeqCst);
+        }
+        0x05 | 0x06 | 0x0F | 0x10 => {
+            counters.writes.fetch_add(1, Ordering::SeqCst);
+        }
+        _ => {}
     }
 }
 
@@ -3684,5 +5219,514 @@ mod tests {
         let mut bank = simple("word", Direction::Output, 16, Table::HoldingRegister, 0);
         assert!(!bank.write_channel("word", 0x1_0000));
         assert_eq!(bank.read_channel("word"), Some(0));
+    }
+
+    // ---- Phase 2 backend tests -------------------------------------------
+
+    use crate::coordinator::{BackendBinding, BackendRegistry, Coordinator};
+    use crate::io_mock::{MockEthercatBackend, MockWire};
+    use crate::module_info::{
+        ChannelInfo, DeviceInfo, DirectBinding, ModuleInfo, RouteEndpoint, RouteInfo,
+    };
+    use stc_got::GotId;
+
+    const UNIT: u8 = 7;
+
+    const LOOPBACK_CONFIG: &str = r#"{
+        "bind": ["127.0.0.1:0", "127.0.0.1:0"],
+        "unit": 7,
+        "max-connections": 4,
+        "idle-timeout": "5s",
+        "word-order": "low-first",
+        "channels": [
+            {"name": "coil_in", "table": "coil", "address": 0},
+            {"name": "coil_out", "table": "coil", "address": 10},
+            {"name": "discrete_out", "table": "discrete-input", "address": 0},
+            {"name": "hr_u8_low", "table": "holding-register", "address": 0, "byte": "low"},
+            {"name": "hr_u8_high", "table": "holding-register", "address": 0, "byte": "high"},
+            {"name": "hr_u16_in", "table": "holding-register", "address": 1},
+            {"name": "hr_u32_in", "table": "holding-register", "address": 2, "word-order": "abcd"},
+            {"name": "hr_u64_in", "table": "holding-register", "address": 4},
+            {"name": "hr_unbound", "table": "holding-register", "address": 30},
+            {"name": "hr_u16_out", "table": "holding-register", "address": 20},
+            {"name": "hr_u32_out", "table": "holding-register", "address": 22, "word-order": "cdab"},
+            {"name": "ir_u16_out", "table": "input-register", "address": 0},
+            {"name": "ir_u64_out", "table": "input-register", "address": 2,
+             "word-order": [4, 5, 6, 7, 0, 1, 2, 3]}
+        ]
+    }"#;
+
+    fn at(area: u8, offset_bits: u64, width_bits: u64) -> ImageRange {
+        ImageRange {
+            area,
+            offset_bits,
+            width_bits,
+        }
+    }
+
+    fn backend_channel(
+        name: &str,
+        direction: &str,
+        width_bits: u32,
+        image: Option<ImageRange>,
+    ) -> BackendChannel {
+        BackendChannel {
+            name: name.into(),
+            direction: direction.into(),
+            width_bits,
+            image,
+        }
+    }
+
+    fn status_channel(name: &str, width_bits: u32, offset_bits: u64) -> BackendChannel {
+        backend_channel(
+            name,
+            "input",
+            width_bits,
+            Some(at(1, offset_bits, u64::from(width_bits))),
+        )
+    }
+
+    fn test_backend_config() -> BackendConfig {
+        let data_channels = vec![
+            backend_channel("coil_in", "input", 1, Some(at(1, 0, 1))),
+            backend_channel("hr_u8_low", "input", 8, Some(at(1, 8, 8))),
+            backend_channel("hr_u8_high", "input", 8, Some(at(1, 16, 8))),
+            backend_channel("hr_u16_in", "input", 16, Some(at(1, 24, 16))),
+            backend_channel("hr_u32_in", "input", 32, Some(at(1, 40, 32))),
+            backend_channel("hr_u64_in", "input", 64, Some(at(1, 72, 64))),
+            backend_channel("hr_unbound", "input", 16, None),
+            backend_channel("coil_out", "output", 1, Some(at(2, 0, 1))),
+            backend_channel("discrete_out", "output", 1, Some(at(2, 1, 1))),
+            backend_channel("hr_u16_out", "output", 16, Some(at(2, 8, 16))),
+            backend_channel("hr_u32_out", "output", 32, Some(at(2, 32, 32))),
+            backend_channel("ir_u16_out", "output", 16, Some(at(2, 64, 16))),
+            backend_channel("ir_u64_out", "output", 64, Some(at(2, 80, 64))),
+        ];
+        let status_channels = vec![
+            status_channel("server0.listening", 1, 136),
+            status_channel("server0.listeners", 16, 144),
+            status_channel("server0.bound_listeners", 16, 160),
+            status_channel("server0.connections", 16, 176),
+            status_channel("server0.requests", 32, 192),
+            status_channel("server0.writes", 32, 224),
+            status_channel("server0.exceptions", 32, 256),
+            status_channel("server0.malformed", 32, 288),
+            status_channel("server0.last_error", 32, 320),
+        ];
+        let mut bindings = Vec::new();
+        for (device, channels) in [("mb", &data_channels), ("mb-status", &status_channels)] {
+            for channel in channels {
+                if let Some(image) = channel.image {
+                    bindings.push(BackendBinding {
+                        device: device.into(),
+                        channel: channel.name.clone(),
+                        image,
+                        direction: channel.direction.clone(),
+                    });
+                }
+            }
+        }
+        BackendConfig {
+            name: "modbus-tcp".into(),
+            devices: vec![
+                BackendDeviceConfig {
+                    name: "mb".into(),
+                    kind: MODBUS_TCP_KIND.into(),
+                    config: Some(LOOPBACK_CONFIG.into()),
+                    channels: data_channels,
+                },
+                BackendDeviceConfig {
+                    name: "mb-status".into(),
+                    kind: MODBUS_TCP_STATUS_KIND.into(),
+                    config: None,
+                    channels: status_channels,
+                },
+            ],
+            bindings,
+            layout: ImageLayout {
+                inputs_bytes: 44,
+                outputs_bytes: 18,
+                markers_bytes: 0,
+            },
+            profile: None,
+        }
+    }
+
+    fn diagnostic_bind(backend: &ModbusTcpBackend, listener: usize) -> String {
+        backend
+            .diagnostics()
+            .get(&format!("server0.listener{listener}.bind"))
+            .cloned()
+            .expect("listener bind diagnostic")
+    }
+
+    fn test_client(bind: &str) -> TcpStream {
+        let address: SocketAddr = bind.parse().expect("effective bind");
+        let stream = TcpStream::connect(address).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .expect("write timeout");
+        stream
+    }
+
+    fn read_response(stream: &mut TcpStream) -> Vec<u8> {
+        let mut header = [0_u8; 7];
+        stream.read_exact(&mut header).expect("MBAP header");
+        assert_eq!(u16::from_be_bytes([header[2], header[3]]), 0);
+        let length = usize::from(u16::from_be_bytes([header[4], header[5]]));
+        assert!(length >= 2, "MBAP length {length}");
+        let mut pdu = vec![0_u8; length - 1];
+        stream.read_exact(&mut pdu).expect("PDU");
+        pdu
+    }
+
+    fn exchange(stream: &mut TcpStream, transaction: u16, unit: u8, pdu: &[u8]) -> Vec<u8> {
+        let adu = encode_adu(transaction, unit, pdu).expect("adu");
+        stream.write_all(&adu).expect("request");
+        read_response(stream)
+    }
+
+    fn image_value(image: &ProcessImage, area: u8, offset: u64, width: u64) -> u64 {
+        image.read_bits(area, offset, width).unwrap_or_else(|| {
+            panic!(
+                "%{} range {offset}+{width} missing",
+                if area == 1 { "I" } else { "Q" }
+            )
+        })
+    }
+
+    #[test]
+    fn loopback_server_serves_tables_widths_status_and_shutdown() {
+        let config = test_backend_config();
+        let mut backend = ModbusTcpBackend::new();
+        backend.cold_start(&config).expect("cold start");
+        assert_eq!(backend.status().state, BackendState::Ready);
+        assert_eq!(backend.status().devices, 2);
+        assert_eq!(backend.unbound_channels(), 1);
+        assert_eq!(backend.diagnostics()["server0.unbound"], "1");
+        assert_eq!(backend.diagnostics()["server0.listeners"], "2");
+        assert_eq!(backend.diagnostics()["server0.bound_listeners"], "2");
+        assert_eq!(
+            backend.diagnostics()["server0.listener0.state"],
+            "listening"
+        );
+        assert_eq!(
+            backend.diagnostics()["server0.listener1.state"],
+            "listening"
+        );
+
+        let bind_a = diagnostic_bind(&backend, 0);
+        let bind_b = diagnostic_bind(&backend, 1);
+        assert_ne!(bind_a, bind_b);
+        let mut client = test_client(&bind_a);
+
+        // Client writes are visible at the next latch for every input width.
+        assert_eq!(
+            exchange(&mut client, 1, UNIT, &write_single_pdu(0x05, 0, 0xFF00)),
+            write_single_pdu(0x05, 0, 0xFF00)
+        );
+        assert_eq!(
+            exchange(&mut client, 2, UNIT, &write_single_pdu(0x06, 0, 0xAB12)),
+            write_single_pdu(0x06, 0, 0xAB12)
+        );
+        exchange(
+            &mut client,
+            3,
+            UNIT,
+            &write_registers_pdu(1, &[0x1234, 0x1122, 0x3344]),
+        );
+        exchange(
+            &mut client,
+            4,
+            UNIT,
+            &write_registers_pdu(4, &[0xCDEF, 0x89AB, 0x4567, 0x0123]),
+        );
+
+        let mut image = ProcessImage::new(config.layout);
+        backend.latch_inputs(&mut image).expect("latch");
+        assert_eq!(backend.status().state, BackendState::Running);
+        assert_eq!(image_value(&image, 1, 0, 1), 1);
+        assert_eq!(image_value(&image, 1, 8, 8), 0x12);
+        assert_eq!(image_value(&image, 1, 16, 8), 0xAB);
+        assert_eq!(image_value(&image, 1, 24, 16), 0x1234);
+        assert_eq!(image_value(&image, 1, 40, 32), 0x1122_3344);
+        assert_eq!(
+            image_value(&image, 1, 72, 64),
+            0x0123_4567_89AB_CDEF,
+            "device low-first 64-bit order"
+        );
+        assert_eq!(image_value(&image, 1, 136, 1), 1);
+        assert_eq!(image_value(&image, 1, 144, 16), 2);
+        assert_eq!(image_value(&image, 1, 160, 16), 2);
+        assert_eq!(image_value(&image, 1, 176, 16), 1);
+        assert_eq!(image_value(&image, 1, 192, 32), 4);
+        assert_eq!(image_value(&image, 1, 224, 32), 4);
+        assert_eq!(image_value(&image, 1, 256, 32), 0);
+        assert_eq!(image_value(&image, 1, 288, 32), 0);
+        assert_eq!(image_value(&image, 1, 320, 32), 0);
+
+        // PLC outputs reach clients on all four tables.
+        assert!(image.write_bits(2, 0, 1, 1));
+        assert!(image.write_bits(2, 1, 1, 1));
+        assert!(image.write_bits(2, 8, 16, 0xBEEF));
+        assert!(image.write_bits(2, 32, 32, 0x1122_3344));
+        assert!(image.write_bits(2, 64, 16, 0xCAFE));
+        assert!(image.write_bits(2, 80, 64, 0x0102_0304_0506_0708));
+        backend.publish_outputs(&image).expect("publish");
+
+        let response = exchange(&mut client, 5, UNIT, &read_pdu(0x01, 10, 1));
+        assert_eq!(response_bits(&response, 1), vec![true]);
+        let response = exchange(&mut client, 6, UNIT, &read_pdu(0x02, 0, 1));
+        assert_eq!(response_bits(&response, 1), vec![true]);
+        let response = exchange(&mut client, 7, UNIT, &read_pdu(0x03, 20, 1));
+        assert_eq!(response_words(&response), vec![0xBEEF]);
+        let response = exchange(&mut client, 8, UNIT, &read_pdu(0x03, 22, 2));
+        assert_eq!(response_words(&response), vec![0x3344, 0x1122]);
+        let response = exchange(&mut client, 9, UNIT, &read_pdu(0x04, 0, 1));
+        assert_eq!(response_words(&response), vec![0xCAFE]);
+        let response = exchange(&mut client, 10, UNIT, &read_pdu(0x04, 2, 4));
+        assert_eq!(
+            response_words(&response),
+            vec![0x0506, 0x0708, 0x0102, 0x0304],
+            "explicit per-channel permutation"
+        );
+
+        // Both listeners serve the same bank.
+        let mut second = test_client(&bind_b);
+        let response = exchange(&mut second, 11, UNIT, &read_pdu(0x01, 0, 1));
+        assert_eq!(response_bits(&response, 1), vec![true]);
+        let response = exchange(&mut second, 12, 8, &read_pdu(0x03, 20, 1));
+        assert_exception(&response, 0x03, ExceptionCode::WrongUnitId);
+
+        // Pipelined ADUs are answered in order on one connection.
+        let first = encode_adu(13, UNIT, &read_pdu(0x03, 20, 1)).expect("first");
+        let second = encode_adu(14, UNIT, &read_pdu(0x04, 0, 1)).expect("second");
+        let mut pipelined = first;
+        pipelined.extend_from_slice(&second);
+        client.write_all(&pipelined).expect("pipelined requests");
+        assert_eq!(response_words(&read_response(&mut client)), vec![0xBEEF]);
+        assert_eq!(response_words(&read_response(&mut client)), vec![0xCAFE]);
+
+        // Refresh the status block and assert the documented counters.
+        backend.latch_inputs(&mut image).expect("latch status");
+        assert_eq!(image_value(&image, 1, 176, 16), 2);
+        assert_eq!(image_value(&image, 1, 192, 32), 14);
+        assert_eq!(image_value(&image, 1, 224, 32), 4);
+        assert_eq!(image_value(&image, 1, 256, 32), 1);
+        assert_eq!(image_value(&image, 1, 288, 32), 0);
+        assert_eq!(image_value(&image, 1, 320, 32), 0);
+        let diagnostics = backend.diagnostics();
+        assert_eq!(diagnostics["server0.requests"], "14");
+        assert_eq!(diagnostics["server0.reads"], "9");
+        assert_eq!(diagnostics["server0.writes"], "4");
+        assert_eq!(diagnostics["server0.exceptions"], "1");
+        assert_eq!(diagnostics["server0.malformed"], "0");
+        assert_eq!(diagnostics["server0.last_error"], "0");
+        assert_eq!(diagnostics["server0.peak_connections"], "2");
+        assert_eq!(diagnostics["server0.listener0.connections"], "1");
+        assert_eq!(diagnostics["server0.listener1.connections"], "1");
+
+        drop(client);
+        drop(second);
+        backend.shutdown().expect("shutdown");
+        backend.shutdown().expect("idempotent shutdown");
+        assert_eq!(backend.status().state, BackendState::Stopped);
+        let diagnostics = backend.diagnostics();
+        assert_eq!(diagnostics["server0.listener0.state"], "stopped");
+        assert_eq!(diagnostics["server0.listener1.state"], "stopped");
+        assert_eq!(diagnostics["server0.bound_listeners"], "0");
+    }
+
+    const MIXED_CONFIG: &str = r#"{
+        "bind": ["127.0.0.1:0"],
+        "channels": [
+            {"name": "mb_in", "table": "holding-register", "address": 0, "byte": "low"},
+            {"name": "mb_out", "table": "holding-register", "address": 1, "byte": "low"}
+        ]
+    }"#;
+
+    const ECAT_CONFIG: &str = r#"{
+        "syncs": [
+            {"index": 1, "direction": "input", "watchdog": "disable", "pdos": [{
+                "index": "0x1a00",
+                "entries": [{"index": "0x3001", "subindex": 1, "bits": 8}]
+            }]},
+            {"index": 2, "direction": "output", "watchdog": "enable", "pdos": [{
+                "index": "0x1600",
+                "entries": [{"index": "0x3101", "subindex": 1, "bits": 8}]
+            }]}
+        ],
+        "pdo-channels": [
+            {"name": "IN0", "entry": {"index": "0x3001", "subindex": 1}, "bit": 0},
+            {"name": "OUT0", "entry": {"index": "0x3101", "subindex": 1}, "bit": 0}
+        ]
+    }"#;
+
+    fn channel_info(name: &str, direction: &str, width_bits: u32) -> ChannelInfo {
+        ChannelInfo {
+            name: name.into(),
+            direction: direction.into(),
+            width_bits,
+        }
+    }
+
+    fn direct_binding(
+        seed: u8,
+        area: u8,
+        offset_bits: u64,
+        width_bits: u64,
+        device: &str,
+        channel: &str,
+        direction: &str,
+    ) -> DirectBinding {
+        DirectBinding {
+            got_id: GotId::from_bytes([seed; 16]),
+            area,
+            offset_bits,
+            width_bits,
+            device: Some(device.into()),
+            channel: Some(crate::module_info::BindingChannel::Name(channel.into())),
+            direction: Some(direction.into()),
+        }
+    }
+
+    fn route_endpoint(device: &str, channel: &str, input: bool) -> RouteEndpoint {
+        if input {
+            RouteEndpoint::PhysicalInput {
+                device: device.into(),
+                channel: channel.into(),
+                width_bits: 8,
+            }
+        } else {
+            RouteEndpoint::PhysicalOutput {
+                device: device.into(),
+                channel: channel.into(),
+                width_bits: 8,
+            }
+        }
+    }
+
+    fn mixed_registry(wire: &MockWire) -> BackendRegistry {
+        let mut registry = BackendRegistry::new();
+        for kind in ["ethercat", "ethercat-status"] {
+            let wire = wire.clone();
+            registry.register(kind, "ethercat", move || {
+                Box::new(MockEthercatBackend::with_wire(wire.clone()))
+            });
+        }
+        for kind in [MODBUS_TCP_KIND, MODBUS_TCP_STATUS_KIND] {
+            registry.register(kind, "modbus-tcp", || Box::new(ModbusTcpBackend::new()));
+        }
+        registry
+    }
+
+    #[test]
+    fn coordinator_serves_modbus_and_ethercat_over_one_image() {
+        let wire = MockWire::new();
+        let registry = mixed_registry(&wire);
+        let devices = vec![
+            DeviceInfo {
+                name: "ec".into(),
+                kind: "ethercat".into(),
+                config: Some(ECAT_CONFIG.into()),
+                channels: vec![
+                    channel_info("IN0", "input", 8),
+                    channel_info("OUT0", "output", 8),
+                ],
+            },
+            DeviceInfo {
+                name: "mb".into(),
+                kind: MODBUS_TCP_KIND.into(),
+                config: Some(MIXED_CONFIG.into()),
+                channels: vec![
+                    channel_info("mb_in", "input", 8),
+                    channel_info("mb_out", "output", 8),
+                ],
+            },
+        ];
+        let bindings = vec![
+            direct_binding(1, 1, 0, 8, "mb", "mb_in", "input"),
+            direct_binding(3, 1, 16, 8, "ec", "IN0", "input"),
+        ];
+        let routes = vec![
+            RouteInfo {
+                source: route_endpoint("mb", "mb_in", true),
+                sinks: vec![route_endpoint("ec", "OUT0", false)],
+            },
+            RouteInfo {
+                source: route_endpoint("ec", "IN0", true),
+                sinks: vec![route_endpoint("mb", "mb_out", false)],
+            },
+        ];
+        let module = ModuleInfo {
+            inputs_bytes: 3,
+            outputs_bytes: 3,
+            input_defaults: vec![0; 3],
+            bindings,
+            devices,
+            routes,
+            ..ModuleInfo::default()
+        };
+        let mut coordinator = Coordinator::cold_start(&module, &registry).expect("cold start");
+        let reports = coordinator.reports();
+        let modbus_report = reports
+            .iter()
+            .find(|report| report.name == "modbus-tcp")
+            .expect("Modbus report");
+        let bind = modbus_report.diagnostics["server0.listener0.bind"].clone();
+        let mut client = test_client(&bind);
+
+        // Modbus client write -> EtherCAT output over the shared image.
+        exchange(&mut client, 1, 1, &write_single_pdu(0x06, 0, 0x00A1));
+        coordinator.input_boundary();
+        coordinator.after_scan();
+        assert_eq!(wire.output("ec", "OUT0"), Some(0xA1));
+        assert_eq!(coordinator.image().read_bits(1, 0, 8), Some(0xA1));
+
+        // EtherCAT input -> Modbus client read over the shared image.
+        wire.set_input("ec", "IN0", 0xB2);
+        coordinator.input_boundary();
+        coordinator.after_scan();
+        assert_eq!(coordinator.image().read_bits(1, 16, 8), Some(0xB2));
+        let response = exchange(&mut client, 2, 1, &read_pdu(0x03, 1, 1));
+        assert_eq!(response_words(&response), vec![0x00B2]);
+
+        // An EtherCAT fault is isolated: Modbus keeps serving and reporting.
+        wire.set_fail_latch(true);
+        coordinator.input_boundary();
+        coordinator.after_scan();
+        let reports = coordinator.reports();
+        let ethercat = reports
+            .iter()
+            .find(|report| report.name == "ethercat")
+            .expect("EtherCAT report");
+        assert_eq!(ethercat.state, BackendState::Faulted);
+        assert!(ethercat.faults >= 1);
+        let modbus = reports
+            .iter()
+            .find(|report| report.name == "modbus-tcp")
+            .expect("Modbus report");
+        assert_eq!(modbus.state, BackendState::Running);
+        assert_eq!(modbus.faults, 0);
+
+        exchange(&mut client, 3, 1, &write_single_pdu(0x06, 0, 0x00A3));
+        let response = exchange(&mut client, 4, 1, &read_pdu(0x03, 0, 1));
+        assert_eq!(response_words(&response), vec![0x00A3]);
+        coordinator.input_boundary();
+        coordinator.after_scan();
+        assert_eq!(
+            coordinator
+                .reports()
+                .iter()
+                .find(|report| report.name == "modbus-tcp")
+                .expect("Modbus report")
+                .state,
+            BackendState::Running
+        );
+        coordinator.shutdown().expect("shutdown");
     }
 }

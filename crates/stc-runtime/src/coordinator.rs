@@ -344,12 +344,14 @@ impl BackendRegistry {
     }
 
     /// Creates the default registry: `ethercat` and `ethercat-status` share
-    /// one instance. Backend selection lives in the runtime platform layer:
-    /// Linux uses the shim-backed backend, other hosts use the phase-1 mock.
+    /// one instance, and `modbus-tcp` and `modbus-tcp-status` share another.
+    /// Backend selection lives in the runtime platform layer: Linux uses the
+    /// shim-backed EtherCAT backend, other hosts use the phase-1 mock.
     #[must_use]
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         crate::backend_defaults::register_ethercat(&mut registry);
+        crate::backend_defaults::register_modbus_tcp(&mut registry);
         registry
     }
 

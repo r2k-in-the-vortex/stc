@@ -3,11 +3,11 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-11-01; revised 2026-11-02 (owner decisions accepted; phase 0 contracts gate closed)  
 Branch: `WL-5.1` (sub-plan of `v2.0.0-planning`)  
-Status: Phase 0 complete 2026-11-02; phase 1 in progress. WL-5.2 is complete and its multi-backend
-I/O system is the baseline. The owner accepted M-1–M-15 and resolved Q-1–Q-22 on 2026-11-02; the
-decisions in §5 are the locked contract. Phases are handed one at a time to subagents; each phase
-ends with a commit, push, and green CI, and this agent updates §7.1 before the next handover
-(§7.4).  
+Status: Phase 0 and phase 1 complete 2026-11-02; phase 2 in progress. WL-5.2 is complete and its
+multi-backend I/O system is the baseline. The owner accepted M-1–M-15 and resolved Q-1–Q-22 on
+2026-11-02; the decisions in §5 are the locked contract. Phases are handed one at a time to
+subagents; each phase ends with a commit, push, and green CI, and this agent updates §7.1 before
+the next handover (§7.4).  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-5.1)  
 Baseline: `WL-5.1` at `a25bf69` (merge of WL-5.2 into `v2.0.0-planning`); the WL-5.2 working plan
 is retired and its decisions are D-211–D-228.  
@@ -1018,8 +1018,8 @@ orchestrator (§7.4).
 | Phase | Status | Commit | CI |
 | --- | --- | --- | --- |
 | 0 — contracts | Done | `3547e58` | [41473961570](https://github.com/r2k-in-the-vortex/stc/actions/runs/41473961570) — success |
-| 1 — protocol core and bank | In progress | — | — |
-| 2 — backend and coordinator integration | Not started | — | — |
+| 1 — protocol core and bank | Done | `ebfbbc6` | [41478485216](https://github.com/r2k-in-the-vortex/stc/actions/runs/41478485216) — success |
+| 2 — backend and coordinator integration | In progress | — | — |
 | 3 — error paths, lifecycle, online change | Not started | — | — |
 | 4 — cross-host and end-to-end | Not started | — | — |
 | 5 — overhead, documentation consolidation, PR | Not started | — | — |
@@ -1280,4 +1280,5 @@ After the gate:
 | 2026-11-02 | Recorded owner answers: BOOL on bit tables only; partial 32/64-bit writes rejected; word order is a device-level default with a per-channel named ABCD/CDAB/DCBA/BADC or explicit index-list override; `modbus-tcp` is kind-only, with no global backend spelling; cold-start binds are all-or-nothing; the mixed mock test is required and a real mixed bench run is planned with both backends active but no external Modbus↔EtherCAT signal connection; the status device is optional; `unit` is optional with accept-any when absent; unmapped ranges fail the whole request; there is no runtime bind override. |
 | 2026-11-02 | All owner questions resolved; M-1–M-15 accepted. Phase 0 handed to a subagent under §7.4; the orchestrator will update §7.1 with the phase commit and CI before handing phase 1. |
 | 2026-11-02 | Phase 0 complete: commit `3547e58`, CI run 41473961570 success. The contracts are locked; phase 1 (protocol core and register bank) handed to a subagent. |
+| 2026-11-02 | Phase 1 complete: commit `ebfbbc6`, CI run 41478485216 success. The protocol core and register bank have 44 new tests; phase 2 (backend and coordinator integration) handed to a subagent. |
 | 2026-11-02 | Phase 0 contracts gate closed. Verified M-1–M-15 and Q-1–Q-22 against the profile schema, protocol surface, scheduling/fault/status/diagnostics contracts, phase plan, file-change list, test matrix, and evidence plan. Clarified the word-order/code-validation boundary, the 8-bit mixed input/output write rule, the aggregate fault state during a listener retry, the profile-only Modbus data-device configuration path, and the mixed-bench evidence status; no implementation code was started. |
