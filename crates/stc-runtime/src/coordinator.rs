@@ -447,6 +447,7 @@ pub struct Coordinator {
     routes: Vec<RoutePlan>,
     staged_plc: Vec<u64>,
     claimed_output: Vec<bool>,
+    claimed_input: Vec<bool>,
     config_hash: String,
 }
 
@@ -680,6 +681,19 @@ impl Coordinator {
             }
         }
 
+        let mut claimed_input = vec![false; image_input_bits(&image)];
+        for range in ranges.values().flatten().filter(|range| range.area == 1) {
+            claim_bit_range(&mut claimed_input, *range);
+        }
+        for plan in &routes {
+            let sink = match plan {
+                RoutePlan::InputCopy { sink, .. } | RoutePlan::PlcToPlc { sink, .. } => sink,
+            };
+            if sink.area == 1 {
+                claim_bit_range(&mut claimed_input, *sink);
+            }
+        }
+
         // Group devices by registered instance, preserving declaration order.
         let mut order: Vec<String> = Vec::new();
         let mut groups: BTreeMap<String, Vec<&DeviceInfo>> = BTreeMap::new();
@@ -765,6 +779,7 @@ impl Coordinator {
             routes,
             staged_plc: Vec::new(),
             claimed_output,
+            claimed_input,
             config_hash,
         })
     }
@@ -775,11 +790,8 @@ impl Coordinator {
     /// in declaration order, then physical-input routes run, then the
     /// buffered PLC→PLC sources from the previous scan are applied.
     pub fn input_boundary(&mut self) {
-        if self.global_backend.is_null_behavior()
-            && let Some(area) = self.image.area_bytes_mut(1)
-        {
-            let count = area.len().min(self.input_defaults.len());
-            area[..count].copy_from_slice(&self.input_defaults[..count]);
+        if self.global_backend.is_null_behavior() {
+            self.apply_unbound_input_defaults();
         }
         for index in 0..self.instances.len() {
             let result = self.instances[index].backend.latch_inputs(&mut self.image);
@@ -921,6 +933,32 @@ impl Coordinator {
         }
     }
 
+    /// Applies the global input defaults only to unbound input bits.
+    ///
+    /// Bound inputs are owned by their backend. On a fault the backend keeps
+    /// the last received value in the image (IO-Routing-and-Backends §6), so
+    /// the coordinator must not overwrite it with a default.
+    fn apply_unbound_input_defaults(&mut self) {
+        let Some(area) = self.image.area_bytes_mut(1) else {
+            return;
+        };
+        for (index, byte) in area.iter_mut().enumerate() {
+            let default = self.input_defaults.get(index).copied().unwrap_or(0);
+            for bit in 0..8 {
+                let absolute = index * 8 + bit;
+                if self.claimed_input.get(absolute).copied().unwrap_or(false) {
+                    continue;
+                }
+                let mask = 1_u8 << bit;
+                if default & mask == 0 {
+                    *byte &= !mask;
+                } else {
+                    *byte |= mask;
+                }
+            }
+        }
+    }
+
     fn clear_unbound_outputs(&mut self) {
         let Some(area) = self.image.area_bytes_mut(2) else {
             return;
@@ -958,6 +996,12 @@ fn sized(bytes: &[u8], length: u64) -> Vec<u8> {
     let count = value.len().min(bytes.len());
     value[..count].copy_from_slice(&bytes[..count]);
     value
+}
+
+fn image_input_bits(image: &ProcessImage) -> usize {
+    usize::try_from(image.layout().inputs_bytes)
+        .unwrap_or(0)
+        .saturating_mul(8)
 }
 
 fn image_output_bits(image: &ProcessImage) -> usize {
@@ -1912,10 +1956,17 @@ mod tests {
         let mut coordinator = Coordinator::cold_start(&info, &registry).expect("cold start");
         ethercat.set_input("diewu", "IN0", 0x11);
         other.set_input("other", "IN0", 0x22);
+        coordinator.input_boundary();
+        assert_eq!(coordinator.image().read_bits(1, 0, 8), Some(0x11));
+        assert_eq!(coordinator.image().read_bits(1, 8, 8), Some(0x22));
 
         ethercat.set_fail_latch(true);
         coordinator.input_boundary();
-        assert_eq!(coordinator.image().read_bits(1, 0, 8), Some(0));
+        assert_eq!(
+            coordinator.image().read_bits(1, 0, 8),
+            Some(0x11),
+            "a faulted backend's bound input keeps its last received value"
+        );
         assert_eq!(coordinator.image().read_bits(1, 8, 8), Some(0x22));
         let reports = coordinator.reports();
         assert_eq!(reports[0].state, BackendState::Faulted);
@@ -1931,6 +1982,38 @@ mod tests {
         assert_eq!(reports[0].state, BackendState::Running);
         assert_eq!(reports[0].faults, 1);
         assert_eq!(reports[1].faults, 0);
+    }
+
+    #[test]
+    fn faulted_bound_input_keeps_its_last_value_under_global_defaults() {
+        let wire = MockWire::new();
+        let devices = vec![diewu("ethercat", Some(MOCK_CONFIG), all_channels())];
+        let bindings = vec![binding(1, 1, 0, 8, "diewu", "IN0", "input")];
+        let mut info = module(devices, bindings, Vec::new(), 2, 1);
+        info.backend = IoBackend::Ethercat;
+        info.input_defaults = vec![0xAA, 0xBB];
+        let mut coordinator =
+            Coordinator::cold_start(&info, &ethercat_registry(&wire)).expect("cold start");
+
+        wire.set_input("diewu", "IN0", 0x11);
+        coordinator.input_boundary();
+        assert_eq!(coordinator.image().read_bits(1, 0, 8), Some(0x11));
+        assert_eq!(coordinator.image().read_bits(1, 8, 8), Some(0xBB));
+
+        wire.set_fail_latch(true);
+        coordinator.input_boundary();
+        assert_eq!(
+            coordinator.image().read_bits(1, 0, 8),
+            Some(0x11),
+            "a faulted backend's bound input keeps its last received value"
+        );
+        assert_eq!(
+            coordinator.image().read_bits(1, 8, 8),
+            Some(0xBB),
+            "unbound input defaults still apply during the fault"
+        );
+        let reports = coordinator.reports();
+        assert_eq!(reports[0].state, BackendState::Faulted);
     }
 
     #[test]
