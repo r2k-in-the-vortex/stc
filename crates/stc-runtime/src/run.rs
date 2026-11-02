@@ -33,6 +33,9 @@ pub enum IoBackend {
     Memory,
     /// Input image read at cold start; output image written at shutdown.
     File,
+    /// Hardware device backends own their bound ranges; unbound areas use the
+    /// `null` behavior (IO-Routing-and-Backends §4.1).
+    Ethercat,
 }
 
 impl IoBackend {
@@ -43,6 +46,7 @@ impl IoBackend {
             "null" => Some(Self::Null),
             "memory" => Some(Self::Memory),
             "file" => Some(Self::File),
+            "ethercat" => Some(Self::Ethercat),
             _ => None,
         }
     }
@@ -54,6 +58,7 @@ impl IoBackend {
             Self::Null => "null",
             Self::Memory => "memory",
             Self::File => "file",
+            Self::Ethercat => "ethercat",
         }
     }
 }
@@ -213,9 +218,10 @@ pub(crate) fn run_loop_with_control(
         0
     };
     let mut metrics = match (&rt, &options.rt_metrics) {
-        (Some(_), Some(path)) => {
-            Some(MetricsWriter::open(path).map_err(|message| RunLoopError::Setup { message })?)
-        }
+        (Some(rt), Some(path)) => Some(
+            MetricsWriter::open(path, rt.background_affinity())
+                .map_err(|message| RunLoopError::Setup { message })?,
+        ),
         _ => None,
     };
     // The first deadline is set after the metrics file is open so file
@@ -237,7 +243,7 @@ pub(crate) fn run_loop_with_control(
             started_ns: deadline_ns.unwrap_or(0),
         };
         metrics
-            .write_header(&header)
+            .write_header(header)
             .map_err(|message| RunLoopError::Setup { message })?;
     }
     let mut cycles = 0_u64;
@@ -329,9 +335,7 @@ pub(crate) fn run_loop_with_control(
                     faults,
                     allocations,
                 };
-                metrics
-                    .record(&sample)
-                    .map_err(|message| RunLoopError::Setup { message })?;
+                metrics.record(&sample);
             }
         }
         if control_signal == ControlSignal::Stop {

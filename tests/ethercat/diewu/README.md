@@ -1,0 +1,275 @@
+# DIEWU open-ended EtherCAT HIL fixture (WL-5.2 phase 3)
+
+This fixture brings up a DIEWU EtherCAT-IO 16I/16O slave in OP on the
+`ecat-host` bench and confirms at frame level that IgH accepts and replies to
+every process-data frame. It is deliberately open-ended: the terminal blocks
+are unwired/unloaded, the program only copies inputs to outputs and advances a
+counter, and no physical input value or output measurement is asserted. The
+host procedure and phase-3 evidence are in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md).
+
+Phase 3 does **not** cover cable unplug, power-cycle, loopback harnesses, fault
+injection, or any manual toggling/measuring. Those belong to phase 6: the
+self-contained loopback project is [loopback/](loopback/), and the manual
+wiring, all-points, and physical fault procedure is
+[PHASE6.md](PHASE6.md). The phase-6 procedure was executed on 2026-11-01
+(host time) with a second 24 V output-stage supply; the all-points and powered
+fault matrices passed, and the observed results are in PHASE6.md §8.
+
+## Bench
+
+- Host: `ecat-host` (Dell Wyse 5070), Ubuntu 24.04, `6.12.115-ecat-rt`
+  PREEMPT_RT kernel.
+- Master: IgH EtherCAT master 1.6.13 at `/usr/local/etherlab`, device
+  `/dev/EtherCAT0`, master 0; user `r2k` can open the device without sudo.
+- Slave: DIEWU 16I/16O at position 0, alias 0.
+  Vendor `0x00000b95`, product `0x00010200`, revision 1.
+- DC: not configured. The SII has no `<Dc>` section; free-run is the owner
+  decision ([Decisions.md](../../../specification/Decisions.md) D-215/E-5;
+  the u16 spelling is D-227/E-17).
+
+## Files
+
+| Path | Purpose |
+| --- | --- |
+| `stc.toml` | Manifest: 16 BOOL inputs, 16 BOOL outputs, `status` device (`ethercat-status`, layout 1), direct bindings, `[io].config = "io/bench.toml"`. |
+| `io/bench.toml` | Machine profile: DIEWU identity, SM0/SM1 output PDOs `0x1a00`/`0x1a01` on `0x3101:01`/`0x3101:02`, SM2 input PDOs `0x1600`/`0x1601` on `0x3001:01`/`0x3001:02`, the 32-bit channel map, and three routes. |
+| `src/main.st` | Non-CPU-bound program: `Out0..Out13 := In0..In13`, `In14` toggles a state bit, `Counter` increments; 1 ms task. |
+| `build.sh` | Builds the fixture with the deployed `stc` package. |
+| `run-open-ended.sh` | Runs 600000 cycles at 1 ms (10 minutes) with `-v` status output. |
+| `run-ct.sh` | Runs one phase-5 cycle-time sweep step; invoked as `r2k` through the privileged `stc-wl52-run` wrapper, not directly. |
+| `holder/holder.c` | Ordinary-user helper that calls `ecrt_request_master(0)` and pauses; used in phase 4 to exercise the runtime's master-already-owned failure. |
+
+## Process-image map
+
+```
+%IX0.0..%IX0.7  In0..In7     0x3001:01 bits 0..7
+%IX1.0..%IX1.7  In8..In15    0x3001:02 bits 0..7
+%IX2.0          Shadow1      sink of the buffered PLC -> PLC route
+%QX0.0..%QX0.7  Out0..Out7   0x3101:01 bits 0..7
+%QX1.0..%QX1.5  Out8..Out13  0x3101:02 bits 0..5
+OUT14 (0x3101:02 bit 6)      route Out0 -> OUT14
+OUT15 (0x3101:02 bit 7)      route IN15 -> OUT15 (physical pass-through)
+```
+
+Status variables occupy `%I` bytes 4..38 (`%IWn` is word n at byte 2n, `%IDn`
+is dword n at byte 4n). The `ethercat-status` device fills them at the input
+boundary from the live master/domain state; they are read-only.
+
+## Deploying with the CI-built package
+
+Never build `stc` on the bench host. Download the CI artifacts
+`stc-package-ubuntu-24.04` and `stc-io-ethercat-linux-x86_64` on the build
+workstation, verify the package, and copy the unpacked files to the host
+under a dedicated directory:
+
+```sh
+gh run download <run-id> -n stc-package-ubuntu-24.04 -D artifacts/package
+gh run download <run-id> -n stc-io-ethercat-linux-x86_64 -D artifacts/shim
+package="$(cd artifacts/package/dist/stc-* && pwd)"
+(cd "$package" && sha256sum -c SHA256SUMS)
+ssh <user>@ecat-host 'install -d "$HOME/stc-wl52" "$HOME/stc-wl52/logs"'
+scp -r "$package/." <user>@ecat-host:~/stc-wl52/
+scp artifacts/shim/libstc_io_ethercat.so <user>@ecat-host:~/stc-wl52/lib/
+ssh <user>@ecat-host 'chmod 0755 "$HOME/stc-wl52/bin/stc"'
+ssh <user>@ecat-host '$HOME/stc-wl52/bin/stc --version'
+```
+
+Copy this fixture directory (no `target/`) to the host, for example
+`~/stc-wl52/diewu`. The full deployment and preflight procedure is in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md).
+
+`clang` must be available on the host for the fixture's user-project build
+(`clang --version`). If it is missing, stop: do not install packages. The
+fixture itself is built with the deployed `stc`, not by rebuilding the
+compiler or runtime.
+
+## Procedure
+
+1. Confirm the master is idle and the slave is present:
+
+   ```sh
+   ethercat master
+   ethercat slaves
+   ```
+
+   `ethercat master` must show `Phase: Idle` before the run; if another
+   application holds the master, stop and report.
+
+2. Export the shim and IgH library paths:
+
+   ```sh
+   export STC_ETHERCAT_LIBRARY="$HOME/stc-wl52/lib/libstc_io_ethercat.so"
+   export LD_LIBRARY_PATH="/usr/local/etherlab/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+   export PATH="$HOME/stc-wl52/bin:$PATH"
+   ```
+
+3. Build the fixture once:
+
+   ```sh
+   bash ~/stc-wl52/diewu/build.sh
+   ```
+
+4. Sample the master counters, then run the 10-minute open-ended cycle in the
+   foreground and keep the log on the host:
+
+   ```sh
+   ethercat master > ~/stc-wl52/logs/master-before.txt
+   bash ~/stc-wl52/diewu/run-open-ended.sh \
+     2>&1 | tee ~/stc-wl52/logs/open-ended-$(date +%Y%m%dT%H%M%S).log
+   ethercat master > ~/stc-wl52/logs/master-after.txt
+   ```
+
+   The script passes `--io ethercat`, `--cycles 600000`, `--cycle-time 1ms`,
+   and `-v` (exit status summary). It does not pass `--rt`.
+
+   Run this from one SSH session and do not open other SSH sessions, poll from
+   another terminal, or run background commands on the host while the timed
+   run is active. This non-RT procedure does not pin the run or the IgH threads
+   to a dedicated CPU; the observed `EtherCAT-IDLE` thread is `SCHED_OTHER`
+   (class `TS`), and a login CPU burst can delay one frame. That is a
+   host-scheduling event, not a runtime send/receive error. If it happens, let
+   the run finish, confirm the master counters, and repeat the 10-minute run
+   in isolation.
+
+## Frame-level success criteria
+
+The run succeeds when all of the following hold; physical I/O values are not
+verified:
+
+- The slave is operational: the runtime's health gate requires every configured
+  slave to be online and operational, so `faults=0` and `domain.wc_state=2`
+  with `master.slaves_responding=1` reflect OP. The operator status line does
+  not print the per-slave fields; the kernel log's slave-state transition and
+  `ethercat slaves` after release carry that evidence.
+- The runtime stays healthy: `state=running`, `faults=0`,
+  `domain.wc_state=2` (WC complete), and `exchanges=600000` at exit.
+- No send/receive failures or startup errors in the log
+  (`STC-E-ETH-*`, `send`, `receive`); no recovery is triggered
+  (`master.recoveries=0`, `input.stale=0`).
+- `ethercat master` after the run shows the same lost-frame and Tx-error
+  counters as before (frame-level health; sample both, do not reset).
+- After release, `ethercat slaves` shows PREOP; the process exits after the
+  cycle count and does not rewrite the output image (the backend never writes
+  outputs during shutdown).
+
+The `-v` summary line looks like:
+
+```
+stc: status: io-backend ethercat devices=2 state=running exchanges=600000 faults=0 hash=0x... domain.wc_state=2 domain.working_counter=3 input.stale=0 master.last_error=0 master.link_up=1 master.recoveries=0 master.slaves_responding=1
+```
+
+Keep the raw logs in `~/stc-wl52/logs/` for the run report; do not commit
+them. Commit only the concise summary and the runbook procedure, with log
+paths and hashes.
+
+## Phase 3 result
+
+The acceptance run on 2026-10-31 completed 600000 requested 1 ms cycles in one
+SSH session with `state=running`, `exchanges=600000`, `faults=0`,
+`domain.wc_state=2`, and `master.recoveries=0`; the master's `Tx errors` and
+`Lost frames` counters stayed at 0, and the slave was PREOP after release. Raw
+logs remain on `ecat-host`; the run summary, hashes, and the earlier diagnostic
+run are in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md)
+§8. Physical I/O values were not verified.
+
+## Phase 4 result
+
+The software-fault matrix (master already owned, wrong identity, missing position, startup
+timeout), the 14 PLC-visible status registers, and same-configuration versus changed-configuration
+online change were exercised on `ecat-host` without physical faults, root, or host changes; the
+master service stop/start case was then a recorded privilege gap, resolved by the phase-5
+wrappers below. Results and evidence hashes are in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md) §9.
+
+## Phase 5 cycle-time sweep
+
+Phase 5 adds `run-ct.sh`, which runs one step of the runbook §10.7 sweep with the
+packaged release launcher (`stc run --release --rt --rt-priority 90
+--rt-cpu 3 --cycle-time <cycle> --cycles 0 --rt-metrics <log>.jsonl -v`). It
+sets `STC_ETHERCAT_LIBRARY` and `LD_LIBRARY_PATH=/usr/local/etherlab/lib` and
+bounds build plus run with `timeout` at the requested duration plus a 60 s
+build allowance. The script is user-writable and is executed as `r2k` with
+only `CAP_SYS_NICE` ambient by the privileged `stc-wl52-run` wrapper; it is
+never run as root and is not meant to be invoked directly. It exits 0 only
+for a frame-level pass: healthy status, `exchanges` equal to the completed
+cycle count, at least the requested window's worth of cycles, zero skipped
+periods, zero dropped metrics records, an execution p99 at most half the cycle
+time, an unchanged master Tx-error counter, a lost-frame counter that does not
+increase by more than the tool's one-frame travelling allowance, and PREOP after
+release. The strict missed-deadline counter is reported but not gated because it
+counts any positive wake lateness and is not a hard-miss count (see
+[KNOWN-LIMITATIONS.md](../../../KNOWN-LIMITATIONS.md)). The install and use procedure is in the
+[EtherCAT runbook](../../../specification/Verification/EtherCAT-Runbook.md) §10.
+
+## Phase 5 result
+
+The service wrapper was verified (status 0; an invalid verb and an extra argument exit 64
+without a systemd call). An idle stop/start unloaded and reloaded the modules, reset the master
+frame counters, and returned to Idle with link UP and the slave PREOP. A stop issued while a run
+owned the master returned 0 but left the unit `failed`: the module stayed loaded because it was
+in use, the runtime finished healthy at the timeout, and `start` restored the unit. No runtime
+fault, stale input, or recovery occurred because the module never went away; see the runbook
+§10.6.
+
+The sweep after the metrics-writer fix screened 1 ms, 500 µs, 250 µs, 200 µs, and 150 µs at
+60 s; all passed with zero skipped periods, zero dropped records, and execution p99 47.1-49.3 µs,
+and the 600 s confirmation at 150 µs passed (4388666 cycles, zero skipped periods, zero dropped
+records, execution p99 49.0 µs, master Tx/lost 0/1953->1953). The 100 µs step is the first
+failure: 283 skipped periods in 283 one-period events, wake lateness up to 133.3 µs, while
+execution p99 stayed 48.8 µs and the frame path stayed healthy (1182738 exchanges, WC state 2,
+no faults, master counters unchanged). The fastest maintainable cycle time is 150 µs; 75 µs and
+below were not run, and the wrapper allowlist did not need extension. The earlier 500 µs failure
+was the 1 MiB metrics-buffer flush on the cycle thread; commit `77cab14` moved the writer to a
+dedicated thread with a bounded non-blocking queue, and every final run reports zero dropped
+records. The strict missed-deadline counter equaled the cycle count in every run and is reported,
+not gated. Distributions and evidence hashes are in the runbook §10.7-§10.8.
+
+## Phase 6 loopback (powered execution, 2026-11-01)
+
+Phase 6 adds a separate, self-contained project in [loopback/](loopback/) with
+its own `stc.toml` and machine profile. It binds all 16 inputs and all 16
+outputs directly (no routes), drives a one-hot pattern across the outputs,
+waits 20 ms, reads all 16 inputs through the OUTn-to-INn bench harness, and
+latches `Pass` and `FailMask`. `loopback_test.py` launches it through
+`stc debug` and reads the result through `var.read`, printing a 16-channel
+matrix. The manual wiring, supply/commons, all-points, physical
+fault-injection, evidence, and restore procedure is [PHASE6.md](PHASE6.md).
+
+The procedure was executed on 2026-11-01 host time with a second 24 V supply on
+the output stage. The automated all-points matrix passed 16/16 (exit 0,
+`FailMask=0x0000`, `ObservedMask=0xFFFF`); every output driver turned on its
+corresponding input opto. Fault A (host-end unplug/replug) and Fault B (DIEWU
+power cycle) passed on the fixed package: the runtime held `OUTPUTMASK=65535`,
+presented `INPUTMASK=65535` as stale during each fault, kept `SCANCOUNT`
+advancing, and recovered the same configured slave (`STATUSRECOVERIES` 1 → 2 →
+3) without a cold download or host restart. `HOLD FALSE` during the first
+recorded fault gave `OUTPUTMASK=0`, `INPUTMASK=65535`. Fault C is covered by
+Fault A. Restore was `Phase: Idle` / `Active: no` / PREOP with no `stc` process.
+
+An earlier supply-limited run found a coordinator stale-input defect, fixed in
+`d694266` and verified by the final run. The fault session recorded one extra,
+unobserved episode, so its cumulative counters are 1/1 at the post-HOLD
+baseline and 3/3 at the end; this manual counter deviation is recorded in
+PHASE6 §8.2. Observed values and hashes are in PHASE6.md §8; the runbook summary
+is §13. The open-ended fixture above is unchanged and remains the phase 3-5
+frame-level evidence.
+
+## Troubleshooting
+
+- `STC_ETHERCAT_LIBRARY` unset or wrong: the runtime fails with an EtherCAT
+  backend activation error; check `stc: status: io-backend ... last-fault=`.
+- Shim cannot find `ecrt_*`: add `/usr/local/etherlab/lib` to
+  `LD_LIBRARY_PATH`.
+- `/dev/EtherCAT0` permission denied: stop and report; do not use sudo.
+- `ethercat master` cannot open the master: another application is using it;
+  stop and report instead of killing it.
+- The slave never reaches OP or frames are rejected: capture the full log and
+  `ethercat master`/`ethercat slaves` output, then diagnose the fixture or
+  runtime. Do not power-cycle, unplug cables, or toggle I/O.
+- A steady-state `SKIPPED`/`UNMATCHED` datagram appears while another SSH
+  session is active: finish that session, confirm the master's lost-frame and
+  Tx-error counters did not increase, and repeat the 10-minute run with no
+  concurrent host activity. A steady-state WC/AL fault without such an event
+  is a frame-level failure and must be diagnosed before accepting the run.

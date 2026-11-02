@@ -1,0 +1,101 @@
+#!/bin/bash -p
+# WL-5.2 privileged cycle-time-sweep wrapper.
+#
+# This file is installed root-owned at /usr/local/sbin/stc-wl52-run. The
+# sudoers rule grants the login user NOPASSWD access to this wrapper only.
+# Every subcommand, argument, and path is fixed; there is no generic command
+# or path passthrough.
+#
+# The wrapper starts root-owned code only. The user-writable fixture, launcher,
+# and shim are never executed as root: setpriv drops to r2k (uid/gid 1000)
+# with the supplementary groups from /etc/group (so the ethercat group is
+# retained for /dev/EtherCAT0), no_new_privs, and only CAP_SYS_NICE in the
+# inheritable/ambient set. Ambient CAP_SYS_NICE lets the cycle thread enter
+# SCHED_FIFO 90; it carries across exec into the stc launcher.
+#
+# The r2k uid/gid are the values verified on ecat-host (id -u/--gid 1000 and
+# getent group ethercat -> 1001:r2k). Re-check them before installing on a
+# different host.
+
+set -euo pipefail
+umask 022
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+readonly STC=/home/r2k/stc-wl52/bin/stc
+readonly FIXTURE=/home/r2k/stc-wl52/diewu
+readonly SHIM=/home/r2k/stc-wl52/lib/libstc_io_ethercat.so
+readonly LOGS=/home/r2k/stc-wl52/logs
+readonly RUN_CT=$FIXTURE/run-ct.sh
+readonly SETPRIV=/usr/bin/setpriv
+readonly BASH=/bin/bash
+readonly RUN_UID=1000
+readonly RUN_GID=1000
+
+usage() {
+    cat <<'EOF'
+usage: stc-wl52-run ct <cycle-time> <duration-seconds> <label>
+
+cycle-time:     1ms 500us 250us 200us 150us 100us 75us 50us 25us
+duration:       60 or 600 seconds
+label:          [a-z0-9-]{1,32}
+
+Runs one open-ended cycle-time sweep step against the fixed DIEWU fixture.
+Fixed paths:
+  launcher  /home/r2k/stc-wl52/bin/stc
+  fixture   /home/r2k/stc-wl52/diewu
+  shim      /home/r2k/stc-wl52/lib/libstc_io_ethercat.so
+  logs      /home/r2k/stc-wl52/logs
+No other command, path, or argument is accepted.
+EOF
+}
+
+die() {
+    printf 'stc-wl52-run: %s\n' "$*" >&2
+    exit 64
+}
+
+if [[ $# -ne 4 ]]; then
+    usage >&2
+    exit 64
+fi
+if [[ $1 != ct ]]; then
+    usage >&2
+    exit 64
+fi
+
+cycle_time=$2
+duration=$3
+label=$4
+
+case "$cycle_time" in
+    1ms|500us|250us|200us|150us|100us|75us|50us|25us) ;;
+    *) die "unsupported cycle time: $cycle_time" ;;
+esac
+
+case "$duration" in
+    60|600) ;;
+    *) die "unsupported duration: $duration (expected 60 or 600)" ;;
+esac
+
+[[ $label =~ ^[a-z0-9-]{1,32}$ ]] || die "invalid label: $label"
+
+[[ -x $STC ]] || die "launcher not found or not executable: $STC"
+[[ -d $FIXTURE ]] || die "fixture directory not found: $FIXTURE"
+[[ -f $FIXTURE/stc.toml ]] || die "fixture manifest not found: $FIXTURE/stc.toml"
+[[ -f $FIXTURE/io/bench.toml ]] || die "fixture profile not found: $FIXTURE/io/bench.toml"
+[[ -f $RUN_CT ]] || die "cycle-time runner not found: $RUN_CT"
+[[ -f $SHIM ]] || die "EtherCAT shim not found: $SHIM"
+[[ -d $LOGS ]] || die "log directory not found: $LOGS"
+[[ -x $SETPRIV ]] || die "setpriv not found: $SETPRIV"
+
+# Drop all privilege before executing user-writable code. The user script
+# runs as r2k, keeps the ethercat group, and retains only CAP_SYS_NICE.
+exec "$SETPRIV" \
+    --reuid="$RUN_UID" \
+    --regid="$RUN_GID" \
+    --init-groups \
+    --no-new-privs \
+    --inh-caps=+sys_nice \
+    --ambient-caps=+sys_nice \
+    --bounding-set=+sys_nice \
+    -- "$BASH" "$RUN_CT" "$cycle_time" "$duration" "$label"

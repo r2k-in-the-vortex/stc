@@ -111,7 +111,30 @@ detail is in
 | The control-disabled control-cost leg estimates its warm-up cycle boundary from the cycle count | The error is negligible over a 10 minute run; the control-enabled legs use fixed status boundaries |
 | The tuned boot profile was not executed in v2.0.0 | It remains a separate future-work scope decision; no tuned result is claimed |
 
-## 8. Coverage (WL-10)
+## 8. EtherCAT I/O (WL-5.2, v2.0.0 work)
+
+Added 2026-11-01. The v1.0.0 boundary in §5 is unchanged: the base 1.0.0 package does not carry
+hardware I/O. WL-5.2 adds the optional Linux EtherCAT backend for v2.0.0. The full evidence is in
+[EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md); the procedure and per-run data
+are in [EtherCAT-Runbook.md](specification/Verification/EtherCAT-Runbook.md) and
+[tests/ethercat/diewu/PHASE6.md](tests/ethercat/diewu/PHASE6.md).
+
+| Limitation | Status / workaround |
+| --- | --- |
+| Hardware-in-the-loop evidence is Linux x86-64 only (`ecat-host`, kernel `6.12.115-ecat-rt`, IgH 1.6.13) | The backend compiles for Linux AArch64 but is not hardware-verified there; no hard-RT claim |
+| HIL uses one DIEWU 16I/16O digital slave at master 0/alias 0/position 0 | Multi-slave configurations are covered by configuration/mapping and mock tests, not hardware |
+| No servo-drive hardware was available | The generic cyclic-PDO and distributed-clock path is implemented and unit-tested; the DIEWU runs free-run, so DC was not exercised on hardware |
+| Fault C (slave-end unplug) was not run separately; it is covered by Fault A (host-end unplug) because a single direct cable has the same link-loss path | Run the separate case if the harness gains an intermediate device; the configured-slave reconnect behavior is recorded through Fault A |
+| Recovery time was not measured, only sampled within the procedure windows; the fault-session counters carry one extra unobserved episode | The behavior and stale-image values are recorded; add a timed recovery measurement if a bound is required. The counter deviation is a manual-sequence record, not a product failure |
+| The master lost-frame counter is cumulative; the phase-6 samples are 18856 → 18856 for the all-points run and 18856 → 24426 for the fault session (delta 5570) | The fault-session delta is frames sent during the link-down/power-off windows. Record `ethercat master` before and after each future run |
+| The optional per-backend `stc-io-metrics/1` stream from the WL-5.2 design is not implemented | Timing evidence uses `stc-rt-metrics/1` plus `ethercat master` boundary samples; a per-backend stream is deferred |
+| The fastest maintainable cycle time is 150 µs on this host; 100 µs fails on host wake jitter (283 skipped periods, wake lateness 53.4–133.3 µs), and 75/50/25 µs were not run | Host- and configuration-specific, not a hard real-time guarantee. Release is the timing evidence; the debug build uses most of a 1 ms budget |
+| Mixed real backends in one run are not HIL-tested in WL-5.2 | The coordinator and per-device `kind` dispatch are tested with EtherCAT plus a mock backend; WL-5.1 Modbus TCP attaches as a second real backend without changing the EtherCAT backend |
+| IgH is an operator-installed host prerequisite and is coupled to the kernel | Pin the kernel/IgH pairing in the runbook and rebuild the modules after a kernel update; the repository does not redistribute kernel modules |
+| The base `stc` package has no IgH dependency; the backend is an optional `stc-io-ethercat` shim loaded with `dlopen` | The shim loads only when an EtherCAT device is configured; the shim source is committed and the library is dynamically linked LGPL userspace |
+| Transparent fault behavior is not a safety function and the status block is not a safety signal | The runtime holds outputs, presents stale inputs, and exposes status; the PLC decides. Provide safety separately as required by law and regulation |
+
+## 9. Coverage (WL-10)
 
 Added 2026-10-31. `stc test --coverage` reports statement coverage for the ST code compiled into
 the test artifacts; the model and formats are in
