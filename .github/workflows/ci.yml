@@ -535,6 +535,10 @@ jobs:
         run: python3 tools/ci/check_verification_registry.py
       - name: Check the fail-closed semantics-conformance placeholder
         run: python3 tools/ci/check_semantics_placeholder.py
+      - name: Run the reference-interpreter reader, case, result, and CLI tests
+        working-directory: lean
+        shell: bash
+        run: lake exe stc-sem-tests
       - name: Regenerate exact-function vectors and check they are committed
         if: hashFiles('lean/VectorCli.lean') != ''
         working-directory: lean

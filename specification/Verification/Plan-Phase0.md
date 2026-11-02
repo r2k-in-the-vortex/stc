@@ -5,7 +5,8 @@ Date: 2026-11-02
 Status: Phase 0 is in progress. P0.0–P0.5 are complete and reviewed; P0.5 was approved on
 2026-11-02 and merged through PR #12 (merge commit `92e113f`). P0.6 is in progress: the
 versioned core-HIR dump format `0.1.0` and `stc hir-dump` are complete (2026-11-01), and the
-reference interpreter, case corpus, and differential harness remain. P0.7 follows. Completion
+strict Lean reader, the `stc-core-case`/`stc-sem-result` `0.1.0` formats, and `lake exe stc-sem`
+are complete (2026-11-01); the differential harness and corpus remain. P0.7 follows. Completion
 records and sign-offs are in §16–§22; `lean/verification-status.toml` is authoritative for
 proved claims.
 Parent: [Verification Program Plan](Plan.md)
@@ -474,6 +475,14 @@ a sound, small semantics, exclude it and record the gap.
 **Deliverables.** HIR dump specification and emitter; `stc-sem`; conformance harness; core
 corpus; committed report.
 
+**Progress (2026-11-01).** The dump, emitter, validator, and `stc hir-dump` are complete and
+frozen at `0.1.0` ([HIR-Dump.md](HIR-Dump.md)). The strict Lean reader, the case descriptor
+`stc-core-case` `0.1.0`, the result `stc-sem-result` `0.1.0`, `lake exe stc-sem`, and the
+`lake exe stc-sem-tests` unit tests are complete ([Semantics-Cases.md](Semantics-Cases.md)). No
+corpus `case.json` is committed; the fail-closed placeholder gate stays green with an empty
+corpus. The differential harness, corpus seeding, CI wiring of the corpus run, and the report
+remain.
+
 **Exit criteria.** The harness runs the full core corpus deterministically; all cases agree or
 have a documented exclusion; the report is committed; a disagreement is filed with a
 reproduction; the harness is part of CI.
@@ -811,9 +820,10 @@ Phase 0 is done when:
 ## 15. Immediate next steps
 
 1. P0.0–P0.5 are complete; their completion records are §16–§22.
-2. Start P0.6: define the versioned HIR dump, implement `lake exe stc-sem` and the
-   `tests/verification/semantics/<case>/case.json` format, build `lake exe
-   semantics-conformance`, seed the core corpus, and document disagreement triage.
+2. Continue P0.6: the versioned dump, `lake exe stc-sem`, and the
+   `tests/verification/semantics/<case>/case.json` format are complete. Build `lake exe
+   semantics-conformance` into the differential harness, seed the core corpus, document
+   disagreement triage, and commit the report.
 3. Run P0.7: complete and review `Semantics.md`, version the semantics, and hand off the
    artifact with its TCB note.
 

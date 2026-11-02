@@ -4,9 +4,12 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-01
 Dump format: `stc-core-hir` version `0.1.0` (frozen by P0.6)
 Semantics version: `1.0-draft`
-Status: P0.6 first milestone. The format, emitter, validator, and CLI command are implemented;
-the Lean reader and the differential harness are later P0.6 work.
-Companion: [Semantics](Semantics.md) · [Phase 0 Implementation Plan](Plan-Phase0.md)
+Status: P0.6. The format, emitter, validator, and CLI command are implemented, and the Lean
+reader consumes it in `lake exe stc-sem`; the differential harness remains later P0.6 work. The
+case descriptor and reference result are specified in
+[Semantics-Cases.md](Semantics-Cases.md).
+Companion: [Semantics](Semantics.md) · [Core Semantics Cases](Semantics-Cases.md) ·
+[Phase 0 Implementation Plan](Plan-Phase0.md)
 
 This document is the normative schema of the core-HIR JSON dump consumed by the reference
 interpreter and the conformance harness. The dump is **V0 differential evidence, not a
@@ -32,7 +35,10 @@ The dump is not:
 
 The emitter is `stc_hir::dump_core_hir` in `crates/stc-hir/src/core_dump.rs`; the validator is
 `stc_hir::verify_core_dump`; the driver command is `stc hir-dump`
-(`crates/stc-driver/src/hir_dump.rs`).
+(`crates/stc-driver/src/hir_dump.rs`). The reference reader is
+`Verification.Semantics.CoreDump.parseCoreDump`, which validates the header, status, features,
+types, places, calls, literals, names, positions, and depth before returning a `CoreUnit`; it
+rejects every construct this document marks rejected.
 
 ## 2. Encoding, identity, and determinism
 
@@ -380,3 +386,4 @@ accepts no input files, and emit mode requires at least one input file.
 | Date | Format | Change |
 | --- | --- | --- |
 | 2026-11-01 | `0.1.0` | P0.6 first milestone: defined and froze the core-HIR dump, implemented the emitter and validator in `stc-hir`, added `stc hir-dump`, and recorded the schema here. Replaces the `0.1-draft` placeholder in Semantics.md §9.2 |
+| 2026-11-01 | `0.1.0` | P0.6 second milestone: added the strict Lean reader and `lake exe stc-sem`, and split the case and result schemas into [Semantics-Cases.md](Semantics-Cases.md). The dump format is unchanged; the differential harness remains |

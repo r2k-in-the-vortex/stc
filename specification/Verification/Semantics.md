@@ -18,8 +18,11 @@ questions were resolved in [Plan-Phase0.md](Plan-Phase0.md) §19.8. P0.4 is comp
 approved 2026-10-31, WL-3): `IRFrag`, `IRContract`, `WellFormed`, and the structural lemmas are
 defined and proved. P0.5 definitions and proofs follow and are reviewed in P0.7. P0.6's first
 milestone is complete (2026-11-01): the canonical core-HIR dump format `0.1.0`, its emitter and
-validator, and `stc hir-dump` are defined and frozen in [HIR-Dump.md](HIR-Dump.md); the reference
-interpreter and differential harness remain. The P0.3
+validator, and `stc hir-dump` are defined and frozen in [HIR-Dump.md](HIR-Dump.md). P0.6's
+second milestone is complete (2026-11-01): the strict Lean dump reader, the `stc-core-case`
+`0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` are implemented
+and specified in [Semantics-Cases.md](Semantics-Cases.md); the differential harness and corpus
+remain. The P0.3
 completion record and review checklist are in §19.12, the drift register in §19, and the P0.4
 scope decisions in §20. This document does not yet make the full Phase 0 soundness claim.
 Charter: [Semantics Charter](Semantics-Charter.md)
@@ -485,6 +488,7 @@ an unknown version or an unmodeled construct is rejected, never interpreted.
 | 2026-10-31 | 1.0-draft | P0.3 (preservation) | Proved `preservation` over every focus form, including the value/statement/resume/returned transitions and the FOR advance path. Fixed three machine bugs found by the proof: the call-argument continuation advanced past the wrong argument, `EXIT` kept the loop body's loop context, and `CONTINUE` on a `FOR` entered the increment in the body's loop context. Initial-state typing and `type_soundness` remain |
 | 2026-10-31 | 1.0-draft | P0.3 (complete) | Proved initial-state typing (`initBody_typed`, `initState_typed`) using `ExprHasType.transport`, a context-agreement lemma over the mutual typing recursor, and `type_soundness`: the initial configuration is typed, every reachable configuration stays typed, and no reachable configuration is stuck. P0.3 is complete; the review was approved 2026-10-31 |
 | 2026-11-01 | 1.0-draft | P0.6 (dump) | Defined and froze dump format `0.1.0` in [HIR-Dump.md](HIR-Dump.md): canonical names and positions, function signatures, globals with GOT keys, the single program, statements, expressions and places, explicit casts, call targets, literal values, spans, and the feature-tag vocabulary for rejection. Implemented the emitter and validator in `crates/stc-hir/src/core_dump.rs`, added `stc hir-dump` with emit/verify modes, and added determinism, versioning, and unmodeled-construct tests. The Lean reader, case corpus, and differential harness remain |
+| 2026-11-01 | 1.0-draft | P0.6 (reference) | Added the strict Lean reader for dump `0.1.0` and defined the `stc-core-case` `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` in [Semantics-Cases.md](Semantics-Cases.md); the reader validates header/version/profile/semantics, status/features, names, positions, callees, arities, literals, and depth, and rejects unmodeled constructs. Added unit tests and temporary-fixture CLI tests (`lake exe stc-sem-tests`); no corpus case is committed while the harness is a fail-closed placeholder. The differential harness and corpus remain |
 
 ## 10. Rust/Lean interface
 
@@ -506,7 +510,13 @@ them with emit and verify modes.
 `lake exe stc-sem` reads a dump and a case descriptor, runs the core evaluator, and writes a
 machine-readable result: values, traps, global snapshot, cycle count, and an optional trace. It
 is a verification tool, not a production interpreter; performance is not a goal. P0.3 provides
-the fuel-based core (`runFuel`/`stcSem` in §4.3); P0.6 adds the dump and case front ends.
+the fuel-based core (`runFuel`/`stcSem` in §4.3); P0.6 adds the strict dump reader
+(`Verification.Semantics.CoreDump`), the case reader (`CoreCase`), the runner and result encoder
+(`Reference`), and the command (`ReferenceCli`). The exact descriptor and result schemas, the
+header/version checks, the comparison observations, and the exit codes are normative in
+[Semantics-Cases.md](Semantics-Cases.md). The command refuses an unknown version, an unmodeled
+or rejected dump, an out-of-schema case, an entry-name mismatch, and a global-count mismatch; it
+never interprets a construct it does not model.
 
 ### 10.3 Conformance harness
 
@@ -528,6 +538,7 @@ exclusion is a Phase 0 exit failure. The triage log is part of `Phase0-Report.md
 
 - [Semantics Charter](Semantics-Charter.md)
 - [Core HIR Dump](HIR-Dump.md)
+- [Core Semantics Cases](Semantics-Cases.md)
 - [Core Syntax Coverage](Core-Coverage.md)
 - [Core IR Coverage](Core-IR-Coverage.md)
 - [Phase 0 Implementation Plan](Plan-Phase0.md)
