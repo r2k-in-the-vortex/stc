@@ -1682,7 +1682,11 @@ def AccessBoundedTerminator (_contract : IRContract) (c : IRState) (f : IRFrame)
         ∃ block, f.fn.block? (if value == 0 then elseTarget else thenTarget) = some block
   | .unreachable => False
 
-/-- The current instruction or terminator is ready to execute. -/
+/-- The current instruction or terminator is ready to execute. `AccessBounded`
+is the source-check premise of `ir_progress`, not a state invariant: the source
+checks discharge it for ordinary accesses, while the character-index path needs
+an explicit `CharIndexBounded` hypothesis (or exclusion from the covered
+fragment) until Q3 is resolved. -/
 def AccessBounded (contract : IRContract) (c : IRState) : Prop :=
   match c.frames with
   | [] => True
@@ -10975,5 +10979,342 @@ theorem irStepStar_wf {contract : IRContract} {c c' : IRState}
   induction h with
   | refl => exact hwf
   | step hstep _ ih => exact ih (irStep_wf hwf hstep)
+
+/-! ## Reachability of well-formed running states
+
+The three soundness theorems are stated over `WFRunning`. The lemmas below
+connect that predicate to the executable entry point: `initState?_wf` makes the
+initial state well formed and running, `irStep_wf` preserves `WFState`, and the
+non-halting step property below shows that a state reachable while the machine
+keeps running also keeps a non-empty stack. -/
+
+/-- A `withHead` update keeps a non-empty stack non-empty. -/
+theorem withHead_frames_ne {s : IRState} {f : IRFrame} (h : s.frames ≠ []) :
+    (s.withHead f).frames ≠ [] := by
+  cases hf : s.frames with
+  | nil => exact absurd hf h
+  | cons g rest => simp [IRState.withHead, hf]
+
+/-- A `withHeadInstrs` update keeps a non-empty stack non-empty. -/
+theorem withHeadInstrs_frames_ne {s : IRState} {instrs : List Instr}
+    (h : s.frames ≠ []) : (s.withHeadInstrs instrs).frames ≠ [] := by
+  cases hf : s.frames with
+  | nil => exact absurd hf h
+  | cons g rest => simp [IRState.withHeadInstrs, hf]
+
+/-- A map over a non-empty list is non-empty. -/
+theorem list_map_ne_nil {α β : Type} {l : List α} {g : α → β} (h : l ≠ []) :
+    l.map g ≠ [] := by
+  cases l with
+  | nil => exact absurd rfl h
+  | cons a rest => simp
+
+/-- A successful stack store preserves a non-empty stack; persistent stores do
+not touch the frame list. -/
+theorem storeValue_frames_ne {s s' : IRState} {addr : IRAddr} {v : IRValue}
+    (h : s.storeValue addr v = some s') (hne : s.frames ≠ []) : s'.frames ≠ [] := by
+  cases addr with
+  | stack frame slot off =>
+      simp only [IRState.storeValue] at h
+      repeat' split at h
+      all_goals (cases h <;> exact list_map_ne_nil hne)
+  | slotEntry slot =>
+      simp only [IRState.storeValue] at h
+      cases h
+  | cell slot =>
+      simp only [IRState.storeValue] at h
+      cases h
+  | root slot off =>
+      simp only [IRState.storeValue] at h
+      unfold IRState.writeStorage at h
+      cases hl : s.lookupStorage (.root slot) with
+      | none => simp [hl] at h
+      | some values =>
+          simp [hl] at h
+          by_cases ho : off < values.length
+          · simp [ho] at h
+            rcases h with rfl
+            exact hne
+          · simp [ho] at h
+  | global name off =>
+      simp only [IRState.storeValue] at h
+      unfold IRState.writeStorage at h
+      cases hl : s.lookupStorage (.global name) with
+      | none => simp [hl] at h
+      | some values =>
+          simp [hl] at h
+          by_cases ho : off < values.length
+          · simp [ho] at h
+            rcases h with rfl
+            exact hne
+          · simp [ho] at h
+  | slotTable =>
+      simp only [IRState.storeValue] at h
+      cases h
+  | function name =>
+      simp only [IRState.storeValue] at h
+      cases h
+  | importCell slot =>
+      simp only [IRState.storeValue] at h
+      cases h
+
+/-- A successful instruction step from a non-empty stack keeps the stack
+non-empty. -/
+theorem stepInstr_frames_ne {s : IRState} {f : IRFrame} {instr : Instr}
+    {rest : List Instr} {c' : IRState}
+    (hne : s.frames ≠ []) (h : stepInstr s f instr rest = .step c') :
+    c'.frames ≠ [] := by
+  cases instr with
+  | alloca dest ty =>
+      simp only [stepInstr] at h
+      cases h
+      exact withHead_frames_ne hne
+  | load dest ty ptr align =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals (cases h <;> exact withHead_frames_ne hne)
+  | store ty value ptr align =>
+      simp only [stepInstr] at h
+      cases hv : evalOperand f value with
+      | none => simp only [hv] at h; cases h
+      | some v =>
+          cases hp : evalOperand f ptr with
+          | none => simp only [hv, hp] at h; cases h
+          | some pv =>
+              cases pv with
+              | int ty0 n => simp only [hv, hp] at h; cases h
+              | ptr addr =>
+                  simp only [hv, hp] at h
+                  by_cases hcond : (v.type? == some ty && stackStoreTypeOK s addr ty)
+                  · simp only [hcond] at h
+                    cases hs : s.storeValue addr v with
+                    | none => simp only [hs] at h; cases h
+                    | some s' =>
+                        simp only [hs] at h
+                        cases h
+                        exact withHeadInstrs_frames_ne (storeValue_frames_ne hs hne)
+                  · simp only [hcond] at h; cases h
+              | pair ty0 a b => simp only [hv, hp] at h; cases h
+              | null => simp only [hv, hp] at h; cases h
+  | gep dest pointee base indices inbounds =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals (cases h <;> exact withHead_frames_ne hne)
+  | binop dest op ty lhs rhs =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals (cases h <;> exact withHead_frames_ne hne)
+  | icmp dest pred ty lhs rhs =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals (cases h <;> exact withHead_frames_ne hne)
+  | select dest ty cond thenValue elseValue =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals (cases h <;> exact withHead_frames_ne hne)
+  | cast dest op value fromTy toTy =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals (cases h <;> exact withHead_frames_ne hne)
+  | phi dest ty incoming =>
+      simp only [stepInstr] at h
+      repeat' split at h
+      all_goals (cases h <;> exact withHead_frames_ne hne)
+  | call dest ret callee args =>
+      simp only [stepInstr, callResult, callFunction] at h
+      repeat' split at h
+      all_goals (cases h <;> (first | exact withHead_frames_ne hne | simp))
+  | callPtr dest ret callee args =>
+      simp only [stepInstr, callFunction, trapOutcome] at h
+      repeat' split at h
+      all_goals (cases h <;> (first | exact withHead_frames_ne hne | simp))
+  | extractValue dest aggregate index ty =>
+      simp only [stepInstr, callResult] at h
+      repeat' split at h
+      all_goals (cases h <;> exact withHead_frames_ne hne)
+
+/-- A successful terminator step either keeps the stack non-empty or halts. -/
+theorem stepTerminator_frames_ne_or_halt {s : IRState} {f : IRFrame} {c' : IRState}
+    (hne : s.frames ≠ []) (h : stepTerminator s f = .step c') :
+    c'.frames ≠ [] ∨ c'.status = .halted := by
+  cases ht : f.terminator with
+  | none => simp only [stepTerminator, ht] at h; cases h
+  | some term =>
+      cases term with
+      | «ret» value =>
+          cases value with
+          | none =>
+              simp only [stepTerminator, ht, irStepRet] at h
+              repeat' split at h
+              all_goals (cases h <;> simp)
+          | some operand =>
+              simp only [stepTerminator, ht, irStepRet] at h
+              repeat' split at h
+              all_goals (cases h <;> simp)
+      | br target =>
+          simp only [stepTerminator, ht, irJump] at h
+          repeat' split at h
+          all_goals (cases h <;> (first | exact Or.inl (withHead_frames_ne hne) |
+            exact Or.inr (by simp)))
+      | condBr cond thenTarget elseTarget =>
+          simp only [stepTerminator, ht, irJump] at h
+          repeat' split at h
+          all_goals (cases h <;> (first | exact Or.inl (withHead_frames_ne hne) |
+            exact Or.inr (by simp)))
+      | unreachable =>
+          simp only [stepTerminator, ht] at h
+          cases h
+
+/-- An `IRStep` can only originate from a running state. -/
+theorem irStep_status_running {c c' : IRState} (h : IRStep c c') :
+    c.status = .running := by
+  unfold IRStep at h
+  unfold irStep at h
+  cases hs : c.status with
+  | halted => simp only [hs] at h; cases h
+  | trapped trap => simp only [hs] at h; cases h
+  | ub => simp only [hs] at h; cases h
+  | running => rfl
+
+/-- A step from a non-empty stack either keeps the stack non-empty or halts. -/
+theorem irStep_frames_ne_or_halt {c c' : IRState} (h : IRStep c c')
+    (hne : c.frames ≠ []) : c'.frames ≠ [] ∨ c'.status = .halted := by
+  unfold IRStep at h
+  unfold irStep at h
+  split at h
+  · cases h
+  · cases h
+  · cases h
+  · split at h
+    · cases h
+      exact Or.inr rfl
+    · split at h
+      · exact stepTerminator_frames_ne_or_halt hne (toOutcome_step h)
+      · exact Or.inl (stepInstr_frames_ne hne (toOutcome_step h))
+
+/-- The non-halting step property: a running step that stays running keeps a
+non-empty stack. -/
+theorem irStep_running_frames_ne {c c' : IRState} (h : IRStep c c')
+    (hne : c.frames ≠ []) (hstatus : c'.status = .running) : c'.frames ≠ [] := by
+  rcases irStep_frames_ne_or_halt h hne with h' | h'
+  · exact h'
+  · rw [h'] at hstatus
+    cases hstatus
+
+/-- `WFRunning` is preserved by every step that leaves the machine running. -/
+theorem irStep_wfRunning {contract : IRContract} {c c' : IRState}
+    (hwf : WFRunning contract c) (hstep : IRStep c c')
+    (hstatus : c'.status = .running) : WFRunning contract c' :=
+  ⟨irStep_wf hwf.1 hstep, hstatus,
+    irStep_running_frames_ne hstep hwf.2.2 hstatus⟩
+
+/-- Every running state reachable from a well-formed running state is
+well formed. -/
+theorem irStepStar_wfRunning {contract : IRContract} {c₀ c : IRState}
+    (hwf : WFRunning contract c₀) (h : IRStepStar c₀ c)
+    (hstatus : c.status = .running) : WFRunning contract c := by
+  induction h with
+  | refl => exact hwf
+  | step hstep hrest ih =>
+      cases hrest with
+      | refl =>
+          exact irStep_wfRunning hwf hstep hstatus
+      | step hstep2 _ =>
+          exact ih (irStep_wfRunning hwf hstep (irStep_status_running hstep2))
+            hstatus
+
+/-- `initState?_wf` composed with the run lift: every running state reachable
+from an `initState?` state is well formed. The host-initialization premises are
+the ones of `initState?_wf`. -/
+theorem initState?_reachable_wfRunning {contract : IRContract} {module : IRFrag}
+    {entry : String} {args : List IRValue} {roots : List (Nat × IRValue)}
+    {functions : List (Nat × String)} {imports : List (Nat × ImportKind)}
+    {globals : List (String × IRValue)} {storage : List (StoreId × List IRValue)}
+    {functionSignatures : List (Nat × Signature)} {cycles : Nat} {c₀ c : IRState}
+    (hprog : WFProgram contract module)
+    (hinit : initState? module entry args roots functions imports globals storage
+      functionSignatures cycles = some c₀)
+    (hargsTyped : ∀ fn, module.function? entry = some fn → ArgsTyped fn args)
+    (hargsLive : ∀ fn, module.function? entry = some fn → HostArgsLive c₀ fn args)
+    (hslots : ∀ f ∈ c₀.frames, SlotsBase c₀ f)
+    (hslotsStorage : SlotsStorage c₀)
+    (hstorage : StorageValuesLive c₀)
+    (hdomain : StorageDomain c₀)
+    (hnoSlotsArgs : ∀ fn, module.function? entry = some fn → ∀ p a,
+      (p, a) ∈ fn.params.zip args → ∀ g off, a = .ptr (.global g off) →
+        g ∉ SlotsGlobals module)
+    (hnoSlotsStorage : ∀ id off v g off', c₀.lookupStorageAt id off = some v →
+      v = .ptr (.global g off') → g ∉ SlotsGlobals module)
+    (hbindings : FunctionBindingsTyped c₀)
+    (hcallTargets : CallTargetsTyped c₀)
+    (hpayloads : PayloadsTyped c₀)
+    (hreach : IRStepStar c₀ c) (hrunning : c.status = .running) :
+    WFRunning contract c :=
+  irStepStar_wfRunning
+    (initState?_wf hprog hinit hargsTyped hargsLive hslots hslotsStorage hstorage
+      hdomain hnoSlotsArgs hnoSlotsStorage hbindings hcallTargets hpayloads)
+    hreach hrunning
+
+/-- Reachable-state form of P0-T16 (`ir_progress`): every state reachable from
+a well-formed running state while the machine is still running steps or traps.
+
+`AccessBounded` is the source-check premise, not a state invariant. The source
+checks discharge it for ordinary accesses; the character-index path needs an
+explicit `CharIndexBounded` hypothesis (or exclusion from the covered fragment)
+until Q3 is resolved (`Plan-Phase0` §22.4). -/
+theorem ir_progress_reachable {contract : IRContract} {c₀ c : IRState}
+    (hwf₀ : WFRunning contract c₀) (hreach : IRStepStar c₀ c)
+    (hrunning : c.status = .running) (haccess : AccessBounded contract c) :
+    (∃ c', irStep c = .step c') ∨
+      (∃ trap c', irStep c = .trapped trap c') :=
+  ir_progress (irStepStar_wfRunning hwf₀ hreach hrunning) haccess
+
+/-- Reachable-state form of P0-T17 (`ir_memory_safe`): every successful load or
+store in a running state reachable from a well-formed running state targets
+valid stack, GOT, or persistent storage of the right kind. Q3 does not weaken
+this statement: the character model is layout-only, so access validity is
+unaffected. -/
+theorem ir_memory_safe_reachable {contract : IRContract} {c₀ c : IRState}
+    (hwf₀ : WFRunning contract c₀) (hreach : IRStepStar c₀ c)
+    (hrunning : c.status = .running) :
+    (∀ addr ty v, StepLoad c addr ty v → AccessValid contract c addr false ty) ∧
+    (∀ addr ty v c', StepStore c addr ty v c' →
+      AccessValid contract c addr true ty) :=
+  ir_memory_safe (irStepStar_wfRunning hwf₀ hreach hrunning)
+
+/-- Reachable-state form of P0-T22 (`ir_no_ub`): a running state reachable from
+a well-formed running state never reaches the undefined state. Q3 does not
+weaken this statement: an out-of-range character access is a defined fault, not
+undefined behavior. -/
+theorem ir_no_ub_reachable {contract : IRContract} {c₀ c c' : IRState}
+    (hwf₀ : WFRunning contract c₀) (hreach : IRStepStar c₀ c)
+    (hrunning : c.status = .running) : irStep c ≠ .ub c' :=
+  ir_no_ub (irStepStar_wfRunning hwf₀ hreach hrunning)
+
+/-- A halting executor run from a well-formed running state ends in a
+well-formed state. -/
+theorem irExecRec_halt_wf {contract : IRContract} {c r : IRState} {fuel : Nat}
+    (hwf : WFRunning contract c) (hrun : irExecRec fuel c = .halt r) :
+    WFState contract r ∧ irStep r = .halt r := by
+  rcases irExecRec_halt_sound hrun with ⟨hstar, hhalt⟩
+  exact ⟨irStepStar_wf hwf.1 hstar, hhalt⟩
+
+/-- Executable-entry lift of the invariant: a halting `irRun` from a
+well-formed initial state ends in a well-formed state and a halting step. -/
+theorem irRun_halt_wf {contract : IRContract} {fuel : Nat} {module : IRFrag}
+    {entry : String} {args : List IRValue} {roots : List (Nat × IRValue)}
+    {functions : List (Nat × String)} {imports : List (Nat × ImportKind)}
+    {globals : List (String × IRValue)} {storage : List (StoreId × List IRValue)}
+    {functionSignatures : List (Nat × Signature)} {cycles : Nat} {c₀ r : IRState}
+    (hinit : IRSem module entry args roots functions imports globals storage
+      functionSignatures cycles = some c₀)
+    (hwf₀ : WFRunning contract c₀)
+    (hrun : irRun fuel module entry args roots functions imports globals storage
+      functionSignatures cycles = some (.halt r)) :
+    WFState contract r ∧ irStep r = .halt r := by
+  unfold irRun at hrun
+  rw [hinit] at hrun
+  simp only [Option.map, Option.some.injEq] at hrun
+  exact irExecRec_halt_wf hwf₀ hrun
 
 end Stc.Codegen
