@@ -1431,6 +1431,184 @@ fn print_help() {
 mod tests {
     use super::*;
 
+    fn parse_ok(args: &[&str]) -> Invocation {
+        let args = args
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        parse(&args)
+            .unwrap_or_else(|error| panic!("parse failed for {args:?}: {error}"))
+            .expect("not a help/version invocation")
+    }
+
+    fn parse_error(args: &[&str]) -> String {
+        let args = args
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        match parse(&args) {
+            Ok(_) => panic!("expected {args:?} to fail"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn command_and_option_combinations_are_validated() {
+        let cases: &[(&[&str], &str)] = &[
+            (&[], "missing command"),
+            (&["bogus"], "unknown command"),
+            (&["online"], "needs"),
+            (&["online", "bogus"], "unknown online"),
+            (&["check", "--ast"], "--ast"),
+            (&["check", "--watch"], "--watch"),
+            (&["run", "--watch-timeout", "1s"], "watch-timeout"),
+            (&["run", "--watch", "--cold"], "cannot be combined"),
+            (&["check", "--dry-run"], "dry-run"),
+            (&["check", "--output", "x"], "--output"),
+            (&["check", "--verify", "x"], "--verify"),
+            (
+                &["hir-dump", "--output", "x", "--verify", "y"],
+                "mutually exclusive",
+            ),
+            (&["hir-dump", "--verify", "x", "a.st"], "does not accept"),
+            (&["hir-dump"], "at least one input"),
+            (&["online", "download", "--baseline", "x"], "baseline"),
+            (&["online", "diff", "--out", "x"], "--out"),
+            (&["online", "diff", "--binary", "x"], "--binary"),
+            (&["check", "--host", "h"], "--host"),
+            (&["check", "--nonce", "n"], "--nonce"),
+            (&["check", "--cycles", "1"], "only valid with `stc run`"),
+            (&["check", "--name", "x"], "build options are only valid"),
+            (&["check", "--target", "x"], "build options are only valid"),
+            (&["fmt", "--debug"], "--debug"),
+            (&["fmt", "--release"], "--debug"),
+            (&["test", "--name", "x"], "not valid"),
+            (&["test", "--emit", "ir"], "not valid"),
+            (&["test", "--got-manifest", "x"], "never uses a baseline"),
+            (&["test", "--cold"], "never uses a baseline"),
+            (&["test", "--rename", "a=b"], "never uses a baseline"),
+            (
+                &["test", "--allow-untracked-removal"],
+                "never uses a baseline",
+            ),
+            (&["run", "--name", "x"], "--name"),
+            (&["run", "--emit", "ir"], "--emit"),
+            (&["debug", "--name", "x"], "--name"),
+            (&["build", "--io", "file"], "--io"),
+            (&["build", "--io-file", "f"], "--io"),
+            (&["check", "--out-dir", "x"], "--out-dir"),
+            (&["debug", "--message-format", "short"], "supports"),
+            (&["debug", "--debug-server"], "only valid with `stc run`"),
+            (
+                &["debug", "--attach", "x", "--cycles", "1"],
+                "cannot be combined",
+            ),
+            (
+                &["run", "--debug-endpoint", "x"],
+                "require `stc run --debug-server`",
+            ),
+            (
+                &["run", "--allow-write"],
+                "require `stc run --debug-server`",
+            ),
+            (
+                &["run", "--session-timeout", "1s"],
+                "require `stc run --debug-server`",
+            ),
+            (
+                &["run", "--debug-protocol", "pipe"],
+                "require `stc run --debug-server`",
+            ),
+            (
+                &["check", "--break", "a.st:1"],
+                "only valid with `stc debug`",
+            ),
+            (&["check", "--attach", "x"], "only valid with `stc debug`"),
+            (
+                &["check", "--debug-endpoint", "x"],
+                "only valid with `stc run --debug-server`",
+            ),
+            (
+                &["check", "--allow-force"],
+                "only valid with `stc run --debug-server`",
+            ),
+            (&["check", "--batch", "x"], "only valid with `stc debug`"),
+            (&["run", "--attach", "x"], "only valid with `stc debug`"),
+            (&["run", "--break", "a.st:1"], "only valid with `stc debug`"),
+            (
+                &["parse", "--message-format", "bogus"],
+                "unsupported message format",
+            ),
+            (&["build", "--emit", "bogus"], "unknown emit kind"),
+            (&["build", "--emit", ""], "at least one artifact"),
+            (&["run", "--cycles", "abc"], "cycle count"),
+            (&["run", "--cycle-time", "1x"], "invalid cycle time"),
+            (
+                &["debug", "--session-timeout", "bad"],
+                "invalid session timeout",
+            ),
+            (&["debug", "--session-timeout", "0s"], "positive"),
+            (&["debug", "--session-timeout", "25h"], "at most 24"),
+            (&["debug", "--break", "a.st"], "--break"),
+            (&["debug", "--break", ":1"], "--break"),
+        ];
+        for (args, expected) in cases {
+            let error = parse_error(args);
+            assert!(
+                error.contains(expected),
+                "{args:?}: expected `{expected}` in `{error}`"
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_parses_and_has_a_name() {
+        let invocations = [
+            parse_ok(&["parse", "a.st"]),
+            parse_ok(&["check"]),
+            parse_ok(&["build"]),
+            parse_ok(&["new", "proj"]),
+            parse_ok(&["run"]),
+            parse_ok(&["debug"]),
+            parse_ok(&["test"]),
+            parse_ok(&["fmt"]),
+            parse_ok(&["clean"]),
+            parse_ok(&["metadata"]),
+            parse_ok(&["compliance"]),
+            parse_ok(&["rename", "old", "new"]),
+            parse_ok(&["hir-dump", "a.st"]),
+            parse_ok(&["online", "download"]),
+            parse_ok(&["online", "diff", "candidate.json"]),
+        ];
+        for invocation in invocations {
+            let name = command_name(invocation.command);
+            assert!(!name.is_empty());
+        }
+    }
+
+    #[test]
+    fn break_specs_and_durations_are_parsed() {
+        assert_eq!(
+            parse_break_spec("src/main.st:12").expect("line only"),
+            ("src/main.st".to_owned(), 12, 0)
+        );
+        assert_eq!(
+            parse_break_spec("src/main.st:12:4").expect("line and column"),
+            ("src/main.st".to_owned(), 12, 4)
+        );
+        assert!(parse_break_spec(":12").is_err());
+        assert!(parse_break_spec("a.st:0x10").is_err());
+        assert_eq!(
+            parse_break_spec("a.st:1:2:3").expect("extra colon belongs to the file"),
+            ("a.st:1".to_owned(), 2, 3)
+        );
+        assert_eq!(parse_debug_timeout("1s").expect("seconds"), 1_000_000_000);
+        assert!(parse_debug_timeout("nope").is_err());
+        assert!(parse_debug_timeout("0s").is_err());
+        assert!(parse_debug_timeout("24h").is_ok());
+        assert!(parse_debug_timeout("25h").is_err());
+    }
+
     fn invocation(args: &[&str]) -> Invocation {
         let args = args
             .iter()

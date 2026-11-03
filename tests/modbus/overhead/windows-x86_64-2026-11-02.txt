@@ -1,0 +1,96 @@
+WL-5.1 Modbus TCP overhead evidence - raw runs
+===============================================
+
+Date: 2026-11-02
+Host: Dell Precision 7680, 13th Gen Intel Core i7-13850HX (20 cores, 28 logical
+      processors), 16 GiB RAM, Windows 11 Pro 10.0.26300, x86_64
+Toolchain: rustc 1.99.1 (58cf8f9c3 2026-10-13), cargo 1.99.1
+Branch: WL-5.1
+Harness: crates/stc-runtime/tests/modbus_overhead.rs
+Build: release, #[ignore] test run explicitly
+
+Command:
+
+  cargo test -p stc-runtime --release --test modbus_overhead -- --ignored --nocapture
+
+Configuration:
+  one modbus-tcp device, bind 127.0.0.1:0, unit 1, max-connections 16,
+  idle-timeout 30 s, device word-order low-first
+  56 bound channels across coil, discrete-input, holding-register, and
+  input-register tables; widths 1, 16, 32, and 64 bits
+  process image: 48 bytes inputs, 64 bytes outputs
+  iterations per client count: 200000 latch/publish pairs
+  client mix per connection: FC1 coils @1024 qty 8, FC3 holding @1000 qty 8,
+  FC4 input registers @0 qty 8, FC16 holding @0 qty 4 (round robin)
+
+Method:
+  The test constructs ModbusTcpBackend directly through the public
+  DeviceBackend trait, runs its cold_start, and then measures the two
+  cycle-boundary calls (latch_inputs and publish_outputs) in a tight loop.
+  Client threads connect over loopback and issue the request mix while the
+  main thread records per-call nanosecond samples. The harness also reads
+  process CPU time with GetProcessTimes on Windows
+  (clock_gettime(CLOCK_PROCESS_CPUTIME_ID) on Linux). No coordinator or
+  scan engine is involved, so "cycle_mean" is the latch+publish seam cost
+  only, not a scan period. Results are host-specific and are not a
+  real-time or worst-case claim.
+
+Columns:
+  clients           connected client threads
+  latch_p50_us      DeviceBackend::latch_inputs p50, microseconds
+  latch_p99_us      latch p99
+  latch_max_us      latch max
+  publish_p50_us    DeviceBackend::publish_outputs p50
+  publish_p99_us    publish p99
+  publish_max_us    publish max
+  cycle_mean_us     mean of latch+publish per iteration
+  rtt_p50_us        client request round-trip p50 (0 for zero clients)
+  rtt_p99_us        request round-trip p99
+  rtt_max_us        request round-trip max
+  requests_per_s    completed requests per wall second across clients
+  process_cpu_s     process CPU time consumed during the whole row
+  cpu_percent       process CPU time / wall time for the row
+
+Run 1
+-----
+modbus-overhead: host=windows arch=x86_64 release=true iterations=200000 channels=56 inputs=48B outputs=64B bind=127.0.0.1:49946
+modbus-overhead: columns: clients latch_p50_us latch_p99_us latch_max_us publish_p50_us publish_p99_us publish_max_us cycle_mean_us rtt_p50_us rtt_p99_us rtt_max_us requests_per_s process_cpu_s cpu_percent
+modbus-overhead: 0 1.800 1.900 23.400 2.900 3.100 71.100 4.706 0.000 0.000 0.000 0 0.953 100.1
+modbus-overhead: 1 1.900 3.200 124.000 2.900 4.200 225.500 4.975 22.400 53.900 310.600 41481 2.297 228.2
+modbus-overhead: 4 2.000 6.500 147.900 3.200 8.000 151.700 6.015 25.500 75.500 1521.500 136098 7.719 635.3
+modbus-overhead: 8 2.600 46.200 432.700 3.900 50.200 357.500 13.262 36.500 112.300 3844.000 182979 27.719 1038.5
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.90s
+
+Run 2
+-----
+modbus-overhead: host=windows arch=x86_64 release=true iterations=200000 channels=56 inputs=48B outputs=64B bind=127.0.0.1:49961
+modbus-overhead: columns: clients latch_p50_us latch_p99_us latch_max_us publish_p50_us publish_p99_us publish_max_us cycle_mean_us rtt_p50_us rtt_p99_us rtt_max_us requests_per_s process_cpu_s cpu_percent
+modbus-overhead: 0 2.500 3.200 139.300 4.100 5.400 131.700 6.397 0.000 0.000 0.000 0 1.297 100.2
+modbus-overhead: 1 2.600 4.400 26.800 4.200 6.300 154.700 7.092 31.700 66.200 343.700 29715 3.234 225.5
+modbus-overhead: 4 2.800 9.100 166.900 4.400 9.800 239.000 8.284 36.000 104.200 892.700 97868 10.578 632.0
+modbus-overhead: 8 3.600 62.800 332.000 5.200 67.700 376.800 17.242 50.200 150.900 3910.300 132858 36.703 1057.4
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.95s
+
+Run 3
+-----
+modbus-overhead: host=windows arch=x86_64 release=true iterations=200000 channels=56 inputs=48B outputs=64B bind=127.0.0.1:56543
+modbus-overhead: columns: clients latch_p50_us latch_p99_us latch_max_us publish_p50_us publish_p99_us publish_max_us cycle_mean_us rtt_p50_us rtt_p99_us rtt_max_us requests_per_s process_cpu_s cpu_percent
+modbus-overhead: 0 2.500 2.700 46.500 4.000 4.300 170.200 6.624 0.000 0.000 0.000 0 1.328 99.1
+modbus-overhead: 1 2.600 4.300 121.400 4.200 5.800 196.300 7.012 31.500 67.500 364.100 29878 3.266 230.2
+modbus-overhead: 4 2.200 6.500 166.600 3.200 8.000 250.100 6.284 26.100 82.700 718.700 128664 8.281 652.2
+modbus-overhead: 8 3.100 51.500 447.600 4.500 56.300 1344.600 14.460 41.500 131.000 5458.500 162454 31.344 1076.6
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.03s
+
+Interpretation
+--------------
+The seam cost stays in the low microseconds at p50 for every client count.
+The p99 and max columns show scheduler and lock-contention outliers under
+loopback load, especially at eight clients; they are not a cycle-time
+guarantee. Request throughput is bounded by the synthetic per-connection
+round-robin loop and the loopback stack, not by the cycle thread. CPU
+percent is process-wide and includes every client and server thread.
+
+No Linux host was available for this harness on 2026-11-02: the Windows
+workstation was the only accessible machine, the WSL distribution was not
+running, and ecat-host was not reachable by SSH or DNS from it. The
+functional cross-host evidence is the CI matrix, not this timing file.

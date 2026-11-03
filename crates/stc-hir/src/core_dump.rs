@@ -2625,12 +2625,14 @@ fn check_stmt(value: &Value, scope: Scope, what: &str, depth: u32) -> Result<(),
         "call" => {
             let call = field(object, "call")?;
             check_expr(call, scope, &format!("{what}.call"), depth + 1)?;
-            if call
+            let call_kind = call
                 .as_object()
                 .and_then(|call| call.get("kind"))
-                .and_then(Value::as_str)
-                != Some("call")
-            {
+                .and_then(Value::as_str);
+            // An out-of-core invocation (for example a function-block call
+            // statement) is represented as `unsupported` rather than a `call`
+            // expression; both are valid call statements.
+            if !matches!(call_kind, Some("call" | "unsupported")) {
                 return Err(format!("{what}.call must be a call expression"));
             }
             check_span(field(object, "span")?, &format!("{what}.span"))

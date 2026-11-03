@@ -41,6 +41,7 @@ VAR_GLOBAL
   G_BOOL : BOOL;
   G_ARRAY : ARRAY[1..3] OF DINT;
   G_BIG : ARRAY[1..1024] OF DINT;
+  G_STRING : STRING[8];
   G_POINT : Point;
 END_VAR
 
@@ -2422,4 +2423,240 @@ fn capabilities_cover_release_test_and_hook_free_builds() {
         }
         host.stop_debug_server();
     }
+}
+
+#[test]
+fn protected_watches_and_sliced_strings_are_audited_and_validated() {
+    let Some(mut setup) = Setup::new("protected-watch", false, false, Duration::ZERO) else {
+        return;
+    };
+    put(
+        &mut setup.host,
+        &setup.artifacts,
+        "G_RETAINED",
+        &11_i32.to_le_bytes(),
+    );
+    let mut string = vec![0_u8; 12];
+    string[..4].copy_from_slice(&3_i32.to_le_bytes());
+    string[4..7].copy_from_slice(b"hey");
+    put(&mut setup.host, &setup.artifacts, "G_STRING", &string);
+    let mut client = setup.client();
+    let _ = start_session(&mut client, &["observe"]);
+
+    let full = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "var.read",
+        obj([("target", target_path("G_STRING"))]),
+    )
+    .expect("string read");
+    let value = field(&full, "value");
+    assert_eq!(text(value, "type"), "STRING[8]");
+    assert_eq!(number(field(value, "value"), "length"), 3);
+
+    let sliced = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "var.read",
+        obj([
+            ("target", target_path("G_STRING")),
+            (
+                "range",
+                obj([("start", Json::unsigned(1)), ("count", Json::unsigned(2))]),
+            ),
+        ]),
+    )
+    .expect("string slice");
+    let units = field(field(field(&sliced, "value"), "value"), "units")
+        .as_array()
+        .expect("units");
+    assert_eq!(units.len(), 2);
+    assert_eq!(units[0].as_number(), Some(101));
+    assert_eq!(units[1].as_number(), Some(121));
+
+    let beyond = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "var.read",
+        obj([
+            ("target", target_path("G_STRING")),
+            (
+                "range",
+                obj([("start", Json::unsigned(0)), ("count", Json::unsigned(9))]),
+            ),
+        ]),
+    )
+    .expect_err("range beyond the string");
+    assert_eq!(beyond.code.as_deref(), Some(codes::DEBUG_TYPE));
+
+    let overflow = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "var.read",
+        obj([
+            ("target", target_path("G_STRING")),
+            (
+                "range",
+                obj([
+                    ("start", Json::unsigned(u64::MAX)),
+                    ("count", Json::unsigned(2)),
+                ]),
+            ),
+        ]),
+    )
+    .expect_err("overflowing range");
+    assert_eq!(overflow.code.as_deref(), Some(codes::DEBUG_REQUEST));
+
+    let got = root(&setup.artifacts, "G_DINT").got_id.to_hex();
+    let by_id = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "var.read",
+        obj([(
+            "target",
+            obj([
+                ("kind", Json::string("got_id")),
+                ("got_id", Json::string(got)),
+            ]),
+        )]),
+    )
+    .expect("got_id read");
+    assert_eq!(text(field(&by_id, "value"), "type"), setup.dint_type());
+
+    let added = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "watch.add",
+        obj([
+            ("targets", Json::Array(vec![target_path("G_RETAINED")])),
+            ("interval_ms", Json::unsigned(50)),
+        ]),
+    )
+    .expect("protected watch");
+    let watch_id = number(&added, "watch_id");
+    let _ = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "watch.remove",
+        obj([("watch_id", Json::unsigned(watch_id))]),
+    )
+    .expect("remove protected watch");
+    let audit = setup.audit();
+    let protected = audit
+        .iter()
+        .filter(|event| event.render_compact().contains("read-protected"))
+        .count();
+    assert!(protected >= 2, "{audit:#?}");
+    let _ = stop_session(&mut setup.host, &mut client);
+    for target in [
+        obj([
+            ("kind", Json::string("got_id")),
+            ("got_id", Json::string("0xZZ")),
+        ]),
+        obj([
+            ("kind", Json::string("got_id")),
+            ("got_id", Json::string("0x00000000000000000000000000000000")),
+            ("extra", Json::Null),
+        ]),
+        obj([("kind", Json::string("bogus"))]),
+    ] {
+        let _ = call_ok_pumped(
+            &mut setup.host,
+            &mut client,
+            "var.read",
+            obj([("target", target)]),
+        )
+        .expect_err("malformed target");
+    }
+
+    setup.host.stop_debug_server();
+}
+
+#[test]
+fn session_start_parameters_and_frame_encodings_are_validated() {
+    let Some(mut setup) = Setup::new("session-start-validation", false, false, Duration::ZERO)
+    else {
+        return;
+    };
+    let token = setup.endpoint_file().token;
+    let scopes = || Json::Array(vec![Json::string("observe")]);
+    let cases: Vec<Json> = vec![
+        obj([("scopes", scopes()), ("extra", Json::Bool(true))]),
+        obj([]),
+        obj([("scopes", Json::Array(vec![Json::unsigned(1)]))]),
+        obj([("scopes", Json::Array(vec![Json::string("bogus")]))]),
+        obj([(
+            "scopes",
+            Json::Array(vec![Json::string("observe"), Json::string("observe")]),
+        )]),
+        obj([("scopes", scopes()), ("client", Json::unsigned(5))]),
+        obj([
+            ("scopes", scopes()),
+            (
+                "client",
+                obj([
+                    ("name", Json::string("stc-debug-test")),
+                    ("extra", Json::Bool(true)),
+                ]),
+            ),
+        ]),
+        obj([
+            ("scopes", scopes()),
+            ("client", obj([("name", Json::unsigned(5))])),
+        ]),
+    ];
+    for params in cases {
+        let mut client = setup.client();
+        let response = send_frame(&mut client, 1, &token, "session.start", params);
+        assert_eq!(response_code(&response), codes::DEBUG_REQUEST);
+    }
+
+    // Raw frame encodings: non-UTF-8, a non-object, and a missing protocol.
+    let mut client = setup.client();
+    client
+        .write_frame(&[0xFF, b'\n'])
+        .expect("write non-UTF-8 frame");
+    let response = client
+        .read_message()
+        .expect("read response")
+        .expect("response before close");
+    assert_eq!(response_code(&response), codes::DEBUG_REQUEST);
+    let mut client = setup.client();
+    let response = send_text(&mut client, "[1]");
+    assert_eq!(response_code(&response), codes::DEBUG_REQUEST);
+    let mut client = setup.client();
+    let missing_protocol = obj([
+        ("kind", Json::string("request")),
+        ("id", Json::unsigned(1)),
+        ("token", Json::string(token.clone())),
+        ("op", Json::string("session.start")),
+        ("params", session_start_params(&["observe"])),
+    ]);
+    let response = send_text(&mut client, &missing_protocol.render_compact());
+    assert_eq!(response_code(&response), codes::DEBUG_REQUEST);
+
+    // A successful session blocks a second session until it stops.
+    let mut first = setup.client();
+    let response = send_frame(
+        &mut first,
+        1,
+        &token,
+        "session.start",
+        session_start_params(&["observe"]),
+    );
+    assert_eq!(text(&response, "status"), "ok");
+    let mut second = setup.client();
+    let response = send_frame(
+        &mut second,
+        1,
+        &token,
+        "session.start",
+        session_start_params(&["observe"]),
+    );
+    assert_eq!(response_code(&response), codes::DEBUG_SESSION);
+    let response = send_frame(&mut first, 2, &token, "session.stop", obj([]));
+    assert!(boolean(response_result(&response), "ended"));
+    let messages = drain_until_eof(&mut setup.host, &mut first);
+    assert_eq!(session_ended(&find_session_ended(&messages)).0, "client");
+    setup.host.stop_debug_server();
 }
