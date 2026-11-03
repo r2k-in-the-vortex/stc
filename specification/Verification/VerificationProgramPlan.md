@@ -435,7 +435,9 @@ kernel uses a filtered Aeneas/Charon translation (derived/helper bodies opaque o
 key normalization uses a proved Lean checker/contract, not Aeneas; the `stc-got` wire codec uses
 a proved Lean checker, with the successful Aeneas translation retained as fallback evidence. The
 Aeneas/Mathlib proof environment is to be built and its cost measured. No claim is raised above
-V0; these choices refine D-V1 for Phase 1.
+V0; these choices refine D-V1 for Phase 1. Bridge-toolchain reproducibility is enforced by a
+separate manual/nightly drift workflow; fast CI remains free of Aeneas/Mathlib (owner decision
+2026-11-03).
 
 **Exit criteria.** Bridge spike report exists; D-V1 through D-V10 are resolved; the Phase 0
 semantics is the reference for the bridge; the registry, no-sorry check, vector-regeneration

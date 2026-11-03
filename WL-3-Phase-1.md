@@ -152,12 +152,13 @@ it with the bridge toolchain/translation boundary.
 | D-V6 subset | Approved: scalar types, expressions, assignments, control flow, functions, programs, GOT globals; no OOP, references, strings, or aggregates. |
 | Claim level | No new claims: all Phase 1 bridge/tooling work stays V0; Phase 0's S-level semantics remains the only reviewed claim. |
 | Aeneas/Mathlib proof environment | Approved: prune rebuildable build artifacts and build the Aeneas Lean backend plus Mathlib v4.35.0 on the Ubuntu host to measure compile/proof cost. |
+| Bridge-toolchain CI | Resolved 2026-11-03: fast CI stays free of Aeneas/Mathlib; add a separate manual/nightly drift workflow that installs the pinned toolchain and checks regeneration.
 | Exact kernel bridge | Aeneas/Charon on the filtered pure exact kernel; derived/helper bodies opaque or filtered; compile/prove against `Stc.Exact`. |
 | Keys bridge | Proved Lean key-normalization contract/checker; do not use Aeneas for the string/iterator-heavy keys module. |
 | Codec bridge | Proved Lean wire-format checker as primary; the successful Aeneas translation is fallback evidence, not the chosen bridge. |
 
-Remaining open gates: the bridge choice per target class (after M1–M3), CI adoption of the bridge
-toolchain (after spike evidence), and Phase 1 report acceptance/retirement (after M7).
+Remaining open gate: Phase 1 report acceptance and working-plan retirement (after M7). The bridge
+choice and bridge-toolchain CI decisions are resolved above.
 
 ## 5. Work breakdown
 
@@ -244,7 +245,7 @@ untracked credentials.
 
 | Gate | Status |
 | --- | --- |
-| Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; Aeneas/Mathlib proof environment build approved 2026-11-02; exact pins and source hashes recorded 2026-11-03 in `lean/bridge-toolchain.toml`; CI adoption remains open until spike evidence review (M6). |
+| Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; Aeneas/Mathlib proof environment built 2026-11-02; exact pins and source hashes recorded 2026-11-03 in `lean/bridge-toolchain.toml`; CI adoption resolved 2026-11-03 as a separate manual/nightly drift workflow, with fast CI toolchain-free. |
 | Bridge choice per target class | Resolved 2026-11-02: exact = filtered Aeneas kernel; keys = proved checker/contract; codec = proved Lean checker. Any change requires a new owner review. |
 | Bridge architecture and proof-engineering policy | Recorded 2026-11-03 in §12; no new owner decision required; no claim change. |
 | Full emitted-IR fragment boundary / versioned format | Boundary freeze approved 2026-11-02 and recorded 2026-11-03 in `specification/Verification/Core-IR-Boundary.md` (boundary version 1); full Lean extension is Phase 5; any versioned-format change still requires approval. |
@@ -573,4 +574,4 @@ module, toolchain pin, or claim changed.
 | M5 IR boundary and D-V6 subset | Complete 2026-11-03 — full production-module boundary and D-V6 subset frozen in `Core-IR-Boundary.md`; coverage tables, program plan, and `check_docs.py` updated; no Lean-side slice and no claim change |
 | M6 CI and registry | Not started |
 | M7 report and retirement | Not started |
-| Owner decision gates | Toolchain install, IR boundary, D-V6, and no-new-claims resolved 2026-11-02; boundary and D-V6 recorded 2026-11-03; bridge choice, CI adoption, and report acceptance open |
+| Owner decision gates | Toolchain install, IR boundary, D-V6, no-new-claims, bridge choices, and bridge-toolchain CI resolved; Phase 1 report acceptance open |
