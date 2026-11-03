@@ -58,9 +58,20 @@ running.
    stc run --cycles 10
    ```
 
-6. Ctrl-C stops the watch. The store under `target/stc/runtime` is preserved by
-   `stc clean`; retained state lives in `state/` by this project's policy.
+6. Ctrl-C stops the watch (exit 130); closing standard input (Ctrl-D/Ctrl-Z,
+   `/dev/null`, or a closed pipe) also stops it gracefully and exits 0. The
+   store under `target/stc/runtime` is preserved by `stc clean`; retained
+   state lives in `state/` by this project's policy.
 
 Debug and online change do not mix: every swap ends a debug session and clears
 forces and breakpoints. Reconnect with `stc debug` after the new generation is
 active.
+
+The local VS Code extension drives this same workflow without a second
+implementation: **stc: Start Online Change** runs the watch as an
+extension-owned child with a private per-session debug endpoint, shows the
+active generation/build in the status bar, attaches the debugger on request,
+and surfaces the `STC-E-DEBUG-019` swap teardown. See
+[`editors/vscode/README.md`](../../editors/vscode/README.md) and
+[`IDE-Integration.md`](../../specification/Architecture/IDE-Integration.md)
+§4.7. Online change is a deployment convenience, not a safety function.

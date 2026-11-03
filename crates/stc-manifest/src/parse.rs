@@ -1290,13 +1290,7 @@ impl Parser {
             && let Some(timeout) =
                 self.parse_duration_setting(value, "STC-E-PROJECT-010", "session-timeout")
         {
-            if timeout.as_nanos() == 0 {
-                self.error(
-                    "STC-E-PROJECT-010",
-                    "invalid `session-timeout` 0ns; expected a positive duration",
-                    self.item_span(value),
-                );
-            } else if timeout.as_nanos() > MAX_DEBUG_SESSION_TIMEOUT_NS {
+            if timeout.as_nanos() > MAX_DEBUG_SESSION_TIMEOUT_NS {
                 self.error(
                     "STC-E-PROJECT-010",
                     "`session-timeout` must not exceed 24 hours",
@@ -2170,7 +2164,6 @@ sources = [\"src/**/*.st\"]\n";
             format!("{BASE}[debug]\nprotocol = \"bogus\"\n"),
             format!("{BASE}[debug]\nforce-sessions-end-on-swap = 1\n"),
             format!("{BASE}[debug]\nsession-timeout = \"bogus\"\n"),
-            format!("{BASE}[debug]\nsession-timeout = \"0s\"\n"),
             format!("{BASE}[debug]\nsession-timeout = \"25h\"\n"),
             format!("{BASE}[debug]\nallow-write = 1\n"),
             format!("{BASE}[debug]\nallow-force = 1\n"),
@@ -2206,6 +2199,7 @@ sources = [\"src/**/*.st\"]\n";
         parse_ok(&format!(
             "{BASE}[debug]\ndefault = true\nprotocol = \"pipe\"\nforce-sessions-end-on-swap = true\nsession-timeout = \"1s\"\nallow-write = true\nallow-force = true\n"
         ));
+        parse_ok(&format!("{BASE}[debug]\nsession-timeout = \"0s\"\n"));
         parse_ok(&format!("{BASE}[run]\ncycles = 10\ncycle-time = \"1ms\"\n"));
         parse_ok(&format!(
             "{BASE}[test]\nsources = [\"tests/**/*.st\"]\ntimeout = \"5s\"\ndefault-cycles = 10\nmock-clock = \"1us\"\ncoverage = true\n"

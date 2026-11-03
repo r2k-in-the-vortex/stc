@@ -350,7 +350,8 @@ Rules and notes:
 - `method_decl` appears in classes, FBs, and (as `method_prototype`) interfaces. `OVERRIDE` is
   only valid when the method overrides a base method; `ABSTRACT` is only valid in an abstract
   class/FB, and is incompatible with `OVERRIDE`.
-- Default access: variables in classes/FBs are `PROTECTED`; methods are `PUBLIC` unless marked.
+- Default access: internal `VAR` variables in classes/FBs are `PROTECTED`; FB interface variables
+  (`VAR_INPUT`, `VAR_OUTPUT`, `VAR_IN_OUT`) are `PUBLIC`; methods are `PUBLIC` unless marked.
   This is a `stc` choice; the 2013 tables describe the allowed access specifiers but leave some
   default details to the implementer.
 - `THIS` and `SUPER` are available in method/FB bodies. `THIS` is not a general expression

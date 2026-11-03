@@ -458,7 +458,10 @@ fn debug_source<'a>(
     crate::debug::DebugSource {
         target,
         manifest,
-        roots,
+        roots: std::ptr::from_ref(roots),
+        // A running boundary publishes reads only; a one-shot write received
+        // here stays queued until the next boundary.
+        writable_roots: None,
         info: active.info.as_ref(),
         generation: active.id,
         build_id: active.manifest.header.build_id,
@@ -1310,7 +1313,7 @@ impl Host {
         let active = self.active.as_ref();
         let source = active
             .map(|generation| debug_source(target, &generation.manifest, &self.roots, generation));
-        let count = self.debug.pump(now_ns, source);
+        let count = self.debug.pump(now_ns, source, false);
         drop(pin);
         count
     }
@@ -2479,7 +2482,7 @@ impl Host {
             let pump_info = crate::stop::CyclePumpInfo {
                 target: &self.platform.target,
                 manifest: &generation.manifest,
-                roots: &self.roots,
+                roots: &mut self.roots,
                 info: generation.info.as_ref(),
                 generation: generation.id,
                 build_id: generation.manifest.header.build_id,

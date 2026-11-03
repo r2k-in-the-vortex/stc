@@ -187,9 +187,10 @@ Formats and versions in this release:
 | Contract | Version |
 | --- | --- |
 | GOT manifest / catalog | 2 |
-| Descriptor, module, state, metadata sidecar, debug object, stopped-frame sidecar | 1 |
+| Descriptor, module, state, metadata sidecar, debug object | 1 |
+| Stopped-frame sidecar | 2 |
 | Host ABI | 2.3 (test 2.2, production 2.1) |
-| Debug protocol | `stc-debug/1` |
+| Debug protocol | `stc-debug/1`, plus the additive `stc-debug/1.1` revision |
 
 IR and manifests are deterministic functions of source, options, and
 toolchain: no timestamps, absolute paths, host names, user names, random IDs,
@@ -215,6 +216,8 @@ or addresses. Double builds are byte-identical, including PE timestamps.
 | `stc rename <old> <new>` | Source-aware tracked rename |
 | `stc run --watch` | Rebuild and deploy online while watching sources |
 | `stc parse <file> [--ast]` | Dump the CST (and typed AST) |
+| `stc lsp` | Serve the Language Server Protocol over stdio |
+| `stc dap` | Serve the Debug Adapter Protocol over stdio |
 
 Global options include `--message-format human|short|json`,
 `--color auto|always|never`, `-q`, `-v`/`-vv`, `--manifest-path`,
@@ -235,6 +238,10 @@ stc online diff target/stc/debug/<name>.stc-got.json --baseline active.json
   rejected or require a cold download.
 - A failed build, prepare, or compatibility check leaves the previous
   generation active.
+- `stc run --watch` runs until interrupted, the `--watch-timeout` bound, or
+  standard-input EOF. Ctrl-C stops it gracefully with exit 130; closing stdin
+  (Ctrl-D/Ctrl-Z in a terminal, `/dev/null`, or a closed pipe) stops it
+  gracefully with `[stc] watch stopped` and exit 0.
 - Every swap ends a debug session and clears forces/breakpoints.
 - Format-1 manifests are cold-download only; no migration is provided.
 - Debug and release forms have distinct identities and are not a supported
@@ -266,23 +273,232 @@ include `print`, `set`, `force`, `release`, `release-all`, `watch`,
   outputs and is bounded by `[debug].session-timeout` (default five minutes);
   expiry ends the session and resumes the cycle.
 - Writes and forces are queued and applied at a cycle boundary, revalidated
-  for generation, root, type, layout, and writability.
+  for generation, root, type, layout, and writability. A `stc-debug/1.1`
+  client that writes while the target is stopped gets an immediate
+  `status:"applied"` result: the parked cycle applies the write before the
+  response, so a read or step in the same stop sees it and no boundary applies
+  it again. The `stc debug` CLI and `stc-debug/1` clients keep the queued
+  behavior. Forces apply at a boundary on every version.
 - Release builds are monitoring-only; breakpoints, stepping, and full locals
-  require a debug build.
+  require a debug build. Monitor live Globals and target paths from the Debug
+  Console; Variables and Watch require a stopped frame.
+- A selected `{stc:test}` POU can be debugged through the DAP `test` launch
+  field (see §8.4). Set it to a name printed by `stc test --list`; the run
+  builds only that test as a hook-bearing harness under
+  `target/stc/test/debug/<artifact>`, applies breakpoints before the test body
+  executes, and ends when the test prints its result line and exits. `stc test`
+  itself remains hook-free and its artifacts are unchanged. `test` cannot be
+  combined with `noBuild`, `release`, or attach.
 - Debug is local only. There is no raw-memory access, unauthenticated mode, or
   remote transport. The endpoint file is user-only and contains the per-run
   token; never share it.
 - Every swap/rollback/cold install/shutdown/exit ends the session.
+- The server accepts `stc-debug/1` and the additive `stc-debug/1.1` revision. A 1.1 client can
+  list a stopped frame's local names, types, and liveness with `frame.locals`; values still come
+  from `frame.read`, and the endpoint-file `protocol` field stays `stc-debug/1`.
 
 See
 [`specification/Architecture/Debug-and-Monitoring.md`](specification/Architecture/Debug-and-Monitoring.md)
 §12–§18 and [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) §3 for the limits.
 
-## 8. Tests and formatting
+## 8. VS Code integration
+
+The local extension in [`editors/vscode`](editors/vscode) provides syntax highlighting, language
+features, tasks with compiler diagnostics, formatting, and a debug adapter for `stc` projects.
+
+### 8.1 Install
+
+Install the VSIX from the release artifacts (VSIX-only distribution in v2.0.0; it is not published
+to the marketplace):
+
+```sh
+code --install-extension stc-vscode-0.1.0.vsix
+```
+
+Or open **Extensions**, choose **...**, **Install from VSIX...**, and select the file. VS Code
+1.82 or newer is required. The extension does not bundle a compiler: install the `stc` release
+package and either put `bin` on `PATH` or set `stc.path` to the executable. A missing compiler is
+reported in the **stc** output channel; the language server is not started until it is resolved.
+
+Open a folder containing `stc.toml`. The extension starts one language server per project and
+watches `**/*.st` and `**/stc.toml`. No configuration is required beyond the compiler path.
+
+An invalid `stc.toml` fails language-server initialization: VS Code retries the server a few
+times before stopping, and the project error appears in the **stc Language Server** output
+channel. Fix the manifest and reload the window. A project without tests must currently omit
+`[test]`; a declared source glob that matches no files is `STC-E-PROJECT-004`.
+
+### 8.2 Tasks and diagnostics
+
+Run **Tasks: Run Task** and choose an `stc check`, `stc build`, `stc test`, or `stc fmt` task, or
+define tasks in `.vscode/tasks.json`:
+
+```json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "stc: build",
+      "type": "stc",
+      "command": "build",
+      "project": "${workspaceFolder}/stc.toml",
+      "problemMatcher": ["$stc"],
+      "group": "build"
+    }
+  ]
+}
+```
+
+The task type accepts `command` (`check`, `build`, `run`, `test`, or `fmt`), `project`, `args`, and
+`release` (for `build` and `run`). Generated tasks run in the manifest directory and pass
+`--message-format short --color never`; diagnostic commands also pass
+`--diagnostic-paths absolute` so the `$stc` problem matcher can resolve sources in multi-package
+projects. The matcher consumes `path:line:column: severity[CODE]: message` lines and does not
+reinterpret diagnostics.
+
+### 8.3 Language features
+
+With a project open and `stc` available:
+
+- diagnostics from the compiler in the Problems panel, updated as you type;
+- document symbols, go-to-definition, references, and hover for identifiers;
+- completion for keywords, visible names, and one level of members after `.`;
+- format document through `stc fmt` (one whole-document edit; no range formatting).
+
+The language server analyzes the root package's production and test sources, so test files resolve
+against production declarations. It does not offer semantic tokens, rename, code actions, inlay
+hints, call hierarchy, or workspace symbols. The grammar provides syntax highlighting.
+
+### 8.4 Launch and attach
+
+Add a configuration to `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "stc",
+      "request": "launch",
+      "name": "stc: Launch",
+      "project": "${workspaceFolder}/stc.toml",
+      "noBuild": false,
+      "release": false,
+      "allowWrite": false,
+      "allowForce": false
+    },
+    {
+      "type": "stc",
+      "request": "attach",
+      "name": "stc: Attach",
+      "project": "${workspaceFolder}/stc.toml",
+      "endpoint": "${workspaceFolder}/target/stc/debug/debug.endpoint.json"
+    }
+  ]
+}
+```
+
+Launch builds the debug form by default and stops a launch-owned host when the session ends.
+`noBuild` launches existing artifacts; `outDir` selects them; `release` builds the monitoring-only
+release form; `sourceRoot` overrides package-root source mapping; `args` and `cwd` apply to the
+launched host. Attach connects to the endpoint file printed by `stc run --debug-server` and leaves
+the host running. Replace the placeholder endpoint path with the printed file.
+
+Add `"test": "<name>"` to a launch configuration to debug one test. The name must match a test
+listed by `stc test --list` exactly. The Testing view's **Debug Test** starts this launch
+automatically for one test (see §8.5). The launch builds only that test as a hook-bearing harness
+under `target/stc/test/debug/<artifact>` (or under `<outDir>/debug/<artifact>`), so the ordinary
+`stc test` artifacts stay hook-free and unchanged. Breakpoints in test source bind before the test
+body runs, the test POU is the top frame, and the session ends after the test prints its result
+line and exits. `test` cannot be combined with `noBuild`, `release`, or attach.
+
+Writes are disabled by default. `allowWrite` requests the write scope and enables `setVariable` for
+writable live roots (globals, program-instance fields, and live split fields); the host must also
+allow `[debug].allow-write`. `allowForce` requests the force
+scope and requires `[debug].allow-force`; DAP has no force request, so forcing remains a
+`stc debug` operation. Locals require a debug build and a `stc-debug/1.1` host; release builds are
+monitoring-only. Use the Debug Console to evaluate live Globals and target paths while the release
+host runs; Variables and Watch require a stopped frame and remain unavailable. Target paths use
+manifest keys (the sample global `TOTAL` is `SAMPLE::TOTAL`, not `MAIN.TOTAL`). There is one debug
+session per host, every online swap ends the session, and local names appear in the frame table's
+uppercase normalized spelling. `evaluate` accepts a local name or a manifest target path, not an ST
+expression.
+
+The local sample at
+[`editors/vscode/samples/workspace`](editors/vscode/samples/workspace/README.md) contains launch and
+attach configurations, tasks, a known breakpoint line, and known values, and is the fixture used by
+the automated tests.
+
+### 8.5 Running tests from the editor
+
+Open a folder containing `stc.toml`, show the **Testing** view, and expand a file to see its
+`{stc:test}` POUs. Each test is placed at its declaration line, including the `{stc:test}`
+annotation, so the Test Explorer and editor gutter navigate to it. The extension discovers tests
+with `stc test --list --message-format json` and refreshes the list when an `.st` file or
+`stc.toml` changes, when the workspace folders or `stc.path` change, with the view's refresh
+button, or with **stc: Refresh Tests**.
+
+Run Test on a test runs only that test; Run Test on a file runs all of its tests. The extension
+passes `--exact` so the selected test name is a complete-name match, not a substring, and captures
+test output. Passed tests show their duration; failed, trapped, and timed-out tests show their
+failure messages and the first known source location. Compiler diagnostics and captured output
+appear in the Test Results output, and a build failure marks the selected tests errored rather
+than reporting invented results.
+
+Debug Test opens the test under the debugger through the same per-test launch described in §8.4.
+Because a launch accepts one test name, selecting several tests (or a file) for debugging starts
+them one after another, each in its own session. The Debug Console result line reports the test
+outcome; debug sessions do not produce Test Explorer pass/fail results. A missing compiler or a
+discovery failure is logged to the **stc** output channel. Runs require the same clang and runtime
+artifacts as `stc test`. See
+[`IDE-Integration.md`](specification/Architecture/IDE-Integration.md) §4.8 for the full contract.
+
+### 8.6 Online change
+
+The extension can drive the same online-change workflow from the editor. Open a project and run
+**stc: Start Online Change** from the Command Palette. The extension starts an extension-owned
+`stc run --watch --debug-server --debug-endpoint <private per-session path>` child; the status bar
+shows `starting`, then `building` when a rebuild starts, then `gen <n> · <8 hex>` for the active
+generation and build. Click the status item or run **stc: Show Online Change Status** to open the
+**stc Online Change** channel, which prints the CLI's output with the control nonce, control
+endpoint, and the runtime's debug endpoint/audit path lines redacted. The runtime debug token is
+never read or logged.
+
+Run **stc: Attach Debugger to Online Change** to attach a read-only debug session to the running
+watch host. Saving a compatible change rebuilds and activates a new generation at a cycle
+boundary; the attached session ends with `STC-E-DEBUG-019` (shown in the Debug Console), and the
+extension offers **Attach Debugger** for the new generation. It does not reconnect automatically,
+and breakpoints, forces, and watches do not survive the swap.
+
+**stc: Stop Online Change** closes the watch's stdin, which the CLI treats as a graceful stop; the
+status returns to idle and the host saves retained state at normal shutdown. If the process does
+not exit within five seconds, the extension warns and kills the process tree, and retained state
+may not be saved. Closing the window stops an owned watch the same way.
+
+`stc.onlineChange.args` (string array, default empty) appends options such as `--release`,
+`--store`, or `--watch-timeout` to the watch. The extension owns the manifest, debug-server,
+endpoint, color, control, and quiet flags; a value for one of those is rejected. Only one
+online-change session runs per window, and there is no cross-window coordination. The surface is
+local only and offers no cold-download, rollback, or migration action; use the CLI for those. See
+the [extension README](editors/vscode/README.md) and
+[`IDE-Integration.md`](specification/Architecture/IDE-Integration.md) §4.7 for the full contract.
+
+### 8.7 Non-safety
+
+The extension is local only: no telemetry, network requests, remote debugging, or bundled compiler.
+Debug and force can stop the cycle and hold outputs indefinitely, and an online change can activate
+new logic while the machine is running. `stc` is not a safety PLC and is not responsible for
+safety; safety must be provided by a separate safety system and machine design as required by law
+and regulation. See
+[`specification/Architecture/IDE-Integration.md`](specification/Architecture/IDE-Integration.md)
+and [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) for the complete contract.
+
+## 9. Tests and formatting
 
 ```sh
 stc test                 # all discovered {stc:test} POUs
 stc test --list          # list without building
+stc test --exact MyTest  # complete-name match, not a substring
 stc test --no-run        # build artifacts only
 stc test --timeout 5s
 stc test -- --nocapture
@@ -344,7 +560,7 @@ Coverage is not correctness evidence. See
 `stc fmt` uses one fixed style over the lossless CST, preserves comments,
 emits strict semicolons, and supports `--check`. It is idempotent.
 
-## 9. Cross-target smoke tests
+## 10. Cross-target smoke tests
 
 `stc build --target=<triple> --emit=ir` (or `obj`) emits target-independent IR
 and an object for the requested triple. The release-candidate matrix covers:
@@ -361,7 +577,7 @@ Execution, module loading, and frame extraction are native on Windows x86-64
 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU. `--emit=exe` and `--emit=lib`
 reject a non-host target with `STC-E-BUILD-004`.
 
-## 10. Performance
+## 11. Performance
 
 Timing is informational, not a real-time guarantee. Record the host and regime
 when comparing numbers:
@@ -384,7 +600,7 @@ runs the cycle thread with FIFO scheduling and absolute `CLOCK_MONOTONIC` pacing
 JSONL metrics described in [specification/Verification/RT-Host.md](specification/Verification/RT-Host.md) §3.4. The mode is measurement-only;
 without `--rt` the run loop and the generated artifacts are unchanged.
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 | Symptom | Cause / action |
 | --- | --- |
@@ -395,12 +611,14 @@ without `--rt` the run loop and the generated artifacts are unchanged.
 | `STC-E-MANIFEST-002` host ABI minor | The baseline needs a newer ABI than the selected build form; use the matching mode or cold-download |
 | `STC-E-DEBUG-017` stack/frame unavailable | The stopped-frame sidecar is missing or unusable (`llvm-readobj`/`readelf` at build time); typed monitoring still works |
 | `STC-E-PROJECT-010` debug/release mixed | Use distinct out-dirs for the two forms; one explicit out-dir cannot hold both |
+| `STC-E-PROJECT-004` “source glob matched no files” | Add a matching source file, or omit the source set (for example `[test]` in a project without tests). This error also prevents the language server from starting |
+| `stc lsp` restarts repeatedly or “Server initialization failed” | The project manifest cannot load; fix the `STC-E-PROJECT-*` error shown in the **stc Language Server** output channel, then reload the window |
 | Version or build-ID mismatch after upgrading | Pre-RC artifacts are not compatible; cold-download or rebuild both sides |
 
 For every diagnostic, `--message-format json` gives a stable object with code,
 severity, spans, notes, and related locations.
 
-## 12. Modbus TCP server I/O (v2.0.0)
+## 13. Modbus TCP server I/O (v2.0.0)
 
 A project can expose its process image as a Modbus TCP server. Declare a device with
 `kind = "modbus-tcp"` and map each declared channel to a Modbus table in the selected machine
@@ -504,7 +722,7 @@ Modbus as a safety function or an interpolated motion channel. See the full cont
 [`specification/Verification/Modbus-Server.md`](specification/Verification/Modbus-Server.md),
 and the runnable fixture in [`tests/modbus/`](tests/modbus/README.md).
 
-## 13. Support matrix
+## 14. Support matrix
 
 | Host | Triple | Package | Compile | Run/model | Debug | Online change |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -518,7 +736,7 @@ The three native hosts are supported from M8 (D-200); macOS, Windows ARM64,
 online, projects, conformance, execution, UI, cross-target, package,
 traceability, Lean, and fuzz-smoke jobs natively on all three hosts.
 
-## 14. Safety
+## 15. Safety
 
 See [`NON-SAFETY.md`](NON-SAFETY.md). In short: `stc` can control real
 machinery, but it is not a safety PLC; safety must be provided by a separate

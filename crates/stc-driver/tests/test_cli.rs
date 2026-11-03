@@ -431,10 +431,30 @@ END_FUNCTION
     let filtered = directory.run_test(&["--list", "beta"]);
     assert_eq!(stdout(&filtered), "BetaWorks\n");
 
+    let exact = directory.run_test(&["--list", "--exact", "BetaWorks"]);
+    assert_eq!(stdout(&exact), "BetaWorks\n");
+    let case_folded = directory.run_test(&["--list", "--exact", "betaworks"]);
+    assert_eq!(stdout(&case_folded), "BetaWorks\n");
+    let prefix = directory.run_test(&["--list", "--exact", "Beta"]);
+    assert_eq!(stdout(&prefix), "");
+
     let json = directory.run_test(&["--list", "--message-format", "json"]);
     let text = stdout(&json);
-    assert!(text.contains("{\"name\":\"AlphaWorks\"}"), "{text}");
-    assert!(text.contains("{\"name\":\"BetaWorks\"}"), "{text}");
+    let entries: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("list entry is JSON"))
+        .collect();
+    assert_eq!(entries.len(), 2, "{text}");
+    assert_eq!(entries[0]["name"], "AlphaWorks");
+    assert_eq!(entries[0]["package"], "demo");
+    assert_eq!(entries[0]["file"], "tests/list.st");
+    assert_eq!(entries[0]["line"], 2);
+    assert_eq!(entries[0]["column"], 1);
+    assert_eq!(entries[1]["name"], "BetaWorks");
+    assert_eq!(entries[1]["package"], "demo");
+    assert_eq!(entries[1]["file"], "tests/list.st");
+    assert_eq!(entries[1]["line"], 7);
+    assert_eq!(entries[1]["column"], 1);
 
     let no_run = directory.run_test(&["--no-run"]);
     assert_eq!(code(&no_run), 0, "{}", stderr(&no_run));
@@ -808,6 +828,7 @@ END_FUNCTION
     assert_eq!(code(&directory.run(&["test", "--cold"])), 2);
     assert_eq!(code(&directory.run(&["build", "--timeout", "1s"])), 2);
     assert_eq!(code(&directory.run(&["check", "--list"])), 2);
+    assert_eq!(code(&directory.run(&["check", "--exact"])), 2);
     assert_eq!(code(&directory.run(&["test", "--", "--unknown"])), 2);
     for arguments in [
         ["test", "--release"].as_slice(),

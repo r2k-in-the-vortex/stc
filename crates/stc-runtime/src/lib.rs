@@ -126,8 +126,9 @@ pub use debug::{
     StringValue, TypedValue, WatchId, WatchResult, WatchSpec, WatchValue,
 };
 pub use debug_server::{
-    DEBUG_PROTOCOL, DebugClient, DebugClientError, DebugEndpointFile, DebugServer,
-    DebugServerConfig, DebugServerInfo, MAX_MESSAGE_BYTES, MAX_REQUEST_BYTES,
+    DEBUG_PROTOCOL, DEBUG_PROTOCOL_1_1, DEBUG_PROTOCOL_VERSIONS, DebugClient, DebugClientError,
+    DebugEndpointFile, DebugServer, DebugServerConfig, DebugServerInfo, MAX_MESSAGE_BYTES,
+    MAX_REQUEST_BYTES,
 };
 pub use debug_view::{
     IdentityKind, SplitView, ViewField, ViewIdentity, ViewKind, ViewNode, ViewOrigin, ViewRoot,
@@ -409,9 +410,6 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
                 let text = value("--debug-session-timeout")?;
                 let ns = run::parse_duration_ns(&text)
                     .ok_or_else(|| format!("invalid debug session timeout `{text}`"))?;
-                if ns == 0 {
-                    return Err("the debug session timeout must be positive".into());
-                }
                 debug_session_timeout_ns = Some(ns);
             }
             "--trace" => {
@@ -1933,6 +1931,16 @@ mod tests {
         assert!(options.debug_allow_force);
         assert_eq!(options.debug_session_timeout_ns, Some(1_000_000_000));
 
+        let disabled = parse_launcher_args(&args(&[
+            "app",
+            "--debug-endpoint",
+            "d",
+            "--debug-session-timeout",
+            "0s",
+        ]))
+        .expect("zero disables the session bound");
+        assert_eq!(disabled.debug_session_timeout_ns, Some(0));
+
         let clock =
             parse_launcher_args(&args(&["app", "--mock-clock", "1us"])).expect("mock clock");
         assert_eq!(clock.run.mock_clock_ns, Some(1_000));
@@ -1978,13 +1986,6 @@ mod tests {
             vec!["app", "--debug-allow-write"],
             vec!["app", "--debug-allow-force"],
             vec!["app", "--debug-session-timeout", "1s"],
-            vec![
-                "app",
-                "--debug-endpoint",
-                "d",
-                "--debug-session-timeout",
-                "0s",
-            ],
             vec!["app", "--debug-endpoint", "d", "--debug-protocol", "bogus"],
             vec!["app", "--trace"],
         ] {

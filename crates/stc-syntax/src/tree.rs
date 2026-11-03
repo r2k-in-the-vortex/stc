@@ -222,6 +222,76 @@ impl SyntaxTree {
             .unwrap_or("")
     }
 
+    /// Returns the non-trivia token that contains the byte `offset`.
+    ///
+    /// This is the editor-facing position lookup: it never returns trivia
+    /// leaves (whitespace and comments) and never returns zero-width tokens the
+    /// parser inserted for recovery. The offset is clamped to the source
+    /// length, and an offset at the end of the source returns the `Eof` token
+    /// when the tree has one. An offset inside trivia returns `None`; use
+    /// [`SyntaxTree::token_before`] for the token preceding a cursor position.
+    #[must_use]
+    pub fn token_at(&self, offset: usize) -> Option<SyntaxToken> {
+        let offset = offset.min(self.data.source.len());
+        if offset == self.data.source.len()
+            && let Some(index) = self
+                .data
+                .tokens
+                .iter()
+                .position(|token| token.kind == SyntaxKind::Eof && !token.missing)
+        {
+            return Some(self.token(TokenId(index)));
+        }
+        self.data
+            .tokens
+            .iter()
+            .enumerate()
+            .find_map(|(index, token)| {
+                (!token.missing
+                    && token.kind != SyntaxKind::Eof
+                    && token.span.start as usize <= offset
+                    && offset < token.span.end as usize)
+                    .then(|| self.token(TokenId(index)))
+            })
+    }
+
+    /// Returns the last non-trivia token that ends at or before `offset`.
+    ///
+    /// The offset is clamped to the source length. `Eof` and zero-width
+    /// recovery tokens are skipped, so this returns the token a caret placed
+    /// after `offset` follows, and `None` when no token precedes the position.
+    #[must_use]
+    pub fn token_before(&self, offset: usize) -> Option<SyntaxToken> {
+        let offset = offset.min(self.data.source.len());
+        self.data
+            .tokens
+            .iter()
+            .enumerate()
+            .filter(|(_, token)| {
+                !token.missing
+                    && token.kind != SyntaxKind::Eof
+                    && !token.span.is_empty()
+                    && token.span.end as usize <= offset
+            })
+            .max_by_key(|(_, token)| token.span.end)
+            .map(|(index, _)| self.token(TokenId(index)))
+    }
+
+    /// Returns the innermost node that owns the token at `offset`.
+    ///
+    /// The offset is clamped to the source length. The node is the parent of
+    /// [`SyntaxTree::token_at`], or of [`SyntaxTree::token_before`] when the
+    /// offset falls in trivia or after the last token (for example when the
+    /// parser inserted a trailing recovery token). A tree with no usable token
+    /// returns its root, so this lookup always yields a node.
+    #[must_use]
+    pub fn node_at(&self, offset: usize) -> SyntaxNode {
+        self.token_at(offset)
+            .or_else(|| self.token_before(offset))
+            .and_then(|token| token.parent())
+            .unwrap_or_else(|| self.root())
+    }
+
     /// Checks the lossless-tree invariants from AST §3.4.
     ///
     /// # Errors

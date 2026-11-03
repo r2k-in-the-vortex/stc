@@ -100,23 +100,33 @@ struct BuildForm {
     debug: bool,
     release: bool,
     test_build: bool,
+    test_debug: bool,
 }
 
 const DEBUG: BuildForm = BuildForm {
     debug: true,
     release: false,
     test_build: false,
+    test_debug: false,
 };
 const RELEASE: BuildForm = BuildForm {
     // A release build wins even when a caller also sets the debug switch.
     debug: true,
     release: true,
     test_build: false,
+    test_debug: false,
 };
 const TEST: BuildForm = BuildForm {
     debug: true,
     release: false,
     test_build: true,
+    test_debug: false,
+};
+const TEST_DEBUG: BuildForm = BuildForm {
+    debug: true,
+    release: false,
+    test_build: true,
+    test_debug: true,
 };
 
 fn line_of(source: &str, needle: &str) -> usize {
@@ -149,6 +159,7 @@ fn generate(source: &str, form: BuildForm) -> stc_codegen::Output {
         module: stc_codegen::ModuleBuildOptions::default(),
         project: stc_codegen::ProjectOptions::default(),
         test_build: form.test_build,
+        test_debug: form.test_debug,
         coverage: None,
     };
     stc_codegen::generate(&hir, &options)
@@ -445,6 +456,28 @@ fn test_builds_stay_hook_free_at_abi_2_2() {
     assert_eq!(descriptor.entry_flags & entry_flag::DEBUG_HOOKS, 0);
     assert_eq!(descriptor.required_features & feature::DEBUG_HOOKS, 0);
     assert_no_service_13(descriptor);
+    assert_eq!(output.got.manifest.header.generator_flags & 1, 1);
+}
+
+#[test]
+fn test_debug_builds_import_the_checkpoint_service_at_abi_2_3() {
+    let output = generate(SOURCE, TEST_DEBUG);
+    let debug = debug_of(&output);
+    assert!(debug.hooks);
+    assert!(!debug.checkpoints.is_empty());
+    let descriptor = &output.got.descriptor;
+    assert_eq!(descriptor.host_abi_minor, stc_got::DEBUG_ABI_MINOR);
+    assert_eq!(descriptor.host_abi_minor, 3);
+    assert_ne!(descriptor.entry_flags & entry_flag::DEBUG_BUILD, 0);
+    assert_ne!(descriptor.entry_flags & entry_flag::DEBUG_HOOKS, 0);
+    assert_ne!(descriptor.required_features & feature::DEBUG_HOOKS, 0);
+    assert!(
+        descriptor
+            .slots
+            .iter()
+            .any(|slot| slot.service == ImportService::DebugCheck.id()),
+        "a per-test debug build imports debug_check into a slot"
+    );
     assert_eq!(output.got.manifest.header.generator_flags & 1, 1);
 }
 

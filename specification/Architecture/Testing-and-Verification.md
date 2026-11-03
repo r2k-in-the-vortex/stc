@@ -223,12 +223,21 @@ END_FUNCTION
 ```sh
 stc test                     # all tests
 stc test Timer               # substring filter on POU name
+stc test --exact TimerBlink  # complete-name match (case-insensitive)
 stc test --list              # list discovered tests
+stc test --list --message-format json  # name, package, file, line, column
 stc test --no-run            # build the test artifacts only
 stc test -- --nocapture      # pass through runtime output
 # tests run sequentially in v1; no --test-threads
 stc test --timeout 2s        # override the default
 ```
+
+Without `--exact`, each positional filter selects every test whose name contains it
+(ASCII case-insensitive). With `--exact`, a filter selects only a test whose complete name
+matches (ASCII case-insensitive), so an editor can run one `{stc:test}` POU without also running
+another test whose name merely contains it. The JSON list shape is the stable additive shape in
+[CLI and Manifest](CLI-and-Manifest.md) §1.6; `line` and `column` are the 1-based start of the test
+declaration.
 
 ### 2.5 Test build mode
 
@@ -238,9 +247,8 @@ test case; the artifact is a normal ABI 2 module/manifest pair plus a test host,
 
 - **Body.** A function test gets a synthetic wrapper program that calls the function once and
   asserts its `BOOL` result. An FB test gets a wrapper that instantiates the FB and calls it once
-  per scan; because FB fields are `PROTECTED` by default, the test host reads the optional
-  `PASSED : BOOL` leaf through its GOT root instead of source access. A program test uses the
-  program itself.
+  per scan; the test host reads the optional `PASSED : BOOL` output through its GOT leaf root
+  instead of source access. A program test uses the program itself.
 - **Synthetic configuration.** Each artifact has one synthetic configuration `STC_TEST`, resource
   `STC_TEST_RES`, task `STC_TEST_TASK`, processor `STC_TEST_CPU`, instance `STC_TEST_INSTANCE`,
   and wrapper `STC_TEST_WRAPPER`. The lexer rejects leading/trailing double underscores, so these
@@ -273,13 +281,30 @@ test case; the artifact is a normal ABI 2 module/manifest pair plus a test host,
   and exclude `{stc:test}` POUs before analysis/codegen. `STC_ASSERT` in production is
   `STC-E-ASSERT-001`; a reference to a test-only POU is `STC-E-TEST-001`; invalid test
   signatures, duplicates, and source conflicts use `STC-E-TEST-002/003/004`.
-- **Contract boundary.** No manifest/descriptor/state format changes; the only ABI addition is
-  service ID 12. Test artifacts never participate in a baseline or a swap, so they cannot affect
-  production identity or retained state.
+- **Per-test debugging.** A discovered test can be launched under the debug adapter by name
+  through the DAP `test` launch field (IDE Integration §4.1). This is the one test build that is
+  not hook-free: it is compiled with `test_debug=true` and therefore imports checkpoint service
+  13 at host minor 2.3, carries `debug.hooks=true` with a non-empty checkpoint table and the
+  stopped-frame sidecar, while retaining the ABI 2.2 test-clock service 12. The artifact is
+  written under `<artifact root>/debug/<artifact>` (default
+  `target/stc/test/debug/<artifact>`), so the ordinary `stc test` artifact at
+  `target/stc/test/<artifact>` is neither reused nor overwritten. The test host publishes its
+  debug endpoint and then waits for a start gate that the adapter writes after applying
+  breakpoints and receiving `configurationDone`; this makes a single-cycle test stop at its
+  breakpoint instead of racing the adapter. While gated, the host still services the debug
+  command queue, so breakpoint binding and function-name resolution complete before the first
+  cycle. The adapter includes the root package's `[test].sources` in the source table, hides the
+  synthetic `STC_TEST_WRAPPER` frames, and the test host still prints its one result line and
+  exits, ending the session. A plain `stc test` build remains hook-free at ABI 2.2 and unchanged.
+- **Contract boundary.** No manifest/descriptor/state format changes; the only ABI addition for
+  ordinary test builds is service ID 12. Test artifacts never participate in a baseline or a swap,
+  so they cannot affect production identity or retained state. Per-test debugging adds no
+  debug-protocol operation or artifact format: it reuses service 13, the existing frame sidecar,
+  and a start-gate file.
 
 ### 2.6 Coverage
 
-`stc test` can report statement coverage for the ST code under test (WL-10; D-211 records the two
+`stc test` can report statement coverage for the ST code under test (WL-10; D-214 records the two
 warning codes). Coverage records which executable statements the test suite executed, attributed
 to ST source file, line, and column, aggregated across the suite and available per test. It is
 test tooling: coverage is not a correctness claim and does not gate a build. Coverage of the ST
@@ -420,7 +445,7 @@ a production file runs but contributes no sites. Committed golden reports are in
 `crates/stc-driver/tests/coverage_evidence.rs` covers determinism and host-data absence, result
 equivalence, production isolation, test-code exclusions, dependency labels, and optimized builds.
 The warning codes are `STC-W-COVERAGE-001/002` ([Conformance Profile](../01-Conformance-Profile.md)
-§10; D-211).
+§10; D-214).
 
 ## 3. Compiler tests
 
@@ -559,9 +584,9 @@ arbitrary module code.
 `cargo xtask test --suite debug` runs the debug suite: the twelve integration targets that
 cover typed reads/writes/forces/watches, removed-field rejection across a swap, breakpoint
 binding/unbinding, step/continue, call-stack and optimized-out reporting, DWARF/CodeView
-inspection, the stop/idle session bound (pause expiry, state clearing, and resume with a fresh
-deadline), force teardown, session authentication/audit, and the rule that every online swap ends
-the debug session. Debug/release tests assert that release artifacts contain no debug hooks and
+inspection, the opt-in stop/idle session bound (pause expiry, state clearing, and resume with a
+fresh deadline), force teardown, session authentication/audit, and the rule that every online swap
+ends the debug session. Debug/release tests assert that release artifacts contain no debug hooks and
 have distinct build IDs/manifests. The target mapping is:
 
 | Package | Test targets |

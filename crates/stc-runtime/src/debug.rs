@@ -980,6 +980,27 @@ pub(crate) enum ManifestData {
     Binary(Vec<u8>),
 }
 
+/// Outcome of one synchronous write request.
+///
+/// A running target queues the write for the next cycle boundary. A stopped
+/// target on a `stc-debug/1.1` session applies a one-shot write to root storage
+/// on the parked cycle thread before the reply is produced, so the service
+/// thread never touches module or root storage.
+#[derive(Debug)]
+pub(crate) enum DebugWriteReply {
+    /// The write waits in the queue for the next cycle boundary.
+    Queued(DebugQueueId),
+    /// The write already reached root storage at the reported stop.
+    Applied {
+        /// Generation that accepted the write.
+        generation: u64,
+        /// Build that accepted the write.
+        build_id: GotId,
+        /// Stop cycle that observed the write.
+        cycle: u64,
+    },
+}
+
 enum DebugCommand {
     Read {
         request: ReadRequestId,
@@ -992,7 +1013,10 @@ enum DebugCommand {
     WriteWait {
         kind: DebugWriteKind,
         target: DebugWriteRequest,
-        reply: Arc<Reply<std::result::Result<DebugQueueId, DebugFailure>>>,
+        /// `stc-debug/1.1` asks for an immediate stopped write; the baseline
+        /// version keeps the queued behavior it was specified with.
+        immediate: bool,
+        reply: Arc<Reply<std::result::Result<DebugWriteReply, DebugFailure>>>,
     },
     ReleaseWait {
         target: DebugTarget,
@@ -1118,11 +1142,13 @@ impl DebugService {
         &self,
         kind: DebugWriteKind,
         request: DebugWriteRequest,
-    ) -> Result<Arc<Reply<std::result::Result<DebugQueueId, DebugFailure>>>> {
+        immediate: bool,
+    ) -> Result<Arc<Reply<std::result::Result<DebugWriteReply, DebugFailure>>>> {
         let reply = Arc::new(Reply::new());
         self.push_command(DebugCommand::WriteWait {
             kind,
             target: request,
+            immediate,
             reply: Arc::clone(&reply),
         })?;
         Ok(reply)
@@ -1524,6 +1550,138 @@ impl DebugEngine {
         )?;
         self.queue.push_back(QueuedWrite { queue_id, prepared });
         Ok(queue_id)
+    }
+
+    /// Validates and queues a write for the next cycle boundary.
+    fn prepare_and_queue_write(
+        &mut self,
+        source: &DebugSource<'_>,
+        request: &DebugWriteRequest,
+        kind: DebugWriteKind,
+    ) -> std::result::Result<DebugWriteReply, DebugFailure> {
+        match prepare_write(source, request, kind) {
+            Ok(prepared) => self
+                .enqueue(prepared)
+                .map(DebugWriteReply::Queued)
+                .map_err(DebugFailure::from),
+            Err(error) => {
+                let _ = self.audit_request_error(
+                    kind,
+                    &request.target,
+                    Some(&request.value),
+                    &error,
+                    Some((source.generation, source.build_id, source.cycle)),
+                );
+                Err(DebugFailure::from(error))
+            }
+        }
+    }
+
+    /// Validates and applies one one-shot write while the cycle is parked.
+    ///
+    /// The caller is the parked cycle thread, so root storage is exclusively
+    /// available here. The reply is set only after the bytes reach storage;
+    /// the write is never pushed onto the queue, so no boundary can apply it a
+    /// second time. The audit record is appended before storage changes, so an
+    /// audit failure refuses the write as on the queued path.
+    fn apply_stopped_write(
+        &mut self,
+        source: &DebugSource<'_>,
+        request: &DebugWriteRequest,
+        kind: DebugWriteKind,
+    ) -> std::result::Result<DebugWriteReply, DebugFailure> {
+        let prepared = match prepare_write(source, request, kind) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let _ = self.audit_request_error(
+                    kind,
+                    &request.target,
+                    Some(&request.value),
+                    &error,
+                    Some((source.generation, source.build_id, source.cycle)),
+                );
+                return Err(DebugFailure::from(error));
+            }
+        };
+        let Some(writable) = source.writable_roots else {
+            // The pump takes this path only with a parked cycle context; stay
+            // fail-closed if the flag ever disagrees with the source.
+            return Err(DebugFailure::new(
+                codes::DEBUG_STALE,
+                "the parked cycle has no writable root storage for a stopped write",
+            ));
+        };
+        // SAFETY: `writable_roots` is set only by `CyclePump::debug_source`,
+        // which borrows the host's root registry for the enclosing
+        // `module.cycle` call. The cycle thread is parked in service 13, so no
+        // module code can touch root storage concurrently, and the reference
+        // is confined to this call.
+        let roots = unsafe { &mut *writable };
+        let root = match revalidate_prepared(
+            &prepared,
+            source.manifest,
+            source.target,
+            source.info,
+            source.generation,
+            source.build_id,
+        ) {
+            Ok(Some(root)) => root,
+            Ok(None) => {
+                let error = Error::new(
+                    codes::DEBUG_STALE,
+                    "the target root was removed before the stopped write could be applied",
+                );
+                self.audit_stopped_rejection(&prepared, &error, source);
+                return Err(DebugFailure::from(error));
+            }
+            Err(error) => {
+                self.audit_stopped_rejection(&prepared, &error, source);
+                return Err(DebugFailure::from(error));
+            }
+        };
+        // The audit is fail closed for a write, so append the record before
+        // storage changes. An append failure refuses the request with the
+        // audit code and leaves the target untouched, matching the queued
+        // path's enqueue-time audit.
+        if let Err(error) = self.audit_prepared_boundary(
+            &prepared,
+            AuditOutcome::Ok,
+            None,
+            None,
+            "applied",
+            Some(source.generation),
+            Some(source.build_id),
+            Some(source.cycle),
+        ) {
+            return Err(DebugFailure::from(error));
+        }
+        if let Err(error) = write_root_bytes(source.info, roots, root, &prepared.bytes) {
+            self.audit_stopped_rejection(&prepared, &error, source);
+            return Err(DebugFailure::from(error));
+        }
+        Ok(DebugWriteReply::Applied {
+            generation: source.generation,
+            build_id: source.build_id,
+            cycle: source.cycle,
+        })
+    }
+
+    fn audit_stopped_rejection(
+        &mut self,
+        prepared: &PreparedWrite,
+        error: &Error,
+        source: &DebugSource<'_>,
+    ) {
+        let _ = self.audit_prepared_boundary(
+            prepared,
+            AuditOutcome::Error,
+            Some(error),
+            None,
+            "rejected",
+            Some(source.generation),
+            Some(source.build_id),
+            Some(source.cycle),
+        );
     }
 
     pub(crate) fn audit_request_error(
@@ -2004,7 +2162,17 @@ impl DebugEngine {
     /// The source is `None` when no generation is active. No command or watch
     /// takes a lock held by the cycle: the caller is the cycle thread at a
     /// boundary.
-    pub(crate) fn pump(&mut self, now_ns: i64, source: Option<DebugSource<'_>>) -> usize {
+    ///
+    /// `stopped` is true only when the source was captured by the parked cycle
+    /// thread inside service 13. A one-shot write flagged `immediate` is then
+    /// applied to root storage before its reply is set; every other write is
+    /// queued for the next boundary as before.
+    pub(crate) fn pump(
+        &mut self,
+        now_ns: i64,
+        source: Option<DebugSource<'_>>,
+        stopped: bool,
+    ) -> usize {
         let current_generation = source.as_ref().map(|source| source.generation);
         if self.last_generation != current_generation {
             // A watch session is bound to one generation; a swap ends every
@@ -2045,22 +2213,20 @@ impl DebugEngine {
                 DebugCommand::WriteWait {
                     kind,
                     target,
+                    immediate,
                     reply,
                 } => {
+                    let apply_now = stopped
+                        && immediate
+                        && kind == DebugWriteKind::Write
+                        && source
+                            .as_ref()
+                            .is_some_and(|source| source.writable_roots.is_some());
                     let result = match source.as_ref() {
-                        Some(source) => match prepare_write(source, &target, kind) {
-                            Ok(prepared) => self.enqueue(prepared).map_err(DebugFailure::from),
-                            Err(error) => {
-                                let _ = self.audit_request_error(
-                                    kind,
-                                    &target.target,
-                                    Some(&target.value),
-                                    &error,
-                                    Some((source.generation, source.build_id, source.cycle)),
-                                );
-                                Err(DebugFailure::from(error))
-                            }
-                        },
+                        Some(source) if apply_now => {
+                            self.apply_stopped_write(source, &target, kind)
+                        }
+                        Some(source) => self.prepare_and_queue_write(source, &target, kind),
                         None => Err(DebugFailure::new(
                             codes::DEBUG_STALE,
                             "no active generation is available for a write",
@@ -2370,7 +2536,19 @@ const fn debug_end_detail(reason: DebugEndReason) -> &'static str {
 pub(crate) struct DebugSource<'a> {
     pub(crate) target: &'a Target,
     pub(crate) manifest: &'a Manifest,
-    pub(crate) roots: &'a crate::RootRegistry,
+    /// Root storage as a raw handle.
+    ///
+    /// Keeping this as a raw pointer lets the parked cycle reborrow the
+    /// registry immutably for validation and then mutably for an immediate
+    /// stopped write without leaving a live shared reference for the mutable
+    /// reborrow to invalidate.
+    pub(crate) roots: *const crate::RootRegistry,
+    /// Writable root storage for an immediate stopped write.
+    ///
+    /// Only the parked cycle thread's pump context sets this. It is `None` at
+    /// a running cycle boundary, so a write submitted while the target runs
+    /// stays queued.
+    pub(crate) writable_roots: Option<*mut crate::RootRegistry>,
     pub(crate) info: Option<&'a crate::ModuleInfo>,
     pub(crate) generation: u64,
     pub(crate) build_id: GotId,
@@ -2384,6 +2562,19 @@ pub(crate) struct DebugSource<'a> {
     pub(crate) manifest_digest: stc_got::digest::Digest32,
     pub(crate) manifest_json: Option<&'a str>,
     pub(crate) manifest_binary: Option<&'a [u8]>,
+}
+
+impl DebugSource<'_> {
+    /// Returns the root registry for read-only validation.
+    ///
+    /// The caller must not hold the returned borrow across a stopped write;
+    /// `apply_stopped_write` reborrows the same registry mutably after
+    /// validation completes.
+    pub(crate) fn roots(&self) -> &crate::RootRegistry {
+        // SAFETY: `roots` is set from a registry borrowed for the enclosing
+        // pump call and is non-null at every construction site.
+        unsafe { &*self.roots }
+    }
 }
 
 fn lock_bus(bus: &DebugBus) -> MutexGuard<'_, BusState> {
@@ -4204,7 +4395,7 @@ fn root_bytes(source: &DebugSource<'_>, root: &RootRecord) -> Result<Vec<u8>> {
         return Ok(bytes);
     }
     source
-        .roots
+        .roots()
         .storage(root.got_id)
         .map(<[u8]>::to_vec)
         .ok_or_else(|| {
@@ -5527,7 +5718,7 @@ pub(crate) fn prepare_write(
             format!("task-guard root `{}` is not writable", root.key),
         ));
     }
-    if root.root_kind != RootKind::Direct && source.roots.get(root.got_id).is_none() {
+    if root.root_kind != RootKind::Direct && source.roots().get(root.got_id).is_none() {
         return Err(Error::new(
             codes::DEBUG_STALE,
             format!("root `{}` has no active storage", root.key),
@@ -10226,7 +10417,8 @@ mod tests {
         DebugSource {
             target,
             manifest,
-            roots,
+            roots: std::ptr::from_ref(roots),
+            writable_roots: None,
             info: None,
             generation: 3,
             build_id: GotId::ZERO,
@@ -10946,7 +11138,11 @@ mod tests {
         let request = DebugReadRequest::new(DebugTarget::path("counter"));
         let _ = service.submit_read(request.clone()).expect("submit read");
         assert_eq!(
-            engine.pump(0, Some(source(&target, &write_manifest_value, &roots))),
+            engine.pump(
+                0,
+                Some(source(&target, &write_manifest_value, &roots)),
+                false
+            ),
             1
         );
         let events = service.drain_events();
@@ -10958,14 +11154,18 @@ mod tests {
         let reply = service
             .submit_read_wait(request.clone())
             .expect("read wait");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         let read = reply.wait(deadline).expect("reply").expect("read");
         assert_eq!(read.value, DebugValue::Decimal("5".into()));
 
         let reply = service
             .submit_read_wait(request.clone())
             .expect("read wait");
-        engine.pump(0, None);
+        engine.pump(0, None, false);
         failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
 
         let value = typed("DINT", DebugValue::Decimal("2".into()));
@@ -10973,11 +11173,19 @@ mod tests {
             .submit_write_wait(
                 DebugWriteKind::Write,
                 DebugWriteRequest::new(DebugTarget::path("counter"), value),
+                false,
             )
             .expect("write wait");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         let queued = reply.wait(deadline).expect("reply").expect("queued");
-        assert_eq!(queued.0, 1);
+        let DebugWriteReply::Queued(queue_id) = queued else {
+            panic!("expected a queued write");
+        };
+        assert_eq!(queue_id.0, 1);
         assert_eq!(engine.queued_count(), 1);
 
         let reply = service
@@ -10987,31 +11195,49 @@ mod tests {
                     DebugTarget::path("counter"),
                     typed("LINT", DebugValue::Decimal("2".into())),
                 ),
+                false,
             )
             .expect("bad write wait");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_TYPE);
         assert!(audited.lock().expect("audited").len() >= 2);
 
         let reply = service
             .submit_release_wait(DebugTarget::path("counter"))
             .expect("release wait");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         assert!(!reply.wait(deadline).expect("reply").expect("release"));
         let reply = service.submit_release_all_wait().expect("release all");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         assert_eq!(reply.wait(deadline).expect("reply").expect("all"), 0);
 
         let reply = service
             .submit_watch_add_wait(vec![DebugTarget::path("counter")], MIN_WATCH_INTERVAL_NS)
             .expect("watch add");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         let info = reply.wait(deadline).expect("reply").expect("watch");
         assert_eq!(engine.watch_count(), 1);
         assert!(!info.protected);
         let emitted = engine.pump(
             MIN_WATCH_INTERVAL_NS + 1,
             Some(source(&target, &write_manifest_value, &roots)),
+            false,
         );
         assert!(emitted >= 1);
         let events = service.drain_events();
@@ -11022,24 +11248,40 @@ mod tests {
         );
 
         let reply = service.submit_watch_list_wait().expect("watch list");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         assert_eq!(reply.wait(deadline).expect("reply").len(), 1);
 
         let reply = service
             .submit_watch_remove_wait(info.watch_id)
             .expect("watch remove");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         assert!(reply.wait(deadline).expect("reply").is_some());
         assert_eq!(engine.watch_count(), 0);
 
         service.set_session(Some("session".into()));
         let reply = service.submit_clear_session_wait().expect("clear");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         reply.wait(deadline).expect("reply").expect("cleared");
         assert!(!engine.has_session());
 
         let reply = service.submit_manifest_wait(false).expect("manifest");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
 
         let json = "{}";
@@ -11053,7 +11295,7 @@ mod tests {
             Some(&binary),
         );
         let reply = service.submit_manifest_wait(false).expect("manifest");
-        engine.pump(0, Some(json_source));
+        engine.pump(0, Some(json_source), false);
         let manifest_reply = reply.wait(deadline).expect("reply").expect("json");
         assert_eq!(manifest_reply.format, "json");
         assert_eq!(manifest_reply.data, ManifestData::Json(json.into()));
@@ -11068,6 +11310,7 @@ mod tests {
                 Some(json),
                 Some(&binary),
             )),
+            false,
         );
         assert_eq!(
             reply.wait(deadline).expect("reply").expect("binary").data,
@@ -11077,10 +11320,14 @@ mod tests {
         let _ = service
             .submit_watch_add_wait(vec![DebugTarget::path("counter")], MIN_WATCH_INTERVAL_NS)
             .expect("watch add");
-        engine.pump(0, Some(source(&target, &write_manifest_value, &roots)));
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
         assert_eq!(engine.watch_count(), 1);
         let new_generation = source_with(&target, &write_manifest_value, &roots, 4, None, None);
-        engine.pump(0, Some(new_generation));
+        engine.pump(0, Some(new_generation), false);
         assert_eq!(engine.watch_count(), 0);
     }
 
@@ -12053,35 +12300,36 @@ mod tests {
                     DebugTarget::path("counter"),
                     typed("DINT", DebugValue::Decimal("1".into())),
                 ),
+                false,
             )
             .expect("write");
-        stale_engine.pump(0, None);
+        stale_engine.pump(0, None, false);
         failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
 
         let reply = stale_service
             .submit_release_wait(DebugTarget::path("counter"))
             .expect("release");
-        stale_engine.pump(0, None);
+        stale_engine.pump(0, None, false);
         failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
 
         let reply = stale_service
             .submit_watch_add_wait(vec![DebugTarget::path("counter")], MIN_WATCH_INTERVAL_NS)
             .expect("watch");
-        stale_engine.pump(0, None);
+        stale_engine.pump(0, None, false);
         failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
 
         let reply = stale_service.submit_manifest_wait(false).expect("manifest");
-        stale_engine.pump(0, None);
+        stale_engine.pump(0, None, false);
         failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
 
         stale_service.set_session(Some("session".into()));
         let reply = stale_service.submit_clear_session_wait().expect("clear");
-        stale_engine.pump(0, None);
+        stale_engine.pump(0, None, false);
         reply.wait(deadline).expect("reply").expect("cleared");
 
         let request = DebugReadRequest::new(DebugTarget::path("counter"));
         let _ = service.submit_read(request).expect("read");
-        assert_eq!(engine.pump(0, None), 1);
+        assert_eq!(engine.pump(0, None, false), 1);
         let events = service.drain_events();
         assert!(matches!(
             events.first(),
@@ -12656,6 +12904,9 @@ mod tests {
 
     #[test]
     fn direct_binding_validation_reports_missing_area_and_width_errors() {
+        let _guard = crate::IMAGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let id = GotId::from_bytes([102; 16]);
         let counter = direct_root(id, "_ROOT::COUNTER", "DINT", 4);
         let flag = direct_root(id, "_ROOT::COUNTER", "BOOL", 1);

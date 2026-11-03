@@ -196,8 +196,10 @@ pub(crate) fn generate(
     let (span_ids, span_entries) = build_span_table(hir);
     let debug = crate::debug::DebugInfo::new(options, target);
     let checkpoint_slot = got.import_slot(ImportService::DebugCheck);
-    let collect_checkpoints =
-        options.debug && !options.release && !options.test_build && checkpoint_slot.is_some();
+    let collect_checkpoints = options.debug
+        && !options.release
+        && (!options.test_build || options.test_debug)
+        && checkpoint_slot.is_some();
     let mut lowerer = Lowerer {
         hir,
         options,

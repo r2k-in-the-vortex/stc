@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28); WL-5.1 adds the Modbus TCP profile schema and records the implemented `--io`/shim/status surface (2026-11-02)  
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28); WL-1.1 adds `stc lsp`, `stc dap`, `--diagnostic-paths`, and `stc test --exact` (2026-10-30; F-17/F-18, 2026-11-03); WL-1.1 F-20 makes stdin EOF a default graceful stop for `stc run --watch` (D-213, 2026-10-31); WL-1.1 F-11 raises the stopped-frame sidecar to format 2 (D-244) and F-14 adds immediate stopped writes on `stc-debug/1.1` (D-245); WL-5.1 adds the Modbus TCP profile schema and records the implemented `--io`/shim/status surface (2026-11-02)
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md)
 
@@ -28,8 +28,10 @@ output goes to stdout.
 > exits 0/1/2. `run --watch` builds against the active baseline, launches the host with a local
 > user-only control endpoint, watches sources/manifests/history, deploys module/manifest pairs,
 > reports each compatibility result, retries once on a stale baseline, keeps the old generation
-> on failure, and exits 130 on Ctrl-C. `--store` also selects the watch store, and
-> `--watch-timeout <duration>` bounds a run for automation. `--message-format` supports
+> on failure, and exits 130 on Ctrl-C. The watch runs until interrupted, the watch timeout, or
+> standard-input EOF; EOF stops it gracefully with `[stc] watch stopped` and exit 0 (D-213). `--store`
+> also selects the watch store, and `--watch-timeout <duration>` bounds a run for automation.
+> `--message-format` supports
 > `human`, `json`, and `short`; exit codes follow §1.3. The loadable `module` with its
 > binary/JSON manifest and metadata, the thin `exe` launcher, and the embedding `lib` host
 > archive keep their M4.5 shapes, and `lib-type = "shared"` selects the shared host library.
@@ -75,8 +77,10 @@ output goes to stdout.
 | `stc rename` | Source-aware tracked rename that preserves `GotId` history |
 | `stc run --watch` | Watch sources, rebuild, and deploy an online change |
 | `stc debug` | Build and launch a local authenticated debug session, or attach with `--attach` (§1.7) |
+| `stc lsp` | Serve the Language Server Protocol for the local project over stdio (§1.8) |
+| `stc dap` | Serve the Debug Adapter Protocol for the local project over stdio; distinct from `stc debug` (§1.8) |
 
-Future commands (not v1): `stc lsp`, `stc doc`.
+Future commands (not v1): `stc doc`.
 
 ### 1.2 Common options
 
@@ -101,6 +105,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--no-retain` | Disable retained-state load and save |
 | `--debug-protocol <kind>` | Local debug transport (`pipe` default, `socket` optional) for `stc debug` and `stc run --debug-server`; overrides `[debug].protocol` |
 | `--allow-untracked-removal` | Permit removing/renaming a root without a tracked rename; otherwise diagnose and require `--cold` |
+| `--diagnostic-paths <style>` | `package` (default) names project diagnostics `<package>/<relative>`; `absolute` names the source file by absolute path. Valid only with `check`, `build`, `run`, and `test` |
 | `--message-format <fmt>` | `human` (default), `json`, `short` |
 | `--color <when>` | `auto`, `always`, `never` |
 | `-v`, `-vv` | Verbose phase output; `-vv` includes clang commands and IR paths |
@@ -109,6 +114,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--deny warnings` | Equivalent to `-D warnings` |
 | `--locked` | Require `stc.lock` to match the manifest/dependency graph; fail instead of updating it |
 | `--list` | `stc test`: list discovered tests without building |
+| `--exact` | `stc test`: match positional filters against complete test names (ASCII case-insensitive) instead of substrings |
 | `--test` | `stc clean`: remove only the test artifact tree (`target/stc/test`) and the default coverage directory (`target/stc/coverage`); with `--out-dir`, exactly the given root |
 | `--no-run` | `stc test`: build test artifacts without executing them |
 | `--timeout <duration>` | `stc test`: override the per-test timeout (default 5 s) |
@@ -123,7 +129,8 @@ Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LO
 (`--coverage` with `--no-coverage`, `--coverage` with `--list`, and `--coverage-out` with
 `--list` or without effective coverage) are usage errors (`STC-E-PROJECT-010`, exit 2).
 Coverage options are valid only with `stc test`; using them with another command, including
-`stc build`, is a usage error (`STC-E-PROJECT-010`, exit 2).
+`stc build`, is a usage error (`STC-E-PROJECT-010`, exit 2). `--list` and `--exact` are likewise
+valid only with `stc test`; using either with another command is a usage error.
 
 The table describes the v1 target surface. M6 implemented `--manifest-path`, `--locked`,
 `--color`, `-q`, `-D`/`-W`/`-A`, `--deny warnings`, `-v`/`-vv`, `--debug`, and, for `stc run`,
@@ -131,9 +138,10 @@ The table describes the v1 target surface. M6 implemented `--manifest-path`, `--
 `--no-retain`. `run --watch` adds `--store <dir>` and `--watch-timeout <duration>`; the online
 commands add `--out`, `--binary`, `--store`, `--host`, `--nonce`, and `--baseline`, and `rename`
 adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `stc debug` /
-`--debug-server` surface are implemented in M6.5; §1.7 fixes the contract. WL-10 implements
-`--coverage`, `--no-coverage`, and `--coverage-out` for `stc test`, plus the `[test] coverage`
-project default (§2.4).
+`--debug-server` surface are implemented in M6.5; §1.7 fixes the contract. WL-1.1 implements
+`--diagnostic-paths` and the `stc lsp` and `stc dap` servers; §1.8 fixes their surface. WL-10
+implements `--coverage`, `--no-coverage`, and `--coverage-out` for `stc test`, plus the
+`[test] coverage` project default (§2.4).
 
 The implemented I/O overrides are exactly `--io` and `--io-file`. There is no `--io-config`
 runtime profile override: the profile selected by `[io].config` is embedded at build time and is
@@ -152,6 +160,9 @@ and in [I/O Routing and Backends](IO-Routing-and-Backends.md) §2.3; WL-5.1 does
 | 4 | Trap or runtime failure in `stc run`/`stc test` |
 | 130 | Interrupted (Ctrl-C) |
 
+`stc run --watch` exits 0 for a graceful stdin-EOF stop, for a normal `--watch-timeout` expiry, and
+for a host exit with status 0; `--watch-timeout` otherwise returns the host's exit status, and a
+host exit returns that status. Ctrl-C remains 130 (§1.7).
 For `stc test`, coverage leaves the test exit codes unchanged: 0 when the selected tests pass, 1
 for a failing or timed-out test or a coverage report directory/file write failure
 (`STC-E-BUILD-002`), 2 for a usage or manifest error, and 4 for an unexpected trap. Coverage
@@ -233,6 +244,26 @@ key, but a required key's name, type, or meaning does not change. JSON goes to s
 logging stays on stderr.
 
 **Diagnostics.** One object per diagnostic per line, as in §1.4. This shape is unchanged.
+
+**Discovered tests.** `stc test --list --message-format json` writes one object per discovered
+test, in discovery order, without building:
+
+```json
+{
+  "name": "TimerBlink",
+  "package": "demo",
+  "file": "tests/timer.st",
+  "line": 12,
+  "column": 1
+}
+```
+
+- `package` is the owning package name; `file` is package-relative with forward slashes. A
+  dependency file is `<package>/<relative>`.
+- `line` and `column` are 1-based and name the start of the test declaration, which is the
+  `{stc:test}` annotation when one is present.
+- The human `--list` format remains one test name per line. These keys are additive; a later
+  compatible extension may append another key.
 
 **Test results.** `stc test --message-format json` writes one object per test, in discovery
 order, after the test process exits:
@@ -432,7 +463,7 @@ the command surface.
 | `--watch <target>` | Add an initial watch target; repeatable. |
 | `--allow-write` | Launch the server with the `write` scope and request it. |
 | `--allow-force` | Launch the server with the `force` scope and request it. |
-| `--session-timeout <duration>` | Launch-mode stop/idle bound; defaults to `[debug].session-timeout`. |
+| `--session-timeout <duration>` | Launch-mode stop/idle bound; defaults to `[debug].session-timeout` (disabled by default; zero disables). |
 | `--debug-protocol <kind>` | Launch transport (`pipe` or `socket`); overrides `[debug].protocol`. |
 | `--debug` / `--release` | Build-mode selection; `stc debug` defaults to debug. |
 
@@ -483,13 +514,62 @@ by a separate system and machine design as required by law and regulation.
 | `--debug-endpoint <path>` | Endpoint file to write (default a per-run path under the out-dir). |
 | `--allow-write` | Grant the `write` scope. |
 | `--allow-force` | Grant the `force` scope. |
-| `--session-timeout <duration>` | Stop/idle bound; defaults to `[debug].session-timeout`. |
+| `--session-timeout <duration>` | Stop/idle bound; defaults to `[debug].session-timeout` (disabled by default; zero disables). |
 
 `--debug-server` is valid for debug and release modules; a release module yields a
 monitoring-only session (`STC-W-DEBUG-004`). `stc test` rejects `--release`, `--debug-server`,
 `--debug-protocol`, and the server-grant options. `stc run --watch` and `--debug-server` may
 coexist: the M6 control endpoint and the M6.5 debug endpoint have different names, tokens,
 protocols, and messages (D-155, D-173).
+
+**`stc run --watch` lifetime.** The watch runs until interrupted, the `--watch-timeout` bound, or
+standard-input EOF. It reads stdin only to detect EOF and never consumes commands from it. On EOF
+(a terminal Ctrl-D/Ctrl-Z, `/dev/null`, or a closed stdin pipe) it stops the host through the same
+control client as Ctrl-C, prints `[stc] watch stopped`, and exits 0; Ctrl-C prints `[stc] watch
+interrupted` and exits 130. `--watch-timeout` stops the host, prints `[stc] watch timeout reached`,
+and returns the host's exit status (0 for a clean stop). A host that exits on its own ends the
+watch with the host's status and prints `[stc] host exited with status <n>` (D-213). The watch does
+not run the stale-endpoint preparation that non-watch debug launches use: an explicit
+`--debug-endpoint` must be a fresh path for each watch run, or startup fails with
+`STC-E-DEBUG-020`/`STC-E-DEBUG-021`; a caller that uniquely names the path per run, as the VS Code
+extension does, is unaffected. IDE Integration §4.7 fixes the editor surface that uses this
+contract.
+
+### 1.8 IDE servers (`stc lsp` and `stc dap`)
+
+Both servers own standard input and standard output. Standard output carries protocol messages
+only; logs, build output, and the debug endpoint line go to standard error. Both accept only
+`--manifest-path <path>` (plus `--help`/`--version`); diagnostic, build, and formatting options are
+rejected. The editor contracts are fixed in
+[IDE Integration](IDE-Integration.md) §3 and §4.
+
+**`stc lsp`.** Serves the Language Server Protocol with `Content-Length` framed JSON-RPC over
+stdio. `--manifest-path` selects the project; otherwise the server discovers `stc.toml` from the
+initialize `rootUri`, then `workspaceFolders`, then the process working directory, searching
+ancestors. A missing or unloadable project fails `initialize` with a readable error and logs the
+detail to stderr. The server exits 0 after the `shutdown`/`exit` handshake and 1 when input closes
+or `exit` arrives without `shutdown`. It provides push diagnostics, document symbols, definition,
+references, hover, completion, and whole-document formatting, with full synchronization and
+UTF-16 positions; the closed unsupported list is in IDE Integration §3.3.
+
+**`stc dap`.** Serves the Debug Adapter Protocol over stdio. Launch and attach settings arrive as
+DAP messages (`project`, `noBuild`, `outDir`, `release`, `allowWrite`, `allowForce`, `sourceRoot`,
+`args`, `cwd`, `test` for a selected test, and `endpoint` for attach); `--manifest-path` is only a
+fallback project path. Launch builds the debug form by default and starts a local endpoint through
+the same driver plumbing as `stc debug`; `noBuild` launches existing artifacts. A launch with
+`test` builds only that discovered `{stc:test}` POU with the per-test debug harness (Testing and
+Verification §2.5) into `<artifact root>/debug/<artifact>`, applies breakpoints before releasing
+the test host's start gate, and cannot be combined with `noBuild`, `release`, or attach. The
+adapter translates DAP to `stc-debug/1.1` and falls back to `stc-debug/1`, reports unsupported
+capabilities honestly, and owns no compiler or debugger logic. `disconnect` stops the session and
+exits the adapter; a launch-owned host is shut down, while attach leaves it running. `stc dap` is
+distinct from `stc debug`: `stc debug` is the interactive CLI client, and `stc dap` is the editor
+server.
+
+`--diagnostic-paths` affects project-mode diagnostics only. `package` is the default and keeps
+`<package>/<relative>` names for human and JSON output; `absolute` names the source file by its
+absolute path so an editor problem matcher can resolve multi-package sources. `stc run --watch`
+forwards the selected style to its child build.
 
 ## 2. Project manifest: `stc.toml`
 
@@ -565,7 +645,7 @@ allow-untracked-removal = false
 default = true
 protocol = "pipe"                   # pipe | socket (local only)
 force-sessions-end-on-swap = true   # must be true in v1
-session-timeout = "5m"              # continuous stop/idle bound (implemented, M6.5)
+# session-timeout = "5m"            # optional continuous stop/idle bound; omit or "0ns" to disable
 allow-write = false                 # grant the write scope (implemented, M6.5)
 allow-force = false                 # grant the force scope (implemented, M6.5)
 
@@ -681,11 +761,11 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   override it.
 - `[debug]` controls the default build mode (`default`), local transport (`protocol`, `pipe`
   default or `socket`), the swap teardown policy (`force-sessions-end-on-swap`, which must be
-  `true` in v1), the stop/idle bound (`session-timeout`, a duration string, default `5m`), and
-  the default write/force grants (`allow-write`, `allow-force`, both false). `[debug].default`
-  must agree with an explicitly present `[build].debug`; a disagreement or
-  `force-sessions-end-on-swap = false` is `STC-E-PROJECT-010`. `session-timeout` must be a
-  positive duration and must not exceed 24 hours; `allow-write`/`allow-force` are booleans.
+  `true` in v1), the optional stop/idle bound (`session-timeout`, a duration string; unset or
+  `0ns` disables it), and the default write/force grants (`allow-write`, `allow-force`, both
+  false). `[debug].default` must agree with an explicitly present `[build].debug`; a disagreement
+  or `force-sessions-end-on-swap = false` is `STC-E-PROJECT-010`. `session-timeout` must be zero
+  or a positive duration and must not exceed 24 hours; `allow-write`/`allow-force` are booleans.
   These settings are runtime/session policy and do not affect the build ID or manifest identity.
   `stc test` ignores them and always builds the hook-free debug form. Debug remains a local,
   authenticated capability; it is not a safety function (D-173–D-179).
@@ -871,6 +951,11 @@ security boundary are in [I/O Routing and Backends](IO-Routing-and-Backends.md) 
 - `timeout` is a duration string; the runner kills the test process on expiry. The default is 5 s.
 - `[test].mock-clock` sets the initial mock time; tests advance the next cycle's latched time with
   `STC_CLOCK_ADVANCE` through host ABI 2.2 service ID 12 (D-157).
+- A `stc dap` launch with `test` selects a test by its exact discovered name (`stc test --list`
+  prints the names). The run compiles the same root package and dependencies, including
+  `[test].sources`, but builds only the selected test as a hook-bearing per-test debug harness
+  under `target/stc/test/debug/<artifact>` (D-246). Ordinary `stc test` builds and artifacts are
+  unaffected.
 - `[test] coverage` is a boolean (default `false`). When `true`, `stc test` collects statement
   coverage by default. `--coverage` forces it on and `--no-coverage` forces it off, overriding the
   manifest; `--list` ignores the manifest default. `--coverage` with `--no-coverage`, `--coverage`
@@ -994,6 +1079,17 @@ target/stc/test/<artifact>/                     per-test artifact (stc test; hoo
   <artifact>.stc-meta.json
   <artifact>.stc-got.json
   <artifact>.stc-got.bin
+
+target/stc/test/debug/<artifact>/               per-test debug harness (stc dap launch `test`; D-246)
+  <artifact>.ll
+  <artifact>.o
+  <artifact>.exe | <artifact>                    thin host launcher (exe)
+  <artifact>-launcher.ll | <artifact>-launcher.o
+  <artifact>-<build-id>.dll | <artifact>-<build-id>.so
+  <artifact>.stc-meta.json
+  <artifact>.stc-got.json
+  <artifact>.stc-got.bin
+  <artifact>.stc-frames.json                    stopped-frame sidecar (hook-bearing)
 
 target/stc/coverage/                            coverage reports (stc test; default)
   coverage.json                                 native report (`stc-coverage/1`)

@@ -1,0 +1,1376 @@
+{
+  "name": "stc-vscode",
+  "displayName": "stc Structured Text",
+  "description": "Local Structured Text support for stc: syntax highlighting, language features, tasks, compiler diagnostics, and debugging.",
+  "version": "0.1.0",
+  "publisher": "stc-local",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/r2k-in-the-vortex/stc.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers"
+  ],
+  "keywords": [
+    "structured text",
+    "iec 61131-3",
+    "stc",
+    "plc"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:st",
+    "onDebugResolve:stc",
+    "workspaceContains:**/stc.toml"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "stc.startOnlineChange",
+        "title": "Start Online Change",
+        "category": "stc"
+      },
+      {
+        "command": "stc.stopOnlineChange",
+        "title": "Stop Online Change",
+        "category": "stc",
+        "enablement": "stc.onlineChangeActive"
+      },
+      {
+        "command": "stc.showOnlineChangeStatus",
+        "title": "Show Online Change Status",
+        "category": "stc"
+      },
+      {
+        "command": "stc.attachOnlineDebugger",
+        "title": "Attach Debugger to Online Change",
+        "category": "stc",
+        "enablement": "stc.onlineChangeAttachable"
+      },
+      {
+        "command": "stc.refreshTests",
+        "title": "Refresh Tests",
+        "category": "stc"
+      }
+    ],
+    "languages": [
+      {
+        "id": "st",
+        "aliases": [
+          "Structured Text",
+          "ST",
+          "st"
+        ],
+        "extensions": [
+          ".st"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "st",
+        "scopeName": "source.st",
+        "path": "./syntaxes/st.tmLanguage.json"
+      }
+    ],
+    "themes": [
+      {
+        "label": "stc Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/stc-dark-color-theme.json"
+      },
+      {
+        "label": "stc Light",
+        "uiTheme": "vs",
+        "path": "./themes/stc-light-color-theme.json"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "st"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "stc",
+        "label": "stc Structured Text",
+        "languages": [
+          "st"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "project": {
+                "type": "string",
+                "default": "${workspaceFolder}/stc.toml",
+                "description": "Path to stc.toml, its directory, or a project directory."
+              },
+              "test": {
+                "type": "string",
+                "description": "Exact test name from `stc test --list`; build and debug only that test. Cannot be combined with noBuild or release."
+              },
+              "outDir": {
+                "type": "string",
+                "description": "Output directory override; used by noBuild. A test launch appends debug/<artifact>."
+              },
+              "noBuild": {
+                "type": "boolean",
+                "default": false,
+                "description": "Launch existing artifacts without building."
+              },
+              "release": {
+                "type": "boolean",
+                "default": false,
+                "description": "Build in release mode (monitoring only: no breakpoints, stepping, or locals)."
+              },
+              "allowWrite": {
+                "type": "boolean",
+                "default": false,
+                "description": "Enable setVariable writes; the host must also allow [debug].allow-write."
+              },
+              "allowForce": {
+                "type": "boolean",
+                "default": false,
+                "description": "Request the force scope; the host must also allow [debug].allow-force."
+              },
+              "sourceRoot": {
+                "type": "string",
+                "description": "Override the source-path root instead of resolving package roots."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Extra arguments appended to the launched host."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the launched host."
+              }
+            }
+          },
+          "attach": {
+            "properties": {
+              "project": {
+                "type": "string",
+                "default": "${workspaceFolder}/stc.toml",
+                "description": "Path to stc.toml, its directory, or a project directory."
+              },
+              "endpoint": {
+                "type": "string",
+                "default": "${workspaceFolder}/target/stc/debug/debug.endpoint.json",
+                "description": "Endpoint file printed by `stc run --debug-server`."
+              },
+              "outDir": {
+                "type": "string",
+                "description": "Output directory override; used by noBuild."
+              },
+              "noBuild": {
+                "type": "boolean",
+                "default": false,
+                "description": "Launch existing artifacts without building."
+              },
+              "release": {
+                "type": "boolean",
+                "default": false,
+                "description": "Build in release mode (monitoring only)."
+              },
+              "allowWrite": {
+                "type": "boolean",
+                "default": false,
+                "description": "Enable setVariable writes; the host must also allow [debug].allow-write."
+              },
+              "allowForce": {
+                "type": "boolean",
+                "default": false,
+                "description": "Request the force scope; the host must also allow [debug].allow-force."
+              },
+              "sourceRoot": {
+                "type": "string",
+                "description": "Override the source-path root instead of resolving package roots."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Extra arguments appended to the launched host."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the launched host."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "stc",
+            "request": "launch",
+            "name": "stc: Launch",
+            "project": "${workspaceFolder}/stc.toml",
+            "noBuild": false
+          },
+          {
+            "type": "stc",
+            "request": "attach",
+            "name": "stc: Attach",
+            "project": "${workspaceFolder}/stc.toml",
+            "endpoint": "${workspaceFolder}/target/stc/debug/debug.endpoint.json"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "stc: Launch",
+            "description": "Build and debug the local stc project.",
+            "body": {
+              "type": "stc",
+              "request": "launch",
+              "name": "stc: Launch",
+              "project": "^\"\\${workspaceFolder}/stc.toml\"",
+              "noBuild": false
+            }
+          },
+          {
+            "label": "stc: Attach",
+            "description": "Attach to a running `stc run --debug-server` endpoint.",
+            "body": {
+              "type": "stc",
+              "request": "attach",
+              "name": "stc: Attach",
+              "project": "^\"\\${workspaceFolder}/stc.toml\"",
+              "endpoint": "^\"\\${workspaceFolder}/target/stc/debug/debug.endpoint.json\""
+            }
+          }
+        ]
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "stc",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "check",
+              "build",
+              "run",
+              "test",
+              "fmt"
+            ],
+            "description": "The stc command to run."
+          },
+          "project": {
+            "type": "string",
+            "description": "Path to stc.toml, its directory, or a project directory. Defaults to the first stc.toml in the workspace."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Additional arguments appended to the command."
+          },
+          "release": {
+            "type": "boolean",
+            "description": "Pass --release for build and run tasks."
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "stc",
+        "owner": "stc",
+        "source": "stc",
+        "fileLocation": "absolute",
+        "pattern": {
+          "regexp": "^(.+?):(\\d+):(\\d+): (error|warning)\\[(STC-[EW]-[A-Z0-9-]+)\\]: (.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        }
+      }
+    ],
+    "configuration": {
+      "title": "stc",
+      "properties": {
+        "stc.path": {
+          "type": "string",
+          "default": "stc",
+          "description": "Path to the stc compiler executable, or its name on PATH."
+        },
+        "stc.onlineChange.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Extra arguments appended to `stc run --watch`, such as --release, --store, or --watch-timeout. The extension owns --manifest-path, --debug-server, --debug-endpoint, --color, the control flags, and --quiet."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "editor.tokenColorCustomizations": {
+        "[Default Dark Modern]": {
+          "textMateRules": [
+            {
+              "name": "ST comment",
+              "scope": [
+                "comment.line.double-slash.st",
+                "comment.line.documentation.st",
+                "comment.block.st"
+              ],
+              "settings": {
+                "foreground": "#6A9955",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "name": "ST control keyword",
+              "scope": [
+                "keyword.control.conditional.st",
+                "keyword.control.loop.st",
+                "keyword.control.flow.st"
+              ],
+              "settings": {
+                "foreground": "#C586C0"
+              }
+            },
+            {
+              "name": "ST declaration keyword and modifier",
+              "scope": [
+                "keyword.declaration.st",
+                "storage.modifier.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST function and declaration name",
+              "scope": [
+                "entity.name.function.st"
+              ],
+              "settings": {
+                "foreground": "#DCDCAA"
+              }
+            },
+            {
+              "name": "ST type",
+              "scope": [
+                "entity.name.type.st",
+                "support.type.primitives.st",
+                "entity.name.namespace.st",
+                "entity.other.inherited-class.st",
+                "support.class.st"
+              ],
+              "settings": {
+                "foreground": "#4EC9B0"
+              }
+            },
+            {
+              "name": "ST variable",
+              "scope": [
+                "variable.name.st",
+                "variable.other.enummember.st"
+              ],
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "name": "ST parameter",
+              "scope": [
+                "variable.parameter.st",
+                "variable.parameter.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#7FB3D5"
+              }
+            },
+            {
+              "name": "ST member",
+              "scope": [
+                "variable.other.member.st"
+              ],
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "name": "ST direct variable",
+              "scope": [
+                "variable.other.constant.st"
+              ],
+              "settings": {
+                "foreground": "#4FC1FF"
+              }
+            },
+            {
+              "name": "ST language variable",
+              "scope": [
+                "variable.language.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST string, escape, and character",
+              "scope": [
+                "string.quoted.double.st",
+                "string.quoted.single.st",
+                "constant.character.escape.st",
+                "constant.character.st"
+              ],
+              "settings": {
+                "foreground": "#CE9178"
+              }
+            },
+            {
+              "name": "ST number",
+              "scope": [
+                "constant.numeric.integer.st",
+                "constant.numeric.real.st",
+                "constant.numeric.based.st",
+                "constant.numeric.typed.st",
+                "constant.numeric.duration.st",
+                "constant.numeric.date.st",
+                "constant.numeric.time.st",
+                "constant.numeric.datetime.st",
+                "constant.numeric.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#B5CEA8"
+              }
+            },
+            {
+              "name": "ST language constant",
+              "scope": [
+                "constant.language.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST operator and punctuation",
+              "scope": [
+                "keyword.operator.st",
+                "keyword.operator.type.st",
+                "punctuation.st",
+                "punctuation.definition.comment.begin.st",
+                "punctuation.definition.comment.end.st",
+                "punctuation.definition.string.begin.st",
+                "punctuation.definition.string.end.st"
+              ],
+              "settings": {
+                "foreground": "#D4D4D4"
+              }
+            },
+            {
+              "name": "ST pragma",
+              "scope": [
+                "keyword.other.pragma.st",
+                "punctuation.definition.pragma.begin.st",
+                "punctuation.definition.pragma.end.st"
+              ],
+              "settings": {
+                "foreground": "#FFB86C"
+              }
+            }
+          ]
+        },
+        "[Dark Modern]": {
+          "textMateRules": [
+            {
+              "name": "ST comment",
+              "scope": [
+                "comment.line.double-slash.st",
+                "comment.line.documentation.st",
+                "comment.block.st"
+              ],
+              "settings": {
+                "foreground": "#6A9955",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "name": "ST control keyword",
+              "scope": [
+                "keyword.control.conditional.st",
+                "keyword.control.loop.st",
+                "keyword.control.flow.st"
+              ],
+              "settings": {
+                "foreground": "#C586C0"
+              }
+            },
+            {
+              "name": "ST declaration keyword and modifier",
+              "scope": [
+                "keyword.declaration.st",
+                "storage.modifier.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST function and declaration name",
+              "scope": [
+                "entity.name.function.st"
+              ],
+              "settings": {
+                "foreground": "#DCDCAA"
+              }
+            },
+            {
+              "name": "ST type",
+              "scope": [
+                "entity.name.type.st",
+                "support.type.primitives.st",
+                "entity.name.namespace.st",
+                "entity.other.inherited-class.st",
+                "support.class.st"
+              ],
+              "settings": {
+                "foreground": "#4EC9B0"
+              }
+            },
+            {
+              "name": "ST variable",
+              "scope": [
+                "variable.name.st",
+                "variable.other.enummember.st"
+              ],
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "name": "ST parameter",
+              "scope": [
+                "variable.parameter.st",
+                "variable.parameter.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#7FB3D5"
+              }
+            },
+            {
+              "name": "ST member",
+              "scope": [
+                "variable.other.member.st"
+              ],
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "name": "ST direct variable",
+              "scope": [
+                "variable.other.constant.st"
+              ],
+              "settings": {
+                "foreground": "#4FC1FF"
+              }
+            },
+            {
+              "name": "ST language variable",
+              "scope": [
+                "variable.language.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST string, escape, and character",
+              "scope": [
+                "string.quoted.double.st",
+                "string.quoted.single.st",
+                "constant.character.escape.st",
+                "constant.character.st"
+              ],
+              "settings": {
+                "foreground": "#CE9178"
+              }
+            },
+            {
+              "name": "ST number",
+              "scope": [
+                "constant.numeric.integer.st",
+                "constant.numeric.real.st",
+                "constant.numeric.based.st",
+                "constant.numeric.typed.st",
+                "constant.numeric.duration.st",
+                "constant.numeric.date.st",
+                "constant.numeric.time.st",
+                "constant.numeric.datetime.st",
+                "constant.numeric.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#B5CEA8"
+              }
+            },
+            {
+              "name": "ST language constant",
+              "scope": [
+                "constant.language.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST operator and punctuation",
+              "scope": [
+                "keyword.operator.st",
+                "keyword.operator.type.st",
+                "punctuation.st",
+                "punctuation.definition.comment.begin.st",
+                "punctuation.definition.comment.end.st",
+                "punctuation.definition.string.begin.st",
+                "punctuation.definition.string.end.st"
+              ],
+              "settings": {
+                "foreground": "#D4D4D4"
+              }
+            },
+            {
+              "name": "ST pragma",
+              "scope": [
+                "keyword.other.pragma.st",
+                "punctuation.definition.pragma.begin.st",
+                "punctuation.definition.pragma.end.st"
+              ],
+              "settings": {
+                "foreground": "#FFB86C"
+              }
+            }
+          ]
+        },
+        "[Dark 2026]": {
+          "textMateRules": [
+            {
+              "name": "ST comment",
+              "scope": [
+                "comment.line.double-slash.st",
+                "comment.line.documentation.st",
+                "comment.block.st"
+              ],
+              "settings": {
+                "foreground": "#6A9955",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "name": "ST control keyword",
+              "scope": [
+                "keyword.control.conditional.st",
+                "keyword.control.loop.st",
+                "keyword.control.flow.st"
+              ],
+              "settings": {
+                "foreground": "#C586C0"
+              }
+            },
+            {
+              "name": "ST declaration keyword and modifier",
+              "scope": [
+                "keyword.declaration.st",
+                "storage.modifier.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST function and declaration name",
+              "scope": [
+                "entity.name.function.st"
+              ],
+              "settings": {
+                "foreground": "#DCDCAA"
+              }
+            },
+            {
+              "name": "ST type",
+              "scope": [
+                "entity.name.type.st",
+                "support.type.primitives.st",
+                "entity.name.namespace.st",
+                "entity.other.inherited-class.st",
+                "support.class.st"
+              ],
+              "settings": {
+                "foreground": "#4EC9B0"
+              }
+            },
+            {
+              "name": "ST variable",
+              "scope": [
+                "variable.name.st",
+                "variable.other.enummember.st"
+              ],
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "name": "ST parameter",
+              "scope": [
+                "variable.parameter.st",
+                "variable.parameter.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#7FB3D5"
+              }
+            },
+            {
+              "name": "ST member",
+              "scope": [
+                "variable.other.member.st"
+              ],
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "name": "ST direct variable",
+              "scope": [
+                "variable.other.constant.st"
+              ],
+              "settings": {
+                "foreground": "#4FC1FF"
+              }
+            },
+            {
+              "name": "ST language variable",
+              "scope": [
+                "variable.language.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST string, escape, and character",
+              "scope": [
+                "string.quoted.double.st",
+                "string.quoted.single.st",
+                "constant.character.escape.st",
+                "constant.character.st"
+              ],
+              "settings": {
+                "foreground": "#CE9178"
+              }
+            },
+            {
+              "name": "ST number",
+              "scope": [
+                "constant.numeric.integer.st",
+                "constant.numeric.real.st",
+                "constant.numeric.based.st",
+                "constant.numeric.typed.st",
+                "constant.numeric.duration.st",
+                "constant.numeric.date.st",
+                "constant.numeric.time.st",
+                "constant.numeric.datetime.st",
+                "constant.numeric.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#B5CEA8"
+              }
+            },
+            {
+              "name": "ST language constant",
+              "scope": [
+                "constant.language.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST operator and punctuation",
+              "scope": [
+                "keyword.operator.st",
+                "keyword.operator.type.st",
+                "punctuation.st",
+                "punctuation.definition.comment.begin.st",
+                "punctuation.definition.comment.end.st",
+                "punctuation.definition.string.begin.st",
+                "punctuation.definition.string.end.st"
+              ],
+              "settings": {
+                "foreground": "#D4D4D4"
+              }
+            },
+            {
+              "name": "ST pragma",
+              "scope": [
+                "keyword.other.pragma.st",
+                "punctuation.definition.pragma.begin.st",
+                "punctuation.definition.pragma.end.st"
+              ],
+              "settings": {
+                "foreground": "#FFB86C"
+              }
+            }
+          ]
+        },
+        "[Default Light Modern]": {
+          "textMateRules": [
+            {
+              "name": "ST comment",
+              "scope": [
+                "comment.line.double-slash.st",
+                "comment.line.documentation.st",
+                "comment.block.st"
+              ],
+              "settings": {
+                "foreground": "#5A6673",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "name": "ST control keyword",
+              "scope": [
+                "keyword.control.conditional.st",
+                "keyword.control.loop.st",
+                "keyword.control.flow.st"
+              ],
+              "settings": {
+                "foreground": "#AF00DB"
+              }
+            },
+            {
+              "name": "ST declaration keyword and modifier",
+              "scope": [
+                "keyword.declaration.st",
+                "storage.modifier.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST function and declaration name",
+              "scope": [
+                "entity.name.function.st"
+              ],
+              "settings": {
+                "foreground": "#795E26"
+              }
+            },
+            {
+              "name": "ST type",
+              "scope": [
+                "entity.name.type.st",
+                "support.type.primitives.st",
+                "entity.name.namespace.st",
+                "entity.other.inherited-class.st",
+                "support.class.st"
+              ],
+              "settings": {
+                "foreground": "#267F99"
+              }
+            },
+            {
+              "name": "ST variable",
+              "scope": [
+                "variable.name.st",
+                "variable.other.enummember.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST parameter",
+              "scope": [
+                "variable.parameter.st",
+                "variable.parameter.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#005A9E"
+              }
+            },
+            {
+              "name": "ST member",
+              "scope": [
+                "variable.other.member.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST direct variable",
+              "scope": [
+                "variable.other.constant.st"
+              ],
+              "settings": {
+                "foreground": "#C2185B"
+              }
+            },
+            {
+              "name": "ST language variable",
+              "scope": [
+                "variable.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST string, escape, and character",
+              "scope": [
+                "string.quoted.double.st",
+                "string.quoted.single.st",
+                "constant.character.escape.st",
+                "constant.character.st"
+              ],
+              "settings": {
+                "foreground": "#A31515"
+              }
+            },
+            {
+              "name": "ST number",
+              "scope": [
+                "constant.numeric.integer.st",
+                "constant.numeric.real.st",
+                "constant.numeric.based.st",
+                "constant.numeric.typed.st",
+                "constant.numeric.duration.st",
+                "constant.numeric.date.st",
+                "constant.numeric.time.st",
+                "constant.numeric.datetime.st",
+                "constant.numeric.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#098658"
+              }
+            },
+            {
+              "name": "ST language constant",
+              "scope": [
+                "constant.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST operator and punctuation",
+              "scope": [
+                "keyword.operator.st",
+                "keyword.operator.type.st",
+                "punctuation.st",
+                "punctuation.definition.comment.begin.st",
+                "punctuation.definition.comment.end.st",
+                "punctuation.definition.string.begin.st",
+                "punctuation.definition.string.end.st"
+              ],
+              "settings": {
+                "foreground": "#1F1F1F"
+              }
+            },
+            {
+              "name": "ST pragma",
+              "scope": [
+                "keyword.other.pragma.st",
+                "punctuation.definition.pragma.begin.st",
+                "punctuation.definition.pragma.end.st"
+              ],
+              "settings": {
+                "foreground": "#B45309"
+              }
+            }
+          ]
+        },
+        "[Light Modern]": {
+          "textMateRules": [
+            {
+              "name": "ST comment",
+              "scope": [
+                "comment.line.double-slash.st",
+                "comment.line.documentation.st",
+                "comment.block.st"
+              ],
+              "settings": {
+                "foreground": "#5A6673",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "name": "ST control keyword",
+              "scope": [
+                "keyword.control.conditional.st",
+                "keyword.control.loop.st",
+                "keyword.control.flow.st"
+              ],
+              "settings": {
+                "foreground": "#AF00DB"
+              }
+            },
+            {
+              "name": "ST declaration keyword and modifier",
+              "scope": [
+                "keyword.declaration.st",
+                "storage.modifier.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST function and declaration name",
+              "scope": [
+                "entity.name.function.st"
+              ],
+              "settings": {
+                "foreground": "#795E26"
+              }
+            },
+            {
+              "name": "ST type",
+              "scope": [
+                "entity.name.type.st",
+                "support.type.primitives.st",
+                "entity.name.namespace.st",
+                "entity.other.inherited-class.st",
+                "support.class.st"
+              ],
+              "settings": {
+                "foreground": "#267F99"
+              }
+            },
+            {
+              "name": "ST variable",
+              "scope": [
+                "variable.name.st",
+                "variable.other.enummember.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST parameter",
+              "scope": [
+                "variable.parameter.st",
+                "variable.parameter.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#005A9E"
+              }
+            },
+            {
+              "name": "ST member",
+              "scope": [
+                "variable.other.member.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST direct variable",
+              "scope": [
+                "variable.other.constant.st"
+              ],
+              "settings": {
+                "foreground": "#C2185B"
+              }
+            },
+            {
+              "name": "ST language variable",
+              "scope": [
+                "variable.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST string, escape, and character",
+              "scope": [
+                "string.quoted.double.st",
+                "string.quoted.single.st",
+                "constant.character.escape.st",
+                "constant.character.st"
+              ],
+              "settings": {
+                "foreground": "#A31515"
+              }
+            },
+            {
+              "name": "ST number",
+              "scope": [
+                "constant.numeric.integer.st",
+                "constant.numeric.real.st",
+                "constant.numeric.based.st",
+                "constant.numeric.typed.st",
+                "constant.numeric.duration.st",
+                "constant.numeric.date.st",
+                "constant.numeric.time.st",
+                "constant.numeric.datetime.st",
+                "constant.numeric.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#098658"
+              }
+            },
+            {
+              "name": "ST language constant",
+              "scope": [
+                "constant.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST operator and punctuation",
+              "scope": [
+                "keyword.operator.st",
+                "keyword.operator.type.st",
+                "punctuation.st",
+                "punctuation.definition.comment.begin.st",
+                "punctuation.definition.comment.end.st",
+                "punctuation.definition.string.begin.st",
+                "punctuation.definition.string.end.st"
+              ],
+              "settings": {
+                "foreground": "#1F1F1F"
+              }
+            },
+            {
+              "name": "ST pragma",
+              "scope": [
+                "keyword.other.pragma.st",
+                "punctuation.definition.pragma.begin.st",
+                "punctuation.definition.pragma.end.st"
+              ],
+              "settings": {
+                "foreground": "#B45309"
+              }
+            }
+          ]
+        },
+        "[Light 2026]": {
+          "textMateRules": [
+            {
+              "name": "ST comment",
+              "scope": [
+                "comment.line.double-slash.st",
+                "comment.line.documentation.st",
+                "comment.block.st"
+              ],
+              "settings": {
+                "foreground": "#5A6673",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "name": "ST control keyword",
+              "scope": [
+                "keyword.control.conditional.st",
+                "keyword.control.loop.st",
+                "keyword.control.flow.st"
+              ],
+              "settings": {
+                "foreground": "#AF00DB"
+              }
+            },
+            {
+              "name": "ST declaration keyword and modifier",
+              "scope": [
+                "keyword.declaration.st",
+                "storage.modifier.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST function and declaration name",
+              "scope": [
+                "entity.name.function.st"
+              ],
+              "settings": {
+                "foreground": "#795E26"
+              }
+            },
+            {
+              "name": "ST type",
+              "scope": [
+                "entity.name.type.st",
+                "support.type.primitives.st",
+                "entity.name.namespace.st",
+                "entity.other.inherited-class.st",
+                "support.class.st"
+              ],
+              "settings": {
+                "foreground": "#267F99"
+              }
+            },
+            {
+              "name": "ST variable",
+              "scope": [
+                "variable.name.st",
+                "variable.other.enummember.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST parameter",
+              "scope": [
+                "variable.parameter.st",
+                "variable.parameter.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#005A9E"
+              }
+            },
+            {
+              "name": "ST member",
+              "scope": [
+                "variable.other.member.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST direct variable",
+              "scope": [
+                "variable.other.constant.st"
+              ],
+              "settings": {
+                "foreground": "#C2185B"
+              }
+            },
+            {
+              "name": "ST language variable",
+              "scope": [
+                "variable.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST string, escape, and character",
+              "scope": [
+                "string.quoted.double.st",
+                "string.quoted.single.st",
+                "constant.character.escape.st",
+                "constant.character.st"
+              ],
+              "settings": {
+                "foreground": "#A31515"
+              }
+            },
+            {
+              "name": "ST number",
+              "scope": [
+                "constant.numeric.integer.st",
+                "constant.numeric.real.st",
+                "constant.numeric.based.st",
+                "constant.numeric.typed.st",
+                "constant.numeric.duration.st",
+                "constant.numeric.date.st",
+                "constant.numeric.time.st",
+                "constant.numeric.datetime.st",
+                "constant.numeric.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#098658"
+              }
+            },
+            {
+              "name": "ST language constant",
+              "scope": [
+                "constant.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST operator and punctuation",
+              "scope": [
+                "keyword.operator.st",
+                "keyword.operator.type.st",
+                "punctuation.st",
+                "punctuation.definition.comment.begin.st",
+                "punctuation.definition.comment.end.st",
+                "punctuation.definition.string.begin.st",
+                "punctuation.definition.string.end.st"
+              ],
+              "settings": {
+                "foreground": "#1F1F1F"
+              }
+            },
+            {
+              "name": "ST pragma",
+              "scope": [
+                "keyword.other.pragma.st",
+                "punctuation.definition.pragma.begin.st",
+                "punctuation.definition.pragma.end.st"
+              ],
+              "settings": {
+                "foreground": "#B45309"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs && vscode-tmgrammar-test -g syntaxes/st.tmLanguage.json \"test/grammar/*.st\"",
+    "test:electron": "node test/electron/runTest.js",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.82.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.1.0",
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3",
+    "vscode-tmgrammar-test": "0.1.3"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  }
+}

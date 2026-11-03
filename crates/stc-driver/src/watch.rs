@@ -4,12 +4,14 @@
 //! host with a local control endpoint, and sends module/manifest pairs after
 //! each change. Deploy preparation runs on the host's cycle thread between
 //! scans; a build error, incompatible change, or prepare failure leaves the
-//! old generation active. Ctrl-C stops the host and exits 130.
+//! old generation active. Ctrl-C stops the host and exits 130; standard-input
+//! EOF is also a graceful stop and exits 0 (D-213).
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use stc_diag::Severity;
@@ -21,14 +23,43 @@ use stc_runtime::store::ManifestStore;
 use crate::build::Request;
 use crate::cli::DebugOptions;
 use crate::compat::CompatibilityReport;
-use crate::report::{Log, Reporter};
+use crate::report::{DiagnosticPaths, Log, Reporter};
 use crate::run as run_util;
+
+/// Set by the stdin reader when standard input reaches EOF.
+static STDIN_EOF: AtomicBool = AtomicBool::new(false);
+
+/// Treats standard-input EOF as a graceful stop request (D-213).
+///
+/// The reader consumes stdin so a terminal Ctrl-D/Ctrl-Z or a closed pipe is
+/// observed without blocking the watch loop. The extension closes the child's
+/// stdin pipe to stop an IDE-owned watch.
+fn watch_stdin_for_eof() {
+    std::thread::spawn(|| {
+        let mut stdin = std::io::stdin();
+        let mut buffer = [0_u8; 256];
+        loop {
+            match stdin.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        STDIN_EOF.store(true, Ordering::SeqCst);
+    });
+}
+
+fn stdin_closed() -> bool {
+    STDIN_EOF.load(Ordering::SeqCst)
+}
 
 /// Runs the watch workflow.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     manifest: Option<&str>,
     locked: bool,
+    diagnostic_paths: DiagnosticPaths,
     request: &Request,
     debug: &DebugOptions,
     store: Option<&str>,
@@ -37,6 +68,7 @@ pub(crate) fn run(
     log: Log,
 ) -> u8 {
     stc_runtime::signal::install_stop_handler();
+    watch_stdin_for_eof();
     let manifest_input = manifest.unwrap_or("stc.toml");
     let graph = match load_graph(manifest_input, locked, reporter) {
         Some(graph) => graph,
@@ -76,6 +108,7 @@ pub(crate) fn run(
         manifest_input,
         &name,
         locked,
+        diagnostic_paths,
         request,
         mode,
         &out_dir,
@@ -150,6 +183,12 @@ pub(crate) fn run(
             log.status("watch interrupted");
             return 130;
         }
+        if stdin_closed() {
+            stop_host(&mut client, &nonce);
+            let _ = child.wait();
+            log.status("watch stopped");
+            return 0;
+        }
         if let Some(timeout) = timeout
             && started.elapsed() >= timeout
         {
@@ -199,6 +238,7 @@ pub(crate) fn run(
             manifest_input,
             &name,
             locked,
+            diagnostic_paths,
             request,
             mode,
             &out_dir,
@@ -217,6 +257,7 @@ pub(crate) fn run(
                             manifest_input,
                             &name,
                             locked,
+                            diagnostic_paths,
                             request,
                             mode,
                             &out_dir,
@@ -276,6 +317,7 @@ fn build_once(
     manifest_input: &str,
     name: &str,
     locked: bool,
+    diagnostic_paths: DiagnosticPaths,
     request: &Request,
     mode: crate::build::BuildMode,
     out_dir: &Path,
@@ -352,6 +394,9 @@ fn build_once(
     }
     if locked {
         command.arg("--locked");
+    }
+    if diagnostic_paths == DiagnosticPaths::Absolute {
+        command.args(["--diagnostic-paths", "absolute"]);
     }
     if let Some(target) = &request.target {
         command.arg("--target").arg(target);

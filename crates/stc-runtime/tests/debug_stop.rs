@@ -17,8 +17,8 @@ use stc_got::GotId;
 use stc_got::codes;
 use stc_got::json::Json;
 use stc_runtime::{
-    Candidate, CycleOutcome, DebugClient, DebugServerConfig, DebugServerInfo, Host, HostPlatform,
-    LoadMode, LoadOutcome, ManifestStore, PROFILE, TransportKind,
+    Candidate, CycleOutcome, DEBUG_PROTOCOL_1_1, DebugClient, DebugServerConfig, DebugServerInfo,
+    Host, HostPlatform, LoadMode, LoadOutcome, ManifestStore, PROFILE, TransportKind,
 };
 
 use common::{Behavior, BuildFlags, Fixture, StopFixture, StopFlow};
@@ -337,6 +337,23 @@ fn ok(client: &mut DebugClient, op: &str, params: Json) -> Json {
     result_of(&response).clone()
 }
 
+/// Sends one request while the host services it as a running boundary pump.
+///
+/// The cycle thread is not parked, so a 1.1 write stays queued exactly as it
+/// does while the target runs.
+fn request_pumped(host: &mut Host, client: &mut DebugClient, op: &str, params: Json) -> Json {
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(|| request(client, op, params));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !handle.is_finished() {
+            assert!(Instant::now() < deadline, "`{op}` did not finish in time");
+            host.debug_pump_at(0);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        handle.join().expect("request thread")
+    })
+}
+
 fn expect_error(client: &mut DebugClient, op: &str, params: Json, code: &str) -> Json {
     let response = request(client, op, params);
     assert_eq!(
@@ -547,6 +564,11 @@ fn breakpoint_stop_reports_frames_and_typed_locals() {
         assert_eq!(text(&frames[1], "function"), setup.fixture.outer.to_hex());
         assert_eq!(text(&frames[1], "symbol"), setup.fixture.outer_symbol);
         assert!(!boolean(&frames[1], "optimized_out"));
+        // F-11: the caller reports the call site from the format-2 line map.
+        let caller_source = field(&frames[1], "source");
+        assert_eq!(text(caller_source, "file"), "src/outer.st");
+        assert_eq!(number(caller_source, "line"), 21);
+        assert_eq!(number(caller_source, "column"), 5);
 
         let local = client
             .call_ok(
@@ -964,6 +986,40 @@ fn pause_timeout_ends_session_and_resumes_cycle() {
     });
     // The cycle resumes and completes; no state from the timed-out stop is
     // applied to a later session.
+    assert_ran(cycle, setup.generation);
+    setup.finish();
+}
+
+#[test]
+fn zero_session_timeout_disables_the_pause_bound() {
+    let _guard = stop_guard();
+    let Some(mut setup) = StopSetup::new(
+        "pause-no-timeout",
+        StopFlow::Pause,
+        Duration::ZERO,
+        Sidecar::Valid,
+    ) else {
+        return;
+    };
+    let mut client = setup.client();
+    session_start(&mut client);
+    let response = request(&mut client, "exec.pause", obj([]));
+    assert_eq!(text(result_of(&response), "status"), "pause-requested");
+
+    let cycle = std::thread::scope(|scope| {
+        let host = &mut setup.host;
+        let handle = scope.spawn(move || host.cycle_at(1_000_000));
+        let stopped = wait_stopped(&mut client, Duration::from_secs(10));
+        assert_eq!(text(&stopped, "reason"), "pause");
+        assert!(
+            field(&session_status(&mut client), "pause_remaining_ms").is_null(),
+            "a zero timeout has no remaining bound"
+        );
+        let stop_id = number(&stopped, "stop_id");
+        let response = request(&mut client, "exec.continue", stop_id_params(stop_id));
+        assert_eq!(text(result_of(&response), "status"), "running");
+        handle.join().expect("cycle thread").expect("cycle")
+    });
     assert_ran(cycle, setup.generation);
     setup.finish();
 }
@@ -1583,6 +1639,341 @@ fn queued_write_is_held_until_continue() {
     assert_eq!(
         setup.host.root_storage(got_id).expect("counter storage"),
         &7_i32.to_le_bytes()
+    );
+    setup.finish();
+}
+
+#[test]
+fn stopped_write_applies_immediately_on_protocol_1_1() {
+    let _guard = stop_guard();
+    let Some(mut setup) = StopSetup::new(
+        "stopped-write-1-1",
+        StopFlow::Nested,
+        Duration::from_secs(60),
+        Sidecar::Valid,
+    ) else {
+        return;
+    };
+    let counter = root_record(&setup.fixture.artifacts, "G_COUNTER");
+    let got_id = counter.got_id;
+    let type_key = counter.type_key.clone();
+    let build_hex = setup.fixture.build_id.to_hex();
+    let generation = setup.generation;
+    let audit_log = setup.info.audit_log.clone();
+    assert_eq!(
+        setup.host.root_storage(got_id).expect("counter storage"),
+        &[0, 0, 0, 0]
+    );
+
+    let mut client = setup.client();
+    client.set_protocol_version(DEBUG_PROTOCOL_1_1);
+    session_start(&mut client);
+    set_checkpoint(&mut client, setup.fixture.hooks.inner_first.id);
+
+    let cycle = std::thread::scope(|scope| {
+        let host = &mut setup.host;
+        let handle = scope.spawn(move || host.cycle_at(1_000_000));
+        let stopped = next_stopped(&mut client);
+        let stop_id = number(&stopped, "stop_id");
+
+        // A 1.1 write is applied on the parked cycle thread before the
+        // response is produced: it reports `applied`, not `queued`, and it
+        // carries no queue identity.
+        let response = request(
+            &mut client,
+            "var.write",
+            obj([
+                ("target", path_target("G_COUNTER")),
+                ("value", decimal_value(&type_key, "7")),
+            ]),
+        );
+        let applied = result_of(&response).clone();
+        assert_eq!(text(&applied, "status"), "applied");
+        assert!(optional_number(&applied, "queue_id").is_none());
+        assert_eq!(number(&applied, "generation"), generation);
+        assert_eq!(
+            optional_text(&applied, "build_id"),
+            Some(build_hex.as_str())
+        );
+        assert_eq!(number(&applied, "cycle"), 1);
+
+        // Nothing entered the queue, so no boundary can apply it again.
+        let status = session_status(&mut client);
+        assert_eq!(text(&status, "state"), "stopped");
+        assert_eq!(number(&status, "queued_writes"), 0);
+
+        // A read in the same stop sees the new storage value.
+        let read = ok(
+            &mut client,
+            "var.read",
+            obj([("target", path_target("G_COUNTER"))]),
+        );
+        assert!(boolean(&read, "stopped"));
+        assert_eq!(text(field(&read, "value"), "value"), "7");
+        assert_eq!(number(&read, "cycle"), 1);
+
+        // Stepping within the same stop re-enters the module briefly and the
+        // next stop still sees the applied value.
+        let response = request(
+            &mut client,
+            "exec.step",
+            obj([
+                ("mode", Json::string("over")),
+                ("stop_id", Json::unsigned(stop_id)),
+            ]),
+        );
+        assert_eq!(text(result_of(&response), "status"), "stepping");
+        let _ = next_resumed(&mut client);
+        let next = next_stopped(&mut client);
+        assert_eq!(text(&next, "reason"), "step");
+        let read = ok(
+            &mut client,
+            "var.read",
+            obj([("target", path_target("G_COUNTER"))]),
+        );
+        assert_eq!(text(field(&read, "value"), "value"), "7");
+
+        request(
+            &mut client,
+            "exec.continue",
+            stop_id_params(number(&next, "stop_id")),
+        );
+        let _ = next_resumed(&mut client);
+        handle.join().expect("cycle thread").expect("cycle")
+    });
+    assert_ran(cycle, generation);
+    // The write reached storage once and was never queued, so the resumed
+    // boundary has nothing to apply.
+    assert_eq!(
+        setup.host.root_storage(got_id).expect("counter storage"),
+        &7_i32.to_le_bytes()
+    );
+    assert_eq!(setup.host.debug_queued_count(), 0);
+    setup.host.stop_debug_server();
+
+    let contents = fs::read_to_string(&audit_log).expect("audit log");
+    let writes: Vec<_> = contents
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| stc_got::json::parse(line).expect("audit record"))
+        .filter(|event| text(event, "event") == "write")
+        .collect();
+    assert_eq!(writes.len(), 1, "one audit record for the applied write");
+    let detail = field(&writes[0], "detail");
+    assert_eq!(text(detail, "status"), "applied");
+    assert!(
+        detail
+            .as_object()
+            .is_some_and(|detail| !detail.contains_key("queue_id")),
+        "an applied stopped write has no queue identity: {}",
+        writes[0].render_compact()
+    );
+    assert!(
+        text(field(&writes[0], "target"), "key").ends_with("G_COUNTER"),
+        "{}",
+        writes[0].render_compact()
+    );
+}
+
+#[test]
+fn stopped_force_stays_queued_on_protocol_1_1() {
+    let _guard = stop_guard();
+    let Some(mut setup) = StopSetup::new(
+        "stopped-force-1-1",
+        StopFlow::Nested,
+        Duration::from_secs(60),
+        Sidecar::Valid,
+    ) else {
+        return;
+    };
+    let counter = root_record(&setup.fixture.artifacts, "G_COUNTER");
+    let got_id = counter.got_id;
+    let type_key = counter.type_key.clone();
+
+    let mut client = setup.client();
+    client.set_protocol_version(DEBUG_PROTOCOL_1_1);
+    session_start(&mut client);
+    set_checkpoint(&mut client, setup.fixture.hooks.inner_first.id);
+
+    let cycle = std::thread::scope(|scope| {
+        let host = &mut setup.host;
+        let handle = scope.spawn(move || host.cycle_at(1_000_000));
+        let stopped = next_stopped(&mut client);
+        let stop_id = number(&stopped, "stop_id");
+
+        // Forces keep boundary semantics: a stopped force is still queued.
+        let response = request(
+            &mut client,
+            "var.force",
+            obj([
+                ("target", path_target("G_COUNTER")),
+                ("value", decimal_value(&type_key, "9")),
+            ]),
+        );
+        let forced = result_of(&response).clone();
+        assert_eq!(text(&forced, "status"), "queued");
+        assert!(optional_number(&forced, "queue_id").is_some());
+
+        let status = wait_queued(&mut client, 1);
+        assert_eq!(text(&status, "state"), "stopped");
+        let read = ok(
+            &mut client,
+            "var.read",
+            obj([("target", path_target("G_COUNTER"))]),
+        );
+        assert_eq!(text(field(&read, "value"), "value"), "0");
+
+        request(&mut client, "exec.continue", stop_id_params(stop_id));
+        let _ = next_resumed(&mut client);
+        handle.join().expect("cycle thread").expect("cycle")
+    });
+    assert_ran(cycle, setup.generation);
+    // The force is applied at the boundary and stays active afterwards.
+    assert_eq!(
+        setup.host.root_storage(got_id).expect("counter storage"),
+        &9_i32.to_le_bytes()
+    );
+    assert_eq!(setup.host.debug_queued_count(), 0);
+    assert_eq!(setup.host.debug_force_count(), 1);
+    setup.finish();
+}
+
+#[test]
+fn stopped_write_rejections_are_synchronous_on_protocol_1_1() {
+    let _guard = stop_guard();
+    let Some(mut setup) = StopSetup::new(
+        "stopped-write-reject-1-1",
+        StopFlow::Nested,
+        Duration::from_secs(60),
+        Sidecar::Valid,
+    ) else {
+        return;
+    };
+    let counter = root_record(&setup.fixture.artifacts, "G_COUNTER");
+    let got_id = counter.got_id;
+    let type_key = counter.type_key.clone();
+
+    let mut client = setup.client();
+    client.set_protocol_version(DEBUG_PROTOCOL_1_1);
+    session_start(&mut client);
+    set_checkpoint(&mut client, setup.fixture.hooks.inner_first.id);
+
+    let cycle = std::thread::scope(|scope| {
+        let host = &mut setup.host;
+        let handle = scope.spawn(move || host.cycle_at(1_000_000));
+        let stopped = next_stopped(&mut client);
+        let stop_id = number(&stopped, "stop_id");
+
+        // An unknown target is rejected while stopped, with the ordinary
+        // diagnostic code and no queue entry.
+        expect_error(
+            &mut client,
+            "var.write",
+            obj([
+                ("target", path_target("G_MISSING")),
+                ("value", decimal_value(&type_key, "7")),
+            ]),
+            codes::DEBUG_UNKNOWN,
+        );
+        // A value/target type mismatch uses the ordinary type diagnostic.
+        expect_error(
+            &mut client,
+            "var.write",
+            obj([
+                ("target", path_target("G_COUNTER")),
+                ("value", decimal_value("BOOL", "7")),
+            ]),
+            codes::DEBUG_TYPE,
+        );
+        let status = session_status(&mut client);
+        assert_eq!(text(&status, "state"), "stopped");
+        assert_eq!(number(&status, "queued_writes"), 0);
+        // Neither rejection changed storage.
+        let read = ok(
+            &mut client,
+            "var.read",
+            obj([("target", path_target("G_COUNTER"))]),
+        );
+        assert_eq!(text(field(&read, "value"), "value"), "0");
+
+        request(&mut client, "exec.continue", stop_id_params(stop_id));
+        let _ = next_resumed(&mut client);
+        handle.join().expect("cycle thread").expect("cycle")
+    });
+    assert_ran(cycle, setup.generation);
+    assert_eq!(
+        setup.host.root_storage(got_id).expect("counter storage"),
+        &[0, 0, 0, 0]
+    );
+    setup.finish();
+}
+
+#[test]
+fn a_write_after_resume_is_queued_at_the_next_boundary() {
+    let _guard = stop_guard();
+    let Some(mut setup) = StopSetup::new(
+        "write-after-resume-1-1",
+        StopFlow::Nested,
+        Duration::from_secs(60),
+        Sidecar::Valid,
+    ) else {
+        return;
+    };
+    let counter = root_record(&setup.fixture.artifacts, "G_COUNTER");
+    let got_id = counter.got_id;
+    let type_key = counter.type_key.clone();
+
+    let mut client = setup.client();
+    client.set_protocol_version(DEBUG_PROTOCOL_1_1);
+    session_start(&mut client);
+    let breakpoint = set_checkpoint(&mut client, setup.fixture.hooks.inner_first.id);
+    let breakpoint_id = number(&breakpoint, "breakpoint_id");
+
+    let cycle = std::thread::scope(|scope| {
+        let host = &mut setup.host;
+        let handle = scope.spawn(move || host.cycle_at(1_000_000));
+        let stopped = next_stopped(&mut client);
+        request(
+            &mut client,
+            "exec.continue",
+            stop_id_params(number(&stopped, "stop_id")),
+        );
+        let _ = next_resumed(&mut client);
+        handle.join().expect("cycle thread").expect("cycle")
+    });
+    assert_ran(cycle, setup.generation);
+    let cleared = request(
+        &mut client,
+        "breakpoint.clear",
+        obj([("breakpoint_id", Json::unsigned(breakpoint_id))]),
+    );
+    assert!(boolean(result_of(&cleared), "cleared"));
+
+    // The resume won the race: the parked cycle is gone, so a write now takes
+    // the running-session path and is applied at the next boundary.
+    let response = request_pumped(
+        &mut setup.host,
+        &mut client,
+        "var.write",
+        obj([
+            ("target", path_target("G_COUNTER")),
+            ("value", decimal_value(&type_key, "5")),
+        ]),
+    );
+    let queued = result_of(&response).clone();
+    assert_eq!(text(&queued, "status"), "queued");
+    assert!(optional_number(&queued, "queue_id").is_some());
+    assert_eq!(setup.host.debug_queued_count(), 1);
+    assert_eq!(
+        setup.host.root_storage(got_id).expect("counter storage"),
+        &[0, 0, 0, 0]
+    );
+
+    setup.host.cycle_at(2_000_000).expect("cycle");
+    assert_eq!(setup.host.debug_queued_count(), 0);
+    assert_eq!(
+        setup.host.root_storage(got_id).expect("counter storage"),
+        &5_i32.to_le_bytes()
     );
     setup.finish();
 }
