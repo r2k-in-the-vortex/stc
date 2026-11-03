@@ -52,6 +52,7 @@ REQUIRED_DOCUMENTS = (
     "specification/Verification/Semantics-Cases.md",
     "specification/Verification/Core-Coverage.md",
     "specification/Verification/Core-IR-Coverage.md",
+    "specification/Verification/Core-IR-Boundary.md",
     "specification/Verification/Performance.md",
     "specification/Decisions.md",
     "specification/UTF8-Strings.md",

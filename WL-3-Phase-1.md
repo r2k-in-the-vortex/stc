@@ -134,6 +134,8 @@ not as a blanket "adopt Aeneas" statement.
   expressions, assignments, control flow, functions, programs, and GOT globals; no OOP,
   references, strings, or aggregates.
 - Record both the fragment boundary and the subset in the program plan and the Phase 1 report.
+- **Recorded 2026-11-03 (M5):** the boundary and subset are frozen in
+  [`Core-IR-Boundary.md`](specification/Verification/Core-IR-Boundary.md); see §13.
 
 ### 4.4 TCB and claim language
 
@@ -166,7 +168,7 @@ toolchain (after spike evidence), and Phase 1 report acceptance/retirement (afte
 | M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Complete 2026-11-02: Aeneas cannot translate the module as-is (loops/string/lifetime errors); fallback or refactor required; evidence in §11. |
 | M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Complete 2026-11-02: wire encoder/decoder translated (`StcGot.lean`, 54 transparent functions); external-definition and Aeneas/Mathlib proof costs remain; evidence in §11. |
 | M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | Complete 2026-11-03: per-target decisions, module layout, generated/hand-written boundary, pins and source hashes, external-axiom trust policy, and registry evidence plan recorded in §12; no claim change. |
-| M5 — IR boundary and D-V6 subset | Freeze and document the full emitted-fragment boundary; implement only the bridge/D-V6 slice; write D-V6's first end-to-end subset; leave the full Lean `IRFrag` extension to Phase 5; update coverage tables. | Boundary document, updated coverage, program-plan/report text. |
+| M5 — IR boundary and D-V6 subset | Freeze and document the full emitted-fragment boundary; implement only the bridge/D-V6 slice; write D-V6's first end-to-end subset; leave the full Lean `IRFrag` extension to Phase 5; update coverage tables. | Complete 2026-11-03: full production-module boundary and D-V6 subset frozen in `specification/Verification/Core-IR-Boundary.md`; program plan, Core IR Coverage, Core Syntax Coverage, and `check_docs.py` updated; no Lean-side fragment slice and no claim change; record in §13. |
 | M6 — CI and registry | Extend the registry for bridge/toolchain records; add no-`sorry`, axiom, vector-regeneration, and oracle checks; add Aeneas regeneration drift checks if the bridge is adopted; document CI budget. | CI changes and a green run; registry entries. |
 | M7 — Report and retirement | Write `specification/Verification/Reports/Phase1-Report.md`; move durable decisions to the program plan/TCB/claim doc/registry; delete stale working notes and retire this file. | Durable report; Phase 1 review package; working file deleted. |
 
@@ -245,8 +247,8 @@ untracked credentials.
 | Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; Aeneas/Mathlib proof environment build approved 2026-11-02; exact pins and source hashes recorded 2026-11-03 in `lean/bridge-toolchain.toml`; CI adoption remains open until spike evidence review (M6). |
 | Bridge choice per target class | Resolved 2026-11-02: exact = filtered Aeneas kernel; keys = proved checker/contract; codec = proved Lean checker. Any change requires a new owner review. |
 | Bridge architecture and proof-engineering policy | Recorded 2026-11-03 in §12; no new owner decision required; no claim change. |
-| Full emitted-IR fragment boundary / versioned format | Boundary freeze approved 2026-11-02; full Lean extension is Phase 5; any versioned-format change still requires approval. |
-| D-V6 first end-to-end subset | Approved 2026-11-02 as the program-plan recommendation. |
+| Full emitted-IR fragment boundary / versioned format | Boundary freeze approved 2026-11-02 and recorded 2026-11-03 in `specification/Verification/Core-IR-Boundary.md` (boundary version 1); full Lean extension is Phase 5; any versioned-format change still requires approval. |
+| D-V6 first end-to-end subset | Approved 2026-11-02 and fixed 2026-11-03 in `specification/Verification/Core-IR-Boundary.md` §11; Phase 9 owns the theorem. |
 | Claim level increase or refinement/translation-validation claim | Closed for Phase 1: no new claims; V0 evidence only, Phase 0 S remains the only reviewed claim. |
 | Phase 1 report acceptance and working-plan retirement | Open; after M7. |
 
@@ -506,7 +508,60 @@ are:
 When M6 adds these records it also rewords the Phase 0 report's "45 records" statement as a
 P0.7-freeze count, so the live registry total stays accurate. No V1/V2 record is added in Phase 1.
 
-## 13. Status board
+## 13. M5 emitted-IR boundary and D-V6 subset record (2026-11-03)
+
+### 13.1 Boundary
+
+The full production-module boundary is frozen in
+`specification/Verification/Core-IR-Boundary.md` (boundary version `1`). It was derived from the
+emitter and the committed snapshot/verifier tests, not from LLVM documentation. It records:
+
+- the module envelope: header, deterministic section order, function and global linkage, entry
+  points, and the absence of named types, module asm, comdats, aliases, and production metadata;
+- types: `void`, `i1`–`i64`, opaque `ptr`, `float`/`double`, the overflow result, fixed arrays,
+  structs, and the emitted aggregate shapes;
+- instructions: integer/bitwise/floating binops, comparisons, `select`, casts, `phi`,
+  `extractvalue`/`insertvalue`, `alloca`/`load`/`store`/GEP, direct and indirect calls, and the
+  `llvm.memcpy` call;
+- the direct-callee set (overflow and rotate intrinsics, floating intrinsics, `memcmp`, and the
+  internal helpers), the indirect-call origins (`Function`, `Import`, vtable code), the host
+  service table, and the trap/assert patterns;
+- module globals, the GOT two-load access pattern, cell-kind use, the canonical slot-table shape,
+  process-image and vtable access as later-phase forms;
+- the seven entry-point signatures, the descriptor/function-table/metadata shapes, and the
+  control-flow and UB policy;
+- explicit construct and build-form exclusions: test builds, debug builds, launcher executables,
+  atomics, volatile, `invoke`/`landingpad`, `bitcast`/`inttoptr`, vectors, dynamic `alloca`,
+  `switch`, inline asm, and the never-emitted intrinsics;
+- versioning and change-control rules tying additions to the boundary document, the P0.4 table,
+  the Lean model, and the verifier.
+
+### 13.2 D-V6 subset
+
+The D-V6 first end-to-end subset is fixed exactly as owner-approved: scalar types, expressions,
+assignments, control flow, functions, programs, and GOT globals; no OOP, references, strings, or
+aggregates. The boundary document maps it to `Semantics.md` §1 and the P0.4 tables, lists the
+included source constructs and target forms, and assigns every deferred feature to its owning
+phase. The end-to-end theorem remains Phase 9's `pipeline_correct`; M5 fixes its scope only.
+
+### 13.3 Implementation decision
+
+Phase 1 adds no Lean `IRFrag`/`WellFormed` slice. The reviewed Phase 0 fragment stays authoritative
+for the core; Phase 5 owns the Lean extension to the full boundary; Phase 7 owns codegen
+preservation; Phase 9 owns the D-V6 theorem. This keeps the default `lean/` build core-only and
+adds no Aeneas/Mathlib dependency and no claim. The Phase 1 executable evidence remains the Rust
+structural verifier and the clang acceptance tests (V0).
+
+### 13.4 Files and coordination
+
+New: `specification/Verification/Core-IR-Boundary.md`. Updated:
+`specification/Verification/VerificationProgramPlan.md` (status, Phase 1 M5 record, feature matrix,
+D-V3/D-V6, next steps), `specification/Verification/Core-IR-Coverage.md` and
+`specification/Verification/Core-Coverage.md` (boundary links and scope relationship),
+`tools/ci/check_docs.py` (required document), and this working plan. No registry record, Lean
+module, toolchain pin, or claim changed.
+
+## 14. Status board
 
 | Item | State |
 | --- | --- |
@@ -515,7 +570,7 @@ P0.7-freeze count, so the live registry total stays accurate. No V1/V2 record is
 | M2 keys bridge spike | Complete — Charon produced LLBC; Aeneas failed on loops/string/lifetime support; fallback/refactor required |
 | M3 codec bridge spike | Complete — wire codec translated to Lean; external definitions and Aeneas/Mathlib proof cost remain |
 | M4 bridge decision and architecture | Complete 2026-11-03 — decisions, module layout, pins/hashes, external-axiom policy, and registry evidence plan recorded in §12; no claim change |
-| M5 IR boundary and D-V6 subset | Not started |
+| M5 IR boundary and D-V6 subset | Complete 2026-11-03 — full production-module boundary and D-V6 subset frozen in `Core-IR-Boundary.md`; coverage tables, program plan, and `check_docs.py` updated; no Lean-side slice and no claim change |
 | M6 CI and registry | Not started |
 | M7 report and retirement | Not started |
-| Owner decision gates | Toolchain install, IR boundary, D-V6, and no-new-claims resolved 2026-11-02; bridge choice, CI adoption, and report acceptance open |
+| Owner decision gates | Toolchain install, IR boundary, D-V6, and no-new-claims resolved 2026-11-02; boundary and D-V6 recorded 2026-11-03; bridge choice, CI adoption, and report acceptance open |

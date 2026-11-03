@@ -8,12 +8,14 @@ productions in [Grammar](../Syntax/Grammar.md) and the lexical rules in
 `Stc.Grammar`. It makes no parser-correctness claim; Phase 4 owns the parser contracts.
 Parent: [Phase 0 design record](Reports/Phase0-Design.md)
 Semantics reference: [stc Semantics — Phase 0 Core](Semantics.md)
+Target boundary: [Emitted IR Boundary — Phase 1 Freeze](Core-IR-Boundary.md)
 
 ## 1. Scope
 
 The covered source subset is frozen by [Semantics.md](Semantics.md) §1 and the
 [charter's exclusion register](Semantics-Charter.md#6-frozen-core-and-exclusion-register). The
-Lean modules are:
+target-side counterpart and the D-V6 first end-to-end subset are recorded in the Phase 1
+[Emitted IR Boundary](Core-IR-Boundary.md). The Lean modules are:
 
 | Module | Contents |
 | --- | --- |

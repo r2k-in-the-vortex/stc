@@ -7,9 +7,12 @@ emitted
 production-module fragment to the Lean definitions in [`Stc.Codegen.Ir`](../../lean/Stc/Codegen/Ir.lean).
 It makes no parser or refinement claim; Phase 5 owns the textual printer/parser and the proved
 checker. The table is updated when the Lean definitions or the compiler's emitted instruction set
-change.
+change. It records the Phase 0 core slice of the full emitted boundary frozen by Phase 1 M5 in
+[Core IR Boundary](Core-IR-Boundary.md); the boundary document is authoritative for the wider
+production-module fragment and for the D-V6 first end-to-end subset.
 Parent: [Phase 0 design record §2](Reports/Phase0-Design.md)
 Semantics reference: [stc Semantics — Phase 0 Core](Semantics.md)
+Boundary: [Emitted IR Boundary — Phase 1 Freeze](Core-IR-Boundary.md)
 
 ## 1. Scope
 
@@ -21,7 +24,9 @@ the initialization boundary.
 
 Out of scope: debug-info builds, test builds and coverage instrumentation, debug checkpoint
 hooks, the textual printer/parser, the full LLVM memory model, OOP descriptors/vtables, the
-process image, and raw pointer arithmetic. Build-form exclusions are listed in §8.
+process image, and raw pointer arithmetic. Build-form exclusions are listed in §8. The Phase 1
+[Core IR Boundary](Core-IR-Boundary.md) records those forms for the wider production fragment and
+the D-V6 subset; this table remains the reviewed P0.4 core slice.
 
 The Lean module is the umbrella [`Stc.Codegen.Ir`](../../lean/Stc/Codegen/Ir.lean). The
 definitions sit in the `Stc.Codegen` namespace:
@@ -90,7 +95,10 @@ No other aggregate, floating-point, or vector type is part of the fragment.
 | `unreachable` | `Terminator.unreachable` | After a trap call | Semantics §5.3 |
 
 `insertvalue`, `llvm.memcpy`, `ptrtoint`/`inttoptr`, `switch`, floating-point operations, atomics,
-volatile access, `invoke`/`landingpad`, and dynamic `alloca` are not part of the fragment.
+volatile access, `invoke`/`landingpad`, and dynamic `alloca` are not part of the core fragment.
+Several of them are inside the wider Phase 1 [boundary](Core-IR-Boundary.md) for later phases
+(`insertvalue`, `llvm.memcpy`, `ptrtoint`, floating-point operations, descriptor/vtable blobs); the
+boundary document is authoritative for which phase adds each one.
 
 ## 5. Terminators
 
@@ -156,9 +164,17 @@ lemmas are listed in [Semantics.md §7.7](Semantics.md#77-p04-structural-lemma-s
 | `ptrtoint`/`inttoptr`, `fadd`/`fsub`/`fmul`/`fdiv`/`frem` | References and floating point are excluded from the source core | Phase 5–7 |
 | Descriptor/vtable/TYPEINFO blobs, process image | OOP, I/O, and online change are later phases | Phase 5/7/8 |
 
+The Phase 1 [boundary](Core-IR-Boundary.md) records `insertvalue`, `llvm.memcpy`, `ptrtoint`,
+floating-point operations, and descriptor/vtable/process-image forms as inside the production
+fragment for later phases. `inttoptr`, atomics, volatile access, `invoke`/`landingpad`, dynamic
+`alloca`, and `switch` remain outside the full boundary as well as the core.
+
 ## 9. Change control
 
 The fragment is defined by the emitted production module, not by the full textual IR. When
 `stc-codegen` changes an emitted instruction, type, global, or entry-point shape, update this
-table and the Lean definition in the same change. A construct that appears only in debug, test,
-or OOP builds is rejected by the fragment rather than modeled silently.
+table and the Lean definition in the same change. A change to the wider Phase 1
+[boundary](Core-IR-Boundary.md) that touches a core form updates both records together; the
+boundary document is the superset and this table is the reviewed core slice. A construct that
+appears only in debug, test, or OOP builds is rejected by the core fragment rather than modeled
+silently.

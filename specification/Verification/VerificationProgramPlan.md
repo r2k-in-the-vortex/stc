@@ -1,14 +1,17 @@
 # Verification Program Plan — Lean Verification of stc
 
 Profile: `stc-2013-oop-utf8-v1`
-Date: 2026-11-02
+Date: 2026-11-03
 Status: Draft for review. Phase 0 is complete: P0.0–P0.7 are complete and owner-approved (P0.5
 approved 2026-11-02 and merged through PR #12; P0.6 approved 2026-11-02 and merged through PR #13; P0.7 approved 2026-11-02, freezing
 `semantics_version` at `1.0`). P0.6 delivered the
 canonical core-HIR dump format `0.1.0`, `stc hir-dump`, the reference interpreter, the opt-in
 snapshot surface, the differential harness, the conformance report schema, the 74-case corpus,
 and the committed byte-stable report; P0.7 completed `Semantics.md`, `Phase0-Report.md`, the
-version freeze, and the handoff. The Phase 1 bridge spike is next. The proved claims are the
+version freeze, and the handoff. Phase 1 M1–M5 are complete: the three bridge spikes, the bridge
+decisions and module layout, and the emitted-IR boundary and D-V6 subset freeze recorded in
+[Core-IR-Boundary.md](Core-IR-Boundary.md). M6 (CI and registry) and M7 (report and retirement)
+remain. The proved claims are the
 records in `lean/verification-status.toml`; no claim beyond them is made by this document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -374,6 +377,21 @@ Phase 1 produces no large correctness proofs; it produces the bridge and the too
   expressions, assignments, control flow, functions, programs, and GOT globals, without OOP,
   references, strings, or aggregates. (Owner-approved 2026-11-02.)
 - Write the TCB and claim-language document (D-V4).
+
+**Emitted-IR boundary and D-V6 record (M5, 2026-11-03).** The full production-module boundary is
+frozen in [Core-IR-Boundary.md](Core-IR-Boundary.md). It records the module envelope; the types,
+instructions, terminators, intrinsics, direct and indirect call patterns, trap pattern, module
+globals, GOT two-load access, slot-table shape, seven entry points, and descriptor/function-table
+shapes that `stc-codegen` may emit; the explicit construct and build-form exclusions; and the
+versioning rules. It also fixes the D-V6 first end-to-end subset exactly as owner-approved and maps
+it to [Semantics.md](Semantics.md) §1 and the P0.4 [Core IR Coverage](Core-IR-Coverage.md) tables,
+with the deferred features assigned to later phases.
+
+Phase 1 adds no Lean-side fragment slice: the Phase 0 `IRFrag` remains the reviewed core model,
+Phase 5 owns its extension to the full boundary, Phase 7 owns preservation, and Phase 9 owns the
+D-V6 `pipeline_correct` obligation. The Phase 1 executable evidence stays V0: the Rust structural
+verifier and the clang acceptance tests. The P0.4 table remains the definition-to-emission map for
+the core and is updated together with the boundary when a core form changes.
 
 **Bridge architecture and interfaces (M4 record, 2026-11-03).** The bridge keeps the fast proof
 build independent of the Aeneas/Mathlib toolchain. The main `lean/` package is core Lean only;
@@ -985,6 +1003,7 @@ turn it into the registry.
 | OOP, interfaces, references | 6c | V1/V4 | resolution, dispatch, escape lemmas | Not started |
 | HIR lowering | 6 | V1 | `lower_preserves_semantics` | Not started |
 | Emitted-IR well-formedness | 5 | V2 | `checkIR_sound` | Rust verifier exists (V0) |
+| Emitted-IR fragment boundary | 1/5 | S | boundary definition (no theorem) | Frozen 2026-11-03 for Phase 1 M5 in [Core-IR-Boundary.md](Core-IR-Boundary.md); Phase 5 extends `IRFrag`/`WellFormed` to it; no claim change |
 | Scalar codegen semantics | 7a | V4 | `codegen_preserves` | Not started |
 | Aggregate/string codegen and type layout | 7b | V4 | staged simulation and layout lemmas | Not started |
 | OOP/reference codegen | 7c | V4 | staged simulation | Not started |
@@ -994,7 +1013,7 @@ turn it into the registry.
 | Scheduler and timers | 8 | V1 | `scheduler_deterministic`, `timer_semantics_matches_standard` | Not started |
 | Process image and I/O | 8 | V1 | `process_image_remap_sound`, `image_span_sound` | Not started |
 | Host ABI 2.2 table | 8 | V1 | `host_abi_table_sound` | Not started |
-| End-to-end subset | 9 | V4 | `pipeline_correct` | Not started |
+| End-to-end subset (D-V6) | 9 | V4 | `pipeline_correct` | Scope fixed 2026-11-03 in [Core-IR-Boundary.md](Core-IR-Boundary.md) §11; theorem not started |
 
 Not planned: full LLVM/LLVM optimizer/backend semantics, floating-point transcendental
 semantics (remains test-based under D-006), debug information and the debug subsystem (the
@@ -1090,10 +1109,10 @@ system, filesystem, I/O devices, and hardware.
 | --- | --- | --- |
 | D-V1 | Bridge strategy per target class | Resolved for Phase 1 (2026-11-02): filtered Aeneas/Charon model for the exact kernel; proved Lean checker/contract for GOT keys; proved Lean checker for the wire codec, with the Aeneas translation as fallback. Extraction only if the chosen path fails; any change needs owner review. |
 | D-V2 | Mathlib and Batteries policy | Core Lean plus Batteries for executable models; Mathlib is proof-only in the separate `lean/aeneas/` package after the Phase 1 build-time spike; it never enters the default `lean/` build. |
-| D-V3 | Emitted-IR fragment and UB policy | Phase 0 defines the core fragment; Phase 5 extends it. Keep it restricted with no poison/undef on covered paths; no fast-math; clang verification plus the proved checker |
+| D-V3 | Emitted-IR fragment and UB policy | Phase 0 defines the core fragment; Phase 1 froze the full production boundary on 2026-11-03 in [Core-IR-Boundary.md](Core-IR-Boundary.md); Phase 5 extends the Lean model to it. Keep it restricted with no poison/undef on covered paths; no fast-math; clang verification plus the proved checker |
 | D-V4 | TCB and claim language | Adopt the V0–V4 ladder; publish the TCB; never say "fully verified" |
 | D-V5 | Verification registry and spec traceability | TOML registry plus an `xtask` check; generated status matrix |
-| D-V6 | First end-to-end subset | Phase 0 defines the core semantic subset; Phase 1 fixes the first end-to-end theorem subset: scalars, expressions, assignments, control flow, functions, programs, GOT globals; no OOP/strings/aggregates |
+| D-V6 | First end-to-end subset | Phase 0 defines the core semantic subset; Phase 1 fixed the first end-to-end theorem subset on 2026-11-03 in [Core-IR-Boundary.md](Core-IR-Boundary.md) §11: scalars, expressions, assignments, control flow, functions, programs, GOT globals; no OOP/strings/aggregates. Phase 9 owns `pipeline_correct` |
 | D-V7 | Production versus CI-only checkers | CI first for Phases 3 and 5; production integration after a size and latency evaluation |
 | D-V8 | Ownership and maintenance budget | One verification owner; a standing proof-CI budget; quarterly coverage review |
 | D-V9 | Format-version proof policy | Prove format 1; start a new proof module for any format change; no implicit migration |
@@ -1128,8 +1147,9 @@ The program is done when:
 2. P0.7 owner review and sign-off were completed on 2026-11-02; Phase 0 is closed.
    `Semantics.md` and `Phase0-Report.md` are complete, `semantics_version` is frozen at `1.0`,
    and the registry, fixtures, and handoff are updated.
-3. Phase 1 M1–M4 are complete: the three bridge spikes, the per-target bridge decisions, and the
-   bridge module layout, pins, external-axiom trust policy, and registry evidence plan. Next is
-   M5, the emitted-IR boundary and the D-V6 first end-to-end subset.
+3. Phase 1 M1–M5 are complete: the three bridge spikes, the per-target bridge decisions, the
+   bridge module layout, pins, external-axiom trust policy, and registry evidence plan, and the
+   emitted-IR boundary and D-V6 subset freeze in
+   [Core-IR-Boundary.md](Core-IR-Boundary.md). Next is M6, the CI and registry work.
 4. Extend the exact vectors to every operation and type, add the constant-evaluation oracle, and
    prototype `lake exe check-ir` against `stc_codegen::verify`.
