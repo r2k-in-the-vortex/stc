@@ -40,6 +40,14 @@ def decodeCompare : exact.Compare → Int → Int → Bool
   | .Gt, a, b => decide (a > b)
   | .Ge, a, b => decide (a ≥ b)
 
+/-- The production layout invariant: a positive width no wider than the shared
+`i128` kernel. Every concrete ST scalar type is `BOOL` (width `1`) or an
+8/16/32/64-bit integer type. The generated model is total on `u8` widths, but
+its `i128` intermediate shifts and divisions only refine the exact kernel on
+this invariant. -/
+def WellFormed (ty : exact.IntType) : Prop :=
+  0 < ty.width.val ∧ ty.width.val ≤ 64
+
 /-! ## Result-refinement predicates -/
 
 /-- A generated checked result matches an exact checked result: the success
@@ -131,143 +139,165 @@ def i128AbsRefines : Prop :=
 
 /-! ## Generated helper operations -/
 
-/-- `IntType.modulus` refines `2 ^ width`, where the generated `i128` shift is
-representable. -/
+/-- `IntType.modulus` refines `2 ^ width`. -/
 def modulusRefines : Prop :=
   ∀ ty : exact.IntType,
-    ty.width.val ≤ 63 →
+    WellFormed ty →
       ResultRefinesInt (exact.IntType.modulus ty)
         (((decodeIntType ty).modulus : Nat) : Int)
 
 /-- `IntType.minimum` refines the exact minimum. -/
 def minimumRefines : Prop :=
   ∀ ty : exact.IntType,
-    0 < ty.width.val → ty.width.val ≤ 64 →
+    WellFormed ty →
       ResultRefinesInt (exact.IntType.minimum ty) (decodeIntType ty).minimum
 
 /-- `IntType.maximum` refines the exact maximum. -/
 def maximumRefines : Prop :=
   ∀ ty : exact.IntType,
-    0 < ty.width.val → ty.width.val ≤ 64 →
+    WellFormed ty →
       ResultRefinesInt (exact.IntType.maximum ty) (decodeIntType ty).maximum
 
 /-- `IntType.fits` refines the exact range predicate. -/
 def fitsRefines : Prop :=
   ∀ (ty : exact.IntType) (value : Std.I128),
-    ResultRefinesBool (exact.IntType.fits ty value)
-      ((decodeIntType ty).fits value.val)
+    WellFormed ty →
+      ResultRefinesBool (exact.IntType.fits ty value)
+        ((decodeIntType ty).fits value.val)
 
 /-- `IntType.mask` refines the exact bit mask. -/
 def maskRefines : Prop :=
   ∀ ty : exact.IntType,
-    ty.width.val ≤ 128 →
+    WellFormed ty →
       ResultRefinesNat (exact.IntType.mask ty) (decodeIntType ty).mask
 
 /-- `IntType.count` refines the exact masked shift count. -/
 def countRefines : Prop :=
   ∀ (ty : exact.IntType) (n : Std.I64),
-    0 < ty.width.val →
+    WellFormed ty →
       ResultRefinesU32 (exact.IntType.count ty n)
         ((decodeIntType ty).count n.val)
 
 /-- `checked` refines the exact checked-result construction. -/
 def checkedRefines : Prop :=
   ∀ (ty : exact.IntType) (value : Std.I128),
-    ResultRefinesExact (exact.checked ty value)
-      ((decodeIntType ty).checked value.val)
+    WellFormed ty →
+      ResultRefinesExact (exact.checked ty value)
+        ((decodeIntType ty).checked value.val)
 
 /-! ## Checked arithmetic operations -/
 
 /-- `exact.add` refines `Stc.Exact.IntType.add`. -/
 def addRefines : Prop :=
   ∀ (ty : exact.IntType) (a b : Std.I128),
-    ResultRefinesExact (exact.add ty a b)
-      ((decodeIntType ty).add a.val b.val)
+    WellFormed ty →
+      ResultRefinesExact (exact.add ty a b)
+        ((decodeIntType ty).add a.val b.val)
 
 /-- `exact.sub` refines `Stc.Exact.IntType.sub`. -/
 def subRefines : Prop :=
   ∀ (ty : exact.IntType) (a b : Std.I128),
-    ResultRefinesExact (exact.sub ty a b)
-      ((decodeIntType ty).sub a.val b.val)
+    WellFormed ty →
+      ResultRefinesExact (exact.sub ty a b)
+        ((decodeIntType ty).sub a.val b.val)
 
 /-- `exact.mul` refines `Stc.Exact.IntType.mul`. -/
 def mulRefines : Prop :=
   ∀ (ty : exact.IntType) (a b : Std.I128),
-    ResultRefinesExact (exact.mul ty a b)
-      ((decodeIntType ty).mul a.val b.val)
+    WellFormed ty →
+      ResultRefinesExact (exact.mul ty a b)
+        ((decodeIntType ty).mul a.val b.val)
 
 /-- `exact.neg` refines `Stc.Exact.IntType.neg`. -/
 def negRefines : Prop :=
   ∀ (ty : exact.IntType) (a : Std.I128),
-    ResultRefinesExact (exact.neg ty a)
-      ((decodeIntType ty).neg a.val)
+    WellFormed ty →
+      ResultRefinesExact (exact.neg ty a)
+        ((decodeIntType ty).neg a.val)
 
-/-- `exact.div` refines `Stc.Exact.IntType.div`. -/
+/-- `exact.div` refines `Stc.Exact.IntType.div`. The dividend fits its layout,
+so the shared `i128` division stays away from the `i128::MIN / -1` overflow
+(the exact guard only covers the type's own minimum). -/
 def divRefines : Prop :=
   ∀ (ty : exact.IntType) (a b : Std.I128),
-    ResultRefinesExact (exact.div ty a b)
-      ((decodeIntType ty).div a.val b.val)
+    WellFormed ty →
+      (decodeIntType ty).fits a.val = true →
+        ResultRefinesExact (exact.div ty a b)
+          ((decodeIntType ty).div a.val b.val)
 
 /-- `exact.modulo` refines `Stc.Exact.IntType.mod`. -/
 def moduloRefines : Prop :=
   ∀ (ty : exact.IntType) (a b : Std.I128),
-    ResultRefinesExact (exact.modulo ty a b)
-      ((decodeIntType ty).mod a.val b.val)
+    WellFormed ty →
+      ResultRefinesExact (exact.modulo ty a b)
+        ((decodeIntType ty).mod a.val b.val)
 
-/-- `exact.abs` refines `Stc.Exact.IntType.abs`. -/
+/-- `exact.abs` refines `Stc.Exact.IntType.abs`. The operand fits its layout,
+so the shared `i128::abs` call stays away from `i128::MIN`, where Rust panics
+and the exact guard does not apply. -/
 def absRefines : Prop :=
   ∀ (ty : exact.IntType) (a : Std.I128),
-    ResultRefinesExact (exact.abs ty a)
-      ((decodeIntType ty).abs a.val)
+    WellFormed ty →
+      (decodeIntType ty).fits a.val = true →
+        ResultRefinesExact (exact.abs ty a)
+          ((decodeIntType ty).abs a.val)
 
 /-! ## Bitwise, shift, and rotate operations -/
 
 /-- `exact.bit_and` refines `Stc.Exact.IntType.bitAnd`. -/
 def bitAndRefines : Prop :=
   ∀ (ty : exact.IntType) (a b : Std.U128),
-    ResultRefinesNat (exact.bit_and ty a b)
+    WellFormed ty →
+      ResultRefinesNat (exact.bit_and ty a b)
       ((decodeIntType ty).bitAnd a.val b.val)
 
 /-- `exact.bit_or` refines `Stc.Exact.IntType.bitOr`. -/
 def bitOrRefines : Prop :=
   ∀ (ty : exact.IntType) (a b : Std.U128),
-    ResultRefinesNat (exact.bit_or ty a b)
+    WellFormed ty →
+      ResultRefinesNat (exact.bit_or ty a b)
       ((decodeIntType ty).bitOr a.val b.val)
 
 /-- `exact.bit_xor` refines `Stc.Exact.IntType.bitXor`. -/
 def bitXorRefines : Prop :=
   ∀ (ty : exact.IntType) (a b : Std.U128),
-    ResultRefinesNat (exact.bit_xor ty a b)
+    WellFormed ty →
+      ResultRefinesNat (exact.bit_xor ty a b)
       ((decodeIntType ty).bitXor a.val b.val)
 
 /-- `exact.bit_not` refines `Stc.Exact.IntType.bitNot`. -/
 def bitNotRefines : Prop :=
   ∀ (ty : exact.IntType) (a : Std.U128),
-    ResultRefinesNat (exact.bit_not ty a)
+    WellFormed ty →
+      ResultRefinesNat (exact.bit_not ty a)
       ((decodeIntType ty).bitNot a.val)
 
 /-- `exact.shl` refines `Stc.Exact.IntType.shl`. -/
 def shlRefines : Prop :=
   ∀ (ty : exact.IntType) (a : Std.U128) (n : Std.I64),
-    ResultRefinesNat (exact.shl ty a n)
+    WellFormed ty →
+      ResultRefinesNat (exact.shl ty a n)
       ((decodeIntType ty).shl a.val n.val)
 
 /-- `exact.shr` refines `Stc.Exact.IntType.shr`. -/
 def shrRefines : Prop :=
   ∀ (ty : exact.IntType) (a : Std.U128) (n : Std.I64),
-    ResultRefinesNat (exact.shr ty a n)
+    WellFormed ty →
+      ResultRefinesNat (exact.shr ty a n)
       ((decodeIntType ty).shr a.val n.val)
 
 /-- `exact.rol` refines `Stc.Exact.IntType.rol`. -/
 def rolRefines : Prop :=
   ∀ (ty : exact.IntType) (a : Std.U128) (n : Std.I64),
-    ResultRefinesNat (exact.rol ty a n)
+    WellFormed ty →
+      ResultRefinesNat (exact.rol ty a n)
       ((decodeIntType ty).rol a.val n.val)
 
 /-- `exact.ror` refines `Stc.Exact.IntType.ror`. -/
 def rorRefines : Prop :=
   ∀ (ty : exact.IntType) (a : Std.U128) (n : Std.I64),
-    ResultRefinesNat (exact.ror ty a n)
+    WellFormed ty →
+      ResultRefinesNat (exact.ror ty a n)
       ((decodeIntType ty).ror a.val n.val)
 
 /-! ## Comparison and selection -/
