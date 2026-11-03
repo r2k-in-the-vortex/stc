@@ -15,9 +15,10 @@ run `41212737785`, 38 jobs) and manually verified 2026-10-31. F-16 is complete: 
 monitoring. F-3 is complete: commits `644e067`/`3a93260` (CI run `41239879013`, 38 jobs) and
 manually verified 2026-10-31. F-1.1 is complete: commits `a126800` and `c2af647` (CI runs
 `41681462972` and `41692812156` green), with owner-confirmed manual rendering on Dark Modern,
-Light Modern, Dark 2026, and Light 2026 on 2026-11-03. F-11 (caller-frame source locations)
-and F-14 (immediate writes while stopped) were brought into scope as required items on
-2026-11-03; implementation is pending. Manual VS Code verification 2026-10-31: 40 of 40
+Light Modern, Dark 2026, and Light 2026 on 2026-11-03. F-11 and F-14 are complete: commits
+`909ebd0`/`c8cb1c9` (CI run `41703710933` green, 39 jobs), with owner-confirmed manual checks
+2026-11-03. No required close-out items remain; the LSP project-load and project-file
+optionality follow-ups are deferred in §12.3. Manual VS Code verification 2026-10-31: 40 of 40
 checklist entries pass. Required close-out items and deferred follow-ups are triaged in §12.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-1.1,
@@ -326,11 +327,13 @@ audit behavior.
   ends after the bound with `STC-E-DEBUG-018`; the editor reports the end reason but gives no
   countdown or advance warning. Leaving it unset is the default because an automatic resume can
   move machinery unexpectedly.
-- Caller stack frames report no source location; only the top frame carries file and line.
+- Caller stack frames report their call-site file and line from the build-time line map at any
+  depth; the top frame keeps the checkpoint source, and an unavailable mapping is reported as
+  absent.
 - Locals lists the stopped frame's locals only; program and FB instance fields are exposed under
   Globals, not Locals.
-- `setVariable` queues a write and displays the requested value; the program observes it at the
-  next cycle boundary, so stepping through the current cycle reads the stored value again.
+- `setVariable` applies immediately while the session is stopped; while the program runs, the
+  write stays queued and the program observes it at the next cycle boundary.
 
 ## 7. Work breakdown
 
@@ -498,8 +501,8 @@ The 36-item manual checklist ([WL-1.1-UI-CHECKLIST.md](WL-1.1-UI-CHECKLIST.md)) 
 F-5, F-7, F-8, the DAP frame-name mapping and evaluate-by-name fixes, and the D-211 FB
 interface-access change. Complete features (F-1, F-2, F-3, F-4, F-5, F-6, F-7, F-8, F-10, F-12,
 F-16, F-20) are feature history, not open follow-ups; they remain in the tables only as
-acceptance evidence. F-11 and F-14 are the open required items (owner decision 2026-11-03).
-The remaining items are assigned to exactly one bucket:
+acceptance evidence. No required close-out items remain. The remaining items are assigned to
+exactly one bucket:
 
 - **Required** — must be closed before WL-1.1 is complete.
 - **Documented** — accepted limitation or deliberate design; record it in the IDE specification,
@@ -511,12 +514,7 @@ The remaining items are assigned to exactly one bucket:
 
 #### Open required items
 
-| Item | Finding | Why required | Acceptance |
-| --- | --- | --- | --- |
-| F-11 | Caller stack frames have no source location; only the top frame carries the checkpoint's file/line, so `MAIN` shows Unknown Source while stopped in `ADDSTEP`. | Owner decision 2026-11-03 brings F-11 into WL-1.1 scope: call stacks are a shipped feature, and every resolved ST frame must identify where it called the next frame. | Add call-site source mapping to the debug metadata (line/address table or sidecar call-site map) and runtime resolution of the return address. Acceptance, from the checklist: the caller frame shows the call-site file and line (for the sample, `src/main.st:39`) at any depth; an unavailable mapping stays honestly absent; frame indices, scopes, and evaluate behavior are unchanged. |
-| F-14 | `setVariable` displays the queued value before the program applies it; the host applies writes at the next cycle boundary, so stepping through the current cycle reads the stored value again and the temporary revert looks like a lost write. | Owner decision 2026-11-03: queued writes are correct while the program runs, but a stop is a debugger-owned state — writes made while paused or at a breakpoint must take effect immediately, not at resume. | Update the queued-write semantics: while a debug session is stopped (breakpoint, step landing, or pause), `var.write`/DAP `setVariable` applies to root storage immediately and subsequent reads in the same stop (variables, evaluate, stepping within the cycle) observe the new value; while running, writes stay queued and apply at the next boundary as today. Validation, permissions, diagnostics, and frame/scopes behavior are unchanged, and the protocol/specification document the stopped-write path. |
-
-F-1.1 is complete; the evidence is recorded below.
+None.
 
 #### Completed required features
 
@@ -524,6 +522,8 @@ These are feature history, not open work.
 
 | Item | Finding | Why it was required | Acceptance and evidence |
 | --- | --- | --- | --- |
+| F-11 | Caller stack frames have no source location; only the top frame carries the checkpoint's file/line, so `MAIN` shows Unknown Source while stopped in `ADDSTEP`. | Owner decision 2026-11-03 brought F-11 into WL-1.1 scope: call stacks are a shipped feature, and every resolved ST frame must identify where it called the next frame. | Add call-site source mapping to the debug metadata (format-2 stopped-frame sidecar `line_ranges`) and runtime resolution of `return_address - 1`. Implemented in `909ebd0`; CI run `41703710933` green (39 jobs). Owner-confirmed manual check 2026-11-03: the `MAIN` caller shows `src/main.st:39` while stopped in `ADDSTEP`; the depth-3 check shows `LEVELONE` at `main.st:12` and `MAIN` at `main.st:19`; top-frame source, scopes, and evaluate are unchanged. D-229. |
+| F-14 | `setVariable` displays the queued value before the program applies it; the host applies writes at the next cycle boundary, so stepping through the current cycle reads the stored value again and the temporary revert looks like a lost write. | Owner decision 2026-11-03: queued writes are correct while the program runs, but a stop is a debugger-owned state — writes made while paused or at a breakpoint must take effect immediately, not at resume. | Update the queued-write semantics: while a debug session is stopped (breakpoint, step landing, or pause), `var.write`/DAP `setVariable` applies to root storage immediately and subsequent reads in the same stop (variables, evaluate, stepping within the cycle) observe the new value; while running, writes stay queued and apply at the next boundary as today. Implemented in `c8cb1c9` (parked cycle thread applies stopped one-shot writes on `stc-debug/1.1`); CI run `41703710933` green (39 jobs). Owner-confirmed manual check 2026-11-03: stopped at line 39, editing `INCREMENT` to 42 was visible immediately to Variables/evaluate and stayed 42 after stepping; running-write queue semantics are covered by the protocol/DAP tests. D-230. |
 | F-1.1 | F-1 ships `stc Dark`/`stc Light`, so the intended ST palette requires selecting a contributed theme; a user on the built-in default themes does not get the `.st`-specific token rules without a theme switch. | The owner requires the default-theme path for WL-1.1; users should not have to select a custom theme to see distinct ST colors. | Add an opt-out ST token-color overlay through `editor.tokenColorCustomizations` (extension-provided defaults), keyed for Default Dark Modern/Light Modern, Dark Modern/Light Modern, and Dark 2026/Light 2026, with `.st` scope rules; keep the contributed themes as explicit alternatives. The overlay is documented and opt-out via an empty `textMateRules` array. Implemented in `a126800`/`c2af647`; CI runs `41681462972`/`41692812156` green (39 jobs). Owner-confirmed manual check 2026-11-03: all nine categories render distinctly in Dark Modern, Dark 2026, and Light 2026 (`VAR_GLOBAL` `#569CD6`, `DINT` `#4EC9B0`, `IF` `#C586C0`, `counter` `#9CDCFE`, `42` `#B5CEA8`, `'hello'` `#CE9178`, comment `#6A9955` italic, pragma `#FFB86C`, `%IX0.0` `#4FC1FF`); non-ST languages are unchanged. |
 | F-1 | The grammar scopes are correct, but the palette is dominated by red and white and no theme decision has been made. | The first thing a user sees; the owner requires it for WL-1.1. | Enrich the grammar with standard semantic scopes (declarations, types, variables, parameters, control keywords, built-ins) using [Serhioromano/vscode-st](https://github.com/Serhioromano/vscode-st) as a reference, and ship a small theme or document a recommended one; verify distinct keyword/type/declaration/variable/comment/string/number/pragma/direct-variable colors in a standard dark and light theme. |
 | F-6 | Removing a breakpoint updates the editor/panel but the running session still stops at the removed line. | Source breakpoints are a core debug feature; a stale host breakpoint is a correctness bug. | Remove and re-add while running or stopped; the session no longer stops at the removed location, and normal and verbatim path spellings share one key. Implemented in `dfda944`; CI run `41209918428` green (38 jobs); manual verification 2026-10-31 passed. |
@@ -556,8 +556,9 @@ Notes:
 - Owner decisions on 2026-10-31 added F-1 (highlighting) and F-20 (online change) to WL-1.1 and
   chose the implementation path for F-16; these are recorded in the change log.
 - F-3 is complete. F-1/F-1.1 change only the grammar/theme, and F-20 uses the existing
-  runtime/CLI workflow; none changes the language, artifact format, module ABI, or
-  `stc-debug/1` behavior.
+  runtime/CLI workflow. F-11 raises the stopped-frame sidecar to format 2 (D-229), and F-14
+  adds the immediate stopped-write path on `stc-debug/1.1` (D-230); neither changes the
+  language, module ABI, or the frozen `stc-debug/1` behavior.
 
 ### 12.2 Documented as not supported or by design
 
@@ -578,6 +579,8 @@ Notes:
 | F-18 | `stc: test` runs the whole test source set through a task; there is no Testing view, code lens, or per-test command. | Test-workflow plan: a VS Code Testing API provider backed by `stc test` JSON results with Run and Debug actions. |
 | F-19 | Rename (F2) does nothing and prints no message, while the compiler/runtime already carry rename history. | Language-server refactoring plan: `textDocument/prepareRename`/`textDocument/rename` backed by the reference resolution; explicitly outside I-7. |
 | F-21 | F-20's online change is a local file-watch workflow: `stc run --watch` owns the host and deploys on every saved edit. The expected operating model is an always-on PLC runtime in the background (remote after v2.0.0), where online change is not coupled to a file watcher; when the user attaches a debug session and the source has changed, the IDE should offer a choice between a cold download and an online change. | Remote-runtime/workflow follow-up (WL-1.2): decouple the runtime lifetime and debug attach from the file watch; detect source/build drift on attach and present an explicit cold-download vs online-change choice (with cancel); define state preservation, rollback, and remote transport. WL-1.1 keeps the current watch surface as its local v1 limitation. |
+| F-22 | `stc lsp` fails `initialize` when the project cannot load (any `STC-E-PROJECT-*` manifest error). The VS Code language client restarts the server five times before giving up, and the manifest error is only in the "stc Language Server" output channel, so the user sees a restart storm rather than the cause. A manual depth-check workspace copied the sample's `[test] sources` without a `tests/` directory and hit this loop. | Language-server/IDE robustness follow-up: stop the restart loop for deterministic initialization failures (for example `initializationFailedHandler` plus a visible error and retry action), and/or initialize in a degraded state that publishes manifest diagnostics and recovers when `stc.toml` is fixed. Decide the client's restart policy for configuration errors separately from unexpected crashes. Document the current restart behavior and the reload workaround meanwhile. |
+| F-23 | A source glob that matches no files is `STC-E-PROJECT-004` at project load for every source set, so a project that declares `[test] sources` before adding tests is invalid even for `stc check` and the LSP; a project without tests must currently omit `[test]`. Other optional project-file items may have similar load-time requirements that turn an incomplete but workable project into an error. | Project-file robustness follow-up: audit required versus optional manifest items and empty source sets. Allow a project without tests (empty or not-yet-created test globs) and decide which other items should be optional or deferred until the command that needs them. This amends the `STC-E-PROJECT-004` rule (source glob matching nothing) and requires conformance, CLI, LSP, and documentation updates. |
 
 ## 13. Change log
 
@@ -603,3 +606,6 @@ Notes:
 | 2026-11-03 | F-1.1 complete: the extension contributes an opt-out `.st`-scoped token-color overlay for Default Dark/Light Modern, Dark/Light Modern, and Dark/Light 2026. Commits `a126800`/`c2af647`; CI runs `41681462972`/`41692812156` green (39 jobs); owner-confirmed manual rendering in Dark Modern, Dark 2026, and Light 2026. Checklist F-1.1 marked pass; plan §12.1 moves F-1.1 to the completed required features. |
 | 2026-11-03 | Owner brought F-11 (caller-frame source locations) back into WL-1.1 scope as a required item: every resolved caller frame must show its call-site file and line at any depth (sample `src/main.st:39`), with unavailable mappings reported honestly. F-11 moves from §12.2 documented limitations to §12.1 required; the IDE documentation and KNOWN-LIMITATIONS will describe the implemented behavior after delivery. |
 | 2026-11-03 | Owner brought F-14 (typed writes while stopped) back into WL-1.1 scope as a required item and updated the queued-write semantics: writes made while the program runs remain queued until the next boundary, but writes made while stopped at a breakpoint, step landing, or pause apply immediately and are visible to subsequent reads and stepping in the same stop. F-14 moves from §12.2 documented limitations to §12.1 required; Debug and Monitoring §15.3 and the IDE documentation will describe the stopped-write path after delivery. |
+| 2026-11-03 | F-11 complete: the stopped-frame sidecar is format 2 with a function-relative line map, and the runtime reports each resolved caller's call-site source (D-229). Commit `909ebd0`; CI run `41703710933` green (39 jobs); owner-confirmed manual checks for the sample caller (`src/main.st:39`) and a depth-3 chain (`LEVELONE:12`, `MAIN:19`). Checklist F-11 marked pass; plan §12.1 moves F-11 to the completed required features. |
+| 2026-11-03 | F-14 complete: on `stc-debug/1.1`, a one-shot write received while stopped is applied by the parked cycle thread before its response, while running writes and forces keep boundary semantics (D-230). Commit `c8cb1c9`; CI run `41703710933` green (39 jobs); owner-confirmed manual check that a stopped `INCREMENT` edit is immediately visible and survives a step. Checklist F-14 marked pass; plan §12.1 moves F-14 to the completed required features. |
+| 2026-11-03 | Deferred follow-ups recorded after a manual depth-check LSP incident: F-22 (LSP project-load failure restart loop and hidden manifest error) and F-23 (project-file optionality audit; allow a project without tests and review other optional items that fail at load). Both follow-ups document the current behavior and workarounds in KNOWN-LIMITATIONS and the USER-GUIDE; no WL-1.1 code change. |

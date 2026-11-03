@@ -10,10 +10,9 @@ Compiler: the binary `stc.path` points at; use the latest debug or a rebuilt rel
 Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **N/A** =
 unsupported or intentionally out of scope.
 
-Summary 2026-11-03: 40/40 checklist entries evaluated — 40 pass (100%); the F-1.1 required
-item also passes; F-11 and F-14 are open as required items after the owner brought them back
-into scope. The required/documented/deferred close-out triage is in
-[WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
+Summary 2026-11-03: 40/40 checklist entries evaluated — 40 pass (100%); the F-1.1, F-11, and
+F-14 required items also pass. The required/documented/deferred close-out triage is in
+[WL-1.1-Plan.md](WL-1.1-Plan.md) §12; F-22 and F-23 are deferred follow-ups.
 
 ## 0. Prerequisites
 
@@ -366,7 +365,7 @@ Completed findings are feature history, not open follow-ups. The close-out triag
       runtime `function` is a manifest function `GotId` in `function_names`, and preserves each
       kept frame's original runtime `index` as its DAP frame id so `scopes`, `evaluate`, and
       `frame.locals` still address the captured frame. The filter deliberately ignores `source`
-      because resolved caller frames legitimately have no source location (F-11). If the top
+      because a resolved caller frame can still have an unavailable source (F-11). If the top
       frame itself is not resolved, or no frame resolves (for example the manifest is
       unavailable), `stackTrace` returns an empty list and `totalFrames` 0 rather than
       misreporting a caller as the stop location or fabricating a frame. Regression coverage in
@@ -430,7 +429,7 @@ Completed findings are feature history, not open follow-ups. The close-out triag
 
 ### Required for WL-1.1
 
-All required implementation items except F-11 and F-14 are complete (plan §12.1).
+All required implementation items are complete (plan §12.1).
 
 - [x] **F-1.1 — Default-theme ST token-color overlay.** Pass 2026-11-03. F-1 ships `stc Dark`/
       `stc Light`, so the intended palette required selecting a contributed theme. The extension
@@ -443,25 +442,24 @@ All required implementation items except F-11 and F-14 are complete (plan §12.1
       empty-`textMateRules` opt-out is documented and unit-tested. Commits `a126800`/`c2af647`;
       CI runs `41681462972`/`41692812156` green.
 
-- [ ] **F-11 — Caller stack frames must show their call-site source.** Required for WL-1.1
-      (owner decision 2026-11-03; plan §12.1). The top frame carries the checkpoint's
-      `file`/`line`/`column`, but `capture_frames` sets `source: None` for every caller. The
-      frame sidecar has function ranges and locals but no address-to-source mapping, so a
-      caller such as `MAIN` shows "Unknown Source" while stopped in `ADDSTEP`. Add a
-      line/address table (or sidecar call-site map) to the debug metadata and runtime
-      resolution of the return address. Acceptance: the caller frame shows the call-site file
-      and line (for the sample, `src/main.st:39`) at any depth; unavailable mappings stay
-      honestly absent; frame indices, scopes, and evaluate behavior are unchanged.
+- [x] **F-11 — Caller stack frames must show their call-site source.** Pass 2026-11-03.
+      Required for WL-1.1 (owner decision 2026-11-03; plan §12.1). The stopped-frame sidecar is
+      now format 2 with a function-relative line map (`line_ranges`, D-229), and the runtime
+      resolves each caller with `return_address - 1`; unavailable mappings stay honestly
+      absent. Implemented in `909ebd0`; CI run `41703710933` green (39 jobs). Manual checks:
+      the sample `MAIN` caller shows `src/main.st:39` while stopped in `ADDSTEP`, and the
+      depth-3 check shows `LEVELONE` at `main.st:12` and `MAIN` at `main.st:19`; top-frame
+      source, frame indices, scopes, and evaluate are unchanged.
 
-- [ ] **F-14 — Writes while stopped must apply immediately.** Required for WL-1.1 (owner
-      decision 2026-11-03; plan §12.1). Today `setVariable` displays the new value, but the host
-      applies the write only at the next cycle boundary, so stepping through the current cycle
-      reads the stored value again and the temporary revert looks like a lost write. Updated
-      semantics: while the program is running, writes remain queued until the next boundary
-      (current behavior is expected); while the session is stopped at a breakpoint, step
-      landing, or pause, `var.write`/DAP `setVariable` must update the variable immediately, and
-      subsequent reads in the same stop (variables, evaluate, stepping within the cycle) must
-      observe the new value. Validation, permissions, and diagnostics are unchanged.
+- [x] **F-14 — Writes while stopped must apply immediately.** Pass 2026-11-03. Required for
+      WL-1.1 (owner decision 2026-11-03; plan §12.1). While the program runs, writes stay
+      queued until the next boundary; while the session is stopped at a breakpoint, step
+      landing, or pause, a `stc-debug/1.1` one-shot write is applied by the parked cycle thread
+      before its response (D-230). Implemented in `c8cb1c9`; CI run `41703710933` green
+      (39 jobs). Manual check: editing `INCREMENT` to 42 at the line-39 stop was immediately
+      visible to Variables and evaluate, and stayed 42 after a step; the running-write queue
+      path is covered by the protocol and DAP tests. Validation, permissions, diagnostics, and
+      forces are unchanged.
 
 ### Deferred follow-ups
 
@@ -592,8 +590,8 @@ not a WL-1.1 code change.
 | Item | Result | Notes |
 | --- | --- | --- |
 | F-1.1 | Pass | Manual 2026-11-03: Dark Modern, Dark 2026, and Light 2026 render all nine categories with the overlay palette; non-ST languages unchanged; documented opt-out; commits `a126800`/`c2af647`, CI runs `41681462972`/`41692812156` green; plan §12.1 |
-| F-11 | Required; pending | Caller frames must show the call-site file/line at any depth (sample `src/main.st:39`); owner brought it into scope 2026-11-03; plan §12.1 |
-| F-14 | Required; pending | Writes while stopped apply immediately and are visible to reads/stepping; writes while running stay queued; owner brought it into scope 2026-11-03; plan §12.1 |
+| F-11 | Pass | Manual 2026-11-03: sample caller `src/main.st:39`; depth-3 `LEVELONE:12`, `MAIN:19`; top frame, scopes, and evaluate unchanged; commit `909ebd0`, CI `41703710933` green; plan §12.1 |
+| F-14 | Pass | Manual 2026-11-03: stopped `INCREMENT := 42` visible immediately to Variables/evaluate and retained after a step; running writes stay queued (protocol/DAP tests); commit `c8cb1c9`, CI `41703710933` green; plan §12.1 |
 
 ### Deferred follow-ups
 
@@ -605,6 +603,8 @@ not a WL-1.1 code change.
 | F-18 | Pending | No per-test run control (Testing view/code lens) in VS Code |
 | F-19 | Pending | `textDocument/rename` not exposed; F2 is silent in the IDE |
 | F-21 | Deferred | Always-on runtime; attach-time cold-download vs online-change choice, no file-watch requirement; plan §12.3 / WL-1.2 |
+| F-22 | Deferred | LSP project-load failure restart loop and hidden manifest error; needs visible error/retry or degraded initialization; plan §12.3 |
+| F-23 | Deferred | Project-file optionality audit: allow a project without tests and review other optional items that fail at load; plan §12.3 |
 
 ### Documented limitations
 
