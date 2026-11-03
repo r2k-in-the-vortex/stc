@@ -195,6 +195,26 @@ Stop and request an owner decision before:
 - changing `semantics_version`, a toolchain pin, or an accepted Phase 1
   architecture decision.
 
+### 5.1 Owner decisions received 2026-11-03
+
+The owner reviewed the Phase 2 report and gates above and directed:
+
+1. Phase 2 continues toward V1 evidence.
+2. The three production scalar paths are unified on `exact.rs`: `exact.rs` is
+   the single kernel, `consteval.rs` and codegen `cast_value`/`int_convert`
+   delegate to it, behavior is preserved, and any semantic difference is
+   documented.
+3. The Aeneas/Charon bridge model is widened and regenerated to include
+   `convert`, `min_list`, `max_list`, `limit`, `mux`, and the string-length
+   helpers; additional external axioms are allowed only when each is modeled
+   and recorded in the TCB, and regeneration must emit no generated `sorry`.
+4. All toolchain pins and accepted Phase 1 architecture decisions stay fixed.
+
+These decisions remove the three blocking gates for this phase; they are not
+owner acceptance of Phase 2. Final acceptance remains the owner's review after
+the resulting proofs and evidence are committed. A genuinely new architecture
+decision still stops the work for an owner ruling.
+
 ## 6. Verification per batch
 
 - `lake build` and `lake exe stc-sem-tests` in `lean/`.
