@@ -107,4 +107,78 @@ theorem utf16Length_bounds (scalars : List Nat) :
       rw [hu]
       omega
 
+/-! ## Supplementary scalars and aggregate bounds -/
+
+/-- A supplementary scalar uses four UTF-8 bytes. -/
+theorem utf8Length_supplementary {scalar : Nat} (h : 0xFFFF < scalar) :
+    utf8Length scalar = 4 := by
+  simp [utf8Length, show ¬ scalar ≤ 0x7F by omega,
+    show ¬ scalar ≤ 0x7FF by omega, show ¬ scalar ≤ 0xFFFF by omega]
+
+/-- A supplementary scalar uses two UTF-16 code units. -/
+theorem utf16Units_supplementary {scalar : Nat} (h : 0xFFFF < scalar) :
+    utf16Units scalar = 2 := by
+  simp [utf16Units, show ¬ scalar ≤ 0xFFFF by omega]
+
+/-- UTF-8 byte length is between the scalar count and four times it. -/
+theorem utf8ByteLength_bounds (scalars : List Nat) :
+    scalars.length ≤ utf8ByteLength scalars ∧
+      utf8ByteLength scalars ≤ 4 * scalars.length := by
+  induction scalars with
+  | nil => simp [utf8ByteLength]
+  | cons scalar rest ih =>
+    have h := utf8Length_range scalar
+    simp only [utf8ByteLength, List.length_cons]
+    constructor <;> omega
+
+/-- UTF-8 byte length is additive over concatenation. -/
+theorem utf8ByteLength_append (xs ys : List Nat) :
+    utf8ByteLength (xs ++ ys) = utf8ByteLength xs + utf8ByteLength ys := by
+  induction xs with
+  | nil => simp [utf8ByteLength]
+  | cons x xs ih => simp [utf8ByteLength, ih, Nat.add_assoc]
+
+/-- UTF-16 length is additive over concatenation. -/
+theorem utf16Length_append (xs ys : List Nat) :
+    utf16Length (xs ++ ys) = utf16Length xs + utf16Length ys := by
+  induction xs with
+  | nil => simp [utf16Length]
+  | cons x xs ih => simp [utf16Length, ih, Nat.add_assoc]
+
+/-- An all-ASCII sequence uses one UTF-8 byte per scalar. -/
+theorem utf8ByteLength_ascii (scalars : List Nat)
+    (h : ∀ scalar ∈ scalars, scalar ≤ 0x7F) :
+    utf8ByteLength scalars = scalars.length := by
+  induction scalars with
+  | nil => simp [utf8ByteLength]
+  | cons scalar rest ih =>
+    have hs : utf8Length scalar = 1 :=
+      utf8_ascii scalar (h scalar List.mem_cons_self)
+    have hrest : ∀ x ∈ rest, x ≤ 0x7F :=
+      fun x hx => h x (List.mem_cons_of_mem _ hx)
+    simp [utf8ByteLength, hs, ih hrest]
+    omega
+
+/-- An all-supplementary sequence uses four UTF-8 bytes per scalar. -/
+theorem utf8ByteLength_supplementary (scalars : List Nat)
+    (h : ∀ scalar ∈ scalars, 0xFFFF < scalar) :
+    utf8ByteLength scalars = 4 * scalars.length := by
+  induction scalars with
+  | nil => simp [utf8ByteLength]
+  | cons scalar rest ih =>
+    have hs : utf8Length scalar = 4 :=
+      utf8Length_supplementary (h scalar List.mem_cons_self)
+    have hrest : ∀ x ∈ rest, 0xFFFF < x :=
+      fun x hx => h x (List.mem_cons_of_mem _ hx)
+    simp only [utf8ByteLength, List.length_cons, hs, ih hrest]
+    omega
+
+/-- Every string kind's stored count is no larger than its code-unit count. -/
+theorem len_le_lenCodeUnit (kind : StringKind) (scalars : List Nat) :
+    len kind scalars ≤ lenCodeUnit kind scalars := by
+  cases kind
+  · simp [len, lenCodeUnit]
+  · simp [len, lenCodeUnit]
+  · exact unicode_len_le_code_unit scalars
+
 end Stc.Exact

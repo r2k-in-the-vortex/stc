@@ -74,9 +74,10 @@ the width), the missing `ror_width`, and value identities (`bitAnd_self`,
 
 Widening, narrowing, equal-width signedness changes, BOOL conversion, and one
 round-trip already have lemmas. Phase 2 adds BOOL zero/nonzero outcomes,
-`convert_ok_fits` (a successful non-BOOL conversion fits the destination), and
-the `evalCast` fit connection. Conversion totality on source-fitting values is
-stated where the proof is complete.
+`convert_narrow_ok_fits`, `convert_widen_ok_fits`, and the corresponding
+`evalCast` connections. A single `convert_ok_fits` covering equal-width
+signedness reinterpretation is not yet proved; the equal-width cases remain a
+recorded gap, not a claim.
 
 ### 3.4 Selection (`Stc.Exact.Select`)
 
@@ -180,11 +181,11 @@ Until acceptance, this file stays in the repository. No deletion and no
 | Item | Status |
 | --- | --- |
 | Working plan | Created |
-| Exact integer property lemmas | Planned |
-| Bitwise/shift/rotate lemmas | Planned |
-| Conversion lemmas | Planned |
-| Selection lemmas | Planned |
-| String-length lemmas | Planned |
+| Exact integer property lemmas | Done: success/overflow characterizations, MIN/-1 division and remainder, range extrema |
+| Bitwise/shift/rotate lemmas | Done: count-zero/width identities, `ror_width`, bitwise value identities; full rotate inverse remains open |
+| Conversion lemmas | Partial: BOOL outcomes, narrow/widen fit; equal-width reinterpret fit remains open |
+| Selection lemmas | Done: membership, clamp cases, in-range MUX, range properties |
+| String-length lemmas | Done: supplementary scalars, byte/UTF-16 bounds, append, per-kind length bound |
 | Constant-evaluation model | Planned |
 | Exact bridge package and generated model | Planned |
 | External-axiom models and refinement propositions | Planned |

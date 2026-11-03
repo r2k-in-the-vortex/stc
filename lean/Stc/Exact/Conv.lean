@@ -253,4 +253,80 @@ theorem IntType.convert_roundtrip {src to : IntType} {v : Int}
     rw [ite_eq_left (by simpa [hs] using hsigned)]
   · rw [ite_eq_right hneg]
 
+/-! ## BOOL and result-range facts -/
+
+/-- The one-bit unsigned layout represents zero. -/
+theorem IntType.fits_bool_zero : (⟨1, false⟩ : IntType).fits 0 = true := by
+  decide
+
+/-- The one-bit unsigned layout represents one. -/
+theorem IntType.fits_bool_one : (⟨1, false⟩ : IntType).fits 1 = true := by
+  decide
+
+/-- Converting zero to `BOOL` returns zero. -/
+theorem IntType.convert_to_bool_zero (src : IntType) :
+    src.convert ⟨1, false⟩ 0 = .ok 0 := by
+  rw [IntType.convert_to_bool]
+  simp
+
+/-- Converting any nonzero value to `BOOL` returns one. -/
+theorem IntType.convert_to_bool_nonzero (src : IntType) {v : Int} (hv : v ≠ 0) :
+    src.convert ⟨1, false⟩ v = .ok 1 := by
+  rw [IntType.convert_to_bool]
+  simp [hv]
+
+/-- A successful narrowing conversion fits its destination. -/
+theorem IntType.convert_narrow_ok_fits {src to : IntType} {v r : Int}
+    (hbool : to.width ≠ 1) (h : to.width < src.width)
+    (hok : src.convert to v = .ok r) : to.fits r = true := by
+  by_cases hf : to.fits v = true
+  · have hres : src.convert to v = .ok v :=
+      IntType.convert_narrow_ok hbool h hf
+    rw [hres] at hok
+    cases hok
+    exact hf
+  · have hf' : to.fits v = false := by simpa using hf
+    have herr : src.convert to v = .error .range :=
+      (IntType.convert_narrow_error hbool h).mpr hf'
+    rw [herr] at hok
+    cases hok
+
+/-- A successful widening conversion of a source-fitting value fits the
+destination. -/
+theorem IntType.convert_widen_ok_fits {src to : IntType} {v r : Int}
+    (hbool : to.width ≠ 1) (hw : 0 < src.width) (h : src.width < to.width)
+    (hsrc : src.fits v = true) (hok : src.convert to v = .ok r) :
+    to.fits r = true := by
+  by_cases hneg : (src.signed && v < 0) = true
+  · have hs : src.signed = true := (Bool.and_eq_true_iff.mp hneg).1
+    have hv : v < 0 := by simpa using (Bool.and_eq_true_iff.mp hneg).2
+    by_cases ht : to.signed = true
+    · have hres : src.convert to v = .ok v :=
+        IntType.convert_widen_signed hbool h hs ht hv
+      rw [hres] at hok
+      cases hok
+      exact IntType.convert_widen_signed_fits hw h ht hsrc
+    · have ht' : to.signed = false := by simpa using ht
+      have hres : src.convert to v = .ok (v + (2 : Int) ^ to.width) :=
+        IntType.convert_widen_neg_unsigned hbool h hs ht' hv
+      rw [hres] at hok
+      cases hok
+      exact IntType.convert_widen_neg_unsigned_fits hw h ht' hsrc hv
+  · have hnotneg : ¬ (src.signed && v < 0) = true := hneg
+    have hv : src.signed = false ∨ 0 ≤ v := by
+      by_cases hs : src.signed = true
+      · right
+        have : ¬ v < 0 := by
+          intro hvn
+          have htrue : (src.signed && v < 0) = true := by simp [hs, hvn]
+          exact hnotneg htrue
+        omega
+      · left
+        simpa using hs
+    have hres : src.convert to v = .ok v :=
+      IntType.convert_widen_value hbool h hv
+    rw [hres] at hok
+    cases hok
+    exact IntType.convert_widen_value_fits hw h hsrc hv
+
 end Stc.Exact
