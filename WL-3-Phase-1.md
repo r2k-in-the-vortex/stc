@@ -152,7 +152,7 @@ it with the bridge toolchain/translation boundary.
 | D-V6 subset | Approved: scalar types, expressions, assignments, control flow, functions, programs, GOT globals; no OOP, references, strings, or aggregates. |
 | Claim level | No new claims: all Phase 1 bridge/tooling work stays V0; Phase 0's S-level semantics remains the only reviewed claim. |
 | Aeneas/Mathlib proof environment | Approved: prune rebuildable build artifacts and build the Aeneas Lean backend plus Mathlib v4.35.0 on the Ubuntu host to measure compile/proof cost. |
-| Bridge-toolchain CI | Resolved 2026-11-03: fast CI stays free of Aeneas/Mathlib; add a separate manual/nightly drift workflow that installs the pinned toolchain and checks regeneration.
+| Bridge-toolchain CI | Resolved 2026-11-03: fast CI stays free of Aeneas/Mathlib; add a separate manual/nightly drift workflow that installs the pinned toolchain and checks regeneration. |
 | Exact kernel bridge | Aeneas/Charon on the filtered pure exact kernel; derived/helper bodies opaque or filtered; compile/prove against `Stc.Exact`. |
 | Keys bridge | Proved Lean key-normalization contract/checker; do not use Aeneas for the string/iterator-heavy keys module. |
 | Codec bridge | Proved Lean wire-format checker as primary; the successful Aeneas translation is fallback evidence, not the chosen bridge. |
