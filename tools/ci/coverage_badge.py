@@ -14,7 +14,8 @@ Only line coverage (the LCOV `LF:`/`LH:` records) is used. The threshold colors
 match the common coverage conventions: >= 90 brightgreen, >= 80 green,
 >= 70 yellowgreen, >= 60 yellow, >= 50 orange, otherwise red.
 
-Only the Python standard library is required.
+Only the Python standard library is required. Pass `--fail-under 85` to use
+the same line-coverage total as a CI gate.
 """
 
 from __future__ import annotations
@@ -121,6 +122,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--svg", type=Path, help="write the badge SVG here")
     parser.add_argument("--json", type=Path, help="write the shields endpoint JSON here")
     parser.add_argument("--label", default="coverage", help="badge label (default: coverage)")
+    parser.add_argument(
+        "--fail-under",
+        type=float,
+        metavar="PERCENT",
+        help="exit non-zero when line coverage is below PERCENT",
+    )
     args = parser.parse_args(argv)
 
     if args.svg is None and args.json is None:
@@ -134,6 +141,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.svg is not None:
         args.svg.parent.mkdir(parents=True, exist_ok=True)
         args.svg.write_text(render_svg(args.label, message, hex_color), encoding="utf-8")
+    if args.fail_under is not None and percent < args.fail_under:
+        print(
+            f"coverage_badge: line coverage {percent:.2f}% is below the "
+            f"{args.fail_under:g}% gate",
+            file=sys.stderr,
+        )
+        return 1
     if args.json is not None:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         endpoint = {

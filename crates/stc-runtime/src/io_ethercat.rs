@@ -3426,4 +3426,294 @@ mod tests {
         assert_eq!(domain_read(&data, 0, 8), Some(0xA5));
         assert_eq!(domain_read(&data, 12, 5), None);
     }
+
+    fn parse_error_for(json: &str, channels: Vec<BackendChannel>) -> (&'static str, String) {
+        let config = config(
+            vec![device("d", "ethercat", Some(json), channels)],
+            Vec::new(),
+            1,
+            1,
+        );
+        match parse_config(&config) {
+            Ok(_) => panic!("expected a configuration error for {json}"),
+            Err(error) => (error.code, error.message),
+        }
+    }
+
+    fn assert_data_config_error(json: &str, expected: &str) {
+        let (code, message) = parse_error_for(json, data_channels());
+        assert_eq!(code, codes::ETH_CONFIG, "{message}");
+        assert!(message.contains(expected), "{message}");
+    }
+
+    /// Minimal data-device JSON with the given extra fields.
+    fn data_json(extra: &str) -> String {
+        format!("{{\"position\":1,\"vendor\":1,\"product\":2{extra}}}")
+    }
+
+    #[test]
+    fn malformed_device_configuration_reports_specific_errors() {
+        assert_data_config_error("{", "not valid JSON");
+        assert_data_config_error("[]", "not a JSON object");
+        assert_data_config_error("{\"vendor\":1,\"product\":2}", "`position`");
+        assert_data_config_error(
+            "{\"position\":\"one\",\"vendor\":1,\"product\":2}",
+            "`position`",
+        );
+        assert_data_config_error("{\"position\":1,\"product\":2}", "`vendor`");
+        assert_data_config_error("{\"position\":1,\"vendor\":1}", "`product`");
+        assert_data_config_error(&data_json(",\"revision\":\"bad\""), "`revision`");
+        assert_data_config_error(&data_json(",\"startup-timeout\":5"), "`startup-timeout`");
+        assert_data_config_error(
+            &data_json(",\"startup-timeout\":\"soon\""),
+            "`startup-timeout`",
+        );
+        assert_data_config_error(&data_json(",\"recovery-cycles\":-1"), "`recovery-cycles`");
+        assert_data_config_error(&data_json(",\"syncs\":5"), "`syncs` is not an array");
+        assert_data_config_error(&data_json(",\"syncs\":[1]"), "not an object");
+        assert_data_config_error(&data_json(",\"syncs\":[{}]"), "sync index");
+        assert_data_config_error(
+            &data_json(
+                ",\"syncs\":[{\"index\":1,\"direction\":\"input\"},\
+                 {\"index\":1,\"direction\":\"input\"}]",
+            ),
+            "more than once",
+        );
+        assert_data_config_error(&data_json(",\"syncs\":[{\"index\":1}]"), "no direction");
+        assert_data_config_error(
+            &data_json(",\"syncs\":[{\"index\":1,\"direction\":\"input\",\"watchdog\":\"on\"}]"),
+            "watchdog",
+        );
+        assert_data_config_error(
+            &data_json(",\"syncs\":[{\"index\":1,\"direction\":\"input\",\"pdos\":5}]"),
+            "`pdos` is not an array",
+        );
+        assert_data_config_error(
+            &data_json(",\"syncs\":[{\"index\":1,\"direction\":\"input\",\"pdos\":[1]}]"),
+            "PDO that is not an object",
+        );
+        assert_data_config_error(
+            &data_json(",\"syncs\":[{\"index\":1,\"direction\":\"input\",\"pdos\":[{}]}]"),
+            "`index`",
+        );
+        assert_data_config_error(
+            &data_json(
+                ",\"syncs\":[{\"index\":1,\"direction\":\"input\",\
+                 \"pdos\":[{\"index\":\"0x1a00\",\"entries\":5}]}]",
+            ),
+            "`entries` is not an array",
+        );
+        assert_data_config_error(
+            &data_json(
+                ",\"syncs\":[{\"index\":1,\"direction\":\"input\",\
+                 \"pdos\":[{\"index\":\"0x1a00\",\"entries\":[1]}]}]",
+            ),
+            "PDO entry that is not an object",
+        );
+        assert_data_config_error(
+            &data_json(
+                ",\"syncs\":[{\"index\":1,\"direction\":\"input\",\
+                 \"pdos\":[{\"index\":\"0x1a00\",\"entries\":\
+                 [{\"index\":\"0x3001\",\"subindex\":1,\"bits\":0}]}]}]",
+            ),
+            "1..=64",
+        );
+        assert_data_config_error(
+            &data_json(
+                ",\"syncs\":[{\"index\":1,\"direction\":\"input\",\
+                 \"pdos\":[{\"index\":\"0x1a00\",\"entries\":\
+                 [{\"index\":\"0x3001\",\"subindex\":1,\"bits\":65}]}]}]",
+            ),
+            "1..=64",
+        );
+        assert_data_config_error(
+            &data_json(
+                ",\"syncs\":[{\"index\":1,\"direction\":\"input\",\
+                 \"pdos\":[{\"index\":\"0x1a00\",\"entries\":\
+                 [{\"index\":\"0x3001\",\"subindex\":1,\"bits\":8}]}]},\
+                 {\"index\":2,\"direction\":\"output\",\
+                 \"pdos\":[{\"index\":\"0x1600\",\"entries\":\
+                 [{\"index\":\"0x3001\",\"subindex\":1,\"bits\":8}]}]}]",
+            ),
+            "declares PDO entry",
+        );
+        assert_data_config_error(
+            &data_json(",\"pdo-channels\":5"),
+            "`pdo-channels` is not an array",
+        );
+        assert_data_config_error(&data_json(",\"pdo-channels\":[1]"), "not an object");
+        assert_data_config_error(
+            &data_json(",\"pdo-channels\":[{\"entry\":{}}]"),
+            "unnamed PDO channel",
+        );
+        assert_data_config_error(
+            &data_json(
+                ",\"syncs\":[{\"index\":1,\"direction\":\"input\",\"pdos\":[{\"index\":\"0x1a00\",\"entries\":[{\"index\":\"0x3001\",\"subindex\":1,\"bits\":16}]}]}],\
+                 \"pdo-channels\":[\
+                 {\"name\":\"IN\",\"entry\":{\"index\":\"0x3001\",\"subindex\":1},\"bit\":0},\
+                 {\"name\":\"IN\",\"entry\":{\"index\":\"0x3001\",\"subindex\":1},\"bit\":0}]",
+            ),
+            "maps channel",
+        );
+        assert_data_config_error(
+            &data_json(",\"pdo-channels\":[{\"name\":\"IN\",\"bit\":0}]"),
+            "no `entry` object",
+        );
+        assert_data_config_error(
+            &data_json(
+                ",\"pdo-channels\":[{\"name\":\"IN\",\
+                 \"entry\":{\"index\":\"0x3002\",\"subindex\":1},\"bit\":0}]",
+            ),
+            "not declared",
+        );
+        assert_data_config_error(
+            &data_json(
+                ",\"syncs\":[{\"index\":1,\"direction\":\"input\",\"pdos\":[{\"index\":\"0x1a00\",\"entries\":[{\"index\":\"0x3001\",\"subindex\":1,\"bits\":16}]}]}],\
+                 \"pdo-channels\":[{\"name\":\"IN\",\
+                 \"entry\":{\"index\":\"0x3001\",\"subindex\":1}}]",
+            ),
+            "`bit`",
+        );
+        assert_data_config_error(&data_json(",\"dc\":\"on\""), "table/object");
+        assert_data_config_error(
+            &data_json(",\"dc\":{\"assign-activate\":true}"),
+            "boolean shorthand",
+        );
+        assert_data_config_error(
+            &data_json(",\"dc\":{\"assign-activate\":70000}"),
+            "0..=65535",
+        );
+        assert_data_config_error(
+            &data_json(",\"dc\":{\"assign-activate\":1,\"sync0-shift\":\"x\"}"),
+            "sync0-shift",
+        );
+    }
+
+    #[test]
+    fn device_channels_and_image_ranges_are_validated() {
+        let cases: &[(&str, &str)] = &[
+            ("DUPLICATE", "declares channel"),
+            ("BAD_DIRECTION", "expected `input` or `output`"),
+            ("BAD_WIDTH", "expected 1, 8, 16, or 32"),
+            ("UNMAPPED", "no `pdo-channels` mapping"),
+        ];
+        for (case, expected) in cases {
+            let channels = match *case {
+                "DUPLICATE" => vec![
+                    bound("IN", "input", 8, 1, 0),
+                    bound("IN", "output", 8, 2, 0),
+                ],
+                "BAD_DIRECTION" => vec![
+                    bound("IN", "sideways", 8, 1, 0),
+                    bound("OUT", "output", 8, 2, 0),
+                ],
+                "BAD_WIDTH" => vec![
+                    bound("IN", "input", 2, 1, 0),
+                    bound("OUT", "output", 8, 2, 0),
+                ],
+                _ => vec![
+                    bound("IN", "input", 8, 1, 0),
+                    bound("OUT", "output", 8, 2, 0),
+                    unbound("EXTRA", "input", 8),
+                ],
+            };
+            let (code, message) = parse_error_for(DATA_CONFIG, channels);
+            assert_eq!(code, codes::ETH_CONFIG, "{expected}: {message}");
+            assert!(message.contains(expected), "{case}: {message}");
+        }
+
+        let mapped_unknown = data_json(
+            ",\"syncs\":[{\"index\":1,\"direction\":\"input\",\"pdos\":[{\"index\":\"0x1a00\",\"entries\":[{\"index\":\"0x3001\",\"subindex\":1,\"bits\":16}]}]}],\
+             \"pdo-channels\":[{\"name\":\"EXTRA\",\
+             \"entry\":{\"index\":\"0x3001\",\"subindex\":1},\"bit\":0}]",
+        );
+        let (_, message) = parse_error_for(&mapped_unknown, data_channels());
+        assert!(message.contains("not declared in `stc.toml`"), "{message}");
+
+        let out_of_range = data_json(
+            ",\"syncs\":[{\"index\":1,\"direction\":\"output\",\
+             \"pdos\":[{\"index\":\"0x1600\",\"entries\":\
+             [{\"index\":\"0x3101\",\"subindex\":1,\"bits\":8}]}]}],\
+             \"pdo-channels\":[{\"name\":\"OUT\",\
+             \"entry\":{\"index\":\"0x3101\",\"subindex\":1},\"bit\":8}]",
+        );
+        let (_, message) = parse_error_for(&out_of_range, data_channels());
+        assert!(
+            message.contains("does not fit inside PDO entry"),
+            "{message}"
+        );
+
+        let wrong_direction = data_json(
+            ",\"syncs\":[{\"index\":1,\"direction\":\"output\",\
+             \"pdos\":[{\"index\":\"0x1600\",\"entries\":\
+             [{\"index\":\"0x3101\",\"subindex\":1,\"bits\":8}]}]}],\
+             \"pdo-channels\":[{\"name\":\"IN\",\
+             \"entry\":{\"index\":\"0x3101\",\"subindex\":1},\"bit\":0}]",
+        );
+        let (_, message) = parse_error_for(&wrong_direction, data_channels());
+        assert!(
+            message.contains("does not match the PDO entry direction"),
+            "{message}"
+        );
+
+        let unaligned = data_json(
+            ",\"syncs\":[{\"index\":1,\"direction\":\"input\",\
+             \"pdos\":[{\"index\":\"0x1a00\",\"entries\":\
+             [{\"index\":\"0x3001\",\"subindex\":1,\"bits\":16}]}]}],\
+             \"pdo-channels\":[{\"name\":\"IN\",\
+             \"entry\":{\"index\":\"0x3001\",\"subindex\":1},\"bit\":1}]",
+        );
+        let (_, message) = parse_error_for(&unaligned, data_channels());
+        assert!(message.contains("not byte-aligned"), "{message}");
+    }
+
+    #[test]
+    fn status_device_configuration_errors_are_specific() {
+        let status_config = |json: &str, channels: Vec<BackendChannel>| {
+            config(
+                vec![
+                    device("d", "ethercat", Some(DATA_CONFIG), data_channels()),
+                    device("s", "ethercat-status", Some(json), channels),
+                ],
+                Vec::new(),
+                2,
+                1,
+            )
+        };
+        let assert_error = |json: &str, channels: Vec<BackendChannel>, expected: &str| {
+            let error = match parse_config(&status_config(json, channels)) {
+                Ok(_) => panic!("status configuration must fail"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, codes::ETH_CONFIG, "{}", error.message);
+            assert!(error.message.contains(expected), "{}", error.message);
+        };
+        let valid = || vec![bound("master.phase", "input", 16, 1, 0)];
+        assert_error("{", valid(), "not valid JSON");
+        assert_error("[]", valid(), "not a JSON object");
+        assert_error("{\"layout\": 2}", valid(), "unknown layout");
+        assert_error(
+            "{\"layout\": 1}",
+            vec![
+                bound("master.phase", "input", 16, 1, 0),
+                bound("master.phase", "input", 16, 1, 16),
+            ],
+            "more than once",
+        );
+        assert_error(
+            "{\"layout\": 1}",
+            vec![bound("master.phase", "output", 16, 1, 0)],
+            "read-only",
+        );
+        assert_error(
+            "{\"layout\": 1}",
+            vec![bound("nope.phase", "input", 16, 1, 0)],
+            "unknown status channel",
+        );
+        assert_error(
+            "{\"layout\": 1}",
+            vec![bound("master.phase", "input", 8, 1, 0)],
+            "status layout uses",
+        );
+    }
 }

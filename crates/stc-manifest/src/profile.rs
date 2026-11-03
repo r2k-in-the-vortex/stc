@@ -1736,4 +1736,312 @@ word-order = [3, 2, 1, 0]
             );
         }
     }
+
+    fn profile_err(text: &str) {
+        assert!(
+            parse_profile(text, file()).is_err(),
+            "profile accepted:\n{text}"
+        );
+    }
+
+    const MINIMAL_DEVICE: &str = r#"
+[device.diewu]
+position = 0
+vendor = "0x00000b95"
+product = "0x00010200"
+"#;
+
+    #[test]
+    fn device_field_mutations_are_rejected() {
+        for text in [
+            r#"
+[device.diewu]
+position = 0
+vendor = "zzzz"
+product = 2
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = -1
+product = 2
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+revision = [1]
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+startup-timeout = "soon"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+recovery-cycles = -1
+"#,
+        ] {
+            profile_err(text);
+        }
+        assert!(parse_profile(MINIMAL_DEVICE, file()).is_ok());
+    }
+
+    #[test]
+    fn sync_and_pdo_mutations_are_rejected() {
+        for text in [
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+syncs = 5
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = "zero"
+direction = "input"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "sideways"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+watchdog = "on"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+pdos = 5
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "zzzz"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+entries = 5
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+[[device.diewu.syncs.pdos.entries]]
+index = "zzzz"
+subindex = 1
+bits = 8
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 300
+bits = 8
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 1
+bits = 0
+"#,
+        ] {
+            profile_err(text);
+        }
+    }
+
+    #[test]
+    fn pdo_channel_mutations_are_rejected() {
+        let device = r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 1
+bits = 16
+"#;
+        for tail in [
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 1 }
+bit = "zero"
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = ""
+entry = { index = "0x3001", subindex = 1 }
+bit = 0
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = 5
+bit = 0
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 300 }
+bit = 0
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "zzzz", subindex = 1 }
+bit = 0
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 1 }
+bit = 0
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 1 }
+bit = 0
+"#,
+        ] {
+            profile_err(&format!("{device}{tail}"));
+        }
+    }
+
+    #[test]
+    fn dc_and_route_mutations_are_rejected() {
+        for text in [
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+dc = 5
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.dc]]
+assign-activate = 1
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[device.diewu.dc]
+assign-activate = true
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[device.diewu.dc]
+assign-activate = 70000
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[device.diewu.dc]
+assign-activate = 1
+sync0-shift = "x"
+"#,
+            r#"
+[[routes]]
+source = { kind = "bogus", variable = "Main.In" }
+sinks = [{ kind = "plc-output", variable = "Main.Out" }]
+"#,
+            r#"
+[[routes]]
+source = { kind = "plc-output" }
+sinks = [{ kind = "plc-output", variable = "Main.Out" }]
+"#,
+            r#"
+[[routes]]
+source = { kind = "plc-output", variable = "Main.Out" }
+sinks = 5
+"#,
+            r#"
+[[routes]]
+source = { kind = "plc-output", variable = "Main.Out", extra = 1 }
+sinks = [{ kind = "plc-output", variable = "Main.Out" }]
+"#,
+        ] {
+            profile_err(text);
+        }
+    }
 }
