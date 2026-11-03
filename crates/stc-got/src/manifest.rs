@@ -1795,3 +1795,1020 @@ fn array_records<T>(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+    use crate::keys::{
+        descriptor_identity_key, function_key, global_root_key, instance_identity_key,
+        type_identity_key,
+    };
+    use crate::model::{
+        ActionRecord, AggregateFieldRecord, DescriptorKind, EnumMemberRecord, FieldRecord,
+        InitializerKind, PlanDiagnostic, Retention, RetiredCause, RetiredRecord, SubrangeBounds,
+    };
+
+    fn got(byte: u8) -> GotId {
+        GotId::from_bytes([byte; 16])
+    }
+
+    fn digest(byte: u8) -> Digest32 {
+        Digest32::from_bytes([byte; 32])
+    }
+
+    fn header() -> Header {
+        Header {
+            profile: "stc-2013-oop-utf8-v1".into(),
+            compiler_version: "stc test".into(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            module_name: "test".into(),
+            active_configuration: String::new(),
+            endianness: 1,
+            pointer_width: 8,
+            module_format: 1,
+            host_abi_major: 2,
+            host_abi_minor: 3,
+            generator_flags: 0,
+            required_features: 0,
+            build_id: got(9),
+            parent_build_id: None,
+            parent_manifest_digest: None,
+            descriptor_digest: digest(1),
+            source_fingerprint: digest(2),
+            catalog_digest: digest(3),
+            plan_digest: digest(4),
+        }
+    }
+
+    fn manifest() -> Manifest {
+        Manifest {
+            header: header(),
+            roots: Vec::new(),
+            functions: Vec::new(),
+            types: Vec::new(),
+            type_metadata: Vec::new(),
+            aggregates: Vec::new(),
+            descriptors: Vec::new(),
+            instances: Vec::new(),
+            tasks: Vec::new(),
+            exports: Vec::new(),
+            slots: Vec::new(),
+            plan: Plan {
+                verdict: PlanVerdict::Cold,
+                parent_build_id: None,
+                parent_manifest_digest: None,
+                actions: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            history: History::default(),
+        }
+    }
+
+    fn root(id: u8, key: &str) -> RootRecord {
+        RootRecord {
+            got_id: got(id),
+            key: key.into(),
+            previous_keys: Vec::new(),
+            root_kind: RootKind::Global,
+            owner_type: None,
+            field_path: String::new(),
+            type_key: TypeKey::Dint.to_string(),
+            layout_hash: got(7),
+            size: 4,
+            align: 4,
+            retention: Retention::None,
+            initializer: InitializerKind::Zero,
+            initializer_digest: None,
+            source: None,
+            slot: 0,
+        }
+    }
+
+    fn named_type(id: u8, kind: TypeKind) -> TypeRecord {
+        TypeRecord {
+            got_id: got(id),
+            key: type_identity_key("_ROOT", &format!("T{id}")).expect("type key"),
+            previous_keys: Vec::new(),
+            type_key: TypeKey::Dint.to_string(),
+            layout_hash: got(7),
+            size: 4,
+            align: 4,
+            type_kind: kind,
+            base: None,
+            interfaces: Vec::new(),
+            vtable_shape: None,
+            fields: Vec::new(),
+            source: None,
+        }
+    }
+
+    fn function(id: u8) -> FunctionRecord {
+        let signature = Signature::parse("(IN:DINT)->DINT").expect("signature");
+        FunctionRecord {
+            got_id: got(id),
+            key: function_key("_ROOT", &format!("F{id}"), &signature).expect("function key"),
+            previous_keys: Vec::new(),
+            signature_key: signature.to_string(),
+            function_kind: crate::model::FunctionKind::Function,
+            owner_type: None,
+            flags: 0,
+            slot: 0,
+            export_name: None,
+            vtable_slot: None,
+            source: None,
+        }
+    }
+
+    fn descriptor(id: u8) -> DescriptorRecord {
+        DescriptorRecord {
+            got_id: got(id),
+            key: descriptor_identity_key("_ROOT", &format!("T{id}"), "VTABLE")
+                .expect("descriptor key"),
+            previous_keys: Vec::new(),
+            descriptor_kind: DescriptorKind::Vtable,
+            owner_type: None,
+            type_key: TypeKey::Dint.to_string(),
+            layout_hash: got(7),
+            size: 4,
+            align: 4,
+            slot: 0,
+            source: None,
+        }
+    }
+
+    fn instance(instance_path: &str, shape_key: &str) -> InstanceRecord {
+        InstanceRecord {
+            got_id: got(20),
+            key: instance_identity_key("_ROOT", "CFG", "RES", "INST").expect("instance key"),
+            previous_keys: Vec::new(),
+            program_type: None,
+            program_type_key: shape_key.into(),
+            configuration: "CFG".into(),
+            resource: "RES".into(),
+            instance_path: instance_path.into(),
+            task_key: None,
+            source: None,
+        }
+    }
+
+    fn slot(slot: u32, kind: SlotKind, service: u8, id: GotId) -> SlotRecord {
+        SlotRecord {
+            slot,
+            kind,
+            service,
+            got_id: id,
+        }
+    }
+
+    fn check(manifest: &Manifest, validate: impl Fn(&Manifest) -> Result<()>, expected: &str) {
+        match validate(manifest) {
+            Ok(()) => panic!("expected validation to fail with `{expected}`"),
+            Err(error) => assert!(
+                error.message.contains(expected),
+                "expected `{expected}` in `{}`",
+                error.message
+            ),
+        }
+    }
+
+    fn check_with_active(
+        manifest: &Manifest,
+        active: &BTreeMap<GotId, (u8, String)>,
+        expected: &str,
+    ) {
+        match manifest.validate_plan(active) {
+            Ok(()) => panic!("expected plan validation to fail with `{expected}`"),
+            Err(error) => assert!(
+                error.message.contains(expected),
+                "expected `{expected}` in `{}`",
+                error.message
+            ),
+        }
+    }
+
+    #[test]
+    fn header_fields_are_validated() {
+        let cases: &[(fn(&mut Header), &str)] = &[
+            (|h| h.profile.clear(), "profile is empty"),
+            (|h| h.target_triple.clear(), "target triple is empty"),
+            (|h| h.module_format = 2, "module_format"),
+            (|h| h.endianness = 2, "endianness"),
+            (|h| h.pointer_width = 4, "pointer_width"),
+            (|h| h.generator_flags = 0x80, "generator_flags"),
+            (|h| h.required_features = 1 << 63, "feature bits"),
+            (|h| h.build_id = GotId::ZERO, "build_id is zero"),
+            (|h| h.parent_build_id = Some(got(1)), "both be present"),
+            (
+                |h| {
+                    h.parent_build_id = Some(GotId::ZERO);
+                    h.parent_manifest_digest = Some(digest(5));
+                },
+                "parent_build_id is zero",
+            ),
+            (
+                |h| {
+                    h.parent_build_id = Some(got(1));
+                    h.parent_manifest_digest = Some(Digest32::ZERO);
+                },
+                "parent_manifest_digest is zero",
+            ),
+            (
+                |h| h.descriptor_digest = Digest32::ZERO,
+                "descriptor_digest",
+            ),
+            (
+                |h| h.source_fingerprint = Digest32::ZERO,
+                "source_fingerprint",
+            ),
+            (|h| h.catalog_digest = Digest32::ZERO, "catalog_digest"),
+            (|h| h.plan_digest = Digest32::ZERO, "plan_digest"),
+        ];
+        for (mutate, expected) in cases {
+            let mut value = manifest();
+            mutate(&mut value.header);
+            check(&value, Manifest::validate_header, expected);
+        }
+        let mut value = manifest();
+        value.header.parent_build_id = Some(got(1));
+        value.header.parent_manifest_digest = Some(digest(5));
+        value.validate_header().expect("valid parent identity");
+    }
+
+    #[test]
+    fn type_metadata_is_validated() {
+        let mut value = manifest();
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: Vec::new(),
+            subrange: None,
+        });
+        check(&value, Manifest::validate_type_metadata, "missing type");
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Enum));
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: Vec::new(),
+            subrange: None,
+        });
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: Vec::new(),
+            subrange: None,
+        });
+        check(
+            &value,
+            Manifest::validate_type_metadata,
+            "duplicate type metadata",
+        );
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Enum));
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: Vec::new(),
+            subrange: Some(SubrangeBounds { lower: 0, upper: 1 }),
+        });
+        check(
+            &value,
+            Manifest::validate_type_metadata,
+            "has subrange bounds",
+        );
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Enum));
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: vec![EnumMemberRecord {
+                name: "lower".into(),
+                value: 0,
+            }],
+            subrange: None,
+        });
+        check(&value, Manifest::validate_type_metadata, "not normalized");
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Enum));
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: vec![
+                EnumMemberRecord {
+                    name: "A".into(),
+                    value: 1,
+                },
+                EnumMemberRecord {
+                    name: "A".into(),
+                    value: 2,
+                },
+            ],
+            subrange: None,
+        });
+        check(&value, Manifest::validate_type_metadata, "duplicate member");
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Enum));
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: vec![
+                EnumMemberRecord {
+                    name: "B".into(),
+                    value: 2,
+                },
+                EnumMemberRecord {
+                    name: "A".into(),
+                    value: 1,
+                },
+            ],
+            subrange: None,
+        });
+        check(&value, Manifest::validate_type_metadata, "canonical order");
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Subrange));
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: vec![EnumMemberRecord {
+                name: "A".into(),
+                value: 0,
+            }],
+            subrange: Some(SubrangeBounds { lower: 0, upper: 1 }),
+        });
+        check(&value, Manifest::validate_type_metadata, "has enum members");
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Subrange));
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: Vec::new(),
+            subrange: None,
+        });
+        check(&value, Manifest::validate_type_metadata, "has no bounds");
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Subrange));
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: Vec::new(),
+            subrange: Some(SubrangeBounds { lower: 5, upper: 1 }),
+        });
+        check(
+            &value,
+            Manifest::validate_type_metadata,
+            "lower bound exceeds",
+        );
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Struct));
+        value.type_metadata.push(TypeMetadataRecord {
+            type_id: got(1),
+            enum_members: Vec::new(),
+            subrange: None,
+        });
+        check(
+            &value,
+            Manifest::validate_type_metadata,
+            "must not have debug type metadata",
+        );
+
+        let mut value = manifest();
+        value.types.push(named_type(1, TypeKind::Enum));
+        check(
+            &value,
+            Manifest::validate_type_metadata,
+            "missing debug type metadata",
+        );
+    }
+
+    fn type_shape(path: &str, shape_key: &str) -> AggregateRecord {
+        AggregateRecord {
+            package: "_ROOT".into(),
+            path: path.into(),
+            qualifier: None,
+            kind: AggregateKind::Type,
+            shape_key: shape_key.into(),
+            layout_hash: got(7),
+            fields: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn aggregate_shapes_are_validated() {
+        let mut value = manifest();
+        value.aggregates.push(type_shape("P", "DINT"));
+        value.aggregates[0].layout_hash = GotId::ZERO;
+        check(&value, Manifest::validate_aggregates, "zero layout hash");
+
+        let mut value = manifest();
+        value.aggregates.push(type_shape("P", "DINT"));
+        value.aggregates[0].package = "_root".into();
+        check(&value, Manifest::validate_aggregates, "not normalized");
+
+        let mut value = manifest();
+        value.aggregates.push(type_shape("P", "DINT"));
+        value.aggregates[0].path = "p".into();
+        check(&value, Manifest::validate_aggregates, "not normalized");
+
+        let mut value = manifest();
+        value.aggregates.push(type_shape("P", "DINT"));
+        value.aggregates[0].qualifier = Some("CFG/RES/INST".into());
+        check(
+            &value,
+            Manifest::validate_aggregates,
+            "must not have an instance qualifier",
+        );
+
+        let mut value = manifest();
+        value.aggregates.push(type_shape("P", "DINT"));
+        value.aggregates[0].fields.push(AggregateFieldRecord {
+            path: "X".into(),
+            type_key: "DINT".into(),
+            layout_hash: got(7),
+        });
+        check(
+            &value,
+            Manifest::validate_aggregates,
+            "must not carry program fields",
+        );
+
+        let mut value = manifest();
+        value.aggregates.push(type_shape("P", "!!!"));
+        check(&value, Manifest::validate_aggregates, "shape key");
+
+        let mut value = manifest();
+        value.aggregates.push(type_shape("P", "DINT"));
+        check(&value, Manifest::validate_aggregates, "no split roots");
+
+        let mut value = manifest();
+        value
+            .aggregates
+            .push(type_shape("P", &TypeKey::Dint.to_string()));
+        value.roots.push(root(1, "_ROOT::P.X"));
+        value.aggregates[0].kind = AggregateKind::Program;
+        check(
+            &value,
+            Manifest::validate_aggregates,
+            "no instance qualifier",
+        );
+
+        let mut value = manifest();
+        let shape = format!("P@{}", "CFG/RES/INST");
+        value.aggregates.push(AggregateRecord {
+            package: "_ROOT".into(),
+            path: "P".into(),
+            qualifier: Some("cfg/res/inst".into()),
+            kind: AggregateKind::Program,
+            shape_key: shape.clone(),
+            layout_hash: got(7),
+            fields: Vec::new(),
+        });
+        check(&value, Manifest::validate_aggregates, "not normalized");
+
+        let mut value = manifest();
+        value.aggregates.push(AggregateRecord {
+            package: "_ROOT".into(),
+            path: "P".into(),
+            qualifier: Some("CFG/RES/INST".into()),
+            kind: AggregateKind::Program,
+            shape_key: "P".into(),
+            layout_hash: got(7),
+            fields: Vec::new(),
+        });
+        check(&value, Manifest::validate_aggregates, "missing instance");
+
+        let mut value = manifest();
+        value.instances.push(instance("CFG/RES/INST", "P"));
+        value.aggregates.push(AggregateRecord {
+            package: "_ROOT".into(),
+            path: "P".into(),
+            qualifier: Some("CFG/RES/INST".into()),
+            kind: AggregateKind::Program,
+            shape_key: "Q".into(),
+            layout_hash: got(7),
+            fields: Vec::new(),
+        });
+        check(
+            &value,
+            Manifest::validate_aggregates,
+            "shape key does not match",
+        );
+
+        let mut value = manifest();
+        value.instances.push(instance("CFG/RES/INST", "P"));
+        value.aggregates.push(AggregateRecord {
+            package: "_ROOT".into(),
+            path: "P".into(),
+            qualifier: Some("CFG/RES/INST".into()),
+            kind: AggregateKind::Program,
+            shape_key: "P".into(),
+            layout_hash: got(7),
+            fields: Vec::new(),
+        });
+        check(&value, Manifest::validate_aggregates, "has no roots");
+
+        let mut value = manifest();
+        value.instances.push(instance("CFG/RES/INST", "P"));
+        value.roots.push(root(1, "_ROOT::P.X#CFG/RES/INST"));
+        value.aggregates.push(AggregateRecord {
+            package: "_ROOT".into(),
+            path: "P".into(),
+            qualifier: Some("CFG/RES/INST".into()),
+            kind: AggregateKind::Program,
+            shape_key: "P".into(),
+            layout_hash: got(7),
+            fields: vec![AggregateFieldRecord {
+                path: "X.Y".into(),
+                type_key: "DINT".into(),
+                layout_hash: got(7),
+            }],
+        });
+        check(
+            &value,
+            Manifest::validate_aggregates,
+            "not a top-level field path",
+        );
+
+        let mut value = manifest();
+        value.instances.push(instance("CFG/RES/INST", "P"));
+        value.roots.push(root(1, "_ROOT::P.X#CFG/RES/INST"));
+        value.aggregates.push(AggregateRecord {
+            package: "_ROOT".into(),
+            path: "P".into(),
+            qualifier: Some("CFG/RES/INST".into()),
+            kind: AggregateKind::Program,
+            shape_key: "P".into(),
+            layout_hash: got(7),
+            fields: vec![AggregateFieldRecord {
+                path: "x".into(),
+                type_key: "DINT".into(),
+                layout_hash: got(7),
+            }],
+        });
+        check(
+            &value,
+            Manifest::validate_aggregates,
+            "field `x` is not normalized",
+        );
+
+        let mut value = manifest();
+        value.instances.push(instance("CFG/RES/INST", "P"));
+        value.roots.push(root(1, "_ROOT::P.X#CFG/RES/INST"));
+        value.roots.push(root(2, "_ROOT::P.Y#CFG/RES/INST"));
+        value.aggregates.push(AggregateRecord {
+            package: "_ROOT".into(),
+            path: "P".into(),
+            qualifier: Some("CFG/RES/INST".into()),
+            kind: AggregateKind::Program,
+            shape_key: "P".into(),
+            layout_hash: got(7),
+            fields: vec![
+                AggregateFieldRecord {
+                    path: "Y".into(),
+                    type_key: "DINT".into(),
+                    layout_hash: got(7),
+                },
+                AggregateFieldRecord {
+                    path: "X".into(),
+                    type_key: "DINT".into(),
+                    layout_hash: got(7),
+                },
+            ],
+        });
+        check(
+            &value,
+            Manifest::validate_aggregates,
+            "fields are not in canonical order",
+        );
+
+        let mut value = manifest();
+        value.instances.push(instance("CFG/RES/INST", "P"));
+        value.roots.push(root(1, "_ROOT::P.X#CFG/RES/INST"));
+        value.aggregates.push(AggregateRecord {
+            package: "_ROOT".into(),
+            path: "P".into(),
+            qualifier: Some("CFG/RES/INST".into()),
+            kind: AggregateKind::Program,
+            shape_key: "P".into(),
+            layout_hash: got(7),
+            fields: vec![AggregateFieldRecord {
+                path: "X".into(),
+                type_key: "!!!".into(),
+                layout_hash: got(7),
+            }],
+        });
+        check(&value, Manifest::validate_aggregates, "type key");
+
+        let mut value = manifest();
+        value.instances.push(instance("CFG/RES/INST", "P"));
+        value.roots.push(root(1, "_ROOT::P.X#CFG/RES/INST"));
+        value.aggregates.push(AggregateRecord {
+            package: "_ROOT".into(),
+            path: "P".into(),
+            qualifier: Some("CFG/RES/INST".into()),
+            kind: AggregateKind::Program,
+            shape_key: "P".into(),
+            layout_hash: got(7),
+            fields: vec![AggregateFieldRecord {
+                path: "X".into(),
+                type_key: "DINT".into(),
+                layout_hash: GotId::ZERO,
+            }],
+        });
+        check(&value, Manifest::validate_aggregates, "zero layout hash");
+    }
+
+    #[test]
+    fn slot_tables_are_validated() {
+        let slot_case = |slots: Vec<SlotRecord>, mutate: Option<fn(&mut Manifest)>| {
+            let mut value = manifest();
+            value.slots = slots;
+            if let Some(mutate) = mutate {
+                mutate(&mut value);
+            }
+            value
+        };
+
+        let value = slot_case(vec![slot(1, SlotKind::Data, 0, got(1))], None);
+        check(&value, Manifest::validate_slots, "contiguous from zero");
+
+        let mut value = slot_case(
+            vec![
+                slot(0, SlotKind::Function, 0, got(1)),
+                slot(1, SlotKind::Data, 0, got(2)),
+            ],
+            None,
+        );
+        value.functions.push(function(1));
+        check(&value, Manifest::validate_slots, "slot groups must appear");
+
+        let value = slot_case(vec![slot(0, SlotKind::Import, 200, GotId::ZERO)], None);
+        check(
+            &value,
+            Manifest::validate_slots,
+            "outside the ABI 2 service table",
+        );
+
+        let value = slot_case(vec![slot(0, SlotKind::Import, 1, got(1))], None);
+        check(&value, Manifest::validate_slots, "zero GotId");
+
+        let value = slot_case(
+            vec![
+                slot(0, SlotKind::Import, 1, GotId::ZERO),
+                slot(1, SlotKind::Import, 1, GotId::ZERO),
+            ],
+            None,
+        );
+        check(&value, Manifest::validate_slots, "duplicate import service");
+
+        let value = slot_case(
+            vec![
+                slot(0, SlotKind::Import, 2, GotId::ZERO),
+                slot(1, SlotKind::Import, 1, GotId::ZERO),
+            ],
+            None,
+        );
+        check(&value, Manifest::validate_slots, "sorted by service ID");
+
+        let value = slot_case(vec![slot(0, SlotKind::Data, 1, got(1))], None);
+        check(&value, Manifest::validate_slots, "service ID zero");
+
+        let value = slot_case(vec![slot(0, SlotKind::Data, 0, GotId::ZERO)], None);
+        check(&value, Manifest::validate_slots, "nonzero GotId");
+
+        let mut unsorted = slot_case(
+            vec![
+                slot(0, SlotKind::Data, 0, got(2)),
+                slot(1, SlotKind::Data, 0, got(1)),
+            ],
+            None,
+        );
+        unsorted.roots.push(root(2, "_ROOT::A"));
+        unsorted.roots.push(root(1, "_ROOT::B"));
+        check(&unsorted, Manifest::validate_slots, "strictly sorted");
+
+        let value = slot_case(vec![slot(0, SlotKind::Data, 0, got(1))], None);
+        check(
+            &value,
+            Manifest::validate_slots,
+            "references a missing root",
+        );
+
+        let mut value = slot_case(vec![slot(0, SlotKind::Data, 0, got(1))], None);
+        let mut direct = root(1, "_ROOT::D");
+        direct.root_kind = RootKind::Direct;
+        value.roots.push(direct);
+        check(
+            &value,
+            Manifest::validate_slots,
+            "direct root must use a direct slot",
+        );
+
+        let mut value = slot_case(vec![slot(0, SlotKind::Direct, 0, got(1))], None);
+        value.roots.push(root(1, "_ROOT::D"));
+        check(
+            &value,
+            Manifest::validate_slots,
+            "non-direct root must use a data slot",
+        );
+
+        let value = slot_case(vec![slot(0, SlotKind::Direct, 0, got(1))], None);
+        check(
+            &value,
+            Manifest::validate_slots,
+            "direct slot 0 references a missing root",
+        );
+
+        let value = slot_case(vec![slot(0, SlotKind::Function, 0, got(1))], None);
+        check(
+            &value,
+            Manifest::validate_slots,
+            "references a missing function",
+        );
+
+        let value = slot_case(vec![slot(0, SlotKind::Descriptor, 0, got(1))], None);
+        check(
+            &value,
+            Manifest::validate_slots,
+            "references a missing descriptor",
+        );
+
+        let mut value = manifest();
+        value.roots.push(root(1, "_ROOT::R"));
+        check(&value, Manifest::validate_slots, "has no GOT slot");
+
+        let mut value = manifest();
+        value.functions.push(function(1));
+        check(&value, Manifest::validate_slots, "function `");
+
+        let mut value = manifest();
+        value.descriptors.push(descriptor(1));
+        check(&value, Manifest::validate_slots, "descriptor `");
+    }
+
+    fn action(id: u8, kind: u8, action: PlanAction, key: &str) -> ActionRecord {
+        ActionRecord {
+            got_id: got(id),
+            kind,
+            key: key.into(),
+            old_key: None,
+            action,
+            reason_code: "test".into(),
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn plans_are_validated() {
+        let active_empty = BTreeMap::new();
+        let mut value = manifest();
+        value.plan.verdict = PlanVerdict::OnlineCandidate;
+        check_with_active(
+            &value,
+            &active_empty,
+            "online-candidate plan must have a parent",
+        );
+
+        let mut value = manifest();
+        value.plan.verdict = PlanVerdict::Cold;
+        value.plan.parent_build_id = Some(got(1));
+        value.plan.parent_manifest_digest = Some(digest(1));
+        value.header.parent_build_id = Some(got(1));
+        value.header.parent_manifest_digest = Some(digest(1));
+        check_with_active(&value, &active_empty, "cold plan must not have a parent");
+
+        let mut value = manifest();
+        value.plan.parent_build_id = Some(got(1));
+        check_with_active(&value, &active_empty, "must both be present");
+
+        let mut value = manifest();
+        value.plan.parent_build_id = Some(got(1));
+        value.plan.parent_manifest_digest = Some(digest(1));
+        check_with_active(
+            &value,
+            &active_empty,
+            "must equal the manifest header parent",
+        );
+
+        let data_key = global_root_key("_ROOT", "COUNTER").expect("root key");
+        let mut value = manifest();
+        value.plan.verdict = PlanVerdict::Rejected;
+        value.plan.actions.push(action(
+            1,
+            IdentityKind::DataRoot.as_u8(),
+            PlanAction::Drop,
+            &data_key,
+        ));
+        value.plan.actions.push(action(
+            1,
+            IdentityKind::DataRoot.as_u8(),
+            PlanAction::Drop,
+            &data_key,
+        ));
+        check_with_active(&value, &active_empty, "duplicate plan action");
+
+        let mut value = manifest();
+        value
+            .plan
+            .actions
+            .push(action(1, 99, PlanAction::Drop, &data_key));
+        check_with_active(&value, &active_empty, "invalid identity kind");
+
+        let mut value = manifest();
+        value.plan.actions.push(action(
+            1,
+            IdentityKind::DataRoot.as_u8(),
+            PlanAction::Drop,
+            "nope",
+        ));
+        check_with_active(&value, &active_empty, "missing `::`");
+
+        let mut active = BTreeMap::new();
+        active.insert(got(1), (IdentityKind::DataRoot.as_u8(), data_key.clone()));
+        let mut value = manifest();
+        value.plan.actions.push(action(
+            1,
+            IdentityKind::DataRoot.as_u8(),
+            PlanAction::Drop,
+            "OTHER::COUNTER",
+        ));
+        check_with_active(&value, &active, "does not match the active record");
+
+        let mut value = manifest();
+        value.plan.actions.push(action(
+            1,
+            IdentityKind::DataRoot.as_u8(),
+            PlanAction::Drop,
+            &data_key,
+        ));
+        check_with_active(&value, &active, "drop action for active identity");
+
+        let mut value = manifest();
+        value.plan.actions.push(action(
+            2,
+            IdentityKind::DataRoot.as_u8(),
+            PlanAction::Allocate,
+            &global_root_key("_ROOT", "NEW").expect("key"),
+        ));
+        check_with_active(&value, &active, "action for inactive identity");
+
+        let mut value = manifest();
+        value.plan.actions.push(action(
+            2,
+            IdentityKind::DataRoot.as_u8(),
+            PlanAction::Preserve,
+            &global_root_key("_ROOT", "NEW").expect("key"),
+        ));
+        check_with_active(
+            &value,
+            &active_empty,
+            "preserve action for inactive identity",
+        );
+
+        let mut value = manifest();
+        value.plan.actions.push(action(
+            2,
+            IdentityKind::DataRoot.as_u8(),
+            PlanAction::Migrate,
+            &global_root_key("_ROOT", "NEW").expect("key"),
+        ));
+        check_with_active(&value, &active, "must classify every identity as allocate");
+
+        let mut uncovered = active.clone();
+        uncovered.insert(
+            got(2),
+            (
+                IdentityKind::DataRoot.as_u8(),
+                global_root_key("_ROOT", "OTHER").expect("key"),
+            ),
+        );
+        let mut value = manifest();
+        value.plan.verdict = PlanVerdict::Rejected;
+        value.plan.actions.push(action(
+            1,
+            IdentityKind::DataRoot.as_u8(),
+            PlanAction::Migrate,
+            &data_key,
+        ));
+        check_with_active(&value, &uncovered, "does not cover active identity");
+
+        let mut value = manifest();
+        value.plan.diagnostics.push(PlanDiagnostic {
+            code: "X".into(),
+            severity: 99,
+            message: "bad".into(),
+            got_id: None,
+            old_key: None,
+            new_key: None,
+        });
+        check_with_active(&value, &active_empty, "invalid diagnostic severity");
+    }
+
+    #[test]
+    fn history_records_are_validated() {
+        let retired = |id: u8| RetiredRecord {
+            got_id: got(id),
+            kind: IdentityKind::DataRoot.as_u8(),
+            key: global_root_key("_ROOT", &format!("R{id}")).expect("key"),
+            previous_keys: Vec::new(),
+            retired_build_id: got(30),
+            retired_manifest_digest: digest(1),
+            cause: RetiredCause::Dropped,
+        };
+        let mut value = manifest();
+        value.history.retired.push(retired(1));
+        value.history.retired.push(retired(1));
+        check(
+            &value,
+            Manifest::validate_history,
+            "duplicate retired identity",
+        );
+
+        let mut value = manifest();
+        let mut record = retired(1);
+        record.retired_build_id = GotId::ZERO;
+        value.history.retired.push(record);
+        check(
+            &value,
+            Manifest::validate_history,
+            "nonzero build and manifest identities",
+        );
+
+        let mut value = manifest();
+        let mut record = retired(1);
+        record.kind = 99;
+        value.history.retired.push(record);
+        check(&value, Manifest::validate_history, "invalid identity kind");
+
+        let mut value = manifest();
+        let mut record = retired(1);
+        record.key = "nope".into();
+        value.history.retired.push(record);
+        check(&value, Manifest::validate_history, "missing `::`");
+
+        let mut value = manifest();
+        let mut record = retired(1);
+        record.previous_keys.push(record.key.clone());
+        value.history.retired.push(record);
+        check(
+            &value,
+            Manifest::validate_history,
+            "contains the current key",
+        );
+    }
+
+    #[test]
+    fn type_fields_are_validated() {
+        let field = |id: u8, path: &str, offset: u64| FieldRecord {
+            got_id: got(id),
+            path: path.into(),
+            type_key: TypeKey::Dint.to_string(),
+            layout_hash: got(7),
+            offset,
+            size: 4,
+            align: 4,
+            retention: Retention::None,
+            source: None,
+        };
+        let type_with = |fields: Vec<FieldRecord>| {
+            let mut value = named_type(1, TypeKind::Struct);
+            value.size = 16;
+            value.fields = fields;
+            value
+        };
+        let check_fields =
+            |ty: &TypeRecord, expected: &str| match validate_fields(&[ty.clone()], ty) {
+                Ok(()) => panic!("expected field validation failure: {expected}"),
+                Err(error) => assert!(error.message.contains(expected), "{}", error.message),
+            };
+
+        check_fields(
+            &type_with(vec![field(2, "X", 0), field(2, "Y", 4)]),
+            "duplicate field identities",
+        );
+        check_fields(&type_with(vec![field(0, "X", 0)]), "zero field identity");
+        check_fields(&type_with(vec![field(2, "x", 0)]), "not normalized");
+        let mut bad_type_key = field(2, "X", 0);
+        bad_type_key.type_key = "!!!".into();
+        check_fields(&type_with(vec![bad_type_key]), "type key");
+        let mut zero_layout = field(2, "X", 0);
+        zero_layout.layout_hash = GotId::ZERO;
+        check_fields(&type_with(vec![zero_layout]), "zero layout hash");
+        let mut bad_align = field(2, "X", 0);
+        bad_align.align = 3;
+        check_fields(&type_with(vec![bad_align]), "not a power of two");
+        let mut overflow = field(2, "X", u64::MAX);
+        overflow.size = 2;
+        check_fields(&type_with(vec![overflow]), "offset overflows");
+        check_fields(&type_with(vec![field(2, "X", 13)]), "exceeds the type size");
+        check_fields(
+            &type_with(vec![field(2, "Y", 4), field(3, "X", 0)]),
+            "not sorted",
+        );
+
+        let mut ty = type_with(Vec::new());
+        ty.base = Some(got(9));
+        check_fields(&ty, "type base");
+        let mut ty = type_with(Vec::new());
+        ty.interfaces.push(got(9));
+        check_fields(&ty, "type interface");
+    }
+}

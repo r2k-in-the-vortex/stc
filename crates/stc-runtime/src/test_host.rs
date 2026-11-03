@@ -870,4 +870,165 @@ mod tests {
         );
         std::fs::remove_dir_all(&directory).expect("clean up");
     }
+
+    #[test]
+    fn parses_every_test_host_option_and_rejects_bad_values() {
+        let options = parse_args(&args(&[
+            "test",
+            "--name",
+            "case",
+            "--cycles",
+            "25",
+            "--mock-clock",
+            "1ms",
+            "--io",
+            "file",
+            "--io-file",
+            "io.bin",
+            "--expect-trap",
+            "STC_TRAP_DIV_ZERO",
+            "--assertions",
+            "assertions.tsv",
+            "--decl-file",
+            "src/a.st",
+            "--decl-line",
+            "3",
+            "--decl-column",
+            "4",
+            "--passed-root",
+            "0x00000000000000000000000000000001",
+            "--module",
+            "module.so",
+        ]))
+        .expect("valid options");
+        assert_eq!(options.name, "case");
+        assert_eq!(options.cycles, 25);
+        assert_eq!(options.mock_clock_ns, 1_000_000);
+        assert_eq!(options.io_file.as_deref(), Some(Path::new("io.bin")));
+        assert_eq!(options.expect_trap.as_deref(), Some("STC_TRAP_DIV_ZERO"));
+        assert_eq!(
+            options.assertions.as_deref(),
+            Some(Path::new("assertions.tsv"))
+        );
+        assert_eq!(options.decl_file.as_deref(), Some("src/a.st"));
+        assert_eq!(options.decl_line, Some(3));
+        assert_eq!(options.decl_column, Some(4));
+        assert!(options.passed_root.is_some());
+        assert_eq!(options.module.as_deref(), Some("module.so"));
+
+        for case in [
+            vec!["test", "--cycles", "x"],
+            vec!["test", "--mock-clock", "x"],
+            vec!["test", "--io", "bogus"],
+            vec!["test", "--decl-line", "x"],
+            vec!["test", "--decl-column", "x"],
+            vec!["test", "--passed-root", "nope"],
+            vec!["test", "--name"],
+            vec!["test", "--unknown-option"],
+        ] {
+            assert!(parse_args(&args(&case)).is_err(), "{case:?}");
+        }
+    }
+
+    #[test]
+    fn unescapes_sidecar_fields() {
+        assert_eq!(unescape("a\\tb\\nc\\rd\\\\e"), "a\tb\nc\rd\\e");
+        assert_eq!(unescape("left\\"), "left\\");
+        assert_eq!(unescape("\\x"), "\\x");
+    }
+
+    fn write_assertion_sidecar(name: &str) -> PathBuf {
+        let directory = temp_dir(name);
+        let path = directory.join("assertions.tsv");
+        std::fs::write(
+            &path,
+            "1\t2\t3\tsrc/a.st\tfirst message\nbad line\n2\t0\t0\t\t\n",
+        )
+        .expect("write sidecar");
+        path
+    }
+
+    #[test]
+    fn loads_assertion_sites_and_falls_back_for_missing_files() {
+        let path = write_assertion_sidecar("assertions");
+        let sites = load_assertion_sites(&path);
+        assert_eq!(sites.len(), 2);
+        let first = sites.get(&1).expect("first site");
+        assert_eq!(first.message, "first message");
+        assert_eq!(first.file.as_deref(), Some("src/a.st"));
+        assert_eq!(first.line, Some(2));
+        assert_eq!(first.column, Some(3));
+        let second = sites.get(&2).expect("second site");
+        assert_eq!(second.message, "");
+        assert!(second.file.is_none());
+        assert!(second.line.is_none());
+        std::fs::remove_dir_all(path.parent().expect("parent")).expect("clean up");
+
+        assert!(load_assertion_sites(Path::new("does-not-exist.tsv")).is_empty());
+    }
+
+    #[test]
+    fn renders_result_json_with_escaping() {
+        let mut out = String::new();
+        push_json_string(&mut out, "a\"b\\c\nd\re\tf\u{1}");
+        assert_eq!(out, "\"a\\\"b\\\\c\\nd\\re\\tf\\u0001\"");
+
+        let line = ResultLine::new(
+            "case",
+            Status::Fail,
+            vec![Failure {
+                message: "bad \"value\"".into(),
+                file: Some("src/a.st".into()),
+                line: Some(3),
+                column: Some(4),
+            }],
+            Some("TRAP".into()),
+            9,
+        );
+        assert_eq!(line.name, "case");
+        assert_eq!(line.cycles, 9);
+        print_result(&line);
+
+        let internal = ResultLine::internal_error("boom");
+        assert_eq!(internal.status, "fail");
+        assert!(internal.failures[0].message.contains("boom"));
+        print_result(&internal);
+    }
+
+    #[test]
+    fn maps_assertion_sites_to_failures() {
+        let site = AssertSite {
+            message: "assertion failed".into(),
+            file: Some("src/a.st".into()),
+            line: Some(7),
+            column: Some(8),
+        };
+        let failure = Failure::plain("plain");
+        assert!(failure.file.is_none());
+        let options = TestHostOptions {
+            name: "t".into(),
+            cycles: 1,
+            mock_clock_ns: 0,
+            io: IoBackend::Memory,
+            io_file: None,
+            expect_trap: None,
+            assertions: None,
+            passed_root: None,
+            decl_file: Some("d.st".into()),
+            decl_line: Some(1),
+            decl_column: Some(2),
+            module: None,
+            coverage: None,
+            coverage_sites: 0,
+        };
+        let declaration = declaration_failure(&options, "declaration");
+        assert!(declaration.message.contains("declaration"));
+        assert_eq!(declaration.file.as_deref(), Some("d.st"));
+        let mut sites = BTreeMap::new();
+        sites.insert(5, site);
+        let failure = failure_for_site(5, &sites);
+        assert_eq!(failure.message, "assertion failed");
+        let unknown = failure_for_site(9, &sites);
+        assert!(unknown.message.contains('9'));
+    }
 }

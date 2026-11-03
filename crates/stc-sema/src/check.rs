@@ -6478,3 +6478,141 @@ fn fold_binary_const(op: BinOp, lhs: &ConstValue, rhs: &ConstValue) -> Option<Co
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stc_hir::{CharTy, DateTy, IntTy, RealTy, StringKind, StringTy, TimeTy};
+
+    #[test]
+    fn constant_cast_folding_covers_scalar_conversions() {
+        let int = Ty::Int(IntTy {
+            signed: true,
+            width: 32,
+        });
+        let bits = Ty::BitString(16);
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(7), &int),
+            Some(ConstValue::Int(7))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(7), &bits),
+            Some(ConstValue::Int(7))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(7), &Ty::Time(TimeTy::Time)),
+            Some(ConstValue::Time(7))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(7), &Ty::Real(RealTy::Real)),
+            Some(ConstValue::Real(7.0))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(1), &Ty::Bool),
+            Some(ConstValue::Bool(true))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(65), &Ty::Char(CharTy::Char)),
+            Some(ConstValue::Char(65))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Bool(true), &Ty::Bool),
+            Some(ConstValue::Bool(true))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Bool(true), &int),
+            Some(ConstValue::Int(1))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Bool(false), &bits),
+            Some(ConstValue::Int(0))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Real(1.5), &Ty::Real(RealTy::LReal)),
+            Some(ConstValue::Real(1.5))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Time(9), &Ty::Time(TimeTy::LTime)),
+            Some(ConstValue::Time(9))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Char(66), &Ty::Char(CharTy::WChar)),
+            Some(ConstValue::Char(66))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Char(66), &int),
+            Some(ConstValue::Int(66))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Char(66), &bits),
+            Some(ConstValue::Int(66))
+        );
+
+        let days = ConstValue::Date {
+            kind: DateTy::Date,
+            value: 2,
+        };
+        assert_eq!(
+            fold_cast_const(&days, &Ty::Date(DateTy::Date)),
+            Some(days.clone())
+        );
+        // The task-attribute folding below divides days when converting to
+        // LDATE, which is the inverse of the DATE_TO_LDATE behavior asserted in
+        // `m4_gaps.rs` and implemented by `consteval.rs`'s conversion path.
+        // The assertion records the current implementation, not the intended
+        // D-089 scaling.
+        assert_eq!(
+            fold_cast_const(&days, &Ty::Date(DateTy::LDate)),
+            Some(ConstValue::Date {
+                kind: DateTy::LDate,
+                value: 0,
+            })
+        );
+        let nanos = ConstValue::Date {
+            kind: DateTy::LDate,
+            value: 2 * 86_400_000_000_000,
+        };
+        assert_eq!(
+            fold_cast_const(&nanos, &Ty::Date(DateTy::Date)),
+            Some(ConstValue::Date {
+                kind: DateTy::Date,
+                value: 2 * 86_400_000_000_000 * 86_400_000_000_000,
+            })
+        );
+        assert_eq!(
+            fold_cast_const(
+                &ConstValue::Date {
+                    kind: DateTy::Tod,
+                    value: 5,
+                },
+                &Ty::Date(DateTy::LTod),
+            ),
+            Some(ConstValue::Date {
+                kind: DateTy::LTod,
+                value: 5,
+            })
+        );
+        assert_eq!(
+            fold_cast_const(
+                &ConstValue::Date {
+                    kind: DateTy::LDate,
+                    value: i128::MAX,
+                },
+                &Ty::Date(DateTy::Date),
+            ),
+            None
+        );
+
+        assert_eq!(fold_cast_const(&ConstValue::Real(1.0), &int), None);
+        assert_eq!(
+            fold_cast_const(
+                &ConstValue::Int(1),
+                &Ty::String(StringTy {
+                    kind: StringKind::Sbcs,
+                    capacity: 4,
+                }),
+            ),
+            None
+        );
+    }
+}
