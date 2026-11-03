@@ -8,12 +8,12 @@ approved 2026-11-02 and merged through PR #12; P0.6 approved 2026-11-02 and merg
 canonical core-HIR dump format `0.1.0`, `stc hir-dump`, the reference interpreter, the opt-in
 snapshot surface, the differential harness, the conformance report schema, the 74-case corpus,
 and the committed byte-stable report; P0.7 completed `Semantics.md`, `Phase0-Report.md`, the
-version freeze, and the handoff. Phase 1 M1–M6 are complete and M7 preparation is complete: the
+version freeze, and the handoff. Phase 1 is complete and owner-accepted on 2026-11-03: the
 three bridge spikes, the bridge decisions and module layout, the emitted-IR boundary and D-V6
 subset freeze recorded in [Core-IR-Boundary.md](Core-IR-Boundary.md), the bridge registry evidence
 and drift CI recorded in §6, and the durable Phase 1 report at
-[Reports/Phase1-Report.md](Reports/Phase1-Report.md). Phase 1 acceptance and retirement of the
-temporary `WL-3-Phase-1.md` working plan remain open owner decisions. The proved claims are the
+[Reports/Phase1-Report.md](Reports/Phase1-Report.md). The temporary `WL-3-Phase-1.md` working plan
+has been retired. Phase 2 is next. The proved claims are the
 records in `lean/verification-status.toml`; no claim beyond them is made by this document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -474,20 +474,20 @@ separate from the fast CI matrix:
 - The Phase 0 report's "45 records" sentence is now a P0.7 freeze-time count; the live total is
   what `tools/ci/check_verification_registry.py` reports.
 
-**Phase 1 report (M7 preparation, 2026-11-03).** The durable Phase 1 report is
+**Phase 1 report (M7, 2026-11-03).** The durable Phase 1 report is
 [Reports/Phase1-Report.md](Reports/Phase1-Report.md). It records the purpose and non-claims, the
 execution environment and pinned toolchains, the bridge architecture and per-target decisions, the
 three spike results and proof-environment cost, the emitted-IR boundary and D-V6 subset, the
 registry and CI evidence including the drift-workflow prerequisites, residual risks, and the
 Phase 1 review checklist. All Phase 1 evidence is V0; no refinement or checker proof is claimed.
-The temporary `WL-3-Phase-1.md` working plan remains in place until the owner accepts Phase 1 and
-approves its retirement.
+The owner accepted Phase 1 on 2026-11-03 and approved retirement of the temporary working plan;
+`WL-3-Phase-1.md` has been deleted.
 
 **Exit criteria.** Bridge spike report exists; D-V1 through D-V10 are resolved; the Phase 0
 semantics is the reference for the bridge; the registry, no-sorry check, vector-regeneration
 check, and oracle harness run in CI; the full IR fragment and first end-to-end subset are
 written down; no component is claimed above V0 except the S-level Phase 0 semantics. The Phase 1
-report §9 assesses these criteria; Phase 1 acceptance remains an owner decision.
+report §9 assesses these criteria; the owner accepted Phase 1 on 2026-11-03.
 
 **Effort.** S/M.
 
@@ -1203,11 +1203,11 @@ The program is done when:
 2. P0.7 owner review and sign-off were completed on 2026-11-02; Phase 0 is closed.
    `Semantics.md` and `Phase0-Report.md` are complete, `semantics_version` is frozen at `1.0`,
    and the registry, fixtures, and handoff are updated.
-3. Phase 1 M1–M6 are complete and M7 preparation is complete: the three bridge spikes, the
+3. Phase 1 is complete and owner-accepted (2026-11-03): the three bridge spikes, the
    per-target bridge decisions, the bridge module layout, pins, external-axiom trust policy, and
-   registry evidence plan, the emitted-IR boundary and D-V6 subset freeze in
+   registry evidence, the emitted-IR boundary and D-V6 subset freeze in
    [Core-IR-Boundary.md](Core-IR-Boundary.md), the M6 registry evidence and bridge-drift CI, and
-   the durable [Phase 1 report](Reports/Phase1-Report.md). Phase 1 acceptance and retirement of
-   the temporary `WL-3-Phase-1.md` working plan are open owner decisions.
+   the durable [Phase 1 report](Reports/Phase1-Report.md). The temporary working plan has been
+   retired. Phase 2 is next.
 4. Extend the exact vectors to every operation and type, add the constant-evaluation oracle, and
    prototype `lake exe check-ir` against `stc_codegen::verify`.

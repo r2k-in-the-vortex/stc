@@ -2,10 +2,9 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-03
-Status: Phase 1 M1–M6 are complete and M7 preparation is complete. This report is submitted for
-owner acceptance; Phase 1 is **not yet accepted**, and the temporary `WL-3-Phase-1.md` working
-plan is **not retired**. All Phase 1 evidence is V0. The Phase 0 S-level semantics remains the
-only reviewed claim.
+Status: Phase 1 is complete and owner-accepted on 2026-11-03. M1–M7 are complete, the temporary
+`WL-3-Phase-1.md` working plan has been retired, and this report is the enduring Phase 1 record.
+All Phase 1 evidence is V0. The Phase 0 S-level semantics remains the only reviewed claim.
 Companion: [Verification Program Plan](../VerificationProgramPlan.md) ·
 [Core IR Boundary](../Core-IR-Boundary.md) · [Semantics](../Semantics.md) ·
 [Phase 0 Report](Phase0-Report.md) · [Phase 0 Design](Phase0-Design.md) ·
@@ -479,10 +478,11 @@ The checklist below is the proposed review scope for the owner's acceptance deci
 | CI | Fast CI is toolchain-free and within the 30-minute `lean`/10-minute docs budget; the separate drift workflow is not in the required matrix; its runner and variable prerequisites are documented. |
 | IR boundary | Boundary version `1` is frozen, traceable to the emitter and tests, and has explicit exclusions; D-V6 is fixed; Phase 5/7/9 ownership is stated. |
 | Claim boundary | Phase 1 is V0 evidence, not a refinement proof; no component is claimed above V0 except the Phase 0 S-level semantics; the allowed and disallowed claim language is explicit. |
-| Owner decisions | Phase 1 report acceptance and retirement of the temporary `WL-3-Phase-1.md` working plan remain open. |
+| Owner decisions | The owner accepted Phase 1 and approved retirement of the temporary `WL-3-Phase-1.md` working plan on 2026-11-03. |
 
-**Owner acceptance is pending.** This report does not retire the working plan; retirement
-requires the owner's acceptance of Phase 1 and a separate approval to delete the working file.
+**Owner sign-off (2026-11-03).** The owner accepted Phase 1 at `38215cd` and approved retiring the
+temporary working plan. The working plan has been deleted; this report, the program plan,
+`lean/bridge-toolchain.toml`, and the registry are the enduring record.
 
 ## 10. References
 
