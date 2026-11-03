@@ -32,11 +32,16 @@ Program-plan exit criteria:
 
 ## 1.1 Execution environment
 
-Baseline recorded 2026-11-02 on the Ubuntu host:
+Baseline recorded and verified 2026-11-02 on the Ubuntu host:
 
 - Linux 6.12 PREEMPT_RT, x86-64, 3 CPUs, 7.6 GiB RAM, 37 GiB free disk.
-- `git`, `clang`, `python3`, and `tmux` are present; `rustc`, `cargo`, `lake`/`lean`, `aeneas`,
-  and `charon` are not installed.
+- Installed in user space: Rust `1.99.1` with clippy/rustfmt/llvm-tools/rust-src, Lean
+  `4.35.0` (Lake `5.0.0-src+eb6cafb`), and clang `18.1.3`.
+- Verified on `WL-3` at `25b031b`: `lake build` (65 jobs), `stc-sem-tests` (11 groups), registry
+  and docs checks, the conformance gate (74/74 cases; report matches), and
+  `cargo test --workspace --locked` all pass. The gate requires building
+  `stc-driver --bin stc` and the uninstrumented test runtime first, as CI does.
+- Aeneas/Charon are not yet installed; their user-space evaluation is the remaining M0 item.
 - Windows remains the editing host and runs short local checks; the Ubuntu host runs toolchain
   setup, Aeneas/Charon generation, full proof builds, workspace tests, and overnight jobs.
 - Remote work uses the SSH alias/instructions in the gitignored `.env/RT_Host.md`; no host
@@ -147,7 +152,7 @@ toolchain (after spike evidence), and Phase 1 report acceptance/retirement (afte
 
 | Milestone | Work | Deliverable/evidence |
 | --- | --- | --- |
-| M0 — Baseline | Confirm Phase 0 records, CI, registry, and Rust baselines; inventory the three bridge targets and their dependencies; record available toolchains. Establish the Ubuntu execution host baseline, bootstrap the pinned Rust/Lean toolchains, and verify the Phase 0 checks there. | Baseline note in this file; host/toolchain record; no claim change. |
+| M0 — Baseline | Confirm Phase 0 records, CI, registry, and Rust baselines; inventory the three bridge targets and their dependencies; record available toolchains. Establish the Ubuntu execution host baseline, bootstrap the pinned Rust/Lean toolchains, and verify the Phase 0 checks there. | Baseline note in this file; host/toolchain record; Phase 0 checks green on the host (2026-11-02); Aeneas/Charon evaluation pending; no claim change. |
 | M1 — Exact bridge spike | Run Aeneas/Charon on `crates/stc-codegen/src/exact.rs` (or the feasible subset). Measure translation coverage, generated Lean readability, proof obligations, and gaps versus `Stc.Exact`. | Exact-spike section in `Phase1-Report.md`; generated model + pins if feasible. |
 | M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Keys-spike section; evidence and gap list. |
 | M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Codec-spike section; bridge recommendation. |
@@ -183,6 +188,8 @@ cd lean && lake build
 lake exe stc-sem-tests
 PYTHONUTF8=1 python tools/ci/check_verification_registry.py
 python tools/ci/check_docs.py
+cargo build --locked -p stc-driver --bin stc
+cargo build --locked -p stc-runtime --target-dir target/test-runtime
 STC_CLANG=<clang> python tools/ci/check_semantics_placeholder.py
 npx --yes markdownlint-cli2@0.24.0
 cargo test --workspace --locked
@@ -247,7 +254,7 @@ On Phase 1 sign-off:
 
 | Item | State |
 | --- | --- |
-| M0 baseline and toolchain inventory | In progress — Ubuntu host baseline recorded; owner decisions resolved; toolchain bootstrap not started |
+| M0 baseline and toolchain inventory | In progress — Rust/Lean installed and the Phase 0 baseline is green on the Ubuntu host; Aeneas/Charon evaluation pending |
 | M1 exact bridge spike | Not started |
 | M2 keys bridge spike | Not started |
 | M3 codec bridge spike | Not started |
