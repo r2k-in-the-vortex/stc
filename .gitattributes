@@ -3,6 +3,7 @@
 *.rs text eol=lf
 *.toml text eol=lf
 *.md text eol=lf
+LICENSE-* text eol=lf
 *.st text eol=lf
 *.snap text eol=lf
 *.stderr text eol=lf
