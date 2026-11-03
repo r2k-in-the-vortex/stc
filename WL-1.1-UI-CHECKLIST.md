@@ -11,8 +11,8 @@ Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **
 unsupported or intentionally out of scope.
 
 Summary 2026-11-03: 40/40 checklist entries evaluated — 40 pass (100%); the F-1.1, F-11, F-14,
-F-17, and F-18 required items also pass. The required/documented/deferred close-out triage is
-in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12; F-22 and F-23 are deferred follow-ups.
+F-17, and F-18 required items also pass. The close-out status and the remaining follow-ups are
+in [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1).
 
 ## 0. Prerequisites
 
@@ -245,13 +245,13 @@ in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12; F-22 and F-23 are deferred follow-ups.
 
 ## Findings and close-out status
 
-Completed findings are feature history, not open follow-ups. The close-out triage is in
-[WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
+Completed findings are feature history, not open follow-ups. The close-out status is in
+[V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1).
 
 ### Completed features and resolved findings
 
 - [x] **F-1 — Highlighting scope and color scheme.** Complete 2026-10-31 (owner-confirmed);
-      required for WL-1.1 (plan §12.1). The grammar's scopes are correct for the tested tokens
+      required for WL-1.1. The grammar's scopes are correct for the tested tokens
       (`keyword.declaration.st`, `constant.language.st`, `string.quoted.double.st`), but the
       resulting palette was dominated by red and white.
       The implementation enriches the grammar with standard semantic scopes — declared POU/type
@@ -322,7 +322,7 @@ Completed findings are feature history, not open follow-ups. The close-out triag
       plan. Manifest, runtime, CLI, host ABI, and specifications updated; tests cover the default
       and explicit zero.
 
-- [x] **F-20 — Online change is not exposed in the IDE.** Required for WL-1.1 (plan §12.1).
+- [x] **F-20 — Online change is not exposed in the IDE.** Required for WL-1.1.
       The compiler/runtime implement online
       change and the CLI drives it, but the VS Code extension offers no command or status to
       activate a swap, view the generation/build state, or surface the session ending on swap.
@@ -378,7 +378,7 @@ Completed findings are feature history, not open follow-ups. The close-out triag
       line 19; no host frames; caller `MAIN`, Locals, scopes, and stepping still work.
 
 - [x] **F-16 — Release monitoring has no IDE surface.** Pass 2026-10-31. Required for WL-1.1
-      (plan §12.1). With `"release": true`, the session starts and warns that stopped-frame information is unavailable, but `stackTrace` fails
+     . With `"release": true`, the session starts and warns that stopped-frame information is unavailable, but `stackTrace` fails
       (`STC-E-DEBUG-017`), so `scopes`/`variables` have no frame, Variables shows no Globals, and
       Watch expressions stay unavailable; `pause` fails with `STC-E-DEBUG-014`. Typed monitoring
       reads do work while running (`stc debug --release` read `INCREMENT = 1` via `var.read`, and
@@ -429,7 +429,7 @@ Completed findings are feature history, not open follow-ups. The close-out triag
 
 ### Required for WL-1.1
 
-All required implementation items are complete (plan §12.1).
+All required implementation items are complete.
 
 - [x] **F-1.1 — Default-theme ST token-color overlay.** Pass 2026-11-03. F-1 ships `stc Dark`/
       `stc Light`, so the intended palette required selecting a contributed theme. The extension
@@ -443,7 +443,7 @@ All required implementation items are complete (plan §12.1).
       CI runs `41681462972`/`41692812156` green.
 
 - [x] **F-11 — Caller stack frames must show their call-site source.** Pass 2026-11-03.
-      Required for WL-1.1 (owner decision 2026-11-03; plan §12.1). The stopped-frame sidecar is
+      Required for WL-1.1 (owner decision 2026-11-03). The stopped-frame sidecar is
       now format 2 with a function-relative line map (`line_ranges`, D-229), and the runtime
       resolves each caller with `return_address - 1`; unavailable mappings stay honestly
       absent. Implemented in `909ebd0`; CI run `41703710933` green (39 jobs). Manual checks:
@@ -452,7 +452,7 @@ All required implementation items are complete (plan §12.1).
       source, frame indices, scopes, and evaluate are unchanged.
 
 - [x] **F-14 — Writes while stopped must apply immediately.** Pass 2026-11-03. Required for
-      WL-1.1 (owner decision 2026-11-03; plan §12.1). While the program runs, writes stay
+      WL-1.1 (owner decision 2026-11-03). While the program runs, writes stay
       queued until the next boundary; while the session is stopped at a breakpoint, step
       landing, or pause, a `stc-debug/1.1` one-shot write is applied by the parked cycle thread
       before its response (D-230). Implemented in `c8cb1c9`; CI run `41703710933` green
@@ -462,7 +462,7 @@ All required implementation items are complete (plan §12.1).
       forces are unchanged.
 
 - [x] **F-17 — Per-test debugging.** Pass 2026-11-03. Required for WL-1.1 (owner decision
-      2026-11-03; plan §12.1). The DAP launch `test` field builds the selected `{stc:test}` POU
+      2026-11-03). The DAP launch `test` field builds the selected `{stc:test}` POU
       with checkpoint hooks and a frame sidecar under `target/stc/test/debug/<artifact>`,
       starts its test host behind a start gate released after breakpoints and configuration,
       maps the root test sources, hides the synthetic wrapper, and ends with the result line
@@ -472,7 +472,7 @@ All required implementation items are complete (plan §12.1).
       artifacts stayed hook-free.
 
 - [x] **F-18 — VS Code Testing API run/debug.** Pass 2026-11-03. Required for WL-1.1 (owner
-      decision 2026-11-03; plan §12.1); depends on F-17. A TestController discovers
+      decision 2026-11-03); depends on F-17. A TestController discovers
       `{stc:test}` POUs with file/line, runs selected tests through `stc test --exact
       --message-format json`, reports pass/fail with failure locations, durations, captured
       output, and a readable per-test summary, and offers Debug Test through the F-17 launch;
@@ -484,7 +484,7 @@ All required implementation items are complete (plan §12.1).
 
 ### Deferred follow-ups
 
-These items belong to separate follow-up plans (plan §12.3); they are not required for WL-1.1.
+These items belong to separate follow-up plans (V2.0.0-PLAN §4); they are not required for WL-1.1.
 
 - [ ] **F-9 — A launch with a breakpoint must stop on the first cycle.** Currently the host starts
       its cycle loop before `session.start` and `breakpoint.set` complete, so 1–2 cycles run
@@ -526,12 +526,13 @@ These items belong to separate follow-up plans (plan §12.3); they are not requi
       operating model is an always-on PLC runtime in the background (remote after v2.0.0), where
       online change is not coupled to a file watcher. When the user attaches a debug session and
       the source has changed, the IDE should offer an explicit choice between a cold download and
-      an online change (with cancel). Recorded as deferred in plan §12.3 and the WL-1.2 remote
+      an online change (with cancel). Recorded as deferred in V2.0.0-PLAN §4 and the WL-1.2 remote
       workflow; not part of WL-1.1.
 
 ### Documented limitations
 
-These items are accepted limitations or deliberate design (plan §12.2); they require documentation,
+These items are accepted limitations or deliberate design (see KNOWN-LIMITATIONS and
+IDE-Integration); they require documentation,
 not a WL-1.1 code change.
 
 - [ ] **F-13 — Locals is empty for program and FB body frames.** `Locals` lists only
@@ -610,22 +611,16 @@ not a WL-1.1 code change.
 
 | Item | Result | Notes |
 | --- | --- | --- |
-| F-1.1 | Pass | Manual 2026-11-03: Dark Modern, Dark 2026, and Light 2026 render all nine categories with the overlay palette; non-ST languages unchanged; documented opt-out; commits `a126800`/`c2af647`, CI runs `41681462972`/`41692812156` green; plan §12.1 |
-| F-11 | Pass | Manual 2026-11-03: sample caller `src/main.st:39`; depth-3 `LEVELONE:12`, `MAIN:19`; top frame, scopes, and evaluate unchanged; commit `909ebd0`, CI `41703710933` green; plan §12.1 |
-| F-14 | Pass | Manual 2026-11-03: stopped `INCREMENT := 42` visible immediately to Variables/evaluate and retained after a step; running writes stay queued (protocol/DAP tests); commit `c8cb1c9`, CI `41703710933` green; plan §12.1 |
-| F-17 | Pass | Manual 2026-11-03: Debug Test stopped in the test POU with locals; result line and clean session end; ordinary test artifacts unchanged; commits `6b56417`/`caa2959`, CI `41717937649` green; plan §12.1 |
-| F-18 | Pass | Manual 2026-11-03: discovery/ranges, per-test Run pass/fail with line-13 failure location and output summary, refresh, Debug Test via F-17; commits `1c0781d`/`a48b880`, CI runs `41717937649`/`41722550698` green; plan §12.1 |
+| F-1.1 | Pass | Manual 2026-11-03: Dark Modern, Dark 2026, and Light 2026 render all nine categories with the overlay palette; non-ST languages unchanged; documented opt-out; commits `a126800`/`c2af647`, CI runs `41681462972`/`41692812156` green |
+| F-11 | Pass | Manual 2026-11-03: sample caller `src/main.st:39`; depth-3 `LEVELONE:12`, `MAIN:19`; top frame, scopes, and evaluate unchanged; commit `909ebd0`, CI `41703710933` green |
+| F-14 | Pass | Manual 2026-11-03: stopped `INCREMENT := 42` visible immediately to Variables/evaluate and retained after a step; running writes stay queued (protocol/DAP tests); commit `c8cb1c9`, CI `41703710933` green |
+| F-17 | Pass | Manual 2026-11-03: Debug Test stopped in the test POU with locals; result line and clean session end; ordinary test artifacts unchanged; commits `6b56417`/`caa2959`, CI `41717937649` green |
+| F-18 | Pass | Manual 2026-11-03: discovery/ranges, per-test Run pass/fail with line-13 failure location and output summary, refresh, Debug Test via F-17; commits `1c0781d`/`a48b880`, CI runs `41717937649`/`41722550698` green |
 
 ### Deferred follow-ups
 
-| Item | Result | Notes |
-| --- | --- | --- |
-| F-9 | Pending | First stop is 1–2 cycles late; launch-with-breakpoint must stop on cycle 0 |
-| F-15 | Pending | Terminating a launch session is silent in the Debug Console |
-| F-19 | Pending | `textDocument/rename` not exposed; F2 is silent in the IDE |
-| F-21 | Deferred | Always-on runtime; attach-time cold-download vs online-change choice, no file-watch requirement; plan §12.3 / WL-1.2 |
-| F-22 | Deferred | LSP project-load failure restart loop and hidden manifest error; needs visible error/retry or degraded initialization; plan §12.3 |
-| F-23 | Deferred | Project-file optionality audit: allow a project without tests and review other optional items that fail at load; plan §12.3 |
+The deferred items from this verification are recorded as post-completion follow-ups in
+[V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1): F-9, F-15, F-19, F-21, F-22, and F-23.
 
 ### Documented limitations
 
