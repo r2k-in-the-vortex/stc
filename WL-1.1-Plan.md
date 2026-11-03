@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-29  
-Updated: 2026-10-31  
+Updated: 2026-11-03  
 Branch: `WL-1.1` (sub-plan of `v2.0.0-planning`)  
 Status: Phases 0–6 implemented and green in CI (2026-10-29/30). Phase 7 close-out in progress:
 F-1 grammar scopes/themes is complete (commits `ee242ce`/`695b296`, CI run `41163217237`;
@@ -13,9 +13,11 @@ teardown observed; generation 1 -> 2 -> 3). F-6 is complete: commit `dfda944` (C
 run `41212737785`, 38 jobs) and manually verified 2026-10-31. F-16 is complete: commit `d0abb12`
 (CI run `41234800343`, 38 jobs) and manually verified 2026-10-31 with Debug-Console-only
 monitoring. F-3 is complete: commits `644e067`/`3a93260` (CI run `41239879013`, 38 jobs) and
-manually verified 2026-10-31. The remaining required close-out item in §12.1 is F-1.1. Manual VS
-Code verification 2026-10-31: 40 of 40 checklist entries pass. Required close-out items and
-deferred follow-ups are triaged in §12.  
+manually verified 2026-10-31. F-1.1 is complete: commits `a126800` and `c2af647` (CI runs
+`41681462972` and `41692812156` green), with owner-confirmed manual rendering on Dark Modern,
+Light Modern, Dark 2026, and Light 2026 on 2026-11-03. No required close-out items remain.
+Manual VS Code verification 2026-10-31: 40 of 40 checklist entries pass. Required close-out
+items and deferred follow-ups are triaged in §12.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-1.1,
 [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
@@ -492,7 +494,7 @@ The 36-item manual checklist ([WL-1.1-UI-CHECKLIST.md](WL-1.1-UI-CHECKLIST.md)) 
 F-5, F-7, F-8, the DAP frame-name mapping and evaluate-by-name fixes, and the D-211 FB
 interface-access change. Complete features (F-1, F-2, F-3, F-4, F-5, F-6, F-7, F-8, F-10, F-12,
 F-16, F-20) are feature history, not open follow-ups; they remain in the tables only as
-acceptance evidence. The open required item is F-1.1. The remaining items are assigned to exactly
+acceptance evidence. No required close-out items remain. The remaining items are assigned to exactly
 one bucket:
 
 - **Required** — must be closed before WL-1.1 is complete.
@@ -505,9 +507,7 @@ one bucket:
 
 #### Open required items
 
-| Item | Finding | Why required | Acceptance |
-| --- | --- | --- | --- |
-| F-1.1 | F-1 ships `stc Dark`/`stc Light`, so the intended ST palette requires selecting a contributed theme; a user on Default Dark Modern/Light Modern does not get the `.st`-specific token rules without a theme switch. | The owner requires the default-theme path for WL-1.1; users should not have to select a custom theme to see distinct ST colors. | Add an opt-out ST token-color overlay through `editor.tokenColorCustomizations` (extension-provided defaults or a documented setting), keyed for Default Dark Modern and Default Light Modern, with `.st` scope rules; keep the contributed themes as explicit alternatives. Acceptance, owner-approved 2026-10-31: with no contributed theme selected, ST tokens render distinctly in Default Dark Modern and Default Light Modern when the extension's ST token-color overlay is active; the overlay targets `.st` scopes, leaves other languages unchanged, and is documented and opt-out. |
+None. F-1.1 is complete; the evidence is recorded below.
 
 #### Completed required features
 
@@ -515,6 +515,7 @@ These are feature history, not open work.
 
 | Item | Finding | Why it was required | Acceptance and evidence |
 | --- | --- | --- | --- |
+| F-1.1 | F-1 ships `stc Dark`/`stc Light`, so the intended ST palette requires selecting a contributed theme; a user on the built-in default themes does not get the `.st`-specific token rules without a theme switch. | The owner requires the default-theme path for WL-1.1; users should not have to select a custom theme to see distinct ST colors. | Add an opt-out ST token-color overlay through `editor.tokenColorCustomizations` (extension-provided defaults), keyed for Default Dark Modern/Light Modern, Dark Modern/Light Modern, and Dark 2026/Light 2026, with `.st` scope rules; keep the contributed themes as explicit alternatives. The overlay is documented and opt-out via an empty `textMateRules` array. Implemented in `a126800`/`c2af647`; CI runs `41681462972`/`41692812156` green (39 jobs). Owner-confirmed manual check 2026-11-03: all nine categories render distinctly in Dark Modern, Dark 2026, and Light 2026 (`VAR_GLOBAL` `#569CD6`, `DINT` `#4EC9B0`, `IF` `#C586C0`, `counter` `#9CDCFE`, `42` `#B5CEA8`, `'hello'` `#CE9178`, comment `#6A9955` italic, pragma `#FFB86C`, `%IX0.0` `#4FC1FF`); non-ST languages are unchanged. |
 | F-1 | The grammar scopes are correct, but the palette is dominated by red and white and no theme decision has been made. | The first thing a user sees; the owner requires it for WL-1.1. | Enrich the grammar with standard semantic scopes (declarations, types, variables, parameters, control keywords, built-ins) using [Serhioromano/vscode-st](https://github.com/Serhioromano/vscode-st) as a reference, and ship a small theme or document a recommended one; verify distinct keyword/type/declaration/variable/comment/string/number/pragma/direct-variable colors in a standard dark and light theme. |
 | F-6 | Removing a breakpoint updates the editor/panel but the running session still stops at the removed line. | Source breakpoints are a core debug feature; a stale host breakpoint is a correctness bug. | Remove and re-add while running or stopped; the session no longer stops at the removed location, and normal and verbatim path spellings share one key. Implemented in `dfda944`; CI run `41209918428` green (38 jobs); manual verification 2026-10-31 passed. |
 | F-12 | The frame-pointer walk continues into the launcher/host; unresolved frames appear as `frame`/Unknown Source on every stop. | Call stacks are a shipped feature; the sample shows two spurious rows. | Filter or label non-ST frames in `stc-dap`; a sample stop lists only resolved ST frames. The adapter keeps only manifest-resolved function frames, preserves runtime indices for frame operations, and keeps source-less ST callers (F-11). Implemented in `68ecbfc`; CI run `41212737785` green (38 jobs); manual verification 2026-10-31 passed. |
@@ -528,9 +529,11 @@ Notes:
   `stc Light`, grammar/theme/prelude drift tests, VSIX checks, and documentation (commits
   `ee242ce` and `695b296`; CI run `41163217237` green). The manual Inspect Editor Tokens and
   Scopes matrix in Dark Modern, Light Modern, `stc Dark`, and `stc Light` was accepted by the
-  owner; checklist item 1/F-1 records the evidence. F-1.1 is required for WL-1.1 (owner decision
-  2026-10-31): the default-theme ST token-color overlay is tracked in §12.1; `stc Dark`/`stc
-  Light` remain explicit alternatives.
+  owner; checklist item 1/F-1 records the evidence. F-1.1 is complete (2026-11-03): the
+  default-theme ST token-color overlay covers the 1.82 Default Dark/Light Modern IDs, the
+  renamed Dark/Light Modern IDs, and the current Dark 2026/Light 2026 defaults; commits
+  `a126800`/`c2af647`; CI runs `41681462972`/`41692812156` green; manual rendering accepted by
+  the owner. `stc Dark`/`stc Light` remain explicit alternatives.
 - F-20 is complete (commit `fd8c69e`; CI run `41201150443`, 37 jobs green): default
   stdin-EOF watch stop (D-213), extension commands/status/child/private endpoint,
   attach/swap handling, tests, and documentation. Manual in-editor acceptance 2026-10-31:

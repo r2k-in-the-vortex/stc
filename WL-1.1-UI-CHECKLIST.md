@@ -2,7 +2,7 @@
 
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-10-30  
-Updated: 2026-10-31  
+Updated: 2026-11-03  
 Sample: `editors/vscode/samples/workspace`  
 Extension: latest local `editors/vscode/stc-vscode-0.1.0.vsix`  
 Compiler: the binary `stc.path` points at; use the latest debug or a rebuilt release binary
@@ -10,8 +10,9 @@ Compiler: the binary `stc.path` points at; use the latest debug or a rebuilt rel
 Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **N/A** =
 unsupported or intentionally out of scope.
 
-Summary 2026-10-31: 40/40 entries evaluated — 40 pass (100%). The
-required/documented/deferred close-out triage is in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
+Summary 2026-11-03: 40/40 checklist entries evaluated — 40 pass (100%); the F-1.1 required
+item also passes. The required/documented/deferred close-out triage is in
+[WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 
 ## 0. Prerequisites
 
@@ -270,7 +271,7 @@ Completed findings are feature history, not open follow-ups. The close-out triag
       Commits `ee242ce`/`695b296`; CI run `41163217237` is green. The owner accepted the manual
       color check in Dark Modern, Light Modern, `stc Dark`, and `stc Light` on 2026-10-31
       (evidence: the sample README's highlighting check and IDE-Integration §2.1/§6). F-1.1 is
-      required for WL-1.1 (plan §12.1); `stc Dark`/`stc Light` remain explicit alternatives.
+      complete (2026-11-03); `stc Dark`/`stc Light` remain explicit alternatives.
 
 - [x] **F-2 — Make the sample `stc: run` task debuggable.** Pass 2026-10-30: the task passes
       `--debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` (relative to the task
@@ -428,18 +429,18 @@ Completed findings are feature history, not open follow-ups. The close-out triag
 
 ### Required for WL-1.1
 
-These items are open and required for WL-1.1 (plan §12.1); F-1.1 is the remaining required
-implementation task.
+All required implementation items are complete (plan §12.1).
 
-- [ ] **F-1.1 — Default-theme ST token-color overlay.** Required for WL-1.1 (plan §12.1).
-      F-1 ships `stc Dark`/`stc Light`, so the intended palette requires selecting a contributed
-      theme. Add an opt-out overlay through `editor.tokenColorCustomizations` (extension-provided
-      defaults or a documented setting) keyed for Default Dark Modern and Default Light Modern,
-      with `.st` scope rules; keep the contributed themes as explicit alternatives. Acceptance,
-      owner approved 2026-10-31: with no contributed theme selected, ST tokens render distinctly
-      in Default Dark Modern and Default Light Modern when the extension's ST token-color overlay
-      is active; the overlay targets `.st` scopes, leaves other languages unchanged, and is
-      documented and opt-out. Implementation pending.
+- [x] **F-1.1 — Default-theme ST token-color overlay.** Pass 2026-11-03. F-1 ships `stc Dark`/
+      `stc Light`, so the intended palette required selecting a contributed theme. The extension
+      now contributes an opt-out overlay through `editor.tokenColorCustomizations`
+      (configuration defaults) keyed for Default Dark Modern/Light Modern, Dark Modern/Light
+      Modern, and Dark 2026/Light 2026, with `.st` scope rules; the contributed themes remain
+      explicit alternatives. Owner-confirmed manual checks in Dark Modern, Dark 2026, and Light
+      2026 show all nine categories with the overlay palette (including pragma `#FFB86C` and
+      direct variable `#4FC1FF` in the dark themes); non-ST languages are unchanged, and the
+      empty-`textMateRules` opt-out is documented and unit-tested. Commits `a126800`/`c2af647`;
+      CI runs `41681462972`/`41692812156` green.
 
 ### Deferred follow-ups
 
@@ -588,7 +589,7 @@ not a WL-1.1 code change.
 
 | Item | Result | Notes |
 | --- | --- | --- |
-| F-1.1 | Required; pending | Default-theme ST token overlay; acceptance wording owner-approved 2026-10-31; plan §12.1 |
+| F-1.1 | Pass | Manual 2026-11-03: Dark Modern, Dark 2026, and Light 2026 render all nine categories with the overlay palette; non-ST languages unchanged; documented opt-out; commits `a126800`/`c2af647`, CI runs `41681462972`/`41692812156` green; plan §12.1 |
 
 ### Deferred follow-ups
 
