@@ -160,7 +160,7 @@ toolchain (after spike evidence), and Phase 1 report acceptance/retirement (afte
 | M0 — Baseline | Confirm Phase 0 records, CI, registry, and Rust baselines; inventory the three bridge targets and their dependencies; record available toolchains. Establish the Ubuntu execution host baseline, bootstrap the pinned Rust/Lean toolchains, and verify the Phase 0 checks there. | Complete: host/toolchain record; Phase 0 checks green on the host; Aeneas/Charon user-space install and pinned build recorded (2026-11-02); no claim change. |
 | M1 — Exact bridge spike | Run Aeneas/Charon on `crates/stc-codegen/src/exact.rs` (or the feasible subset). Measure translation coverage, generated Lean readability, proof obligations, and gaps versus `Stc.Exact`. | Complete 2026-11-02: pure kernel translated; derived/helper bodies failed; Aeneas/Mathlib compile cost outstanding; evidence in §11. |
 | M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Complete 2026-11-02: Aeneas cannot translate the module as-is (loops/string/lifetime errors); fallback or refactor required; evidence in §11. |
-| M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Codec-spike section; bridge recommendation. |
+| M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Complete 2026-11-02: wire encoder/decoder translated (`StcGot.lean`, 54 transparent functions); external-definition and Aeneas/Mathlib proof costs remain; evidence in §11. |
 | M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | Bridge decision section; module skeleton; owner decision request for toolchain adoption. |
 | M5 — IR boundary and D-V6 subset | Freeze and document the full emitted-fragment boundary; implement only the bridge/D-V6 slice; write D-V6's first end-to-end subset; leave the full Lean `IRFrag` extension to Phase 5; update coverage tables. | Boundary document, updated coverage, program-plan/report text. |
 | M6 — CI and registry | Extend the registry for bridge/toolchain records; add no-`sorry`, axiom, vector-regeneration, and oracle checks; add Aeneas regeneration drift checks if the bridge is adopted; document CI budget. | CI changes and a green run; registry entries. |
@@ -295,6 +295,20 @@ On Phase 1 sign-off:
   proved Lean key-normalization contract/checker, extraction, or a source refactor with a new
   spike.
 
+### M3 — `stc-got` wire codec (2026-11-02)
+
+- Charon `0.1.304`, `--preset=aeneas --start-from stc_got::wire` with keys/descriptor/manifest
+  opaque, produced a 1.3 MB LLBC.
+- Aeneas `ab34bd2` succeeded (`rc=0`, 3.16 s) and generated a 49 KB `StcGot.lean` with 54
+  transparent functions and 65 opaque functions. `wire.Encoder`/`Decoder` and the primitive
+  `u8`/`u16`/`u32`/`u64`/`i64`/`i128`/`bool`/`tag`/`id128`/`digest32`/`string`/`list_header`
+  functions are present.
+- Aeneas warned that the crate contains extracted external/unknown definitions and recommends
+  `-split-files` so they can be supplied explicitly. The generated Lean imports Aeneas and still
+  needs the Aeneas/Mathlib proof environment; compile/proof cost is not yet measured.
+- Spike conclusion: the wire codec path is translatable by Aeneas, but the artifact-codec expert
+  matrix prefers a proved Lean checker; the generated model is evidence for the fallback path.
+
 ## 12. Status board
 
 | Item | State |
@@ -302,7 +316,7 @@ On Phase 1 sign-off:
 | M0 baseline and toolchain inventory | Complete — Rust/Lean/opam/OCaml/GMP/Aeneas/Charon installed; Phase 0 baseline green on the Ubuntu host |
 | M1 exact bridge spike | Complete — pure kernel translated to `Exact.lean`; derived/helper bodies failed; Aeneas/Mathlib compile cost outstanding |
 | M2 keys bridge spike | Complete — Charon produced LLBC; Aeneas failed on loops/string/lifetime support; fallback/refactor required |
-| M3 codec bridge spike | Not started |
+| M3 codec bridge spike | Complete — wire codec translated to Lean; external definitions and Aeneas/Mathlib proof cost remain |
 | M4 bridge decision and architecture | Not started |
 | M5 IR boundary and D-V6 subset | Not started |
 | M6 CI and registry | Not started |
