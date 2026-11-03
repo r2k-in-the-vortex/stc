@@ -437,3 +437,23 @@ END_PROGRAM
     assert!(text.contains("program.field-retain"), "{text}");
     assert!(text.contains("program.field-constant"), "{text}");
 }
+
+#[test]
+fn function_block_call_statements_are_dumped_as_unsupported_calls() {
+    let text = dump(
+        "FUNCTION_BLOCK Ticker
+VAR_INPUT
+  i : DINT;
+END_VAR
+END_FUNCTION_BLOCK
+PROGRAM P
+VAR
+  fb : Ticker;
+END_VAR
+  fb(i := 1);
+END_PROGRAM
+",
+    );
+    assert!(text.contains("\"callee.fb\""), "{text}");
+    assert!(text.contains("\"kind\":\"unsupported\""), "{text}");
+}

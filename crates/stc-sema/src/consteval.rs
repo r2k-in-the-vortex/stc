@@ -1140,8 +1140,8 @@ impl Analyzer<'_> {
             (Ty::Date(_), Ty::Date(_), ConstValue::Date { kind, value }) => {
                 let destination = self.date_kind_of(expected_base);
                 let converted = match (date_is_days(*kind), date_is_days(destination)) {
-                    (false, true) => value.checked_mul(86_400_000_000_000),
-                    (true, false) => value.checked_div(86_400_000_000_000),
+                    (false, true) => value.checked_div(86_400_000_000_000),
+                    (true, false) => value.checked_mul(86_400_000_000_000),
                     _ => Some(*value),
                 };
                 let Some(converted) = converted else {

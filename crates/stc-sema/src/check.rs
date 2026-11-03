@@ -6398,8 +6398,8 @@ fn fold_cast_const(value: &ConstValue, to: &Ty) -> Option<ConstValue> {
         }
         (ConstValue::Date { kind, value }, Ty::Date(destination)) => {
             let value = match (date_is_days(*kind), date_is_days(*destination)) {
-                (false, true) => value.checked_mul(86_400_000_000_000)?,
-                (true, false) => value.checked_div(86_400_000_000_000)?,
+                (false, true) => value.checked_div(86_400_000_000_000)?,
+                (true, false) => value.checked_mul(86_400_000_000_000)?,
                 _ => *value,
             };
             Some(ConstValue::Date {
@@ -6556,16 +6556,11 @@ mod tests {
             fold_cast_const(&days, &Ty::Date(DateTy::Date)),
             Some(days.clone())
         );
-        // The task-attribute folding below divides days when converting to
-        // LDATE, which is the inverse of the DATE_TO_LDATE behavior asserted in
-        // `m4_gaps.rs` and implemented by `consteval.rs`'s conversion path.
-        // The assertion records the current implementation, not the intended
-        // D-089 scaling.
         assert_eq!(
             fold_cast_const(&days, &Ty::Date(DateTy::LDate)),
             Some(ConstValue::Date {
                 kind: DateTy::LDate,
-                value: 0,
+                value: 2 * 86_400_000_000_000,
             })
         );
         let nanos = ConstValue::Date {
@@ -6576,7 +6571,7 @@ mod tests {
             fold_cast_const(&nanos, &Ty::Date(DateTy::Date)),
             Some(ConstValue::Date {
                 kind: DateTy::Date,
-                value: 2 * 86_400_000_000_000 * 86_400_000_000_000,
+                value: 2,
             })
         );
         assert_eq!(
@@ -6595,10 +6590,10 @@ mod tests {
         assert_eq!(
             fold_cast_const(
                 &ConstValue::Date {
-                    kind: DateTy::LDate,
+                    kind: DateTy::Date,
                     value: i128::MAX,
                 },
-                &Ty::Date(DateTy::Date),
+                &Ty::Date(DateTy::LDate),
             ),
             None
         );
