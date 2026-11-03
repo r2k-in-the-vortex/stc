@@ -931,6 +931,9 @@ mod tests {
 
     #[test]
     fn start_gate_waits_for_the_adapter_file() {
+        // Dropping the host reinstalls the process-wide retained-state
+        // configuration; serialize with the state-service tests.
+        let _state = crate::test_support::state_guard();
         let directory = temp_dir("gate");
         let gate = directory.join("start.gate");
         let writer = gate.clone();
