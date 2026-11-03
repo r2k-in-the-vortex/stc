@@ -24,7 +24,8 @@
 # Phase 1 records (P1-*) are V0 evidence with status "tested" or "planned";
 # the checker rejects a proved or higher-level Phase 1 record. No Phase 1
 # record claims refinement, and the Phase 0 S-level semantics remains the only
-# reviewed claim.
+# reviewed claim. The durable Phase 1 summary is
+# specification/Verification/Reports/Phase1-Report.md.
 
 schema_version = 1
 profile = "stc-2013-oop-utf8-v1"

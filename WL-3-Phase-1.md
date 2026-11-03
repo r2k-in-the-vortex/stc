@@ -2,9 +2,11 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-02
-Status: Working planning file. This is **not enduring documentation**; it is retired after Phase 1,
-with stale content deleted and durable results moved to the Phase 1 report, the program plan, the
-semantics/TCB documents, and the registry.
+Status: Working planning file. M7 preparation is complete (2026-11-03): the durable Phase 1
+report exists at `specification/Verification/Reports/Phase1-Report.md`, and owner acceptance is
+pending. This is **not enduring documentation**; it is retired only after the owner accepts Phase
+1 and approves the retirement, with stale content deleted and durable results already moved to the
+Phase 1 report, the program plan, the semantics/TCB documents, and the registry.
 Branch: `WL-3`
 Parent: [Verification Program Plan](specification/Verification/VerificationProgramPlan.md) Phase 1
 Phase report: `specification/Verification/Reports/Phase1-Report.md` (durable)
@@ -171,7 +173,7 @@ choice and bridge-toolchain CI decisions are resolved above.
 | M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | Complete 2026-11-03: per-target decisions, module layout, generated/hand-written boundary, pins and source hashes, external-axiom trust policy, and registry evidence plan recorded in §12; no claim change. |
 | M5 — IR boundary and D-V6 subset | Freeze and document the full emitted-fragment boundary; implement only the bridge/D-V6 slice; write D-V6's first end-to-end subset; leave the full Lean `IRFrag` extension to Phase 5; update coverage tables. | Complete 2026-11-03: full production-module boundary and D-V6 subset frozen in `specification/Verification/Core-IR-Boundary.md`; program plan, Core IR Coverage, Core Syntax Coverage, and `check_docs.py` updated; no Lean-side fragment slice and no claim change; record in §13. |
 | M6 — CI and registry | Extend the registry for bridge/toolchain records; add no-`sorry`, axiom, vector-regeneration, and oracle checks; add Aeneas regeneration drift checks if the bridge is adopted; document CI budget. | Complete 2026-11-03: `P1` registry vocabulary and `P1-E01`–`P1-E07` V0 evidence records; `Verification.Bridge.Evidence`; dual-root registry module resolution; separate manual/nightly `bridge-drift` workflow and pin/hash guard; fast CI unchanged and toolchain-free; Phase 0 count reworded; no claim change. Record in §14. |
-| M7 — Report and retirement | Write `specification/Verification/Reports/Phase1-Report.md`; move durable decisions to the program plan/TCB/claim doc/registry; delete stale working notes and retire this file. | Durable report; Phase 1 review package; working file deleted. |
+| M7 — Report and retirement | Write `specification/Verification/Reports/Phase1-Report.md`; move durable decisions to the program plan/TCB/claim doc/registry; delete stale working notes and retire this file. | Preparation complete 2026-11-03: `specification/Verification/Reports/Phase1-Report.md` written and required by `check_docs.py`; durable decisions are in the report, program plan, `bridge-toolchain.toml`, and registry; owner acceptance pending. The working file is not retired. |
 
 Milestones M1–M3 are timeboxed spikes. A failed/unavailable toolchain is a valid spike result; do
 not fake progress by writing an unverified Lean model.
@@ -257,7 +259,7 @@ untracked credentials.
 | Full emitted-IR fragment boundary / versioned format | Boundary freeze approved 2026-11-02 and recorded 2026-11-03 in `specification/Verification/Core-IR-Boundary.md` (boundary version 1); full Lean extension is Phase 5; any versioned-format change still requires approval. |
 | D-V6 first end-to-end subset | Approved 2026-11-02 and fixed 2026-11-03 in `specification/Verification/Core-IR-Boundary.md` §11; Phase 9 owns the theorem. |
 | Claim level increase or refinement/translation-validation claim | Closed for Phase 1: no new claims; V0 evidence only, Phase 0 S remains the only reviewed claim. |
-| Phase 1 report acceptance and working-plan retirement | Open; after M7. |
+| Phase 1 report acceptance and working-plan retirement | Report prepared 2026-11-03 at `specification/Verification/Reports/Phase1-Report.md`; owner acceptance pending. Retirement is deferred until the owner accepts Phase 1 and approves deletion. |
 
 ## 10. Retirement protocol
 
@@ -651,5 +653,27 @@ module, toolchain pin, or claim changed.
 | M4 bridge decision and architecture | Complete 2026-11-03 — decisions, module layout, pins/hashes, external-axiom policy, and registry evidence plan recorded in §12; no claim change |
 | M5 IR boundary and D-V6 subset | Complete 2026-11-03 — full production-module boundary and D-V6 subset frozen in `Core-IR-Boundary.md`; coverage tables, program plan, and `check_docs.py` updated; no Lean-side slice and no claim change |
 | M6 CI and registry | Complete 2026-11-03 — P1 evidence records, `Verification.Bridge.Evidence`, dual-root registry resolution, separate bridge-drift workflow and pin/hash guard, Phase 0 freeze-count wording; fast CI unchanged and toolchain-free; no claim change |
-| M7 report and retirement | Not started |
-| Owner decision gates | Toolchain install, IR boundary, D-V6, no-new-claims, bridge choices, bridge-toolchain CI, and bridge registry evidence resolved; Phase 1 report acceptance open |
+| M7 report and retirement | Preparation complete 2026-11-03 — `specification/Verification/Reports/Phase1-Report.md` written; `check_docs.py` requires it; owner acceptance and working-plan retirement pending. Working plan retained. |
+| Owner decision gates | Toolchain install, IR boundary, D-V6, no-new-claims, bridge choices, bridge-toolchain CI, and bridge registry evidence resolved; Phase 1 report acceptance and working-plan retirement open |
+
+## 16. M7 report preparation record (2026-11-03)
+
+- Report path: `specification/Verification/Reports/Phase1-Report.md`. It records the purpose and
+  non-claims, execution environment and pinned toolchains, bridge architecture and per-target
+  decisions, the three spike results and proof-environment cost, the emitted-IR boundary and D-V6
+  subset, registry/CI evidence and drift-workflow prerequisites, residual risks, and the Phase 1
+  review checklist.
+- Durable migration: the Phase 1 report is the summary of record; the program plan records the
+  M4–M7 decisions and links the report; `lean/bridge-toolchain.toml` carries the pins and the
+  three source hashes; `lean/verification-status.toml` carries `P1-E01`–`P1-E07`; and
+  `tools/ci/check_docs.py` requires the report.
+- Verification for M7: `lake build`, `lake exe stc-sem-tests`, the registry checker (52 records),
+  `check_docs.py` (28 required documents), markdownlint, `check_bridge_toolchain.py`, and the
+  no-`sorry`/`admit` grep pass locally. The final M7 gate is the fast `CI` workflow on the pushed
+  `WL-3` HEAD; its run ID and result are reported with the M7 completion record and are visible in
+  the Actions history for this branch.
+- No claim or registry status changed. Phase 1 remains V0 evidence; the Phase 0 S-level semantics
+  remains the only reviewed claim.
+- Retirement steps remaining (not performed; owner approval required): the owner accepts Phase 1;
+  the owner approves retirement of the working plan; stale working notes are deleted and
+  `WL-3-Phase-1.md` is removed; the Phase 1 report remains the enduring record.
