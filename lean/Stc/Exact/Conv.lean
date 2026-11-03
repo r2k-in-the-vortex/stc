@@ -291,6 +291,110 @@ theorem IntType.convert_narrow_ok_fits {src to : IntType} {v r : Int}
     rw [herr] at hok
     cases hok
 
+/-- A successful equal-width conversion of a source-fitting value fits the
+destination. Equal widths pass through unchanged or reinterpret the source bit
+pattern, so a value representable in the source stays representable in the
+target. This closes the equal-width gap left by the narrowing and widening fit
+lemmas. -/
+theorem IntType.convert_equal_ok_fits {src to : IntType} {v r : Int}
+    (hbool : to.width ≠ 1) (hpos : 0 < src.width) (hw : src.width = to.width)
+    (hsrc : src.fits v = true) (hok : src.convert to v = .ok r) :
+    to.fits r = true := by
+  unfold IntType.convert at hok
+  rw [ite_eq_right (by simp [hbool])] at hok
+  rw [ite_eq_right (by omega), ite_eq_right (by omega)] at hok
+  by_cases hs : src.signed == to.signed
+  · -- equal widths and signedness return the value unchanged
+    rw [ite_eq_left hs] at hok
+    cases hok
+    have hsigned : src.signed = to.signed := by simpa using hs
+    have hsfit := IntType.fits_iff.mp hsrc
+    refine IntType.fits_iff.mpr ⟨?_, ?_⟩
+    · have h := hsfit.1
+      simp [IntType.minimum, hw, hsigned] at h ⊢
+      exact h
+    · have h := hsfit.2
+      simp [IntType.maximum, hw, hsigned] at h ⊢
+      exact h
+  · rw [ite_eq_right hs] at hok
+    have hne : src.signed ≠ to.signed := by
+      intro heq
+      exact hs (by simp [heq])
+    have hwpos : 0 < to.width := by omega
+    have hpow : (2 : Int) ^ to.width = 2 * (2 : Int) ^ (to.width - 1) := by
+      rw [← Int.pow_succ']
+      congr 1
+      omega
+    have hpowpos : (0 : Int) < (2 : Int) ^ (to.width - 1) := two_pow_pos_int _
+    by_cases ht : to.signed = true
+    · -- unsigned source, signed target: reinterpret the high bit as negative
+      rw [ite_eq_left ht] at hok
+      have hsfalse : src.signed = false := by
+        by_cases hsrc' : src.signed = true
+        · exact absurd (by rw [hsrc', ht]) hne
+        · simpa using hsrc'
+      have hfit := IntType.fits_iff.mp hsrc
+      have hlo : (0 : Int) ≤ v := by
+        have h := hfit.1
+        simp [IntType.minimum, hsfalse] at h
+        exact h
+      have hhi : v ≤ (2 : Int) ^ to.width - 1 := by
+        have h := hfit.2
+        simp [IntType.maximum, hsfalse, hw] at h
+        exact h
+      by_cases hge : (2 : Int) ^ (to.width - 1) ≤ v
+      · rw [ite_eq_left hge] at hok
+        cases hok
+        refine IntType.fits_iff.mpr ⟨?_, ?_⟩
+        · simp [IntType.minimum, ht]
+          omega
+        · simp [IntType.maximum, ht]
+          omega
+      · rw [ite_eq_right hge] at hok
+        cases hok
+        refine IntType.fits_iff.mpr ⟨?_, ?_⟩
+        · simp [IntType.minimum, ht]
+          omega
+        · simp [IntType.maximum, ht]
+          omega
+    · -- signed source, unsigned target: reinterpret a negative value as its
+      -- two's-complement bit pattern
+      rw [ite_eq_right ht] at hok
+      have htfalse : to.signed = false := by simpa using ht
+      have hstrue : src.signed = true := by
+        by_cases hsrc' : src.signed = true
+        · exact hsrc'
+        · have hfalse : src.signed = false := by simpa using hsrc'
+          exfalso
+          apply hne
+          rw [hfalse, htfalse]
+      have hfit := IntType.fits_iff.mp hsrc
+      have hlo : -((2 : Int) ^ (to.width - 1)) ≤ v := by
+        have h := hfit.1
+        simp [IntType.minimum, hstrue, hw] at h
+        exact h
+      have hhi : v ≤ (2 : Int) ^ (to.width - 1) - 1 := by
+        have h := hfit.2
+        simp [IntType.maximum, hstrue, hw] at h
+        exact h
+      have hpow_le : (2 : Int) ^ (to.width - 1) ≤ (2 : Int) ^ to.width :=
+        two_pow_le_two_pow (by omega)
+      by_cases hneg : v < 0
+      · rw [ite_eq_left hneg] at hok
+        cases hok
+        refine IntType.fits_iff.mpr ⟨?_, ?_⟩
+        · simp [IntType.minimum, htfalse]
+          omega
+        · simp [IntType.maximum, htfalse]
+          omega
+      · rw [ite_eq_right hneg] at hok
+        cases hok
+        refine IntType.fits_iff.mpr ⟨?_, ?_⟩
+        · simp [IntType.minimum, htfalse]
+          omega
+        · simp [IntType.maximum, htfalse]
+          omega
+
 /-- A successful widening conversion of a source-fitting value fits the
 destination. -/
 theorem IntType.convert_widen_ok_fits {src to : IntType} {v r : Int}
@@ -328,5 +432,35 @@ theorem IntType.convert_widen_ok_fits {src to : IntType} {v r : Int}
     rw [hres] at hok
     cases hok
     exact IntType.convert_widen_value_fits hw h hsrc hv
+
+/-- A successful conversion to a well-formed production layout fits the
+destination. The one-bit layout is `BOOL`, which is unsigned; every other
+layout is handled by the narrowing, widening, and equal-width fit lemmas. -/
+theorem IntType.convert_ok_fits {src to : IntType} {v r : Int}
+    (hbool : to.width = 1 → to.signed = false)
+    (hpos : 0 < src.width) (hsrc : src.fits v = true)
+    (hok : src.convert to v = .ok r) : to.fits r = true := by
+  by_cases h1 : to.width == 1
+  · -- one-bit destination: the result is zero or one
+    unfold IntType.convert at hok
+    rw [ite_eq_left h1] at hok
+    have hw1 : to.width = 1 := by simpa using h1
+    have hsf : to.signed = false := hbool hw1
+    cases hok
+    by_cases hv : v == 0
+    · rw [ite_eq_left hv]
+      refine IntType.fits_iff.mpr ⟨?_, ?_⟩ <;>
+        simp [IntType.minimum, IntType.maximum, hw1, hsf]
+    · rw [ite_eq_right hv]
+      refine IntType.fits_iff.mpr ⟨?_, ?_⟩ <;>
+        simp [IntType.minimum, IntType.maximum, hw1, hsf]
+  · have hnb : to.width ≠ 1 := by
+      intro h
+      exact h1 (by simp [h])
+    by_cases hlt : src.width < to.width
+    · exact IntType.convert_widen_ok_fits hnb hpos hlt hsrc hok
+    · by_cases hgt : src.width > to.width
+      · exact IntType.convert_narrow_ok_fits hnb hgt hok
+      · exact IntType.convert_equal_ok_fits hnb hpos (by omega) hsrc hok
 
 end Stc.Exact

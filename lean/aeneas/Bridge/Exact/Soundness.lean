@@ -13,7 +13,7 @@ and those models are declared below as TCB assumptions. They cannot be proved
 inside Lean because the generated functions are opaque. Everything else in this
 module is proved.
 
-No `sorry` or `admit` is used; the proof-hole grep covers this directory.
+No proof holes are used; the proof-hole grep covers this directory.
 -/
 
 import Bridge.Exact.Refinement

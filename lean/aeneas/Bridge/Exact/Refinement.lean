@@ -90,6 +90,12 @@ def ResultRefinesU32 (r : Result Std.U32) (expected : Nat) : Prop :=
   | .ok value => expected = value.val
   | _ => False
 
+/-- A generated `Result Std.Usize` returns the expected natural number. -/
+def ResultRefinesUsize (r : Result Std.Usize) (expected : Nat) : Prop :=
+  match r.match with
+  | .ok value => expected = value.val
+  | _ => False
+
 /-- A generated `Result Bool` returns the expected decision. -/
 def ResultRefinesBool (r : Result Bool) (expected : Bool) : Prop :=
   match r.match with
