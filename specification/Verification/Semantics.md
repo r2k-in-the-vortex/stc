@@ -497,11 +497,14 @@ refinement targets.
 
 ### 7.8 Phase 2 exact and constant-evaluation proofs
 
-These records are proved facts about the Lean models at level V0; they are not
-refinement proofs for the Rust implementation, and no Phase 2 record claims V1.
-The full lemma inventory is in the modules and in
-[Phase2-Report.md](Reports/Phase2-Report.md) §3–§4; the registry names the central
-results.
+These records are proved facts about the Lean models. Exactly one Phase 2 record
+claims V1: `Stc.Bridge.Exact.exact_kernel_refines` (`P2-T33`), scoped to the
+exact scalar kernel generated from `crates/stc-codegen/src/exact.rs` and
+relative to the TCB in [Phase2-Report.md](Reports/Phase2-Report.md) §8. All
+other Phase 2 records are V0 model theorems or V0 evidence and are not
+refinement proofs for the Rust implementation. The full lemma inventory is in
+the modules and in [Phase2-Report.md](Reports/Phase2-Report.md) §3–§4; the
+registry names the central results.
 
 | Theorem or lemma | Module | Status | Shape |
 | --- | --- | --- | --- |
@@ -537,19 +540,31 @@ results.
 | `Stc.Exact.len_le_lenCodeUnit` | `Stc.Exact.Strings` | proved | the stored length is at most the code-unit length |
 | `Stc.ConstEval.constEval_sound` | `Stc.ConstEval` | proved | successful evaluation is admitted by `ConstEvalRel` |
 | `Stc.ConstEval.constEval_type_preserving` | `Stc.ConstEval` | proved | a successful result has the expression's declared type and is well formed |
+| `Stc.Bridge.Exact.exact_kernel_refines` | `Bridge.Exact.Kernel` (bridge package) | proved (V1) | bundled refinement of the generated exact scalar kernel for all 32 obligations, relative to the documented TCB |
 
-The bridge package adds V0 evidence records for the checked-in generated model,
-its axiom inventory, and the refinement obligations. All 32 obligations over
-the widened generated model have completed proofs, including `convert`,
-`min_list`, `max_list`, `limit`, `mux`, and the string-length helpers, and
-`Bridge.Exact.Kernel` composes them into `exact_kernel_refines`. The bridge
-records nevertheless stay `tested`: the generated model carries twelve axiom
-declarations (nine operation axioms; the four external operations are modeled
-and the five string operations are covered by TCB equations, while two
-`Display::fmt` axioms and the opaque `EncodeUtf16` type lie outside the
-obligation closure), the shared decoding function `strScalars` is an opaque
-TCB function, and the package is not built in fast CI. No bridge record is
-marked proved and no V1 claim is made.
+The bridge package carries the single Phase 2 V1 claim. The owner accepted
+Phase 2 on 2026-11-03 and recorded `P2-T33`,
+`Stc.Bridge.Exact.exact_kernel_refines` in `Bridge.Exact.Kernel`, as the only
+Phase 2 record above V0. The claim covers the exact scalar kernel generated
+from `crates/stc-codegen/src/exact.rs` only, relative to the documented TCB:
+Aeneas/Charon translation, the nine operation axioms, the three non-equation
+declarations, the five string equations, the opaque `strScalars` decoding
+function, and the unproved Rust certificate verifier. Its scope excludes the
+rest of the compiler.
+
+The other bridge records remain V0 `tested` evidence for the checked-in
+generated model, its axiom inventory, and the refinement obligations. All 32
+obligations over the widened generated model have completed proofs, including
+`convert`, `min_list`, `max_list`, `limit`, `mux`, and the string-length
+helpers, and `Bridge.Exact.Kernel` composes them into `exact_kernel_refines`.
+The generated model carries twelve axiom declarations (nine operation axioms;
+the four external operations are modeled and the five string operations are
+covered by TCB equations, while two `Display::fmt` axioms and the opaque
+`EncodeUtf16` type lie outside the obligation closure), and the package is not
+built in fast CI. The registry checker therefore allowlists `P2-T33`: it skips
+the default-package `#print axioms` audit for that one bridge-only record and
+checks the module declaration textually; every default-package proved record
+keeps the full audit. The full proof is compiled by the pinned host build.
 
 The constant-folding path is tied to the same kernel: `consteval.rs` records
 the operands and result of every arithmetic, bitwise, and conversion fold in a
@@ -558,7 +573,10 @@ the operands and result of every arithmetic, bitwise, and conversion fold in a
 disagrees. This is build-time evidence, not a refinement proof: the verifier
 is Rust, and the repository has no Lean model of HIR-to-IR lowering, so
 `consteval_agrees_with_codegen` is established by the single shared kernel and
-the certificate checker rather than by a named Lean theorem.
+the certificate checker rather than by a named Lean theorem. The owner accepted
+that construction for the folding path on 2026-11-03; the literal Lean theorem
+is explicitly not claimed, and the Rust certificate verifier is part of the
+V1 TCB for the folding path.
 
 ## 8. Trusted computing base and assumptions
 
@@ -567,7 +585,9 @@ In full: the Lean 4.35.0 kernel and standard library; the definitions in this re
 Batteries for executable models and Mathlib only in proof libraries if P0-D5 admits it; the
 versioned HIR dump, case descriptors, and report schema as harness inputs; and the Rust compiler,
 clang/LLVM, operating system, and hardware as the conformance oracle. No proof in Phase 0
-constrains the Rust compiler. The printer/parser boundary, LLVM, and the host runtime outside
+constrains the Rust compiler. The single Phase 2 V1 claim (`P2-T33`, the exact scalar kernel) is
+relative to the TCB in [Phase2-Report.md](Reports/Phase2-Report.md) §8 and does not constrain the
+rest of the Rust compiler. The printer/parser boundary, LLVM, and the host runtime outside
 the modeled initialization boundary remain outside the semantics.
 
 Assumptions that must be stated with any published claim:
@@ -614,7 +634,7 @@ an unknown version or an unmodeled construct is rejected, never interpreted.
 | 2026-11-01 | 1.0-draft | P0.6 (reference) | Added the strict Lean reader for dump `0.1.0` and defined the `stc-core-case` `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` in [Semantics-Cases.md](Semantics-Cases.md); the reader validates header/version/profile/semantics, status/features, names, positions, callees, arities, literals, and depth, and rejects unmodeled constructs. Added unit tests and temporary-fixture CLI tests (`lake exe stc-sem-tests`); no corpus case was committed while the harness was a fail-closed placeholder. The differential harness and corpus followed. |
 | 2026-11-02 | 1.0-draft | P0.6 (complete) | Added the opt-in launcher `--snapshot` surface backed by `Host::debug_read` and manifest roots, the differential harness, and the frozen `stc-sem-conformance-report` `0.1.0`; expanded the corpus to 74 cases covering every claimed core item or a justified exclusion, with the coverage inventory and triage log in `Semantics-Cases.md` §7; fixed `MIN`/`MAX`/`LIMIT` magnitude typing for bit strings and characters; committed the byte-stable report and made the corpus gate reject a stale copy. P0.6 approved 2026-11-02; the V0 differential-evidence label is unchanged |
 | 2026-11-02 | 1.0 | P0.7 | Froze `semantics_version` at `1.0` in the registry, the HIR dump, the case descriptors, the result and report metadata, and the Rust/Lean constants and tests; the dump, case, result, and report formats remain `0.1.0`. Completed this document against the P0.7 checklist, corrected the `semantics_versioned` status to tested evidence, and added the [Phase 0 Report](Reports/Phase0-Report.md) with the proof and evidence summary, known gaps and exclusions, TCB, freeze record, and the handoff to Phases 1, 2, 4, 5, 6, 7, and 8. P0.7 preparation is complete; the owner review and sign-off are pending |
-| 2026-11-03 | 1.0 | Phase 2 (WL-3) | Added §7.8 with the Phase 2 V0 model-theorem inventory: exact arithmetic, bitwise/shift/rotate, conversion, selection, and string property lemmas plus the `Stc.ConstEval` soundness and type-preservation theorems. Added the [Phase 2 Report](Reports/Phase2-Report.md), the non-default Aeneas bridge package with the checked-in generated exact model, and the Rust differential certificate. The phase is not owner-accepted, four external axioms and 22 refinement obligations remain open, and no V1 claim is made |
+| 2026-11-03 | 1.0 | Phase 2 (WL-3) | Added §7.8 with the Phase 2 theorem inventory: the V0 exact arithmetic, bitwise/shift/rotate, conversion, selection, and string property lemmas plus the `Stc.ConstEval` soundness and type-preservation theorems, and the single V1 record `P2-T33` (`Stc.Bridge.Exact.exact_kernel_refines`) for the exact scalar kernel generated from `exact.rs`. Added the [Phase 2 Report](Reports/Phase2-Report.md), the non-default Aeneas bridge package with the checked-in generated exact model, the unified Rust exact kernel, and the constant certificate path. Owner accepted Phase 2 on 2026-11-03 with the documented TCB (Aeneas/Charon, nine operation axioms, three non-equation declarations, five string equations, opaque `strScalars`, and the unproved Rust certificate verifier); all other Phase 2 records remain V0, and `consteval_agrees_with_codegen` is established by the shared kernel plus the build-time checker rather than by a Lean theorem |
 
 ## 10. Rust/Lean interface
 

@@ -2,20 +2,22 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 
-Status: Phase 2 implementation is complete against the four owner decisions
-recorded in `WL-3-Phase-2.md` §5.1, but the phase is **not owner-accepted and
-does not claim V1**. This report records the work completed in WL-3, the
-evidence produced, the parts that remain model-level or V0, and the review still
-required for a V1 claim. It is durable; the temporary execution plan remains
-`WL-3-Phase-2.md` at the repository root until owner acceptance.
+Status: Phase 2 is complete and owner-accepted on 2026-11-03. The owner
+accepted the exact scalar kernel at V1, the documented TCB, the single-kernel
+construction plus certificate checker for the folding path, and the retirement
+of the temporary working plan. This report records the work completed in WL-3,
+the evidence produced, the V1 scope and its trust boundary, the parts that
+remain model-level or V0, and the residual follow-ups.
 
 Starting commit: `c82e521` (Phase 1 owner-accepted 2026-11-03).
 Phase 2 commits through this report: `7520ae1` (exact property lemmas),
 `5785011` (constant-evaluation model and proofs), `3d12a46` (bridge package and
 generated model), `6a91ba4` (Rust differential certificate), `c790a40` and
 `3ad3419` (owner decisions and fast-CI evidence), `ed8097e` (single kernel and
-widened model), and `a75a9cb` (24 exact-model refinement proofs). The final
-certificate, registry, and report commit is recorded in the task handoff.
+widened model), `a75a9cb` (24 exact-model refinement proofs), `bbba1e6` (wide
+model, 32 proofs, bundled kernel), `813b148` (constant certificates), `5d28598`
+(registry, report, and TCB), and `3d53cdd` (final CI evidence). The acceptance
+commit is recorded in the task handoff.
 
 ## 1. Scope and claim discipline
 
@@ -23,14 +25,29 @@ The Phase 2 scope in
 [VerificationProgramPlan.md](../VerificationProgramPlan.md#phase-2-scalar-semantic-kernel-exact-operations-and-constant-evaluation)
 is the exact scalar kernel, its constant-evaluation model, the exact bridge, and
 the certificate or unification of the three Rust implementations of the same
-rules. The claim ladder in §3 of the program plan is unchanged:
+rules. The owner accepted the phase on 2026-11-03 with these decisions:
 
-- the Phase 0 S-level semantics remains the only owner-reviewed semantic claim;
-- Phase 2 model theorems are proved facts about the Lean model, recorded at level
-  V0 (model-verified; implementation tested against the model);
-- no Phase 2 record claims V1 and no external Aeneas axiom is discharged; the
-  Rust production paths now delegate to one shared kernel, but the refinement
-  statements and their axiom equations remain subject to owner review;
+1. record one V1 claim, for the exact scalar kernel only;
+2. accept the documented TCB rather than discharging its axioms in this phase;
+3. accept the single-kernel construction plus the build-time certificate
+   checker as the realization of `consteval_agrees_with_codegen`, explicitly
+   without a literal Lean theorem;
+4. retire the temporary `WL-3-Phase-2.md` working plan.
+
+The claim ladder in §3 of the program plan is otherwise unchanged:
+
+- the Phase 0 S-level semantics remains the source-semantics claim;
+- exactly one Phase 2 record claims V1: `P2-T33`,
+  `Stc.Bridge.Exact.exact_kernel_refines` in `Bridge.Exact.Kernel`. It covers
+  the exact scalar kernel generated from `crates/stc-codegen/src/exact.rs`
+  only, relative to the TCB listed in §8;
+- all other Phase 2 records are proved facts about the Lean models at level V0
+  (model-verified; implementation tested against the model), or V0 evidence;
+- no external Aeneas axiom is discharged; the V1 claim is relative to the
+  modeled operation axioms and the string equations recorded in the TCB;
+- the Rust production paths delegate to one shared kernel, and the
+  constant-folding path is tied to it by the certificate checker; the rest of
+  the compiler remains V0;
 - no `sorry` or `admit` exists in the default package or in the checked-in
   bridge modules, and the default `lean/` build imports neither Aeneas nor
   Mathlib.
@@ -39,14 +56,14 @@ rules. The claim ladder in §3 of the program plan is unchanged:
 
 | ID | Milestone | Status | Evidence |
 | --- | --- | --- | --- |
-| P2-M1 | Working plan | Done | `WL-3-Phase-2.md` and this report |
+| P2-M1 | Working plan | Done, retired | `WL-3-Phase-2.md` (git history) and this report |
 | P2-M2 | Exact property lemmas | Done | `Stc.Exact.{Int,Bits,Conv,Select,Strings}` extensions; `lake build` clean |
 | P2-M3 | Constant-evaluation model | Done for the modeled subset | `Stc/ConstEval.lean`; `constEval_sound`, `constEval_type_preserving`; limitations in §4 |
 | P2-M4 | Exact bridge package | Done | `lean/aeneas/` package, pinned manifest, widened checked-in generated model; host build of `Bridge.Exact.Audit` green |
-| P2-M5 | Bridge obligations | Done | 32 obligations, 32 proved, 0 open; twelve generated axiom declarations and the bridge string equations recorded in the TCB; no V1 |
+| P2-M5 | Bridge obligations | Done, owner-accepted | 32 obligations, 32 proved, 0 open; twelve generated axiom declarations and the bridge string equations recorded in the TCB; `P2-T33` is the single V1 claim |
 | P2-M6 | Rust kernel certificate | Done | one shared `exact.rs` kernel; constant certificates verified before IR emission; differential tests and vector tests |
-| P2-M7 | Registry and CI | Done | P2 records, checker policy, sorry-grep coverage; certificate tests run in `cargo test --workspace` |
-| P2-M8 | Durable report and fast CI | Report done; fast CI result recorded by the final WL-3 run | This report and the CI run cited in the final handoff |
+| P2-M7 | Registry and CI | Done | P2 records, the owner-approved V1 exception and textual guard, sorry-grep coverage; certificate tests run in `cargo test --workspace` |
+| P2-M8 | Durable report and fast CI | Done; owner-accepted 2026-11-03 | This report, the green fast CI run, and the retired working plan |
 
 ## 3. Exact property lemmas
 
@@ -137,9 +154,24 @@ per-operation propositions, `Bridge/Exact/WideRefinement.lean` states the eight
 widened ones, and all 32 have completed proofs in `Soundness.lean`,
 `Refinement.lean`, and `WideSoundness.lean`. `Bridge/Exact/Kernel.lean`
 composes them into `exact_kernel_refines`, re-exported by
-`Audit.kernelStatement_proved`. The bridge records stay `tested` because the
-package is not built in fast CI and every TCB declaration remains an
-assumption; the proof completion does not by itself create a V1 claim.
+`Audit.kernelStatement_proved`.
+
+The owner accepted Phase 2 on 2026-11-03 and recorded `P2-T33`,
+`Stc.Bridge.Exact.exact_kernel_refines` in `Bridge.Exact.Kernel`, as the single
+V1 claim. The claim covers the exact scalar kernel generated from
+`crates/stc-codegen/src/exact.rs` only, relative to the documented TCB:
+Aeneas/Charon translation, the nine operation axioms, the three non-equation
+declarations, the five string equations, the opaque `strScalars` decoding
+function, and the unproved Rust certificate verifier described in §6. It makes
+no claim about the rest of the compiler. The other bridge records remain V0
+`tested` evidence.
+
+Because the bridge package imports Aeneas/Mathlib and is never built in fast
+CI, the registry checker allowlists this one bridge-only record: it skips the
+default-package `#print axioms` audit and instead requires the module to
+declare `exact_kernel_refines` textually. Every default-package proved record
+keeps the full axiom audit. The full proof is compiled by the pinned host
+build of `Bridge.Exact.Audit`.
 
 The four external operations are modeled, not discharged. Their equations
 remain TCB assumptions recorded with the exact-side model; the guard lemmas
@@ -185,7 +217,10 @@ repository has no Lean model of HIR-to-IR lowering, so
 `consteval_agrees_with_codegen` is established by construction (one kernel used
 by both paths) plus this build-time checker, not by a named Lean theorem. The
 certificate module is deliberately outside `exact.rs` so the bridge source pin
-stays byte-identical.
+stays byte-identical. The owner accepted this construction for the folding path
+on 2026-11-03 and explicitly did not claim a literal Lean theorem. The Rust
+certificate verifier is therefore part of the V1 TCB for the folding path: it
+is build-time enforcement code, not a proved checker.
 
 The existing `constant_folding_agrees_with_exact_vectors` test in
 `crates/stc-codegen/tests/lean_vectors.rs` continues to compare the analyzer's
@@ -194,10 +229,10 @@ against `exact.rs`. Shifts, rotates, `ABS`, and the selection functions have no
 constant-folding syntax in `consteval.rs`, so they remain model-plus-vector
 evidence rather than differential evidence.
 
-This is V0 agreement and build-time enforcement evidence, not a Lean refinement
-proof of the compiler. The 32 refinement proofs constrain the generated model
-of the shared kernel; they do not constrain the Rust verifier or the lowering
-pipeline.
+This is V0 agreement and build-time enforcement evidence for the folding path,
+not a Lean refinement proof of the compiler. The V1 kernel theorem constrains
+the generated model of `exact.rs`; it does not constrain the Rust certificate
+verifier or the lowering pipeline.
 
 ## 7. Verification evidence
 
@@ -221,7 +256,8 @@ completed `1812` jobs, building the generated model, all bridge proof modules,
 and `Bridge.Exact.Audit`. This is manual/nightly evidence and is not part of
 fast CI.
 
-Fast CI on the final WL-3 HEAD is recorded in the final handoff for this task.
+Fast CI on the pre-acceptance HEAD `3d53cdd` passed (run `41716346782`, all 37
+jobs). The run for the acceptance commit is recorded in the final handoff.
 
 ## 8. Trusted computing base
 
@@ -236,8 +272,9 @@ Fast CI on the final WL-3 HEAD is recorded in the final handoff for this task.
   in `WideExternals` together with the UTF-8 byte-length invariant. The other
   three (two `Display::fmt` axioms and the opaque `EncodeUtf16` type) are
   outside the proved obligation closure.
-- `strScalars`, the shared opaque decoding function, and the four string
-  operation equations are TCB assumptions; they are not discharged.
+- `strScalars`, the shared opaque decoding function, and the five string TCB
+  equations (the four operation equations plus the UTF-8 byte-length invariant)
+  are TCB assumptions; they are not discharged.
 - The Rust certificate verifier (`crates/stc-codegen/src/certificate.rs`) is
   trusted test/enforcement code, not a proved Lean checker. It recomputes
   folded values through the shared kernel and rejects mismatches at build
@@ -249,52 +286,37 @@ Fast CI on the final WL-3 HEAD is recorded in the final handoff for this task.
   boundary tests cover the shared scalar widths, and the residual difference is
   recorded rather than assumed away.
 
-No theorem in Phase 2 constrains the Rust compiler. The 32 bridge proofs
-constrain the generated model of the shared kernel; the Rust implementation
-remains V0/model-tested, and the certificate checker is the build-time tie
-between the two.
+The V1 kernel claim is relative to exactly this TCB. One Phase 2 theorem now
+constrains the Rust exact kernel: `exact_kernel_refines` is the V1 refinement
+claim for the generated model extracted from
+`crates/stc-codegen/src/exact.rs`. It does not constrain the rest of the
+compiler: HIR-to-IR lowering, IR emission, the Rust certificate verifier, and
+the constant-evaluation path remain V0/model-tested, and no Phase 2 theorem
+constrains them.
 
-## 9. Remaining work and owner decisions
+## 9. Residual follow-ups
 
-The work items from the previous Phase 2 status are complete: the 32
-refinement obligations are proved, the widened model is accepted with no
-generated `sorry`, the equal-width conversion fit gap is closed, the Rust paths
-share one kernel, and the constant-certificate path is implemented and tested.
-What remains before a V1 claim is owner review, not open implementation work:
+Phase 2 is owner-accepted; no implementation work or owner decision blocks the
+V1 kernel claim. The follow-ups below are optional or belong to later phases
+and are not conditions of the V1 record:
 
-1. Review the 32 refinement proofs and the bundled `exact_kernel_refines`
-   statement, and decide whether the completed proofs support a V1 record.
-2. Discharge or explicitly accept the external operation axioms and the string
-   TCB equations (`strScalars`, the five recorded equations, and the three
-   out-of-closure generated declarations). The audit records them; none is
-   discharged.
-3. Decide whether `consteval_agrees_with_codegen` must be a Lean theorem. A
-   non-vacuous statement over the compiler requires a Lean model of HIR-to-IR
-   lowering, which the repository does not have; the current realization is the
-   single shared kernel plus the Rust certificate checker. Building the
-   lowering model is new scope.
-4. Decide whether the non-default bridge package must run in fast CI. It is
-   currently manual/nightly evidence, consistent with the 2026-11-03 owner
-   decision that fast CI never installs or builds Aeneas/Mathlib.
-
-Owner decisions, in the order they block progress:
-
-- whether to record a V1 claim after reviewing the proofs and the TCB;
-- whether to accept the modeled external axioms and string equations as the
-  phase's trusted boundary, or require discharge;
-- whether to fund a Lean HIR-to-IR lowering model and a proved certificate
-  checker for the literal `consteval_agrees_with_codegen` statement;
-- whether any toolchain pin or accepted Phase 1 architecture decision changes.
-
-The implementing agent does not make any of these decisions. Until the owner
-responds, the correct status is V0/model-verified and implementation-tested, and
-the working plan stays in the repository.
+1. A future phase could discharge the modeled external operation axioms and
+   the string TCB equations instead of accepting them. `P2-T33` is relative to
+   them as recorded in §8.
+2. A literal Lean `consteval_agrees_with_codegen` theorem would require a Lean
+   model of HIR-to-IR lowering and a proved certificate checker. Phase 2
+   explicitly claims the single-kernel construction plus the build-time checker
+   instead; building the lowering model is new scope.
+3. The non-default bridge package remains manual/nightly evidence. Adding it to
+   a scheduled job is a CI-cost decision, not a claim change.
+4. Toolchain pins and accepted Phase 1 architecture decisions stay fixed;
+   changing one is a separate owner decision.
 
 ## 10. Retirement status
 
-This report carries the durable Phase 2 content: milestone status, theorem
-inventory, bridge scope and TCB, residual risks, and the owner gate list. The
-temporary `WL-3-Phase-2.md` is not deleted and this report does not claim owner
-acceptance. On acceptance, the working plan's operational rows can be removed
-after confirming that this report, `Semantics.md` §7, and
-`lean/verification-status.toml` carry the same evidence and levels.
+The owner accepted Phase 2 on 2026-11-03. The durable content is in this
+report, `lean/verification-status.toml`, `Semantics.md` §7.8, and the program
+plan; the temporary `WL-3-Phase-2.md` working plan was deleted after that
+content was transferred and remains in git history. Its four owner decisions
+are summarized in §1. The registry records exactly one Phase 2 V1 claim
+(`P2-T33`); every other Phase 2 record remains V0.

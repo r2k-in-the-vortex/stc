@@ -23,9 +23,26 @@
 #
 # Phase 1 records (P1-*) are V0 evidence with status "tested" or "planned";
 # the checker rejects a proved or higher-level Phase 1 record. No Phase 1
-# record claims refinement, and the Phase 0 S-level semantics remains the only
-# reviewed claim. The durable Phase 1 summary is
+# record claims refinement, and the Phase 0 S-level semantics remains the
+# source-semantics claim. The durable Phase 1 summary is
 # specification/Verification/Reports/Phase1-Report.md.
+#
+# Owner-approved Phase 2 exception (2026-11-03): P2-T33 is the only V1 record
+# in this registry outside the Phase 0 S-level claims. It is the exact scalar
+# kernel theorem `Stc.Bridge.Exact.exact_kernel_refines`, scoped to the model
+# generated from crates/stc-codegen/src/exact.rs and relative to the TCB in
+# specification/Verification/Reports/Phase2-Report.md §8: Aeneas/Charon
+# translation, nine operation axioms, three non-equation declarations, five
+# string equations, opaque `strScalars`, and the unproved Rust certificate
+# verifier. Every other Phase 2 record stays V0. The checker allowlists this
+# bridge-only record by id, name, module, kind, status, and level; it skips the
+# default-package `#print axioms` audit because fast CI never builds
+# Aeneas/Mathlib and instead checks the module's declaration textually. All
+# default-package proved records keep the full audit.
+
+# Phase 2 records (P2-*) are otherwise model theorems proved in the default
+# package at V0 or bridge-package evidence at V0. The durable Phase 2 summary
+# is specification/Verification/Reports/Phase2-Report.md.
 
 schema_version = 1
 profile = "stc-2013-oop-utf8-v1"
@@ -1096,14 +1113,27 @@ status = "proved"
 tcb = "core Lean kernel; audited with #print axioms"
 note = "Single fit statement in the generated cast-plan order over every production conversion: BOOL targets (one-bit targets are unsigned in the production layouts), widening, narrowing, and equal width."
 
+[[records]]
+id = "P2-T33"
+kind = "theorem"
+name = "Stc.Bridge.Exact.exact_kernel_refines"
+phase = "P2"
+level = "V1"
+spec = "specification/Verification/Reports/Phase2-Report.md#5-exact-bridge"
+module = "Bridge.Exact.Kernel"
+owner = "verification"
+status = "proved"
+tcb = "owner-approved V1 (2026-11-03) for the exact scalar kernel generated from crates/stc-codegen/src/exact.rs only; relative to the documented TCB: Aeneas/Charon translation, nine operation axioms, three non-equation declarations, five string equations, opaque strScalars, and the unproved Rust certificate verifier"
+note = "Bundled conjunction of all 32 generated-model refinement obligations, proved in Bridge.Exact.Kernel. The owner accepted Phase 2 on 2026-11-03 and recorded this as the only V1 claim. Fast CI skips the default-package #print axioms audit for this bridge-only record and checks the declaration textually; the pinned host builds Bridge.Exact.Audit."
+
 # Phase 2 evidence (WL-3). Model theorems are proved facts about the Lean
-# models at level V0. The bridge package records are evidence only: the
+# models at level V0. The bridge package evidence records stay V0: the
 # generated model and all 32 refinement propositions are checked on the pinned
 # host, but twelve generated axiom declarations (nine operation axioms plus
 # three declarations outside the obligation closure) and the five bridge string
-# equations remain in the TCB, the package is not built in fast CI, and no
-# record claims V1. The durable summary is
-# specification/Verification/Reports/Phase2-Report.md.
+# equations remain in the TCB and the package is not built in fast CI. The
+# single V1 claim is P2-T33, the owner-approved exact-kernel theorem. The
+# durable summary is specification/Verification/Reports/Phase2-Report.md.
 
 [[records]]
 id = "P2-E01"
@@ -1128,7 +1158,7 @@ spec = "specification/Verification/Reports/Phase2-Report.md#5-exact-bridge"
 module = "Bridge.Exact.Audit"
 owner = "verification"
 status = "tested"
-tcb = "twelve generated axiom declarations: nine operation axioms (four external operations plus five string operations) and three declarations outside the obligation closure; the four external operations are modeled and the five string equations plus the opaque strScalars decoding function remain TCB assumptions; no V1 claim"
+tcb = "twelve generated axiom declarations: nine operation axioms (four external operations plus five string operations) and three declarations outside the obligation closure; the four external operations are modeled and the five string equations plus the opaque strScalars decoding function remain TCB assumptions; this evidence record stays V0 and the only Phase 2 V1 claim is P2-T33"
 note = "Audit.externalAxioms records I64::from(u8), I64::rem_euclid, I128::checked_neg, and I128::abs with their models; Audit.wideTcbAxioms records the five string equations and the UTF-8 byte-length invariant; Audit.nonEquationTcbDeclarations records strScalars, the two Display::fmt axioms, and the opaque EncodeUtf16 type."
 
 [[records]]
@@ -1141,7 +1171,7 @@ spec = "specification/Verification/Reports/Phase2-Report.md#5-exact-bridge"
 module = "Bridge.Exact.Refinement"
 owner = "verification"
 status = "tested"
-tcb = "generated-model refinement propositions; 32 stated, 32 proved, 0 open (24 original scalar/helper/bitwise/selection plus convert and the seven wide operations); the bridge-only record stays evidence; no V1 claim"
+tcb = "generated-model refinement propositions; 32 stated, 32 proved, 0 open (24 original scalar/helper/bitwise/selection plus convert and the seven wide operations); this bridge-only record stays V0 evidence; the V1 claim is carried only by P2-T33"
 note = "Proofs in Bridge.Exact.Soundness, Bridge.Exact.Refinement, and Bridge.Exact.WideSoundness; Bridge.Exact.Kernel composes them into exact_kernel_refines; Audit checks the count identity. The widened model contains convert, min_list, max_list, limit, mux, len, len_max, and len_code_unit and emits no generated sorry."
 
 [[records]]
@@ -1180,8 +1210,8 @@ spec = "specification/Verification/Reports/Phase2-Report.md#5-exact-bridge"
 module = "Bridge.Exact.Kernel"
 owner = "verification"
 status = "tested"
-tcb = "bundled statement over the generated model; all 32 conjuncts have completed proofs; twelve generated axiom declarations and the bridge string equations remain TCB assumptions; the package is not built in fast CI; no V1 claim"
-note = "Bridge.Exact.Kernel.exact_kernel_refines composes the per-operation theorems; Audit.kernelStatement_proved re-exports it. Host lake build of Bridge.Exact.Audit completed 1812 jobs."
+tcb = "V0 evidence for the bundled statement over the generated model; all 32 conjuncts have completed proofs; twelve generated axiom declarations and the bridge string equations remain TCB assumptions; the V1 claim is carried only by P2-T33"
+note = "Bridge.Exact.Kernel.exact_kernel_refines composes the per-operation theorems; Audit.kernelStatement_proved re-exports it. Host lake build of Bridge.Exact.Audit completed 1812 jobs. P2-T33 is the owner-approved V1 theorem record; this entry remains V0 evidence."
 
 [[records]]
 id = "P2-E07"

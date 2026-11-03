@@ -13,9 +13,13 @@ three bridge spikes, the bridge decisions and module layout, the emitted-IR boun
 subset freeze recorded in [Core-IR-Boundary.md](Core-IR-Boundary.md), the bridge registry evidence
 and drift CI recorded in §6, and the durable Phase 1 report at
 [Reports/Phase1-Report.md](Reports/Phase1-Report.md). The temporary `WL-3-Phase-1.md` working plan
-has been retired. Phase 2 is in progress on WL-3 and is not owner-accepted; its model
-theorems and bridge evidence are recorded in the registry and the durable
-[Phase 2 Report](Reports/Phase2-Report.md). The proved claims are the
+has been retired. Phase 2 is complete and owner-accepted on 2026-11-03: the exact scalar kernel,
+its constant-evaluation model, the exact bridge, the unified Rust kernel, and the constant
+certificate path are recorded in the registry and the durable
+[Phase 2 Report](Reports/Phase2-Report.md). Exactly one Phase 2 record claims V1
+(`P2-T33`, `Stc.Bridge.Exact.exact_kernel_refines`) for the exact scalar kernel generated from
+`exact.rs`, relative to the documented TCB; every other Phase 2 record stays V0. The temporary
+`WL-3-Phase-2.md` working plan has been retired, and Phase 3 is next. The proved claims are the
 records in `lean/verification-status.toml`; no claim beyond them is made by this document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -563,7 +567,7 @@ scope may grow.
 
 **Effort.** L.
 
-**Phase 2 status (WL-3, 2026-11-03).** Implemented and recorded, not owner-accepted:
+**Phase 2 status (WL-3, owner-accepted 2026-11-03).** Complete:
 
 - exact property lemmas are proved in `Stc.Exact.{Int,Bits,Conv,Select,Strings}` at level V0,
   including the equal-width conversion fit lemmas and the single `convert_ok_fits` statement
@@ -586,15 +590,21 @@ scope may grow.
   certificates for arithmetic, bitwise, and conversion folds, and
   `crates/stc-codegen/src/certificate.rs` recomputes them through the shared kernel and rejects
   a mismatch before IR emission;
-- the registry adds `P2` records: 32 proved V0 model theorems and seven `tested` V0 evidence
-  records; the bridge records are evidence only and no record claims V1.
+- the registry adds `P2` records: 32 proved V0 model theorems, one proved V1 theorem
+  (`P2-T33`, `Stc.Bridge.Exact.exact_kernel_refines`), and seven `tested` V0 evidence records;
+  every other Phase 2 record stays V0.
 
-The four owner decisions of 2026-11-03 are implemented. The phase exit criterion still requires
-owner review of the completed proofs and the TCB boundary, and a decision on V1. The literal
-`consteval_agrees_with_codegen` statement is realized by the single-kernel construction plus the
-build-time certificate checker; a Lean theorem over the compiler would require a Lean HIR-to-IR
-lowering model, which is new scope. The temporary `WL-3-Phase-2.md` stays in the repository until
-owner acceptance.
+The owner accepted Phase 2 on 2026-11-03 with four decisions: record V1 for the exact scalar
+kernel only; accept the documented TCB; accept the single-kernel construction plus the build-time
+certificate checker for the folding path without claiming a literal Lean theorem; and retire the
+temporary working plan. `P2-T33` is scoped to the exact scalar kernel generated from
+`crates/stc-codegen/src/exact.rs`, relative to the TCB in the
+[Phase 2 Report](Reports/Phase2-Report.md) §8: Aeneas/Charon translation, nine operation axioms,
+three non-equation declarations, five string equations, opaque `strScalars`, and the unproved Rust
+certificate verifier. The `consteval_agrees_with_codegen` statement remains realized by the
+single-kernel construction plus the build-time checker; a Lean theorem over the compiler would
+require a Lean HIR-to-IR lowering model, which is new scope and is not claimed. The temporary
+`WL-3-Phase-2.md` has been retired, and Phase 3 is next. No Phase 3 scope changed.
 
 ### Phase 3 — Persistent identity, layout, plan, and artifact codecs
 
@@ -1133,7 +1143,10 @@ system, filesystem, I/O devices, and hardware.
 - Bridge claims in Phase 1 stay V0. Generated-model typechecks and spike measurements are
   evidence, not refinement: their registry entries are `kind = "evidence"`, `level = "V0"`, and
   `status = "tested"`. No V1 claim may cite a generated model while an external axiom or a fuel
-  obligation is undisclosed.
+  obligation is undischarged, except the owner-approved Phase 2 exception: `P2-T33`
+  (`Stc.Bridge.Exact.exact_kernel_refines`, accepted 2026-11-03) is V1 relative to the documented
+  TCB in the [Phase 2 report](Reports/Phase2-Report.md) §8; the registry checker allowlists exactly
+  that bridge-only record and keeps the full axiom audit for default-package records.
 - CI jobs: the single fast `lean` job is the required proof job. It runs the default `lean/`
   build, the no-sorry check, the registry and axiom audit, the vector-regeneration diff, the
   differential oracle (core corpus), and `lake exe stc-sem-tests`. Splitting these into separate
@@ -1243,6 +1256,10 @@ The program is done when:
    registry evidence, the emitted-IR boundary and D-V6 subset freeze in
    [Core-IR-Boundary.md](Core-IR-Boundary.md), the M6 registry evidence and bridge-drift CI, and
    the durable [Phase 1 report](Reports/Phase1-Report.md). The temporary working plan has been
-   retired. Phase 2 is next.
-4. Extend the exact vectors to every operation and type, add the constant-evaluation oracle, and
-   prototype `lake exe check-ir` against `stc_codegen::verify`.
+   retired.
+4. Phase 2 is complete and owner-accepted (2026-11-03): the exact property lemmas, the
+   constant-evaluation model, the widened Aeneas bridge with 32 proved refinement obligations,
+   the unified Rust exact kernel, and the constant-certificate path are recorded in the
+   [Phase 2 report](Reports/Phase2-Report.md). Exactly one V1 record (`P2-T33`) covers the exact
+   scalar kernel generated from `exact.rs`, relative to the documented TCB. The temporary working
+   plan has been retired, and Phase 3 is next.
