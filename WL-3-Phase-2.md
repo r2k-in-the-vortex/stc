@@ -101,14 +101,25 @@ Target surface: literals, constant variables, unary/binary operators, casts,
 and the exact standard functions, over the Phase 0 `Value` and
 `evalUnary`/`evalBinary`/`evalCast`/`evalStd` evaluators.
 
-- `constEval : ConstWorld → Expr → Except ConstEvalError Value`;
-- declarative `ConstEvalRel : ConstWorld → Expr → Value → Prop`;
+- `ConstError : Type` enumerates unbound/non-constant variables, type mismatch,
+  malformed payloads, exact traps, and unsupported user-function calls.
+- `ConstWorld` carries the typing context, the known constant values, and the
+  `value_typed` invariant that every known constant has its context type and is
+  well formed.
+- `constEval : ConstWorld → Expr → Except ConstError Value` (with the
+  left-to-right `evalArgs` companion);
+- declarative `ConstEvalRel : ConstWorld → Expr → Value → Prop` and
+  `ConstEvalRelArgs` for argument lists;
 - `constEval_sound : constEval w e = .ok v → ConstEvalRel w e v`;
-- `constEval_type_preserving : ExprHasType ctx e ty → constEval w e = .ok v →
-  v.ty = ty ∧ v.WellFormed`, under a world-constant well-formedness invariant.
+- `constEval_type_preserving : ExprHasType w.ctx e ty → constEval w e = .ok v →
+  v.ty = ty ∧ v.WellFormed`, proved through `ConstEvalRel_typed` and the
+  `ConstWorld.value_typed` invariant.
+- An `rfl` smoke test checks a constant `DINT` addition through the executable
+  evaluator.
 
 Function calls, real/date/time values, and source-syntax folding are out of the
-modeled subset and are recorded as such.
+modeled subset and are recorded as such. The model does not claim agreement with
+`consteval.rs`; that differential certificate is milestone P2-M6.
 
 ## 4. Bridge plan
 
@@ -186,7 +197,7 @@ Until acceptance, this file stays in the repository. No deletion and no
 | Conversion lemmas | Partial: BOOL outcomes, narrow/widen fit; equal-width reinterpret fit remains open |
 | Selection lemmas | Done: membership, clamp cases, in-range MUX, range properties |
 | String-length lemmas | Done: supplementary scalars, byte/UTF-16 bounds, append, per-kind length bound |
-| Constant-evaluation model | Planned |
+| Constant-evaluation model | Done: executable evaluator, declarative relation, soundness, type preservation over literals/constants/unary/binary/cast/std; user-function calls, real/date/time, and source folding remain out of the modeled subset |
 | Exact bridge package and generated model | Planned |
 | External-axiom models and refinement propositions | Planned |
 | Rust differential certificate | Planned |
