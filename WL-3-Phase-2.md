@@ -244,4 +244,4 @@ Until acceptance, this file stays in the repository. No deletion and no
 | Rust differential certificate | Done: `crates/stc-codegen/tests/exact_differential.rs` checks arithmetic/bitwise/comparison folding and all front-end-accepted conversion pairs against `exact.rs`; the existing vector tests cover the generated corpus; production unification deferred to owner |
 | Registry/docs/CI updates | Done: `P2` phase vocabulary and bridge-only evidence policy, 30 proved V0 model records, 5 tested V0 evidence records, docs required-document entry, Phase 2 sorry gating including `aeneas/StcGenerated` |
 | Phase 2 report | Done: `specification/Verification/Reports/Phase2-Report.md`; program plan and `Semantics.md` §7.8 reconciled; not owner-accepted |
-| Fast CI on final WL-3 HEAD | Pending the final pushed commit |
+| Fast CI on final WL-3 HEAD | Passed: [CI run 41667070276](https://github.com/r2k-in-the-vortex/stc/actions/runs/41667070276) on `4692629`, all jobs green. This status update is re-verified by the final CI run cited in the handoff. |
