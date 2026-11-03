@@ -13,9 +13,12 @@
 //! `exact::convert`, and the emitted IR shape for a runtime conversion is
 //! checked against the same widening/narrowing/reinterpretation rules.
 //!
-//! These are tests, not a refinement proof. Production unification of the
-//! three paths remains an owner decision; until then the agreement is V0
-//! evidence for the shared scalar subset.
+//! The production paths now delegate to `exact`: the constant folder calls
+//! `exact::add`/`sub`/`mul`/`div`/`modulo`/`neg`, the bitwise and comparison
+//! helpers, and `exact::convert`, while codegen dispatches integer conversions
+//! on `exact::cast_plan` and takes range bounds from `exact::IntType`. These
+//! tests remain the regression certificate for that single kernel; they are
+//! tests, not a refinement proof.
 
 mod common;
 

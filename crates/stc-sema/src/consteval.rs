@@ -16,6 +16,7 @@ use stc_syntax::ast::{
 use crate::Analyzer;
 use crate::resolve::Lookup;
 use crate::types::fits_int;
+use stc_codegen::exact::{self, IntType, Trap};
 
 impl Analyzer<'_> {
     /// Evaluates an expression expected to yield an integer constant.
@@ -458,18 +459,22 @@ impl Analyzer<'_> {
             SyntaxKind::PunctPlus => Some((ty, value)),
             SyntaxKind::PunctMinus => match value {
                 ConstValue::Int(value) => {
-                    let value = value.checked_neg()?;
-                    if let Ty::Int(int) = self.hir.types.get(self.scalar_base(ty))
-                        && !fits_int(value, int.signed, int.width)
-                    {
-                        self.error(
-                            crate::codes::CONST_FAILURE,
-                            "constant negation overflows",
-                            span,
-                        );
-                        return None;
+                    let Some((signed, width)) = self.int_layout_of(ty) else {
+                        let value = value.checked_neg()?;
+                        return Some((ty, ConstValue::Int(value)));
+                    };
+                    let layout = IntType::new(signed, width);
+                    match exact::neg(layout, value) {
+                        Ok(value) => Some((ty, ConstValue::Int(value))),
+                        Err(_) => {
+                            self.error(
+                                crate::codes::CONST_FAILURE,
+                                "constant negation overflows",
+                                span,
+                            );
+                            None
+                        }
                     }
-                    Some((ty, ConstValue::Int(value)))
                 }
                 ConstValue::Real(value) => Some((ty, ConstValue::Real(-value))),
                 ConstValue::Time(value) => Some((ty, ConstValue::Time(value.checked_neg()?))),
@@ -496,8 +501,9 @@ impl Analyzer<'_> {
                             return None;
                         }
                     };
-                    let mask = bit_mask(width);
-                    Some((ty, ConstValue::Int((!value) & mask)))
+                    let layout = IntType::new(false, width);
+                    let value = exact::bit_not(layout, value as u128);
+                    Some((ty, ConstValue::Int(value as i128)))
                 }
                 _ => {
                     self.error(
@@ -593,80 +599,69 @@ impl Analyzer<'_> {
                     return None;
                 }
                 let ty = self.promote_int(lhs_ty, rhs_ty);
-                let value = match op {
-                    BinOp::Add => a.checked_add(b),
-                    BinOp::Sub => a.checked_sub(b),
-                    BinOp::Mul => a.checked_mul(b),
-                    BinOp::Div => {
-                        if b == 0 {
-                            self.error(
-                                crate::codes::CONST_FAILURE,
-                                "division by zero in constant expression",
-                                span,
-                            );
-                            return None;
-                        }
-                        if self.int_division_overflows(ty, a, b) {
-                            self.error(
-                                crate::codes::CONST_FAILURE,
-                                "constant arithmetic overflow",
-                                span,
-                            );
-                            return None;
-                        }
-                        a.checked_div(b)
-                    }
-                    BinOp::Mod => {
-                        if b == 0 {
-                            self.error(
-                                crate::codes::CONST_FAILURE,
-                                "division by zero in constant expression",
-                                span,
-                            );
-                            return None;
-                        }
-                        if self.int_division_overflows(ty, a, b) {
-                            self.error(
-                                crate::codes::CONST_FAILURE,
-                                "constant arithmetic overflow",
-                                span,
-                            );
-                            return None;
-                        }
-                        a.checked_rem(b)
-                    }
-                    BinOp::Power => {
-                        if b < 0 {
-                            self.error(
-                                crate::codes::CONST_FAILURE,
-                                "negative exponent in integer constant expression",
-                                span,
-                            );
-                            return None;
-                        }
-                        a.checked_pow(u32::try_from(b).ok()?)
-                    }
-                    _ => None,
-                };
-                let Some(value) = value else {
+                let Some((signed, width)) = self.int_layout_of(ty) else {
                     self.error(
                         crate::codes::CONST_FAILURE,
-                        "constant arithmetic overflow",
+                        "arithmetic requires an integer type",
                         span,
                     );
                     return None;
                 };
-                if let Ty::Int(int) = self.hir.types.get(self.scalar_base(ty))
-                    && !fits_int(value, int.signed, int.width)
-                {
-                    self.error(
-                        crate::codes::CONST_FAILURE,
-                        "constant arithmetic overflow",
-                        span,
-                    );
-                    return None;
+                let layout = IntType::new(signed, width);
+                if op == BinOp::Power {
+                    if b < 0 {
+                        self.error(
+                            crate::codes::CONST_FAILURE,
+                            "negative exponent in integer constant expression",
+                            span,
+                        );
+                        return None;
+                    }
+                    let Some(value) = a.checked_pow(u32::try_from(b).ok()?) else {
+                        self.error(
+                            crate::codes::CONST_FAILURE,
+                            "constant arithmetic overflow",
+                            span,
+                        );
+                        return None;
+                    };
+                    if !layout.fits(value) {
+                        self.error(
+                            crate::codes::CONST_FAILURE,
+                            "constant arithmetic overflow",
+                            span,
+                        );
+                        return None;
+                    }
+                    return Some((ty, ConstValue::Int(value)));
                 }
-                Some((ty, ConstValue::Int(value)))
+                let result = match op {
+                    BinOp::Add => exact::add(layout, a, b),
+                    BinOp::Sub => exact::sub(layout, a, b),
+                    BinOp::Mul => exact::mul(layout, a, b),
+                    BinOp::Div => exact::div(layout, a, b),
+                    BinOp::Mod => exact::modulo(layout, a, b),
+                    _ => unreachable!(),
+                };
+                match result {
+                    Ok(value) => Some((ty, ConstValue::Int(value))),
+                    Err(Trap::DivZero) => {
+                        self.error(
+                            crate::codes::CONST_FAILURE,
+                            "division by zero in constant expression",
+                            span,
+                        );
+                        None
+                    }
+                    Err(_) => {
+                        self.error(
+                            crate::codes::CONST_FAILURE,
+                            "constant arithmetic overflow",
+                            span,
+                        );
+                        None
+                    }
+                }
             }
             BinOp::And | BinOp::Or | BinOp::Xor => {
                 if let (ConstValue::Bool(a), ConstValue::Bool(b)) = (&lhs_value, &rhs_value) {
@@ -697,31 +692,59 @@ impl Analyzer<'_> {
                         return None;
                     }
                 };
-                let mask = bit_mask(width);
+                let layout = IntType::new(false, width);
                 let value = match op {
-                    BinOp::And => a & b,
-                    BinOp::Or => a | b,
-                    _ => a ^ b,
-                } & mask;
-                Some((lhs_ty, ConstValue::Int(value)))
+                    BinOp::And => exact::bit_and(layout, a as u128, b as u128),
+                    BinOp::Or => exact::bit_or(layout, a as u128, b as u128),
+                    _ => exact::bit_xor(layout, a as u128, b as u128),
+                };
+                Some((lhs_ty, ConstValue::Int(value as i128)))
             }
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                let Some(ordering) = compare_const(&lhs_value, &rhs_value) else {
-                    self.error(
-                        crate::codes::TYPE_INVALID_OPERAND,
-                        "comparison operands are not comparable constants",
-                        span,
-                    );
-                    return None;
-                };
-                let value = match op {
-                    BinOp::Eq => ordering == std::cmp::Ordering::Equal,
-                    BinOp::Ne => ordering != std::cmp::Ordering::Equal,
-                    BinOp::Lt => ordering == std::cmp::Ordering::Less,
-                    BinOp::Le => ordering != std::cmp::Ordering::Greater,
-                    BinOp::Gt => ordering == std::cmp::Ordering::Greater,
-                    BinOp::Ge => ordering != std::cmp::Ordering::Less,
-                    _ => unreachable!(),
+                let integer_pair = matches!(
+                    (&lhs_value, &rhs_value),
+                    (
+                        ConstValue::Int(_) | ConstValue::Enum { .. },
+                        ConstValue::Int(_) | ConstValue::Enum { .. }
+                    )
+                );
+                let value = if integer_pair {
+                    let (Some(a), Some(b)) = (lhs, rhs) else {
+                        self.error(
+                            crate::codes::TYPE_INVALID_OPERAND,
+                            "comparison operands are not comparable constants",
+                            span,
+                        );
+                        return None;
+                    };
+                    let compare = match op {
+                        BinOp::Eq => exact::Compare::Eq,
+                        BinOp::Ne => exact::Compare::Ne,
+                        BinOp::Lt => exact::Compare::Lt,
+                        BinOp::Le => exact::Compare::Le,
+                        BinOp::Gt => exact::Compare::Gt,
+                        BinOp::Ge => exact::Compare::Ge,
+                        _ => unreachable!(),
+                    };
+                    exact::compare(compare, a, b)
+                } else {
+                    let Some(ordering) = compare_const(&lhs_value, &rhs_value) else {
+                        self.error(
+                            crate::codes::TYPE_INVALID_OPERAND,
+                            "comparison operands are not comparable constants",
+                            span,
+                        );
+                        return None;
+                    };
+                    match op {
+                        BinOp::Eq => ordering == std::cmp::Ordering::Equal,
+                        BinOp::Ne => ordering != std::cmp::Ordering::Equal,
+                        BinOp::Lt => ordering == std::cmp::Ordering::Less,
+                        BinOp::Le => ordering != std::cmp::Ordering::Greater,
+                        BinOp::Gt => ordering == std::cmp::Ordering::Greater,
+                        BinOp::Ge => ordering != std::cmp::Ordering::Less,
+                        _ => unreachable!(),
+                    }
                 };
                 let _ = expected;
                 Some((self.hir.types.bool(), ConstValue::Bool(value)))
@@ -743,19 +766,12 @@ impl Analyzer<'_> {
         )
     }
 
-    /// Returns whether signed `DIV`/`MOD` of `a` by `b` overflows the type.
-    ///
-    /// The most-negative value divided (or taken remainder) by `-1` has no
-    /// representable result at the type's width, so code generation traps
-    /// before the hardware instruction; constant folding must agree.
-    fn int_division_overflows(&self, ty: TyId, a: i128, b: i128) -> bool {
-        if b != -1 {
-            return false;
+    /// Returns the signedness and width when `ty` is an integer type.
+    fn int_layout_of(&self, ty: TyId) -> Option<(bool, u8)> {
+        match self.hir.types.get(self.scalar_base(ty)) {
+            Ty::Int(int) => Some((int.signed, int.width)),
+            _ => None,
         }
-        let Ty::Int(int) = self.hir.types.get(self.scalar_base(ty)) else {
-            return false;
-        };
-        int.signed && a == -(1_i128 << (int.width - 1))
     }
 
     fn promote_int(&self, lhs: TyId, rhs: TyId) -> TyId {
@@ -999,12 +1015,12 @@ impl Analyzer<'_> {
 
     /// Converts an integer constant to another integer/bit layout.
     ///
-    /// This mirrors code generation (`cast_value`/`int_convert`): widening
-    /// sign- or zero-extends the source bit pattern, equal widths reinterpret
-    /// it in the target type, and narrowing reports `STC-E-CONST-002` unless
-    /// the value is representable. Function-style conversion folding must agree
-    /// with the runtime, so a same-width signed-to-unsigned conversion keeps
-    /// the bit pattern instead of rejecting the negative value.
+    /// The conversion is delegated to the shared `exact::convert` kernel, so
+    /// constant folding and code generation (`cast_value`/`int_convert`, which
+    /// dispatches on the same `exact::cast_plan`) cannot drift: widening sign-
+    /// or zero-extends the source bit pattern, equal widths reinterpret it in
+    /// the target type, and narrowing reports `STC-E-CONST-002` unless the
+    /// value is representable.
     fn convert_int_const(
         &mut self,
         source: Option<(bool, u8)>,
@@ -1026,34 +1042,18 @@ impl Analyzer<'_> {
             );
             return None;
         };
-        let source_modulus = 1_i128 << source_width;
-        let bits = value.rem_euclid(source_modulus);
-        let reinterpret = |bits: i128| -> i128 {
-            if target_signed && bits >= (1_i128 << (target_width - 1)) {
-                bits - (1_i128 << target_width)
-            } else {
-                bits
-            }
-        };
-        if source_width < target_width {
-            let extended = if source_signed && value < 0 {
-                bits + (1_i128 << target_width) - source_modulus
-            } else {
-                bits
-            };
-            Some(reinterpret(extended))
-        } else if source_width > target_width {
-            if !fits_int(value, target_signed, target_width) {
+        let source = IntType::new(source_signed, source_width);
+        let target = IntType::new(target_signed, target_width);
+        match exact::convert(source, target, value) {
+            Ok(value) => Some(value),
+            Err(_) => {
                 self.error(
                     crate::codes::CONST_FAILURE,
                     "conversion result is out of range",
                     span,
                 );
-                return None;
+                None
             }
-            Some(value)
-        } else {
-            Some(reinterpret(bits))
         }
     }
 
@@ -1565,14 +1565,6 @@ fn compare_const(lhs: &ConstValue, rhs: &ConstValue) -> Option<std::cmp::Orderin
         (ConstValue::Date { value: a, .. }, ConstValue::Date { value: b, .. }) => Some(a.cmp(b)),
         (ConstValue::Null, ConstValue::Null) => Some(std::cmp::Ordering::Equal),
         _ => None,
-    }
-}
-
-fn bit_mask(width: u8) -> i128 {
-    if width >= 127 {
-        i128::MAX
-    } else {
-        (1i128 << width) - 1
     }
 }
 

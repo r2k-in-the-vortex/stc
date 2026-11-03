@@ -46,7 +46,7 @@ gmp = "6.3.0"
 
 [sources.exact]
 path = "crates/stc-codegen/src/exact.rs"
-sha256 = "85f3fbfc5263c918f80fc52b46322510de6645bef66c3fc078c7ba4ee826cba4"
+sha256 = "5ecf5d604bb7d545927bc9626876f6fcedfead405623378c4800b3f65b377c44"
 generated = true
 generated_path = "lean/aeneas/StcGenerated/Exact/Model.lean"
 
