@@ -1019,7 +1019,9 @@ impl DebugTables {
 pub(crate) struct CyclePump {
     target: *const Target,
     manifest: *const Manifest,
-    roots: *const RootRegistry,
+    /// The host's root registry for the enclosing cycle, mutable so a stopped
+    /// one-shot write can reach storage on this thread.
+    roots: *mut RootRegistry,
     info: *const ModuleInfo,
     metadata_error: *const Option<String>,
     manifest_json: *const str,
@@ -1040,7 +1042,7 @@ pub(crate) struct CyclePump {
 pub(crate) struct CyclePumpInfo<'a> {
     pub(crate) target: &'a Target,
     pub(crate) manifest: &'a Manifest,
-    pub(crate) roots: &'a RootRegistry,
+    pub(crate) roots: &'a mut RootRegistry,
     pub(crate) info: Option<&'a ModuleInfo>,
     pub(crate) generation: u64,
     pub(crate) build_id: GotId,
@@ -1069,7 +1071,7 @@ impl CyclePump {
         Self {
             target: std::ptr::from_ref(info.target),
             manifest: std::ptr::from_ref(info.manifest),
-            roots: std::ptr::from_ref(info.roots),
+            roots: std::ptr::from_mut(info.roots),
             info: info.info.map_or(std::ptr::null(), std::ptr::from_ref),
             metadata_error: std::ptr::from_ref(info.metadata_error),
             manifest_json: info.manifest_json as *const str,
@@ -1104,7 +1106,10 @@ impl CyclePump {
             DebugSource {
                 target: &*self.target,
                 manifest: &*self.manifest,
-                roots: &*self.roots,
+                roots: self.roots.cast_const(),
+                // The parked cycle thread owns the registry for this call;
+                // an immediate stopped write is applied through this handle.
+                writable_roots: Some(self.roots),
                 info,
                 generation: self.generation,
                 build_id: self.build_id,
@@ -1128,7 +1133,7 @@ impl CyclePump {
         // exclusively available to this thread for the cycle call. The parked
         // cycle thread is the only user, and it never holds a lock across ST.
         unsafe {
-            (&mut *self.engine).pump(now_ns, Some(source));
+            (&mut *self.engine).pump(now_ns, Some(source), true);
         }
     }
 

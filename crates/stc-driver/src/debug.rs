@@ -1546,13 +1546,19 @@ fn render_response(op: &str, result: &Json, context: Option<&str>) {
                 .get("status")
                 .and_then(Json::as_str)
                 .unwrap_or("accepted");
-            let queue_id = result
-                .get("queue_id")
-                .and_then(Json::as_number)
-                .unwrap_or(0);
-            eprintln!(
-                "stc: {operation} {status} (queue {queue_id}); it applies at the next cycle boundary"
-            );
+            if status == "applied" {
+                // A stopped one-shot write on a `stc-debug/1.1` session is
+                // already in storage when the response arrives.
+                eprintln!("stc: {operation} applied immediately to storage");
+            } else {
+                let queue_id = result
+                    .get("queue_id")
+                    .and_then(Json::as_number)
+                    .unwrap_or(0);
+                eprintln!(
+                    "stc: {operation} {status} (queue {queue_id}); it applies at the next cycle boundary"
+                );
+            }
         }
         "var.release" => {
             let effective = result

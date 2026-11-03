@@ -31,7 +31,7 @@ The runtime has three thread classes:
 
 | Thread | Role in debug |
 | --- | --- |
-| Cycle | Executes ST, applies queued writes/forces at boundaries, and services breakpoint checkpoints |
+| Cycle | Executes ST, applies queued writes/forces at boundaries, applies a stopped one-shot write on the parked thread (§15.3), and services breakpoint checkpoints |
 | Loader/prepare | Loads/prepares a candidate module during online change |
 | Service/monitor | Queues typed reads and watches and serves debug control, status, and manifest export; the cycle thread applies reads and watch batches at a boundary |
 
@@ -71,6 +71,13 @@ Writes are queued and applied at a cycle boundary, in the same phase as forced v
 - is type-checked and range-checked against the active manifest;
 - is rejected if the target was removed or its layout changed;
 - is not applied while the cycle thread is executing ST.
+
+One case is immediate: a one-shot write submitted while the target is stopped on a
+`stc-debug/1.1` session is applied by the parked cycle thread inside service 13 before the
+response is produced, so a read or step in the same stop observes the new value (§15.3). The
+service thread still never dereferences host storage. The write is not queued, so no later
+boundary applies it again. A `stc-debug/1` session keeps the queued behavior, and forces keep
+boundary semantics on every version.
 
 A write queued across an online swap never migrates: the swap ends the session and the queued
 write is discarded, and a client that reconnects re-resolves and re-issues it against the new
@@ -389,9 +396,9 @@ the endpoint file.
   {"kind":"event","protocol":"stc-debug/1","session":"<id>","seq":7,"event":"stopped","data":{},"warnings":[]}
   ```
 
-- The message shapes are identical for `stc-debug/1.1`; only the `protocol` value and the
-  additional `frame.locals` operation differ. A 1.1 session uses the same framing, ids, events,
-  scopes, limits, and error object.
+- The message shapes are identical for `stc-debug/1.1`; only the `protocol` value, the
+  additional `frame.locals` operation, and the stopped `var.write` result variant (§13.4) differ.
+  A 1.1 session uses the same framing, ids, events, scopes, limits, and error object.
 - `id` is a client-assigned integer in `[1, 2^53-1]`, strictly increasing on one connection; the
   response echoes it. At most one request is outstanding per connection. The server processes
   requests in order and may interleave events. A duplicated, decreasing, or out-of-range `id` is
@@ -465,9 +472,9 @@ authorization. Authentication precedes every operation, including `session.start
 ### 13.4 Operations and result shapes
 
 The baseline operation set is closed for `stc-debug/1`. `stc-debug/1.1` adds exactly the
-`frame.locals` operation; every baseline operation, parameter, result shape, and limit is
-unchanged. An unknown operation, or `frame.locals` on a `stc-debug/1` connection, is
-`STC-E-DEBUG-003`.
+`frame.locals` operation and the immediate stopped-write behavior of `var.write`; the baseline
+operations, parameters, `stc-debug/1` result shapes, and limits are otherwise unchanged. An
+unknown operation, or `frame.locals` on a `stc-debug/1` connection, is `STC-E-DEBUG-003`.
 
 | Operation | Scope | Result |
 | --- | --- | --- |
@@ -475,7 +482,7 @@ unchanged. An unknown operation, or `frame.locals` on a `stc-debug/1` connection
 | `session.status` | any | state, session, generation, `build_id`, cycle, stop information, queue/force/breakpoint/watch counts, `pause_remaining_ms` |
 | `session.stop` | any | `ended:true`; the response is sent, then the connection closes |
 | `var.read` | `observe` | typed value plus generation, `build_id`, cycle, `consistent`, `atomic`, `stopped`, and an optional `view` (§15.5) |
-| `var.write` | `write` | `status:"queued"`, `queue_id` |
+| `var.write` | `write` | `status:"queued"`, `queue_id`; on a stopped `stc-debug/1.1` session `status:"applied"`, generation, `build_id`, cycle (no `queue_id`) |
 | `var.force` | `force` | `status:"queued"`, `queue_id` |
 | `var.release` | `force` | `released:true`, `effective:"next-boundary"` |
 | `var.release-all` | `force` | `released:<count>` |
@@ -517,6 +524,16 @@ Request parameters:
 - `var.write`/`var.force`:
   `{"target":<target>,"value":<typed value>,"expected_generation":3,"expected_build_id":"0x...","expected_type":"DINT","expected_layout":"0x..."}`.
   Expected fields are optional and checked before enqueue and again at application.
+- `var.write` (`stc-debug/1.1`): while the target is stopped, a one-shot write is applied to root
+  storage on the parked cycle thread before the response, which reports `status:"applied"` with
+  the stop's generation, `build_id`, and cycle and no `queue_id`. No `queue-result` event follows
+  and the write never enters the queue. A read in the same stop returns the new value, and a step
+  within the stop observes it. Validation failures are reported synchronously with the ordinary
+  §18.1 codes and change no storage. While the target runs, and on every `stc-debug/1` connection,
+  the result is `status:"queued"` with a `queue_id` as before. A write that races a resume is
+  decided by the parked cycle: if it pumps the command before observing the resume, the write is
+  applied immediately; if it observes the resume first, the command is queued at the next running
+  boundary. It is never applied twice. Forces are not affected (§15.4).
 - `watch.add`: `{"targets":[<target>...],"interval_ms":100}`; the interval is clamped to the
   server minimum and maximum and returned.
 - `breakpoint.set`: `{"target":{"kind":"source","file":"src/main.st","line":12,"column":5}}` or
@@ -586,11 +603,16 @@ belong to that stop snapshot; a stale `stop_id` is rejected. A `queue-result` wi
 | Locals per `frame.locals` result | 1024 | `truncated:true` |
 | Checkpoint table | 1,000,000 entries or 64 MiB metadata | `STC-E-DEBUG-016` |
 
-- A request timeout aborts only the request; the connection and session remain usable. Writes
-  and forces are idempotent by `queue_id`: the client may retry the same semantic request and
-  must reconcile with `session.status` and `queue-result`. Watch and breakpoint add/remove
-  operations are not silently replayed; a retry first reconciles with `watch.list` or
-  `breakpoint.list`.
+- A request timeout aborts only the request; the connection and session remain usable. Queued
+  writes and forces are idempotent by `queue_id`: the client may retry the same semantic request
+  and must reconcile with `session.status` and `queue-result`. A stopped write applied immediately
+  on a `stc-debug/1.1` session has no `queue_id` and no `queue-result`; a timeout leaves it
+  either applied or not applied, and the client reconciles by re-reading the target. Watch and
+  breakpoint add/remove operations are not silently replayed; a retry first reconciles with
+  `watch.list` or `breakpoint.list`.
+- The 1024-entry/1 MiB queued-write/force limit applies to queue entries. A stopped write applied
+  immediately on a `stc-debug/1.1` session never enters the queue and does not consume queue
+  capacity; the other request and response limits are unchanged.
 - The stop bound is continuous from the moment the cycle thread parks. The client cannot extend
   it except by resuming and stopping again; `session.status` does not reset it.
 - Limits are per host, not per connection; a second connection cannot create a second session.
@@ -643,7 +665,9 @@ While stopped:
 - the I/O backend is not called for output publication, and input latching is suspended;
 - normal task execution, state saves, and online activation are suspended;
 - typed reads copy root storage and may return `consistent:true, atomic:true` for one root;
-- queued writes and forces are accepted but not applied.
+- queued writes and forces are accepted but not applied;
+- on a `stc-debug/1.1` session, a one-shot `var.write` is applied to root storage on the parked
+  cycle thread before its response, so reads and stepping in the same stop observe it (§15.3).
 
 The stop is visible to the runtime as a host service call that does not return. The service
 thread remains responsive; the loader/prepare thread may prepare a candidate but cannot activate
@@ -820,15 +844,37 @@ A write request:
   field that has no persistent root of its own. A field with its own manifest root is an ordinary
   scalar target; a field reached only through a split parent is not writable as a parent value;
 - is limited with the force queue to 1024 entries or 1 MiB; over either limit is
-  `STC-E-DEBUG-011` at enqueue, never backpressure on the cycle thread;
+  `STC-E-DEBUG-011` at enqueue, never backpressure on the cycle thread. A stopped write applied
+  immediately (§15.3, below) does not enter this queue and does not consume a queue entry;
 - must match the target's exact declared type. An actual value type mismatch is
   `STC-E-DEBUG-009`; an expected generation/build/type/layout mismatch is `STC-E-DEBUG-010`.
   Enum membership and subrange bounds are checked from the format-2 metadata, and arrays/strings
   must match their declared count, element type, capacity, and unit range. There is no implicit
   conversion.
 
-A write queued while stopped remains queued until the cycle resumes and reaches the boundary. A
-write to an input is overwritten by the next input latch unless an active force holds it. A write
+The behavior of a write received while stopped depends on the negotiated protocol version.
+
+On a `stc-debug/1.1` session, a one-shot `var.write` received while the cycle is parked is applied
+immediately instead of being queued:
+
+- the parked cycle thread performs the same validation as the queued path, writes root storage,
+  and only then completes the request; the service thread never dereferences root storage;
+- the response is `status:"applied"` with the stop cycle's generation, `build_id`, and cycle, and
+  no `queue_id`; no `queue-result` event is emitted;
+- the write is not stored in the queue, so boundary application cannot apply it a second time;
+- a read in the same stop returns the new value, and a step within the stop observes it in
+  storage;
+- a validation failure, stale target, or failed audit append is reported synchronously with the
+  ordinary §18.1 code; the failed write changes no storage and enters no queue;
+- a write that races a resume is resolved by the park loop: if the parked cycle pumps the command
+  before observing the resume, the write is applied immediately; if it observes the resume first,
+  the command waits and takes the queued path at the next running boundary. Either outcome
+  applies the write at most once.
+
+A `stc-debug/1` write while stopped remains queued until the cycle resumes and reaches the
+boundary. Forces on every protocol version keep boundary semantics (§15.4).
+
+A write to an input is overwritten by the next input latch unless an active force holds it. A write
 to an output is visible in the same cycle's publication. A write to a `RETAIN` root follows the
 normal state-save policy.
 
@@ -935,12 +981,14 @@ At each completed scan boundary the host performs, in order:
 5. publish outputs;
 6. complete the cycle counter and release the boundary.
 
-This is the only place debug writes and forces modify values. The service thread never writes a
-root cell. The cycle thread never waits for a service request; a queue that exceeds its limit is
-rejected at enqueue (`STC-E-DEBUG-011`), not by blocking the cycle. Split-aggregate leaves are
-written only as complete root values; per-field writes resolve to the field's own root where the
-manifest provides one. `OVERLAP` roots are read-only (see §15.5) and are rejected as write or
-force targets with `STC-E-DEBUG-009`.
+This is the only place queued debug writes and forces modify values at a boundary. The one other
+place a debug write modifies storage is a stopped one-shot write applied on the parked cycle
+thread inside service 13 (§15.3); it is never queued, so steps 3 and 4 do not apply it again. The
+service thread never writes a root cell. The cycle thread never waits for a service request; a
+queue that exceeds its limit is rejected at enqueue (`STC-E-DEBUG-011`), not by blocking the
+cycle. Split-aggregate leaves are written only as complete root values; per-field writes resolve
+to the field's own root where the manifest provides one. `OVERLAP` roots are read-only (see
+§15.5) and are rejected as write or force targets with `STC-E-DEBUG-009`.
 
 ### 15.7 Watches
 
@@ -1421,7 +1469,9 @@ debugger that supports typed access, but it cannot stop at checkpoints. `stc tes
   `STC-E-MODULE-002`; a transport failure at launch may additionally use an existing
   `STC-E-IO-*` code. The DEBUG family remains the protocol/session authority.
 - A rejected queued write/force is reported in `queue-result` with the rejection code, not as a
-  response error, because the original request was accepted.
+  response error, because the original request was accepted. A stopped `stc-debug/1.1` write is
+  decided while the request is outstanding, so a rejection or audit failure is a response error
+  with the same `STC-E-DEBUG-*` code and no `queue-result`.
 - The stable diagnostic index and cross-references are in
   [Conformance Profile](../01-Conformance-Profile.md) §10.1.
 - `stc-debug/1.1` adds no diagnostic codes and does not change any v1.0 code meaning. It reuses

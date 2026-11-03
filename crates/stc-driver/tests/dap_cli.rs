@@ -602,6 +602,43 @@ fn launch_stops_at_a_breakpoint_and_reads_locals_and_globals() {
     assert_eq!(write["body"]["value"], "42");
     assert_eq!(write["body"]["type"], "DINT");
 
+    // F-14: the adapter negotiates `stc-debug/1.1`, so a write while stopped
+    // reaches storage before the response. A read in the same stop sees it,
+    // evaluation agrees, and a step that executes the first statement leaves
+    // the applied value in place.
+    assert_eq!(
+        read_global(&mut client, &scopes, "TOTAL"),
+        "42",
+        "the stopped write is visible to an immediate re-read"
+    );
+    let evaluated = client.request(
+        "evaluate",
+        json!({ "expression": "TOTAL", "frameId": 0, "context": "watch" }),
+    );
+    assert_eq!(evaluated["success"], true, "{evaluated}");
+    assert_eq!(evaluated["body"]["result"], "42", "{evaluated}");
+    let next = client.request("next", json!({ "threadId": 1 }));
+    assert_eq!(next["success"], true, "{next}");
+    let stepped = client.event("stopped", PROTOCOL_TIMEOUT);
+    assert_eq!(stepped["body"]["reason"], "step", "{stepped}");
+    let stepped_stack = client.request("stackTrace", json!({ "threadId": 1 }));
+    let stepped_line = stepped_stack["body"]["stackFrames"][0]["line"]
+        .as_i64()
+        .expect("stepped line");
+    assert!(
+        stepped_line >= FIRST_STATEMENT_LINE,
+        "the step advanced the program: {stepped_stack}"
+    );
+    let stepped_frame = stepped_stack["body"]["stackFrames"][0]["id"]
+        .as_i64()
+        .expect("stepped frame id");
+    let stepped_scopes = client.request("scopes", json!({ "frameId": stepped_frame }));
+    assert_eq!(
+        read_global(&mut client, &stepped_scopes, "TOTAL"),
+        "42",
+        "a step within the same stop still sees the applied value"
+    );
+
     // Continue into the function: its locals live on the stack.
     let continued = client.request("continue", json!({ "threadId": 1 }));
     assert_eq!(continued["success"], true, "{continued}");

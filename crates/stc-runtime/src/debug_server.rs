@@ -31,8 +31,9 @@ use stc_got::json::{self, Json};
 use crate::debug::{
     AuditEvent, AuditOutcome, AuditSink, AuditTarget, DebugBatch, DebugEvent, DebugQueueResult,
     DebugRead, DebugReadRequest, DebugService, DebugSnapshot, DebugTarget, DebugValue,
-    DebugWarning, DebugWriteKind, DebugWriteRequest, MAX_WATCHES, MIN_WATCH_INTERVAL_NS, WatchId,
-    WatchInfo, WatchResult, base64_encode, typed_value_from_json, typed_value_json,
+    DebugWarning, DebugWriteKind, DebugWriteReply, DebugWriteRequest, MAX_WATCHES,
+    MIN_WATCH_INTERVAL_NS, WatchId, WatchInfo, WatchResult, base64_encode, typed_value_from_json,
+    typed_value_json,
 };
 use crate::debug_view::view_json;
 use crate::stop::{
@@ -3192,19 +3193,33 @@ impl Handler {
         deadline: Instant,
     ) -> std::result::Result<(Json, Vec<Json>), ProtocolError> {
         let request = parse_write(params)?;
+        // 1.1 asks the engine to apply a stopped one-shot write on the parked
+        // cycle thread before this request completes. The frozen baseline
+        // keeps its queued result shape.
+        let immediate = self.protocol == DEBUG_PROTOCOL_1_1;
         let reply = self
             .shared
             .service
-            .submit_write_wait(kind, request)
+            .submit_write_wait(kind, request, immediate)
             .map_err(ProtocolError::from_stc)?;
-        let queue_id = wait_reply(&reply, deadline)?.map_err(failure_to_error)?;
-        Ok((
-            object([
+        let outcome = wait_reply(&reply, deadline)?.map_err(failure_to_error)?;
+        let result = match outcome {
+            DebugWriteReply::Queued(queue_id) => object([
                 ("status", Json::string("queued")),
                 ("queue_id", Json::unsigned(queue_id.0)),
             ]),
-            Vec::new(),
-        ))
+            DebugWriteReply::Applied {
+                generation,
+                build_id,
+                cycle,
+            } => object([
+                ("status", Json::string("applied")),
+                ("generation", Json::unsigned(generation)),
+                ("build_id", Json::string(build_id.to_hex())),
+                ("cycle", Json::unsigned(cycle)),
+            ]),
+        };
+        Ok((result, Vec::new()))
     }
 
     fn var_release(

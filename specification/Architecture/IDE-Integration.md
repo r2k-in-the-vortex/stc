@@ -275,7 +275,10 @@ multi-thread, restart, conditional-breakpoint, or expression support.
 - `setVariable` maps to `var.write` only for writable live roots when `allowWrite` is enabled and
   the host granted the `write` scope: global roots, program-instance fields, and live split-field
   children that carry their own runtime root. Stopped-frame locals and contiguous snapshot views
-  are read-only and are rejected.
+  are read-only and are rejected. The adapter returns the parsed typed value after the host
+  accepts the write; on a `stc-debug/1.1` host the write is applied while stopped before the
+  response, so a later `variables`, `evaluate`, or step in the same stop reads the new value from
+  storage. A `stc-debug/1` host queues the write for the next boundary.
 - `evaluate` accepts a stopped-frame local name or a manifest target path. It does not parse ST
   expressions; `1 + 2`, conditions, and arbitrary field expressions fail with an explicit message.
 
@@ -327,6 +330,9 @@ adapter session per launch.
   endpoint file.
 - Debug write and force can hold outputs indefinitely; they are opt-in and never presented as
   safety functions.
+- A write made while the host is running takes effect at the next cycle boundary, not immediately.
+  While stopped, a `stc-debug/1.1` host applies a one-shot write before answering; a
+  `stc-debug/1` host queues it until the cycle resumes. A force is always applied at a boundary.
 
 ### 4.7 Online-change surface
 

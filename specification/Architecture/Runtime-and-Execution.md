@@ -339,8 +339,10 @@ boundary in `Host::debug_pump_at`, pinning the active generation. A pin is an ep
 delays unload until the copy is complete. The service thread never dereferences host, module,
 root, or process-image storage, never calls `stc_module_cycle`, never writes GOT cells, and never
 takes a lock held by the cycle thread. Debug writes and forcing are queued for cycle-boundary
-application; `Host::debug_read` performs the same pinned copy synchronously on the calling thread
-for embedding hosts.
+application, except a `stc-debug/1.1` one-shot write received while the cycle is parked, which the
+parked cycle thread applies inside service 13; the service thread never writes root storage.
+`Host::debug_read` performs the same pinned copy synchronously on the calling thread for embedding
+hosts.
 
 The cycle thread runs at the process default operating-system priority. Control-server accept and
 connection threads and debug-server accept and handler threads run one class lower: Windows

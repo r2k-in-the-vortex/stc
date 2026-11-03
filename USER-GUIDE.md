@@ -273,7 +273,12 @@ include `print`, `set`, `force`, `release`, `release-all`, `watch`,
   outputs and is bounded by `[debug].session-timeout` (default five minutes);
   expiry ends the session and resumes the cycle.
 - Writes and forces are queued and applied at a cycle boundary, revalidated
-  for generation, root, type, layout, and writability.
+  for generation, root, type, layout, and writability. A `stc-debug/1.1`
+  client that writes while the target is stopped gets an immediate
+  `status:"applied"` result: the parked cycle applies the write before the
+  response, so a read or step in the same stop sees it and no boundary applies
+  it again. The `stc debug` CLI and `stc-debug/1` clients keep the queued
+  behavior. Forces apply at a boundary on every version.
 - Release builds are monitoring-only; breakpoints, stepping, and full locals
   require a debug build. Monitor live Globals and target paths from the Debug
   Console; Variables and Watch require a stopped frame.

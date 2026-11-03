@@ -91,11 +91,13 @@ only and is not the M6.5 debug protocol (D-155).
 
 The M6.5 service/monitor thread hosts at most one debug session per host (D-175). While the session
 is stopped the cycle is parked in host service ID 13 with the last output image held; the
-session's connection still serves typed reads, watches, and status, and accepts queued
-writes/forces, but a second session/connection is rejected with `STC-E-DEBUG-007` and activation
-is deferred until the session ends. Debug reads pin the active generation and do not lock the
-cycle; writes and forces are queued for the cycle boundary and are never applied from the service
-thread (§10, Debug and Monitoring §13–§16).
+session's connection still serves typed reads, watches, and status, and accepts writes/forces, but
+a second session/connection is rejected with `STC-E-DEBUG-007` and activation is deferred until
+the session ends. Debug reads pin the active generation and do not lock the cycle. Running writes
+and forces are queued for the cycle boundary. On a `stc-debug/1.1` session a one-shot write
+received while stopped is applied by the parked cycle thread inside service 13 before its
+response; no debug write is ever applied from the service thread (§10, Debug and Monitoring
+§13–§16).
 
 ### 2.3 Artifacts
 

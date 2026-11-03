@@ -18,8 +18,8 @@ use stc_got::codes;
 use stc_got::json::{self, Json};
 use stc_runtime::{
     Candidate, DEBUG_PROTOCOL, DEBUG_PROTOCOL_1_1, DebugClient, DebugClientError,
-    DebugEndpointFile, DebugServerConfig, DebugServerInfo, Host, HostPlatform, LoadMode,
-    LoadOutcome, ManifestStore, PROFILE, TransportKind,
+    DebugEndpointFile, DebugQueueOutcome, DebugServerConfig, DebugServerInfo, Host, HostPlatform,
+    LoadMode, LoadOutcome, ManifestStore, PROFILE, TransportKind,
 };
 
 use common::{Behavior, BuildFlags, Fixture, StopFixture, StopFlow};
@@ -1317,6 +1317,65 @@ fn host_allow_flags_gate_write_and_force_and_phase6_ops_are_unavailable() {
     assert_eq!(number(&released, "released"), 1);
     let ended = stop_session(&mut setup.host, &mut client);
     assert_eq!(session_ended(&ended).0, "client");
+    setup.host.stop_debug_server();
+}
+
+#[test]
+fn a_1_1_write_while_running_stays_queued_until_the_boundary() {
+    let _guard = protocol_guard();
+    let Some(mut setup) = Setup::new("write-1-1-running", true, false, Duration::ZERO) else {
+        return;
+    };
+    let mut client = setup.client();
+    let _ = start_session_1_1(&mut client, &["observe", "write"]);
+    let dint = setup.dint_type();
+    let record = root(&setup.artifacts, "G_DINT");
+    assert_eq!(
+        setup
+            .host
+            .root_storage(record.got_id)
+            .expect("root storage"),
+        &[0, 0, 0, 0]
+    );
+
+    // No stop is active, so the engine still queues the write; only a parked
+    // cycle applies one immediately.
+    let written = call_ok_pumped(
+        &mut setup.host,
+        &mut client,
+        "var.write",
+        obj([
+            ("target", target_path("G_DINT")),
+            ("value", decimal_value(&dint, "3")),
+        ]),
+    )
+    .expect("write granted");
+    assert_eq!(text(&written, "status"), "queued");
+    assert!(field(&written, "queue_id").as_number().is_some());
+    assert_eq!(setup.host.debug_queued_count(), 1);
+    assert_eq!(
+        setup
+            .host
+            .root_storage(record.got_id)
+            .expect("root storage"),
+        &[0, 0, 0, 0],
+        "a queued write does not touch storage before the boundary"
+    );
+
+    setup.host.cycle_at(1_000_000).expect("cycle");
+    assert_eq!(setup.host.debug_queued_count(), 0);
+    assert_eq!(
+        setup
+            .host
+            .root_storage(record.got_id)
+            .expect("root storage"),
+        &3_i32.to_le_bytes()
+    );
+    let results = setup.host.debug_take_queue_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, DebugQueueOutcome::Applied);
+
+    let _ = stop_session(&mut setup.host, &mut client);
     setup.host.stop_debug_server();
 }
 
