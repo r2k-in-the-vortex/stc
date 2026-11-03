@@ -751,11 +751,32 @@ pub(crate) fn run(
         );
         return 2;
     }
-    let tests = filter_tests(&project.tests, filters);
+    let tests = filter_tests(&project.tests, filters, options.exact);
     if options.list {
+        // Root-package tests report plain package-relative paths; a dependency
+        // that ever contributes a test would report `<package>/<relative>`.
+        // Resolve the owning package from the parsed source entries.
+        let mut packages: BTreeMap<&str, &str> = BTreeMap::new();
+        for entry in &project.entries {
+            packages
+                .entry(entry.report_path.as_str())
+                .or_insert_with(|| project.graph.packages[entry.package].name.as_str());
+        }
         for test in &tests {
             if reporter.is_json() {
-                println!("{{\"name\":{}}}", json_string(&test.name));
+                let location = project.sources.location(test.span);
+                let package = packages
+                    .get(test.file.as_str())
+                    .copied()
+                    .unwrap_or(project.root_name.as_str());
+                println!(
+                    "{{\"name\":{},\"package\":{},\"file\":{},\"line\":{},\"column\":{}}}",
+                    json_string(&test.name),
+                    json_string(package),
+                    json_string(&test.file),
+                    location.line,
+                    location.column
+                );
             } else {
                 println!("{}", test.name);
             }

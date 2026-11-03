@@ -1,18 +1,9 @@
-import {
-  spawn,
-  type ChildProcessByStdio,
-  type SpawnOptionsWithStdioTuple,
-  type StdioPipe,
-} from 'node:child_process';
-import type { Readable, Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import * as vscode from 'vscode';
 
 import { resolveExecutable } from './executable';
 import { killProcessTree } from './processTree';
-
-/** A `stc run` process with piped stdin, stdout, and stderr. */
-type RunProcess = ChildProcessByStdio<Writable, Readable, Readable>;
+import { spawnStc, type StcProcess } from './stcProcess';
 
 export interface StcRunTerminalOptions {
   /** The configured `stc.path` value, or `stc` on `PATH`. */
@@ -40,7 +31,7 @@ class StcRunTerminal implements vscode.Pseudoterminal {
   private readonly closeEmitter = new vscode.EventEmitter<number | void>();
   private readonly stdoutDecoder = new StringDecoder('utf8');
   private readonly stderrDecoder = new StringDecoder('utf8');
-  private child: RunProcess | undefined;
+  private child: StcProcess | undefined;
   private opened = false;
   private closing = false;
   private finished = false;
@@ -95,9 +86,9 @@ class StcRunTerminal implements vscode.Pseudoterminal {
       this.finish(1);
       return;
     }
-    let child: RunProcess;
+    let child: StcProcess;
     try {
-      child = spawnRun(executable, this.options.args, this.options.cwd);
+      child = spawnStc(executable, this.options.args, this.options.cwd);
     } catch (error) {
       this.report(`the run task could not start stc: ${message(error)}`);
       this.finish(1);
@@ -152,64 +143,6 @@ class StcRunTerminal implements vscode.Pseudoterminal {
     this.writeEmitter.dispose();
     this.closeEmitter.dispose();
   }
-}
-
-/**
- * Spawns `stc` with the task's arguments and working directory.
- *
- * Batch shims cannot be started directly on Windows, so they go through
- * `cmd.exe`; the taskkill-based tree stop still reaches their children.
- */
-function spawnRun(
-  executable: string,
-  args: readonly string[],
-  cwd: string | undefined,
-): RunProcess {
-  const options: SpawnOptionsWithStdioTuple<StdioPipe, StdioPipe, StdioPipe> = {
-    cwd,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-    // On POSIX the pid doubles as the process-group id that killProcessTree
-    // signals when the graceful stop does not finish in time.
-    detached: process.platform !== 'win32',
-  };
-  if (process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(executable)) {
-    const commandLine = [executable, ...args].map(quoteCmdArgument).join(' ');
-    // The outer quotes are for `cmd.exe /s /c`; `/s` strips exactly that
-    // wrapper and leaves the per-argument quoting intact.
-    return spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${commandLine}"`], {
-      ...options,
-      windowsVerbatimArguments: true,
-    });
-  }
-  return spawn(executable, [...args], options);
-}
-
-/**
- * Quotes one argument for a `cmd.exe /s /c` command line.
- *
- * The escaping follows the `CommandLineToArgvW` rules for a quoted argument:
- * backslashes are doubled where they would escape a quote or the closing
- * quote. `cmd.exe` itself still expands `%NAME%` inside the quotes, which is
- * inherent to running a batch shim.
- */
-function quoteCmdArgument(value: string): string {
-  let result = '"';
-  let backslashes = 0;
-  for (const character of value) {
-    if (character === '\\') {
-      backslashes += 1;
-      continue;
-    }
-    if (character === '"') {
-      result += `${'\\'.repeat(backslashes * 2 + 1)}"`;
-    } else {
-      result += `${'\\'.repeat(backslashes)}${character}`;
-    }
-    backslashes = 0;
-  }
-  result += `${'\\'.repeat(backslashes * 2)}"`;
-  return result;
 }
 
 function message(error: unknown): string {

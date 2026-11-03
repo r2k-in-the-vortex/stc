@@ -51,6 +51,8 @@ pub(crate) enum Command {
 pub(crate) struct TestOptions {
     /// `--list`: print discovered tests without building.
     pub list: bool,
+    /// `--exact`: match positional filters against complete test names.
+    pub exact: bool,
     /// `--no-run`: build test artifacts without executing them.
     pub no_run: bool,
     /// `--timeout <duration>` override in nanoseconds.
@@ -273,6 +275,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             "--check" => fmt_check = true,
             "--test" => clean_test = true,
             "--list" => test.list = true,
+            "--exact" => test.exact = true,
             "--no-run" => test.no_run = true,
             "--coverage" => {
                 if test.coverage == Some(false) {
@@ -1035,12 +1038,17 @@ fn validate(
         );
     }
     let coverage_flags = test.coverage.is_some() || test.coverage_out.is_some();
-    if (test.list || test.no_run || test.timeout_ns.is_some() || test.nocapture || coverage_flags)
+    if (test.list
+        || test.exact
+        || test.no_run
+        || test.timeout_ns.is_some()
+        || test.nocapture
+        || coverage_flags)
         && command != Command::Test
     {
         return Err(
-            "`--list`, `--no-run`, `--timeout`, `--coverage`, `--no-coverage`, `--coverage-out`, \
-             and `-- --nocapture` are only valid with `stc test`"
+            "`--list`, `--exact`, `--no-run`, `--timeout`, `--coverage`, `--no-coverage`, \
+             `--coverage-out`, and `-- --nocapture` are only valid with `stc test`"
                 .into(),
         );
     }
@@ -1465,7 +1473,7 @@ fn print_help() {
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--mock-clock <duration>]\n\
          \x20         [--message-format human|json] [-v|-vv] [-q]\n\
-         \x20 stc test [<filter>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
+         \x20 stc test [<filter>...] [--exact] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20          [--list] [--no-run] [--timeout <duration>]\n\
          \x20          [--coverage|--no-coverage] [--coverage-out <dir>]\n\
          \x20          [--io null|memory|file|ethercat] [--io-file <path>]\n\
@@ -1796,6 +1804,24 @@ mod tests {
         let listed = invocation(&["test", "--list"]);
         assert_eq!(listed.test.coverage, None);
         assert!(invocation(&["test", "--list", "--no-coverage"]).test.list);
+    }
+
+    #[test]
+    fn exact_selection_is_a_test_only_flag() {
+        let exact = invocation(&["test", "--exact", "AlphaWorks", "BetaWorks"]);
+        assert!(exact.test.exact);
+        assert_eq!(exact.paths, ["AlphaWorks", "BetaWorks"]);
+        assert!(!invocation(&["test"]).test.exact);
+
+        let args = ["check", "--exact"]
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        let error = match parse(&args) {
+            Ok(_) => panic!("`--exact` is not a build option"),
+            Err(error) => error,
+        };
+        assert!(error.contains("only valid with `stc test`"), "{error}");
     }
 
     #[test]

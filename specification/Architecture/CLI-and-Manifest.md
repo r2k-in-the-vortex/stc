@@ -107,6 +107,7 @@ Future commands (not v1): `stc doc`.
 | `--deny warnings` | Equivalent to `-D warnings` |
 | `--locked` | Require `stc.lock` to match the manifest/dependency graph; fail instead of updating it |
 | `--list` | `stc test`: list discovered tests without building |
+| `--exact` | `stc test`: match positional filters against complete test names (ASCII case-insensitive) instead of substrings |
 | `--test` | `stc clean`: remove only the test artifact tree (`target/stc/test`) and the default coverage directory (`target/stc/coverage`); with `--out-dir`, exactly the given root |
 | `--no-run` | `stc test`: build test artifacts without executing them |
 | `--timeout <duration>` | `stc test`: override the per-test timeout (default 5 s) |
@@ -121,7 +122,8 @@ Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LO
 (`--coverage` with `--no-coverage`, `--coverage` with `--list`, and `--coverage-out` with
 `--list` or without effective coverage) are usage errors (`STC-E-PROJECT-010`, exit 2).
 Coverage options are valid only with `stc test`; using them with another command, including
-`stc build`, is a usage error (`STC-E-PROJECT-010`, exit 2).
+`stc build`, is a usage error (`STC-E-PROJECT-010`, exit 2). `--list` and `--exact` are likewise
+valid only with `stc test`; using either with another command is a usage error.
 
 The table describes the v1 target surface. M6 implemented `--manifest-path`, `--locked`,
 `--color`, `-q`, `-D`/`-W`/`-A`, `--deny warnings`, `-v`/`-vv`, `--debug`, and, for `stc run`,
@@ -229,6 +231,26 @@ key, but a required key's name, type, or meaning does not change. JSON goes to s
 logging stays on stderr.
 
 **Diagnostics.** One object per diagnostic per line, as in §1.4. This shape is unchanged.
+
+**Discovered tests.** `stc test --list --message-format json` writes one object per discovered
+test, in discovery order, without building:
+
+```json
+{
+  "name": "TimerBlink",
+  "package": "demo",
+  "file": "tests/timer.st",
+  "line": 12,
+  "column": 1
+}
+```
+
+- `package` is the owning package name; `file` is package-relative with forward slashes. A
+  dependency file is `<package>/<relative>`.
+- `line` and `column` are 1-based and name the start of the test declaration, which is the
+  `{stc:test}` annotation when one is present.
+- The human `--list` format remains one test name per line. These keys are additive; a later
+  compatible extension may append another key.
 
 **Test results.** `stc test --message-format json` writes one object per test, in discovery
 order, after the test process exits:

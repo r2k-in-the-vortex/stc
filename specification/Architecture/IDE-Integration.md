@@ -53,6 +53,7 @@ Out of scope for v2.0.0:
 | `stc lsp [--manifest-path <path>]` | LSP JSON-RPC with `Content-Length` framing over stdio | The extension's language clients |
 | `stc dap [--manifest-path <path>]` | DAP JSON with `Content-Length` framing over stdio | The extension's `stc` debug adapter |
 | `stc run --watch ... [--debug-server --debug-endpoint <path>]` | stderr `[stc]` status lines; runtime debug endpoint JSON file (format 1) | The extension's online-change session (one per window) |
+| `stc test --list ...` / `stc test ... --message-format json` | Line-delimited JSON on stdout; test-host output with `-- --nocapture` | The extension's Testing API session (one-shot child per discovery or project run) |
 
 - Standard output carries protocol messages only; logs and build output go to standard error. The
   language server never writes diagnostics text to standard output outside a JSON-RPC frame. The
@@ -79,6 +80,10 @@ Out of scope for v2.0.0:
   `PATHEXT` extensions on Windows. A missing executable is logged to the `stc` output channel and
   the language server is not started; starting a debug session reports an explicit error. The
   extension does not bundle or download a compiler.
+- The Testing API session uses the same per-workspace-folder ancestor search as the language
+  client to find one `stc.toml` per project. Discovery runs `stc test --list --message-format
+  json`; a run uses `stc test --message-format json --exact <name>... -- --nocapture` so selection
+  is exact and test-host output is captured. These are one-shot children, not servers.
 - Distribution is a VSIX only in v2.0.0; the extension is not published to the VS Code
   Marketplace. The engine floor is `^1.82.0`, the pinned `vscode-languageclient` 9.0.1 minimum.
   The language id is `st`, the TextMate scope is `source.st`, and `.st` files are the only
@@ -444,6 +449,63 @@ directory under extension storage remains as local audit evidence after a stop; 
 the endpoint file, and the audit log is kept. Status-bar and channel text is presentation only;
 activation and stop are not safety functions.
 
+### 4.8 Testing API
+
+The extension contributes a VS Code Testing API controller for `{stc:test}` POUs. The controller
+lives in `editors/vscode/src/testing/session.ts`; list/result parsing, argument construction, and
+file grouping live in `editors/vscode/src/testing/model.ts`, which does not import `vscode`. There
+is no new compiler protocol: both discovery and runs use the `stc test` JSON surface in
+[CLI and Manifest](CLI-and-Manifest.md) §1.6.
+
+**Controller and discovery.** The controller id and label are `stc`. It is created only after at
+least one workspace folder, or one of its ancestors, contains `stc.toml`; it stays available if the
+manifest later disappears. Discovery starts one `stc test --list --message-format json` per unique
+manifest in the manifest directory. Tests are grouped by source file under a file-level TestItem;
+each test item carries a `file:` URI and a 1-based range at the test declaration start (the
+`{stc:test}` annotation line when present). The item hierarchy shows file paths and test names, and
+the gutter/code lens open the declaration. Discovery refreshes on `**/*.st` and `**/stc.toml`
+create/change/delete with a 500 ms debounce, on workspace-folder changes, on `stc.path` changes,
+through the Test Explorer refresh button, and through the `stc.refreshTests` command. A failed
+listing logs its diagnostics to the `stc` output channel and keeps the previous successful list;
+a missing `stc` executable is logged and no items are created. F-22 covers richer discovery error
+surfacing.
+
+**Run profile.** The default Run profile expands a file-level selection to its children and honors
+`exclude`; with no `include`, it selects every discovered test. Selected tests are grouped per
+manifest and each project runs sequentially:
+
+```text
+stc test --manifest-path <project>/stc.toml --message-format json --color never
+    --diagnostic-paths absolute --exact <test>... -- --nocapture
+```
+
+`--exact` makes each positional filter a complete-name match (ASCII case-insensitive), so one
+selected test never also runs another test whose name contains it. The runner's result objects are
+matched to items by exact reported name; an unexpected result is logged and never reported against
+another item. `pass` reports passed; `fail`, `trap`, and `timeout` report failed with the failure
+messages and the first available file/line/column resolved against the manifest directory. The
+reported `duration_ms` becomes the Test Explorer duration. Test-host output captured between
+results, including JSON printed by tests, is attached to the test's run output. Compiler
+diagnostics and stderr are appended to the run output; if a selected test has no result after a
+failed build or a non-zero exit, it is reported errored with the diagnostic or exit reason.
+Cancellation stops the process tree and marks the remaining selected tests skipped. A missing
+`stc` executable reports every selected test errored and is logged.
+
+**Debug profile.** The Debug profile starts one ordinary launch session per selected test,
+sequentially; a file-level or multi-test selection therefore opens one session per test, and the
+next starts only after the previous terminates. Each session uses the F-17 per-test launch:
+`type: "stc"`, `request: "launch"`, `name: "stc: Debug <test>"`, `project` set to the manifest,
+`test` set to the exact test name, and `noBuild`, `release`, `allowWrite`, and `allowForce` false.
+The workspace folder is resolved from the test URI with the same ancestor search used for
+discovery; multi-root projects use their own folder. Cancellation stops the active session and
+aborts the remaining selection. No Test Explorer results are fabricated for a debug session: the
+F-17 Debug Console result line and the debug session are authoritative.
+
+**Limits.** Running and debugging require the same clang and runtime artifacts as the CLI; discovery
+alone does not build. Continuous run, coverage integration, and test tags are not offered. The
+Testing API presents the CLI's per-test model; it does not add test retries, sharding, or
+parallelism (v1 tests run sequentially).
+
 ## 5. Packaging and distribution
 
 The extension lives at `editors/vscode/`. It is TypeScript bundled by esbuild into
@@ -469,12 +531,16 @@ bundles it.
   evaluate, write gating, attach, no-build, and clean teardown. They run through the debug suite
   and require clang there.
 - The extension checks are `npm ci`, `npm run typecheck`, `npm test` (problem-matcher unit tests,
-  theme JSON tests, online-change state tests, and TextMate grammar fixtures), and `npm run
-  package`. `test/online-change.test.mjs` bundles the pure state module and covers every status
-  line, the stopped reasons, endpoint parsing and field whitelisting (including wrong
-  format/protocol, oversized and non-regular files, and malformed fields), redaction, and status
-  formatting. The theme test checks the contributed themes, required editor colors and token
-  rules, distinct acceptance categories, and the 4.5:1 contrast target. The Rust tests compare the
+  theme JSON tests, online-change state tests, Testing API model tests, and TextMate grammar
+  fixtures), and `npm run package`. `test/online-change.test.mjs` bundles the pure state module and
+  covers every status line, the stopped reasons, endpoint parsing and field whitelisting (including
+  wrong format/protocol, oversized and non-regular files, and malformed fields), redaction, and
+  status formatting. `test/testing.test.mjs` bundles the pure Testing API model and covers list
+  parsing with file/line/column and malformed entries, result parsing and pass/fail/trap/timeout
+  mapping with failure locations and captured output, empty and malformed output, exact run/debug
+  argument construction, file-level grouping, and result-path resolution. The theme test checks the
+  contributed themes, required editor colors and token rules, distinct acceptance categories, and
+  the 4.5:1 contrast target. The Rust tests compare the
   grammar against the lexer keyword and
   punctuation tables (`grammar_covers_lexer_tables`), check every primitive type name against
   `support.type.primitives.st` (`primitive_type_keywords_use_primitive_scope`), and check the
@@ -494,8 +560,9 @@ bundles it.
   any running child in a `finally`. The job and its evidence are part of the release checklist.
 - The release checklist records a manual pass on the Windows development host and at least one
   Linux host: install the VSIX, open the sample workspace, confirm the language features and
-  tasks, run one launch and one attach session, and run the online-change start/attach/swap/stop
-  walkthrough while inspecting the channel and logs for control metadata.
+  tasks, run one launch and one attach session, run and debug one test from the Testing view, and
+  run the online-change start/attach/swap/stop walkthrough while inspecting the channel and logs
+  for control metadata.
 
 ## 7. Related documents
 

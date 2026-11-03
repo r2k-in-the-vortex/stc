@@ -199,9 +199,13 @@ pub fn discover(
     }
 }
 
-/// Returns the tests matching any of the case-insensitive substring filters.
+/// Returns the tests matching any of the filters.
+///
+/// Empty filters select every test. Without `exact`, a filter matches every
+/// test whose name contains it (ASCII case-insensitive); with `exact`, a
+/// filter matches only a complete name (ASCII case-insensitive).
 #[must_use]
-pub fn filter_tests(tests: &[TestCase], filters: &[String]) -> Vec<TestCase> {
+pub fn filter_tests(tests: &[TestCase], filters: &[String], exact: bool) -> Vec<TestCase> {
     if filters.is_empty() {
         return tests.to_vec();
     }
@@ -209,9 +213,14 @@ pub fn filter_tests(tests: &[TestCase], filters: &[String]) -> Vec<TestCase> {
         .iter()
         .filter(|test| {
             let name = test.name.to_ascii_uppercase();
-            filters
-                .iter()
-                .any(|filter| name.contains(&filter.to_ascii_uppercase()))
+            filters.iter().any(|filter| {
+                let filter = filter.to_ascii_uppercase();
+                if exact {
+                    name == filter
+                } else {
+                    name.contains(&filter)
+                }
+            })
         })
         .cloned()
         .collect()

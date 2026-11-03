@@ -36,6 +36,9 @@ locally.
   (keywords, visible names, and one level of members after `.`), and
   whole-document formatting with `stc fmt`.
 - Tasks for `stc check`, `stc build`, `stc run`, `stc test`, and `stc fmt`.
+- A Testing view for `{stc:test}` POUs: discovery with file/line locations, Run Test and Debug
+  Test from the editor, per-test pass/fail results with failure locations and durations, and
+  captured test output.
 - The `$stc` problem matcher for short-format compiler diagnostics.
 - A debug adapter (`stc dap`): launch and attach, source breakpoints, continue,
   pause, over/into/out stepping, call stack, Globals and Locals scopes,
@@ -235,6 +238,33 @@ source files from multi-package projects. `stc run` tasks keep running until
 you terminate the task; terminating it stops the `stc run` driver and the host
 it launched, not just the task shell.
 
+## Testing
+
+Open a workspace containing `stc.toml` and show the **Testing** view. The
+extension discovers every `{stc:test}` POU with `stc test --list
+--message-format json`, groups tests by source file, and places each test at
+its declaration line (the `{stc:test}` annotation when present), so the gutter
+and Test Explorer navigate to the test. Discovery refreshes when an `.st` file
+or `stc.toml` changes, when the workspace folders or `stc.path` change, and
+when you press the Testing view's refresh button or run **stc: Refresh Tests**.
+
+Run Test on a file-level item runs all of its tests; Run Test on one test runs
+only that test. The extension invokes `stc test --message-format json --exact
+<name>... -- --nocapture`, so the selected names are complete-name matches and
+test output is captured. Passed tests report their duration; failed, trapped,
+and timed-out tests report their failure messages and the first known
+file/line/column. Compiler diagnostics and test output appear in the Test
+Results output. A build failure reports the selected tests as errored instead
+of inventing results.
+
+Debug Test starts a normal `stc` launch debug session for one test using the
+`test` launch field (see [Debugging](#debugging)). F-17 accepts one test name
+per launch, so a file-level or multi-test Debug Test opens one session per
+test, sequentially. The Debug Console result line is the outcome; the extension
+does not fabricate Test Explorer results for debug sessions. Missing compilers
+and discovery failures are logged to the **stc** output channel, and runs
+require the same clang and runtime artifacts as `stc test`.
+
 ## Debugging
 
 Add a launch or attach configuration to `.vscode/launch.json`:
@@ -424,6 +454,9 @@ background, and the documented opt-out under VS Code's configuration-merge
 semantics. `test/online-change.test.mjs` bundles the pure
 `src/onlineChange/state.ts` and covers the status-line state machine, endpoint
 parsing and field whitelisting, redaction, and status formatting.
+`test/testing.test.mjs` bundles the pure `src/testing/model.ts` and covers
+test-list and result parsing, failure locations, captured output, exact
+run/debug arguments, and file grouping.
 `test:electron` additionally drives the online-change surface end to end on the
 sample: start, generation, attach, edit/swap, session teardown, and stop. The
 package step writes a `.vsix` next to `package.json`; `samples/**` is excluded

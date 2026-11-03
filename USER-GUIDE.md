@@ -405,7 +405,8 @@ launched host. Attach connects to the endpoint file printed by `stc run --debug-
 the host running. Replace the placeholder endpoint path with the printed file.
 
 Add `"test": "<name>"` to a launch configuration to debug one test. The name must match a test
-listed by `stc test --list` exactly. The launch builds only that test as a hook-bearing harness
+listed by `stc test --list` exactly. The Testing view's **Debug Test** starts this launch
+automatically for one test (see §8.5). The launch builds only that test as a hook-bearing harness
 under `target/stc/test/debug/<artifact>` (or under `<outDir>/debug/<artifact>`), so the ordinary
 `stc test` artifacts stay hook-free and unchanged. Breakpoints in test source bind before the test
 body runs, the test POU is the top frame, and the session ends after the test prints its result
@@ -428,7 +429,31 @@ The local sample at
 attach configurations, tasks, a known breakpoint line, and known values, and is the fixture used by
 the automated tests.
 
-### 8.5 Online change
+### 8.5 Running tests from the editor
+
+Open a folder containing `stc.toml`, show the **Testing** view, and expand a file to see its
+`{stc:test}` POUs. Each test is placed at its declaration line, including the `{stc:test}`
+annotation, so the Test Explorer and editor gutter navigate to it. The extension discovers tests
+with `stc test --list --message-format json` and refreshes the list when an `.st` file or
+`stc.toml` changes, when the workspace folders or `stc.path` change, with the view's refresh
+button, or with **stc: Refresh Tests**.
+
+Run Test on a test runs only that test; Run Test on a file runs all of its tests. The extension
+passes `--exact` so the selected test name is a complete-name match, not a substring, and captures
+test output. Passed tests show their duration; failed, trapped, and timed-out tests show their
+failure messages and the first known source location. Compiler diagnostics and captured output
+appear in the Test Results output, and a build failure marks the selected tests errored rather
+than reporting invented results.
+
+Debug Test opens the test under the debugger through the same per-test launch described in §8.4.
+Because a launch accepts one test name, selecting several tests (or a file) for debugging starts
+them one after another, each in its own session. The Debug Console result line reports the test
+outcome; debug sessions do not produce Test Explorer pass/fail results. A missing compiler or a
+discovery failure is logged to the **stc** output channel. Runs require the same clang and runtime
+artifacts as `stc test`. See
+[`IDE-Integration.md`](specification/Architecture/IDE-Integration.md) §4.8 for the full contract.
+
+### 8.6 Online change
 
 The extension can drive the same online-change workflow from the editor. Open a project and run
 **stc: Start Online Change** from the Command Palette. The extension starts an extension-owned
@@ -458,7 +483,7 @@ local only and offers no cold-download, rollback, or migration action; use the C
 the [extension README](editors/vscode/README.md) and
 [`IDE-Integration.md`](specification/Architecture/IDE-Integration.md) §4.7 for the full contract.
 
-### 8.6 Non-safety
+### 8.7 Non-safety
 
 The extension is local only: no telemetry, network requests, remote debugging, or bundled compiler.
 Debug and force can stop the cycle and hold outputs indefinitely, and an online change can activate
@@ -473,6 +498,7 @@ and [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) for the complete contract.
 ```sh
 stc test                 # all discovered {stc:test} POUs
 stc test --list          # list without building
+stc test --exact MyTest  # complete-name match, not a substring
 stc test --no-run        # build artifacts only
 stc test --timeout 5s
 stc test -- --nocapture

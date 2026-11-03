@@ -4,10 +4,12 @@ import { StcDebugAdapterFactory, StcDebugConfigurationProvider } from './debug';
 import { StcLanguageClient } from './languageClient';
 import { OnlineChangeSession } from './onlineChange/session';
 import { StcTaskProvider, stcExecutable } from './tasks';
+import { StcTestingSession } from './testing/session';
 
 let output: vscode.OutputChannel | undefined;
 let languageClient: StcLanguageClient | undefined;
 let onlineChange: OnlineChangeSession | undefined;
+let testing: StcTestingSession | undefined;
 
 /** Activates local ST support: tasks, the `stc lsp` language client, and the `stc dap` debug adapter. */
 export function activate(context: vscode.ExtensionContext): void {
@@ -40,6 +42,13 @@ export function activate(context: vscode.ExtensionContext): void {
   onlineChange = new OnlineChangeSession(context);
   context.subscriptions.push(onlineChange);
 
+  testing = new StcTestingSession(output);
+  context.subscriptions.push(testing);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('stc.refreshTests', () => testing?.refresh()),
+  );
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('stc.path')) {
@@ -47,6 +56,7 @@ export function activate(context: vscode.ExtensionContext): void {
         void languageClient?.restart().catch((error: unknown) => {
           output?.appendLine(`language server restart failed: ${String(error)}`);
         });
+        void testing?.refresh();
       }
     }),
   );
@@ -63,8 +73,10 @@ export function deactivate(): Thenable<void> | undefined {
   if (onlineStopping !== undefined) {
     stopping.push(onlineStopping);
   }
+  testing?.dispose();
   languageClient = undefined;
   onlineChange = undefined;
+  testing = undefined;
   output = undefined;
   if (stopping.length === 0) {
     return undefined;

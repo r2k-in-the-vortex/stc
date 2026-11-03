@@ -223,12 +223,21 @@ END_FUNCTION
 ```sh
 stc test                     # all tests
 stc test Timer               # substring filter on POU name
+stc test --exact TimerBlink  # complete-name match (case-insensitive)
 stc test --list              # list discovered tests
+stc test --list --message-format json  # name, package, file, line, column
 stc test --no-run            # build the test artifacts only
 stc test -- --nocapture      # pass through runtime output
 # tests run sequentially in v1; no --test-threads
 stc test --timeout 2s        # override the default
 ```
+
+Without `--exact`, each positional filter selects every test whose name contains it
+(ASCII case-insensitive). With `--exact`, a filter selects only a test whose complete name
+matches (ASCII case-insensitive), so an editor can run one `{stc:test}` POU without also running
+another test whose name merely contains it. The JSON list shape is the stable additive shape in
+[CLI and Manifest](CLI-and-Manifest.md) §1.6; `line` and `column` are the 1-based start of the test
+declaration.
 
 ### 2.5 Test build mode
 

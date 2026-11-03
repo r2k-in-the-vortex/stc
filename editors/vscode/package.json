@@ -52,6 +52,11 @@
         "title": "Attach Debugger to Online Change",
         "category": "stc",
         "enablement": "stc.onlineChangeAttachable"
+      },
+      {
+        "command": "stc.refreshTests",
+        "title": "Refresh Tests",
+        "category": "stc"
       }
     ],
     "languages": [
