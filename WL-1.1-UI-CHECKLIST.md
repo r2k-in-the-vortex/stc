@@ -11,7 +11,8 @@ Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **
 unsupported or intentionally out of scope.
 
 Summary 2026-11-03: 40/40 checklist entries evaluated — 40 pass (100%); the F-1.1, F-11, and
-F-14 required items also pass. The required/documented/deferred close-out triage is in
+F-14 required items also pass. F-17 and F-18 are open required items (F-18 depends on F-17; plan
+§12.1). The required/documented/deferred close-out triage is in
 [WL-1.1-Plan.md](WL-1.1-Plan.md) §12; F-22 and F-23 are deferred follow-ups.
 
 ## 0. Prerequisites
@@ -429,7 +430,8 @@ Completed findings are feature history, not open follow-ups. The close-out triag
 
 ### Required for WL-1.1
 
-All required implementation items are complete (plan §12.1).
+All required implementation items except F-17 and F-18 are complete (plan §12.1). F-17 is
+implemented first because F-18's Debug Test action depends on it.
 
 - [x] **F-1.1 — Default-theme ST token-color overlay.** Pass 2026-11-03. F-1 ships `stc Dark`/
       `stc Light`, so the intended palette required selecting a contributed theme. The extension
@@ -460,6 +462,22 @@ All required implementation items are complete (plan §12.1).
       visible to Variables and evaluate, and stayed 42 after a step; the running-write queue
       path is covered by the protocol and DAP tests. Validation, permissions, diagnostics, and
       forces are unchanged.
+
+- [ ] **F-17 — Per-test debugging.** Required for WL-1.1 (owner decision 2026-11-03; plan
+      §12.1). `stc test` builds hook-free per-test artifacts, and the launch configuration
+      builds the production project, so a `{stc:test}` POU cannot be started under the
+      debugger. Build the selected test with checkpoint hooks, start its test host with a debug
+      server, and expose the selection through the DAP launch configuration (or an equivalent
+      command). Acceptance: a test in `tests/smoke.st` stops at a breakpoint with locals
+      available; the test host result/exit ends the session cleanly; production launch behavior
+      is unchanged.
+
+- [ ] **F-18 — VS Code Testing API run/debug.** Required for WL-1.1 (owner decision 2026-11-03;
+      plan §12.1); depends on F-17. Add a TestController that discovers `{stc:test}` POUs with
+      file/line, runs an individual test through `stc test` and reports pass/fail with failure
+      locations, and offers a Debug Test action using the F-17 per-test launch. Acceptance: an
+      individual `{stc:test}` POU can be run and debugged from the editor; discovery refreshes
+      on source/manifest changes.
 
 ### Deferred follow-ups
 
@@ -592,6 +610,8 @@ not a WL-1.1 code change.
 | F-1.1 | Pass | Manual 2026-11-03: Dark Modern, Dark 2026, and Light 2026 render all nine categories with the overlay palette; non-ST languages unchanged; documented opt-out; commits `a126800`/`c2af647`, CI runs `41681462972`/`41692812156` green; plan §12.1 |
 | F-11 | Pass | Manual 2026-11-03: sample caller `src/main.st:39`; depth-3 `LEVELONE:12`, `MAIN:19`; top frame, scopes, and evaluate unchanged; commit `909ebd0`, CI `41703710933` green; plan §12.1 |
 | F-14 | Pass | Manual 2026-11-03: stopped `INCREMENT := 42` visible immediately to Variables/evaluate and retained after a step; running writes stay queued (protocol/DAP tests); commit `c8cb1c9`, CI `41703710933` green; plan §12.1 |
+| F-17 | Required; pending | Per-test debug launch for a selected `{stc:test}` POU; plan §12.1 |
+| F-18 | Required; pending | VS Code Testing API run/debug; depends on F-17; plan §12.1 |
 
 ### Deferred follow-ups
 
@@ -599,8 +619,6 @@ not a WL-1.1 code change.
 | --- | --- | --- |
 | F-9 | Pending | First stop is 1–2 cycles late; launch-with-breakpoint must stop on cycle 0 |
 | F-15 | Pending | Terminating a launch session is silent in the Debug Console |
-| F-17 | Pending | No way to debug a `{stc:test}` POU |
-| F-18 | Pending | No per-test run control (Testing view/code lens) in VS Code |
 | F-19 | Pending | `textDocument/rename` not exposed; F2 is silent in the IDE |
 | F-21 | Deferred | Always-on runtime; attach-time cold-download vs online-change choice, no file-watch requirement; plan §12.3 / WL-1.2 |
 | F-22 | Deferred | LSP project-load failure restart loop and hidden manifest error; needs visible error/retry or degraded initialization; plan §12.3 |

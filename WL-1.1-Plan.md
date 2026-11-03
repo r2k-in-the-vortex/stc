@@ -17,9 +17,11 @@ manually verified 2026-10-31. F-1.1 is complete: commits `a126800` and `c2af647`
 `41681462972` and `41692812156` green), with owner-confirmed manual rendering on Dark Modern,
 Light Modern, Dark 2026, and Light 2026 on 2026-11-03. F-11 and F-14 are complete: commits
 `909ebd0`/`c8cb1c9` (CI run `41703710933` green, 39 jobs), with owner-confirmed manual checks
-2026-11-03. No required close-out items remain; the LSP project-load and project-file
-optionality follow-ups are deferred in §12.3. Manual VS Code verification 2026-10-31: 40 of 40
-checklist entries pass. Required close-out items and deferred follow-ups are triaged in §12.  
+2026-11-03. F-17 and F-18 (per-test debugging and the VS Code Testing API) were brought into
+scope as required items on 2026-11-03; F-18 depends on F-17, and implementation is pending. The
+LSP project-load and project-file optionality follow-ups remain deferred in §12.3. Manual VS
+Code verification 2026-10-31: 40 of 40 checklist entries pass. Required close-out items and
+deferred follow-ups are triaged in §12.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-1.1,
 [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
@@ -58,6 +60,10 @@ In scope:
 - Call-site source locations for every resolved caller frame in a stopped call stack (F-11).
 - Immediate typed variable writes while a debug session is stopped; writes made while running keep
   the cycle-boundary queue (F-14).
+- Per-test debugging: a selected `{stc:test}` POU can be launched under the debugger with
+  breakpoints and locals (F-17).
+- A VS Code Testing API provider that discovers `{stc:test}` POUs and runs or debugs an individual
+  test from the editor (F-18; depends on F-17).
 - An online-change command/status surface over the existing runtime/CLI workflow, showing the
   active generation and surfacing the session teardown on swap (F-20).
 - Packaging as a VSIX, with a sample ST workspace and launch/task configurations.
@@ -501,8 +507,8 @@ The 36-item manual checklist ([WL-1.1-UI-CHECKLIST.md](WL-1.1-UI-CHECKLIST.md)) 
 F-5, F-7, F-8, the DAP frame-name mapping and evaluate-by-name fixes, and the D-211 FB
 interface-access change. Complete features (F-1, F-2, F-3, F-4, F-5, F-6, F-7, F-8, F-10, F-12,
 F-16, F-20) are feature history, not open follow-ups; they remain in the tables only as
-acceptance evidence. No required close-out items remain. The remaining items are assigned to
-exactly one bucket:
+acceptance evidence. F-17 and F-18 are the open required items (owner decision 2026-11-03;
+F-18 depends on F-17). The remaining items are assigned to exactly one bucket:
 
 - **Required** — must be closed before WL-1.1 is complete.
 - **Documented** — accepted limitation or deliberate design; record it in the IDE specification,
@@ -514,7 +520,10 @@ exactly one bucket:
 
 #### Open required items
 
-None.
+| Item | Finding | Why required | Acceptance |
+| --- | --- | --- | --- |
+| F-17 | There is no way to debug a `{stc:test}` POU: `stc test` builds hook-free per-test artifacts, and the launch configuration builds the production project, so there is no per-test debug artifact or launch path. | Owner decision 2026-11-03; per-test debugging is needed before the Testing API can offer Debug Test (F-18 depends on it). | Build a selected `{stc:test}` POU with checkpoint hooks, start its test host with a debug server, and expose the selection through the DAP launch configuration (or an equivalent command). Breakpoints in the test source bind before the test body runs; the top frame and locals are the test POU; the test host's result/exit ends the session cleanly; the production launch path is unchanged. Acceptance: a test in `tests/smoke.st` stops at a breakpoint and shows locals. |
+| F-18 | `stc: test` runs the whole test source set through a task; there is no VS Code Testing view, gutter/code lens, or per-test command to run or debug individual `{stc:test}` POUs. | Owner decision 2026-11-03; per-test run and debug from the editor is required. F-18 depends on F-17 for the Debug Test path. | A VS Code Testing API provider lists discovered `{stc:test}` POUs with file/line, runs an individual test through the existing `stc test` JSON result path and reports pass/fail with failure locations, and offers a Debug Test action using the F-17 per-test debug launch. Discovery refreshes on source/manifest changes; the production build/task surface is unchanged. Acceptance: an individual `{stc:test}` POU can be run and debugged from the editor. |
 
 #### Completed required features
 
@@ -575,8 +584,6 @@ Notes:
 | --- | --- | --- |
 | F-9 | A launch with a breakpoint binds after 1–2 cycles, so the first stop can observe `TOTAL = 2`/`sum = 2`/`cycles = 2` instead of cycle-0 values. | Debug-protocol/runtime plan: add a start-paused mode (or equivalent) so breakpoints bind before the first cycle. This is outside WL-1.1's locked runtime change (`stc-debug/1.1`); WL-1.1 documents the current offset. If the owner requires cycle-0 stops for WL-1.1, this becomes a required scope amendment. |
 | F-15 | Terminating a launch session prints nothing in the Debug Console even though the host exits. | Session-status polish plan: report terminate/exit in the Debug Console and optionally surface the `[debug].session-timeout` budget or a warning; the silent stop is accepted meanwhile. |
-| F-17 | There is no way to debug a `{stc:test}` POU; the launch configuration builds the project, not a per-test artifact. | Test-workflow plan: build the selected test with test metadata and start the test host under the debugger, or add a Testing-API Debug Test action. |
-| F-18 | `stc: test` runs the whole test source set through a task; there is no Testing view, code lens, or per-test command. | Test-workflow plan: a VS Code Testing API provider backed by `stc test` JSON results with Run and Debug actions. |
 | F-19 | Rename (F2) does nothing and prints no message, while the compiler/runtime already carry rename history. | Language-server refactoring plan: `textDocument/prepareRename`/`textDocument/rename` backed by the reference resolution; explicitly outside I-7. |
 | F-21 | F-20's online change is a local file-watch workflow: `stc run --watch` owns the host and deploys on every saved edit. The expected operating model is an always-on PLC runtime in the background (remote after v2.0.0), where online change is not coupled to a file watcher; when the user attaches a debug session and the source has changed, the IDE should offer a choice between a cold download and an online change. | Remote-runtime/workflow follow-up (WL-1.2): decouple the runtime lifetime and debug attach from the file watch; detect source/build drift on attach and present an explicit cold-download vs online-change choice (with cancel); define state preservation, rollback, and remote transport. WL-1.1 keeps the current watch surface as its local v1 limitation. |
 | F-22 | `stc lsp` fails `initialize` when the project cannot load (any `STC-E-PROJECT-*` manifest error). The VS Code language client restarts the server five times before giving up, and the manifest error is only in the "stc Language Server" output channel, so the user sees a restart storm rather than the cause. A manual depth-check workspace copied the sample's `[test] sources` without a `tests/` directory and hit this loop. | Language-server/IDE robustness follow-up: stop the restart loop for deterministic initialization failures (for example `initializationFailedHandler` plus a visible error and retry action), and/or initialize in a degraded state that publishes manifest diagnostics and recovers when `stc.toml` is fixed. Decide the client's restart policy for configuration errors separately from unexpected crashes. Document the current restart behavior and the reload workaround meanwhile. |
@@ -609,3 +616,4 @@ Notes:
 | 2026-11-03 | F-11 complete: the stopped-frame sidecar is format 2 with a function-relative line map, and the runtime reports each resolved caller's call-site source (D-229). Commit `909ebd0`; CI run `41703710933` green (39 jobs); owner-confirmed manual checks for the sample caller (`src/main.st:39`) and a depth-3 chain (`LEVELONE:12`, `MAIN:19`). Checklist F-11 marked pass; plan §12.1 moves F-11 to the completed required features. |
 | 2026-11-03 | F-14 complete: on `stc-debug/1.1`, a one-shot write received while stopped is applied by the parked cycle thread before its response, while running writes and forces keep boundary semantics (D-230). Commit `c8cb1c9`; CI run `41703710933` green (39 jobs); owner-confirmed manual check that a stopped `INCREMENT` edit is immediately visible and survives a step. Checklist F-14 marked pass; plan §12.1 moves F-14 to the completed required features. |
 | 2026-11-03 | Deferred follow-ups recorded after a manual depth-check LSP incident: F-22 (LSP project-load failure restart loop and hidden manifest error) and F-23 (project-file optionality audit; allow a project without tests and review other optional items that fail at load). Both follow-ups document the current behavior and workarounds in KNOWN-LIMITATIONS and the USER-GUIDE; no WL-1.1 code change. |
+| 2026-11-03 | Owner brought F-17 (per-test debugging) and F-18 (VS Code Testing API run/debug) into WL-1.1 scope as required items; F-18 depends on F-17, so F-17 is implemented first. Both move from §12.3 deferred follow-ups to §12.1 required items with their acceptance recorded; implementation is pending. |
