@@ -700,6 +700,105 @@ fn launch_stops_at_a_breakpoint_and_reads_locals_and_globals() {
     );
 }
 
+const NESTED_SOURCE: &str = "\
+FUNCTION LevelTwo : DINT
+VAR_INPUT
+  n : DINT;
+END_VAR
+  LevelTwo := n + 1;
+END_FUNCTION
+
+FUNCTION LevelOne : DINT
+VAR_INPUT
+  n : DINT;
+END_VAR
+  LevelOne := LevelTwo(n) + 1;
+END_FUNCTION
+
+PROGRAM Main
+VAR
+  total : DINT;
+END_VAR
+  total := LevelOne(1);
+  total := total + 1;
+END_PROGRAM
+";
+
+#[test]
+fn nested_callers_report_each_own_call_site() {
+    let Some(_clang) = clang() else {
+        return;
+    };
+    let project = TestDir::new("nested");
+    project.write("stc.toml", MANIFEST);
+    let main = project.write("src/main.st", NESTED_SOURCE);
+    let stop = line_of(NESTED_SOURCE, "LevelTwo := n + 1;");
+    let level_one_call = line_of(NESTED_SOURCE, "LevelOne := LevelTwo(n) + 1;");
+    let main_call = line_of(NESTED_SOURCE, "total := LevelOne(1);");
+
+    let mut client = DapClient::spawn(&project.path);
+    initialize(&mut client);
+    let breakpoints = client.request(
+        "setBreakpoints",
+        json!({
+            "source": { "path": main.to_string_lossy() },
+            "breakpoints": [{ "line": stop }],
+            "lines": [stop],
+        }),
+    );
+    assert_eq!(breakpoints["success"], true, "{breakpoints}");
+    let launch = client.request(
+        "launch",
+        json!({
+            "project": project.manifest().to_string_lossy(),
+            "noBuild": false,
+            "release": false,
+            "allowWrite": false,
+            "allowForce": false,
+            "args": ["--cycles", "20000", "--cycle-time", "10ms"],
+        }),
+    );
+    assert_eq!(launch["success"], true, "{launch}");
+    let configuration = client.request("configurationDone", json!({}));
+    assert_eq!(configuration["success"], true, "{configuration}");
+
+    let (stack, _) = stop_at_line(&mut client, &project, stop);
+    assert_eq!(
+        stack_frame_names(&stack),
+        ["LEVELTWO", "LEVELONE", "MAIN"],
+        "{stack}"
+    );
+    assert_eq!(stack_frame_ids(&stack), [0, 1, 2], "{stack}");
+    assert_eq!(stack["body"]["totalFrames"], json!(3), "{stack}");
+    let expected_source = normalized_path(&project.source());
+    let frames = stack["body"]["stackFrames"]
+        .as_array()
+        .expect("stack frames");
+    for (frame, expected_line) in frames.iter().skip(1).zip([level_one_call, main_call]) {
+        assert_eq!(frame["source"]["name"], "src/main.st", "{stack}");
+        assert_eq!(
+            frame["source"]["path"].as_str(),
+            Some(expected_source.as_str()),
+            "a caller source maps to the workspace file: {stack}"
+        );
+        assert_eq!(
+            frame["line"],
+            json!(expected_line),
+            "a caller reports its own call site: {stack}"
+        );
+    }
+    // The caller's original runtime index still addresses its scopes.
+    let scopes = client.request("scopes", json!({ "frameId": 1 }));
+    assert_eq!(scopes["success"], true, "{scopes}");
+
+    let disconnect = client.request("disconnect", json!({ "terminateDebuggee": true }));
+    assert_eq!(disconnect["success"], true, "{disconnect}");
+    assert!(
+        client.wait_exit(PROTOCOL_TIMEOUT).is_some(),
+        "the adapter exits after disconnect"
+    );
+}
+
 #[test]
 fn sample_workspace_launch_reads_known_values_and_steps() {
     let Some(_clang) = clang() else {
@@ -844,16 +943,20 @@ fn sample_workspace_launch_reads_known_values_and_steps() {
         stack["body"]["stackFrames"][0]["name"], "ADDSTEP",
         "{stack}"
     );
-    // F-12: only the two resolved ST frames remain. `MAIN` has no source
-    // location yet (F-11) but keeps its resolved manifest identity, so the
-    // filter must not drop it for the missing source.
+    // F-12: only the two resolved ST frames remain. F-11: the caller frame
+    // reports its own call-site source from the build-time line map, while
+    // the top frame keeps the checkpoint's source.
     assert_eq!(stack_frame_names(&stack), ["ADDSTEP", "MAIN"], "{stack}");
     assert_eq!(stack_frame_ids(&stack), [0, 1], "{stack}");
     assert_eq!(stack["body"]["totalFrames"], json!(2), "{stack}");
-    assert!(
-        stack["body"]["stackFrames"][1].get("source").is_none(),
-        "the caller frame has no source location: {stack}"
+    let caller = &stack["body"]["stackFrames"][1];
+    assert_eq!(caller["source"]["name"], "src/main.st", "{stack}");
+    assert_eq!(
+        caller["source"]["path"].as_str(),
+        Some(normalized_path(&project.source()).as_str()),
+        "the caller source maps to the workspace file: {stack}"
     );
+    assert_eq!(caller["line"], json!(first_statement), "{stack}");
     // The kept runtime indices still address the captured frames: scopes and
     // frame.locals for the caller (`MAIN`) succeed with its own index rather
     // than a renumbered one.

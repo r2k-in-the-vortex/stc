@@ -319,7 +319,9 @@ adapter session per launch.
   `evaluate` accepts a manifest key, not a source-language path: the sample global `TOTAL` is
   `SAMPLE::TOTAL`, not `MAIN.TOTAL`.
 - Local names are uppercase normalized spellings from the stopped-frame metadata.
-- Caller frames and optimized-out functions report unavailable information honestly.
+- Caller frames report their call-site file and line from the build-time line map, at any depth;
+  the stopped frame keeps its checkpoint source. A caller with no line map or an optimized-out
+  function reports unavailable information honestly rather than a fabricated location.
 - `evaluate` does not parse ST expressions.
 - No remote transport, TLS, or authentication beyond the local endpoint token and user-only
   endpoint file.

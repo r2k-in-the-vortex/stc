@@ -547,6 +547,11 @@ fn breakpoint_stop_reports_frames_and_typed_locals() {
         assert_eq!(text(&frames[1], "function"), setup.fixture.outer.to_hex());
         assert_eq!(text(&frames[1], "symbol"), setup.fixture.outer_symbol);
         assert!(!boolean(&frames[1], "optimized_out"));
+        // F-11: the caller reports the call site from the format-2 line map.
+        let caller_source = field(&frames[1], "source");
+        assert_eq!(text(caller_source, "file"), "src/outer.st");
+        assert_eq!(number(caller_source, "line"), 21);
+        assert_eq!(number(caller_source, "column"), 5);
 
         let local = client
             .call_ok(

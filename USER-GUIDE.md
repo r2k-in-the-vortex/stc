@@ -187,7 +187,8 @@ Formats and versions in this release:
 | Contract | Version |
 | --- | --- |
 | GOT manifest / catalog | 2 |
-| Descriptor, module, state, metadata sidecar, debug object, stopped-frame sidecar | 1 |
+| Descriptor, module, state, metadata sidecar, debug object | 1 |
+| Stopped-frame sidecar | 2 |
 | Host ABI | 2.3 (test 2.2, production 2.1) |
 | Debug protocol | `stc-debug/1`, plus the additive `stc-debug/1.1` revision |
 

@@ -194,7 +194,7 @@ fn validate_function(
     function: &Value,
     manifest_functions: &BTreeSet<String>,
     checkpoint_count: u64,
-) -> usize {
+) -> (usize, usize) {
     let got = function["function"].as_str().expect("function got id");
     assert!(
         got.starts_with("0x") && got.len() == 34,
@@ -224,6 +224,52 @@ fn validate_function(
         (16..=64 * 1024 * 1024).contains(&frame_size),
         "frame_size {frame_size}"
     );
+    let line_ranges = function["line_ranges"]
+        .as_array()
+        .expect("line_ranges array");
+    let mut previous_offset = 0u64;
+    let mut has_offset = false;
+    for line in line_ranges {
+        let offset = line["offset"].as_u64().expect("line offset");
+        assert!(
+            !has_offset || offset > previous_offset,
+            "line ranges are sorted and unique in {symbol}: {previous_offset} then {offset}"
+        );
+        has_offset = true;
+        previous_offset = offset;
+        assert!(
+            offset < high_pc,
+            "line offset {offset} is inside the {high_pc}-byte code range of {symbol}"
+        );
+        let file = line["file"].as_str().expect("line file");
+        assert!(!file.is_empty(), "a line file is required");
+        assert!(
+            !file.starts_with('/') && !file.starts_with('\\'),
+            "a line file is relative in {symbol}: {file:?}"
+        );
+        assert!(
+            !file.contains('\\'),
+            "a line file uses forward slashes in {symbol}: {file:?}"
+        );
+        assert!(
+            !(file.as_bytes().get(1) == Some(&b':') && file.as_bytes()[0].is_ascii_alphabetic()),
+            "a line file has no drive prefix in {symbol}: {file:?}"
+        );
+        assert!(
+            !file
+                .split(['/', '\\'])
+                .any(|part| part.is_empty() || part == "." || part == ".."),
+            "a line file has normalized components in {symbol}: {file:?}"
+        );
+        assert!(
+            line["line"].as_u64().is_some_and(|line| line >= 1),
+            "a line number is one-based in {symbol}"
+        );
+        assert!(
+            line["column"].as_u64().is_some(),
+            "a line column is a number in {symbol}"
+        );
+    }
     let locals = function["locals"].as_array().expect("locals array");
     let mut previous = String::new();
     for local in locals {
@@ -267,7 +313,7 @@ fn validate_function(
             "local {name} live range ends within the checkpoint table"
         );
     }
-    locals.len()
+    (line_ranges.len(), locals.len())
 }
 
 // ---------------------------------------------------------------------------
@@ -325,12 +371,21 @@ fn debug_build_writes_a_deterministic_paired_frame_sidecar() {
     let second = std::fs::read_to_string(&frames2).expect("read second frame sidecar");
     assert_eq!(contents, second, "frame sidecars are byte-deterministic");
     assert!(
-        !contents.contains('/') && !contents.contains('\\'),
-        "the sidecar contains no paths"
+        !contents.contains('\\'),
+        "the sidecar carries normalized forward-slash source paths"
+    );
+    let project_root = project.path("app").to_string_lossy().into_owned();
+    assert!(
+        !contents.contains(&project_root),
+        "the sidecar contains no host paths"
+    );
+    assert!(
+        contents.contains("src/main.st"),
+        "the sidecar carries the package-relative call-site source"
     );
 
     let frames: Value = serde_json::from_str(&contents).expect("frame sidecar JSON");
-    assert_eq!(frames["format"], 1);
+    assert_eq!(frames["format"], 2);
     assert_eq!(frames["build_id"], metadata1["build_id"]);
     assert_eq!(frames["pointer_width"], 8);
     assert_eq!(frames["target"], metadata1["target"]);
@@ -357,6 +412,7 @@ fn debug_build_writes_a_deterministic_paired_frame_sidecar() {
     assert!(!functions.is_empty(), "the sidecar describes functions");
     let mut previous = String::new();
     let mut local_total = 0usize;
+    let mut line_total = 0usize;
     for function in functions {
         let got = function["function"].as_str().expect("function got id");
         assert!(
@@ -364,11 +420,18 @@ fn debug_build_writes_a_deterministic_paired_frame_sidecar() {
             "functions are sorted and unique: {previous} then {got}"
         );
         previous = got.to_owned();
-        local_total += validate_function(function, &manifest_functions, checkpoints.len() as u64);
+        let (lines, locals) =
+            validate_function(function, &manifest_functions, checkpoints.len() as u64);
+        local_total += locals;
+        line_total += lines;
     }
     assert!(
         local_total > 0,
         "at least one function carries described locals"
+    );
+    assert!(
+        line_total > 0,
+        "at least one function carries a call-site line map"
     );
 }
 

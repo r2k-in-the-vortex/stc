@@ -1056,8 +1056,8 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 // the manifest code ranges with a null `function` (and
                 // `optimized_out: true`); they are not part of the ST program
                 // and must not appear in the call stack. Do not filter on
-                // `source`: resolved ST caller frames legitimately have no
-                // source location (F-11).
+                // `source`: a resolved ST frame whose build-time line map is
+                // unavailable still has an honest null source.
                 let Some(function) = jget(entry, "function").and_then(Json::as_str) else {
                     continue;
                 };

@@ -30,7 +30,7 @@ v1 layouts, and M4.5 simply leaves later record kinds empty.
 | Host API | 2.3 implemented; 2.2 adds test service 12, 2.3 adds debug service 13 | `STC_HOST_ABI_MAJOR=2`, `STC_HOST_ABI_MINOR=3` |
 | GOT manifest | 2 | `MANIFEST_FORMAT = 2`; digest domain `stc:manifest:v2` |
 | Metadata-sidecar debug object | 1 | debug object format 1 (D-177) |
-| Stopped-frame sidecar | 1 | `<name>.stc-frames.json` format-1 JSON (D-181) |
+| Stopped-frame sidecar | 2 | `<name>.stc-frames.json` format-2 JSON (D-181, D-229) |
 | Online-change plan | 1 | `STC_PLAN_V1` |
 | Build ID derivation | 1 | `STC_BUILD_V1` |
 
@@ -1818,12 +1818,14 @@ and array-of-aggregate shape resolution; see [Debug and Monitoring](Debug-and-Mo
 
 M6.5 phases 5–10 (2026-10-28) complete the debug surface without a further format change. The
 debug session protocol, typed access, write/force queue, audit, breakpoints/stepping, the
-stopped-frame sidecar (`<name>.stc-frames.json`, format 1, D-181), the split-object `view` key
-(D-182), and the `stc debug` CLI are layered on service ID 13 and the metadata-sidecar debug
+stopped-frame sidecar (`<name>.stc-frames.json`, format 1 at M6.5 and format 2 from WL-1.1
+F-11, D-181/D-229), the split-object `view` key (D-182), and the `stc debug` CLI are layered on
+service ID 13 and the metadata-sidecar debug
 object. Phase 9 added the Windows/Linux `debug` CI job, the twelve-target/115-test suite, and
 the informational overhead measurement; phase 10 completed the documentation and M7 handover
 (D-183). The §1 inventory records the resulting state: manifest format 2, host ABI 2.3, and
-format-1 descriptor, module, state, metadata-sidecar, debug-object, and frame-sidecar formats.
+format-1 descriptor, module, state, metadata-sidecar, and debug-object formats, with the
+stopped-frame sidecar later raised to format 2 (D-229).
 
 ## 13. Related documents
 

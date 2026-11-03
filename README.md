@@ -160,7 +160,8 @@ GOT/manifest, metadata, production modules, and test results are unchanged. The 
 **Release-candidate limitations.** Windows ships object-level CodeView and produces no PDB or
 DLL-level CodeView claim; stack unwinding and typed locals use the stopped-frame table on x86-64
 (Windows MSVC and Linux GNU) and AArch64 (Linux GNU), with frame-less functions reported as
-optimized-out and caller frames reported honestly. The supported native hosts are Windows
+optimized-out, caller frames carrying their build-time call-site source and line at any depth,
+and an unavailable source location reported honestly rather than fabricated. The supported native hosts are Windows
 x86-64 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU; macOS, Windows ARM64, 32-bit, big-endian
 hosts, CPU-affinity pinning, and remote debug are not supported. Format-1 manifests require the
 documented cold download rather than migration; debug and release

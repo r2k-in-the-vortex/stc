@@ -1530,8 +1530,20 @@ fn capture_frames(
     });
 
     for (ret, caller_fp) in callers {
+        // The walk records the return address, which points just after the
+        // call. The call instruction is the last byte before it, so map
+        // `ret - 1` to select the call site's line-table row.
         let address = ret.wrapping_sub(1);
         let range = tables.function_at(address);
+        let source = range.and_then(|range| {
+            let offset = address.checked_sub(range.start)?;
+            let line = tables.frame_function(range.function)?.source_at(offset)?;
+            Some(SourcePosition {
+                file: line.file.clone(),
+                line: line.line,
+                column: line.column,
+            })
+        });
         let (function, symbol, locals) = match range {
             Some(range) => (
                 Some(range.function),
@@ -1553,7 +1565,7 @@ fn capture_frames(
         frames.push(CapturedFrame {
             function,
             symbol,
-            source: None,
+            source,
             optimized_out: range.is_none(),
             locals: function.map_or_else(BTreeMap::new, |_| locals),
         });

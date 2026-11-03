@@ -227,7 +227,8 @@ and debug-information errors. Online-change diagnostics use their own
 describe the pre-M6.5 state and the rules M6.5 followed, not current gaps. The GOT manifest was
 raised to format 2 by M6.5 phase 4 (D-180); descriptor, module, state, and metadata-sidecar
 formats remain 1, the metadata sidecar gains only the optional `debug` object, M6.5 adds the
-format-1 stopped-frame sidecar, and the host ABI appends service 13 at minor 2.3.
+format-1 stopped-frame sidecar (raised to format 2 later by WL-1.1 F-11, D-229), and the host ABI
+appends service 13 at minor 2.3.
 
 M4.5 and M6 do not implement the debugger. They fix the host/module substrate and leave the debug
 surface to M6.5. This section records the boundary so M6.5 can build on it without changing
@@ -1136,36 +1137,49 @@ snapshot is bound to `stop_id`; continue/step invalidates it.
 - Frames unavailable in the unwind are reported as `optimized_out:true` with
   `STC-W-DEBUG-002`; locals unavailable in a frame are reported per value. `SUPER`/interface
   dispatch reports the dynamic function identity from the manifest.
+- A resolved caller frame reports its own call-site source from the stopped-frame line map. The
+  runtime maps `return_address - 1` (the byte of the call instruction) into the caller's
+  function-relative line ranges. The top frame keeps the checkpoint's source, which continues to
+  identify the executed statement. A caller whose line row is unavailable (no line map, a
+  format-1 sidecar, optimized-out code, or a return address outside every range) reports
+  `source:null`; no location is fabricated. CodeView extraction preserves the backend's
+  statement column; DWARF line dumps carry no column, so it is 0 and clients treat it as
+  unspecified.
 - The stack and register context are captured on the cycle thread at the checkpoint; frame and
   local reads use the snapshot, never a raw stack address exposed to the client.
 
 ### 16.9 Stopped-frame sidecar
 
 A hook-emitting debug build emits `<name>.stc-frames.json` alongside the module, manifest,
-metadata, and debug object. It is format-1 JSON, deterministic, paired by `build_id`, optional at
+metadata, and debug object. It is format-2 JSON, deterministic, paired by `build_id`, optional at
 load, and excluded from build-ID, manifest, descriptor, module, state, metadata-sidecar, and
-host-ABI identity. The front end does not know LLVM's final frame offsets, so the table is
+host-ABI identity. The front end does not know LLVM's final instruction offsets, so the table is
 extracted at build time from the module's emitted DWARF/CodeView (or an equivalent deterministic
 backend-derived source); the runtime never parses DWARF/CodeView. A build whose debug information
 cannot be extracted emits no frame table, and stack/frame reads are then unavailable rather than
 guessed.
 
-`stc-debug/1.1` does not change this sidecar format. The `frame.locals` operation reads the same
+`stc-debug/1.1` adds no field to this sidecar. The `frame.locals` operation reads the same
 captured `StopFrame` snapshot produced from the table and exposes only name, canonical type, and
-captured live/available metadata; it adds no sidecar field, value, or address.
+captured live/available metadata; it adds no sidecar field, value, or address. The format-2 line
+map is a sidecar change (D-229), independent of the protocol version.
 
-Format 1:
+Format 2:
 
 ```json
 {
   "build_id": "0x0123456789abcdef0123456789abcdef",
-  "format": 1,
+  "format": 2,
   "functions": [
     {
       "cfa": "fp+16",
       "frame_size": 48,
       "function": "0x11111111111111111111111111111111",
-      "high_pc": 0,
+      "high_pc": 64,
+      "line_ranges": [
+        {"column": 0, "file": "src/main.st", "line": 12, "offset": 0},
+        {"column": 18, "file": "src/main.st", "line": 14, "offset": 32}
+      ],
       "locals": [
         {
           "live": {"first": 3, "last": 9},
@@ -1186,16 +1200,30 @@ Format 1:
 }
 ```
 
-- `functions` is sorted by manifest function `GotId` bytes; locals are sorted by normalized name.
+- `functions` is sorted by manifest function `GotId` bytes; locals are sorted by normalized name;
+  line ranges are sorted by strictly increasing function-relative `offset`.
   `function` is the manifest function `GotId`, `symbol`/`low_pc`/`high_pc` identify the code
   range, and `frame_size`/`saved_fp`/`return_address`/`cfa` describe the frame layout.
+- `line_ranges` maps a function-relative code offset to the source position in effect from that
+  offset until the next entry, using the backend line table. `file` is a package-relative,
+  forward-slash source path (no absolute, drive-qualified, parent-escaping, empty, or
+  control-character paths); `line` is one-based; `column` is the backend statement column when
+  carried (CodeView) and 0 when it is not (DWARF line dumps). The producer drops rows outside the
+  function code range, rows without a positive line, and rows with an unsafe path, and
+  deduplicates equal offsets deterministically. An empty array means the backend line table was
+  unavailable: the function still participates in caller identity, but its callers report
+  `source:null`.
 - Locals and parameters carry the normalized identifier, canonical type key, size, a simple
   `fp`/`cfa`-relative location, and the live checkpoint/span range. Only simple static locations
   are defined in v1; a value without one is reported unavailable, not reconstructed.
-- The table has at most 1,000,000 locals and is at most 64 MiB; records are validated for
-  identity, ordering, bounds, and location form. A missing or invalid table makes
-  `stack.list`/`frame.read` unavailable with `STC-E-DEBUG-017`; breakpoints and stepping depend
-  on the checkpoint table, not this sidecar.
+- The table has at most 1,000,000 locals, 1,000,000 line mappings, and 64 MiB; records are
+  validated for identity, ordering, bounds, path form, and location form. A missing or invalid
+  table makes `stack.list`/`frame.read` unavailable with `STC-E-DEBUG-017`; breakpoints and
+  stepping depend on the checkpoint table, not this sidecar.
+- A runtime that supports only format 1 rejects a format-2 table and reports stack/frame reads
+  as unavailable with `STC-E-DEBUG-017`; it never reinterprets the line map. A current runtime
+  accepts both formats: a format-1 table keeps caller identity and locals but reports caller
+  `source:null`, preserving the pre-F-11 behavior.
 - Debug builds force frame pointers (`frame-pointer="all"`) and disable tail calls in generated
   code so the saved-frame-pointer chain is reliable; release builds are unchanged.
 - At `debug_check` the cycle thread captures the frame, stack, and instruction pointers, walks
@@ -1204,6 +1232,16 @@ Format 1:
   protocol thread reads only those snapshots. Values or frames the table cannot describe are
   `available:false`/`optimized_out:true` with `STC-W-DEBUG-002`; no raw address is returned to a
   client.
+- The line map comes from the same backend line table as the frame data. CodeView
+  `FunctionLineTable` entries are already function-relative and carry statement columns, so the
+  extractor copies them after path normalization. DWARF is read with
+  `readelf --debug-dump=decodedline --wide`; each decoded address is attributed to the enclosing
+  subprogram's `DW_AT_low_pc`/`DW_AT_high_pc` range and stored as `address - low_pc`. DWARF line
+  dumps carry no column, so extracted DWARF rows use column 0. The runtime resolves a caller by
+  mapping `return_address - 1` — the call instruction, since the return address points just
+  after the call — into the caller's function-relative line ranges and selecting the last row
+  whose offset is not greater than that offset. Neither tool's output nor any host path is
+  exposed; only the normalized line map enters the sidecar.
 - The format-1 frame rule covers x86-64 Windows and Linux and AArch64 Linux. On AArch64 the
   service-13 entry point captures `x29` (frame pointer), `sp`, and `x30` (return address) and
   passes them in place of the x86-64 `rbp`/`rsp`/stack return address; the build-time extractor
