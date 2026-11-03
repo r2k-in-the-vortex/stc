@@ -121,6 +121,31 @@ Function calls, real/date/time values, and source-syntax folding are out of the
 modeled subset and are recorded as such. The model does not claim agreement with
 `consteval.rs`; that differential certificate is milestone P2-M6.
 
+### 3.7 Rust differential certificate
+
+`crates/stc-codegen/tests/exact_differential.rs` compares the production Rust
+paths with `crates/stc-codegen/src/exact.rs` on the shared scalar subset:
+
+- `constant_arithmetic_matches_the_exact_reference` folds `+`, `-`, `*`, `/`,
+  `MOD`, unary `-`, bitwise `AND`/`OR`/`XOR`/`NOT`, and the six comparisons on
+  every integer/bit-string type and boundary values, requiring the folded value
+  or constant failure to match `exact.rs`.
+- `constant_conversions_match_the_exact_reference` folds every ordered
+  conversion pair accepted by the front end (178 of the 256
+  `CONV_TYPES` pairs, `842` boundary cases) and requires the value, `CHAR`
+  payload, or range failure to match `exact::convert`.
+- `runtime_conversions_emit_the_exact_model_shape` generates a runtime
+  conversion for each conversion class and checks the IR: widening is
+  `sext`/`zext`, narrowing is a range check plus `trunc`, equal widths are a
+  trap-free reinterpretation, and `BOOL` targets test against zero.
+
+The existing `constant_folding_agrees_with_exact_vectors` test continues to
+check the generated vector corpus. Shifts, rotates, `ABS`, and the selection
+functions have no constant-folding syntax in `consteval.rs`, so they remain
+model-plus-vector evidence, not differential evidence. These tests are V0
+implementation agreement; they do not replace a refinement proof, and the three
+production paths remain duplicated pending an owner decision.
+
 ## 4. Bridge plan
 
 - Regenerate the filtered exact model from the pinned host with the Phase 1
@@ -214,7 +239,7 @@ Until acceptance, this file stays in the repository. No deletion and no
 | Constant-evaluation model | Done: executable evaluator, declarative relation, soundness, type preservation over literals/constants/unary/binary/cast/std; user-function calls, real/date/time, and source folding remain out of the modeled subset |
 | Exact bridge package and generated model | Done: `lean/aeneas` package, pinned manifest, checked-in 409-line model with provenance header, host build `1806` jobs |
 | External-axiom models and refinement propositions | Done: four mathematical models and guard lemmas, 24 stated obligations, 2 proved (`compare_refines`, `sel_refines`), 22 open, no V1 claim |
-| Rust differential certificate | Planned |
+| Rust differential certificate | Done: `crates/stc-codegen/tests/exact_differential.rs` checks arithmetic/bitwise/comparison folding and all front-end-accepted conversion pairs against `exact.rs`; the existing vector tests cover the generated corpus; production unification deferred to owner |
 | Registry/docs/CI updates | Planned |
 | Phase 2 report | Planned |
 | Fast CI on final WL-3 HEAD | Planned |
