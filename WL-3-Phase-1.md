@@ -165,7 +165,7 @@ toolchain (after spike evidence), and Phase 1 report acceptance/retirement (afte
 | M1 — Exact bridge spike | Run Aeneas/Charon on `crates/stc-codegen/src/exact.rs` (or the feasible subset). Measure translation coverage, generated Lean readability, proof obligations, and gaps versus `Stc.Exact`. | Complete 2026-11-02: filtered pure-kernel `Exact.lean` typechecks under Aeneas/Mathlib; four external axioms remain for proof modeling; evidence in §11. |
 | M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Complete 2026-11-02: Aeneas cannot translate the module as-is (loops/string/lifetime errors); fallback or refactor required; evidence in §11. |
 | M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Complete 2026-11-02: wire encoder/decoder translated (`StcGot.lean`, 54 transparent functions); external-definition and Aeneas/Mathlib proof costs remain; evidence in §11. |
-| M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | In progress 2026-11-02: bridge decisions recorded; Aeneas/Mathlib environment built (1796 jobs) and filtered exact model typechecks; module layout/proof policy pending; no claim change. |
+| M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | Complete 2026-11-03: per-target decisions, module layout, generated/hand-written boundary, pins and source hashes, external-axiom trust policy, and registry evidence plan recorded in §12; no claim change. |
 | M5 — IR boundary and D-V6 subset | Freeze and document the full emitted-fragment boundary; implement only the bridge/D-V6 slice; write D-V6's first end-to-end subset; leave the full Lean `IRFrag` extension to Phase 5; update coverage tables. | Boundary document, updated coverage, program-plan/report text. |
 | M6 — CI and registry | Extend the registry for bridge/toolchain records; add no-`sorry`, axiom, vector-regeneration, and oracle checks; add Aeneas regeneration drift checks if the bridge is adopted; document CI budget. | CI changes and a green run; registry entries. |
 | M7 — Report and retirement | Write `specification/Verification/Reports/Phase1-Report.md`; move durable decisions to the program plan/TCB/claim doc/registry; delete stale working notes and retire this file. | Durable report; Phase 1 review package; working file deleted. |
@@ -242,8 +242,9 @@ untracked credentials.
 
 | Gate | Status |
 | --- | --- |
-| Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; Aeneas/Mathlib proof environment build approved 2026-11-02; CI adoption remains open until spike evidence review. |
+| Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; Aeneas/Mathlib proof environment build approved 2026-11-02; exact pins and source hashes recorded 2026-11-03 in `lean/bridge-toolchain.toml`; CI adoption remains open until spike evidence review (M6). |
 | Bridge choice per target class | Resolved 2026-11-02: exact = filtered Aeneas kernel; keys = proved checker/contract; codec = proved Lean checker. Any change requires a new owner review. |
+| Bridge architecture and proof-engineering policy | Recorded 2026-11-03 in §12; no new owner decision required; no claim change. |
 | Full emitted-IR fragment boundary / versioned format | Boundary freeze approved 2026-11-02; full Lean extension is Phase 5; any versioned-format change still requires approval. |
 | D-V6 first end-to-end subset | Approved 2026-11-02 as the program-plan recommendation. |
 | Claim level increase or refinement/translation-validation claim | Closed for Phase 1: no new claims; V0 evidence only, Phase 0 S remains the only reviewed claim. |
@@ -323,7 +324,189 @@ On Phase 1 sign-off:
 - Spike conclusion: the wire codec path is translatable by Aeneas, but the artifact-codec expert
   matrix prefers a proved Lean checker; the generated model is evidence for the fallback path.
 
-## 12. Status board
+## 12. M4 bridge architecture and proof-engineering record (2026-11-03)
+
+### 12.1 Decisions
+
+| ID | Decision |
+| --- | --- |
+| M4-D1 | Generated models live in a separate, non-default Lake package `lean/aeneas/`, not under `lean/Stc/`. The default `lake build` at `lean/` never resolves or builds Mathlib/Aeneas. |
+| M4-D2 | The filtered exact model is `lean/aeneas/StcGenerated/Exact/Model.lean`; the hand-written `Stc.Exact` model is unchanged and remains the reference. |
+| M4-D3 | Generated and hand-written code are separated by directory and module: `StcGenerated/` is generated-only and never edited; hand-written bridge code is in `lean/Stc/Bridge/` and `lean/aeneas/Bridge/`. |
+| M4-D4 | The four external axioms are modeled in `Stc.Bridge.Exact.Externals`; each is an equation against the model, named in the TCB and the registry, never an unstated assumption. No V1 claim until they are discharged. |
+| M4-D5 | Keys bridge is a proved Lean contract/checker in `Stc.Bridge.Keys`; Aeneas is not used for the string/iterator-heavy module. |
+| M4-D6 | Wire codec bridge is a proved Lean checker in `Stc.Bridge.Wire`; the successful Aeneas translation is fallback evidence only. |
+| M4-D7 | Pins and source hashes are recorded in `lean/bridge-toolchain.toml`; regeneration is manual/reviewed on the pinned Ubuntu host and never runs in fast CI. |
+| M4-D8 | Registry evidence is defined here but added in M6. No Phase 0 registry record or claim changes in M4. |
+| M4-D9 | No claim above V0 is made in Phase 1; the Phase 0 S-level semantics remains the only reviewed claim. |
+
+### 12.2 Module layout
+
+```text
+lean/
+  Stc/                              # default Lake package; core Lean only
+    Exact/                          # existing Stc.Exact reference model (unchanged)
+    Bridge/
+      Exact/
+        Encode.lean                 # generated value/result encoding to Stc.Exact
+        Externals.lean              # models for the four external Rust operations
+      Keys/
+        Contract.lean               # declarative key grammar and normalization contract
+        Checker.lean                # executable checker and soundness interface
+      Wire/
+        Contract.lean               # declarative wire format and decoder relation
+        Checker.lean                # executable decoder/validator and soundness interface
+  aeneas/                           # separate Lake package; Mathlib/Aeneas allowed
+    lakefile.lean
+    lake-manifest.json              # resolved Aeneas/Mathlib revisions (M6)
+    lean-toolchain                  # same v4.35.0 pin
+    StcGenerated/
+      Exact/Model.lean              # filtered Aeneas output; generated, do not edit
+      Exact/Externals.lean          # Aeneas split-file externals; generated, do not edit
+      Wire/Model.lean               # fallback evidence; generated, do not edit
+    Bridge/
+      Exact/Refinement.lean         # hand-written V1 obligation; imports both sides
+      Exact/Audit.lean              # axiom inventory for the bridge
+  bridge-toolchain.toml             # durable pins and source hashes
+```
+
+The default package is exactly the `stc` Lake package at `lean/`. It must not gain a Mathlib or
+Aeneas dependency: the existing `lake build`, `lake exe vectors`, `lake exe stc-sem-tests`, and the
+registry audit stay fast. `lean/aeneas/` is a separate package with its own manifest; it depends on
+the parent package for `Stc.Exact` and on the pinned Aeneas Lean backend plus Mathlib. Only
+`lean/aeneas/Bridge/Exact/Refinement.lean` and `Audit.lean` may import generated modules.
+
+### 12.3 Exact bridge: generated model, `Stc.Exact`, and the four external axioms
+
+The filtered Aeneas model contains the pure kernel: `checked`, `add`, `sub`, `mul`, `neg`, `div`,
+`modulo`, `abs`, the bitwise/shift/rotate functions, `compare`, and `sel`. The bridge is additive:
+no `Stc.Exact` definition or theorem statement changes, so `semantics_version` stays `1.0`.
+`Stc.Bridge.Exact.Encode` defines the map from the generated representations (`IntType` with `u32`
+width and a signedness flag, `Result i128 Trap`, integer values) to `Stc.Exact.IntType`,
+`Stc.Exact.Trap`, and `Stc.Exact.Res`. The refinement obligation is stated on decoded results, per operation, for
+example `exact_add_refines`, `exact_div_refines`, `exact_convert_refines`, and `exact_sel_refines`:
+the decoded generated result equals the corresponding `Stc.Exact` operation, including the trap
+value. The filtered functions are pure and loop-free, so no harness loop model or fuel bound is
+expected; if regeneration introduces one, the theorem must state the fuel obligation explicitly
+and may not present it as total correctness.
+
+The filtered model leaves four operations external. They are modeled as follows; the exact
+statements are fixed when the model is checked in and are audited by `#print axioms`.
+
+| External op | Rust use and domain | Hand-written model | Trust treatment |
+| --- | --- | --- | --- |
+| `I64::from(u8)` | `IntType.count`; total widening conversion | Natural embedding of the `u8` value into `Int` | Discharge by replacing the generated external with this definition (Aeneas split-file), or carry as a named TCB hypothesis |
+| `I64::rem_euclid` | `IntType.count` (used by `shl`, `shr`, `rol`, `ror`); divisor is always positive, so the Rust zero-divisor and `MIN % -1` panics are unreachable | Euclidean remainder `a.emod b` under `0 < b`, result in `[0, b)` | Discharge with a domain lemma from the kernel control flow, or carry as a named TCB hypothesis |
+| `I128::checked_neg` | `neg`; `Option<i128>` semantics | `none` exactly at `i128::MIN`, otherwise `some (-a)` | Discharge by definition replacement, or carry as a named TCB hypothesis |
+| `I128::abs` | `abs`; called only after the signed `MIN` guard, so the Rust panic case is unreachable | `if a < 0 then -a else a` on the guarded domain | Discharge with the guard lemma, or carry as a named TCB hypothesis |
+
+The generated axioms are not accepted into a claim as-is. Each is restated as an equation against
+the hand-written model; a proof may leave it as an explicit hypothesis, but the hypothesis is then
+listed in the TCB and in the registry `tcb` field. While any equation is undisclosed, a fuel
+obligation is unstated, or the generated model has not passed the axiom audit, the exact bridge
+stays V0 and the allowed claim remains "model-verified; implementation tested against the model".
+
+### 12.4 Keys and wire checker interfaces
+
+The keys checker is the primary bridge for GOT key normalization; it is hand-written Lean and does
+not model Rust borrowing, allocations, or iterators. `Stc.Bridge.Keys.Contract` fixes:
+
+- `IdentityKind` with the nine identity tags and their canonical key forms;
+- `Key`/`NormalizedKey`, the key grammar predicate, and the normalization relation;
+- `normalize : String → Except KeyError NormalizedKey` and
+  `validate : IdentityKind → String → Except KeyError Unit`;
+- interface theorems `normalize_sound` (every accepted output satisfies the grammar and is
+  canonical), `normalize_idempotent`, and `validate_sound`, plus an artifact-boundary
+  `check_artifact_sound` for Phase 3.
+
+The wire checker is the primary bridge for the codec; the Aeneas `StcGot.lean` translation is
+fallback evidence. `Stc.Bridge.Wire.Contract` fixes:
+
+- a byte-buffer state with an explicit position, and little-endian decoders for `u8`, `u16`,
+  `u32`, `u64`, `i64`, `i128`, `bool`, `tag`, `id128`, `digest32`, and length-prefixed strings;
+- `count` with the untrusted-length bound and `finish` with the no-trailing-bytes rule;
+- interface theorems `decode_sound` (a successful decode advances exactly its width and returns
+  the specified value), `decode_encode` (round-trip on valid values), `count_bounded`, and
+  `finish_sound`.
+
+Neither checker is implemented in Phase 1. The interfaces fix the placement and theorem names so
+Phase 3 can implement them without changing the architecture. A checker proof becomes V2 evidence
+only when it runs on the artifacts the compiler ships or on every module emitted in CI; fixture-only
+runs stay V0/V1.
+
+### 12.5 Generated pins, source hashes, and the regeneration boundary
+
+`lean/bridge-toolchain.toml` records Lean `leanprover/lean4:v4.35.0`, Rust `1.99.1`, Mathlib
+`v4.35.0` (proof-only), Aeneas `nightly-2026.11.02-ab34bd2`, Charon `0.1.304` at `7b462d9`, and
+the OCaml/opam/GMP install baseline. It also records the three bridge source hashes:
+
+| Target | Source | SHA-256 |
+| --- | --- | --- |
+| Exact | `crates/stc-codegen/src/exact.rs` | `85f3fbfc5263c918f80fc52b46322510de6645bef66c3fc078c7ba4ee826cba4` |
+| Keys | `crates/stc-got/src/keys.rs` | `af80f2d87d4c9f9d6f59310210d5020daccbeb7ef0b02af03d91bf2aa9ad34bc` |
+| Wire | `crates/stc-got/src/wire.rs` | `ae840ab12704434b162013fafc85facc2883275dcaefccd2951fd2d09b7810fd` |
+
+Every generated file carries a header naming the Aeneas/Charon versions and the source path and
+SHA-256. Regeneration boundary:
+
+1. Run only on the pinned Ubuntu host with the pinned toolchain and the pinned Aeneas/Charon
+   binaries; never in the fast CI job and never on the Windows editing host.
+2. Charon runs with `--preset=aeneas` and explicit roots for the filtered kernel; Aeneas uses the
+   Lean backend. The whole-file exact output (unsupported helper bodies and `REGISTRY` as `sorry`)
+   is not accepted as evidence.
+3. Typecheck the generated model in the `lean/aeneas` package, run the axiom audit, and review the
+   generated diff. Generated files are never hand-edited to make them compile.
+4. Commit the generated model and the pin/hash record in the same reviewed change. A source change
+   without regeneration or an owner-approved pin update fails the M6 drift check.
+
+### 12.6 Proof-engineering policy
+
+- **Pins.** Lean/Rust are pinned in `lean/lean-toolchain` and `rust-toolchain.toml`; the bridge
+  pins and source hashes are in `lean/bridge-toolchain.toml`; the resolved Aeneas/Mathlib
+  revisions are in `lean/aeneas/lake-manifest.json` (M6). A pin change requires owner review and a
+  new bridge spike.
+- **Mathlib is proof-only.** It is confined to `lean/aeneas/`; it never enters the default `Stc`
+  library, executable models, vector generator, registry audit, or proved checkers.
+- **Generated files are not edited.** `StcGenerated/` is generated-only; hand-written proofs live
+  under `Bridge/`. Regeneration is a reviewed diff, not an edit.
+- **No `sorry`/`admit`.** The existing CI grep stays; M6 extends it to the hand-written bridge
+  modules and to any generated model used as evidence. A generated `sorry` body is filtered out or
+  recorded as opaque; it is never imported into a claim.
+- **Axiom audit.** Every top-level theorem cited by a claim is audited with `#print axioms`; the
+  only permitted standard axioms are `propext`, `Classical.choice`, and `Quot.sound`. The four
+  external bridge axioms are named in the TCB and registry `tcb` field. `native_decide` is not
+  used in a trusted theorem.
+- **Registry.** M6 extends the registry, not M4. The planned Phase 1 records are V0 evidence with
+  status `tested` (spikes) or `planned` (checker interfaces); none is `proved` and none claims
+  refinement. The Phase 0 registry count and freeze record stay unchanged in M4.
+- **CI budget.** The fast `lean` job builds only `lean/`; it must not install Mathlib or Aeneas.
+  The generated-model build and regeneration belong to a nightly/manual `aeneas` job. The spike
+  measured the Aeneas/Mathlib environment at 1796 build jobs; M6 records the budget and timeout.
+- **Claims.** No claim above V0 in Phase 1. The exact bridge stays "model-verified; implementation
+  tested against the model" until the refinement theorem and its external-axiom equations are
+  discharged and registered.
+
+### 12.7 Registry evidence plan (executed in M6)
+
+M6 adds `P1` to the registry phase vocabulary and a hand-written `Verification.Bridge.Evidence`
+module that carries the evidence values (tool versions, source hashes, translation counts). It
+also extends module resolution to `lean/aeneas/` for generated-model records. The planned entries
+are:
+
+| ID | Kind | Level | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| P1-E01 | evidence | V0 | tested | Filtered exact model typechecks under the pinned Aeneas/Mathlib environment (`rc=0`). |
+| P1-E02 | evidence | V0 | tested | The four external axioms are enumerated and their statements reviewed; none is discharged. |
+| P1-E03 | evidence | V0 | tested | Exact/keys/wire source SHA-256 values match the spike inputs. |
+| P1-E04 | evidence | V0 | tested | Keys Aeneas translation fails (`rc=2`; loops, string, and lifetime errors); the checker/contract is the chosen fallback. |
+| P1-E05 | evidence | V0 | tested | Wire Aeneas translation succeeds (54 transparent, 65 opaque functions) and the generated file typechecks in the proof environment (`rc=0`); proof-obligation cost remains unmeasured; fallback evidence only. |
+| P1-E06 | evidence | V0 | tested | `lean/bridge-toolchain.toml` matches the environment used for the spikes. |
+| P1-E07 | evidence | V0 | planned | Keys and wire checker contracts/interfaces are defined; implementation and proofs are Phase 3. |
+
+When M6 adds these records it also rewords the Phase 0 report's "45 records" statement as a
+P0.7-freeze count, so the live registry total stays accurate. No V1/V2 record is added in Phase 1.
+
+## 13. Status board
 
 | Item | State |
 | --- | --- |
@@ -331,7 +514,7 @@ On Phase 1 sign-off:
 | M1 exact bridge spike | Complete — filtered pure-kernel Lean typechecks; four external axioms remain for proof modeling |
 | M2 keys bridge spike | Complete — Charon produced LLBC; Aeneas failed on loops/string/lifetime support; fallback/refactor required |
 | M3 codec bridge spike | Complete — wire codec translated to Lean; external definitions and Aeneas/Mathlib proof cost remain |
-| M4 bridge decision and architecture | In progress — decisions recorded; Aeneas/Mathlib environment built; filtered exact model typechecks; module layout/proof policy pending |
+| M4 bridge decision and architecture | Complete 2026-11-03 — decisions, module layout, pins/hashes, external-axiom policy, and registry evidence plan recorded in §12; no claim change |
 | M5 IR boundary and D-V6 subset | Not started |
 | M6 CI and registry | Not started |
 | M7 report and retirement | Not started |
