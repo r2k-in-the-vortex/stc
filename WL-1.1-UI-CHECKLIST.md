@@ -11,8 +11,8 @@ Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **
 unsupported or intentionally out of scope.
 
 Summary 2026-11-03: 40/40 checklist entries evaluated — 40 pass (100%); the F-1.1 required
-item also passes; F-11 is open as a required item after the owner brought it back into scope.
-The required/documented/deferred close-out triage is in
+item also passes; F-11 and F-14 are open as required items after the owner brought them back
+into scope. The required/documented/deferred close-out triage is in
 [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 
 ## 0. Prerequisites
@@ -430,7 +430,7 @@ Completed findings are feature history, not open follow-ups. The close-out triag
 
 ### Required for WL-1.1
 
-All required implementation items except F-11 are complete (plan §12.1).
+All required implementation items except F-11 and F-14 are complete (plan §12.1).
 
 - [x] **F-1.1 — Default-theme ST token-color overlay.** Pass 2026-11-03. F-1 ships `stc Dark`/
       `stc Light`, so the intended palette required selecting a contributed theme. The extension
@@ -452,6 +452,16 @@ All required implementation items except F-11 are complete (plan §12.1).
       resolution of the return address. Acceptance: the caller frame shows the call-site file
       and line (for the sample, `src/main.st:39`) at any depth; unavailable mappings stay
       honestly absent; frame indices, scopes, and evaluate behavior are unchanged.
+
+- [ ] **F-14 — Writes while stopped must apply immediately.** Required for WL-1.1 (owner
+      decision 2026-11-03; plan §12.1). Today `setVariable` displays the new value, but the host
+      applies the write only at the next cycle boundary, so stepping through the current cycle
+      reads the stored value again and the temporary revert looks like a lost write. Updated
+      semantics: while the program is running, writes remain queued until the next boundary
+      (current behavior is expected); while the session is stopped at a breakpoint, step
+      landing, or pause, `var.write`/DAP `setVariable` must update the variable immediately, and
+      subsequent reads in the same stop (variables, evaluate, stepping within the cycle) must
+      observe the new value. Validation, permissions, and diagnostics are unchanged.
 
 ### Deferred follow-ups
 
@@ -512,16 +522,6 @@ not a WL-1.1 code change.
       needs a frame-to-instance mapping when several instances exist) or documenting the split
       in the IDE spec/sample README. Acceptance: a stop in a program/FB body shows its fields
       in a discoverable place without switching scopes blindly.
-
-- [ ] **F-14 — `setVariable` shows the queued value before the program applies it.** With writes
-      enabled, editing `INCREMENT` displays the new value immediately, but the host applies the
-      write at the next cycle boundary (Debug and Monitoring §15.3). Stepping through the current
-      cycle reads the stored value again, and the new value appears after the boundary. This is
-      the documented queue behavior, but the UI has no pending indicator, so the temporary revert
-      looks like a lost write. Consider reading back the stored value until the queue applies
-      (with a pending marker) or flushing queued writes when a stopped cycle resumes. Acceptance:
-      the displayed value and the program's value agree, or the UI clearly marks the value as
-      queued.
 
 ## Results log
 
@@ -593,6 +593,7 @@ not a WL-1.1 code change.
 | --- | --- | --- |
 | F-1.1 | Pass | Manual 2026-11-03: Dark Modern, Dark 2026, and Light 2026 render all nine categories with the overlay palette; non-ST languages unchanged; documented opt-out; commits `a126800`/`c2af647`, CI runs `41681462972`/`41692812156` green; plan §12.1 |
 | F-11 | Required; pending | Caller frames must show the call-site file/line at any depth (sample `src/main.st:39`); owner brought it into scope 2026-11-03; plan §12.1 |
+| F-14 | Required; pending | Writes while stopped apply immediately and are visible to reads/stepping; writes while running stay queued; owner brought it into scope 2026-11-03; plan §12.1 |
 
 ### Deferred follow-ups
 
@@ -610,4 +611,3 @@ not a WL-1.1 code change.
 | Item | Result | Notes |
 | --- | --- | --- |
 | F-13 | Pending | Locals is empty for program/FB bodies; fields live in Globals |
-| F-14 | Pending | `setVariable` shows the queued value before the program applies it at the next boundary |
