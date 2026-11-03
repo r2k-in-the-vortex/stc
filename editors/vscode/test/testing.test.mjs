@@ -332,6 +332,58 @@ test('debug configuration uses the F-17 per-test launch field', () => {
   });
 });
 
+test('result summaries give every test readable output', () => {
+  const base = { output: '', trap: undefined };
+  assert.equal(
+    model.formatResultSummary({
+      ...base,
+      name: 'AddWorks',
+      status: 'pass',
+      durationMs: 3,
+      failures: [],
+    }),
+    'test AddWorks ... ok (3 ms)',
+  );
+  assert.equal(
+    model.formatResultSummary({
+      ...base,
+      name: 'FailsOnPurpose',
+      status: 'fail',
+      durationMs: 7,
+      failures: [
+        { message: 'intentional failure', file: 'tests/smoke.st', line: 13, column: 3 },
+        { message: 'plain failure' },
+      ],
+    }),
+    [
+      'test FailsOnPurpose ... FAILED (7 ms)',
+      '  intentional failure (tests/smoke.st:13:3)',
+      '  plain failure',
+    ].join('\n'),
+  );
+  assert.equal(
+    model.formatResultSummary({
+      ...base,
+      name: 'TrapWorks',
+      status: 'trap',
+      durationMs: 1,
+      failures: [],
+      trap: 'STC_TRAP_DIV_ZERO',
+    }),
+    'test TrapWorks ... TRAPPED: STC_TRAP_DIV_ZERO (1 ms)',
+  );
+  assert.equal(
+    model.formatResultSummary({
+      ...base,
+      name: 'TimeoutWorks',
+      status: 'timeout',
+      durationMs: 1000,
+      failures: [],
+    }),
+    'test TimeoutWorks ... TIMEOUT (1000 ms)',
+  );
+});
+
 test('result paths resolve against the project and respect absolute paths', () => {
   const project = resolve(root, 'samples', 'workspace');
   assert.equal(

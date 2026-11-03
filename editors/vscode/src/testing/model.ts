@@ -326,6 +326,44 @@ export function resolveResultPath(root: string, file: string): string {
   return isAbsolute(file) ? file : resolve(root, file);
 }
 
+/**
+ * Formats the readable per-test summary attached to the test's output.
+ *
+ * The JSON stream carries status and failures but no human line, and a silent
+ * test otherwise leaves the Test Results output empty. This mirrors the CLI's
+ * `test Name ... ok/FAILED` line and includes the failure locations.
+ */
+export function formatResultSummary(result: TestResult): string {
+  const duration = result.durationMs > 0 ? ` (${result.durationMs} ms)` : '';
+  switch (result.status) {
+    case 'pass':
+      return `test ${result.name} ... ok${duration}`;
+    case 'timeout':
+      return `test ${result.name} ... TIMEOUT${duration}`;
+    case 'trap':
+      return `test ${result.name} ... TRAPPED${
+        result.trap === undefined ? '' : `: ${result.trap}`
+      }${duration}`;
+    case 'fail':
+      return [
+        `test ${result.name} ... FAILED${duration}`,
+        ...result.failures.map(
+          (failure) => `  ${failure.message}${failureLocation(failure)}`,
+        ),
+      ].join('\n');
+  }
+}
+
+/** Formats one failure's file/line/column suffix, when it has a location. */
+function failureLocation(failure: TestFailure): string {
+  if (failure.file === undefined) {
+    return '';
+  }
+  const line = failure.line === undefined ? '' : `:${failure.line}`;
+  const column = failure.column === undefined ? '' : `:${failure.column}`;
+  return ` (${failure.file}${line}${column})`;
+}
+
 /** Formats one diagnostic for a run output channel or an error message. */
 export function formatDiagnostic(diagnostic: TestDiagnostic): string {
   const location =

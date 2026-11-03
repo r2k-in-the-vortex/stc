@@ -16,6 +16,7 @@ import { spawnStc, type StcProcess } from '../stcProcess';
 import { stcExecutable } from '../tasks';
 import {
   formatDiagnostic,
+  formatResultSummary,
   groupTestsByFile,
   parseDiagnostics,
   parseTestList,
@@ -574,6 +575,7 @@ export class StcTestingSession implements vscode.Disposable {
         appendRunOutput(run, `[${result.name}]\n${result.output}\n`, reference.item);
       }
       first = false;
+      appendRunOutput(run, `${formatResultSummary(result)}\n`, reference.item);
       switch (result.status) {
         case 'pass':
           run.passed(reference.item, result.durationMs);
