@@ -32,9 +32,9 @@ Profile: `stc-2013-oop-utf8-v1`.
 | P2-M1 | Working plan | This file | Plan committed; program-plan status updated as batches land |
 | P2-M2 | Exact property lemmas | `Stc.Exact.{Int,Bits,Conv,Select,Strings}` extensions | `lake build`; no `sorry`; named lemmas cover arithmetic, shifts/rotates, conversions, selection, strings |
 | P2-M3 | Constant-evaluation model | `Stc.ConstEval` model and relation | Executable `constEval`, declarative `ConstEvalRel`, `constEval_sound`, conditional `constEval_type_preserving`, or precisely recorded partial results |
-| P2-M4 | Exact bridge package | `lean/aeneas/` Lake package, filtered generated model, header | Generated core model checked in byte-identically to the pinned spike; typechecks on the pinned host; four external axioms enumerated |
-| P2-M5 | Bridge obligations | `Stc.Bridge.Exact.{Encode,Externals}` and `aeneas/Bridge/Exact/{Refinement,Audit}` | External models and equations stated; per-operation refinement propositions named; no V1 claim |
-| P2-M6 | Rust kernel certificate | Differential tests across `exact.rs`/`consteval.rs`/codegen conversion | Tests pass for the shared scalar subset; production unification deferred to owner |
+| P2-M4 | Exact bridge package | `lean/aeneas/` Lake package, widened generated model, header | Generated wide model checked in byte-identically to the accepted wide spike; typechecks on the pinned host; twelve axiom declarations inventoried |
+| P2-M5 | Bridge obligations | `Stc.Bridge.Exact.{Encode,Externals,StrModel,WideExternals}` and `aeneas/Bridge/Exact/{Refinement,WideRefinement,Soundness,WideSoundness,Kernel,Audit}` | External models and string equations stated; all 32 refinement propositions proved and bundled; no V1 claim |
+| P2-M6 | Rust kernel certificate | Unified `exact.rs` kernel, differential tests, constant certificates | Production paths delegate to `exact.rs`; tests pass for the shared scalar subset; folded certificates verify before IR emission |
 | P2-M7 | Registry and CI | P2 records, checker phase policy, sorry-grep coverage | Registry audit passes; fast CI stays free of Aeneas/Mathlib |
 | P2-M8 | Durable report and fast CI | `Phase2-Report.md`, plan/status reconciliation | Report records evidence, gaps, and TCB; final WL-3 HEAD passes fast CI |
 
@@ -139,48 +139,57 @@ paths with `crates/stc-codegen/src/exact.rs` on the shared scalar subset:
   `sext`/`zext`, narrowing is a range check plus `trunc`, equal widths are a
   trap-free reinterpretation, and `BOOL` targets test against zero.
 
+`constant_folding_records_verified_certificates` and
+`corrupted_constant_certificate_is_rejected` cover the constant-certificate
+path: the folder records each arithmetic, bitwise, and conversion value, the
+verifier recomputes it through `exact.rs`, and a corrupted certificate fails
+generation before IR emission.
+
 The existing `constant_folding_agrees_with_exact_vectors` test continues to
 check the generated vector corpus. Shifts, rotates, `ABS`, and the selection
 functions have no constant-folding syntax in `consteval.rs`, so they remain
 model-plus-vector evidence, not differential evidence. These tests are V0
-implementation agreement; they do not replace a refinement proof, and the three
-production paths remain duplicated pending an owner decision.
+implementation agreement and build-time enforcement; they do not replace a
+refinement proof. The production paths delegate to the shared kernel after
+`ed8097e`.
 
 ## 4. Bridge plan
 
-- Regenerate the filtered exact model from the pinned host with the Phase 1
-  root set (`add`, `sub`, `mul`, `neg`, `div`, `modulo`, `abs`, bitwise,
-  shifts/rotates, `compare`, `sel`). The output is byte-identical to the
-  accepted Phase 1 spike (`397` lines, four axioms).
+- Regenerate the widened exact model from the pinned host with the owner-approved
+  root set: `add`, `sub`, `mul`, `neg`, `div`, `modulo`, `abs`, bitwise,
+  shifts/rotates, `compare`, `sel`, `convert`, `min_list`, `max_list`, `limit`,
+  `mux`, `len`, `len_max`, and `len_code_unit`. The accepted body is
+  `744` lines with twelve axiom declarations and no generated proof hole.
 - Check it in at `lean/aeneas/StcGenerated/Exact/Model.lean` with a provenance
   header naming the source path, source SHA-256, Aeneas, Charon, and the
   generation command. The header is added by a reviewed regeneration step; the
-  generated body is never hand-edited. Header plus body is `409` lines; the
-  body is byte-identical to `.tmp/Exact.lean` (SHA-256
-  `95a0ba5c896b7c768921577d79384e0a583cb6a7c550673115fbb01c7552553d`).
+  generated body is never hand-edited. Header plus body is `764` lines; the
+  body SHA-256 is
+  `fa6628af1041f27db8fae1d5cca9ab318d14b515d72465addc950f73d271c0bf`,
+  byte-identical to the accepted wide spike.
 - The non-default package is `lean/aeneas/`: `lakefile.lean` requires Aeneas
   from git at `ab34bd28458a08c150b7cbf1873e59af74588138`, subdirectory
   `backends/lean`, and the default `stc` package from `..`. The generated
   manifest pins Mathlib `v4.35.0` and all transitive dependencies. The package
-  built successfully on the pinned Ubuntu host (`lake build`, `1806` jobs).
+  builds successfully on the pinned Ubuntu host.
 - `Stc.Bridge.Exact.Encode` decodes generated layouts, traps, checked results,
   and unsigned bit patterns to `Stc.Exact` without importing Aeneas.
 - `Stc.Bridge.Exact.Externals` models the four external operations:
   `I64::from(u8)`, `I64::rem_euclid`, `I128::checked_neg`, `I128::abs`,
   including the nonzero-divisor and `MIN` guard facts.
-- `lean/aeneas/Bridge/Exact/Refinement.lean` states the per-operation
-  refinement propositions over the generated surface. `compareRefines` and
-  `selRefines` are proved (`compare_refines`, `sel_refines`); the remaining
-  `22` obligations are stated `Prop`s with no proof and no V1 claim.
-  `Audit.lean` inventories the four generated axioms, all stated obligations,
-  and the two proved facts.
-- Bridge scope limitation: the Phase 1 filtered model does not contain
-  `convert`, `min_list`, `max_list`, `limit`, `mux`, `len`, `len_max`, or
-  `len_code_unit`. A wider regeneration was tested: it adds string/iterator
-  external axioms and emits a generated `sorry` for the `mux` closure, so it is
-  not accepted. Those functions keep model + theorem + vector evidence; their
-  refinement is remaining Phase 2 work and an owner bridge-scope decision if a
-  wider model is required.
+- `Bridge/Exact/Refinement.lean` and `Bridge/Exact/WideRefinement.lean` state
+  the `32` per-operation refinement propositions over the generated surface.
+  All `32` are proved (`Bridge.Exact.Soundness`, `Bridge.Exact.Refinement`,
+  `Bridge.Exact.WideSoundness`) and composed by
+  `Bridge.Exact.Kernel.exact_kernel_refines`. `Audit.lean` inventories the
+  twelve generated axiom declarations, the five string equations, the opaque
+  `strScalars` function, all `32` obligations, and their proof status.
+- TCB boundary: nine of the twelve generated axioms are operation axioms (four
+  external operations modeled, five string operations covered by TCB
+  equations); the remaining three are the two `Display::fmt` axioms and the
+  opaque `EncodeUtf16` type, outside the obligation closure. The bridge records
+  stay `tested`, not proved, because the package is not in fast CI and every
+  TCB declaration remains an assumption; no V1 claim is made.
 
 ## 5. Owner gates
 
@@ -255,13 +264,14 @@ Until acceptance, this file stays in the repository. No deletion and no
 | Working plan | Created |
 | Exact integer property lemmas | Done: success/overflow characterizations, MIN/-1 division and remainder, range extrema |
 | Bitwise/shift/rotate lemmas | Done: count-zero/width identities, `ror_width`, bitwise value identities; full rotate inverse remains open |
-| Conversion lemmas | Partial: BOOL outcomes, narrow/widen fit; equal-width reinterpret fit remains open |
+| Conversion lemmas | Done: BOOL outcomes, narrow/widen fit, equal-width reinterpretation fit, and a single `convert_ok_fits` over the generated cast-plan order |
 | Selection lemmas | Done: membership, clamp cases, in-range MUX, range properties |
 | String-length lemmas | Done: supplementary scalars, byte/UTF-16 bounds, append, per-kind length bound |
 | Constant-evaluation model | Done: executable evaluator, declarative relation, soundness, type preservation over literals/constants/unary/binary/cast/std; user-function calls, real/date/time, and source folding remain out of the modeled subset |
-| Exact bridge package and generated model | Done: `lean/aeneas` package, pinned manifest, checked-in 409-line model with provenance header, host build `1806` jobs |
-| External-axiom models and refinement propositions | Done: four mathematical models and guard lemmas, 24 stated obligations, 2 proved (`compare_refines`, `sel_refines`), 22 open, no V1 claim |
-| Rust differential certificate | Done: `crates/stc-codegen/tests/exact_differential.rs` checks arithmetic/bitwise/comparison folding and all front-end-accepted conversion pairs against `exact.rs`; the existing vector tests cover the generated corpus; production unification deferred to owner |
-| Registry/docs/CI updates | Done: `P2` phase vocabulary and bridge-only evidence policy, 30 proved V0 model records, 5 tested V0 evidence records, docs required-document entry, Phase 2 sorry gating including `aeneas/StcGenerated` |
+| Exact bridge package and generated model | Done: `lean/aeneas` package, pinned manifest, widened 764-line model (744-line body, SHA-256 `fa6628af...`) with provenance header and twelve axiom declarations; host build of `Bridge.Exact.Audit` green |
+| External-axiom models and refinement propositions | Done: four mathematical models, five string TCB equations, twelve generated declarations inventoried, 32 stated obligations, 32 proved, 0 open, bundled as `exact_kernel_refines`; bridge records stay `tested`; no V1 claim |
+| Rust differential certificate | Done: `crates/stc-codegen/tests/exact_differential.rs` checks arithmetic/bitwise/comparison folding, all front-end-accepted conversion pairs, emitted-IR conversion shapes, and the constant-certificate round trip; the three production paths delegate to `exact.rs`; the vector tests cover the generated corpus |
+| Constant-certificate path | Done: `consteval.rs` records certificates for arithmetic, bitwise, and conversion folds; `certificate.rs` recomputes them through `exact.rs` and rejects a mismatch before IR emission; `consteval_agrees_with_codegen` is realized by the single kernel plus the checker (no Lean HIR-to-IR lowering model) |
+| Registry/docs/CI updates | Done: `P2` phase vocabulary and bridge-only evidence policy, 32 proved V0 model records, 7 tested V0 evidence records, docs required-document entry, Phase 2 sorry gating including `aeneas/StcGenerated`; certificate tests run under `cargo test --workspace` |
 | Phase 2 report | Done: `specification/Verification/Reports/Phase2-Report.md`; program plan and `Semantics.md` §7.8 reconciled; not owner-accepted |
 | Fast CI on final WL-3 HEAD | Passed: [CI run 41667070276](https://github.com/r2k-in-the-vortex/stc/actions/runs/41667070276) on `4692629`, all jobs green. This status update is re-verified by the final CI run cited in the handoff. |

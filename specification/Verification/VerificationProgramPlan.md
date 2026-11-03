@@ -565,22 +565,36 @@ scope may grow.
 
 **Phase 2 status (WL-3, 2026-11-03).** Implemented and recorded, not owner-accepted:
 
-- exact property lemmas are proved in `Stc.Exact.{Int,Bits,Conv,Select,Strings}` at level V0;
+- exact property lemmas are proved in `Stc.Exact.{Int,Bits,Conv,Select,Strings}` at level V0,
+  including the equal-width conversion fit lemmas and the single `convert_ok_fits` statement
+  over the generated cast-plan order;
 - `Stc.ConstEval` defines the executable evaluator and declarative relation and proves
   `constEval_sound` and `constEval_type_preserving` for the modeled subset;
-- the non-default `lean/aeneas/` package checks in the filtered generated exact model and the
-  four external-axiom models; 24 refinement obligations are stated, 2 are proved, 22 remain open,
-  and the generated model excludes `convert`, the selection functions, and the string helpers;
-- `crates/stc-codegen/tests/exact_differential.rs` certifies agreement of the analyzer's folding
-  with `exact.rs` for the shared scalar subset, including 178 conversion pairs, while the three
-  production Rust paths remain duplicated;
-- the registry adds `P2` records: 30 proved V0 model theorems and five `tested` V0 evidence
+- the non-default `lean/aeneas/` package checks in the widened generated exact model over 30
+  roots including `convert`, `min_list`, `max_list`, `limit`, `mux`, `len`, `len_max`, and
+  `len_code_unit`; all 32 refinement obligations are proved, the model has no generated `sorry`,
+  and `Bridge.Exact.Kernel.exact_kernel_refines` composes the proofs;
+- the generated model's twelve axiom declarations are inventoried: nine operation axioms (four
+  external operations modeled and five string operations covered by TCB equations) and three
+  declarations outside the obligation closure; `strScalars` and the five string equations remain
+  TCB assumptions;
+- the three Rust production paths are unified on `crates/stc-codegen/src/exact.rs`;
+  `crates/stc-codegen/tests/exact_differential.rs` certifies agreement for the shared scalar
+  subset, including 178 conversion pairs, emitted-IR shapes, and the new constant-certificate
+  round trip;
+- the constant-certificate path is implemented: `consteval.rs` records operand/result
+  certificates for arithmetic, bitwise, and conversion folds, and
+  `crates/stc-codegen/src/certificate.rs` recomputes them through the shared kernel and rejects
+  a mismatch before IR emission;
+- the registry adds `P2` records: 32 proved V0 model theorems and seven `tested` V0 evidence
   records; the bridge records are evidence only and no record claims V1.
 
-The phase exit criterion is not met: the four external axioms and 22 refinement obligations are
-open, the constant-certificate path and `consteval_agrees_with_codegen` are not implemented, and
-the owner decisions on V1, production unification, and bridge scope remain outstanding. The
-temporary `WL-3-Phase-2.md` stays in the repository until owner acceptance.
+The four owner decisions of 2026-11-03 are implemented. The phase exit criterion still requires
+owner review of the completed proofs and the TCB boundary, and a decision on V1. The literal
+`consteval_agrees_with_codegen` statement is realized by the single-kernel construction plus the
+build-time certificate checker; a Lean theorem over the compiler would require a Lean HIR-to-IR
+lowering model, which is new scope. The temporary `WL-3-Phase-2.md` stays in the repository until
+owner acceptance.
 
 ### Phase 3 — Persistent identity, layout, plan, and artifact codecs
 

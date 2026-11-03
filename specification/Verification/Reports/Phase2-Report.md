@@ -2,17 +2,20 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 
-Status: Phase 2 implementation is substantially complete, but the phase is **not
-owner-accepted and does not meet its V1 exit criterion**. This report records the
-work completed in WL-3, the evidence produced, the parts that remain model-level
-or V0, and the owner decisions that block a V1 claim. It is durable; the
-temporary execution plan remains `WL-3-Phase-2.md` at the repository root until
-owner acceptance.
+Status: Phase 2 implementation is complete against the four owner decisions
+recorded in `WL-3-Phase-2.md` §5.1, but the phase is **not owner-accepted and
+does not claim V1**. This report records the work completed in WL-3, the
+evidence produced, the parts that remain model-level or V0, and the review still
+required for a V1 claim. It is durable; the temporary execution plan remains
+`WL-3-Phase-2.md` at the repository root until owner acceptance.
 
 Starting commit: `c82e521` (Phase 1 owner-accepted 2026-11-03).
-Current Phase 2 commits: `7520ae1` (exact property lemmas), `5785011`
-(constant-evaluation model and proofs), `3d12a46` (bridge package and generated
-model), `6a91ba4` (Rust differential certificate).
+Phase 2 commits through this report: `7520ae1` (exact property lemmas),
+`5785011` (constant-evaluation model and proofs), `3d12a46` (bridge package and
+generated model), `6a91ba4` (Rust differential certificate), `c790a40` and
+`3ad3419` (owner decisions and fast-CI evidence), `ed8097e` (single kernel and
+widened model), and `a75a9cb` (24 exact-model refinement proofs). The final
+certificate, registry, and report commit is recorded in the task handoff.
 
 ## 1. Scope and claim discipline
 
@@ -25,8 +28,9 @@ rules. The claim ladder in §3 of the program plan is unchanged:
 - the Phase 0 S-level semantics remains the only owner-reviewed semantic claim;
 - Phase 2 model theorems are proved facts about the Lean model, recorded at level
   V0 (model-verified; implementation tested against the model);
-- no Phase 2 record claims V1, no external Aeneas axiom is discharged, and the
-  Rust production paths remain duplicated;
+- no Phase 2 record claims V1 and no external Aeneas axiom is discharged; the
+  Rust production paths now delegate to one shared kernel, but the refinement
+  statements and their axiom equations remain subject to owner review;
 - no `sorry` or `admit` exists in the default package or in the checked-in
   bridge modules, and the default `lean/` build imports neither Aeneas nor
   Mathlib.
@@ -38,10 +42,10 @@ rules. The claim ladder in §3 of the program plan is unchanged:
 | P2-M1 | Working plan | Done | `WL-3-Phase-2.md` and this report |
 | P2-M2 | Exact property lemmas | Done | `Stc.Exact.{Int,Bits,Conv,Select,Strings}` extensions; `lake build` clean |
 | P2-M3 | Constant-evaluation model | Done for the modeled subset | `Stc/ConstEval.lean`; `constEval_sound`, `constEval_type_preserving`; limitations in §4 |
-| P2-M4 | Exact bridge package | Done | `lean/aeneas/` package, pinned manifest, checked-in generated model; host build `1806` jobs |
-| P2-M5 | Bridge obligations | Partial, honestly recorded | 24 obligations, 2 proved, 22 open; four external axioms open; no V1 |
-| P2-M6 | Rust kernel certificate | Done for the shared subset | `crates/stc-codegen/tests/exact_differential.rs`; existing vector agreement test |
-| P2-M7 | Registry and CI | Done | P2 records, checker policy, sorry-grep coverage |
+| P2-M4 | Exact bridge package | Done | `lean/aeneas/` package, pinned manifest, widened checked-in generated model; host build of `Bridge.Exact.Audit` green |
+| P2-M5 | Bridge obligations | Done | 32 obligations, 32 proved, 0 open; twelve generated axiom declarations and the bridge string equations recorded in the TCB; no V1 |
+| P2-M6 | Rust kernel certificate | Done | one shared `exact.rs` kernel; constant certificates verified before IR emission; differential tests and vector tests |
+| P2-M7 | Registry and CI | Done | P2 records, checker policy, sorry-grep coverage; certificate tests run in `cargo test --workspace` |
 | P2-M8 | Durable report and fast CI | Report done; fast CI result recorded by the final WL-3 run | This report and the CI run cited in the final handoff |
 
 ## 3. Exact property lemmas
@@ -58,11 +62,12 @@ implementation uses `i128` intermediates while the Lean model is unbounded.
 and count-width identities, `ror_width` and `rol_width`, and bitwise value
 identities. A complete `rol`/`ror` inverse is not claimed.
 
-`lean/Stc/Exact/Conv.lean` adds `BOOL` outcomes, narrow and widen fit lemmas, and
-a round-trip theorem for widening conversions. A single `convert_ok_fits`
-covering equal-width signedness reinterpretation is still not proved; the
-individual equal-width cases are proved and the general fit statement remains a
-recorded gap.
+`lean/Stc/Exact/Conv.lean` adds `BOOL` outcomes, narrow and widen fit lemmas, a
+round-trip theorem for widening conversions, `convert_equal_ok_fits` for
+equal-width identity and signedness reinterpretation, and the single
+`convert_ok_fits` statement over the generated cast-plan order (`BOOL`,
+widening, narrowing, equal width). The equal-width fit gap is closed; one-bit
+targets are required to be unsigned, matching the production layouts.
 
 `lean/Stc/Exact/Select.lean` adds membership and range properties for `SEL`,
 `MIN`/`MAX`, `LIMIT`, and in-range `MUX`; tie-breaking is represented by the
@@ -90,8 +95,9 @@ The modeled subset is literals, paths to constants, unary and binary operators,
 casts, and the exact standard functions. User-function calls, real and
 date/time values, string folding beyond literals, and source-syntax folding are
 outside the model. The model is not proved equal to `consteval.rs`; the
-differential certificate in §6 is V0 test evidence for the shared scalar
-subset.
+production folder delegates to the same `exact.rs` kernel used by code
+generation and records verifiable constant certificates, and the differential
+certificate in §6 is V0 test evidence for that shared scalar subset.
 
 ## 5. Exact bridge
 
@@ -101,34 +107,45 @@ from git at `ab34bd28458a08c150b7cbf1873e59af74588138`, subdirectory
 `lake-manifest.json` pins Mathlib `v4.35.0` and all transitive dependencies.
 Fast CI never builds this package.
 
-`lean/aeneas/StcGenerated/Exact/Model.lean` is the filtered generated model. It
-is `409` lines: a `12`-line provenance header naming the source path
+`lean/aeneas/StcGenerated/Exact/Model.lean` is the widened generated model. It
+is `764` lines: a `20`-line provenance header naming the source path
 `crates/stc-codegen/src/exact.rs`, source SHA-256
-`85f3fbfc5263c918f80fc52b46322510de6645bef66c3fc078c7ba4ee826cba4`,
+`5ecf5d604bb7d545927bc9626876f6fcedfead405623378c4800b3f65b377c44`,
 Aeneas `nightly-2026.11.02-ab34bd2`, Charon `0.1.304 (7b462d9)`, and the
-generation recipe, followed by the `397`-line generated body. The body SHA-256
-is `95a0ba5c896b7c768921577d79384e0a583cb6a7c550673115fbb01c7552553d`,
-byte-identical to the accepted Phase 1 spike. The generated body is never
-hand-edited.
+generation recipe, followed by the `744`-line generated body. The body SHA-256
+is `fa6628af1041f27db8fae1d5cca9ab318d14b515d72465addc950f73d271c0bf`,
+byte-identical to the accepted wide spike. The generated body is never
+hand-edited, and it contains no generated `sorry`. The generation roots are
+`add`, `sub`, `mul`, `neg`, `div`, `modulo`, `abs`, the bitwise/shift/rotate
+operations, `compare`, `sel`, `convert`, `min_list`, `max_list`, `limit`, `mux`,
+`len`, `len_max`, and `len_code_unit`.
+
+The generated model declares twelve axioms. Nine are operation axioms: the four
+external scalar operations `I64::from(u8)`, `I64::rem_euclid`,
+`I128::checked_neg`, and `I128::abs`, modeled in `Stc.Bridge.Exact.Externals`,
+and five string operations whose equations are stated in
+`Bridge/Exact/WideExternals.lean`. The remaining three declarations (two
+`Display::fmt` axioms and the opaque `EncodeUtf16` type) lie outside the proved
+obligation closure. The shared decoding function `strScalars` is an opaque TCB
+function declared in `Bridge/Exact/StrModel.lean`. `Bridge/Exact/Audit.lean`
+inventories every generated declaration, the five string equations, and all
+32 obligations.
 
 `Stc.Bridge.Exact.Encode` and `Stc.Bridge.Exact.Externals` are core Lean and do
-not import Aeneas. `Bridge/Exact/Refinement.lean` states the per-operation
-propositions over the generated surface; `compareRefines` and `selRefines` are
-proved (`compare_refines`, `sel_refines`). `Bridge/Exact/Audit.lean` inventories
-the four external axioms and all 24 obligations: 2 proved, 22 open.
+not import Aeneas. `Bridge/Exact/Refinement.lean` states the original
+per-operation propositions, `Bridge/Exact/WideRefinement.lean` states the eight
+widened ones, and all 32 have completed proofs in `Soundness.lean`,
+`Refinement.lean`, and `WideSoundness.lean`. `Bridge/Exact/Kernel.lean`
+composes them into `exact_kernel_refines`, re-exported by
+`Audit.kernelStatement_proved`. The bridge records stay `tested` because the
+package is not built in fast CI and every TCB declaration remains an
+assumption; the proof completion does not by itself create a V1 claim.
 
-The four external axioms remain open: `I64::from(u8)`, `I64::rem_euclid`,
-`I128::checked_neg`, and `I128::abs`. The mathematical models and their guard
-lemmas are stated in `Externals.lean`, but the generated equations are not
-discharged.
-
-Bridge scope limitation: the filtered model does not contain `convert`,
-`min_list`, `max_list`, `limit`, `mux`, `len`, `len_max`, or `len_code_unit`.
-A wider regeneration was tested on the pinned host; it adds string/iterator
-external axioms and emits a generated `sorry` for the `mux` closure, so it is
-not accepted. Those operations keep model, theorem, and vector evidence, but
-their refinement is remaining work and a wider model is an owner bridge-scope
-decision.
+The four external operations are modeled, not discharged. Their equations
+remain TCB assumptions recorded with the exact-side model; the guard lemmas
+describe the domain on which each model applies. Similarly, the five string
+equations and the UTF-8 byte-length invariant are TCB assumptions about the
+opaque generated operations and the shared string content model.
 
 ## 6. Rust differential certificate
 
@@ -147,6 +164,28 @@ the shared scalar subset:
   conversion class: widening is `sext`/`zext`, narrowing is a range check plus
   `trunc`, equal widths are a trap-free reinterpretation, and `BOOL` targets
   test against zero.
+- `constant_folding_records_verified_certificates` folds arithmetic, bitwise,
+  unary, and conversion constants, requires the recorded certificate classes,
+  verifies every certificate through the exact kernel, and generates the module.
+- `corrupted_constant_certificate_is_rejected` changes one recorded result and
+  requires generation to fail with the internal certificate diagnostic before
+  emitting IR.
+
+The production paths now share one kernel. `crates/stc-codegen/src/exact.rs` is
+the single source of the scalar rules: `consteval.rs` calls `exact::add`,
+`sub`, `mul`, `div`, `modulo`, `neg`, the bitwise helpers, and `exact::convert`;
+codegen dispatches integer conversions on `exact::cast_plan` and takes range
+bounds from `exact::IntType`. The certificate path closes the loop: the folder
+records a `ConstCertificate` (operation, layouts, operands, result) for every
+arithmetic, bitwise, and conversion value it produces, and
+`crates/stc-codegen/src/certificate.rs` recomputes each one through the same
+kernel before `generate` projects or emits any IR. A mismatch is an internal
+codegen error. The verifier is Rust, not a proved Lean checker, and the
+repository has no Lean model of HIR-to-IR lowering, so
+`consteval_agrees_with_codegen` is established by construction (one kernel used
+by both paths) plus this build-time checker, not by a named Lean theorem. The
+certificate module is deliberately outside `exact.rs` so the bridge source pin
+stays byte-identical.
 
 The existing `constant_folding_agrees_with_exact_vectors` test in
 `crates/stc-codegen/tests/lean_vectors.rs` continues to compare the analyzer's
@@ -155,9 +194,10 @@ against `exact.rs`. Shifts, rotates, `ABS`, and the selection functions have no
 constant-folding syntax in `consteval.rs`, so they remain model-plus-vector
 evidence rather than differential evidence.
 
-This is V0 agreement evidence, not a refinement proof, and it does not unify
-the three Rust paths. `exact.rs`, `consteval.rs`, and codegen
-`cast_value`/`int_convert` remain duplicated implementations.
+This is V0 agreement and build-time enforcement evidence, not a Lean refinement
+proof of the compiler. The 32 refinement proofs constrain the generated model
+of the shared kernel; they do not constrain the Rust verifier or the lowering
+pipeline.
 
 ## 7. Verification evidence
 
@@ -173,11 +213,13 @@ Local default-package checks on the final Phase 2 content:
 - sorry/admit grep over `Stc/Exact`, `Stc/ConstEval`, `Stc/Bridge`,
   `aeneas/Bridge`, and `aeneas/StcGenerated`;
 - `cargo fmt --check`, `cargo clippy`, and `cargo test` for the changed Rust
-  crates, including the new differential test.
+  crates, including the differential and certificate tests;
+- `cargo test --workspace` in fast CI, which runs `exact_differential`.
 
 Bridge package check on the pinned Ubuntu host: `lake build` in `lean/aeneas`
-completed `1806` jobs. This is manual/nightly evidence and is not part of fast
-CI.
+completed `1812` jobs, building the generated model, all bridge proof modules,
+and `Bridge.Exact.Audit`. This is manual/nightly evidence and is not part of
+fast CI.
 
 Fast CI on the final WL-3 HEAD is recorded in the final handoff for this task.
 
@@ -188,7 +230,18 @@ Fast CI on the final WL-3 HEAD is recorded in the final handoff for this task.
 - The Phase 0 definitions and the frozen `semantics_version` `1.0`.
 - The generated Aeneas model and its provenance pins; Aeneas, Charon, and
   Mathlib are trusted for the bridge package only.
-- The four external axioms remain assumptions; they are not discharged.
+- The generated model's twelve axiom declarations. Nine are operation axioms:
+  the four external scalar operations are modeled in `Externals` and remain
+  assumptions, and the five string operations are covered by the TCB equations
+  in `WideExternals` together with the UTF-8 byte-length invariant. The other
+  three (two `Display::fmt` axioms and the opaque `EncodeUtf16` type) are
+  outside the proved obligation closure.
+- `strScalars`, the shared opaque decoding function, and the four string
+  operation equations are TCB assumptions; they are not discharged.
+- The Rust certificate verifier (`crates/stc-codegen/src/certificate.rs`) is
+  trusted test/enforcement code, not a proved Lean checker. It recomputes
+  folded values through the shared kernel and rejects mismatches at build
+  time.
 - The Rust differential tests use the Rust standard library and the analyzer's
   own constant folder as the implementation side of the comparison.
 - Rust `i128` intermediates: the reference model and the production paths trap
@@ -196,36 +249,41 @@ Fast CI on the final WL-3 HEAD is recorded in the final handoff for this task.
   boundary tests cover the shared scalar widths, and the residual difference is
   recorded rather than assumed away.
 
-No theorem in Phase 2 constrains the Rust compiler. The Rust implementation
-remains V0/model-tested for these kernels.
+No theorem in Phase 2 constrains the Rust compiler. The 32 bridge proofs
+constrain the generated model of the shared kernel; the Rust implementation
+remains V0/model-tested, and the certificate checker is the build-time tie
+between the two.
 
 ## 9. Remaining work and owner decisions
 
-Remaining Phase 2 work before the phase can claim V1:
+The work items from the previous Phase 2 status are complete: the 32
+refinement obligations are proved, the widened model is accepted with no
+generated `sorry`, the equal-width conversion fit gap is closed, the Rust paths
+share one kernel, and the constant-certificate path is implemented and tested.
+What remains before a V1 claim is owner review, not open implementation work:
 
-1. Discharge or explicitly accept the four external Aeneas axioms.
-2. Prove the 22 open refinement obligations, including the generated helper
-   arithmetic and bitwise operations.
-3. Extend the generated model to `convert`, `min_list`, `max_list`, `limit`,
-   `mux`, and the string-length helpers, or record an owner-approved scope
-   exclusion; the tested wider regeneration is not acceptable because it emits
-   a generated `sorry`.
-4. Compose the per-operation obligations into a statement about the Rust
-   functions that run in the build, and add the constant-certificate path or
-   proved-equivalent kernel required by the program plan.
-5. Prove `consteval_agrees_with_codegen` for the shared scalar subset or replace
-   the three Rust paths with one verified kernel.
-6. Close the equal-width conversion fit gap if the planned `convert_ok_fits`
-   statement is required.
+1. Review the 32 refinement proofs and the bundled `exact_kernel_refines`
+   statement, and decide whether the completed proofs support a V1 record.
+2. Discharge or explicitly accept the external operation axioms and the string
+   TCB equations (`strScalars`, the five recorded equations, and the three
+   out-of-closure generated declarations). The audit records them; none is
+   discharged.
+3. Decide whether `consteval_agrees_with_codegen` must be a Lean theorem. A
+   non-vacuous statement over the compiler requires a Lean model of HIR-to-IR
+   lowering, which the repository does not have; the current realization is the
+   single shared kernel plus the Rust certificate checker. Building the
+   lowering model is new scope.
+4. Decide whether the non-default bridge package must run in fast CI. It is
+   currently manual/nightly evidence, consistent with the 2026-11-03 owner
+   decision that fast CI never installs or builds Aeneas/Mathlib.
 
 Owner decisions, in the order they block progress:
 
-- whether to record a V1 claim only after the obligations and axioms are
-  reviewed;
-- whether to unify or refactor the three production Rust paths, and in which
-  direction;
-- whether to widen the bridge scope and accept the additional external axioms
-  and regeneration recipe;
+- whether to record a V1 claim after reviewing the proofs and the TCB;
+- whether to accept the modeled external axioms and string equations as the
+  phase's trusted boundary, or require discharge;
+- whether to fund a Lean HIR-to-IR lowering model and a proved certificate
+  checker for the literal `consteval_agrees_with_codegen` statement;
 - whether any toolchain pin or accepted Phase 1 architecture decision changes.
 
 The implementing agent does not make any of these decisions. Until the owner
@@ -235,7 +293,7 @@ the working plan stays in the repository.
 ## 10. Retirement status
 
 This report carries the durable Phase 2 content: milestone status, theorem
-inventory, bridge scope limits, TCB, residual risks, and the owner gate list. The
+inventory, bridge scope and TCB, residual risks, and the owner gate list. The
 temporary `WL-3-Phase-2.md` is not deleted and this report does not claim owner
 acceptance. On acceptance, the working plan's operational rows can be removed
 after confirming that this report, `Semantics.md` §7, and

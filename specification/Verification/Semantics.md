@@ -524,6 +524,8 @@ results.
 | `Stc.Exact.IntType.convert_roundtrip` | `Stc.Exact.Conv` | proved | widening then narrowing round-trips the source value |
 | `Stc.Exact.IntType.convert_narrow_ok_fits` | `Stc.Exact.Conv` | proved | a successful narrowing result fits the target |
 | `Stc.Exact.IntType.convert_widen_ok_fits` | `Stc.Exact.Conv` | proved | a successful widening result fits the target |
+| `Stc.Exact.IntType.convert_equal_ok_fits` | `Stc.Exact.Conv` | proved | a successful equal-width conversion fits the target, including signedness reinterpretation |
+| `Stc.Exact.IntType.convert_ok_fits` | `Stc.Exact.Conv` | proved | one fit statement in the generated cast-plan order for `BOOL`, widening, narrowing, and equal-width conversions |
 | `Stc.Exact.sel_mem` | `Stc.Exact.Select` | proved | the selected value is one of the inputs; range companions |
 | `Stc.Exact.minList_le` | `Stc.Exact.Select` | proved | `MIN` is a lower bound; `MAX` is an upper bound |
 | `Stc.Exact.limit_within` | `Stc.Exact.Select` | proved | `LIMIT` is within the bounds; identity and below/above cases |
@@ -537,11 +539,26 @@ results.
 | `Stc.ConstEval.constEval_type_preserving` | `Stc.ConstEval` | proved | a successful result has the expression's declared type and is well formed |
 
 The bridge package adds V0 evidence records for the checked-in generated model,
-the four undischarged external axioms, and the refinement-obligation inventory.
-`compareRefines` and `selRefines` have completed proofs over the generated
-model, but the bridge records stay `tested` because 22 obligations and all four
-external axioms remain open and the package is not built in fast CI. No bridge
-record is marked proved and no V1 claim is made.
+its axiom inventory, and the refinement obligations. All 32 obligations over
+the widened generated model have completed proofs, including `convert`,
+`min_list`, `max_list`, `limit`, `mux`, and the string-length helpers, and
+`Bridge.Exact.Kernel` composes them into `exact_kernel_refines`. The bridge
+records nevertheless stay `tested`: the generated model carries twelve axiom
+declarations (nine operation axioms; the four external operations are modeled
+and the five string operations are covered by TCB equations, while two
+`Display::fmt` axioms and the opaque `EncodeUtf16` type lie outside the
+obligation closure), the shared decoding function `strScalars` is an opaque
+TCB function, and the package is not built in fast CI. No bridge record is
+marked proved and no V1 claim is made.
+
+The constant-folding path is tied to the same kernel: `consteval.rs` records
+the operands and result of every arithmetic, bitwise, and conversion fold in a
+`ConstCertificate`, and code generation recomputes each certificate through
+`stc_codegen::exact` and rejects the build before IR emission when a result
+disagrees. This is build-time evidence, not a refinement proof: the verifier
+is Rust, and the repository has no Lean model of HIR-to-IR lowering, so
+`consteval_agrees_with_codegen` is established by the single shared kernel and
+the certificate checker rather than by a named Lean theorem.
 
 ## 8. Trusted computing base and assumptions
 
