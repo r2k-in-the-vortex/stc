@@ -1,8 +1,8 @@
 //! Constant expression evaluation and initializer lowering.
 
 use stc_hir::{
-    BinOp, CharTy, ConstValue, DateTy, DefId, DefKind, ExprId, ExprKindHir, FieldId, LiteralHir,
-    RealTy, StringKind, TimeTy, Ty, TyId,
+    BinOp, CharTy, ConstCertOp, ConstCertificate, ConstValue, DateTy, DefId, DefKind, ExprId,
+    ExprKindHir, FieldId, LiteralHir, RealTy, StringKind, TimeTy, Ty, TyId,
 };
 use stc_lexer::{ElementaryType, Literal, NumericKind, Radix, Sign, TimeUnit};
 use stc_span::Span;
@@ -73,6 +73,31 @@ impl Analyzer<'_> {
             },
             None => None,
         }
+    }
+
+    /// Records one certificate for a value produced by constant folding.
+    ///
+    /// Code generation recomputes the operation through the same `exact`
+    /// kernel and rejects the build when a recorded result disagrees, so a
+    /// folded value that reaches the emitted IR is tied to its operands and
+    /// to the kernel.
+    fn record_certificate(
+        &mut self,
+        op: ConstCertOp,
+        source: (bool, u8),
+        target: (bool, u8),
+        left: i128,
+        right: i128,
+        result: i128,
+    ) {
+        self.hir.certificates.push(ConstCertificate {
+            op,
+            source,
+            target,
+            left,
+            right,
+            result,
+        });
     }
 
     fn eval_paren(
@@ -465,7 +490,17 @@ impl Analyzer<'_> {
                     };
                     let layout = IntType::new(signed, width);
                     match exact::neg(layout, value) {
-                        Ok(value) => Some((ty, ConstValue::Int(value))),
+                        Ok(result) => {
+                            self.record_certificate(
+                                ConstCertOp::Neg,
+                                (signed, width),
+                                (signed, width),
+                                value,
+                                0,
+                                result,
+                            );
+                            Some((ty, ConstValue::Int(result)))
+                        }
                         Err(_) => {
                             self.error(
                                 crate::codes::CONST_FAILURE,
@@ -502,8 +537,16 @@ impl Analyzer<'_> {
                         }
                     };
                     let layout = IntType::new(false, width);
-                    let value = exact::bit_not(layout, value as u128);
-                    Some((ty, ConstValue::Int(value as i128)))
+                    let result = exact::bit_not(layout, value as u128);
+                    self.record_certificate(
+                        ConstCertOp::BitNot,
+                        (false, width),
+                        (false, width),
+                        value,
+                        0,
+                        result as i128,
+                    );
+                    Some((ty, ConstValue::Int(result as i128)))
                 }
                 _ => {
                     self.error(
@@ -644,7 +687,25 @@ impl Analyzer<'_> {
                     _ => unreachable!(),
                 };
                 match result {
-                    Ok(value) => Some((ty, ConstValue::Int(value))),
+                    Ok(folded) => {
+                        let cert_op = match op {
+                            BinOp::Add => ConstCertOp::Add,
+                            BinOp::Sub => ConstCertOp::Sub,
+                            BinOp::Mul => ConstCertOp::Mul,
+                            BinOp::Div => ConstCertOp::Div,
+                            BinOp::Mod => ConstCertOp::Modulo,
+                            _ => unreachable!(),
+                        };
+                        self.record_certificate(
+                            cert_op,
+                            (signed, width),
+                            (signed, width),
+                            a,
+                            b,
+                            folded,
+                        );
+                        Some((ty, ConstValue::Int(folded)))
+                    }
                     Err(Trap::DivZero) => {
                         self.error(
                             crate::codes::CONST_FAILURE,
@@ -693,11 +754,28 @@ impl Analyzer<'_> {
                     }
                 };
                 let layout = IntType::new(false, width);
-                let value = match op {
-                    BinOp::And => exact::bit_and(layout, a as u128, b as u128),
-                    BinOp::Or => exact::bit_or(layout, a as u128, b as u128),
-                    _ => exact::bit_xor(layout, a as u128, b as u128),
+                let (cert_op, value) = match op {
+                    BinOp::And => (
+                        ConstCertOp::BitAnd,
+                        exact::bit_and(layout, a as u128, b as u128),
+                    ),
+                    BinOp::Or => (
+                        ConstCertOp::BitOr,
+                        exact::bit_or(layout, a as u128, b as u128),
+                    ),
+                    _ => (
+                        ConstCertOp::BitXor,
+                        exact::bit_xor(layout, a as u128, b as u128),
+                    ),
                 };
+                self.record_certificate(
+                    cert_op,
+                    (false, width),
+                    (false, width),
+                    a,
+                    b,
+                    value as i128,
+                );
                 Some((lhs_ty, ConstValue::Int(value as i128)))
             }
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
@@ -1045,7 +1123,17 @@ impl Analyzer<'_> {
         let source = IntType::new(source_signed, source_width);
         let target = IntType::new(target_signed, target_width);
         match exact::convert(source, target, value) {
-            Ok(value) => Some(value),
+            Ok(converted) => {
+                self.record_certificate(
+                    ConstCertOp::Convert,
+                    (source_signed, source_width),
+                    (target_signed, target_width),
+                    value,
+                    0,
+                    converted,
+                );
+                Some(converted)
+            }
             Err(_) => {
                 self.error(
                     crate::codes::CONST_FAILURE,

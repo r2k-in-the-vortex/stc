@@ -11,6 +11,7 @@
 
 pub mod abi;
 mod call;
+pub mod certificate;
 pub mod codes;
 mod config;
 mod debug;
@@ -439,6 +440,12 @@ pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<Cod
     }
     hir.check_invariants()
         .map_err(|message| vec![CodegenError::internal(message)])?;
+    crate::certificate::verify_certificates(&hir.certificates).map_err(|failures| {
+        failures
+            .into_iter()
+            .map(CodegenError::internal)
+            .collect::<Vec<_>>()
+    })?;
     let target = resolve_target(options.target);
     let mut module_options = ModuleOptions::new(
         target.clone(),

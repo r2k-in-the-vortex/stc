@@ -329,6 +329,104 @@ fn conversion_body(from: &str, to: &str) -> String {
     program_body(&output.module, "P").to_owned()
 }
 
+/// A source whose constant initializers exercise every certificate class the
+/// shared kernel covers.
+const CERTIFICATE_SOURCE: &str = "\
+VAR_GLOBAL CONSTANT
+  A : DINT := -5 + 7;
+  B : DINT := -DINT#5;
+  M : WORD := WORD#16#00F0 AND WORD#16#0F0F;
+  N : WORD := NOT WORD#16#00FF;
+  Q : DINT := DINT#7 MOD DINT#2;
+  C : DINT := SINT_TO_DINT(SINT#-5);
+END_VAR
+PROGRAM P
+VAR
+  x : DINT;
+END_VAR
+  x := 0;
+END_PROGRAM
+CONFIGURATION CFG
+RESOURCE Res ON Cpu
+  PROGRAM inst : P;
+END_RESOURCE
+END_CONFIGURATION
+";
+
+/// Folding records the operation, operands, and result of every value that
+/// uses the shared scalar kernel, and code generation re-checks them before
+/// emitting IR.
+#[test]
+fn constant_folding_records_verified_certificates() {
+    let hir = common::clean_hir(CERTIFICATE_SOURCE);
+    assert!(
+        !hir.certificates.is_empty(),
+        "no certificates recorded for the folded initializers"
+    );
+    for certificate in &hir.certificates {
+        assert!(
+            (1..=64).contains(&certificate.source.1),
+            "certificate has an invalid source width: {certificate:?}"
+        );
+        assert!(
+            (1..=64).contains(&certificate.target.1),
+            "certificate has an invalid target width: {certificate:?}"
+        );
+        if certificate.op != stc_hir::ConstCertOp::Convert {
+            assert_eq!(
+                certificate.source, certificate.target,
+                "non-conversion certificate changes layout: {certificate:?}"
+            );
+        }
+    }
+    let ops: Vec<_> = hir
+        .certificates
+        .iter()
+        .map(|certificate| certificate.op)
+        .collect();
+    for expected in [
+        stc_hir::ConstCertOp::Add,
+        stc_hir::ConstCertOp::Neg,
+        stc_hir::ConstCertOp::BitAnd,
+        stc_hir::ConstCertOp::BitNot,
+        stc_hir::ConstCertOp::Modulo,
+        stc_hir::ConstCertOp::Convert,
+    ] {
+        assert!(
+            ops.contains(&expected),
+            "no {expected:?} certificate was recorded: {ops:?}"
+        );
+    }
+    stc_codegen::certificate::verify_certificates(&hir.certificates)
+        .expect("folded certificates must reproduce through the exact kernel");
+    let sources = vec!["<test>".to_string()];
+    stc_codegen::generate(&hir, &common::options("test", Mode::Executable, &sources))
+        .expect("certified constants must generate");
+}
+
+/// A corrupted certificate is rejected before any IR is emitted.
+#[test]
+fn corrupted_constant_certificate_is_rejected() {
+    let mut hir = common::clean_hir(CERTIFICATE_SOURCE);
+    assert!(!hir.certificates.is_empty(), "no certificates recorded");
+    hir.certificates[0].result = hir.certificates[0].result.wrapping_add(1);
+    let sources = vec!["<test>".to_string()];
+    let errors = stc_codegen::generate(&hir, &common::options("test", Mode::Executable, &sources))
+        .expect_err("a corrupted certificate must fail generation");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code() == stc_codegen::codes::CODEGEN_INTERNAL),
+        "corruption did not surface as an internal codegen error: {errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message().contains("constant certificate")),
+        "corruption message does not name the certificate: {errors:?}"
+    );
+}
+
 /// Codegen emits widening as an extension, narrowing as a range check plus
 /// truncation, equal widths as a reinterpretation, and `BOOL` targets as a
 /// zero test, matching `exact::convert`.

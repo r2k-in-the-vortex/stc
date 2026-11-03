@@ -1397,6 +1397,64 @@ pub struct PackageInfo {
     pub root_namespace: String,
 }
 
+/// A scalar operation recorded by constant folding.
+///
+/// Every variant is implemented by `stc-codegen`'s shared `exact` kernel, the
+/// same module that the constant folder and the code generator call. The
+/// certificate variants deliberately exclude operations that have no kernel
+/// model (for example `**`, which uses `checked_pow` directly).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstCertOp {
+    /// Checked addition.
+    Add,
+    /// Checked subtraction.
+    Sub,
+    /// Checked multiplication.
+    Mul,
+    /// Checked division.
+    Div,
+    /// Checked remainder.
+    Modulo,
+    /// Checked negation.
+    Neg,
+    /// Bitwise AND on a bit string.
+    BitAnd,
+    /// Bitwise OR on a bit string.
+    BitOr,
+    /// Bitwise XOR on a bit string.
+    BitXor,
+    /// Bitwise NOT on a bit string.
+    BitNot,
+    /// Integer/bit-pattern conversion.
+    Convert,
+}
+
+/// One certificate for a value produced by constant folding.
+///
+/// The constant folder records the operation it performed, the layout(s), the
+/// operand values it used, and the folded result. Code generation recomputes
+/// the result from the operands through the shared `exact` kernel and rejects
+/// the build when the recomputation disagrees, so a folded value that reaches
+/// the emitted IR is tied to the kernel and to its recorded operands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConstCertificate {
+    /// The folded operation.
+    pub op: ConstCertOp,
+    /// The source layout: operand layout for arithmetic and bitwise
+    /// operations, source layout for [`ConstCertOp::Convert`].
+    pub source: (bool, u8),
+    /// The target layout. Equal to `source` except for
+    /// [`ConstCertOp::Convert`].
+    pub target: (bool, u8),
+    /// The first operand (the only operand for unary operations and
+    /// conversions).
+    pub left: i128,
+    /// The second operand; zero for unary operations and conversions.
+    pub right: i128,
+    /// The folded result.
+    pub result: i128,
+}
+
 /// The resolved HIR for one build.
 #[derive(Debug)]
 pub struct HirCrate {
@@ -1427,6 +1485,12 @@ pub struct HirCrate {
     /// Selected configuration, when exactly one exists and no manifest
     /// overrides it.
     pub entry_configuration: Option<DefId>,
+    /// Certificates for values produced by constant folding.
+    ///
+    /// They are recorded during semantic analysis and re-checked by code
+    /// generation before any IR is emitted. They carry no code-generation
+    /// semantics of their own.
+    pub certificates: Vec<ConstCertificate>,
 }
 
 impl HirCrate {
@@ -1465,6 +1529,7 @@ impl HirCrate {
             root_package,
             std_fns: Vec::new(),
             entry_configuration: None,
+            certificates: Vec::new(),
         }
     }
 
