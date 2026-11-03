@@ -490,176 +490,6 @@
             }
           ]
         },
-        "[Default Light Modern]": {
-          "textMateRules": [
-            {
-              "name": "ST comment",
-              "scope": [
-                "comment.line.double-slash.st",
-                "comment.line.documentation.st",
-                "comment.block.st"
-              ],
-              "settings": {
-                "foreground": "#5A6673",
-                "fontStyle": "italic"
-              }
-            },
-            {
-              "name": "ST control keyword",
-              "scope": [
-                "keyword.control.conditional.st",
-                "keyword.control.loop.st",
-                "keyword.control.flow.st"
-              ],
-              "settings": {
-                "foreground": "#AF00DB"
-              }
-            },
-            {
-              "name": "ST declaration keyword and modifier",
-              "scope": [
-                "keyword.declaration.st",
-                "storage.modifier.st"
-              ],
-              "settings": {
-                "foreground": "#0000FF"
-              }
-            },
-            {
-              "name": "ST function and declaration name",
-              "scope": [
-                "entity.name.function.st"
-              ],
-              "settings": {
-                "foreground": "#795E26"
-              }
-            },
-            {
-              "name": "ST type",
-              "scope": [
-                "entity.name.type.st",
-                "support.type.primitives.st",
-                "entity.name.namespace.st",
-                "entity.other.inherited-class.st",
-                "support.class.st"
-              ],
-              "settings": {
-                "foreground": "#267F99"
-              }
-            },
-            {
-              "name": "ST variable",
-              "scope": [
-                "variable.name.st",
-                "variable.other.enummember.st"
-              ],
-              "settings": {
-                "foreground": "#001080"
-              }
-            },
-            {
-              "name": "ST parameter",
-              "scope": [
-                "variable.parameter.st",
-                "variable.parameter.pragma.st"
-              ],
-              "settings": {
-                "foreground": "#005A9E"
-              }
-            },
-            {
-              "name": "ST member",
-              "scope": [
-                "variable.other.member.st"
-              ],
-              "settings": {
-                "foreground": "#001080"
-              }
-            },
-            {
-              "name": "ST direct variable",
-              "scope": [
-                "variable.other.constant.st"
-              ],
-              "settings": {
-                "foreground": "#C2185B"
-              }
-            },
-            {
-              "name": "ST language variable",
-              "scope": [
-                "variable.language.st"
-              ],
-              "settings": {
-                "foreground": "#0000FF"
-              }
-            },
-            {
-              "name": "ST string, escape, and character",
-              "scope": [
-                "string.quoted.double.st",
-                "string.quoted.single.st",
-                "constant.character.escape.st",
-                "constant.character.st"
-              ],
-              "settings": {
-                "foreground": "#A31515"
-              }
-            },
-            {
-              "name": "ST number",
-              "scope": [
-                "constant.numeric.integer.st",
-                "constant.numeric.real.st",
-                "constant.numeric.based.st",
-                "constant.numeric.typed.st",
-                "constant.numeric.duration.st",
-                "constant.numeric.date.st",
-                "constant.numeric.time.st",
-                "constant.numeric.datetime.st",
-                "constant.numeric.pragma.st"
-              ],
-              "settings": {
-                "foreground": "#098658"
-              }
-            },
-            {
-              "name": "ST language constant",
-              "scope": [
-                "constant.language.st"
-              ],
-              "settings": {
-                "foreground": "#0000FF"
-              }
-            },
-            {
-              "name": "ST operator and punctuation",
-              "scope": [
-                "keyword.operator.st",
-                "keyword.operator.type.st",
-                "punctuation.st",
-                "punctuation.definition.comment.begin.st",
-                "punctuation.definition.comment.end.st",
-                "punctuation.definition.string.begin.st",
-                "punctuation.definition.string.end.st"
-              ],
-              "settings": {
-                "foreground": "#1F1F1F"
-              }
-            },
-            {
-              "name": "ST pragma",
-              "scope": [
-                "keyword.other.pragma.st",
-                "punctuation.definition.pragma.begin.st",
-                "punctuation.definition.pragma.end.st"
-              ],
-              "settings": {
-                "foreground": "#B45309"
-              }
-            }
-          ]
-        },
         "[Dark Modern]": {
           "textMateRules": [
             {
@@ -830,7 +660,517 @@
             }
           ]
         },
+        "[Dark 2026]": {
+          "textMateRules": [
+            {
+              "name": "ST comment",
+              "scope": [
+                "comment.line.double-slash.st",
+                "comment.line.documentation.st",
+                "comment.block.st"
+              ],
+              "settings": {
+                "foreground": "#6A9955",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "name": "ST control keyword",
+              "scope": [
+                "keyword.control.conditional.st",
+                "keyword.control.loop.st",
+                "keyword.control.flow.st"
+              ],
+              "settings": {
+                "foreground": "#C586C0"
+              }
+            },
+            {
+              "name": "ST declaration keyword and modifier",
+              "scope": [
+                "keyword.declaration.st",
+                "storage.modifier.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST function and declaration name",
+              "scope": [
+                "entity.name.function.st"
+              ],
+              "settings": {
+                "foreground": "#DCDCAA"
+              }
+            },
+            {
+              "name": "ST type",
+              "scope": [
+                "entity.name.type.st",
+                "support.type.primitives.st",
+                "entity.name.namespace.st",
+                "entity.other.inherited-class.st",
+                "support.class.st"
+              ],
+              "settings": {
+                "foreground": "#4EC9B0"
+              }
+            },
+            {
+              "name": "ST variable",
+              "scope": [
+                "variable.name.st",
+                "variable.other.enummember.st"
+              ],
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "name": "ST parameter",
+              "scope": [
+                "variable.parameter.st",
+                "variable.parameter.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#7FB3D5"
+              }
+            },
+            {
+              "name": "ST member",
+              "scope": [
+                "variable.other.member.st"
+              ],
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "name": "ST direct variable",
+              "scope": [
+                "variable.other.constant.st"
+              ],
+              "settings": {
+                "foreground": "#4FC1FF"
+              }
+            },
+            {
+              "name": "ST language variable",
+              "scope": [
+                "variable.language.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST string, escape, and character",
+              "scope": [
+                "string.quoted.double.st",
+                "string.quoted.single.st",
+                "constant.character.escape.st",
+                "constant.character.st"
+              ],
+              "settings": {
+                "foreground": "#CE9178"
+              }
+            },
+            {
+              "name": "ST number",
+              "scope": [
+                "constant.numeric.integer.st",
+                "constant.numeric.real.st",
+                "constant.numeric.based.st",
+                "constant.numeric.typed.st",
+                "constant.numeric.duration.st",
+                "constant.numeric.date.st",
+                "constant.numeric.time.st",
+                "constant.numeric.datetime.st",
+                "constant.numeric.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#B5CEA8"
+              }
+            },
+            {
+              "name": "ST language constant",
+              "scope": [
+                "constant.language.st"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "name": "ST operator and punctuation",
+              "scope": [
+                "keyword.operator.st",
+                "keyword.operator.type.st",
+                "punctuation.st",
+                "punctuation.definition.comment.begin.st",
+                "punctuation.definition.comment.end.st",
+                "punctuation.definition.string.begin.st",
+                "punctuation.definition.string.end.st"
+              ],
+              "settings": {
+                "foreground": "#D4D4D4"
+              }
+            },
+            {
+              "name": "ST pragma",
+              "scope": [
+                "keyword.other.pragma.st",
+                "punctuation.definition.pragma.begin.st",
+                "punctuation.definition.pragma.end.st"
+              ],
+              "settings": {
+                "foreground": "#FFB86C"
+              }
+            }
+          ]
+        },
+        "[Default Light Modern]": {
+          "textMateRules": [
+            {
+              "name": "ST comment",
+              "scope": [
+                "comment.line.double-slash.st",
+                "comment.line.documentation.st",
+                "comment.block.st"
+              ],
+              "settings": {
+                "foreground": "#5A6673",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "name": "ST control keyword",
+              "scope": [
+                "keyword.control.conditional.st",
+                "keyword.control.loop.st",
+                "keyword.control.flow.st"
+              ],
+              "settings": {
+                "foreground": "#AF00DB"
+              }
+            },
+            {
+              "name": "ST declaration keyword and modifier",
+              "scope": [
+                "keyword.declaration.st",
+                "storage.modifier.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST function and declaration name",
+              "scope": [
+                "entity.name.function.st"
+              ],
+              "settings": {
+                "foreground": "#795E26"
+              }
+            },
+            {
+              "name": "ST type",
+              "scope": [
+                "entity.name.type.st",
+                "support.type.primitives.st",
+                "entity.name.namespace.st",
+                "entity.other.inherited-class.st",
+                "support.class.st"
+              ],
+              "settings": {
+                "foreground": "#267F99"
+              }
+            },
+            {
+              "name": "ST variable",
+              "scope": [
+                "variable.name.st",
+                "variable.other.enummember.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST parameter",
+              "scope": [
+                "variable.parameter.st",
+                "variable.parameter.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#005A9E"
+              }
+            },
+            {
+              "name": "ST member",
+              "scope": [
+                "variable.other.member.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST direct variable",
+              "scope": [
+                "variable.other.constant.st"
+              ],
+              "settings": {
+                "foreground": "#C2185B"
+              }
+            },
+            {
+              "name": "ST language variable",
+              "scope": [
+                "variable.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST string, escape, and character",
+              "scope": [
+                "string.quoted.double.st",
+                "string.quoted.single.st",
+                "constant.character.escape.st",
+                "constant.character.st"
+              ],
+              "settings": {
+                "foreground": "#A31515"
+              }
+            },
+            {
+              "name": "ST number",
+              "scope": [
+                "constant.numeric.integer.st",
+                "constant.numeric.real.st",
+                "constant.numeric.based.st",
+                "constant.numeric.typed.st",
+                "constant.numeric.duration.st",
+                "constant.numeric.date.st",
+                "constant.numeric.time.st",
+                "constant.numeric.datetime.st",
+                "constant.numeric.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#098658"
+              }
+            },
+            {
+              "name": "ST language constant",
+              "scope": [
+                "constant.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST operator and punctuation",
+              "scope": [
+                "keyword.operator.st",
+                "keyword.operator.type.st",
+                "punctuation.st",
+                "punctuation.definition.comment.begin.st",
+                "punctuation.definition.comment.end.st",
+                "punctuation.definition.string.begin.st",
+                "punctuation.definition.string.end.st"
+              ],
+              "settings": {
+                "foreground": "#1F1F1F"
+              }
+            },
+            {
+              "name": "ST pragma",
+              "scope": [
+                "keyword.other.pragma.st",
+                "punctuation.definition.pragma.begin.st",
+                "punctuation.definition.pragma.end.st"
+              ],
+              "settings": {
+                "foreground": "#B45309"
+              }
+            }
+          ]
+        },
         "[Light Modern]": {
+          "textMateRules": [
+            {
+              "name": "ST comment",
+              "scope": [
+                "comment.line.double-slash.st",
+                "comment.line.documentation.st",
+                "comment.block.st"
+              ],
+              "settings": {
+                "foreground": "#5A6673",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "name": "ST control keyword",
+              "scope": [
+                "keyword.control.conditional.st",
+                "keyword.control.loop.st",
+                "keyword.control.flow.st"
+              ],
+              "settings": {
+                "foreground": "#AF00DB"
+              }
+            },
+            {
+              "name": "ST declaration keyword and modifier",
+              "scope": [
+                "keyword.declaration.st",
+                "storage.modifier.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST function and declaration name",
+              "scope": [
+                "entity.name.function.st"
+              ],
+              "settings": {
+                "foreground": "#795E26"
+              }
+            },
+            {
+              "name": "ST type",
+              "scope": [
+                "entity.name.type.st",
+                "support.type.primitives.st",
+                "entity.name.namespace.st",
+                "entity.other.inherited-class.st",
+                "support.class.st"
+              ],
+              "settings": {
+                "foreground": "#267F99"
+              }
+            },
+            {
+              "name": "ST variable",
+              "scope": [
+                "variable.name.st",
+                "variable.other.enummember.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST parameter",
+              "scope": [
+                "variable.parameter.st",
+                "variable.parameter.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#005A9E"
+              }
+            },
+            {
+              "name": "ST member",
+              "scope": [
+                "variable.other.member.st"
+              ],
+              "settings": {
+                "foreground": "#001080"
+              }
+            },
+            {
+              "name": "ST direct variable",
+              "scope": [
+                "variable.other.constant.st"
+              ],
+              "settings": {
+                "foreground": "#C2185B"
+              }
+            },
+            {
+              "name": "ST language variable",
+              "scope": [
+                "variable.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST string, escape, and character",
+              "scope": [
+                "string.quoted.double.st",
+                "string.quoted.single.st",
+                "constant.character.escape.st",
+                "constant.character.st"
+              ],
+              "settings": {
+                "foreground": "#A31515"
+              }
+            },
+            {
+              "name": "ST number",
+              "scope": [
+                "constant.numeric.integer.st",
+                "constant.numeric.real.st",
+                "constant.numeric.based.st",
+                "constant.numeric.typed.st",
+                "constant.numeric.duration.st",
+                "constant.numeric.date.st",
+                "constant.numeric.time.st",
+                "constant.numeric.datetime.st",
+                "constant.numeric.pragma.st"
+              ],
+              "settings": {
+                "foreground": "#098658"
+              }
+            },
+            {
+              "name": "ST language constant",
+              "scope": [
+                "constant.language.st"
+              ],
+              "settings": {
+                "foreground": "#0000FF"
+              }
+            },
+            {
+              "name": "ST operator and punctuation",
+              "scope": [
+                "keyword.operator.st",
+                "keyword.operator.type.st",
+                "punctuation.st",
+                "punctuation.definition.comment.begin.st",
+                "punctuation.definition.comment.end.st",
+                "punctuation.definition.string.begin.st",
+                "punctuation.definition.string.end.st"
+              ],
+              "settings": {
+                "foreground": "#1F1F1F"
+              }
+            },
+            {
+              "name": "ST pragma",
+              "scope": [
+                "keyword.other.pragma.st",
+                "punctuation.definition.pragma.begin.st",
+                "punctuation.definition.pragma.end.st"
+              ],
+              "settings": {
+                "foreground": "#B45309"
+              }
+            }
+          ]
+        },
+        "[Light 2026]": {
           "textMateRules": [
             {
               "name": "ST comment",

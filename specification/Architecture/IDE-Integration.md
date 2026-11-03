@@ -132,11 +132,12 @@ user's choice.
 
 To make ST tokens distinct without selecting a contributed theme, the extension contributes
 `editor.tokenColorCustomizations` defaults through `contributes.configurationDefaults`, keyed
-`[Default Dark Modern]`, `[Default Light Modern]`, `[Dark Modern]`, and `[Light Modern]`. The
-1.82 IDs are the engines-floor targets; the current IDs cover the renamed built-in themes,
-because VS Code does not migrate per-theme customization keys. Each key carries `textMateRules`
-with the shipped palette (dark on `#1F1F1F`, light on `#FFFFFF`), and every selector ends in
-`.st`, so no other language is affected. The nine F-1 acceptance categories stay distinct and at
+`[Default Dark Modern]`, `[Default Light Modern]`, `[Dark Modern]`, `[Light Modern]`,
+`[Dark 2026]`, and `[Light 2026]`. The 1.82 IDs are the engines-floor targets; the other keys
+cover the renamed built-in themes and the current 2026 defaults, because VS Code changes the
+theme IDs without migrating per-theme customization keys. Each key carries `textMateRules`
+with the shipped palette (dark on `#1F1F1F` for the modern themes and `#121314` for Dark 2026;
+light on `#FFFFFF`), and every selector ends in `.st`, so no other language is affected. The nine F-1 acceptance categories stay distinct and at
 or above the 4.5:1 contrast target. The overlay is opt-out: a user or workspace setting that sets
 the matching theme key's `textMateRules` to `[]` replaces the contributed array under VS Code's
 configuration merge (objects merge, arrays replace); an empty customization object does not

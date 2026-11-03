@@ -14,27 +14,63 @@ const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
 const overlays =
   packageJson.contributes?.configurationDefaults?.['editor.tokenColorCustomizations'] ?? {};
 
-// The 1.82 engines-floor setting IDs are the acceptance targets; current VS
-// Code renamed the same built-in themes to `Dark Modern`/`Light Modern` and
-// only migrates `workbench.colorTheme`, not per-theme customization keys, so
-// both spellings are contributed with the same rules.
+// The 1.82 engines-floor setting IDs are the acceptance targets. Later VS Code
+// releases renamed the built-in themes and added the 2026 defaults, and only
+// migrate `workbench.colorTheme`, not per-theme customization keys, so every
+// spelling is contributed with the same rules.
+const themeGroups = [
+  {
+    keys: ['[Default Dark Modern]', '[Dark Modern]', '[Dark 2026]'],
+    themeFile: 'stc-dark-color-theme.json',
+  },
+  {
+    keys: ['[Default Light Modern]', '[Light Modern]', '[Light 2026]'],
+    themeFile: 'stc-light-color-theme.json',
+  },
+];
+
+// Backgrounds are per theme: the modern themes use #1F1F1F, Dark 2026 uses
+// #121314, and both light themes use #FFFFFF.
 const overlayThemes = [
   {
     key: '[Default Dark Modern]',
-    aliasKey: '[Dark Modern]',
     themeFile: 'stc-dark-color-theme.json',
     background: '#1F1F1F',
   },
   {
+    key: '[Dark Modern]',
+    themeFile: 'stc-dark-color-theme.json',
+    background: '#1F1F1F',
+  },
+  {
+    key: '[Dark 2026]',
+    themeFile: 'stc-dark-color-theme.json',
+    background: '#121314',
+  },
+  {
     key: '[Default Light Modern]',
-    aliasKey: '[Light Modern]',
+    themeFile: 'stc-light-color-theme.json',
+    background: '#FFFFFF',
+  },
+  {
+    key: '[Light Modern]',
+    themeFile: 'stc-light-color-theme.json',
+    background: '#FFFFFF',
+  },
+  {
+    key: '[Light 2026]',
     themeFile: 'stc-light-color-theme.json',
     background: '#FFFFFF',
   },
 ];
 
 const requiredThemeKeys = ['[Default Dark Modern]', '[Default Light Modern]'];
-const currentThemeKeys = ['[Dark Modern]', '[Light Modern]'];
+const currentThemeKeys = [
+  '[Dark Modern]',
+  '[Light Modern]',
+  '[Dark 2026]',
+  '[Light 2026]',
+];
 
 function readTheme(fileName) {
   return JSON.parse(readFileSync(path.join(root, 'themes', fileName), 'utf8'));
@@ -163,10 +199,12 @@ test('the overlay is contributed as configuration defaults for both Modern theme
     assert.ok(rules.length >= distinctCategories.length, `${themeKey} has too few rules`);
   }
 
-  // Current VS Code renamed the built-in theme IDs; keep the alias keys in
-  // lockstep with the acceptance-target keys.
-  for (const { key, aliasKey } of overlayThemes) {
-    assert.deepEqual(overlays[aliasKey], overlays[key], `${aliasKey} differs from ${key}`);
+  // VS Code renamed the built-in IDs and added the 2026 defaults; keep every
+  // spelling of a theme in lockstep with the acceptance-target rules.
+  for (const { keys } of themeGroups) {
+    for (const key of keys.slice(1)) {
+      assert.deepEqual(overlays[key], overlays[keys[0]], `${key} differs from ${keys[0]}`);
+    }
   }
 
   assert.deepEqual(

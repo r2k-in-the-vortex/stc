@@ -23,9 +23,9 @@ locally.
   [Highlighting and color themes](#highlighting-and-color-themes).
 - The bundled `stc Dark` and `stc Light` color themes, which give every
   acceptance category a distinct, readable color.
-- An opt-out ST token-color overlay for the built-in **Default Dark Modern**
-  and **Default Light Modern** themes (and their current **Dark Modern** and
-  **Light Modern** IDs), so ST tokens render distinctly without selecting a
+- An opt-out ST token-color overlay for the built-in default themes —
+  **Default Dark Modern**, **Dark Modern**, and **Dark 2026**, plus their light
+  counterparts — so ST tokens render distinctly without selecting a
   contributed theme. See
   [Highlighting and color themes](#highlighting-and-color-themes).
 - Language configuration: `//` line comments, `(* *)` block comments,
@@ -117,32 +117,35 @@ foreground, line number, selection, and cursor colors; the rest of the
 workbench chrome follows the contributed `vs-dark`/`vs` UI theme.
 
 The grammar's standard scope roots also color correctly under **Dark Modern**,
-**Light Modern**, **Dark+**, **Light+**, and the **One Dark** family. The
-extension adds an opt-out ST token-color overlay for the two modern default
-themes, described below, so the pragma and direct-variable categories are
-distinct without selecting a contributed theme. Under other built-in themes
-the pragma name may render as a generic keyword and direct variables may
-follow the variable color; only the shipped themes and the modern-default
-overlay guarantee distinct colors for all nine acceptance categories.
-High-contrast themes are not a target, though the standard scope families
-still apply.
+**Light Modern**, **Dark 2026**, **Light 2026**, **Dark+**, **Light+**, and the
+**One Dark** family. The extension adds an opt-out ST token-color overlay for
+the built-in default themes, described below, so the pragma and
+direct-variable categories are distinct without selecting a contributed
+theme. Under other built-in themes the pragma name may render as a generic
+keyword and direct variables may follow the variable color; only the shipped
+themes and the default-theme overlay guarantee distinct colors for all nine
+acceptance categories. High-contrast themes are not a target, though the
+standard scope families still apply.
 
 ### The ST token-color overlay
 
 The extension contributes `editor.tokenColorCustomizations` defaults through
-`contributes.configurationDefaults`, keyed for the built-in modern themes:
+`contributes.configurationDefaults`, keyed for the built-in dark and light
+default themes:
 
 | Theme key | Palette | Background |
 | --- | --- | --- |
 | `[Default Dark Modern]`, `[Dark Modern]` | `stc Dark` | `#1F1F1F` |
+| `[Dark 2026]` | `stc Dark` | `#121314` |
 | `[Default Light Modern]`, `[Light Modern]` | `stc Light` | `#FFFFFF` |
+| `[Light 2026]` | `stc Light` | `#FFFFFF` |
 
-Both spellings of each theme ID are contributed: `Default Dark Modern` and
+Every theme-ID generation is contributed: `Default Dark Modern` and
 `Default Light Modern` are the setting IDs in VS Code 1.82 (the minimum this
-extension supports), and `Dark Modern` and `Light Modern` are the current IDs.
-VS Code renamed the built-in themes without migrating per-theme customization
-keys, so an overlay keyed for only one spelling would stop applying after an
-upgrade.
+extension supports), `Dark Modern` and `Light Modern` are the IDs used after
+the rename, and `Dark 2026` and `Light 2026` are the current defaults. VS Code
+changes these IDs without migrating per-theme customization keys, so an
+overlay keyed for only one generation would stop applying after an upgrade.
 
 Every overlay selector ends in `.st`, so the rules affect only Structured Text
 files; other languages are unchanged. The overlay does not set
@@ -157,7 +160,7 @@ VS Code merges the `editor.tokenColorCustomizations` object across
 configuration scopes: object keys merge recursively, but arrays replace the
 earlier value. To opt out for one theme, set that theme key's `textMateRules`
 to an empty array in your user or workspace settings. This disables the
-overlay for the dark modern themes only:
+overlay for the dark default themes only:
 
 ```json
 {
@@ -167,13 +170,16 @@ overlay for the dark modern themes only:
     },
     "[Dark Modern]": {
       "textMateRules": []
+    },
+    "[Dark 2026]": {
+      "textMateRules": []
     }
   }
 }
 ```
 
-Use `[Default Light Modern]` and `[Light Modern]` in the same way for the
-light themes. Setting `"editor.tokenColorCustomizations": {}` does not remove
+Use `[Default Light Modern]`, `[Light Modern]`, and `[Light 2026]` in the same
+way for the light themes. Setting `"editor.tokenColorCustomizations": {}` does not remove
 the contributed defaults, because the empty object merges with them. To
 override individual scopes instead, add rules with the same `.st` selectors
 under the theme key; your array replaces the contributed array for that key,
@@ -189,7 +195,7 @@ Lexical limits:
   `POINTER TO`, `EXTENDS`, and `IMPLEMENTS`; other ambiguous identifier
   positions use the variable fallback.
 - Pragma-name and direct-variable distinctness depends on the theme outside
-  the shipped themes and the modern-default overlay, as noted above.
+  the shipped themes and the default-theme overlay, as noted above.
 
 ## Tasks
 
