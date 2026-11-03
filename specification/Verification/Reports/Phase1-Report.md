@@ -4,7 +4,10 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-03
 Status: Phase 1 is complete and owner-accepted on 2026-11-03. M1–M7 are complete, the temporary
 `WL-3-Phase-1.md` working plan has been retired, and this report is the enduring Phase 1 record.
-All Phase 1 evidence is V0. The Phase 0 S-level semantics remains the only reviewed claim.
+All Phase 1 evidence is V0. At Phase 1 acceptance, the Phase 0 S-level semantics was the only
+reviewed claim; Phase 2 later added one V1 exact-kernel claim (`P2-T33`, [Phase 2
+Report](Phase2-Report.md)) on 2026-11-03. Statements below that describe exact-axiom or refinement
+work as future Phase 2 work record the Phase 1 position at the time.
 Companion: [Verification Program Plan](../VerificationProgramPlan.md) ·
 [Core IR Boundary](../Core-IR-Boundary.md) · [Semantics](../Semantics.md) ·
 [Phase 0 Report](Phase0-Report.md) · [Phase 0 Design](Phase0-Design.md) ·
@@ -99,7 +102,7 @@ Reproducibility rules fixed in Phase 1:
 | M4-D1 | Generated models live in a separate, non-default Lake package `lean/aeneas/`, not under `lean/Stc/`. The default `lake build` at `lean/` never resolves or builds Mathlib/Aeneas. |
 | M4-D2 | The filtered exact model is `lean/aeneas/StcGenerated/Exact/Model.lean`; the hand-written `Stc.Exact` model is unchanged and remains the reference. |
 | M4-D3 | Generated and hand-written code are separated by directory and module: `StcGenerated/` is generated-only and never edited; hand-written bridge code is in `lean/Stc/Bridge/` and `lean/aeneas/Bridge/`. |
-| M4-D4 | The four external axioms are modeled in `Stc.Bridge.Exact.Externals`; each is an equation against the model, named in the TCB and the registry, never an unstated assumption. No V1 claim until they are discharged. |
+| M4-D4 | The four external axioms are modeled in `Stc.Bridge.Exact.Externals`; each is an equation against the model, named in the TCB and the registry, never an unstated assumption. No V1 claim until they are discharged. (Phase 2 owner decision 2026-11-03: the axioms are accepted as documented TCB rather than discharged; see [Phase 2 Report](Phase2-Report.md) §5.) |
 | M4-D5 | Keys bridge is a proved Lean contract/checker in `Stc.Bridge.Keys`; Aeneas is not used for the string/iterator-heavy module. |
 | M4-D6 | Wire codec bridge is a proved Lean checker in `Stc.Bridge.Wire`; the successful Aeneas translation is fallback evidence only. |
 | M4-D7 | Pins and source hashes are recorded in `lean/bridge-toolchain.toml`; regeneration is manual/reviewed on the pinned Ubuntu host and never runs in fast CI. |
@@ -434,11 +437,15 @@ hypothesis, it is listed in the TCB and the registry `tcb` field.
 
 ## 8. Residual risks and follow-ups
 
+These rows record the Phase 1 position. Phase 2 closed the exact-axiom, refinement, and
+generated-model items (with the axioms accepted as TCB rather than discharged); the keys/wire
+checker and IRFrag items remain future work. See [Phase 2 Report](Phase2-Report.md) §5 and §8.
+
 | Risk or follow-up | Owner and timing | Mitigation and current state |
 | --- | --- | --- |
-| Four external exact axioms undischarged | Phase 2 | Each has a hand-written model and a discharge-or-hypothesis plan (§3.4); no V1 claim until discharged. |
-| Exact refinement obligation not written | Phase 2 | `Stc.Bridge.Exact.Encode`, `Externals`, and the per-operation refinement theorems are fixed by name; no theorem exists yet. |
-| Generated exact model not checked in | Phase 2 regeneration | Regeneration is manual/reviewed on the pinned host; the drift guard reports the absence and `--require-generated` can enforce it later. |
+| Four external exact axioms undischarged | Phase 2 | Each has a hand-written model and a discharge-or-hypothesis plan (§3.4); Phase 2 accepted them as documented TCB and recorded V1 for the exact kernel (`P2-T33`), not a discharge. |
+| Exact refinement obligation not written | Phase 2 | `Stc.Bridge.Exact.Encode`, `Externals`, and the per-operation refinement theorems are fixed by name; Phase 2 stated and proved 32 obligations in `Bridge.Exact.{Refinement,WideRefinement,Soundness,WideSoundness}`. |
+| Generated exact model not checked in | Phase 2 regeneration | Regeneration is manual/reviewed on the pinned host; the wide model is now checked in at `lean/aeneas/StcGenerated/Exact/Model.lean`; the plain guard still notes that the Phase 1 wire model is not checked in. |
 | Keys checker implementation and proofs absent | Phase 3 | Interfaces and theorem names are fixed in §3.5; Aeneas is not used for this module. |
 | Wire checker implementation and proofs absent; proof cost unmeasured | Phase 3 | The Aeneas translation is fallback evidence only; the checker is the chosen bridge; no proof-cost claim is made. |
 | Full Lean `IRFrag` extension absent | Phase 5 | Boundary version `1` is frozen; Phase 5 extends the model to exactly that boundary. |

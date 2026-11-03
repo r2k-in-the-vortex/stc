@@ -1064,8 +1064,8 @@ model or a model-based test harness rather than assuming the recursive proof car
 
 ## 8. Feature coverage matrix
 
-The matrix is the program's scoreboard. It is illustrative at this stage; Phase 0 and Phase 1
-turn it into the registry.
+The matrix is a phase-level summary. The registry in `lean/verification-status.toml` is the
+single source of truth; this table is reconciled when a phase is owner-accepted.
 
 | Feature | Phase | Target level | Key theorem | Current status |
 | --- | --- | --- | --- | --- |
@@ -1075,11 +1075,11 @@ turn it into the registry.
 | Core typing judgment and checker | 0 | S | `core_check_sound`, `core_rejection_characterized` | Proved (P0.2) |
 | Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | P0.5 target soundness proved: target machine, step relation, executor, coverage table, and all eight soundness theorems (`ir_deterministic`, `ir_progress`, `ir_memory_safe`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`, `ir_no_ub`) proved against the implemented invariant; `initState?_wf`, `irStep_wf`/`irStepStar_wf`, the reachability corollaries, and `irRun_halt_wf` complete the whole-run bridge ([Phase0-Design.md](Reports/Phase0-Design.md) §4–§6 and [Phase0-Report.md](Reports/Phase0-Report.md) §3); P0.5 review approved 2026-11-02 and merged via PR #12 (92e113f) |
 | Reference interpreter and conformance | 0 | V0 | `lake exe semantics-conformance` report | Core-HIR dump `0.1.0` and `stc hir-dump` complete (P0.6); fuel interpreter sound/complete (P0.3); `stc-sem`, the opt-in snapshot surface, the differential harness, the `stc-sem-conformance-report` `0.1.0`, a 74-case corpus covering every claimed core item or a justified exclusion, and the committed byte-stable report complete and checked in CI (P0.6); the triage log records the one fixed source-analyzer bug and the documented exclusions; P0.6 approved 2026-11-02 |
-| Checked integer arithmetic | 2 | V1 | `add_ok_iff`, overflow/div-zero lemmas | Model + vectors (V0) |
-| Bitwise, shifts, rotates | 2 | V1 | range, masking, inverse lemmas | Model + vectors (V0) |
-| Conversions, comparisons, selection | 2 | V1 | conversion and selection lemmas | Model + vectors (V0) |
-| String length and UTF-8 | 2 | V1 | `len`/`len_code_unit` theorems | Model + vectors (V0) |
-| Constant evaluation | 2 | V1 | `constEval_sound` | Not started |
+| Checked integer arithmetic | 2 | V1 | `add_ok_iff`, overflow/div-zero lemmas | V1 kernel refinement (`P2-T33`, [Phase 2 Report](Reports/Phase2-Report.md)); model and vectors remain V0 evidence |
+| Bitwise, shifts, rotates | 2 | V1 | range, masking, inverse lemmas | V1 kernel refinement (`P2-T33`); model and vectors remain V0 evidence; a complete `rol`/`ror` inverse is not claimed |
+| Conversions, comparisons, selection | 2 | V1 | conversion and selection lemmas | V1 kernel refinement (`P2-T33`); model and vectors remain V0 evidence |
+| String length and UTF-8 | 2 | V1 | `len`/`len_code_unit` theorems | V1 kernel refinement (`P2-T33`) relative to the five string TCB equations and opaque `strScalars`; model and vectors remain V0 evidence |
+| Constant evaluation | 2 | V1 | `constEval_sound` | V0 model and soundness proved (`Stc.ConstEval`); the folding path shares the V1 kernel and uses the build-time certificate checker, not a literal Lean theorem |
 | Keys, type keys, layout hashes | 3 | V1 | normalization and hash invariants | Rust functions + tests (V0) |
 | `GotId`, catalog, slots | 3 | V1 | identity, canonical slot tables | Rust functions + tests (V0) |
 | Descriptor/manifest codecs | 3 | V2 | `decode_encode`, `validate_sound` | Rust codecs + fuzz (V0) |
