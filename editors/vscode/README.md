@@ -23,6 +23,11 @@ locally.
   [Highlighting and color themes](#highlighting-and-color-themes).
 - The bundled `stc Dark` and `stc Light` color themes, which give every
   acceptance category a distinct, readable color.
+- An opt-out ST token-color overlay for the built-in **Default Dark Modern**
+  and **Default Light Modern** themes (and their current **Dark Modern** and
+  **Light Modern** IDs), so ST tokens render distinctly without selecting a
+  contributed theme. See
+  [Highlighting and color themes](#highlighting-and-color-themes).
 - Language configuration: `//` line comments, `(* *)` block comments,
   brackets, auto-closing and surrounding pairs, an ST-aware word pattern, and
   indentation rules for block constructs.
@@ -112,11 +117,68 @@ foreground, line number, selection, and cursor colors; the rest of the
 workbench chrome follows the contributed `vs-dark`/`vs` UI theme.
 
 The grammar's standard scope roots also color correctly under **Dark Modern**,
-**Light Modern**, **Dark+**, **Light+**, and the **One Dark** family. Under
-built-in themes the pragma name may render as a generic keyword and direct
-variables may follow the variable color; only the shipped themes guarantee
-distinct pragma and direct-variable colors. High-contrast themes are not a
-target, though the standard scope families still apply.
+**Light Modern**, **Dark+**, **Light+**, and the **One Dark** family. The
+extension adds an opt-out ST token-color overlay for the two modern default
+themes, described below, so the pragma and direct-variable categories are
+distinct without selecting a contributed theme. Under other built-in themes
+the pragma name may render as a generic keyword and direct variables may
+follow the variable color; only the shipped themes and the modern-default
+overlay guarantee distinct colors for all nine acceptance categories.
+High-contrast themes are not a target, though the standard scope families
+still apply.
+
+### The ST token-color overlay
+
+The extension contributes `editor.tokenColorCustomizations` defaults through
+`contributes.configurationDefaults`, keyed for the built-in modern themes:
+
+| Theme key | Palette | Background |
+| --- | --- | --- |
+| `[Default Dark Modern]`, `[Dark Modern]` | `stc Dark` | `#1F1F1F` |
+| `[Default Light Modern]`, `[Light Modern]` | `stc Light` | `#FFFFFF` |
+
+Both spellings of each theme ID are contributed: `Default Dark Modern` and
+`Default Light Modern` are the setting IDs in VS Code 1.82 (the minimum this
+extension supports), and `Dark Modern` and `Light Modern` are the current IDs.
+VS Code renamed the built-in themes without migrating per-theme customization
+keys, so an overlay keyed for only one spelling would stop applying after an
+upgrade.
+
+Every overlay selector ends in `.st`, so the rules affect only Structured Text
+files; other languages are unchanged. The overlay does not set
+`workbench.colorTheme`, and the `stc Dark` and `stc Light` themes remain the
+explicit alternatives. The colors are the shipped theme palettes, so all nine
+acceptance categories stay distinct and at or above the 4.5:1 contrast
+target.
+
+### Opting out of the overlay
+
+VS Code merges the `editor.tokenColorCustomizations` object across
+configuration scopes: object keys merge recursively, but arrays replace the
+earlier value. To opt out for one theme, set that theme key's `textMateRules`
+to an empty array in your user or workspace settings. This disables the
+overlay for the dark modern themes only:
+
+```json
+{
+  "editor.tokenColorCustomizations": {
+    "[Default Dark Modern]": {
+      "textMateRules": []
+    },
+    "[Dark Modern]": {
+      "textMateRules": []
+    }
+  }
+}
+```
+
+Use `[Default Light Modern]` and `[Light Modern]` in the same way for the
+light themes. Setting `"editor.tokenColorCustomizations": {}` does not remove
+the contributed defaults, because the empty object merges with them. To
+override individual scopes instead, add rules with the same `.st` selectors
+under the theme key; your array replaces the contributed array for that key,
+so include every rule you want to keep. The contributed rules are visible in
+`package.json` under `contributes.configurationDefaults`.
 
 Lexical limits:
 
@@ -126,8 +188,8 @@ Lexical limits:
 - A type reference is recognized after `:`, `ARRAY ... OF`, `REF_TO`,
   `POINTER TO`, `EXTENDS`, and `IMPLEMENTS`; other ambiguous identifier
   positions use the variable fallback.
-- Pragma-name and direct-variable distinctness depends on the theme, as noted
-  above.
+- Pragma-name and direct-variable distinctness depends on the theme outside
+  the shipped themes and the modern-default overlay, as noted above.
 
 ## Tasks
 
@@ -337,11 +399,15 @@ npm test
 npm run package
 ```
 
-`npm test` runs the problem-matcher, theme, and online-change state unit tests
-and the TextMate grammar fixtures in `test/grammar/`. `test/theme.test.mjs`
-checks that both themes are contributed, define the required editor colors and
-token rules, use nine distinct category colors, and keep every role at or
-above the 4.5:1 contrast target. `test/online-change.test.mjs` bundles the pure
+`npm test` runs the problem-matcher, theme, token-overlay, and online-change
+state unit tests and the TextMate grammar fixtures in `test/grammar/`.
+`test/theme.test.mjs` checks that both themes are contributed, define the
+required editor colors and token rules, use nine distinct category colors, and
+keep every role at or above the 4.5:1 contrast target.
+`test/token-overlay.test.mjs` checks the contributed `configurationDefaults`
+keys and `.st` scoping, palette reuse, category contrast against each overlay
+background, and the documented opt-out under VS Code's configuration-merge
+semantics. `test/online-change.test.mjs` bundles the pure
 `src/onlineChange/state.ts` and covers the status-line state machine, endpoint
 parsing and field whitelisting, redaction, and status formatting.
 `test:electron` additionally drives the online-change surface end to end on the

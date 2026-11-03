@@ -128,12 +128,21 @@ The extension contributes two optional token themes, `stc Dark` (`uiTheme: "vs-d
 `stc Light` (`uiTheme: "vs"`), both with `semanticHighlighting: false`. They define the editor
 background, foreground, line number, selection, and cursor colors; workbench chrome follows the
 UI theme. The extension does not set `workbench.colorTheme`, so the active theme remains the
-user's choice. The standard roots also color under Dark Modern/Light Modern, Dark+/Light+, and the
-One Dark family. Built-in themes may render the pragma name as a generic keyword and direct
-variables as ordinary variables; only the shipped themes guarantee distinct colors for all nine
-F-1 acceptance categories. High-contrast themes are not a target. F-1.1 is required for WL-1.1:
-an opt-out `.st` token-color overlay for Default Dark Modern and Default Light Modern, so
-distinct ST colors do not require selecting a contributed theme.
+user's choice.
+
+To make ST tokens distinct without selecting a contributed theme, the extension contributes
+`editor.tokenColorCustomizations` defaults through `contributes.configurationDefaults`, keyed
+`[Default Dark Modern]`, `[Default Light Modern]`, `[Dark Modern]`, and `[Light Modern]`. The
+1.82 IDs are the engines-floor targets; the current IDs cover the renamed built-in themes,
+because VS Code does not migrate per-theme customization keys. Each key carries `textMateRules`
+with the shipped palette (dark on `#1F1F1F`, light on `#FFFFFF`), and every selector ends in
+`.st`, so no other language is affected. The nine F-1 acceptance categories stay distinct and at
+or above the 4.5:1 contrast target. The overlay is opt-out: a user or workspace setting that sets
+the matching theme key's `textMateRules` to `[]` replaces the contributed array under VS Code's
+configuration merge (objects merge, arrays replace); an empty customization object does not
+disable the overlay. The standard roots also color under Dark+/Light+ and the One Dark family;
+under other built-in themes the pragma name may render as a generic keyword and direct variables
+as ordinary variables. High-contrast themes are not a target.
 
 ## 3. Language-server contract
 
