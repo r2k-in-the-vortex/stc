@@ -149,6 +149,10 @@ it with the bridge toolchain/translation boundary.
 | Full IR fragment | Freeze and document the full emitted-fragment boundary in Phase 1; implement only the bridge/D-V6 slice; Phase 5 owns the full Lean `IRFrag` extension. |
 | D-V6 subset | Approved: scalar types, expressions, assignments, control flow, functions, programs, GOT globals; no OOP, references, strings, or aggregates. |
 | Claim level | No new claims: all Phase 1 bridge/tooling work stays V0; Phase 0's S-level semantics remains the only reviewed claim. |
+| Aeneas/Mathlib proof environment | Approved: prune rebuildable build artifacts and build the Aeneas Lean backend plus Mathlib v4.35.0 on the Ubuntu host to measure compile/proof cost. |
+| Exact kernel bridge | Aeneas/Charon on the filtered pure exact kernel; derived/helper bodies opaque or filtered; compile/prove against `Stc.Exact`. |
+| Keys bridge | Proved Lean key-normalization contract/checker; do not use Aeneas for the string/iterator-heavy keys module. |
+| Codec bridge | Proved Lean wire-format checker as primary; the successful Aeneas translation is fallback evidence, not the chosen bridge. |
 
 Remaining open gates: the bridge choice per target class (after M1–M3), CI adoption of the bridge
 toolchain (after spike evidence), and Phase 1 report acceptance/retirement (after M7).
@@ -161,7 +165,7 @@ toolchain (after spike evidence), and Phase 1 report acceptance/retirement (afte
 | M1 — Exact bridge spike | Run Aeneas/Charon on `crates/stc-codegen/src/exact.rs` (or the feasible subset). Measure translation coverage, generated Lean readability, proof obligations, and gaps versus `Stc.Exact`. | Complete 2026-11-02: pure kernel translated; derived/helper bodies failed; Aeneas/Mathlib compile cost outstanding; evidence in §11. |
 | M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Complete 2026-11-02: Aeneas cannot translate the module as-is (loops/string/lifetime errors); fallback or refactor required; evidence in §11. |
 | M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Complete 2026-11-02: wire encoder/decoder translated (`StcGot.lean`, 54 transparent functions); external-definition and Aeneas/Mathlib proof costs remain; evidence in §11. |
-| M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | Bridge decision section; module skeleton; owner decision request for toolchain adoption. |
+| M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | In progress 2026-11-02: bridge decisions recorded; Aeneas/Mathlib proof environment measurement and module layout pending; no claim change. |
 | M5 — IR boundary and D-V6 subset | Freeze and document the full emitted-fragment boundary; implement only the bridge/D-V6 slice; write D-V6's first end-to-end subset; leave the full Lean `IRFrag` extension to Phase 5; update coverage tables. | Boundary document, updated coverage, program-plan/report text. |
 | M6 — CI and registry | Extend the registry for bridge/toolchain records; add no-`sorry`, axiom, vector-regeneration, and oracle checks; add Aeneas regeneration drift checks if the bridge is adopted; document CI budget. | CI changes and a green run; registry entries. |
 | M7 — Report and retirement | Write `specification/Verification/Reports/Phase1-Report.md`; move durable decisions to the program plan/TCB/claim doc/registry; delete stale working notes and retire this file. | Durable report; Phase 1 review package; working file deleted. |
@@ -238,8 +242,8 @@ untracked credentials.
 
 | Gate | Status |
 | --- | --- |
-| Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; CI adoption remains open until spike evidence. |
-| Bridge choice per target class | Open; decide after M1–M3 using the decision matrix. |
+| Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; Aeneas/Mathlib proof environment build approved 2026-11-02; CI adoption remains open until spike evidence review. |
+| Bridge choice per target class | Resolved 2026-11-02: exact = filtered Aeneas kernel; keys = proved checker/contract; codec = proved Lean checker. Any change requires a new owner review. |
 | Full emitted-IR fragment boundary / versioned format | Boundary freeze approved 2026-11-02; full Lean extension is Phase 5; any versioned-format change still requires approval. |
 | D-V6 first end-to-end subset | Approved 2026-11-02 as the program-plan recommendation. |
 | Claim level increase or refinement/translation-validation claim | Closed for Phase 1: no new claims; V0 evidence only, Phase 0 S remains the only reviewed claim. |
@@ -317,7 +321,7 @@ On Phase 1 sign-off:
 | M1 exact bridge spike | Complete — pure kernel translated to `Exact.lean`; derived/helper bodies failed; Aeneas/Mathlib compile cost outstanding |
 | M2 keys bridge spike | Complete — Charon produced LLBC; Aeneas failed on loops/string/lifetime support; fallback/refactor required |
 | M3 codec bridge spike | Complete — wire codec translated to Lean; external definitions and Aeneas/Mathlib proof cost remain |
-| M4 bridge decision and architecture | Not started |
+| M4 bridge decision and architecture | In progress — bridge decisions recorded (exact Aeneas, keys checker, codec checker); Aeneas/Mathlib proof environment and module layout pending |
 | M5 IR boundary and D-V6 subset | Not started |
 | M6 CI and registry | Not started |
 | M7 report and retirement | Not started |

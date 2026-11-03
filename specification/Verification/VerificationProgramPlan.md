@@ -375,6 +375,13 @@ Phase 1 produces no large correctness proofs; it produces the bridge and the too
   references, strings, or aggregates. (Owner-approved 2026-11-02.)
 - Write the TCB and claim-language document (D-V4).
 
+**Owner bridge decisions (2026-11-02).** Based on the Phase 1 spikes: the exact-arithmetic
+kernel uses a filtered Aeneas/Charon translation (derived/helper bodies opaque or filtered); GOT
+key normalization uses a proved Lean checker/contract, not Aeneas; the `stc-got` wire codec uses
+a proved Lean checker, with the successful Aeneas translation retained as fallback evidence. The
+Aeneas/Mathlib proof environment is to be built and its cost measured. No claim is raised above
+V0; these choices refine D-V1 for Phase 1.
+
 **Exit criteria.** Bridge spike report exists; D-V1 through D-V10 are resolved; the Phase 0
 semantics is the reference for the bridge; the registry, no-sorry check, vector-regeneration
 check, and oracle harness run in CI; the full IR fragment and first end-to-end subset are
