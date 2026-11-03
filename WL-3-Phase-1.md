@@ -159,7 +159,7 @@ toolchain (after spike evidence), and Phase 1 report acceptance/retirement (afte
 | --- | --- | --- |
 | M0 — Baseline | Confirm Phase 0 records, CI, registry, and Rust baselines; inventory the three bridge targets and their dependencies; record available toolchains. Establish the Ubuntu execution host baseline, bootstrap the pinned Rust/Lean toolchains, and verify the Phase 0 checks there. | Complete: host/toolchain record; Phase 0 checks green on the host; Aeneas/Charon user-space install and pinned build recorded (2026-11-02); no claim change. |
 | M1 — Exact bridge spike | Run Aeneas/Charon on `crates/stc-codegen/src/exact.rs` (or the feasible subset). Measure translation coverage, generated Lean readability, proof obligations, and gaps versus `Stc.Exact`. | Complete 2026-11-02: pure kernel translated; derived/helper bodies failed; Aeneas/Mathlib compile cost outstanding; evidence in §11. |
-| M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Keys-spike section; evidence and gap list. |
+| M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Complete 2026-11-02: Aeneas cannot translate the module as-is (loops/string/lifetime errors); fallback or refactor required; evidence in §11. |
 | M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Codec-spike section; bridge recommendation. |
 | M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | Bridge decision section; module skeleton; owner decision request for toolchain adoption. |
 | M5 — IR boundary and D-V6 subset | Freeze and document the full emitted-fragment boundary; implement only the bridge/D-V6 slice; write D-V6's first end-to-end subset; leave the full Lean `IRFrag` extension to Phase 5; update coverage tables. | Boundary document, updated coverage, program-plan/report text. |
@@ -279,13 +279,29 @@ On Phase 1 sign-off:
   (opaque/filtered translation or a reduced wrapper), and the Aeneas/Mathlib library cost must be
   measured before choosing the bridge. No claim is raised.
 
+### M2 — `stc-got` keys (2026-11-02)
+
+- Charon `0.1.304`, `--preset=aeneas --start-from stc_got::keys`, compiled `stc-got` and
+  produced a 6.8 MB LLBC (271 prepasses).
+- Aeneas `ab34bd2` returned `rc=2` and produced no Lean file. Errors:
+  - early returns inside loops (`stc_got::digest::parse_hex`);
+  - unsupported `str::rsplit_once` and `str::strip_suffix` signatures;
+  - a higher-ranked lifetime constraint in the slice iterator `find`;
+  - an internal Aeneas `CFailure`.
+- The start-from filter did not isolate the key functions from these dependencies; string
+  normalization and iterator/loop shapes need refactoring or a non-Aeneas bridge. No claim is
+  raised.
+- Spike conclusion: Aeneas is not viable for the keys module as written; the fallback is a
+  proved Lean key-normalization contract/checker, extraction, or a source refactor with a new
+  spike.
+
 ## 12. Status board
 
 | Item | State |
 | --- | --- |
 | M0 baseline and toolchain inventory | Complete — Rust/Lean/opam/OCaml/GMP/Aeneas/Charon installed; Phase 0 baseline green on the Ubuntu host |
 | M1 exact bridge spike | Complete — pure kernel translated to `Exact.lean`; derived/helper bodies failed; Aeneas/Mathlib compile cost outstanding |
-| M2 keys bridge spike | Not started |
+| M2 keys bridge spike | Complete — Charon produced LLBC; Aeneas failed on loops/string/lifetime support; fallback/refactor required |
 | M3 codec bridge spike | Not started |
 | M4 bridge decision and architecture | Not started |
 | M5 IR boundary and D-V6 subset | Not started |
