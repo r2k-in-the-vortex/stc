@@ -10,10 +10,9 @@ Compiler: the binary `stc.path` points at; use the latest debug or a rebuilt rel
 Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **N/A** =
 unsupported or intentionally out of scope.
 
-Summary 2026-11-03: 40/40 checklist entries evaluated — 40 pass (100%); the F-1.1, F-11, and
-F-14 required items also pass. F-17 and F-18 are open required items (F-18 depends on F-17; plan
-§12.1). The required/documented/deferred close-out triage is in
-[WL-1.1-Plan.md](WL-1.1-Plan.md) §12; F-22 and F-23 are deferred follow-ups.
+Summary 2026-11-03: 40/40 checklist entries evaluated — 40 pass (100%); the F-1.1, F-11, F-14,
+F-17, and F-18 required items also pass. The required/documented/deferred close-out triage is
+in [WL-1.1-Plan.md](WL-1.1-Plan.md) §12; F-22 and F-23 are deferred follow-ups.
 
 ## 0. Prerequisites
 
@@ -430,8 +429,7 @@ Completed findings are feature history, not open follow-ups. The close-out triag
 
 ### Required for WL-1.1
 
-All required implementation items except F-17 and F-18 are complete (plan §12.1). F-17 is
-implemented first because F-18's Debug Test action depends on it.
+All required implementation items are complete (plan §12.1).
 
 - [x] **F-1.1 — Default-theme ST token-color overlay.** Pass 2026-11-03. F-1 ships `stc Dark`/
       `stc Light`, so the intended palette required selecting a contributed theme. The extension
@@ -463,21 +461,26 @@ implemented first because F-18's Debug Test action depends on it.
       path is covered by the protocol and DAP tests. Validation, permissions, diagnostics, and
       forces are unchanged.
 
-- [ ] **F-17 — Per-test debugging.** Required for WL-1.1 (owner decision 2026-11-03; plan
-      §12.1). `stc test` builds hook-free per-test artifacts, and the launch configuration
-      builds the production project, so a `{stc:test}` POU cannot be started under the
-      debugger. Build the selected test with checkpoint hooks, start its test host with a debug
-      server, and expose the selection through the DAP launch configuration (or an equivalent
-      command). Acceptance: a test in `tests/smoke.st` stops at a breakpoint with locals
-      available; the test host result/exit ends the session cleanly; production launch behavior
-      is unchanged.
+- [x] **F-17 — Per-test debugging.** Pass 2026-11-03. Required for WL-1.1 (owner decision
+      2026-11-03; plan §12.1). The DAP launch `test` field builds the selected `{stc:test}` POU
+      with checkpoint hooks and a frame sidecar under `target/stc/test/debug/<artifact>`,
+      starts its test host behind a start gate released after breakpoints and configuration,
+      maps the root test sources, hides the synthetic wrapper, and ends with the result line
+      (D-231). Commits `6b56417`/`caa2959`; CI run `41717937649` green (39 jobs). Manual:
+      Debug Test stopped at `tests/smoke.st:6`, `ADDWORKS` was the top frame with locals, the
+      Debug Console showed the pass result line, and the session ended; ordinary `stc test`
+      artifacts stayed hook-free.
 
-- [ ] **F-18 — VS Code Testing API run/debug.** Required for WL-1.1 (owner decision 2026-11-03;
-      plan §12.1); depends on F-17. Add a TestController that discovers `{stc:test}` POUs with
-      file/line, runs an individual test through `stc test` and reports pass/fail with failure
-      locations, and offers a Debug Test action using the F-17 per-test launch. Acceptance: an
-      individual `{stc:test}` POU can be run and debugged from the editor; discovery refreshes
-      on source/manifest changes.
+- [x] **F-18 — VS Code Testing API run/debug.** Pass 2026-11-03. Required for WL-1.1 (owner
+      decision 2026-11-03; plan §12.1); depends on F-17. A TestController discovers
+      `{stc:test}` POUs with file/line, runs selected tests through `stc test --exact
+      --message-format json`, reports pass/fail with failure locations, durations, captured
+      output, and a readable per-test summary, and offers Debug Test through the F-17 launch;
+      discovery refreshes on source/manifest/workspace/`stc.path` changes. Commits
+      `1c0781d`/`a48b880`; CI runs `41717937649`/`41722550698` green (39 jobs). Manual: Test
+      Explorer discovered both tests with ranges, Run reported pass/fail and the line-13
+      failure, the per-test output summary appeared, refresh worked, and Debug Test used the
+      F-17 launch.
 
 ### Deferred follow-ups
 
@@ -610,8 +613,8 @@ not a WL-1.1 code change.
 | F-1.1 | Pass | Manual 2026-11-03: Dark Modern, Dark 2026, and Light 2026 render all nine categories with the overlay palette; non-ST languages unchanged; documented opt-out; commits `a126800`/`c2af647`, CI runs `41681462972`/`41692812156` green; plan §12.1 |
 | F-11 | Pass | Manual 2026-11-03: sample caller `src/main.st:39`; depth-3 `LEVELONE:12`, `MAIN:19`; top frame, scopes, and evaluate unchanged; commit `909ebd0`, CI `41703710933` green; plan §12.1 |
 | F-14 | Pass | Manual 2026-11-03: stopped `INCREMENT := 42` visible immediately to Variables/evaluate and retained after a step; running writes stay queued (protocol/DAP tests); commit `c8cb1c9`, CI `41703710933` green; plan §12.1 |
-| F-17 | Required; pending | Per-test debug launch for a selected `{stc:test}` POU; plan §12.1 |
-| F-18 | Required; pending | VS Code Testing API run/debug; depends on F-17; plan §12.1 |
+| F-17 | Pass | Manual 2026-11-03: Debug Test stopped in the test POU with locals; result line and clean session end; ordinary test artifacts unchanged; commits `6b56417`/`caa2959`, CI `41717937649` green; plan §12.1 |
+| F-18 | Pass | Manual 2026-11-03: discovery/ranges, per-test Run pass/fail with line-13 failure location and output summary, refresh, Debug Test via F-17; commits `1c0781d`/`a48b880`, CI runs `41717937649`/`41722550698` green; plan §12.1 |
 
 ### Deferred follow-ups
 
