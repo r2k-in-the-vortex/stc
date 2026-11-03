@@ -118,6 +118,9 @@ fn free_ports() -> (u16, u16) {
 struct Client {
     stream: TcpStream,
     transaction: u16,
+    /// Completed requests by class, used to check the backend counters.
+    reads: u64,
+    writes: u64,
 }
 
 impl Client {
@@ -137,6 +140,8 @@ impl Client {
                     return Self {
                         stream,
                         transaction: 0,
+                        reads: 0,
+                        writes: 0,
                     };
                 }
                 Err(error) => {
@@ -178,6 +183,15 @@ impl Client {
         self.stream
             .read_exact(&mut payload)
             .expect("read response PDU");
+        // The server increments its counters before writing the response, so
+        // a fully received response means this request is accounted for. The
+        // same function-code split as the backend's `count_response` keeps the
+        // two totals directly comparable, poll retries included.
+        match pdu.first().copied().unwrap_or(0) {
+            0x01..=0x04 => self.reads = self.reads.saturating_add(1),
+            0x05 | 0x06 | 0x0F | 0x10 => self.writes = self.writes.saturating_add(1),
+            _ => {}
+        }
         payload
     }
 
@@ -512,6 +526,13 @@ fn fixture_serves_all_tables_and_word_orders_through_two_binds() {
         vec![0xBEEF],
     );
 
+    // Both clients are the only traffic source. Snapshot their completed
+    // request counts before closing them so the final backend counters can be
+    // checked exactly, independent of how many poll attempts the PLC scan
+    // timing required.
+    let client_reads = first.reads + second.reads;
+    let client_writes = first.writes + second.writes;
+
     drop(first);
     drop(second);
 
@@ -547,10 +568,17 @@ fn fixture_serves_all_tables_and_word_orders_through_two_binds() {
     let requests = diagnostic_number(&status, "server0.requests");
     let reads = diagnostic_number(&status, "server0.reads");
     let writes = diagnostic_number(&status, "server0.writes");
-    // Every write is issued exactly once; reads include any poll that ran
-    // before the 1 ms PLC scan copied the input to the output.
+    // Every write is issued exactly once. Polls may retry until the 1 ms PLC
+    // scan latches the input and publishes the output, so their number is
+    // timing-dependent; both the client and the server count every attempt,
+    // making the exact equality below deterministic and stronger than a
+    // minimum bound: the backend must account for every request the test
+    // issued, in the correct read/write class, with no extra traffic.
     assert_eq!(writes, 8, "{status}");
-    assert!(reads >= 15, "{status}");
+    assert_eq!(client_writes, 8, "{status}");
+    assert_eq!(writes, client_writes, "{status}");
+    assert_eq!(reads, client_reads, "{status}");
+    assert_eq!(requests, client_reads + client_writes, "{status}");
     assert_eq!(requests, reads + writes, "{status}");
     for key in [
         "server0.exceptions",
