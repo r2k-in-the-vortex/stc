@@ -198,7 +198,9 @@ Stop and request an owner decision before:
 ## 6. Verification per batch
 
 - `lake build` and `lake exe stc-sem-tests` in `lean/`.
-- `python tools/ci/check_verification_registry.py`.
+- `python tools/ci/check_verification_registry.py`. The checker accepts phase
+  `P2`, keeps Phase 2 records at S/V0, and rejects proved or non-evidence
+  records that resolve only in the bridge package.
 - `python tools/ci/check_docs.py` and the pinned markdownlint command.
 - Sorry/admit grep over `Stc/Exact`, `Stc/ConstEval`, `Stc/Bridge`, and
   `aeneas/Bridge`.
@@ -240,6 +242,6 @@ Until acceptance, this file stays in the repository. No deletion and no
 | Exact bridge package and generated model | Done: `lean/aeneas` package, pinned manifest, checked-in 409-line model with provenance header, host build `1806` jobs |
 | External-axiom models and refinement propositions | Done: four mathematical models and guard lemmas, 24 stated obligations, 2 proved (`compare_refines`, `sel_refines`), 22 open, no V1 claim |
 | Rust differential certificate | Done: `crates/stc-codegen/tests/exact_differential.rs` checks arithmetic/bitwise/comparison folding and all front-end-accepted conversion pairs against `exact.rs`; the existing vector tests cover the generated corpus; production unification deferred to owner |
-| Registry/docs/CI updates | Planned |
-| Phase 2 report | Planned |
-| Fast CI on final WL-3 HEAD | Planned |
+| Registry/docs/CI updates | Done: `P2` phase vocabulary and bridge-only evidence policy, 30 proved V0 model records, 5 tested V0 evidence records, docs required-document entry, Phase 2 sorry gating including `aeneas/StcGenerated` |
+| Phase 2 report | Done: `specification/Verification/Reports/Phase2-Report.md`; program plan and `Semantics.md` §7.8 reconciled; not owner-accepted |
+| Fast CI on final WL-3 HEAD | Pending the final pushed commit |

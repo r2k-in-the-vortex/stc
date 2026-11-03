@@ -362,7 +362,9 @@ committed report is the artifact. Open P0.3 questions are recorded in
 the P0.5 design/implementation record in §4–§6, and the P0.6/P0.7 results in
 [Phase0-Report.md](Reports/Phase0-Report.md). Phase 1 appends `P1` bridge-evidence records (V0,
 status `tested` or `planned`); they are not part of this Phase 0 inventory and do not change the
-frozen `1.0` definitions or theorem statements.
+frozen `1.0` definitions or theorem statements. Phase 2 appends `P2` model-theorem records at
+level V0 and bridge evidence; the durable summary is
+[Phase2-Report.md](Reports/Phase2-Report.md).
 
 ### 7.1 Source soundness
 
@@ -493,6 +495,54 @@ the grouped kind order. Descriptor/function-table content pairing remains Phase 
 `ir_recursive_model_equiv`. These are the internal Lean equivalences that Phase 1 will use as
 refinement targets.
 
+### 7.8 Phase 2 exact and constant-evaluation proofs
+
+These records are proved facts about the Lean models at level V0; they are not
+refinement proofs for the Rust implementation, and no Phase 2 record claims V1.
+The full lemma inventory is in the modules and in
+[Phase2-Report.md](Reports/Phase2-Report.md) §3–§4; the registry names the central
+results.
+
+| Theorem or lemma | Module | Status | Shape |
+| --- | --- | --- | --- |
+| `Stc.Exact.IntType.add_ok_iff` | `Stc.Exact.Int` | proved | `ty.add a b = .ok r ↔ r = a + b ∧ ty.fits r = true` for in-range operands |
+| `Stc.Exact.IntType.sub_ok_iff` | `Stc.Exact.Int` | proved | the subtraction analogue of `add_ok_iff` |
+| `Stc.Exact.IntType.mul_ok_iff` | `Stc.Exact.Int` | proved | the multiplication analogue of `add_ok_iff` |
+| `Stc.Exact.IntType.neg_ok_iff` | `Stc.Exact.Int` | proved | `ty.neg a = .ok r ↔ r = -a ∧ ty.fits r = true` |
+| `Stc.Exact.IntType.abs_ok` | `Stc.Exact.Int` | proved | success is the absolute value of `a`, with the minimum-value overflow case |
+| `Stc.Exact.IntType.div_ok` | `Stc.Exact.Int` | proved | truncating division, zero and `MIN / -1` guards |
+| `Stc.Exact.IntType.mod_ok` | `Stc.Exact.Int` | proved | truncating remainder, zero and `MIN MOD -1` guards |
+| `Stc.Exact.IntType.fits_iff` | `Stc.Exact.Int` | proved | range membership agrees with the minimum/maximum bounds |
+| `Stc.Exact.IntType.bitAnd_lt` | `Stc.Exact.Bits` | proved | every bitwise result is below the modulus; companions for OR/XOR/NOT |
+| `Stc.Exact.IntType.shl_lt` | `Stc.Exact.Bits` | proved | shift and rotate results are below the modulus |
+| `Stc.Exact.IntType.shl_width` | `Stc.Exact.Bits` | proved | width-count shifts are zero; rotate width-count identities |
+| `Stc.Exact.IntType.bitNot_involutive` | `Stc.Exact.Bits` | proved | `NOT (NOT a) = a` inside the width |
+| `Stc.Exact.IntType.bitAnd_self` | `Stc.Exact.Bits` | proved | bitwise self and zero identities |
+| `Stc.Exact.IntType.convert_to_bool` | `Stc.Exact.Conv` | proved | `BOOL` conversion tests against zero |
+| `Stc.Exact.IntType.convert_narrow_ok` | `Stc.Exact.Conv` | proved | narrowing succeeds when the value fits |
+| `Stc.Exact.IntType.convert_widen_value` | `Stc.Exact.Conv` | proved | widening extends the value or its bit pattern |
+| `Stc.Exact.IntType.convert_roundtrip` | `Stc.Exact.Conv` | proved | widening then narrowing round-trips the source value |
+| `Stc.Exact.IntType.convert_narrow_ok_fits` | `Stc.Exact.Conv` | proved | a successful narrowing result fits the target |
+| `Stc.Exact.IntType.convert_widen_ok_fits` | `Stc.Exact.Conv` | proved | a successful widening result fits the target |
+| `Stc.Exact.sel_mem` | `Stc.Exact.Select` | proved | the selected value is one of the inputs; range companions |
+| `Stc.Exact.minList_le` | `Stc.Exact.Select` | proved | `MIN` is a lower bound; `MAX` is an upper bound |
+| `Stc.Exact.limit_within` | `Stc.Exact.Select` | proved | `LIMIT` is within the bounds; identity and below/above cases |
+| `Stc.Exact.mux_in_range` | `Stc.Exact.Select` | proved | in-range `MUX` selects the indexed value; empty/negative/past-end cases |
+| `Stc.Exact.utf8Length_range` | `Stc.Exact.Strings` | proved | UTF-8 byte length of one scalar is between one and four |
+| `Stc.Exact.unicode_len_le_code_unit` | `Stc.Exact.Strings` | proved | Unicode scalar count is at most the UTF-8 byte count |
+| `Stc.Exact.utf8ByteLength_bounds` | `Stc.Exact.Strings` | proved | aggregate UTF-8 bytes are bounded by scalar and four-times-scalar counts |
+| `Stc.Exact.utf8ByteLength_supplementary` | `Stc.Exact.Strings` | proved | supplementary scalars contribute four UTF-8 bytes |
+| `Stc.Exact.len_le_lenCodeUnit` | `Stc.Exact.Strings` | proved | the stored length is at most the code-unit length |
+| `Stc.ConstEval.constEval_sound` | `Stc.ConstEval` | proved | successful evaluation is admitted by `ConstEvalRel` |
+| `Stc.ConstEval.constEval_type_preserving` | `Stc.ConstEval` | proved | a successful result has the expression's declared type and is well formed |
+
+The bridge package adds V0 evidence records for the checked-in generated model,
+the four undischarged external axioms, and the refinement-obligation inventory.
+`compareRefines` and `selRefines` have completed proofs over the generated
+model, but the bridge records stay `tested` because 22 obligations and all four
+external axioms remain open and the package is not built in fast CI. No bridge
+record is marked proved and no V1 claim is made.
+
 ## 8. Trusted computing base and assumptions
 
 The trusted base is recorded in the [charter](Semantics-Charter.md#3-trusted-computing-base).
@@ -547,6 +597,7 @@ an unknown version or an unmodeled construct is rejected, never interpreted.
 | 2026-11-01 | 1.0-draft | P0.6 (reference) | Added the strict Lean reader for dump `0.1.0` and defined the `stc-core-case` `0.1.0` descriptor, the `stc-sem-result` `0.1.0` result, and `lake exe stc-sem` in [Semantics-Cases.md](Semantics-Cases.md); the reader validates header/version/profile/semantics, status/features, names, positions, callees, arities, literals, and depth, and rejects unmodeled constructs. Added unit tests and temporary-fixture CLI tests (`lake exe stc-sem-tests`); no corpus case was committed while the harness was a fail-closed placeholder. The differential harness and corpus followed. |
 | 2026-11-02 | 1.0-draft | P0.6 (complete) | Added the opt-in launcher `--snapshot` surface backed by `Host::debug_read` and manifest roots, the differential harness, and the frozen `stc-sem-conformance-report` `0.1.0`; expanded the corpus to 74 cases covering every claimed core item or a justified exclusion, with the coverage inventory and triage log in `Semantics-Cases.md` §7; fixed `MIN`/`MAX`/`LIMIT` magnitude typing for bit strings and characters; committed the byte-stable report and made the corpus gate reject a stale copy. P0.6 approved 2026-11-02; the V0 differential-evidence label is unchanged |
 | 2026-11-02 | 1.0 | P0.7 | Froze `semantics_version` at `1.0` in the registry, the HIR dump, the case descriptors, the result and report metadata, and the Rust/Lean constants and tests; the dump, case, result, and report formats remain `0.1.0`. Completed this document against the P0.7 checklist, corrected the `semantics_versioned` status to tested evidence, and added the [Phase 0 Report](Reports/Phase0-Report.md) with the proof and evidence summary, known gaps and exclusions, TCB, freeze record, and the handoff to Phases 1, 2, 4, 5, 6, 7, and 8. P0.7 preparation is complete; the owner review and sign-off are pending |
+| 2026-11-03 | 1.0 | Phase 2 (WL-3) | Added §7.8 with the Phase 2 V0 model-theorem inventory: exact arithmetic, bitwise/shift/rotate, conversion, selection, and string property lemmas plus the `Stc.ConstEval` soundness and type-preservation theorems. Added the [Phase 2 Report](Reports/Phase2-Report.md), the non-default Aeneas bridge package with the checked-in generated exact model, and the Rust differential certificate. The phase is not owner-accepted, four external axioms and 22 refinement obligations remain open, and no V1 claim is made |
 
 ## 10. Rust/Lean interface
 

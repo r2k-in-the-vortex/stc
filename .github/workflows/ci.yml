@@ -520,6 +520,18 @@ jobs:
             echo "::error::sorry/admit found in Stc/Exact"
             exit 1
           fi
+      - name: Reject sorry/admit in Phase 2 constant-evaluation module
+        working-directory: lean
+        shell: bash
+        run: |
+          if [ ! -f Stc/ConstEval.lean ]; then
+            echo "::error::Stc/ConstEval.lean is missing"
+            exit 1
+          fi
+          if grep -rnwE 'sorry|admit' Stc/ConstEval.lean; then
+            echo "::error::sorry/admit found in Stc/ConstEval.lean"
+            exit 1
+          fi
       - name: Reject sorry/admit in Phase 0 modules
         working-directory: lean
         shell: bash
@@ -548,7 +560,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for path in Stc/Bridge aeneas/Bridge; do
+          for path in Stc/Bridge aeneas/Bridge aeneas/StcGenerated; do
             if [ ! -e "$path" ]; then
               continue
             fi

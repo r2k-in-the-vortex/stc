@@ -14,7 +14,11 @@ Checks:
     the standard Lean axioms (`propext`, `Classical.choice`, `Quot.sound`);
   * every "descoped" entry records a reason;
   * Phase 1 records stay V0 evidence with status `tested` or `planned` (the
-    Phase 1 policy: no refinement or proved bridge claim).
+    Phase 1 policy: no refinement or proved bridge claim);
+  * Phase 2 records stay at S or V0. Records that resolve only in the
+    non-default `lean/aeneas` bridge package must be V0 evidence with status
+    `planned` or `tested`; no V1 claim is accepted while the external axioms
+    and refinement obligations are open.
 
 Only the Python standard library, a `tomllib`-capable Python (3.11 or later),
 and `lake` on PATH are required. The Lean audit runs only when at least one
@@ -52,11 +56,16 @@ OPTIONAL_FIELDS = {"note"}
 ALLOWED_KINDS = {"theorem", "evidence", "definition"}
 ALLOWED_STATUSES = {"planned", "proved", "tested", "descoped"}
 ALLOWED_LEVELS = {"S", "V0", "V1", "V2", "V3", "V4"}
-ALLOWED_PHASES = {f"P0.{index}" for index in range(8)} | {"P1"}
+ALLOWED_PHASES = {f"P0.{index}" for index in range(8)} | {"P1", "P2"}
 ALLOWED_AXIOMS = {"propext", "Classical.choice", "Quot.sound"}
 # Phase 1 bridge records are evidence only: the spikes and checker interfaces
 # are V0 until the refinement theorem and its external-axiom equations land.
 P1_STATUSES = {"planned", "tested"}
+# Phase 2 model theorems are proved in the default package at V0. The bridge
+# package is not built in fast CI and its axioms/obligations are open, so
+# bridge-only records stay evidence and never claim V1.
+P2_LEVELS = {"S", "V0"}
+P2_BRIDGE_STATUSES = {"planned", "tested"}
 MODULE_ROOTS = (Path("lean"), Path("lean") / "aeneas")
 UMBRELLA_IMPORTS = (
     "Stc.Syntax",
@@ -155,6 +164,27 @@ def check_record(root: Path, record: dict, errors: list[str]) -> None:
         errors.append(f"{entry}: level must be one of {sorted(ALLOWED_LEVELS)}")
     if record["phase"] not in ALLOWED_PHASES:
         errors.append(f"{entry}: phase must be one of {sorted(ALLOWED_PHASES)}")
+    default_module, bridge_module = (
+        path.is_file() for path in module_candidates(root, record["module"])
+    )
+    bridge_only = bridge_module and not default_module
+    if record["phase"] == "P2":
+        if record["level"] not in P2_LEVELS:
+            errors.append(f"{entry}: Phase 2 records must stay at level S or V0")
+        if bridge_only:
+            if record["kind"] != "evidence":
+                errors.append(
+                    f"{entry}: bridge-package Phase 2 records must have kind 'evidence'"
+                )
+            if record["level"] != "V0":
+                errors.append(
+                    f"{entry}: bridge-package Phase 2 records must stay at level V0"
+                )
+            if record["status"] not in P2_BRIDGE_STATUSES:
+                errors.append(
+                    f"{entry}: bridge-package Phase 2 records must be 'planned' or "
+                    f"'tested', not {record['status']!r}"
+                )
     if record["phase"] == "P1":
         if record["kind"] != "evidence":
             errors.append(f"{entry}: Phase 1 records must have kind 'evidence'")
@@ -199,6 +229,8 @@ def lean_audit(root: Path, records: list[dict], errors: list[str]) -> None:
             cwd=root / "lean",
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     output = completed.stdout + completed.stderr

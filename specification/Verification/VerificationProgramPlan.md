@@ -13,7 +13,9 @@ three bridge spikes, the bridge decisions and module layout, the emitted-IR boun
 subset freeze recorded in [Core-IR-Boundary.md](Core-IR-Boundary.md), the bridge registry evidence
 and drift CI recorded in §6, and the durable Phase 1 report at
 [Reports/Phase1-Report.md](Reports/Phase1-Report.md). The temporary `WL-3-Phase-1.md` working plan
-has been retired. Phase 2 is next. The proved claims are the
+has been retired. Phase 2 is in progress on WL-3 and is not owner-accepted; its model
+theorems and bridge evidence are recorded in the registry and the durable
+[Phase 2 Report](Reports/Phase2-Report.md). The proved claims are the
 records in `lean/verification-status.toml`; no claim beyond them is made by this document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -560,6 +562,25 @@ operations must remain out of the proved subset and be documented as such; strin
 scope may grow.
 
 **Effort.** L.
+
+**Phase 2 status (WL-3, 2026-11-03).** Implemented and recorded, not owner-accepted:
+
+- exact property lemmas are proved in `Stc.Exact.{Int,Bits,Conv,Select,Strings}` at level V0;
+- `Stc.ConstEval` defines the executable evaluator and declarative relation and proves
+  `constEval_sound` and `constEval_type_preserving` for the modeled subset;
+- the non-default `lean/aeneas/` package checks in the filtered generated exact model and the
+  four external-axiom models; 24 refinement obligations are stated, 2 are proved, 22 remain open,
+  and the generated model excludes `convert`, the selection functions, and the string helpers;
+- `crates/stc-codegen/tests/exact_differential.rs` certifies agreement of the analyzer's folding
+  with `exact.rs` for the shared scalar subset, including 178 conversion pairs, while the three
+  production Rust paths remain duplicated;
+- the registry adds `P2` records: 30 proved V0 model theorems and five `tested` V0 evidence
+  records; the bridge records are evidence only and no record claims V1.
+
+The phase exit criterion is not met: the four external axioms and 22 refinement obligations are
+open, the constant-certificate path and `consteval_agrees_with_codegen` are not implemented, and
+the owner decisions on V1, production unification, and bridge scope remain outstanding. The
+temporary `WL-3-Phase-2.md` stays in the repository until owner acceptance.
 
 ### Phase 3 — Persistent identity, layout, plan, and artifact codecs
 
