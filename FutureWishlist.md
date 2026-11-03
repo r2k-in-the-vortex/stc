@@ -1,7 +1,7 @@
 # Future Wishlist — v2.0.0
 
-Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3 + P0.5), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, WL-11, WL-12, WL-13, and WL-14. Completed: WL-4 (2026-10-30), WL-5.1 (2026-11-02), WL-5.2 (2026-11-02), and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; P0.5 target soundness and whole-run bridge complete 2026-11-02, awaiting owner review).
-Date: 2026-10-29; revised 2026-11-02  
+Status: v2.0.0 target set locked 2026-10-29 and re-planned 2026-10-31. Locked: WL-1.1, WL-2, WL-3 (P0.4 + P0.3 + P0.5), WL-4 (x86-64), WL-5.1, WL-5.2, and WL-10. Deferred: WL-1.2, WL-6, WL-7, WL-8, WL-9, WL-11, WL-12, WL-13, WL-14, and WL-15. Completed: WL-4 (2026-10-30), WL-5.1 (2026-11-02), WL-5.2 (2026-11-02), and WL-10 (2026-10-31). In progress: WL-3 (P0.4 and P0.3 complete 2026-10-31; P0.5 target soundness and whole-run bridge complete 2026-11-02, awaiting owner review).
+Date: 2026-10-29; revised 2026-11-03
 Branch: `v2.0.0-planning`  
 Baseline: `stc` 1.0.0, released 2026-10-29  
 Profile: `stc-2013-oop-utf8-v1`
@@ -100,6 +100,7 @@ more. They are order-of-magnitude estimates for comparison only.
 | WL-12 | Reduce cycle-thread wake-up jitter at sub-millisecond cycle times | Runtime/RT | M/L | WL-5.2 CT-sweep evidence; RT host | Deferred |
 | WL-13 | Lean security verification for the Modbus TCP server boundary | Verification/security | L/XL | WL-3 Lean infrastructure; WL-5.1 server | Deferred |
 | WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4/WL-12 harness; CI runners; macOS test-only | Deferred |
+| WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Deferred |
 
 ## 5. Candidate items
 
@@ -1219,6 +1220,65 @@ project dependency or evidence).
 **Tentative size.** M/L, dominated by CI matrix work, platform scheduling experiments, and
 measurement.
 
+### WL-15 — MQTT client for process-image I/O
+
+**Intent.** Add an MQTT client I/O backend that connects to an external MQTT broker and maps
+topic/payload messages to the `stc` process image. The broker is external; this item does not
+implement a broker, an MQTT server, or a cloud connector.
+
+**Selection.** Deferred on 2026-11-03, beyond v2.0.0; it is not part of the locked v2.0.0 target
+set. Recorded because the architecture already lists MQTT as a planned backend and because it
+complements the Modbus TCP server and EtherCAT backends.
+
+**Why it matters.** MQTT is the common lightweight publish/subscribe transport for sensors,
+gateways, dashboards, and IT/cloud integration. A client backend lets `stc` consume remote
+sensor and telemetry values into inputs and publish PLC outputs and status without implementing a
+broker. It attaches to the existing multi-backend coordinator as another device `kind`, so it can
+run alongside Modbus TCP and EtherCAT over the same process image. It is non-real-time,
+best-effort, and not suitable for interpolated motion or safety functions.
+
+**Candidate scope.**
+
+- Client role only: connect to one or more configured MQTT brokers; no broker, MQTT server,
+  MQTT-SN, or cloud-specific connector.
+- Map channels to topics and payloads in the machine profile: subscription topics for inputs,
+  publish topics for outputs, payload encoding, retain and last-will, QoS, keepalive, reconnect
+  and backoff, and stale/cache behavior.
+- Integrate as an `mqtt`/`mqtt-status` kind through `DeviceBackend`; connection lifecycle,
+  per-backend fault/status, and optional PLC-visible status fields.
+- Support broker authentication and TLS where the broker requires it; document the trust
+  boundary and credential handling.
+- Evidence: a broker simulator or local test broker, reconnect and malformed-payload tests,
+  cross-host tests, and cycle-overhead measurements. No hard real-time or safety claim.
+
+**Constraints and current state.**
+
+- The project does not ship or require a broker; an operator-provided broker is a run target. The
+  test strategy must provide a deterministic local broker or simulator.
+- MQTT payloads are project-defined; there is no standard PLC register layout. The mapping must
+  be explicit and source-controlled, not inferred.
+- MQTT is asynchronous and non-real-time. A slow or unavailable broker must not stall the scan;
+  the backend needs an explicit stale/cache and reconnect policy.
+- The item does not add MQTT to the v2.0.0 release, the default package, or the safety claim.
+
+**Open questions.**
+
+- MQTT 3.1.1 first, MQTT 5.0, or both?
+- Use an external MQTT client library (and which license/ABI) or a project-owned minimal client?
+- What payload encoding(s) are required: raw bytes, BOOL/int/float/string, or JSON?
+- Which QoS levels, retained messages, last-will, clean-session, and keepalive defaults?
+- How are credentials and TLS material configured and kept out of source control?
+- What is the stale/cache policy when the broker disconnects, and how are failures visible to
+  the PLC?
+- One broker per device, multiple brokers per run, or one broker shared by several devices?
+- How does the test suite provide a broker without making the base package depend on one?
+
+**Related.** [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md),
+[I/O and Devices](specification/Architecture/IO-and-Devices.md), WL-5.1, WL-5.2, WL-11.
+
+**Tentative size.** M/L, dominated by MQTT client integration, mapping schema, security
+configuration, and broker-backed tests.
+
 ## 6. Cross-cutting notes
 
 - WL-4, WL-5.1, and WL-5.2 are locked v2.0.0 targets: RT timing, Modbus TCP server I/O, and
@@ -1240,6 +1300,9 @@ measurement.
 - WL-14 is deferred. macOS is test-only and does not become a supported production host; the item
   combines CI coverage with opt-in Windows/macOS scheduling experiments and does not make a
   hard-real-time or safety claim.
+- WL-15 is deferred. It is an MQTT client backend for an external broker, not a broker or server;
+  it shares the multi-backend coordinator and needs an explicit payload, stale/cache, and security
+  model. It is not v2.0.0 scope.
 - WL-4 and WL-5.2 reinforce each other: EtherCAT cyclic process data is best verified on the
   PREEMPT_RT host, and WL-5.2 should not assume the host exists without a fallback test path.
 - WL-6 is deferred to a future version. If revived, it reuses robot-sim's `robot-motion` and its
@@ -1308,3 +1371,4 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-11-02 | Added WL-13 (Lean security verification for the Modbus TCP server boundary) as deferred beyond v2.0.0. |
 | 2026-11-02 | Added WL-14 (macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests) as deferred beyond v2.0.0. |
 | 2026-11-02 | Retired the WL-5.1 working plan after PR #15 merged; the permanent contract is [IO Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) §4.5, decisions D-229–D-243, and [Modbus-Server.md](specification/Verification/Modbus-Server.md). |
+| 2026-11-03 | Added WL-15 (MQTT client for process-image I/O) as deferred beyond v2.0.0; it is not in the v2 target set. |
