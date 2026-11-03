@@ -77,6 +77,14 @@ pub struct LaunchArguments {
     pub allow_write: bool,
     /// Request the `force` scope.
     pub allow_force: bool,
+    /// Select one discovered `{stc:test}` POU to build and launch as a debug
+    /// harness. The value is the test name printed by `stc test --list`.
+    ///
+    /// A test launch builds into `<artifact root>/debug/<test>`, leaves the
+    /// ordinary `stc test` artifacts untouched, and waits for breakpoints to be
+    /// configured before the first cycle. It cannot be combined with
+    /// `noBuild`, `release`, or `attach`.
+    pub test: Option<String>,
     /// Override the protocol-path root instead of resolving package roots.
     pub source_root: Option<String>,
     /// Extra arguments appended to the launcher command line.

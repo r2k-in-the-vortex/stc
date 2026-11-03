@@ -31,6 +31,16 @@ pub trait SessionHost {
     fn drain_output(&mut self) -> Vec<OutputLine>;
     /// Returns the host's exit code when the process has exited.
     fn try_exit(&mut self) -> Option<i32>;
+    /// Releases a host that waits for breakpoint configuration before its
+    /// first cycle (the per-test debug harness). The adapter calls this after
+    /// `session.start`, `manifest.get`, and `apply_all_breakpoints`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a readable message when the start gate cannot be released.
+    fn configuration_complete(&mut self) -> Result<(), String> {
+        Ok(())
+    }
     /// Stops the host through the control channel and reaps the process.
     fn shutdown(&mut self);
 }

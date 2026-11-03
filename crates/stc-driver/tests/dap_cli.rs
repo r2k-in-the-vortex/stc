@@ -1167,6 +1167,245 @@ fn release_session_monitors_globals_while_running() {
     );
 }
 
+const TEST_MANIFEST: &str = "\
+schema = 1
+
+[package]
+name = \"demo\"
+version = \"0.1.0\"
+language = \"stc-2013-oop-utf8-v1\"
+
+[project]
+sources = [\"src/**/*.st\"]
+
+[test]
+sources = [\"tests/**/*.st\"]
+";
+
+const TEST_SOURCE: &str = "\
+{stc:test}
+FUNCTION AddWorks : BOOL
+VAR
+  r : DINT;
+END_VAR
+  r := 2 + 3;
+  STC_ASSERT(r = 5, \"2 + 3 should be 5\");
+  AddWorks := TRUE;
+END_FUNCTION
+";
+
+/// F-17: a `{stc:test}` POU is built as a debug harness, stops before its body
+/// runs, reports the test source and locals, steps, and then finishes with the
+/// test host's structured result line and a clean session end.
+#[test]
+fn launch_selected_test_stops_before_its_body_and_reports_locals() {
+    let Some(_clang) = clang() else {
+        return;
+    };
+    let project = TestDir::new("test-debug");
+    project.write("stc.toml", TEST_MANIFEST);
+    project.write("src/main.st", "PROGRAM Main\n  ;\nEND_PROGRAM\n");
+    let tests = project.write("tests/smoke.st", TEST_SOURCE);
+    let stop = line_of(TEST_SOURCE, "r := 2 + 3;");
+
+    let mut client = DapClient::spawn(&project.path);
+    initialize(&mut client);
+    let launch = client.request(
+        "launch",
+        json!({
+            "project": project.manifest().to_string_lossy(),
+            "test": "AddWorks",
+            "allowWrite": false,
+            "allowForce": false,
+        }),
+    );
+    assert_eq!(launch["success"], true, "{launch}");
+    // Breakpoints arrive after the launch request but before
+    // `configurationDone`; the harness waits for the adapter's start gate, so
+    // even a single-cycle test cannot run past them.
+    let breakpoints = client.request(
+        "setBreakpoints",
+        json!({
+            "source": { "path": tests.to_string_lossy() },
+            "breakpoints": [{ "line": stop }],
+        }),
+    );
+    assert_eq!(breakpoints["success"], true, "{breakpoints}");
+    assert_eq!(
+        breakpoints["body"]["breakpoints"][0]["verified"], true,
+        "a breakpoint in a test source binds: {breakpoints}"
+    );
+    let configuration = client.request("configurationDone", json!({}));
+    assert_eq!(configuration["success"], true, "{configuration}");
+
+    let stopped = client.event("stopped", BUILD_TIMEOUT);
+    assert_eq!(stopped["body"]["reason"], "breakpoint", "{stopped}");
+    let stack = client.request("stackTrace", json!({ "threadId": 1 }));
+    assert_eq!(stack["success"], true, "{stack}");
+    let frames = stack["body"]["stackFrames"]
+        .as_array()
+        .expect("stack frames");
+    assert_eq!(frames[0]["name"], "ADDWORKS", "{stack}");
+    assert_eq!(frames[0]["line"], json!(stop), "{stack}");
+    assert_eq!(
+        frames[0]["source"]["path"].as_str(),
+        Some(normalized_path(&tests).as_str()),
+        "the test frame maps to the test source file: {stack}"
+    );
+    assert_eq!(
+        stack_frame_names(&stack),
+        ["ADDWORKS"],
+        "the synthetic test wrapper frame is hidden: {stack}"
+    );
+
+    let frame_id = frames[0]["id"].as_i64().expect("frame id");
+    let scopes = client.request("scopes", json!({ "frameId": frame_id }));
+    assert_eq!(scopes["success"], true, "{scopes}");
+    let local = read_local(&mut client, &scopes, "R");
+    assert!(
+        local.parse::<i64>().is_ok(),
+        "the test local R is readable: {local}"
+    );
+
+    // Stepping works inside the test body.
+    let next = client.request("next", json!({ "threadId": 1 }));
+    assert_eq!(next["success"], true, "{next}");
+    let stepped = client.event("stopped", PROTOCOL_TIMEOUT);
+    assert_eq!(stepped["body"]["reason"], "step", "{stepped}");
+    let stepped_stack = client.request("stackTrace", json!({ "threadId": 1 }));
+    assert_eq!(
+        stepped_stack["body"]["stackFrames"][0]["name"], "ADDWORKS",
+        "{stepped_stack}"
+    );
+    let stepped_line = stepped_stack["body"]["stackFrames"][0]["line"]
+        .as_i64()
+        .expect("stepped line");
+    assert!(
+        stepped_line >= stop,
+        "the step stays in the test body: {stepped_stack}"
+    );
+
+    // Continue to the end: the test host prints its structured result line and
+    // exits, which ends the DAP session.
+    let continued = client.request("continue", json!({ "threadId": 1 }));
+    assert_eq!(continued["success"], true, "{continued}");
+    let _terminated = client.event("terminated", BUILD_TIMEOUT);
+    client.collect_events();
+    let outputs: Vec<&str> = client
+        .events()
+        .filter(|event| event["event"] == "output")
+        .filter_map(|event| event["body"]["output"].as_str())
+        .collect();
+    assert!(
+        outputs.iter().any(|line| {
+            line.contains("\"kind\":\"stc-test-result\"")
+                && line.contains("\"name\":\"AddWorks\"")
+                && line.contains("\"status\":\"pass\"")
+        }),
+        "the test host result line is forwarded: {outputs:?}"
+    );
+
+    // F-17: the debug harness has a frame sidecar and lives in its own
+    // directory; the ordinary `stc test` artifact path is untouched.
+    let debug_dir = project.path.join("target/stc/test/debug/demo-AddWorks");
+    assert!(
+        debug_dir.join("demo-AddWorks.stc-frames.json").is_file(),
+        "the debug test build writes its frame sidecar in {}",
+        debug_dir.display()
+    );
+    assert!(
+        !project.path.join("target/stc/test/demo-AddWorks").exists(),
+        "a debug test launch does not write the ordinary test artifact"
+    );
+
+    let disconnect = client.request("disconnect", json!({}));
+    assert_eq!(disconnect["success"], true, "{disconnect}");
+    assert_eq!(
+        client.wait_exit(PROTOCOL_TIMEOUT),
+        Some(0),
+        "the adapter exits cleanly after the test session ends"
+    );
+}
+
+#[test]
+fn test_launch_rejects_incompatible_options() {
+    let cases = [
+        (
+            "launch",
+            json!({ "test": "" }),
+            "must name a discovered test",
+        ),
+        (
+            "launch",
+            json!({ "test": "AddWorks", "noBuild": true }),
+            "requires a build",
+        ),
+        (
+            "launch",
+            json!({ "test": "AddWorks", "release": true }),
+            "cannot be release builds",
+        ),
+        (
+            "attach",
+            json!({ "test": "AddWorks", "endpoint": "missing.endpoint" }),
+            "not accepted by an attach request",
+        ),
+    ];
+    for (command, arguments, expected) in cases {
+        let mut client = DapClient::spawn(Path::new("."));
+        initialize(&mut client);
+        let response = client.request(command, arguments);
+        assert_eq!(response["success"], false, "{response}");
+        assert!(
+            response["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(expected)),
+            "expected `{expected}` in {response}"
+        );
+        let disconnect = client.request("disconnect", json!({}));
+        assert_eq!(disconnect["success"], true, "{disconnect}");
+        assert!(
+            client.wait_exit(PROTOCOL_TIMEOUT).is_some(),
+            "the adapter exits after a rejected launch"
+        );
+    }
+}
+
+#[test]
+fn test_launch_rejects_an_unknown_test_name() {
+    let project = TestDir::new("test-debug-missing");
+    project.write("stc.toml", TEST_MANIFEST);
+    project.write("src/main.st", "PROGRAM Main\n  ;\nEND_PROGRAM\n");
+    project.write("tests/smoke.st", TEST_SOURCE);
+    let mut client = DapClient::spawn(&project.path);
+    initialize(&mut client);
+    let launch = client.request(
+        "launch",
+        json!({
+            "project": project.manifest().to_string_lossy(),
+            "test": "Missing",
+        }),
+    );
+    // The launch request is acknowledged so breakpoints can arrive before it
+    // builds; discovery fails when the pending session starts.
+    assert_eq!(launch["success"], true, "{launch}");
+    let configuration = client.request("configurationDone", json!({}));
+    assert_eq!(configuration["success"], false, "{configuration}");
+    assert!(
+        configuration["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("no test named `Missing`")),
+        "{configuration}"
+    );
+    let _terminated = client.event("terminated", PROTOCOL_TIMEOUT);
+    let disconnect = client.request("disconnect", json!({}));
+    assert_eq!(disconnect["success"], true, "{disconnect}");
+    assert!(
+        client.wait_exit(PROTOCOL_TIMEOUT).is_some(),
+        "the adapter exits after an unknown test name"
+    );
+}
+
 #[test]
 fn launch_accepts_breakpoints_after_the_launch_request() {
     let Some(_clang) = clang() else {

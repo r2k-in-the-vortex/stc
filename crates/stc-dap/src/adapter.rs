@@ -35,6 +35,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_SCOPE_CHILDREN: usize = 256;
 /// How long a target-exited teardown waits for the host process to be reaped.
 const EXIT_WAIT: Duration = Duration::from_secs(2);
+/// Synthetic wrapper PROGRAM generated for function and FB test artifacts
+/// (Testing and Verification §2.5). It is not user code, so a per-test debug
+/// launch hides it from the call stack.
+const TEST_WRAPPER_FRAME: &str = "STC_TEST_WRAPPER";
 
 /// Runs the adapter over the process standard streams.
 ///
@@ -132,6 +136,8 @@ struct Session {
     globals: GlobalsLayout,
     /// Manifest function `GotId`s mapped to display names for stack frames.
     function_names: BTreeMap<String, String>,
+    /// Per-test debug launch: hide the synthetic test wrapper from the stack.
+    test_launch: bool,
 }
 
 /// One requested DAP breakpoint.
@@ -464,13 +470,38 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             self.fail(request, "stopOnEntry is not supported");
             return;
         }
+        if let Some(test) = arguments.test.as_deref() {
+            if test.is_empty() {
+                self.fail(request, "`test` must name a discovered test");
+                return;
+            }
+            if attach {
+                self.fail(request, "`test` is not accepted by an attach request");
+                return;
+            }
+            if arguments.no_build {
+                self.fail(
+                    request,
+                    "`test` requires a build; remove `noBuild` or launch the selected test",
+                );
+                return;
+            }
+            if arguments.release {
+                self.fail(request, "`test` launches cannot be release builds");
+                return;
+            }
+        }
         if attach && arguments.endpoint.as_deref().is_none_or(str::is_empty) {
             self.fail(request, "attach requires an `endpoint` file");
             return;
         }
         let project = arguments.project_path(self.options.manifest_path.as_deref());
         let source_root = arguments.source_root.as_deref().map(Path::new);
-        let source_table = match SourceTable::from_project(&project, source_root) {
+        let source_table = match SourceTable::from_project_with_tests(
+            &project,
+            source_root,
+            arguments.test.is_some(),
+        ) {
             Ok(table) => table,
             Err(error) => {
                 self.fail(
@@ -524,7 +555,12 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             None => {
                 let project = arguments.project_path(self.options.manifest_path.as_deref());
                 let source_root = arguments.source_root.as_deref().map(Path::new);
-                SourceTable::from_project(&project, source_root).map_err(|error| {
+                SourceTable::from_project_with_tests(
+                    &project,
+                    source_root,
+                    arguments.test.is_some(),
+                )
+                .map_err(|error| {
                     format!("cannot load the project `{}`: {error}", project.display())
                 })?
             }
@@ -577,6 +613,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
         let function_names = manifest_body
             .as_ref()
             .map_or_else(BTreeMap::new, function_names_from_manifest);
+        let test_launch = arguments.test.is_some();
         self.session = Some(Session {
             client,
             host: launched.host,
@@ -587,6 +624,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             source_table,
             globals,
             function_names,
+            test_launch,
         });
         self.send_output("console", NON_SAFETY_NOTICE);
         if protocol == DEBUG_PROTOCOL_1_1 && frames_available {
@@ -611,6 +649,13 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             );
         }
         self.apply_all_breakpoints();
+        // The per-test harness waits here for the first cycle so a breakpoint
+        // set moments ago cannot lose a single-cycle race.
+        if let Some(session) = self.session.as_mut()
+            && let Some(host) = session.host.as_mut()
+        {
+            host.configuration_complete()?;
+        }
         Ok(())
     }
 
@@ -926,11 +971,15 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 exited = host.try_exit();
             }
         }
-        for message in &messages {
-            self.handle_runtime_message(message);
-        }
+        // Forward host output before handling runtime events: a
+        // `session-ended` event ends the session and emits `terminated`, and a
+        // test host may have already printed its result line into this batch.
+        // Sending the batch first keeps that line ahead of the terminal event.
         for line in outputs {
             self.send_output(line.category, &line.text);
+        }
+        for message in &messages {
+            self.handle_runtime_message(message);
         }
         if let Some(error) = failed {
             self.send_output(
@@ -1044,6 +1093,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             }
         };
         let function_names = session.function_names.clone();
+        let test_launch = session.test_launch;
         let truncated = jget(&result, "truncated")
             .and_then(Json::as_bool)
             .unwrap_or(false);
@@ -1064,6 +1114,9 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 let Some(name) = function_names.get(function).cloned() else {
                     continue;
                 };
+                if test_launch && name == TEST_WRAPPER_FRAME {
+                    continue;
+                }
                 if position == 0 {
                     top_resolved = true;
                 }
@@ -1760,6 +1813,12 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             host.shutdown();
             if exit_code.is_none() && reason == "target-exited" {
                 exit_code = host.try_exit();
+            }
+            // A test host stops its debug server before printing its result
+            // line, so forward output produced during shutdown before the
+            // terminal events.
+            for line in host.drain_output() {
+                self.send_output(line.category, &line.text);
             }
         }
         if !matches!(reason, "client" | "disconnect" | "terminate") {

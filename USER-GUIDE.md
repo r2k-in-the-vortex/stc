@@ -282,6 +282,13 @@ include `print`, `set`, `force`, `release`, `release-all`, `watch`,
 - Release builds are monitoring-only; breakpoints, stepping, and full locals
   require a debug build. Monitor live Globals and target paths from the Debug
   Console; Variables and Watch require a stopped frame.
+- A selected `{stc:test}` POU can be debugged through the DAP `test` launch
+  field (see §8.4). Set it to a name printed by `stc test --list`; the run
+  builds only that test as a hook-bearing harness under
+  `target/stc/test/debug/<artifact>`, applies breakpoints before the test body
+  executes, and ends when the test prints its result line and exits. `stc test`
+  itself remains hook-free and its artifacts are unchanged. `test` cannot be
+  combined with `noBuild`, `release`, or attach.
 - Debug is local only. There is no raw-memory access, unauthenticated mode, or
   remote transport. The endpoint file is user-only and contains the per-run
   token; never share it.
@@ -396,6 +403,13 @@ Launch builds the debug form by default and stops a launch-owned host when the s
 release form; `sourceRoot` overrides package-root source mapping; `args` and `cwd` apply to the
 launched host. Attach connects to the endpoint file printed by `stc run --debug-server` and leaves
 the host running. Replace the placeholder endpoint path with the printed file.
+
+Add `"test": "<name>"` to a launch configuration to debug one test. The name must match a test
+listed by `stc test --list` exactly. The launch builds only that test as a hook-bearing harness
+under `target/stc/test/debug/<artifact>` (or under `<outDir>/debug/<artifact>`), so the ordinary
+`stc test` artifacts stay hook-free and unchanged. Breakpoints in test source bind before the test
+body runs, the test POU is the top frame, and the session ends after the test prints its result
+line and exits. `test` cannot be combined with `noBuild`, `release`, or attach.
 
 Writes are disabled by default. `allowWrite` requests the write scope and enables `setVariable` for
 writable live roots (globals, program-instance fields, and live split fields); the host must also

@@ -272,9 +272,26 @@ test case; the artifact is a normal ABI 2 module/manifest pair plus a test host,
   and exclude `{stc:test}` POUs before analysis/codegen. `STC_ASSERT` in production is
   `STC-E-ASSERT-001`; a reference to a test-only POU is `STC-E-TEST-001`; invalid test
   signatures, duplicates, and source conflicts use `STC-E-TEST-002/003/004`.
-- **Contract boundary.** No manifest/descriptor/state format changes; the only ABI addition is
-  service ID 12. Test artifacts never participate in a baseline or a swap, so they cannot affect
-  production identity or retained state.
+- **Per-test debugging.** A discovered test can be launched under the debug adapter by name
+  through the DAP `test` launch field (IDE Integration §4.1). This is the one test build that is
+  not hook-free: it is compiled with `test_debug=true` and therefore imports checkpoint service
+  13 at host minor 2.3, carries `debug.hooks=true` with a non-empty checkpoint table and the
+  stopped-frame sidecar, while retaining the ABI 2.2 test-clock service 12. The artifact is
+  written under `<artifact root>/debug/<artifact>` (default
+  `target/stc/test/debug/<artifact>`), so the ordinary `stc test` artifact at
+  `target/stc/test/<artifact>` is neither reused nor overwritten. The test host publishes its
+  debug endpoint and then waits for a start gate that the adapter writes after applying
+  breakpoints and receiving `configurationDone`; this makes a single-cycle test stop at its
+  breakpoint instead of racing the adapter. While gated, the host still services the debug
+  command queue, so breakpoint binding and function-name resolution complete before the first
+  cycle. The adapter includes the root package's `[test].sources` in the source table, hides the
+  synthetic `STC_TEST_WRAPPER` frames, and the test host still prints its one result line and
+  exits, ending the session. A plain `stc test` build remains hook-free at ABI 2.2 and unchanged.
+- **Contract boundary.** No manifest/descriptor/state format changes; the only ABI addition for
+  ordinary test builds is service ID 12. Test artifacts never participate in a baseline or a swap,
+  so they cannot affect production identity or retained state. Per-test debugging adds no
+  debug-protocol operation or artifact format: it reuses service 13, the existing frame sidecar,
+  and a start-gate file.
 
 ### 2.6 Coverage
 

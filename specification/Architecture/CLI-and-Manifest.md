@@ -519,13 +519,17 @@ UTF-16 positions; the closed unsupported list is in IDE Integration §3.3.
 
 **`stc dap`.** Serves the Debug Adapter Protocol over stdio. Launch and attach settings arrive as
 DAP messages (`project`, `noBuild`, `outDir`, `release`, `allowWrite`, `allowForce`, `sourceRoot`,
-`args`, `cwd`, and `endpoint` for attach); `--manifest-path` is only a fallback project path.
-Launch builds the debug form by default and starts a local endpoint through the same driver
-plumbing as `stc debug`; `noBuild` launches existing artifacts. The adapter translates DAP to
-`stc-debug/1.1` and falls back to `stc-debug/1`, reports unsupported capabilities honestly, and
-owns no compiler or debugger logic. `disconnect` stops the session and exits the adapter; a
-launch-owned host is shut down, while attach leaves it running. `stc dap` is distinct from
-`stc debug`: `stc debug` is the interactive CLI client, and `stc dap` is the editor server.
+`args`, `cwd`, `test` for a selected test, and `endpoint` for attach); `--manifest-path` is only a
+fallback project path. Launch builds the debug form by default and starts a local endpoint through
+the same driver plumbing as `stc debug`; `noBuild` launches existing artifacts. A launch with
+`test` builds only that discovered `{stc:test}` POU with the per-test debug harness (Testing and
+Verification §2.5) into `<artifact root>/debug/<artifact>`, applies breakpoints before releasing
+the test host's start gate, and cannot be combined with `noBuild`, `release`, or attach. The
+adapter translates DAP to `stc-debug/1.1` and falls back to `stc-debug/1`, reports unsupported
+capabilities honestly, and owns no compiler or debugger logic. `disconnect` stops the session and
+exits the adapter; a launch-owned host is shut down, while attach leaves it running. `stc dap` is
+distinct from `stc debug`: `stc debug` is the interactive CLI client, and `stc dap` is the editor
+server.
 
 `--diagnostic-paths` affects project-mode diagnostics only. `package` is the default and keeps
 `<package>/<relative>` names for human and JSON output; `absolute` names the source file by its
@@ -789,6 +793,11 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
 - `timeout` is a duration string; the runner kills the test process on expiry. The default is 5 s.
 - `[test].mock-clock` sets the initial mock time; tests advance the next cycle's latched time with
   `STC_CLOCK_ADVANCE` through host ABI 2.2 service ID 12 (D-157).
+- A `stc dap` launch with `test` selects a test by its exact discovered name (`stc test --list`
+  prints the names). The run compiles the same root package and dependencies, including
+  `[test].sources`, but builds only the selected test as a hook-bearing per-test debug harness
+  under `target/stc/test/debug/<artifact>` (D-231). Ordinary `stc test` builds and artifacts are
+  unaffected.
 - `[test] coverage` is a boolean (default `false`). When `true`, `stc test` collects statement
   coverage by default. `--coverage` forces it on and `--no-coverage` forces it off, overriding the
   manifest; `--list` ignores the manifest default. `--coverage` with `--no-coverage`, `--coverage`
@@ -912,6 +921,17 @@ target/stc/test/<artifact>/                     per-test artifact (stc test; hoo
   <artifact>.stc-meta.json
   <artifact>.stc-got.json
   <artifact>.stc-got.bin
+
+target/stc/test/debug/<artifact>/               per-test debug harness (stc dap launch `test`; D-231)
+  <artifact>.ll
+  <artifact>.o
+  <artifact>.exe | <artifact>                    thin host launcher (exe)
+  <artifact>-launcher.ll | <artifact>-launcher.o
+  <artifact>-<build-id>.dll | <artifact>-<build-id>.so
+  <artifact>.stc-meta.json
+  <artifact>.stc-got.json
+  <artifact>.stc-got.bin
+  <artifact>.stc-frames.json                    stopped-frame sidecar (hook-bearing)
 
 target/stc/coverage/                            coverage reports (stc test; default)
   coverage.json                                 native report (`stc-coverage/1`)

@@ -233,6 +233,7 @@ pub fn output_with_flags(source: &str, name: &str, flags: BuildFlags) -> Output 
         module: ModuleBuildOptions::default(),
         project: ProjectOptions::default(),
         test_build: flags.test_build,
+        test_debug: false,
         coverage: None,
     };
     stc_codegen::generate(&hir, &options)

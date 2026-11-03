@@ -107,9 +107,13 @@
                 "default": "${workspaceFolder}/stc.toml",
                 "description": "Path to stc.toml, its directory, or a project directory."
               },
+              "test": {
+                "type": "string",
+                "description": "Exact test name from `stc test --list`; build and debug only that test. Cannot be combined with noBuild or release."
+              },
               "outDir": {
                 "type": "string",
-                "description": "Output directory override; used by noBuild."
+                "description": "Output directory override; used by noBuild. A test launch appends debug/<artifact>."
               },
               "noBuild": {
                 "type": "boolean",

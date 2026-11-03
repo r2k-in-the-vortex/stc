@@ -26,6 +26,7 @@ use crate::cli::DebugOptions;
 use crate::project::{self, ProjectBuild};
 use crate::report::{ColorChoice, DiagnosticPaths, Format, LintOverrides, Log, Reporter};
 use crate::run as run_util;
+use crate::test;
 
 /// Deadline for the host to publish its endpoint file.
 const ENDPOINT_DEADLINE: Duration = Duration::from_secs(5);
@@ -51,6 +52,9 @@ struct DapLauncher {
 impl Launcher for DapLauncher {
     fn launch(&mut self, arguments: &LaunchArguments) -> Result<LaunchedSession, String> {
         let project_path = arguments.project_path(self.manifest_path.as_deref());
+        if let Some(test) = arguments.test.as_deref() {
+            return launch_test(&project_path, test, arguments);
+        }
         let build = if arguments.no_build {
             no_build(&project_path, arguments)?
         } else {
@@ -77,7 +81,15 @@ impl Launcher for DapLauncher {
             )
             .map_err(|code| format!("the project build failed (exit code {code})"))?
         };
-        spawn_host(&build, arguments)
+        let args = run_util::run_arguments(&build.run, &build.manifest, &build.root_dir, false);
+        spawn_host(
+            &build.launcher,
+            &build.out_dir,
+            args,
+            &build.manifest,
+            arguments,
+            false,
+        )
     }
 
     fn attach(&mut self, arguments: &LaunchArguments) -> Result<LaunchedSession, String> {
@@ -93,6 +105,49 @@ impl Launcher for DapLauncher {
         })?;
         Ok(LaunchedSession { client, host: None })
     }
+}
+
+/// Builds one selected test as a debug harness and spawns its test host.
+///
+/// The adapter validates `noBuild`, `release`, and attach combinations before
+/// calling the launcher; this check keeps the launcher honest for direct users.
+fn launch_test(
+    project_path: &Path,
+    test_name: &str,
+    arguments: &LaunchArguments,
+) -> Result<LaunchedSession, String> {
+    if arguments.no_build {
+        return Err("`test` requires a build; remove `noBuild`".into());
+    }
+    if arguments.release {
+        return Err("`test` launches cannot be release builds".into());
+    }
+    let mut request = Request::default();
+    if let Some(out_dir) = &arguments.out_dir {
+        request.out_dir = Some(out_dir.clone());
+    }
+    let mut reporter = Reporter::new(
+        Format::Human,
+        ColorChoice::Never,
+        false,
+        &LintOverrides::default(),
+    );
+    let build = test::build_debug_test(
+        Some(&project_path.to_string_lossy()),
+        &request,
+        test_name,
+        DiagnosticPaths::Package,
+        &mut reporter,
+        Log::new(false, 0),
+    )?;
+    spawn_host(
+        &build.launcher,
+        &build.out_dir,
+        build.args,
+        &build.manifest,
+        arguments,
+        true,
+    )
 }
 
 /// Resolves a `noBuild` launch from existing artifacts.
@@ -147,38 +202,47 @@ fn no_build(project_path: &Path, arguments: &LaunchArguments) -> Result<ProjectB
 }
 
 /// Spawns the runtime host with piped output and connects the debug client.
+///
+/// `test` launches add a start gate: the test host publishes the debug endpoint
+/// and then waits for [`SessionHost::configuration_complete`] before its first
+/// cycle. A production launch runs immediately, exactly as before.
+#[allow(clippy::too_many_arguments)]
 fn spawn_host(
-    build: &ProjectBuild,
+    launcher: &Path,
+    out_dir: &Path,
+    host_args: Vec<String>,
+    manifest: &stc_manifest::Manifest,
     arguments: &LaunchArguments,
+    test: bool,
 ) -> Result<LaunchedSession, String> {
-    let endpoint = build
-        .out_dir
-        .join(format!("stc-debug-{}.endpoint", crate::debug::random_hex()));
-    let control = crate::debug::control_endpoint();
     let nonce = crate::debug::random_hex();
+    let endpoint = out_dir.join(format!("stc-debug-{nonce}.endpoint"));
+    let control = crate::debug::control_endpoint();
+    let gate = test.then(|| out_dir.join(format!("stc-test-start-{nonce}.gate")));
+    if let Some(gate) = &gate {
+        let _ = std::fs::remove_file(gate);
+    }
     let debug_options = DebugOptions {
         allow_write: arguments.allow_write,
         allow_force: arguments.allow_force,
         ..DebugOptions::default()
     };
-    let mut command = Command::new(&build.launcher);
-    command.args(run_util::run_arguments(
-        &build.run,
-        &build.manifest,
-        &build.root_dir,
-        false,
-    ));
+    let mut command = Command::new(launcher);
+    command.args(&host_args);
     command.args(crate::debug::server_arguments_for(
         &debug_options,
-        &build.manifest,
+        manifest,
         &endpoint,
     ));
+    if let Some(gate) = &gate {
+        command.arg("--start-gate").arg(gate);
+    }
     command
         .arg("--control")
         .arg(&control)
         .arg("--control-nonce")
         .arg(&nonce);
-    // The launch configuration's `args` follow the resolved run options so a
+    // The launch configuration's `args` follow the resolved host options so a
     // later flag overrides a manifest default.
     command.args(&arguments.args);
     command
@@ -191,12 +255,17 @@ fn spawn_host(
     let mut child = command.spawn().map_err(|error| {
         format!(
             "cannot start the launcher `{}`: {error}",
-            build.launcher.display()
+            launcher.display()
         )
     })?;
     let (sender, receiver) = mpsc::channel();
-    spawn_output_reader(child.stdout.take(), "stdout", sender.clone());
-    spawn_output_reader(child.stderr.take(), "stderr", sender);
+    let mut readers = Vec::new();
+    if let Some(handle) = spawn_output_reader(child.stdout.take(), "stdout", sender.clone()) {
+        readers.push(handle);
+    }
+    if let Some(handle) = spawn_output_reader(child.stderr.take(), "stderr", sender) {
+        readers.push(handle);
+    }
     let deadline = Instant::now() + ENDPOINT_DEADLINE;
     while !endpoint.is_file() {
         if let Ok(Some(status)) = child.try_wait() {
@@ -226,6 +295,8 @@ fn spawn_host(
             child,
             control,
             nonce,
+            gate,
+            readers,
             output: receiver,
         })),
     })
@@ -235,10 +306,8 @@ fn spawn_output_reader<R: Read + Send + 'static>(
     stream: Option<R>,
     category: &'static str,
     sender: mpsc::Sender<OutputLine>,
-) {
-    let Some(stream) = stream else {
-        return;
-    };
+) -> Option<std::thread::JoinHandle<()>> {
+    let stream = stream?;
     let spawned = std::thread::Builder::new()
         .name(format!("stc-dap-{category}"))
         .spawn(move || {
@@ -263,9 +332,10 @@ fn spawn_output_reader<R: Read + Send + 'static>(
                 }
             }
         });
-    if let Err(error) = spawned {
+    if let Err(error) = &spawned {
         eprintln!("stc-dap: cannot start the {category} reader: {error}");
     }
+    spawned.ok()
 }
 
 /// A launch-owned host process driven through the control channel.
@@ -273,6 +343,10 @@ struct DriverHost {
     child: Child,
     control: String,
     nonce: String,
+    /// Start gate for a per-test debug harness; `None` for production launches.
+    gate: Option<PathBuf>,
+    /// Output reader threads; joined during shutdown so final lines reach DAP.
+    readers: Vec<std::thread::JoinHandle<()>>,
     output: Receiver<OutputLine>,
 }
 
@@ -288,7 +362,24 @@ impl SessionHost for DriverHost {
         }
     }
 
+    fn configuration_complete(&mut self) -> Result<(), String> {
+        if let Some(gate) = self.gate.take() {
+            std::fs::write(&gate, b"start").map_err(|error| {
+                format!(
+                    "cannot release the test start gate `{}`: {error}",
+                    gate.display()
+                )
+            })?;
+        }
+        Ok(())
+    }
+
     fn shutdown(&mut self) {
+        // A harness that never reached configuration-complete would otherwise
+        // wait for the gate while the stop request is being sent.
+        if let Some(gate) = self.gate.take() {
+            let _ = std::fs::write(gate, b"start");
+        }
         if let Ok(mut client) =
             ControlClient::connect(&self.control, crate::debug::CONTROL_DEADLINE)
         {
@@ -298,6 +389,12 @@ impl SessionHost for DriverHost {
             );
         }
         let _ = crate::debug::wait_child(&mut self.child);
+        // The child's pipes are closed now; join the readers so every final
+        // line (including a test host's result line) has reached the channel
+        // before the adapter drains it.
+        for reader in self.readers.drain(..) {
+            let _ = reader.join();
+        }
     }
 }
 

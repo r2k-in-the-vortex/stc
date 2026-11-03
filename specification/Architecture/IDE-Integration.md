@@ -212,11 +212,21 @@ Launch builds the project in the debug form by default and then starts the launc
 debug endpoint and control endpoint. `noBuild` uses the existing artifacts; `outDir` overrides their
 directory. Attach connects to an existing endpoint file and does not build or launch.
 
+A launch with `test` selects one discovered `{stc:test}` POU by exact name (`stc test --list`
+prints the names) and builds only that test as the per-test debug harness (Testing and
+Verification §2.5): breakpoints bind before the test body runs, the top stack frame is the test
+POU, and the session ends when the test host prints its result line and exits. `test` is a launch
+setting only; it cannot be combined with `noBuild`, `release`, or attach. A test launch builds
+under `<outDir or target/stc/test>/debug/<artifact>`, so ordinary `stc test` artifacts are not
+touched. The start gate is a driver/test-host handshake; the adapter still uses only
+`stc-debug/1.1` operations.
+
 | Configuration key | Requests | Meaning |
 | --- | --- | --- |
 | `project` | launch, attach | `stc.toml`, its directory, or a project directory; the extension defaults it to `${workspaceFolder}/stc.toml` |
+| `test` | launch | Exact discovered test name; build and debug only that test |
 | `noBuild` | launch, attach | Launch existing artifacts without building; default `false` |
-| `outDir` | launch, attach | Artifact directory override, primarily for `noBuild` |
+| `outDir` | launch, attach | Artifact directory override, primarily for `noBuild`; a test launch appends `debug/<artifact>` |
 | `release` | launch, attach | Build in release mode; monitoring only |
 | `allowWrite` | launch, attach | Request the `write` scope and enable `setVariable`; the host must also allow `[debug].allow-write` |
 | `allowForce` | launch, attach | Request the `force` scope; the host must also allow `[debug].allow-force`. DAP has no force request, so forcing remains a `stc debug` operation |
@@ -289,7 +299,9 @@ protocol path against the owning package's root directory from the project graph
 wins when relative paths collide. `sourceRoot` overrides the graph resolution. Comparison
 normalizes `\` to `/`, strips Windows verbatim/device prefixes, and folds ASCII case on Windows. DAP
 `Source` objects carry absolute host paths. A breakpoint on a file that is not a project source is
-reported unbound rather than mapped to a guessed path.
+reported unbound rather than mapped to a guessed path. A test launch also joins the root package's
+`[test].sources` to the source table, so breakpoints in test files resolve; the synthetic
+`STC_TEST_WRAPPER` frame is hidden from `stackTrace`, leaving the test POU at the top.
 
 ### 4.5 Events and teardown
 
@@ -308,7 +320,12 @@ stops the runtime session and exits the adapter; `terminate` ends the session bu
 to finish its protocol loop. A launch-owned host is shut down through the control endpoint; an
 attached host is left running. An online swap, timeout, or target exit ends the session with no
 migration of breakpoints, forces, or watches. There is exactly one debug session per host and one
-adapter session per launch.
+adapter session per launch. For a test launch, the host's structured `stc-test-result` line is
+forwarded as `output` before the session terminates; the test's exit ends the DAP session.
+
+A test launch is start-paused relative to the test body. The adapter applies breakpoints, writes
+the test host's start gate on configuration-complete, and only then does the host execute its
+first cycle; this guarantees that a single-cycle test can stop at a breakpoint in its source.
 
 ### 4.6 Honest limits
 

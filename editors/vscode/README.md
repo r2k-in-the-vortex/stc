@@ -268,9 +268,17 @@ Launch builds the debug form by default, starts a local debug endpoint, and
 stops the launch-owned host when the session ends. Attach connects to the
 endpoint file printed by `stc run --debug-server` and leaves the host running.
 
+Set `test` to a name listed by `stc test --list` to debug one `{stc:test}` POU.
+The launch builds only that test as a hook-bearing harness under
+`target/stc/test/debug/<artifact>` (or `<outDir>/debug/<artifact>`), applies
+breakpoints before the test body runs, and the session ends when the test
+prints its result line and exits. Ordinary `stc test` artifacts stay hook-free.
+`test` cannot be combined with `noBuild`, `release`, or attach.
+
 | Key | Meaning |
 | --- | --- |
 | `project` | `stc.toml`, its directory, or a project directory. |
+| `test` | Exact name from `stc test --list`; build and debug only that test. |
 | `noBuild` | Launch existing artifacts without building. |
 | `outDir` | Artifact directory override, primarily for `noBuild`. |
 | `release` | Build the monitoring-only release form. |

@@ -436,6 +436,10 @@ pub(crate) struct Request {
     /// Whether this is a test build (`stc test`): emit the test-host launcher
     /// and the host ABI 2.2 test-clock import.
     pub test_build: bool,
+    /// Whether this test build keeps debug hooks, debug information, and the
+    /// frame sidecar for a per-test debug session. Ordinary `stc test`
+    /// artifacts leave this unset and stay hook-free.
+    pub test_debug: bool,
     /// Statement coverage instrumentation for this test build (WL-10).
     pub coverage: Option<stc_codegen::CoverageOptions>,
     /// Effective `[build].opt-level`.
@@ -485,6 +489,7 @@ impl Default for Request {
             debug: false,
             release: false,
             test_build: false,
+            test_debug: false,
             coverage: None,
             opt_level: OptLevel::O0,
             opt_level_explicit: false,
@@ -750,6 +755,7 @@ pub(crate) fn generate(
             },
         },
         test_build: request.test_build,
+        test_debug: request.test_debug,
         coverage: request.coverage.clone(),
     };
     let codegen_start = Instant::now();
@@ -979,7 +985,7 @@ pub(crate) fn emit(
     if needs_pair
         && request.debug
         && !request.release
-        && !request.test_build
+        && (!request.test_build || request.test_debug)
         && !output.frames.is_empty()
         && let Some(debug) = &output.metadata.debug
     {

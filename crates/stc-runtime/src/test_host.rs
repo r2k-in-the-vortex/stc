@@ -25,13 +25,14 @@ use std::ffi::CStr;
 use std::fmt::Write as _;
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::host::{Candidate, Host, LoadMode};
 use crate::host_api;
 use crate::module_info;
 use crate::run::{self, IoBackend, RunLoopError, RunOptions};
 use crate::store::ManifestStore;
-use crate::{MismatchPolicy, RetainConfig, host_platform};
+use crate::{DebugServerConfig, MismatchPolicy, RetainConfig, control, host_platform};
 
 /// Parsed test-host arguments.
 struct TestHostOptions {
@@ -49,7 +50,23 @@ struct TestHostOptions {
     module: Option<String>,
     coverage: Option<PathBuf>,
     coverage_sites: u32,
+    /// A debug harness launch: the host publishes a debug endpoint and services
+    /// the protocol while the test runs.
+    debug_endpoint: Option<PathBuf>,
+    debug_protocol: crate::transport::TransportKind,
+    debug_allow_write: bool,
+    debug_allow_force: bool,
+    debug_session_timeout_ns: Option<u64>,
+    /// Start gate written by the adapter after breakpoints are configured. The
+    /// first cycle runs only after the file appears, so a single-cycle test
+    /// cannot race the debugger.
+    start_gate: Option<PathBuf>,
+    control_endpoint: Option<String>,
+    control_nonce: Option<String>,
 }
+
+/// Poll interval for the start gate.
+const START_GATE_POLL: Duration = Duration::from_millis(5);
 
 /// One recorded assertion site from the driver's sidecar.
 struct AssertSite {
@@ -170,6 +187,25 @@ fn run_test(
         policy: MismatchPolicy::Error,
         reset: false,
     });
+    // A debug harness launch also owns a control channel so the adapter can
+    // stop a running test. Ordinary test hosts have neither.
+    let control_server = match (
+        options.control_endpoint.as_deref(),
+        options.control_nonce.as_deref(),
+    ) {
+        (Some(endpoint), Some(nonce)) => match control::ControlServer::bind(endpoint, nonce) {
+            Ok(server) => Some(server),
+            Err(error) => {
+                let message = format!(
+                    "cannot start the control channel: {}: {}",
+                    error.code, error.message
+                );
+                eprintln!("stc: {message}");
+                return ResultLine::internal_error(message);
+            }
+        },
+        _ => None,
+    };
     host.configure_io(Some(options.io), options.io_file.clone());
     if let Err(error) = host.load(candidate, LoadMode::Cold) {
         let failures = host_api::last_trap().map_or_else(
@@ -188,7 +224,39 @@ fn run_test(
         return ResultLine::new(&options.name, Status::Fail, failures, None, 0);
     }
 
+    if let Some(endpoint) = options.debug_endpoint.as_deref() {
+        let mut config = DebugServerConfig::new(endpoint.to_path_buf(), options.debug_protocol);
+        config.allow_write = options.debug_allow_write;
+        config.allow_force = options.debug_allow_force;
+        if let Some(ns) = options.debug_session_timeout_ns {
+            config.session_timeout = Duration::from_nanos(ns);
+        }
+        match host.start_debug_server(&config) {
+            Ok(info) => {
+                eprintln!("stc: debug endpoint {}", info.endpoint_file.display());
+                eprintln!("stc: debug audit {}", info.audit_log.display());
+            }
+            Err(error) => {
+                let message = format!(
+                    "cannot start the debug server: {}: {}",
+                    error.code, error.message
+                );
+                eprintln!("stc: {message}");
+                let _ = host.shutdown();
+                return ResultLine::internal_error(message);
+            }
+        }
+    }
+
     host_api::begin_assert_recording();
+    // The adapter releases the gate after `session.start`, `manifest.get`, and
+    // all breakpoints are applied. Starting the first cycle any earlier would
+    // let a single-cycle test finish before breakpoints bind. The debug
+    // service delivers `manifest.get` through the cycle thread, so keep
+    // pumping its command queue while the host is parked.
+    if let Some(gate) = options.start_gate.as_deref() {
+        wait_for_start_gate(&mut host, gate);
+    }
     let run = RunOptions {
         cycles: options.cycles.max(1),
         cycle_time_ns: None,
@@ -201,7 +269,16 @@ fn run_test(
         status: false,
         ..RunOptions::default()
     };
-    let outcome = run::run_loop(&mut host, &run);
+    let outcome = if control_server.is_some() {
+        run::run_loop_with_control(
+            &mut host,
+            &run,
+            run::StopSource::None,
+            control_server.as_ref(),
+        )
+    } else {
+        run::run_loop(&mut host, &run)
+    };
     let records = host_api::end_assert_recording();
     let mut failures: Vec<Failure> = records
         .iter()
@@ -431,6 +508,20 @@ fn trap_name(code: i32) -> String {
     format!("STC_TRAP_{}", crate::trap_name(code))
 }
 
+/// Blocks until the adapter writes the start gate.
+///
+/// The file is only used by the DAP per-test launch; a directly-run test host
+/// never receives `--start-gate`. The adapter kills the process if the gate
+/// cannot be released, so the wait is bounded by process lifetime. Debug
+/// commands queued by the adapter (`manifest.get`) are applied at this
+/// boundary so the session is fully described before the first cycle.
+fn wait_for_start_gate(host: &mut Host, path: &Path) {
+    while !path.exists() {
+        host.debug_pump_at(0);
+        std::thread::sleep(START_GATE_POLL);
+    }
+}
+
 fn parse_args(args: &[String]) -> Result<TestHostOptions, String> {
     let mut options = TestHostOptions {
         name: "test".into(),
@@ -447,6 +538,14 @@ fn parse_args(args: &[String]) -> Result<TestHostOptions, String> {
         module: None,
         coverage: None,
         coverage_sites: 0,
+        debug_endpoint: None,
+        debug_protocol: crate::transport::TransportKind::Pipe,
+        debug_allow_write: false,
+        debug_allow_force: false,
+        debug_session_timeout_ns: None,
+        start_gate: None,
+        control_endpoint: None,
+        control_nonce: None,
     };
     let mut index = usize::from(!args.is_empty());
     while index < args.len() {
@@ -509,9 +608,45 @@ fn parse_args(args: &[String]) -> Result<TestHostOptions, String> {
                 })?);
             }
             "--module" => options.module = Some(value("--module")?),
+            "--debug-endpoint" => {
+                options.debug_endpoint = Some(PathBuf::from(value("--debug-endpoint")?));
+            }
+            "--debug-protocol" => {
+                let text = value("--debug-protocol")?;
+                options.debug_protocol =
+                    crate::transport::TransportKind::parse(&text).ok_or_else(|| {
+                        format!("unknown debug transport `{text}` (expected pipe or socket)")
+                    })?;
+            }
+            "--debug-allow-write" => options.debug_allow_write = true,
+            "--debug-allow-force" => options.debug_allow_force = true,
+            "--debug-session-timeout" => {
+                let text = value("--debug-session-timeout")?;
+                let ns = run::parse_duration_ns(&text)
+                    .ok_or_else(|| format!("invalid debug session timeout `{text}`"))?;
+                options.debug_session_timeout_ns = Some(ns);
+            }
+            "--start-gate" => options.start_gate = Some(PathBuf::from(value("--start-gate")?)),
+            "--control" => options.control_endpoint = Some(value("--control")?),
+            "--control-nonce" => options.control_nonce = Some(value("--control-nonce")?),
             other => return Err(format!("unknown test-host option `{other}`")),
         }
         index += 1;
+    }
+    if options.control_endpoint.is_some() != options.control_nonce.is_some() {
+        return Err("`--control` and `--control-nonce` must be supplied together".into());
+    }
+    if options.debug_allow_write && options.debug_endpoint.is_none() {
+        return Err("`--debug-allow-write` requires `--debug-endpoint`".into());
+    }
+    if options.debug_allow_force && options.debug_endpoint.is_none() {
+        return Err("`--debug-allow-force` requires `--debug-endpoint`".into());
+    }
+    if options.debug_session_timeout_ns.is_some() && options.debug_endpoint.is_none() {
+        return Err("`--debug-session-timeout` requires `--debug-endpoint`".into());
+    }
+    if options.start_gate.is_some() && options.debug_endpoint.is_none() {
+        return Err("`--start-gate` requires `--debug-endpoint`".into());
     }
     Ok(options)
 }
@@ -727,6 +862,87 @@ mod tests {
             Some(Path::new("out/test.coverage"))
         );
         assert_eq!(options.coverage_sites, 7);
+    }
+
+    #[test]
+    fn parses_debug_harness_options() {
+        let options = parse_args(&args(&[
+            "test",
+            "--debug-endpoint",
+            "out/test.endpoint",
+            "--debug-protocol",
+            "socket",
+            "--debug-allow-write",
+            "--debug-session-timeout",
+            "3s",
+            "--start-gate",
+            "out/test.gate",
+            "--control",
+            "out/test.control",
+            "--control-nonce",
+            "n",
+        ]))
+        .expect("valid debug options");
+        assert_eq!(
+            options.debug_endpoint.as_deref(),
+            Some(Path::new("out/test.endpoint"))
+        );
+        assert_eq!(
+            options.debug_protocol,
+            crate::transport::TransportKind::Socket
+        );
+        assert!(options.debug_allow_write);
+        assert_eq!(options.debug_session_timeout_ns, Some(3_000_000_000));
+        assert_eq!(
+            options.start_gate.as_deref(),
+            Some(Path::new("out/test.gate"))
+        );
+        assert_eq!(
+            options.control_endpoint.as_deref(),
+            Some("out/test.control")
+        );
+        assert_eq!(options.control_nonce.as_deref(), Some("n"));
+    }
+
+    #[test]
+    fn debug_only_options_require_an_endpoint() {
+        for items in [
+            vec!["test", "--start-gate", "gate"],
+            vec!["test", "--debug-allow-write"],
+            vec!["test", "--debug-allow-force"],
+            vec!["test", "--debug-session-timeout", "1s"],
+        ] {
+            let error = parse_args(&args(&items)).err().expect("missing endpoint");
+            assert!(error.contains("--debug-endpoint"), "{items:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn control_endpoint_and_nonce_are_paired() {
+        let error = parse_args(&args(&["test", "--control", "c"]))
+            .err()
+            .expect("missing nonce");
+        assert!(error.contains("control-nonce"), "{error}");
+        let error = parse_args(&args(&["test", "--control-nonce", "n"]))
+            .err()
+            .expect("missing endpoint");
+        assert!(error.contains("control"), "{error}");
+    }
+
+    #[test]
+    fn start_gate_waits_for_the_adapter_file() {
+        let directory = temp_dir("gate");
+        let gate = directory.join("start.gate");
+        let writer = gate.clone();
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            std::fs::write(&writer, b"start").expect("write gate");
+        });
+        let mut host = Host::new(host_platform(), ManifestStore::memory());
+        wait_for_start_gate(&mut host, &gate);
+        thread.join().expect("gate writer");
+        assert!(gate.exists());
+        std::fs::remove_dir_all(&directory).expect("clean up");
     }
 
     #[test]

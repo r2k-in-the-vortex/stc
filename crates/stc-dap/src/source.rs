@@ -46,6 +46,22 @@ impl SourceTable {
     /// Returns the first project diagnostic when the manifest or project graph
     /// cannot be loaded.
     pub fn from_project(manifest: &Path, source_root: Option<&Path>) -> Result<Self, String> {
+        Self::from_project_with_tests(manifest, source_root, false)
+    }
+
+    /// Loads the project graph and includes the root package's `[test].sources`
+    /// when `include_tests` is set, so a test debug session can resolve
+    /// breakpoints and stack frames in test source files.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first project diagnostic when the manifest or project graph
+    /// cannot be loaded.
+    pub fn from_project_with_tests(
+        manifest: &Path,
+        source_root: Option<&Path>,
+        include_tests: bool,
+    ) -> Result<Self, String> {
         let graph = stc_manifest::load_project_readonly(manifest, &LoadOptions::default())
             .map_err(|error| {
                 error.diagnostics.first().map_or_else(
@@ -53,26 +69,44 @@ impl SourceTable {
                     |diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message),
                 )
             })?;
-        Ok(Self::from_graph(&graph, source_root))
+        Ok(Self::from_graph_parts(&graph, source_root, include_tests))
     }
 
     /// Builds the table from an already loaded project graph.
     #[must_use]
     pub fn from_graph(graph: &ProjectGraph, source_root: Option<&Path>) -> Self {
+        Self::from_graph_parts(graph, source_root, false)
+    }
+
+    fn from_graph_parts(
+        graph: &ProjectGraph,
+        source_root: Option<&Path>,
+        include_tests: bool,
+    ) -> Self {
         let packages = graph
             .packages
             .iter()
-            .map(|package| PackageSource {
-                root_key: path_key(&package.root_dir),
-                sources: package
+            .map(|package| {
+                let include_package_tests = include_tests && package.is_root;
+                let sources = package
                     .sources
                     .iter()
+                    .chain(
+                        package
+                            .test_sources
+                            .iter()
+                            .filter(|_| include_package_tests),
+                    )
                     .map(|source| SourceEntry {
                         relative: source.relative.clone(),
                         key: protocol_key(&source.relative),
                         absolute: normalize_absolute(&source.path),
                     })
-                    .collect(),
+                    .collect();
+                PackageSource {
+                    root_key: path_key(&package.root_dir),
+                    sources,
+                }
             })
             .collect();
         let source_root = source_root.map(Path::to_path_buf);
@@ -266,6 +300,89 @@ fn join_relative(root: &Path, relative: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct TempProject {
+        path: PathBuf,
+    }
+
+    impl TempProject {
+        fn new(name: &str) -> Self {
+            static COUNTER: AtomicUsize = AtomicUsize::new(0);
+            let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "stc-dap-source-{}-{name}-{unique}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("create temporary project");
+            let path = std::fs::canonicalize(&path).expect("canonical temporary project");
+            Self { path }
+        }
+
+        fn write(&self, relative: &str, contents: &str) -> PathBuf {
+            let path = relative
+                .split('/')
+                .fold(self.path.clone(), |path, part| path.join(part));
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create directory");
+            }
+            std::fs::write(&path, contents).expect("write file");
+            path
+        }
+    }
+
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn test_sources_join_the_table_only_for_test_sessions() {
+        let project = TempProject::new("tests");
+        let manifest = project.write(
+            "stc.toml",
+            "schema = 1\n\n\
+             [package]\n\
+             name = \"demo\"\n\
+             version = \"0.1.0\"\n\
+             language = \"stc-2013-oop-utf8-v1\"\n\n\
+             [project]\n\
+             sources = [\"src/**/*.st\"]\n\n\
+             [test]\n\
+             sources = [\"tests/**/*.st\"]\n",
+        );
+        project.write("src/main.st", "PROGRAM Main\n  ;\nEND_PROGRAM\n");
+        let test_source = project.write(
+            "tests/smoke.st",
+            "{stc:test}\nFUNCTION Smoke : BOOL\n  Smoke := TRUE;\nEND_FUNCTION\n",
+        );
+
+        let test_session =
+            SourceTable::from_project_with_tests(&manifest, None, true).expect("test table");
+        assert_eq!(
+            test_session.protocol_path(&test_source),
+            Some("tests/smoke.st".into())
+        );
+        assert_eq!(
+            test_session.absolute_path("tests/smoke.st"),
+            Some(normalize_absolute(&test_source))
+        );
+        assert_eq!(
+            test_session.absolute_path("src/main.st"),
+            Some(normalize_absolute(&project.path.join("src/main.st")))
+        );
+
+        let production =
+            SourceTable::from_project_with_tests(&manifest, None, false).expect("production table");
+        assert_eq!(
+            production.protocol_path(&test_source),
+            None,
+            "an ordinary launch does not bind test sources"
+        );
+        assert_eq!(production.absolute_path("tests/smoke.st"), None);
+    }
 
     fn table(source_root: Option<&str>) -> SourceTable {
         let packages = vec![

@@ -1125,9 +1125,13 @@ void (*debug_check)(uint32_t checkpoint_id, uint32_t span_id);
   validation (`STC-E-MODULE-002`).
 - `entry_flags` bit 4 (debug build form) is set for every debug-form build, including test builds
   and hook-free debug builds; it is clear for release. It does not by itself require host 2.3.
-- Test builds remain hook-free: `required_features` bit 4 clear, `entry_flags` bit 6 clear,
-  `debug.hooks=false`, empty checkpoint array, and required host minor 2.2 (service 12). This
-  keeps the measured test ABI and M6 test modules unchanged.
+- **Ordinary** test builds (`stc test`) remain hook-free: `required_features` bit 4 clear,
+  `entry_flags` bit 6 clear, `debug.hooks=false`, empty checkpoint array, and required host minor
+  2.2 (service 12). This keeps the measured test ABI and M6 test modules unchanged.
+- A per-test debug harness (DAP launch field `test`; §17.7) is the explicit exception: it is
+  compiled with `test_debug=true`, sets both bit 4 and bit 6, emits service 13, and requires host
+  minor 2.3 while still importing the ABI 2.2 test-clock service 12. Its artifact is built in a
+  separate `debug/` subdirectory so the ordinary test artifact is untouched.
 - Release builds: bit 4 clear, bit 6 clear, feature bit 4 clear, no `debug` object, required host
   minor 2.1.
 
@@ -1407,16 +1411,37 @@ sections are not inputs to the build ID.
 
 ### 17.7 Test and hook-free builds
 
-Test builds are debug-form builds for the existing test driver:
+Ordinary `stc test` builds are debug-form builds for the existing test driver:
 
 - `entry_flags` bit 4 set, bit 6 clear; `required_features` bit 4 clear;
 - `debug.hooks=false`, empty checkpoint array, `info` may be `dwarf`/`codeview`;
 - required host minor 2.2 because the test ABI uses service 12;
 - no debug server, no checkpoint calls, and no watch/force service enabled by `stc test`.
 
-This preserves M6 test timing and module compatibility. A test build can still be read by a
-debugger that supports typed access, but it cannot stop at checkpoints. `stc test` rejects
+This preserves M6 test timing and module compatibility. An ordinary test build can still be read
+by a debugger that supports typed access, but it cannot stop at checkpoints. `stc test` rejects
 `--release`, `--debug-server`, and `--debug-protocol`.
+
+**Per-test debug harness.** A DAP launch with the `test` field selects one discovered test and
+builds it with `test_debug=true` into `<artifact root>/debug/<artifact>` (default
+`target/stc/test/debug/<artifact>`) instead of `target/stc/test/<artifact>`. That harness is a
+normal hook-bearing debug-form module except for its test host:
+
+- `entry_flags` bits 4 and 6 set; `required_features` bit 4 set; `debug.hooks=true` with the
+  checkpoint table and `<artifact>.stc-frames.json`; host minor 2.3; test-clock service 12 is
+  still imported;
+- the test host starts the debug server, then waits for a start-gate file named on the command
+  line before its first cycle. The adapter applies breakpoints and writes the gate on
+  configuration-complete, so a single-cycle test stops before its body;
+- the host services the debug command queue while gated, so breakpoint binding, `manifest.get`,
+  function names, and stopped-frame locals are available when the gate is released;
+- the host still prints the one structured result line and exits. The driver drains and forwards
+  final host output before the session terminates, so the result remains visible in the DAP
+  output stream.
+
+No new debug-protocol operation is added: the gate is a driver/test-host handshake, and the
+adapter uses `breakpoint.set`, `configurationDone` handling, and the existing `stc-debug/1.1`
+stopped-frame surface. A plain `stc test` run never sets `test_debug`, so it stays hook-free.
 
 ## 18. Diagnostics and stable codes
 

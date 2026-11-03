@@ -58,274 +58,332 @@ struct BuiltTest {
     test: TestCase,
     exe: PathBuf,
     args: Vec<String>,
+    /// Directory holding the launcher, module, and sidecars.
+    out_dir: PathBuf,
     /// Coverage instrumentation, when the run has coverage enabled.
     coverage: Option<CoverageArtifact>,
 }
 
-/// Runs `stc test`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn run(
-    manifest: Option<&str>,
-    locked: bool,
-    diagnostic_paths: DiagnosticPaths,
-    request: &Request,
-    options: &TestOptions,
-    filters: &[String],
-    reporter: &mut Reporter,
-    log: Log,
-) -> u8 {
-    let manifest_input = manifest.unwrap_or("stc.toml");
-    let graph =
-        match stc_manifest::load_project(manifest_input, &stc_manifest::LoadOptions { locked }) {
-            Ok(graph) => graph,
-            Err(error) => {
-                reporter.diagnostics(&error.diagnostics, &error.sources);
-                return 2;
-            }
-        };
-    let root = graph.root_package();
-    let root_index = graph.root.0;
-    reporter.merge_manifest_lints(&root.manifest.lints);
-    reporter.diagnostics(&graph.warnings, &graph.sources);
-    log.info(format!("manifest {manifest_input}"));
-    log.info(format!("profile {}", stc_manifest::PROFILE_ID));
+/// Parsed and discovered project state shared by `stc test` and the per-test
+/// debug build (`stc dap` launch with `test`, WL-1.1 F-17).
+struct TestProject {
+    graph: stc_manifest::ProjectGraph,
+    entries: Vec<SourceEntry>,
+    sources: SourceMap,
+    package_files: Vec<Vec<ParsedFile>>,
+    test_files: Vec<ParsedFile>,
+    tests: Vec<TestCase>,
+    /// Production source files eligible for statement coverage.
+    coverage_files: BTreeSet<FileId>,
+    relaxed: bool,
+    root_index: usize,
+    root_name: String,
+    root_dir: PathBuf,
+    manifest: stc_manifest::Manifest,
+    stdlib: bool,
+    mock_clock_ns: u64,
+}
 
-    // `--coverage`/`--no-coverage` override `[test] coverage`; `--list` ignores
-    // the manifest default and returns before any coverage work.
-    let effective_coverage = options.coverage.unwrap_or(root.manifest.test.coverage);
-    if options.coverage_out.is_some() && !effective_coverage {
-        reporter.plain(
-            "STC-E-PROJECT-010",
-            Severity::Error,
-            "`--coverage-out` requires coverage to be enabled (`--coverage` or `[test] coverage = \
-             true`)",
-        );
-        return 2;
-    }
+/// Build-wide settings resolved after the manifest and profile are known.
+struct TestBuildConfig {
+    project_settings: build::ProjectSettings,
+    effective_io: String,
+    io_file: Option<PathBuf>,
+}
 
-    let relaxed = request.relaxed || root.manifest.build.syntax == SyntaxMode::Relaxed;
-    let mut sources = SourceMap::new();
-    let mut parse_diagnostics = DiagnosticSink::new();
-    let mut entries: Vec<SourceEntry> = Vec::new();
-    let mut read_error = false;
-    let mut lex_time = Duration::ZERO;
-    let mut parse_time = Duration::ZERO;
-    let mut line_count = 0_usize;
+/// One selected test built as a debug harness: checkpoint hooks, debug
+/// information, a frame sidecar, and test-host arguments.
+pub(crate) struct DebugTestBuild {
+    /// Built test-host launcher.
+    pub(crate) launcher: PathBuf,
+    /// Artifact directory.
+    pub(crate) out_dir: PathBuf,
+    /// Test-host arguments, without debug-server arguments.
+    pub(crate) args: Vec<String>,
+    /// Root-package manifest.
+    pub(crate) manifest: stc_manifest::Manifest,
+}
 
-    for (index, package) in graph.packages.iter().enumerate() {
-        let mut package_sources: Vec<(&stc_manifest::SourcePath, bool)> = package
-            .sources
-            .iter()
-            .map(|source| (source, false))
-            .collect();
-        if package.is_root {
-            package_sources.extend(package.test_sources.iter().map(|source| (source, true)));
-        }
-        for (source, is_test) in package_sources {
-            let display = format!("{}/{}", package.name, source.relative);
-            let diagnostic_display = match diagnostic_paths {
-                DiagnosticPaths::Package => display.clone(),
-                DiagnosticPaths::Absolute => absolute_path(&source.path),
-            };
-            let Some(file) = u32::try_from(entries.len()).ok().map(FileId::new) else {
-                reporter.plain(
-                    "STC-E-BUILD-002",
-                    Severity::Error,
-                    "too many source files for the span table",
-                );
-                return 1;
-            };
-            let bytes = match std::fs::read(&source.path) {
-                Ok(bytes) => bytes,
+impl TestProject {
+    /// Loads, parses, and discovers tests without analyzing or configuring the
+    /// profile; `--list` and an empty selection return before those phases.
+    #[allow(clippy::too_many_arguments)]
+    fn load(
+        manifest: Option<&str>,
+        locked: bool,
+        timeout_ns: Option<u64>,
+        diagnostic_paths: DiagnosticPaths,
+        request: &Request,
+        reporter: &mut Reporter,
+        log: Log,
+    ) -> Result<Self, u8> {
+        let manifest_input = manifest.unwrap_or("stc.toml");
+        let graph =
+            match stc_manifest::load_project(manifest_input, &stc_manifest::LoadOptions { locked })
+            {
+                Ok(graph) => graph,
                 Err(error) => {
-                    let mapped = sources.add_file(diagnostic_display, String::new());
-                    debug_assert_eq!(mapped, file);
-                    parse_diagnostics.error(
-                        "STC-E-BUILD-002",
-                        format!("cannot read `{}`: {error}", source.path.to_string_lossy()),
-                        Span::new(mapped, 0, 0),
-                    );
-                    read_error = true;
-                    continue;
+                    reporter.diagnostics(&error.diagnostics, &error.sources);
+                    return Err(2);
                 }
             };
-            line_count += bytes.iter().filter(|byte| **byte == b'\n').count();
-            let lex_start = Instant::now();
-            let lexed = tokenize_bytes(file, &bytes, &mut parse_diagnostics);
-            lex_time += lex_start.elapsed();
-            let mapped = sources.add_file(diagnostic_display.clone(), lexed.text.clone());
-            debug_assert_eq!(mapped, file);
-            let parse_start = Instant::now();
-            let parsed = parse(
-                file,
-                lexed.text.as_str(),
-                &lexed.stream,
-                ParseOptions {
-                    relaxed_semicolons: relaxed,
-                    ..ParseOptions::default()
-                },
-                &mut parse_diagnostics,
-            );
-            parse_time += parse_start.elapsed();
-            let report_path = if package.is_root {
-                source.relative.clone()
-            } else {
-                display.clone()
-            };
-            entries.push(SourceEntry {
-                package: index,
-                is_test,
-                display,
-                relative: source.relative.clone(),
-                report_path,
-                file_id: file,
-                bytes,
-                parsed,
-            });
-        }
-    }
-    log.info(format!(
-        "sources {} files, {line_count} lines",
-        entries.len()
-    ));
-    log.info(format!(
-        "lex {}  parse {}",
-        duration(lex_time),
-        duration(parse_time)
-    ));
-    if parse_diagnostics.has_errors() || read_error {
-        report_sink(&parse_diagnostics, &sources, reporter, log);
-        return 1;
-    }
+        let root = graph.root_package();
+        let root_index = graph.root.0;
+        reporter.merge_manifest_lints(&root.manifest.lints);
+        reporter.diagnostics(&graph.warnings, &graph.sources);
+        log.info(format!("manifest {manifest_input}"));
+        log.info(format!("profile {}", stc_manifest::PROFILE_ID));
 
-    // Discovery sees the current package's production and test sources.
-    // Manifest `[[test.case]]` spans refer to the manifest source map; merge
-    // those files into the compilation source map so one reporter can render
-    // both kinds of diagnostic.
-    let mut manifest_file_ids = BTreeMap::new();
-    for index in 0..graph.sources.len() {
-        let id = FileId::new(u32::try_from(index).unwrap_or(u32::MAX));
-        let Some(file) = graph.sources.file(id) else {
-            continue;
-        };
-        let mapped = sources.add_file(file.path().to_owned(), file.text().to_owned());
-        manifest_file_ids.insert(index, mapped);
-    }
-    let mut test_settings = root.manifest.test.clone();
-    for case in &mut test_settings.cases {
-        if let Some(mapped) = manifest_file_ids.get(&case.span.file.index()) {
-            case.span = Span::new(*mapped, case.span.start, case.span.end);
-        }
-    }
-    let discovery_refs: Vec<SourceFileRef<'_>> = entries
-        .iter()
-        .filter(|entry| entry.package == root_index)
-        .map(|entry| SourceFileRef {
-            relative: &entry.report_path,
-            parsed: &entry.parsed,
-        })
-        .collect();
-    let discovery = discover(&discovery_refs, &test_settings, options.timeout_ns);
-    if !discovery.diagnostics.is_empty() {
-        reporter.diagnostics(&discovery.diagnostics, &sources);
-        return 1;
-    }
-    let tests = filter_tests(&discovery.tests, filters);
-    if options.list {
-        for test in &tests {
-            if reporter.is_json() {
-                println!("{{\"name\":{}}}", json_string(&test.name));
-            } else {
-                println!("{}", test.name);
+        let relaxed = request.relaxed || root.manifest.build.syntax == SyntaxMode::Relaxed;
+        let mut sources = SourceMap::new();
+        let mut parse_diagnostics = DiagnosticSink::new();
+        let mut entries: Vec<SourceEntry> = Vec::new();
+        let mut read_error = false;
+        let mut lex_time = Duration::ZERO;
+        let mut parse_time = Duration::ZERO;
+        let mut line_count = 0_usize;
+
+        for (index, package) in graph.packages.iter().enumerate() {
+            let mut package_sources: Vec<(&stc_manifest::SourcePath, bool)> = package
+                .sources
+                .iter()
+                .map(|source| (source, false))
+                .collect();
+            if package.is_root {
+                package_sources.extend(package.test_sources.iter().map(|source| (source, true)));
+            }
+            for (source, is_test) in package_sources {
+                let display = format!("{}/{}", package.name, source.relative);
+                let diagnostic_display = match diagnostic_paths {
+                    DiagnosticPaths::Package => display.clone(),
+                    DiagnosticPaths::Absolute => absolute_path(&source.path),
+                };
+                let Some(file) = u32::try_from(entries.len()).ok().map(FileId::new) else {
+                    reporter.plain(
+                        "STC-E-BUILD-002",
+                        Severity::Error,
+                        "too many source files for the span table",
+                    );
+                    return Err(1);
+                };
+                let bytes = match std::fs::read(&source.path) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        let mapped = sources.add_file(diagnostic_display, String::new());
+                        debug_assert_eq!(mapped, file);
+                        parse_diagnostics.error(
+                            "STC-E-BUILD-002",
+                            format!("cannot read `{}`: {}", source.path.to_string_lossy(), error),
+                            Span::new(mapped, 0, 0),
+                        );
+                        read_error = true;
+                        continue;
+                    }
+                };
+                line_count += bytes.iter().filter(|byte| **byte == b'\n').count();
+                let lex_start = Instant::now();
+                let lexed = tokenize_bytes(file, &bytes, &mut parse_diagnostics);
+                lex_time += lex_start.elapsed();
+                let mapped = sources.add_file(diagnostic_display.clone(), lexed.text.clone());
+                debug_assert_eq!(mapped, file);
+                let parse_start = Instant::now();
+                let parsed = parse(
+                    file,
+                    lexed.text.as_str(),
+                    &lexed.stream,
+                    ParseOptions {
+                        relaxed_semicolons: relaxed,
+                        ..ParseOptions::default()
+                    },
+                    &mut parse_diagnostics,
+                );
+                parse_time += parse_start.elapsed();
+                let report_path = if package.is_root {
+                    source.relative.clone()
+                } else {
+                    display.clone()
+                };
+                entries.push(SourceEntry {
+                    package: index,
+                    is_test,
+                    display,
+                    relative: source.relative.clone(),
+                    report_path,
+                    file_id: file,
+                    bytes,
+                    parsed,
+                });
             }
         }
-        return u8::from(reporter.denied());
-    }
-    if tests.is_empty() {
-        log.status("0 tests discovered");
-        return u8::from(reporter.denied());
-    }
+        log.info(format!(
+            "sources {} files, {line_count} lines",
+            entries.len()
+        ));
+        log.info(format!(
+            "lex {}  parse {}",
+            duration(lex_time),
+            duration(parse_time)
+        ));
+        if parse_diagnostics.has_errors() || read_error {
+            report_sink(&parse_diagnostics, &sources, reporter, log);
+            return Err(1);
+        }
 
-    // Build the per-package file vectors once; each test appends its wrapper.
-    let mut package_files: Vec<Vec<ParsedFile>> = vec![Vec::new(); graph.packages.len()];
-    for entry in &entries {
-        package_files[entry.package].push(entry.parsed.clone());
-    }
-    let test_files: Vec<ParsedFile> = entries
-        .iter()
-        .filter(|entry| entry.is_test)
-        .map(|entry| entry.parsed.clone())
-        .collect();
-    // Production sources of every package are instrumented; `[test].sources`
-    // and the synthetic wrapper are excluded by construction.
-    let coverage_files: BTreeSet<FileId> = if effective_coverage {
-        entries
+        // Discovery sees the current package's production and test sources.
+        // Manifest `[[test.case]]` spans refer to the manifest source map; merge
+        // those files into the compilation source map so one reporter can render
+        // both kinds of diagnostic.
+        let mut manifest_file_ids = BTreeMap::new();
+        for index in 0..graph.sources.len() {
+            let id = FileId::new(u32::try_from(index).unwrap_or(u32::MAX));
+            let Some(file) = graph.sources.file(id) else {
+                continue;
+            };
+            let mapped = sources.add_file(file.path().to_owned(), file.text().to_owned());
+            manifest_file_ids.insert(index, mapped);
+        }
+        let mut test_settings = root.manifest.test.clone();
+        for case in &mut test_settings.cases {
+            if let Some(mapped) = manifest_file_ids.get(&case.span.file.index()) {
+                case.span = Span::new(*mapped, case.span.start, case.span.end);
+            }
+        }
+        let discovery_refs: Vec<SourceFileRef<'_>> = entries
+            .iter()
+            .filter(|entry| entry.package == root_index)
+            .map(|entry| SourceFileRef {
+                relative: &entry.report_path,
+                parsed: &entry.parsed,
+            })
+            .collect();
+        let discovery = discover(&discovery_refs, &test_settings, timeout_ns);
+        if !discovery.diagnostics.is_empty() {
+            reporter.diagnostics(&discovery.diagnostics, &sources);
+            return Err(1);
+        }
+
+        // Build the per-package file vectors once; each test appends its
+        // wrapper.
+        let mut package_files: Vec<Vec<ParsedFile>> = vec![Vec::new(); graph.packages.len()];
+        for entry in &entries {
+            package_files[entry.package].push(entry.parsed.clone());
+        }
+        let test_files: Vec<ParsedFile> = entries
+            .iter()
+            .filter(|entry| entry.is_test)
+            .map(|entry| entry.parsed.clone())
+            .collect();
+        // Production sources of every package are instrumented; `[test].sources`
+        // and the synthetic wrapper are excluded by construction.
+        let coverage_files: BTreeSet<FileId> = entries
             .iter()
             .filter(|entry| !entry.is_test)
             .map(|entry| entry.file_id)
-            .collect()
-    } else {
-        BTreeSet::new()
-    };
+            .collect();
+        let root_name = root.name.clone();
+        let root_dir = root.root_dir.clone();
+        let manifest = root.manifest.clone();
+        let stdlib = root.manifest.project.stdlib;
+        let mock_clock_ns = root.manifest.test.mock_clock.as_nanos();
+        Ok(Self {
+            graph,
+            entries,
+            sources,
+            package_files,
+            test_files,
+            tests: discovery.tests,
+            coverage_files,
+            relaxed,
+            root_index,
+            root_name,
+            root_dir,
+            manifest,
+            stdlib,
+            mock_clock_ns,
+        })
+    }
 
-    // Catch semantic errors once before building N artifacts.
-    {
+    /// Reports semantic errors once before building any artifact. Warnings are
+    /// reported here and not repeated by the per-test analyses.
+    fn check_semantics(&self, reporter: &mut Reporter) -> u8 {
         let mut diagnostics = DiagnosticSink::new();
         let session = session_for(
-            &graph,
-            &package_files,
-            &test_files,
+            &self.graph,
+            &self.package_files,
+            &self.test_files,
             None,
-            root.manifest.project.stdlib,
+            self.stdlib,
         );
         let _analysis = stc_sema::analyze_project(&session, &mut diagnostics);
-        // The per-test analyses repeat these warnings; report them once.
-        reporter.diagnostics(diagnostics.diagnostics(), &sources);
-        if diagnostics.has_errors() {
-            return 1;
-        }
+        reporter.diagnostics(diagnostics.diagnostics(), &self.sources);
+        u8::from(diagnostics.has_errors())
     }
 
-    let artifact_root = request
-        .out_dir
-        .as_ref()
-        .map_or_else(|| root.root_dir.join("target/stc/test"), PathBuf::from);
-    let effective_io = request
-        .run
-        .io
-        .clone()
-        .unwrap_or_else(|| root.manifest.test.effective_io().as_str().to_owned());
-    // The machine profile is build-wide; embed it once before the per-test
-    // artifacts so every test module carries the same routes.
-    let mut profile_diagnostics = DiagnosticSink::new();
-    let mut project_settings = build::ProjectSettings::from_manifest(&root.manifest);
-    if !project_settings.embed_profile(
-        &root.root_dir,
-        &root.manifest,
-        &mut sources,
-        &mut profile_diagnostics,
-    ) {
-        report_sink(&profile_diagnostics, &sources, reporter, log);
-        return crate::project::diagnostic_exit(&profile_diagnostics).max(1);
+    /// Embeds the machine profile and resolves I/O settings for test runs and
+    /// debug test builds.
+    fn configure(
+        &mut self,
+        request: &Request,
+        reporter: &mut Reporter,
+        log: Log,
+    ) -> Result<TestBuildConfig, u8> {
+        let mut profile_diagnostics = DiagnosticSink::new();
+        let mut project_settings = build::ProjectSettings::from_manifest(&self.manifest);
+        if !project_settings.embed_profile(
+            &self.root_dir,
+            &self.manifest,
+            &mut self.sources,
+            &mut profile_diagnostics,
+        ) {
+            report_sink(&profile_diagnostics, &self.sources, reporter, log);
+            return Err(crate::project::diagnostic_exit(&profile_diagnostics).max(1));
+        }
+        let effective_io = request
+            .run
+            .io
+            .clone()
+            .unwrap_or_else(|| self.manifest.test.effective_io().as_str().to_owned());
+        let io_file = request
+            .run
+            .io_file
+            .as_ref()
+            .map(|file| absolute(Path::new(file)))
+            .or_else(|| {
+                self.manifest
+                    .io
+                    .file
+                    .as_ref()
+                    .map(|file| self.root_dir.join(file))
+            });
+        Ok(TestBuildConfig {
+            project_settings,
+            effective_io,
+            io_file,
+        })
     }
-    let io_file = request
-        .run
-        .io_file
-        .as_ref()
-        .map(|file| absolute(Path::new(file)))
-        .or_else(|| {
-            root.manifest
-                .io
-                .file
-                .as_ref()
-                .map(|file| root.root_dir.join(file))
-        });
-    let mut built = Vec::new();
-    let mut build_exit = 0_u8;
-    for test in &tests {
-        let artifact = artifact_name(&root.name, &test.name);
+
+    /// Builds one test artifact under `artifact_root`.
+    ///
+    /// `test_debug` keeps checkpoint hooks, debug information, and the frame
+    /// sidecar; ordinary test builds leave it false and stay hook-free.
+    /// `coverage_files` selects statement coverage for this artifact.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        &mut self,
+        config: &TestBuildConfig,
+        test: &TestCase,
+        request: &Request,
+        artifact_root: &Path,
+        coverage_files: Option<&BTreeSet<FileId>>,
+        test_debug: bool,
+        reporter: &mut Reporter,
+        log: Log,
+    ) -> Result<BuiltTest, u8> {
+        let artifact = artifact_name(&self.root_name, &test.name);
         let wrapper = wrapper_source(test);
-        let wrapper_file = sources.add_virtual_file(format!("stc-test-{artifact}"), &wrapper);
+        let wrapper_file = self
+            .sources
+            .add_virtual_file(format!("stc-test-{artifact}"), &wrapper);
         let mut wrapper_diagnostics = DiagnosticSink::new();
         let wrapper_lexed =
             tokenize_bytes(wrapper_file, wrapper.as_bytes(), &mut wrapper_diagnostics);
@@ -334,31 +392,29 @@ pub(crate) fn run(
             wrapper_lexed.text.as_str(),
             &wrapper_lexed.stream,
             ParseOptions {
-                relaxed_semicolons: relaxed,
+                relaxed_semicolons: self.relaxed,
                 ..ParseOptions::default()
             },
             &mut wrapper_diagnostics,
         );
         if wrapper_diagnostics.has_errors() {
-            reporter.diagnostics(wrapper_diagnostics.diagnostics(), &sources);
-            build_exit = build_exit.max(1);
-            continue;
+            reporter.diagnostics(wrapper_diagnostics.diagnostics(), &self.sources);
+            return Err(1);
         }
-        let mut files_for_test = package_files.clone();
-        files_for_test[root_index].push(wrapper_parsed);
+        let mut files_for_test = self.package_files.clone();
+        files_for_test[self.root_index].push(wrapper_parsed);
         let mut diagnostics = DiagnosticSink::new();
         let session = session_for(
-            &graph,
+            &self.graph,
             &files_for_test,
-            &test_files,
+            &self.test_files,
             Some(stc_test::discovery::TEST_CONFIGURATION),
-            root.manifest.project.stdlib,
+            self.stdlib,
         );
         let analysis = stc_sema::analyze_project(&session, &mut diagnostics);
         if diagnostics.has_errors() {
-            reporter.diagnostics(diagnostics.diagnostics(), &sources);
-            build_exit = build_exit.max(1);
-            continue;
+            reporter.diagnostics(diagnostics.diagnostics(), &self.sources);
+            return Err(1);
         }
 
         let mut test_request = request.clone();
@@ -366,33 +422,34 @@ pub(crate) fn run(
             .into_iter()
             .collect();
         test_request.test_build = true;
-        // `stc test` always builds the hook-free debug form, regardless of
-        // `[build].debug`, `[debug].default`, or `--debug`.
+        test_request.test_debug = test_debug;
+        // `stc test` always builds the debug form, regardless of
+        // `[build].debug`, `[debug].default`, or `--debug`. A debug harness
+        // additionally keeps checkpoint hooks.
         test_request.apply_mode(crate::build::BuildMode::Debug);
         test_request.out_dir_explicit = false;
         test_request.cold = true;
         test_request.got_manifest = None;
         test_request.renames.clear();
         test_request.allow_untracked_removal = false;
-        test_request.relaxed = relaxed;
-        test_request.opt_level = root.manifest.build.opt_level;
-        test_request.opt_level_explicit = root.manifest.build.opt_level_explicit;
-        test_request.lib_type = root.manifest.build.lib_type;
-        test_request.manifest_target = root.manifest.build.target.clone();
-        test_request.manifest_clang = root.manifest.build.clang.clone();
-        test_request.manifest_runtime = root.manifest.build.runtime.clone();
-        test_request.project = project_settings.clone();
+        test_request.relaxed = self.relaxed;
+        test_request.opt_level = self.manifest.build.opt_level;
+        test_request.opt_level_explicit = self.manifest.build.opt_level_explicit;
+        test_request.lib_type = self.manifest.build.lib_type;
+        test_request.manifest_target = self.manifest.build.target.clone();
+        test_request.manifest_clang = self.manifest.build.clang.clone();
+        test_request.manifest_runtime = self.manifest.build.runtime.clone();
+        test_request.project = config.project_settings.clone();
         test_request.project.retain_enabled = false;
-        test_request.project.io_backend.clone_from(&effective_io);
+        test_request
+            .project
+            .io_backend
+            .clone_from(&config.effective_io);
         // Non-coverage test builds stay byte-identical: the request carries no
         // coverage options and codegen receives `None`.
-        test_request.coverage = if effective_coverage {
-            Some(stc_codegen::CoverageOptions {
-                files: coverage_files.clone(),
-            })
-        } else {
-            None
-        };
+        test_request.coverage = coverage_files.map(|files| stc_codegen::CoverageOptions {
+            files: files.clone(),
+        });
         let out_dir = artifact_root.join(&artifact);
         // A previous run can leave a module with an older content-derived
         // build ID; start each test artifact directory clean.
@@ -404,39 +461,45 @@ pub(crate) fn run(
                 Severity::Error,
                 &format!("cannot remove `{}`: {error}", out_dir.display()),
             );
-            build_exit = build_exit.max(1);
-            continue;
+            return Err(1);
         }
         test_request.out_dir = Some(out_dir.to_string_lossy().into_owned());
 
         // Source paths must cover every FileId up to the wrapper so metadata's
         // span-file index stays valid; earlier wrappers are unused placeholders.
-        let mut source_files: Vec<String> =
-            entries.iter().map(|entry| entry.display.clone()).collect();
-        let mut source_paths: Vec<String> =
-            entries.iter().map(|entry| entry.relative.clone()).collect();
+        let mut source_files: Vec<String> = self
+            .entries
+            .iter()
+            .map(|entry| entry.display.clone())
+            .collect();
+        let mut source_paths: Vec<String> = self
+            .entries
+            .iter()
+            .map(|entry| entry.relative.clone())
+            .collect();
         while source_files.len() <= wrapper_file.index() {
             let id = FileId::new(u32::try_from(source_files.len()).unwrap_or(u32::MAX));
             source_files.push(
-                sources
+                self.sources
                     .file_path(id)
                     .map_or_else(|| "<test>".into(), str::to_owned),
             );
             source_paths.push(format!("{artifact}.st"));
         }
         source_paths[wrapper_file.index()] = format!("{artifact}.st");
-        let mut fingerprint_sources: Vec<(String, String, Vec<u8>)> = entries
+        let mut fingerprint_sources: Vec<(String, String, Vec<u8>)> = self
+            .entries
             .iter()
             .map(|entry| {
                 (
-                    graph.packages[entry.package].name.clone(),
+                    self.graph.packages[entry.package].name.clone(),
                     entry.relative.clone(),
                     entry.bytes.clone(),
                 )
             })
             .collect();
         fingerprint_sources.push((
-            root.name.clone(),
+            self.root_name.clone(),
             format!("{artifact}.st"),
             wrapper.as_bytes().to_vec(),
         ));
@@ -445,8 +508,7 @@ pub(crate) fn run(
                 Ok(fingerprint) => fingerprint,
                 Err(error) => {
                     reporter.plain(error.code, Severity::Error, &error.message);
-                    build_exit = build_exit.max(1);
-                    continue;
+                    return Err(1);
                 }
             };
 
@@ -456,7 +518,7 @@ pub(crate) fn run(
             &artifact,
             &source_files,
             Some(&source_paths),
-            &sources,
+            &self.sources,
             fingerprint,
             &mut diagnostics,
             reporter,
@@ -464,16 +526,14 @@ pub(crate) fn run(
         ) {
             Ok(generated) => generated,
             Err(_) => {
-                reporter.diagnostics(diagnostics.diagnostics(), &sources);
-                build_exit = build_exit.max(1);
-                continue;
+                reporter.diagnostics(diagnostics.diagnostics(), &self.sources);
+                return Err(1);
             }
         };
         let code = build::emit(&test_request, &artifact, &generated, reporter, log);
-        report_sink(&diagnostics, &sources, reporter, log);
+        report_sink(&diagnostics, &self.sources, reporter, log);
         if code != 0 {
-            build_exit = build_exit.max(code);
-            continue;
+            return Err(code);
         }
         let passed_root = if test.has_passed {
             match passed_root(&generated) {
@@ -484,8 +544,7 @@ pub(crate) fn run(
                         Severity::Error,
                         "the test wrapper's `PASSED` output has no GOT root",
                     );
-                    build_exit = build_exit.max(1);
-                    continue;
+                    return Err(1);
                 }
             }
         } else {
@@ -496,26 +555,29 @@ pub(crate) fn run(
             &assertion_path,
             &analysis.hir,
             &generated,
-            &sources,
+            &self.sources,
             wrapper_file,
             test,
-            &entries,
+            &self.entries,
         ) {
             reporter.plain(
                 "STC-E-BUILD-002",
                 Severity::Error,
                 &format!("cannot write `{}`: {error}", assertion_path.display()),
             );
-            build_exit = build_exit.max(1);
-            continue;
+            return Err(1);
         }
-        let coverage = if effective_coverage {
-            let report_paths: BTreeMap<FileId, &str> = entries
+        let coverage = if coverage_files.is_some() {
+            let report_paths: BTreeMap<FileId, &str> = self
+                .entries
                 .iter()
                 .map(|entry| (entry.file_id, entry.report_path.as_str()))
                 .collect();
-            let (points, omitted) =
-                coverage_points(&generated.output.coverage_sites, &report_paths, &sources);
+            let (points, omitted) = coverage_points(
+                &generated.output.coverage_sites,
+                &report_paths,
+                &self.sources,
+            );
             if omitted > 0 {
                 reporter.plain(
                     "STC-W-COVERAGE-002",
@@ -536,16 +598,16 @@ pub(crate) fn run(
         };
         let exe = build::launcher_path(&generated.out_dir, &artifact);
         let module = generated.out_dir.join(&generated.module_file);
-        let declaration = sources.location(test.span);
+        let declaration = self.sources.location(test.span);
         let mut args = vec![
             "--name".to_owned(),
             test.name.clone(),
             "--cycles".to_owned(),
             test.cycles.to_string(),
             "--mock-clock".to_owned(),
-            format!("{}ns", root.manifest.test.mock_clock.as_nanos()),
+            format!("{}ns", self.mock_clock_ns),
             "--io".to_owned(),
-            effective_io.clone(),
+            config.effective_io.clone(),
             "--assertions".to_owned(),
             assertion_path.to_string_lossy().into_owned(),
             "--decl-file".to_owned(),
@@ -557,7 +619,7 @@ pub(crate) fn run(
             "--module".to_owned(),
             module.to_string_lossy().into_owned(),
         ];
-        if let Some(file) = &io_file {
+        if let Some(file) = &config.io_file {
             args.push("--io-file".into());
             args.push(file.to_string_lossy().into_owned());
         }
@@ -575,12 +637,166 @@ pub(crate) fn run(
             args.push("--coverage-sites".into());
             args.push(coverage.sites.len().to_string());
         }
-        built.push(BuiltTest {
+        Ok(BuiltTest {
             test: test.clone(),
             exe,
             args,
+            out_dir: generated.out_dir.clone(),
             coverage,
-        });
+        })
+    }
+}
+
+/// Builds one selected test as a debug harness for `stc dap`.
+///
+/// The artifact lands under `<artifact root>/debug/<test>` so it cannot
+/// overwrite the hook-free `stc test` artifact. `request.outDir` replaces the
+/// default `target/stc/test` artifact root and still gains the `debug`
+/// component.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_debug_test(
+    manifest: Option<&str>,
+    request: &Request,
+    test_name: &str,
+    diagnostic_paths: DiagnosticPaths,
+    reporter: &mut Reporter,
+    log: Log,
+) -> Result<DebugTestBuild, String> {
+    let mut project = TestProject::load(
+        manifest,
+        false,
+        None,
+        diagnostic_paths,
+        request,
+        reporter,
+        log,
+    )
+    .map_err(|code| format!("the test project could not be loaded (exit code {code})"))?;
+    let Some(test) = project
+        .tests
+        .iter()
+        .find(|test| test.name == test_name)
+        .cloned()
+    else {
+        return Err(format!(
+            "no test named `{test_name}` was discovered; run `stc test --list` to list tests"
+        ));
+    };
+    let code = project.check_semantics(reporter);
+    if code != 0 {
+        return Err(format!("the test build failed (exit code {code})"));
+    }
+    let config = project
+        .configure(request, reporter, log)
+        .map_err(|code| format!("the test build failed (exit code {code})"))?;
+    let base = request
+        .out_dir
+        .as_ref()
+        .map_or_else(|| project.root_dir.join("target/stc/test"), PathBuf::from);
+    let artifact_root = absolute(&base.join("debug"));
+    let built = project
+        .build(
+            &config,
+            &test,
+            request,
+            &artifact_root,
+            None,
+            true,
+            reporter,
+            log,
+        )
+        .map_err(|code| format!("the test build failed (exit code {code})"))?;
+    Ok(DebugTestBuild {
+        launcher: built.exe,
+        out_dir: built.out_dir,
+        args: built.args,
+        manifest: project.manifest.clone(),
+    })
+}
+
+/// Runs `stc test`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run(
+    manifest: Option<&str>,
+    locked: bool,
+    diagnostic_paths: DiagnosticPaths,
+    request: &Request,
+    options: &TestOptions,
+    filters: &[String],
+    reporter: &mut Reporter,
+    log: Log,
+) -> u8 {
+    let mut project = match TestProject::load(
+        manifest,
+        locked,
+        options.timeout_ns,
+        diagnostic_paths,
+        request,
+        reporter,
+        log,
+    ) {
+        Ok(project) => project,
+        Err(code) => return code,
+    };
+
+    // `--coverage`/`--no-coverage` override `[test] coverage`; `--list` ignores
+    // the manifest default and returns before any coverage work.
+    let effective_coverage = options.coverage.unwrap_or(project.manifest.test.coverage);
+    if options.coverage_out.is_some() && !effective_coverage {
+        reporter.plain(
+            "STC-E-PROJECT-010",
+            Severity::Error,
+            "`--coverage-out` requires coverage to be enabled (`--coverage` or `[test] coverage = \
+             true`)",
+        );
+        return 2;
+    }
+    let tests = filter_tests(&project.tests, filters);
+    if options.list {
+        for test in &tests {
+            if reporter.is_json() {
+                println!("{{\"name\":{}}}", json_string(&test.name));
+            } else {
+                println!("{}", test.name);
+            }
+        }
+        return u8::from(reporter.denied());
+    }
+    if tests.is_empty() {
+        log.status("0 tests discovered");
+        return u8::from(reporter.denied());
+    }
+
+    // Catch semantic errors once before building N artifacts.
+    if project.check_semantics(reporter) != 0 {
+        return 1;
+    }
+    let config = match project.configure(request, reporter, log) {
+        Ok(config) => config,
+        Err(code) => return code,
+    };
+    let artifact_root = request
+        .out_dir
+        .as_ref()
+        .map_or_else(|| project.root_dir.join("target/stc/test"), PathBuf::from);
+
+    let mut built = Vec::new();
+    let mut build_exit = 0_u8;
+    let coverage_files = effective_coverage.then(|| project.coverage_files.clone());
+    for test in &tests {
+        match project.build(
+            &config,
+            test,
+            request,
+            &artifact_root,
+            coverage_files.as_ref(),
+            false,
+            reporter,
+            log,
+        ) {
+            Ok(item) => built.push(item),
+            Err(code) => build_exit = build_exit.max(code),
+        }
     }
     if build_exit != 0 {
         return build_exit;
@@ -597,12 +813,12 @@ pub(crate) fn run(
     }
     let (mut code, coverage_tests) = run_tests(&built, options, reporter);
     if effective_coverage {
-        let coverage_dir = options
-            .coverage_out
-            .as_ref()
-            .map_or_else(|| root.root_dir.join("target/stc/coverage"), PathBuf::from);
+        let coverage_dir = options.coverage_out.as_ref().map_or_else(
+            || project.root_dir.join("target/stc/coverage"),
+            PathBuf::from,
+        );
         let report = aggregate(&CoverageRun {
-            package: root.name.clone(),
+            package: project.root_name.clone(),
             filters: filters.to_vec(),
             tests: coverage_tests,
         });
