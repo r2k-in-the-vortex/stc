@@ -158,7 +158,7 @@ toolchain (after spike evidence), and Phase 1 report acceptance/retirement (afte
 | Milestone | Work | Deliverable/evidence |
 | --- | --- | --- |
 | M0 — Baseline | Confirm Phase 0 records, CI, registry, and Rust baselines; inventory the three bridge targets and their dependencies; record available toolchains. Establish the Ubuntu execution host baseline, bootstrap the pinned Rust/Lean toolchains, and verify the Phase 0 checks there. | Complete: host/toolchain record; Phase 0 checks green on the host; Aeneas/Charon user-space install and pinned build recorded (2026-11-02); no claim change. |
-| M1 — Exact bridge spike | Run Aeneas/Charon on `crates/stc-codegen/src/exact.rs` (or the feasible subset). Measure translation coverage, generated Lean readability, proof obligations, and gaps versus `Stc.Exact`. | Exact-spike section in `Phase1-Report.md`; generated model + pins if feasible. |
+| M1 — Exact bridge spike | Run Aeneas/Charon on `crates/stc-codegen/src/exact.rs` (or the feasible subset). Measure translation coverage, generated Lean readability, proof obligations, and gaps versus `Stc.Exact`. | Complete 2026-11-02: pure kernel translated; derived/helper bodies failed; Aeneas/Mathlib compile cost outstanding; evidence in §11. |
 | M2 — Keys bridge spike | Run the spike on `crates/stc-got/src/keys.rs` normalization/key functions. Record string/UTF-8 and allocation/borrow friction; compare against the key-normalization contract; run vector/differential checks. | Keys-spike section; evidence and gap list. |
 | M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Codec-spike section; bridge recommendation. |
 | M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | Bridge decision section; module skeleton; owner decision request for toolchain adoption. |
@@ -255,12 +255,36 @@ On Phase 1 sign-off:
 - delete `WL-3-Phase-1.md` once every durable item has a home;
 - keep `specification/Verification/Reports/Phase1-Report.md` as the enduring record.
 
-## 11. Status board
+## 11. Spike log
+
+### M1 — `exact.rs` (2026-11-02)
+
+- Source: `crates/stc-codegen/src/exact.rs`, SHA-256
+  `85f3fbfc5263c918f80fc52b46322510de6645bef66c3fc078c7ba4ee826cba4`, 738 lines.
+- Charon `0.1.304 (7b462d9)` with `--preset=aeneas`, compiling the file as a library with edition
+  2024, produced a 2.3 MB `exact.llbc` (94 transparent functions, 55 opaque functions, 217
+  globals).
+- Aeneas `ab34bd2`, Lean backend, produced a 1708-line `Exact.lean` (119 `def`s, 22 `axiom`s).
+  All core arithmetic/conversion/selection functions are present, including `checked`, `add`,
+  `sub`, `mul`, `neg`, `div`, `modulo`, `abs`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shl`,
+  `shr`, `rol`, `ror`, `compare`, and `sel`.
+- Aeneas returned `rc=1` because unsupported bodies failed: derived `PartialEq`/`Debug` impls,
+  `MINMAX_TYPES`, `comparison`, `shift`, `bits`, `unary`, `binary`, the `mux` closure, and
+  `REGISTRY::{promoted_const}`. These are macro/trait-impl/iterator-shaped helpers, not the pure
+  arithmetic kernel.
+- The generated Lean imports the Aeneas library; that library requires Mathlib v4.35.0. Building
+  the Aeneas/Mathlib proof environment and compiling `Exact.lean` was not attempted in this
+  spike; it is a measured follow-up cost.
+- Spike conclusion: the pure kernel is translatable; the derived/helper bodies need isolation
+  (opaque/filtered translation or a reduced wrapper), and the Aeneas/Mathlib library cost must be
+  measured before choosing the bridge. No claim is raised.
+
+## 12. Status board
 
 | Item | State |
 | --- | --- |
 | M0 baseline and toolchain inventory | Complete — Rust/Lean/opam/OCaml/GMP/Aeneas/Charon installed; Phase 0 baseline green on the Ubuntu host |
-| M1 exact bridge spike | Not started |
+| M1 exact bridge spike | Complete — pure kernel translated to `Exact.lean`; derived/helper bodies failed; Aeneas/Mathlib compile cost outstanding |
 | M2 keys bridge spike | Not started |
 | M3 codec bridge spike | Not started |
 | M4 bridge decision and architecture | Not started |
