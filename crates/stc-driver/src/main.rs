@@ -17,6 +17,7 @@ mod dap;
 mod debug;
 mod fmt;
 mod frames;
+mod hir_dump;
 mod metadata;
 mod new;
 mod online;
@@ -205,6 +206,7 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
+        Command::HirDump => hir_dump::run(&invocation, &mut reporter, log),
         Command::Rename => rename::run(
             &invocation.paths[0],
             &invocation.paths[1],

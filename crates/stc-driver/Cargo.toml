@@ -14,6 +14,7 @@ name = "stc"
 path = "src/main.rs"
 
 [dependencies]
+serde_json = "1.0"
 stc-codegen = { path = "../stc-codegen" }
 stc-dap = { path = "../stc-dap" }
 stc-diag = { path = "../stc-diag" }
@@ -31,7 +32,6 @@ stc-syntax = { path = "../stc-syntax" }
 stc-test = { path = "../stc-test" }
 
 [dev-dependencies]
-serde_json = "1.0"
 toml_edit = "0.25.17"
 
 [lints]

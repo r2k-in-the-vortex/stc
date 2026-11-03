@@ -986,6 +986,7 @@ pub(crate) enum ManifestData {
 /// target on a `stc-debug/1.1` session applies a one-shot write to root storage
 /// on the parked cycle thread before the reply is produced, so the service
 /// thread never touches module or root storage.
+#[derive(Debug)]
 pub(crate) enum DebugWriteReply {
     /// The write waits in the queue for the next cycle boundary.
     Queued(DebugQueueId),
@@ -7908,7 +7909,9 @@ mod tests {
     use stc_got::keys::global_root_key;
     use stc_got::layout::Endianness;
     use stc_got::model::{
-        ActionRecord, FieldRecord, Header, History, InitializerKind, Plan, Retention,
+        ActionRecord, AggregateFieldRecord, AggregateKind, AggregateRecord, EnumMemberRecord,
+        FieldRecord, Header, History, InitializerKind, Plan, Retention, RetiredCause,
+        RetiredRecord, SubrangeBounds, TypeMetadataRecord,
     };
 
     fn target() -> Target {
@@ -8494,5 +8497,4575 @@ mod tests {
     fn service_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<DebugService>();
+    }
+
+    fn record_with_id(
+        got_id: GotId,
+        key: &str,
+        type_key: &str,
+        kind: TypeKind,
+        size: u64,
+        fields: Vec<FieldRecord>,
+    ) -> TypeRecord {
+        let mut record = type_record(key, type_key, kind, size, fields);
+        record.got_id = got_id;
+        record
+    }
+
+    fn error_code<T: std::fmt::Debug>(result: Result<T>, code: &str) {
+        let error = result.expect_err("expected an error");
+        assert_eq!(error.code, code, "{}", error.message);
+    }
+
+    fn typed(type_key: &str, value: DebugValue) -> TypedValue {
+        TypedValue::new(type_key, value)
+    }
+
+    #[test]
+    fn json_scalars_decode_to_canonical_debug_values() {
+        assert_eq!(real_value_json(f64::NAN), Json::string("NaN"));
+        assert_eq!(real_value_json(f64::INFINITY), Json::string("INF"));
+        assert_eq!(real_value_json(f64::NEG_INFINITY), Json::string("-INF"));
+        assert_eq!(real_value_json(0.0), Json::NumberLiteral("0".into()));
+        assert_eq!(real_value_json(-0.0), Json::NumberLiteral("0".into()));
+        assert_eq!(real_value_json(1.5), Json::NumberLiteral("1.5".into()));
+
+        assert_eq!(
+            debug_value_from_json(&Json::Bool(true), 0).expect("bool"),
+            DebugValue::Bool(true)
+        );
+        assert!(matches!(
+            debug_value_from_json(&Json::string("NaN"), 0).expect("nan"),
+            DebugValue::Real(value) if value.is_nan()
+        ));
+        assert_eq!(
+            debug_value_from_json(&Json::string("INF"), 0).expect("inf"),
+            DebugValue::Real(f64::INFINITY)
+        );
+        assert_eq!(
+            debug_value_from_json(&Json::string("-INF"), 0).expect("-inf"),
+            DebugValue::Real(f64::NEG_INFINITY)
+        );
+        assert_eq!(
+            debug_value_from_json(&Json::string("12"), 0).expect("decimal"),
+            DebugValue::Decimal("12".into())
+        );
+        assert_eq!(
+            debug_value_from_json(&Json::Number(-3), 0).expect("number"),
+            DebugValue::Real(-3.0)
+        );
+        assert_eq!(
+            debug_value_from_json(&Json::NumberLiteral("2.5".into()), 0).expect("literal"),
+            DebugValue::Real(2.5)
+        );
+
+        error_code(
+            debug_value_from_json(&Json::NumberLiteral("abc".into()), 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            debug_value_from_json(&Json::NumberLiteral("1e999".into()), 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(debug_value_from_json(&Json::Null, 0), codes::DEBUG_REQUEST);
+        error_code(
+            debug_value_from_json(&Json::Array(Vec::new()), 0),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(&Json::Bool(true), MAX_DECODE_DEPTH + 1),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn json_string_shapes_validate_length_and_units() {
+        let value = debug_value_from_json(
+            &Json::object([
+                ("length".into(), Json::unsigned(2)),
+                (
+                    "units".into(),
+                    Json::Array(vec![Json::unsigned(104), Json::unsigned(105)]),
+                ),
+            ]),
+            0,
+        )
+        .expect("string");
+        assert_eq!(
+            value,
+            DebugValue::String(StringValue {
+                capacity: 2,
+                length: 2,
+                units: vec![104, 105],
+                text: Some("hi".into()),
+            })
+        );
+
+        let invalid_scalar = debug_value_from_json(
+            &Json::object([
+                ("length".into(), Json::unsigned(1)),
+                ("units".into(), Json::Array(vec![Json::unsigned(0x11_0000)])),
+            ]),
+            0,
+        )
+        .expect("an invalid scalar is preserved as units");
+        let DebugValue::String(string) = invalid_scalar else {
+            panic!("string");
+        };
+        assert_eq!(string.units, vec![0x11_0000]);
+        assert!(string.text.is_none());
+
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("length".into(), Json::Number(-1)),
+                    ("units".into(), Json::Array(Vec::new())),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("length".into(), Json::Number(i128::from(u32::MAX) + 1)),
+                    ("units".into(), Json::Array(Vec::new())),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(&Json::object([("length".into(), Json::unsigned(0))]), 0),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("length".into(), Json::unsigned(1)),
+                    ("units".into(), Json::Array(vec![Json::string("x")])),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+    }
+
+    #[test]
+    fn json_array_and_aggregate_shapes_require_named_entries() {
+        let array = debug_value_from_json(
+            &Json::object([(
+                "elements".into(),
+                Json::Array(vec![Json::object([
+                    ("type".into(), Json::string("DINT")),
+                    ("value".into(), Json::string("7")),
+                ])]),
+            )]),
+            0,
+        )
+        .expect("array");
+        assert_eq!(
+            array,
+            DebugValue::Array(vec![typed("DINT", DebugValue::Decimal("7".into()))])
+        );
+
+        let aggregate = debug_value_from_json(
+            &Json::object([
+                ("aggregate".into(), Json::Bool(true)),
+                ("atomic".into(), Json::Bool(false)),
+                (
+                    "fields".into(),
+                    Json::Array(vec![Json::object([
+                        ("name".into(), Json::string("X")),
+                        (
+                            "value".into(),
+                            Json::object([
+                                ("type".into(), Json::string("DINT")),
+                                ("value".into(), Json::string("1")),
+                            ]),
+                        ),
+                    ])]),
+                ),
+            ]),
+            0,
+        )
+        .expect("aggregate");
+        assert_eq!(
+            aggregate,
+            DebugValue::Aggregate(vec![NamedValue {
+                name: "X".into(),
+                value: typed("DINT", DebugValue::Decimal("1".into())),
+            }])
+        );
+
+        error_code(
+            debug_value_from_json(&Json::object([("elements".into(), Json::unsigned(1))]), 0),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("aggregate".into(), Json::Bool(true)),
+                    ("fields".into(), Json::Array(Vec::new())),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("aggregate".into(), Json::Bool(true)),
+                    ("atomic".into(), Json::Bool(false)),
+                    ("fields".into(), Json::Array(vec![Json::string("bad")])),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("aggregate".into(), Json::Bool(true)),
+                    ("atomic".into(), Json::Bool(false)),
+                    (
+                        "fields".into(),
+                        Json::Array(vec![Json::object([("value".into(), Json::Bool(true))])]),
+                    ),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+    }
+
+    #[test]
+    fn json_reference_object_and_read_only_shapes() {
+        let reference = debug_value_from_json(
+            &Json::object([
+                ("identity".into(), Json::string("0xabc")),
+                ("present".into(), Json::Bool(true)),
+                ("target_type".into(), Json::string("DINT")),
+            ]),
+            0,
+        )
+        .expect("reference");
+        assert_eq!(
+            reference,
+            DebugValue::Reference {
+                identity: Some("0xabc".into()),
+                present: true,
+                target_type: Some("DINT".into()),
+            }
+        );
+
+        let object = debug_value_from_json(
+            &Json::object([
+                ("class".into(), Json::string("C")),
+                (
+                    "fields".into(),
+                    Json::Array(vec![Json::object([
+                        ("name".into(), Json::string("X")),
+                        (
+                            "value".into(),
+                            Json::object([
+                                ("type".into(), Json::string("DINT")),
+                                ("value".into(), Json::string("1")),
+                            ]),
+                        ),
+                    ])]),
+                ),
+                ("identity".into(), Json::Null),
+                ("interface".into(), Json::string("I")),
+            ]),
+            0,
+        )
+        .expect("object");
+        assert_eq!(
+            object,
+            DebugValue::Object {
+                identity: None,
+                present: true,
+                class: Some("C".into()),
+                interface: Some("I".into()),
+                fields: vec![NamedValue {
+                    name: "X".into(),
+                    value: typed("DINT", DebugValue::Decimal("1".into())),
+                }],
+            }
+        );
+
+        error_code(
+            debug_value_from_json(
+                &Json::object([("bytes".into(), Json::string("AQIDBA=="))]),
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("available".into(), Json::Bool(false)),
+                    ("code".into(), Json::string("STC-W-DEBUG-002")),
+                ]),
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("identity".into(), Json::Null),
+                    ("present".into(), Json::string("yes")),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("identity".into(), Json::Number(5)),
+                    ("present".into(), Json::Bool(true)),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("class".into(), Json::string("C")),
+                    ("fields".into(), Json::Array(Vec::new())),
+                    ("bogus".into(), Json::Null),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(
+                &Json::object([
+                    ("class".into(), Json::Number(5)),
+                    ("fields".into(), Json::Array(Vec::new())),
+                ]),
+                0,
+            ),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            debug_value_from_json(&Json::Object(std::collections::BTreeMap::new()), 0),
+            codes::DEBUG_REQUEST,
+        );
+    }
+
+    #[test]
+    fn typed_value_envelope_requires_exact_keys() {
+        let value = typed_value_from_json(&Json::object([
+            ("type".into(), Json::string("DINT")),
+            ("value".into(), Json::string("5")),
+        ]))
+        .expect("typed value");
+        assert_eq!(value, typed("DINT", DebugValue::Decimal("5".into())));
+
+        error_code(
+            typed_value_from_json(&Json::string("DINT")),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            typed_value_from_json(&Json::object([("type".into(), Json::string("DINT"))])),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            typed_value_from_json(&Json::object([
+                ("type".into(), Json::string("DINT")),
+                ("value".into(), Json::Bool(true)),
+                ("extra".into(), Json::Null),
+            ])),
+            codes::DEBUG_REQUEST,
+        );
+        error_code(
+            typed_value_from_json(&Json::object([
+                ("type".into(), Json::Bool(true)),
+                ("value".into(), Json::Bool(true)),
+            ])),
+            codes::DEBUG_REQUEST,
+        );
+    }
+
+    #[test]
+    fn debug_value_json_round_trips_every_writable_shape() {
+        let cases = [
+            DebugValue::Bool(true),
+            DebugValue::Decimal("-12".into()),
+            DebugValue::Real(1.25),
+            DebugValue::String(StringValue {
+                capacity: 2,
+                length: 2,
+                units: vec![65, 66],
+                text: Some("AB".into()),
+            }),
+            DebugValue::Array(vec![typed("DINT", DebugValue::Decimal("1".into()))]),
+            DebugValue::Aggregate(vec![NamedValue {
+                name: "X".into(),
+                value: typed("DINT", DebugValue::Decimal("1".into())),
+            }]),
+            DebugValue::Object {
+                identity: Some("0xid".into()),
+                present: true,
+                class: Some("C".into()),
+                interface: None,
+                fields: Vec::new(),
+            },
+            DebugValue::Reference {
+                identity: None,
+                present: false,
+                target_type: Some("DINT".into()),
+            },
+        ];
+        for value in cases {
+            let json = debug_value_json(&value);
+            let decoded = debug_value_from_json(&json, 0).expect("round trip");
+            assert_eq!(decoded, value, "{}", json.render());
+        }
+
+        assert_eq!(
+            debug_value_json(&DebugValue::Overlap {
+                bytes: vec![1, 2],
+                base64: "AQI=".into(),
+            }),
+            Json::object([("bytes".into(), Json::string("AQI="))])
+        );
+        assert_eq!(
+            debug_value_json(&DebugValue::Unavailable {
+                warning: DebugWarning {
+                    code: codes::W_DEBUG_UNAVAILABLE,
+                    message: "missing".into(),
+                },
+            }),
+            Json::object([
+                ("available".into(), Json::Bool(false)),
+                ("code".into(), Json::string(codes::W_DEBUG_UNAVAILABLE)),
+            ])
+        );
+    }
+
+    #[test]
+    fn writable_types_reject_identities_and_missing_records() {
+        let manifest = manifest(Vec::new(), Vec::new());
+        error_code(
+            validate_writable_type(&manifest, &TypeKey::RefTo(Box::new(TypeKey::Dint)), 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            validate_writable_type(&manifest, &TypeKey::PtrTo(Box::new(TypeKey::Dint)), 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            validate_writable_type(&manifest, &TypeKey::Void, 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            validate_writable_type(&manifest, &TypeKey::Named(GotId::from_bytes([9; 16])), 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            validate_writable_type(&manifest, &TypeKey::Dint, MAX_DECODE_DEPTH + 1),
+            codes::DEBUG_TYPE,
+        );
+        validate_writable_type(&manifest, &TypeKey::Bool, 0).expect("scalar");
+        validate_writable_type(
+            &manifest,
+            &TypeKey::Array {
+                lower: ArrayBound::Value(1),
+                upper: ArrayBound::Value(2),
+                element: Box::new(TypeKey::Dint),
+            },
+            0,
+        )
+        .expect("scalar array");
+    }
+
+    #[test]
+    fn writable_types_follow_aliases_and_reject_aggregates() {
+        let enum_id = GotId::from_bytes([1; 16]);
+        let subrange_id = GotId::from_bytes([2; 16]);
+        let alias_id = GotId::from_bytes([3; 16]);
+        let broken_alias_id = GotId::from_bytes([4; 16]);
+        let dangling_alias_id = GotId::from_bytes([5; 16]);
+        let struct_id = GotId::from_bytes([6; 16]);
+        let invalid_alias_id = GotId::from_bytes([7; 16]);
+        let invalid_base_id = GotId::from_bytes([8; 16]);
+        let base_id = GotId::from_bytes([10; 16]);
+        let enum_record = record_with_id(enum_id, "_ROOT::E", "E", TypeKind::Enum, 4, Vec::new());
+        let subrange_record = record_with_id(
+            subrange_id,
+            "_ROOT::S",
+            "S",
+            TypeKind::Subrange,
+            4,
+            Vec::new(),
+        );
+        let base_record = record_with_id(
+            base_id,
+            "_ROOT::BASE",
+            "DINT",
+            TypeKind::Struct,
+            4,
+            Vec::new(),
+        );
+        let mut alias = record_with_id(alias_id, "_ROOT::A", "A", TypeKind::Alias, 4, Vec::new());
+        alias.base = Some(base_id);
+        let broken = record_with_id(
+            broken_alias_id,
+            "_ROOT::B",
+            "B",
+            TypeKind::Alias,
+            4,
+            Vec::new(),
+        );
+        let mut dangling = record_with_id(
+            dangling_alias_id,
+            "_ROOT::D",
+            "D",
+            TypeKind::Alias,
+            4,
+            Vec::new(),
+        );
+        dangling.base = Some(GotId::from_bytes([9; 16]));
+        let mut invalid_alias = record_with_id(
+            invalid_alias_id,
+            "_ROOT::I",
+            "I",
+            TypeKind::Alias,
+            4,
+            Vec::new(),
+        );
+        invalid_alias.base = Some(invalid_base_id);
+        let invalid_base = record_with_id(
+            invalid_base_id,
+            "_ROOT::X",
+            "!!!",
+            TypeKind::Struct,
+            4,
+            Vec::new(),
+        );
+        let struct_record =
+            record_with_id(struct_id, "_ROOT::T", "T", TypeKind::Struct, 8, Vec::new());
+        let manifest = manifest(
+            Vec::new(),
+            vec![
+                enum_record,
+                subrange_record,
+                base_record,
+                alias,
+                broken,
+                dangling,
+                invalid_alias,
+                invalid_base,
+                struct_record,
+            ],
+        );
+
+        validate_writable_type(&manifest, &TypeKey::Named(enum_id), 0).expect("enum");
+        validate_writable_type(&manifest, &TypeKey::Named(subrange_id), 0).expect("subrange");
+        validate_writable_type(&manifest, &TypeKey::Named(alias_id), 0).expect("alias");
+        error_code(
+            validate_writable_type(&manifest, &TypeKey::Named(broken_alias_id), 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            validate_writable_type(&manifest, &TypeKey::Named(dangling_alias_id), 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            validate_writable_type(&manifest, &TypeKey::Named(invalid_alias_id), 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            validate_writable_type(&manifest, &TypeKey::Named(struct_id), 0),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            validate_writable_type(
+                &manifest,
+                &TypeKey::Array {
+                    lower: ArrayBound::Value(1),
+                    upper: ArrayBound::Value(2),
+                    element: Box::new(TypeKey::Named(struct_id)),
+                },
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn resolve_got_id_reports_removed_and_unknown_targets() {
+        let live_id = GotId::from_bytes([1; 16]);
+        let dropped_id = GotId::from_bytes([2; 16]);
+        let retired_id = GotId::from_bytes([3; 16]);
+        let unknown_id = GotId::from_bytes([4; 16]);
+        let mut live = root("_ROOT::LIVE", "DINT", 4, "");
+        live.got_id = live_id;
+        let mut manifest = manifest(vec![live], Vec::new());
+        manifest.plan.actions.push(ActionRecord {
+            got_id: dropped_id,
+            kind: 1,
+            key: "_ROOT::DROPPED".into(),
+            old_key: None,
+            action: PlanAction::Drop,
+            reason_code: "test".into(),
+            detail: String::new(),
+        });
+        manifest.history.retired.push(RetiredRecord {
+            got_id: retired_id,
+            kind: 1,
+            key: "_ROOT::RETIRED".into(),
+            previous_keys: Vec::new(),
+            retired_build_id: GotId::ZERO,
+            retired_manifest_digest: stc_got::Digest32::ZERO,
+            cause: RetiredCause::Dropped,
+        });
+
+        let resolved = resolve_got_id(&manifest, live_id).expect("live");
+        assert_eq!(resolved.canonical_key, "_ROOT::LIVE");
+        error_code(resolve_got_id(&manifest, dropped_id), codes::DEBUG_STALE);
+        error_code(resolve_got_id(&manifest, retired_id), codes::DEBUG_STALE);
+        error_code(resolve_got_id(&manifest, unknown_id), codes::DEBUG_UNKNOWN);
+    }
+
+    #[test]
+    fn encodings_match_declared_widths_and_endianness() {
+        let manifest = manifest(Vec::new(), Vec::new());
+        let dint = encode_type_value(
+            &manifest,
+            &target(),
+            &TypeKey::Dint,
+            "DINT",
+            &typed("DINT", DebugValue::Decimal("-2".into())),
+            4,
+        )
+        .expect("dint");
+        assert_eq!(dint, (-2_i32).to_le_bytes());
+
+        let big = Target::new("x86_64-unknown-linux-gnu", Endianness::Big, 8);
+        let uint = encode_type_value(
+            &manifest,
+            &big,
+            &TypeKey::Uint,
+            "UINT",
+            &typed("UINT", DebugValue::Decimal("258".into())),
+            2,
+        )
+        .expect("uint");
+        assert_eq!(uint, 258_u16.to_be_bytes());
+
+        let boolean = encode_type_value(
+            &manifest,
+            &target(),
+            &TypeKey::Bool,
+            "BOOL",
+            &typed("BOOL", DebugValue::Bool(true)),
+            1,
+        )
+        .expect("bool");
+        assert_eq!(boolean, vec![1]);
+
+        let real = encode_type_value(
+            &manifest,
+            &target(),
+            &TypeKey::Real,
+            "REAL",
+            &typed("REAL", DebugValue::Real(1.5)),
+            4,
+        )
+        .expect("real");
+        assert_eq!(real, 1.5_f32.to_le_bytes());
+
+        let lreal = encode_type_value(
+            &manifest,
+            &target(),
+            &TypeKey::Lreal,
+            "LREAL",
+            &typed("LREAL", DebugValue::Real(-0.25)),
+            8,
+        )
+        .expect("lreal");
+        assert_eq!(lreal, (-0.25_f64).to_le_bytes());
+    }
+
+    #[test]
+    fn encode_rejects_type_and_range_violations() {
+        let manifest = manifest(Vec::new(), Vec::new());
+        let target = target();
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Dint,
+                "DINT",
+                &typed("INT", DebugValue::Decimal("1".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Dint,
+                "DINT",
+                &typed("DINT", DebugValue::Bool(true)),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Dint,
+                "DINT",
+                &typed("DINT", DebugValue::Decimal("abc".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Dint,
+                "DINT",
+                &typed("DINT", DebugValue::Decimal("2147483648".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Uint,
+                "UINT",
+                &typed("UINT", DebugValue::Decimal("-1".into())),
+                2,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Uint,
+                "UINT",
+                &typed("UINT", DebugValue::Decimal("65536".into())),
+                2,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Real,
+                "REAL",
+                &typed("REAL", DebugValue::Decimal("1".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::RefTo(Box::new(TypeKey::Dint)),
+                "REF_TO(DINT)",
+                &typed("REF_TO(DINT)", DebugValue::Bool(false)),
+                48,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Void,
+                "VOID",
+                &typed("VOID", DebugValue::Bool(false)),
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn encode_strings_validate_capacity_and_units() {
+        let manifest = manifest(Vec::new(), Vec::new());
+        let target = target();
+        let sbcs = TypeKey::String {
+            kind: StringKind::Sbcs,
+            capacity: 4,
+        };
+        let bytes = encode_type_value(
+            &manifest,
+            &target,
+            &sbcs,
+            "STRING[4]",
+            &typed(
+                "STRING[4]",
+                DebugValue::String(StringValue {
+                    capacity: 4,
+                    length: 2,
+                    units: vec![104, 105],
+                    text: Some("hi".into()),
+                }),
+            ),
+            8,
+        )
+        .expect("sbcs");
+        assert_eq!(bytes, vec![2, 0, 0, 0, b'h', b'i', 0, 0]);
+
+        let dbcs = TypeKey::String {
+            kind: StringKind::Dbcs,
+            capacity: 2,
+        };
+        let bytes = encode_type_value(
+            &manifest,
+            &target,
+            &dbcs,
+            "WSTRING[2]",
+            &typed(
+                "WSTRING[2]",
+                DebugValue::String(StringValue {
+                    capacity: 2,
+                    length: 2,
+                    units: vec![0x41, 0xD83D],
+                    text: None,
+                }),
+            ),
+            8,
+        )
+        .expect("dbcs");
+        assert_eq!(bytes, vec![2, 0, 0, 0, 0x41, 0, 0x3D, 0xD8]);
+
+        let unicode = TypeKey::String {
+            kind: StringKind::Unicode,
+            capacity: 2,
+        };
+        let bytes = encode_type_value(
+            &manifest,
+            &target,
+            &unicode,
+            "USTRING[2]",
+            &typed(
+                "USTRING[2]",
+                DebugValue::String(StringValue {
+                    capacity: 2,
+                    length: 2,
+                    units: vec![0x1F600, 0x41],
+                    text: None,
+                }),
+            ),
+            12,
+        )
+        .expect("unicode");
+        let mut expected = vec![2, 0, 0, 0];
+        expected.extend_from_slice(&0x1F600_u32.to_le_bytes());
+        expected.extend_from_slice(&0x41_u32.to_le_bytes());
+        assert_eq!(bytes, expected);
+
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &sbcs,
+                "STRING[4]",
+                &typed("STRING[4]", DebugValue::Bool(false)),
+                8,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &sbcs,
+                "STRING[4]",
+                &typed(
+                    "STRING[4]",
+                    DebugValue::String(StringValue {
+                        capacity: 3,
+                        length: 0,
+                        units: Vec::new(),
+                        text: Some(String::new()),
+                    }),
+                ),
+                8,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &sbcs,
+                "STRING[4]",
+                &typed(
+                    "STRING[4]",
+                    DebugValue::String(StringValue {
+                        capacity: 4,
+                        length: 5,
+                        units: vec![65; 5],
+                        text: Some("AAAAA".into()),
+                    }),
+                ),
+                8,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &sbcs,
+                "STRING[4]",
+                &typed(
+                    "STRING[4]",
+                    DebugValue::String(StringValue {
+                        capacity: 4,
+                        length: 1,
+                        units: vec![256],
+                        text: None,
+                    }),
+                ),
+                8,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &dbcs,
+                "WSTRING[2]",
+                &typed(
+                    "WSTRING[2]",
+                    DebugValue::String(StringValue {
+                        capacity: 2,
+                        length: 1,
+                        units: vec![0x1_0000],
+                        text: None,
+                    }),
+                ),
+                8,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &unicode,
+                "USTRING[2]",
+                &typed(
+                    "USTRING[2]",
+                    DebugValue::String(StringValue {
+                        capacity: 2,
+                        length: 1,
+                        units: vec![0xD800],
+                        text: None,
+                    }),
+                ),
+                12,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn encode_arrays_validate_bounds_shape_and_length() {
+        let manifest = manifest(Vec::new(), Vec::new());
+        let target = target();
+        let ty = TypeKey::Array {
+            lower: ArrayBound::Value(1),
+            upper: ArrayBound::Value(3),
+            element: Box::new(TypeKey::Dint),
+        };
+        let values = vec![
+            typed("DINT", DebugValue::Decimal("1".into())),
+            typed("DINT", DebugValue::Decimal("2".into())),
+            typed("DINT", DebugValue::Decimal("3".into())),
+        ];
+        let bytes = encode_type_value(
+            &manifest,
+            &target,
+            &ty,
+            "ARRAY[1..3]OF(DINT)",
+            &typed("ARRAY[1..3]OF(DINT)", DebugValue::Array(values.clone())),
+            12,
+        )
+        .expect("array");
+        let mut expected = Vec::new();
+        for value in 1_i32..=3 {
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(bytes, expected);
+
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &ty,
+                "ARRAY[1..3]OF(DINT)",
+                &typed("ARRAY[1..3]OF(DINT)", DebugValue::Decimal("1".into())),
+                12,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &ty,
+                "ARRAY[1..3]OF(DINT)",
+                &typed(
+                    "ARRAY[1..3]OF(DINT)",
+                    DebugValue::Array(values[..2].to_vec()),
+                ),
+                12,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let invert = TypeKey::Array {
+            lower: ArrayBound::Value(3),
+            upper: ArrayBound::Value(1),
+            element: Box::new(TypeKey::Dint),
+        };
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target,
+                &invert,
+                "ARRAY[3..1]OF(DINT)",
+                &typed("ARRAY[3..1]OF(DINT)", DebugValue::Array(Vec::new())),
+                12,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let mut out = vec![0_u8; 12];
+        let conformant = "ARRAY[*..1]OF(DINT)";
+        error_code(
+            encode_array(
+                &manifest,
+                &target,
+                &typed(conformant, DebugValue::Array(Vec::new())),
+                conformant,
+                ArrayBound::Conformant,
+                ArrayBound::Value(1),
+                &TypeKey::Dint,
+                &mut out,
+                0,
+                12,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        let inverted = "ARRAY[3..1]OF(DINT)";
+        error_code(
+            encode_array(
+                &manifest,
+                &target,
+                &typed(inverted, DebugValue::Array(Vec::new())),
+                inverted,
+                ArrayBound::Value(3),
+                ArrayBound::Value(1),
+                &TypeKey::Dint,
+                &mut out,
+                0,
+                12,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        let oversized = "ARRAY[1..1000001]OF(DINT)";
+        error_code(
+            encode_array(
+                &manifest,
+                &target,
+                &typed(oversized, DebugValue::Array(Vec::new())),
+                oversized,
+                ArrayBound::Value(1),
+                ArrayBound::Value(1_000_001),
+                &TypeKey::Dint,
+                &mut out,
+                0,
+                12,
+                0,
+            ),
+            codes::DEBUG_LIMIT,
+        );
+        let outside = vec![typed("DINT", DebugValue::Decimal("1".into())); 3];
+        error_code(
+            encode_array(
+                &manifest,
+                &target,
+                &typed("ARRAY[1..3]OF(DINT)", DebugValue::Array(outside)),
+                "ARRAY[1..3]OF(DINT)",
+                ArrayBound::Value(1),
+                ArrayBound::Value(3),
+                &TypeKey::Dint,
+                &mut out,
+                0,
+                4,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn encode_enums_and_subranges_require_metadata_and_ranges() {
+        let enum_id = GotId::from_bytes([1; 16]);
+        let subrange_id = GotId::from_bytes([2; 16]);
+        let enum_record = record_with_id(enum_id, "_ROOT::E", "E", TypeKind::Enum, 4, Vec::new());
+        let subrange_record = record_with_id(
+            subrange_id,
+            "_ROOT::S",
+            "S",
+            TypeKind::Subrange,
+            4,
+            Vec::new(),
+        );
+        let mut manifest = manifest(Vec::new(), vec![enum_record, subrange_record]);
+        manifest.type_metadata.push(TypeMetadataRecord {
+            type_id: enum_id,
+            enum_members: vec![EnumMemberRecord {
+                name: "A".into(),
+                value: 1,
+            }],
+            subrange: None,
+        });
+        manifest.type_metadata.push(TypeMetadataRecord {
+            type_id: subrange_id,
+            enum_members: Vec::new(),
+            subrange: Some(SubrangeBounds {
+                lower: 0,
+                upper: 10,
+            }),
+        });
+
+        let enum_ty = TypeKey::Named(enum_id);
+        let bytes = encode_type_value(
+            &manifest,
+            &target(),
+            &enum_ty,
+            "E",
+            &typed("E", DebugValue::Decimal("1".into())),
+            4,
+        )
+        .expect("enum");
+        assert_eq!(bytes, 1_i32.to_le_bytes());
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target(),
+                &enum_ty,
+                "E",
+                &typed("E", DebugValue::Decimal("2".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target(),
+                &enum_ty,
+                "E",
+                &typed("E", DebugValue::Bool(true)),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        let mut no_metadata = manifest.clone();
+        no_metadata.type_metadata.clear();
+        error_code(
+            encode_type_value(
+                &no_metadata,
+                &target(),
+                &enum_ty,
+                "E",
+                &typed("E", DebugValue::Decimal("1".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let subrange_ty = TypeKey::Named(subrange_id);
+        let bytes = encode_type_value(
+            &manifest,
+            &target(),
+            &subrange_ty,
+            "S",
+            &typed("S", DebugValue::Decimal("10".into())),
+            4,
+        )
+        .expect("subrange");
+        assert_eq!(bytes, 10_i32.to_le_bytes());
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target(),
+                &subrange_ty,
+                "S",
+                &typed("S", DebugValue::Decimal("11".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        let mut no_bounds = manifest.clone();
+        no_bounds.type_metadata[1].subrange = None;
+        error_code(
+            encode_type_value(
+                &no_bounds,
+                &target(),
+                &subrange_ty,
+                "S",
+                &typed("S", DebugValue::Decimal("1".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn encode_named_aliases_and_aggregates() {
+        let alias_id = GotId::from_bytes([1; 16]);
+        let base_id = GotId::from_bytes([2; 16]);
+        let broken_id = GotId::from_bytes([3; 16]);
+        let dangling_id = GotId::from_bytes([4; 16]);
+        let invalid_id = GotId::from_bytes([5; 16]);
+        let bad_base_id = GotId::from_bytes([6; 16]);
+        let struct_id = GotId::from_bytes([7; 16]);
+        let mut alias = record_with_id(alias_id, "_ROOT::A", "A", TypeKind::Alias, 4, Vec::new());
+        alias.base = Some(base_id);
+        let base = record_with_id(
+            base_id,
+            "_ROOT::BASE",
+            "DINT",
+            TypeKind::Struct,
+            4,
+            Vec::new(),
+        );
+        let broken = record_with_id(broken_id, "_ROOT::B", "B", TypeKind::Alias, 4, Vec::new());
+        let mut dangling =
+            record_with_id(dangling_id, "_ROOT::D", "D", TypeKind::Alias, 4, Vec::new());
+        dangling.base = Some(GotId::from_bytes([8; 16]));
+        let mut invalid =
+            record_with_id(invalid_id, "_ROOT::I", "I", TypeKind::Alias, 4, Vec::new());
+        invalid.base = Some(bad_base_id);
+        let bad_base = record_with_id(
+            bad_base_id,
+            "_ROOT::X",
+            "!!!",
+            TypeKind::Struct,
+            4,
+            Vec::new(),
+        );
+        let struct_record =
+            record_with_id(struct_id, "_ROOT::T", "T", TypeKind::Struct, 8, Vec::new());
+        let manifest = manifest(
+            Vec::new(),
+            vec![
+                alias,
+                base,
+                broken,
+                dangling,
+                invalid,
+                bad_base,
+                struct_record,
+            ],
+        );
+
+        let bytes = encode_type_value(
+            &manifest,
+            &target(),
+            &TypeKey::Named(alias_id),
+            "A",
+            &typed("A", DebugValue::Decimal("7".into())),
+            4,
+        )
+        .expect("alias");
+        assert_eq!(bytes, 7_i32.to_le_bytes());
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target(),
+                &TypeKey::Named(broken_id),
+                "B",
+                &typed("B", DebugValue::Decimal("7".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target(),
+                &TypeKey::Named(dangling_id),
+                "D",
+                &typed("D", DebugValue::Decimal("7".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target(),
+                &TypeKey::Named(invalid_id),
+                "I",
+                &typed("I", DebugValue::Decimal("7".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target(),
+                &TypeKey::Named(struct_id),
+                "T",
+                &typed("T", DebugValue::Decimal("7".into())),
+                8,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_type_value(
+                &manifest,
+                &target(),
+                &TypeKey::Named(GotId::from_bytes([9; 16])),
+                "MISSING",
+                &typed("MISSING", DebugValue::Decimal("7".into())),
+                4,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn decode_named_enums_classes_interfaces_and_structs() {
+        let enum_id = GotId::from_bytes([1; 16]);
+        let wide_enum_id = GotId::from_bytes([2; 16]);
+        let class_id = GotId::from_bytes([3; 16]);
+        let small_class_id = GotId::from_bytes([4; 16]);
+        let interface_id = GotId::from_bytes([5; 16]);
+        let short_interface_id = GotId::from_bytes([6; 16]);
+        let struct_id = GotId::from_bytes([7; 16]);
+        let enum_record = record_with_id(enum_id, "_ROOT::E", "E", TypeKind::Enum, 4, Vec::new());
+        let wide_enum = record_with_id(
+            wide_enum_id,
+            "_ROOT::WE",
+            "WE",
+            TypeKind::Enum,
+            16,
+            Vec::new(),
+        );
+        let class_record =
+            record_with_id(class_id, "_ROOT::C", "C", TypeKind::Class, 8, Vec::new());
+        let small_class = record_with_id(
+            small_class_id,
+            "_ROOT::SC",
+            "SC",
+            TypeKind::Class,
+            4,
+            Vec::new(),
+        );
+        let interface_record = record_with_id(
+            interface_id,
+            "_ROOT::I",
+            "I",
+            TypeKind::Interface,
+            16,
+            Vec::new(),
+        );
+        let short_interface = record_with_id(
+            short_interface_id,
+            "_ROOT::SI",
+            "SI",
+            TypeKind::Interface,
+            8,
+            Vec::new(),
+        );
+        let struct_record = record_with_id(
+            struct_id,
+            "_ROOT::P",
+            "P",
+            TypeKind::Struct,
+            8,
+            vec![field("X", "DINT", 0, 4), field("Y", "DINT", 4, 4)],
+        );
+        let manifest = manifest(
+            Vec::new(),
+            vec![
+                enum_record,
+                wide_enum,
+                class_record,
+                small_class,
+                interface_record,
+                short_interface,
+                struct_record,
+            ],
+        );
+        let target = target();
+
+        let value = decode_type_value(
+            &manifest,
+            &target,
+            &TypeKey::Named(enum_id),
+            "E",
+            &(-3_i32).to_le_bytes(),
+            1,
+        )
+        .expect("enum");
+        assert_eq!(value.value, DebugValue::Decimal("-3".into()));
+        error_code(
+            decode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Named(wide_enum_id),
+                "WE",
+                &[0_u8; 16],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let value = decode_type_value(
+            &manifest,
+            &target,
+            &TypeKey::Named(class_id),
+            "C",
+            &0x1234_i64.to_le_bytes(),
+            1,
+        )
+        .expect("class");
+        let DebugValue::Object {
+            identity,
+            present,
+            class,
+            ..
+        } = value.value
+        else {
+            panic!("object");
+        };
+        assert!(present);
+        assert!(identity.expect("identity").starts_with("0x"));
+        assert_eq!(class.as_deref(), Some("C"));
+        error_code(
+            decode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Named(small_class_id),
+                "SC",
+                &[0_u8; 4],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let value = decode_type_value(
+            &manifest,
+            &target,
+            &TypeKey::Named(interface_id),
+            "I",
+            &[0_u8; 16],
+            1,
+        )
+        .expect("absent interface");
+        assert_eq!(
+            value.value,
+            DebugValue::Object {
+                identity: None,
+                present: false,
+                class: None,
+                interface: Some("I".into()),
+                fields: Vec::new(),
+            }
+        );
+        let value = decode_type_value(
+            &manifest,
+            &target,
+            &TypeKey::Named(interface_id),
+            "I",
+            &[0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            1,
+        )
+        .expect("present interface");
+        let DebugValue::Object {
+            identity, present, ..
+        } = value.value
+        else {
+            panic!("object");
+        };
+        assert!(present);
+        assert!(identity.is_some());
+        error_code(
+            decode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Named(short_interface_id),
+                "SI",
+                &[0_u8; 8],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_i32.to_le_bytes());
+        bytes.extend_from_slice(&2_i32.to_le_bytes());
+        let value = decode_type_value(
+            &manifest,
+            &target,
+            &TypeKey::Named(struct_id),
+            "P",
+            &bytes,
+            1,
+        )
+        .expect("struct");
+        assert_eq!(
+            value.value,
+            DebugValue::Aggregate(vec![
+                NamedValue {
+                    name: "X".into(),
+                    value: typed("DINT", DebugValue::Decimal("1".into())),
+                },
+                NamedValue {
+                    name: "Y".into(),
+                    value: typed("DINT", DebugValue::Decimal("2".into())),
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn decode_named_aliases_and_missing_records() {
+        let alias_id = GotId::from_bytes([1; 16]);
+        let base_id = GotId::from_bytes([2; 16]);
+        let broken_id = GotId::from_bytes([3; 16]);
+        let dangling_id = GotId::from_bytes([4; 16]);
+        let invalid_id = GotId::from_bytes([5; 16]);
+        let bad_base_id = GotId::from_bytes([6; 16]);
+        let mut alias = record_with_id(alias_id, "_ROOT::A", "A", TypeKind::Alias, 4, Vec::new());
+        alias.base = Some(base_id);
+        let base = record_with_id(
+            base_id,
+            "_ROOT::BASE",
+            "DINT",
+            TypeKind::Struct,
+            4,
+            Vec::new(),
+        );
+        let broken = record_with_id(broken_id, "_ROOT::B", "B", TypeKind::Alias, 4, Vec::new());
+        let mut dangling =
+            record_with_id(dangling_id, "_ROOT::D", "D", TypeKind::Alias, 4, Vec::new());
+        dangling.base = Some(GotId::from_bytes([8; 16]));
+        let mut invalid =
+            record_with_id(invalid_id, "_ROOT::I", "I", TypeKind::Alias, 4, Vec::new());
+        invalid.base = Some(bad_base_id);
+        let bad_base = record_with_id(
+            bad_base_id,
+            "_ROOT::X",
+            "!!!",
+            TypeKind::Struct,
+            4,
+            Vec::new(),
+        );
+        let manifest = manifest(
+            Vec::new(),
+            vec![alias, base, broken, dangling, invalid, bad_base],
+        );
+        let target = target();
+
+        let value = decode_type_value(
+            &manifest,
+            &target,
+            &TypeKey::Named(alias_id),
+            "A",
+            &9_i32.to_le_bytes(),
+            1,
+        )
+        .expect("alias");
+        assert_eq!(value.type_key, "A");
+        assert_eq!(value.value, DebugValue::Decimal("9".into()));
+        error_code(
+            decode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Named(broken_id),
+                "B",
+                &[0_u8; 4],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Named(dangling_id),
+                "D",
+                &[0_u8; 4],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Named(invalid_id),
+                "I",
+                &[0_u8; 4],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Named(GotId::from_bytes([9; 16])),
+                "MISSING",
+                &[0_u8; 4],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn decode_rejects_bad_storage_depths_and_void() {
+        let manifest = manifest(Vec::new(), Vec::new());
+        let target = target();
+        error_code(
+            decode_type_value(&manifest, &target, &TypeKey::Bool, "BOOL", &[0, 1], 1),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_type_value(&manifest, &target, &TypeKey::Void, "VOID", &[], 1),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_type_value_depth(
+                &manifest,
+                &target,
+                &TypeKey::Dint,
+                "DINT",
+                &[0_u8; 4],
+                1,
+                MAX_DECODE_DEPTH + 1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_type_value(
+                &manifest,
+                &target,
+                &TypeKey::Named(GotId::from_bytes([9; 16])),
+                "MISSING",
+                &[0_u8; 4],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn decode_strings_reject_invalid_units_and_lengths() {
+        let little = Endianness::Little;
+        error_code(
+            decode_string(StringKind::Sbcs, 4, &[0, 0, 0], little),
+            codes::DEBUG_TYPE,
+        );
+
+        let mut negative = vec![0_u8; 8];
+        negative[..4].copy_from_slice(&(-1_i32).to_le_bytes());
+        error_code(
+            decode_string(StringKind::Sbcs, 4, &negative, little),
+            codes::DEBUG_TYPE,
+        );
+
+        let mut too_long = vec![0_u8; 8];
+        too_long[..4].copy_from_slice(&5_i32.to_le_bytes());
+        error_code(
+            decode_string(StringKind::Sbcs, 4, &too_long, little),
+            codes::DEBUG_TYPE,
+        );
+
+        let mut high_at_end = vec![0_u8; 8];
+        high_at_end[..4].copy_from_slice(&1_i32.to_le_bytes());
+        high_at_end[4..6].copy_from_slice(&0xD83D_u16.to_le_bytes());
+        error_code(
+            decode_string(StringKind::Dbcs, 1, &high_at_end, little),
+            codes::DEBUG_TYPE,
+        );
+
+        let mut high_not_low = vec![0_u8; 8];
+        high_not_low[..4].copy_from_slice(&2_i32.to_le_bytes());
+        high_not_low[4..6].copy_from_slice(&0xD83D_u16.to_le_bytes());
+        high_not_low[6..8].copy_from_slice(&0x41_u16.to_le_bytes());
+        error_code(
+            decode_string(StringKind::Dbcs, 2, &high_not_low, little),
+            codes::DEBUG_TYPE,
+        );
+
+        let mut low_alone = vec![0_u8; 8];
+        low_alone[..4].copy_from_slice(&1_i32.to_le_bytes());
+        low_alone[4..6].copy_from_slice(&0xDE00_u16.to_le_bytes());
+        error_code(
+            decode_string(StringKind::Dbcs, 1, &low_alone, little),
+            codes::DEBUG_TYPE,
+        );
+
+        let mut bad_scalar = vec![0_u8; 8];
+        bad_scalar[..4].copy_from_slice(&1_i32.to_le_bytes());
+        bad_scalar[4..8].copy_from_slice(&0xD800_u32.to_le_bytes());
+        error_code(
+            decode_string(StringKind::Unicode, 1, &bad_scalar, little),
+            codes::DEBUG_TYPE,
+        );
+        let mut too_large = vec![0_u8; 8];
+        too_large[..4].copy_from_slice(&1_i32.to_le_bytes());
+        too_large[4..8].copy_from_slice(&0x11_0000_u32.to_le_bytes());
+        error_code(
+            decode_string(StringKind::Unicode, 1, &too_large, little),
+            codes::DEBUG_TYPE,
+        );
+
+        let mut valid_unicode = vec![0_u8; 8];
+        valid_unicode[..4].copy_from_slice(&1_i32.to_le_bytes());
+        valid_unicode[4..8].copy_from_slice(&0x1F600_u32.to_le_bytes());
+        let string =
+            decode_string(StringKind::Unicode, 1, &valid_unicode, little).expect("unicode scalar");
+        assert_eq!(string.units, vec![0x1F600]);
+        assert_eq!(string.text.as_deref(), Some("😀"));
+    }
+
+    #[test]
+    fn decode_contiguous_fields_report_bad_field_layouts() {
+        let struct_id = GotId::from_bytes([1; 16]);
+        let struct_record = record_with_id(
+            struct_id,
+            "_ROOT::P",
+            "P",
+            TypeKind::Struct,
+            8,
+            vec![field("OUT", "DINT", 6, 4)],
+        );
+        let out_of_range = manifest(Vec::new(), vec![struct_record]);
+        error_code(
+            decode_type_value(
+                &out_of_range,
+                &target(),
+                &TypeKey::Named(struct_id),
+                "P",
+                &[0_u8; 8],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let invalid_id = GotId::from_bytes([2; 16]);
+        let invalid_record = record_with_id(
+            invalid_id,
+            "_ROOT::Q",
+            "Q",
+            TypeKind::Struct,
+            4,
+            vec![field("BAD", "!!!", 0, 4)],
+        );
+        let invalid_field = manifest(Vec::new(), vec![invalid_record]);
+        error_code(
+            decode_type_value(
+                &invalid_field,
+                &target(),
+                &TypeKey::Named(invalid_id),
+                "Q",
+                &[0_u8; 4],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let overflow_id = GotId::from_bytes([3; 16]);
+        let overflow_record = record_with_id(
+            overflow_id,
+            "_ROOT::R",
+            "R",
+            TypeKind::Struct,
+            8,
+            vec![field("HUGE", "DINT", u64::MAX, 1)],
+        );
+        let overflowing_field = manifest(Vec::new(), vec![overflow_record]);
+        error_code(
+            decode_type_value(
+                &overflowing_field,
+                &target(),
+                &TypeKey::Named(overflow_id),
+                "R",
+                &[0_u8; 8],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn decode_arrays_reject_conformant_and_short_storage() {
+        let manifest = manifest(Vec::new(), Vec::new());
+        let target = target();
+        let conformant = TypeKey::Array {
+            lower: ArrayBound::Conformant,
+            upper: ArrayBound::Value(2),
+            element: Box::new(TypeKey::Dint),
+        };
+        error_code(
+            decode_type_value(
+                &manifest,
+                &target,
+                &conformant,
+                "ARRAY[*..2]OF(DINT)",
+                &[0_u8; 12],
+                1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let short = "ARRAY[1..2]OF(DINT)";
+        error_code(
+            decode_array(
+                &manifest,
+                &target,
+                short,
+                ArrayBound::Value(1),
+                ArrayBound::Value(2),
+                &TypeKey::Dint,
+                &[0_u8; 4],
+                1,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        let value = decode_array(
+            &manifest,
+            &target,
+            short,
+            ArrayBound::Value(1),
+            ArrayBound::Value(2),
+            &TypeKey::Dint,
+            &[0_u8; 8],
+            1,
+            0,
+        )
+        .expect("two elements");
+        let DebugValue::Array(elements) = value.value else {
+            panic!("array");
+        };
+        assert_eq!(elements.len(), 2);
+    }
+
+    #[test]
+    fn reference_identities_require_the_declared_place_kind() {
+        let little = Endianness::Little;
+        let mut absent = vec![0_u8; 48];
+        absent[..4].copy_from_slice(&0_i32.to_le_bytes());
+        assert_eq!(
+            reference_identity(&absent, little, "REF_TO(DINT)", 1).expect("absent"),
+            (None, false)
+        );
+        error_code(
+            reference_identity(&[0_u8; 47], little, "REF_TO(DINT)", 1),
+            codes::DEBUG_TYPE,
+        );
+        let mut unknown = vec![0_u8; 48];
+        unknown[..4].copy_from_slice(&9_i32.to_le_bytes());
+        error_code(
+            reference_identity(&unknown, little, "REF_TO(DINT)", 1),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    fn allocated_root(got_id: GotId, key: &str, type_key: &str, size: u64) -> RootRecord {
+        let mut record = root(key, type_key, size, "");
+        record.got_id = got_id;
+        record.retention = Retention::None;
+        record
+    }
+
+    fn source<'a>(
+        target: &'a Target,
+        manifest: &'a Manifest,
+        roots: &'a crate::RootRegistry,
+    ) -> DebugSource<'a> {
+        DebugSource {
+            target,
+            manifest,
+            roots: std::ptr::from_ref(roots),
+            writable_roots: None,
+            info: None,
+            generation: 3,
+            build_id: GotId::ZERO,
+            cycle: 9,
+            mode: "run",
+            debug_hooks: true,
+            debug_info: None,
+            checkpoints: false,
+            metadata_error: None,
+            tables: None,
+            manifest_digest: stc_got::Digest32::ZERO,
+            manifest_json: None,
+            manifest_binary: None,
+        }
+    }
+
+    fn prepared_write(kind: DebugWriteKind, queue_bytes: usize) -> PreparedWrite {
+        PreparedWrite {
+            kind,
+            got_id: GotId::from_bytes([1; 16]),
+            generation: 3,
+            build_id: GotId::ZERO,
+            cycle: 9,
+            target_key: "_ROOT::COUNTER".into(),
+            type_key: "DINT".into(),
+            layout_hash: GotId::ZERO,
+            expected_generation: None,
+            expected_build_id: None,
+            expected_type_key: None,
+            expected_layout_hash: None,
+            bytes: vec![0; 4],
+            value: typed("DINT", DebugValue::Decimal("0".into())),
+            warning: None,
+            queue_bytes,
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingSink {
+        events: std::sync::Arc<Mutex<Vec<AuditEvent>>>,
+    }
+
+    impl AuditSink for RecordingSink {
+        fn record(&mut self, event: &AuditEvent) -> Result<()> {
+            self.events.lock().expect("sink").push(event.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn read_request_decodes_active_root_storage() {
+        let id = GotId::from_bytes([1; 16]);
+        let record = allocated_root(id, "_ROOT::COUNTER", "DINT", 4);
+        let manifest = manifest(vec![record.clone()], Vec::new());
+        let mut roots = crate::RootRegistry::new();
+        roots.allocate(&record, 3).expect("root");
+        roots
+            .get_mut(id)
+            .expect("active")
+            .storage_mut()
+            .copy_from_slice(&(-7_i32).to_le_bytes());
+        let target = target();
+        let source = source(&target, &manifest, &roots);
+
+        let read = read_request(
+            &source,
+            &DebugReadRequest::new(DebugTarget::path("counter")),
+        )
+        .expect("read");
+        assert_eq!(read.value, DebugValue::Decimal("-7".into()));
+        assert_eq!(read.resolved_key, "_ROOT::COUNTER");
+        assert!(!read.protected);
+        assert!(read.view.is_none());
+
+        let read = read_request(
+            &source,
+            &DebugReadRequest::new(DebugTarget::path("counter")).with_view(),
+        )
+        .expect("view read");
+        assert!(read.view.is_some());
+    }
+
+    #[test]
+    fn read_request_reports_missing_storage_and_stale_expectations() {
+        let id = GotId::from_bytes([1; 16]);
+        let record = allocated_root(id, "_ROOT::COUNTER", "DINT", 4);
+        let manifest = manifest(vec![record.clone()], Vec::new());
+        let target = target();
+        let empty = crate::RootRegistry::new();
+        let empty_source = source(&target, &manifest, &empty);
+        error_code(
+            read_request(
+                &empty_source,
+                &DebugReadRequest::new(DebugTarget::path("counter")),
+            ),
+            codes::DEBUG_STALE,
+        );
+
+        let mut roots = crate::RootRegistry::new();
+        roots.allocate(&record, 3).expect("root");
+        let live_source = source(&target, &manifest, &roots);
+        error_code(
+            read_request(
+                &live_source,
+                &DebugReadRequest::new(DebugTarget::path("counter")).with_generation(2),
+            ),
+            codes::DEBUG_STALE,
+        );
+        error_code(
+            read_request(
+                &live_source,
+                &DebugReadRequest::new(DebugTarget::path("counter"))
+                    .with_build(GotId::from_bytes([9; 16])),
+            ),
+            codes::DEBUG_STALE,
+        );
+        error_code(
+            read_request(
+                &live_source,
+                &DebugReadRequest::new(DebugTarget::path("counter")).with_type_key("LINT"),
+            ),
+            codes::DEBUG_STALE,
+        );
+        error_code(
+            read_request(
+                &live_source,
+                &DebugReadRequest::new(DebugTarget::path("counter"))
+                    .with_layout_hash(GotId::from_bytes([8; 16])),
+            ),
+            codes::DEBUG_STALE,
+        );
+    }
+
+    #[test]
+    fn read_request_builds_a_struct_view() {
+        let id = GotId::from_bytes([2; 16]);
+        let type_id = GotId::from_bytes([3; 16]);
+        let type_key = TypeKey::Named(type_id).render();
+        let record = allocated_root(id, "_ROOT::P", &type_key, 8);
+        let type_record = record_with_id(
+            type_id,
+            "_ROOT::P",
+            &type_key,
+            TypeKind::Struct,
+            8,
+            vec![field("X", "DINT", 0, 4), field("Y", "DINT", 4, 4)],
+        );
+        let manifest = manifest(vec![record.clone()], vec![type_record]);
+        let mut roots = crate::RootRegistry::new();
+        roots.allocate(&record, 3).expect("root");
+        {
+            let mut bytes = [0_u8; 8];
+            bytes[..4].copy_from_slice(&1_i32.to_le_bytes());
+            bytes[4..].copy_from_slice(&2_i32.to_le_bytes());
+            roots
+                .get_mut(id)
+                .expect("active")
+                .storage_mut()
+                .copy_from_slice(&bytes);
+        }
+        let target = target();
+        let source = source(&target, &manifest, &roots);
+        let read = read_request(
+            &source,
+            &DebugReadRequest::new(DebugTarget::path("p")).with_view(),
+        )
+        .expect("struct read");
+        assert!(matches!(read.value, DebugValue::Aggregate(_)));
+        assert!(read.view.is_some());
+    }
+
+    #[test]
+    fn read_local_validates_stop_frames_and_expectations() {
+        let manifest = manifest(Vec::new(), Vec::new());
+        let roots = crate::RootRegistry::new();
+        let target = target();
+        let source = source(&target, &manifest, &roots);
+        let request = DebugReadRequest::new(DebugTarget::local("F1", "X"));
+        error_code(read_request(&source, &request), codes::DEBUG_STOP);
+
+        let mut locals = BTreeMap::new();
+        locals.insert(
+            "X".into(),
+            StoppedLocal::new(typed("DINT", DebugValue::Decimal("5".into())), true),
+        );
+        let frame = StopFrame {
+            token: "F1".into(),
+            generation: 3,
+            build_id: GotId::ZERO,
+            cycle: 9,
+            locals,
+        };
+        error_code(
+            read_request(
+                &source,
+                &DebugReadRequest::new(DebugTarget::local("F2", "X"))
+                    .with_stop_frame(frame.clone()),
+            ),
+            codes::DEBUG_STOP,
+        );
+        let mut stale_generation = frame.clone();
+        stale_generation.generation = 2;
+        error_code(
+            read_request(
+                &source,
+                &DebugReadRequest::new(DebugTarget::local("F1", "X"))
+                    .with_stop_frame(stale_generation),
+            ),
+            codes::DEBUG_STOP,
+        );
+        let mut stale_build = frame.clone();
+        stale_build.build_id = GotId::from_bytes([9; 16]);
+        error_code(
+            read_request(
+                &source,
+                &DebugReadRequest::new(DebugTarget::local("F1", "X")).with_stop_frame(stale_build),
+            ),
+            codes::DEBUG_STOP,
+        );
+        let mut future_cycle = frame.clone();
+        future_cycle.cycle = 10;
+        error_code(
+            read_request(
+                &source,
+                &DebugReadRequest::new(DebugTarget::local("F1", "X")).with_stop_frame(future_cycle),
+            ),
+            codes::DEBUG_STOP,
+        );
+        error_code(
+            read_request(
+                &source,
+                &DebugReadRequest::new(DebugTarget::local("F1", "X"))
+                    .with_stop_frame(frame.clone())
+                    .with_generation(2),
+            ),
+            codes::DEBUG_STALE,
+        );
+        error_code(
+            read_request(
+                &source,
+                &DebugReadRequest::new(DebugTarget::local("F1", "X"))
+                    .with_stop_frame(frame.clone())
+                    .with_build(GotId::from_bytes([9; 16])),
+            ),
+            codes::DEBUG_STALE,
+        );
+        error_code(
+            read_request(
+                &source,
+                &DebugReadRequest::new(DebugTarget::local("F1", "MISSING"))
+                    .with_stop_frame(frame.clone()),
+            ),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            read_request(
+                &source,
+                &DebugReadRequest::new(DebugTarget::local("F1", "X"))
+                    .with_stop_frame(frame.clone())
+                    .with_type_key("LINT"),
+            ),
+            codes::DEBUG_STALE,
+        );
+        error_code(
+            read_request(
+                &source,
+                &DebugReadRequest::new(DebugTarget::local("F1", "X"))
+                    .with_stop_frame(frame.clone())
+                    .with_layout_hash(GotId::from_bytes([8; 16])),
+            ),
+            codes::DEBUG_STALE,
+        );
+        let read = read_request(
+            &source,
+            &DebugReadRequest::new(DebugTarget::local("F1", "X"))
+                .with_stop_frame(frame)
+                .with_view(),
+        )
+        .expect("local read");
+        assert_eq!(read.value, DebugValue::Decimal("5".into()));
+        assert!(read.atomic);
+        assert!(read.view.is_some());
+    }
+
+    #[test]
+    fn prepare_write_validates_targets_values_and_storage() {
+        let id = GotId::from_bytes([1; 16]);
+        let record = allocated_root(id, "_ROOT::COUNTER", "DINT", 4);
+        let write_manifest = manifest(vec![record.clone()], Vec::new());
+        let target = target();
+        let mut roots = crate::RootRegistry::new();
+        roots.allocate(&record, 3).expect("root");
+        let write_source = source(&target, &write_manifest, &roots);
+
+        let value = typed("DINT", DebugValue::Decimal("5".into()));
+        let prepared = prepare_write(
+            &write_source,
+            &DebugWriteRequest::new(DebugTarget::path("counter"), value.clone()),
+            DebugWriteKind::Write,
+        )
+        .expect("prepared");
+        assert_eq!(prepared.bytes, 5_i32.to_le_bytes());
+
+        error_code(
+            prepare_write(
+                &write_source,
+                &DebugWriteRequest::new(DebugTarget::local("F1", "X"), value.clone()),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            prepare_write(
+                &write_source,
+                &DebugWriteRequest::new(
+                    DebugTarget::path("counter"),
+                    typed("LINT", DebugValue::Decimal("5".into())),
+                ),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        let mut wrong_generation =
+            DebugWriteRequest::new(DebugTarget::path("counter"), value.clone());
+        wrong_generation.expected_generation = Some(2);
+        error_code(
+            prepare_write(&write_source, &wrong_generation, DebugWriteKind::Write),
+            codes::DEBUG_STALE,
+        );
+        let mut wrong_build = DebugWriteRequest::new(DebugTarget::path("counter"), value.clone());
+        wrong_build.expected_build_id = Some(GotId::from_bytes([9; 16]));
+        error_code(
+            prepare_write(&write_source, &wrong_build, DebugWriteKind::Write),
+            codes::DEBUG_STALE,
+        );
+        let mut wrong_type = DebugWriteRequest::new(DebugTarget::path("counter"), value.clone());
+        wrong_type.expected_type_key = Some("LINT".into());
+        error_code(
+            prepare_write(&write_source, &wrong_type, DebugWriteKind::Write),
+            codes::DEBUG_STALE,
+        );
+        let mut wrong_layout = DebugWriteRequest::new(DebugTarget::path("counter"), value.clone());
+        wrong_layout.expected_layout_hash = Some(GotId::from_bytes([8; 16]));
+        error_code(
+            prepare_write(&write_source, &wrong_layout, DebugWriteKind::Write),
+            codes::DEBUG_STALE,
+        );
+
+        let empty = crate::RootRegistry::new();
+        let no_storage = source(&target, &write_manifest, &empty);
+        error_code(
+            prepare_write(
+                &no_storage,
+                &DebugWriteRequest::new(DebugTarget::path("counter"), value.clone()),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_STALE,
+        );
+
+        let mut guard = record.clone();
+        guard.root_kind = RootKind::TaskGuard;
+        let guard_manifest = manifest(vec![guard.clone()], Vec::new());
+        let mut guard_roots = crate::RootRegistry::new();
+        guard_roots.allocate(&guard, 3).expect("guard root");
+        let guard_source = source(&target, &guard_manifest, &guard_roots);
+        error_code(
+            prepare_write(
+                &guard_source,
+                &DebugWriteRequest::new(DebugTarget::path("counter"), value),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn engine_enqueue_limits_release_and_end_state_are_audited() {
+        let mut engine = DebugEngine::new();
+        let sink = RecordingSink::default();
+        let events = std::sync::Arc::clone(&sink.events);
+        engine.set_audit_sink(Some(Box::new(sink)));
+
+        let first = engine
+            .enqueue(prepared_write(DebugWriteKind::Write, 8))
+            .expect("enqueue");
+        assert_eq!(first.0, 1);
+        assert_eq!(engine.queued_count(), 1);
+        assert!(!events.lock().expect("events").is_empty());
+
+        let mut engine = DebugEngine::new();
+        for _ in 0..MAX_DEBUG_QUEUE_ENTRIES {
+            engine
+                .enqueue(prepared_write(DebugWriteKind::Write, 8))
+                .expect("enqueue");
+        }
+        error_code(
+            engine.enqueue(prepared_write(DebugWriteKind::Write, 8)),
+            codes::DEBUG_LIMIT,
+        );
+
+        let mut engine = DebugEngine::new();
+        error_code(
+            engine.enqueue(prepared_write(
+                DebugWriteKind::Write,
+                MAX_DEBUG_QUEUE_BYTES + 1,
+            )),
+            codes::DEBUG_LIMIT,
+        );
+
+        let mut engine = DebugEngine::new();
+        engine
+            .enqueue(prepared_write(DebugWriteKind::Force, 4))
+            .expect("force");
+        assert_eq!(engine.active_force_count(), 0);
+        engine.service().set_session(Some("session".into()));
+        let released = engine.end_state(DebugEndReason::Swap, Some(4), Some(GotId::ZERO), Some(9));
+        assert!(released.is_ok());
+        assert_eq!(engine.queued_count(), 0);
+        let results = engine.take_results();
+        assert!(
+            results
+                .iter()
+                .any(|result| result.outcome == DebugQueueOutcome::Rejected)
+        );
+        assert!(engine.service().take_end_notice().is_some());
+    }
+
+    fn aggregate_shape(
+        path: &str,
+        kind: AggregateKind,
+        shape_key: &str,
+        fields: Vec<AggregateFieldRecord>,
+    ) -> AggregateRecord {
+        AggregateRecord {
+            package: "_ROOT".into(),
+            path: path.into(),
+            qualifier: None,
+            kind,
+            shape_key: shape_key.into(),
+            layout_hash: GotId::ZERO,
+            fields,
+        }
+    }
+
+    #[test]
+    fn aggregate_targets_resolve_owner_types_and_decode_roots() {
+        let inner_id = GotId::from_bytes([1; 16]);
+        let outer_id = GotId::from_bytes([2; 16]);
+        let inner_key = TypeKey::Named(inner_id).render();
+        let outer_key = TypeKey::Named(outer_id).render();
+        let inner = record_with_id(
+            inner_id,
+            "_ROOT::INNER",
+            &inner_key,
+            TypeKind::Struct,
+            4,
+            vec![field("X", "DINT", 0, 4)],
+        );
+        let outer = record_with_id(
+            outer_id,
+            "_ROOT::OUTER",
+            &outer_key,
+            TypeKind::Struct,
+            8,
+            vec![field("IN", &inner_key, 0, 4), field("N", "DINT", 4, 4)],
+        );
+        let x_id = GotId::from_bytes([3; 16]);
+        let n_id = GotId::from_bytes([4; 16]);
+        let mut root_x = allocated_root(x_id, "_ROOT::P.IN.X", "DINT", 4);
+        root_x.owner_type = Some(outer_id);
+        root_x.field_path = "IN.X".into();
+        let mut root_n = allocated_root(n_id, "_ROOT::P.N", "DINT", 4);
+        root_n.owner_type = Some(outer_id);
+        root_n.field_path = "N".into();
+        let manifest = manifest(vec![root_x.clone(), root_n.clone()], vec![inner, outer]);
+        let mut roots = crate::RootRegistry::new();
+        roots.allocate(&root_x, 3).expect("x root");
+        roots.allocate(&root_n, 3).expect("n root");
+        roots
+            .get_mut(x_id)
+            .expect("x")
+            .storage_mut()
+            .copy_from_slice(&11_i32.to_le_bytes());
+        roots
+            .get_mut(n_id)
+            .expect("n")
+            .storage_mut()
+            .copy_from_slice(&22_i32.to_le_bytes());
+        let target = target();
+        let source = source(&target, &manifest, &roots);
+        let read =
+            read_request(&source, &DebugReadRequest::new(DebugTarget::path("p"))).expect("read");
+        let DebugValue::Aggregate(fields) = read.value else {
+            panic!("aggregate");
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            fields[0].value.value,
+            DebugValue::Aggregate(vec![NamedValue {
+                name: "X".into(),
+                value: typed("DINT", DebugValue::Decimal("11".into())),
+            }])
+        );
+        assert_eq!(fields[1].value.value, DebugValue::Decimal("22".into()));
+        assert!(!read.atomic);
+    }
+
+    #[test]
+    fn aggregate_field_roots_validate_type_and_layout() {
+        let kind_id = GotId::from_bytes([1; 16]);
+        let type_key = TypeKey::Named(kind_id).render();
+        let record = record_with_id(
+            kind_id,
+            "_ROOT::P",
+            &type_key,
+            TypeKind::Struct,
+            4,
+            vec![field("X", "DINT", 0, 4)],
+        );
+        let root_id = GotId::from_bytes([2; 16]);
+        let mut root_x = allocated_root(root_id, "_ROOT::P.X", "LINT", 4);
+        root_x.owner_type = Some(kind_id);
+        root_x.field_path = "X".into();
+        let type_manifest = manifest(vec![root_x.clone()], vec![record]);
+        let roots = crate::RootRegistry::new();
+        let target = target();
+        let type_source = source(&target, &type_manifest, &roots);
+        error_code(
+            read_request(&type_source, &DebugReadRequest::new(DebugTarget::path("p"))),
+            codes::DEBUG_TYPE,
+        );
+
+        let layout_id = GotId::from_bytes([3; 16]);
+        let layout_record = record_with_id(
+            layout_id,
+            "_ROOT::P",
+            &TypeKey::Named(layout_id).render(),
+            TypeKind::Struct,
+            4,
+            vec![field("X", "DINT", 0, 4)],
+        );
+        let mut layout_root = allocated_root(root_id, "_ROOT::P.X", "DINT", 4);
+        layout_root.owner_type = Some(layout_id);
+        layout_root.field_path = "X".into();
+        layout_root.layout_hash = GotId::from_bytes([4; 16]);
+        let layout_manifest = manifest(vec![layout_root], vec![layout_record]);
+        let layout_source = source(&target, &layout_manifest, &roots);
+        error_code(
+            read_request(
+                &layout_source,
+                &DebugReadRequest::new(DebugTarget::path("p")),
+            ),
+            codes::DEBUG_STALE,
+        );
+    }
+
+    #[test]
+    fn manifest_aggregate_shapes_resolve_types_programs_and_arrays() {
+        let inner_id = GotId::from_bytes([1; 16]);
+        let outer_id = GotId::from_bytes([2; 16]);
+        let inner_key = TypeKey::Named(inner_id).render();
+        let outer_key = TypeKey::Named(outer_id).render();
+        let inner = record_with_id(
+            inner_id,
+            "_ROOT::INNER",
+            &inner_key,
+            TypeKind::Struct,
+            4,
+            vec![field("X", "DINT", 0, 4)],
+        );
+        let outer = record_with_id(
+            outer_id,
+            "_ROOT::OUTER",
+            &outer_key,
+            TypeKind::Struct,
+            4,
+            vec![field("SUB", &inner_key, 0, 4)],
+        );
+        let x_id = GotId::from_bytes([3; 16]);
+        let mut root_x = allocated_root(x_id, "_ROOT::Q.SUB.X", "DINT", 4);
+        root_x.owner_type = Some(inner_id);
+        root_x.field_path = "SUB.X".into();
+        let mut q_manifest = manifest(vec![root_x.clone()], vec![inner, outer]);
+        q_manifest.aggregates.push(aggregate_shape(
+            "Q",
+            AggregateKind::Type,
+            &outer_key,
+            Vec::new(),
+        ));
+        let mut roots = crate::RootRegistry::new();
+        roots.allocate(&root_x, 3).expect("x root");
+        roots
+            .get_mut(x_id)
+            .expect("x")
+            .storage_mut()
+            .copy_from_slice(&5_i32.to_le_bytes());
+        let target = target();
+        let q_source = source(&target, &q_manifest, &roots);
+        let read = read_request(
+            &q_source,
+            &DebugReadRequest::new(DebugTarget::path("q.sub")),
+        )
+        .expect("sub aggregate");
+        let DebugValue::Aggregate(fields) = read.value else {
+            panic!("aggregate");
+        };
+        assert_eq!(fields[0].name, "X");
+        assert_eq!(fields[0].value.value, DebugValue::Decimal("5".into()));
+
+        let point_id = GotId::from_bytes([4; 16]);
+        let point = record_with_id(
+            point_id,
+            "_ROOT::POINT",
+            &TypeKey::Named(point_id).render(),
+            TypeKind::Struct,
+            8,
+            vec![field("X", "DINT", 0, 4), field("Y", "DINT", 4, 4)],
+        );
+        let array_ty = TypeKey::Array {
+            lower: ArrayBound::Value(1),
+            upper: ArrayBound::Value(2),
+            element: Box::new(TypeKey::Dint),
+        };
+        let mut array_manifest = manifest(Vec::new(), vec![point]);
+        array_manifest.aggregates.push(aggregate_shape(
+            "ARR",
+            AggregateKind::Type,
+            &array_ty.render(),
+            Vec::new(),
+        ));
+        let element_id = GotId::from_bytes([5; 16]);
+        array_manifest
+            .roots
+            .push(allocated_root(element_id, "_ROOT::ARR.E1", "DINT", 4));
+        let mut roots = crate::RootRegistry::new();
+        roots
+            .allocate(&array_manifest.roots[0], 3)
+            .expect("array element root");
+        roots
+            .get_mut(element_id)
+            .expect("element")
+            .storage_mut()
+            .copy_from_slice(&7_i32.to_le_bytes());
+        let array_source = source(&target, &array_manifest, &roots);
+        let read = read_request(
+            &array_source,
+            &DebugReadRequest::new(DebugTarget::path("arr")),
+        )
+        .expect("array aggregate");
+        let DebugValue::Array(values) = read.value else {
+            panic!("array");
+        };
+        assert_eq!(values.len(), 2);
+        assert!(matches!(values[0].value, DebugValue::Unavailable { .. }));
+        assert_eq!(values[1].value, DebugValue::Decimal("7".into()));
+
+        let mut invalid = array_manifest.clone();
+        invalid.aggregates[0].shape_key = "!!!".into();
+        let invalid_source = source(&target, &invalid, &roots);
+        error_code(
+            read_request(
+                &invalid_source,
+                &DebugReadRequest::new(DebugTarget::path("arr")),
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+    fn failure_code<T: std::fmt::Debug>(result: std::result::Result<T, DebugFailure>, code: &str) {
+        let error = result.expect_err("expected a failure");
+        assert_eq!(error.code, code, "{}", error.message);
+    }
+
+    fn submit_error<T>(result: Result<T>, code: &str) {
+        match result {
+            Ok(_) => panic!("expected the request to be rejected"),
+            Err(error) => assert_eq!(error.code, code, "{}", error.message),
+        }
+    }
+
+    fn source_with<'a>(
+        target: &'a Target,
+        manifest: &'a Manifest,
+        roots: &'a crate::RootRegistry,
+        generation: u64,
+        manifest_json: Option<&'a str>,
+        manifest_binary: Option<&'a [u8]>,
+    ) -> DebugSource<'a> {
+        let mut value = source(target, manifest, roots);
+        value.generation = generation;
+        value.manifest_json = manifest_json;
+        value.manifest_binary = manifest_binary;
+        value
+    }
+
+    #[test]
+    fn engine_pump_serves_reads_writes_releases_watches_and_manifest() {
+        use std::time::{Duration, Instant};
+
+        let id = GotId::from_bytes([1; 16]);
+        let record = allocated_root(id, "_ROOT::COUNTER", "DINT", 4);
+        let write_manifest_value = manifest(vec![record.clone()], Vec::new());
+        let mut roots = crate::RootRegistry::new();
+        roots.allocate(&record, 3).expect("root");
+        roots
+            .get_mut(id)
+            .expect("active")
+            .storage_mut()
+            .copy_from_slice(&5_i32.to_le_bytes());
+        let target = target();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut engine = DebugEngine::new();
+        let sink = RecordingSink::default();
+        let audited = std::sync::Arc::clone(&sink.events);
+        engine.set_audit_sink(Some(Box::new(sink)));
+        let service = engine.service();
+
+        let request = DebugReadRequest::new(DebugTarget::path("counter"));
+        let _ = service.submit_read(request.clone()).expect("submit read");
+        assert_eq!(
+            engine.pump(
+                0,
+                Some(source(&target, &write_manifest_value, &roots)),
+                false
+            ),
+            1
+        );
+        let events = service.drain_events();
+        assert!(matches!(
+            events.first(),
+            Some(DebugEvent::Read(completion)) if completion.result.is_ok()
+        ));
+
+        let reply = service
+            .submit_read_wait(request.clone())
+            .expect("read wait");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        let read = reply.wait(deadline).expect("reply").expect("read");
+        assert_eq!(read.value, DebugValue::Decimal("5".into()));
+
+        let reply = service
+            .submit_read_wait(request.clone())
+            .expect("read wait");
+        engine.pump(0, None, false);
+        failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
+
+        let value = typed("DINT", DebugValue::Decimal("2".into()));
+        let reply = service
+            .submit_write_wait(
+                DebugWriteKind::Write,
+                DebugWriteRequest::new(DebugTarget::path("counter"), value),
+                false,
+            )
+            .expect("write wait");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        let queued = reply.wait(deadline).expect("reply").expect("queued");
+        let DebugWriteReply::Queued(queue_id) = queued else {
+            panic!("expected a queued write");
+        };
+        assert_eq!(queue_id.0, 1);
+        assert_eq!(engine.queued_count(), 1);
+
+        let reply = service
+            .submit_write_wait(
+                DebugWriteKind::Write,
+                DebugWriteRequest::new(
+                    DebugTarget::path("counter"),
+                    typed("LINT", DebugValue::Decimal("2".into())),
+                ),
+                false,
+            )
+            .expect("bad write wait");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_TYPE);
+        assert!(audited.lock().expect("audited").len() >= 2);
+
+        let reply = service
+            .submit_release_wait(DebugTarget::path("counter"))
+            .expect("release wait");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        assert!(!reply.wait(deadline).expect("reply").expect("release"));
+        let reply = service.submit_release_all_wait().expect("release all");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        assert_eq!(reply.wait(deadline).expect("reply").expect("all"), 0);
+
+        let reply = service
+            .submit_watch_add_wait(vec![DebugTarget::path("counter")], MIN_WATCH_INTERVAL_NS)
+            .expect("watch add");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        let info = reply.wait(deadline).expect("reply").expect("watch");
+        assert_eq!(engine.watch_count(), 1);
+        assert!(!info.protected);
+        let emitted = engine.pump(
+            MIN_WATCH_INTERVAL_NS + 1,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        assert!(emitted >= 1);
+        let events = service.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, DebugEvent::Batch(_)))
+        );
+
+        let reply = service.submit_watch_list_wait().expect("watch list");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        assert_eq!(reply.wait(deadline).expect("reply").len(), 1);
+
+        let reply = service
+            .submit_watch_remove_wait(info.watch_id)
+            .expect("watch remove");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        assert!(reply.wait(deadline).expect("reply").is_some());
+        assert_eq!(engine.watch_count(), 0);
+
+        service.set_session(Some("session".into()));
+        let reply = service.submit_clear_session_wait().expect("clear");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        reply.wait(deadline).expect("reply").expect("cleared");
+        assert!(!engine.has_session());
+
+        let reply = service.submit_manifest_wait(false).expect("manifest");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
+
+        let json = "{}";
+        let binary = [1_u8, 2];
+        let json_source = source_with(
+            &target,
+            &write_manifest_value,
+            &roots,
+            3,
+            Some(json),
+            Some(&binary),
+        );
+        let reply = service.submit_manifest_wait(false).expect("manifest");
+        engine.pump(0, Some(json_source), false);
+        let manifest_reply = reply.wait(deadline).expect("reply").expect("json");
+        assert_eq!(manifest_reply.format, "json");
+        assert_eq!(manifest_reply.data, ManifestData::Json(json.into()));
+        let reply = service.submit_manifest_wait(true).expect("manifest");
+        engine.pump(
+            0,
+            Some(source_with(
+                &target,
+                &write_manifest_value,
+                &roots,
+                3,
+                Some(json),
+                Some(&binary),
+            )),
+            false,
+        );
+        assert_eq!(
+            reply.wait(deadline).expect("reply").expect("binary").data,
+            ManifestData::Binary(binary.to_vec())
+        );
+
+        let _ = service
+            .submit_watch_add_wait(vec![DebugTarget::path("counter")], MIN_WATCH_INTERVAL_NS)
+            .expect("watch add");
+        engine.pump(
+            0,
+            Some(source(&target, &write_manifest_value, &roots)),
+            false,
+        );
+        assert_eq!(engine.watch_count(), 1);
+        let new_generation = source_with(&target, &write_manifest_value, &roots, 4, None, None);
+        engine.pump(0, Some(new_generation), false);
+        assert_eq!(engine.watch_count(), 0);
+    }
+
+    #[test]
+    fn engine_rejects_watch_requests_outside_the_limits() {
+        let engine = DebugEngine::new();
+        let service = engine.service();
+        submit_error(
+            service.submit_watch_add_wait(Vec::new(), MIN_WATCH_INTERVAL_NS),
+            codes::DEBUG_LIMIT,
+        );
+        submit_error(
+            service.submit_watch_add_wait(
+                vec![DebugTarget::path("counter")],
+                MIN_WATCH_INTERVAL_NS - 1,
+            ),
+            codes::DEBUG_LIMIT,
+        );
+        submit_error(
+            service
+                .submit_watch_add_wait(vec![DebugTarget::local("F1", "X")], MIN_WATCH_INTERVAL_NS),
+            codes::DEBUG_STOP,
+        );
+        let many = (0..=MAX_WATCHES)
+            .map(|_| DebugTarget::path("counter"))
+            .collect();
+        submit_error(
+            service.submit_watch_add_wait(many, MIN_WATCH_INTERVAL_NS),
+            codes::DEBUG_LIMIT,
+        );
+    }
+
+    fn direct_root(got_id: GotId, key: &str, type_key: &str, size: u64) -> RootRecord {
+        let mut record = allocated_root(got_id, key, type_key, size);
+        record.root_kind = RootKind::Direct;
+        record
+    }
+
+    fn binding(
+        got_id: GotId,
+        area: u8,
+        offset_bits: u64,
+        width_bits: u64,
+    ) -> crate::module_info::DirectBinding {
+        crate::module_info::DirectBinding {
+            got_id,
+            area,
+            offset_bits,
+            width_bits,
+            device: None,
+            channel: None,
+            direction: None,
+        }
+    }
+
+    fn direct_source<'a>(
+        target: &'a Target,
+        manifest: &'a Manifest,
+        roots: &'a crate::RootRegistry,
+        info: &'a crate::ModuleInfo,
+    ) -> DebugSource<'a> {
+        let mut value = source(target, manifest, roots);
+        value.info = Some(info);
+        value
+    }
+
+    fn direct_info(
+        inputs_bytes: u64,
+        bindings: Vec<crate::module_info::DirectBinding>,
+    ) -> crate::ModuleInfo {
+        crate::ModuleInfo {
+            inputs_bytes,
+            outputs_bytes: inputs_bytes,
+            bindings,
+            ..crate::ModuleInfo::default()
+        }
+    }
+
+    #[test]
+    fn direct_roots_read_and_write_process_image_cells() {
+        let _guard = crate::IMAGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let counter_id = GotId::from_bytes([21; 16]);
+        let counter = direct_root(counter_id, "_ROOT::COUNTER", "DINT", 4);
+        let direct_manifest = manifest(vec![counter], Vec::new());
+        let target = target();
+        let empty = crate::RootRegistry::new();
+        let info = direct_info(8, vec![binding(counter_id, 1, 0, 32)]);
+        let direct = direct_source(&target, &direct_manifest, &empty, &info);
+
+        crate::stc_rt_io_configure(8, 8, 0);
+        assert!(crate::image_write(0, &5_i32.to_le_bytes()));
+        let read = read_request(
+            &direct,
+            &DebugReadRequest::new(DebugTarget::path("counter")),
+        )
+        .expect("direct read");
+        assert_eq!(read.value, DebugValue::Decimal("5".into()));
+
+        let mut engine = DebugEngine::new();
+        let prepared = prepare_write(
+            &direct,
+            &DebugWriteRequest::new(
+                DebugTarget::path("counter"),
+                typed("DINT", DebugValue::Decimal("9".into())),
+            ),
+            DebugWriteKind::Write,
+        )
+        .expect("direct write prepared");
+        let mut roots = crate::RootRegistry::new();
+        engine.enqueue(prepared).expect("queue direct write");
+        engine.apply_boundary(
+            &direct_manifest,
+            &target,
+            Some(&info),
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        let mut bytes = [0_u8; 4];
+        assert_eq!(crate::image_read(0, &mut bytes), 4);
+        assert_eq!(i32::from_le_bytes(bytes), 9);
+        assert_eq!(engine.queued_count(), 0);
+
+        let force = prepare_write(
+            &direct,
+            &DebugWriteRequest::new(
+                DebugTarget::path("counter"),
+                typed("DINT", DebugValue::Decimal("11".into())),
+            ),
+            DebugWriteKind::Force,
+        )
+        .expect("direct force prepared");
+        engine.enqueue(force).expect("queue direct force");
+        engine.apply_boundary(
+            &direct_manifest,
+            &target,
+            Some(&info),
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        assert_eq!(engine.active_force_count(), 1);
+        engine.apply_input_forces(
+            &direct_manifest,
+            &target,
+            Some(&info),
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        assert_eq!(crate::image_read(0, &mut bytes), 4);
+        assert_eq!(i32::from_le_bytes(bytes), 11);
+
+        // Input forces do not touch output-area cells at the input latch.
+        let mut output_info = info.clone();
+        output_info.bindings[0].area = 2;
+        assert!(crate::image_write(0, &7_i32.to_le_bytes()));
+        engine.apply_input_forces(
+            &direct_manifest,
+            &target,
+            Some(&output_info),
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        assert_eq!(crate::image_read(0, &mut bytes), 4);
+        assert_eq!(i32::from_le_bytes(bytes), 7);
+
+        // A generation change rejects the active force and drops it.
+        engine.apply_boundary(
+            &direct_manifest,
+            &target,
+            Some(&info),
+            &mut roots,
+            4,
+            GotId::ZERO,
+            10,
+        );
+        assert_eq!(engine.active_force_count(), 0);
+
+        // Without metadata input forces are a no-op.
+        engine
+            .enqueue(
+                prepare_write(
+                    &direct,
+                    &DebugWriteRequest::new(
+                        DebugTarget::path("counter"),
+                        typed("DINT", DebugValue::Decimal("12".into())),
+                    ),
+                    DebugWriteKind::Force,
+                )
+                .expect("force prepared"),
+            )
+            .expect("queue");
+        engine.apply_boundary(
+            &direct_manifest,
+            &target,
+            Some(&info),
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        engine.apply_input_forces(
+            &direct_manifest,
+            &target,
+            None,
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        assert_eq!(engine.active_force_count(), 1);
+    }
+
+    #[test]
+    fn direct_bit_cells_share_a_byte_and_keep_the_other_bits() {
+        let _guard = crate::IMAGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let low_id = GotId::from_bytes([31; 16]);
+        let high_id = GotId::from_bytes([32; 16]);
+        let off_id = GotId::from_bytes([33; 16]);
+        let low = direct_root(low_id, "_ROOT::LOW", "BOOL", 1);
+        let high = direct_root(high_id, "_ROOT::HIGH", "BOOL", 1);
+        let off = direct_root(off_id, "_ROOT::OFF", "BOOL", 1);
+        let bit_manifest = manifest(vec![low, high, off], Vec::new());
+        let target = target();
+        let empty = crate::RootRegistry::new();
+        let info = direct_info(
+            4,
+            vec![
+                binding(low_id, 1, 11, 1),
+                binding(high_id, 1, 15, 1),
+                binding(off_id, 1, 14, 1),
+            ],
+        );
+        let direct = direct_source(&target, &bit_manifest, &empty, &info);
+
+        crate::stc_rt_io_configure(4, 4, 0);
+        assert!(crate::image_write(1, &[0b1000_1000]));
+        for (path, expected) in [("low", true), ("high", true), ("off", false)] {
+            let read = read_request(&direct, &DebugReadRequest::new(DebugTarget::path(path)))
+                .expect("bit read");
+            assert_eq!(read.value, DebugValue::Bool(expected), "{path}");
+        }
+
+        let mut roots = crate::RootRegistry::new();
+        let mut engine = DebugEngine::new();
+        engine
+            .enqueue(
+                prepare_write(
+                    &direct,
+                    &DebugWriteRequest::new(
+                        DebugTarget::path("low"),
+                        typed("BOOL", DebugValue::Bool(false)),
+                    ),
+                    DebugWriteKind::Write,
+                )
+                .expect("bit write prepared"),
+            )
+            .expect("queue bit write");
+        engine.apply_boundary(
+            &bit_manifest,
+            &target,
+            Some(&info),
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        let mut byte = [0_u8; 1];
+        assert_eq!(crate::image_read(1, &mut byte), 1);
+        assert_eq!(byte[0], 0b1000_0000);
+        let low_read = read_request(&direct, &DebugReadRequest::new(DebugTarget::path("low")))
+            .expect("low read");
+        assert_eq!(low_read.value, DebugValue::Bool(false));
+        let high_read = read_request(&direct, &DebugReadRequest::new(DebugTarget::path("high")))
+            .expect("high read");
+        assert_eq!(high_read.value, DebugValue::Bool(true));
+    }
+
+    #[test]
+    fn direct_binding_failures_are_reported() {
+        let _guard = crate::IMAGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let id = GotId::from_bytes([41; 16]);
+        let counter = direct_root(id, "_ROOT::COUNTER", "DINT", 4);
+        let direct_manifest = manifest(vec![counter.clone()], Vec::new());
+        let target = target();
+        let empty = crate::RootRegistry::new();
+        let request = DebugReadRequest::new(DebugTarget::path("counter"));
+        let value = typed("DINT", DebugValue::Decimal("1".into()));
+
+        crate::stc_rt_io_configure(8, 8, 0);
+        let no_info = source(&target, &direct_manifest, &empty);
+        error_code(read_request(&no_info, &request), codes::DEBUG_STALE);
+
+        let missing = direct_info(8, vec![binding(GotId::from_bytes([42; 16]), 1, 0, 32)]);
+        error_code(
+            read_request(
+                &direct_source(&target, &direct_manifest, &empty, &missing),
+                &request,
+            ),
+            codes::DEBUG_STALE,
+        );
+
+        let invalid_area = direct_info(8, vec![binding(id, 0, 0, 32)]);
+        error_code(
+            read_request(
+                &direct_source(&target, &direct_manifest, &empty, &invalid_area),
+                &request,
+            ),
+            codes::DEBUG_STALE,
+        );
+
+        let one_bit_size = direct_info(8, vec![binding(id, 1, 0, 1)]);
+        error_code(
+            prepare_write(
+                &direct_source(&target, &direct_manifest, &empty, &one_bit_size),
+                &DebugWriteRequest::new(DebugTarget::path("counter"), value.clone()),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let misaligned = direct_info(8, vec![binding(id, 1, 4, 32)]);
+        error_code(
+            read_request(
+                &direct_source(&target, &direct_manifest, &empty, &misaligned),
+                &request,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let narrow = direct_info(8, vec![binding(id, 1, 0, 16)]);
+        error_code(
+            prepare_write(
+                &direct_source(&target, &direct_manifest, &empty, &narrow),
+                &DebugWriteRequest::new(DebugTarget::path("counter"), value.clone()),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let past_area = direct_info(8, vec![binding(id, 1, 64, 32)]);
+        error_code(
+            read_request(
+                &direct_source(&target, &direct_manifest, &empty, &past_area),
+                &request,
+            ),
+            codes::DEBUG_STALE,
+        );
+        error_code(
+            prepare_write(
+                &direct_source(&target, &direct_manifest, &empty, &past_area),
+                &DebugWriteRequest::new(DebugTarget::path("counter"), value.clone()),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_STALE,
+        );
+
+        let one_bit_past_area = direct_info(8, vec![binding(id, 1, 64, 1)]);
+        let mut one_bit_record = counter.clone();
+        one_bit_record.type_key = "BOOL".into();
+        one_bit_record.size = 1;
+        let one_bit_manifest = manifest(vec![one_bit_record], Vec::new());
+        error_code(
+            read_request(
+                &direct_source(&target, &one_bit_manifest, &empty, &one_bit_past_area),
+                &DebugReadRequest::new(DebugTarget::path("counter")),
+            ),
+            codes::DEBUG_STALE,
+        );
+
+        // The image may be smaller than the metadata layout announces.
+        crate::stc_rt_io_configure(0, 0, 0);
+        let short = direct_info(8, vec![binding(id, 1, 0, 32)]);
+        error_code(
+            read_request(
+                &direct_source(&target, &direct_manifest, &empty, &short),
+                &request,
+            ),
+            codes::DEBUG_STALE,
+        );
+        let mut roots = crate::RootRegistry::new();
+        error_code(
+            write_root_bytes(
+                Some(&short),
+                &mut roots,
+                &direct_manifest.roots[0],
+                &[0_u8; 4],
+            ),
+            codes::DEBUG_STALE,
+        );
+        let one_bit_short = direct_info(8, vec![binding(id, 1, 0, 1)]);
+        let mut bool_record = counter.clone();
+        bool_record.type_key = "BOOL".into();
+        bool_record.size = 1;
+        let bool_manifest = manifest(vec![bool_record], Vec::new());
+        error_code(
+            write_root_bytes(
+                Some(&one_bit_short),
+                &mut roots,
+                &bool_manifest.roots[0],
+                &[1_u8],
+            ),
+            codes::DEBUG_STALE,
+        );
+
+        error_code(
+            write_root_bytes(None, &mut roots, &direct_manifest.roots[0], &[0_u8; 4]),
+            codes::DEBUG_STALE,
+        );
+        let mut global = counter.clone();
+        global.root_kind = RootKind::Global;
+        error_code(
+            write_root_bytes(None, &mut roots, &global, &[0_u8; 4]),
+            codes::DEBUG_STALE,
+        );
+        roots.allocate(&global, 3).expect("root");
+        error_code(
+            write_root_bytes(None, &mut roots, &global, &[0_u8; 2]),
+            codes::DEBUG_STALE,
+        );
+    }
+
+    #[test]
+    fn revalidate_prepared_rejects_every_stale_identity() {
+        let id = GotId::from_bytes([1; 16]);
+        let record = allocated_root(id, "_ROOT::COUNTER", "DINT", 4);
+        let revalidate_manifest = manifest(vec![record.clone()], Vec::new());
+        let target = target();
+        let prepared = prepared_write(DebugWriteKind::Write, 8);
+        assert!(
+            revalidate_prepared(
+                &prepared,
+                &revalidate_manifest,
+                &target,
+                None,
+                3,
+                GotId::ZERO
+            )
+            .expect("active")
+            .is_some()
+        );
+
+        let mut stale = prepared.clone();
+        stale.generation = 2;
+        error_code(
+            revalidate_prepared(&stale, &revalidate_manifest, &target, None, 3, GotId::ZERO),
+            codes::DEBUG_STALE,
+        );
+        let mut expected = prepared.clone();
+        expected.expected_generation = Some(2);
+        error_code(
+            revalidate_prepared(
+                &expected,
+                &revalidate_manifest,
+                &target,
+                None,
+                3,
+                GotId::ZERO,
+            ),
+            codes::DEBUG_STALE,
+        );
+        let mut build = prepared.clone();
+        build.build_id = GotId::from_bytes([9; 16]);
+        error_code(
+            revalidate_prepared(&build, &revalidate_manifest, &target, None, 3, GotId::ZERO),
+            codes::DEBUG_STALE,
+        );
+        let mut expected_build = prepared.clone();
+        expected_build.expected_build_id = Some(GotId::from_bytes([9; 16]));
+        error_code(
+            revalidate_prepared(
+                &expected_build,
+                &revalidate_manifest,
+                &target,
+                None,
+                3,
+                GotId::ZERO,
+            ),
+            codes::DEBUG_STALE,
+        );
+        let empty = manifest(Vec::new(), Vec::new());
+        assert!(
+            revalidate_prepared(&prepared, &empty, &target, None, 3, GotId::ZERO)
+                .expect("removed")
+                .is_none()
+        );
+        let mut renamed = prepared.clone();
+        renamed.target_key = "_ROOT::OTHER".into();
+        error_code(
+            revalidate_prepared(
+                &renamed,
+                &revalidate_manifest,
+                &target,
+                None,
+                3,
+                GotId::ZERO,
+            ),
+            codes::DEBUG_STALE,
+        );
+        let mut retyped = prepared.clone();
+        retyped.type_key = "LINT".into();
+        error_code(
+            revalidate_prepared(
+                &retyped,
+                &revalidate_manifest,
+                &target,
+                None,
+                3,
+                GotId::ZERO,
+            ),
+            codes::DEBUG_STALE,
+        );
+        let mut relaid = prepared.clone();
+        relaid.layout_hash = GotId::from_bytes([8; 16]);
+        error_code(
+            revalidate_prepared(&relaid, &revalidate_manifest, &target, None, 3, GotId::ZERO),
+            codes::DEBUG_STALE,
+        );
+        let mut expected_type = prepared.clone();
+        expected_type.expected_type_key = Some("LINT".into());
+        error_code(
+            revalidate_prepared(
+                &expected_type,
+                &revalidate_manifest,
+                &target,
+                None,
+                3,
+                GotId::ZERO,
+            ),
+            codes::DEBUG_STALE,
+        );
+        let mut expected_layout = prepared.clone();
+        expected_layout.expected_layout_hash = Some(GotId::from_bytes([8; 16]));
+        error_code(
+            revalidate_prepared(
+                &expected_layout,
+                &revalidate_manifest,
+                &target,
+                None,
+                3,
+                GotId::ZERO,
+            ),
+            codes::DEBUG_STALE,
+        );
+        let mut guard = record.clone();
+        guard.root_kind = RootKind::TaskGuard;
+        let guard_manifest = manifest(vec![guard], Vec::new());
+        error_code(
+            revalidate_prepared(
+                &prepared,
+                &guard_manifest,
+                &target,
+                Some(&crate::ModuleInfo::default()),
+                3,
+                GotId::ZERO,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn apply_boundary_rejects_removed_roots_and_sized_storage() {
+        let id = GotId::from_bytes([1; 16]);
+        let record = allocated_root(id, "_ROOT::COUNTER", "DINT", 4);
+        let apply_manifest = manifest(vec![record.clone()], Vec::new());
+        let target = target();
+        let mut engine = DebugEngine::new();
+
+        let mut roots = crate::RootRegistry::new();
+        engine
+            .enqueue(prepared_write(DebugWriteKind::Write, 8))
+            .expect("queue");
+        engine.apply_boundary(
+            &apply_manifest,
+            &target,
+            None,
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        assert_eq!(engine.queued_count(), 0);
+
+        let mut short_roots = crate::RootRegistry::new();
+        let mut short = record.clone();
+        short.size = 2;
+        short_roots.allocate(&short, 3).expect("short root");
+        engine
+            .enqueue(prepared_write(DebugWriteKind::Write, 8))
+            .expect("queue");
+        engine.apply_boundary(
+            &apply_manifest,
+            &target,
+            None,
+            &mut short_roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        assert_eq!(engine.queued_count(), 0);
+
+        let mut stale = prepared_write(DebugWriteKind::Write, 8);
+        stale.generation = 2;
+        engine.enqueue(stale).expect("queue");
+        engine.apply_boundary(
+            &apply_manifest,
+            &target,
+            None,
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        assert_eq!(engine.queued_count(), 0);
+
+        let mut unknown = prepared_write(DebugWriteKind::Write, 8);
+        unknown.got_id = GotId::from_bytes([7; 16]);
+        engine.enqueue(unknown).expect("queue");
+        engine.apply_boundary(
+            &apply_manifest,
+            &target,
+            None,
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        assert_eq!(engine.queued_count(), 0);
+
+        let mut renamed = prepared_write(DebugWriteKind::Write, 8);
+        renamed.target_key = "_ROOT::OTHER".into();
+        engine.enqueue(renamed).expect("queue");
+        engine.apply_boundary(
+            &apply_manifest,
+            &target,
+            None,
+            &mut roots,
+            3,
+            GotId::ZERO,
+            9,
+        );
+        assert_eq!(engine.queued_count(), 0);
+    }
+
+    fn shape_field(path: &str, type_key: &str) -> AggregateFieldRecord {
+        AggregateFieldRecord {
+            path: path.into(),
+            type_key: type_key.into(),
+            layout_hash: GotId::ZERO,
+        }
+    }
+
+    fn shape_group<'a>(roots: Vec<&'a RootRecord>) -> Group<'a> {
+        Group {
+            package: "_ROOT",
+            qualifier: None,
+            roots,
+        }
+    }
+
+    fn shape_query(path: &str) -> TargetQuery {
+        TargetQuery {
+            package: None,
+            path: path.into(),
+            qualifier: None,
+        }
+    }
+
+    #[test]
+    fn manifest_aggregate_shapes_resolve_nested_programs_and_arrays() {
+        let inner_id = GotId::from_bytes([51; 16]);
+        let outer_id = GotId::from_bytes([52; 16]);
+        let enum_id = GotId::from_bytes([53; 16]);
+        let inner_key = TypeKey::Named(inner_id).render();
+        let outer_key = TypeKey::Named(outer_id).render();
+        let inner = record_with_id(
+            inner_id,
+            "_ROOT::INNER",
+            &inner_key,
+            TypeKind::Struct,
+            4,
+            vec![field("X", "DINT", 0, 4)],
+        );
+        let outer = record_with_id(
+            outer_id,
+            "_ROOT::OUTER",
+            &outer_key,
+            TypeKind::Struct,
+            4,
+            vec![
+                field("SUB", &inner_key, 0, 4),
+                field("SUB.X", "DINT", 0, 4),
+                field("BAD", "!!!", 0, 4),
+            ],
+        );
+        let enum_record = record_with_id(
+            enum_id,
+            "_ROOT::COLOR",
+            &TypeKey::Named(enum_id).render(),
+            TypeKind::Enum,
+            1,
+            Vec::new(),
+        );
+        let mut shape_manifest = manifest(Vec::new(), vec![inner, outer, enum_record]);
+        shape_manifest.aggregates.push(aggregate_shape(
+            "P",
+            AggregateKind::Program,
+            "P",
+            vec![shape_field("IN", &inner_key), shape_field("FLAT.X", "DINT")],
+        ));
+        shape_manifest.aggregates.push(aggregate_shape(
+            "Q",
+            AggregateKind::Type,
+            &outer_key,
+            Vec::new(),
+        ));
+        shape_manifest.aggregates.push(aggregate_shape(
+            "Q.SUB",
+            AggregateKind::Type,
+            &inner_key,
+            Vec::new(),
+        ));
+        shape_manifest.aggregates.push(aggregate_shape(
+            "ENUM",
+            AggregateKind::Type,
+            &TypeKey::Named(enum_id).render(),
+            Vec::new(),
+        ));
+        shape_manifest.aggregates.push(aggregate_shape(
+            "BAD",
+            AggregateKind::Type,
+            "!!!",
+            Vec::new(),
+        ));
+        shape_manifest.aggregates.push(aggregate_shape(
+            "MISS",
+            AggregateKind::Type,
+            &TypeKey::Named(GotId::from_bytes([54; 16])).render(),
+            Vec::new(),
+        ));
+        shape_manifest.aggregates.push(aggregate_shape(
+            "SCALAR",
+            AggregateKind::Type,
+            "DINT",
+            Vec::new(),
+        ));
+        let nested_array = TypeKey::Array {
+            lower: ArrayBound::Value(1),
+            upper: ArrayBound::Value(2),
+            element: Box::new(TypeKey::Array {
+                lower: ArrayBound::Value(1),
+                upper: ArrayBound::Value(2),
+                element: Box::new(TypeKey::Dint),
+            }),
+        };
+        shape_manifest.aggregates.push(aggregate_shape(
+            "NEST",
+            AggregateKind::Type,
+            &nested_array.render(),
+            Vec::new(),
+        ));
+        let inner_array = TypeKey::Array {
+            lower: ArrayBound::Value(1),
+            upper: ArrayBound::Value(2),
+            element: Box::new(TypeKey::Named(inner_id)),
+        };
+        shape_manifest.aggregates.push(aggregate_shape(
+            "ARR",
+            AggregateKind::Type,
+            &inner_array.render(),
+            Vec::new(),
+        ));
+        let group = shape_group(Vec::new());
+
+        let program = build_manifest_aggregate(&shape_manifest, &group, &shape_query("P"))
+            .expect("program shape")
+            .expect("program target");
+        assert!(matches!(program.kind, AggregateTargetKind::Program { .. }));
+        let program_field = build_manifest_aggregate(&shape_manifest, &group, &shape_query("P.IN"))
+            .expect("program field")
+            .expect("field target");
+        assert!(matches!(
+            program_field.kind,
+            AggregateTargetKind::Record { ref ty } if ty.got_id == inner_id
+        ));
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("P.FLAT")),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("P.MISSING")),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("P.IN.X")),
+            codes::DEBUG_UNKNOWN,
+        );
+
+        let nested = build_manifest_aggregate(&shape_manifest, &group, &shape_query("Q.SUB"))
+            .expect("nested type")
+            .expect("nested target");
+        assert!(matches!(
+            nested.kind,
+            AggregateTargetKind::Record { ref ty } if ty.got_id == inner_id
+        ));
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("Q.MISSING")),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("Q.SUB.X")),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("Q.BAD")),
+            codes::DEBUG_TYPE,
+        );
+        assert!(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("Q"))
+                .expect("ambiguous prefix")
+                .is_some()
+        );
+        assert!(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("ENUM"))
+                .expect("enum")
+                .is_none()
+        );
+        assert!(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("SCALAR"))
+                .expect("scalar")
+                .is_none()
+        );
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("BAD")),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("MISS")),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("NEST.E1")),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            build_manifest_aggregate(&shape_manifest, &group, &shape_query("ARR.NOPE")),
+            codes::DEBUG_UNKNOWN,
+        );
+    }
+
+    #[test]
+    fn descend_shape_reports_missing_and_non_aggregate_types() {
+        let struct_id = GotId::from_bytes([61; 16]);
+        let enum_id = GotId::from_bytes([62; 16]);
+        let struct_key = TypeKey::Named(struct_id).render();
+        let struct_record = record_with_id(
+            struct_id,
+            "_ROOT::S",
+            &struct_key,
+            TypeKind::Struct,
+            4,
+            vec![
+                field("OK", "DINT", 0, 4),
+                field("FLAT.X", "DINT", 0, 4),
+                field("BAD", "???", 0, 4),
+            ],
+        );
+        let enum_record = record_with_id(
+            enum_id,
+            "_ROOT::E",
+            &TypeKey::Named(enum_id).render(),
+            TypeKind::Enum,
+            1,
+            Vec::new(),
+        );
+        let shape_manifest = manifest(Vec::new(), vec![struct_record, enum_record]);
+        let ty = TypeKey::Named(struct_id);
+
+        let (next, _) =
+            descend_shape(&shape_manifest, &ty, "OK", GotId::ZERO, "s.ok").expect("scalar field");
+        assert_eq!(next, TypeKey::Dint);
+        error_code(
+            descend_shape(&shape_manifest, &ty, "MISSING", GotId::ZERO, "s.missing"),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            descend_shape(&shape_manifest, &ty, "FLAT", GotId::ZERO, "s.flat"),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            descend_shape(&shape_manifest, &ty, "BAD", GotId::ZERO, "s.bad"),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            descend_shape(
+                &shape_manifest,
+                &TypeKey::Named(enum_id),
+                "X",
+                GotId::ZERO,
+                "e.x",
+            ),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            descend_shape(
+                &shape_manifest,
+                &TypeKey::Named(GotId::from_bytes([63; 16])),
+                "X",
+                GotId::ZERO,
+                "m.x",
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            descend_shape(&shape_manifest, &TypeKey::Dint, "X", GotId::ZERO, "d.x"),
+            codes::DEBUG_UNKNOWN,
+        );
+        let array_ty = TypeKey::Array {
+            lower: ArrayBound::Value(1),
+            upper: ArrayBound::Value(2),
+            element: Box::new(TypeKey::Named(struct_id)),
+        };
+        error_code(
+            descend_shape(&shape_manifest, &array_ty, "X", GotId::ZERO, "a.x"),
+            codes::DEBUG_UNKNOWN,
+        );
+        let (element, layout) =
+            descend_shape(&shape_manifest, &array_ty, "E2", GotId::ZERO, "a.e2")
+                .expect("array element");
+        assert_eq!(element, TypeKey::Named(struct_id));
+        assert_eq!(layout, GotId::ZERO);
+        let nested_ty = TypeKey::Array {
+            lower: ArrayBound::Value(1),
+            upper: ArrayBound::Value(2),
+            element: Box::new(array_ty),
+        };
+        let (nested, layout) =
+            descend_shape(&shape_manifest, &nested_ty, "E1", GotId::ZERO, "n.e1")
+                .expect("nested element");
+        assert!(matches!(nested, TypeKey::Array { .. }));
+        assert_eq!(layout, GotId::ZERO);
+    }
+
+    #[test]
+    fn engine_pump_reports_stale_writes_releases_and_watches() {
+        use std::time::{Duration, Instant};
+
+        let mut engine = DebugEngine::new();
+        let service = engine.service();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut stale_engine = DebugEngine::new();
+        let stale_service = stale_engine.service();
+
+        let reply = stale_service
+            .submit_write_wait(
+                DebugWriteKind::Write,
+                DebugWriteRequest::new(
+                    DebugTarget::path("counter"),
+                    typed("DINT", DebugValue::Decimal("1".into())),
+                ),
+                false,
+            )
+            .expect("write");
+        stale_engine.pump(0, None, false);
+        failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
+
+        let reply = stale_service
+            .submit_release_wait(DebugTarget::path("counter"))
+            .expect("release");
+        stale_engine.pump(0, None, false);
+        failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
+
+        let reply = stale_service
+            .submit_watch_add_wait(vec![DebugTarget::path("counter")], MIN_WATCH_INTERVAL_NS)
+            .expect("watch");
+        stale_engine.pump(0, None, false);
+        failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
+
+        let reply = stale_service.submit_manifest_wait(false).expect("manifest");
+        stale_engine.pump(0, None, false);
+        failure_code(reply.wait(deadline).expect("reply"), codes::DEBUG_STALE);
+
+        stale_service.set_session(Some("session".into()));
+        let reply = stale_service.submit_clear_session_wait().expect("clear");
+        stale_engine.pump(0, None, false);
+        reply.wait(deadline).expect("reply").expect("cleared");
+
+        let request = DebugReadRequest::new(DebugTarget::path("counter"));
+        let _ = service.submit_read(request).expect("read");
+        assert_eq!(engine.pump(0, None, false), 1);
+        let events = service.drain_events();
+        assert!(matches!(
+            events.first(),
+            Some(DebugEvent::Read(completion)) if completion.result.is_err()
+        ));
+    }
+
+    #[test]
+    fn strings_reject_bad_lengths_and_encodings() {
+        let little = Endianness::Little;
+        let string_bytes = |length: i32, units: &[u8]| {
+            let mut bytes = length.to_le_bytes().to_vec();
+            bytes.extend_from_slice(units);
+            bytes
+        };
+        error_code(
+            decode_string(StringKind::Sbcs, 4, &[0, 0, 0], little),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_string(StringKind::Sbcs, 4, &string_bytes(-1, &[]), little),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_string(StringKind::Sbcs, 2, &string_bytes(3, b"abc"), little),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_string(StringKind::Sbcs, 4, &string_bytes(4, b"ab"), little),
+            codes::DEBUG_TYPE,
+        );
+        let sbcs = decode_string(StringKind::Sbcs, 4, &string_bytes(3, b"abc"), little)
+            .expect("sbcs string");
+        assert_eq!(sbcs.length, 3);
+        assert_eq!(sbcs.text.as_deref(), Some("abc"));
+
+        let mut pair = Vec::new();
+        pair.extend_from_slice(&0xD83Du16.to_le_bytes());
+        pair.extend_from_slice(&0xDE00u16.to_le_bytes());
+        let dbcs =
+            decode_string(StringKind::Dbcs, 4, &string_bytes(2, &pair), little).expect("dbcs pair");
+        assert_eq!(dbcs.units, vec![0x1_F600]);
+        assert_eq!(dbcs.text.as_deref(), Some("\u{1F600}"));
+
+        let high = 0xD83Du16.to_le_bytes();
+        error_code(
+            decode_string(StringKind::Dbcs, 2, &string_bytes(1, &high), little),
+            codes::DEBUG_TYPE,
+        );
+        let mut bad_pair = Vec::new();
+        bad_pair.extend_from_slice(&high);
+        bad_pair.extend_from_slice(&0x0041u16.to_le_bytes());
+        error_code(
+            decode_string(StringKind::Dbcs, 2, &string_bytes(2, &bad_pair), little),
+            codes::DEBUG_TYPE,
+        );
+        let low = 0xDC00u16.to_le_bytes();
+        error_code(
+            decode_string(StringKind::Dbcs, 2, &string_bytes(1, &low), little),
+            codes::DEBUG_TYPE,
+        );
+
+        let unicode = decode_string(
+            StringKind::Unicode,
+            2,
+            &string_bytes(1, &0x41u32.to_le_bytes()),
+            little,
+        )
+        .expect("unicode string");
+        assert_eq!(unicode.text.as_deref(), Some("A"));
+        error_code(
+            decode_string(
+                StringKind::Unicode,
+                2,
+                &string_bytes(1, &0x11_0000u32.to_le_bytes()),
+                little,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_string(
+                StringKind::Unicode,
+                2,
+                &string_bytes(1, &0xD800u32.to_le_bytes()),
+                little,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn array_decoding_validates_bounds_and_storage() {
+        let empty = manifest(Vec::new(), Vec::new());
+        let target = target();
+        error_code(
+            decode_array(
+                &empty,
+                &target,
+                "ARRAY[*] OF DINT",
+                ArrayBound::Conformant,
+                ArrayBound::Value(2),
+                &TypeKey::Dint,
+                &[0_u8; 8],
+                3,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_array(
+                &empty,
+                &target,
+                "ARRAY[2..1] OF DINT",
+                ArrayBound::Value(2),
+                ArrayBound::Value(1),
+                &TypeKey::Dint,
+                &[0_u8; 8],
+                3,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            decode_array(
+                &empty,
+                &target,
+                "ARRAY[0..2000000] OF DINT",
+                ArrayBound::Value(0),
+                ArrayBound::Value(2_000_000),
+                &TypeKey::Dint,
+                &[0_u8; 8],
+                3,
+                0,
+            ),
+            codes::DEBUG_LIMIT,
+        );
+        error_code(
+            decode_array(
+                &empty,
+                &target,
+                "ARRAY[1..2] OF DINT",
+                ArrayBound::Value(1),
+                ArrayBound::Value(2),
+                &TypeKey::Dint,
+                &[0_u8; 4],
+                3,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        let mut bytes = vec![0_u8; 8];
+        bytes[..4].copy_from_slice(&7_i32.to_le_bytes());
+        bytes[4..].copy_from_slice(&8_i32.to_le_bytes());
+        let value = decode_array(
+            &empty,
+            &target,
+            "ARRAY[1..2] OF DINT",
+            ArrayBound::Value(1),
+            ArrayBound::Value(2),
+            &TypeKey::Dint,
+            &bytes,
+            3,
+            0,
+        )
+        .expect("array");
+        let DebugValue::Array(values) = value.value else {
+            panic!("array");
+        };
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[1].value, DebugValue::Decimal("8".into()));
+
+        error_code(
+            decode_type_value_depth(
+                &empty,
+                &target,
+                &TypeKey::Dint,
+                "DINT",
+                &[0_u8; 4],
+                3,
+                MAX_DECODE_DEPTH + 1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn typed_value_sizes_cover_every_shape() {
+        let scalar = typed("DINT", DebugValue::Decimal("12".into()));
+        let real = typed("REAL", DebugValue::Real(1.5));
+        let string = typed(
+            "STRING[4]",
+            DebugValue::String(StringValue {
+                capacity: 4,
+                length: 3,
+                units: vec![u32::from(b'a'), u32::from(b'b'), u32::from(b'c')],
+                text: Some("abc".into()),
+            }),
+        );
+        let array = typed(
+            "ARRAY[1..2] OF DINT",
+            DebugValue::Array(vec![scalar.clone()]),
+        );
+        let aggregate = typed(
+            "PAIR",
+            DebugValue::Aggregate(vec![NamedValue {
+                name: "x".into(),
+                value: scalar,
+            }]),
+        );
+        let object = typed(
+            "SHAPE",
+            DebugValue::Object {
+                identity: Some("identity".into()),
+                present: true,
+                class: Some("SHAPE".into()),
+                interface: None,
+                fields: vec![NamedValue {
+                    name: "id".into(),
+                    value: real.clone(),
+                }],
+            },
+        );
+        let reference = typed(
+            "REF_TO(DINT)",
+            DebugValue::Reference {
+                identity: Some("reference".into()),
+                present: true,
+                target_type: Some("DINT".into()),
+            },
+        );
+        let overlap = typed(
+            "VIEW",
+            DebugValue::Overlap {
+                bytes: vec![1, 2, 3],
+                base64: "AQID".into(),
+            },
+        );
+        let unavailable = typed(
+            "DINT",
+            DebugValue::Unavailable {
+                warning: DebugWarning {
+                    code: codes::W_DEBUG_UNAVAILABLE,
+                    message: "unavailable".into(),
+                },
+            },
+        );
+        for value in [
+            real,
+            string,
+            array,
+            aggregate,
+            object,
+            reference,
+            overlap,
+            unavailable,
+        ] {
+            assert!(typed_value_bytes(&value) > value.type_key.len());
+        }
+    }
+
+    #[test]
+    fn traverse_fields_resolves_nested_and_rejects_invalid_shapes() {
+        let inner_id = GotId::from_bytes([71; 16]);
+        let outer_id = GotId::from_bytes([72; 16]);
+        let inner_key = TypeKey::Named(inner_id).render();
+        let outer_key = TypeKey::Named(outer_id).render();
+        let inner = record_with_id(
+            inner_id,
+            "_ROOT::INNER",
+            &inner_key,
+            TypeKind::Struct,
+            4,
+            vec![field("X", "DINT", 0, 4)],
+        );
+        let outer = record_with_id(
+            outer_id,
+            "_ROOT::OUTER",
+            &outer_key,
+            TypeKind::Struct,
+            16,
+            vec![
+                field("SUB", &inner_key, 0, 4),
+                field("FLAT.X", "DINT", 0, 4),
+                field("SCALAR", "DINT", 4, 4),
+                field("BAD", "!!!", 8, 4),
+                field(
+                    "MISS",
+                    &TypeKey::Named(GotId::from_bytes([73; 16])).render(),
+                    12,
+                    4,
+                ),
+            ],
+        );
+        let traverse_manifest = manifest(Vec::new(), vec![inner.clone(), outer.clone()]);
+
+        assert_eq!(
+            traverse_fields(&traverse_manifest, &outer, "").expect("owner"),
+            outer
+        );
+        assert_eq!(
+            traverse_fields(&traverse_manifest, &outer, "SUB").expect("inner"),
+            inner
+        );
+        error_code(
+            traverse_fields(&traverse_manifest, &outer, "SUB.X"),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            traverse_fields(&traverse_manifest, &outer, "E1"),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            traverse_fields(&traverse_manifest, &outer, "MISSING"),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            traverse_fields(&traverse_manifest, &outer, "FLAT"),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            traverse_fields(&traverse_manifest, &outer, "SCALAR"),
+            codes::DEBUG_UNKNOWN,
+        );
+        error_code(
+            traverse_fields(&traverse_manifest, &outer, "BAD"),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            traverse_fields(&traverse_manifest, &outer, "MISS"),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn hidden_types_unwrap_handles_and_object_records() {
+        let inner_id = GotId::from_bytes([81; 16]);
+        let inner_key = TypeKey::Named(inner_id).render();
+        let inner = record_with_id(
+            inner_id,
+            "_ROOT::INNER",
+            &inner_key,
+            TypeKind::Class,
+            4,
+            Vec::new(),
+        );
+        let hidden_manifest = manifest(Vec::new(), vec![inner.clone()]);
+        let reference_key = TypeKey::RefTo(Box::new(TypeKey::Named(inner_id))).render();
+        let mut handle = allocated_root(
+            GotId::from_bytes([82; 16]),
+            "_ROOT::H#HANDLE",
+            &reference_key,
+            8,
+        );
+        assert_eq!(
+            hidden_type(&hidden_manifest, &handle, "HANDLE").expect("handle"),
+            inner
+        );
+        let pointer_key = TypeKey::PtrTo(Box::new(TypeKey::Named(inner_id))).render();
+        handle.type_key = pointer_key;
+        assert_eq!(
+            hidden_type(&hidden_manifest, &handle, "HANDLE").expect("pointer"),
+            inner
+        );
+        let object_array = TypeKey::Array {
+            lower: ArrayBound::Value(0),
+            upper: ArrayBound::Value(0),
+            element: Box::new(TypeKey::RefTo(Box::new(TypeKey::Named(inner_id)))),
+        };
+        handle.type_key = object_array.render();
+        assert_eq!(
+            hidden_type(&hidden_manifest, &handle, "OBJREC").expect("object record"),
+            inner
+        );
+
+        handle.type_key = "DINT".into();
+        error_code(
+            hidden_type(&hidden_manifest, &handle, "HANDLE"),
+            codes::DEBUG_UNKNOWN,
+        );
+        handle.type_key = TypeKey::RefTo(Box::new(TypeKey::Dint)).render();
+        error_code(
+            hidden_type(&hidden_manifest, &handle, "HANDLE"),
+            codes::DEBUG_UNKNOWN,
+        );
+        handle.type_key =
+            TypeKey::RefTo(Box::new(TypeKey::Named(GotId::from_bytes([83; 16])))).render();
+        error_code(
+            hidden_type(&hidden_manifest, &handle, "HANDLE"),
+            codes::DEBUG_TYPE,
+        );
+        handle.type_key = "!!!".into();
+        error_code(
+            hidden_type(&hidden_manifest, &handle, "HANDLE"),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn build_aggregate_prefers_hidden_roots_and_rejects_ambiguous_owners() {
+        let inner_id = GotId::from_bytes([91; 16]);
+        let other_id = GotId::from_bytes([92; 16]);
+        let outer_id = GotId::from_bytes([93; 16]);
+        let inner_key = TypeKey::Named(inner_id).render();
+        let other_key = TypeKey::Named(other_id).render();
+        let outer_key = TypeKey::Named(outer_id).render();
+        let inner = record_with_id(
+            inner_id,
+            "_ROOT::INNER",
+            &inner_key,
+            TypeKind::Struct,
+            4,
+            vec![field("X", "DINT", 0, 4)],
+        );
+        let other = record_with_id(
+            other_id,
+            "_ROOT::OTHER",
+            &other_key,
+            TypeKind::Struct,
+            4,
+            vec![field("X", "DINT", 0, 4)],
+        );
+        let outer = record_with_id(
+            outer_id,
+            "_ROOT::OUTER",
+            &outer_key,
+            TypeKind::Struct,
+            8,
+            vec![field("IN", &inner_key, 0, 4), field("N", "DINT", 4, 4)],
+        );
+        let mut build_manifest = manifest(
+            Vec::new(),
+            vec![inner.clone(), other.clone(), outer.clone()],
+        );
+
+        let hidden = allocated_root(
+            GotId::from_bytes([94; 16]),
+            "_ROOT::H#HANDLE",
+            &TypeKey::RefTo(Box::new(TypeKey::Named(inner_id))).render(),
+            8,
+        );
+        build_manifest.roots.push(hidden.clone());
+        let hidden_group = shape_group(vec![&hidden]);
+        let hidden_target = build_aggregate(&build_manifest, &hidden_group, &shape_query("H"))
+            .expect("hidden aggregate");
+        assert!(matches!(
+            hidden_target.kind,
+            AggregateTargetKind::Record { ref ty } if ty.got_id == inner_id
+        ));
+
+        let mut root_in = allocated_root(GotId::from_bytes([95; 16]), "_ROOT::P.IN.X", "DINT", 4);
+        root_in.owner_type = Some(outer_id);
+        root_in.field_path = "IN.X".into();
+        let mut root_n = allocated_root(GotId::from_bytes([96; 16]), "_ROOT::P.N", "DINT", 4);
+        root_n.owner_type = Some(outer_id);
+        root_n.field_path = "N".into();
+        build_manifest.roots.push(root_in.clone());
+        build_manifest.roots.push(root_n.clone());
+        let owner_group = shape_group(vec![&root_in, &root_n]);
+        let owner_target = build_aggregate(&build_manifest, &owner_group, &shape_query("P"))
+            .expect("owner aggregate");
+        assert!(matches!(
+            owner_target.kind,
+            AggregateTargetKind::Record { ref ty } if ty.got_id == outer_id
+        ));
+
+        let mut conflicting = root_in.clone();
+        conflicting.got_id = GotId::from_bytes([97; 16]);
+        conflicting.owner_type = Some(other_id);
+        build_manifest.roots.push(conflicting.clone());
+        let conflict_group = shape_group(vec![&root_in, &conflicting]);
+        error_code(
+            build_aggregate(&build_manifest, &conflict_group, &shape_query("P")),
+            codes::DEBUG_UNKNOWN,
+        );
+
+        let mut element_root = root_in.clone();
+        element_root.key = "_ROOT::P.E1.X".into();
+        element_root.field_path = "E1.X".into();
+        let element_group = shape_group(vec![&element_root]);
+        error_code(
+            build_aggregate(&build_manifest, &element_group, &shape_query("P")),
+            codes::DEBUG_UNKNOWN,
+        );
+
+        let empty_group = shape_group(Vec::new());
+        error_code(
+            build_aggregate(&build_manifest, &empty_group, &shape_query("MISSING")),
+            codes::DEBUG_UNKNOWN,
+        );
+    }
+
+    #[test]
+    fn prepare_write_rejects_invalid_types_sizes_and_direct_metadata() {
+        let id = GotId::from_bytes([101; 16]);
+        let target = target();
+        let empty = crate::RootRegistry::new();
+
+        let invalid = allocated_root(id, "_ROOT::COUNTER", "!!!", 4);
+        let invalid_manifest = manifest(vec![invalid.clone()], Vec::new());
+        let mut invalid_roots = crate::RootRegistry::new();
+        invalid_roots.allocate(&invalid, 3).expect("invalid root");
+        let invalid_source = source(&target, &invalid_manifest, &invalid_roots);
+        error_code(
+            prepare_write(
+                &invalid_source,
+                &DebugWriteRequest::new(
+                    DebugTarget::path("counter"),
+                    typed("!!!", DebugValue::Decimal("1".into())),
+                ),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let sized = allocated_root(id, "_ROOT::COUNTER", "DINT", 8);
+        let sized_manifest = manifest(vec![sized.clone()], Vec::new());
+        let mut sized_roots = crate::RootRegistry::new();
+        sized_roots.allocate(&sized, 3).expect("sized root");
+        let sized_source = source(&target, &sized_manifest, &sized_roots);
+        error_code(
+            prepare_write(
+                &sized_source,
+                &DebugWriteRequest::new(
+                    DebugTarget::path("counter"),
+                    typed("DINT", DebugValue::Decimal("1".into())),
+                ),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let pointer_key = TypeKey::RefTo(Box::new(TypeKey::Dint)).render();
+        let pointer = allocated_root(id, "_ROOT::COUNTER", &pointer_key, 8);
+        let pointer_manifest = manifest(vec![pointer.clone()], Vec::new());
+        let mut pointer_roots = crate::RootRegistry::new();
+        pointer_roots.allocate(&pointer, 3).expect("pointer root");
+        let pointer_source = source(&target, &pointer_manifest, &pointer_roots);
+        error_code(
+            prepare_write(
+                &pointer_source,
+                &DebugWriteRequest::new(
+                    DebugTarget::path("counter"),
+                    typed(
+                        &pointer_key,
+                        DebugValue::Reference {
+                            identity: None,
+                            present: false,
+                            target_type: Some("DINT".into()),
+                        },
+                    ),
+                ),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let direct = direct_root(id, "_ROOT::COUNTER", "DINT", 4);
+        let direct_manifest = manifest(vec![direct], Vec::new());
+        let direct_source = source(&target, &direct_manifest, &empty);
+        error_code(
+            prepare_write(
+                &direct_source,
+                &DebugWriteRequest::new(
+                    DebugTarget::path("counter"),
+                    typed("DINT", DebugValue::Decimal("1".into())),
+                ),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_STALE,
+        );
+    }
+
+    #[test]
+    fn direct_binding_validation_reports_missing_area_and_width_errors() {
+        let _guard = crate::IMAGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let id = GotId::from_bytes([102; 16]);
+        let counter = direct_root(id, "_ROOT::COUNTER", "DINT", 4);
+        let flag = direct_root(id, "_ROOT::COUNTER", "BOOL", 1);
+        let word = direct_root(id, "_ROOT::COUNTER", "INT", 2);
+        let target = target();
+        let empty = crate::RootRegistry::new();
+
+        let missing = direct_info(8, Vec::new());
+        error_code(
+            validate_direct_binding(&missing, &counter),
+            codes::DEBUG_STALE,
+        );
+        let invalid_area = direct_info(8, vec![binding(id, 0, 0, 32)]);
+        error_code(
+            validate_direct_binding(&invalid_area, &counter),
+            codes::DEBUG_STALE,
+        );
+        let one_bit_past = direct_info(8, vec![binding(id, 1, 64, 1)]);
+        error_code(
+            validate_direct_binding(&one_bit_past, &flag),
+            codes::DEBUG_STALE,
+        );
+        let misaligned_width = direct_info(8, vec![binding(id, 1, 0, 12)]);
+        error_code(
+            validate_direct_binding(&misaligned_width, &word),
+            codes::DEBUG_TYPE,
+        );
+
+        // A one-bit binding may not describe a wider root when reading.
+        crate::stc_rt_io_configure(8, 8, 0);
+        let counter_manifest = manifest(vec![counter], Vec::new());
+        let one_bit = direct_info(8, vec![binding(id, 1, 0, 1)]);
+        error_code(
+            read_request(
+                &direct_source(&target, &counter_manifest, &empty, &one_bit),
+                &DebugReadRequest::new(DebugTarget::path("counter")),
+            ),
+            codes::DEBUG_TYPE,
+        );
+        let word_manifest = manifest(vec![word], Vec::new());
+        error_code(
+            prepare_write(
+                &direct_source(&target, &word_manifest, &empty, &misaligned_width),
+                &DebugWriteRequest::new(
+                    DebugTarget::path("counter"),
+                    typed("INT", DebugValue::Decimal("1".into())),
+                ),
+                DebugWriteKind::Write,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn encoding_rejects_depth_type_and_storage_violations() {
+        let empty = manifest(Vec::new(), Vec::new());
+        let target = target();
+        let value = typed("DINT", DebugValue::Decimal("1".into()));
+        let mut bytes = [0_u8; 4];
+        error_code(
+            encode_value_into(
+                &empty,
+                &target,
+                &TypeKey::Dint,
+                &value,
+                None,
+                &mut bytes,
+                0,
+                MAX_DECODE_DEPTH + 1,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_value_into(
+                &empty,
+                &target,
+                &TypeKey::Dint,
+                &typed("LINT", DebugValue::Decimal("1".into())),
+                Some("DINT"),
+                &mut bytes,
+                0,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_value_into(
+                &empty,
+                &target,
+                &TypeKey::Dint,
+                &value,
+                None,
+                &mut bytes[..2],
+                0,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+        error_code(
+            encode_value_into(
+                &empty,
+                &target,
+                &TypeKey::Bool,
+                &typed("BOOL", DebugValue::Decimal("1".into())),
+                Some("BOOL"),
+                &mut [0_u8; 1],
+                0,
+                0,
+            ),
+            codes::DEBUG_TYPE,
+        );
+    }
+
+    #[test]
+    fn revalidate_prepared_rejects_invalid_types_shapes_and_direct_metadata() {
+        let id = GotId::from_bytes([1; 16]);
+        let target = target();
+        let prepared = prepared_write(DebugWriteKind::Write, 8);
+
+        let invalid = allocated_root(id, "_ROOT::COUNTER", "!!!", 8);
+        let invalid_manifest = manifest(vec![invalid], Vec::new());
+        let mut invalid_prepared = prepared.clone();
+        invalid_prepared.type_key = "!!!".into();
+        error_code(
+            revalidate_prepared(
+                &invalid_prepared,
+                &invalid_manifest,
+                &target,
+                None,
+                3,
+                GotId::ZERO,
+            ),
+            codes::DEBUG_TYPE,
+        );
+
+        let sized = allocated_root(id, "_ROOT::COUNTER", "DINT", 2);
+        let sized_manifest = manifest(vec![sized], Vec::new());
+        error_code(
+            revalidate_prepared(&prepared, &sized_manifest, &target, None, 3, GotId::ZERO),
+            codes::DEBUG_STALE,
+        );
+
+        let mut direct = allocated_root(id, "_ROOT::COUNTER", "DINT", 4);
+        direct.root_kind = RootKind::Direct;
+        let direct_manifest = manifest(vec![direct], Vec::new());
+        error_code(
+            revalidate_prepared(&prepared, &direct_manifest, &target, None, 3, GotId::ZERO),
+            codes::DEBUG_STALE,
+        );
+        error_code(
+            revalidate_prepared(
+                &prepared,
+                &direct_manifest,
+                &target,
+                Some(&crate::ModuleInfo::default()),
+                3,
+                GotId::ZERO,
+            ),
+            codes::DEBUG_STALE,
+        );
     }
 }

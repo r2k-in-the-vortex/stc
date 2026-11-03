@@ -14,7 +14,7 @@ stc-span = { path = "../stc-span" }
 stc-syntax = { path = "../stc-syntax" }
 
 [dev-dependencies]
-serde_json = "1"
+serde_json = "1.0"
 
 [lints]
 workspace = true

@@ -554,7 +554,7 @@ failed and trapped tests contribute what they executed. Production `PROGRAM`
 bodies that a test artifact does not link are outside the measured universe.
 Coverage is not correctness evidence. See
 [`specification/Architecture/Testing-and-Verification.md`](specification/Architecture/Testing-and-Verification.md)
-§2.6, [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) §8, and
+§2.6, [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md) §9, and
 [`examples/coverage/`](examples/coverage/README.md).
 
 `stc fmt` uses one fixed style over the lossless CST, preserves comments,
@@ -586,10 +586,14 @@ when comparing numbers:
 cargo test -p stc-driver --test performance -- --ignored --nocapture
 cargo test -p stc-driver --test debug_overhead -- --ignored --nocapture
 cargo test -p stc-runtime --test switch_latency -- --ignored --nocapture
+cargo test -p stc-runtime --release --test modbus_overhead -- --ignored --nocapture
 ```
 
 Recorded figures are in
 [`specification/Verification/Performance.md`](specification/Verification/Performance.md).
+The Modbus harness measures the public `latch_inputs`/`publish_outputs` seam with 0, 1, 4, and
+8 loopback clients; the method and host-specific results are in
+[`specification/Verification/Modbus-Server.md`](specification/Verification/Modbus-Server.md) §11.
 
 On Linux, `stc run --rt --cycle-time 1ms --rt-priority 90 --rt-cpu 3 --rt-metrics rt.jsonl`
 runs the cycle thread with FIFO scheduling and absolute `CLOCK_MONOTONIC` pacing, and writes the
@@ -614,7 +618,111 @@ without `--rt` the run loop and the generated artifacts are unchanged.
 For every diagnostic, `--message-format json` gives a stable object with code,
 severity, spans, notes, and related locations.
 
-## 13. Support matrix
+## 13. Modbus TCP server I/O (v2.0.0)
+
+A project can expose its process image as a Modbus TCP server. Declare a device with
+`kind = "modbus-tcp"` and map each declared channel to a Modbus table in the selected machine
+profile. The compiler embeds the profile; the runtime opens one listener per `bind` entry and
+serves all bind entries from one register bank.
+
+```toml
+# stc.toml
+[io]
+config = "io/bench.toml"
+
+[[io.devices]]
+name = "modbus0"
+kind = "modbus-tcp"
+
+  [[io.devices.channels]]
+  name = "CoilIn0"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "WordOut0"
+  direction = "output"
+  width = 16
+
+[[io.bindings]]
+variable = "Main.CoilIn0"
+device = "modbus0"
+channel = "CoilIn0"
+direction = "input"
+
+[[io.bindings]]
+variable = "Main.WordOut0"
+device = "modbus0"
+channel = "WordOut0"
+direction = "output"
+```
+
+```toml
+# io/bench.toml
+[device.modbus0]
+bind = ["127.0.0.1:15020", "192.168.1.7:15020"]
+unit = 1
+max-connections = 8
+idle-timeout = "60s"
+word-order = "high-first"
+
+# Zero-based: address 0 is the first element of the table. Vendor 00001,
+# 10001, 30001, and 40001 are one-based references; subtract one.
+[[device.modbus0.channels]]
+name = "CoilIn0"
+table = "coil"
+address = 0
+
+[[device.modbus0.channels]]
+name = "WordOut0"
+table = "holding-register"
+address = 0
+```
+
+- Functions: FC1/2/3/4 reads and FC5/6/15/16 writes.
+- Coils and discrete inputs carry 1-bit values. Holding and input registers carry 8-, 16-,
+  32-, or 64-bit values; 32/64-bit channels occupy 2/4 registers. A boolean in a register is a
+  16-bit channel.
+- `coil` and `holding-register` accept input (client-writable) and output (PLC-readable)
+  channels. `discrete-input` and `input-register` accept output channels only.
+- Addresses are zero-based. A 32-bit channel at address 20 covers registers 20 and 21 (vendor
+  `40021..40022` on holding registers). A write that only partly covers a wide channel returns
+  exception 0x02 and changes nothing.
+- `word-order` defaults to `high-first`; `low-first` and per-channel `abcd`/`cdab`/`dcba`/`badc`
+  or an integer byte list are supported. `byte = "low"`/`"high"` selects a byte for 8-bit
+  register channels.
+- Optional status device:
+
+```toml
+[[io.devices]]
+name = "MBStatus"
+kind = "modbus-tcp-status"
+config = { layout = 1 }
+
+[[io.devices.channels]]
+name = "server0.listening"
+direction = "input"
+width = 1
+```
+
+Run with `stc run -v` to print the `io-backend modbus-tcp` line with `server0.*` listener,
+connection, request, read/write, exception, malformed, and last-error diagnostics. A client
+write is visible to the PLC at the next input boundary; a PLC output is readable after the
+publish boundary. An unbound or read-only write, a partial wide write, and an unmapped range
+return exception 0x02.
+
+The server is **non-real-time** and has **no authentication or encryption**. Every
+input-mapped coil/register on every bind is writable by any reachable client. Bind only
+interfaces you intend to expose, use a trusted/segmented network or host firewall, and never use
+Modbus as a safety function or an interpolated motion channel. See the full contract in
+[`specification/Architecture/IO-Routing-and-Backends.md`](specification/Architecture/IO-Routing-and-Backends.md)
+§4.5, the profile schema in
+[`specification/Architecture/CLI-and-Manifest.md`](specification/Architecture/CLI-and-Manifest.md)
+§2.2.1, the evidence report in
+[`specification/Verification/Modbus-Server.md`](specification/Verification/Modbus-Server.md),
+and the runnable fixture in [`tests/modbus/`](tests/modbus/README.md).
+
+## 14. Support matrix
 
 | Host | Triple | Package | Compile | Run/model | Debug | Online change |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -628,7 +736,7 @@ The three native hosts are supported from M8 (D-200); macOS, Windows ARM64,
 online, projects, conformance, execution, UI, cross-target, package,
 traceability, Lean, and fuzz-smoke jobs natively on all three hosts.
 
-## 14. Safety
+## 15. Safety
 
 See [`NON-SAFETY.md`](NON-SAFETY.md). In short: `stc` can control real
 machinery, but it is not a safety PLC; safety must be provided by a separate

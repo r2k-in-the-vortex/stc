@@ -1,0 +1,12 @@
+VAR_GLOBAL
+  A : BOOL;
+  B : BOOL;
+  C : BOOL;
+  D : BOOL;
+END_VAR
+PROGRAM Main
+  A := SINT#-5 < SINT#3;
+  B := SINT#-5 > SINT#3;
+  C := USINT#200 > USINT#100;
+  D := USINT#200 >= USINT#200;
+END_PROGRAM

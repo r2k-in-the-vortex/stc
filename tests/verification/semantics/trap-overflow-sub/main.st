@@ -1,0 +1,10 @@
+VAR_GLOBAL
+  R : DINT;
+END_VAR
+PROGRAM Main
+VAR
+  x : SINT;
+END_VAR
+  x := SINT#-128;
+  R := SINT_TO_DINT(x - SINT#1);
+END_PROGRAM

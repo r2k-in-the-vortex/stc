@@ -234,7 +234,7 @@ and debug-information errors. Online-change diagnostics use their own
 describe the pre-M6.5 state and the rules M6.5 followed, not current gaps. The GOT manifest was
 raised to format 2 by M6.5 phase 4 (D-180); descriptor, module, state, and metadata-sidecar
 formats remain 1, the metadata sidecar gains only the optional `debug` object, M6.5 adds the
-format-1 stopped-frame sidecar (raised to format 2 later by WL-1.1 F-11, D-229), and the host ABI
+format-1 stopped-frame sidecar (raised to format 2 later by WL-1.1 F-11, D-244), and the host ABI
 appends service 13 at minor 2.3.
 
 M4.5 and M6 do not implement the debugger. They fix the host/module substrate and leave the debug
@@ -1214,7 +1214,7 @@ guessed.
 `stc-debug/1.1` adds no field to this sidecar. The `frame.locals` operation reads the same
 captured `StopFrame` snapshot produced from the table and exposes only name, canonical type, and
 captured live/available metadata; it adds no sidecar field, value, or address. The format-2 line
-map is a sidecar change (D-229), independent of the protocol version.
+map is a sidecar change (D-244), independent of the protocol version.
 
 Format 2:
 

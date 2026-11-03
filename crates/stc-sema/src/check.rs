@@ -4190,6 +4190,12 @@ impl Analyzer<'_> {
                 let any_real = tys
                     .iter()
                     .any(|ty| matches!(self.hir.types.get(self.scalar_base(*ty)), Ty::Real(_)));
+                let all_bits = tys.iter().all(|ty| {
+                    matches!(self.hir.types.get(self.scalar_base(*ty)), Ty::BitString(_))
+                });
+                let all_chars = tys
+                    .iter()
+                    .all(|ty| matches!(self.hir.types.get(self.scalar_base(*ty)), Ty::Char(_)));
                 if any_real {
                     let lreal = tys.iter().any(|ty| {
                         matches!(
@@ -4202,6 +4208,22 @@ impl Analyzer<'_> {
                     } else {
                         self.hir.types.real(stc_hir::RealTy::Real)
                     };
+                } else if matches!(kind, stc_hir::StdFnKind::Max | stc_hir::StdFnKind::Min)
+                    && all_bits
+                {
+                    let width = tys
+                        .iter()
+                        .filter_map(|ty| match self.hir.types.get(self.scalar_base(*ty)) {
+                            Ty::BitString(width) => Some(*width),
+                            _ => None,
+                        })
+                        .max()
+                        .unwrap_or(8);
+                    result = self.hir.types.bit_string(width);
+                } else if matches!(kind, stc_hir::StdFnKind::Max | stc_hir::StdFnKind::Min)
+                    && all_chars
+                {
+                    result = tys[0];
                 } else {
                     result = self.promoted_int(&tys);
                 }
@@ -6450,8 +6472,8 @@ fn fold_cast_const(value: &ConstValue, to: &Ty) -> Option<ConstValue> {
         }
         (ConstValue::Date { kind, value }, Ty::Date(destination)) => {
             let value = match (date_is_days(*kind), date_is_days(*destination)) {
-                (false, true) => value.checked_mul(86_400_000_000_000)?,
-                (true, false) => value.checked_div(86_400_000_000_000)?,
+                (false, true) => value.checked_div(86_400_000_000_000)?,
+                (true, false) => value.checked_mul(86_400_000_000_000)?,
                 _ => *value,
             };
             Some(ConstValue::Date {
@@ -6528,5 +6550,138 @@ fn fold_binary_const(op: BinOp, lhs: &ConstValue, rhs: &ConstValue) -> Option<Co
             Some(ConstValue::Bool(value))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stc_hir::{CharTy, DateTy, IntTy, RealTy, StringKind, StringTy, TimeTy};
+
+    #[test]
+    fn constant_cast_folding_covers_scalar_conversions() {
+        let int = Ty::Int(IntTy {
+            signed: true,
+            width: 32,
+        });
+        let bits = Ty::BitString(16);
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(7), &int),
+            Some(ConstValue::Int(7))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(7), &bits),
+            Some(ConstValue::Int(7))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(7), &Ty::Time(TimeTy::Time)),
+            Some(ConstValue::Time(7))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(7), &Ty::Real(RealTy::Real)),
+            Some(ConstValue::Real(7.0))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(1), &Ty::Bool),
+            Some(ConstValue::Bool(true))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Int(65), &Ty::Char(CharTy::Char)),
+            Some(ConstValue::Char(65))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Bool(true), &Ty::Bool),
+            Some(ConstValue::Bool(true))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Bool(true), &int),
+            Some(ConstValue::Int(1))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Bool(false), &bits),
+            Some(ConstValue::Int(0))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Real(1.5), &Ty::Real(RealTy::LReal)),
+            Some(ConstValue::Real(1.5))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Time(9), &Ty::Time(TimeTy::LTime)),
+            Some(ConstValue::Time(9))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Char(66), &Ty::Char(CharTy::WChar)),
+            Some(ConstValue::Char(66))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Char(66), &int),
+            Some(ConstValue::Int(66))
+        );
+        assert_eq!(
+            fold_cast_const(&ConstValue::Char(66), &bits),
+            Some(ConstValue::Int(66))
+        );
+
+        let days = ConstValue::Date {
+            kind: DateTy::Date,
+            value: 2,
+        };
+        assert_eq!(
+            fold_cast_const(&days, &Ty::Date(DateTy::Date)),
+            Some(days.clone())
+        );
+        assert_eq!(
+            fold_cast_const(&days, &Ty::Date(DateTy::LDate)),
+            Some(ConstValue::Date {
+                kind: DateTy::LDate,
+                value: 2 * 86_400_000_000_000,
+            })
+        );
+        let nanos = ConstValue::Date {
+            kind: DateTy::LDate,
+            value: 2 * 86_400_000_000_000,
+        };
+        assert_eq!(
+            fold_cast_const(&nanos, &Ty::Date(DateTy::Date)),
+            Some(ConstValue::Date {
+                kind: DateTy::Date,
+                value: 2,
+            })
+        );
+        assert_eq!(
+            fold_cast_const(
+                &ConstValue::Date {
+                    kind: DateTy::Tod,
+                    value: 5,
+                },
+                &Ty::Date(DateTy::LTod),
+            ),
+            Some(ConstValue::Date {
+                kind: DateTy::LTod,
+                value: 5,
+            })
+        );
+        assert_eq!(
+            fold_cast_const(
+                &ConstValue::Date {
+                    kind: DateTy::Date,
+                    value: i128::MAX,
+                },
+                &Ty::Date(DateTy::LDate),
+            ),
+            None
+        );
+
+        assert_eq!(fold_cast_const(&ConstValue::Real(1.0), &int), None);
+        assert_eq!(
+            fold_cast_const(
+                &ConstValue::Int(1),
+                &Ty::String(StringTy {
+                    kind: StringKind::Sbcs,
+                    capacity: 4,
+                }),
+            ),
+            None
+        );
     }
 }

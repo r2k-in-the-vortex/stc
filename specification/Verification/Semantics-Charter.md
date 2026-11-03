@@ -2,10 +2,11 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-27
-Status: Approved 2026-10-27. P0.0 froze the scope and the claim. P0.1 and P0.2 are complete, P0.3
-is resumed mid-proof (2026-10-31) with its drift register rechecked and open questions resolved,
-and P0.4 is complete and review-approved (2026-10-31). The frozen target scope was revised on
-2026-10-31 to remove `switch`; no other inclusion or exclusion changed.
+Status: Approved 2026-10-27, with the frozen scope and claim unchanged. P0.0–P0.6 are complete and
+owner-approved through P0.6. P0.7 froze `semantics_version` at `1.0`, completed the semantics
+document, and added the [Phase 0 Report](Phase0-Report.md); the P0.7 owner review and sign-off are
+pending. The frozen target scope was revised on 2026-10-31 to remove `switch`; no other inclusion
+or exclusion changed.
 Parent: [Verification Program Plan](Plan.md)
 Phase plan: [Phase 0 Implementation Plan](Plan-Phase0.md)
 Semantics reference: [stc Semantics — Phase 0 Core](Semantics.md)
@@ -90,8 +91,9 @@ Later phases extend the core; they do not silently change it (§5).
 
 The semantics is a product artifact.
 
-- `semantics_version` is `1.0-draft` while Phase 0 is in progress. It becomes `1.0` at the P0.7
-  freeze, and the registry records the version and the freeze commit.
+- `semantics_version` is frozen at `1.0` by P0.7. The registry records the version and the freeze
+  commit; the freeze commit itself carries a marked placeholder because a commit cannot name
+  itself, and the immediately following commit records the exact hash.
 - The HIR dump carries its own format version. Every conformance report records both the
   semantics version and the dump-format version.
 - A new feature is added in new modules or new sections and leaves existing definitions and
@@ -196,5 +198,5 @@ semantics document skeleton.
 | Documentation checks | `tools/ci/check_docs.py` | Requires the charter, phase plan, and semantics document |
 
 Review approved this charter, the exclusion register, and the [Semantics.md](Semantics.md)
-skeleton on 2026-10-27. The approval is recorded in [Plan-Phase0.md](Plan-Phase0.md) and will be
-carried into `Phase0-Report.md` at P0.7.
+skeleton on 2026-10-27. The approval is recorded in [Plan-Phase0.md](Plan-Phase0.md) and is
+carried into the [Phase 0 Report](Phase0-Report.md).

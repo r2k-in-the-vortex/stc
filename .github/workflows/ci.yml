@@ -231,11 +231,12 @@ jobs:
           python3 tools/ci/coverage_summary.py target/summary.json >> "$GITHUB_STEP_SUMMARY"
       - name: Build HTML report
         run: cargo llvm-cov report --html
-      - name: Build coverage badge
+      - name: Build coverage badge and enforce the 85% gate
         run: |
           python3 tools/ci/coverage_badge.py target/lcov.info \
             --svg target/coverage.svg \
-            --json target/coverage.json
+            --json target/coverage.json \
+            --fail-under 85
       - name: Upload coverage report
         uses: actions/upload-artifact@v7
         with:
@@ -538,8 +539,21 @@ jobs:
           done
       - name: Check the Phase 0 verification registry and axioms
         run: python3 tools/ci/check_verification_registry.py
-      - name: Check the fail-closed semantics-conformance placeholder
+      # The corpus gate runs the compiled artifact path, so it needs the Rust
+      # compiler and the uninstrumented test runtime. `STC_CLANG` pins the
+      # system clang: `lake exe` puts the Lean toolchain bin first on PATH.
+      - name: Build the Rust compiler and test runtime for the harness
+        run: |
+          cargo build --locked -p stc-driver --bin stc
+          cargo build --locked -p stc-runtime --target-dir target/test-runtime
+      - name: Run the core corpus through the differential harness
+        env:
+          STC_CLANG: /usr/bin/clang
         run: python3 tools/ci/check_semantics_placeholder.py
+      - name: Run the reference-interpreter reader, case, result, and CLI tests
+        working-directory: lean
+        shell: bash
+        run: lake exe stc-sem-tests
       - name: Regenerate exact-function vectors and check they are committed
         if: hashFiles('lean/VectorCli.lean') != ''
         working-directory: lean

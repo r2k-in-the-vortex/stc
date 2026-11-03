@@ -1,0 +1,10 @@
+VAR_GLOBAL
+  R : USINT;
+END_VAR
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+  x := DINT#-1;
+  R := DINT_TO_USINT(x);
+END_PROGRAM

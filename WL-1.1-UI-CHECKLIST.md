@@ -444,7 +444,7 @@ All required implementation items are complete.
 
 - [x] **F-11 — Caller stack frames must show their call-site source.** Pass 2026-11-03.
       Required for WL-1.1 (owner decision 2026-11-03). The stopped-frame sidecar is
-      now format 2 with a function-relative line map (`line_ranges`, D-229), and the runtime
+      now format 2 with a function-relative line map (`line_ranges`, D-244), and the runtime
       resolves each caller with `return_address - 1`; unavailable mappings stay honestly
       absent. Implemented in `909ebd0`; CI run `41703710933` green (39 jobs). Manual checks:
       the sample `MAIN` caller shows `src/main.st:39` while stopped in `ADDSTEP`, and the
@@ -455,7 +455,7 @@ All required implementation items are complete.
       WL-1.1 (owner decision 2026-11-03). While the program runs, writes stay
       queued until the next boundary; while the session is stopped at a breakpoint, step
       landing, or pause, a `stc-debug/1.1` one-shot write is applied by the parked cycle thread
-      before its response (D-230). Implemented in `c8cb1c9`; CI run `41703710933` green
+      before its response (D-245). Implemented in `c8cb1c9`; CI run `41703710933` green
       (39 jobs). Manual check: editing `INCREMENT` to 42 at the line-39 stop was immediately
       visible to Variables and evaluate, and stayed 42 after a step; the running-write queue
       path is covered by the protocol and DAP tests. Validation, permissions, diagnostics, and
@@ -466,7 +466,7 @@ All required implementation items are complete.
       with checkpoint hooks and a frame sidecar under `target/stc/test/debug/<artifact>`,
       starts its test host behind a start gate released after breakpoints and configuration,
       maps the root test sources, hides the synthetic wrapper, and ends with the result line
-      (D-231). Commits `6b56417`/`caa2959`; CI run `41717937649` green (39 jobs). Manual:
+      (D-246). Commits `6b56417`/`caa2959`; CI run `41717937649` green (39 jobs). Manual:
       Debug Test stopped at `tests/smoke.st:6`, `ADDWORKS` was the top frame with locals, the
       Debug Console showed the pass result line, and the session ended; ordinary `stc test`
       artifacts stayed hook-free.

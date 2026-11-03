@@ -22,8 +22,13 @@
 
 schema_version = 1
 profile = "stc-2013-oop-utf8-v1"
-semantics_version = "1.0-draft"
-dump_format_version = "0.1-draft"
+semantics_version = "1.0"
+dump_format_version = "0.1.0"
+# The commit that froze semantics_version 1.0 (P0.7). A commit cannot name
+# itself, so the freeze commit is committed with a marked placeholder and the
+# placeholder is replaced by the exact hash in the immediately following
+# commit. Phase0-Report.md records the same value.
+semantics_freeze_commit = "7aad70d41e1dc4b47606f13cd7818b638fd45927"
 
 [[records]]
 id = "P0-T01"
@@ -301,20 +306,21 @@ level = "V0"
 spec = "specification/Verification/Plan-Phase0.md#93-conformance-harness"
 module = "Verification.Semantics.Conformance"
 owner = "verification"
-status = "planned"
+status = "tested"
 tcb = "differential evidence, not a refinement proof"
 
 [[records]]
 id = "P0-T24"
-kind = "theorem"
+kind = "evidence"
 name = "Verification.Semantics.semantics_versioned"
 phase = "P0.6"
 level = "S"
 spec = "specification/Verification/Plan-Phase0.md#35-semantics-versioning"
 module = "Verification.Semantics.Conformance"
 owner = "verification"
-status = "planned"
+status = "tested"
 tcb = "report and dump metadata; checked by the harness"
+note = "Reclassified from theorem to evidence at P0.6: the claim is the committed report and the strict version checks, not a Lean declaration. The report carries the semantics, dump, case, result, and snapshot versions; the harness rejects a mismatched version, and CI regenerates the committed report and rejects a stale copy."
 
 # P0.4 definitions (WL-3). A definition's "proved" status means it is present
 # and resolves in the Lean environment; #print axioms reports no axioms.

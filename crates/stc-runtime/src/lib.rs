@@ -84,6 +84,7 @@ pub mod io;
 #[cfg(target_os = "linux")]
 pub mod io_ethercat;
 pub mod io_mock;
+pub mod io_modbus_tcp;
 pub mod loader;
 pub mod memory;
 pub mod migration;
@@ -93,6 +94,7 @@ mod rt;
 pub mod run;
 pub mod scheduler;
 pub mod signal;
+mod snapshot;
 pub mod state;
 mod stop;
 pub mod store;
@@ -143,6 +145,7 @@ pub use io::{IoNotice, IoRuntime};
 #[cfg(target_os = "linux")]
 pub use io_ethercat::{EthercatBackend, SHIM_ENV, SHIM_LIBRARY, ShimInfo, probe_shim};
 pub use io_mock::{MockEthercatBackend, MockWire};
+pub use io_modbus_tcp::ModbusTcpBackend;
 pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
 pub use migration::{PlanDecision, validate_deployable, validate_plan};
@@ -245,7 +248,10 @@ pub extern "C" fn stc_abi_version() -> i32 {
 /// Accepted options: `--cycles <n>` (zero runs until interrupted),
 /// `--cycle-time <duration>`, `--io null|memory|file`, `--io-file <path>`,
 /// `--state-file <path>`, `--reset-retain`, `--no-retain`,
-/// `--mock-clock <duration>`, `--status`, and `--module <path>`.
+/// `--mock-clock <duration>`, `--status`, `--module <path>`, and the
+/// differential-testing `--snapshot <path>` (writes the active generation's
+/// manifest roots after the run; protected roots are included and marked, and
+/// a snapshot write failure exits 2).
 ///
 /// A relative `--state-file`/`--io-file`, or a relative `retain.file`/
 /// `io.file` from the metadata sidecar, resolves against the module directory
@@ -287,6 +293,7 @@ struct LauncherOptions {
     debug_allow_write: bool,
     debug_allow_force: bool,
     debug_session_timeout_ns: Option<u64>,
+    snapshot: Option<PathBuf>,
 }
 
 fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
@@ -300,6 +307,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     let mut debug_allow_write = false;
     let mut debug_allow_force = false;
     let mut debug_session_timeout_ns = None;
+    let mut snapshot = None;
     let mut index = usize::from(!args.is_empty());
     while index < args.len() {
         let argument = args[index].as_str();
@@ -367,6 +375,13 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
                 run.rt_metrics = Some(parse_rt_metrics_path(&other["--rt-metrics=".len()..])?);
             }
             "--status" => run.status = true,
+            "--snapshot" => {
+                let path = value("--snapshot")?;
+                if path.is_empty() {
+                    return Err("`--snapshot` requires a non-empty path".into());
+                }
+                snapshot = Some(PathBuf::from(path));
+            }
             "--module" => {
                 module = Some(value("--module")?);
             }
@@ -439,6 +454,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
         debug_allow_write,
         debug_allow_force,
         debug_session_timeout_ns,
+        snapshot,
     })
 }
 
@@ -573,29 +589,32 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
     } else {
         run::run_loop(&mut host, &options.run)
     };
-    match outcome {
-        Ok(_) => {
-            if options.run.status {
-                print_host_status(&host);
-            }
-            if let Err(error) = host.shutdown() {
-                eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
-                return 1;
-            }
-            0
-        }
+    if options.run.status {
+        print_host_status(&host);
+    }
+    let mut code = match &outcome {
+        Ok(_) => 0,
         Err(error) => {
-            if options.run.status {
-                print_host_status(&host);
-            }
-            report_run_error(&error);
-            let code = error.exit_code();
-            if let Err(error) = host.shutdown() {
-                eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
-            }
-            code
+            report_run_error(error);
+            error.exit_code()
+        }
+    };
+    if let Some(path) = options.snapshot.as_deref() {
+        // The snapshot is written before shutdown retires the active
+        // generation. A write failure makes the run unusable for the
+        // differential harness, so it replaces the run exit code.
+        if let Err(message) = crate::snapshot::write_snapshot(path, &host) {
+            eprintln!("stc: snapshot failed: {message}");
+            code = 2;
         }
     }
+    if let Err(error) = host.shutdown() {
+        eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
+        if code == 0 {
+            return 1;
+        }
+    }
+    code
 }
 
 /// Configures retained state and the I/O backend for a launcher run.
@@ -1669,11 +1688,17 @@ pub extern "C" fn stc_metadata_json() -> *const c_char {
 }
 
 #[cfg(test)]
+pub(crate) static IMAGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn image_is_contiguous_and_exposed() {
+        let _guard = IMAGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         stc_rt_io_configure(4, 2, 3);
         let mut base: *mut u8 = std::ptr::null_mut();
         let mut len: u64 = 0;
@@ -1817,5 +1842,190 @@ mod tests {
             .is_err(),
             "RT CPU 64 is outside the supported range"
         );
+    }
+
+    #[test]
+    fn launcher_options_parse_every_flag() {
+        let args = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let options = parse_launcher_args(&args(&[
+            "app",
+            "--cycles",
+            "7",
+            "--cycle-time",
+            "1ms",
+            "--io",
+            "file",
+            "--io-file",
+            "io.bin",
+            "--state-file",
+            "state.bin",
+            "--reset-retain",
+            "--no-retain",
+            "--rt",
+            "--rt-priority",
+            "10",
+            "--rt-cpu",
+            "2",
+            "--rt-metrics",
+            "metrics.jsonl",
+            "--status",
+            "--snapshot",
+            "snap.bin",
+            "--module",
+            "module.so",
+            "--control",
+            "control.json",
+            "--control-nonce",
+            "nonce",
+            "--manifest-dir",
+            "manifests",
+            "--debug-endpoint",
+            "debug.json",
+            "--debug-protocol",
+            "socket",
+            "--debug-allow-write",
+            "--debug-allow-force",
+            "--debug-session-timeout",
+            "1s",
+        ]))
+        .expect("valid launcher options");
+        assert_eq!(options.run.cycles, 7);
+        assert_eq!(options.run.cycle_time_ns, Some(1_000_000));
+        assert_eq!(options.run.io_file.as_deref(), Some(Path::new("io.bin")));
+        assert_eq!(
+            options.run.state_file.as_deref(),
+            Some(Path::new("state.bin"))
+        );
+        assert!(options.run.reset_retain);
+        assert!(options.run.no_retain);
+        assert!(options.run.rt);
+        assert_eq!(options.run.rt_priority, Some(10));
+        assert_eq!(options.run.rt_cpu, Some(2));
+        assert_eq!(
+            options.run.rt_metrics.as_deref(),
+            Some(Path::new("metrics.jsonl"))
+        );
+        assert!(options.run.status);
+        assert_eq!(options.snapshot.as_deref(), Some(Path::new("snap.bin")));
+        assert_eq!(options.module.as_deref(), Some("module.so"));
+        assert_eq!(options.control_endpoint.as_deref(), Some("control.json"));
+        assert_eq!(options.control_nonce.as_deref(), Some("nonce"));
+        assert_eq!(
+            options.manifest_dir.as_deref(),
+            Some(Path::new("manifests"))
+        );
+        assert_eq!(
+            options.debug_endpoint.as_deref(),
+            Some(Path::new("debug.json"))
+        );
+        assert_eq!(
+            options.debug_protocol,
+            crate::transport::TransportKind::Socket
+        );
+        assert!(options.debug_allow_write);
+        assert!(options.debug_allow_force);
+        assert_eq!(options.debug_session_timeout_ns, Some(1_000_000_000));
+
+        let disabled = parse_launcher_args(&args(&[
+            "app",
+            "--debug-endpoint",
+            "d",
+            "--debug-session-timeout",
+            "0s",
+        ]))
+        .expect("zero disables the session bound");
+        assert_eq!(disabled.debug_session_timeout_ns, Some(0));
+
+        let clock =
+            parse_launcher_args(&args(&["app", "--mock-clock", "1us"])).expect("mock clock");
+        assert_eq!(clock.run.mock_clock_ns, Some(1_000));
+        let spaced = parse_launcher_args(&args(&[
+            "app",
+            "--rt",
+            "--cycle-time",
+            "1ms",
+            "--rt-priority=20",
+            "--rt-cpu=3",
+            "--rt-metrics=out.jsonl",
+        ]))
+        .expect("spaced rt options");
+        assert_eq!(spaced.run.rt_priority, Some(20));
+        assert_eq!(spaced.run.rt_cpu, Some(3));
+    }
+
+    #[test]
+    fn launcher_options_reject_invalid_combinations() {
+        let args = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<Vec<_>>()
+        };
+        for case in [
+            vec!["app", "--unknown"],
+            vec!["app", "--cycles"],
+            vec!["app", "--cycles", "x"],
+            vec!["app", "--cycle-time", "x"],
+            vec!["app", "--io", "bogus"],
+            vec!["app", "--io-file"],
+            vec!["app", "--mock-clock", "x"],
+            vec!["app", "--rt-priority", "1"],
+            vec!["app", "--rt", "--cycle-time", "0ns"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--mock-clock", "1us"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--rt-priority", "0"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--rt-priority", "100"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--rt-cpu", "64"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--rt-metrics", ""],
+            vec!["app", "--snapshot", ""],
+            vec!["app", "--control", "c"],
+            vec!["app", "--debug-allow-write"],
+            vec!["app", "--debug-allow-force"],
+            vec!["app", "--debug-session-timeout", "1s"],
+            vec!["app", "--debug-endpoint", "d", "--debug-protocol", "bogus"],
+            vec!["app", "--trace"],
+        ] {
+            assert!(
+                parse_launcher_args(&args(&case)).is_err(),
+                "{case:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_path_helpers_resolve_relative_paths() {
+        let absolute = std::env::temp_dir().join("stc-runtime-path");
+        assert_eq!(resolve_relative(Path::new("/base"), &absolute), absolute);
+        assert_eq!(
+            resolve_relative(Path::new("/base"), Path::new("child")),
+            Path::new("/base").join("child")
+        );
+        assert_eq!(absolute_path(&absolute), absolute);
+        assert_eq!(resolve_module_path(&absolute.to_string_lossy()), absolute);
+        let nested = Path::new("dir").join("module.so");
+        assert_eq!(resolve_module_path("dir/module.so"), nested);
+    }
+
+    #[test]
+    fn trap_names_cover_the_abi_table() {
+        for (code, name) in [
+            (TRAP_OVERFLOW, "OVERFLOW"),
+            (TRAP_DIV_ZERO, "DIV_ZERO"),
+            (TRAP_RANGE, "RANGE"),
+            (TRAP_BOUNDS, "BOUNDS"),
+            (TRAP_NULL_REF, "NULL_REF"),
+            (TRAP_INVALID_UTF8, "INVALID_UTF8"),
+            (TRAP_CONVERSION, "CONVERSION"),
+            (TRAP_WATCHDOG, "WATCHDOG"),
+            (TRAP_ASSERT, "ASSERT"),
+            (TRAP_UNIMPLEMENTED, "UNIMPLEMENTED"),
+        ] {
+            assert_eq!(trap_name(code), name);
+        }
+        assert_eq!(trap_name(9999), "UNKNOWN");
     }
 }

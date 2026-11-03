@@ -440,7 +440,7 @@ pub fn ty_matches_generic(ty: &Ty, generic: GenericKind) -> bool {
         GenericKind::AnyElementary => !matches!(ty, Ty::Error | Ty::Generic(_)),
         GenericKind::AnyMagnitude => matches!(
             ty,
-            Ty::Int(_) | Ty::Real(_) | Ty::BitString(_) | Ty::Time(_) | Ty::Date(_)
+            Ty::Int(_) | Ty::Real(_) | Ty::BitString(_) | Ty::Char(_) | Ty::Time(_) | Ty::Date(_)
         ),
         GenericKind::AnyNum => matches!(ty, Ty::Int(_) | Ty::Real(_)),
         GenericKind::AnyReal => matches!(ty, Ty::Real(_)),

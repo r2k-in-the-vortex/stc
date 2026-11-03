@@ -1,0 +1,1 @@
+{"cycles": 1, "entry": {"kind": "program", "name": "MAIN"}, "expected": {"cycles": 1, "globals": [8364, 8364, 65], "status": "halted", "trap": null}, "features": ["type.char", "type.uchar", "type.wchar"], "format": "stc-core-case", "formatVersion": "0.1.0", "fuel": 10000, "inputs": [], "name": "type-char-values", "profile": "stc-2013-oop-utf8-v1", "semanticsVersion": "1.0"}

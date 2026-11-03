@@ -13,6 +13,7 @@
 //! `STC-E-IO-BINDING-001` (IO-Routing-and-Backends §10).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::SocketAddr;
 use std::ops::Range;
 
 use stc_diag::{Diagnostic, Severity};
@@ -38,6 +39,12 @@ const DEVICE_KEYS: &[&str] = &[
     "syncs",
     "pdo-channels",
     "dc",
+    "bind",
+    "unit",
+    "max-connections",
+    "idle-timeout",
+    "word-order",
+    "channels",
 ];
 const SYNC_KEYS: &[&str] = &["index", "direction", "watchdog", "pdos"];
 const PDO_KEYS: &[&str] = &["index", "entries"];
@@ -53,6 +60,14 @@ const DC_KEYS: &[&str] = &[
 const ROUTE_KEYS: &[&str] = &["source", "sinks"];
 const PHYSICAL_ENDPOINT_KEYS: &[&str] = &["kind", "device", "channel"];
 const PLC_ENDPOINT_KEYS: &[&str] = &["kind", "variable"];
+const MODBUS_CHANNEL_KEYS: &[&str] = &["name", "table", "address", "byte", "word-order"];
+const MODBUS_TABLES: &[&str] = &[
+    "coil",
+    "discrete-input",
+    "holding-register",
+    "input-register",
+];
+const MODBUS_WORD_ORDERS: &[&str] = &["high-first", "low-first", "abcd", "cdab", "dcba", "badc"];
 
 /// A parsed machine profile.
 #[derive(Clone, Debug, PartialEq)]
@@ -383,6 +398,215 @@ impl ProfileParser {
         if let Some(item) = table.get("dc") {
             self.parse_dc(device, item);
         }
+        self.validate_modbus_device(device, table);
+    }
+
+    /// Structurally validates the Modbus device keys. The device kind is only
+    /// known at runtime, so a key's shape is checked whenever it is present;
+    /// cross-kind consistency and permutation validity are runtime errors.
+    fn validate_modbus_device(&mut self, device: &str, table: &dyn TableLike) {
+        if let Some(item) = table.get("bind") {
+            self.modbus_bind(device, item);
+        }
+        if let Some(item) = table.get("unit") {
+            let valid = item
+                .as_integer()
+                .is_some_and(|value| (1..=247).contains(&value));
+            if !valid {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!("profile device `{device}` `unit` must be an integer in 1..=247"),
+                    self.item_span(item),
+                );
+            }
+        }
+        if let Some(item) = table.get("max-connections") {
+            let valid = item
+                .as_integer()
+                .is_some_and(|value| (1..=128).contains(&value));
+            if !valid {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!(
+                        "profile device `{device}` `max-connections` must be an integer in 1..=128"
+                    ),
+                    self.item_span(item),
+                );
+            }
+        }
+        if let Some(item) = table.get("idle-timeout") {
+            let valid = item
+                .as_str()
+                .and_then(parse_duration)
+                .is_some_and(|duration| duration.as_nanos() > 0);
+            if !valid {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!(
+                        "profile device `{device}` `idle-timeout` must be a positive duration such \
+                         as `60s`"
+                    ),
+                    self.item_span(item),
+                );
+            }
+        }
+        if let Some(item) = table.get("word-order") {
+            match item.as_str() {
+                Some("high-first" | "low-first") => {}
+                _ => self.error(
+                    "STC-E-PROJECT-009",
+                    format!(
+                        "profile device `{device}` `word-order` must be `high-first` or \
+                         `low-first`"
+                    ),
+                    self.item_span(item),
+                ),
+            }
+        }
+        if let Some(item) = table.get("channels") {
+            self.modbus_channels(device, item);
+        }
+    }
+
+    fn modbus_bind(&mut self, device: &str, item: &Item) {
+        let Some(entries) = item.as_array() else {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!(
+                    "profile device `{device}` `bind` must be an array of literal address:port \
+                     strings"
+                ),
+                self.item_span(item),
+            );
+            return;
+        };
+        if entries.is_empty() {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("profile device `{device}` `bind` must contain at least one address"),
+                self.item_span(item),
+            );
+        }
+        for value in entries.iter() {
+            let valid = value
+                .as_str()
+                .is_some_and(|text| text.trim().parse::<SocketAddr>().is_ok());
+            if !valid {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!(
+                        "profile device `{device}` `bind` entries must be literal address:port \
+                         strings such as `127.0.0.1:502`"
+                    ),
+                    self.value_span(value),
+                );
+            }
+        }
+    }
+
+    fn modbus_channels(&mut self, device: &str, item: &Item) {
+        let Some(channels) = item.as_array_of_tables() else {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!(
+                    "profile device `{device}` `channels` must be an array of \
+                     `[[device.<name>.channels]]` tables"
+                ),
+                self.item_span(item),
+            );
+            return;
+        };
+        for (index, channel) in channels.iter().enumerate() {
+            let owner = format!("profile device `{device}` channel {}", index + 1);
+            self.check_unknown(channel, &owner, MODBUS_CHANNEL_KEYS);
+            match channel.get("name").and_then(Item::as_str) {
+                Some(name) if !name.is_empty() => {}
+                _ => self.error(
+                    "STC-E-PROJECT-009",
+                    format!("{owner} is missing a non-empty `name`"),
+                    channel
+                        .get("name")
+                        .map_or_else(|| self.span(None), |item| self.item_span(item)),
+                ),
+            }
+            let valid_table = channel
+                .get("table")
+                .and_then(Item::as_str)
+                .is_some_and(|table| MODBUS_TABLES.contains(&table));
+            if !valid_table {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!(
+                        "{owner} `table` must be one of {}",
+                        render_keys(MODBUS_TABLES)
+                    ),
+                    channel
+                        .get("table")
+                        .map_or_else(|| self.span(None), |item| self.item_span(item)),
+                );
+            }
+            let valid_address = channel
+                .get("address")
+                .and_then(Item::as_integer)
+                .is_some_and(|address| (0..=65535).contains(&address));
+            if !valid_address {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!("{owner} `address` must be an integer in 0..=65535"),
+                    channel
+                        .get("address")
+                        .map_or_else(|| self.span(None), |item| self.item_span(item)),
+                );
+            }
+            if let Some(item) = channel.get("byte")
+                && !matches!(item.as_str(), Some("low" | "high"))
+            {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!("{owner} `byte` must be `low` or `high`"),
+                    self.item_span(item),
+                );
+            }
+            if let Some(item) = channel.get("word-order") {
+                self.modbus_channel_word_order(&owner, item);
+            }
+        }
+    }
+
+    fn modbus_channel_word_order(&mut self, owner: &str, item: &Item) {
+        if let Some(text) = item.as_str() {
+            if !MODBUS_WORD_ORDERS.contains(&text) {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!(
+                        "{owner} `word-order` must be one of {} or an array of byte positions",
+                        render_keys(MODBUS_WORD_ORDERS)
+                    ),
+                    self.item_span(item),
+                );
+            }
+            return;
+        }
+        if let Some(values) = item.as_array() {
+            for value in values.iter() {
+                if !matches!(value.as_integer(), Some(position) if position >= 0) {
+                    self.error(
+                        "STC-E-PROJECT-009",
+                        format!("{owner} `word-order` list must contain non-negative integers"),
+                        self.value_span(value),
+                    );
+                }
+            }
+            return;
+        }
+        self.error(
+            "STC-E-PROJECT-009",
+            format!(
+                "{owner} `word-order` must be one of {} or an array of byte positions",
+                render_keys(MODBUS_WORD_ORDERS)
+            ),
+            self.item_span(item),
+        );
     }
 
     fn identity_value(&mut self, item: &Item, device: &str, key: &str) {
@@ -1329,5 +1553,495 @@ dc = { assign-activate = 768, sync0-cycle = 1000000 }
     fn rejects_malformed_toml() {
         let diagnostics = parse_profile("[device.", file()).expect_err("invalid TOML");
         assert_eq!(diagnostics[0].code, "STC-E-PROJECT-001");
+    }
+
+    #[test]
+    fn accepts_modbus_device_keys() {
+        let text = r#"
+[device.mb]
+bind = ["127.0.0.1:502", "[::1]:1502"]
+unit = 247
+max-connections = 128
+idle-timeout = "1h"
+word-order = "low-first"
+
+[[device.mb.channels]]
+name = "coil"
+table = "coil"
+address = 0
+
+[[device.mb.channels]]
+name = "reg"
+table = "holding-register"
+address = 65535
+byte = "high"
+
+[[device.mb.channels]]
+name = "wide"
+table = "input-register"
+address = 10
+word-order = "cdab"
+
+[[device.mb.channels]]
+name = "explicit"
+table = "holding-register"
+address = 20
+word-order = [3, 2, 1, 0]
+"#;
+        let profile = parse_profile(text, file()).expect("valid Modbus profile");
+        assert_eq!(profile.devices.len(), 1);
+        let ConfigValue::Table(table) = &profile.devices[0].config else {
+            panic!("device config is not a table");
+        };
+        assert_eq!(table.get("unit"), Some(&ConfigValue::Integer(247)));
+        assert_eq!(
+            table.get("max-connections"),
+            Some(&ConfigValue::Integer(128))
+        );
+        assert_eq!(
+            table.get("bind"),
+            Some(&ConfigValue::Array(vec![
+                ConfigValue::String("127.0.0.1:502".into()),
+                ConfigValue::String("[::1]:1502".into()),
+            ]))
+        );
+        let Some(ConfigValue::Array(channels)) = table.get("channels") else {
+            panic!("channels are not an array");
+        };
+        assert_eq!(channels.len(), 4);
+        let ConfigValue::Table(wide) = &channels[2] else {
+            panic!("channel is not a table");
+        };
+        assert_eq!(
+            wide.get("word-order"),
+            Some(&ConfigValue::String("cdab".into()))
+        );
+        let ConfigValue::Table(explicit) = &channels[3] else {
+            panic!("channel is not a table");
+        };
+        assert_eq!(
+            explicit.get("word-order"),
+            Some(&ConfigValue::Array(vec![
+                ConfigValue::Integer(3),
+                ConfigValue::Integer(2),
+                ConfigValue::Integer(1),
+                ConfigValue::Integer(0),
+            ]))
+        );
+
+        // Boundary values are accepted.
+        for text in [
+            "[device.mb]\nbind = [\"127.0.0.1:0\"]\nunit = 1\nmax-connections = 1\nidle-timeout = \"1ns\"\n",
+            "[device.mb]\nbind = [\"127.0.0.1:1\"]\nunit = 247\nmax-connections = 128\nidle-timeout = \"5m\"\n",
+        ] {
+            parse_profile(text, file()).expect("valid boundary values");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_modbus_device_keys() {
+        let cases = [
+            (
+                "[device.mb]\nbind = \"127.0.0.1:502\"\n",
+                "`bind` must be an array",
+            ),
+            ("[device.mb]\nbind = []\n", "at least one address"),
+            (
+                "[device.mb]\nbind = [\"localhost:502\"]\n",
+                "literal address:port",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1\"]\n",
+                "literal address:port",
+            ),
+            ("[device.mb]\nbind = [\"  \"]\n", "literal address:port"),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\nunit = 0\n",
+                "1..=247",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\nunit = 248\n",
+                "1..=247",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\nunit = \"7\"\n",
+                "1..=247",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\nmax-connections = 0\n",
+                "1..=128",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\nmax-connections = 129\n",
+                "1..=128",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\nidle-timeout = \"0s\"\n",
+                "positive duration",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\nidle-timeout = \"5\"\n",
+                "positive duration",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\nword-order = \"middle-first\"\n",
+                "`word-order`",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\nchannels = 1\n",
+                "`channels` must be an array",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\n[[device.mb.channels]]\ntable = \"coil\"\naddress = 0\n",
+                "non-empty `name`",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\n[[device.mb.channels]]\nname = \"x\"\ntable = \"register\"\naddress = 0\n",
+                "`table` must be one of",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\n[[device.mb.channels]]\nname = \"x\"\ntable = \"coil\"\naddress = 65536\n",
+                "0..=65535",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\n[[device.mb.channels]]\nname = \"x\"\ntable = \"coil\"\naddress = \"0\"\n",
+                "0..=65535",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\n[[device.mb.channels]]\nname = \"x\"\ntable = \"holding-register\"\naddress = 0\nbyte = \"middle\"\n",
+                "`byte` must be",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\n[[device.mb.channels]]\nname = \"x\"\ntable = \"holding-register\"\naddress = 0\nword-order = \"middle\"\n",
+                "`word-order` must be one of",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\n[[device.mb.channels]]\nname = \"x\"\ntable = \"holding-register\"\naddress = 0\nword-order = [-1, 0, 1, 2]\n",
+                "non-negative integers",
+            ),
+            (
+                "[device.mb]\nbind = [\"127.0.0.1:502\"]\n[[device.mb.channels]]\nname = \"x\"\ntable = \"coil\"\naddress = 0\nnope = 1\n",
+                "unknown key `nope`",
+            ),
+        ];
+        for (text, needle) in cases {
+            let diagnostics = parse_profile(text, file())
+                .expect_err(&format!("accepted invalid Modbus profile: {text}"));
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "STC-E-PROJECT-009"
+                        && diagnostic.message.contains(needle)),
+                "missing `{needle}` for {text}: {diagnostics:?}"
+            );
+        }
+    }
+
+    fn profile_err(text: &str) {
+        assert!(
+            parse_profile(text, file()).is_err(),
+            "profile accepted:\n{text}"
+        );
+    }
+
+    const MINIMAL_DEVICE: &str = r#"
+[device.diewu]
+position = 0
+vendor = "0x00000b95"
+product = "0x00010200"
+"#;
+
+    #[test]
+    fn device_field_mutations_are_rejected() {
+        for text in [
+            r#"
+[device.diewu]
+position = 0
+vendor = "zzzz"
+product = 2
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = -1
+product = 2
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+revision = [1]
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+startup-timeout = "soon"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+recovery-cycles = -1
+"#,
+        ] {
+            profile_err(text);
+        }
+        assert!(parse_profile(MINIMAL_DEVICE, file()).is_ok());
+    }
+
+    #[test]
+    fn sync_and_pdo_mutations_are_rejected() {
+        for text in [
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+syncs = 5
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = "zero"
+direction = "input"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "sideways"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+watchdog = "on"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+pdos = 5
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "zzzz"
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+entries = 5
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+[[device.diewu.syncs.pdos.entries]]
+index = "zzzz"
+subindex = 1
+bits = 8
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 300
+bits = 8
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 1
+bits = 0
+"#,
+        ] {
+            profile_err(text);
+        }
+    }
+
+    #[test]
+    fn pdo_channel_mutations_are_rejected() {
+        let device = r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.syncs]]
+index = 0
+direction = "input"
+[[device.diewu.syncs.pdos]]
+index = "0x1a00"
+[[device.diewu.syncs.pdos.entries]]
+index = "0x3001"
+subindex = 1
+bits = 16
+"#;
+        for tail in [
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 1 }
+bit = "zero"
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = ""
+entry = { index = "0x3001", subindex = 1 }
+bit = 0
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = 5
+bit = 0
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 300 }
+bit = 0
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "zzzz", subindex = 1 }
+bit = 0
+"#,
+            r#"
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 1 }
+bit = 0
+[[device.diewu.pdo-channels]]
+name = "IN0"
+entry = { index = "0x3001", subindex = 1 }
+bit = 0
+"#,
+        ] {
+            profile_err(&format!("{device}{tail}"));
+        }
+    }
+
+    #[test]
+    fn dc_and_route_mutations_are_rejected() {
+        for text in [
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+dc = 5
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[[device.diewu.dc]]
+assign-activate = 1
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[device.diewu.dc]
+assign-activate = true
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[device.diewu.dc]
+assign-activate = 70000
+"#,
+            r#"
+[device.diewu]
+position = 0
+vendor = 1
+product = 2
+[device.diewu.dc]
+assign-activate = 1
+sync0-shift = "x"
+"#,
+            r#"
+[[routes]]
+source = { kind = "bogus", variable = "Main.In" }
+sinks = [{ kind = "plc-output", variable = "Main.Out" }]
+"#,
+            r#"
+[[routes]]
+source = { kind = "plc-output" }
+sinks = [{ kind = "plc-output", variable = "Main.Out" }]
+"#,
+            r#"
+[[routes]]
+source = { kind = "plc-output", variable = "Main.Out" }
+sinks = 5
+"#,
+            r#"
+[[routes]]
+source = { kind = "plc-output", variable = "Main.Out", extra = 1 }
+sinks = [{ kind = "plc-output", variable = "Main.Out" }]
+"#,
+        ] {
+            profile_err(text);
+        }
     }
 }
