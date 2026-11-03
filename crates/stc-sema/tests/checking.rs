@@ -1217,9 +1217,16 @@ END_PROGRAM
         "TYPE E : (A, B); END_TYPE\nPROGRAM P\nVAR\n  e : E;\nEND_VAR\n  e := 0;\nEND_PROGRAM\n",
         codes::TYPE_ASSIGN,
     );
-    for source in ["PROGRAM P\nVAR\n  b : BOOL;\nEND_VAR\n  b := 2;\nEND_PROGRAM\n"] {
-        assert_error(source, codes::TYPE_ASSIGN);
-    }
+    assert_error(
+        "PROGRAM P
+VAR
+  b : BOOL;
+END_VAR
+  b := 2;
+END_PROGRAM
+",
+        codes::TYPE_ASSIGN,
+    );
 }
 
 #[test]

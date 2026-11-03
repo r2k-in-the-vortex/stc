@@ -11151,11 +11151,12 @@ mod tests {
         inputs_bytes: u64,
         bindings: Vec<crate::module_info::DirectBinding>,
     ) -> crate::ModuleInfo {
-        let mut info = crate::ModuleInfo::default();
-        info.inputs_bytes = inputs_bytes;
-        info.outputs_bytes = inputs_bytes;
-        info.bindings = bindings;
-        info
+        crate::ModuleInfo {
+            inputs_bytes,
+            outputs_bytes: inputs_bytes,
+            bindings,
+            ..crate::ModuleInfo::default()
+        }
     }
 
     #[test]
@@ -12322,7 +12323,7 @@ mod tests {
             "DINT",
             DebugValue::Unavailable {
                 warning: DebugWarning {
-                    code: codes::W_DEBUG_UNAVAILABLE.into(),
+                    code: codes::W_DEBUG_UNAVAILABLE,
                     message: "unavailable".into(),
                 },
             },

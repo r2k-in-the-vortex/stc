@@ -1986,9 +1986,11 @@ mod validation_tests {
         }
     }
 
+    type HeaderMutation = (fn(&mut Header), &'static str);
+
     #[test]
     fn header_fields_are_validated() {
-        let cases: &[(fn(&mut Header), &str)] = &[
+        let cases: &[HeaderMutation] = &[
             (|h| h.profile.clear(), "profile is empty"),
             (|h| h.target_triple.clear(), "target triple is empty"),
             (|h| h.module_format = 2, "module_format"),
@@ -2775,7 +2777,7 @@ mod validation_tests {
             value
         };
         let check_fields =
-            |ty: &TypeRecord, expected: &str| match validate_fields(&[ty.clone()], ty) {
+            |ty: &TypeRecord, expected: &str| match validate_fields(std::slice::from_ref(ty), ty) {
                 Ok(()) => panic!("expected field validation failure: {expected}"),
                 Err(error) => assert!(error.message.contains(expected), "{}", error.message),
             };
