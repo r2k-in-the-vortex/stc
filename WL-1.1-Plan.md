@@ -15,9 +15,10 @@ run `41212737785`, 38 jobs) and manually verified 2026-10-31. F-16 is complete: 
 monitoring. F-3 is complete: commits `644e067`/`3a93260` (CI run `41239879013`, 38 jobs) and
 manually verified 2026-10-31. F-1.1 is complete: commits `a126800` and `c2af647` (CI runs
 `41681462972` and `41692812156` green), with owner-confirmed manual rendering on Dark Modern,
-Light Modern, Dark 2026, and Light 2026 on 2026-11-03. No required close-out items remain.
-Manual VS Code verification 2026-10-31: 40 of 40 checklist entries pass. Required close-out
-items and deferred follow-ups are triaged in §12.  
+Light Modern, Dark 2026, and Light 2026 on 2026-11-03. F-11 (caller-frame source locations)
+was brought into scope as a required item on 2026-11-03; implementation is pending. Manual VS
+Code verification 2026-10-31: 40 of 40 checklist entries pass. Required close-out items and
+deferred follow-ups are triaged in §12.  
 Parent: [V2.0.0-PLAN.md](V2.0.0-PLAN.md) §4 (WL-1.1)  
 Inputs: [FutureWishlist.md](FutureWishlist.md) WL-1.1,
 [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
@@ -53,6 +54,7 @@ In scope:
 - A debug adapter (`stc-dap`) translating DAP to the local `stc-debug/1.1` protocol (with
   `stc-debug/1` compatibility): launch and attach, source breakpoints, stepping, variables,
   watch, and call stack.
+- Call-site source locations for every resolved caller frame in a stopped call stack (F-11).
 - An online-change command/status surface over the existing runtime/CLI workflow, showing the
   active generation and surfacing the session teardown on swap (F-20).
 - Packaging as a VSIX, with a sample ST workspace and launch/task configurations.
@@ -494,8 +496,8 @@ The 36-item manual checklist ([WL-1.1-UI-CHECKLIST.md](WL-1.1-UI-CHECKLIST.md)) 
 F-5, F-7, F-8, the DAP frame-name mapping and evaluate-by-name fixes, and the D-211 FB
 interface-access change. Complete features (F-1, F-2, F-3, F-4, F-5, F-6, F-7, F-8, F-10, F-12,
 F-16, F-20) are feature history, not open follow-ups; they remain in the tables only as
-acceptance evidence. No required close-out items remain. The remaining items are assigned to exactly
-one bucket:
+acceptance evidence. F-11 is the open required item (owner decision 2026-11-03). The remaining
+items are assigned to exactly one bucket:
 
 - **Required** — must be closed before WL-1.1 is complete.
 - **Documented** — accepted limitation or deliberate design; record it in the IDE specification,
@@ -507,7 +509,11 @@ one bucket:
 
 #### Open required items
 
-None. F-1.1 is complete; the evidence is recorded below.
+| Item | Finding | Why required | Acceptance |
+| --- | --- | --- | --- |
+| F-11 | Caller stack frames have no source location; only the top frame carries the checkpoint's file/line, so `MAIN` shows Unknown Source while stopped in `ADDSTEP`. | Owner decision 2026-11-03 brings F-11 into WL-1.1 scope: call stacks are a shipped feature, and every resolved ST frame must identify where it called the next frame. | Add call-site source mapping to the debug metadata (line/address table or sidecar call-site map) and runtime resolution of the return address. Acceptance, from the checklist: the caller frame shows the call-site file and line (for the sample, `src/main.st:39`) at any depth; an unavailable mapping stays honestly absent; frame indices, scopes, and evaluate behavior are unchanged. |
+
+F-1.1 is complete; the evidence is recorded below.
 
 #### Completed required features
 
@@ -555,7 +561,6 @@ Notes:
 | Item | Finding | Documentation action |
 | --- | --- | --- |
 | F-10 | When configured, `[debug].session-timeout` ends a stopped session with `STC-E-DEBUG-018`; the bound is disabled by default (D-212), and the editor gives no countdown or warning when an operator opts in. | D-212 makes the bound opt-in because an automatic resume can move machinery unexpectedly. Document the opt-in bound and the end reason in IDE-Integration §4.6 and KNOWN-LIMITATIONS; the optional session-start budget/warning message is part of the F-15 session-status polish plan. |
-| F-11 | Caller frames have no source location; only the top frame carries file/line, so `MAIN` shows Unknown Source while stopped in `ADDSTEP`. | IDE-Integration §4.6 already states caller and optimized-out information is reported honestly; resolving call sites needs an address-to-source table, which is not part of WL-1.1. Document the limitation in KNOWN-LIMITATIONS. |
 | F-13 | `Locals` is empty for program and FB body frames; their fields are instance roots in `Globals`. | Deliberate model: Locals lists `frame.locals`, while Globals groups manifest instance roots. Document the split in IDE-Integration §4.3 and the sample README so users know where program/FB state lives. |
 | F-14 | `setVariable` displays the requested value immediately, but the program sees it only at the next cycle boundary; stepping through the current cycle reads the stored value again. | Deliberate queued-write semantics (Debug and Monitoring §15.3). Document the queue behavior in IDE-Integration §4.3/KNOWN-LIMITATIONS; a pending-state UI is optional future polish. |
 | Conditional breakpoints, multi-thread, `stopOnEntry`, DAP `restart` | Conditional breakpoints warn that they are unsupported and stop unconditionally; one thread (`cycle`) is shown; `stopOnEntry` is rejected by the launch schema and by the adapter; restart works through VS Code's client-side relaunch, not the DAP request. | Keep the capability maps and KNOWN-LIMITATIONS current; no code change. These are the I-9 limits confirmed by the manual pass. |
@@ -593,3 +598,5 @@ Notes:
 | 2026-10-31 | F-12 complete: the DAP adapter keeps only manifest-resolved ST frames, preserves runtime indices for frame operations, and keeps source-less ST callers; host/launcher `frame` rows are gone. Commit `68ecbfc`; CI run `41212737785` green (38 jobs); manual verification 2026-10-31 passed. Checklist F-12 marked pass; plan §12.1 moves F-12 to completed required features. |
 | 2026-10-31 | F-16 implementation and owner scope decision: Debug-Console-only monitoring is accepted for release/hook-free sessions. The adapter exposes one synthetic `monitoring` frame with the Globals scope, live `variables`/`evaluate`, a clear pause error, and a session-start path message; VS Code's built-in Variables/Watch require a stopped frame and remain unavailable while running. Commit `d0abb12`; CI run `41234800343` green (38 jobs); manual release-mode verification 2026-10-31 passed. Checklist F-16/item 33 marked pass; plan §12.1 moves F-16 to completed required features. Target paths use manifest keys (`SAMPLE::TOTAL`, not `MAIN.TOTAL`). |
 | 2026-10-31 | F-3 complete: the `stc: run` task now uses a custom-execution pseudoterminal and kills its full process tree on termination; check/build/test/fmt keep ShellExecution. Commits `644e067`/`3a93260`; CI run `41239879013` green (38 jobs); manual verification 2026-10-31 passed (only `stc lsp` remained; `stc check` exits normally). Checklist item 12/F-3 marked pass; plan §12.1 moves F-3 to completed required features. |
+| 2026-11-03 | F-1.1 complete: the extension contributes an opt-out `.st`-scoped token-color overlay for Default Dark/Light Modern, Dark/Light Modern, and Dark/Light 2026. Commits `a126800`/`c2af647`; CI runs `41681462972`/`41692812156` green (39 jobs); owner-confirmed manual rendering in Dark Modern, Dark 2026, and Light 2026. Checklist F-1.1 marked pass; plan §12.1 moves F-1.1 to the completed required features. |
+| 2026-11-03 | Owner brought F-11 (caller-frame source locations) back into WL-1.1 scope as a required item: every resolved caller frame must show its call-site file and line at any depth (sample `src/main.st:39`), with unavailable mappings reported honestly. F-11 moves from §12.2 documented limitations to §12.1 required; the IDE documentation and KNOWN-LIMITATIONS will describe the implemented behavior after delivery. |

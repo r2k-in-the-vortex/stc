@@ -11,7 +11,8 @@ Result key: unchecked = pending, `[x]` = pass, **FAIL** = failed with a note, **
 unsupported or intentionally out of scope.
 
 Summary 2026-11-03: 40/40 checklist entries evaluated — 40 pass (100%); the F-1.1 required
-item also passes. The required/documented/deferred close-out triage is in
+item also passes; F-11 is open as a required item after the owner brought it back into scope.
+The required/documented/deferred close-out triage is in
 [WL-1.1-Plan.md](WL-1.1-Plan.md) §12.
 
 ## 0. Prerequisites
@@ -429,7 +430,7 @@ Completed findings are feature history, not open follow-ups. The close-out triag
 
 ### Required for WL-1.1
 
-All required implementation items are complete (plan §12.1).
+All required implementation items except F-11 are complete (plan §12.1).
 
 - [x] **F-1.1 — Default-theme ST token-color overlay.** Pass 2026-11-03. F-1 ships `stc Dark`/
       `stc Light`, so the intended palette required selecting a contributed theme. The extension
@@ -441,6 +442,16 @@ All required implementation items are complete (plan §12.1).
       direct variable `#4FC1FF` in the dark themes); non-ST languages are unchanged, and the
       empty-`textMateRules` opt-out is documented and unit-tested. Commits `a126800`/`c2af647`;
       CI runs `41681462972`/`41692812156` green.
+
+- [ ] **F-11 — Caller stack frames must show their call-site source.** Required for WL-1.1
+      (owner decision 2026-11-03; plan §12.1). The top frame carries the checkpoint's
+      `file`/`line`/`column`, but `capture_frames` sets `source: None` for every caller. The
+      frame sidecar has function ranges and locals but no address-to-source mapping, so a
+      caller such as `MAIN` shows "Unknown Source" while stopped in `ADDSTEP`. Add a
+      line/address table (or sidecar call-site map) to the debug metadata and runtime
+      resolution of the return address. Acceptance: the caller frame shows the call-site file
+      and line (for the sample, `src/main.st:39`) at any depth; unavailable mappings stay
+      honestly absent; frame indices, scopes, and evaluate behavior are unchanged.
 
 ### Deferred follow-ups
 
@@ -493,15 +504,6 @@ These items belong to separate follow-up plans (plan §12.3); they are not requi
 
 These items are accepted limitations or deliberate design (plan §12.2); they require documentation,
 not a WL-1.1 code change.
-
-- [ ] **F-11 — Caller stack frames have no source location.** The top frame carries the
-      checkpoint's `file`/`line`/`column`, but `capture_frames` sets `source: None` for every
-      caller. The frame sidecar has function ranges and locals but no address-to-source mapping,
-      so a caller such as `MAIN` shows "Unknown Source" while stopped in `ADDSTEP` until the
-      session returns. Fixing this needs a line/address table in the debug metadata (or a
-      sidecar call-site map) and runtime resolution of the return address. Acceptance: the
-      caller frame shows the call-site file and line (for the sample, `src/main.st:39`) at any
-      depth.
 
 - [ ] **F-13 — Locals is empty for program and FB body frames.** `Locals` lists only
       `frame.locals`; program/FB fields are instance roots and appear under `Globals`, so a stop
@@ -590,6 +592,7 @@ not a WL-1.1 code change.
 | Item | Result | Notes |
 | --- | --- | --- |
 | F-1.1 | Pass | Manual 2026-11-03: Dark Modern, Dark 2026, and Light 2026 render all nine categories with the overlay palette; non-ST languages unchanged; documented opt-out; commits `a126800`/`c2af647`, CI runs `41681462972`/`41692812156` green; plan §12.1 |
+| F-11 | Required; pending | Caller frames must show the call-site file/line at any depth (sample `src/main.st:39`); owner brought it into scope 2026-11-03; plan §12.1 |
 
 ### Deferred follow-ups
 
@@ -606,6 +609,5 @@ not a WL-1.1 code change.
 
 | Item | Result | Notes |
 | --- | --- | --- |
-| F-11 | Pending | Caller frames lose file/line while stopped in a callee |
 | F-13 | Pending | Locals is empty for program/FB bodies; fields live in Globals |
 | F-14 | Pending | `setVariable` shows the queued value before the program applies it at the next boundary |
