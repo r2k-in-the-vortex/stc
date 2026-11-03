@@ -44,9 +44,12 @@ non-claims are fixed in [Semantics-Charter.md](../Semantics-Charter.md) §2.
 
 ## 3. What was proved and established (P0.0–P0.6)
 
-The registry holds 45 records: 36 proved theorems, 6 proved definitions, 1 descoped theorem, and 2
-tested evidence items. The counts and statuses are audited by
-`tools/ci/check_verification_registry.py`.
+At the P0.7 freeze the registry held 45 records: 36 proved theorems, 6 proved definitions, 1
+descoped theorem, and 2 tested evidence items. That is the freeze-time Phase 0 count. Later
+phases append records without renaming or redefining these entries (Phase 1 adds the `P1-E01`–
+`P1-E07` V0 evidence records), so the live total reported by
+`tools/ci/check_verification_registry.py` grows; the checker validates the live table, while the
+freeze counts above remain the Phase 0 audit result.
 
 | Sub-phase | Delivered | Status |
 | --- | --- | --- |

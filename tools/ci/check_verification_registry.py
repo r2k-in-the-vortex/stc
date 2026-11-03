@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Phase 0 verification registry (Semantics.md §7 and Phase0-Report.md).
+"""Validate the verification registry (Semantics.md §7 and Phase0-Report.md).
 
 Usage:
     python tools/ci/check_verification_registry.py [repository-root]
@@ -8,10 +8,13 @@ Checks:
   * the registry parses and uses the documented schema and versions;
   * ids, names, phases, levels, kinds, and statuses are valid and unique;
   * every specification reference resolves to an existing section anchor;
-  * every referenced Lean module exists;
+  * every referenced Lean module exists in the default `lean/` package or in
+    the separate `lean/aeneas/` bridge package (generated-model records);
   * every proved entry resolves in the Lean environment and depends only on
     the standard Lean axioms (`propext`, `Classical.choice`, `Quot.sound`);
-  * every "descoped" entry records a reason.
+  * every "descoped" entry records a reason;
+  * Phase 1 records stay V0 evidence with status `tested` or `planned` (the
+    Phase 1 policy: no refinement or proved bridge claim).
 
 Only the Python standard library, a `tomllib`-capable Python (3.11 or later),
 and `lake` on PATH are required. The Lean audit runs only when at least one
@@ -49,8 +52,12 @@ OPTIONAL_FIELDS = {"note"}
 ALLOWED_KINDS = {"theorem", "evidence", "definition"}
 ALLOWED_STATUSES = {"planned", "proved", "tested", "descoped"}
 ALLOWED_LEVELS = {"S", "V0", "V1", "V2", "V3", "V4"}
-ALLOWED_PHASES = {f"P0.{index}" for index in range(8)}
+ALLOWED_PHASES = {f"P0.{index}" for index in range(8)} | {"P1"}
 ALLOWED_AXIOMS = {"propext", "Classical.choice", "Quot.sound"}
+# Phase 1 bridge records are evidence only: the spikes and checker interfaces
+# are V0 until the refinement theorem and its external-axiom equations land.
+P1_STATUSES = {"planned", "tested"}
+MODULE_ROOTS = (Path("lean"), Path("lean") / "aeneas")
 UMBRELLA_IMPORTS = (
     "Stc.Syntax",
     "Stc.Grammar",
@@ -85,8 +92,22 @@ def heading_slugs(path: Path) -> set[str]:
     return slugs
 
 
-def module_path(root: Path, module: str) -> Path:
-    return root / "lean" / Path(*module.split(".")).with_suffix(".lean")
+def module_candidates(root: Path, module: str) -> list[Path]:
+    """Return the default-package and bridge-package paths for a module."""
+    relative = Path(*module.split(".")).with_suffix(".lean")
+    return [root / base / relative for base in MODULE_ROOTS]
+
+
+def check_module(root: Path, record: dict, errors: list[str]) -> None:
+    entry = record["id"]
+    candidates = module_candidates(root, record["module"])
+    if any(path.is_file() for path in candidates):
+        return
+    looked = ", ".join(path.relative_to(root).as_posix() for path in candidates)
+    errors.append(
+        f"{entry}: Lean module is missing: {record['module']} "
+        f"(looked for {looked})"
+    )
 
 
 def check_spec(root: Path, record: dict, errors: list[str]) -> None:
@@ -134,14 +155,23 @@ def check_record(root: Path, record: dict, errors: list[str]) -> None:
         errors.append(f"{entry}: level must be one of {sorted(ALLOWED_LEVELS)}")
     if record["phase"] not in ALLOWED_PHASES:
         errors.append(f"{entry}: phase must be one of {sorted(ALLOWED_PHASES)}")
+    if record["phase"] == "P1":
+        if record["kind"] != "evidence":
+            errors.append(f"{entry}: Phase 1 records must have kind 'evidence'")
+        if record["level"] != "V0":
+            errors.append(f"{entry}: Phase 1 records must stay at level V0")
+        if record["status"] not in P1_STATUSES:
+            errors.append(
+                f"{entry}: Phase 1 records must be 'planned' or 'tested', "
+                f"not {record['status']!r}"
+            )
     if record["status"] == "proved" and record["kind"] == "evidence":
         errors.append(f"{entry}: evidence cannot have status 'proved'; use 'tested'")
     if record["status"] == "tested" and record["kind"] != "evidence":
         errors.append(f"{entry}: status 'tested' is reserved for evidence entries")
     if record["status"] == "descoped" and not record.get("note"):
         errors.append(f"{entry}: status 'descoped' requires a note with the reason")
-    if not module_path(root, record["module"]).is_file():
-        errors.append(f"{entry}: Lean module is missing: {record['module']}")
+    check_module(root, record, errors)
     check_spec(root, record, errors)
 
 

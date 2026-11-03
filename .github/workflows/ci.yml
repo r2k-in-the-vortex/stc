@@ -479,6 +479,17 @@ jobs:
       - name: Check that host-specific code stays in the platform layer
         run: cargo run --locked -p xtask -- host-audit --check
 
+  # Fast Lean CI. This is the only proof job in the required matrix and it
+  # must stay free of Aeneas and Mathlib (owner decision 2026-11-03). It runs
+  # the default `lean/` build, the no-sorry checks, the registry and axiom
+  # audit, vector regeneration, the differential oracle (core corpus), and the
+  # reference-interpreter tests.
+  #
+  # Budget: 30 minutes on ubuntu-24.04 (timeout below); the docs job is 10
+  # minutes. The pinned Aeneas/Charon drift check lives in
+  # `.github/workflows/bridge-drift.yml` (nightly/manual) and never gates this
+  # matrix. Long proof builds and any regeneration belong in that workflow or
+  # on the pinned Ubuntu host, not here.
   lean:
     name: Lean proofs
     needs: detect
@@ -532,7 +543,21 @@ jobs:
               exit 1
             fi
           done
-      - name: Check the Phase 0 verification registry and axioms
+      - name: Reject sorry/admit in bridge modules (when present)
+        working-directory: lean
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in Stc/Bridge aeneas/Bridge; do
+            if [ ! -e "$path" ]; then
+              continue
+            fi
+            if grep -rnwE 'sorry|admit' "$path"; then
+              echo "::error::sorry/admit found in $path"
+              exit 1
+            fi
+          done
+      - name: Check the verification registry, traceability, and axioms
         run: python3 tools/ci/check_verification_registry.py
       # The corpus gate runs the compiled artifact path, so it needs the Rust
       # compiler and the uninstrumented test runtime. `STC_CLANG` pins the
@@ -541,7 +566,7 @@ jobs:
         run: |
           cargo build --locked -p stc-driver --bin stc
           cargo build --locked -p stc-runtime --target-dir target/test-runtime
-      - name: Run the core corpus through the differential harness
+      - name: Run the differential oracle (core corpus)
         env:
           STC_CLANG: /usr/bin/clang
         run: python3 tools/ci/check_semantics_placeholder.py

@@ -360,7 +360,9 @@ versioning and conformance claims are evidence, not theorems, and are recorded a
 committed report is the artifact. Open P0.3 questions are recorded in
 [Phase0-Design.md](Reports/Phase0-Design.md) §3, the P0.4 decisions in §2 of the design record,
 the P0.5 design/implementation record in §4–§6, and the P0.6/P0.7 results in
-[Phase0-Report.md](Reports/Phase0-Report.md).
+[Phase0-Report.md](Reports/Phase0-Report.md). Phase 1 appends `P1` bridge-evidence records (V0,
+status `tested` or `planned`); they are not part of this Phase 0 inventory and do not change the
+frozen `1.0` definitions or theorem statements.
 
 ### 7.1 Source soundness
 

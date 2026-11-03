@@ -3,8 +3,9 @@
 # This file is the durable pin record for the Aeneas/Charon/Mathlib bridge
 # environment. The fast `lake build` at `lean/` uses only
 # `lean/lean-toolchain` and `rust-toolchain.toml`; the bridge environment is
-# the separate, non-default Lake package `lean/aeneas/`. M6 adds the CI drift
-# check that consumes this file.
+# the separate, non-default Lake package `lean/aeneas/`. The drift check that
+# consumes this file is `tools/ci/check_bridge_toolchain.py`, run by the
+# manual/nightly `bridge-drift` workflow.
 #
 # A pin change requires owner review and a new bridge spike. Generated models
 # under `lean/aeneas/StcGenerated/` must be regenerated from these exact

@@ -170,7 +170,7 @@ choice and bridge-toolchain CI decisions are resolved above.
 | M3 — Codec bridge spike | Pick one codec path (`wire.rs` primitive encode/decode or one descriptor section). Measure generated-model/proof-obligation cost and whether a proved Lean checker is the better bridge. | Complete 2026-11-02: wire encoder/decoder translated (`StcGot.lean`, 54 transparent functions); external-definition and Aeneas/Mathlib proof costs remain; evidence in §11. |
 | M4 — Decision and architecture | Apply the decision matrix per target class; record ADRs; define bridge module layout and proof-engineering policy; do not raise claims yet. | Complete 2026-11-03: per-target decisions, module layout, generated/hand-written boundary, pins and source hashes, external-axiom trust policy, and registry evidence plan recorded in §12; no claim change. |
 | M5 — IR boundary and D-V6 subset | Freeze and document the full emitted-fragment boundary; implement only the bridge/D-V6 slice; write D-V6's first end-to-end subset; leave the full Lean `IRFrag` extension to Phase 5; update coverage tables. | Complete 2026-11-03: full production-module boundary and D-V6 subset frozen in `specification/Verification/Core-IR-Boundary.md`; program plan, Core IR Coverage, Core Syntax Coverage, and `check_docs.py` updated; no Lean-side fragment slice and no claim change; record in §13. |
-| M6 — CI and registry | Extend the registry for bridge/toolchain records; add no-`sorry`, axiom, vector-regeneration, and oracle checks; add Aeneas regeneration drift checks if the bridge is adopted; document CI budget. | CI changes and a green run; registry entries. |
+| M6 — CI and registry | Extend the registry for bridge/toolchain records; add no-`sorry`, axiom, vector-regeneration, and oracle checks; add Aeneas regeneration drift checks if the bridge is adopted; document CI budget. | Complete 2026-11-03: `P1` registry vocabulary and `P1-E01`–`P1-E07` V0 evidence records; `Verification.Bridge.Evidence`; dual-root registry module resolution; separate manual/nightly `bridge-drift` workflow and pin/hash guard; fast CI unchanged and toolchain-free; Phase 0 count reworded; no claim change. Record in §14. |
 | M7 — Report and retirement | Write `specification/Verification/Reports/Phase1-Report.md`; move durable decisions to the program plan/TCB/claim doc/registry; delete stale working notes and retire this file. | Durable report; Phase 1 review package; working file deleted. |
 
 Milestones M1–M3 are timeboxed spikes. A failed/unavailable toolchain is a valid spike result; do
@@ -199,6 +199,7 @@ Baseline checks for every milestone:
 cd lean && lake build
 lake exe stc-sem-tests
 PYTHONUTF8=1 python tools/ci/check_verification_registry.py
+python tools/ci/check_bridge_toolchain.py
 python tools/ci/check_docs.py
 cargo build --locked -p stc-driver --bin stc
 cargo build --locked -p stc-runtime --target-dir target/test-runtime
@@ -208,6 +209,11 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo fmt --all -- --check
 ```
+
+The bridge pin/hash guard is cheap and runs locally; the full drift workflow
+(`.github/workflows/bridge-drift.yml`) is nightly/manual and never part of fast CI. Invoke the
+drift job with `gh workflow run bridge-drift --ref WL-3` once the workflow is on the default
+branch, and the pinned-host audit with `-f full=true` on a self-hosted `stc-bridge` runner.
 
 Bridge-specific commands and toolchain versions are recorded in the Phase 1 report as they are
 established.
@@ -245,7 +251,7 @@ untracked credentials.
 
 | Gate | Status |
 | --- | --- |
-| Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; Aeneas/Mathlib proof environment built 2026-11-02; exact pins and source hashes recorded 2026-11-03 in `lean/bridge-toolchain.toml`; CI adoption resolved 2026-11-03 as a separate manual/nightly drift workflow, with fast CI toolchain-free. |
+| Aeneas/Charon versions and build/CI adoption | Install/evaluate in user space approved 2026-11-02; Aeneas/Mathlib proof environment built 2026-11-02; exact pins and source hashes recorded 2026-11-03 in `lean/bridge-toolchain.toml`; CI adoption resolved 2026-11-03 as a separate manual/nightly drift workflow, with fast CI toolchain-free, and implemented in M6 (§14). |
 | Bridge choice per target class | Resolved 2026-11-02: exact = filtered Aeneas kernel; keys = proved checker/contract; codec = proved Lean checker. Any change requires a new owner review. |
 | Bridge architecture and proof-engineering policy | Recorded 2026-11-03 in §12; no new owner decision required; no claim change. |
 | Full emitted-IR fragment boundary / versioned format | Boundary freeze approved 2026-11-02 and recorded 2026-11-03 in `specification/Verification/Core-IR-Boundary.md` (boundary version 1); full Lean extension is Phase 5; any versioned-format change still requires approval. |
@@ -482,18 +488,22 @@ SHA-256. Regeneration boundary:
 - **Registry.** M6 extends the registry, not M4. The planned Phase 1 records are V0 evidence with
   status `tested` (spikes) or `planned` (checker interfaces); none is `proved` and none claims
   refinement. The Phase 0 registry count and freeze record stay unchanged in M4.
-- **CI budget.** The fast `lean` job builds only `lean/`; it must not install Mathlib or Aeneas.
-  The generated-model build and regeneration belong to a nightly/manual `aeneas` job. The spike
-  measured the Aeneas/Mathlib environment at 1796 build jobs; M6 records the budget and timeout.
+- **CI budget (recorded in M6).** The fast `lean` job builds only `lean/`; it must not install
+  Mathlib or Aeneas. Its budget is the existing 30-minute job timeout on `ubuntu-24.04` (the docs
+  job stays at 10 minutes), covering the default build, no-`sorry` checks, registry/axiom audit,
+  vector regeneration, the differential oracle, and `lake exe stc-sem-tests`. Splitting these into
+  separate jobs was rejected because each would rebuild the Lean package without adding coverage.
+  The drift job has a 10-minute timeout and is not part of the required matrix. The spike measured
+  the Aeneas/Mathlib environment at 1796 build jobs; that cost is never in fast CI.
 - **Claims.** No claim above V0 in Phase 1. The exact bridge stays "model-verified; implementation
   tested against the model" until the refinement theorem and its external-axiom equations are
   discharged and registered.
 
-### 12.7 Registry evidence plan (executed in M6)
+### 12.7 Registry evidence plan (executed in M6; see §14)
 
-M6 adds `P1` to the registry phase vocabulary and a hand-written `Verification.Bridge.Evidence`
+M6 added `P1` to the registry phase vocabulary and a hand-written `Verification.Bridge.Evidence`
 module that carries the evidence values (tool versions, source hashes, translation counts). It
-also extends module resolution to `lean/aeneas/` for generated-model records. The planned entries
+also extended module resolution to `lean/aeneas/` for generated-model records. The added entries
 are:
 
 | ID | Kind | Level | Status | Evidence |
@@ -506,8 +516,9 @@ are:
 | P1-E06 | evidence | V0 | tested | `lean/bridge-toolchain.toml` matches the environment used for the spikes. |
 | P1-E07 | evidence | V0 | planned | Keys and wire checker contracts/interfaces are defined; implementation and proofs are Phase 3. |
 
-When M6 adds these records it also rewords the Phase 0 report's "45 records" statement as a
+When M6 added these records it also reworded the Phase 0 report's "45 records" statement as a
 P0.7-freeze count, so the live registry total stays accurate. No V1/V2 record is added in Phase 1.
+The executed record, statuses, and CI changes are in §14.
 
 ## 13. M5 emitted-IR boundary and D-V6 subset record (2026-11-03)
 
@@ -562,7 +573,74 @@ D-V3/D-V6, next steps), `specification/Verification/Core-IR-Coverage.md` and
 `tools/ci/check_docs.py` (required document), and this working plan. No registry record, Lean
 module, toolchain pin, or claim changed.
 
-## 14. Status board
+## 14. M6 CI and registry record (2026-11-03)
+
+### 14.1 Registry
+
+- `tools/ci/check_verification_registry.py` now accepts phase `P1`. A Phase 1 record must be
+  `kind = "evidence"`, `level = "V0"`, and status `tested` or `planned`; the checker rejects a
+  proved, higher-level, or non-evidence Phase 1 record. It also resolves a record's `module` in
+  the default `lean/` package first and then in the separate `lean/aeneas/` package, so a future
+  generated-model record can cite `StcGenerated.*` without moving the file under `Stc/`.
+- `lean/verification-status.toml` adds the seven Phase 1 records. The live total is 52 records
+  (42 proved, 8 tested, 1 planned, 1 descoped); the P0.7 freeze count stays 45.
+
+| ID | Kind | Level | Status | Module | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| P1-E01 | evidence | V0 | tested | `Verification.Bridge.Evidence` | Filtered exact model typechecks under the pinned Aeneas/Mathlib environment (`rc=0`); whole-file output rejected. |
+| P1-E02 | evidence | V0 | tested | `Verification.Bridge.Evidence` | Four external axioms enumerated; none discharged; no V1 claim. |
+| P1-E03 | evidence | V0 | tested | `Verification.Bridge.Evidence` | Exact/keys/wire source SHA-256 pins match the M1–M3 inputs. |
+| P1-E04 | evidence | V0 | tested | `Verification.Bridge.Evidence` | Keys Aeneas translation fails (`rc=2`; loops, string, lifetime); checker fallback. |
+| P1-E05 | evidence | V0 | tested | `Verification.Bridge.Evidence` | Wire translation succeeds (54 transparent, 65 opaque) and typechecks (`rc=0`); fallback evidence only; no proof-cost claim. |
+| P1-E06 | evidence | V0 | tested | `Verification.Bridge.Evidence` | `lean/bridge-toolchain.toml` pins match the spike environment. |
+| P1-E07 | evidence | V0 | planned | `Verification.Bridge.Evidence` | Keys/wire checker interfaces are fixed; implementation and proofs are Phase 3. |
+
+- `lean/Verification/Bridge/Evidence.lean` (module `Verification.Bridge.Evidence`) is hand-written
+  core Lean and part of the default package. It carries the toolchain pin values, the three source
+  pins, the three translation results, the four external-axiom records, and the planned checker
+  interfaces. It adds no Mathlib/Aeneas import and no theorem; `lake build` grows to 66 jobs.
+- The Phase 0 report now states that 45 records was the P0.7 freeze-time count, not the live
+  total.
+
+### 14.2 CI checks and boundary
+
+- Fast CI keeps its existing matrix and `lean` job scope: default `lake build`, no-`sorry`/
+  `admit` (Phase 0 modules, `Stc/Exact`, and conditionally `Stc/Bridge`/`aeneas/Bridge`), the
+  registry and axiom audit, vector regeneration, the differential oracle (core corpus), and the
+  interpreter tests. The docs job still runs `check_docs.py` and markdownlint. No Aeneas or
+  Mathlib is installed. The job-name change for the oracle step and the conditional bridge
+  no-`sorry` step are the only workflow edits.
+- The CI budget is the 30-minute `lean` timeout (10-minute docs); the drift job is 10 minutes and
+  is not a required check.
+- New `.github/workflows/bridge-drift.yml` runs nightly (`23 3 * * *`) and on
+  `workflow_dispatch`. The `drift` job runs `python tools/ci/check_bridge_toolchain.py` on
+  `ubuntu-24.04`: it validates the pin record schema/profile, the Lean/Rust pin consistency, the
+  `semantics_version` match with the registry, and the three source SHA-256 values, and checks
+  generated-file headers when they exist. The manual `full` input adds a `pinned` job on a
+  self-hosted runner labelled `stc-bridge`, which runs the guard with `--check-environment`.
+- `tools/ci/check_bridge_toolchain.py` is also part of `tools/ci/check_local.py`; it is cheap and
+  needs no OCaml/Lean proof environment.
+- Full Aeneas/Charon regeneration remains a reviewed manual procedure on the pinned Ubuntu host
+  and never runs on a GitHub-hosted runner. Generated models are not checked in as of M6; the
+  guard reports their absence (and `--require-generated` turns it into an error) and checks the
+  Aeneas/Charon/source header once a model is added. The drift trigger is the source hash: a
+  bridge source change without a pin update or regeneration fails the nightly job.
+- No claim changes: all Phase 1 records are V0, no refinement or proved bridge record exists, and
+  the Phase 0 S-level semantics remains the only reviewed claim.
+
+### 14.3 Files and verification
+
+- New: `.github/workflows/bridge-drift.yml`, `tools/ci/check_bridge_toolchain.py`,
+  `lean/Verification/Bridge/Evidence.lean`.
+- Updated: `lean/verification-status.toml`, `tools/ci/check_verification_registry.py`,
+  `tools/ci/check_local.py`, `.github/workflows/ci.yml`, this working plan, the program plan, and
+  the Phase 0 report.
+- Local verification: `lake build` (66 jobs), the registry checker (52 records), the bridge guard,
+  the docs check, markdownlint, the no-`sorry` grep, and the workspace tests. The fast CI run on
+  the pushed HEAD is the final M6 gate; its run ID and result are reported with the M6 completion
+  record and are visible in the Actions history for this branch.
+
+## 15. Status board
 
 | Item | State |
 | --- | --- |
@@ -572,6 +650,6 @@ module, toolchain pin, or claim changed.
 | M3 codec bridge spike | Complete — wire codec translated to Lean; external definitions and Aeneas/Mathlib proof cost remain |
 | M4 bridge decision and architecture | Complete 2026-11-03 — decisions, module layout, pins/hashes, external-axiom policy, and registry evidence plan recorded in §12; no claim change |
 | M5 IR boundary and D-V6 subset | Complete 2026-11-03 — full production-module boundary and D-V6 subset frozen in `Core-IR-Boundary.md`; coverage tables, program plan, and `check_docs.py` updated; no Lean-side slice and no claim change |
-| M6 CI and registry | Not started |
+| M6 CI and registry | Complete 2026-11-03 — P1 evidence records, `Verification.Bridge.Evidence`, dual-root registry resolution, separate bridge-drift workflow and pin/hash guard, Phase 0 freeze-count wording; fast CI unchanged and toolchain-free; no claim change |
 | M7 report and retirement | Not started |
-| Owner decision gates | Toolchain install, IR boundary, D-V6, no-new-claims, bridge choices, and bridge-toolchain CI resolved; Phase 1 report acceptance open |
+| Owner decision gates | Toolchain install, IR boundary, D-V6, no-new-claims, bridge choices, bridge-toolchain CI, and bridge registry evidence resolved; Phase 1 report acceptance open |
