@@ -130,16 +130,25 @@ modeled subset and are recorded as such. The model does not claim agreement with
 - Check it in at `lean/aeneas/StcGenerated/Exact/Model.lean` with a provenance
   header naming the source path, source SHA-256, Aeneas, Charon, and the
   generation command. The header is added by a reviewed regeneration step; the
-  generated body is never hand-edited.
-- `Stc.Bridge.Exact.Encode` decodes generated/primitive representations to
-  `Stc.Exact` without importing Aeneas.
+  generated body is never hand-edited. Header plus body is `409` lines; the
+  body is byte-identical to `.tmp/Exact.lean` (SHA-256
+  `95a0ba5c896b7c768921577d79384e0a583cb6a7c550673115fbb01c7552553d`).
+- The non-default package is `lean/aeneas/`: `lakefile.lean` requires Aeneas
+  from git at `ab34bd28458a08c150b7cbf1873e59af74588138`, subdirectory
+  `backends/lean`, and the default `stc` package from `..`. The generated
+  manifest pins Mathlib `v4.35.0` and all transitive dependencies. The package
+  built successfully on the pinned Ubuntu host (`lake build`, `1806` jobs).
+- `Stc.Bridge.Exact.Encode` decodes generated layouts, traps, checked results,
+  and unsigned bit patterns to `Stc.Exact` without importing Aeneas.
 - `Stc.Bridge.Exact.Externals` models the four external operations:
-  `I64::from(u8)`, `I64::rem_euclid`, `I128::checked_neg`, `I128::abs`.
+  `I64::from(u8)`, `I64::rem_euclid`, `I128::checked_neg`, `I128::abs`,
+  including the nonzero-divisor and `MIN` guard facts.
 - `lean/aeneas/Bridge/Exact/Refinement.lean` states the per-operation
-  refinement propositions (`exact_add_refines`, `exact_div_refines`,
-  `exact_sel_refines`, and the rest of the generated surface). No proposition
-  is marked proved until the equation is completed. `Audit.lean` inventories
-  the axioms and the unresolved obligations.
+  refinement propositions over the generated surface. `compareRefines` and
+  `selRefines` are proved (`compare_refines`, `sel_refines`); the remaining
+  `22` obligations are stated `Prop`s with no proof and no V1 claim.
+  `Audit.lean` inventories the four generated axioms, all stated obligations,
+  and the two proved facts.
 - Bridge scope limitation: the Phase 1 filtered model does not contain
   `convert`, `min_list`, `max_list`, `limit`, `mux`, `len`, `len_max`, or
   `len_code_unit`. A wider regeneration was tested: it adds string/iterator
@@ -168,7 +177,12 @@ Stop and request an owner decision before:
 - `python tools/ci/check_docs.py` and the pinned markdownlint command.
 - Sorry/admit grep over `Stc/Exact`, `Stc/ConstEval`, `Stc/Bridge`, and
   `aeneas/Bridge`.
-- `python tools/ci/check_bridge_toolchain.py` (no Aeneas needed).
+- `python tools/ci/check_bridge_toolchain.py` (no Aeneas needed). The
+  `--require-generated` form is not used yet because the Phase 1 `wire` model
+  is still not checked in.
+- Bridge package only, on the pinned Ubuntu host: `lake build` in
+  `lean/aeneas` (compiles Aeneas/Mathlib and the generated model). This is
+  manual/nightly and never part of fast CI.
 - `cargo fmt --check`, `cargo clippy`, and targeted `cargo test` for changed
   Rust.
 
@@ -198,8 +212,8 @@ Until acceptance, this file stays in the repository. No deletion and no
 | Selection lemmas | Done: membership, clamp cases, in-range MUX, range properties |
 | String-length lemmas | Done: supplementary scalars, byte/UTF-16 bounds, append, per-kind length bound |
 | Constant-evaluation model | Done: executable evaluator, declarative relation, soundness, type preservation over literals/constants/unary/binary/cast/std; user-function calls, real/date/time, and source folding remain out of the modeled subset |
-| Exact bridge package and generated model | Planned |
-| External-axiom models and refinement propositions | Planned |
+| Exact bridge package and generated model | Done: `lean/aeneas` package, pinned manifest, checked-in 409-line model with provenance header, host build `1806` jobs |
+| External-axiom models and refinement propositions | Done: four mathematical models and guard lemmas, 24 stated obligations, 2 proved (`compare_refines`, `sel_refines`), 22 open, no V1 claim |
 | Rust differential certificate | Planned |
 | Registry/docs/CI updates | Planned |
 | Phase 2 report | Planned |
