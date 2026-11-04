@@ -56,7 +56,7 @@ For a quick tour, see the [75-second VS Code walkthrough](https://youtu.be/lqABv
   The base package has no IgH dependency and no kernel modules are
   redistributed. It is Linux-only and has no safety function.
 - **Coverage gate.** The CI coverage job is now a pass/fail gate at 85% line
-  coverage. The current recorded figure is 85.29% (92,671/108,649).
+  coverage. The final release run records 85.28% line coverage (99,696/116,909).
 - **No new language surface.** v2.0.0 adds tooling, verification, and I/O
   around the released compiler; it does not add core ST language or compiler
   features.
@@ -66,7 +66,7 @@ For a quick tour, see the [75-second VS Code walkthrough](https://youtu.be/lqABv
 | Target | Delivered in 2.0.0 | Evidence |
 | --- | --- | --- |
 | WL-1.1 — local VS Code integration | Extension, LSP, DAP, tasks, diagnostics, online-change status, Testing API, VSIX, sample workspace, headless smoke | [IDE Integration](specification/Architecture/IDE-Integration.md), [VS Code README](editors/vscode/README.md) |
-| WL-2 — coverage to 85% | CI coverage gate at 85%; recorded 85.29% line coverage | Workflow run [41696263268](https://github.com/r2k-in-the-vortex/stc/actions/runs/41696263268) |
+| WL-2 — coverage to 85% | CI coverage gate at 85%; final run records 85.28% line coverage | Workflow run [41879601977](https://github.com/r2k-in-the-vortex/stc/actions/runs/41879601977) |
 | WL-3 — Lean verification | P0.3–P0.7 and Phases 1–2; source/target semantics, 74/74 corpus, exact-kernel V1 bridge record | [Phase 0](specification/Verification/Reports/Phase0-Report.md), [Phase 1](specification/Verification/Reports/Phase1-Report.md), [Phase 2](specification/Verification/Reports/Phase2-Report.md) |
 | WL-4 — RT verification | x86-64 PREEMPT_RT campaign, harness, host report, runbook | [RT-Host.md](specification/Verification/RT-Host.md), [RT-Runbook.md](specification/Verification/RT-Runbook.md) |
 | WL-5.1 — Modbus TCP server | Server backend, mapping, status, cross-host tests, mixed bench | [Modbus-Server.md](specification/Verification/Modbus-Server.md) |
@@ -75,14 +75,14 @@ For a quick tour, see the [75-second VS Code walkthrough](https://youtu.be/lqABv
 
 ## Verification
 
-The release candidate at commit `6c0f04e` passed the full manually triggered
-CI run [41870216013](https://github.com/r2k-in-the-vortex/stc/actions/runs/41870216013)
+The release code commit `e604435` passed the full CI run
+[41879601977](https://github.com/r2k-in-the-vortex/stc/actions/runs/41879601977)
 on 2026-11-04: **39/39 jobs**, with no skipped or failed jobs, on
 `windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm`. The run includes the
 workspace tests, online change, debug suites, UI/conformance/execution,
 projects, cross-target IR, packages, the VS Code extension smoke, EtherCAT
 shim, fuzz smoke, traceability, docs, and **Lean proofs**. The Lean job
-completed in 2m 37s.
+completed in 2m 33s.
 
 The separate bridge package check ran on the pinned `ecat-host` at the same
 commit:
@@ -97,6 +97,11 @@ commit:
 This was a build and provenance check, not a fresh Aeneas/Charon regeneration.
 The exact model is current by source-hash and generated-body-hash match with
 the pinned record; the wire model remains intentionally absent.
+
+The same CI run built the Windows x86-64, Linux x86-64, and Linux AArch64
+`2.0.0` packages and the `stc-vscode-0.1.0.vsix`. All three package
+`SHA256SUMS` files verify, and each package reports `2.0.0`, host ABI 2.3, and
+stopped-frame sidecar format 2.
 
 The release checklist records the detailed evidence and the remaining
 release-identity items. The exact-kernel V1 claim applies only to the modeled
