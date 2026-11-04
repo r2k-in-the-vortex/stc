@@ -30,7 +30,7 @@ These apply to every candidate until a v2.0.0 target is locked.
   IDE API or a conformance HIR dump); any such change is specified and reviewed as part of that
   item.
 - **Evidence over assertion.** Verification claims use the V0–V4 ladder in the
-  [Verification Program Plan](specification/Verification/Plan.md). Performance claims record
+  [Verification Program Plan](specification/Verification/VerificationProgramPlan.md). Performance claims record
   host, kernel, build form, metric, and sample. `stc` remains not a safety PLC and makes no
   safety claim; see [NON-SAFETY.md](NON-SAFETY.md).
 - **The PREEMPT_RT host is a run target, not a build host.** Artifacts are built on development
@@ -76,7 +76,7 @@ Locking process:
 4. After the target set is locked, adding or removing a target is an explicit re-plan, not an
    edit to the locked set.
 
-Tentative size classes follow the [Verification Program Plan](specification/Verification/Plan.md):
+Tentative size classes follow the [Verification Program Plan](specification/Verification/VerificationProgramPlan.md):
 S is up to one engineer-month, M is one to three, L is three to six, and XL is six to twelve or
 more. They are order-of-magnitude estimates for comparison only.
 
@@ -319,7 +319,7 @@ snapshot for triage, not a fixed list; re-derive it from the next CI run as test
   `crates/stc-runtime/src/debug_server.rs`.
 
 **Related.** [Testing and Verification](specification/Architecture/Testing-and-Verification.md),
-[Verification Program Plan §4](specification/Verification/Plan.md),
+[Verification Program Plan §4](specification/Verification/VerificationProgramPlan.md),
 [README coverage section](README.md), [tools/ci/coverage_summary.py](tools/ci/coverage_summary.py),
 [tools/ci/coverage_badge.py](tools/ci/coverage_badge.py), [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
@@ -339,14 +339,14 @@ review-approved (2026-10-31). P0.3 is complete, review-approved (2026-10-31), an
 PR #11 (merge commit `612f84d`): `progress`, `preservation`, initial-state typing, and
 `type_soundness` are proved. WL-3 remains in progress for P0.5 and is done only after owner
 confirmation. The P0.5 checkpoint defines the target machine, step relation, executor, and
-coverage table. The owner approved the state-invariant design in Plan-Phase0 §22 on 2026-10-31,
+coverage table. The owner approved the state-invariant design in the Phase 0 design record on 2026-10-31,
 the model and invariant are implemented, and all eight target soundness theorems are proved
 (determinism, progress, memory safety, GOT soundness, trap soundness, checked-arithmetic
 refinement, recursive-model equivalence, and no-UB). The initial-state/preservation proofs and
 reachability corollaries remain as the whole-run follow-up. Core compiler features and the
 language are not expected to change, so further drift is not expected; only bug fixes are in
 scope. Detailed planning is in [V2.0.0-PLAN.md](V2.0.0-PLAN.md); the P0.4 scope decisions are in
-[Plan-Phase0.md](specification/Verification/Plan-Phase0.md) §20, the P0.3 completion record in
+[Phase 0 report](specification/Verification/Reports/Phase0-Report.md) §20, the P0.3 completion record in
 §19.12, the P0.5 checkpoint in §21, and the approved design/implementation record in §22.
 
 **Why it matters.** Phase 0 was paused mid-P0.3 pending alignment with M6.5; P0.3 is now complete
@@ -370,12 +370,12 @@ target semantics will assume:
 - Define the slot table and cell-kind model used by the later target semantics, including the
   canonical ordering rule.
 - Prove the structural lemmas listed in
-  [Plan-Phase0 §P0.4](specification/Verification/Plan-Phase0.md): well-formed blocks have a
+  [Phase 0 design record §2](specification/Verification/Reports/Phase0-Design.md): well-formed blocks have a
   terminator; `phi` predecessors match; slot references are in range and have the recorded kind;
   entry-point signatures match the ABI 2 contract.
 
 P0.5 target operational semantics, P0.6 conformance, P0.7 review/versioning, and all later
-phases are out of scope for v2.0.0. The [program plan](specification/Verification/Plan.md)
+phases are out of scope for v2.0.0. The [program plan](specification/Verification/VerificationProgramPlan.md)
 remains authoritative for the overall sequence.
 
 **Constraints.**
@@ -398,13 +398,13 @@ remains authoritative for the overall sequence.
   before the structural proofs?
 - Who owns the proof CI budget for P0.4?
 
-**Related.** [Verification Program Plan](specification/Verification/Plan.md),
-[Phase 0 Implementation Plan](specification/Verification/Plan-Phase0.md),
+**Related.** [Verification Program Plan](specification/Verification/VerificationProgramPlan.md),
+[Phase 0 report](specification/Verification/Reports/Phase0-Report.md),
 [Semantics](specification/Verification/Semantics.md),
 [Semantics Charter](specification/Verification/Semantics-Charter.md),
 [lean/verification-status.toml](lean/verification-status.toml).
 
-**Tentative size.** M for P0.4, per [Plan-Phase0](specification/Verification/Plan-Phase0.md);
+**Tentative size.** M for P0.4, per [Phase 0 design record](specification/Verification/Reports/Phase0-Design.md);
 the full program remains XL.
 
 ### WL-4 — Run and verify RT performance on PREEMPT_RT Linux
@@ -707,7 +707,7 @@ a second, disconnected proof effort.
 **Related.** [robot-sim](https://github.com/r2k-in-the-vortex/robot-sim),
 [Runtime and Execution](specification/Architecture/Runtime-and-Execution.md),
 [I/O and Device Linking](specification/Architecture/IO-and-Devices.md),
-[Verification Program Plan](specification/Verification/Plan.md) (D-V2), WL-3, WL-4, WL-5.2,
+[Verification Program Plan](specification/Verification/VerificationProgramPlan.md) (D-V2), WL-3, WL-4, WL-5.2,
 WL-7.
 
 **Tentative size.** L/XL. Adapting proven code reduces the math risk; generalization, drive
@@ -1364,12 +1364,12 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-10-30 | Marked WL-4 done after PR #7 merged into main and main was merged back into v2.0.0-planning; the report, runbook, and evidence are in specification/Verification/. |
 | 2026-10-31 | Re-planned the v2.0.0 target set: deferred WL-9 (WebUI) and locked WL-5.2 (EtherCAT using IgH) now that WL-4 is complete and the EtherCAT hardware has arrived. |
 | 2026-10-31 | Marked WL-10 done and started WL-3 (P0.4) on branch `WL-3`; the compiler drift that paused P0.3 was rechecked against `stc` 1.0.0. |
-| 2026-10-31 | P0.4 is complete and review-approved; WL-3 continues with P0.3, which is resumed with the Q1–Q7 decisions recorded in Plan-Phase0 §19.8. |
-| 2026-10-31 | P0.3 proof work is complete: `progress`, `preservation`, initial-state typing, and `type_soundness` are proved; the review checklist is in Plan-Phase0 §19.12. |
+| 2026-10-31 | P0.4 is complete and review-approved; WL-3 continues with P0.3, which is resumed with the Q1–Q7 decisions recorded in the Phase 0 design record §3. |
+| 2026-10-31 | P0.3 proof work is complete: `progress`, `preservation`, initial-state typing, and `type_soundness` are proved; the review checklist is in the Phase 0 report §3. |
 | 2026-10-31 | Approved the P0.3 review; WL-3 remains in progress for P0.5 and is done only after owner confirmation. |
 | 2026-10-31 | Merged PR #11 (P0.3) into `v2.0.0-planning` as `612f84d`; WL-3 remains in progress for P0.5. |
-| 2026-10-31 | P0.5 checkpoint: target machine, step relation, executor, and coverage table defined; determinism, GOT soundness, trap soundness, checked-arithmetic refinement, and recursive-model equivalence proved. Progress, memory safety, and no-UB await the target state invariant; see Plan-Phase0 §21. |
-| 2026-10-31 | Drafted the P0.5 target-invariant design proposal in Plan-Phase0 §22 (invariant shape, exact theorem statements, preservation obligations, decisions D1–D4); awaiting owner approval before implementation. |
+| 2026-10-31 | P0.5 checkpoint: target machine, step relation, executor, and coverage table defined; determinism, GOT soundness, trap soundness, checked-arithmetic refinement, and recursive-model equivalence proved. Progress, memory safety, and no-UB await the target state invariant; see the Phase 0 report §3. |
+| 2026-10-31 | Drafted the P0.5 target-invariant design proposal in the Phase 0 design record (invariant shape, exact theorem statements, preservation obligations, decisions D1–D4); awaiting owner approval before implementation. |
 | 2026-10-31 | Owner approved the §22 design; implemented the offset-aware storage, `.slotEntry`, bounds-checked memory operations, origin/binding facts, and the `WFProgram`/`WFState`/`AccessBounded` invariant; proved `ir_progress`, `ir_memory_safe`, and `ir_no_ub`. All eight P0.5 target soundness theorems (P0-T15–P0-T22) are proved; initial-state/preservation/reachability remain as the whole-run follow-up. |
 | 2026-11-01 | Added WL-12 (cycle-thread wake-up jitter at sub-millisecond cycle times) as deferred. WL-5.2's CT sweep found 150 µs maintainable and 100 µs failing on host wake jitter after the metrics-writer flush moved off the cycle thread; the follow-up is out of scope for WL-5.2. |
 | 2026-11-02 | Completed the P0.5 whole-run bridge on `WL-3`; P0.5 is ready for owner review. WL-5.2 is complete; its decisions are [Decisions.md](specification/Decisions.md) D-211–D-228 and its evidence is [EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md). |

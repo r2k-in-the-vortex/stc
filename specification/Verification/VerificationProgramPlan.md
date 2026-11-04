@@ -1,14 +1,25 @@
 # Verification Program Plan — Lean Verification of stc
 
 Profile: `stc-2013-oop-utf8-v1`
-Date: 2026-11-02
+Date: 2026-11-03
 Status: Draft for review. Phase 0 is complete: P0.0–P0.7 are complete and owner-approved (P0.5
 approved 2026-11-02 and merged through PR #12; P0.6 approved 2026-11-02 and merged through PR #13; P0.7 approved 2026-11-02, freezing
 `semantics_version` at `1.0`). P0.6 delivered the
 canonical core-HIR dump format `0.1.0`, `stc hir-dump`, the reference interpreter, the opt-in
 snapshot surface, the differential harness, the conformance report schema, the 74-case corpus,
 and the committed byte-stable report; P0.7 completed `Semantics.md`, `Phase0-Report.md`, the
-version freeze, and the handoff. The Phase 1 bridge spike is next. The proved claims are the
+version freeze, and the handoff. Phase 1 is complete and owner-accepted on 2026-11-03: the
+three bridge spikes, the bridge decisions and module layout, the emitted-IR boundary and D-V6
+subset freeze recorded in [Core-IR-Boundary.md](Core-IR-Boundary.md), the bridge registry evidence
+and drift CI recorded in §6, and the durable Phase 1 report at
+[Reports/Phase1-Report.md](Reports/Phase1-Report.md). The temporary `WL-3-Phase-1.md` working plan
+has been retired. Phase 2 is complete and owner-accepted on 2026-11-03: the exact scalar kernel,
+its constant-evaluation model, the exact bridge, the unified Rust kernel, and the constant
+certificate path are recorded in the registry and the durable
+[Phase 2 Report](Reports/Phase2-Report.md). Exactly one Phase 2 record claims V1
+(`P2-T33`, `Stc.Bridge.Exact.exact_kernel_refines`) for the exact scalar kernel generated from
+`exact.rs`, relative to the documented TCB; every other Phase 2 record stays V0. The temporary
+`WL-3-Phase-2.md` working plan has been retired, and Phase 3 is next. The proved claims are the
 records in `lean/verification-status.toml`; no claim beyond them is made by this document.
 Inputs: [Testing and Verification](../Architecture/Testing-and-Verification.md),
 [Architecture](../Architecture/Architecture.md),
@@ -192,8 +203,8 @@ any phase and still have a true, published claim.
 
 ### Phase 0 — Formal semantics foundation and soundness
 
-Detailed execution plan: [Plan-Phase0.md](Plan-Phase0.md). Its decisions P0-D1 through P0-D10
-are resolved.
+Detailed Phase 0 record: [Phase0-Report.md](Reports/Phase0-Report.md) and
+[Phase0-Design.md](Reports/Phase0-Design.md). Its decisions P0-D1 through P0-D10 are resolved.
 
 **Goal.** Deliver a standalone, machine-checked formal semantics of the stc core language and
 the emitted IR fragment, with the soundness results that make the semantics trustworthy. This
@@ -364,19 +375,125 @@ Phase 1 produces no large correctness proofs; it produces the bridge and the too
   with one record per target: phase, level, theorem name, specification section or rule ID,
   status, owner, and TCB note. Add an `xtask` check that every record resolves to a theorem and
   every top-level theorem is registered.
-- Extend the Phase 0 `IRFrag` to the full emitted LLVM IR fragment for Phase 5 and Phase 7: the
-  exact instructions, types, control-flow constructs, GOT access patterns, calls, traps,
-  globals, and descriptor/function table shape that codegen may emit. Anything outside the
-  fragment is out of scope until the fragment is extended.
-- Fix the first end-to-end subset (D-V6), building on the Phase 0 core subset: recommended as
-  scalar types, expressions, assignments, control flow, functions, programs, and GOT globals,
-  without OOP, references, strings, or aggregates.
+- Freeze and document the **boundary** of the full emitted LLVM IR fragment for Phase 5 and
+  Phase 7: the exact instructions, types, control-flow constructs, GOT access patterns, calls,
+  traps, globals, and descriptor/function table shape that codegen may emit. Phase 1 implements
+  only the fragment slice needed by the bridge and D-V6; Phase 5 owns the full Lean `IRFrag`
+  extension. Anything outside the frozen boundary is out of scope until the fragment is extended.
+  (Owner decision 2026-11-02.)
+- Fix the first end-to-end subset (D-V6), building on the Phase 0 core subset: scalar types,
+  expressions, assignments, control flow, functions, programs, and GOT globals, without OOP,
+  references, strings, or aggregates. (Owner-approved 2026-11-02.)
 - Write the TCB and claim-language document (D-V4).
+
+**Emitted-IR boundary and D-V6 record (M5, 2026-11-03).** The full production-module boundary is
+frozen in [Core-IR-Boundary.md](Core-IR-Boundary.md). It records the module envelope; the types,
+instructions, terminators, intrinsics, direct and indirect call patterns, trap pattern, module
+globals, GOT two-load access, slot-table shape, seven entry points, and descriptor/function-table
+shapes that `stc-codegen` may emit; the explicit construct and build-form exclusions; and the
+versioning rules. It also fixes the D-V6 first end-to-end subset exactly as owner-approved and maps
+it to [Semantics.md](Semantics.md) §1 and the P0.4 [Core IR Coverage](Core-IR-Coverage.md) tables,
+with the deferred features assigned to later phases.
+
+Phase 1 adds no Lean-side fragment slice: the Phase 0 `IRFrag` remains the reviewed core model,
+Phase 5 owns its extension to the full boundary, Phase 7 owns preservation, and Phase 9 owns the
+D-V6 `pipeline_correct` obligation. The Phase 1 executable evidence stays V0: the Rust structural
+verifier and the clang acceptance tests. The P0.4 table remains the definition-to-emission map for
+the core and is updated together with the boundary when a core form changes.
+
+**Bridge architecture and interfaces (M4 record, 2026-11-03).** The bridge keeps the fast proof
+build independent of the Aeneas/Mathlib toolchain. The main `lean/` package is core Lean only;
+`lean/aeneas/` is a separate, non-default Lake package with its own manifest and is the only
+place that may depend on Mathlib or the Aeneas Lean backend. The fast CI job never installs or
+builds either.
+
+| Area | Location | Contents and interface |
+| --- | --- | --- |
+| Reference kernel | `lean/Stc/Exact/` | Existing hand-written `Stc.Exact` model; unchanged by the bridge. |
+| Exact encoding and externals | `lean/Stc/Bridge/Exact/Encode.lean`, `lean/Stc/Bridge/Exact/Externals.lean` | Hand-written, core Lean only. `Encode` maps generated integers, `IntType`, traps, and results to `Stc.Exact`; `Externals` models the four operations the filtered model leaves external. |
+| Exact generated model | `lean/aeneas/StcGenerated/Exact/Model.lean` | Filtered Aeneas output, checked in unmodified, marked generated, never hand-edited. |
+| Exact refinement proof | `lean/aeneas/Bridge/Exact/Refinement.lean` | Hand-written; imports the generated model and `Stc.Exact`; states the V1 refinement obligation. Not part of the default build. |
+| Keys contract and checker | `lean/Stc/Bridge/Keys/Contract.lean`, `lean/Stc/Bridge/Keys/Checker.lean` | Hand-written normalization contract and executable checker; interface theorems `normalize_sound`, `validate_sound`, `normalize_idempotent`. |
+| Wire contract and checker | `lean/Stc/Bridge/Wire/Contract.lean`, `lean/Stc/Bridge/Wire/Checker.lean` | Hand-written wire-format contract and executable decoder/validator; interface theorems `decode_sound`, `decode_encode`, `finish_sound`. |
+| Generated wire model | `lean/aeneas/StcGenerated/Wire/Model.lean` | Fallback evidence only; generated, checked in, never imported by the main library. |
+
+The four external axioms of the filtered exact model are `I64::from(u8)`, `I64::rem_euclid`,
+`I128::checked_neg`, and `I128::abs`. `Stc.Bridge.Exact.Externals` models them as total Lean
+functions over the domains the kernel uses (a positive `rem_euclid` divisor; `abs` and
+`checked_neg` outside `i128::MIN`). A generated axiom is never an unstated assumption: each is
+restated as an equation against its hand-written model and is either proved in the refinement
+module or carried as a named hypothesis in the TCB and the registry `tcb` field. Until those
+equations are discharged, the exact bridge stays V0.
+
+The generated/hand-written boundary is fixed. `lean/aeneas/StcGenerated/` contains only generated
+files, each headed with the Aeneas/Charon versions and the source path and SHA-256. Hand-written
+proofs live in `lean/Stc/Bridge/` and `lean/aeneas/Bridge/`. Regeneration runs only on the pinned
+Ubuntu host with the pinned toolchain, is always a reviewed diff, and never runs in fast CI. Pins
+and source hashes are recorded in `lean/bridge-toolchain.toml`; M6 adds the drift check.
+
+Registry evidence for the bridge is deliberately deferred to M6. The planned Phase 1 records are
+V0 evidence with status `tested`, never `proved`: the filtered exact-model typecheck and its
+external-axiom inventory, the three source pins, the keys translation failure, the wire
+translation, and the toolchain pin record. M6 adds `P1` to the registry phase vocabulary, a
+hand-written `Verification.Bridge.Evidence` module carrying the evidence values, and a generated
+module root for the generated-model records. No V1 or V2 record is added in Phase 1.
+
+**Owner bridge decisions (2026-11-02).** Based on the Phase 1 spikes: the exact-arithmetic
+kernel uses a filtered Aeneas/Charon translation (derived/helper bodies opaque or filtered); GOT
+key normalization uses a proved Lean checker/contract, not Aeneas; the `stc-got` wire codec uses
+a proved Lean checker, with the successful Aeneas translation retained as fallback evidence. The
+Aeneas/Mathlib proof environment is to be built and its cost measured. No claim is raised above
+V0; these choices refine D-V1 for Phase 1. Bridge-toolchain reproducibility is enforced by a
+separate manual/nightly drift workflow; fast CI remains free of Aeneas/Mathlib (owner decision
+2026-11-03).
+
+#### Bridge toolchain pins, evidence, and drift CI (M6, 2026-11-03)
+
+The registry now carries the Phase 1 evidence vocabulary and records, and the drift check is
+separate from the fast CI matrix:
+
+- `lean/verification-status.toml` adds phase `P1` and records `P1-E01`–`P1-E07`. Every record is
+  `kind = "evidence"`, `level = "V0"`, and `status = "tested"` (the completed spikes and pin
+  record) or `"planned"` (the keys/wire checker interfaces). The checker rejects a Phase 1
+  record that is proved, above V0, or of another kind. No Phase 1 record claims refinement.
+- `Verification.Bridge.Evidence` (`lean/Verification/Bridge/Evidence.lean`) is hand-written, core
+  Lean only, and part of the default `Stc` package. It carries the pinned tool versions, the
+  three source SHA-256 values, the translation results and counts, the four external-axiom
+  inventory, and the planned checker interfaces.
+- The registry checker resolves a record's module in the default `lean/` package first and then
+  in the separate `lean/aeneas/` generated-model package, so a future generated-model record can
+  cite its generated file without moving it into `Stc/`.
+- `tools/ci/check_bridge_toolchain.py` validates `lean/bridge-toolchain.toml`: schema and
+  profile, Lean and Rust pin consistency with `lean/lean-toolchain` and `rust-toolchain.toml`,
+  the three source SHA-256 values, and, when generated models are checked in, each generated
+  header's Aeneas/Charon versions, source path, and source hash. `--check-environment` compares
+  the installed Lean/Rust versions on the pinned host; `--require-generated` makes a missing
+  generated model an error.
+- `.github/workflows/bridge-drift.yml` runs the pin/hash guard nightly and on manual dispatch on
+  `ubuntu-24.04`. A manual `full` dispatch can run the pinned-host audit on a self-hosted runner
+  labelled `stc-bridge`; full Aeneas/Charon regeneration remains a reviewed manual procedure on
+  the pinned Ubuntu host and never runs on the GitHub-hosted runner.
+- The fast `lean` CI job is unchanged in scope: it runs the default build, the no-sorry check,
+  the registry and axiom audit, vector regeneration, and the differential oracle, with a
+  30-minute timeout, and it installs neither Aeneas nor Mathlib. The drift workflow is not part
+  of the required CI matrix.
+- The Phase 0 report's "45 records" sentence is now a P0.7 freeze-time count; the live total is
+  what `tools/ci/check_verification_registry.py` reports.
+
+**Phase 1 report (M7, 2026-11-03).** The durable Phase 1 report is
+[Reports/Phase1-Report.md](Reports/Phase1-Report.md). It records the purpose and non-claims, the
+execution environment and pinned toolchains, the bridge architecture and per-target decisions, the
+three spike results and proof-environment cost, the emitted-IR boundary and D-V6 subset, the
+registry and CI evidence including the drift-workflow prerequisites, residual risks, and the
+Phase 1 review checklist. All Phase 1 evidence is V0; no refinement or checker proof is claimed.
+The owner accepted Phase 1 on 2026-11-03 and approved retirement of the temporary working plan;
+`WL-3-Phase-1.md` has been deleted.
 
 **Exit criteria.** Bridge spike report exists; D-V1 through D-V10 are resolved; the Phase 0
 semantics is the reference for the bridge; the registry, no-sorry check, vector-regeneration
 check, and oracle harness run in CI; the full IR fragment and first end-to-end subset are
-written down; no component is claimed above V0 except the S-level Phase 0 semantics.
+written down; no component is claimed above V0 except the S-level Phase 0 semantics. The Phase 1
+report §9 assesses these criteria; the owner accepted Phase 1 on 2026-11-03.
 
 **Effort.** S/M.
 
@@ -449,6 +566,45 @@ operations must remain out of the proved subset and be documented as such; strin
 scope may grow.
 
 **Effort.** L.
+
+**Phase 2 status (WL-3, owner-accepted 2026-11-03).** Complete:
+
+- exact property lemmas are proved in `Stc.Exact.{Int,Bits,Conv,Select,Strings}` at level V0,
+  including the equal-width conversion fit lemmas and the single `convert_ok_fits` statement
+  over the generated cast-plan order;
+- `Stc.ConstEval` defines the executable evaluator and declarative relation and proves
+  `constEval_sound` and `constEval_type_preserving` for the modeled subset;
+- the non-default `lean/aeneas/` package checks in the widened generated exact model over 30
+  roots including `convert`, `min_list`, `max_list`, `limit`, `mux`, `len`, `len_max`, and
+  `len_code_unit`; all 32 refinement obligations are proved, the model has no generated `sorry`,
+  and `Bridge.Exact.Kernel.exact_kernel_refines` composes the proofs;
+- the generated model's twelve axiom declarations are inventoried: nine operation axioms (four
+  external operations modeled and five string operations covered by TCB equations) and three
+  declarations outside the obligation closure; `strScalars` and the five string equations remain
+  TCB assumptions;
+- the three Rust production paths are unified on `crates/stc-codegen/src/exact.rs`;
+  `crates/stc-codegen/tests/exact_differential.rs` certifies agreement for the shared scalar
+  subset, including 178 conversion pairs, emitted-IR shapes, and the new constant-certificate
+  round trip;
+- the constant-certificate path is implemented: `consteval.rs` records operand/result
+  certificates for arithmetic, bitwise, and conversion folds, and
+  `crates/stc-codegen/src/certificate.rs` recomputes them through the shared kernel and rejects
+  a mismatch before IR emission;
+- the registry adds `P2` records: 32 proved V0 model theorems, one proved V1 theorem
+  (`P2-T33`, `Stc.Bridge.Exact.exact_kernel_refines`), and seven `tested` V0 evidence records;
+  every other Phase 2 record stays V0.
+
+The owner accepted Phase 2 on 2026-11-03 with four decisions: record V1 for the exact scalar
+kernel only; accept the documented TCB; accept the single-kernel construction plus the build-time
+certificate checker for the folding path without claiming a literal Lean theorem; and retire the
+temporary working plan. `P2-T33` is scoped to the exact scalar kernel generated from
+`crates/stc-codegen/src/exact.rs`, relative to the TCB in the
+[Phase 2 Report](Reports/Phase2-Report.md) §8: Aeneas/Charon translation, nine operation axioms,
+three non-equation declarations, five string equations, opaque `strScalars`, and the unproved Rust
+certificate verifier. The `consteval_agrees_with_codegen` statement remains realized by the
+single-kernel construction plus the build-time checker; a Lean theorem over the compiler would
+require a Lean HIR-to-IR lowering model, which is new scope and is not claimed. The temporary
+`WL-3-Phase-2.md` has been retired, and Phase 3 is next. No Phase 3 scope changed.
 
 ### Phase 3 — Persistent identity, layout, plan, and artifact codecs
 
@@ -908,22 +1064,22 @@ model or a model-based test harness rather than assuming the recursive proof car
 
 ## 8. Feature coverage matrix
 
-The matrix is the program's scoreboard. It is illustrative at this stage; Phase 0 and Phase 1
-turn it into the registry.
+The matrix is a phase-level summary. The registry in `lean/verification-status.toml` is the
+single source of truth; this table is reconciled when a phase is owner-accepted.
 
 | Feature | Phase | Target level | Key theorem | Current status |
 | --- | --- | --- | --- | --- |
-| Semantics document and version | 0 | S | `semantics_version` `1.0`; registry and conformance evidence | P0.7 preparation complete: `Semantics.md` and `Phase0-Report.md` complete, `semantics_version` frozen at `1.0`, registry and all versioned fixtures updated, handoff recorded; owner review and sign-off pending |
+| Semantics document and version | 0 | S | `semantics_version` `1.0`; registry and conformance evidence | Complete: `Semantics.md` and `Phase0-Report.md` complete, `semantics_version` frozen at `1.0`, registry and all versioned fixtures updated, handoff recorded; P0.7 owner review and sign-off approved 2026-11-02 |
 | AST, HIR, and IR fragment types | 0 | S | definitions plus `WellFormed` | Syntax, grammar, and HIR defined (P0.1–P0.2); IR fragment defined and review-approved (P0.4, 2026-10-31) |
-| Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31 and merged into v2.0.0-planning via PR #11 (612f84d); see Plan-Phase0.md §19 |
+| Core source semantics | 0 | S | `eval_deterministic`, `progress`, `preservation`, `type_soundness` | Proof work complete (P0.3): values, machine, configuration typing, determinism, progress, preservation, initial-state typing, type soundness, trap soundness, guarded exact arithmetic, and interpreter proved; P0.3 review approved 2026-10-31 and merged into v2.0.0-planning via PR #11 (612f84d); see [Phase0-Report.md](Reports/Phase0-Report.md) §3 |
 | Core typing judgment and checker | 0 | S | `core_check_sound`, `core_rejection_characterized` | Proved (P0.2) |
-| Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | P0.5 target soundness proved: target machine, step relation, executor, coverage table, and all eight soundness theorems (`ir_deterministic`, `ir_progress`, `ir_memory_safe`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`, `ir_no_ub`) proved against the implemented invariant; `initState?_wf`, `irStep_wf`/`irStepStar_wf`, the reachability corollaries, and `irRun_halt_wf` complete the whole-run bridge (Plan-Phase0.md §22.10–§22.11; checkpoint §21); P0.5 review approved 2026-11-02 and merged via PR #12 (92e113f) |
+| Core target semantics | 0 | S | `ir_deterministic`, `ir_memory_safe`, `ir_trap_sound` | P0.5 target soundness proved: target machine, step relation, executor, coverage table, and all eight soundness theorems (`ir_deterministic`, `ir_progress`, `ir_memory_safe`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`, `ir_no_ub`) proved against the implemented invariant; `initState?_wf`, `irStep_wf`/`irStepStar_wf`, the reachability corollaries, and `irRun_halt_wf` complete the whole-run bridge ([Phase0-Design.md](Reports/Phase0-Design.md) §4–§6 and [Phase0-Report.md](Reports/Phase0-Report.md) §3); P0.5 review approved 2026-11-02 and merged via PR #12 (92e113f) |
 | Reference interpreter and conformance | 0 | V0 | `lake exe semantics-conformance` report | Core-HIR dump `0.1.0` and `stc hir-dump` complete (P0.6); fuel interpreter sound/complete (P0.3); `stc-sem`, the opt-in snapshot surface, the differential harness, the `stc-sem-conformance-report` `0.1.0`, a 74-case corpus covering every claimed core item or a justified exclusion, and the committed byte-stable report complete and checked in CI (P0.6); the triage log records the one fixed source-analyzer bug and the documented exclusions; P0.6 approved 2026-11-02 |
-| Checked integer arithmetic | 2 | V1 | `add_ok_iff`, overflow/div-zero lemmas | Model + vectors (V0) |
-| Bitwise, shifts, rotates | 2 | V1 | range, masking, inverse lemmas | Model + vectors (V0) |
-| Conversions, comparisons, selection | 2 | V1 | conversion and selection lemmas | Model + vectors (V0) |
-| String length and UTF-8 | 2 | V1 | `len`/`len_code_unit` theorems | Model + vectors (V0) |
-| Constant evaluation | 2 | V1 | `constEval_sound` | Not started |
+| Checked integer arithmetic | 2 | V1 | `add_ok_iff`, overflow/div-zero lemmas | V1 kernel refinement (`P2-T33`, [Phase 2 Report](Reports/Phase2-Report.md)); model and vectors remain V0 evidence |
+| Bitwise, shifts, rotates | 2 | V1 | range, masking, inverse lemmas | V1 kernel refinement (`P2-T33`); model and vectors remain V0 evidence; a complete `rol`/`ror` inverse is not claimed |
+| Conversions, comparisons, selection | 2 | V1 | conversion and selection lemmas | V1 kernel refinement (`P2-T33`); model and vectors remain V0 evidence |
+| String length and UTF-8 | 2 | V1 | `len`/`len_code_unit` theorems | V1 kernel refinement (`P2-T33`) relative to the five string TCB equations and opaque `strScalars`; model and vectors remain V0 evidence |
+| Constant evaluation | 2 | V1 | `constEval_sound` | V0 model and soundness proved (`Stc.ConstEval`); the folding path shares the V1 kernel and uses the build-time certificate checker, not a literal Lean theorem |
 | Keys, type keys, layout hashes | 3 | V1 | normalization and hash invariants | Rust functions + tests (V0) |
 | `GotId`, catalog, slots | 3 | V1 | identity, canonical slot tables | Rust functions + tests (V0) |
 | Descriptor/manifest codecs | 3 | V2 | `decode_encode`, `validate_sound` | Rust codecs + fuzz (V0) |
@@ -939,6 +1095,8 @@ turn it into the registry.
 | OOP, interfaces, references | 6c | V1/V4 | resolution, dispatch, escape lemmas | Not started |
 | HIR lowering | 6 | V1 | `lower_preserves_semantics` | Not started |
 | Emitted-IR well-formedness | 5 | V2 | `checkIR_sound` | Rust verifier exists (V0) |
+| Emitted-IR fragment boundary | 1/5 | S | boundary definition (no theorem) | Frozen 2026-11-03 for Phase 1 M5 in [Core-IR-Boundary.md](Core-IR-Boundary.md); Phase 5 extends `IRFrag`/`WellFormed` to it; no claim change |
+| Bridge toolchain pins and drift | 1 | V0 | pin/hash guard (no theorem) | Enforced 2026-11-03 by `tools/ci/check_bridge_toolchain.py` in the manual/nightly `bridge-drift` workflow; fast CI stays free of Aeneas/Mathlib |
 | Scalar codegen semantics | 7a | V4 | `codegen_preserves` | Not started |
 | Aggregate/string codegen and type layout | 7b | V4 | staged simulation and layout lemmas | Not started |
 | OOP/reference codegen | 7c | V4 | staged simulation | Not started |
@@ -948,7 +1106,7 @@ turn it into the registry.
 | Scheduler and timers | 8 | V1 | `scheduler_deterministic`, `timer_semantics_matches_standard` | Not started |
 | Process image and I/O | 8 | V1 | `process_image_remap_sound`, `image_span_sound` | Not started |
 | Host ABI 2.2 table | 8 | V1 | `host_abi_table_sound` | Not started |
-| End-to-end subset | 9 | V4 | `pipeline_correct` | Not started |
+| End-to-end subset (D-V6) | 9 | V4 | `pipeline_correct` | Scope fixed 2026-11-03 in [Core-IR-Boundary.md](Core-IR-Boundary.md) §11; theorem not started |
 
 Not planned: full LLVM/LLVM optimizer/backend semantics, floating-point transcendental
 semantics (remains test-based under D-006), debug information and the debug subsystem (the
@@ -958,27 +1116,53 @@ system, filesystem, I/O devices, and hardware.
 
 ## 9. Proof engineering and CI
 
-- Toolchain: Lean 4.35.0 is pinned in `lean/lean-toolchain`; the program keeps that pin until a
-  deliberate upgrade with a proof-build validation.
-- No `sorry` or `admit` in proved modules. CI fails on either. Top-level theorems are audited
-  with `#print axioms`; any extra axiom is listed in the TCB and justified.
-- Executable models stay free of proof-only dependencies. If Mathlib is adopted (D-V2), it is
-  confined to proof libraries; the executable kernel and vector generator remain core Lean plus
-  Batteries so `lake exe vectors` stays fast and deterministic.
+- Toolchain: Lean 4.35.0 is pinned in `lean/lean-toolchain` and Rust 1.99.1 in
+  `rust-toolchain.toml`; the program keeps those pins until a deliberate upgrade with a
+  proof-build validation. The bridge pins (Aeneas `nightly-2026.11.02-ab34bd2`, Charon `0.1.304`
+  at `7b462d9`, Mathlib `v4.35.0`, and the three source SHA-256 values) are recorded in
+  `lean/bridge-toolchain.toml`.
+- No `sorry` or `admit` in proved modules, hand-written bridge modules, or generated models used
+  as evidence. CI fails on either. Top-level theorems are audited with `#print axioms`; any extra
+  axiom is listed in the TCB and justified. The four external Aeneas axioms are named in the TCB
+  and in the registry `tcb` field; they are never unstated.
+- Executable models stay free of proof-only dependencies. Mathlib is proof-only and confined to
+  the separate `lean/aeneas/` package; the default `lean/` package, the executable kernel, the
+  vector generator, and the proved checkers remain core Lean so `lake build` and
+  `lake exe vectors` stay fast and deterministic.
 - The verification registry is the single source of truth for claims. A generated status matrix
   in this document and in the README replaces hand-written claims.
 - Vector and oracle pipeline: keep `lake exe vectors`; add `lake exe oracle` for constant
   evaluation, keys/layout, codecs, and front-end contracts; Rust tests compare against the
   committed JSON. Regenerating a vector is a reviewed change, and a digest mismatch fails CI.
-- Aeneas/Charon pipeline: pin the toolchain; check generated Lean models into a separate
-  `lean/Stc/Generated/` tree; keep proofs in hand-written modules; record the exact Rust source
-  hash the model was generated from and fail CI when it drifts.
-- CI jobs: `lean` (build, no-sorry, axiom audit), `lean-vectors` (regeneration diff),
-  `lean-oracle` (differential tests), `lean-checkers` (verified IR/GOT checkers on CI
-  artifacts), and an optional nightly `aeneas` job. The existing `lean` job becomes the first
-  three.
-- Time budget: keep the fast proof CI under a documented limit; put long proofs and the Aeneas
-  regeneration in a nightly job. A proof that cannot fit the budget is a design smell.
+- Aeneas/Charon pipeline: pin the toolchain in `lean/bridge-toolchain.toml`; check generated Lean
+  models into the separate, non-default Lake package `lean/aeneas/StcGenerated/`; keep hand-written
+  proofs in `lean/Stc/Bridge/` and `lean/aeneas/Bridge/`; record the exact Rust source hash the
+  model was generated from in `lean/bridge-toolchain.toml` and fail the bridge-drift check when it
+  drifts. Generated files are never hand-edited; regeneration is a reviewed diff and never runs in
+  fast CI.
+- Bridge claims in Phase 1 stay V0. Generated-model typechecks and spike measurements are
+  evidence, not refinement: their registry entries are `kind = "evidence"`, `level = "V0"`, and
+  `status = "tested"`. No V1 claim may cite a generated model while an external axiom or a fuel
+  obligation is undischarged, except the owner-approved Phase 2 exception: `P2-T33`
+  (`Stc.Bridge.Exact.exact_kernel_refines`, accepted 2026-11-03) is V1 relative to the documented
+  TCB in the [Phase 2 report](Reports/Phase2-Report.md) §8; the registry checker allowlists exactly
+  that bridge-only record and keeps the full axiom audit for default-package records.
+- CI jobs: the single fast `lean` job is the required proof job. It runs the default `lean/`
+  build, the no-sorry check, the registry and axiom audit, the vector-regeneration diff, the
+  differential oracle (core corpus), and `lake exe stc-sem-tests`. Splitting these into separate
+  jobs was rejected in M6 because each split would rebuild the Lean package for no additional
+  coverage; a `lean-checkers` job lands when the Phase 3/5 checkers exist. The default job must not
+  install Mathlib or Aeneas.
+- Bridge drift: `.github/workflows/bridge-drift.yml` is a separate manual/nightly workflow. It
+  runs `python3 tools/ci/check_bridge_toolchain.py` against `lean/bridge-toolchain.toml` and the
+  three source SHA-256 values; a manual `full` dispatch can run the pinned-host audit on a
+  self-hosted runner labelled `stc-bridge`. Full Aeneas/Charon regeneration stays a reviewed
+  manual procedure on the pinned Ubuntu host and never runs on a GitHub-hosted runner.
+- Time budget: the fast proof CI budget is the 30-minute `lean` job timeout on `ubuntu-24.04`
+  (10 minutes for the docs job). The bridge-drift workflow has a 10-minute drift job and is not
+  part of the required matrix. The M1–M3 spike measured the Aeneas/Mathlib proof environment at
+  1796 build jobs; that cost is not part of the default job. A proof that cannot fit the budget is
+  a design smell.
 - Traceability: every registry record names the specification section or rule ID it proves.
   A theorem without a specification reference is either a missing specification update or a
   proof of something the product does not need.
@@ -1027,12 +1211,12 @@ system, filesystem, I/O devices, and hardware.
 
 | ID | Decision | Recommendation |
 | --- | --- | --- |
-| D-V1 | Bridge strategy per target class | Aeneas/Charon for existing pure kernels; proved Lean checkers for artifacts; vectors for the rest; extraction only if Aeneas fails |
-| D-V2 | Mathlib and Batteries policy | Core Lean plus Batteries for executable models; Mathlib allowed only in proof libraries after a build-time spike |
-| D-V3 | Emitted-IR fragment and UB policy | Phase 0 defines the core fragment; Phase 5 extends it. Keep it restricted with no poison/undef on covered paths; no fast-math; clang verification plus the proved checker |
+| D-V1 | Bridge strategy per target class | Resolved for Phase 1 (2026-11-02): filtered Aeneas/Charon model for the exact kernel; proved Lean checker/contract for GOT keys; proved Lean checker for the wire codec, with the Aeneas translation as fallback. Extraction only if the chosen path fails; any change needs owner review. |
+| D-V2 | Mathlib and Batteries policy | Core Lean plus Batteries for executable models; Mathlib is proof-only in the separate `lean/aeneas/` package after the Phase 1 build-time spike; it never enters the default `lean/` build. |
+| D-V3 | Emitted-IR fragment and UB policy | Phase 0 defines the core fragment; Phase 1 froze the full production boundary on 2026-11-03 in [Core-IR-Boundary.md](Core-IR-Boundary.md); Phase 5 extends the Lean model to it. Keep it restricted with no poison/undef on covered paths; no fast-math; clang verification plus the proved checker |
 | D-V4 | TCB and claim language | Adopt the V0–V4 ladder; publish the TCB; never say "fully verified" |
 | D-V5 | Verification registry and spec traceability | TOML registry plus an `xtask` check; generated status matrix |
-| D-V6 | First end-to-end subset | Phase 0 defines the core semantic subset; Phase 1 fixes the first end-to-end theorem subset: scalars, expressions, assignments, control flow, functions, programs, GOT globals; no OOP/strings/aggregates |
+| D-V6 | First end-to-end subset | Phase 0 defines the core semantic subset; Phase 1 fixed the first end-to-end theorem subset on 2026-11-03 in [Core-IR-Boundary.md](Core-IR-Boundary.md) §11: scalars, expressions, assignments, control flow, functions, programs, GOT globals; no OOP/strings/aggregates. Phase 9 owns `pipeline_correct` |
 | D-V7 | Production versus CI-only checkers | CI first for Phases 3 and 5; production integration after a size and latency evaluation |
 | D-V8 | Ownership and maintenance budget | One verification owner; a standing proof-CI budget; quarterly coverage review |
 | D-V9 | Format-version proof policy | Prove format 1; start a new proof module for any format change; no implicit migration |
@@ -1064,11 +1248,18 @@ The program is done when:
 1. P0.0–P0.6 are complete, including the versioned HIR dump, `lake exe stc-sem`, the case format,
    the differential harness, the report schema, the 74-case corpus, and the committed byte-stable
    report checked in CI.
-2. Complete the P0.7 owner review and sign-off: `Semantics.md` and `Phase0-Report.md` are
-   complete, `semantics_version` is frozen at `1.0`, and the registry, fixtures, and handoff are
-   updated; the review checklist is in `Phase0-Report.md` §9.
-3. After sign-off, close Phase 0 and continue the Phase 1 bridge spike: Aeneas/Charon on
-   `exact.rs`, `keys.rs`, and one codec path; write the spike report with measured effort and
-   coverage.
-4. Extend the exact vectors to every operation and type, add the constant-evaluation oracle, and
-   prototype `lake exe check-ir` against `stc_codegen::verify`.
+2. P0.7 owner review and sign-off were completed on 2026-11-02; Phase 0 is closed.
+   `Semantics.md` and `Phase0-Report.md` are complete, `semantics_version` is frozen at `1.0`,
+   and the registry, fixtures, and handoff are updated.
+3. Phase 1 is complete and owner-accepted (2026-11-03): the three bridge spikes, the
+   per-target bridge decisions, the bridge module layout, pins, external-axiom trust policy, and
+   registry evidence, the emitted-IR boundary and D-V6 subset freeze in
+   [Core-IR-Boundary.md](Core-IR-Boundary.md), the M6 registry evidence and bridge-drift CI, and
+   the durable [Phase 1 report](Reports/Phase1-Report.md). The temporary working plan has been
+   retired.
+4. Phase 2 is complete and owner-accepted (2026-11-03): the exact property lemmas, the
+   constant-evaluation model, the widened Aeneas bridge with 32 proved refinement obligations,
+   the unified Rust exact kernel, and the constant-certificate path are recorded in the
+   [Phase 2 report](Reports/Phase2-Report.md). Exactly one V1 record (`P2-T33`) covers the exact
+   scalar kernel generated from `exact.rs`, relative to the documented TCB. The temporary working
+   plan has been retired, and Phase 3 is next.

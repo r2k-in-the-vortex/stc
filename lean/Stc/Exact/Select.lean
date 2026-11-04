@@ -102,4 +102,76 @@ theorem mux_past_end {k : Int} (hk : 0 ≤ k) {values : List Int}
     (hlen : values.length ≤ k.toNat) (d : Int) : mux k values d = d := by
   simp [mux, hk, List.getElem?_eq_none_iff.mpr hlen]
 
+/-! ## Membership, range, and clamp cases -/
+
+/-- `SEL` returns one of its two inputs. -/
+theorem sel_mem (g : Bool) (a b : Int) : sel g a b = a ∨ sel g a b = b := by
+  cases g <;> simp [sel]
+
+/-- `SEL` stays between its inputs' bounds. -/
+theorem sel_between {g : Bool} {a b lo hi : Int}
+    (ha : lo ≤ a ∧ a ≤ hi) (hb : lo ≤ b ∧ b ≤ hi) :
+    lo ≤ sel g a b ∧ sel g a b ≤ hi := by
+  cases g
+  · simpa [sel] using ha
+  · simpa [sel] using hb
+
+/-- A successful `MIN` is one of the input values. -/
+theorem minList_mem {values : List Int} {m : Int} (h : minList values = some m) :
+    m ∈ values :=
+  (List.min?_eq_some_iff.mp h).1
+
+/-- A successful `MAX` is one of the input values. -/
+theorem maxList_mem {values : List Int} {m : Int} (h : maxList values = some m) :
+    m ∈ values :=
+  (List.max?_eq_some_iff.mp h).1
+
+/-- A successful `MIN` stays between the bounds of every input. -/
+theorem minList_between {values : List Int} {m lo hi : Int}
+    (h : minList values = some m) (hvals : ∀ v ∈ values, lo ≤ v ∧ v ≤ hi) :
+    lo ≤ m ∧ m ≤ hi :=
+  hvals m (minList_mem h)
+
+/-- A successful `MAX` stays between the bounds of every input. -/
+theorem maxList_between {values : List Int} {m lo hi : Int}
+    (h : maxList values = some m) (hvals : ∀ v ∈ values, lo ≤ v ∧ v ≤ hi) :
+    lo ≤ m ∧ m ≤ hi :=
+  hvals m (maxList_mem h)
+
+/-- `LIMIT` below the lower bound returns the lower bound when the bounds are
+ordered. -/
+theorem limit_below {mn x mx : Int} (h : mn ≤ mx) (hx : x < mn) :
+    limit mn x mx = mn := by
+  unfold limit
+  rw [ite_eq_left hx, ite_eq_right (by omega)]
+
+/-- `LIMIT` above the upper bound returns the upper bound when the bounds are
+ordered. -/
+theorem limit_above {mn x mx : Int} (h : mn ≤ mx) (hx : mx < x) :
+    limit mn x mx = mx := by
+  unfold limit
+  have hxmn : ¬ x < mn := by
+    intro hlt
+    omega
+  rw [ite_eq_right hxmn, ite_eq_left hx]
+
+/-- `MUX` with an in-range selector returns the selected value. -/
+theorem mux_in_range {k : Int} (hk : 0 ≤ k) {values : List Int}
+    (h : k.toNat < values.length) (d : Int) :
+    mux k values d = values[k.toNat] := by
+  unfold mux
+  rw [ite_eq_left hk, List.getElem?_eq_getElem h]
+
+/-- `MUX` stays between the bounds of the values and the default. -/
+theorem mux_between {k : Int} {values : List Int} {d lo hi : Int}
+    (hd : lo ≤ d ∧ d ≤ hi) (hvals : ∀ v ∈ values, lo ≤ v ∧ v ≤ hi) :
+    lo ≤ mux k values d ∧ mux k values d ≤ hi := by
+  unfold mux
+  split
+  · split
+    · next value hsome =>
+      exact hvals value (List.mem_iff_getElem?.mpr ⟨_, hsome⟩)
+    · exact hd
+  · exact hd
+
 end Stc.Exact

@@ -938,7 +938,7 @@ theorem default_type? {ty : IrType} (h : ty.isRepresentable = true) :
     (IRValue.default ty).type? = some ty := by
   cases ty <;> simp [IrType.isRepresentable, IRValue.default, IRValue.type?] at h ⊢
 
-/-! ## Target invariant (approved design, Plan-Phase0 §22) -/
+/-! ## Target invariant (approved design, Phase0-Design.md §4–§6) -/
 
 /-- The first instruction that defines an SSA name. -/
 def defInstr? (fn : Function) (name : Ssa) : Option Instr :=
@@ -11261,7 +11261,7 @@ a well-formed running state while the machine is still running steps or traps.
 `AccessBounded` is the source-check premise, not a state invariant. The source
 checks discharge it for ordinary accesses; the character-index path needs an
 explicit `CharIndexBounded` hypothesis (or exclusion from the covered fragment)
-until Q3 is resolved (`Plan-Phase0` §22.4). -/
+until Q3 is resolved (`Phase0-Design.md` §5, D2). -/
 theorem ir_progress_reachable {contract : IRContract} {c₀ c : IRState}
     (hwf₀ : WFRunning contract c₀) (hreach : IRStepStar c₀ c)
     (hrunning : c.status = .running) (haccess : AccessBounded contract c) :

@@ -4,11 +4,11 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-27
 Status: Approved 2026-10-27, with the frozen scope and claim unchanged. P0.0–P0.6 are complete and
 owner-approved through P0.6. P0.7 froze `semantics_version` at `1.0`, completed the semantics
-document, and added the [Phase 0 Report](Phase0-Report.md); the P0.7 owner review and sign-off are
+document, and added the [Phase 0 Report](Reports/Phase0-Report.md); the P0.7 owner review and sign-off are
 pending. The frozen target scope was revised on 2026-10-31 to remove `switch`; no other inclusion
 or exclusion changed.
-Parent: [Verification Program Plan](Plan.md)
-Phase plan: [Phase 0 Implementation Plan](Plan-Phase0.md)
+Parent: [Verification Program Plan](VerificationProgramPlan.md)
+Phase plan: [Verification Program Plan](VerificationProgramPlan.md)
 Semantics reference: [stc Semantics — Phase 0 Core](Semantics.md)
 
 ## 1. Purpose
@@ -71,7 +71,7 @@ document's TCB section.
 
 ## 4. Relationship to the program plan
 
-[Phase 0](Plan.md#phase-0--formal-semantics-foundation-and-soundness) is standalone: it uses no
+[Phase 0](VerificationProgramPlan.md#phase-0--formal-semantics-foundation-and-soundness) is standalone: it uses no
 Aeneas/Charon translation and requires no Rust refinement. Its outputs are consumed as follows.
 
 | Consumer | Consumes |
@@ -100,7 +100,7 @@ The semantics is a product artifact.
   theorem statements intact.
 - A change to an existing definition or theorem is a semantics change: it requires a version
   bump, a registry update, a changelog entry in [Semantics.md](Semantics.md), and a note in
-  [Plan.md](Plan.md) if it changes a phase claim.
+  [Plan.md](VerificationProgramPlan.md) if it changes a phase claim.
 - A change to the frozen core scope in §6 also requires this charter to be revised and the
   parent program plan to be updated. Extending the core for a later phase is expected; silently
   shrinking or reinterpreting it is not.
@@ -109,7 +109,7 @@ The semantics is a product artifact.
 
 ## 6. Frozen core and exclusion register
 
-The normative definition of the frozen core is [Plan-Phase0.md](Plan-Phase0.md) §3.3 (source
+The normative definition of the frozen core is [Semantics.md](Semantics.md) §1 (source
 subset) and §3.4 (target fragment). This charter records the decision and every exclusion with
 the phase that will add it.
 
@@ -145,7 +145,7 @@ Included in Phase 0:
 | Target floating point and general values | `float`, `double`, vectors, `fadd`/`fsub`/`fmul`/`fdiv`/`frem` | Phase 5 syntax; Phase 7 semantics |
 | Advanced target instructions | Atomics, volatile access, `invoke`/`landingpad`, dynamic `alloca`, `insertvalue`, `llvm.memcpy`, `ptrtoint`/`inttoptr`, descriptor/vtable/TYPEINFO blobs, process image, string data | Phase 5 syntax; Phase 7 semantics; Phase 8 runtime |
 | Dense-label `switch` lowering | `CASE` currently lowers to comparison branches; no `switch` is emitted | Phase 5 syntax if lowering changes |
-| Debug and monitoring | DWARF/CodeView contents, `stc-debug/1`, sessions, typed access, forcing, checkpoint hooks and metadata, host service 13 | Not planned for v1 verification: the verified release build excludes debug state by contract (D-178); see [Plan](Plan.md) §11 |
+| Debug and monitoring | DWARF/CodeView contents, `stc-debug/1`, sessions, typed access, forcing, checkpoint hooks and metadata, host service 13 | Not planned for v1 verification: the verified release build excludes debug state by contract (D-178); see [Plan](VerificationProgramPlan.md) §11 |
 | Full host lifecycle | Attach/prepare/activate/commit/rollback/unload beyond the initialization boundary | Phase 8 |
 | General LLVM model | Poison/`undef` generality, provenance, optimizer behaviour, general pointer arithmetic | Not planned; a non-goal of the program |
 | Printer and parser proof | Textual IR printing and parsing round-trip | Phase 5 |
@@ -164,13 +164,13 @@ reduction: the character types remain in the core.
 
 ## 7. Phase 0 decisions
 
-The ten Phase 0 decisions are resolved and frozen; [Plan-Phase0.md](Plan-Phase0.md) §14 is the
+The ten Phase 0 decisions are resolved and frozen; [Phase 0 design record §1](Reports/Phase0-Design.md) is the
 normative record, and this table confirms them for the charter.
 
 | ID | Subject | Confirmed resolution |
 | --- | --- | --- |
-| P0-D1 | Exact core language subset | Use Plan-Phase0 §3.3 as written; exclude floats, strings, aggregates, OOP, references, FBs, tasks, I/O, and online change |
-| P0-D2 | Target IR fragment and memory model | Use Plan-Phase0 §3.4 as written; abstract GOT cells and stack frames; exclude general LLVM memory and UB |
+| P0-D1 | Exact core language subset | Use Semantics.md §1 as written; exclude floats, strings, aggregates, OOP, references, FBs, tasks, I/O, and online change |
+| P0-D2 | Target IR fragment and memory model | Use Semantics.md §1 and Core-IR-Coverage.md as written; abstract GOT cells and stack frames; exclude general LLVM memory and UB |
 | P0-D3 | Small-step versus functional semantics | Define both the recursive executable model and the loop-shaped small-step relation; prove them equivalent and expose both as refinement targets |
 | P0-D4 | HIR dump format and version | Stable, versioned JSON with schema validation; no Rust internals; start from the `stc-hir` dump |
 | P0-D5 | Mathlib/Batteries policy | Core Lean plus Batteries for executable models; Mathlib proof-only after a build-time spike |
@@ -198,5 +198,5 @@ semantics document skeleton.
 | Documentation checks | `tools/ci/check_docs.py` | Requires the charter, phase plan, and semantics document |
 
 Review approved this charter, the exclusion register, and the [Semantics.md](Semantics.md)
-skeleton on 2026-10-27. The approval is recorded in [Plan-Phase0.md](Plan-Phase0.md) and is
-carried into the [Phase 0 Report](Phase0-Report.md).
+skeleton on 2026-10-27. The approval is recorded in [Phase 0 report](Reports/Phase0-Report.md) and is
+carried into the [Phase 0 Report](Reports/Phase0-Report.md).

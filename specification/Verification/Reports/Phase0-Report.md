@@ -8,9 +8,9 @@ Status: P0.7 was approved on 2026-11-02; Phase 0 is complete. P0.0–P0.7 are ow
 This report records what Phase 0 established, the conformance evidence, the known gaps, the
 trusted computing base, the version freeze, and the handoff to later phases. It does not claim a
 refinement proof; the review and sign-off are recorded in §9.
-Companion: [Semantics](Semantics.md) · [Semantics Charter](Semantics-Charter.md) ·
-[Core HIR Dump](HIR-Dump.md) · [Core Semantics Cases](Semantics-Cases.md) ·
-[Phase 0 Implementation Plan](Plan-Phase0.md) · [Verification Program Plan](Plan.md)
+Companion: [Semantics](../Semantics.md) · [Semantics Charter](../Semantics-Charter.md) ·
+[Core HIR Dump](../HIR-Dump.md) · [Core Semantics Cases](../Semantics-Cases.md) ·
+[Phase 0 Design and Decision Record](Phase0-Design.md) · [Verification Program Plan](../VerificationProgramPlan.md)
 
 ## 1. Purpose and scope
 
@@ -19,8 +19,8 @@ frozen core subset of stc and the emitted-IR fragment it compiles to, proves the
 deterministic, type-sound, trap-sound, memory-safe, GOT-sound, and free of modeled undefined
 behavior, provides executable reference models proved equivalent to the declarative judgments,
 and compares the Rust compiler against the reference on a versioned corpus as V0 differential
-evidence. The normative definitions are in [Semantics.md](Semantics.md); the authoritative
-theorem status is [`lean/verification-status.toml`](../../lean/verification-status.toml).
+evidence. The normative definitions are in [Semantics.md](../Semantics.md); the authoritative
+theorem status is [`lean/verification-status.toml`](../../../lean/verification-status.toml).
 
 Phase 0 does not claim that the Rust parser, analyzer, or code generator refines the semantics.
 The conformance result is evidence that the reference semantics and the compiler agree on the
@@ -40,31 +40,34 @@ At level S, Phase 0 claims:
 
 The claim is relative to the trusted computing base in §6 and the gaps recorded in §5. It is not a
 safety-certification claim, a general LLVM claim, or a compiler-correctness claim. Those
-non-claims are fixed in [Semantics-Charter.md](Semantics-Charter.md) §2.
+non-claims are fixed in [Semantics-Charter.md](../Semantics-Charter.md) §2.
 
 ## 3. What was proved and established (P0.0–P0.6)
 
-The registry holds 45 records: 36 proved theorems, 6 proved definitions, 1 descoped theorem, and 2
-tested evidence items. The counts and statuses are audited by
-`tools/ci/check_verification_registry.py`.
+At the P0.7 freeze the registry held 45 records: 36 proved theorems, 6 proved definitions, 1
+descoped theorem, and 2 tested evidence items. That is the freeze-time Phase 0 count. Later
+phases append records without renaming or redefining these entries (Phase 1 adds the `P1-E01`–
+`P1-E07` V0 evidence records), so the live total reported by
+`tools/ci/check_verification_registry.py` grows; the checker validates the live table, while the
+freeze counts above remain the Phase 0 audit result.
 
 | Sub-phase | Delivered | Status |
 | --- | --- | --- |
 | P0.0 | Scope and claim freeze, TCB, exclusion register, versioning policy, module skeleton, registry, and fail-closed CI checks | Approved 2026-10-27 |
-| P0.1 | Token/trivia/span model, lossless CST contract, surface AST, `Derives`, AST/CST and source-span mapping, `ast_span_wellformed`, and the [Core Syntax Coverage](Core-Coverage.md) table | Approved |
+| P0.1 | Token/trivia/span model, lossless CST contract, surface AST, `Derives`, AST/CST and source-span mapping, `ast_span_wellformed`, and the [Core Syntax Coverage](../Core-Coverage.md) table | Approved |
 | P0.2 | Typed HIR, `HasType`, `checkCore`, `HirWellFormed`, `ConversionLegal`; proved `core_check_sound`, `core_rejection_characterized`, `hir_wellformed`, and `conversion_legal_iff`; descoped `core_check_complete` with the `FOR` over-rejection recorded | Approved |
 | P0.3 | Values and traps, source small-step machine, `ConfigTyped`, fuel interpreter; proved `eval_deterministic`, `progress`, `preservation`, `type_soundness`, `trap_soundness`, guarded `checked_arith_traps_exactly`, `interpreter_sound`, `interpreter_complete`, and initial-state typing | Approved 2026-10-31 |
 | P0.4 | Production-module fragment `IRFrag`/`IRContract`, `WellFormed`, and the structural definition/lemma inventory, including the GOT cell kinds, slot table, overflow result, fixed arrays, and entry-point contract | Approved 2026-10-31 |
 | P0.5 | `IRState`/`IRStep`, checked arithmetic, memory, GOT, calls, traps, `irExecRec`/`irRun`; proved `ir_deterministic`, `ir_progress`, `ir_memory_safe`, `ir_got_sound`, `ir_trap_sound`, `ir_checked_arith_refines_exact`, `ir_recursive_model_equiv`, `ir_no_ub`, `initState?_wf`, `irStep_wf`/`irStepStar_wf`, the reachability corollaries, and `irRun_halt_wf` | Approved 2026-11-02 |
 | P0.6 | Frozen core-HIR dump `0.1.0`, strict Lean reader, `stc-core-case` and `stc-sem-result` `0.1.0`, `lake exe stc-sem`, opt-in `--snapshot`, differential harness, `stc-sem-conformance-report` `0.1.0`, 74-case corpus, committed byte-stable report, and the fail-closed corpus gate | Approved 2026-11-02; V0 evidence |
 
-The proof inventory and the exact theorem shapes are in [Semantics.md](Semantics.md) §7. The
+The proof inventory and the exact theorem shapes are in [Semantics.md](../Semantics.md) §7. The
 P0.3 proof found and fixed three machine bugs before the results were accepted: the call-argument
 continuation advanced past the wrong argument, `EXIT` kept the loop body's loop context, and
 `CONTINUE` on a `FOR` entered the increment in the body's loop context. The P0.4 target scope was
 revised to remove `switch`; `CASE` lowers to branches, and no other inclusion or exclusion
 changed. These are recorded in the sub-phase completion records in
-[Plan-Phase0.md](Plan-Phase0.md) §19–§23.
+this report §3 and [Phase0-Design.md](Phase0-Design.md).
 
 ## 4. Conformance evidence
 
@@ -90,12 +93,12 @@ The report records the exact inputs of the run:
 | Semantics | `semantics_version` | `1.0` |
 
 The format versions are unchanged by the P0.7 freeze. The schemas, exit codes, comparison rule,
-and gating contract are normative in [Semantics-Cases.md](Semantics-Cases.md) §8 and
-[HIR-Dump.md](HIR-Dump.md).
+and gating contract are normative in [Semantics-Cases.md](../Semantics-Cases.md) §8 and
+[HIR-Dump.md](../HIR-Dump.md).
 
 ### 4.3 Corpus and coverage
 
-The coverage inventory in [Semantics-Cases.md](Semantics-Cases.md) §7.1 maps every claimed core
+The coverage inventory in [Semantics-Cases.md](../Semantics-Cases.md) §7.1 maps every claimed core
 type, literal and expression form, operator, exact standard function, statement form, conversion,
 trap, GOT access, and program/execution shape to at least one case, or records a justified
 exclusion. The corpus exercises one program and one sequential cycle plus multi-cycle persistence,
@@ -126,7 +129,7 @@ this corpus supports confidence but does not establish agreement on another plat
 ### 5.1 Exclusions E1–E7
 
 The corpus exclusions are recorded with their reasons in
-[Semantics-Cases.md](Semantics-Cases.md) §7.2. None is a silent omission.
+[Semantics-Cases.md](../Semantics-Cases.md) §7.2. None is a silent omission.
 
 | ID | Exclusion | Reason and disposition |
 | --- | --- | --- |
@@ -161,7 +164,7 @@ The corpus exclusions are recorded with their reasons in
 
 ### 5.3 Triage log and the T2 fix
 
-The full triage log is [Semantics-Cases.md](Semantics-Cases.md) §7.3. No reference-versus-artifact
+The full triage log is [Semantics-Cases.md](../Semantics-Cases.md) §7.3. No reference-versus-artifact
 disagreement remains in the committed corpus.
 
 | ID | Classification | Resolution |
@@ -174,8 +177,8 @@ disagreement remains in the committed corpus.
 
 ## 6. Trusted computing base and assumptions
 
-The TCB is fixed by [Semantics-Charter.md](Semantics-Charter.md) §3 and restated in
-[Semantics.md](Semantics.md) §8. In full:
+The TCB is fixed by [Semantics-Charter.md](../Semantics-Charter.md) §3 and restated in
+[Semantics.md](../Semantics.md) §8. In full:
 
 - the Lean 4.35.0 kernel, its standard library, and the pinned toolchain in
   `lean/lean-toolchain`;
@@ -214,7 +217,7 @@ P0.6 values: `stc-core-hir` `0.1.0`, `stc-core-case` `0.1.0`, `stc-sem-result` `
 `stc-sem-conformance-report` `0.1.0`, and `stc-runtime-snapshot` `0.1.0`.
 
 The freeze commit is `7aad70d41e1dc4b47606f13cd7818b638fd45927`, recorded in
-[`lean/verification-status.toml`](../../lean/verification-status.toml) and here. The freeze commit
+[`lean/verification-status.toml`](../../../lean/verification-status.toml) and here. The freeze commit
 itself carried a marked placeholder because a commit cannot name itself; the immediately following
 commit records the exact hash. The committed report was regenerated from the frozen corpus and
 toolchain and matches the gate byte-for-byte; the case descriptors and the Rust/Lean version
@@ -232,7 +235,7 @@ metadata and its tests and fixtures.
 | --- | --- |
 | Phase 1 | The recursive models `stcSem`/`runFuel` and `irRun`/`irExecRec`; the loop-shaped relations `Step`/`Steps` and `IRStep`/`IRStepStar`; the equivalence theorems `interpreter_sound`, `interpreter_complete`, and `ir_recursive_model_equiv`; the registry schema and checker; and the no-`sorry`/axiom policy. The intended bridge points are `crates/stc-codegen/src/exact.rs` against `Stc.Exact`, `crates/stc-got/src/keys.rs` against the GOT key normalization, and one `stc-got` codec path against the cell/codec model. |
 | Phase 2 | The core typing judgment and `ConversionLegal` in `Stc.Sem.Typing`; the exact-arithmetic connection `checked_arith_traps_exactly` and `ir_checked_arith_refines_exact`; and the descoped `core_check_complete` as the completeness obligation connecting the source checker to the judgment. |
-| Phase 4 | The surface AST in `Stc.Syntax.Ast`, the `Derives` relation in `Stc.Grammar.Derives`, the AST/CST and source-span mappings, the lossless CST contract, and the [Core Syntax Coverage](Core-Coverage.md) table. Phase 4a proves the round-trip contracts; Phase 4b owns `parse_sound` and `parse_complete`. |
+| Phase 4 | The surface AST in `Stc.Syntax.Ast`, the `Derives` relation in `Stc.Grammar.Derives`, the AST/CST and source-span mappings, the lossless CST contract, and the [Core Syntax Coverage](../Core-Coverage.md) table. Phase 4a proves the round-trip contracts; Phase 4b owns `parse_sound` and `parse_complete`. |
 | Phase 5 | `IRFrag`, `IRContract`, `WellFormed`, and the structural lemmas in `Stc.Codegen.Ir` as the starting fragment for the full emitted-IR and textual-IR work, plus the grouped slot-table contract. Phase 5 extends the fragment; it does not reinterpret the core. |
 | Phase 6 | The core typing judgment and dynamic semantics in `Stc.Sem` as the extension point for the full type system, name resolution, and HIR lowering. |
 | Phase 7 | The source semantics and the target `IRFrag`/`IRStep` semantics for the codegen preservation theorem, with `ir_recursive_model_equiv` as the executable bridge. |
@@ -250,7 +253,7 @@ A semantics version bump is required when:
 - an existing `1.0` definition, judgment, transition rule, or theorem statement changes, or its
   meaning changes even if the syntax is unchanged;
 - an extension changes the truth of an existing theorem or requires a different hypothesis;
-- the frozen core scope in [Semantics-Charter.md](Semantics-Charter.md) §6 changes;
+- the frozen core scope in [Semantics-Charter.md](../Semantics-Charter.md) §6 changes;
 - a dump, case, result, report, or snapshot field name, meaning, shape, ordering rule, status or
   trap vocabulary, or comparison rule changes. Such a change requires the affected format version
   to change as well; the semantics version is bumped if the semantic claim changes, and every
@@ -321,17 +324,17 @@ this checklist and the documented gaps are accepted.
 
 ## 10. References
 
-- [Semantics](Semantics.md)
-- [Semantics Charter](Semantics-Charter.md)
-- [Core HIR Dump](HIR-Dump.md)
-- [Core Semantics Cases](Semantics-Cases.md)
-- [Core Syntax Coverage](Core-Coverage.md)
-- [Core IR Coverage](Core-IR-Coverage.md)
-- [Phase 0 Implementation Plan](Plan-Phase0.md)
-- [Verification Program Plan](Plan.md)
-- [Testing and Verification](../Architecture/Testing-and-Verification.md)
-- [GOT Artifacts and Schemas](../Architecture/GOT-Artifacts.md)
-- [Runtime and Execution](../Architecture/Runtime-and-Execution.md)
-- [AST, CST, and HIR](../AST/AST.md)
-- [Grammar](../Syntax/Grammar.md)
-- [UTF-8 Strings](../UTF8-Strings.md)
+- [Semantics](../Semantics.md)
+- [Semantics Charter](../Semantics-Charter.md)
+- [Core HIR Dump](../HIR-Dump.md)
+- [Core Semantics Cases](../Semantics-Cases.md)
+- [Core Syntax Coverage](../Core-Coverage.md)
+- [Core IR Coverage](../Core-IR-Coverage.md)
+- [Phase 0 Design and Decision Record](Phase0-Design.md)
+- [Verification Program Plan](../VerificationProgramPlan.md)
+- [Testing and Verification](../../Architecture/Testing-and-Verification.md)
+- [GOT Artifacts and Schemas](../../Architecture/GOT-Artifacts.md)
+- [Runtime and Execution](../../Architecture/Runtime-and-Execution.md)
+- [AST, CST, and HIR](../../AST/AST.md)
+- [Grammar](../../Syntax/Grammar.md)
+- [UTF-8 Strings](../../UTF8-Strings.md)

@@ -12,6 +12,7 @@
 
 # Lean build artifacts
 /lean/.lake/
+/lean/aeneas/.lake/
 
 # Python bytecode from CI helper scripts
 __pycache__/

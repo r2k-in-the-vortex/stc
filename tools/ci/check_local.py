@@ -9,6 +9,8 @@ hand is easy to forget, and two of them are not covered by `cargo test` or
   fuzz targets without breaking the main workspace.
 * Markdown lint is a separate docs job (`markdownlint-cli2`), not part of
   `tools/ci/check_docs.py`.
+* The bridge pin/source-hash guard is cheap here even though its full run is
+  the manual/nightly `bridge-drift` workflow, not fast CI.
 
 Usage:
     python tools/ci/check_local.py
@@ -122,6 +124,15 @@ def main() -> int:
         (
             "Specification, links, and required documents",
             [sys.executable, str(ROOT / "tools/ci/check_docs.py")],
+            ROOT,
+            None,
+        ),
+        # Cheap bridge pin/hash drift guard. The full check runs in the
+        # manual/nightly bridge-drift workflow; this step only reads the pin
+        # record and hashes the three sources, so it needs no Aeneas/Mathlib.
+        (
+            "Bridge toolchain pins and source hashes",
+            [sys.executable, str(ROOT / "tools/ci/check_bridge_toolchain.py")],
             ROOT,
             None,
         ),

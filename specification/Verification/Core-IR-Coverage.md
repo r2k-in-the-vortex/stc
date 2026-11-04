@@ -7,21 +7,26 @@ emitted
 production-module fragment to the Lean definitions in [`Stc.Codegen.Ir`](../../lean/Stc/Codegen/Ir.lean).
 It makes no parser or refinement claim; Phase 5 owns the textual printer/parser and the proved
 checker. The table is updated when the Lean definitions or the compiler's emitted instruction set
-change.
-Parent: [Phase 0 Implementation Plan](Plan-Phase0.md) §6 (P0.4)
+change. It records the Phase 0 core slice of the full emitted boundary frozen by Phase 1 M5 in
+[Core IR Boundary](Core-IR-Boundary.md); the boundary document is authoritative for the wider
+production-module fragment and for the D-V6 first end-to-end subset.
+Parent: [Phase 0 design record §2](Reports/Phase0-Design.md)
 Semantics reference: [stc Semantics — Phase 0 Core](Semantics.md)
+Boundary: [Emitted IR Boundary — Phase 1 Freeze](Core-IR-Boundary.md)
 
 ## 1. Scope
 
 The covered target is the production module the current `stc-codegen` emits for the frozen core
-source subset in [Plan-Phase0.md](Plan-Phase0.md) §3.3. `WellFormed` is defined over the whole
+source subset in [Semantics.md](Semantics.md) §1. `WellFormed` is defined over the whole
 module, including the generated entry-point wrappers and module globals. The P0.5 target
 semantics interprets the covered user functions and the cycle body; attach/prepare/shutdown are
 the initialization boundary.
 
 Out of scope: debug-info builds, test builds and coverage instrumentation, debug checkpoint
 hooks, the textual printer/parser, the full LLVM memory model, OOP descriptors/vtables, the
-process image, and raw pointer arithmetic. Build-form exclusions are listed in §8.
+process image, and raw pointer arithmetic. Build-form exclusions are listed in §8. The Phase 1
+[Core IR Boundary](Core-IR-Boundary.md) records those forms for the wider production fragment and
+the D-V6 subset; this table remains the reviewed P0.4 core slice.
 
 The Lean module is the umbrella [`Stc.Codegen.Ir`](../../lean/Stc/Codegen/Ir.lean). The
 definitions sit in the `Stc.Codegen` namespace:
@@ -43,10 +48,10 @@ definitions sit in the `Stc.Codegen` namespace:
 
 | Emitted shape | Lean definition | Specification |
 | --- | --- | --- |
-| Named type definitions | `TypeDef`; core production modules carry none | Plan-Phase0 §3.4 |
+| Named type definitions | `TypeDef`; core production modules carry none | Semantics.md §1 |
 | Module globals | `Global` with `GlobalInit` | GOT Artifacts §7.3; Runtime and Execution §2.3 |
-| External declarations | `Declaration` (LLVM intrinsics) | Plan-Phase0 §3.4 |
-| Function definitions | `Function` with linkage, return type, parameters, blocks | Plan-Phase0 §3.4 |
+| External declarations | `Declaration` (LLVM intrinsics) | Semantics.md §1 |
+| Function definitions | `Function` with linkage, return type, parameters, blocks | Semantics.md §1 |
 | Slot table | `IRFrag.slots : SlotTable` (one `CellKind` per host cell) | Online Change and GOT §3.3; GOT Artifacts §7.1 |
 | Function-address table | `IRFrag.functionTable : List String` and the emitted `[N x ptr]` global | GOT Artifacts §7.1, §7.3 |
 
@@ -54,16 +59,16 @@ definitions sit in the `Stc.Codegen` namespace:
 
 | LLVM spelling | Lean type | Emitted for | Specification |
 | --- | --- | --- | --- |
-| `void` | `IrType.void` | Procedure returns | Plan-Phase0 §3.4 |
+| `void` | `IrType.void` | Procedure returns | Semantics.md §1 |
 | `i1` | `IrType.int 1` | `BOOL` in SSA; comparison results | Semantics §3.1 |
 | `i8` | `IrType.int 8` | `SINT`, `USINT`, `BYTE`, `CHAR` | Semantics §3.1 |
 | `i16` | `IrType.int 16` | `INT`, `UINT`, `WORD`, `WCHAR` | Semantics §3.1 |
 | `i32` | `IrType.int 32` | `DINT`, `UDINT`, `DWORD`, `UCHAR` | Semantics §3.1 |
 | `i64` | `IrType.int 64` | `LINT`, `ULINT`, `LWORD` | Semantics §3.1 |
-| `ptr` | `IrType.ptr` | Locals, GOT cell values, calls | Plan-Phase0 §3.4 |
+| `ptr` | `IrType.ptr` | Locals, GOT cell values, calls | Semantics.md §1 |
 | `{ iN, i1 }` | `IrType.overflow N` | `llvm.*.with.overflow` result | Semantics §6 |
-| `[N x ptr]` | `IrType.array IrType.ptr N` | Function table, root-pointer arrays | GOT Artifacts §7.1; Plan-Phase0 §3.4 |
-| `[N x i8]` | `IrType.array (IrType.int 8) N` | Descriptor blob, metadata blob, retain buffer | GOT Artifacts §7.1; Plan-Phase0 §3.4 |
+| `[N x ptr]` | `IrType.array IrType.ptr N` | Function table, root-pointer arrays | GOT Artifacts §7.1; Semantics.md §1 |
+| `[N x i8]` | `IrType.array (IrType.int 8) N` | Descriptor blob, metadata blob, retain buffer | GOT Artifacts §7.1; Semantics.md §1 |
 
 No other aggregate, floating-point, or vector type is part of the fragment.
 
@@ -84,13 +89,16 @@ No other aggregate, floating-point, or vector type is part of the fragment.
 | `select i1 C, T A, B` | `Instr.select` | `FOR` bound selection; `SEL`/`MIN`/`MAX`/`LIMIT`/`MUX` lowering | Semantics §3.1 |
 | `zext`/`sext`/`trunc` | `Instr.cast` | Integer and character conversions; shift-count narrowing | Semantics §3.4 |
 | `phi T [V, %P], ...` | `Instr.phi` | Short-circuit `AND`/`OR` merges | Semantics §4.2 |
-| `call T @f(args)` | `Instr.call` | Intrinsics, compiler helpers, pre-attach accessor bodies | Plan-Phase0 §3.4 |
+| `call T @f(args)` | `Instr.call` | Intrinsics, compiler helpers, pre-attach accessor bodies | Semantics.md §1 |
 | `call T %p(args)` | `Instr.callPtr` | User calls through `Function`/`Import` cells; trap calls | Online Change and GOT §3.1 |
 | `extractvalue { iN, i1 } V, 0/1` | `Instr.extractValue` | Checked-arithmetic result and overflow flag | Semantics §6 |
 | `unreachable` | `Terminator.unreachable` | After a trap call | Semantics §5.3 |
 
 `insertvalue`, `llvm.memcpy`, `ptrtoint`/`inttoptr`, `switch`, floating-point operations, atomics,
-volatile access, `invoke`/`landingpad`, and dynamic `alloca` are not part of the fragment.
+volatile access, `invoke`/`landingpad`, and dynamic `alloca` are not part of the core fragment.
+Several of them are inside the wider Phase 1 [boundary](Core-IR-Boundary.md) for later phases
+(`insertvalue`, `llvm.memcpy`, `ptrtoint`, floating-point operations, descriptor/vtable blobs); the
+boundary document is authoritative for which phase adds each one.
 
 ## 5. Terminators
 
@@ -111,7 +119,7 @@ Every well-formed block has exactly one of these after its instructions.
 | `stc_module_function_table` | `Global` constant `[N x ptr]`, symbol array | Contract table symbol and count; entries match `IRFrag.functionTable` | GOT Artifacts §7.1, §7.3 |
 | `stc_module_api`, `stc_module_slots` | `Global` mutable `ptr`, `null` | Module-local, not a root | Online Change and GOT §3.3 |
 | `stc_retain_buffer` | `Global` mutable `[1 x i8]`, zeroinitializer | Module-local | State and Retain §2 |
-| `stc_metadata_json_data` | `Global` constant `[N x i8]`, bytes | Opaque module-local metadata | Plan-Phase0 §3.4 |
+| `stc_metadata_json_data` | `Global` constant `[N x i8]`, bytes | Opaque module-local metadata | Semantics.md §1 |
 
 The required entry points are the seven host ABI 2 production symbols from
 [GOT Artifacts §7.3](../Architecture/GOT-Artifacts.md): `stc_module_descriptor`,
@@ -142,7 +150,7 @@ external linkage.
 `FunctionFacts` mirrors the builder's recorded facts (`origins`, `directCalls`, `indirectCalls`,
 `memoryAccesses`, `cellWrites`, `memoryGlobals`, `symbolRefs`). Deriving those facts from the
 textual IR is Phase 5's checker obligation; P0.4 checks them against the contract. The structural
-lemmas are listed in [Plan-Phase0 §7.1](Plan-Phase0.md#71-p04-structural-lemmas).
+lemmas are listed in [Semantics.md §7.7](Semantics.md#77-p04-structural-lemma-shapes).
 
 ## 8. Exclusions and build forms
 
@@ -156,9 +164,17 @@ lemmas are listed in [Plan-Phase0 §7.1](Plan-Phase0.md#71-p04-structural-lemmas
 | `ptrtoint`/`inttoptr`, `fadd`/`fsub`/`fmul`/`fdiv`/`frem` | References and floating point are excluded from the source core | Phase 5–7 |
 | Descriptor/vtable/TYPEINFO blobs, process image | OOP, I/O, and online change are later phases | Phase 5/7/8 |
 
+The Phase 1 [boundary](Core-IR-Boundary.md) records `insertvalue`, `llvm.memcpy`, `ptrtoint`,
+floating-point operations, and descriptor/vtable/process-image forms as inside the production
+fragment for later phases. `inttoptr`, atomics, volatile access, `invoke`/`landingpad`, dynamic
+`alloca`, and `switch` remain outside the full boundary as well as the core.
+
 ## 9. Change control
 
 The fragment is defined by the emitted production module, not by the full textual IR. When
 `stc-codegen` changes an emitted instruction, type, global, or entry-point shape, update this
-table and the Lean definition in the same change. A construct that appears only in debug, test,
-or OOP builds is rejected by the fragment rather than modeled silently.
+table and the Lean definition in the same change. A change to the wider Phase 1
+[boundary](Core-IR-Boundary.md) that touches a core form updates both records together; the
+boundary document is the superset and this table is the reviewed core slice. A construct that
+appears only in debug, test, or OOP builds is rejected by the core fragment rather than modeled
+silently.

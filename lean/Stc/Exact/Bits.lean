@@ -234,4 +234,98 @@ theorem IntType.rol_width (ty : IntType) (a : Nat) :
     Nat.or_self]
   exact Nat.mod_eq_of_lt hx
 
+/-- Rotating right by the width is the identity on the value. -/
+theorem IntType.ror_width (ty : IntType) (a : Nat) :
+    ty.ror a (ty.width : Int) = a % ty.modulus := by
+  unfold IntType.ror
+  rw [ty.count_width]
+  have hx : a % ty.modulus < ty.modulus := Nat.mod_lt _ ty.modulus_pos
+  simp only [Nat.shiftRight_zero, Nat.sub_zero, Nat.mod_self, Nat.shiftLeft_zero,
+    Nat.or_self]
+  exact Nat.mod_eq_of_lt hx
+
+/-- A shift whose masked count is zero is the identity on the value. -/
+theorem IntType.rol_count_zero (ty : IntType) (a : Nat) {n : Int}
+    (h : ty.count n = 0) : ty.rol a n = a % ty.modulus := by
+  unfold IntType.rol
+  rw [h]
+  have hx : a % ty.modulus < ty.modulus := Nat.mod_lt _ ty.modulus_pos
+  simp only [Nat.shiftLeft_zero, Nat.sub_zero, Nat.mod_self, Nat.shiftRight_zero,
+    Nat.or_self]
+  exact Nat.mod_eq_of_lt hx
+
+/-- A right shift whose masked count is zero is the identity on the value. -/
+theorem IntType.ror_count_zero (ty : IntType) (a : Nat) {n : Int}
+    (h : ty.count n = 0) : ty.ror a n = a % ty.modulus := by
+  unfold IntType.ror
+  rw [h]
+  have hx : a % ty.modulus < ty.modulus := Nat.mod_lt _ ty.modulus_pos
+  simp only [Nat.shiftRight_zero, Nat.sub_zero, Nat.mod_self, Nat.shiftLeft_zero,
+    Nat.or_self]
+  exact Nat.mod_eq_of_lt hx
+
+/-- A left shift by a zero count is the identity on the value. -/
+theorem IntType.shl_zero (ty : IntType) (a : Nat) (hw : 0 < ty.width) :
+    ty.shl a 0 = a % ty.modulus := by
+  unfold IntType.shl
+  rw [ty.count_zero hw]
+  simp [Nat.mod_eq_of_lt (Nat.mod_lt _ ty.modulus_pos)]
+
+/-- A logical right shift by a zero count is the identity on the value. -/
+theorem IntType.shr_zero (ty : IntType) (a : Nat) (hw : 0 < ty.width) :
+    ty.shr a 0 = a % ty.modulus := by
+  unfold IntType.shr
+  rw [ty.count_zero hw]
+  simp
+
+/-- A left shift by the width is the identity on the value. -/
+theorem IntType.shl_width (ty : IntType) (a : Nat) :
+    ty.shl a (ty.width : Int) = a % ty.modulus := by
+  unfold IntType.shl
+  rw [ty.count_width]
+  simp [Nat.mod_eq_of_lt (Nat.mod_lt _ ty.modulus_pos)]
+
+/-- A logical right shift by the width is the identity on the value. -/
+theorem IntType.shr_width (ty : IntType) (a : Nat) :
+    ty.shr a (ty.width : Int) = a % ty.modulus := by
+  unfold IntType.shr
+  rw [ty.count_width]
+  simp
+
+/-- AND with a value is the value on the type's bit pattern. -/
+theorem IntType.bitAnd_self (ty : IntType) (a : Nat) :
+    ty.bitAnd a a = a % ty.modulus := by
+  simp [IntType.bitAnd, Nat.and_self]
+
+/-- OR with a value is the value on the type's bit pattern. -/
+theorem IntType.bitOr_self (ty : IntType) (a : Nat) :
+    ty.bitOr a a = a % ty.modulus := by
+  simp [IntType.bitOr, Nat.or_self]
+
+/-- XOR with a value is zero. -/
+theorem IntType.bitXor_self (ty : IntType) (a : Nat) : ty.bitXor a a = 0 := by
+  simp [IntType.bitXor, Nat.xor_self]
+
+/-- AND with zero is zero. -/
+theorem IntType.bitAnd_zero (ty : IntType) (a : Nat) : ty.bitAnd a 0 = 0 := by
+  simp [IntType.bitAnd]
+
+/-- OR with zero keeps the value. -/
+theorem IntType.bitOr_zero (ty : IntType) (a : Nat) :
+    ty.bitOr a 0 = a % ty.modulus := by
+  simp [IntType.bitOr]
+
+/-- XOR with zero keeps the value. -/
+theorem IntType.bitXor_zero (ty : IntType) (a : Nat) :
+    ty.bitXor a 0 = a % ty.modulus := by
+  simp [IntType.bitXor]
+
+/-- Complementing zero gives the mask. -/
+theorem IntType.bitNot_zero (ty : IntType) : ty.bitNot 0 = ty.mask := by
+  simp [IntType.bitNot]
+
+/-- Complementing the mask gives zero. -/
+theorem IntType.bitNot_mask (ty : IntType) : ty.bitNot ty.mask = 0 := by
+  simp [IntType.bitNot, Nat.mod_eq_of_lt ty.mask_lt, Nat.xor_self]
+
 end Stc.Exact
