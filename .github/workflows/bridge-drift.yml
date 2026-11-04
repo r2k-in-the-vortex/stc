@@ -1,0 +1,60 @@
+name: Bridge toolchain drift
+
+# Manual/nightly drift check for the pinned Aeneas/Charon bridge. The fast CI
+# matrix stays free of Aeneas and Mathlib (owner decision 2026-11-03); this
+# workflow is never part of the required `ci` gate.
+#
+# `drift` validates `lean/bridge-toolchain.toml`, the Lean/Rust pin
+# consistency, and the three bridge source SHA-256 values. It needs no OCaml,
+# Lean proof environment, or Mathlib, so it is safe on a GitHub-hosted runner.
+#
+# `pinned` is manual-only (`full` dispatch input) and runs the same guard with
+# `--check-environment` on a self-hosted runner labelled `stc-bridge`. That
+# runner must be the pinned Ubuntu bridge host. Full Aeneas/Charon regeneration
+# is a reviewed manual procedure on that host (see the record file and the
+# program plan §9); it is deliberately not run here, because installing and
+# building the Aeneas/Mathlib environment (1796 build jobs in the M1-M3 spike)
+# is not practical on a GitHub-hosted runner.
+on:
+  schedule:
+    # Nightly, after the bridge pins were last reviewed.
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Run the pinned-host audit on the self-hosted stc-bridge runner"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-drift-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  drift:
+    name: Pin and source-hash drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate the bridge pin record and source hashes
+        run: python3 tools/ci/check_bridge_toolchain.py
+
+  pinned:
+    name: Pinned-host audit
+    if: github.event_name == 'workflow_dispatch' && inputs.full
+    runs-on: [self-hosted, linux, x64, stc-bridge]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify the installed pinned toolchain and source hashes
+        env:
+          AENEAS: ${{ vars.STC_AENEAS_BIN }}
+          CHARON: ${{ vars.STC_CHARON_BIN }}
+        run: python3 tools/ci/check_bridge_toolchain.py --check-environment

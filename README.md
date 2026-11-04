@@ -5,7 +5,7 @@
 through LLVM and clang, changes logic on a running controller at the next cycle
 boundary, and brings tests, coverage, formatting, and a typed debugger to PLC
 projects — with first-class VS Code support, a machine-checked semantic core,
-and a Cargo-style CLI, on Windows and Linux.
+a proved exact scalar kernel, and a Cargo-style CLI, on Windows and Linux.
 
 [![CI](https://github.com/r2k-in-the-vortex/stc/actions/workflows/ci.yml/badge.svg)](https://github.com/r2k-in-the-vortex/stc/actions/workflows/ci.yml)
 [![Coverage](https://raw.githubusercontent.com/r2k-in-the-vortex/stc/badges/coverage.svg)](https://github.com/r2k-in-the-vortex/stc/actions/workflows/ci.yml)
@@ -40,9 +40,11 @@ bringing automation into their existing build and review workflow.
   bar. The contract is [IDE Integration](specification/Architecture/IDE-Integration.md);
   the Cargo-style CLI remains for automation and CI.
 - **Proof, not just tests.** Lean 4 machine-checks the core source and emitted-IR
-  semantics: determinism, type soundness, trap soundness, memory and GOT safety,
-  and no modeled undefined behavior, backed by a reference interpreter and a
-  74-case differential conformance corpus.
+  semantics — determinism, type soundness, trap soundness, memory and GOT
+  safety, and no modeled undefined behavior — and proves the exact scalar kernel
+  behind constant folding and code generation equivalent to its Lean model,
+  relative to the documented trusted base. A reference interpreter and a 74/74
+  differential corpus back the implementation.
 
 ## See it
 
@@ -67,10 +69,20 @@ models the core source language and the emitted-IR fragment, and proves:
 - whole-run invariant preservation, including the run-level halt theorem.
 
 A frozen 74-case corpus runs through the reference interpreter and the compiled
-artifact; the committed report passes 74/74. This is a machine-checked
-semantic foundation and differential conformance evidence, not a
-compiler-refinement proof. The scope, trusted base, and version freeze are in
-the [Phase 0 report](specification/Verification/Phase0-Report.md).
+artifact; the committed report passes 74/74.
+
+Phase 2 adds a formal refinement for the scalar core. The exact kernel behind
+checked arithmetic, division, bitwise and shift/rotate operations, conversions,
+comparisons, selection, and string lengths is proved equivalent to its Lean
+model through Aeneas/Charon. The analyzer's constant folder and the code
+generator share that single kernel, and a build-time certificate check rejects
+any folded value that does not recompute through it.
+
+This is a machine-checked semantic foundation, a V1 refinement of the exact
+scalar kernel, and differential conformance evidence — not a whole-compiler
+refinement proof. Scope, trusted base, and version freeze are in the
+[Phase 0 report](specification/Verification/Reports/Phase0-Report.md) and
+[Phase 2 report](specification/Verification/Reports/Phase2-Report.md).
 
 ## What you can do
 
@@ -108,8 +120,9 @@ code never owns persistent storage.
   symbols, definition, references, hover, completion, formatting), tasks and
   problem matcher, DAP debugging, and online-change controls.
 - **Stronger Lean verification than originally planned.** Source and target
-  semantics, 36 proved theorems, whole-run invariant preservation, a reference
-  interpreter, and a frozen 74-case differential corpus that passes 74/74.
+  semantics, whole-run invariant preservation, a reference interpreter, a
+  74/74 differential corpus, and a formal refinement of the exact scalar kernel
+  shared by constant folding and code generation.
 - **EtherCAT I/O on Linux.** The optional `stc-io-ethercat` shim is loaded at
   run time; the base package has no IgH dependency and no kernel modules are
   redistributed.
@@ -188,9 +201,9 @@ baseline. Language profile: `stc-2013-oop-utf8-v1`.
 
 - CI is green on Windows x64, Linux x64, and Linux ARM64.
 - Line coverage is gated at 85% (85.29% at the v2.0.0 gate).
-- Lean 4 machine-checks the core source and emitted-IR semantics (36 proved
-  theorems, a reference interpreter, and a 74/74 differential corpus); exact
-  functions also have Lean models and generated vectors.
+- Lean 4 machine-checks the core source and emitted-IR semantics, and the exact
+  scalar kernel is proved equivalent to its Lean model; a reference interpreter
+  and a 74/74 differential corpus back the implementation.
 - Double builds are byte-identical, and fuzz targets cover the front end and
   artifact decoders.
 - Cycle timing and jitter are measured on x86-64 PREEMPT_RT; results are
@@ -209,7 +222,7 @@ a safety PLC; see [NON-SAFETY.md](NON-SAFETY.md).
 | [v2.0.0 plan](V2.0.0-PLAN.md) | [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md) |
 | [v1.0.0 release notes](RELEASE-NOTES.md) | [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) |
 | [Known Limitations](KNOWN-LIMITATIONS.md) | [Testing and Verification](specification/Architecture/Testing-and-Verification.md) |
-| [Phase 0 verification report](specification/Verification/Phase0-Report.md) | [Core semantics](specification/Verification/Semantics.md) |
+| [Phase 0 report](specification/Verification/Reports/Phase0-Report.md) · [Phase 2 report](specification/Verification/Reports/Phase2-Report.md) | [Core semantics](specification/Verification/Semantics.md) |
 | [Non-Safety Statement](NON-SAFETY.md) | [Decisions](specification/Decisions.md) |
 
 Verification evidence: [Modbus TCP server](specification/Verification/Modbus-Server.md),

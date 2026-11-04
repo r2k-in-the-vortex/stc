@@ -405,6 +405,7 @@ name = "stc-sema"
 version = "1.0.0"
 dependencies = [
  "serde_json",
+ "stc-codegen",
  "stc-diag",
  "stc-hir",
  "stc-lexer",

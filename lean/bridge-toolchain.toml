@@ -1,0 +1,74 @@
+# Bridge toolchain pins (Phase 1 M4 architecture record; the durable Phase 1
+# summary is specification/Verification/Reports/Phase1-Report.md).
+#
+# This file is the durable pin record for the Aeneas/Charon/Mathlib bridge
+# environment. The fast `lake build` at `lean/` uses only
+# `lean/lean-toolchain` and `rust-toolchain.toml`; the bridge environment is
+# the separate, non-default Lake package `lean/aeneas/`. The drift check that
+# consumes this file is `tools/ci/check_bridge_toolchain.py`, run by the
+# manual/nightly `bridge-drift` workflow.
+#
+# A pin change requires owner review and a new bridge spike. Generated models
+# under `lean/aeneas/StcGenerated/` must be regenerated from these exact
+# versions; they are never hand-edited.
+
+schema_version = 1
+profile = "stc-2013-oop-utf8-v1"
+semantics_version = "1.0"
+
+[lean]
+toolchain = "leanprover/lean4:v4.35.0"
+recorded_in = "lean/lean-toolchain"
+
+[rust]
+channel = "1.99.1"
+recorded_in = "rust-toolchain.toml"
+
+[mathlib]
+version = "v4.35.0"
+role = "proof-only"
+package = "lean/aeneas"
+
+[aeneas]
+version = "nightly-2026.11.02-ab34bd2"
+commit = "ab34bd2"
+backend = "lean"
+
+[charon]
+version = "0.1.304"
+commit = "7b462d9"
+preset = "aeneas"
+
+[ocaml]
+opam = "2.6.1"
+compiler = "5.3.0"
+gmp = "6.3.0"
+
+[sources.exact]
+path = "crates/stc-codegen/src/exact.rs"
+sha256 = "5ecf5d604bb7d545927bc9626876f6fcedfead405623378c4800b3f65b377c44"
+generated = true
+generated_path = "lean/aeneas/StcGenerated/Exact/Model.lean"
+
+[sources.keys]
+path = "crates/stc-got/src/keys.rs"
+sha256 = "af80f2d87d4c9f9d6f59310210d5020daccbeb7ef0b02af03d91bf2aa9ad34bc"
+generated = false
+note = "Aeneas translation failed; the proved Lean checker/contract is the chosen bridge."
+
+[sources.wire]
+path = "crates/stc-got/src/wire.rs"
+sha256 = "ae840ab12704434b162013fafc85facc2883275dcaefccd2951fd2d09b7810fd"
+generated = true
+generated_path = "lean/aeneas/StcGenerated/Wire/Model.lean"
+note = "Fallback evidence only; the proved Lean checker is the chosen bridge."
+
+[layout]
+default_package = "lean"
+bridge_package = "lean/aeneas"
+generated_root = "lean/aeneas/StcGenerated"
+handwritten_bridge_root = "lean/Stc/Bridge"
+handwritten_proof_root = "lean/aeneas/Bridge"
+
+[generation]
+boundary = "manual on the pinned Ubuntu host; reviewed diff; never in fast CI"

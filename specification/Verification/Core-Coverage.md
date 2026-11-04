@@ -6,14 +6,16 @@ Status: Approved for P0.1 review (2026-10-27). This table is the traceability re
 productions in [Grammar](../Syntax/Grammar.md) and the lexical rules in
 [Tokenization](../Syntax/Tokenization.md) to the Lean definitions in `Stc.Syntax` and
 `Stc.Grammar`. It makes no parser-correctness claim; Phase 4 owns the parser contracts.
-Parent: [Phase 0 Implementation Plan](Plan-Phase0.md) §6 (P0.1)
+Parent: [Phase 0 design record](Reports/Phase0-Design.md)
 Semantics reference: [stc Semantics — Phase 0 Core](Semantics.md)
+Target boundary: [Emitted IR Boundary — Phase 1 Freeze](Core-IR-Boundary.md)
 
 ## 1. Scope
 
-The covered source subset is frozen by [Plan-Phase0.md](Plan-Phase0.md) §3.3 and the
+The covered source subset is frozen by [Semantics.md](Semantics.md) §1 and the
 [charter's exclusion register](Semantics-Charter.md#6-frozen-core-and-exclusion-register). The
-Lean modules are:
+target-side counterpart and the D-V6 first end-to-end subset are recorded in the Phase 1
+[Emitted IR Boundary](Core-IR-Boundary.md). The Lean modules are:
 
 | Module | Contents |
 | --- | --- |
@@ -267,4 +269,4 @@ the spans and the mapping predicates the proof will use.
 P0.1 coverage was reviewed and approved on 2026-10-27 against
 [Grammar](../Syntax/Grammar.md) and [Tokenization](../Syntax/Tokenization.md). Every included core
 production has a Lean constructor or relation rule; every excluded production is listed in §5.4
-and the charter register. The approval is recorded in [Plan-Phase0.md](Plan-Phase0.md) §17.
+and the charter register. The approval is recorded in [Phase 0 report](Reports/Phase0-Report.md).
