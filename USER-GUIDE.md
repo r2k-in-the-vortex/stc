@@ -1,4 +1,4 @@
-# `stc` user guide — 1.0.0
+# `stc` user guide — 2.0.0
 
 Profile: `stc-2013-oop-utf8-v1`
 
@@ -17,7 +17,7 @@ retained state, I/O backends, and typed debug/monitoring.
 A release package has this layout:
 
 ```text
-stc-1.0.0-<host-triple>/
+stc-2.0.0-<host-triple>/
   bin/stc(.exe)
   lib/stc_runtime.lib + stc_runtime.dll        (Windows MSVC)
   lib/libstc_runtime.a + libstc_runtime.so     (Linux GNU)
@@ -33,9 +33,9 @@ stc-1.0.0-<host-triple>/
 A package is produced for each native host triple:
 
 ```text
-stc-1.0.0-x86_64-pc-windows-msvc
-stc-1.0.0-x86_64-unknown-linux-gnu
-stc-1.0.0-aarch64-unknown-linux-gnu
+stc-2.0.0-x86_64-pc-windows-msvc
+stc-2.0.0-x86_64-unknown-linux-gnu
+stc-2.0.0-aarch64-unknown-linux-gnu
 ```
 
 Linux GNU packages therefore exist for both x86-64 and AArch64, each with a
@@ -109,7 +109,7 @@ version = "0.1.0"
 language = "stc-2013-oop-utf8-v1"
 
 [dependencies]
-motorlib = { path = "../motorlib" }   # local path only in v1
+motorlib = { path = "../motorlib" }   # local path only in this release
 
 [project]
 sources = ["src/**/*.st"]
@@ -726,9 +726,9 @@ and the runnable fixture in [`tests/modbus/`](tests/modbus/README.md).
 
 | Host | Triple | Package | Compile | Run/model | Debug | Online change |
 | --- | --- | --- | --- | --- | --- | --- |
-| Windows 11 x86-64 MSVC | `x86_64-pc-windows-msvc` | `stc-1.0.0-x86_64-pc-windows-msvc` | yes | yes | yes | yes |
-| Linux x86-64 GNU | `x86_64-unknown-linux-gnu` | `stc-1.0.0-x86_64-unknown-linux-gnu` | yes | yes | yes | yes |
-| Linux AArch64 GNU | `aarch64-unknown-linux-gnu` | `stc-1.0.0-aarch64-unknown-linux-gnu` | yes | yes | yes | yes |
+| Windows 11 x86-64 MSVC | `x86_64-pc-windows-msvc` | `stc-2.0.0-x86_64-pc-windows-msvc` | yes | yes | yes | yes |
+| Linux x86-64 GNU | `x86_64-unknown-linux-gnu` | `stc-2.0.0-x86_64-unknown-linux-gnu` | yes | yes | yes | yes |
+| Linux AArch64 GNU | `aarch64-unknown-linux-gnu` | `stc-2.0.0-aarch64-unknown-linux-gnu` | yes | yes | yes | yes |
 | Other targets | any clang triple | none | IR/object emission only | no | no | no |
 
 The three native hosts are supported from M8 (D-200); macOS, Windows ARM64,

@@ -256,7 +256,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stc-codegen"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "serde_json",
  "stc-diag",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "stc-dap"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -281,14 +281,14 @@ dependencies = [
 
 [[package]]
 name = "stc-diag"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "stc-span",
 ]
 
 [[package]]
 name = "stc-driver"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "serde_json",
  "stc-codegen",
@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "stc-fmt"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "stc-diag",
  "stc-lexer",
@@ -322,11 +322,11 @@ dependencies = [
 
 [[package]]
 name = "stc-got"
-version = "1.0.0"
+version = "2.0.0"
 
 [[package]]
 name = "stc-hir"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "serde_json",
  "stc-span",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "stc-ide"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "stc-diag",
  "stc-fmt",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "stc-lexer"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "stc-diag",
  "stc-span",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "stc-lsp"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "stc-manifest"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "stc-diag",
  "stc-span",
@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "stc-parser"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "stc-diag",
  "stc-lexer",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "stc-runtime"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "stc-codegen",
  "stc-diag",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "stc-sema"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "serde_json",
  "stc-codegen",
@@ -416,11 +416,11 @@ dependencies = [
 
 [[package]]
 name = "stc-span"
-version = "1.0.0"
+version = "2.0.0"
 
 [[package]]
 name = "stc-syntax"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "stc-test"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "serde_json",
  "stc-diag",
@@ -562,7 +562,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "stc-got",
  "toml_edit",

@@ -1,10 +1,10 @@
-# Known limitations — `stc` 1.0.0
+# Known limitations — `stc` 2.0.0
 
 Profile: `stc-2013-oop-utf8-v1`  
-Date: 2026-10-29; revised 2026-11-02
+Date: 2026-10-29; revised 2026-11-04
 
 This list is part of the release contract. Each entry is either an explicit
-v1 profile boundary or a tested limitation with a documented workaround.
+profile boundary or a tested limitation with a documented workaround.
 Anything not listed here and not described in
 [`specification/01-Conformance-Profile.md`](specification/01-Conformance-Profile.md)
 must either work or produce an explicit diagnostic; silent acceptance of an
@@ -23,7 +23,7 @@ machine design as required by law and regulation.
 | Vendor project import (TIA Portal, CODESYS), the SIMATIC AX preprocessor, and vendor pragma semantics are not supported | Use plain ST against this profile |
 | A registry, version solver, or network package resolution is not provided | Local path dependencies plus a committed `stc.lock`; `--locked` is enforced in CI |
 | `PERSISTENT` is not a keyword; periodic or crash-time retained-state saves are not provided | `RETAIN` is saved at normal shutdown only |
-| Hardware I/O backends: the EtherCAT backend and the Modbus TCP server are implemented for v2.0.0; MQTT remains deferred | v1 uses `null`, `memory`, and `file` backends; see §8 and §10 for the v2.0.0 hardware boundaries |
+| Hardware I/O backends: the EtherCAT backend and the Modbus TCP server are implemented in v2.0.0; MQTT remains deferred | The v2 package includes the Modbus TCP server and the optional Linux EtherCAT shim; see §8 and §10 for the hardware boundaries |
 | Multi-threaded ST task execution is not provided | One cooperative cycle thread executes ST; the control and debug service threads never execute ST |
 | `ARRAY [*]` is a conformant-parameter form only | Dynamic locals, globals, and function results are rejected |
 | `stc fmt` has one fixed style and no configuration | `--check` reports a diff; post-v1 work adds configuration |
@@ -33,7 +33,7 @@ machine design as required by law and regulation.
 
 | Limitation | Status / workaround |
 | --- | --- |
-| Native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`) | Each has its own `stc-1.0.0-<triple>` package; other triples are smoke-tested for IR/object emission only |
+| Native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`) | Each has its own `stc-2.0.0-<triple>` package; other triples are smoke-tested for IR/object emission only |
 | Module loading, execution, and frame extraction are supported on the three native hosts | Cross-target artifacts are not loadable or debuggable off-host; link and run on the target host |
 | macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported | Use a supported host, or emit IR/objects only; no support claim is made |
 | CPU affinity is not pinned; control and debug service threads run at below-normal priority (`THREAD_PRIORITY_BELOW_NORMAL` on Windows, nice +10 on Linux) as an advisory policy | CPU placement belongs to the deployment's cpuset/scheduler policy; this is not a real-time guarantee |
@@ -92,7 +92,7 @@ machine design as required by law and regulation.
 | GOT manifest format 1 is rejected | The documented cold download is the only upgrade path; there is no migration tool (D-192) |
 | Debug and release forms have distinct identities and are not a supported hot-swap pair | Keep separate stores; a release candidate against a debug baseline selects a cold layout, and the reverse direction is classified compatible but is not a supported deployment path |
 | M4-era code-linked artifacts are not loadable | Rebuild with the current module model |
-| There is no remote/network deployment, multi-user scheduling, or deploy/rollback UI; the IDE surface starts/stops the watch and shows the generation but offers no deploy/rollback controls | v1 online change is a local host API/CLI capability; use `stc run --watch` and `stc online` locally |
+| There is no remote/network deployment, multi-user scheduling, or deploy/rollback UI; the IDE surface starts/stops the watch and shows the generation but offers no deploy/rollback controls | Online change is a local host API/CLI capability; use `stc run --watch` and `stc online` locally |
 | `stc run --watch`, the control channel, and the IDE online-change surface are local only | The debug protocol is a separate local endpoint; the extension adds no network path |
 | A missing, stale, or corrupt baseline forces a cold download | The runtime exports and downloads the active manifest; never execute manifest content |
 
@@ -101,7 +101,7 @@ machine design as required by law and regulation.
 | Limitation | Status / workaround |
 | --- | --- |
 | Retained state is saved at normal shutdown; crash-time saves and periodic checkpoints are not provided | Use the documented shutdown path; a cold start reinitializes |
-| Per-field retained-state reset policy during online change is not implemented | `STC-E-ONLINE-STATE-001`, `STC-W-ONLINE-STATE-001`, and `STC-W-ONLINE-004` are allowlisted as not implemented; v1 preserves host memory and rejects incompatible layouts |
+| Per-field retained-state reset policy during online change is not implemented | `STC-E-ONLINE-STATE-001`, `STC-W-ONLINE-STATE-001`, and `STC-W-ONLINE-004` are allowlisted as not implemented; the runtime preserves host memory and rejects incompatible layouts |
 | Direct variables in function/FB bodies are rejected as `STC-E-IO-001` rather than accepted with a deprecation warning | `STC-W-RUN-001` is allowlisted as not implemented |
 | The test runner is sequential and process-isolated; parallel test threads are not provided | Deterministic output and resource use are deliberate |
 | `STC_ASSERT` and `{stc:test}` units are excluded from production builds; production use is an error | Keep test code in `[test].sources` or a separate test package |
@@ -136,10 +136,11 @@ detail is in
 | The control-disabled control-cost leg estimates its warm-up cycle boundary from the cycle count | The error is negligible over a 10 minute run; the control-enabled legs use fixed status boundaries |
 | The tuned boot profile was not executed in v2.0.0 | It remains a separate future-work scope decision; no tuned result is claimed |
 
-## 8. EtherCAT I/O (WL-5.2, v2.0.0 work)
+## 8. EtherCAT I/O (WL-5.2, v2.0.0)
 
-Added 2026-11-01. The v1.0.0 boundary in §5 is unchanged: the base 1.0.0 package does not carry
-hardware I/O. WL-5.2 adds the optional Linux EtherCAT backend for v2.0.0. The full evidence is in
+Added 2026-11-01; revised for v2.0.0. The v2.0.0 package carries the optional Linux EtherCAT
+backend; the base runtime still has no IgH dependency and no kernel modules are redistributed.
+The full evidence is in
 [EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md); the procedure and per-run data
 are in [EtherCAT-Runbook.md](specification/Verification/EtherCAT-Runbook.md) and
 [tests/ethercat/diewu/PHASE6.md](tests/ethercat/diewu/PHASE6.md).
@@ -176,7 +177,7 @@ the test artifacts; the model and formats are in
 | There is no fail-under threshold, coverage gate, or HTML report | Consume `coverage.json` or `lcov.info` in external tooling; see Testing and Verification §2.6 |
 | Coverage is not correctness evidence and is not rule-level traceability | Correctness is established by tests and by the rule traceability check; coverage only records executed statements |
 
-## 10. Modbus TCP server I/O (WL-5.1, v2.0.0 work)
+## 10. Modbus TCP server I/O (WL-5.1, v2.0.0)
 
 Added 2026-11-02. WL-5.1 implements a Modbus TCP **server** backend in the runtime; it is not a
 client, not Modbus RTU, and not a safety function. The contract is in
