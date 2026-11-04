@@ -48,11 +48,12 @@ bringing automation into their existing build and review workflow.
 
 ## See it
 
-[![Watch the VS Code walkthrough](https://github.com/r2k-in-the-vortex/stc/releases/download/v2.0.0/vscode-demo-poster.png)](https://github.com/r2k-in-the-vortex/stc/releases/download/v2.0.0/vscode-demo.mp4)
+[![Watch the VS Code walkthrough on YouTube](https://github.com/r2k-in-the-vortex/stc/releases/download/v2.0.0/vscode-demo-poster.png)](https://youtu.be/lqABvDU5pto)
 
-The 60-second walkthrough shows the intended workflow: open a project, read
-diagnostics, jump to a definition, format, set a breakpoint, inspect typed
-variables, then edit and hot-swap the running logic from the status bar.
+The 75-second walkthrough shows the intended workflow: browse types and
+interfaces, read compiler diagnostics, format, set a breakpoint, inspect
+Globals and Locals, then edit and hot-swap the running logic from the status
+bar.
 
 The extension is a local client for `stc`; the compiler and runtime do the
 work. Everything runs on the machine.
@@ -97,6 +98,17 @@ refinement proof. Scope, trusted base, and version freeze are in the
 | Find bugs | Typed debug session; breakpoints, stepping, call stack; Globals/Locals; force/watch; local authenticated protocol |
 | Keep quality | Isolated `{stc:test}` suites; statement coverage (`coverage.json` + `lcov.info`); formatter with `--check` |
 | Embed the runtime | `--emit=lib` produces a C ABI host library with generated code in a separate module |
+
+## Connectivity
+
+PLC projects need to talk to the plant. `stc` exposes the runtime-owned process
+image to fieldbuses and plant systems.
+
+| Modbus TCP | EtherCAT | MQTT |
+| :---: | :---: | :---: |
+| [![Modbus TCP](docs/assets/connectivity/modbus-tcp.png)](specification/Verification/Modbus-Server.md) | [![EtherCAT](docs/assets/connectivity/ethercat.png)](specification/Verification/EtherCAT-Host.md) | ![MQTT](docs/assets/connectivity/mqtt.png) |
+| **Available** in v2.0.0 | **Available on Linux** in v2.0.0 | **Planned** for the next version |
+| Server for coils, discrete inputs, input and holding registers | Cyclic process data and servo-drive I/O through `stc-io-ethercat` | Process-image I/O client for an external broker |
 
 Network-facing I/O is not a safety function: the Modbus TCP server is
 unauthenticated and non-real-time, and EtherCAT is Linux-only in v2.0.0.
