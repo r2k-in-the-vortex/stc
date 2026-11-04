@@ -12,8 +12,8 @@ verified is marked **unsupported** and added to
 
 **Current status:** the workspace and version-bearing snapshots are now
 `2.0.0`. The final `2.0.0` CI run, all three package builds, and the
-Aeneas/Charon build are green; artifact upload and owner sign-off are still
-open.
+Aeneas/Charon build are green and verified. Artifact upload and owner sign-off
+are still open.
 
 ## 1. Release identity and contract freeze
 
@@ -28,13 +28,15 @@ open.
 
 ## 2. Full CI verification
 
-The full CI matrix at the final release commit `e604435` passed:
-[run 41879601977](https://github.com/r2k-in-the-vortex/stc/actions/runs/41879601977),
-**39/39 jobs**, 0 skipped, 0 failed, on 2026-11-04.
+The full CI matrix at the final release commit `0f3bf3c` passed:
+[run 41882102341](https://github.com/r2k-in-the-vortex/stc/actions/runs/41882102341),
+**39/39 jobs**, 0 skipped, 0 failed, on 2026-11-04. The code commit `e604435`
+also passed [run 41879601977](https://github.com/r2k-in-the-vortex/stc/actions/runs/41879601977)
+with the same 39/39 result.
 
 | # | Check | Evidence | Result |
 | --- | --- | --- | --- |
-| 1 | Full CI matrix | run `41879601977`; `windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm` | `[x]` 39/39 |
+| 1 | Full CI matrix | run `41882102341`; `windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm` | `[x]` 39/39 |
 | 2 | Workspace and driver tests | Rust test jobs on all three hosts | `[x]` |
 | 3 | Online change, debug, UI, conformance, execution, projects, cross-target | CI jobs | `[x]` |
 | 4 | Packaging and fresh-project exercise at release identity | Release package jobs on all three hosts | `[x]` all three jobs passed at `2.0.0` |
@@ -75,8 +77,8 @@ diff remains available on the pinned host if release policy requires it.
 
 | # | Target | Evidence | Result |
 | --- | --- | --- | --- |
-| 1 | WL-1.1 — VS Code integration and debugging | PR #18; owner-confirmed manual acceptance 2026-11-03; final branch run `41732616607`; current extension jobs in `41879601977` | `[x]` |
-| 2 | WL-2 — 85% compile coverage | coverage job passed; 85.28% recorded on final run `41879601977`; gate active in CI | `[x]` |
+| 1 | WL-1.1 — VS Code integration and debugging | PR #18; owner-confirmed manual acceptance 2026-11-03; final branch run `41732616607`; current extension jobs in `41882102341` | `[x]` |
+| 2 | WL-2 — 85% compile coverage | coverage job passed; 85.28% recorded on final run `41882102341`; gate active in CI | `[x]` |
 | 3 | WL-3 — Lean and bridge verification | [Phase 0](specification/Verification/Reports/Phase0-Report.md), [Phase 1](specification/Verification/Reports/Phase1-Report.md), [Phase 2](specification/Verification/Reports/Phase2-Report.md); CI Lean job; Aeneas run above | `[x]` |
 | 4 | WL-4 — RT verification | [RT-Host.md](specification/Verification/RT-Host.md), [RT-Runbook.md](specification/Verification/RT-Runbook.md), [RT-Run-Manifest.md](specification/Verification/RT-Run-Manifest.md); host-specific | `[x]` |
 | 5 | WL-5.1 — Modbus TCP server | [Modbus-Server.md](specification/Verification/Modbus-Server.md); [tests/modbus](tests/modbus/README.md); mixed bench 60,000 cycles | `[x]` |
@@ -87,10 +89,10 @@ diff remains available on the pinned host if release policy requires it.
 
 | # | Check | Evidence | Result |
 | --- | --- | --- | --- |
-| 1 | `cargo xtask package --locked` succeeds for all three native hosts at `2.0.0` | CI artifacts from run `41879601977` | `[x]` Windows, Linux x86-64, and Linux AArch64 |
+| 1 | `cargo xtask package --locked` succeeds for all three native hosts at `2.0.0` | CI artifacts from run `41882102341` | `[x]` Windows, Linux x86-64, and Linux AArch64 |
 | 2 | Package layout, `package.json`, and `SHA256SUMS` verify | all three package checksums verified; each reports `2.0.0`, host ABI 2.3, `frame_sidecar` 2 | `[x]` |
-| 3 | Unpacked fresh project: `new`, `check`, `build`, `build --release`, `build --emit=lib`, `run`, `test`, `clean`, rebuild | package jobs in run `41879601977` | `[x]` |
-| 4 | VSIX installs against the packaged `stc`; extension smoke passes | local VSIX build + extension/smoke jobs in run `41879601977` | `[x]` |
+| 3 | Unpacked fresh project: `new`, `check`, `build`, `build --release`, `build --emit=lib`, `run`, `test`, `clean`, rebuild | package jobs in run `41882102341` | `[x]` |
+| 4 | VSIX installs against the packaged `stc`; extension smoke passes | local VSIX build + extension/smoke jobs in run `41882102341` | `[x]` |
 | 5 | Release artifacts uploaded and URLs/checksums recorded | GitHub release | `[ ]` pending |
 
 ## 6. Documentation and limitations
@@ -130,7 +132,7 @@ workarounds.
 | Role | Name | Date | Signature / result |
 | --- | --- | --- | --- |
 | Release owner | project maintainer (`r2k`) | — | `[ ]` pending |
-| Build/CI evidence reviewed | project maintainer (`r2k`) | — | Run `41879601977` (39/39), Aeneas build, three package checksums, and VSIX recorded; owner review pending |
+| Build/CI evidence reviewed | project maintainer (`r2k`) | — | Run `41882102341` (39/39), Aeneas build, three package checksums, and VSIX recorded; owner review pending |
 | Documentation reviewed | project maintainer (`r2k`) | — | `[ ]` pending |
 | Non-safety statement reviewed | project maintainer (`r2k`) | — | `[ ]` pending |
 
