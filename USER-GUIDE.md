@@ -139,7 +139,7 @@ timeout = "5s"
 [debug]
 default = true
 protocol = "pipe"                     # pipe | socket
-session-timeout = "5min"
+session-timeout = "5min"              # optional; unset or "0ns" disables
 allow-write = false
 allow-force = false
 ```
@@ -270,8 +270,8 @@ include `print`, `set`, `force`, `release`, `release-all`, `watch`,
 `audit`, and `quit`.
 
 - Starting a session does not stop the cycle. A stop/breakpoint/step holds
-  outputs and is bounded by `[debug].session-timeout` (default five minutes);
-  expiry ends the session and resumes the cycle.
+  outputs. The optional `[debug].session-timeout` bound is disabled by default;
+  when configured, expiry ends the session and resumes the cycle.
 - Writes and forces are queued and applied at a cycle boundary, revalidated
   for generation, root, type, layout, and writability. A `stc-debug/1.1`
   client that writes while the target is stopped gets an immediate

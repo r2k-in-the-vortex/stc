@@ -281,6 +281,9 @@ multi-thread, restart, conditional-breakpoint, or expression support.
 - Locals lists a frame's names, canonical types, and live/available state from `frame.locals`;
   values are read one by one with `frame.read`. Names are the frame table's normalized uppercase
   spellings; the source spelling is not retained by the debug metadata.
+- A program or FB body frame has no frame-table locals: its fields are instance roots and appear
+  under Globals, so its Locals scope is empty. A function frame still lists its locals. This split
+  is the documented F-13 limitation; a frame-to-instance mapping is not implemented.
 - Globals groups manifest roots by program instance and exposes top-level global and direct roots.
   It is sourced from `manifest.get` and read with `var.read`. A program instance is shown as a
   container whose fields are its manifest roots.

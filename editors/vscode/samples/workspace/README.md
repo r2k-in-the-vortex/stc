@@ -117,9 +117,9 @@ a debug server with an explicit endpoint, so repeated `stc: run` and attach
 cycles work. An older `stc` binary without this behavior requires the stale
 endpoint and audit files to be removed first.
 
-Terminating the `stc: run` task currently leaves the driver and launcher
-processes running; stop the process tree manually until that is fixed (UI
-checklist follow-up F-3).
+Terminating the `stc: run` task stops the whole process tree: the task's
+pseudoterminal closes the `stc run` driver and the host it launched, not just
+the task shell.
 
 Writes are disabled by default. `allowWrite` enables `setVariable` for live
 roots, and `allowForce` additionally requests the force scope; the host must

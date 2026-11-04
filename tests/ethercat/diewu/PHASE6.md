@@ -279,7 +279,7 @@ write is applied at the next cycle boundary and a queue-result event follows.
 Wait about one second before printing the result. Values are printed as
 `stc: NAME = value`.
 
-The debug session's default stop/idle budget is five minutes; the cycle is
+The stop/idle budget is opt-in and disabled by default (D-212); the cycle is
 not stopped during these reads, so an active session does not consume it. If
 the session ends, relaunch it: the host restarts and the fault counters reset,
 so redo the baseline and treat the interrupted attempt as incomplete.
