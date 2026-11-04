@@ -704,6 +704,143 @@ fn message_formats_and_colors() {
 }
 
 #[test]
+fn diagnostic_paths_select_absolute_source_paths() {
+    let project = TestDir::new("diagnostic-paths");
+    project.write("app/stc.toml", &app_manifest("app", ""));
+    project.write("app/src/main.st", UNKNOWN_NAME_PROGRAM);
+    let source = project.path("app/src/main.st");
+    let absolute = absolute_text(&source);
+
+    // The default keeps the package-qualified display path.
+    let short = project.run(
+        "app",
+        &["check", "--message-format", "short", "--color", "never"],
+    );
+    assert_eq!(short.status.code(), Some(1), "{}", stderr(&short));
+    let text = stderr(&short);
+    assert!(text.contains("app/src/main.st:3:"), "{text}");
+    assert!(!text.contains(&absolute), "{text}");
+
+    // `--diagnostic-paths absolute` prints the real source path.
+    let absolute_short = project.run(
+        "app",
+        &[
+            "check",
+            "--message-format",
+            "short",
+            "--color",
+            "never",
+            "--diagnostic-paths",
+            "absolute",
+        ],
+    );
+    assert_eq!(
+        absolute_short.status.code(),
+        Some(1),
+        "{}",
+        stderr(&absolute_short)
+    );
+    let text = stderr(&absolute_short);
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(text.starts_with(&absolute), "{text}");
+    assert!(text.contains(":3:"), "{text}");
+
+    let json = project.run(
+        "app",
+        &[
+            "check",
+            "--message-format",
+            "json",
+            "--diagnostic-paths=absolute",
+        ],
+    );
+    assert_eq!(json.status.code(), Some(1), "{}", stderr(&json));
+    let diagnostic: serde_json::Value =
+        serde_json::from_str(stdout(&json).lines().next().expect("one JSON line"))
+            .expect("diagnostic JSON");
+    assert_eq!(
+        diagnostic.get("file").and_then(serde_json::Value::as_str),
+        Some(absolute.as_str())
+    );
+
+    // `stc test` uses its own project loader; the option applies there too.
+    scaffold(&project, "tapp");
+    project.write("tapp/src/main.st", UNKNOWN_NAME_PROGRAM);
+    let test_default = project.run(
+        "tapp",
+        &[
+            "test",
+            "--no-run",
+            "--message-format",
+            "short",
+            "--color",
+            "never",
+        ],
+    );
+    assert_eq!(
+        test_default.status.code(),
+        Some(1),
+        "{}",
+        stderr(&test_default)
+    );
+    assert!(
+        stderr(&test_default).contains("tapp/src/main.st:3:"),
+        "{}",
+        stderr(&test_default)
+    );
+    let test_absolute = project.run(
+        "tapp",
+        &[
+            "test",
+            "--no-run",
+            "--message-format",
+            "short",
+            "--color",
+            "never",
+            "--diagnostic-paths",
+            "absolute",
+        ],
+    );
+    assert_eq!(
+        test_absolute.status.code(),
+        Some(1),
+        "{}",
+        stderr(&test_absolute)
+    );
+    assert!(
+        stderr(&test_absolute).starts_with(&absolute_text(&project.path("tapp/src/main.st"))),
+        "{}",
+        stderr(&test_absolute)
+    );
+
+    // The option is not valid outside the diagnostic-producing project
+    // commands.
+    for arguments in [
+        vec!["fmt", "--diagnostic-paths", "absolute"],
+        vec!["metadata", "--diagnostic-paths", "absolute"],
+        vec!["clean", "--diagnostic-paths", "absolute"],
+        vec!["check", "--diagnostic-paths", "relative"],
+    ] {
+        let output = project.run(".", &arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "`{arguments:?}` should be a usage error:\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+fn absolute_text(path: &std::path::Path) -> String {
+    let text = path
+        .canonicalize()
+        .expect("canonical source path")
+        .to_string_lossy()
+        .into_owned();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
+#[test]
 fn quiet_and_verbose_output() {
     let project = TestDir::new("verbosity");
     project.write("app/stc.toml", &app_manifest("app", "debug = false"));

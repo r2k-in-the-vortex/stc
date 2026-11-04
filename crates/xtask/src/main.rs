@@ -78,6 +78,7 @@ fn suite_targets(suite: &str) -> Option<&'static [SuiteTarget]> {
             ("stc-runtime", "debug_view"),
             ("stc-runtime", "debug_protocol"),
             ("stc-driver", "debug_cli"),
+            ("stc-driver", "dap_cli"),
             ("stc-driver", "debug_release"),
             ("stc-driver", "frames"),
             ("stc-codegen", "debug_info"),
@@ -675,7 +676,7 @@ fn render_package_json(version: &str, host: &str, artifacts: &[String]) -> Strin
         "    \"descriptor\": {},\n",
         stc_got::DESCRIPTOR_FORMAT
     ));
-    json.push_str("    \"frame_sidecar\": 1,\n");
+    json.push_str("    \"frame_sidecar\": 2,\n");
     json.push_str(&format!(
         "    \"manifest\": {},\n",
         stc_got::MANIFEST_FORMAT
@@ -1330,5 +1331,6 @@ let ports: u16 = 80;
         };
         assert!(json.contains(expected), "{json}");
         assert!(json.contains("\"host\": \"host-triple\""), "{json}");
+        assert!(json.contains("\"frame_sidecar\": 2"), "{json}");
     }
 }

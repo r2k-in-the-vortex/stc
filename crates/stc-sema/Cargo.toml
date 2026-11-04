@@ -3,15 +3,20 @@ name = "stc-sema"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
+stc-codegen = { path = "../stc-codegen" }
 stc-diag = { path = "../stc-diag" }
 stc-hir = { path = "../stc-hir" }
 stc-lexer = { path = "../stc-lexer" }
 stc-parser = { path = "../stc-parser" }
 stc-span = { path = "../stc-span" }
 stc-syntax = { path = "../stc-syntax" }
+
+[dev-dependencies]
+serde_json = "1.0"
 
 [lints]
 workspace = true

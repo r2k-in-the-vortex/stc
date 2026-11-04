@@ -4,14 +4,22 @@
 //! `stc test` discovers `{stc:test}` POUs in the current package, builds one
 //! artifact per test through the driver, and runs each artifact in its own test
 //! host process. This crate owns the syntax-level discovery and manifest
-//! overrides, the child-process runner (timeout and result parsing), and the
-//! stable human/JSON report shapes. It does not compile or execute modules.
+//! overrides, the child-process runner (timeout and result parsing), the raw
+//! coverage sidecar parser, and the stable human/JSON report shapes. It does not
+//! compile or execute modules.
 
 #![forbid(unsafe_code)]
 
+pub mod coverage;
 pub mod discovery;
 pub mod report;
 pub mod runner;
+
+pub use coverage::{
+    CoverageData, CoverageKind, CoveragePoint, CoverageReport, CoverageRun, CoverageState,
+    CoverageTest, FileCoverage, RawCoverage, RawCoverageError, SiteCoverage, TestCoverage,
+    aggregate, parse as parse_raw_coverage, percent, render_human, render_json, render_lcov,
+};
 
 pub use discovery::{
     Discovery, SourceFileRef, TestCase, TestKind, discover, filter_tests, wrapper_source,

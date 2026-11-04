@@ -1,7 +1,7 @@
 # Non-safety statement
 
 Profile: `stc-2013-oop-utf8-v1`  
-Applies to: `stc` 1.0.0 and its runtime
+Applies to: `stc` 2.0.0 and its runtime
 
 **`stc` is not a safety PLC and is not responsible for safety in any way.**
 
@@ -21,9 +21,10 @@ The following properties are deliberate and are not defects:
 
 - **Debug can hold outputs indefinitely.** Starting a debug session does not
   stop the cycle, but a stop, breakpoint, step, or force can hold the last
-  published outputs for as long as the session remains stopped. The stop/idle
-  budget (`[debug].session-timeout`, five minutes by default) bounds a stop and
-  resumes the cycle when it expires, but it is not a fail-safe output timeout.
+  published outputs for as long as the session remains stopped. The optional
+  stop/idle budget (`[debug].session-timeout`, disabled by default) bounds a
+  stop and resumes the cycle when configured and expired, but it is not a
+  fail-safe output timeout.
 - **Forcing overrides program logic.** A force is applied at a cycle boundary
   and held until released, the session ends, or a generation change occurs.
   Forced inputs and outputs are not a safety interlock.

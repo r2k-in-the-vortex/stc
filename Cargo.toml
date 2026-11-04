@@ -14,15 +14,19 @@ members = [
     "crates/stc-runtime",
     "crates/stc-test",
     "crates/stc-fmt",
+    "crates/stc-ide",
+    "crates/stc-lsp",
+    "crates/stc-dap",
     "crates/stc-driver",
     "crates/xtask",
 ]
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.99"
+license = "MIT OR Apache-2.0"
 publish = false
 
 # Release artifacts are shipped; reduce debug information at build time, and

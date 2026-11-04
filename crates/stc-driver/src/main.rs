@@ -13,9 +13,11 @@ mod clean;
 mod cli;
 mod compat;
 mod compliance;
+mod dap;
 mod debug;
 mod fmt;
 mod frames;
+mod hir_dump;
 mod metadata;
 mod new;
 mod online;
@@ -107,6 +109,7 @@ fn run(args: &[String]) -> ExitCode {
                     mode,
                     invocation.manifest.as_deref(),
                     invocation.locked,
+                    invocation.diagnostic_paths,
                     &invocation.build,
                     &invocation.debug,
                     &mut reporter,
@@ -120,6 +123,7 @@ fn run(args: &[String]) -> ExitCode {
             Mode::Metadata,
             invocation.manifest.as_deref(),
             invocation.locked,
+            invocation.diagnostic_paths,
             &invocation.build,
             &invocation.debug,
             &mut reporter,
@@ -138,6 +142,7 @@ fn run(args: &[String]) -> ExitCode {
         Command::Run if invocation.watch => watch::run(
             invocation.manifest.as_deref(),
             invocation.locked,
+            invocation.diagnostic_paths,
             &invocation.build,
             &invocation.debug,
             invocation.online.store.as_deref(),
@@ -149,6 +154,7 @@ fn run(args: &[String]) -> ExitCode {
             Mode::Run,
             invocation.manifest.as_deref(),
             invocation.locked,
+            invocation.diagnostic_paths,
             &invocation.build,
             &invocation.debug,
             &mut reporter,
@@ -161,6 +167,7 @@ fn run(args: &[String]) -> ExitCode {
             Mode::Debug,
             invocation.manifest.as_deref(),
             invocation.locked,
+            invocation.diagnostic_paths,
             &invocation.build,
             &invocation.debug,
             &mut reporter,
@@ -169,6 +176,7 @@ fn run(args: &[String]) -> ExitCode {
         Command::Test => test::run(
             invocation.manifest.as_deref(),
             invocation.locked,
+            invocation.diagnostic_paths,
             &invocation.build,
             &invocation.test,
             &invocation.paths,
@@ -198,6 +206,7 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
+        Command::HirDump => hir_dump::run(&invocation, &mut reporter, log),
         Command::Rename => rename::run(
             &invocation.paths[0],
             &invocation.paths[1],
@@ -208,6 +217,12 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
+        // The language server and debug adapter own stdout; they must not go
+        // through the diagnostic reporter.
+        Command::Lsp => {
+            stc_lsp::run_stdio(invocation.manifest.as_deref().map(std::path::Path::new))
+        }
+        Command::Dap => dap::run(invocation.manifest.as_deref()),
     };
     ExitCode::from(code)
 }

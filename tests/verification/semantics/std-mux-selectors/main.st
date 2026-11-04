@@ -1,0 +1,12 @@
+VAR_GLOBAL
+  A : DINT;
+  B : DINT;
+  C : DINT;
+  D : DINT;
+END_VAR
+PROGRAM Main
+  A := MUX(DINT#0, 11, 22, 33);
+  B := MUX(DINT#1, 11, 22, 33);
+  C := MUX(DINT#2, 11, 22, 33);
+  D := MUX(DINT#-1, 11, 22, 33);
+END_PROGRAM

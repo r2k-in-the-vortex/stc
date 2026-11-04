@@ -14,6 +14,7 @@ use stc_span::Span;
 use crate::CodegenError;
 use crate::abi::trap;
 use crate::codes;
+use crate::exact::{self, CastPlan};
 use crate::ir::{Function, IrType, Module, SymbolAttrs, Value};
 use crate::layout::{self, ScalarKind};
 use crate::module::{FunctionTarget, RootTarget};
@@ -318,8 +319,7 @@ impl Lowerer<'_> {
                 let lhs_value = values
                     .pop()
                     .ok_or_else(|| CodegenError::internal("missing binary left operand"))?;
-                let value =
-                    self.lower_binary(f, info, op, lhs, rhs, lhs_value, rhs_value, expr.span)?;
+                let value = self.lower_binary(f, op, lhs, rhs, lhs_value, rhs_value, expr.span)?;
                 values.push(value);
             }
             ExprKindHir::Unary { op, operand } => {
@@ -980,7 +980,6 @@ impl Lowerer<'_> {
     fn lower_binary(
         &mut self,
         f: &mut Function,
-        info: &BodyInfo,
         op: BinOp,
         lhs: ExprId,
         rhs: ExprId,
@@ -1111,7 +1110,7 @@ impl Lowerer<'_> {
                         f, op, lhs_kind, rhs_kind, &lhs_value, &rhs_value, span,
                     );
                 }
-                self.lower_arithmetic(f, info, op, lhs_kind, &lhs_value, &rhs_value, span)
+                self.lower_arithmetic(f, op, lhs_kind, &lhs_value, &rhs_value, span)
             }
             BinOp::And => self.bit_op(f, "and", lhs_kind, &lhs_value, &rhs_value, span),
             BinOp::Or => self.bit_op(f, "or", lhs_kind, &lhs_value, &rhs_value, span),
@@ -1303,7 +1302,6 @@ impl Lowerer<'_> {
     pub(crate) fn lower_arithmetic(
         &mut self,
         f: &mut Function,
-        info: &BodyInfo,
         op: BinOp,
         kind: ScalarKind,
         lhs: &Value,
@@ -1355,7 +1353,7 @@ impl Lowerer<'_> {
                     f.call(
                         IrType::Int(width),
                         &name,
-                        &[lhs.clone(), rhs.clone(), span_value, info.slots.clone()],
+                        &[lhs.clone(), rhs.clone(), span_value],
                     )
                     .ok_or_else(|| CodegenError::internal("pow helper returned void"))
                 }
@@ -1488,7 +1486,8 @@ impl Lowerer<'_> {
         let zero = f.icmp("eq", rhs, &Value::int(bits, 0));
         self.trap_if(f, &zero, trap::DIV_ZERO, span)?;
         if signed {
-            let minimum = Value::int(bits, -(1_i128 << (bits - 1)));
+            let layout = exact_type(true, bits)?;
+            let minimum = Value::int(bits, layout.minimum());
             let is_min = f.icmp("eq", lhs, &minimum);
             let is_neg_one = f.icmp("eq", rhs, &Value::int(bits, -1));
             let overflow = f.binop("and", &is_min, &is_neg_one);
@@ -1590,14 +1589,19 @@ impl Lowerer<'_> {
         }
         match (from, to) {
             (ScalarKind::Bool, ScalarKind::Bool) => Ok(value),
-            (ScalarKind::Bool, ScalarKind::Int { width, .. } | ScalarKind::Char { width }) => {
-                Ok(cast_raw(f, "zext", &value, IrType::Int(width)))
+            (ScalarKind::Bool, ScalarKind::Int { signed, width }) => {
+                self.int_convert(f, &value, from, width, signed, span)
+            }
+            (ScalarKind::Bool, ScalarKind::Char { width }) => {
+                self.int_convert(f, &value, from, width, false, span)
             }
             (ScalarKind::Bool, ScalarKind::Real { width }) => {
                 Ok(cast_raw(f, "uitofp", &value, real_type(width)))
             }
             (ScalarKind::Int { .. } | ScalarKind::Char { .. }, ScalarKind::Bool) => {
-                Ok(f.icmp("ne", &value, &Value::int(value_bits(from), 0)))
+                // `CastPlan::BoolTest`: the target compares the source against
+                // zero at the source width.
+                self.int_convert(f, &value, from, 1, false, span)
             }
             (
                 ScalarKind::Int { .. } | ScalarKind::Char { .. } | ScalarKind::Time,
@@ -1651,18 +1655,22 @@ impl Lowerer<'_> {
         to_signed: bool,
         span: Span,
     ) -> Res<Value> {
-        let from_width = value_bits(from);
-        if from_width < to_width {
-            let op = if from.is_signed() { "sext" } else { "zext" };
-            return Ok(cast_raw(f, op, value, IrType::Int(to_width)));
+        let source = exact_type_of(from)?;
+        let target = exact_type(to_signed, to_width)?;
+        match exact::cast_plan(source, target) {
+            CastPlan::Identity | CastPlan::Reinterpret => Ok(value.clone()),
+            CastPlan::BoolTest => Ok(f.icmp("ne", value, &Value::int(value_bits(from), 0))),
+            CastPlan::Widen { source_signed } => {
+                let op = if source_signed { "sext" } else { "zext" };
+                Ok(cast_raw(f, op, value, IrType::Int(to_width)))
+            }
+            CastPlan::Narrow => {
+                let fits = range_check(f, value, from, target);
+                let outside = f.binop("xor", &fits, &Value::bool(true));
+                self.trap_if(f, &outside, trap::RANGE, span)?;
+                Ok(cast_raw(f, "trunc", value, IrType::Int(to_width)))
+            }
         }
-        if from_width > to_width {
-            let fits = range_check(f, value, from, to_width, to_signed);
-            let outside = f.binop("xor", &fits, &Value::bool(true));
-            self.trap_if(f, &outside, trap::RANGE, span)?;
-            return Ok(cast_raw(f, "trunc", value, IrType::Int(to_width)));
-        }
-        Ok(value.clone())
     }
 
     fn real_to_int(
@@ -1722,17 +1730,16 @@ impl Lowerer<'_> {
                 (ty.clone(), "%a0".into()),
                 (ty.clone(), "%a1".into()),
                 (IrType::Int(32), "%a2".into()),
-                (IrType::Ptr, "%slots".into()),
             ],
         );
         helper.start_fresh_block();
+        let slots_value = self.slots_global(&mut helper);
         let base_ptr = helper.alloca(ty.clone());
         let exponent_ptr = helper.alloca(ty.clone());
         let result_ptr = helper.alloca(ty.clone());
         let base = helper.param_value(0);
         let exponent = helper.param_value(1);
         let span_value = helper.param_value(2);
-        let slots_value = helper.param_value(3);
         let trap_slot = self.import_slot(stc_got::catalog::ImportService::Trap)?;
         helper.store(&base, &base_ptr, None);
         helper.store(&exponent, &exponent_ptr, None);
@@ -1963,35 +1970,52 @@ fn to_i64(f: &mut Function, value: &Value, signed: bool, width: u16) -> Value {
     )
 }
 
+/// Returns the exact-kernel layout for a code-generation scalar.
+fn exact_type(signed: bool, width: u16) -> Res<exact::IntType> {
+    let width = u8::try_from(width)
+        .map_err(|_| CodegenError::internal("integer width exceeds 255 bits"))?;
+    Ok(exact::IntType::new(signed, width))
+}
+
+/// Returns the exact-kernel layout for a scalar with integer representation.
+fn exact_type_of(kind: ScalarKind) -> Res<exact::IntType> {
+    match kind {
+        ScalarKind::Bool => Ok(exact::IntType::BOOL),
+        ScalarKind::Int { signed, width } => exact_type(signed, width),
+        ScalarKind::Char { width } => exact_type(false, width),
+        ScalarKind::Time => Ok(exact::IntType::new(true, 64)),
+        ScalarKind::Real { .. } | ScalarKind::Date(_) => Err(CodegenError::internal(
+            "real and date scalars have no exact integer layout",
+        )),
+    }
+}
+
 /// Returns an `i1` that is true when `value` fits the destination integer.
-fn range_check(
-    f: &mut Function,
-    value: &Value,
-    from: ScalarKind,
-    to_width: u16,
-    to_signed: bool,
-) -> Value {
+///
+/// The destination bounds come from the exact kernel's `IntType::minimum` and
+/// `IntType::maximum`, so the code generator and the constant folder share one
+/// definition of "fits".
+fn range_check(f: &mut Function, value: &Value, from: ScalarKind, target: exact::IntType) -> Value {
     let from_width = value_bits(from);
     let source_signed = from.is_signed();
-    if to_signed {
-        let minimum = -(1_i128 << (to_width - 1));
-        let maximum = (1_i128 << (to_width - 1)) - 1;
+    let minimum = target.minimum();
+    let maximum = target.maximum();
+    if target.signed {
         if source_signed {
             let low = f.icmp("sge", value, &Value::int(from_width, minimum));
             let high = f.icmp("sle", value, &Value::int(from_width, maximum));
             f.binop("and", &low, &high)
         } else {
+            // An unsigned source is non-negative, so the signed minimum is
+            // always satisfied; only the maximum needs a comparison.
             f.icmp("ule", value, &Value::int(from_width, maximum))
         }
+    } else if source_signed {
+        let low = f.icmp("sge", value, &Value::int(from_width, 0));
+        let high = f.icmp("sle", value, &Value::int(from_width, maximum));
+        f.binop("and", &low, &high)
     } else {
-        let maximum = (1_i128 << to_width) - 1;
-        if source_signed {
-            let low = f.icmp("sge", value, &Value::int(from_width, 0));
-            let high = f.icmp("sle", value, &Value::int(from_width, maximum));
-            f.binop("and", &low, &high)
-        } else {
-            f.icmp("ule", value, &Value::int(from_width, maximum))
-        }
+        f.icmp("ule", value, &Value::int(from_width, maximum))
     }
 }
 

@@ -21,7 +21,7 @@ use stc_driver::toolchain::system_link_args;
 use stc_got::{Digest32, Manifest, Rename};
 use stc_hir::HirCrate;
 use stc_manifest::{ChannelRef, ConfigValue, EmitKind, LibType, OptLevel};
-use stc_span::SourceMap;
+use stc_span::{SourceMap, Span};
 
 use crate::compat::CompatibilityReport;
 use crate::report::{Log, Reporter, display_path, elapsed};
@@ -102,6 +102,10 @@ pub(crate) struct ProjectSettings {
     pub devices: Vec<stc_codegen::DeviceMetadata>,
     /// Project bindings.
     pub bindings: Vec<stc_codegen::ProjectBinding>,
+    /// Embedded machine profile selected by `[io].config`.
+    pub profile: Option<stc_codegen::IoProfileMetadata>,
+    /// Effective routes from the embedded profile.
+    pub routes: Vec<stc_codegen::IoRoute>,
 }
 
 impl Default for ProjectSettings {
@@ -114,6 +118,8 @@ impl Default for ProjectSettings {
             io_file: None,
             devices: Vec::new(),
             bindings: Vec::new(),
+            profile: None,
+            routes: Vec::new(),
         }
     }
 }
@@ -160,7 +166,172 @@ impl ProjectSettings {
                     direction: binding.direction.map(|direction| direction.as_str().into()),
                 })
                 .collect(),
+            profile: None,
+            routes: Vec::new(),
         }
+    }
+
+    /// Loads `[io].config` and embeds the selected machine profile
+    /// (IO-Routing-and-Backends §2.1–§2.3).
+    ///
+    /// The profile is read from the project root, parsed, and embedded with
+    /// its effective routes. Profile device configuration is merged field by
+    /// field over inline `[io.devices].config`; profile fields win.
+    ///
+    /// Returns `false` after reporting diagnostics when the profile is
+    /// missing, escapes the project root, cannot be read, or is invalid.
+    pub(crate) fn embed_profile(
+        &mut self,
+        root_dir: &Path,
+        manifest: &stc_manifest::Manifest,
+        sources: &mut SourceMap,
+        diagnostics: &mut DiagnosticSink,
+    ) -> bool {
+        let Some(selected) = manifest.io.config.as_deref() else {
+            return true;
+        };
+        let canonical_root = match std::fs::canonicalize(root_dir) {
+            Ok(path) => path,
+            Err(error) => {
+                let file = sources.add_file(selected, String::new());
+                diagnostics.error(
+                    "STC-E-PROJECT-009",
+                    format!(
+                        "cannot resolve the project root `{}` for machine profile `{selected}`: {error}",
+                        root_dir.display()
+                    ),
+                    Span::new(file, 0, 0),
+                );
+                return false;
+            }
+        };
+        let path = match std::fs::canonicalize(root_dir.join(selected)) {
+            Ok(path) => path,
+            Err(error) => {
+                let file = sources.add_file(selected, String::new());
+                diagnostics.error(
+                    "STC-E-PROJECT-009",
+                    format!("selected machine profile `{selected}` cannot be read: {error}"),
+                    Span::new(file, 0, 0),
+                );
+                return false;
+            }
+        };
+        if !path.starts_with(&canonical_root) {
+            let file = sources.add_file(selected, String::new());
+            diagnostics.error(
+                "STC-E-PROJECT-009",
+                format!("selected machine profile `{selected}` resolves outside the project root"),
+                Span::new(file, 0, 0),
+            );
+            return false;
+        }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                let file = sources.add_file(selected, String::new());
+                diagnostics.error(
+                    "STC-E-PROJECT-009",
+                    format!("selected machine profile `{selected}` cannot be read: {error}"),
+                    Span::new(file, 0, 0),
+                );
+                return false;
+            }
+        };
+        let file = sources.add_file(selected, text.clone());
+        let profile = match stc_manifest::parse_profile(&text, file) {
+            Ok(profile) => profile,
+            Err(errors) => {
+                for diagnostic in errors {
+                    diagnostics.push(diagnostic);
+                }
+                return false;
+            }
+        };
+
+        let digest =
+            stc_got::Digest32::from_bytes(stc_got::sha256::sha256(text.as_bytes())).to_hex();
+        self.routes = profile
+            .routes
+            .iter()
+            .map(|route| stc_codegen::IoRoute {
+                source: io_route_endpoint(&route.source),
+                sinks: route.sinks.iter().map(io_route_endpoint).collect(),
+            })
+            .collect();
+        for device in &profile.devices {
+            if let Some(declared) = self
+                .devices
+                .iter_mut()
+                .find(|declared| declared.name == device.name)
+            {
+                declared.config = Some(merge_device_config(
+                    declared.config.as_ref(),
+                    &device.config,
+                ));
+            }
+        }
+        self.profile = Some(stc_codegen::IoProfileMetadata {
+            path: selected.to_owned(),
+            text,
+            digest,
+            devices: profile
+                .devices
+                .iter()
+                .map(|device| device.name.clone())
+                .collect(),
+        });
+        true
+    }
+}
+
+/// Converts a parsed profile endpoint into the codegen route endpoint.
+fn io_route_endpoint(endpoint: &stc_manifest::ProfileEndpoint) -> stc_codegen::IoRouteEndpoint {
+    use stc_manifest::ProfileEndpoint;
+    match endpoint {
+        ProfileEndpoint::PhysicalInput {
+            device,
+            channel,
+            span,
+        } => stc_codegen::IoRouteEndpoint::PhysicalInput {
+            device: device.clone(),
+            channel: channel.clone(),
+            span: *span,
+        },
+        ProfileEndpoint::PhysicalOutput {
+            device,
+            channel,
+            span,
+        } => stc_codegen::IoRouteEndpoint::PhysicalOutput {
+            device: device.clone(),
+            channel: channel.clone(),
+            span: *span,
+        },
+        ProfileEndpoint::PlcInput { variable, span } => stc_codegen::IoRouteEndpoint::PlcInput {
+            variable: variable.clone(),
+            span: *span,
+        },
+        ProfileEndpoint::PlcOutput { variable, span } => stc_codegen::IoRouteEndpoint::PlcOutput {
+            variable: variable.clone(),
+            span: *span,
+        },
+    }
+}
+
+/// Merges profile device configuration over inline configuration, field by
+/// field at the top level (IO-Routing-and-Backends §2.3).
+fn merge_device_config(inline: Option<&Json>, profile: &ConfigValue) -> Json {
+    let overlay = config_json(profile);
+    match (inline, overlay) {
+        (Some(Json::Object(base)), Json::Object(overlay)) if !overlay.is_empty() => {
+            let mut merged = base.clone();
+            for (key, value) in overlay {
+                merged.insert(key, value);
+            }
+            Json::Object(merged)
+        }
+        (Some(base), Json::Object(overlay)) if overlay.is_empty() => base.clone(),
+        (_, overlay) => overlay,
     }
 }
 
@@ -265,6 +436,12 @@ pub(crate) struct Request {
     /// Whether this is a test build (`stc test`): emit the test-host launcher
     /// and the host ABI 2.2 test-clock import.
     pub test_build: bool,
+    /// Whether this test build keeps debug hooks, debug information, and the
+    /// frame sidecar for a per-test debug session. Ordinary `stc test`
+    /// artifacts leave this unset and stay hook-free.
+    pub test_debug: bool,
+    /// Statement coverage instrumentation for this test build (WL-10).
+    pub coverage: Option<stc_codegen::CoverageOptions>,
     /// Effective `[build].opt-level`.
     pub opt_level: OptLevel,
     /// Whether `[build].opt-level` was explicitly present; absent levels use
@@ -312,6 +489,8 @@ impl Default for Request {
             debug: false,
             release: false,
             test_build: false,
+            test_debug: false,
+            coverage: None,
             opt_level: OptLevel::O0,
             opt_level_explicit: false,
             lib_type: LibType::Static,
@@ -571,9 +750,13 @@ pub(crate) fn generate(
                 file: request.project.io_file.clone(),
                 devices: request.project.devices.clone(),
                 bindings: request.project.bindings.clone(),
+                profile: request.project.profile.clone(),
+                routes: request.project.routes.clone(),
             },
         },
         test_build: request.test_build,
+        test_debug: request.test_debug,
+        coverage: request.coverage.clone(),
     };
     let codegen_start = Instant::now();
     let output = match stc_codegen::generate(hir, &options) {
@@ -802,7 +985,7 @@ pub(crate) fn emit(
     if needs_pair
         && request.debug
         && !request.release
-        && !request.test_build
+        && (!request.test_build || request.test_debug)
         && !output.frames.is_empty()
         && let Some(debug) = &output.metadata.debug
     {

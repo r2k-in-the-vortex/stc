@@ -1,8 +1,9 @@
 /-
-`lake exe semantics-conformance`: Phase 0 conformance harness entry point.
+`lake exe semantics-conformance`: Phase 0 core-corpus differential harness
+entry point.
 
-See `Verification.Semantics.Conformance` for the fail-closed placeholder
-behavior installed at P0.0.
+See `Verification.Semantics.Conformance` for the corpus, comparison, report,
+and fail-closed empty-corpus behavior.
 -/
 import Verification.Semantics.Conformance
 

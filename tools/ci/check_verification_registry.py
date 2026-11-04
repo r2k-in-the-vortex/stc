@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Phase 0 verification registry (Plan-Phase0.md §7, §11).
+"""Validate the verification registry (Semantics.md §7 and Phase0-Report.md).
 
 Usage:
     python tools/ci/check_verification_registry.py [repository-root]
@@ -8,10 +8,21 @@ Checks:
   * the registry parses and uses the documented schema and versions;
   * ids, names, phases, levels, kinds, and statuses are valid and unique;
   * every specification reference resolves to an existing section anchor;
-  * every referenced Lean module exists;
+  * every referenced Lean module exists in the default `lean/` package or in
+    the separate `lean/aeneas/` bridge package (generated-model records);
   * every proved entry resolves in the Lean environment and depends only on
-    the standard Lean axioms (`propext`, `Classical.choice`, `Quot.sound`);
-  * every "descoped" entry records a reason.
+    the standard Lean axioms (`propext`, `Classical.choice`, `Quot.sound`).
+    The single owner-approved Phase 2 bridge exception (P2-T33) is exempt
+    because the bridge package imports Aeneas/Mathlib and is not built in fast
+    CI; a cheap textual declaration guard replaces its axiom audit. Every
+    default-package proved record keeps the full audit;
+  * every "descoped" entry records a reason;
+  * Phase 1 records stay V0 evidence with status `tested` or `planned` (the
+    Phase 1 policy: no refinement or proved bridge claim);
+  * Phase 2 records stay at S or V0, with exactly one owner-approved
+    exception: P2-T33, the bridge-only exact-kernel refinement theorem, may be
+    kind `theorem`, status `proved`, level V1. Every other bridge-only Phase 2
+    record must be V0 evidence with status `planned` or `tested`.
 
 Only the Python standard library, a `tomllib`-capable Python (3.11 or later),
 and `lake` on PATH are required. The Lean audit runs only when at least one
@@ -49,8 +60,27 @@ OPTIONAL_FIELDS = {"note"}
 ALLOWED_KINDS = {"theorem", "evidence", "definition"}
 ALLOWED_STATUSES = {"planned", "proved", "tested", "descoped"}
 ALLOWED_LEVELS = {"S", "V0", "V1", "V2", "V3", "V4"}
-ALLOWED_PHASES = {f"P0.{index}" for index in range(8)}
+ALLOWED_PHASES = {f"P0.{index}" for index in range(8)} | {"P1", "P2"}
 ALLOWED_AXIOMS = {"propext", "Classical.choice", "Quot.sound"}
+# Phase 1 bridge records are evidence only: the spikes and checker interfaces
+# are V0 until the refinement theorem and its external-axiom equations land.
+P1_STATUSES = {"planned", "tested"}
+# Phase 2 model theorems are proved in the default package at V0. The owner
+# accepted Phase 2 on 2026-11-03 with exactly one bridge V1 claim: the exact
+# scalar kernel bundle `Stc.Bridge.Exact.exact_kernel_refines`, relative to the
+# TCB in Phase2-Report.md §8. Every other bridge-only record stays V0 evidence.
+P2_LEVELS = {"S", "V0"}
+P2_BRIDGE_STATUSES = {"planned", "tested"}
+P2_V1_EXCEPTION = {
+    "id": "P2-T33",
+    "kind": "theorem",
+    "name": "Stc.Bridge.Exact.exact_kernel_refines",
+    "phase": "P2",
+    "level": "V1",
+    "module": "Bridge.Exact.Kernel",
+    "status": "proved",
+}
+MODULE_ROOTS = (Path("lean"), Path("lean") / "aeneas")
 UMBRELLA_IMPORTS = (
     "Stc.Syntax",
     "Stc.Grammar",
@@ -85,8 +115,22 @@ def heading_slugs(path: Path) -> set[str]:
     return slugs
 
 
-def module_path(root: Path, module: str) -> Path:
-    return root / "lean" / Path(*module.split(".")).with_suffix(".lean")
+def module_candidates(root: Path, module: str) -> list[Path]:
+    """Return the default-package and bridge-package paths for a module."""
+    relative = Path(*module.split(".")).with_suffix(".lean")
+    return [root / base / relative for base in MODULE_ROOTS]
+
+
+def check_module(root: Path, record: dict, errors: list[str]) -> None:
+    entry = record["id"]
+    candidates = module_candidates(root, record["module"])
+    if any(path.is_file() for path in candidates):
+        return
+    looked = ", ".join(path.relative_to(root).as_posix() for path in candidates)
+    errors.append(
+        f"{entry}: Lean module is missing: {record['module']} "
+        f"(looked for {looked})"
+    )
 
 
 def check_spec(root: Path, record: dict, errors: list[str]) -> None:
@@ -107,6 +151,58 @@ def check_spec(root: Path, record: dict, errors: list[str]) -> None:
         return
     if anchor not in heading_slugs(target):
         errors.append(f"{entry}: spec section anchor not found: {raw_path}#{anchor}")
+
+
+def module_state(root: Path, record: dict) -> tuple[bool, bool]:
+    """Return (default-package module exists, bridge-package module exists)."""
+    default_module, bridge_module = (
+        path.is_file() for path in module_candidates(root, record["module"])
+    )
+    return default_module, bridge_module
+
+
+def is_p2_v1_exception(root: Path, record: dict) -> bool:
+    """Whether this is the single owner-approved Phase 2 bridge V1 record.
+
+    The match is exact on the allowlist fields and additionally requires the
+    module to resolve only in the non-default bridge package, so a
+    default-package record cannot inherit the exception.
+    """
+    if not isinstance(record, dict):
+        return False
+    default_module, bridge_module = module_state(root, record)
+    if not (bridge_module and not default_module):
+        return False
+    return all(record.get(field) == value for field, value in P2_V1_EXCEPTION.items())
+
+
+def check_bridge_v1_declaration(root: Path, record: dict, errors: list[str]) -> None:
+    """Cheap textual guard for the bridge-only V1 theorem.
+
+    Fast CI never builds the Aeneas/Mathlib package, so the default-package
+    `#print axioms` audit cannot check this record. The full proof is checked
+    by the pinned host build; here we only require the module to declare the
+    recorded theorem.
+    """
+    path = next(
+        (
+            candidate
+            for candidate in module_candidates(root, record["module"])[1:]
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if path is None:
+        return  # check_module reports the missing module
+    short_name = record["name"].rsplit(".", 1)[-1]
+    pattern = re.compile(
+        rf"^\s*(?:theorem|lemma)\s+{re.escape(short_name)}\b", re.MULTILINE
+    )
+    if not pattern.search(read_text(path)):
+        errors.append(
+            f"{record['id']}: bridge module "
+            f"{path.relative_to(root).as_posix()} does not declare {short_name}"
+        )
 
 
 def check_record(root: Path, record: dict, errors: list[str]) -> None:
@@ -134,19 +230,63 @@ def check_record(root: Path, record: dict, errors: list[str]) -> None:
         errors.append(f"{entry}: level must be one of {sorted(ALLOWED_LEVELS)}")
     if record["phase"] not in ALLOWED_PHASES:
         errors.append(f"{entry}: phase must be one of {sorted(ALLOWED_PHASES)}")
+    default_module, bridge_module = module_state(root, record)
+    bridge_only = bridge_module and not default_module
+    p2_v1_exception = record["phase"] == "P2" and is_p2_v1_exception(root, record)
+    if record["phase"] == "P2" and not p2_v1_exception:
+        if record["level"] not in P2_LEVELS:
+            errors.append(
+                f"{entry}: Phase 2 records must stay at level S or V0, except the "
+                f"owner-approved bridge theorem P2-T33"
+            )
+        if bridge_only:
+            if record["kind"] != "evidence":
+                errors.append(
+                    f"{entry}: bridge-package Phase 2 records must have kind 'evidence', "
+                    f"except the owner-approved theorem P2-T33"
+                )
+            if record["level"] != "V0":
+                errors.append(
+                    f"{entry}: bridge-package Phase 2 records must stay at level V0, "
+                    f"except the owner-approved theorem P2-T33"
+                )
+            if record["status"] not in P2_BRIDGE_STATUSES:
+                errors.append(
+                    f"{entry}: bridge-package Phase 2 records must be 'planned' or "
+                    f"'tested', not {record['status']!r}, except the owner-approved "
+                    f"theorem P2-T33"
+                )
+    if p2_v1_exception:
+        check_bridge_v1_declaration(root, record, errors)
+    if record["phase"] == "P1":
+        if record["kind"] != "evidence":
+            errors.append(f"{entry}: Phase 1 records must have kind 'evidence'")
+        if record["level"] != "V0":
+            errors.append(f"{entry}: Phase 1 records must stay at level V0")
+        if record["status"] not in P1_STATUSES:
+            errors.append(
+                f"{entry}: Phase 1 records must be 'planned' or 'tested', "
+                f"not {record['status']!r}"
+            )
     if record["status"] == "proved" and record["kind"] == "evidence":
         errors.append(f"{entry}: evidence cannot have status 'proved'; use 'tested'")
     if record["status"] == "tested" and record["kind"] != "evidence":
         errors.append(f"{entry}: status 'tested' is reserved for evidence entries")
     if record["status"] == "descoped" and not record.get("note"):
         errors.append(f"{entry}: status 'descoped' requires a note with the reason")
-    if not module_path(root, record["module"]).is_file():
-        errors.append(f"{entry}: Lean module is missing: {record['module']}")
+    check_module(root, record, errors)
     check_spec(root, record, errors)
 
 
 def lean_audit(root: Path, records: list[dict], errors: list[str]) -> None:
-    proved = [record for record in records if record["status"] == "proved"]
+    # The owner-approved bridge V1 record is exempt: the Aeneas/Mathlib package
+    # is not part of the default environment that fast CI builds. Default-package
+    # records, including every other proved Phase 2 record, keep the full audit.
+    proved = [
+        record
+        for record in records
+        if record["status"] == "proved" and not is_p2_v1_exception(root, record)
+    ]
     if not proved:
         return
     lake = shutil.which("lake")
@@ -169,6 +309,8 @@ def lean_audit(root: Path, records: list[dict], errors: list[str]) -> None:
             cwd=root / "lean",
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     output = completed.stdout + completed.stderr
@@ -250,6 +392,22 @@ def main(argv: list[str]) -> int:
                 if name in names:
                     errors.append(f"{name}: duplicate name")
                 names.add(name)
+
+    # Exactly one Phase 2 V1 record is accepted, and it must be the allowlisted
+    # bridge-only exact-kernel theorem. This also catches a missing acceptance
+    # record or a second V1 claim introduced around the per-record checks.
+    p2_v1 = [
+        record
+        for record in records
+        if isinstance(record, dict)
+        and record.get("phase") == "P2"
+        and record.get("level") == "V1"
+    ]
+    if len(p2_v1) != 1 or not is_p2_v1_exception(root, p2_v1[0]):
+        errors.append(
+            "Phase 2 must record exactly one V1 theorem: the owner-approved "
+            "bridge exception P2-T33 (Stc.Bridge.Exact.exact_kernel_refines)"
+        )
 
     lean_audit(root, records, errors)
 

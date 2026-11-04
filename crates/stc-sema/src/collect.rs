@@ -540,6 +540,19 @@ impl Analyzer<'_> {
                 .any(|token| token.kind() == SyntaxKind::KwConstant);
             let retain = retain_policy(&qualifiers);
             let default_visibility = match owner_kind {
+                // The FB interface is the callable contract: inputs, outputs,
+                // and in-out variables are externally visible like the call
+                // bindings that carry them. Internal `VAR` state stays
+                // protected. Classes keep the protected default for all
+                // variables.
+                OwnerKind::FunctionBlock
+                    if matches!(
+                        kind,
+                        VarSectionKind::Input | VarSectionKind::Output | VarSectionKind::InOut
+                    ) =>
+                {
+                    Visibility::Public
+                }
                 OwnerKind::Class | OwnerKind::FunctionBlock => Visibility::Protected,
                 _ => Visibility::Public,
             };

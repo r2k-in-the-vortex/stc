@@ -588,3 +588,18 @@ fn null_backend_does_not_write_an_image_file() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output));
     assert!(!directory.exists("target/stc/debug/app.stcio"));
 }
+
+#[test]
+fn ethercat_backend_is_accepted_without_hardware() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("io-ethercat");
+    directory.write("stc.toml", &manifest(""));
+    directory.write("src/main.st", IO_SOURCE);
+    // Phase 1 runs the test/mock EtherCAT implementation, which has the null
+    // backend's no-file behavior.
+    let output = directory.run(&["run", "--cycles", "1", "--io", "ethercat"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(!directory.exists("target/stc/debug/app.stcio"));
+}

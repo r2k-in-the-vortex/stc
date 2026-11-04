@@ -132,6 +132,8 @@ fn generate_ir(
         module: stc_codegen::ModuleBuildOptions::default(),
         project: stc_codegen::ProjectOptions::default(),
         test_build: false,
+        test_debug: false,
+        coverage: None,
     };
     stc_codegen::generate(&hir, &options)
         .unwrap_or_else(|errors| panic!("codegen failed: {errors:#?}"))

@@ -54,6 +54,7 @@ const BUILD_KEYS: &[&str] = &[
 ];
 const IO_KEYS: &[&str] = &[
     "backend",
+    "config",
     "file",
     "input-bytes",
     "output-bytes",
@@ -89,6 +90,7 @@ const TEST_KEYS: &[&str] = &[
     "default-cycles",
     "mock-clock",
     "io",
+    "coverage",
     "case",
 ];
 const TEST_CASE_KEYS: &[&str] = &["name", "cycles", "timeout", "expect-trap"];
@@ -738,6 +740,18 @@ impl Parser {
                 .parse_io_backend(value, "STC-E-PROJECT-009", "backend")
                 .unwrap_or(IoBackend::Null);
         }
+        if let Some(value) = io.get("config")
+            && let Some(path) = self.expect_nonempty_string(value, "STC-E-PROJECT-009", "config")
+        {
+            if let Some(reason) = relative_path_problem(&path) {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!("invalid io `config` `{path}`: {reason}"),
+                    self.item_span(value),
+                );
+            }
+            config.config = Some(path);
+        }
         if let Some(value) = io.get("file") {
             config.file = self.expect_nonempty_string(value, "STC-E-PROJECT-009", "file");
         }
@@ -771,8 +785,15 @@ impl Parser {
             Some("null") => Some(IoBackend::Null),
             Some("memory") => Some(IoBackend::Memory),
             Some("file") => Some(IoBackend::File),
+            Some("ethercat") => Some(IoBackend::Ethercat),
             Some(other) => {
-                self.invalid_enum(code, key, other, "`null`, `memory`, or `file`", item);
+                self.invalid_enum(
+                    code,
+                    key,
+                    other,
+                    "`null`, `memory`, `file`, or `ethercat`",
+                    item,
+                );
                 None
             }
             None => {
@@ -1269,13 +1290,7 @@ impl Parser {
             && let Some(timeout) =
                 self.parse_duration_setting(value, "STC-E-PROJECT-010", "session-timeout")
         {
-            if timeout.as_nanos() == 0 {
-                self.error(
-                    "STC-E-PROJECT-010",
-                    "invalid `session-timeout` 0ns; expected a positive duration",
-                    self.item_span(value),
-                );
-            } else if timeout.as_nanos() > MAX_DEBUG_SESSION_TIMEOUT_NS {
+            if timeout.as_nanos() > MAX_DEBUG_SESSION_TIMEOUT_NS {
                 self.error(
                     "STC-E-PROJECT-010",
                     "`session-timeout` must not exceed 24 hours",
@@ -1471,6 +1486,9 @@ impl Parser {
             && let Some(backend) = self.parse_io_backend(value, "STC-E-PROJECT-008", "io")
         {
             settings.io = Some(backend);
+        }
+        if let Some(value) = test.get("coverage") {
+            settings.coverage = self.expect_bool(value, "STC-E-PROJECT-002", "coverage");
         }
         if let Some(value) = test.get("case") {
             settings.cases = self.parse_test_cases(value);
@@ -1995,5 +2013,200 @@ mod tests {
             Some("project")
         );
         assert_eq!(did_you_mean("zzzzzz", TOP_LEVEL_KEYS), None);
+    }
+
+    const BASE: &str = "schema = 1\n\
+[package]\n\
+name = \"app\"\n\
+version = \"0.1.0\"\n\
+language = \"stc-2013-oop-utf8-v1\"\n\
+[project]\n\
+sources = [\"src/**/*.st\"]\n";
+
+    fn parse_text(text: &str) -> Result<super::ParsedManifest, Vec<stc_diag::Diagnostic>> {
+        super::parse_manifest(text, FileId::new(0))
+    }
+
+    fn parse_ok(text: &str) {
+        if let Err(diagnostics) = parse_text(text) {
+            panic!("manifest rejected:\n{text}\n{diagnostics:#?}");
+        }
+    }
+
+    fn parse_bad(text: &str) {
+        assert!(parse_text(text).is_err(), "manifest accepted:\n{text}");
+    }
+
+    #[test]
+    fn minimal_manifest_parses() {
+        parse_ok(BASE);
+        parse_ok(&format!("\u{feff}{BASE}"));
+        parse_bad("");
+        parse_bad("schema = 2\n");
+        parse_bad("schema = \"1\"\n");
+        parse_bad(
+            "schema = 1\n[package]\nversion = \"0.1.0\"\nlanguage = \"stc-2013-oop-utf8-v1\"\n[project]\nsources = []\n",
+        );
+        parse_bad(
+            "schema = 1\n[package]\nname = \"app\"\nlanguage = \"stc-2013-oop-utf8-v1\"\n[project]\nsources = []\n",
+        );
+        parse_bad(
+            "schema = 1\n[package]\nname = \"app\"\nversion = \"0.1.0\"\n[project]\nsources = []\n",
+        );
+        parse_bad("schema = 1\n[[[");
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected() {
+        for text in [
+            format!("{BASE}[bogus]\nx = 1\n"),
+            format!("{BASE}bogus = 1\n"),
+            format!("{BASE}[package]\nbogus = 1\n"),
+            format!("{BASE}[project]\nbogus = 1\n"),
+            format!("{BASE}[build]\nbogus = 1\n"),
+            format!("{BASE}[io]\nbogus = 1\n"),
+            format!("{BASE}[retain]\nbogus = 1\n"),
+            format!("{BASE}[runtime]\nbogus = 1\n"),
+            format!("{BASE}[online]\nbogus = 1\n"),
+            format!("{BASE}[debug]\nbogus = 1\n"),
+            format!("{BASE}[run]\nbogus = 1\n"),
+            format!("{BASE}[test]\nbogus = 1\n"),
+            format!("{BASE}[lints]\nbogus = 1\n"),
+        ] {
+            parse_bad(&text);
+        }
+    }
+
+    #[test]
+    fn package_and_project_mutations_are_rejected() {
+        for text in [
+            BASE.replace("name = \"app\"", "name = \"1app\""),
+            BASE.replace("name = \"app\"", "name = \"a b\""),
+            BASE.replace("version = \"0.1.0\"", "version = \"1.2\""),
+            BASE.replace(
+                "language = \"stc-2013-oop-utf8-v1\"",
+                "language = \"other\"",
+            ),
+            BASE.replace("sources = [\"src/**/*.st\"]", "sources = \"src\""),
+            BASE.replace("sources = [\"src/**/*.st\"]", "sources = [\"[\"]"),
+            format!("{BASE}stdlib = 1\n"),
+            format!("{BASE}configuration = 1\n"),
+            format!("{BASE}[dependencies]\ndep = 1\n"),
+            format!("{BASE}[dependencies]\ndep = {{ bogus = 1 }}\n"),
+            format!("{BASE}[dependencies]\ndep = {{ version = \"x\" }}\n"),
+            format!("{BASE}[dependencies]\ndep = {{ path = 1 }}\n"),
+        ] {
+            parse_bad(&text);
+        }
+    }
+
+    #[test]
+    fn build_mutations_are_rejected() {
+        for text in [
+            format!("{BASE}[build]\nopt-level = 4\n"),
+            format!("{BASE}[build]\nopt-level = \"fast\"\n"),
+            format!("{BASE}[build]\nopt-level = \"s\"\nout-dir = 1\n"),
+            format!("{BASE}[build]\nlib-type = 1\n"),
+            format!("{BASE}[build]\nlib-type = \"bogus\"\n"),
+            format!("{BASE}[build]\ndebug = 1\n"),
+            format!("{BASE}[build]\nsyntax = \"bogus\"\n"),
+            format!("{BASE}[build]\nemit = \"ir\"\n"),
+            format!("{BASE}[build]\nemit = []\n"),
+            format!("{BASE}[build]\nemit = [\"bogus\"]\n"),
+            format!("{BASE}[build]\ntarget = 1\n"),
+            format!("{BASE}[build]\nclang = 1\n"),
+            format!("{BASE}[build]\nruntime = 1\n"),
+        ] {
+            parse_bad(&text);
+        }
+    }
+
+    #[test]
+    fn io_mutations_are_rejected() {
+        for text in [
+            format!("{BASE}[io]\nbackend = \"bogus\"\n"),
+            format!("{BASE}[io]\nconfig = 1\n"),
+            format!("{BASE}[io]\nfile = 1\n"),
+            format!("{BASE}[io]\ninput-bytes = \"x\"\n"),
+            format!("{BASE}[io]\noutput-bytes = -1\n"),
+            format!("{BASE}[io]\nmarker-bytes = \"x\"\n"),
+            format!("{BASE}[io]\n[[io.devices]]\nkind = \"memory\"\n"),
+            format!("{BASE}[io]\n[[io.devices]]\nname = \"d\"\n"),
+            format!(
+                "{BASE}[io]\n[[io.devices]]\nname = \"d\"\nkind = \"memory\"\n[[io.devices.channels]]\nname = \"c\"\n"
+            ),
+            format!(
+                "{BASE}[io]\n[[io.devices]]\nname = \"d\"\nkind = \"memory\"\n[[io.devices.channels]]\nname = \"c\"\ndirection = \"sideways\"\nwidth = 8\n"
+            ),
+            format!("{BASE}[io]\n[[io.bindings]]\nvariable = \"Main.x\"\n"),
+            format!(
+                "{BASE}[io]\n[[io.bindings]]\nvariable = \"Main.x\"\ndevice = \"d\"\nchannel = \"c\"\ndirection = \"sideways\"\n"
+            ),
+        ] {
+            parse_bad(&text);
+        }
+    }
+
+    #[test]
+    fn runtime_debug_online_retain_mutations_are_rejected() {
+        for text in [
+            format!("{BASE}[retain]\nenabled = 1\n"),
+            format!("{BASE}[retain]\nfile = 1\n"),
+            format!("{BASE}[retain]\non-mismatch = \"bogus\"\n"),
+            format!("{BASE}[runtime]\nmodule-dir = 1\n"),
+            format!("{BASE}[runtime]\nmanifest-dir = 1\n"),
+            format!("{BASE}[runtime]\nmax-retired-generations = \"x\"\n"),
+            format!("{BASE}[online]\nbaseline = 1\n"),
+            format!("{BASE}[online]\nmanifest = 1\n"),
+            format!("{BASE}[online]\ncold-policy = \"bogus\"\n"),
+            format!("{BASE}[online]\nallow-untracked-removal = 1\n"),
+            format!("{BASE}[debug]\ndefault = 1\n"),
+            format!("{BASE}[debug]\nprotocol = \"bogus\"\n"),
+            format!("{BASE}[debug]\nforce-sessions-end-on-swap = 1\n"),
+            format!("{BASE}[debug]\nsession-timeout = \"bogus\"\n"),
+            format!("{BASE}[debug]\nsession-timeout = \"25h\"\n"),
+            format!("{BASE}[debug]\nallow-write = 1\n"),
+            format!("{BASE}[debug]\nallow-force = 1\n"),
+            format!("{BASE}[run]\ncycles = \"x\"\n"),
+            format!("{BASE}[run]\ncycle-time = \"bogus\"\n"),
+            format!("{BASE}[test]\nsources = \"src\"\n"),
+            format!("{BASE}[test]\ntimeout = \"bogus\"\n"),
+            format!("{BASE}[test]\ndefault-cycles = \"x\"\n"),
+            format!("{BASE}[test]\nmock-clock = \"bogus\"\n"),
+            format!("{BASE}[test]\ncoverage = 1\n"),
+            format!("{BASE}[[test.case]]\ncycles = 1\n"),
+            format!("{BASE}[[test.case]]\nname = \"a\"\nexpect-trap = \"BOGUS\"\n"),
+            format!("{BASE}[[test.case]]\nname = \"a\"\ncycles = \"x\"\n"),
+        ] {
+            parse_bad(&text);
+        }
+    }
+
+    #[test]
+    fn optional_sections_parse() {
+        parse_ok(&format!(
+            "{BASE}[build]\nopt-level = 2\nout-dir = \"out\"\nlib-type = \"static\"\ndebug = true\nemit = [\"ir\"]\ntarget = \"x86_64-unknown-linux-gnu\"\nclang = \"clang\"\nruntime = \"runtime\"\n"
+        ));
+        parse_ok(&format!(
+            "{BASE}[retain]\nenabled = true\nfile = \"retain.bin\"\n"
+        ));
+        parse_ok(&format!(
+            "{BASE}[runtime]\nmodule-dir = \"mods\"\nmanifest-dir = \"mans\"\nmax-retired-generations = 2\n"
+        ));
+        parse_ok(&format!(
+            "{BASE}[online]\nbaseline = \"active\"\nmanifest = \"manifest.json\"\nallow-untracked-removal = true\n"
+        ));
+        parse_ok(&format!(
+            "{BASE}[debug]\ndefault = true\nprotocol = \"pipe\"\nforce-sessions-end-on-swap = true\nsession-timeout = \"1s\"\nallow-write = true\nallow-force = true\n"
+        ));
+        parse_ok(&format!("{BASE}[debug]\nsession-timeout = \"0s\"\n"));
+        parse_ok(&format!("{BASE}[run]\ncycles = 10\ncycle-time = \"1ms\"\n"));
+        parse_ok(&format!(
+            "{BASE}[test]\nsources = [\"tests/**/*.st\"]\ntimeout = \"5s\"\ndefault-cycles = 10\nmock-clock = \"1us\"\ncoverage = true\n"
+        ));
+        parse_ok(&format!(
+            "{BASE}[[test.case]]\nname = \"a\"\ncycles = 10\ntimeout = \"1s\"\n"
+        ));
+        parse_ok(&format!("{BASE}[lints]\nwarnings = \"deny\"\n"));
     }
 }

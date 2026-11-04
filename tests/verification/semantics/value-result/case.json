@@ -1,0 +1,18 @@
+{
+  "format": "stc-core-case",
+  "formatVersion": "0.1.0",
+  "semanticsVersion": "1.0",
+  "profile": "stc-2013-oop-utf8-v1",
+  "name": "value-result",
+  "entry": { "kind": "program", "name": "MAIN" },
+  "inputs": [],
+  "cycles": 1,
+  "fuel": 10000,
+  "features": ["arith.add", "function.call", "value.result"],
+  "expected": {
+    "status": "halted",
+    "trap": null,
+    "globals": [42],
+    "cycles": 1
+  }
+}

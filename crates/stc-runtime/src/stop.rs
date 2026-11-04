@@ -37,6 +37,8 @@ pub(crate) const MAX_STACK_FRAMES: usize = 1024;
 pub(crate) const MAX_BREAKPOINTS: usize = 1024;
 /// Maximum number of local bytes copied into one stop snapshot.
 pub(crate) const MAX_LOCAL_COPY_BYTES: usize = 1024 * 1024;
+/// Maximum number of locals returned by one `frame.locals` (1.1) request.
+pub(crate) const MAX_LOCALS_LIST: usize = 1024;
 /// Maximum address span walked from one frame pointer chain.
 const MAX_STACK_WALK_BYTES: usize = 64 * 1024 * 1024;
 /// How often a parked cycle thread services the debug engine.
@@ -355,8 +357,25 @@ impl StopEvent {
 #[derive(Clone, Debug)]
 pub(crate) struct CapturedLocal {
     pub(crate) type_key: String,
+    /// Whether the declared storage is live at this stop. A local described by
+    /// the frame table but outside its live checkpoint range is captured with
+    /// `live: false` and no value.
+    pub(crate) live: bool,
     pub(crate) value: Option<DebugValue>,
     pub(crate) reason: Option<String>,
+}
+
+/// One local listed by the `stc-debug/1.1` `frame.locals` operation.
+///
+/// The list carries no value and no address: values remain `frame.read`
+/// requests. Names are the frame table's normalized uppercase spellings and
+/// the list is sorted by name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalInfo {
+    pub(crate) name: String,
+    pub(crate) type_key: String,
+    pub(crate) live: bool,
+    pub(crate) available: bool,
 }
 
 /// One captured stack frame.
@@ -415,7 +434,8 @@ struct StopState {
     checkpoint: DebugCheckpointRecord,
     breakpoint_id: Option<u64>,
     cycle: u64,
-    deadline: Instant,
+    /// No deadline means the session timeout is disabled.
+    deadline: Option<Instant>,
     frames: Vec<CapturedFrame>,
     truncated: bool,
     frames_available: bool,
@@ -757,9 +777,10 @@ impl SessionStop {
             breakpoint_id: stop.breakpoint_id,
             cycle: stop.cycle,
         });
-        let pause_remaining_ms = control.stop.as_ref().map(|stop| {
-            let remaining = stop.deadline.saturating_duration_since(now);
-            u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)
+        let pause_remaining_ms = control.stop.as_ref().and_then(|stop| {
+            let deadline = stop.deadline?;
+            let remaining = deadline.saturating_duration_since(now);
+            Some(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX))
         });
         SessionStatus {
             stop,
@@ -863,6 +884,65 @@ impl SessionStop {
         })
     }
 
+    /// Lists the captured locals of one frame for `stc-debug/1.1`.
+    ///
+    /// The result carries names, canonical type keys, and the captured
+    /// live/available state only; values remain [`Self::read_local`] requests
+    /// and no address is exposed. Names are the frame table's normalized
+    /// uppercase spellings, sorted by name, and the list is capped at
+    /// [`MAX_LOCALS_LIST`] entries with `truncated` reporting the cap.
+    ///
+    /// An unknown or stale stop is `STC-E-DEBUG-008`; missing frame metadata
+    /// (no frame sidecar or an optimized-out frame) is `STC-E-DEBUG-017`.
+    pub(crate) fn locals(&self, stop_id: u64, frame: usize) -> Result<(Vec<LocalInfo>, bool)> {
+        let control = lock(&self.control);
+        let Some(stop) = control.stop.as_ref() else {
+            return Err(Error::new(
+                codes::DEBUG_UNKNOWN,
+                "the cycle is not stopped; frame.locals requires a current stop_id",
+            ));
+        };
+        if stop.id != stop_id {
+            return Err(Error::new(
+                codes::DEBUG_UNKNOWN,
+                "the stop_id is not the current stop; frame.locals requires a current stop_id",
+            ));
+        }
+        if !stop.frames_available {
+            return Err(Error::new(
+                codes::DEBUG_INFO,
+                "stopped-frame information is unavailable for this build",
+            ));
+        }
+        let Some(captured) = stop.frames.get(frame) else {
+            return Err(Error::new(
+                codes::DEBUG_UNKNOWN,
+                format!("frame {frame} is not in the current stop snapshot"),
+            ));
+        };
+        if captured.function.is_none() || captured.optimized_out {
+            return Err(Error::new(
+                codes::DEBUG_INFO,
+                format!("stopped-frame information is unavailable for frame {frame}"),
+            ));
+        }
+        let mut locals: Vec<LocalInfo> = captured
+            .locals
+            .iter()
+            .map(|(name, local)| LocalInfo {
+                name: name.clone(),
+                type_key: local.type_key.clone(),
+                live: local.live,
+                available: local.value.is_some(),
+            })
+            .collect();
+        let truncated = locals.len() > MAX_LOCALS_LIST;
+        if truncated {
+            locals.truncate(MAX_LOCALS_LIST);
+        }
+        Ok((locals, truncated))
+    }
+
     /// Drains protocol stop events in order.
     pub(crate) fn drain_events(&self) -> Vec<StopEvent> {
         let mut control = lock(&self.control);
@@ -939,7 +1019,9 @@ impl DebugTables {
 pub(crate) struct CyclePump {
     target: *const Target,
     manifest: *const Manifest,
-    roots: *const RootRegistry,
+    /// The host's root registry for the enclosing cycle, mutable so a stopped
+    /// one-shot write can reach storage on this thread.
+    roots: *mut RootRegistry,
     info: *const ModuleInfo,
     metadata_error: *const Option<String>,
     manifest_json: *const str,
@@ -960,7 +1042,7 @@ pub(crate) struct CyclePump {
 pub(crate) struct CyclePumpInfo<'a> {
     pub(crate) target: &'a Target,
     pub(crate) manifest: &'a Manifest,
-    pub(crate) roots: &'a RootRegistry,
+    pub(crate) roots: &'a mut RootRegistry,
     pub(crate) info: Option<&'a ModuleInfo>,
     pub(crate) generation: u64,
     pub(crate) build_id: GotId,
@@ -989,7 +1071,7 @@ impl CyclePump {
         Self {
             target: std::ptr::from_ref(info.target),
             manifest: std::ptr::from_ref(info.manifest),
-            roots: std::ptr::from_ref(info.roots),
+            roots: std::ptr::from_mut(info.roots),
             info: info.info.map_or(std::ptr::null(), std::ptr::from_ref),
             metadata_error: std::ptr::from_ref(info.metadata_error),
             manifest_json: info.manifest_json as *const str,
@@ -1024,7 +1106,10 @@ impl CyclePump {
             DebugSource {
                 target: &*self.target,
                 manifest: &*self.manifest,
-                roots: &*self.roots,
+                roots: self.roots.cast_const(),
+                // The parked cycle thread owns the registry for this call;
+                // an immediate stopped write is applied through this handle.
+                writable_roots: Some(self.roots),
                 info,
                 generation: self.generation,
                 build_id: self.build_id,
@@ -1048,7 +1133,7 @@ impl CyclePump {
         // exclusively available to this thread for the cycle call. The parked
         // cycle thread is the only user, and it never holds a lock across ST.
         unsafe {
-            (&mut *self.engine).pump(now_ns, Some(source));
+            (&mut *self.engine).pump(now_ns, Some(source), true);
         }
     }
 
@@ -1225,7 +1310,7 @@ pub(crate) unsafe extern "C" fn debug_check_entry(
             checkpoint: record.clone(),
             breakpoint_id,
             cycle,
-            deadline: now + session.timeout,
+            deadline: (!session.timeout.is_zero()).then(|| now + session.timeout),
             frames,
             truncated,
             frames_available: session.tables.frames.is_some(),
@@ -1283,9 +1368,12 @@ fn park(session: &SessionStop, pump: &CyclePump) {
             let Some(stop) = control.stop.as_ref() else {
                 return;
             };
+            let deadline = stop.deadline;
+            let cycle = stop.cycle;
             let now = Instant::now();
-            if now >= stop.deadline {
-                let cycle = stop.cycle;
+            if let Some(deadline) = deadline
+                && now >= deadline
+            {
                 control.ending = true;
                 control.stop = None;
                 control.step = None;
@@ -1295,7 +1383,9 @@ fn park(session: &SessionStop, pump: &CyclePump) {
                 pump.pause_timeout(session, cycle);
                 return;
             }
-            let wait = stop.deadline.saturating_duration_since(now).min(PARK_POLL);
+            let wait = deadline.map_or(PARK_POLL, |deadline| {
+                deadline.saturating_duration_since(now).min(PARK_POLL)
+            });
             let (mut guard, _) = session
                 .wake
                 .wait_timeout(control, wait)
@@ -1445,8 +1535,20 @@ fn capture_frames(
     });
 
     for (ret, caller_fp) in callers {
+        // The walk records the return address, which points just after the
+        // call. The call instruction is the last byte before it, so map
+        // `ret - 1` to select the call site's line-table row.
         let address = ret.wrapping_sub(1);
         let range = tables.function_at(address);
+        let source = range.and_then(|range| {
+            let offset = address.checked_sub(range.start)?;
+            let line = tables.frame_function(range.function)?.source_at(offset)?;
+            Some(SourcePosition {
+                file: line.file.clone(),
+                line: line.line,
+                column: line.column,
+            })
+        });
         let (function, symbol, locals) = match range {
             Some(range) => (
                 Some(range.function),
@@ -1468,7 +1570,7 @@ fn capture_frames(
         frames.push(CapturedFrame {
             function,
             symbol,
-            source: None,
+            source,
             optimized_out: range.is_none(),
             locals: function.map_or_else(BTreeMap::new, |_| locals),
         });
@@ -1513,6 +1615,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: false,
                     value: None,
                     reason: Some("the local is not live at this stop".into()),
                 },
@@ -1524,6 +1627,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: true,
                     value: None,
                     reason: Some("the local storage is outside the stopped frame".into()),
                 },
@@ -1536,6 +1640,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: true,
                     value: None,
                     reason: Some("the local storage range overflows".into()),
                 },
@@ -1547,6 +1652,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: true,
                     value: None,
                     reason: Some("the local storage is outside the live stack frame".into()),
                 },
@@ -1558,6 +1664,7 @@ fn capture_locals(
                 local.name.clone(),
                 CapturedLocal {
                     type_key: local.type_key.clone(),
+                    live: true,
                     value: None,
                     reason: Some("the stop snapshot local copy limit was reached".into()),
                 },
@@ -1578,6 +1685,7 @@ fn capture_locals(
                     local.name.clone(),
                     CapturedLocal {
                         type_key: local.type_key.clone(),
+                        live: true,
                         value: Some(value),
                         reason: None,
                     },
@@ -1588,6 +1696,7 @@ fn capture_locals(
                     local.name.clone(),
                     CapturedLocal {
                         type_key: local.type_key.clone(),
+                        live: true,
                         value: None,
                         reason: Some(
                             "the local could not be decoded from its recorded location".into(),

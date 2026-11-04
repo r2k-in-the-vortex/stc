@@ -41,6 +41,20 @@ pub const TEST_ABI_MINOR: u16 = 2;
 
 /// Host ABI minor version required by modules with debug checkpoint hooks.
 pub const DEBUG_ABI_MINOR: u16 = 3;
+
+/// Internal test-build export: the statement-coverage counter array.
+///
+/// A test build defines one module-owned `[N x i64]` global under this name,
+/// exported as `dso_local dllexport`, only when it instruments at least one
+/// statement. The test host reads the array through the ordinary export lookup
+/// after the scan loop (WL-10 C-2).
+///
+/// This symbol is an internal protocol between the generated test module and
+/// the test host. It is **not** part of the deployable module ABI: production
+/// modules never define it, and no descriptor, manifest, GOT record, or
+/// metadata document names it.
+pub const COVERAGE_COUNTERS: &str = "stc_coverage_counters";
+
 /// Descriptor digest domain string.
 pub const DESCRIPTOR_DOMAIN: &str = "stc:descriptor:v1";
 /// Byte offset of `descriptor_size` in the encoded header.

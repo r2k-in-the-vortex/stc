@@ -1,0 +1,9 @@
+VAR_GLOBAL
+  A : LINT;
+  B : ULINT;
+END_VAR
+PROGRAM Main
+  A := LINT#-1;
+  B := LINT_TO_ULINT(A);
+  A := ULINT_TO_LINT(B);
+END_PROGRAM

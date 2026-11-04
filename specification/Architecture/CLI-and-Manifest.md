@@ -1,6 +1,6 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28)
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28); WL-1.1 adds `stc lsp`, `stc dap`, `--diagnostic-paths`, and `stc test --exact` (2026-10-30; F-17/F-18, 2026-11-03); WL-1.1 F-20 makes stdin EOF a default graceful stop for `stc run --watch` (D-213, 2026-10-31); WL-1.1 F-11 raises the stopped-frame sidecar to format 2 (D-244) and F-14 adds immediate stopped writes on `stc-debug/1.1` (D-245); WL-5.1 adds the Modbus TCP profile schema and records the implemented `--io`/shim/status surface (2026-11-02)
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md)
 
@@ -28,8 +28,10 @@ output goes to stdout.
 > exits 0/1/2. `run --watch` builds against the active baseline, launches the host with a local
 > user-only control endpoint, watches sources/manifests/history, deploys module/manifest pairs,
 > reports each compatibility result, retries once on a stale baseline, keeps the old generation
-> on failure, and exits 130 on Ctrl-C. `--store` also selects the watch store, and
-> `--watch-timeout <duration>` bounds a run for automation. `--message-format` supports
+> on failure, and exits 130 on Ctrl-C. The watch runs until interrupted, the watch timeout, or
+> standard-input EOF; EOF stops it gracefully with `[stc] watch stopped` and exit 0 (D-213). `--store`
+> also selects the watch store, and `--watch-timeout <duration>` bounds a run for automation.
+> `--message-format` supports
 > `human`, `json`, and `short`; exit codes follow §1.3. The loadable `module` with its
 > binary/JSON manifest and metadata, the thin `exe` launcher, and the embedding `lib` host
 > archive keep their M4.5 shapes, and `lib-type = "shared"` selects the shared host library.
@@ -44,6 +46,20 @@ output goes to stdout.
 > **M6.5 status (2026-10-28):** phases 0–10 are implemented. The `stc debug`, `--debug`,
 > `--release`, debug-information, checkpoint, `--debug-protocol`, and `[debug]` contracts are in
 > place; the M6 behavior above is historical.
+>
+> **WL-10 status (2026-10-31):** `stc test` emits statement coverage for the ST code under test
+> when `[test] coverage = true` or `--coverage` is given. `--no-coverage` overrides the manifest,
+> and `--coverage-out` selects the report directory. `coverage.json` (`stc-coverage/1`) and
+> `lcov.info` (LCOV) default to `target/stc/coverage`; the human summary follows the test
+> summary. Production artifacts, the host ABI, GOT/manifest, metadata, and test-result shapes are
+> unchanged. The model is in [Testing](Testing-and-Verification.md) §2.6.
+>
+> **WL-5.1 status (2026-11-02):** Modbus TCP is selected by `kind = "modbus-tcp"` (and the
+> optional `kind = "modbus-tcp-status"`), not by a global backend value; the profile schema is
+> §2.2.1. Only `--io` and `--io-file` are parsed for I/O; the formerly documented `--io-config`
+> and `--io-ethercat-lib` flags do not exist. The EtherCAT shim path comes from the
+> `STC_ETHERCAT_LIBRARY` environment variable. The control `Status` JSON does not include I/O
+> reports; the verbose launcher output (`stc run -v`) is the implemented operator surface.
 
 | Command | Purpose |
 | --- | --- |
@@ -51,9 +67,9 @@ output goes to stdout.
 | `stc check` | Lex, parse, resolve, and type-check; no codegen |
 | `stc build` | Emit artifacts selected by `--emit` / manifest; excludes test-only units |
 | `stc run` | Build an executable and run it |
-| `stc test` | Build and run the built-in test suite; includes test-only units |
+| `stc test` | Build and run the built-in test suite; includes test-only units; `--coverage` adds statement coverage of the ST code under test (`[test] coverage` sets the project default) |
 | `stc fmt [paths...]` | Format sources with the fixed style; `--check` for CI |
-| `stc clean` | Remove generated artifact directories: debug (`target/stc/debug`), release (`target/stc/release`), test (`target/stc/test`), and an explicit `[build].out-dir`; `--debug`, `--release`, or `--test` narrows the command to one tree, and `--out-dir` selects exactly one directory. Never `stc.lock`, retained-state files, or the runtime module/manifest store |
+| `stc clean` | Remove generated artifact directories: debug (`target/stc/debug`), release (`target/stc/release`), test (`target/stc/test`), coverage (`target/stc/coverage`, with the default tree and `--test`), and an explicit `[build].out-dir`; `--debug`, `--release`, or `--test` narrows the command to one tree, and `--out-dir` selects exactly one directory. Never `stc.lock`, retained-state files, or the runtime module/manifest store |
 | `stc metadata` | Print the selected configuration, ABI version, build mode, debug summary, exports, and artifact layout |
 | `stc compliance` | Print the profile ID and supported feature matrix |
 | `stc online download` | Export the active manifest, layout summary, and controller/deployment identifier |
@@ -61,8 +77,10 @@ output goes to stdout.
 | `stc rename` | Source-aware tracked rename that preserves `GotId` history |
 | `stc run --watch` | Watch sources, rebuild, and deploy an online change |
 | `stc debug` | Build and launch a local authenticated debug session, or attach with `--attach` (§1.7) |
+| `stc lsp` | Serve the Language Server Protocol for the local project over stdio (§1.8) |
+| `stc dap` | Serve the Debug Adapter Protocol for the local project over stdio; distinct from `stc debug` (§1.8) |
 
-Future commands (not v1): `stc lsp`, `stc doc`.
+Future commands (not v1): `stc doc`.
 
 ### 1.2 Common options
 
@@ -79,7 +97,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--clang <path>` | clang executable |
 | `--runtime <path>` | Runtime host archive used when linking `exe`/`lib` |
 | `--out-dir <path>` | Artifact directory; default `target/stc/debug` (debug) or `target/stc/release` (release); an explicit value is used verbatim for both modes; `[build].out-dir` overrides the project default; for `stc clean`, selects exactly the given directory |
-| `--io <backend>` | Override `[io].backend` for `run`/`test` (`null`, `memory`, `file`) |
+| `--io <backend>` | Override `[io].backend` for `run`/`test` (`null`, `memory`, `file`, `ethercat`); `ethercat` means hardware device backends own their bound ranges and unbound areas keep the null behavior. Modbus is selected only by device `kind`, not by this option |
 | `--io-file <path>` | File used by the file backend |
 | `--relaxed` | Accept the documented semicolon-relaxation syntax superset |
 | `--state-file <path>` | Retained-state file for this run |
@@ -87,6 +105,7 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--no-retain` | Disable retained-state load and save |
 | `--debug-protocol <kind>` | Local debug transport (`pipe` default, `socket` optional) for `stc debug` and `stc run --debug-server`; overrides `[debug].protocol` |
 | `--allow-untracked-removal` | Permit removing/renaming a root without a tracked rename; otherwise diagnose and require `--cold` |
+| `--diagnostic-paths <style>` | `package` (default) names project diagnostics `<package>/<relative>`; `absolute` names the source file by absolute path. Valid only with `check`, `build`, `run`, and `test` |
 | `--message-format <fmt>` | `human` (default), `json`, `short` |
 | `--color <when>` | `auto`, `always`, `never` |
 | `-v`, `-vv` | Verbose phase output; `-vv` includes clang commands and IR paths |
@@ -95,13 +114,23 @@ Future commands (not v1): `stc lsp`, `stc doc`.
 | `--deny warnings` | Equivalent to `-D warnings` |
 | `--locked` | Require `stc.lock` to match the manifest/dependency graph; fail instead of updating it |
 | `--list` | `stc test`: list discovered tests without building |
-| `--test` | `stc clean`: remove only the test artifact tree (`target/stc/test`, or the `--out-dir` root) |
+| `--exact` | `stc test`: match positional filters against complete test names (ASCII case-insensitive) instead of substrings |
+| `--test` | `stc clean`: remove only the test artifact tree (`target/stc/test`) and the default coverage directory (`target/stc/coverage`); with `--out-dir`, exactly the given root |
 | `--no-run` | `stc test`: build test artifacts without executing them |
 | `--timeout <duration>` | `stc test`: override the per-test timeout (default 5 s) |
+| `--coverage` | `stc test`: force statement coverage on, overriding `[test] coverage`; rejected with `--list`; with `--no-run`, artifacts are instrumented but no report is written |
+| `--no-coverage` | `stc test`: force coverage off, overriding `[test] coverage`; conflicts with `--coverage` |
+| `--coverage-out <dir>` | `stc test`: coverage report directory; requires effective coverage and is rejected with `--list`; default `target/stc/coverage` relative to the project root, an explicit value is used as given |
 | `-- --nocapture` | `stc test`: forward test-host output instead of only reporting results |
 
 Precedence: CLI > environment (`STC_TARGET`, `STC_CLANG`, `STC_RUNTIME`, `STC_LOG`) >
-`stc.toml` > built-in defaults.
+`stc.toml` > built-in defaults. For coverage, `--coverage` and `--no-coverage` override
+`[test] coverage`, while `--list` ignores the manifest default. Invalid combinations
+(`--coverage` with `--no-coverage`, `--coverage` with `--list`, and `--coverage-out` with
+`--list` or without effective coverage) are usage errors (`STC-E-PROJECT-010`, exit 2).
+Coverage options are valid only with `stc test`; using them with another command, including
+`stc build`, is a usage error (`STC-E-PROJECT-010`, exit 2). `--list` and `--exact` are likewise
+valid only with `stc test`; using either with another command is a usage error.
 
 The table describes the v1 target surface. M6 implemented `--manifest-path`, `--locked`,
 `--color`, `-q`, `-D`/`-W`/`-A`, `--deny warnings`, `-v`/`-vv`, `--debug`, and, for `stc run`,
@@ -109,7 +138,16 @@ The table describes the v1 target surface. M6 implemented `--manifest-path`, `--
 `--no-retain`. `run --watch` adds `--store <dir>` and `--watch-timeout <duration>`; the online
 commands add `--out`, `--binary`, `--store`, `--host`, `--nonce`, and `--baseline`, and `rename`
 adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `stc debug` /
-`--debug-server` surface are implemented in M6.5; §1.7 fixes the contract.
+`--debug-server` surface are implemented in M6.5; §1.7 fixes the contract. WL-1.1 implements
+`--diagnostic-paths` and the `stc lsp` and `stc dap` servers; §1.8 fixes their surface. WL-10
+implements `--coverage`, `--no-coverage`, and `--coverage-out` for `stc test`, plus the
+`[test] coverage` project default (§2.4).
+
+The implemented I/O overrides are exactly `--io` and `--io-file`. There is no `--io-config`
+runtime profile override: the profile selected by `[io].config` is embedded at build time and is
+authoritative. There is no `--io-ethercat-lib` flag either; the shim loader reads
+`STC_ETHERCAT_LIBRARY` (falling back to the platform library name). These gaps are recorded here
+and in [I/O Routing and Backends](IO-Routing-and-Backends.md) §2.3; WL-5.1 does not add a flag.
 
 ### 1.3 Exit codes
 
@@ -121,6 +159,15 @@ adds `--dry-run`. `--release`, debug information, `--debug-protocol`, and the `s
 | 3 | Internal compiler error (panic caught at the driver boundary) |
 | 4 | Trap or runtime failure in `stc run`/`stc test` |
 | 130 | Interrupted (Ctrl-C) |
+
+`stc run --watch` exits 0 for a graceful stdin-EOF stop, for a normal `--watch-timeout` expiry, and
+for a host exit with status 0; `--watch-timeout` otherwise returns the host's exit status, and a
+host exit returns that status. Ctrl-C remains 130 (§1.7).
+For `stc test`, coverage leaves the test exit codes unchanged: 0 when the selected tests pass, 1
+for a failing or timed-out test or a coverage report directory/file write failure
+(`STC-E-BUILD-002`), 2 for a usage or manifest error, and 4 for an unexpected trap. Coverage
+collection never changes a test status. The coverage warnings `STC-W-COVERAGE-001/002` follow the
+normal lint levels and fail the run only when promoted to errors.
 
 ### 1.4 Diagnostics
 
@@ -198,6 +245,26 @@ logging stays on stderr.
 
 **Diagnostics.** One object per diagnostic per line, as in §1.4. This shape is unchanged.
 
+**Discovered tests.** `stc test --list --message-format json` writes one object per discovered
+test, in discovery order, without building:
+
+```json
+{
+  "name": "TimerBlink",
+  "package": "demo",
+  "file": "tests/timer.st",
+  "line": 12,
+  "column": 1
+}
+```
+
+- `package` is the owning package name; `file` is package-relative with forward slashes. A
+  dependency file is `<package>/<relative>`.
+- `line` and `column` are 1-based and name the start of the test declaration, which is the
+  `{stc:test}` annotation when one is present.
+- The human `--list` format remains one test name per line. These keys are additive; a later
+  compatible extension may append another key.
+
 **Test results.** `stc test --message-format json` writes one object per test, in discovery
 order, after the test process exits:
 
@@ -219,6 +286,85 @@ order, after the test process exits:
   are omitted only when the call site has no source location.
 - `trap` is the trap name (for example `STC_TRAP_DIV_ZERO`) for `status = "trap"`, otherwise
   `null`. An expected trap that matches `expect-trap` produces `pass`.
+
+**Coverage report.** With coverage enabled, `stc test` writes `coverage.json` and `lcov.info`
+under the coverage directory (default `target/stc/coverage`; `--coverage-out <dir>` overrides) and
+prints a human summary. `coverage.json` is versioned by its `protocol` key:
+
+```json
+{
+  "files": [
+    {
+      "covered": 1,
+      "file": "src/stats.st",
+      "line_percent": 50.0,
+      "lines": 2,
+      "lines_covered": 1,
+      "percent": 50.0,
+      "sites": 2
+    }
+  ],
+  "filters": [],
+  "kind": "statement",
+  "package": "coverage-demo",
+  "profile": "stc-2013-oop-utf8-v1",
+  "protocol": "stc-coverage/1",
+  "sites": [
+    { "column": 3, "count": 1, "file": "src/stats.st", "line": 4 },
+    { "column": 3, "count": 0, "file": "src/stats.st", "line": 7 }
+  ],
+  "tests": [
+    {
+      "coverage": "reported",
+      "covered": [0],
+      "name": "ClassifyPositive",
+      "sites_covered": 1,
+      "status": "pass"
+    },
+    {
+      "coverage": "timeout",
+      "name": "SlowTest",
+      "status": "timeout"
+    }
+  ],
+  "totals": {
+    "covered": 1,
+    "line_percent": 50.0,
+    "lines": 2,
+    "lines_covered": 1,
+    "percent": 50.0,
+    "sites": 2
+  }
+}
+```
+
+- `protocol` is `stc-coverage/1`; `profile` is the profile ID; `package` is the root package name;
+  `kind` is `statement`; `filters` records the positional filters as given (`[]` when none).
+- `totals` and each `files` entry carry `sites`, `covered`, `percent`, `lines`, `lines_covered`,
+  and `line_percent`. `files` is sorted by `file`; files with no executable sites are absent from
+  `files` and `sites`. `percent` and `line_percent` are `null` when the denominator is zero,
+  otherwise half-up rounded to one decimal; `lines` counts distinct start lines with at least one
+  site, and `lines_covered` counts those with a hit.
+- `sites` is sorted by `(file, start byte, end byte)`; `line` and `column` are the span start, and
+  `count` is the summed hit count (`u64`). Identical spans from different test artifacts merge.
+- `tests` is in run order. `coverage` is `reported`, `missing`, or `timeout`; `covered` holds
+  ascending indices into `sites` and `sites_covered` its length, and both are present only when
+  `coverage` is `reported`. `status` is the test status from the test-result shape above.
+- Paths are package-relative with forward slashes; a dependency file is `<package>/<relative>`.
+
+`lcov.info` is a standard LCOV tracefile sorted by file: one record per file with `TN:`, `SF:`,
+one `DA:<line>,<count>` per distinct start line (counts summed per line), `LF:`, `LH:`, and
+`end_of_record`. There are no `BRDA`, function, or checksum records in v2.0.0. The human summary
+follows the test summary in human mode:
+
+```text
+coverage: 3/5 statements (60.0%), 3/5 lines (60.0%)
+  src/stats.st: 3/5 statements (60.0%), 3/5 lines (60.0%)
+```
+
+A run with no sites prints `coverage: no sites`. In JSON mode the summary is suppressed on stdout
+and the two file paths are logged to stderr; `-q` suppresses the human summary. The files are still
+written. The reports contain no timings, build IDs, absolute paths, or host data.
 
 **Compatibility report.** `stc build` and `stc online` write one object when a baseline is in
 use (human output is the default; `--message-format json` selects this shape):
@@ -317,7 +463,7 @@ the command surface.
 | `--watch <target>` | Add an initial watch target; repeatable. |
 | `--allow-write` | Launch the server with the `write` scope and request it. |
 | `--allow-force` | Launch the server with the `force` scope and request it. |
-| `--session-timeout <duration>` | Launch-mode stop/idle bound; defaults to `[debug].session-timeout`. |
+| `--session-timeout <duration>` | Launch-mode stop/idle bound; defaults to `[debug].session-timeout` (disabled by default; zero disables). |
 | `--debug-protocol <kind>` | Launch transport (`pipe` or `socket`); overrides `[debug].protocol`. |
 | `--debug` / `--release` | Build-mode selection; `stc debug` defaults to debug. |
 
@@ -368,13 +514,62 @@ by a separate system and machine design as required by law and regulation.
 | `--debug-endpoint <path>` | Endpoint file to write (default a per-run path under the out-dir). |
 | `--allow-write` | Grant the `write` scope. |
 | `--allow-force` | Grant the `force` scope. |
-| `--session-timeout <duration>` | Stop/idle bound; defaults to `[debug].session-timeout`. |
+| `--session-timeout <duration>` | Stop/idle bound; defaults to `[debug].session-timeout` (disabled by default; zero disables). |
 
 `--debug-server` is valid for debug and release modules; a release module yields a
 monitoring-only session (`STC-W-DEBUG-004`). `stc test` rejects `--release`, `--debug-server`,
 `--debug-protocol`, and the server-grant options. `stc run --watch` and `--debug-server` may
 coexist: the M6 control endpoint and the M6.5 debug endpoint have different names, tokens,
 protocols, and messages (D-155, D-173).
+
+**`stc run --watch` lifetime.** The watch runs until interrupted, the `--watch-timeout` bound, or
+standard-input EOF. It reads stdin only to detect EOF and never consumes commands from it. On EOF
+(a terminal Ctrl-D/Ctrl-Z, `/dev/null`, or a closed stdin pipe) it stops the host through the same
+control client as Ctrl-C, prints `[stc] watch stopped`, and exits 0; Ctrl-C prints `[stc] watch
+interrupted` and exits 130. `--watch-timeout` stops the host, prints `[stc] watch timeout reached`,
+and returns the host's exit status (0 for a clean stop). A host that exits on its own ends the
+watch with the host's status and prints `[stc] host exited with status <n>` (D-213). The watch does
+not run the stale-endpoint preparation that non-watch debug launches use: an explicit
+`--debug-endpoint` must be a fresh path for each watch run, or startup fails with
+`STC-E-DEBUG-020`/`STC-E-DEBUG-021`; a caller that uniquely names the path per run, as the VS Code
+extension does, is unaffected. IDE Integration §4.7 fixes the editor surface that uses this
+contract.
+
+### 1.8 IDE servers (`stc lsp` and `stc dap`)
+
+Both servers own standard input and standard output. Standard output carries protocol messages
+only; logs, build output, and the debug endpoint line go to standard error. Both accept only
+`--manifest-path <path>` (plus `--help`/`--version`); diagnostic, build, and formatting options are
+rejected. The editor contracts are fixed in
+[IDE Integration](IDE-Integration.md) §3 and §4.
+
+**`stc lsp`.** Serves the Language Server Protocol with `Content-Length` framed JSON-RPC over
+stdio. `--manifest-path` selects the project; otherwise the server discovers `stc.toml` from the
+initialize `rootUri`, then `workspaceFolders`, then the process working directory, searching
+ancestors. A missing or unloadable project fails `initialize` with a readable error and logs the
+detail to stderr. The server exits 0 after the `shutdown`/`exit` handshake and 1 when input closes
+or `exit` arrives without `shutdown`. It provides push diagnostics, document symbols, definition,
+references, hover, completion, and whole-document formatting, with full synchronization and
+UTF-16 positions; the closed unsupported list is in IDE Integration §3.3.
+
+**`stc dap`.** Serves the Debug Adapter Protocol over stdio. Launch and attach settings arrive as
+DAP messages (`project`, `noBuild`, `outDir`, `release`, `allowWrite`, `allowForce`, `sourceRoot`,
+`args`, `cwd`, `test` for a selected test, and `endpoint` for attach); `--manifest-path` is only a
+fallback project path. Launch builds the debug form by default and starts a local endpoint through
+the same driver plumbing as `stc debug`; `noBuild` launches existing artifacts. A launch with
+`test` builds only that discovered `{stc:test}` POU with the per-test debug harness (Testing and
+Verification §2.5) into `<artifact root>/debug/<artifact>`, applies breakpoints before releasing
+the test host's start gate, and cannot be combined with `noBuild`, `release`, or attach. The
+adapter translates DAP to `stc-debug/1.1` and falls back to `stc-debug/1`, reports unsupported
+capabilities honestly, and owns no compiler or debugger logic. `disconnect` stops the session and
+exits the adapter; a launch-owned host is shut down, while attach leaves it running. `stc dap` is
+distinct from `stc debug`: `stc debug` is the interactive CLI client, and `stc dap` is the editor
+server.
+
+`--diagnostic-paths` affects project-mode diagnostics only. `package` is the default and keeps
+`<package>/<relative>` names for human and JSON output; `absolute` names the source file by its
+absolute path so an editor problem matcher can resolve multi-package sources. `stc run --watch`
+forwards the selected style to its child build.
 
 ## 2. Project manifest: `stc.toml`
 
@@ -450,7 +645,7 @@ allow-untracked-removal = false
 default = true
 protocol = "pipe"                   # pipe | socket (local only)
 force-sessions-end-on-swap = true   # must be true in v1
-session-timeout = "5m"              # continuous stop/idle bound (implemented, M6.5)
+# session-timeout = "5m"            # optional continuous stop/idle bound; omit or "0ns" to disable
 allow-write = false                 # grant the write scope (implemented, M6.5)
 allow-force = false                 # grant the force scope (implemented, M6.5)
 
@@ -469,6 +664,7 @@ timeout = "5s"
 default-cycles = 1
 mock-clock = "0ns"
 io = "memory"
+coverage = false                  # statement coverage by default (WL-10)
 
 [[test.case]]
 name = "TimerBlink"
@@ -532,10 +728,14 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   passes `--out-dir`. The default is `target/stc/debug` (debug) or `target/stc/release`
   (release). An explicit out-dir is used verbatim for both modes; building both modes into one
   explicit directory is not a supported layout because manifest/metadata names collide (D-178).
-- `[io]` is optional. `backend` is `null`, `memory`, or `file` in v1; hardware backend names are
-  runtime-defined in v2. `file` names the file used by the file backend.
-  `input-bytes`/`output-bytes`/`marker-bytes` are optional; the compiler computes them from `AT`
-  declarations when omitted. `[test] io` overrides the backend for test runs.
+- `[io]` is optional. `backend` is `null`, `memory`, `file`, or `ethercat`; `ethercat` selects
+  the hardware-device path where devices of a registered `kind` own their bound ranges and
+  unbound areas keep the null behavior. It does **not** select Modbus: Modbus devices use
+  `kind = "modbus-tcp"` and leave `backend` unset or `null`. `file` names the file used by the
+  file backend. `input-bytes`/`output-bytes`/`marker-bytes` are optional; the compiler computes
+  them from `AT` declarations when omitted. `[test] io` overrides the backend for test runs. The
+  v2.0.0 machine-profile key `[io].config`, the profile schema (including Modbus in §2.2.1), and
+  the route schema are fixed in [I/O Routing and Backends](IO-Routing-and-Backends.md).
 - `[[io.devices]]` declares a device tree. `name` is unique; `kind` is an opaque string;
   `config` is opaque TOML copied to metadata. `[[io.devices.channels]]` is optional and gives the
   compiler enough information to validate hints (`name`, `direction`, `width`).
@@ -561,11 +761,11 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
   override it.
 - `[debug]` controls the default build mode (`default`), local transport (`protocol`, `pipe`
   default or `socket`), the swap teardown policy (`force-sessions-end-on-swap`, which must be
-  `true` in v1), the stop/idle bound (`session-timeout`, a duration string, default `5m`), and
-  the default write/force grants (`allow-write`, `allow-force`, both false). `[debug].default`
-  must agree with an explicitly present `[build].debug`; a disagreement or
-  `force-sessions-end-on-swap = false` is `STC-E-PROJECT-010`. `session-timeout` must be a
-  positive duration and must not exceed 24 hours; `allow-write`/`allow-force` are booleans.
+  `true` in v1), the optional stop/idle bound (`session-timeout`, a duration string; unset or
+  `0ns` disables it), and the default write/force grants (`allow-write`, `allow-force`, both
+  false). `[debug].default` must agree with an explicitly present `[build].debug`; a disagreement
+  or `force-sessions-end-on-swap = false` is `STC-E-PROJECT-010`. `session-timeout` must be zero
+  or a positive duration and must not exceed 24 hours; `allow-write`/`allow-force` are booleans.
   These settings are runtime/session policy and do not affect the build ID or manifest identity.
   `stc test` ignores them and always builds the hook-free debug form. Debug remains a local,
   authenticated capability; it is not a safety function (D-173–D-179).
@@ -583,6 +783,127 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
 - `[dependencies]` is part of v1 for local path dependencies. A dependency entry without `path`
   is an error until/unless a registry resolver is added (beyond v1, A-009); unknown dependency
   keys are errors.
+
+#### 2.2.1 Modbus TCP profile schema
+
+A device with `kind = "modbus-tcp"` is a Modbus TCP **server**. Its protocol-side configuration
+lives in the machine profile selected by `[io].config`; it has no addressing in inline
+`[io.devices].config`. Every declared channel must have exactly one mapping, and every mapping
+must name a declared channel. An optional `kind = "modbus-tcp-status"` device has no profile
+entry and uses inline `config = { layout = 1 }`.
+
+The compiler validates structure only: key types, the non-empty `bind` array, literal
+`ip:port` entries, the unit/connection/timeout ranges, `word-order` spellings or integer lists,
+the channel-map shape, and the `byte` value. It reports structural errors as
+`STC-E-PROJECT-009`. The runtime validates semantics at cold start with `STC-E-IO-MODTCP-001`
+and `STC-E-IO-MODTCP-003`: declared/mapped name agreement, table/direction/width agreement,
+overlapping spans, byte placement, and image ranges.
+
+Device keys:
+
+| Key | Type and default | Meaning |
+| --- | --- | --- |
+| `bind` | non-empty array of strings; required | Literal IPv4/IPv6 `"ip:port"` entries. IPv6 uses `[address]:port`; hostnames are rejected. One listener per entry; all binds share one bank. Port 0 gets an ephemeral port. |
+| `unit` | integer 1..=247; optional | Requests for another unit id get exception 0x0B. When absent, the unit id is accepted and echoed. |
+| `max-connections` | integer 1..=128; default 8 | Total across all binds of the server. |
+| `idle-timeout` | positive duration string; default `"60s"` | Closes a connection with no complete request for the interval, including a partial frame. |
+| `word-order` | `"high-first"` (default) or `"low-first"` | Device default for 32/64-bit register channels. |
+| `[[device.<name>.channels]]` | array of tables; required | One entry per declared channel. |
+
+Channel-map keys:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `name` | string, unique | Must match a declared `[[io.devices.channels]]` name. Direction and width come from `stc.toml`. |
+| `table` | `"coil"`, `"discrete-input"`, `"holding-register"`, `"input-register"` | Modbus data table. |
+| `address` | integer 0..=65535 | **Zero-based** first address of the channel. |
+| `byte` | `"low"` (default) or `"high"` | Valid only for 8-bit register channels; selects one byte of the register. |
+| `word-order` | named order or integer list | Optional override for 32/64-bit register channels: `"high-first"`, `"low-first"`, `"abcd"`, `"cdab"`, `"dcba"`, `"badc"`, or a permutation of length `width/8`. |
+
+Example:
+
+```toml
+[device.modbus0]
+bind = ["127.0.0.1:15020", "192.168.1.7:502"]
+unit = 1
+max-connections = 8
+idle-timeout = "60s"
+word-order = "high-first"
+
+# Addresses are zero-based: address 0 is the first element of the table.
+# Vendor reference numbers 00001/10001/30001/40001 are one-based; subtract one.
+[[device.modbus0.channels]]
+name = "CoilIn0"
+table = "coil"
+address = 0
+
+[[device.modbus0.channels]]
+name = "ByteInLo"
+table = "holding-register"
+address = 0
+byte = "low"
+
+[[device.modbus0.channels]]
+name = "ByteInHi"
+table = "holding-register"
+address = 0
+byte = "high"
+
+[[device.modbus0.channels]]
+name = "DwordIn0"
+table = "holding-register"
+address = 20
+word-order = "dcba"
+
+[[device.modbus0.channels]]
+name = "LwordOut0"
+table = "input-register"
+address = 30
+word-order = [6, 7, 4, 5, 2, 3, 0, 1]
+```
+
+Zero-based addressing and width rules:
+
+- The four tables are independent address spaces. `address = 0` is the first coil, discrete
+  input, input register, or holding register. Vendor `00001`/`10001`/`30001`/`40001` notation is
+  one-based and is converted by subtracting one. The profile never accepts vendor notation.
+- `coil` and `discrete-input` channels are 1 bit. `holding-register` and `input-register`
+  channels are 8, 16, 32, or 64 bits; a boolean in a register is a 16-bit channel.
+- A register channel occupies 1 (8/16-bit), 2 (32-bit), or 4 (64-bit) consecutive registers
+  starting at `address`. Spans must stay in 0..=65535 and must not overlap, except one low and
+  one high 8-bit channel in the same register.
+- `holding-register` and `coil` accept input (client-writable) and output (PLC-published)
+  channels. `input-register` and `discrete-input` accept only output channels because Modbus has
+  no write function for those tables.
+- Writes must cover complete input-mapped channels. A write range with an unmapped, read-only,
+  or output-only address returns exception 0x02 and applies nothing; a write that partially
+  covers a 32/64-bit channel is also rejected with 0x02. FC15/FC16 are atomic under one bank
+  lock.
+- For 8-bit channels, `byte = "low"` is the least significant byte of the register and
+  `"high"` the most significant. For register value `0x1234`, low is `0x34` and high is `0x12`.
+- A 16-bit register is big-endian on the wire. Device `word-order` and per-channel overrides
+  control the order of the 16-bit words and, for the named/index forms, the value bytes. Device
+  `low-first` at 64 bits reverses all four words (GHEFCDAB); per-channel `cdab` is the per-half
+  pattern (CDABGHEF).
+
+The status device is read-only and has no profile entry:
+
+```toml
+[[io.devices]]
+name = "MBStatus"
+kind = "modbus-tcp-status"
+config = { layout = 1 }
+
+[[io.devices.channels]]
+name = "server0.listening"
+direction = "input"
+width = 1
+```
+
+Layout 1 exposes `server<N>.listening`, `listeners`, `bound_listeners`, `connections`,
+`requests`, `writes`, `exceptions`, `malformed`, and `last_error`; unknown layouts or channels
+and width/direction mismatches fail closed. The full contract, diagnostics, fault policy, and
+security boundary are in [I/O Routing and Backends](IO-Routing-and-Backends.md) §4.5.
 
 ### 2.3 Source discovery
 
@@ -630,6 +951,18 @@ expect-trap = "STC_TRAP_DIV_ZERO"  # optional; a matching trap makes the test pa
 - `timeout` is a duration string; the runner kills the test process on expiry. The default is 5 s.
 - `[test].mock-clock` sets the initial mock time; tests advance the next cycle's latched time with
   `STC_CLOCK_ADVANCE` through host ABI 2.2 service ID 12 (D-157).
+- A `stc dap` launch with `test` selects a test by its exact discovered name (`stc test --list`
+  prints the names). The run compiles the same root package and dependencies, including
+  `[test].sources`, but builds only the selected test as a hook-bearing per-test debug harness
+  under `target/stc/test/debug/<artifact>` (D-246). Ordinary `stc test` builds and artifacts are
+  unaffected.
+- `[test] coverage` is a boolean (default `false`). When `true`, `stc test` collects statement
+  coverage by default. `--coverage` forces it on and `--no-coverage` forces it off, overriding the
+  manifest; `--list` ignores the manifest default. `--coverage` with `--no-coverage`, `--coverage`
+  with `--list`, and `--coverage-out` with `--list` or without effective coverage are usage
+  errors. Reports default to `target/stc/coverage`; `--coverage-out <dir>` selects another
+  directory. Coverage is test tooling only; see
+  [Testing and Verification](Testing-and-Verification.md) §2.6.
 - `[[test.case]].expect-trap` (M6) records the expected trap code; a test that traps with that
   code passes, and any other trap fails it. The same key is accepted in the `{stc:test}` JSON
   payload; a pragma/manifest conflict is `STC-E-PROJECT-008`.
@@ -747,20 +1080,39 @@ target/stc/test/<artifact>/                     per-test artifact (stc test; hoo
   <artifact>.stc-got.json
   <artifact>.stc-got.bin
 
+target/stc/test/debug/<artifact>/               per-test debug harness (stc dap launch `test`; D-246)
+  <artifact>.ll
+  <artifact>.o
+  <artifact>.exe | <artifact>                    thin host launcher (exe)
+  <artifact>-launcher.ll | <artifact>-launcher.o
+  <artifact>-<build-id>.dll | <artifact>-<build-id>.so
+  <artifact>.stc-meta.json
+  <artifact>.stc-got.json
+  <artifact>.stc-got.bin
+  <artifact>.stc-frames.json                    stopped-frame sidecar (hook-bearing)
+
+target/stc/coverage/                            coverage reports (stc test; default)
+  coverage.json                                 native report (`stc-coverage/1`)
+  lcov.info                                 LCOV tracefile
+
 target/stc/runtime/                             default runtime store (`stc run --watch`)
   modules/                                      runtime module generations (when configured)
   manifests/                                    active/retired GOT manifests
 ```
 
-`stc clean` removes the debug, release, and test trees and an explicit `[build].out-dir`. It
-preserves `stc.lock`, every retained-state file (`*.stcstate`), an explicit `[retain].file`, and
-the runtime module/manifest store (`[runtime].module-dir`, `[runtime].manifest-dir`, or the
-default `target/stc/runtime`); a preserved entry keeps its parent directories in place. With no
-selector, clean covers the three generated trees and the explicit out-dir; `--debug`, `--release`,
+`stc clean` removes the debug, release, and test trees, the default coverage directory
+(`target/stc/coverage`), and an explicit `[build].out-dir`. It preserves `stc.lock`, every
+retained-state file (`*.stcstate`), an explicit `[retain].file`, and the runtime module/manifest
+store (`[runtime].module-dir`, `[runtime].manifest-dir`, or the default `target/stc/runtime`); a
+preserved entry keeps its parent directories in place. With no selector, clean covers the three
+generated trees, the default coverage directory, and the explicit out-dir; `--debug`, `--release`,
 or `--test` narrows the command to one, and `--out-dir` selects exactly the given directory.
-Cleaning a directory that contains the project root is refused. A runtime store selected only by a
-`stc run --watch --store` CLI override is not discoverable by clean; keep it outside the generated
-trees or delete it explicitly.
+`--test` removes the test tree and the default coverage directory together; `--debug` and
+`--release` leave coverage reports in place. A custom `--coverage-out` directory, like a custom
+`--out-dir`, is outside the default tree and is not removed. Cleaning a directory that contains
+the project root is refused. A runtime store selected only by a `stc run --watch --store` CLI
+override is not discoverable by clean; keep it outside the generated trees or delete it
+explicitly.
 
 ### 4.1 Release package layout
 
@@ -809,7 +1161,7 @@ stc-<version>-<host-triple>/
   "abi_version": 2,
   "artifact": "motor-control",
   "build_id": "0x…",
-  "compiler": "stc 1.0.0",
+  "compiler": "stc 2.0.0",
   "configuration": "Main",
   "descriptor_digest": "0x…",
   "debug": {

@@ -38,6 +38,14 @@
 //!   the process-wide ABI 2 state services;
 //! - [`io`] owns the `null`/`memory`/`file` process-image backends and the
 //!   per-scan input latch/output publish;
+//! - [`coordinator`] owns the shared process image, per-device backend
+//!   dispatch, route application, and per-backend fault isolation
+//!   (IO-Routing-and-Backends §3–§4);
+//! - [`io_mock`] is the protocol-neutral mock backend used by the coordinator
+//!   tests; on Linux `ethercat`/`ethercat-status` are served by `io_ethercat`
+//!   instead, and the mock remains the default elsewhere;
+//! - `io_ethercat` (Linux only) dynamically loads the project-owned IgH shim
+//!   and owns EtherCAT configuration, startup, fault/recovery, and status;
 //! - `signal` installs the Ctrl-C/Ctrl-Break stop handlers;
 //! - `trap_boundary` provides the non-local trap exit around module calls.
 //!
@@ -58,9 +66,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) mod backend_defaults;
 pub mod catalog;
 pub mod compare;
 pub mod control;
+pub mod coordinator;
 pub mod debug;
 pub mod debug_server;
 pub mod debug_view;
@@ -71,6 +81,10 @@ pub mod host;
 pub mod host_api;
 pub mod image;
 pub mod io;
+#[cfg(target_os = "linux")]
+pub mod io_ethercat;
+pub mod io_mock;
+pub mod io_modbus_tcp;
 pub mod loader;
 pub mod memory;
 pub mod migration;
@@ -80,6 +94,7 @@ mod rt;
 pub mod run;
 pub mod scheduler;
 pub mod signal;
+mod snapshot;
 pub mod state;
 mod stop;
 pub mod store;
@@ -96,6 +111,11 @@ pub use control::{
     CONTROL_UNAVAILABLE, ControlClient, ControlOp, ControlRequest, ControlServer, ControlSignal,
     DEPLOY_REJECTED, PROTOCOL_VERSION,
 };
+pub use coordinator::{
+    BackendBinding, BackendChannel, BackendConfig, BackendDeviceConfig, BackendRegistry,
+    BackendReport, BackendState, BackendStatus, Coordinator, DeviceBackend, ImageRange,
+    ProcessImage,
+};
 pub use debug::{
     AuditEvent, AuditOutcome, AuditSink, AuditTarget, DebugBatch, DebugEndReason, DebugError,
     DebugEvent, DebugFailure, DebugQueueId, DebugQueueOutcome, DebugQueueResult, DebugRead,
@@ -106,8 +126,9 @@ pub use debug::{
     StringValue, TypedValue, WatchId, WatchResult, WatchSpec, WatchValue,
 };
 pub use debug_server::{
-    DEBUG_PROTOCOL, DebugClient, DebugClientError, DebugEndpointFile, DebugServer,
-    DebugServerConfig, DebugServerInfo, MAX_MESSAGE_BYTES, MAX_REQUEST_BYTES,
+    DEBUG_PROTOCOL, DEBUG_PROTOCOL_1_1, DEBUG_PROTOCOL_VERSIONS, DebugClient, DebugClientError,
+    DebugEndpointFile, DebugServer, DebugServerConfig, DebugServerInfo, MAX_MESSAGE_BYTES,
+    MAX_REQUEST_BYTES,
 };
 pub use debug_view::{
     IdentityKind, SplitView, ViewField, ViewIdentity, ViewKind, ViewNode, ViewOrigin, ViewRoot,
@@ -121,6 +142,10 @@ pub use host::{
 pub use host_api::{ABI_VERSION, HOST_API, HostApi, TrapRecord};
 pub use image::{DirectRemap, MAX_IMAGE_BYTES};
 pub use io::{IoNotice, IoRuntime};
+#[cfg(target_os = "linux")]
+pub use io_ethercat::{EthercatBackend, SHIM_ENV, SHIM_LIBRARY, ShimInfo, probe_shim};
+pub use io_mock::{MockEthercatBackend, MockWire};
+pub use io_modbus_tcp::ModbusTcpBackend;
 pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
 pub use migration::{PlanDecision, validate_deployable, validate_plan};
@@ -223,7 +248,10 @@ pub extern "C" fn stc_abi_version() -> i32 {
 /// Accepted options: `--cycles <n>` (zero runs until interrupted),
 /// `--cycle-time <duration>`, `--io null|memory|file`, `--io-file <path>`,
 /// `--state-file <path>`, `--reset-retain`, `--no-retain`,
-/// `--mock-clock <duration>`, `--status`, and `--module <path>`.
+/// `--mock-clock <duration>`, `--status`, `--module <path>`, and the
+/// differential-testing `--snapshot <path>` (writes the active generation's
+/// manifest roots after the run; protected roots are included and marked, and
+/// a snapshot write failure exits 2).
 ///
 /// A relative `--state-file`/`--io-file`, or a relative `retain.file`/
 /// `io.file` from the metadata sidecar, resolves against the module directory
@@ -265,6 +293,7 @@ struct LauncherOptions {
     debug_allow_write: bool,
     debug_allow_force: bool,
     debug_session_timeout_ns: Option<u64>,
+    snapshot: Option<PathBuf>,
 }
 
 fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
@@ -278,6 +307,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     let mut debug_allow_write = false;
     let mut debug_allow_force = false;
     let mut debug_session_timeout_ns = None;
+    let mut snapshot = None;
     let mut index = usize::from(!args.is_empty());
     while index < args.len() {
         let argument = args[index].as_str();
@@ -303,7 +333,9 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
             "--io" => {
                 let text = value("--io")?;
                 run.io = Some(IoBackend::parse(&text).ok_or_else(|| {
-                    format!("unknown I/O backend `{text}` (expected null, memory, or file)")
+                    format!(
+                        "unknown I/O backend `{text}` (expected null, memory, file, or ethercat)"
+                    )
                 })?);
             }
             "--io-file" => {
@@ -343,6 +375,13 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
                 run.rt_metrics = Some(parse_rt_metrics_path(&other["--rt-metrics=".len()..])?);
             }
             "--status" => run.status = true,
+            "--snapshot" => {
+                let path = value("--snapshot")?;
+                if path.is_empty() {
+                    return Err("`--snapshot` requires a non-empty path".into());
+                }
+                snapshot = Some(PathBuf::from(path));
+            }
             "--module" => {
                 module = Some(value("--module")?);
             }
@@ -371,9 +410,6 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
                 let text = value("--debug-session-timeout")?;
                 let ns = run::parse_duration_ns(&text)
                     .ok_or_else(|| format!("invalid debug session timeout `{text}`"))?;
-                if ns == 0 {
-                    return Err("the debug session timeout must be positive".into());
-                }
                 debug_session_timeout_ns = Some(ns);
             }
             "--trace" => {
@@ -418,6 +454,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
         debug_allow_write,
         debug_allow_force,
         debug_session_timeout_ns,
+        snapshot,
     })
 }
 
@@ -552,29 +589,32 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
     } else {
         run::run_loop(&mut host, &options.run)
     };
-    match outcome {
-        Ok(_) => {
-            if options.run.status {
-                print_host_status(&host);
-            }
-            if let Err(error) = host.shutdown() {
-                eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
-                return 1;
-            }
-            0
-        }
+    if options.run.status {
+        print_host_status(&host);
+    }
+    let mut code = match &outcome {
+        Ok(_) => 0,
         Err(error) => {
-            if options.run.status {
-                print_host_status(&host);
-            }
-            report_run_error(&error);
-            let code = error.exit_code();
-            if let Err(error) = host.shutdown() {
-                eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
-            }
-            code
+            report_run_error(error);
+            error.exit_code()
+        }
+    };
+    if let Some(path) = options.snapshot.as_deref() {
+        // The snapshot is written before shutdown retires the active
+        // generation. A write failure makes the run unusable for the
+        // differential harness, so it replaces the run exit code.
+        if let Err(message) = crate::snapshot::write_snapshot(path, &host) {
+            eprintln!("stc: snapshot failed: {message}");
+            code = 2;
         }
     }
+    if let Err(error) = host.shutdown() {
+        eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
+        if code == 0 {
+            return 1;
+        }
+    }
+    code
 }
 
 /// Configures retained state and the I/O backend for a launcher run.
@@ -689,6 +729,29 @@ fn print_host_status(host: &Host) {
         .file()
         .map_or_else(String::new, |file| format!(" file={}", file.display()));
     eprintln!("stc: status: io {}{io_file}", io.backend().name());
+    for report in host.io_reports() {
+        let details = report
+            .diagnostics
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let fault = report
+            .last_fault
+            .as_deref()
+            .map_or_else(String::new, |fault| format!(" last-fault={fault}"));
+        eprintln!(
+            "stc: status: io-backend {} devices={} state={} exchanges={} faults={} \
+             hash={}{fault}{}{details}",
+            report.name,
+            report.devices,
+            report.state.as_str(),
+            report.exchanges,
+            report.faults,
+            report.config_hash,
+            if details.is_empty() { "" } else { " " },
+        );
+    }
     let retain = host.retain_config();
     eprintln!(
         "stc: status: retain {} policy {}{}",
@@ -1145,7 +1208,8 @@ pub unsafe extern "C" fn stc_host_load_module(module_path: *const c_char, mode: 
 /// Selects the embedding host's process-image backend.
 ///
 /// `backend` is `-1` (keep the module metadata's backend), `0` `null`, `1`
-/// `memory`, or `2` `file`. `file` is null to keep the metadata/default file.
+/// `memory`, `2` `file`, or `3` `ethercat`. `file` is null to keep the
+/// metadata/default file.
 /// Returns `0` on success and `2` for an unknown backend. The setting applies
 /// to subsequent loads and the current host's next cycles.
 ///
@@ -1159,6 +1223,7 @@ pub unsafe extern "C" fn stc_host_configure_io(backend: i32, file: *const c_char
         0 => Some(IoBackend::Null),
         1 => Some(IoBackend::Memory),
         2 => Some(IoBackend::File),
+        3 => Some(IoBackend::Ethercat),
         _ => return 2,
     };
     // SAFETY: the caller contract requires a NUL-terminated string.
@@ -1378,6 +1443,7 @@ unsafe fn run_embedded(options: *const StcHostOptions) -> i32 {
         0 => Some(IoBackend::Null),
         1 => Some(IoBackend::Memory),
         2 => Some(IoBackend::File),
+        3 => Some(IoBackend::Ethercat),
         other => {
             eprintln!("stc: unknown I/O backend {other}");
             return 2;
@@ -1622,11 +1688,17 @@ pub extern "C" fn stc_metadata_json() -> *const c_char {
 }
 
 #[cfg(test)]
+pub(crate) static IMAGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn image_is_contiguous_and_exposed() {
+        let _guard = IMAGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         stc_rt_io_configure(4, 2, 3);
         let mut base: *mut u8 = std::ptr::null_mut();
         let mut len: u64 = 0;
@@ -1770,5 +1842,190 @@ mod tests {
             .is_err(),
             "RT CPU 64 is outside the supported range"
         );
+    }
+
+    #[test]
+    fn launcher_options_parse_every_flag() {
+        let args = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let options = parse_launcher_args(&args(&[
+            "app",
+            "--cycles",
+            "7",
+            "--cycle-time",
+            "1ms",
+            "--io",
+            "file",
+            "--io-file",
+            "io.bin",
+            "--state-file",
+            "state.bin",
+            "--reset-retain",
+            "--no-retain",
+            "--rt",
+            "--rt-priority",
+            "10",
+            "--rt-cpu",
+            "2",
+            "--rt-metrics",
+            "metrics.jsonl",
+            "--status",
+            "--snapshot",
+            "snap.bin",
+            "--module",
+            "module.so",
+            "--control",
+            "control.json",
+            "--control-nonce",
+            "nonce",
+            "--manifest-dir",
+            "manifests",
+            "--debug-endpoint",
+            "debug.json",
+            "--debug-protocol",
+            "socket",
+            "--debug-allow-write",
+            "--debug-allow-force",
+            "--debug-session-timeout",
+            "1s",
+        ]))
+        .expect("valid launcher options");
+        assert_eq!(options.run.cycles, 7);
+        assert_eq!(options.run.cycle_time_ns, Some(1_000_000));
+        assert_eq!(options.run.io_file.as_deref(), Some(Path::new("io.bin")));
+        assert_eq!(
+            options.run.state_file.as_deref(),
+            Some(Path::new("state.bin"))
+        );
+        assert!(options.run.reset_retain);
+        assert!(options.run.no_retain);
+        assert!(options.run.rt);
+        assert_eq!(options.run.rt_priority, Some(10));
+        assert_eq!(options.run.rt_cpu, Some(2));
+        assert_eq!(
+            options.run.rt_metrics.as_deref(),
+            Some(Path::new("metrics.jsonl"))
+        );
+        assert!(options.run.status);
+        assert_eq!(options.snapshot.as_deref(), Some(Path::new("snap.bin")));
+        assert_eq!(options.module.as_deref(), Some("module.so"));
+        assert_eq!(options.control_endpoint.as_deref(), Some("control.json"));
+        assert_eq!(options.control_nonce.as_deref(), Some("nonce"));
+        assert_eq!(
+            options.manifest_dir.as_deref(),
+            Some(Path::new("manifests"))
+        );
+        assert_eq!(
+            options.debug_endpoint.as_deref(),
+            Some(Path::new("debug.json"))
+        );
+        assert_eq!(
+            options.debug_protocol,
+            crate::transport::TransportKind::Socket
+        );
+        assert!(options.debug_allow_write);
+        assert!(options.debug_allow_force);
+        assert_eq!(options.debug_session_timeout_ns, Some(1_000_000_000));
+
+        let disabled = parse_launcher_args(&args(&[
+            "app",
+            "--debug-endpoint",
+            "d",
+            "--debug-session-timeout",
+            "0s",
+        ]))
+        .expect("zero disables the session bound");
+        assert_eq!(disabled.debug_session_timeout_ns, Some(0));
+
+        let clock =
+            parse_launcher_args(&args(&["app", "--mock-clock", "1us"])).expect("mock clock");
+        assert_eq!(clock.run.mock_clock_ns, Some(1_000));
+        let spaced = parse_launcher_args(&args(&[
+            "app",
+            "--rt",
+            "--cycle-time",
+            "1ms",
+            "--rt-priority=20",
+            "--rt-cpu=3",
+            "--rt-metrics=out.jsonl",
+        ]))
+        .expect("spaced rt options");
+        assert_eq!(spaced.run.rt_priority, Some(20));
+        assert_eq!(spaced.run.rt_cpu, Some(3));
+    }
+
+    #[test]
+    fn launcher_options_reject_invalid_combinations() {
+        let args = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<Vec<_>>()
+        };
+        for case in [
+            vec!["app", "--unknown"],
+            vec!["app", "--cycles"],
+            vec!["app", "--cycles", "x"],
+            vec!["app", "--cycle-time", "x"],
+            vec!["app", "--io", "bogus"],
+            vec!["app", "--io-file"],
+            vec!["app", "--mock-clock", "x"],
+            vec!["app", "--rt-priority", "1"],
+            vec!["app", "--rt", "--cycle-time", "0ns"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--mock-clock", "1us"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--rt-priority", "0"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--rt-priority", "100"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--rt-cpu", "64"],
+            vec!["app", "--rt", "--cycle-time", "1ms", "--rt-metrics", ""],
+            vec!["app", "--snapshot", ""],
+            vec!["app", "--control", "c"],
+            vec!["app", "--debug-allow-write"],
+            vec!["app", "--debug-allow-force"],
+            vec!["app", "--debug-session-timeout", "1s"],
+            vec!["app", "--debug-endpoint", "d", "--debug-protocol", "bogus"],
+            vec!["app", "--trace"],
+        ] {
+            assert!(
+                parse_launcher_args(&args(&case)).is_err(),
+                "{case:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_path_helpers_resolve_relative_paths() {
+        let absolute = std::env::temp_dir().join("stc-runtime-path");
+        assert_eq!(resolve_relative(Path::new("/base"), &absolute), absolute);
+        assert_eq!(
+            resolve_relative(Path::new("/base"), Path::new("child")),
+            Path::new("/base").join("child")
+        );
+        assert_eq!(absolute_path(&absolute), absolute);
+        assert_eq!(resolve_module_path(&absolute.to_string_lossy()), absolute);
+        let nested = Path::new("dir").join("module.so");
+        assert_eq!(resolve_module_path("dir/module.so"), nested);
+    }
+
+    #[test]
+    fn trap_names_cover_the_abi_table() {
+        for (code, name) in [
+            (TRAP_OVERFLOW, "OVERFLOW"),
+            (TRAP_DIV_ZERO, "DIV_ZERO"),
+            (TRAP_RANGE, "RANGE"),
+            (TRAP_BOUNDS, "BOUNDS"),
+            (TRAP_NULL_REF, "NULL_REF"),
+            (TRAP_INVALID_UTF8, "INVALID_UTF8"),
+            (TRAP_CONVERSION, "CONVERSION"),
+            (TRAP_WATCHDOG, "WATCHDOG"),
+            (TRAP_ASSERT, "ASSERT"),
+            (TRAP_UNIMPLEMENTED, "UNIMPLEMENTED"),
+        ] {
+            assert_eq!(trap_name(code), name);
+        }
+        assert_eq!(trap_name(9999), "UNKNOWN");
     }
 }

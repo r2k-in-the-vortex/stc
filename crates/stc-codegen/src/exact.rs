@@ -287,21 +287,45 @@ pub fn sel(g: bool, in0: i128, in1: i128) -> i128 {
 }
 
 /// `MIN` over a non-empty value list, keeping the earlier value on ties.
+///
+/// The loop form is deliberate: the Aeneas/Charon bridge translates it without
+/// closures or iterator adaptors, so the generated model has no extra axioms.
 #[must_use]
 pub fn min_list(values: &[i128]) -> Option<i128> {
-    values.split_first().map(|(first, rest)| {
-        rest.iter()
-            .fold(*first, |acc, &v| if v < acc { v } else { acc })
-    })
+    if values.is_empty() {
+        return None;
+    }
+    let mut acc = values[0];
+    let mut index = 1usize;
+    while index < values.len() {
+        let value = values[index];
+        if value < acc {
+            acc = value;
+        }
+        index += 1;
+    }
+    Some(acc)
 }
 
 /// `MAX` over a non-empty value list, keeping the earlier value on ties.
+///
+/// The loop form is deliberate: the Aeneas/Charon bridge translates it without
+/// closures or iterator adaptors, so the generated model has no extra axioms.
 #[must_use]
 pub fn max_list(values: &[i128]) -> Option<i128> {
-    values.split_first().map(|(first, rest)| {
-        rest.iter()
-            .fold(*first, |acc, &v| if acc < v { v } else { acc })
-    })
+    if values.is_empty() {
+        return None;
+    }
+    let mut acc = values[0];
+    let mut index = 1usize;
+    while index < values.len() {
+        let value = values[index];
+        if acc < value {
+            acc = value;
+        }
+        index += 1;
+    }
+    Some(acc)
 }
 
 /// `LIMIT(MN, IN, MX)` clamps to the bounds in declaration order.
@@ -312,16 +336,15 @@ pub fn limit(mn: i128, x: i128, mx: i128) -> i128 {
 }
 
 /// `MUX(K, IN0, ..., DEFAULT)`: returns the `K`th value or the default.
+///
+/// The explicit range test is deliberate: the Aeneas/Charon bridge translates
+/// it without closures, iterator adaptors, or `TryFrom` axioms.
 #[must_use]
 pub fn mux(k: i128, values: &[i128], default: i128) -> i128 {
-    if k < 0 {
+    if k < 0 || k >= values.len() as i128 {
         return default;
     }
-    usize::try_from(k)
-        .ok()
-        .and_then(|index| values.get(index))
-        .copied()
-        .unwrap_or(default)
+    values[k as usize]
 }
 
 /// Converts `value` from `src` to `to`.
@@ -330,39 +353,89 @@ pub fn mux(k: i128, values: &[i128], default: i128) -> i128 {
 /// Widening sign- or zero-extends, equal widths reinterpret the bit pattern,
 /// and narrowing reports [`Trap::Range`] when the value does not fit.
 pub fn convert(src: IntType, to: IntType, value: i128) -> Res {
-    if to.width == 1 {
-        return Ok(i128::from(value != 0));
-    }
-    if src.width < to.width {
-        if src.signed && value < 0 {
-            if to.signed {
+    match cast_plan(src, to) {
+        CastPlan::BoolTest => Ok(i128::from(value != 0)),
+        CastPlan::Widen { source_signed } => {
+            if source_signed && value < 0 && !to.signed {
+                Ok(value + to.modulus())
+            } else {
+                Ok(value)
+            }
+        }
+        CastPlan::Narrow => {
+            if to.fits(value) {
                 Ok(value)
             } else {
-                Ok(value + to.modulus())
+                Err(Trap::Range)
             }
-        } else {
-            Ok(value)
+        }
+        CastPlan::Identity => Ok(value),
+        CastPlan::Reinterpret => {
+            if to.signed {
+                Ok(if value >= 1_i128 << (to.width - 1) {
+                    value - to.modulus()
+                } else {
+                    value
+                })
+            } else {
+                Ok(if value < 0 {
+                    value + to.modulus()
+                } else {
+                    value
+                })
+            }
+        }
+    }
+}
+
+/// The code-generation rule for an integer or bit-pattern conversion.
+///
+/// [`cast_plan`] classifies a conversion once; [`convert`] executes the same
+/// classification for constant folding and the code generator emits the
+/// matching instruction sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastPlan {
+    /// The layouts agree; the value is unchanged and cannot trap.
+    Identity,
+    /// A `BOOL` target tests the source against zero.
+    BoolTest,
+    /// The target is wider; sign- or zero-extend from `source_signed`.
+    Widen {
+        /// Whether the source layout is signed.
+        source_signed: bool,
+    },
+    /// The target is narrower; range-check against the target bounds, then
+    /// truncate.
+    Narrow,
+    /// Equal width with different signedness; reinterpret the bit pattern.
+    Reinterpret,
+}
+
+impl CastPlan {
+    /// Returns whether this plan carries a runtime range check.
+    #[must_use]
+    pub const fn traps(self) -> bool {
+        matches!(self, Self::Narrow)
+    }
+}
+
+/// Classifies `src -> to` exactly as [`convert`] executes it.
+///
+/// A `BOOL` target always tests against zero, even from a narrower source.
+#[must_use]
+pub fn cast_plan(src: IntType, to: IntType) -> CastPlan {
+    if to.width == 1 {
+        CastPlan::BoolTest
+    } else if src.width < to.width {
+        CastPlan::Widen {
+            source_signed: src.signed,
         }
     } else if src.width > to.width {
-        if to.fits(value) {
-            Ok(value)
-        } else {
-            Err(Trap::Range)
-        }
+        CastPlan::Narrow
     } else if src.signed == to.signed {
-        Ok(value)
-    } else if to.signed {
-        Ok(if value >= 1_i128 << (to.width - 1) {
-            value - to.modulus()
-        } else {
-            value
-        })
+        CastPlan::Identity
     } else {
-        Ok(if value < 0 {
-            value + to.modulus()
-        } else {
-            value
-        })
+        CastPlan::Reinterpret
     }
 }
 
@@ -725,6 +798,33 @@ mod tests {
         assert_eq!(convert(dint, sint, 300), Err(Trap::Range));
         assert_eq!(convert(dint, IntType::BOOL, -5), Ok(1));
         assert_eq!(convert(dint, IntType::BOOL, 0), Ok(0));
+    }
+
+    #[test]
+    fn cast_plans_classify_the_conversion_rules() {
+        let sint = IntType::new(true, 8);
+        let uint = IntType::new(false, 16);
+        let dint = IntType::new(true, 32);
+        let udint = IntType::new(false, 32);
+        assert_eq!(
+            cast_plan(sint, dint),
+            CastPlan::Widen {
+                source_signed: true
+            }
+        );
+        assert_eq!(
+            cast_plan(sint, uint),
+            CastPlan::Widen {
+                source_signed: true
+            }
+        );
+        assert_eq!(cast_plan(dint, sint), CastPlan::Narrow);
+        assert_eq!(cast_plan(dint, udint), CastPlan::Reinterpret);
+        assert_eq!(cast_plan(udint, dint), CastPlan::Reinterpret);
+        assert_eq!(cast_plan(dint, dint), CastPlan::Identity);
+        assert_eq!(cast_plan(dint, IntType::BOOL), CastPlan::BoolTest);
+        assert!(!CastPlan::Identity.traps());
+        assert!(CastPlan::Narrow.traps());
     }
 
     #[test]

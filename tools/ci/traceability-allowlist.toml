@@ -28,3 +28,18 @@ reason = "The stale-reference quarantine warning has a reserved code but no emis
 id = "STC-W-RUN-001"
 status = "not-implemented"
 reason = "Direct variables in function/FB bodies are rejected as STC-E-IO-001 rather than accepted with this deprecation warning (Runtime and Execution §2.4)."
+
+[[rule]]
+id = "STC-W-IO-ETH-001"
+status = "not-implemented"
+reason = "The locked DeviceBackend interface has no configuration-warning channel; unbound declared channels are configured and visible through backend status instead of emitting this warning."
+
+[[rule]]
+id = "STC-W-IO-ETH-002"
+status = "not-implemented"
+reason = "The locked DeviceBackend interface has no configuration-warning channel; a DC table without assign-activate runs free-run and is otherwise silent."
+
+[[rule]]
+id = "STC-W-IO-MODTCP-001"
+status = "not-implemented"
+reason = "The locked DeviceBackend interface has no configuration-warning channel; unbound declared Modbus channels are counted in server<N>.unbound diagnostics instead of emitting this warning (I/O Routing and Backends §4.5.7)."

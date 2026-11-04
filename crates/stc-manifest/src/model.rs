@@ -249,6 +249,8 @@ impl EmitKind {
 pub struct IoConfig {
     /// Runtime backend.
     pub backend: IoBackend,
+    /// Machine profile path used by hardware backends.
+    pub config: Option<String>,
     /// File used by the `file` backend.
     pub file: Option<String>,
     /// Optional input image size in bytes.
@@ -267,6 +269,7 @@ impl Default for IoConfig {
     fn default() -> Self {
         Self {
             backend: IoBackend::Null,
+            config: None,
             file: None,
             input_bytes: None,
             output_bytes: None,
@@ -286,6 +289,8 @@ pub enum IoBackend {
     Memory,
     /// File-backed process image.
     File,
+    /// Hardware device backends selected by `[io.devices].kind`.
+    Ethercat,
 }
 
 impl IoBackend {
@@ -296,6 +301,7 @@ impl IoBackend {
             Self::Null => "null",
             Self::Memory => "memory",
             Self::File => "file",
+            Self::Ethercat => "ethercat",
         }
     }
 }
@@ -513,7 +519,7 @@ pub struct DebugSettings {
     pub protocol: DebugProtocol,
     /// Whether an online swap ends debug sessions.
     pub force_sessions_end_on_swap: bool,
-    /// Default continuous stop/idle session bound.
+    /// Default continuous stop/idle session bound; zero disables it.
     pub session_timeout: DurationNs,
     /// Default `write` scope grant for a launched debug service.
     pub allow_write: bool,
@@ -528,7 +534,7 @@ impl Default for DebugSettings {
             default_explicit: false,
             protocol: DebugProtocol::Pipe,
             force_sessions_end_on_swap: true,
-            session_timeout: DurationNs(300_000_000_000),
+            session_timeout: DurationNs(0),
             allow_write: false,
             allow_force: false,
         }
@@ -636,6 +642,9 @@ pub struct TestSettings {
     pub mock_clock: DurationNs,
     /// Test I/O backend; `None` selects `memory`.
     pub io: Option<IoBackend>,
+    /// Whether `stc test` collects statement coverage by default (WL-10).
+    /// `--coverage` and `--no-coverage` override this per run.
+    pub coverage: bool,
     /// Per-POU overrides.
     pub cases: Vec<TestCase>,
 }
@@ -648,6 +657,7 @@ impl Default for TestSettings {
             default_cycles: 1,
             mock_clock: DurationNs(0),
             io: None,
+            coverage: false,
             cases: Vec::new(),
         }
     }

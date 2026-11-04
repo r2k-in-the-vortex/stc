@@ -1,0 +1,10 @@
+VAR_GLOBAL
+  R : DINT;
+END_VAR
+PROGRAM Main
+VAR
+  x : DINT;
+END_VAR
+  x := DINT#2;
+  R := x ** DINT#-1;
+END_PROGRAM

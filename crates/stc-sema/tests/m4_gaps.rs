@@ -249,3 +249,43 @@ END_PROGRAM
         }
     );
 }
+
+#[test]
+fn date_adaptation_scales_days_and_nanoseconds() {
+    let analysis = clean(
+        r#"PROGRAM Main
+VAR
+  days_to_nanos : LDATE := DATE#1970-01-02;
+  nanos_to_days : DATE := LDATE#1970-01-02;
+END_VAR
+END_PROGRAM
+"#,
+    );
+    let hir = &analysis.hir;
+    let value_of = |name: &str| {
+        let field = hir
+            .fields
+            .iter()
+            .find(|field| hir.interner.text(field.name) == name)
+            .expect("field");
+        let init = field.init.expect("initializer");
+        match &hir.expr(init).kind {
+            ExprKindHir::Literal(literal) => literal.value.clone(),
+            other => panic!("expected literal, got {other:?}"),
+        }
+    };
+    assert_eq!(
+        value_of("days_to_nanos"),
+        ConstValue::Date {
+            kind: stc_hir::DateTy::LDate,
+            value: 86_400_000_000_000
+        }
+    );
+    assert_eq!(
+        value_of("nanos_to_days"),
+        ConstValue::Date {
+            kind: stc_hir::DateTy::Date,
+            value: 1
+        }
+    );
+}

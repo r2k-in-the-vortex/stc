@@ -866,6 +866,46 @@ fn launch_interactive_reports_session_status_and_never_prints_the_token() {
     );
 
     writeln!(stdin, "watch MAIN.TICKS 100").expect("write watch");
+    for command in [
+        "help",
+        "bogus-command",
+        "break",
+        "break not-a-spec",
+        "break src/main.st:1",
+        "break src/main.st:1:2",
+        "clear",
+        "clear all",
+        "clear nope",
+        "clear 1",
+        "print",
+        "print MAIN.TICKS",
+        "print MAIN.MISSING",
+        "set",
+        "set MAIN.TICKS",
+        "set MAIN.TICKS 1",
+        "set MAIN.TICKS not-a-value",
+        "force MAIN.TICKS 1",
+        "release",
+        "release MAIN.TICKS",
+        "release-all",
+        "watch",
+        "watch MAIN.TICKS",
+        "watch MAIN.TICKS 1",
+        "unwatch",
+        "unwatch 1",
+        "stack",
+        "stack 1",
+        "frame",
+        "frame x MAIN.TICKS",
+        "frame 0 MAIN.TICKS",
+        "frame 0 MAIN.TICKS 1",
+        "step",
+        "next",
+        "finish",
+        "pause",
+    ] {
+        writeln!(stdin, "{command}").expect("write debug command");
+    }
     writeln!(stdin, "quit").expect("write quit");
     drop(stdin);
     let status = wait_exit(&mut child, Duration::from_secs(30));

@@ -1,8 +1,9 @@
 # Conformance Profile: `stc-2013-oop-utf8-v1`
 
-Status: Target profile; M3 front end, M4 scalar codegen, M4.5 online-change foundation, M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 project system, CLI, scheduler, state, I/O, test runner, formatter, online workflow, Lean vectors, conformance corpus, and CI complete (2026-10-27); M6.5 debug/monitoring complete (2026-10-28); M7 release candidate implemented (2026-10-28); v1.0.0 final (2026-10-29)
+Status: Target profile; M3 front end, M4 scalar codegen, M4.5 online-change foundation, M5 lowering phases 1–7, `STC-POINTER`, and phase 4b (interfaces, descriptors, `?=`, object references, and their verification) complete (2026-10-25); M6 project system, CLI, scheduler, state, I/O, test runner, formatter, online workflow, Lean vectors, conformance corpus, and CI complete (2026-10-27); M6.5 debug/monitoring complete (2026-10-28); M7 release candidate implemented (2026-10-28); v1.0.0 final (2026-10-29); v2.0.0 adds no language change (2026-11-04)
 
-Applies to: `stc` v1  
+Applies to: `stc` v1 and v2
+
 Normative reference: IEC 61131-3:2013 (Ed. 3.0), Structured Text portions  
 Project extensions: `STC-UTF8`, `STC-PRAGMA`, `STC-TEST`, `STC-POINTER`  
 Runtime capabilities (not IEC claims): online change, GOT/manifest, debug/monitoring
@@ -181,7 +182,7 @@ parsed because they define the execution model, but graphical bodies and SFC act
 | `CONSTANT`, `RETAIN`, `NON_RETAIN` | Implemented; effective policy per leaf; file-backed state in v1 |
 | `AT` direct-variable declarations | Implemented |
 | `R_EDGE` / `F_EDGE` edge variables | Implemented |
-| Access specifiers on class/FB variables | Implemented |
+| Access specifiers on class/FB variables | Implemented; FB `VAR_INPUT`/`VAR_OUTPUT`/`VAR_IN_OUT` default to `PUBLIC`, class and internal FB `VAR` default to `PROTECTED` (D-211) |
 | Initial values and constant expressions | Implemented |
 
 ### 4.4 Statements and expressions
@@ -371,7 +372,7 @@ The following are deliberately chosen and must be documented and tested:
 | Debug behavior | Typed read/write/force/watch, checkpoint breakpoints, stop-the-world stepping, call stacks with optimized-out reporting; writes/forces apply only at cycle boundaries; swaps and the pause bound end sessions and clear state; outputs may be held indefinitely; may control machinery but is not a safety PLC (D-173–D-177) |
 | Debug protocol | Local-only `stc-debug/1` on a user-scoped pipe (default) or loopback socket (optional); newline-delimited JSON, per-run token, four scopes, audited protected access, rate limits, and bounded frames; separate from the M6 control channel (D-173, D-174) |
 | Debug checkpoints | Dense checkpoint table in the metadata sidecar, source-span bound, first-class host check service ID 13 at ABI 2.3; debug builds set `entry_flags` bit 4/bit 6 and `required_features` bit 4 when hooks are emitted; release and test builds are hook-free (D-177) |
-| Debug sessions | One session per host; start does not stop the cycle; a stop parks the cycle at a checkpoint and holds outputs; a five-minute default stop/idle bound, swap/disconnect/timeout teardown, force/breakpoint clearing, and explicit reconnect with no state migration (D-175) |
+| Debug sessions | One session per host; start does not stop the cycle; a stop parks the cycle at a checkpoint and holds outputs; an opt-in stop/idle bound, disabled by default (D-212), swap/disconnect/timeout teardown, force/breakpoint clearing, and explicit reconnect with no state migration (D-175) |
 | Runtime threads | One cycle thread, one control/status thread for deployment/status, and the M6.5 service/monitor thread class for typed access, debug/monitoring, diagnostics, and manifest export. Only the cycle thread executes ST; readers use generation pinning and at most one debug session runs per host |
 
 ## 9. Project model (project feature, not an IEC claim)
@@ -429,6 +430,8 @@ code is never reused. The owning specification is normative if a summary here di
 | `STC-E-RUN-003` | invalid `stc run` option or runtime scheduling configuration (for example a task without a guard); codegen configuration errors stay `STC-E-RUN-001/002` | Runtime and Execution §1.3 |
 | `STC-E-RUN-IO-001` | the file I/O backend cannot write its output image at shutdown | I/O and Devices §7 |
 | `STC-W-IO-004` | the file I/O backend input image is missing or unreadable; the run starts with defaults | I/O and Devices §7 |
+| `STC-W-COVERAGE-001` | a test's raw coverage data is missing, malformed, or inconsistent with the artifact's site table; the test is excluded from the aggregate | Testing and Verification §2.6 |
+| `STC-W-COVERAGE-002` | a coverage site cannot be attributed to a reportable source file; it is omitted from the report | Testing and Verification §2.6 |
 | `STC-W-PROJECT-001` | setting parsed but not honored until a later milestone (for example a configuration key reserved ahead of its milestone) | CLI and Manifest §2.2 |
 | `STC-W-PROJECT-002` | rename history has no baseline; the new key receives a fresh `GotId` | CLI and Manifest §3.1 |
 | `STC-W-ONLINE-007` | compatibility-report warning not covered by an existing online code | CLI and Manifest §1.6 |

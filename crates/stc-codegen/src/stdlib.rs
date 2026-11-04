@@ -57,11 +57,10 @@ impl Lowerer<'_> {
             vec![
                 (IrType::Ptr, "%this".into()),
                 (IrType::Ptr, "%table".into()),
-                (IrType::Ptr, "%slots".into()),
             ],
         );
         f.start_fresh_block();
-        let slots = f.param_value(2);
+        let slots = self.slots_global(&mut f);
         let table = f.param_value(1);
         let mut pointers: BTreeMap<String, Value> = BTreeMap::new();
         for (field_name, (index, _)) in &fields {

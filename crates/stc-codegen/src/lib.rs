@@ -11,6 +11,7 @@
 
 pub mod abi;
 mod call;
+pub mod certificate;
 pub mod codes;
 mod config;
 mod debug;
@@ -32,6 +33,7 @@ mod types;
 mod unit;
 pub mod verify;
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use stc_got::{Digest32, Endianness, GotId, Manifest, Rename, Target};
@@ -40,8 +42,9 @@ use stc_span::{FileId, SourceMap, Span};
 
 pub use launcher::{generate_launcher, generate_test_launcher};
 pub use metadata::{
-    ChannelMetadata, DebugCheckpointMetadata, DebugMetadata, DeviceMetadata, Json, Metadata,
-    ProjectBinding, ProjectChannel, VarAccessMetadata,
+    ChannelMetadata, DebugCheckpointMetadata, DebugMetadata, DeviceMetadata, IoProfileMetadata,
+    IoRoute, IoRouteEndpoint, Json, Metadata, ProjectBinding, ProjectChannel,
+    RouteEndpointMetadata, RouteMetadata, VarAccessMetadata,
 };
 pub use module::{
     FunctionTarget, ModuleArtifacts, ModuleError, ModuleOptions, RootTarget, Severity, SlotBinding,
@@ -136,6 +139,10 @@ pub struct IoMetadataOptions {
     pub devices: Vec<DeviceMetadata>,
     /// Project bindings resolved against the HIR.
     pub bindings: Vec<ProjectBinding>,
+    /// Embedded machine profile, when `[io].config` selects one.
+    pub profile: Option<IoProfileMetadata>,
+    /// Profile routes to resolve against the HIR and device tree.
+    pub routes: Vec<IoRoute>,
 }
 
 impl Default for IoMetadataOptions {
@@ -145,6 +152,8 @@ impl Default for IoMetadataOptions {
             file: None,
             devices: Vec::new(),
             bindings: Vec::new(),
+            profile: None,
+            routes: Vec::new(),
         }
     }
 }
@@ -156,6 +165,43 @@ pub struct ProjectOptions {
     pub retain: RetainMetadataOptions,
     /// Project I/O metadata.
     pub io: IoMetadataOptions,
+}
+
+/// What one coverage site measures (WL-10 §6.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverageKind {
+    /// One executable statement entry.
+    Statement,
+}
+
+/// One instrumented statement site in a generated module.
+///
+/// The ID is artifact-local: it indexes the module's
+/// `stc_coverage_counters` array and [`Output::coverage_sites`]. Reports map
+/// sites to canonical source spans and never depend on this local order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CoverageSite {
+    /// Artifact-local counter index.
+    pub id: u32,
+    /// Statement source span.
+    pub span: Span,
+    /// What the site measures.
+    pub kind: CoverageKind,
+}
+
+/// Test-build statement-coverage settings (WL-10 C-1–C-3).
+///
+/// Coverage is test tooling only. It is rejected outside a test build, is
+/// output-only, and never changes module identity, metadata, or the deployable
+/// ABI.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CoverageOptions {
+    /// Source files whose statements are instrumented.
+    ///
+    /// Test sources, the synthetic wrapper, prelude definitions, and
+    /// test-only definitions are excluded regardless of this list; the list
+    /// selects the production files that codegen may instrument.
+    pub files: BTreeSet<FileId>,
 }
 
 /// Code generation options.
@@ -200,6 +246,15 @@ pub struct Options<'a> {
     /// 2.2) and the test-only prelude lowering. Test artifacts are cold,
     /// non-deployable, and never part of `[build].emit`.
     pub test_build: bool,
+    /// Whether this test build is a debug harness: keeps checkpoint hooks and
+    /// the debug service (host ABI 2.3) in addition to the test-clock service.
+    /// It has no effect outside a debug form test build; ordinary `stc test`
+    /// artifacts stay hook-free.
+    pub test_debug: bool,
+    /// Test-build statement coverage. `None` disables instrumentation and
+    /// leaves the emitted module byte-identical to a coverage-free build.
+    /// Coverage is an internal error outside a test build (§6.1).
+    pub coverage: Option<CoverageOptions>,
 }
 
 /// One harness-visible span-table entry.
@@ -268,6 +323,9 @@ pub struct Output {
     /// Frame identity/type hints; non-empty only for hook-emitting debug
     /// builds. The driver uses this to write `<name>.stc-frames.json`.
     pub frames: Vec<FrameFunctionHint>,
+    /// Instrumented statement sites in ID order; empty when coverage is
+    /// disabled or no statement was eligible.
+    pub coverage_sites: Vec<CoverageSite>,
 }
 
 /// A structured code generation failure.
@@ -378,8 +436,21 @@ impl fmt::Display for CodegenError {
 /// Returns every unsupported-construct, identity, projection, or internal
 /// error encountered.
 pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<CodegenError>> {
+    if options.coverage.is_some() && !options.test_build {
+        // Production and release builds must never instrument, even if a
+        // caller sets the option by mistake (WL-10 §6.1, §6.5).
+        return Err(vec![CodegenError::internal(
+            "statement coverage is only available in a test build",
+        )]);
+    }
     hir.check_invariants()
         .map_err(|message| vec![CodegenError::internal(message)])?;
+    crate::certificate::verify_certificates(&hir.certificates).map_err(|failures| {
+        failures
+            .into_iter()
+            .map(CodegenError::internal)
+            .collect::<Vec<_>>()
+    })?;
     let target = resolve_target(options.target);
     let mut module_options = ModuleOptions::new(
         target.clone(),
@@ -395,7 +466,8 @@ pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<Cod
     module_options.allow_untracked_removal = options.module.allow_untracked_removal;
     module_options.renames = options.module.renames.clone();
     module_options.test_build = options.test_build;
-    module_options.debug_hooks = options.debug && !options.release && !options.test_build;
+    module_options.debug_hooks =
+        options.debug && !options.release && (!options.test_build || options.test_debug);
     let got = module::project(hir, options.sources, &module_options).map_err(project_errors)?;
     unit::generate(hir, options, &target, got, &module_options, options.sources)
 }

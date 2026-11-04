@@ -7,7 +7,7 @@
 use stc_manifest::{DebugProtocol, LintLevel};
 
 use crate::build::{BuildMode, Emit, Request};
-use crate::report::{ColorChoice, Format, LintOverrides};
+use crate::report::{ColorChoice, DiagnosticPaths, Format, LintOverrides};
 
 /// A driver command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +40,21 @@ pub(crate) enum Command {
     OnlineDiff,
     /// Source-aware tracked rename.
     Rename,
+    /// Serve the Language Server Protocol over standard input and output.
+    Lsp,
+    /// Serve the Debug Adapter Protocol over standard input and output.
+    Dap,
+    /// Emit or verify the canonical core-HIR dump (P0.6).
+    HirDump,
+}
+
+/// `stc hir-dump` options.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HirDumpOptions {
+    /// `--output <path>`: write the dump instead of stdout.
+    pub(crate) output: Option<String>,
+    /// `--verify <path>`: validate a dump without emitting one.
+    pub(crate) verify: Option<String>,
 }
 
 /// `stc test` options.
@@ -47,12 +62,18 @@ pub(crate) enum Command {
 pub(crate) struct TestOptions {
     /// `--list`: print discovered tests without building.
     pub list: bool,
+    /// `--exact`: match positional filters against complete test names.
+    pub exact: bool,
     /// `--no-run`: build test artifacts without executing them.
     pub no_run: bool,
     /// `--timeout <duration>` override in nanoseconds.
     pub timeout_ns: Option<u64>,
     /// `-- --nocapture`: forward test-host output.
     pub nocapture: bool,
+    /// `--coverage`/`--no-coverage`; `None` uses `[test] coverage`.
+    pub coverage: Option<bool>,
+    /// `--coverage-out <dir>` report directory.
+    pub coverage_out: Option<String>,
 }
 
 /// Online-change command options.
@@ -89,7 +110,8 @@ pub(crate) struct DebugOptions {
     pub(crate) allow_write: bool,
     /// `--allow-force`.
     pub(crate) allow_force: bool,
-    /// `--session-timeout` in nanoseconds.
+    /// `--session-timeout` in nanoseconds; `None` inherits the manifest
+    /// setting and zero disables the bound.
     pub(crate) session_timeout_ns: Option<u64>,
     /// `--debug-protocol`.
     pub(crate) protocol: Option<DebugProtocol>,
@@ -107,6 +129,8 @@ pub(crate) struct Invocation {
     pub(crate) paths: Vec<String>,
     /// Diagnostic message format.
     pub(crate) format: Format,
+    /// How project-mode diagnostics name source files.
+    pub(crate) diagnostic_paths: DiagnosticPaths,
     /// Color selection.
     pub(crate) color: ColorChoice,
     /// `-q`.
@@ -141,6 +165,8 @@ pub(crate) struct Invocation {
     pub(crate) test: TestOptions,
     /// Debug-session options.
     pub(crate) debug: DebugOptions,
+    /// `stc hir-dump` options.
+    pub(crate) hir_dump: HirDumpOptions,
 }
 
 /// Parses argv.
@@ -177,6 +203,9 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         "metadata" => Command::Metadata,
         "compliance" => Command::Compliance,
         "rename" => Command::Rename,
+        "lsp" => Command::Lsp,
+        "dap" => Command::Dap,
+        "hir-dump" => Command::HirDump,
         "online" => {
             let subcommand = args
                 .get(1)
@@ -196,7 +225,16 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     };
     index += 1;
 
+    if command == Command::Lsp {
+        return parse_lsp(args, index);
+    }
+    if command == Command::Dap {
+        return parse_dap(args, index);
+    }
+
     let mut format = Format::Human;
+    let mut diagnostic_paths = DiagnosticPaths::Package;
+    let mut diagnostic_paths_explicit = false;
     let mut color = ColorChoice::Auto;
     let mut quiet = false;
     let mut verbosity = 0_u8;
@@ -213,6 +251,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     let mut clean_test = false;
     let mut test = TestOptions::default();
     let mut debug = DebugOptions::default();
+    let mut hir_dump = HirDumpOptions::default();
     let mut paths = Vec::new();
     let mut build = Request::default();
 
@@ -251,7 +290,32 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             "--check" => fmt_check = true,
             "--test" => clean_test = true,
             "--list" => test.list = true,
+            "--exact" => test.exact = true,
             "--no-run" => test.no_run = true,
+            "--coverage" => {
+                if test.coverage == Some(false) {
+                    return Err(
+                        "STC-E-PROJECT-010: `--coverage` and `--no-coverage` are mutually exclusive"
+                            .into(),
+                    );
+                }
+                test.coverage = Some(true);
+            }
+            "--no-coverage" => {
+                if test.coverage == Some(true) {
+                    return Err(
+                        "STC-E-PROJECT-010: `--coverage` and `--no-coverage` are mutually exclusive"
+                            .into(),
+                    );
+                }
+                test.coverage = Some(false);
+            }
+            "--coverage-out" => {
+                test.coverage_out = Some(next_value(args, &mut index, "--coverage-out")?);
+            }
+            other if other.starts_with("--coverage-out=") => {
+                test.coverage_out = Some(other["--coverage-out=".len()..].to_owned());
+            }
             "--timeout" => {
                 test.timeout_ns = Some(parse_cycle_time(&next_value(
                     args,
@@ -362,6 +426,15 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             other if other.starts_with("--message-format=") => {
                 format = parse_format(&other["--message-format=".len()..])?;
             }
+            "--diagnostic-paths" => {
+                let value = next_value(args, &mut index, "--diagnostic-paths")?;
+                diagnostic_paths = DiagnosticPaths::parse(&value)?;
+                diagnostic_paths_explicit = true;
+            }
+            other if other.starts_with("--diagnostic-paths=") => {
+                diagnostic_paths = DiagnosticPaths::parse(&other["--diagnostic-paths=".len()..])?;
+                diagnostic_paths_explicit = true;
+            }
             "--color" => {
                 let value = next_value(args, &mut index, "--color")?;
                 color = ColorChoice::parse(&value)?;
@@ -392,6 +465,18 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             other if other.starts_with("--out-dir=") => {
                 build.out_dir = Some(other["--out-dir=".len()..].to_owned());
                 build.out_dir_explicit = true;
+            }
+            "--output" => {
+                hir_dump.output = Some(next_value(args, &mut index, "--output")?);
+            }
+            other if other.starts_with("--output=") => {
+                hir_dump.output = Some(other["--output=".len()..].to_owned());
+            }
+            "--verify" => {
+                hir_dump.verify = Some(next_value(args, &mut index, "--verify")?);
+            }
+            other if other.starts_with("--verify=") => {
+                hir_dump.verify = Some(other["--verify=".len()..].to_owned());
             }
             "--out" => online.out = Some(next_value(args, &mut index, "--out")?),
             other if other.starts_with("--out=") => {
@@ -543,7 +628,20 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         &test,
         format,
         &debug,
+        &hir_dump,
     )?;
+    if diagnostic_paths_explicit
+        && !matches!(
+            command,
+            Command::Check | Command::Build | Command::Run | Command::Test
+        )
+    {
+        return Err(
+            "`--diagnostic-paths` is only valid with `stc check`, `stc build`, `stc run`, or \
+             `stc test`"
+                .into(),
+        );
+    }
     for spec in &debug.breaks {
         parse_break_spec(spec)?;
     }
@@ -557,6 +655,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         command,
         paths,
         format,
+        diagnostic_paths,
         color,
         quiet,
         verbosity,
@@ -574,6 +673,123 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         build,
         test,
         debug,
+        hir_dump,
+    }))
+}
+
+/// Parses the options `stc lsp` accepts.
+///
+/// The language server owns standard input and output, so it takes no
+/// diagnostic, build, or formatting options. `--manifest-path` is the only
+/// accepted argument.
+fn parse_lsp(args: &[String], mut index: usize) -> Result<Option<Invocation>, String> {
+    let mut manifest = None;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        match argument {
+            "--help" | "-h" => {
+                print_help();
+                return Ok(None);
+            }
+            "--version" | "-V" => {
+                println!("stc {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            "--manifest-path" => {
+                manifest = Some(next_value(args, &mut index, "--manifest-path")?);
+            }
+            other if other.starts_with("--manifest-path=") => {
+                manifest = Some(other["--manifest-path=".len()..].to_owned());
+            }
+            other => {
+                return Err(format!(
+                    "`stc lsp` only accepts `--manifest-path <path>`, found `{other}`"
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(Some(Invocation {
+        command: Command::Lsp,
+        paths: Vec::new(),
+        format: Format::Human,
+        diagnostic_paths: DiagnosticPaths::Package,
+        color: ColorChoice::Auto,
+        quiet: false,
+        verbosity: 0,
+        relaxed: false,
+        ast: false,
+        manifest,
+        locked: false,
+        lints: LintOverrides::default(),
+        watch: false,
+        watch_timeout_ns: None,
+        dry_run: false,
+        online: OnlineOptions::default(),
+        fmt_check: false,
+        clean_test: false,
+        build: Request::default(),
+        test: TestOptions::default(),
+        debug: DebugOptions::default(),
+        hir_dump: HirDumpOptions::default(),
+    }))
+}
+
+/// Parses the options `stc dap` accepts.
+///
+/// The debug adapter owns standard input and output, so it takes no
+/// diagnostic, build, or formatting options. `--manifest-path` is the only
+/// accepted argument; launch/attach settings arrive as DAP messages.
+fn parse_dap(args: &[String], mut index: usize) -> Result<Option<Invocation>, String> {
+    let mut manifest = None;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        match argument {
+            "--help" | "-h" => {
+                print_help();
+                return Ok(None);
+            }
+            "--version" | "-V" => {
+                println!("stc {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            "--manifest-path" => {
+                manifest = Some(next_value(args, &mut index, "--manifest-path")?);
+            }
+            other if other.starts_with("--manifest-path=") => {
+                manifest = Some(other["--manifest-path=".len()..].to_owned());
+            }
+            other => {
+                return Err(format!(
+                    "`stc dap` only accepts `--manifest-path <path>`, found `{other}`"
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(Some(Invocation {
+        command: Command::Dap,
+        paths: Vec::new(),
+        format: Format::Human,
+        diagnostic_paths: DiagnosticPaths::Package,
+        color: ColorChoice::Auto,
+        quiet: false,
+        verbosity: 0,
+        relaxed: false,
+        ast: false,
+        manifest,
+        locked: false,
+        lints: LintOverrides::default(),
+        watch: false,
+        watch_timeout_ns: None,
+        dry_run: false,
+        online: OnlineOptions::default(),
+        fmt_check: false,
+        clean_test: false,
+        build: Request::default(),
+        test: TestOptions::default(),
+        debug: DebugOptions::default(),
+        hir_dump: HirDumpOptions::default(),
     }))
 }
 
@@ -625,6 +841,7 @@ fn validate(
     test: &TestOptions,
     format: Format,
     debug: &DebugOptions,
+    hir_dump: &HirDumpOptions,
 ) -> Result<(), String> {
     let debug_command_only = debug.attach.is_some()
         || debug.endpoint.is_some()
@@ -852,13 +1069,29 @@ fn validate(
                 .into(),
         );
     }
-    if (test.list || test.no_run || test.timeout_ns.is_some() || test.nocapture)
+    let coverage_flags = test.coverage.is_some() || test.coverage_out.is_some();
+    if (test.list
+        || test.exact
+        || test.no_run
+        || test.timeout_ns.is_some()
+        || test.nocapture
+        || coverage_flags)
         && command != Command::Test
     {
         return Err(
-            "`--list`, `--no-run`, `--timeout`, and `-- --nocapture` are only valid with `stc test`"
+            "`--list`, `--exact`, `--no-run`, `--timeout`, `--coverage`, `--no-coverage`, \
+             `--coverage-out`, and `-- --nocapture` are only valid with `stc test`"
                 .into(),
         );
+    }
+    if command == Command::Test && test.list && test.coverage == Some(true) {
+        return Err("STC-E-PROJECT-010: `--coverage` cannot be combined with `--list`".into());
+    }
+    if command == Command::Test && test.list && test.coverage_out.is_some() {
+        return Err("STC-E-PROJECT-010: `--coverage-out` cannot be combined with `--list`".into());
+    }
+    if command == Command::Test && test.coverage_out.is_some() && test.coverage == Some(false) {
+        return Err("STC-E-PROJECT-010: `--coverage-out` requires coverage to be enabled".into());
     }
     if build.out_dir.is_some()
         && !matches!(
@@ -893,6 +1126,23 @@ fn validate(
     }
     if dry_run && command != Command::Rename {
         return Err("`--dry-run` is only valid with `stc rename`".into());
+    }
+    if hir_dump.output.is_some() && command != Command::HirDump {
+        return Err("`--output` is only valid with `stc hir-dump`".into());
+    }
+    if hir_dump.verify.is_some() && command != Command::HirDump {
+        return Err("`--verify` is only valid with `stc hir-dump`".into());
+    }
+    if hir_dump.output.is_some() && hir_dump.verify.is_some() {
+        return Err("`--output` and `--verify` are mutually exclusive".into());
+    }
+    if command == Command::HirDump {
+        if hir_dump.verify.is_some() && !paths.is_empty() {
+            return Err("`stc hir-dump --verify` does not accept input files".into());
+        }
+        if hir_dump.verify.is_none() && paths.is_empty() {
+            return Err("`stc hir-dump` needs at least one input file".into());
+        }
     }
     if online.out.is_some() && command != Command::OnlineDownload {
         return Err("`--out` is only valid with `stc online download`".into());
@@ -939,10 +1189,13 @@ fn validate(
                 | Command::Metadata
                 | Command::Test
                 | Command::Debug
+                | Command::HirDump
         )
     {
         return Err(
-            "`--relaxed` is only valid with parse, check, build, metadata, test, or debug".into(),
+            "`--relaxed` is only valid with parse, check, build, metadata, test, debug, or \
+             hir-dump"
+                .into(),
         );
     }
     if manifest.is_some() {
@@ -998,12 +1251,17 @@ fn validate(
         Command::OnlineDiff => path_count == 1,
         // Test positional arguments are substring filters.
         Command::Check | Command::Build | Command::Fmt | Command::Test => true,
+        // Input files in emit mode; verify mode is checked above.
+        Command::HirDump => true,
         Command::Run
         | Command::Clean
         | Command::Metadata
         | Command::Compliance
         | Command::OnlineDownload
         | Command::Debug => path_count == 0,
+        // `stc lsp` and `stc dap` are parsed separately and never reach
+        // validation.
+        Command::Lsp | Command::Dap => false,
     };
     if !allowed {
         return Err(match command {
@@ -1105,9 +1363,11 @@ fn parse_debug_timeout(value: &str) -> Result<u64, String> {
                  of `ns`, `us`, `ms`, `s`, `m`, or `h`"
             )
         })?;
-    if ns == 0 || ns > MAX_SESSION_TIMEOUT_NS {
+    if ns > MAX_SESSION_TIMEOUT_NS {
         return Err(
-            "STC-E-PROJECT-010: `--session-timeout` must be positive and at most 24 hours".into(),
+            "STC-E-PROJECT-010: `--session-timeout` must be zero or a positive duration and at \
+             most 24 hours"
+                .into(),
         );
     }
     Ok(ns)
@@ -1157,9 +1417,9 @@ pub(crate) fn parse_break_spec(value: &str) -> Result<(String, u32, u32), String
 
 fn parse_io(value: &str) -> Result<String, String> {
     match value {
-        "null" | "memory" | "file" => Ok(value.to_owned()),
+        "null" | "memory" | "file" | "ethercat" => Ok(value.to_owned()),
         other => Err(format!(
-            "unknown I/O backend `{other}` (expected `null`, `memory`, or `file`)"
+            "unknown I/O backend `{other}` (expected `null`, `memory`, `file`, or `ethercat`)"
         )),
     }
 }
@@ -1216,6 +1476,9 @@ fn command_name(command: Command) -> &'static str {
         Command::OnlineDownload => "online download",
         Command::OnlineDiff => "online diff",
         Command::Rename => "rename",
+        Command::Lsp => "lsp",
+        Command::Dap => "dap",
+        Command::HirDump => "hir-dump",
     }
 }
 
@@ -1227,14 +1490,16 @@ fn print_help() {
          \x20 stc parse <file> [--ast] [--relaxed] [--message-format human|json|short]\n\
          \x20 stc new <path>\n\
          \x20 stc check [<file>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
-         \x20           [--relaxed] [--message-format human|json|short] [-v|-vv] [-q]\n\
+         \x20           [--relaxed] [--message-format human|json|short]\n\
+         \x20           [--diagnostic-paths package|absolute] [-v|-vv] [-q]\n\
          \x20 stc build [<file>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20           [--debug|--release]\n\
          \x20           [--name <name>] [--emit ir,obj,module,exe,lib,metadata]\n\
          \x20           [--out-dir <dir>] [--target <triple>] [--clang <path>]\n\
          \x20           [--runtime <path>] [--got-manifest <path>] [--cold]\n\
          \x20           [--rename old=new]... [--allow-untracked-removal]\n\
-         \x20           [--relaxed] [--message-format human|json|short] [-v|-vv] [-q]\n\
+         \x20           [--relaxed] [--message-format human|json|short]\n\
+         \x20           [--diagnostic-paths package|absolute] [-v|-vv] [-q]\n\
          \x20 stc clean [--manifest-path <stc.toml|dir>] [--out-dir <dir>] [--locked]\n\
          \x20           [--debug|--release|--test]\n\
          \x20 stc metadata [--manifest-path <stc.toml|dir>] [--locked]\n\
@@ -1242,12 +1507,13 @@ fn print_help() {
          \x20 stc compliance [--message-format human|json]\n\
          \x20 stc run [--manifest-path <stc.toml|dir>] [--locked] [--cycles <n>]\n\
          \x20         [--debug|--release]\n\
-         \x20         [--cycle-time <duration>] [--io null|memory|file]\n\
+         \x20         [--cycle-time <duration>] [--io null|memory|file|ethercat]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--mock-clock <duration>] [--target <triple>]\n\
          \x20         [--rt] [--rt-priority <1-99>] [--rt-cpu <0-63>]\n\
          \x20         [--rt-metrics <path>]\n\
-         \x20         [--clang <path>] [--runtime <path>] [-v|-vv] [-q]\n\
+         \x20         [--clang <path>] [--runtime <path>]\n\
+         \x20         [--diagnostic-paths package|absolute] [-v|-vv] [-q]\n\
          \x20 stc run --debug-server [--debug-endpoint <path>] [--allow-write]\n\
          \x20         [--allow-force] [--session-timeout <duration>]\n\
          \x20         [--debug-protocol pipe|socket]\n\
@@ -1258,15 +1524,18 @@ fn print_help() {
          \x20         [--watch <target>]... [--allow-write] [--allow-force]\n\
          \x20         [--session-timeout <duration>] [--debug-protocol pipe|socket]\n\
          \x20         [--debug|--release] [--manifest-path <stc.toml|dir>] [--locked]\n\
-         \x20         [--cycles <n>] [--cycle-time <duration>] [--io null|memory|file]\n\
+         \x20         [--cycles <n>] [--cycle-time <duration>] [--io null|memory|file|ethercat]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
          \x20         [--no-retain] [--mock-clock <duration>]\n\
          \x20         [--message-format human|json] [-v|-vv] [-q]\n\
-         \x20 stc test [<filter>...] [--manifest-path <stc.toml|dir>] [--locked]\n\
+         \x20 stc test [<filter>...] [--exact] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20          [--list] [--no-run] [--timeout <duration>]\n\
-         \x20          [--io null|memory|file] [--io-file <path>]\n\
+         \x20          [--coverage|--no-coverage] [--coverage-out <dir>]\n\
+         \x20          [--io null|memory|file|ethercat] [--io-file <path>]\n\
          \x20          [--target <triple>] [--clang <path>] [--runtime <path>]\n\
-         \x20          [--out-dir <dir>] [--relaxed] [--message-format human|json]\n\
+         \x20          [--out-dir <dir>] [--relaxed]\n\
+         \x20          [--message-format human|json|short]\n\
+         \x20          [--diagnostic-paths package|absolute]\n\
          \x20          [-v|-vv] [-q] [-- --nocapture]\n\
          \x20 stc fmt [<path>...] [--check] [--manifest-path <stc.toml|dir>]\n\
          \x20         [--locked] [--message-format human|json|short] [-v|-vv] [-q]\n\
@@ -1278,6 +1547,11 @@ fn print_help() {
          \x20         [--locked] [--debug|--release]\n\
          \x20         [--message-format human|json|short] [-v|-vv]\n\
          \x20 stc rename <old> <new> [--dry-run] [--manifest-path <stc.toml|dir>] [--locked]\n\
+         \x20 stc lsp [--manifest-path <stc.toml|dir>]\n\
+         \x20 stc dap [--manifest-path <stc.toml|dir>]\n\
+         \x20 stc hir-dump <file>... [--output <path>] [--relaxed]\n\
+         \x20              [--message-format human|json]\n\
+         \x20 stc hir-dump --verify <dump.json> [--message-format human|json]\n\
          \x20 stc --version\n\
          \x20 stc --help\n\
          \n\
@@ -1291,7 +1565,10 @@ fn print_help() {
          executable launcher, or the embedding host library through clang.\n\
          Without input files (or with `--manifest-path`), `check`, `build`,\n\
          `clean`, and `metadata` load `stc.toml`, compile the package graph in\n\
-         dependency order, and report package-qualified diagnostics. The\n\
+         dependency order, and report package-qualified diagnostics\n\
+         (`<package>/<relative>`). `--diagnostic-paths absolute` names the\n\
+         source file by its absolute path instead, for editor problem matchers;\n\
+         it is valid with `check`, `build`, `run`, and `test`. The\n\
          file-based form is the explicit manifest-free bridge. Project builds\n\
          default to `--emit module`, the debug build form, and\n\
          `target/stc/debug`. `--release` selects optimized, stripped,\n\
@@ -1308,6 +1585,10 @@ fn print_help() {
          authenticated debug session (or attaches with `--attach`), prints the\n\
          endpoint path on stderr, and never prints the session token. `stc run\n\
          --debug-server` starts the same local service beside the run loop.\n\
+         `stc run --watch` runs until interrupted, the watch timeout, or\n\
+         standard-input EOF. Ctrl-C stops the host through the control channel\n\
+         and exits 130; an EOF stop (Ctrl-D/Ctrl-Z or a closed stdin) stops it\n\
+         gracefully and exits 0.\n\
          Debug sessions are availability and operability features, not safety\n\
          functions: a stopped or forced controller may hold outputs\n\
          indefinitely. stc may control machinery, but it is not a safety PLC\n\
@@ -1321,7 +1602,18 @@ fn print_help() {
          envelope; `online diff` compares a candidate manifest with the active\n\
          baseline (or `--baseline`) and exits 0 compatible, 1 incompatible,\n\
          2 usage/parse. `rename` rewrites a sema-resolved declaration and its\n\
-         references and records the mapping in `stc.renames.toml`.\n\
+         references and records the mapping in `stc.renames.toml`. `lsp` serves the\n\
+         Language Server Protocol for the VS Code extension over standard input and\n\
+         output; stderr carries logs. `--manifest-path` selects the project;\n\
+         otherwise the server discovers `stc.toml` from the initialize workspace\n\
+         roots or the current directory, and fails initialization with a readable\n\
+         error when none exists. The server exits after the shutdown/exit handshake\n\
+         or when standard input closes. `dap` serves the Debug Adapter Protocol\n\
+         over standard input and output; launch and attach settings arrive as DAP\n\
+         messages, and `--manifest-path` is a fallback project path. `hir-dump`\n\
+         emits the versioned canonical core-HIR JSON dump (HIR-Dump.md), or\n\
+         validates one with `--verify`; exit 0 accepted, 1 rejected or compile\n\
+         error, 2 malformed dump, usage, or I/O error.\n\
          Exit codes: 0 success, 1 compile error, 2 usage/manifest/toolchain error,\n\
          3 internal error, 4 runtime trap, 130 interrupted.",
         env!("CARGO_PKG_VERSION")
@@ -1331,6 +1623,183 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_ok(args: &[&str]) -> Invocation {
+        let args = args
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        parse(&args)
+            .unwrap_or_else(|error| panic!("parse failed for {args:?}: {error}"))
+            .expect("not a help/version invocation")
+    }
+
+    fn parse_error(args: &[&str]) -> String {
+        let args = args
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        match parse(&args) {
+            Ok(_) => panic!("expected {args:?} to fail"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn command_and_option_combinations_are_validated() {
+        let cases: &[(&[&str], &str)] = &[
+            (&[], "missing command"),
+            (&["bogus"], "unknown command"),
+            (&["online"], "needs"),
+            (&["online", "bogus"], "unknown online"),
+            (&["check", "--ast"], "--ast"),
+            (&["check", "--watch"], "--watch"),
+            (&["run", "--watch-timeout", "1s"], "watch-timeout"),
+            (&["run", "--watch", "--cold"], "cannot be combined"),
+            (&["check", "--dry-run"], "dry-run"),
+            (&["check", "--output", "x"], "--output"),
+            (&["check", "--verify", "x"], "--verify"),
+            (
+                &["hir-dump", "--output", "x", "--verify", "y"],
+                "mutually exclusive",
+            ),
+            (&["hir-dump", "--verify", "x", "a.st"], "does not accept"),
+            (&["hir-dump"], "at least one input"),
+            (&["online", "download", "--baseline", "x"], "baseline"),
+            (&["online", "diff", "--out", "x"], "--out"),
+            (&["online", "diff", "--binary", "x"], "--binary"),
+            (&["check", "--host", "h"], "--host"),
+            (&["check", "--nonce", "n"], "--nonce"),
+            (&["check", "--cycles", "1"], "only valid with `stc run`"),
+            (&["check", "--name", "x"], "build options are only valid"),
+            (&["check", "--target", "x"], "build options are only valid"),
+            (&["fmt", "--debug"], "--debug"),
+            (&["fmt", "--release"], "--debug"),
+            (&["test", "--name", "x"], "not valid"),
+            (&["test", "--emit", "ir"], "not valid"),
+            (&["test", "--got-manifest", "x"], "never uses a baseline"),
+            (&["test", "--cold"], "never uses a baseline"),
+            (&["test", "--rename", "a=b"], "never uses a baseline"),
+            (
+                &["test", "--allow-untracked-removal"],
+                "never uses a baseline",
+            ),
+            (&["run", "--name", "x"], "--name"),
+            (&["run", "--emit", "ir"], "--emit"),
+            (&["debug", "--name", "x"], "--name"),
+            (&["build", "--io", "file"], "--io"),
+            (&["build", "--io-file", "f"], "--io"),
+            (&["check", "--out-dir", "x"], "--out-dir"),
+            (&["debug", "--message-format", "short"], "supports"),
+            (&["debug", "--debug-server"], "only valid with `stc run`"),
+            (
+                &["debug", "--attach", "x", "--cycles", "1"],
+                "cannot be combined",
+            ),
+            (
+                &["run", "--debug-endpoint", "x"],
+                "require `stc run --debug-server`",
+            ),
+            (
+                &["run", "--allow-write"],
+                "require `stc run --debug-server`",
+            ),
+            (
+                &["run", "--session-timeout", "1s"],
+                "require `stc run --debug-server`",
+            ),
+            (
+                &["run", "--debug-protocol", "pipe"],
+                "require `stc run --debug-server`",
+            ),
+            (
+                &["check", "--break", "a.st:1"],
+                "only valid with `stc debug`",
+            ),
+            (&["check", "--attach", "x"], "only valid with `stc debug`"),
+            (
+                &["check", "--debug-endpoint", "x"],
+                "only valid with `stc run --debug-server`",
+            ),
+            (
+                &["check", "--allow-force"],
+                "only valid with `stc run --debug-server`",
+            ),
+            (&["check", "--batch", "x"], "only valid with `stc debug`"),
+            (&["run", "--attach", "x"], "only valid with `stc debug`"),
+            (&["run", "--break", "a.st:1"], "only valid with `stc debug`"),
+            (
+                &["parse", "--message-format", "bogus"],
+                "unsupported message format",
+            ),
+            (&["build", "--emit", "bogus"], "unknown emit kind"),
+            (&["build", "--emit", ""], "at least one artifact"),
+            (&["run", "--cycles", "abc"], "cycle count"),
+            (&["run", "--cycle-time", "1x"], "invalid cycle time"),
+            (
+                &["debug", "--session-timeout", "bad"],
+                "invalid session timeout",
+            ),
+            (&["debug", "--session-timeout", "25h"], "at most 24"),
+            (&["debug", "--break", "a.st"], "--break"),
+            (&["debug", "--break", ":1"], "--break"),
+        ];
+        for (args, expected) in cases {
+            let error = parse_error(args);
+            assert!(
+                error.contains(expected),
+                "{args:?}: expected `{expected}` in `{error}`"
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_parses_and_has_a_name() {
+        let invocations = [
+            parse_ok(&["parse", "a.st"]),
+            parse_ok(&["check"]),
+            parse_ok(&["build"]),
+            parse_ok(&["new", "proj"]),
+            parse_ok(&["run"]),
+            parse_ok(&["debug"]),
+            parse_ok(&["test"]),
+            parse_ok(&["fmt"]),
+            parse_ok(&["clean"]),
+            parse_ok(&["metadata"]),
+            parse_ok(&["compliance"]),
+            parse_ok(&["rename", "old", "new"]),
+            parse_ok(&["hir-dump", "a.st"]),
+            parse_ok(&["online", "download"]),
+            parse_ok(&["online", "diff", "candidate.json"]),
+        ];
+        for invocation in invocations {
+            let name = command_name(invocation.command);
+            assert!(!name.is_empty());
+        }
+    }
+
+    #[test]
+    fn break_specs_and_durations_are_parsed() {
+        assert_eq!(
+            parse_break_spec("src/main.st:12").expect("line only"),
+            ("src/main.st".to_owned(), 12, 0)
+        );
+        assert_eq!(
+            parse_break_spec("src/main.st:12:4").expect("line and column"),
+            ("src/main.st".to_owned(), 12, 4)
+        );
+        assert!(parse_break_spec(":12").is_err());
+        assert!(parse_break_spec("a.st:0x10").is_err());
+        assert_eq!(
+            parse_break_spec("a.st:1:2:3").expect("extra colon belongs to the file"),
+            ("a.st:1".to_owned(), 2, 3)
+        );
+        assert_eq!(parse_debug_timeout("1s").expect("seconds"), 1_000_000_000);
+        assert!(parse_debug_timeout("nope").is_err());
+        assert_eq!(parse_debug_timeout("0s").expect("zero disables"), 0);
+        assert!(parse_debug_timeout("24h").is_ok());
+        assert!(parse_debug_timeout("25h").is_err());
+    }
 
     fn invocation(args: &[&str]) -> Invocation {
         let args = args
@@ -1356,6 +1825,68 @@ mod tests {
                 .mode_override,
             Some(BuildMode::Debug)
         );
+    }
+
+    #[test]
+    fn session_timeout_accepts_zero_as_disabled() {
+        assert_eq!(parse_debug_timeout("0ns").expect("zero"), 0);
+        assert_eq!(
+            parse_debug_timeout("5m").expect("five minutes"),
+            300_000_000_000
+        );
+        assert!(parse_debug_timeout("25h").is_err());
+    }
+
+    #[test]
+    fn lsp_accepts_only_a_manifest_path() {
+        let parsed = invocation(&["lsp", "--manifest-path", "stc.toml"]);
+        assert_eq!(parsed.command, Command::Lsp);
+        assert_eq!(parsed.manifest.as_deref(), Some("stc.toml"));
+
+        let parsed = invocation(&["lsp", "--manifest-path=project/stc.toml"]);
+        assert_eq!(parsed.manifest.as_deref(), Some("project/stc.toml"));
+
+        for args in [
+            ["lsp", "--message-format", "json"].as_slice(),
+            ["lsp", "file.st"].as_slice(),
+            ["lsp", "--debug"].as_slice(),
+        ] {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            let error = match parse(&args) {
+                Ok(_) => panic!("`stc lsp` must reject the option"),
+                Err(error) => error,
+            };
+            assert!(error.contains("only accepts `--manifest-path"), "{error}");
+        }
+    }
+
+    #[test]
+    fn dap_accepts_only_a_manifest_path() {
+        let parsed = invocation(&["dap", "--manifest-path", "stc.toml"]);
+        assert_eq!(parsed.command, Command::Dap);
+        assert_eq!(parsed.manifest.as_deref(), Some("stc.toml"));
+
+        let parsed = invocation(&["dap", "--manifest-path=project/stc.toml"]);
+        assert_eq!(parsed.manifest.as_deref(), Some("project/stc.toml"));
+
+        for args in [
+            ["dap", "--message-format", "json"].as_slice(),
+            ["dap", "file.st"].as_slice(),
+            ["dap", "--debug"].as_slice(),
+        ] {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            let error = match parse(&args) {
+                Ok(_) => panic!("`stc dap` must reject the option"),
+                Err(error) => error,
+            };
+            assert!(error.contains("only accepts `--manifest-path"), "{error}");
+        }
     }
 
     #[test]
@@ -1451,6 +1982,84 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.starts_with("STC-E-PROJECT-010: "), "{error}");
+    }
+
+    #[test]
+    fn coverage_flags_are_parsed_and_validated() {
+        let default = invocation(&["test"]);
+        assert_eq!(default.test.coverage, None);
+        assert!(default.test.coverage_out.is_none());
+
+        assert_eq!(
+            invocation(&["test", "--coverage"]).test.coverage,
+            Some(true)
+        );
+        assert_eq!(
+            invocation(&["test", "--no-coverage"]).test.coverage,
+            Some(false)
+        );
+        assert_eq!(
+            invocation(&["test", "--coverage-out", "cov"])
+                .test
+                .coverage_out
+                .as_deref(),
+            Some("cov")
+        );
+        assert_eq!(
+            invocation(&["test", "--coverage-out=out/cov"])
+                .test
+                .coverage_out
+                .as_deref(),
+            Some("out/cov")
+        );
+
+        let parse_error = |args: &[&str]| {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            parse(&args).err().expect("the invocation must fail")
+        };
+        assert!(
+            parse_error(&["test", "--coverage", "--no-coverage"]).contains("mutually exclusive")
+        );
+        assert!(
+            parse_error(&["test", "--no-coverage", "--coverage"]).contains("mutually exclusive")
+        );
+        assert!(parse_error(&["test", "--coverage", "--list"]).contains("--list"));
+        assert!(parse_error(&["test", "--coverage-out", "cov", "--list"]).contains("--list"));
+        assert!(
+            parse_error(&["test", "--coverage-out", "cov", "--no-coverage"])
+                .contains("requires coverage")
+        );
+        assert!(parse_error(&["build", "--coverage"]).contains("only valid with `stc test`"));
+        assert!(
+            parse_error(&["build", "--coverage-out", "cov"]).contains("only valid with `stc test`")
+        );
+
+        // `--list` ignores the manifest default, so no explicit flag is needed;
+        // `--no-coverage` remains valid there.
+        let listed = invocation(&["test", "--list"]);
+        assert_eq!(listed.test.coverage, None);
+        assert!(invocation(&["test", "--list", "--no-coverage"]).test.list);
+    }
+
+    #[test]
+    fn exact_selection_is_a_test_only_flag() {
+        let exact = invocation(&["test", "--exact", "AlphaWorks", "BetaWorks"]);
+        assert!(exact.test.exact);
+        assert_eq!(exact.paths, ["AlphaWorks", "BetaWorks"]);
+        assert!(!invocation(&["test"]).test.exact);
+
+        let args = ["check", "--exact"]
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        let error = match parse(&args) {
+            Ok(_) => panic!("`--exact` is not a build option"),
+            Err(error) => error,
+        };
+        assert!(error.contains("only valid with `stc test`"), "{error}");
     }
 
     #[test]

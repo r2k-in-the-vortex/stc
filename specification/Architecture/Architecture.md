@@ -4,7 +4,7 @@ Status: M4.5 host/module model, M5 lowering, M6 project system/CLI/verification 
 M6.5 debug/monitoring, and M7 release packaging/cross-target/hardening implemented (2026-10-28);
 release-checklist sign-off pending the both-host CI run  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
+Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [IDE Integration](IDE-Integration.md), [CLI and Manifest](CLI-and-Manifest.md), [Testing](Testing-and-Verification.md)
 
 ## 1. Overview
 
@@ -57,8 +57,12 @@ stc/
     stc-manifest/            stc.toml schema, local dependency graph, source discovery
     stc-runtime/             persistent host, loader/GOT/root allocator, staticlib/rlib
     stc-test/                test discovery, wrapper generation, runner, reporting
+    stc-ide/                 editor query layer: snapshot, diagnostics, navigation, formatting
+    stc-lsp/                 Language Server Protocol server (`stc lsp`)
+    stc-dap/                 Debug Adapter Protocol server (`stc dap`)
     stc-driver/              CLI binary `stc` and test-support library `stc_driver`
     xtask/                   `cargo xtask test --suite ...` and `traceability`
+  editors/vscode/            local VS Code extension, grammar, tasks, and sample workspace
   lean/                      Lake project for exact-function models/proofs
   tests/                     conformance corpus, UI snapshots, committed vectors, cross-target fixtures
   examples/
@@ -74,8 +78,16 @@ stc-span <- stc-hir <- stc-sema <- stc-parser
 stc-hir <- stc-codegen <- stc-got
 stc-got <- stc-runtime
 stc-manifest <- stc-test
-stc-codegen, stc-fmt, stc-got, stc-hir, stc-manifest, stc-runtime, stc-sema, stc-test <- stc-driver
+stc-diag, stc-fmt, stc-hir, stc-lexer, stc-manifest, stc-parser, stc-sema, stc-span, stc-syntax <- stc-ide
+stc-ide <- stc-lsp
+stc-got, stc-manifest, stc-runtime <- stc-dap
+stc-codegen, stc-fmt, stc-got, stc-hir, stc-manifest, stc-runtime, stc-sema, stc-test, stc-lsp, stc-dap <- stc-driver
 ```
+
+The editor crates are protocol and query layers only: `stc-ide` reads the compiler crates,
+`stc-lsp` translates LSP, and `stc-dap` translates DAP to the runtime debug client. The extension
+in `editors/vscode/` is a client of `stc lsp` and `stc dap`; it contains no compiler logic
+([IDE Integration](IDE-Integration.md)).
 
 `stc-codegen` must not depend on `stc-parser` or `stc-syntax`; it consumes HIR only. The GOT
 manifest model is produced by codegen from HIR identity metadata, not by the runtime. The runtime

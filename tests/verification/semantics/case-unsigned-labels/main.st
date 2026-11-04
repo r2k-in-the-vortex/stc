@@ -1,0 +1,15 @@
+VAR_GLOBAL
+  R : DINT;
+END_VAR
+PROGRAM Main
+VAR
+  i : USINT;
+END_VAR
+  i := USINT#200;
+  CASE i OF
+    100..150: R := 1;
+    151..255: R := 2;
+  ELSE
+    R := 3;
+  END_CASE;
+END_PROGRAM

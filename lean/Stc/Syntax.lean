@@ -6,7 +6,7 @@ the surface AST. P0.0 fixes the module layout so later sub-phases add
 declarations without moving imports.
 
 Scope is frozen by `specification/Verification/Semantics-Charter.md` §6 and
-`specification/Verification/Plan-Phase0.md` §3.3.
+`specification/Verification/Semantics.md` §1.
 -/
 import Stc.Syntax.Tokens
 import Stc.Syntax.Cst

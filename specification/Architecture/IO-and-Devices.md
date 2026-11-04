@@ -1,8 +1,8 @@
 # I/O and Device Linking
 
-Status: M4.5 scalar process image and online remap, M5 aggregate leaves, and M6 device metadata plus `null`/`memory`/`file` backends implemented (2026-10-27)  
+Status: M4.5 scalar process image and online remap, M5 aggregate leaves, and M6 device metadata plus `null`/`memory`/`file` backends implemented (2026-10-27); v2 hardware backends EtherCAT (WL-5.2, 2026-11-01) and Modbus TCP server (WL-5.1, 2026-11-02) implemented; MQTT deferred  
 Profile: `stc-2013-oop-utf8-v1`  
-Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [Tokenization](../Syntax/Tokenization.md)
+Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [I/O Routing and Backends](IO-Routing-and-Backends.md), [Tokenization](../Syntax/Tokenization.md)
 
 ## 1. Responsibility split
 
@@ -25,7 +25,8 @@ Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [
 
 **v1 scope**: no hardware backends. The executable/library runtime uses `null` (unbound inputs
 receive type defaults, unbound outputs are discarded), `memory` (tests), or optionally `file`.
-EtherCAT, Modbus, and MQTT are planned for v2 and are noted here but not designed in v1.
+The v2.0.0 hardware backends EtherCAT and Modbus TCP server are implemented and documented in
+[I/O Routing and Backends](IO-Routing-and-Backends.md); MQTT remains deferred.
 
 > **M4.5 status (2026-10-25):** `AT` scalar layout, contiguous `%I`/`%Q`/`%M` image sizing,
 > `offset_bits`, `{stc:io}` hints, `<name>.stc-meta.json`, and unbound-input defaults are
@@ -248,12 +249,25 @@ A runtime override may bind a variable that has no pragma, or rebind one that do
   (D-163). Tests use memory.
 - The runtime API exposes the process image (`stc_rt_io_image`) and an optional backend vtable.
 
-### 6.2 v2 device backends (not designed yet)
+### 6.2 v2 device backends
 
-Planned primary backends:
+The v2.0.0 hardware contract — machine profiles selected by `[io].config`, the route graph, the
+multi-backend coordinator, the EtherCAT status device, transparent fault behavior, and the
+Modbus TCP server contract — is fixed in [I/O Routing and Backends](IO-Routing-and-Backends.md).
 
-- **EtherCAT** — cyclic process data; device tree maps to channels.
-- **Modbus** — register/coil mapping; read/write scheduling.
+Implemented primary backends:
+
+- **EtherCAT** (WL-5.2) — cyclic process data; the device tree maps to PDO channels. Linux IgH
+  only, loaded through the optional shim; see
+  [EtherCAT host integration](../Verification/EtherCAT-Host.md).
+- **Modbus TCP server** (WL-5.1) — coils, discrete inputs, holding registers, and input
+  registers; explicit zero-based channel map in the machine profile; 1/8/16/32/64-bit values,
+  multiple listeners, and optional layout-1 status device. Contract in
+  [I/O Routing and Backends](IO-Routing-and-Backends.md) §4.5; evidence in
+  [Modbus TCP server](../Verification/Modbus-Server.md).
+
+Deferred backend:
+
 - **MQTT** — topic/payload mapping; asynchronous I/O and caching.
 
 These require runtime-side scheduling, discovery, and configuration. The compiler metadata and

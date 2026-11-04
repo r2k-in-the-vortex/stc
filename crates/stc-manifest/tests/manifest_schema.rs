@@ -135,6 +135,7 @@ timeout = "5s"
 default-cycles = 1
 mock-clock = "0ns"
 io = "memory"
+coverage = true
 
 [[test.case]]
 name = "TimerBlink"
@@ -166,6 +167,7 @@ fn minimal_manifest_applies_documented_defaults() {
     assert!(!manifest.online.allow_untracked_removal);
     assert!(manifest.debug.default);
     assert_eq!(manifest.debug.protocol.as_str(), "pipe");
+    assert_eq!(manifest.debug.session_timeout, DurationNs(0));
     assert_eq!(manifest.lints.warnings, LintLevel::Warn);
     assert_eq!(manifest.run.cycles, 0);
     assert_eq!(manifest.run.cycle_time, None);
@@ -173,6 +175,7 @@ fn minimal_manifest_applies_documented_defaults() {
     assert_eq!(manifest.test.default_cycles, 1);
     assert_eq!(manifest.test.mock_clock, DurationNs(0));
     assert_eq!(manifest.test.effective_io(), IoBackend::Memory);
+    assert!(!manifest.test.coverage);
     assert!(manifest.test.sources.is_empty());
 }
 
@@ -200,6 +203,7 @@ fn full_manifest_parses() {
     assert_eq!(manifest.run.cycles, 10);
     assert_eq!(manifest.run.cycle_time, Some(DurationNs(10_000_000)));
     assert_eq!(manifest.test.cases.len(), 1);
+    assert!(manifest.test.coverage);
     assert_eq!(manifest.test.cases[0].name, "TimerBlink");
     assert_eq!(manifest.test.cases[0].cycles, Some(25));
     assert_eq!(
@@ -210,6 +214,41 @@ fn full_manifest_parses() {
         manifest.test.cases[0].expect_trap.as_deref(),
         Some("STC_TRAP_DIV_ZERO")
     );
+}
+
+#[test]
+fn io_ethercat_backend_and_profile_config_are_accepted() {
+    let text = MINIMAL.replace(
+        "[project]",
+        "[io]\nbackend = \"ethercat\"\nconfig = \"profiles/machine.toml\"\n\n[project]",
+    );
+    let parsed = parse_ok(&text);
+    assert_eq!(parsed.manifest.io.backend, IoBackend::Ethercat);
+    assert_eq!(
+        parsed.manifest.io.config.as_deref(),
+        Some("profiles/machine.toml")
+    );
+
+    let devices = parse_ok(&format!(
+        "{MINIMAL}\n[io]\n\n[[io.devices]]\nname = \"diewu\"\nkind = \"ethercat\"\n"
+    ));
+    assert_eq!(devices.manifest.io.devices.len(), 1);
+    assert_eq!(devices.manifest.io.devices[0].name, "diewu");
+    assert_eq!(devices.manifest.io.devices[0].kind, "ethercat");
+}
+
+#[test]
+fn io_config_path_must_stay_relative_inside_the_project() {
+    for value in [
+        "\"\"",
+        "\"/abs/machine.toml\"",
+        "\"../machine.toml\"",
+        "\"C:/machine.toml\"",
+    ] {
+        let text = MINIMAL.replace("[project]", &format!("[io]\nconfig = {value}\n\n[project]"));
+        let diagnostics = parse_err(&text);
+        assert_code(&diagnostics, "STC-E-PROJECT-009");
+    }
 }
 
 #[test]
@@ -475,6 +514,21 @@ fn test_settings_are_validated() {
         "STC-E-PROJECT-008",
     );
     assert_code(
+        &parse_err(&FULL.replace("coverage = true", "coverage = \"yes\"")),
+        "STC-E-PROJECT-002",
+    );
+    assert_code(
+        &parse_err(&FULL.replace("coverage = true", "coverage = 1")),
+        "STC-E-PROJECT-002",
+    );
+    let unknown = parse_err(&FULL.replace("coverage = true", "coverge = true"));
+    assert_code(&unknown, "STC-E-PROJECT-002");
+    let diagnostic = unknown
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("coverge"))
+        .expect("unknown-key diagnostic");
+    assert_eq!(diagnostic.suggestions[0].replacement, "coverage");
+    assert_code(
         &parse_err(&FULL.replace(
             "expect-trap = \"STC_TRAP_DIV_ZERO\"",
             "expect-trap = \"STC_TRAP_NOPE\"",
@@ -555,6 +609,27 @@ fn debug_settings_record_explicit_values_without_obsolete_warnings() {
     assert!(explicit_false.manifest.build.debug_explicit);
     assert!(!explicit_false.manifest.debug.default);
     assert!(explicit_false.manifest.debug.default_explicit);
+}
+
+#[test]
+fn debug_session_timeout_is_opt_in() {
+    let default = parse_ok(FULL);
+    assert_eq!(default.manifest.debug.session_timeout, DurationNs(0));
+
+    let disabled = parse_ok(&FULL.replace(
+        "[debug]\ndefault = true",
+        "[debug]\ndefault = true\nsession-timeout = \"0ns\"",
+    ));
+    assert_eq!(disabled.manifest.debug.session_timeout, DurationNs(0));
+
+    let enabled = parse_ok(&FULL.replace(
+        "[debug]\ndefault = true",
+        "[debug]\ndefault = true\nsession-timeout = \"5m\"",
+    ));
+    assert_eq!(
+        enabled.manifest.debug.session_timeout,
+        DurationNs(300_000_000_000)
+    );
 }
 
 #[test]
