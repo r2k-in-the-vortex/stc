@@ -10,6 +10,7 @@ import { resolveExecutable } from '../executable';
 import { findManifest } from '../languageClient';
 import { killProcessTree, waitForExit } from '../processTree';
 import { findProjectRoots, stcExecutable } from '../tasks';
+import { StcDebugSessionTracker } from './debugSessions';
 import {
   ENDPOINT_MAX_BYTES,
   NON_SAFETY_NOTICE,
@@ -168,6 +169,9 @@ export class OnlineChangeSession {
   private deactivating = false;
   private lastFailureKey: string | undefined;
   private readonly attachedSessions = new Map<string, AttachRecord>();
+  private readonly debugSessions = new StcDebugSessionTracker(
+    vscode.debug.activeDebugSession,
+  );
 
   public constructor(private readonly context: vscode.ExtensionContext) {
     this.channel = vscode.window.createOutputChannel('stc Online Change');
@@ -180,11 +184,15 @@ export class OnlineChangeSession {
     this.register(context, 'stc.showOnlineChangeStatus', () => this.showStatus());
     this.register(context, 'stc.attachOnlineDebugger', () => this.attach());
 
-    const terminated = vscode.debug.onDidTerminateDebugSession((session) =>
-      this.onDebugTerminated(session),
-    );
-    context.subscriptions.push(terminated);
-    this.disposables.push(terminated);
+    const debugListeners = [
+      vscode.debug.onDidStartDebugSession((session) => this.debugSessions.start(session)),
+      vscode.debug.onDidTerminateDebugSession((session) => {
+        this.debugSessions.end(session);
+        this.onDebugTerminated(session);
+      }),
+    ];
+    context.subscriptions.push(...debugListeners);
+    this.disposables.push(...debugListeners);
 
     this.updateUi();
   }
@@ -282,7 +290,12 @@ export class OnlineChangeSession {
       return;
     }
 
-    if (vscode.debug.activeDebugSession?.type === 'stc') {
+    // Do not read `vscode.debug.activeDebugSession` here: it is updated by a
+    // different extension-host message than the termination event, so it can
+    // still name a session that just terminated. The tracker removes the
+    // session synchronously with `onDidTerminateDebugSession`, so a start
+    // immediately after a stop is deterministic.
+    if (this.debugSessions.hasActiveSession) {
       const proceed = await vscode.window.showWarningMessage(
         'A stc debug session is active. Starting an online change launches a second local host. Continue?',
         { modal: true },

@@ -9,9 +9,9 @@ import { build } from 'esbuild';
 // memory and exercise the same code the extension ships.
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
-async function loadStateModule() {
+async function loadModule(entryPoint) {
   const result = await build({
-    entryPoints: [join(root, 'src', 'onlineChange', 'state.ts')],
+    entryPoints: [entryPoint],
     bundle: true,
     write: false,
     format: 'cjs',
@@ -25,7 +25,10 @@ async function loadStateModule() {
   return moduleObject.exports;
 }
 
-const state = await loadStateModule();
+const state = await loadModule(join(root, 'src', 'onlineChange', 'state.ts'));
+const debugSessions = await loadModule(
+  join(root, 'src', 'onlineChange', 'debugSessions.ts'),
+);
 
 const BUILD_A = '0123456789abcdef0123456789abcdef';
 const BUILD_B = 'fedcba9876543210fedcba9876543210';
@@ -89,6 +92,40 @@ function endpoint(current, overrides = {}) {
     },
   });
 }
+
+test('stc debug session tracking drops a session as soon as it terminates', () => {
+  // Regression: `vscode.debug.activeDebugSession` is updated by a separate
+  // extension-host message than the termination event, so it can still name a
+  // session whose termination event already fired. The start gate must use
+  // this tracker, not that lagging API.
+  const tracker = new debugSessions.StcDebugSessionTracker({
+    id: 'oc-debug',
+    type: 'stc',
+  });
+  assert.equal(tracker.hasActiveSession, true, 'the active session seeds the tracker');
+
+  tracker.end({ id: 'oc-debug', type: 'stc' });
+  assert.equal(tracker.hasActiveSession, false, 'a terminated session is not active');
+
+  tracker.start({ id: 'next', type: 'stc' });
+  assert.equal(tracker.hasActiveSession, true, 'a later session is tracked');
+});
+
+test('stc debug session tracking ignores other debuggers', () => {
+  const tracker = new debugSessions.StcDebugSessionTracker();
+  tracker.start({ id: 'node', type: 'node' });
+  assert.equal(tracker.hasActiveSession, false);
+});
+
+test('stc debug session tracking keeps unrelated stc sessions active', () => {
+  const tracker = new debugSessions.StcDebugSessionTracker();
+  tracker.start({ id: 'a', type: 'stc' });
+  tracker.start({ id: 'b', type: 'stc' });
+  tracker.end({ id: 'a', type: 'stc' });
+  assert.equal(tracker.hasActiveSession, true, 'another stc session is still live');
+  tracker.end({ id: 'b', type: 'stc' });
+  assert.equal(tracker.hasActiveSession, false);
+});
 
 test('classifies every stable watch status line', () => {
   assert.deepEqual(state.classifyStatusLine(LINES.baseline), {

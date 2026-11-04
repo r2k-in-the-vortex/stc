@@ -432,6 +432,16 @@ async function runDebugSession(folder) {
   try {
     await vscode.debug.stopDebugging(session);
     await withTimeout(terminated, DEBUG_STOP_TIMEOUT_MS, 'the stc debug session to terminate');
+    // The extension host clears `activeDebugSession` with a different RPC than
+    // the one that fires `onDidTerminateDebugSession`, so it can still name
+    // the stopped session after the termination event. Wait for it to clear
+    // before the online change starts; otherwise the extension's active-session
+    // warning becomes a modal dialog that the test host refuses to show.
+    await poll(
+      'the stopped stc debug session to clear from vscode.debug.activeDebugSession',
+      DEBUG_STOP_TIMEOUT_MS,
+      () => (vscode.debug.activeDebugSession?.type === 'stc' ? undefined : true),
+    );
   } finally {
     terminateListener.dispose();
   }
@@ -521,6 +531,18 @@ async function runOnlineChange(document) {
   try {
     console.log('stc smoke: online change start');
     await vscode.commands.executeCommand('stc.startOnlineChange');
+    // The command resolves after the extension's start gates have run. If a
+    // gate aborted (for example the active-debug-session warning was refused
+    // instead of answered), the status is still idle; fail now with that
+    // status rather than waiting the full activation timeout for a generation
+    // that will never arrive.
+    const accepted = await onlineChangeStatus();
+    assert.ok(
+      accepted !== undefined &&
+        (accepted.kind === 'starting' || accepted.kind === 'running'),
+      `the online change start was accepted (status: ${JSON.stringify(accepted)}; ` +
+        'see the "stc Online Change" output channel for the start failure)',
+    );
     const active = await waitForOnlineChange(
       'the online change to report an active generation',
       ONLINE_CHANGE_TIMEOUT_MS,
