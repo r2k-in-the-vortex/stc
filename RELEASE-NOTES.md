@@ -26,7 +26,9 @@ For a quick tour, see the [75-second VS Code walkthrough](https://youtu.be/lqABv
   symbols, definition, references, hover, completion, and formatting; tasks
   and a problem matcher; a DAP debugger over `stc-debug/1` with the additive
   `stc-debug/1.1` Locals revision; online-change controls; and a Testing API
-  provider with run/debug support for `{stc:test}` suites.
+  provider with run/debug support for `{stc:test}` suites. The online-change
+  start gate tracks live debug sessions synchronously, so a just-stopped
+  session cannot suppress a start through a stale active-session pointer.
 - **Coverage for ST tests.** `stc test --coverage` reports statement coverage
   for the ST code under test, mapped to source spans. It writes deterministic
   `coverage.json` (`stc-coverage/1`), `lcov.info`, and a human-readable
@@ -66,7 +68,7 @@ For a quick tour, see the [75-second VS Code walkthrough](https://youtu.be/lqABv
 | Target | Delivered in 2.0.0 | Evidence |
 | --- | --- | --- |
 | WL-1.1 — local VS Code integration | Extension, LSP, DAP, tasks, diagnostics, online-change status, Testing API, VSIX, sample workspace, headless smoke | [IDE Integration](specification/Architecture/IDE-Integration.md), [VS Code README](editors/vscode/README.md) |
-| WL-2 — coverage to 85% | CI coverage gate at 85%; final run records 85.28% line coverage | Workflow run [41879601977](https://github.com/r2k-in-the-vortex/stc/actions/runs/41879601977) |
+| WL-2 — coverage to 85% | CI coverage gate at 85%; final run records 85.28% line coverage | Workflow run [41889698752](https://github.com/r2k-in-the-vortex/stc/actions/runs/41889698752) |
 | WL-3 — Lean verification | P0.3–P0.7 and Phases 1–2; source/target semantics, 74/74 corpus, exact-kernel V1 bridge record | [Phase 0](specification/Verification/Reports/Phase0-Report.md), [Phase 1](specification/Verification/Reports/Phase1-Report.md), [Phase 2](specification/Verification/Reports/Phase2-Report.md) |
 | WL-4 — RT verification | x86-64 PREEMPT_RT campaign, harness, host report, runbook | [RT-Host.md](specification/Verification/RT-Host.md), [RT-Runbook.md](specification/Verification/RT-Runbook.md) |
 | WL-5.1 — Modbus TCP server | Server backend, mapping, status, cross-host tests, mixed bench | [Modbus-Server.md](specification/Verification/Modbus-Server.md) |
@@ -75,14 +77,15 @@ For a quick tour, see the [75-second VS Code walkthrough](https://youtu.be/lqABv
 
 ## Verification
 
-The release code commit `e604435` passed the full CI run
-[41879601977](https://github.com/r2k-in-the-vortex/stc/actions/runs/41879601977)
+The release commit `f49d233` passed the full CI run
+[41889698752](https://github.com/r2k-in-the-vortex/stc/actions/runs/41889698752)
 on 2026-11-04: **39/39 jobs**, with no skipped or failed jobs, on
 `windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm`. The run includes the
 workspace tests, online change, debug suites, UI/conformance/execution,
 projects, cross-target IR, packages, the VS Code extension smoke, EtherCAT
 shim, fuzz smoke, traceability, docs, and **Lean proofs**. The Lean job
-completed in 2m 33s.
+passed; the extension smoke includes the debug-stop/online-change sequencing
+fix.
 
 The separate bridge package check ran on the pinned `ecat-host` at the same
 commit:
