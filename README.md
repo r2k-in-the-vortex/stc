@@ -39,10 +39,10 @@ bringing automation into their existing build and review workflow.
   and CI.
 - **Proof, not just tests.** Lean 4 machine-checks the core source and emitted-IR
   semantics — determinism, type soundness, trap soundness, memory and GOT
-  safety, and no modeled undefined behavior — and proves that the exact scalar
-  kernel used by constant folding and code generation is equivalent to its Lean
-  model. A reference interpreter and a 74/74 differential corpus back the
-  implementation.
+  safety, and no modeled undefined behavior — and proves the exact scalar kernel
+  behind constant folding and code generation equivalent to its Lean model,
+  relative to the documented trusted base. A reference interpreter and a 74/74
+  differential corpus back the implementation.
 
 ## See it
 
