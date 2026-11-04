@@ -48,12 +48,13 @@ bringing automation into their existing build and review workflow.
 
 ## See it
 
-[![Watch the VS Code walkthrough on YouTube](https://github.com/r2k-in-the-vortex/stc/releases/download/v2.0.0/vscode-demo-poster.png)](https://youtu.be/lqABvDU5pto)
+<!-- markdownlint-disable-next-line MD034 -->
+https://github.com/user-attachments/assets/9cfd6ef4-a3c6-408d-b785-d558bcc09d9c
 
 The 75-second walkthrough shows the intended workflow: browse types and
 interfaces, read compiler diagnostics, format, set a breakpoint, inspect
 Globals and Locals, then edit and hot-swap the running logic from the status
-bar.
+bar. [Watch it on YouTube](https://youtu.be/lqABvDU5pto).
 
 The extension is a local client for `stc`; the compiler and runtime do the
 work. Everything runs on the machine.
