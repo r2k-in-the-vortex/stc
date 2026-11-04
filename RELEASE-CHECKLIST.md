@@ -1,19 +1,18 @@
 # Release checklist — `stc` 2.0.0
 
 - Owner: project maintainer (`r2k`)
-- Target release date: 2026-11-04
+- Release date: 2026-11-04
 - Profile: `stc-2013-oop-utf8-v1`
 - Baseline: `stc` 1.0.0 (2026-10-29)
-- Branch: `v2.0.0-planning`
+- Branch: `main`
 
 Sign-off requires recorded evidence for every item. An item that cannot be
 verified is marked **unsupported** and added to
 [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md); it is never left blank.
 
-**Current status:** the workspace and version-bearing snapshots are now
-`2.0.0`. The final `2.0.0` CI run, all three package builds, and the
-Aeneas/Charon build are green and verified. Artifact upload and owner sign-off
-are still open.
+**Current status:** released on 2026-11-04. The final `2.0.0` CI run, all
+three package builds, the Aeneas/Charon build, and the published artifacts are
+verified. Release: <https://github.com/r2k-in-the-vortex/stc/releases/tag/v2.0.0>.
 
 ## 1. Release identity and contract freeze
 
@@ -91,7 +90,7 @@ diff remains available on the pinned host if release policy requires it.
 | 2 | Package layout, `package.json`, and `SHA256SUMS` verify | all three package checksums verified; each reports `2.0.0`, host ABI 2.3, `frame_sidecar` 2 | `[x]` |
 | 3 | Unpacked fresh project: `new`, `check`, `build`, `build --release`, `build --emit=lib`, `run`, `test`, `clean`, rebuild | package jobs in run `41889698752` | `[x]` |
 | 4 | VSIX installs against the packaged `stc`; extension smoke passes | local VSIX build + extension/smoke jobs in run `41889698752` | `[x]` |
-| 5 | Release artifacts uploaded and URLs/checksums recorded | GitHub release | `[ ]` pending |
+| 5 | Release artifacts uploaded and URLs/checksums recorded | [v2.0.0 release](https://github.com/r2k-in-the-vortex/stc/releases/tag/v2.0.0); six assets; published `SHA256SUMS` verified | `[x]` |
 
 ## 6. Documentation and limitations
 
@@ -129,17 +128,10 @@ workarounds.
 
 | Role | Name | Date | Signature / result |
 | --- | --- | --- | --- |
-| Release owner | project maintainer (`r2k`) | — | `[ ]` pending |
-| Build/CI evidence reviewed | project maintainer (`r2k`) | — | Run `41889698752` (39/39), Aeneas build, three package checksums, and VSIX recorded; owner review pending |
-| Documentation reviewed | project maintainer (`r2k`) | — | `[ ]` pending |
-| Non-safety statement reviewed | project maintainer (`r2k`) | — | `[ ]` pending |
+| Release owner | project maintainer (`r2k`) | 2026-11-04 | `[x]` approved release |
+| Build/CI evidence reviewed | project maintainer (`r2k`) | 2026-11-04 | `[x]` run `41889698752` (39/39), Aeneas build, three package checksums, and VSIX verified |
+| Documentation reviewed | project maintainer (`r2k`) | 2026-11-04 | `[x]` approved |
+| Non-safety statement reviewed | project maintainer (`r2k`) | 2026-11-04 | `[x]` approved |
 
-**Release is not signed off until:**
-
-1. the version is set to `2.0.0` and version-bearing snapshots are regenerated;
-2. the final package and extension artifacts are built at that commit and
-   verified;
-3. the final CI run for the version commit is green;
-4. the Aeneas/Charon evidence above is re-run or confirmed against the final
-   version commit;
-5. every remaining `[ ]` item above is checked with its output recorded.
+**Release signed off 2026-11-04.** All items above are recorded, the release
+is published, and the tag is `v2.0.0`.
