@@ -238,6 +238,11 @@ source files from multi-package projects. `stc run` tasks keep running until
 you terminate the task; terminating it stops the `stc run` driver and the host
 it launched, not just the task shell.
 
+VS Code's default task picker lists the configured `.vscode/tasks.json`
+entries; the sample defines the five `stc` tasks. Set
+`"task.quickOpen.showAll": true` to show both configured and detected `stc`
+tasks in one list.
+
 ## Testing
 
 Open a workspace containing `stc.toml` and show the **Testing** view. The
