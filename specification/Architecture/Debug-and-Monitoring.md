@@ -1,6 +1,6 @@
 # Debug and Monitoring
 
-Status: Resolved specification (2026-10-24); M4.5 interface recorded; M6 complete with the M6.5 boundary at host ABI 2.2 service ID 12 (2026-10-27); M6.5 phase 0 fixes the protocol, session, access, checkpoint, and build contracts (2026-10-27); M6.5 implementation complete (2026-10-28)  
+Status: Resolved specification (2026-10-24); M4.5 interface recorded; M6 complete with the M6.5 boundary at host ABI 2.2 service ID 12 (2026-10-27); M6.5 phase 0 fixes the protocol, session, access, checkpoint, and build contracts (2026-10-27); M6.5 implementation complete (2026-10-28); WL-1.1 adds the additive `stc-debug/1.1` revision (2026-10-30)  
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: v1 runtime/platform capability; not an IEC 61131-3 language feature.
 
@@ -31,7 +31,7 @@ The runtime has three thread classes:
 
 | Thread | Role in debug |
 | --- | --- |
-| Cycle | Executes ST, applies queued writes/forces at boundaries, and services breakpoint checkpoints |
+| Cycle | Executes ST, applies queued writes/forces at boundaries, applies a stopped one-shot write on the parked thread (§15.3), and services breakpoint checkpoints |
 | Loader/prepare | Loads/prepares a candidate module during online change |
 | Service/monitor | Queues typed reads and watches and serves debug control, status, and manifest export; the cycle thread applies reads and watch batches at a boundary |
 
@@ -71,6 +71,13 @@ Writes are queued and applied at a cycle boundary, in the same phase as forced v
 - is type-checked and range-checked against the active manifest;
 - is rejected if the target was removed or its layout changed;
 - is not applied while the cycle thread is executing ST.
+
+One case is immediate: a one-shot write submitted while the target is stopped on a
+`stc-debug/1.1` session is applied by the parked cycle thread inside service 13 before the
+response is produced, so a read or step in the same stop observes the new value (§15.3). The
+service thread still never dereferences host storage. The write is not queued, so no later
+boundary applies it again. A `stc-debug/1` session keeps the queued behavior, and forces keep
+boundary semantics on every version.
 
 A write queued across an online swap never migrates: the swap ends the session and the queued
 write is discarded, and a client that reconnects re-resolves and re-issues it against the new
@@ -120,11 +127,11 @@ unbound rather than silently moved to an unrelated statement.
 
 Stepping is stop-the-world: the cycle thread is suspended at a checkpoint. Step-over, step-into,
 step-out, and continue are supported. A step that would cross an online swap ends the session
-instead of continuing into a different generation. While the cycle is stopped, the bounded stop
-budget of §14.3 (`[debug].session-timeout`, default five minutes) applies; if the bound is
-exceeded the session is terminated and the cycle resumes with a fresh deadline. M6 has no
-watchdog; if one is added later it is paused or extended while the cycle is stopped, and the stop
-budget still terminates the session.
+instead of continuing into a different generation. While the cycle is stopped, the optional stop
+budget of §14.3 (`[debug].session-timeout`, disabled by default) applies when configured; if the
+bound is exceeded the session is terminated and the cycle resumes with a fresh deadline. M6 has no
+watchdog; if one is added later it is paused or extended while the cycle is stopped, and the
+configured stop budget still terminates the session.
 
 ### 5.3 Call stack
 
@@ -227,7 +234,8 @@ and debug-information errors. Online-change diagnostics use their own
 describe the pre-M6.5 state and the rules M6.5 followed, not current gaps. The GOT manifest was
 raised to format 2 by M6.5 phase 4 (D-180); descriptor, module, state, and metadata-sidecar
 formats remain 1, the metadata sidecar gains only the optional `debug` object, M6.5 adds the
-format-1 stopped-frame sidecar, and the host ABI appends service 13 at minor 2.3.
+format-1 stopped-frame sidecar (raised to format 2 later by WL-1.1 F-11, D-244), and the host ABI
+appends service 13 at minor 2.3.
 
 M4.5 and M6 do not implement the debugger. They fix the host/module substrate and leave the debug
 surface to M6.5. This section records the boundary so M6.5 can build on it without changing
@@ -356,6 +364,11 @@ selects an explicit path whose parent directory must already exist. The host pri
 path in server and launch modes; the token is never printed. A client reads the endpoint file
 only after the host reports it, or polls for it within the connect deadline.
 
+The endpoint file's `protocol` field remains the baseline `stc-debug/1` in format 1. It is a
+baseline marker, not the negotiated session version: a host accepts both versions in §13.2 and
+negotiates the exact version on the first request, so a client must not infer 1.1 support from
+the endpoint file.
+
 ### 13.2 Framing and version negotiation
 
 - The stream is UTF-8 without a BOM. Every message is one compact JSON object terminated by a
@@ -365,10 +378,15 @@ only after the host reports it, or polls for it within the connect deadline.
   its limit, or a partial frame that does not terminate within the request deadline, is
   `STC-E-DEBUG-004` and closes the connection. Three malformed frames in one connection also
   close it.
-- Every message carries `"protocol":"stc-debug/1"`. Version negotiation is exact and happens on
-  the first request. A first request carrying another version receives `STC-E-DEBUG-002` with
-  `detail.supported = ["stc-debug/1"]`; the connection may retry once with a supported version.
-  There is no unauthenticated banner, hello, or capability probe.
+- The supported versions are `stc-debug/1` (baseline) and `stc-debug/1.1` (the additive revision
+  defined in §13.4). Every message carries a `protocol` field; every response and event carries
+  the version negotiated for the connection. Negotiation is exact and happens on the first
+  request: a first request carrying either version selects it for the whole connection, and a
+  first request carrying any other version receives `STC-E-DEBUG-002` with
+  `detail.supported = ["stc-debug/1","stc-debug/1.1"]`; the connection may retry once with a
+  supported version. After negotiation, a message carrying a different version is
+  `STC-E-DEBUG-002` and closes the connection as a protocol error. There is no unauthenticated
+  banner, hello, or capability probe.
 - Message shapes (wire keys are snake_case; `stc.toml` remains kebab-case):
 
   ```json
@@ -378,6 +396,9 @@ only after the host reports it, or polls for it within the connect deadline.
   {"kind":"event","protocol":"stc-debug/1","session":"<id>","seq":7,"event":"stopped","data":{},"warnings":[]}
   ```
 
+- The message shapes are identical for `stc-debug/1.1`; only the `protocol` value, the
+  additional `frame.locals` operation, and the stopped `var.write` result variant (§13.4) differ.
+  A 1.1 session uses the same framing, ids, events, scopes, limits, and error object.
 - `id` is a client-assigned integer in `[1, 2^53-1]`, strictly increasing on one connection; the
   response echoes it. At most one request is outstanding per connection. The server processes
   requests in order and may interleave events. A duplicated, decreasing, or out-of-range `id` is
@@ -403,7 +424,7 @@ authorization. Authentication precedes every operation, including `session.start
   `detail.reason:"auth-refused"`. Failures are rate-limited before the constant-time comparison.
 - `session.start` requests scopes from this closed set:
   - `observe`: `var.read`, `watch.*`, `session.status`, `stack.list`, `frame.read`,
-    `manifest.get`.
+    `frame.locals` (1.1), `manifest.get`.
   - `control`: `breakpoint.*`, `exec.*`, `session.stop`.
   - `write`: `var.write`.
   - `force`: `var.force`, `var.release`, `var.release-all`.
@@ -450,7 +471,10 @@ authorization. Authentication precedes every operation, including `session.start
 
 ### 13.4 Operations and result shapes
 
-The operation set is closed for `stc-debug/1`. An unknown operation is `STC-E-DEBUG-003`.
+The baseline operation set is closed for `stc-debug/1`. `stc-debug/1.1` adds exactly the
+`frame.locals` operation and the immediate stopped-write behavior of `var.write`; the baseline
+operations, parameters, `stc-debug/1` result shapes, and limits are otherwise unchanged. An
+unknown operation, or `frame.locals` on a `stc-debug/1` connection, is `STC-E-DEBUG-003`.
 
 | Operation | Scope | Result |
 | --- | --- | --- |
@@ -458,7 +482,7 @@ The operation set is closed for `stc-debug/1`. An unknown operation is `STC-E-DE
 | `session.status` | any | state, session, generation, `build_id`, cycle, stop information, queue/force/breakpoint/watch counts, `pause_remaining_ms` |
 | `session.stop` | any | `ended:true`; the response is sent, then the connection closes |
 | `var.read` | `observe` | typed value plus generation, `build_id`, cycle, `consistent`, `atomic`, `stopped`, and an optional `view` (§15.5) |
-| `var.write` | `write` | `status:"queued"`, `queue_id` |
+| `var.write` | `write` | `status:"queued"`, `queue_id`; on a stopped `stc-debug/1.1` session `status:"applied"`, generation, `build_id`, cycle (no `queue_id`) |
 | `var.force` | `force` | `status:"queued"`, `queue_id` |
 | `var.release` | `force` | `released:true`, `effective:"next-boundary"` |
 | `var.release-all` | `force` | `released:<count>` |
@@ -473,6 +497,7 @@ The operation set is closed for `stc-debug/1`. An unknown operation is `STC-E-DE
 | `exec.pause` | `control` | `status:"pause-requested"` or `"stopped"` |
 | `stack.list` | `observe` | `frames:[...]`, `truncated` |
 | `frame.read` | `observe` | typed local/parameter value or availability reason, plus an optional `view` (§15.5) |
+| `frame.locals` | `observe` | `locals:[{name,type,live,available}]`, `truncated`; `stc-debug/1.1` only |
 | `manifest.get` | `observe` | `format`, `digest`, and JSON data or base64 binary data |
 
 Request parameters:
@@ -482,6 +507,14 @@ Request parameters:
 - Target objects (§15.1): `{"kind":"got_id","got_id":"0x..."}`,
   `{"kind":"path","key":"MAIN.COUNTER"}`, `{"kind":"local","frame":0,"name":"x"}`. A `local`
   target is valid only for `frame.read` and requires the current `stop_id`.
+- `frame.locals` (`stc-debug/1.1` only): `{"stop_id":4,"frame":0}`. `stop_id` must be the current
+  stop and `frame` is the zero-based index reported by `stack.list`. The result is
+  `{"locals":[{"name":"COUNTER","type":"DINT","live":true,"available":true}],"truncated":false}`,
+  sorted by normalized name and capped by §13.5. It reports names, canonical type keys, and the
+  captured live/available state only; values remain `frame.read` requests, and no value or address
+  is returned. A `stc-debug/1` connection receives the ordinary unknown-operation
+  `STC-E-DEBUG-003`. An unknown or stale `stop_id`, or a frame outside the current snapshot, is
+  `STC-E-DEBUG-008`; unavailable frame metadata or an optimized-out frame is `STC-E-DEBUG-017`.
 - `var.read`:
   `{"target":<target>,"expected_generation":3,"expected_build_id":"0x...","range":{"start":0,"count":16}}`.
   `expected_*` are optional; when supplied they must match (`STC-E-DEBUG-010` otherwise).
@@ -491,6 +524,16 @@ Request parameters:
 - `var.write`/`var.force`:
   `{"target":<target>,"value":<typed value>,"expected_generation":3,"expected_build_id":"0x...","expected_type":"DINT","expected_layout":"0x..."}`.
   Expected fields are optional and checked before enqueue and again at application.
+- `var.write` (`stc-debug/1.1`): while the target is stopped, a one-shot write is applied to root
+  storage on the parked cycle thread before the response, which reports `status:"applied"` with
+  the stop's generation, `build_id`, and cycle and no `queue_id`. No `queue-result` event follows
+  and the write never enters the queue. A read in the same stop returns the new value, and a step
+  within the stop observes it. Validation failures are reported synchronously with the ordinary
+  §18.1 codes and change no storage. While the target runs, and on every `stc-debug/1` connection,
+  the result is `status:"queued"` with a `queue_id` as before. A write that races a resume is
+  decided by the parked cycle: if it pumps the command before observing the resume, the write is
+  applied immediately; if it observes the resume first, the command is queued at the next running
+  boundary. It is never applied twice. Forces are not affected (§15.4).
 - `watch.add`: `{"targets":[<target>...],"interval_ms":100}`; the interval is clamped to the
   server minimum and maximum and returned.
 - `breakpoint.set`: `{"target":{"kind":"source","file":"src/main.st","line":12,"column":5}}` or
@@ -521,7 +564,9 @@ Request parameters:
 valid checkpoint table and frame information are available; the two maxima repeat the §13.5
 limits. A release or hook-free artifact reports `hooks:false`, `checkpoints:false`, and
 `stepping:false` (and `debug_info:"none"` for a stripped release) with `STC-W-DEBUG-004`. No other
-capability key is valid in `stc-debug/1`.
+capability key is valid in `stc-debug/1`. `stc-debug/1.1` adds no capability key: the same
+object is the complete 1.1 set, and the client discovers `frame.locals` support by negotiating the
+version.
 
 Events:
 
@@ -543,7 +588,7 @@ belong to that stop snapshot; a stale `stop_id` is rejected. A `queue-result` wi
 | --- | --- | --- |
 | Connect and first-request deadline | 5 s | Close; audited |
 | Request processing deadline | 5 s | `STC-E-DEBUG-013` |
-| Stop/idle session bound | `[debug].session-timeout`, default 5 min | `STC-E-DEBUG-018`, session ends |
+| Stop/idle session bound | `[debug].session-timeout`, disabled by default | When configured and exceeded: `STC-E-DEBUG-018`, session ends |
 | Request frame | 1 MiB | `STC-E-DEBUG-004`, close |
 | Response or event frame | 4 MiB | `STC-E-DEBUG-011` |
 | Request rate | 100/s, burst 200, per session | `STC-E-DEBUG-012` |
@@ -555,13 +600,19 @@ belong to that stop snapshot; a stale `stop_id` is rejected. A `queue-result` wi
 | Queued writes and forces | 1024 entries or 1 MiB | `STC-E-DEBUG-011` |
 | Aggregate leaves per read | 1024 | `STC-E-DEBUG-011` |
 | Stack frames per stop | 1024 | `truncated:true` |
+| Locals per `frame.locals` result | 1024 | `truncated:true` |
 | Checkpoint table | 1,000,000 entries or 64 MiB metadata | `STC-E-DEBUG-016` |
 
-- A request timeout aborts only the request; the connection and session remain usable. Writes
-  and forces are idempotent by `queue_id`: the client may retry the same semantic request and
-  must reconcile with `session.status` and `queue-result`. Watch and breakpoint add/remove
-  operations are not silently replayed; a retry first reconciles with `watch.list` or
-  `breakpoint.list`.
+- A request timeout aborts only the request; the connection and session remain usable. Queued
+  writes and forces are idempotent by `queue_id`: the client may retry the same semantic request
+  and must reconcile with `session.status` and `queue-result`. A stopped write applied immediately
+  on a `stc-debug/1.1` session has no `queue_id` and no `queue-result`; a timeout leaves it
+  either applied or not applied, and the client reconciles by re-reading the target. Watch and
+  breakpoint add/remove operations are not silently replayed; a retry first reconciles with
+  `watch.list` or `breakpoint.list`.
+- The 1024-entry/1 MiB queued-write/force limit applies to queue entries. A stopped write applied
+  immediately on a `stc-debug/1.1` session never enters the queue and does not consume queue
+  capacity; the other request and response limits are unchanged.
 - The stop bound is continuous from the moment the cycle thread parks. The client cannot extend
   it except by resuming and stopping again; `session.status` does not reset it.
 - Limits are per host, not per connection; a second connection cannot create a second session.
@@ -614,7 +665,9 @@ While stopped:
 - the I/O backend is not called for output publication, and input latching is suspended;
 - normal task execution, state saves, and online activation are suspended;
 - typed reads copy root storage and may return `consistent:true, atomic:true` for one root;
-- queued writes and forces are accepted but not applied.
+- queued writes and forces are accepted but not applied;
+- on a `stc-debug/1.1` session, a one-shot `var.write` is applied to root storage on the parked
+  cycle thread before its response, so reads and stepping in the same stop observe it (§15.3).
 
 The stop is visible to the runtime as a host service call that does not return. The service
 thread remains responsive; the loader/prepare thread may prepare a candidate but cannot activate
@@ -622,9 +675,9 @@ it without ending the session (§14.5).
 
 ### 14.3 Pause bound and watchdog interaction
 
-The documented pause bound is `[debug].session-timeout`, default `5m`, configurable per launch by
-`--session-timeout`. The bound covers the continuous time the cycle is stopped, from the parking
-checkpoint to the resume. When it expires:
+The optional pause bound is `[debug].session-timeout`, disabled by default and configurable per
+launch by `--session-timeout` (zero disables). The bound, when set, covers the continuous time the
+cycle is stopped, from the parking checkpoint to the resume. When it expires:
 
 1. the host emits `session-ended` with `reason:"pause-timeout"` and code `STC-E-DEBUG-018`;
 2. all breakpoints, step/pause plans, forces, and queued writes are cleared;
@@ -632,16 +685,17 @@ checkpoint to the resume. When it expires:
 4. the next cycle deadline is computed fresh, with no catch-up and no accumulated missed-cycle
    count.
 
-An idle session with no watches that sends no successful request for the bound is ended with
-`reason:"idle-timeout"`. A delivered watch batch counts as activity, so a watch-only session is
-bounded by connection liveness rather than this timer. `session.status` does not extend either
-bound.
+The same configured bound ends an idle session with no watches that sends no successful request
+for the bound with `reason:"idle-timeout"`. A delivered watch batch counts as activity, so a
+watch-only session is bounded by connection liveness rather than this timer. `session.status` does
+not extend either timer. With no configured bound, neither timer expires; the non-safety notice
+states that a stopped or forced controller may hold outputs indefinitely (D-212).
 
 M6 has no watchdog implementation; it has only a trap code for a watchdog expiry. Phase 6
 implements this stop budget as the host-side pause bound. If a watchdog is added later, its
 deadline is paused or extended while the cycle is parked, never treated as an elapsed cycle, and
-the pause bound above still terminates the session. This is a non-safety behavior: the bound is
-an availability control, not a safety function.
+the configured pause bound above still terminates the session. This is a non-safety behavior: the
+bound is an opt-in availability control, not a safety function.
 
 ### 14.4 Generation, build, and cycle tagging
 
@@ -790,15 +844,37 @@ A write request:
   field that has no persistent root of its own. A field with its own manifest root is an ordinary
   scalar target; a field reached only through a split parent is not writable as a parent value;
 - is limited with the force queue to 1024 entries or 1 MiB; over either limit is
-  `STC-E-DEBUG-011` at enqueue, never backpressure on the cycle thread;
+  `STC-E-DEBUG-011` at enqueue, never backpressure on the cycle thread. A stopped write applied
+  immediately (§15.3, below) does not enter this queue and does not consume a queue entry;
 - must match the target's exact declared type. An actual value type mismatch is
   `STC-E-DEBUG-009`; an expected generation/build/type/layout mismatch is `STC-E-DEBUG-010`.
   Enum membership and subrange bounds are checked from the format-2 metadata, and arrays/strings
   must match their declared count, element type, capacity, and unit range. There is no implicit
   conversion.
 
-A write queued while stopped remains queued until the cycle resumes and reaches the boundary. A
-write to an input is overwritten by the next input latch unless an active force holds it. A write
+The behavior of a write received while stopped depends on the negotiated protocol version.
+
+On a `stc-debug/1.1` session, a one-shot `var.write` received while the cycle is parked is applied
+immediately instead of being queued:
+
+- the parked cycle thread performs the same validation as the queued path, writes root storage,
+  and only then completes the request; the service thread never dereferences root storage;
+- the response is `status:"applied"` with the stop cycle's generation, `build_id`, and cycle, and
+  no `queue_id`; no `queue-result` event is emitted;
+- the write is not stored in the queue, so boundary application cannot apply it a second time;
+- a read in the same stop returns the new value, and a step within the stop observes it in
+  storage;
+- a validation failure, stale target, or failed audit append is reported synchronously with the
+  ordinary §18.1 code; the failed write changes no storage and enters no queue;
+- a write that races a resume is resolved by the park loop: if the parked cycle pumps the command
+  before observing the resume, the write is applied immediately; if it observes the resume first,
+  the command waits and takes the queued path at the next running boundary. Either outcome
+  applies the write at most once.
+
+A `stc-debug/1` write while stopped remains queued until the cycle resumes and reaches the
+boundary. Forces on every protocol version keep boundary semantics (§15.4).
+
+A write to an input is overwritten by the next input latch unless an active force holds it. A write
 to an output is visible in the same cycle's publication. A write to a `RETAIN` root follows the
 normal state-save policy.
 
@@ -905,12 +981,14 @@ At each completed scan boundary the host performs, in order:
 5. publish outputs;
 6. complete the cycle counter and release the boundary.
 
-This is the only place debug writes and forces modify values. The service thread never writes a
-root cell. The cycle thread never waits for a service request; a queue that exceeds its limit is
-rejected at enqueue (`STC-E-DEBUG-011`), not by blocking the cycle. Split-aggregate leaves are
-written only as complete root values; per-field writes resolve to the field's own root where the
-manifest provides one. `OVERLAP` roots are read-only (see §15.5) and are rejected as write or
-force targets with `STC-E-DEBUG-009`.
+This is the only place queued debug writes and forces modify values at a boundary. The one other
+place a debug write modifies storage is a stopped one-shot write applied on the parked cycle
+thread inside service 13 (§15.3); it is never queued, so steps 3 and 4 do not apply it again. The
+service thread never writes a root cell. The cycle thread never waits for a service request; a
+queue that exceeds its limit is rejected at enqueue (`STC-E-DEBUG-011`), not by blocking the
+cycle. Split-aggregate leaves are written only as complete root values; per-field writes resolve
+to the field's own root where the manifest provides one. `OVERLAP` roots are read-only (see
+§15.5) and are rejected as write or force targets with `STC-E-DEBUG-009`.
 
 ### 15.7 Watches
 
@@ -1047,9 +1125,13 @@ void (*debug_check)(uint32_t checkpoint_id, uint32_t span_id);
   validation (`STC-E-MODULE-002`).
 - `entry_flags` bit 4 (debug build form) is set for every debug-form build, including test builds
   and hook-free debug builds; it is clear for release. It does not by itself require host 2.3.
-- Test builds remain hook-free: `required_features` bit 4 clear, `entry_flags` bit 6 clear,
-  `debug.hooks=false`, empty checkpoint array, and required host minor 2.2 (service 12). This
-  keeps the measured test ABI and M6 test modules unchanged.
+- **Ordinary** test builds (`stc test`) remain hook-free: `required_features` bit 4 clear,
+  `entry_flags` bit 6 clear, `debug.hooks=false`, empty checkpoint array, and required host minor
+  2.2 (service 12). This keeps the measured test ABI and M6 test modules unchanged.
+- A per-test debug harness (DAP launch field `test`; §17.7) is the explicit exception: it is
+  compiled with `test_debug=true`, sets both bit 4 and bit 6, emits service 13, and requires host
+  minor 2.3 while still importing the ABI 2.2 test-clock service 12. Its artifact is built in a
+  separate `debug/` subdirectory so the ordinary test artifact is untouched.
 - Release builds: bit 4 clear, bit 6 clear, feature bit 4 clear, no `debug` object, required host
   minor 2.1.
 
@@ -1107,32 +1189,49 @@ snapshot is bound to `stop_id`; continue/step invalidates it.
 - Frames unavailable in the unwind are reported as `optimized_out:true` with
   `STC-W-DEBUG-002`; locals unavailable in a frame are reported per value. `SUPER`/interface
   dispatch reports the dynamic function identity from the manifest.
+- A resolved caller frame reports its own call-site source from the stopped-frame line map. The
+  runtime maps `return_address - 1` (the byte of the call instruction) into the caller's
+  function-relative line ranges. The top frame keeps the checkpoint's source, which continues to
+  identify the executed statement. A caller whose line row is unavailable (no line map, a
+  format-1 sidecar, optimized-out code, or a return address outside every range) reports
+  `source:null`; no location is fabricated. CodeView extraction preserves the backend's
+  statement column; DWARF line dumps carry no column, so it is 0 and clients treat it as
+  unspecified.
 - The stack and register context are captured on the cycle thread at the checkpoint; frame and
   local reads use the snapshot, never a raw stack address exposed to the client.
 
 ### 16.9 Stopped-frame sidecar
 
 A hook-emitting debug build emits `<name>.stc-frames.json` alongside the module, manifest,
-metadata, and debug object. It is format-1 JSON, deterministic, paired by `build_id`, optional at
+metadata, and debug object. It is format-2 JSON, deterministic, paired by `build_id`, optional at
 load, and excluded from build-ID, manifest, descriptor, module, state, metadata-sidecar, and
-host-ABI identity. The front end does not know LLVM's final frame offsets, so the table is
+host-ABI identity. The front end does not know LLVM's final instruction offsets, so the table is
 extracted at build time from the module's emitted DWARF/CodeView (or an equivalent deterministic
 backend-derived source); the runtime never parses DWARF/CodeView. A build whose debug information
 cannot be extracted emits no frame table, and stack/frame reads are then unavailable rather than
 guessed.
 
-Format 1:
+`stc-debug/1.1` adds no field to this sidecar. The `frame.locals` operation reads the same
+captured `StopFrame` snapshot produced from the table and exposes only name, canonical type, and
+captured live/available metadata; it adds no sidecar field, value, or address. The format-2 line
+map is a sidecar change (D-244), independent of the protocol version.
+
+Format 2:
 
 ```json
 {
   "build_id": "0x0123456789abcdef0123456789abcdef",
-  "format": 1,
+  "format": 2,
   "functions": [
     {
       "cfa": "fp+16",
       "frame_size": 48,
       "function": "0x11111111111111111111111111111111",
-      "high_pc": 0,
+      "high_pc": 64,
+      "line_ranges": [
+        {"column": 0, "file": "src/main.st", "line": 12, "offset": 0},
+        {"column": 18, "file": "src/main.st", "line": 14, "offset": 32}
+      ],
       "locals": [
         {
           "live": {"first": 3, "last": 9},
@@ -1153,16 +1252,30 @@ Format 1:
 }
 ```
 
-- `functions` is sorted by manifest function `GotId` bytes; locals are sorted by normalized name.
+- `functions` is sorted by manifest function `GotId` bytes; locals are sorted by normalized name;
+  line ranges are sorted by strictly increasing function-relative `offset`.
   `function` is the manifest function `GotId`, `symbol`/`low_pc`/`high_pc` identify the code
   range, and `frame_size`/`saved_fp`/`return_address`/`cfa` describe the frame layout.
+- `line_ranges` maps a function-relative code offset to the source position in effect from that
+  offset until the next entry, using the backend line table. `file` is a package-relative,
+  forward-slash source path (no absolute, drive-qualified, parent-escaping, empty, or
+  control-character paths); `line` is one-based; `column` is the backend statement column when
+  carried (CodeView) and 0 when it is not (DWARF line dumps). The producer drops rows outside the
+  function code range, rows without a positive line, and rows with an unsafe path, and
+  deduplicates equal offsets deterministically. An empty array means the backend line table was
+  unavailable: the function still participates in caller identity, but its callers report
+  `source:null`.
 - Locals and parameters carry the normalized identifier, canonical type key, size, a simple
   `fp`/`cfa`-relative location, and the live checkpoint/span range. Only simple static locations
   are defined in v1; a value without one is reported unavailable, not reconstructed.
-- The table has at most 1,000,000 locals and is at most 64 MiB; records are validated for
-  identity, ordering, bounds, and location form. A missing or invalid table makes
-  `stack.list`/`frame.read` unavailable with `STC-E-DEBUG-017`; breakpoints and stepping depend
-  on the checkpoint table, not this sidecar.
+- The table has at most 1,000,000 locals, 1,000,000 line mappings, and 64 MiB; records are
+  validated for identity, ordering, bounds, path form, and location form. A missing or invalid
+  table makes `stack.list`/`frame.read` unavailable with `STC-E-DEBUG-017`; breakpoints and
+  stepping depend on the checkpoint table, not this sidecar.
+- A runtime that supports only format 1 rejects a format-2 table and reports stack/frame reads
+  as unavailable with `STC-E-DEBUG-017`; it never reinterprets the line map. A current runtime
+  accepts both formats: a format-1 table keeps caller identity and locals but reports caller
+  `source:null`, preserving the pre-F-11 behavior.
 - Debug builds force frame pointers (`frame-pointer="all"`) and disable tail calls in generated
   code so the saved-frame-pointer chain is reliable; release builds are unchanged.
 - At `debug_check` the cycle thread captures the frame, stack, and instruction pointers, walks
@@ -1171,6 +1284,16 @@ Format 1:
   protocol thread reads only those snapshots. Values or frames the table cannot describe are
   `available:false`/`optimized_out:true` with `STC-W-DEBUG-002`; no raw address is returned to a
   client.
+- The line map comes from the same backend line table as the frame data. CodeView
+  `FunctionLineTable` entries are already function-relative and carry statement columns, so the
+  extractor copies them after path normalization. DWARF is read with
+  `readelf --debug-dump=decodedline --wide`; each decoded address is attributed to the enclosing
+  subprogram's `DW_AT_low_pc`/`DW_AT_high_pc` range and stored as `address - low_pc`. DWARF line
+  dumps carry no column, so extracted DWARF rows use column 0. The runtime resolves a caller by
+  mapping `return_address - 1` — the call instruction, since the return address points just
+  after the call — into the caller's function-relative line ranges and selecting the last row
+  whose offset is not greater than that offset. Neither tool's output nor any host path is
+  exposed; only the normalized line map enters the sidecar.
 - The format-1 frame rule covers x86-64 Windows and Linux and AArch64 Linux. On AArch64 the
   service-13 entry point captures `x29` (frame pointer), `sp`, and `x30` (return address) and
   passes them in place of the x86-64 `rbp`/`rsp`/stack return address; the build-time extractor
@@ -1288,16 +1411,37 @@ sections are not inputs to the build ID.
 
 ### 17.7 Test and hook-free builds
 
-Test builds are debug-form builds for the existing test driver:
+Ordinary `stc test` builds are debug-form builds for the existing test driver:
 
 - `entry_flags` bit 4 set, bit 6 clear; `required_features` bit 4 clear;
 - `debug.hooks=false`, empty checkpoint array, `info` may be `dwarf`/`codeview`;
 - required host minor 2.2 because the test ABI uses service 12;
 - no debug server, no checkpoint calls, and no watch/force service enabled by `stc test`.
 
-This preserves M6 test timing and module compatibility. A test build can still be read by a
-debugger that supports typed access, but it cannot stop at checkpoints. `stc test` rejects
+This preserves M6 test timing and module compatibility. An ordinary test build can still be read
+by a debugger that supports typed access, but it cannot stop at checkpoints. `stc test` rejects
 `--release`, `--debug-server`, and `--debug-protocol`.
+
+**Per-test debug harness.** A DAP launch with the `test` field selects one discovered test and
+builds it with `test_debug=true` into `<artifact root>/debug/<artifact>` (default
+`target/stc/test/debug/<artifact>`) instead of `target/stc/test/<artifact>`. That harness is a
+normal hook-bearing debug-form module except for its test host:
+
+- `entry_flags` bits 4 and 6 set; `required_features` bit 4 set; `debug.hooks=true` with the
+  checkpoint table and `<artifact>.stc-frames.json`; host minor 2.3; test-clock service 12 is
+  still imported;
+- the test host starts the debug server, then waits for a start-gate file named on the command
+  line before its first cycle. The adapter applies breakpoints and writes the gate on
+  configuration-complete, so a single-cycle test stops before its body;
+- the host services the debug command queue while gated, so breakpoint binding, `manifest.get`,
+  function names, and stopped-frame locals are available when the gate is released;
+- the host still prints the one structured result line and exits. The driver drains and forwards
+  final host output before the session terminates, so the result remains visible in the DAP
+  output stream.
+
+No new debug-protocol operation is added: the gate is a driver/test-host handshake, and the
+adapter uses `breakpoint.set`, `configurationDone` handling, and the existing `stc-debug/1.1`
+stopped-frame surface. A plain `stc test` run never sets `test_debug`, so it stays hook-free.
 
 ## 18. Diagnostics and stable codes
 
@@ -1350,14 +1494,22 @@ debugger that supports typed access, but it cannot stop at checkpoints. `stc tes
   `STC-E-MODULE-002`; a transport failure at launch may additionally use an existing
   `STC-E-IO-*` code. The DEBUG family remains the protocol/session authority.
 - A rejected queued write/force is reported in `queue-result` with the rejection code, not as a
-  response error, because the original request was accepted.
+  response error, because the original request was accepted. A stopped `stc-debug/1.1` write is
+  decided while the request is outstanding, so a rejection or audit failure is a response error
+  with the same `STC-E-DEBUG-*` code and no `queue-result`.
 - The stable diagnostic index and cross-references are in
   [Conformance Profile](../01-Conformance-Profile.md) §10.1.
+- `stc-debug/1.1` adds no diagnostic codes and does not change any v1.0 code meaning. It reuses
+  `STC-E-DEBUG-002` for an unsupported version (with both supported versions in
+  `detail.supported`) and for a later version mismatch, `STC-E-DEBUG-003` for `frame.locals` on a
+  `stc-debug/1` connection or a malformed request, `STC-E-DEBUG-008` for an unknown or stale
+  `stop_id` or frame, and `STC-E-DEBUG-017` for unavailable frame metadata or an optimized-out
+  frame. The v1.0 operation set, endpoint-file contract, and all other codes are unchanged.
 
 ### 18.4 Non-safety statement
 
-The debug service, its pause bound, its authentication, and its audit log are availability and
-operability features, not safety functions. A stopped or forced controller may hold outputs
+The debug service, its optional pause bound, its authentication, and its audit log are
+availability and operability features, not safety functions. A stopped or forced controller may hold outputs
 indefinitely. `stc` can control real machinery, but it is not a safety PLC and is not responsible
 for safety; safety must be provided by a separate safety system and machine design as required by
 law and regulation. Deployments that require fail-safe behavior must implement it independently

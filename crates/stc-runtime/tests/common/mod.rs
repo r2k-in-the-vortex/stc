@@ -233,6 +233,7 @@ pub fn output_with_flags(source: &str, name: &str, flags: BuildFlags) -> Output 
         module: ModuleBuildOptions::default(),
         project: ProjectOptions::default(),
         test_build: flags.test_build,
+        test_debug: false,
         coverage: None,
     };
     stc_codegen::generate(&hir, &options)
@@ -772,12 +773,21 @@ fn frame_sidecar(
             ("type".into(), Json::string(dint.clone())),
         ])
     };
-    let function = |got_id: GotId, symbol: &str, locals: Vec<Json>| {
+    let line = |file: &str, number: u32, column: u32| {
+        Json::object([
+            ("column".into(), Json::Number(i128::from(column))),
+            ("file".into(), Json::string(file)),
+            ("line".into(), Json::Number(i128::from(number))),
+            ("offset".into(), Json::Number(0)),
+        ])
+    };
+    let function = |got_id: GotId, symbol: &str, locals: Vec<Json>, lines: Vec<Json>| {
         Json::object([
             ("cfa".into(), Json::string("fp+16")),
             ("frame_size".into(), Json::Number(64)),
             ("function".into(), Json::string(got_id.to_hex())),
             ("high_pc".into(), Json::Number(512)),
+            ("line_ranges".into(), Json::Array(lines)),
             ("locals".into(), Json::Array(locals)),
             ("low_pc".into(), Json::Number(0)),
             ("return_address".into(), Json::Number(-8)),
@@ -798,6 +808,7 @@ fn frame_sidecar(
                     // must report it as unavailable rather than guessing.
                     local("C", 12, hooks.outer_before.id, hooks.outer_after.id),
                 ],
+                vec![line("src/inner.st", 11, 5)],
             ),
         ),
         (
@@ -809,6 +820,7 @@ fn frame_sidecar(
                     local("CA", 4, 1, checkpoint_count),
                     local("CB", 8, 1, checkpoint_count),
                 ],
+                vec![line("src/outer.st", 21, 5)],
             ),
         ),
     ];
@@ -818,7 +830,7 @@ fn frame_sidecar(
             "build_id".into(),
             Json::string(artifacts.manifest.header.build_id.to_hex()),
         ),
-        ("format".into(), Json::Number(1)),
+        ("format".into(), Json::Number(2)),
         (
             "functions".into(),
             Json::Array(functions.into_iter().map(|(_, value)| value).collect()),

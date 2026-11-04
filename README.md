@@ -30,13 +30,15 @@ bringing automation into their existing build and review workflow.
   background, activate it at a cycle boundary, preserve compatible state, and
   roll back a failed candidate.
 - **Debug like software.** Typed read/write/force/watch, breakpoints,
-  stop-the-world stepping, and call stacks — in VS Code or from the CLI. Debug
-  builds by default; `--release` is stripped and hook-free.
+  stop-the-world stepping, and call stacks with call-site source at any depth —
+  in VS Code or from the CLI. Debug builds by default; `--release` is stripped
+  and hook-free.
 - **Your editor, not a vendor IDE.** A first-class VS Code extension brings
   highlighting, live diagnostics, go-to-definition, references, hover,
-  completion, formatting, tasks, and launch/attach debugging. Online-change
-  controls live in the status bar; the Cargo-style CLI remains for automation
-  and CI.
+  completion, formatting, tasks, launch/attach debugging, and Testing API
+  run/debug for `{stc:test}` suites; online-change controls live in the status
+  bar. The contract is [IDE Integration](specification/Architecture/IDE-Integration.md);
+  the Cargo-style CLI remains for automation and CI.
 - **Proof, not just tests.** Lean 4 machine-checks the core source and emitted-IR
   semantics — determinism, type soundness, trap soundness, memory and GOT
   safety, and no modeled undefined behavior — and proves the exact scalar kernel

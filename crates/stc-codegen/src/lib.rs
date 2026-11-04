@@ -246,6 +246,11 @@ pub struct Options<'a> {
     /// 2.2) and the test-only prelude lowering. Test artifacts are cold,
     /// non-deployable, and never part of `[build].emit`.
     pub test_build: bool,
+    /// Whether this test build is a debug harness: keeps checkpoint hooks and
+    /// the debug service (host ABI 2.3) in addition to the test-clock service.
+    /// It has no effect outside a debug form test build; ordinary `stc test`
+    /// artifacts stay hook-free.
+    pub test_debug: bool,
     /// Test-build statement coverage. `None` disables instrumentation and
     /// leaves the emitted module byte-identical to a coverage-free build.
     /// Coverage is an internal error outside a test build (§6.1).
@@ -461,7 +466,8 @@ pub fn generate(hir: &HirCrate, options: &Options<'_>) -> Result<Output, Vec<Cod
     module_options.allow_untracked_removal = options.module.allow_untracked_removal;
     module_options.renames = options.module.renames.clone();
     module_options.test_build = options.test_build;
-    module_options.debug_hooks = options.debug && !options.release && !options.test_build;
+    module_options.debug_hooks =
+        options.debug && !options.release && (!options.test_build || options.test_debug);
     let got = module::project(hir, options.sources, &module_options).map_err(project_errors)?;
     unit::generate(hir, options, &target, got, &module_options, options.sources)
 }

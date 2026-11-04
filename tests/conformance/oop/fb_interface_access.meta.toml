@@ -1,0 +1,3 @@
+profile = "stc-2013-oop-utf8-v1"
+kind = "compile-pass"
+rules = ["STC-GRAM-004", "STC-GRAM-005"]

@@ -6,6 +6,11 @@
 //! runtime never parses DWARF or CodeView: it reads the build-time extraction
 //! and validates every field before use.
 //!
+//! Format 2 adds the per-function `line_ranges` call-site map. Format 1 tables
+//! are still accepted for compatibility; they carry frame identity and locals
+//! but no caller call-site source, so caller frames report `source: null`
+//! exactly as before.
+//!
 //! A missing, unreadable, or malformed table never fails module loading. The
 //! table is optional and its absence only disables `stack.list` and
 //! `frame.read` with `STC-E-DEBUG-017`.
@@ -18,6 +23,9 @@ use stc_got::{GotId, Json, Target, json};
 
 /// Maximum number of typed locals across one frame table.
 pub(crate) const MAX_LOCALS: usize = 1_000_000;
+
+/// Maximum number of call-site line mappings across one frame table.
+pub(crate) const MAX_LINE_RANGES: usize = 1_000_000;
 
 /// Maximum serialized stopped-frame table size.
 pub(crate) const MAX_TABLE_BYTES: u64 = 64 * 1024 * 1024;
@@ -41,7 +49,7 @@ const MAX_TYPE_LEN: usize = 4096;
 const MAX_FILE_LEN: usize = 1024;
 
 const TABLE_KEYS: [&str; 5] = ["build_id", "format", "functions", "pointer_width", "target"];
-const FUNCTION_KEYS: [&str; 9] = [
+const FUNCTION_KEYS_V1: [&str; 9] = [
     "cfa",
     "frame_size",
     "function",
@@ -52,8 +60,21 @@ const FUNCTION_KEYS: [&str; 9] = [
     "saved_fp",
     "symbol",
 ];
+const FUNCTION_KEYS_V2: [&str; 10] = [
+    "cfa",
+    "frame_size",
+    "function",
+    "high_pc",
+    "line_ranges",
+    "locals",
+    "low_pc",
+    "return_address",
+    "saved_fp",
+    "symbol",
+];
 const LOCAL_KEYS: [&str; 5] = ["live", "location", "name", "size", "type"];
 const LIVE_KEYS: [&str; 2] = ["first", "last"];
+const LINE_KEYS: [&str; 4] = ["column", "file", "line", "offset"];
 
 /// One typed local described by the stopped-frame table.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +105,19 @@ impl FrameLocal {
     }
 }
 
+/// One call-site mapping from a function-relative code offset to source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FrameLine {
+    /// Offset from the function entry.
+    pub(crate) offset: u32,
+    /// Normalized, package-relative source path.
+    pub(crate) file: String,
+    /// One-based source line.
+    pub(crate) line: u32,
+    /// One-based source column, or zero when the backend carries no column.
+    pub(crate) column: u32,
+}
+
 /// One function described by the stopped-frame table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FrameFunction {
@@ -95,6 +129,18 @@ pub(crate) struct FrameFunction {
     pub(crate) frame_size: u32,
     /// Typed locals, sorted by normalized name.
     pub(crate) locals: Vec<FrameLocal>,
+    /// Call-site mappings, sorted by strictly increasing offset.
+    pub(crate) lines: Vec<FrameLine>,
+}
+
+impl FrameFunction {
+    /// Returns the source position covering one function-relative offset.
+    #[must_use]
+    pub(crate) fn source_at(&self, offset: usize) -> Option<&FrameLine> {
+        let offset = u32::try_from(offset).ok()?;
+        let index = self.lines.partition_point(|line| line.offset <= offset);
+        self.lines.get(index.checked_sub(1)?)
+    }
 }
 
 /// A validated stopped-frame table.
@@ -151,11 +197,18 @@ pub(crate) fn parse(text: &str, build_id: GotId, target: &Target) -> Result<Fram
         return Err("the stopped-frame table is not a JSON object".into());
     };
     if object.len() != TABLE_KEYS.len() || TABLE_KEYS.iter().any(|key| !object.contains_key(*key)) {
-        return Err("the stopped-frame table does not have the format-1 keys".into());
+        return Err("the stopped-frame table does not have the supported keys".into());
     }
-    if object.get("format").and_then(Json::as_number) != Some(1) {
-        return Err("the stopped-frame table format is not 1".into());
-    }
+    let format = match object.get("format").and_then(Json::as_number) {
+        Some(1) => 1,
+        Some(2) => 2,
+        _ => return Err("the stopped-frame table format is not supported".into()),
+    };
+    let function_keys: &[&str] = if format == 1 {
+        &FUNCTION_KEYS_V1
+    } else {
+        &FUNCTION_KEYS_V2
+    };
     let table_build = object
         .get("build_id")
         .and_then(Json::as_str)
@@ -188,15 +241,18 @@ pub(crate) fn parse(text: &str, build_id: GotId, target: &Target) -> Result<Fram
         functions: BTreeMap::new(),
     };
     let mut locals = 0usize;
+    let mut line_total = 0usize;
     let mut previous: Option<GotId> = None;
     for function in functions {
         let Some(object) = function.as_object() else {
             return Err("a stopped-frame function is not a JSON object".into());
         };
-        if object.len() != FUNCTION_KEYS.len()
-            || FUNCTION_KEYS.iter().any(|key| !object.contains_key(*key))
+        if object.len() != function_keys.len()
+            || function_keys.iter().any(|key| !object.contains_key(*key))
         {
-            return Err("a stopped-frame function does not have the format-1 keys".into());
+            return Err(format!(
+                "a stopped-frame function does not have the format-{format} keys"
+            ));
         }
         let identity = object
             .get("function")
@@ -331,6 +387,73 @@ pub(crate) fn parse(text: &str, build_id: GotId, target: &Target) -> Result<Fram
                 live_last: last,
             });
         }
+        let mut function_lines = Vec::new();
+        if format == 2 {
+            let Some(entries) = object.get("line_ranges").and_then(Json::as_array) else {
+                return Err("a stopped-frame function line_ranges field is not an array".into());
+            };
+            line_total = line_total
+                .checked_add(entries.len())
+                .filter(|total| *total <= MAX_LINE_RANGES)
+                .ok_or_else(|| {
+                    format!("the stopped-frame table exceeds the {MAX_LINE_RANGES}-line limit")
+                })?;
+            let mut previous_offset: Option<u32> = None;
+            for entry in entries {
+                let Some(entry) = entry.as_object() else {
+                    return Err("a stopped-frame line range is not a JSON object".into());
+                };
+                if entry.len() != LINE_KEYS.len()
+                    || LINE_KEYS.iter().any(|key| !entry.contains_key(*key))
+                {
+                    return Err(format!(
+                        "a stopped-frame line range does not have the format-{format} keys"
+                    ));
+                }
+                let offset = entry
+                    .get("offset")
+                    .and_then(Json::as_number)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|offset| *offset < code_size);
+                let Some(offset) = offset else {
+                    return Err("a stopped-frame line range offset is invalid".into());
+                };
+                if previous_offset.is_some_and(|previous| previous >= offset) {
+                    return Err("stopped-frame line ranges are not sorted and unique".into());
+                }
+                previous_offset = Some(offset);
+                let file = entry
+                    .get("file")
+                    .and_then(Json::as_str)
+                    .filter(|file| valid_source_file(file));
+                let Some(file) = file else {
+                    return Err(
+                        "a stopped-frame line range file is not a relative source path".into(),
+                    );
+                };
+                let line = entry
+                    .get("line")
+                    .and_then(Json::as_number)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|line| *line >= 1);
+                let Some(line) = line else {
+                    return Err("a stopped-frame line range line is invalid".into());
+                };
+                let column = entry
+                    .get("column")
+                    .and_then(Json::as_number)
+                    .and_then(|value| u32::try_from(value).ok());
+                let Some(column) = column else {
+                    return Err("a stopped-frame line range column is invalid".into());
+                };
+                function_lines.push(FrameLine {
+                    offset,
+                    file: file.to_owned(),
+                    line,
+                    column,
+                });
+            }
+        }
         if table
             .functions
             .insert(
@@ -340,6 +463,7 @@ pub(crate) fn parse(text: &str, build_id: GotId, target: &Target) -> Result<Fram
                     code_size,
                     frame_size,
                     locals: function_locals,
+                    lines: function_lines,
                 },
             )
             .is_some()
@@ -431,17 +555,21 @@ mod tests {
         GotId::parse(BUILD).expect("build id")
     }
 
-    fn table(locals: &str) -> String {
+    fn table_with(format: u8, locals: &str, lines: Option<&str>) -> String {
+        let line_field = lines.map_or_else(String::new, |lines| {
+            format!("\"line_ranges\": [{lines}],\n")
+        });
         format!(
             r#"{{
                 "build_id": "{BUILD}",
-                "format": 1,
+                "format": {format},
                 "functions": [
                     {{
                         "cfa": "fp+16",
                         "frame_size": 72,
                         "function": "{FUNCTION}",
                         "high_pc": 127,
+                        {line_field}
                         "locals": [{locals}],
                         "low_pc": 0,
                         "return_address": -8,
@@ -455,10 +583,22 @@ mod tests {
         )
     }
 
+    fn table(locals: &str) -> String {
+        table_with(1, locals, None)
+    }
+
+    fn table_v2(locals: &str, lines: &str) -> String {
+        table_with(2, locals, Some(lines))
+    }
+
     fn local(name: &str, location: &str) -> String {
         format!(
             r#"{{"live": {{"first": 1, "last": 2}}, "location": "{location}", "name": "{name}", "size": 4, "type": "DINT"}}"#
         )
+    }
+
+    fn line(offset: u32, file: &str, number: u32, column: u32) -> String {
+        format!(r#"{{"column": {column}, "file": "{file}", "line": {number}, "offset": {offset}}}"#)
     }
 
     #[test]
@@ -472,6 +612,65 @@ mod tests {
         assert_eq!(function.locals[0].name, "A");
         assert_eq!(function.locals[1].offset, 8);
         assert_eq!(function.locals[1].live_last, 2);
+        assert!(function.lines.is_empty(), "format 1 carries no line map");
+        assert!(function.source_at(0).is_none());
+    }
+
+    #[test]
+    fn parses_format_2_line_ranges() {
+        let text = table_v2(
+            &local("A", "fp-4"),
+            &format!(
+                "{},{}",
+                line(0, "src/main.st", 39, 3),
+                line(18, "src/main.st", 40, 0)
+            ),
+        );
+        let parsed = parse(&text, build(), &target()).expect("valid format 2 table");
+        let function = &parsed.functions[&GotId::parse(FUNCTION).unwrap()];
+        assert_eq!(function.lines.len(), 2);
+        assert_eq!(function.lines[1].offset, 18);
+        assert_eq!(function.lines[1].file, "src/main.st");
+        assert_eq!(function.lines[1].line, 40);
+        assert_eq!(function.source_at(0).map(|line| line.line), Some(39));
+        assert_eq!(function.source_at(17).map(|line| line.line), Some(39));
+        assert_eq!(function.source_at(18).map(|line| line.line), Some(40));
+        assert_eq!(function.source_at(126).map(|line| line.line), Some(40));
+    }
+
+    #[test]
+    fn rejects_invalid_line_ranges() {
+        let base = local("A", "fp-4");
+        let unsorted = format!(
+            "{},{}",
+            line(18, "src/main.st", 40, 0),
+            line(0, "src/main.st", 39, 3)
+        );
+        assert!(parse(&table_v2(&base, &unsorted), build(), &target()).is_err());
+        let duplicate = format!(
+            "{},{}",
+            line(0, "src/main.st", 39, 3),
+            line(0, "src/main.st", 40, 0)
+        );
+        assert!(parse(&table_v2(&base, &duplicate), build(), &target()).is_err());
+        let outside = line(127, "src/main.st", 39, 3);
+        assert!(parse(&table_v2(&base, &outside), build(), &target()).is_err());
+        let absolute = line(0, "C:/src/main.st", 39, 3);
+        assert!(parse(&table_v2(&base, &absolute), build(), &target()).is_err());
+        let escaping = line(0, "../src/main.st", 39, 3);
+        assert!(parse(&table_v2(&base, &escaping), build(), &target()).is_err());
+        let no_line = line(0, "src/main.st", 0, 3);
+        assert!(parse(&table_v2(&base, &no_line), build(), &target()).is_err());
+        let extra = r#"{"column": 0, "extra": 1, "file": "src/main.st", "line": 39, "offset": 0}"#;
+        assert!(parse(&table_v2(&base, extra), build(), &target()).is_err());
+    }
+
+    #[test]
+    fn format_2_requires_line_ranges_and_only_formats_1_and_2_are_accepted() {
+        let without_lines = table_with(2, "", None);
+        assert!(parse(&without_lines, build(), &target()).is_err());
+        let unknown = table_with(3, "", None);
+        assert!(parse(&unknown, build(), &target()).is_err());
     }
 
     #[test]

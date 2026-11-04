@@ -118,7 +118,58 @@ evidence, and the release PR's CI run is the final gate for the version commit.
       (D-199).
 - [x] No installers, registry, hardware I/O, or remote deployment in v1.
 
-## 7. Sign-off
+## 7. VS Code extension (WL-1.1, v2.0.0)
+
+This section is the release gate for the local editor integration. It is not part of the `1.0.0`
+sign-off above; record evidence here for the v2.0.0 release.
+
+| # | Item | Command / evidence | Result |
+| --- | --- | --- | --- |
+| 1 | Extension toolchain | `cd editors/vscode && npm ci && npm run typecheck && npm test` | `[ ]` |
+| 2 | VSIX artifact | `npm run package` produces `stc-vscode-<version>.vsix`; CI uploads it and the release attaches it | `[ ]` |
+| 3 | VSIX contents | `samples/**`, `src/**`, `test/**`, TypeScript config, and build scripts are absent; grammar, language configuration, bundled extension, both theme files under `themes/`, and README are present | `[ ]` |
+| 4 | Compiler discovery | Install the VSIX against a packaged `stc`; confirm `stc.path` and `PATH` both work and a missing compiler is reported without a modal error | `[ ]` |
+| 5 | Headless smoke | `@vscode/test-electron` installs the VSIX on the sample workspace, activates the extension, and exercises highlighting, diagnostics, definition, completion, formatting, a task, and a launch debug session; CI run ID and result recorded | `[ ]` |
+| 6 | Manual in-editor pass (Windows) | Install the VSIX, open `editors/vscode/samples/workspace`, and run the checks below | `[ ]` |
+| 7 | Manual in-editor pass (Linux) | The same pass on at least one supported Linux host | `[ ]` |
+| 8 | Online-change automated smoke | The same headless smoke starts the extension-owned watch, reports the generation/build, attaches, saves a layout-preserving literal edit, observes the swap-caused session end and the higher generation/different build, and stops; local pass 2026-10-31 (generation 1 → 2, session ended on swap, clean user stop, 13.5 s total). The CI `extension-smoke` job is the Linux record | `[x]` local 2026-10-31 |
+
+Manual in-editor checks for items 6 and 7:
+
+- [ ] Syntax highlighting, comment toggling, and bracket behavior on `src/main.st`.
+- [ ] **Developer: Inspect Editor Tokens and Scopes** matrix on the sample and grammar fixtures
+      (declaration, type, variable/parameter/member, keyword, comment, string, number, pragma,
+      direct variable, language constant, built-in) in **Dark Modern**, **Light Modern**,
+      `stc Dark`, and `stc Light`, with One Dark as an optional spot-check. Each acceptance
+      category is distinct in the shipped themes, and every role meets the 4.5:1 contrast target.
+- [ ] The Problems panel shows no diagnostics for the clean sample; introducing a syntax error
+      produces compiler diagnostics and fixing it clears them.
+- [ ] Document symbols, go-to-definition from `AddStep` to the function, references across
+      `tests/smoke.st`, hover, completion, and format document work.
+- [ ] `stc: check`, `stc: build`, `stc: test`, and `stc: fmt` tasks run with the `$stc` matcher;
+      `stc: test` reports both smoke tests as passing.
+- [ ] **stc: Launch sample** stops at line 39 (`sum := AddStep(sum);`); Globals shows
+      `INCREMENT = 1`; continuing stops at line 19 with local `INCREMENTED = 0`; stepping over
+      line 19 leaves `INCREMENTED = 1`; disconnect ends the session and the launch-owned host.
+- [ ] `stc run --debug-server --debug-endpoint target/stc/debug/debug.endpoint.json` plus
+      **stc: Attach sample** stops at the breakpoint and leaves the host running after disconnect.
+- [ ] The non-safety notice appears in the debug console, and `setVariable` is refused unless
+      `allowWrite` and `[debug].allow-write` are enabled.
+- [ ] **stc: Start Online Change** on the sample shows `starting`, then the initial generation and
+      build in the status bar; **stc: Show Online Change Status** opens the **stc Online Change**
+      channel. **stc: Attach Debugger to Online Change** attaches with read-only scopes; saving
+      line 43 `cycles := cycles + 1;` as `cycles := cycles + 2;` swaps to a higher generation and
+      different build, ends the session with `STC-E-DEBUG-019` in the Debug Console, and shows one
+      notification with **Attach Debugger**. **stc: Stop Online Change** returns the status to idle
+      and leaves no `stc` or `sample` process.
+- [ ] The online-change channel, notifications, and VS Code logs contain no control nonce, control
+      endpoint, runtime debug token, or debug endpoint/audit path; the per-session endpoint file is
+      user-only under extension storage.
+- [ ] The documentation set (`IDE-Integration.md` including §4.7, `Debug-and-Monitoring.md`
+      §13–§18, CLI §1, README, USER-GUIDE, KNOWN-LIMITATIONS, extension README) matches the
+      observed behavior.
+
+## 8. Sign-off
 
 | Role | Name | Date | Signature / result |
 | --- | --- | --- | --- |

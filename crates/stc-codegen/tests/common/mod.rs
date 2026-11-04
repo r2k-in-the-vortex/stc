@@ -69,6 +69,7 @@ pub fn options<'a>(
         module: stc_codegen::ModuleBuildOptions::default(),
         project: stc_codegen::ProjectOptions::default(),
         test_build: false,
+        test_debug: false,
         coverage: None,
     }
 }
@@ -163,6 +164,7 @@ pub fn test_build_options<'a>(
         module: stc_codegen::ModuleBuildOptions::default(),
         project: stc_codegen::ProjectOptions::default(),
         test_build: true,
+        test_debug: false,
         coverage: coverage.map(|files| stc_codegen::CoverageOptions {
             files: files.iter().copied().collect(),
         }),
