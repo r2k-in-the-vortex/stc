@@ -323,9 +323,11 @@ reported in the **stc** output channel; the language server is not started until
 Open a folder containing `stc.toml`. The extension starts one language server per project and
 watches `**/*.st` and `**/stc.toml`. No configuration is required beyond the compiler path.
 
-An invalid `stc.toml` fails language-server initialization: VS Code retries the server a few
-times before stopping, and the project error appears in the **stc Language Server** output
-channel. Fix the manifest and reload the window. A project without tests must currently omit
+An invalid `stc.toml` fails language-server initialization. The extension does not retry a
+deterministic project-load error: the `STC-E-PROJECT-*` detail appears in the **stc Language
+Server** output channel and in one error notification with **Open Output** and **Retry**. Fix the
+manifest and choose **Retry** (a window reload also works). Unexpected server crashes still restart
+automatically up to four times in three minutes. A project without tests must currently omit
 `[test]`; a declared source glob that matches no files is `STC-E-PROJECT-004`.
 
 ### 8.2 Tasks and diagnostics
@@ -612,7 +614,7 @@ without `--rt` the run loop and the generated artifacts are unchanged.
 | `STC-E-DEBUG-017` stack/frame unavailable | The stopped-frame sidecar is missing or unusable (`llvm-readobj`/`readelf` at build time); typed monitoring still works |
 | `STC-E-PROJECT-010` debug/release mixed | Use distinct out-dirs for the two forms; one explicit out-dir cannot hold both |
 | `STC-E-PROJECT-004` “source glob matched no files” | Add a matching source file, or omit the source set (for example `[test]` in a project without tests). This error also prevents the language server from starting |
-| `stc lsp` restarts repeatedly or “Server initialization failed” | The project manifest cannot load; fix the `STC-E-PROJECT-*` error shown in the **stc Language Server** output channel, then reload the window |
+| “The language server could not start” or an `STC-E-PROJECT-*` error | The project manifest cannot load; the extension does not restart a deterministic configuration error. Fix the `STC-E-PROJECT-*` error shown in the notification or the **stc Language Server** output channel, then choose **Retry** (or reload the window) |
 | Version or build-ID mismatch after upgrading | Pre-RC artifacts are not compatible; cold-download or rebuild both sides |
 
 For every diagnostic, `--message-format json` gives a stable object with code,

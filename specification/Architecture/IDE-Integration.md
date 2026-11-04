@@ -64,6 +64,16 @@ Out of scope for v2.0.0:
   `--manifest-path` first, then the initialize `rootUri`, then `workspaceFolders`, then the process
   working directory. A missing manifest fails `initialize` with a readable internal error rather
   than starting without a project.
+- Initialization is all-or-nothing. An invalid or unloadable manifest fails `initialize` and the
+  extension classifies the failure as a deterministic configuration error: it does not auto-restart
+  that client, writes the `STC-E-PROJECT-*` detail to the **stc Language Server** channel, and
+  shows one error notification with **Open Output** and **Retry**. **Retry** recreates only that
+  project's client, so fixing `stc.toml` recovers the session without a window reload. A connection
+  that closes for any other reason is treated as a crash and restarted up to four times within
+  three minutes, after which the client stops and reports the crash; this crash policy is separate
+  from the configuration-error policy. A `stc.path` change or a window reload starts fresh clients.
+  Degraded initialization that publishes manifest diagnostics and recovers automatically is not
+  implemented.
 - The language client watches `**/*.st` and `**/stc.toml`; a watched change reloads the project
   graph and reanalyzes. `stc.path` changes restart the clients.
 - `stc dap` receives no project argument from the extension. It starts in the workspace folder and
@@ -470,8 +480,7 @@ the gutter/code lens open the declaration. Discovery refreshes on `**/*.st` and 
 create/change/delete with a 500 ms debounce, on workspace-folder changes, on `stc.path` changes,
 through the Test Explorer refresh button, and through the `stc.refreshTests` command. A failed
 listing logs its diagnostics to the `stc` output channel and keeps the previous successful list;
-a missing `stc` executable is logged and no items are created. F-22 covers richer discovery error
-surfacing.
+a missing `stc` executable is logged and no items are created.
 
 **Run profile.** The default Run profile expands a file-level selection to its children and honors
 `exclude`; with no `include`, it selects every discovered test. Selected tests are grouped per
