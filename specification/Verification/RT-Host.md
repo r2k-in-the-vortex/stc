@@ -4,7 +4,7 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-30  
 Status: Informational and host-specific. Not a hard real-time guarantee, not a safety function,
 and not a CI gate.  
-Parent: [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) §4 (WL-4)  
+Origin: v2.0.0 target WL-4, released 2026-11-04 ([RELEASE-NOTES.md](../../RELEASE-NOTES.md))  
 Evidence: [RT-Run-Manifest.md](RT-Run-Manifest.md)  
 Runbook: [RT-Runbook.md](RT-Runbook.md)
 
@@ -424,7 +424,7 @@ the procedure for other hosts, is [RT-Runbook.md](RT-Runbook.md).
 
 - [RT-Runbook.md](RT-Runbook.md) — the portable runbook, reference-host baseline, and other-host
   procedure.
-- [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) — the v2.0.0 target set and the WL-4 completion status.
+- [RELEASE-NOTES.md](../../RELEASE-NOTES.md) — the delivered v2.0.0 target set and release status.
 - [RT-Run-Manifest.md](RT-Run-Manifest.md) — per-run tables, host snapshots, raw file SHA256
   values.
 - [Performance.md](Performance.md) — the full performance record, including this section.

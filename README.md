@@ -232,7 +232,7 @@ a safety PLC; see [NON-SAFETY.md](NON-SAFETY.md).
 | [User Guide](USER-GUIDE.md) | [Architecture](specification/Architecture/Architecture.md) |
 | [Conformance Profile](specification/01-Conformance-Profile.md) | [Runtime and Execution](specification/Architecture/Runtime-and-Execution.md) |
 | [Examples](examples/) | [Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md) |
-| [v2.0.0 plan](V2.0.0-PLAN.md) | [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md) |
+| [Future wishlist](FutureWishlist.md) | [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md) |
 | [v2.0.0 release notes](RELEASE-NOTES.md) | [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) |
 | [Known Limitations](KNOWN-LIMITATIONS.md) | [Testing and Verification](specification/Architecture/Testing-and-Verification.md) |
 | [Phase 0 report](specification/Verification/Reports/Phase0-Report.md) · [Phase 2 report](specification/Verification/Reports/Phase2-Report.md) | [Core semantics](specification/Verification/Semantics.md) |
