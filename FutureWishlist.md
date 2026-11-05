@@ -1,10 +1,10 @@
 # Future Wishlist — post-v2.0.0
 
-Status: `stc` 2.0.0 is released (2026-11-04). This file tracks candidate directions for future
-releases. Selected for v3 on 2026-11-04 (not yet locked): WL-1.2, WL-7, WL-14, WL-15, and WL-18
-(F-19). The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, WL-13, WL-16, and WL-17.
-It is deliberately not a roadmap, a commitment, or a release plan. The delivered v2.0.0 scope
-and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
+Status: `stc` 2.0.0 is released (2026-11-04). The v3.0.0 target set is locked in
+[v3.0.0-plan.md](v3.0.0-plan.md): WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18 (F-19).
+The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, and WL-13; they stay here for a
+later release. This file is deliberately not a roadmap, a commitment, or a release plan. The
+delivered v2.0.0 scope and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
 [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
 
 - Date: 2026-10-29; revised 2026-11-04 (v3 planning start)
@@ -16,10 +16,10 @@ and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
 This file records candidate directions for releases after v2.0.0, while they are still ideas.
 It is deliberately not a roadmap, a commitment, or a release plan.
 
-When the v3 target set is selected, it is picked from this list and locked in a dedicated plan
-with scope, non-goals, work breakdown, exit criteria, evidence, risks, and effort. Items that
-are not picked stay here for a later release. Append new entries with the next `WL-` id and
-change an entry's status rather than deleting it.
+The v3.0.0 target set was picked from this list and locked in
+[v3.0.0-plan.md](v3.0.0-plan.md) on 2026-11-04. Items that were not picked stay here for a
+later release. Append new entries with the next `WL-` id and change an entry's status rather
+than deleting it.
 
 ## 2. Ground rules
 
@@ -45,8 +45,8 @@ These apply to every candidate until a future target set is locked.
 
 ## 3. Selection and locking
 
-All entries start as `Candidate`. When the v3 target set is selected, those entries are locked
-in a dedicated plan. The completed v2.0.0 target set and its evidence remain in
+All entries start as `Candidate`. The v3.0.0 target set was locked on 2026-11-04 in
+[v3.0.0-plan.md](v3.0.0-plan.md). The completed v2.0.0 target set and its evidence remain in
 [RELEASE-NOTES.md](RELEASE-NOTES.md) and [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
 
 | Status | Meaning |
@@ -86,25 +86,26 @@ more. They are order-of-magnitude estimates for comparison only.
 ## 4. Summary
 
 The delivered v2.0.0 targets are intentionally absent from this table; their scope and evidence
-are in [RELEASE-NOTES.md](RELEASE-NOTES.md). Entries marked `Selected` are chosen for v3 but are
-not yet locked; the remaining entries are deferred candidates for a later release. Dependencies
-that name WL-1.1, WL-3, WL-4, WL-5.1, or WL-5.2 refer to delivered v2.0.0 components.
+are in [RELEASE-NOTES.md](RELEASE-NOTES.md). Entries marked `Locked` are the v3.0.0 target set
+in [v3.0.0-plan.md](v3.0.0-plan.md); the remaining entries are deferred candidates for a later
+release. Dependencies that name WL-1.1, WL-3, WL-4, WL-5.1, or WL-5.2 refer to delivered v2.0.0
+components.
 
 | ID | Candidate | Area | Tentative size | Key dependency | Status |
 | --- | --- | --- | --- | --- | --- |
-| WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Selected |
+| WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Locked |
+| WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Locked |
+| WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS test-only | Locked |
+| WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Locked |
+| WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Locked |
+| WL-17 | Manifest and task follow-ups from v2.0.0 | Tooling/IDE | S/M | WL-1.1 delivered; manifest/task contracts | Locked |
+| WL-18 | Language-server rename (F-19) | Tooling/IDE | M | WL-1.1 delivered; reference resolution | Locked |
 | WL-6 | Motion controller: coordinated multi-axis interpolated motion | Motion | L/XL | WL-5.2, WL-7, WL-4; robot-sim reuse | Deferred |
-| WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Selected |
 | WL-8 | Tracing UI to watch and graph PLC variables | Tooling/observability | M/L | WL-9 WebUI | Deferred |
 | WL-9 | WebUI for basic runtime control | Tooling/operations | M/L | Runtime control API; network security | Deferred |
 | WL-11 | Modbus TCP client capability; separate from WL-5.1 server | Runtime/IO | M/L | WL-5.1 backend contract | Deferred |
 | WL-12 | Reduce cycle-thread wake-up jitter at sub-millisecond cycle times | Runtime/RT | M/L | WL-5.2 CT-sweep evidence; RT host | Deferred |
 | WL-13 | Lean security verification for the Modbus TCP server boundary | Verification/security | L/XL | WL-3 Lean infrastructure; WL-5.1 server | Deferred |
-| WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS test-only | Selected |
-| WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Selected |
-| WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Deferred |
-| WL-17 | Manifest and task follow-ups from v2.0.0 | Tooling/IDE | S/M | WL-1.1 delivered; manifest/task contracts | Deferred |
-| WL-18 | Language-server rename (F-19) | Tooling/IDE | M | WL-1.1 delivered; reference resolution | Selected |
 
 ## 5. Candidate items
 
@@ -114,9 +115,9 @@ that name WL-1.1, WL-3, WL-4, WL-5.1, or WL-5.2 refer to delivered v2.0.0 compon
 host: connect VS Code to a remote `stc` runtime over the network with authentication, transport
 security, and source mapping. This is a separate task.
 
-**Status.** Selected for v3 (2026-11-04); not yet locked. Previously deferred (2026-10-29).
-The v2.0.0 WL-1.1 follow-up F-21 (always-on runtime and attach-time deployment choice) is
-folded into this item rather than tracked separately.
+**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-10-29). The v2.0.0 WL-1.1
+follow-up F-21 (always-on runtime and attach-time deployment choice) is folded into this item
+rather than tracked separately.
 
 **Why it matters.** The PREEMPT_RT host (WL-4) and deployed controllers are run-only targets, not
 development machines. A developer needs to set breakpoints, step, inspect variables, and read
@@ -279,7 +280,7 @@ integration, the ST API, and cycle/online-change behavior dominate.
 Information) files instead of hand-maintained channel and PDO metadata. This builds on the
 delivered WL-5.2 EtherCAT backend.
 
-**Status.** Selected for v3 (2026-11-04); not yet locked. Previously deferred (2026-10-29).
+**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-10-29).
 
 **Why it matters.** An ESI file describes a slave's vendor/product/revision identity, object
 dictionary, PDO mapping, sync managers, distributed clocks, and mailbox behavior. Practical
@@ -662,10 +663,10 @@ dependency or evidence).
 soft-real-time scheduling facilities on macOS and Windows to improve test and benchmark behavior,
 without adding macOS as a supported production host or claiming hard real-time behavior.
 
-**Selection.** Selected for v3 (2026-11-04); not yet locked. Previously deferred on 2026-11-02,
-beyond v2.0.0. The supported native hosts remain Windows x86-64, Linux x86-64, and Linux
-AArch64; macOS is test-only. This item is inspired by the audio/pro-audio use of thread
-priorities and time-constraint policies on Windows and macOS.
+**Selection.** Locked for v3.0.0 (2026-11-04). Previously deferred on 2026-11-02, beyond
+v2.0.0. The supported native hosts remain Windows x86-64, Linux x86-64, and Linux AArch64;
+macOS is test-only. This item is inspired by the audio/pro-audio use of thread priorities and
+time-constraint policies on Windows and macOS.
 
 **Why it matters.** The current matrix has no macOS coverage, so portability regressions in the
 driver, runtime, or test harness can go unnoticed on a second soft-real-time-capable Unix. Windows
@@ -731,9 +732,9 @@ measurement.
 topic/payload messages to the `stc` process image. The broker is external; this item does not
 implement a broker, an MQTT server, or a cloud connector.
 
-**Selection.** Selected for v3 (2026-11-04); not yet locked. Previously deferred on 2026-11-03,
-beyond v2.0.0. Recorded because the architecture already lists MQTT as a planned backend and
-because it complements the Modbus TCP server and EtherCAT backends.
+**Selection.** Locked for v3.0.0 (2026-11-04). Previously deferred on 2026-11-03, beyond
+v2.0.0. Recorded because the architecture already lists MQTT as a planned backend and because
+it complements the Modbus TCP server and EtherCAT backends.
 
 **Why it matters.** MQTT is the common lightweight publish/subscribe transport for sensors,
 gateways, dashboards, and IT/cloud integration. A client backend lets `stc` consume remote
@@ -790,8 +791,8 @@ configuration, and broker-backed tests.
 before the first cycle (F-9) and report session termination and exit in the Debug Console (F-15).
 Optionally surface the `[debug].session-timeout` budget as well.
 
-**Status.** Deferred to a future version (2026-11-04); recorded from the v2.0.0 WL-1.1
-post-completion follow-ups.
+**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-11-04); recorded from the
+v2.0.0 WL-1.1 post-completion follow-ups.
 
 **Why it matters.** A launch with a breakpoint currently binds after one or two cycles, so the
 first stop can observe cycle-1 or cycle-2 values instead of cycle-0 values; startup logic is
@@ -840,9 +841,9 @@ the Debug Console even though the host exits, so a normal exit and a failed sess
 task provider, and extension: optional project items and empty source sets (F-23) and
 task-argument variable expansion (F-24).
 
-**Status.** Deferred to a future version (2026-11-04); recorded from the v2.0.0 WL-1.1
-post-completion follow-ups. F-19 was split out to WL-18 when it was selected for v3; F-22 was
-fixed after v2.0.0 (`277f752`).
+**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-11-04); recorded from the
+v2.0.0 WL-1.1 post-completion follow-ups. F-19 was split out to WL-18 when it was selected for
+v3; F-22 was fixed after v2.0.0 (`277f752`).
 
 **Why it matters.** Each is a small but visible developer-experience gap:
 
@@ -886,7 +887,7 @@ fixed after v2.0.0 (`277f752`).
 the compiler's reference resolution and rename history, so Rename (F2) works in VS Code instead
 of doing nothing.
 
-**Status.** Selected for v3 (2026-11-04); not yet locked. Split out of WL-17.
+**Status.** Locked for v3.0.0 (2026-11-04). Split out of WL-17.
 
 **Why it matters.** Rename (F2) currently does nothing and prints no message, even though the
 compiler and runtime carry rename history. It is the most visible missing editor action in the
@@ -955,8 +956,8 @@ closed language-server capability set.
 - WL-16 and WL-17 cover the remaining WL-1.1 follow-ups deferred when v2.0.0 shipped: F-9 and
   F-15 in WL-16, F-23 and F-24 in WL-17; F-19 is WL-18, and F-21 is part of WL-1.2. F-22 was
   fixed after v2.0.0.
-- The v3 selected set is WL-1.2, WL-7, WL-14, WL-15, and WL-18 (2026-11-04); it is not yet
-  locked.
+- The v3.0.0 target set is locked: WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18
+  (2026-11-04); see [v3.0.0-plan.md](v3.0.0-plan.md).
 - The remaining items are additive around a stable compiler. None changes the ST language or the
   core compiler architecture unless a selected item explicitly says so.
 
@@ -969,6 +970,8 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-04 | Locked the v3.0.0 target set (WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18) and created [v3.0.0-plan.md](v3.0.0-plan.md) as the working plan. |
+| 2026-11-04 | Selected WL-16 (F-9, F-15) and WL-17 (F-23, F-24) for v3 (not yet locked). |
 | 2026-11-04 | Fixed F-22 (`277f752`): deterministic project-load errors no longer restart the language server and now show the manifest error with Open Output/Retry. Split F-19 out of WL-17 as WL-18 and selected WL-1.2, WL-7, WL-14, WL-15, and WL-18 for v3 (not yet locked); WL-17 now covers F-23 and F-24. |
 | 2026-11-04 | v2.0.0 released. Started v3 planning: retired the delivered v2.0.0 plan, moved its open follow-ups here as WL-16 (F-9, F-15) and WL-17 (F-19, F-22, F-23, F-24), folded F-21 into WL-1.2 and the deferred tuned boot profile into WL-12, and set the compatibility baseline to 2.0.0. |
 | 2026-11-04 | v2.0.0 target set complete. Removed completed targets WL-1.1, WL-2, WL-3, WL-4, WL-5.1, WL-5.2, and WL-10; retained the deferred candidates below. |
