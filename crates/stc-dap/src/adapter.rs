@@ -5,12 +5,15 @@
 //! connected [`DebugClient`] for runtime events between requests. Standard
 //! output carries DAP messages only; diagnostics and tracing go to stderr.
 //!
-//! Launch ordering (WL-1.1 §5.3): the adapter answers `initialize`, sends the
-//! `initialized` event, and buffers `setBreakpoints`/`configurationDone` until
-//! both the launch/attach request and `configurationDone` have arrived. The
-//! host is started only at that point, so every breakpoint the client set is
-//! applied before the adapter reports the session ready. A breakpoint on the
-//! first executable statement is therefore honored at the next checkpoint.
+//! Launch ordering (WL-1.1 §5.3, WL-16): the adapter answers `initialize`,
+//! sends the `initialized` event, and buffers `setBreakpoints`/
+//! `configurationDone` until both the launch/attach request and
+//! `configurationDone` have arrived. The host is started only at that point
+//! and, for a launch-owned host, parks before its first cycle until the
+//! adapter has started the session, fetched the manifest, and applied every
+//! breakpoint. A breakpoint on the first executable statement therefore binds
+//! before cycle 0. An attached host is already running and cannot be gated;
+//! its breakpoints bind at the next checkpoint.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -648,9 +651,25 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 "stc: debug session started with stc-debug/1; this host has no Locals scope",
             );
         }
+        // F-10/F-15: when the opt-in stop/idle bound is enabled, state it at
+        // session start instead of letting the session end silently. An attach
+        // session does not know the running host's bound, so it stays silent.
+        if !attach
+            && let Some(timeout_ns) = configured_session_timeout_ns(&arguments, &self.options)
+            && timeout_ns > 0
+        {
+            self.send_output(
+                "console",
+                &format!(
+                    "stc: the opt-in debug stop/idle bound is {}; when it expires the session ends with STC-E-DEBUG-018 and the cycle resumes",
+                    human_duration(Duration::from_nanos(timeout_ns))
+                ),
+            );
+        }
         self.apply_all_breakpoints();
-        // The per-test harness waits here for the first cycle so a breakpoint
-        // set moments ago cannot lose a single-cycle race.
+        // Every launch-owned host waits here for its first cycle, so a
+        // breakpoint set moments ago cannot lose the cycle-0 race. An attach
+        // session has no host and releases nothing.
         if let Some(session) = self.session.as_mut()
             && let Some(host) = session.host.as_mut()
         {
@@ -1056,14 +1075,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                     .and_then(Json::as_str)
                     .unwrap_or("internal");
                 let code = jget(&data, "code").and_then(Json::as_str);
-                if reason != "client" {
-                    let suffix = code.map_or_else(String::new, |code| format!(" ({code})"));
-                    self.send_output(
-                        "stderr",
-                        &format!("stc: the debug session ended: {reason}{suffix}"),
-                    );
-                }
-                self.end_session(reason);
+                self.end_session_with(reason, code, None);
             }
             _ => {}
         }
@@ -1791,10 +1803,20 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
 
     /// Ends the runtime session and emits `terminated`/`exited`.
     fn end_session(&mut self, reason: &str) {
-        self.end_session_with_exit(reason, None);
+        self.end_session_with(reason, None, None);
     }
 
     fn end_session_with_exit(&mut self, reason: &str, exit_code: Option<i32>) {
+        self.end_session_with(reason, None, exit_code);
+    }
+
+    /// Ends the runtime session, reports why in the Debug Console, and emits
+    /// `exited` (launch-owned hosts only) followed by `terminated`.
+    ///
+    /// A client stop, a host exit, a trap, and a connection loss produce
+    /// distinct summaries. The launch-owned host's real exit code is reported
+    /// whenever it can be obtained; an attached host is left running.
+    fn end_session_with(&mut self, reason: &str, code: Option<&str>, exit_code: Option<i32>) {
         let Some(mut session) = self.session.take() else {
             self.send_terminated();
             return;
@@ -1802,6 +1824,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
         self.stop_id = None;
         self.frames.clear();
         self.variables.clear();
+        let launched = session.host.is_some();
         let _ = session.client.call_messages("session.stop", got_object([]));
         let mut exit_code = exit_code;
         if let Some(mut host) = session.host.take() {
@@ -1811,7 +1834,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 exit_code = wait_exit(host.as_mut(), EXIT_WAIT);
             }
             host.shutdown();
-            if exit_code.is_none() && reason == "target-exited" {
+            if exit_code.is_none() {
                 exit_code = host.try_exit();
             }
             // A test host stops its debug server before printing its result
@@ -1821,9 +1844,8 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 self.send_output(line.category, &line.text);
             }
         }
-        if !matches!(reason, "client" | "disconnect" | "terminate") {
-            self.send_output("stderr", &format!("stc: the debug session ended: {reason}"));
-        }
+        let summary = session_end_summary(reason, code, exit_code, launched);
+        self.send_output("console", &summary);
         self.send_exited(exit_code);
         self.send_terminated();
     }
@@ -2071,6 +2093,117 @@ fn wait_exit(host: &mut dyn SessionHost, timeout: Duration) -> Option<i32> {
     }
 }
 
+/// Renders the one-line Debug Console summary for a session teardown.
+///
+/// The wording distinguishes a client stop, a host exit (with its process exit
+/// code), a trap, a swap or timeout, and a connection loss. `launched` is false
+/// for an attach session, whose host is left running.
+fn session_end_summary(
+    reason: &str,
+    code: Option<&str>,
+    exit_code: Option<i32>,
+    launched: bool,
+) -> String {
+    let detail = match reason {
+        "terminate" | "client" => {
+            if launched {
+                stopped_host_detail("the client stopped the session", exit_code)
+            } else {
+                "the client stopped the session; the attached host was left running".to_owned()
+            }
+        }
+        "disconnect" => {
+            if launched {
+                stopped_host_detail("the client disconnected", exit_code)
+            } else {
+                "the client disconnected; the attached host was left running".to_owned()
+            }
+        }
+        "target-exited" => match exit_code {
+            Some(code) if code == stc_runtime::STC_RUN_TRAP_EXIT_CODE => {
+                format!("the target trapped and exited with code {code}")
+            }
+            Some(code) => format!("the target exited with code {code}"),
+            None => "the target exited".to_owned(),
+        },
+        "shutdown" => match exit_code {
+            Some(code) => format!("the host shut down and exited with code {code}"),
+            None => "the host shut down".to_owned(),
+        },
+        "swap" => "swap".to_owned(),
+        "pause-timeout" | "idle-timeout" => {
+            "the stop/idle session bound expired; the cycle resumed".to_owned()
+        }
+        "protocol-error" => "the debug connection closed after a protocol error".to_owned(),
+        "transport-error" => "the debug connection was lost".to_owned(),
+        "internal" => "the internal debug service failed".to_owned(),
+        "launch-failed" => "the debug session could not start".to_owned(),
+        other => other.to_owned(),
+    };
+    match code.filter(|code| !detail.contains(code)) {
+        Some(code) => format!("stc: the debug session ended: {detail} ({code})"),
+        None => format!("stc: the debug session ended: {detail}"),
+    }
+}
+
+fn stopped_host_detail(prefix: &str, exit_code: Option<i32>) -> String {
+    match exit_code {
+        Some(code) => format!("{prefix}; the host exited with code {code}"),
+        None => format!("{prefix}; the host was stopped"),
+    }
+}
+
+/// Returns the effective launch stop/idle bound in nanoseconds.
+///
+/// The driver passes `[debug].session-timeout` to the host as
+/// `--debug-session-timeout`; a launch configuration's `args` are appended
+/// afterwards and may override it. A missing or unreadable manifest only
+/// suppresses the informational line; the host still enforces its own bound.
+fn configured_session_timeout_ns(arguments: &LaunchArguments, options: &DapOptions) -> Option<u64> {
+    let project = arguments.project_path(options.manifest_path.as_deref());
+    let graph =
+        stc_manifest::load_project_readonly(&project, &stc_manifest::LoadOptions::default())
+            .ok()?;
+    let mut timeout_ns = graph
+        .root_package()
+        .manifest
+        .debug
+        .session_timeout
+        .as_nanos();
+    let mut index = 0;
+    while let Some(argument) = arguments.args.get(index) {
+        if argument == "--debug-session-timeout" {
+            if let Some(text) = arguments.args.get(index + 1)
+                && let Some(parsed) = stc_runtime::run::parse_duration_ns(text)
+            {
+                timeout_ns = parsed;
+            }
+            index += 1;
+        } else if let Some(text) = argument.strip_prefix("--debug-session-timeout=")
+            && let Some(parsed) = stc_runtime::run::parse_duration_ns(text)
+        {
+            timeout_ns = parsed;
+        }
+        index += 1;
+    }
+    Some(timeout_ns)
+}
+
+/// Formats a duration for the Debug Console (`5min`, `30s`, `1.5s`, `30ms`).
+fn human_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if duration.subsec_nanos() == 0 && seconds > 0 {
+        if seconds.is_multiple_of(3600) {
+            return format!("{}h", seconds / 3600);
+        }
+        if seconds.is_multiple_of(60) {
+            return format!("{}min", seconds / 60);
+        }
+        return format!("{seconds}s");
+    }
+    format!("{duration:?}")
+}
+
 // ---------------------------------------------------------------------------
 // Manifest root grouping
 // ---------------------------------------------------------------------------
@@ -2270,6 +2403,48 @@ mod tests {
 
     fn body(text: &str) -> Json {
         json::parse(text).expect("manifest body")
+    }
+
+    #[test]
+    fn session_end_summary_distinguishes_teardown_causes() {
+        assert_eq!(
+            session_end_summary("terminate", None, Some(0), true),
+            "stc: the debug session ended: the client stopped the session; the host exited with code 0"
+        );
+        assert_eq!(
+            session_end_summary("disconnect", None, Some(7), true),
+            "stc: the debug session ended: the client disconnected; the host exited with code 7"
+        );
+        assert!(
+            session_end_summary("terminate", None, None, false)
+                .contains("the attached host was left running")
+        );
+        assert_eq!(
+            session_end_summary("target-exited", None, Some(0), true),
+            "stc: the debug session ended: the target exited with code 0"
+        );
+        assert!(session_end_summary("target-exited", None, Some(4), true).contains("trapped"));
+        assert_eq!(
+            session_end_summary("swap", Some("STC-E-DEBUG-019"), Some(3), true),
+            "stc: the debug session ended: swap (STC-E-DEBUG-019)"
+        );
+        assert_eq!(
+            session_end_summary("transport-error", None, None, false),
+            "stc: the debug session ended: the debug connection was lost"
+        );
+        assert!(
+            session_end_summary("pause-timeout", Some("STC-E-DEBUG-018"), None, true)
+                .contains("STC-E-DEBUG-018")
+        );
+    }
+
+    #[test]
+    fn human_duration_uses_readable_units() {
+        assert_eq!(human_duration(Duration::from_secs(3600)), "1h");
+        assert_eq!(human_duration(Duration::from_secs(300)), "5min");
+        assert_eq!(human_duration(Duration::from_secs(30)), "30s");
+        assert_eq!(human_duration(Duration::from_millis(30)), "30ms");
+        assert_eq!(human_duration(Duration::from_millis(1500)), "1.5s");
     }
 
     #[test]

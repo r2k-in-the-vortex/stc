@@ -673,6 +673,36 @@ The stop is visible to the runtime as a host service call that does not return. 
 thread remains responsive; the loader/prepare thread may prepare a candidate but cannot activate
 it without ending the session (§14.5).
 
+#### 14.2.1 Start-gated launch binding (WL-16)
+
+`stc debug` launch and every `stc dap` launch-owned host start the runtime with an internal start
+gate. After the host publishes its endpoint and accepts the debug connection, it parks before its
+first cycle and services the debug command queue (`session.start`, `manifest.get`, breakpoint
+binding, and the launch mode's initial breakpoint/watch setup). The driver writes the gate only
+after the session is established and every breakpoint received before `configurationDone` (DAP) or
+supplied by `--break` (`stc debug`) is applied. Cycle 0 therefore runs with every launch breakpoint
+bound, and a breakpoint on the first executable statement stops before that statement and observes
+cycle-0 values.
+
+The gate is a driver/host handshake, not a `stc-debug/1` operation. The wire protocol,
+endpoint-file `protocol` value, version negotiation, result shapes, and the `stc-debug/1` and
+`stc-debug/1.1` operation sets are unchanged; WL-16 introduces no protocol revision.
+
+- The gate applies only to a launch-owned host. Attach (`stc dap` attach, `stc debug --attach`,
+  and a host started directly by `stc run --debug-server`) cannot pause a host that is already
+  running: its breakpoints bind at the next checkpoint, and cycles before the attach are not
+  observed or replayed.
+- The budget is 30 seconds; both driver launch paths pass it as the internal
+  `--start-gate-timeout` host option. If the gate is not released in that time, the host prints
+  an error, shuts down, and exits 2 without running a cycle. The launch fails instead of running
+  an unbound first cycle.
+- A breakpoint set after the gate is released (for example after DAP `configurationDone`) applies
+  at the next checkpoint and does not retroactively cover cycle 0.
+- Monitoring-only launch hosts (release or hook-free builds) are gated too. They have no
+  breakpoint to bind, but the session is fully described before cycle 0.
+- The same handshake backs the per-test debug harness (§17.7); a directly run `stc test` host is
+  never gated.
+
 ### 14.3 Pause bound and watchdog interaction
 
 The optional pause bound is `[debug].session-timeout`, disabled by default and configurable per
@@ -1439,9 +1469,10 @@ normal hook-bearing debug-form module except for its test host:
   final host output before the session terminates, so the result remains visible in the DAP
   output stream.
 
-No new debug-protocol operation is added: the gate is a driver/test-host handshake, and the
-adapter uses `breakpoint.set`, `configurationDone` handling, and the existing `stc-debug/1.1`
-stopped-frame surface. A plain `stc test` run never sets `test_debug`, so it stays hook-free.
+No new debug-protocol operation is added: the gate is the same driver/host launch handshake used
+by a production launch (§14.2.1), and the adapter uses `breakpoint.set`, `configurationDone`
+handling, and the existing `stc-debug/1.1` stopped-frame surface. A plain `stc test` run never sets
+`test_debug`, so it stays hook-free.
 
 ## 18. Diagnostics and stable codes
 

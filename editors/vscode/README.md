@@ -300,8 +300,13 @@ Add a launch or attach configuration to `.vscode/launch.json`:
 ```
 
 Launch builds the debug form by default, starts a local debug endpoint, and
-stops the launch-owned host when the session ends. Attach connects to the
-endpoint file printed by `stc run --debug-server` and leaves the host running.
+stops the launch-owned host when the session ends. A launch is start-gated: the
+host does not run cycle 0 until the adapter has started the session and bound
+every breakpoint received before `configurationDone`, so a first-statement
+breakpoint sees cycle-0 values. Attach connects to the endpoint file printed by
+`stc run --debug-server` and leaves the host running; its breakpoints bind at the
+next checkpoint because an already-running host cannot be paused before its
+first cycle.
 
 Set `test` to a name listed by `stc test --list` to debug one `{stc:test}` POU.
 The launch builds only that test as a hook-bearing harness under
@@ -334,7 +339,10 @@ are shown in the frame table's normalized uppercase form.
 `evaluate` accepts a stopped-frame local name or a manifest target path; it
 does not parse ST expressions. There is one debug session per host, and every
 online swap ends the session without migrating breakpoints, forces, or
-watches.
+watches. Session teardown is reported in the Debug Console: a client stop, the
+host's exit code, a trap, a swap or timeout with its `STC-E-DEBUG-*` code, and a
+connection loss are distinguished. When `[debug].session-timeout` is enabled,
+a launch session names the effective stop/idle bound at startup.
 
 ## Online change
 

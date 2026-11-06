@@ -95,6 +95,7 @@ pub mod run;
 pub mod scheduler;
 pub mod signal;
 mod snapshot;
+mod start_gate;
 pub mod state;
 mod stop;
 pub mod store;
@@ -253,6 +254,11 @@ pub extern "C" fn stc_abi_version() -> i32 {
 /// manifest roots after the run; protected roots are included and marked, and
 /// a snapshot write failure exits 2).
 ///
+/// The internal launch-only options `--start-gate <path>` and
+/// `--start-gate-timeout <duration>` park the host before its first cycle
+/// until the driver finishes configuring the debug session (WL-16). They
+/// require `--debug-endpoint`; without it the options are rejected.
+///
 /// A relative `--state-file`/`--io-file`, or a relative `retain.file`/
 /// `io.file` from the metadata sidecar, resolves against the module directory
 /// (D-163). `stc run` passes absolute paths instead. Without a metadata
@@ -293,6 +299,12 @@ struct LauncherOptions {
     debug_allow_write: bool,
     debug_allow_force: bool,
     debug_session_timeout_ns: Option<u64>,
+    /// Start gate written by the driver after the debug session is configured.
+    /// The first cycle runs only after the file appears; `None` for a direct
+    /// `stc run` or an attach target.
+    start_gate: Option<PathBuf>,
+    /// Budget for the driver to release `start_gate`; zero is rejected.
+    start_gate_timeout_ns: Option<u64>,
     snapshot: Option<PathBuf>,
 }
 
@@ -307,6 +319,8 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     let mut debug_allow_write = false;
     let mut debug_allow_force = false;
     let mut debug_session_timeout_ns = None;
+    let mut start_gate = None;
+    let mut start_gate_timeout_ns = None;
     let mut snapshot = None;
     let mut index = usize::from(!args.is_empty());
     while index < args.len() {
@@ -412,6 +426,22 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
                     .ok_or_else(|| format!("invalid debug session timeout `{text}`"))?;
                 debug_session_timeout_ns = Some(ns);
             }
+            "--start-gate" => {
+                let path = value("--start-gate")?;
+                if path.is_empty() {
+                    return Err("`--start-gate` requires a non-empty path".into());
+                }
+                start_gate = Some(PathBuf::from(path));
+            }
+            "--start-gate-timeout" => {
+                let text = value("--start-gate-timeout")?;
+                let ns = run::parse_duration_ns(&text)
+                    .ok_or_else(|| format!("invalid start gate timeout `{text}`"))?;
+                if ns == 0 {
+                    return Err("`--start-gate-timeout` must be positive".into());
+                }
+                start_gate_timeout_ns = Some(ns);
+            }
             "--trace" => {
                 return Err("runtime option `--trace` is not supported in this build".into());
             }
@@ -430,6 +460,12 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     }
     if debug_session_timeout_ns.is_some() && debug_endpoint.is_none() {
         return Err("`--debug-session-timeout` requires `--debug-endpoint`".into());
+    }
+    if start_gate.is_some() && debug_endpoint.is_none() {
+        return Err("`--start-gate` requires `--debug-endpoint`".into());
+    }
+    if start_gate_timeout_ns.is_some() && start_gate.is_none() {
+        return Err("`--start-gate-timeout` requires `--start-gate`".into());
     }
     if !run.rt {
         if run.rt_priority.is_some() || run.rt_cpu.is_some() || run.rt_metrics.is_some() {
@@ -454,6 +490,8 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
         debug_allow_write,
         debug_allow_force,
         debug_session_timeout_ns,
+        start_gate,
+        start_gate_timeout_ns,
         snapshot,
     })
 }
@@ -577,6 +615,24 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
                 }
                 return 2;
             }
+        }
+    }
+    // A launch-owned debug host parks here after publishing its endpoint so
+    // the driver can start the session, fetch the manifest, and bind every
+    // pre-configuration breakpoint before cycle 0. The debug queue is pumped
+    // while parked, so boundary operations such as `manifest.get` complete.
+    if let Some(gate) = options.start_gate.as_deref() {
+        let timeout = options
+            .start_gate_timeout_ns
+            .map_or(start_gate::DEFAULT_START_GATE_TIMEOUT, |ns| {
+                std::time::Duration::from_nanos(ns)
+            });
+        if let Err(message) = start_gate::wait_for_start_gate(&mut host, gate, timeout) {
+            eprintln!("stc: {message}");
+            if let Err(error) = host.shutdown() {
+                eprintln!("stc: shutdown failed: {}: {}", error.code, error.message);
+            }
+            return 2;
         }
     }
     let outcome = if control.is_some() {
@@ -1892,6 +1948,10 @@ mod tests {
             "--debug-allow-force",
             "--debug-session-timeout",
             "1s",
+            "--start-gate",
+            "out/start.gate",
+            "--start-gate-timeout",
+            "10s",
         ]))
         .expect("valid launcher options");
         assert_eq!(options.run.cycles, 7);
@@ -1930,6 +1990,11 @@ mod tests {
         assert!(options.debug_allow_write);
         assert!(options.debug_allow_force);
         assert_eq!(options.debug_session_timeout_ns, Some(1_000_000_000));
+        assert_eq!(
+            options.start_gate.as_deref(),
+            Some(Path::new("out/start.gate"))
+        );
+        assert_eq!(options.start_gate_timeout_ns, Some(10_000_000_000));
 
         let disabled = parse_launcher_args(&args(&[
             "app",
@@ -1986,6 +2051,18 @@ mod tests {
             vec!["app", "--debug-allow-write"],
             vec!["app", "--debug-allow-force"],
             vec!["app", "--debug-session-timeout", "1s"],
+            vec!["app", "--start-gate", "gate"],
+            vec!["app", "--debug-endpoint", "d", "--start-gate-timeout", "1s"],
+            vec![
+                "app",
+                "--debug-endpoint",
+                "d",
+                "--start-gate",
+                "gate",
+                "--start-gate-timeout",
+                "0s",
+            ],
+            vec!["app", "--debug-endpoint", "d", "--start-gate", ""],
             vec!["app", "--debug-endpoint", "d", "--debug-protocol", "bogus"],
             vec!["app", "--trace"],
         ] {
