@@ -64,6 +64,16 @@ Out of scope for v2.0.0:
   `--manifest-path` first, then the initialize `rootUri`, then `workspaceFolders`, then the process
   working directory. A missing manifest fails `initialize` with a readable internal error rather
   than starting without a project.
+- Initialization is all-or-nothing. An invalid or unloadable manifest fails `initialize` and the
+  extension classifies the failure as a deterministic configuration error: it does not auto-restart
+  that client, writes the `STC-E-PROJECT-*` detail to the **stc Language Server** channel, and
+  shows one error notification with **Open Output** and **Retry**. **Retry** recreates only that
+  project's client, so fixing `stc.toml` recovers the session without a window reload. A connection
+  that closes for any other reason is treated as a crash and restarted up to four times within
+  three minutes, after which the client stops and reports the crash; this crash policy is separate
+  from the configuration-error policy. A `stc.path` change or a window reload starts fresh clients.
+  Degraded initialization that publishes manifest diagnostics and recovers automatically is not
+  implemented.
 - The language client watches `**/*.st` and `**/stc.toml`; a watched change reloads the project
   graph and reanalyzes. `stc.path` changes restart the clients.
 - `stc dap` receives no project argument from the extension. It starts in the workspace folder and
@@ -208,10 +218,14 @@ The extension launches `stc dap` with `DebugAdapterExecutable`; the adapter emit
 `initialized` event once after the `initialize` response. A launch or attach configuration and
 `configurationDone` are both required before the adapter starts the host. Breakpoints received
 before that point are buffered, resolved against the project graph, and re-reported with a
-`breakpoint`/`changed` event when the source mapping becomes available. The adapter applies the
-breakpoints as soon as the session is established; cycles that execute before the adapter connects
-are not observed and are not replayed, so a debugger can rely on the stop location but must not
-assume it is the first program cycle.
+`breakpoint`/`changed` event when the source mapping becomes available. A launch-owned host is
+start-gated (Debug and Monitoring §14.2.1): it publishes its endpoint and waits before cycle 0
+while the adapter starts the session, fetches the manifest, and applies every breakpoint received
+before `configurationDone`. A launch breakpoint on the first executable statement therefore stops
+before the first cycle and observes cycle-0 values; a breakpoint set after configuration completes
+binds at the next checkpoint. Attach connects to an already-running host and cannot gate it:
+cycles before the attach are not observed or replayed, and its breakpoints bind at the next
+checkpoint.
 
 Launch builds the project in the debug form by default and then starts the launcher with a local
 debug endpoint and control endpoint. `noBuild` uses the existing artifacts; `outDir` overrides their
@@ -223,8 +237,9 @@ Verification §2.5): breakpoints bind before the test body runs, the top stack f
 POU, and the session ends when the test host prints its result line and exits. `test` is a launch
 setting only; it cannot be combined with `noBuild`, `release`, or attach. A test launch builds
 under `<outDir or target/stc/test>/debug/<artifact>`, so ordinary `stc test` artifacts are not
-touched. The start gate is a driver/test-host handshake; the adapter still uses only
-`stc-debug/1.1` operations.
+touched. The start gate is the same driver/host launch handshake used by every launch (Debug and
+Monitoring §14.2.1), not a protocol operation; the adapter still uses only `stc-debug/1.1`
+operations.
 
 | Configuration key | Requests | Meaning |
 | --- | --- | --- |
@@ -319,9 +334,17 @@ Runtime events map to DAP as follows:
 | --- | --- |
 | `stopped` | `stopped` with `threadId: 1`, `reason` (`breakpoint`, `step`, `pause`), `allThreadsStopped: true`, and a `description` of `file:line` |
 | `resumed` | `continued` with `threadId: 1`, unless the resume response already emitted it |
-| `session-ended` | `terminated`; the reason and optional `STC-E-DEBUG-*` code are written to the debug console |
+| `session-ended` | one Debug Console summary line, then `exited` for a launch-owned host, then `terminated` |
 | Launcher stdout/stderr | `output` with the corresponding category |
-| Session or host exit | `exited` when a launch-owned host reports an exit code, then `terminated` |
+| Session or host exit | one Debug Console summary line, `exited` when a launch-owned host reports an exit code, then `terminated` |
+
+The summary line distinguishes a client stop (`terminate`/`disconnect`, saying whether the
+launch-owned host exited with code N or the attached host was left running), a target/host exit
+(with its process exit code), a trap (exit code 4), an online swap or stop/idle timeout (with its
+`STC-E-DEBUG-*` code), and a connection loss. It is emitted for every teardown path, including a
+user stop, so a clean exit and a failed session are not silent. A launch-owned host's real process
+exit code is sent in the DAP `exited` event even when the stop was client-initiated; attach has no
+owned process and sends no `exited`.
 
 Breakpoint resolution changes produce `breakpoint` events with `reason: "changed"`. `disconnect`
 stops the runtime session and exits the adapter; `terminate` ends the session but leaves the adapter
@@ -331,14 +354,22 @@ migration of breakpoints, forces, or watches. There is exactly one debug session
 adapter session per launch. For a test launch, the host's structured `stc-test-result` line is
 forwarded as `output` before the session terminates; the test's exit ends the DAP session.
 
-A test launch is start-paused relative to the test body. The adapter applies breakpoints, writes
-the test host's start gate on configuration-complete, and only then does the host execute its
-first cycle; this guarantees that a single-cycle test can stop at a breakpoint in its source.
+Every launch is start-paused relative to the first cycle. The adapter applies breakpoints, writes
+the launch-owned host's start gate on configuration-complete, and only then does the host execute
+cycle 0; this guarantees that a launch breakpoint on the first executable statement stops before
+the first cycle. A breakpoint set after configuration-complete binds at the next checkpoint.
 
 ### 4.6 Honest limits
 
 - One debug session per host; a second session fails until the first ends.
 - Every online swap ends the session; reconnect and re-resolve.
+- Launch is start-gated, but attach and a host started directly by `stc run --debug-server` cannot
+  be paused before they run. Their breakpoints bind at the next checkpoint, and cycles before the
+  attach are not observed or replayed.
+- When the opt-in `[debug].session-timeout` bound is enabled, a launch session prints the
+  effective bound at session start. It does not show a countdown or warn before expiry, and an
+  attach session cannot know the running host's bound. An expired bound ends the session with
+  `STC-E-DEBUG-018` and resumes the cycle.
 - Release and hook-free builds are monitoring-only: no breakpoints, stepping, or Locals. The
   accepted monitoring path is the Debug Console: evaluate visible Globals and target paths while
   the host runs. The adapter also exposes one synthetic `monitoring` frame with the Globals scope
@@ -470,8 +501,7 @@ the gutter/code lens open the declaration. Discovery refreshes on `**/*.st` and 
 create/change/delete with a 500 ms debounce, on workspace-folder changes, on `stc.path` changes,
 through the Test Explorer refresh button, and through the `stc.refreshTests` command. A failed
 listing logs its diagnostics to the `stc` output channel and keeps the previous successful list;
-a missing `stc` executable is logged and no items are created. F-22 covers richer discovery error
-surfacing.
+a missing `stc` executable is logged and no items are created.
 
 **Run profile.** The default Run profile expands a file-level selection to its children and honors
 `exclude`; with no `include`, it selects every discovered test. Selected tests are grouped per
@@ -530,9 +560,9 @@ bundles it.
   references, hover, completion, formatting, UTF-16 positions, watched-file reload, shutdown, and
   exit. They need no clang and run in the workspace test matrix.
 - Rust DAP integration tests spawn `stc dap`, build a temporary copy of the sample workspace with
-  clang, and cover launch with a first-statement breakpoint, known locals and globals, stepping,
-  evaluate, write gating, attach, no-build, and clean teardown. They run through the debug suite
-  and require clang there.
+  clang, and cover launch with a first-statement breakpoint on cycle 0, known locals and globals,
+  stepping, evaluate, write gating, attach, no-build, terminate/exit reporting, the timeout-budget
+  line, and clean teardown. They run through the debug suite and require clang there.
 - The extension checks are `npm ci`, `npm run typecheck`, `npm test` (problem-matcher unit tests,
   theme JSON tests, online-change state tests, Testing API model tests, and TextMate grammar
   fixtures), and `npm run package`. `test/online-change.test.mjs` bundles the pure state module and

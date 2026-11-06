@@ -271,7 +271,17 @@ include `print`, `set`, `force`, `release`, `release-all`, `watch`,
 
 - Starting a session does not stop the cycle. A stop/breakpoint/step holds
   outputs. The optional `[debug].session-timeout` bound is disabled by default;
-  when configured, expiry ends the session and resumes the cycle.
+  when configured, expiry ends the session and resumes the cycle. A VS Code
+  launch session names the effective bound at startup.
+- A launch (`stc debug` or a VS Code launch configuration) starts the host
+  gated: cycle 0 does not run until the debug session is established and every
+  initial breakpoint is bound, so a first-statement breakpoint observes cycle-0
+  values. Attach cannot pause an already-running host; its breakpoints bind at
+  the next checkpoint.
+- Session teardown is reported in the Debug Console: a client stop, a host exit
+  with its exit code, a trap (exit code 4), an online swap, a timeout with its
+  `STC-E-DEBUG-*` code, and a connection loss are distinguished. `stc debug`
+  prints the same distinctions in its own output.
 - Writes and forces are queued and applied at a cycle boundary, revalidated
   for generation, root, type, layout, and writability. A `stc-debug/1.1`
   client that writes while the target is stopped gets an immediate
@@ -323,9 +333,11 @@ reported in the **stc** output channel; the language server is not started until
 Open a folder containing `stc.toml`. The extension starts one language server per project and
 watches `**/*.st` and `**/stc.toml`. No configuration is required beyond the compiler path.
 
-An invalid `stc.toml` fails language-server initialization: VS Code retries the server a few
-times before stopping, and the project error appears in the **stc Language Server** output
-channel. Fix the manifest and reload the window. A project without tests must currently omit
+An invalid `stc.toml` fails language-server initialization. The extension does not retry a
+deterministic project-load error: the `STC-E-PROJECT-*` detail appears in the **stc Language
+Server** output channel and in one error notification with **Open Output** and **Retry**. Fix the
+manifest and choose **Retry** (a window reload also works). Unexpected server crashes still restart
+automatically up to four times in three minutes. A project without tests must currently omit
 `[test]`; a declared source glob that matches no files is `STC-E-PROJECT-004`.
 
 ### 8.2 Tasks and diagnostics
@@ -399,10 +411,14 @@ Add a configuration to `.vscode/launch.json`:
 ```
 
 Launch builds the debug form by default and stops a launch-owned host when the session ends.
-`noBuild` launches existing artifacts; `outDir` selects them; `release` builds the monitoring-only
-release form; `sourceRoot` overrides package-root source mapping; `args` and `cwd` apply to the
-launched host. Attach connects to the endpoint file printed by `stc run --debug-server` and leaves
-the host running. Replace the placeholder endpoint path with the printed file.
+Launch is start-gated: a breakpoint set before the session is configured binds before cycle 0, so
+a breakpoint on the first executable statement stops before that statement executes. Attach
+connects to the endpoint file printed by `stc run --debug-server`, leaves the host running, and
+binds breakpoints at the next checkpoint; cycles before the attach are not observed. The Debug
+Console reports a client stop, the host's exit code, a trap, a swap or timeout with its code, and a
+connection loss. `noBuild` launches existing artifacts; `outDir` selects them; `release` builds the
+monitoring-only release form; `sourceRoot` overrides package-root source mapping; `args` and `cwd`
+apply to the launched host. Replace the placeholder endpoint path with the printed file.
 
 Add `"test": "<name>"` to a launch configuration to debug one test. The name must match a test
 listed by `stc test --list` exactly. The Testing view's **Debug Test** starts this launch
@@ -612,7 +628,7 @@ without `--rt` the run loop and the generated artifacts are unchanged.
 | `STC-E-DEBUG-017` stack/frame unavailable | The stopped-frame sidecar is missing or unusable (`llvm-readobj`/`readelf` at build time); typed monitoring still works |
 | `STC-E-PROJECT-010` debug/release mixed | Use distinct out-dirs for the two forms; one explicit out-dir cannot hold both |
 | `STC-E-PROJECT-004` “source glob matched no files” | Add a matching source file, or omit the source set (for example `[test]` in a project without tests). This error also prevents the language server from starting |
-| `stc lsp` restarts repeatedly or “Server initialization failed” | The project manifest cannot load; fix the `STC-E-PROJECT-*` error shown in the **stc Language Server** output channel, then reload the window |
+| “The language server could not start” or an `STC-E-PROJECT-*` error | The project manifest cannot load; the extension does not restart a deterministic configuration error. Fix the `STC-E-PROJECT-*` error shown in the notification or the **stc Language Server** output channel, then choose **Retry** (or reload the window) |
 | Version or build-ID mismatch after upgrading | Pre-RC artifacts are not compatible; cold-download or rebuild both sides |
 
 For every diagnostic, `--message-format json` gives a stable object with code,
