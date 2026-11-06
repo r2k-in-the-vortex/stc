@@ -293,6 +293,9 @@ struct LauncherOptions {
     module: Option<String>,
     control_endpoint: Option<String>,
     control_nonce: Option<String>,
+    /// Path to a user-only file containing the control nonce. Used by
+    /// `stc serve` so the nonce is not visible in the process arguments.
+    control_nonce_file: Option<PathBuf>,
     manifest_dir: Option<PathBuf>,
     debug_endpoint: Option<PathBuf>,
     debug_protocol: crate::transport::TransportKind,
@@ -313,6 +316,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     let mut module = None;
     let mut control_endpoint = None;
     let mut control_nonce = None;
+    let mut control_nonce_file = None;
     let mut manifest_dir = None;
     let mut debug_endpoint = None;
     let mut debug_protocol = crate::transport::TransportKind::Pipe;
@@ -405,6 +409,13 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
             "--control-nonce" => {
                 control_nonce = Some(value("--control-nonce")?);
             }
+            "--control-nonce-file" => {
+                let path = value("--control-nonce-file")?;
+                if path.is_empty() {
+                    return Err("`--control-nonce-file` requires a non-empty path".into());
+                }
+                control_nonce_file = Some(PathBuf::from(path));
+            }
             "--manifest-dir" => {
                 manifest_dir = Some(PathBuf::from(value("--manifest-dir")?));
             }
@@ -449,8 +460,14 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
         }
         index += 1;
     }
-    if control_endpoint.is_some() && control_nonce.is_none() {
-        return Err("`--control` requires `--control-nonce`".into());
+    if control_endpoint.is_some() && control_nonce.is_none() && control_nonce_file.is_none() {
+        return Err("`--control` requires `--control-nonce` or `--control-nonce-file`".into());
+    }
+    if control_endpoint.is_none() && (control_nonce.is_some() || control_nonce_file.is_some()) {
+        return Err("`--control-nonce` and `--control-nonce-file` require `--control`".into());
+    }
+    if control_nonce.is_some() && control_nonce_file.is_some() {
+        return Err("`--control-nonce` and `--control-nonce-file` are mutually exclusive".into());
     }
     if debug_allow_write && debug_endpoint.is_none() {
         return Err("`--debug-allow-write` requires `--debug-endpoint`".into());
@@ -484,6 +501,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
         module,
         control_endpoint,
         control_nonce,
+        control_nonce_file,
         manifest_dir,
         debug_endpoint,
         debug_protocol,
@@ -521,6 +539,56 @@ fn parse_rt_metrics_path(text: &str) -> Result<PathBuf, String> {
         return Err("`--rt-metrics` requires a non-empty path".into());
     }
     Ok(PathBuf::from(text))
+}
+
+/// Reads a control nonce from a user-only file.
+///
+/// The file is deliberately not accepted on the command line for `stc serve`;
+/// it must be a regular file with no group or other permission bits on Unix.
+/// The value is trimmed and must be non-empty.
+fn read_control_nonce_file(path: &Path) -> Result<String, String> {
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        format!(
+            "cannot inspect the control nonce file `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "the control nonce path `{}` is not a regular file",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(format!(
+                "the control nonce file `{}` is not user-only",
+                path.display()
+            ));
+        }
+    }
+    if metadata.len() > 4096 {
+        return Err(format!(
+            "the control nonce file `{}` is larger than 4096 bytes",
+            path.display()
+        ));
+    }
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "cannot read the control nonce file `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let nonce = text.trim();
+    if nonce.is_empty() {
+        return Err(format!(
+            "the control nonce file `{}` is empty",
+            path.display()
+        ));
+    }
+    Ok(nonce.to_owned())
 }
 
 fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_char) -> i32 {
@@ -569,7 +637,23 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
         }
     };
     configure_run_services(&mut host, &options.run, &candidate);
-    let control = match (&options.control_endpoint, &options.control_nonce) {
+    let control_nonce = match &options.control_nonce {
+        Some(nonce) => Some(nonce.clone()),
+        None => match options.control_nonce_file.as_deref() {
+            Some(path) => match read_control_nonce_file(path) {
+                Ok(nonce) => Some(nonce),
+                Err(message) => {
+                    eprintln!("stc: {message}");
+                    return 2;
+                }
+            },
+            None => None,
+        },
+    };
+    let control = match (
+        options.control_endpoint.as_deref(),
+        control_nonce.as_deref(),
+    ) {
         (Some(endpoint), Some(nonce)) => match crate::control::ControlServer::bind(endpoint, nonce)
         {
             Ok(server) => Some(server),
@@ -1975,6 +2059,20 @@ mod tests {
         assert_eq!(options.module.as_deref(), Some("module.so"));
         assert_eq!(options.control_endpoint.as_deref(), Some("control.json"));
         assert_eq!(options.control_nonce.as_deref(), Some("nonce"));
+        assert!(options.control_nonce_file.is_none());
+        let nonce_file = parse_launcher_args(&args(&[
+            "app",
+            "--control",
+            "control.sock",
+            "--control-nonce-file",
+            "control.nonce",
+        ]))
+        .expect("nonce file");
+        assert_eq!(
+            nonce_file.control_nonce_file.as_deref(),
+            Some(Path::new("control.nonce"))
+        );
+        assert!(nonce_file.control_nonce.is_none());
         assert_eq!(
             options.manifest_dir.as_deref(),
             Some(Path::new("manifests"))
@@ -2048,6 +2146,16 @@ mod tests {
             vec!["app", "--rt", "--cycle-time", "1ms", "--rt-metrics", ""],
             vec!["app", "--snapshot", ""],
             vec!["app", "--control", "c"],
+            vec![
+                "app",
+                "--control",
+                "c",
+                "--control-nonce",
+                "n",
+                "--control-nonce-file",
+                "f",
+            ],
+            vec!["app", "--control-nonce-file", "f"],
             vec!["app", "--debug-allow-write"],
             vec!["app", "--debug-allow-force"],
             vec!["app", "--debug-session-timeout", "1s"],
@@ -2071,6 +2179,36 @@ mod tests {
                 "{case:?} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn control_nonce_file_is_read_and_must_be_nonempty() {
+        let directory = std::env::temp_dir().join(format!(
+            "stc-control-nonce-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir_all(&directory).expect("create directory");
+        let path = directory.join("control.nonce");
+        std::fs::write(&path, b"abc123\n").expect("write nonce");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("set mode");
+        }
+        assert_eq!(read_control_nonce_file(&path).expect("nonce"), "abc123");
+        std::fs::write(&path, b"   \n").expect("write empty nonce");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("set mode");
+        }
+        assert!(read_control_nonce_file(&path).is_err());
+        std::fs::remove_dir_all(&directory).expect("clean up");
     }
 
     #[test]

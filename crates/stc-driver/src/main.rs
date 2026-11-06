@@ -26,6 +26,7 @@ mod remote;
 mod rename;
 mod report;
 mod run;
+mod serve;
 mod test;
 mod watch;
 
@@ -207,6 +208,7 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
+        Command::Serve => serve::run(&invocation, &mut reporter, log),
         Command::HirDump => hir_dump::run(&invocation, &mut reporter, log),
         Command::Rename => rename::run(
             &invocation.paths[0],

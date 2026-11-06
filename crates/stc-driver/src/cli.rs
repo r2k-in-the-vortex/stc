@@ -38,6 +38,8 @@ pub(crate) enum Command {
     OnlineDownload,
     /// Compare a candidate manifest with the active baseline.
     OnlineDiff,
+    /// Serve a persistent remote-debug runtime on the host.
+    Serve,
     /// Source-aware tracked rename.
     Rename,
     /// Serve the Language Server Protocol over standard input and output.
@@ -91,6 +93,39 @@ pub(crate) struct OnlineOptions {
     pub(crate) nonce: Option<String>,
     /// `--baseline`: explicit diff baseline manifest.
     pub(crate) baseline: Option<String>,
+}
+
+/// `stc serve` actions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ServeAction {
+    /// Start a persistent runtime.
+    #[default]
+    Start,
+    /// Print the running session status.
+    Status,
+    /// Deploy a module/manifest pair through the control channel.
+    Deploy,
+    /// Stop the running session.
+    Stop,
+}
+
+/// `stc serve` options.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ServeOptions {
+    /// Selected action.
+    pub(crate) action: ServeAction,
+    /// Remote work directory; defaults to the current directory.
+    pub(crate) work_dir: Option<String>,
+    /// Session descriptor path; defaults under the work directory.
+    pub(crate) session: Option<String>,
+    /// Control endpoint path; defaults under the work directory.
+    pub(crate) control_endpoint: Option<String>,
+    /// Start from existing artifacts without building.
+    pub(crate) no_build: bool,
+    /// Deploy module path.
+    pub(crate) deploy_module: Option<String>,
+    /// Deploy GOT manifest path.
+    pub(crate) deploy_manifest: Option<String>,
 }
 
 /// Debug-session options shared by `stc debug` and `stc run --debug-server`.
@@ -155,6 +190,8 @@ pub(crate) struct Invocation {
     pub(crate) dry_run: bool,
     /// Online-change options.
     pub(crate) online: OnlineOptions,
+    /// `stc serve` options.
+    pub(crate) serve: ServeOptions,
     /// `fmt --check`.
     pub(crate) fmt_check: bool,
     /// `clean --test`: remove only the test artifact tree.
@@ -197,6 +234,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         "new" => Command::New,
         "run" => Command::Run,
         "debug" => Command::Debug,
+        "serve" => Command::Serve,
         "test" => Command::Test,
         "fmt" => Command::Fmt,
         "clean" => Command::Clean,
@@ -230,6 +268,9 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     }
     if command == Command::Dap {
         return parse_dap(args, index);
+    }
+    if command == Command::Serve {
+        return parse_serve(args, index);
     }
 
     let mut format = Format::Human;
@@ -668,6 +709,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         watch_timeout_ns,
         dry_run,
         online,
+        serve: ServeOptions::default(),
         fmt_check,
         clean_test,
         build,
@@ -726,6 +768,7 @@ fn parse_lsp(args: &[String], mut index: usize) -> Result<Option<Invocation>, St
         watch_timeout_ns: None,
         dry_run: false,
         online: OnlineOptions::default(),
+        serve: ServeOptions::default(),
         fmt_check: false,
         clean_test: false,
         build: Request::default(),
@@ -784,6 +827,7 @@ fn parse_dap(args: &[String], mut index: usize) -> Result<Option<Invocation>, St
         watch_timeout_ns: None,
         dry_run: false,
         online: OnlineOptions::default(),
+        serve: ServeOptions::default(),
         fmt_check: false,
         clean_test: false,
         build: Request::default(),
@@ -791,6 +835,327 @@ fn parse_dap(args: &[String], mut index: usize) -> Result<Option<Invocation>, St
         debug: DebugOptions::default(),
         hir_dump: HirDumpOptions::default(),
     }))
+}
+
+/// Parses the `stc serve` command and its actions.
+///
+/// `stc serve` is the remote-host runtime entry point. Its start action accepts
+/// the project build/run surface; `status`, `deploy`, and `stop` accept only
+/// the session/control/output options.
+fn parse_serve(args: &[String], mut index: usize) -> Result<Option<Invocation>, String> {
+    let mut serve = ServeOptions::default();
+    if let Some(action) = args.get(index) {
+        match action.as_str() {
+            "status" => {
+                serve.action = ServeAction::Status;
+                index += 1;
+            }
+            "deploy" => {
+                serve.action = ServeAction::Deploy;
+                index += 1;
+            }
+            "stop" => {
+                serve.action = ServeAction::Stop;
+                index += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let mut format = Format::Human;
+    let mut diagnostic_paths = DiagnosticPaths::Package;
+    let mut color = ColorChoice::Auto;
+    let mut quiet = false;
+    let mut verbosity = 0_u8;
+    let mut manifest = None;
+    let mut locked = false;
+    let mut build = Request::default();
+    let mut debug = DebugOptions::default();
+    let mut operation_option = false;
+
+    while index < args.len() {
+        let argument = args[index].as_str();
+        match argument {
+            "--help" | "-h" => {
+                print_help();
+                return Ok(None);
+            }
+            "--version" | "-V" => {
+                println!("stc {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            "--manifest-path" => {
+                manifest = Some(next_value(args, &mut index, "--manifest-path")?);
+                operation_option = true;
+            }
+            other if other.starts_with("--manifest-path=") => {
+                manifest = Some(other["--manifest-path=".len()..].to_owned());
+                operation_option = true;
+            }
+            "--locked" => {
+                locked = true;
+                operation_option = true;
+            }
+            "--debug" => {
+                select_build_mode(&mut build, BuildMode::Debug)?;
+                operation_option = true;
+            }
+            "--release" => {
+                select_build_mode(&mut build, BuildMode::Release)?;
+                operation_option = true;
+            }
+            "--out-dir" => {
+                build.out_dir = Some(next_value(args, &mut index, "--out-dir")?);
+                build.out_dir_explicit = true;
+                operation_option = true;
+            }
+            other if other.starts_with("--out-dir=") => {
+                build.out_dir = Some(other["--out-dir=".len()..].to_owned());
+                build.out_dir_explicit = true;
+                operation_option = true;
+            }
+            "--target" => {
+                build.target = Some(next_value(args, &mut index, "--target")?);
+                operation_option = true;
+            }
+            other if other.starts_with("--target=") => {
+                build.target = Some(other["--target=".len()..].to_owned());
+                operation_option = true;
+            }
+            "--clang" => {
+                build.clang = Some(next_value(args, &mut index, "--clang")?);
+                operation_option = true;
+            }
+            other if other.starts_with("--clang=") => {
+                build.clang = Some(other["--clang=".len()..].to_owned());
+                operation_option = true;
+            }
+            "--runtime" => {
+                build.runtime = Some(next_value(args, &mut index, "--runtime")?);
+                operation_option = true;
+            }
+            other if other.starts_with("--runtime=") => {
+                build.runtime = Some(other["--runtime=".len()..].to_owned());
+                operation_option = true;
+            }
+            "--got-manifest" => {
+                build.got_manifest = Some(next_value(args, &mut index, "--got-manifest")?);
+                operation_option = true;
+            }
+            other if other.starts_with("--got-manifest=") => {
+                build.got_manifest = Some(other["--got-manifest=".len()..].to_owned());
+                operation_option = true;
+            }
+            "--cold" => {
+                build.cold = true;
+                operation_option = true;
+            }
+            "--cycles" => {
+                build.run.cycles = Some(parse_cycles(&next_value(args, &mut index, "--cycles")?)?);
+                operation_option = true;
+            }
+            "--cycle-time" => {
+                build.run.cycle_time_ns = Some(parse_cycle_time(&next_value(
+                    args,
+                    &mut index,
+                    "--cycle-time",
+                )?)?);
+                operation_option = true;
+            }
+            "--io" => {
+                build.run.io = Some(parse_io(&next_value(args, &mut index, "--io")?)?);
+                operation_option = true;
+            }
+            "--io-file" => {
+                build.run.io_file = Some(next_value(args, &mut index, "--io-file")?);
+                operation_option = true;
+            }
+            "--state-file" => {
+                build.run.state_file = Some(next_value(args, &mut index, "--state-file")?);
+                operation_option = true;
+            }
+            "--reset-retain" => {
+                build.run.reset_retain = true;
+                operation_option = true;
+            }
+            "--no-retain" => {
+                build.run.no_retain = true;
+                operation_option = true;
+            }
+            "--mock-clock" => {
+                build.run.mock_clock_ns = Some(parse_cycle_time(&next_value(
+                    args,
+                    &mut index,
+                    "--mock-clock",
+                )?)?);
+                operation_option = true;
+            }
+            "--debug-endpoint" => {
+                debug.server_endpoint = Some(next_value(args, &mut index, "--debug-endpoint")?);
+                operation_option = true;
+            }
+            other if other.starts_with("--debug-endpoint=") => {
+                debug.server_endpoint = Some(other["--debug-endpoint=".len()..].to_owned());
+                operation_option = true;
+            }
+            "--debug-protocol" => {
+                debug.protocol = Some(parse_debug_protocol(&next_value(
+                    args,
+                    &mut index,
+                    "--debug-protocol",
+                )?)?);
+                operation_option = true;
+            }
+            "--allow-write" => {
+                debug.allow_write = true;
+                operation_option = true;
+            }
+            "--allow-force" => {
+                debug.allow_force = true;
+                operation_option = true;
+            }
+            "--session-timeout" => {
+                debug.session_timeout_ns = Some(parse_debug_timeout(&next_value(
+                    args,
+                    &mut index,
+                    "--session-timeout",
+                )?)?);
+                operation_option = true;
+            }
+            "--work-dir" => serve.work_dir = Some(next_value(args, &mut index, "--work-dir")?),
+            other if other.starts_with("--work-dir=") => {
+                serve.work_dir = Some(other["--work-dir=".len()..].to_owned());
+            }
+            "--session" => serve.session = Some(next_value(args, &mut index, "--session")?),
+            other if other.starts_with("--session=") => {
+                serve.session = Some(other["--session=".len()..].to_owned());
+            }
+            "--control-endpoint" => {
+                serve.control_endpoint = Some(next_value(args, &mut index, "--control-endpoint")?);
+            }
+            other if other.starts_with("--control-endpoint=") => {
+                serve.control_endpoint = Some(other["--control-endpoint=".len()..].to_owned());
+            }
+            "--no-build" => serve.no_build = true,
+            "--module" => serve.deploy_module = Some(next_value(args, &mut index, "--module")?),
+            other if other.starts_with("--module=") => {
+                serve.deploy_module = Some(other["--module=".len()..].to_owned());
+            }
+            "--deploy-manifest" => {
+                serve.deploy_manifest = Some(next_value(args, &mut index, "--deploy-manifest")?);
+            }
+            other if other.starts_with("--deploy-manifest=") => {
+                serve.deploy_manifest = Some(other["--deploy-manifest=".len()..].to_owned());
+            }
+            "--message-format" => {
+                format = parse_format(&next_value(args, &mut index, "--message-format")?)?;
+            }
+            other if other.starts_with("--message-format=") => {
+                format = parse_format(&other["--message-format=".len()..])?;
+            }
+            "--diagnostic-paths" => {
+                let value = next_value(args, &mut index, "--diagnostic-paths")?;
+                diagnostic_paths = parse_diagnostic_paths(&value)?;
+                operation_option = true;
+            }
+            other if other.starts_with("--diagnostic-paths=") => {
+                diagnostic_paths = parse_diagnostic_paths(&other["--diagnostic-paths=".len()..])?;
+                operation_option = true;
+            }
+            "--color" => color = ColorChoice::parse(&next_value(args, &mut index, "--color")?)?,
+            other if other.starts_with("--color=") => {
+                color = ColorChoice::parse(&other["--color=".len()..])?;
+            }
+            "-q" | "--quiet" => quiet = true,
+            "-v" | "--verbose" => verbosity = verbosity.max(1),
+            "-vv" => verbosity = 2,
+            other => return Err(format!("`stc serve` does not accept `{other}`")),
+        }
+        index += 1;
+    }
+
+    if serve.action != ServeAction::Start {
+        if operation_option || serve.no_build {
+            return Err(
+                "`stc serve status/deploy/stop` does not accept build, run, or debug options"
+                    .into(),
+            );
+        }
+        if serve.deploy_module.is_some() != serve.deploy_manifest.is_some() {
+            return Err(
+                "`stc serve deploy` needs both `--module <path>` and `--deploy-manifest <path>`"
+                    .into(),
+            );
+        }
+        if serve.action != ServeAction::Deploy
+            && (serve.deploy_module.is_some() || serve.deploy_manifest.is_some())
+        {
+            return Err(
+                "`--module` and `--deploy-manifest` are only valid with `stc serve deploy`".into(),
+            );
+        }
+        if serve.action == ServeAction::Deploy
+            && (serve.deploy_module.is_none() || serve.deploy_manifest.is_none())
+        {
+            return Err(
+                "`stc serve deploy` needs both `--module <path>` and `--deploy-manifest <path>`"
+                    .into(),
+            );
+        }
+    } else {
+        if serve.deploy_module.is_some() || serve.deploy_manifest.is_some() {
+            return Err(
+                "`--module` and `--deploy-manifest` are only valid with `stc serve deploy`".into(),
+            );
+        }
+        if debug.protocol.is_none() {
+            debug.protocol = Some(DebugProtocol::Socket);
+        }
+        if debug.protocol != Some(DebugProtocol::Socket) {
+            return Err(
+                "`stc serve` requires `--debug-protocol socket` for the remote transport".into(),
+            );
+        }
+        if format == Format::Short {
+            return Err("`stc serve` supports `--message-format human` or `json`".into());
+        }
+    }
+
+    Ok(Some(Invocation {
+        command: Command::Serve,
+        paths: Vec::new(),
+        format,
+        diagnostic_paths,
+        color,
+        quiet,
+        verbosity,
+        relaxed: false,
+        ast: false,
+        manifest,
+        locked,
+        lints: LintOverrides::default(),
+        watch: false,
+        watch_timeout_ns: None,
+        dry_run: false,
+        online: OnlineOptions::default(),
+        serve,
+        fmt_check: false,
+        clean_test: false,
+        build,
+        test: TestOptions::default(),
+        debug,
+        hir_dump: HirDumpOptions::default(),
+    }))
+}
+
+fn parse_diagnostic_paths(value: &str) -> Result<DiagnosticPaths, String> {
+    match value {
+        "package" => Ok(DiagnosticPaths::Package),
+        "absolute" => Ok(DiagnosticPaths::Absolute),
+        other => Err(format!(
+            "unsupported diagnostic path style `{other}` (expected `package` or `absolute`)"
+        )),
+    }
 }
 
 fn select_build_mode(request: &mut Request, mode: BuildMode) -> Result<(), String> {
@@ -1259,9 +1624,9 @@ fn validate(
         | Command::Compliance
         | Command::OnlineDownload
         | Command::Debug => path_count == 0,
-        // `stc lsp` and `stc dap` are parsed separately and never reach
-        // validation.
-        Command::Lsp | Command::Dap => false,
+        // `stc lsp`, `stc dap`, and `stc serve` are parsed separately and never
+        // reach validation.
+        Command::Lsp | Command::Dap | Command::Serve => false,
     };
     if !allowed {
         return Err(match command {
@@ -1475,6 +1840,7 @@ fn command_name(command: Command) -> &'static str {
         Command::Compliance => "compliance",
         Command::OnlineDownload => "online download",
         Command::OnlineDiff => "online diff",
+        Command::Serve => "serve",
         Command::Rename => "rename",
         Command::Lsp => "lsp",
         Command::Dap => "dap",
@@ -1549,6 +1915,13 @@ fn print_help() {
          \x20 stc rename <old> <new> [--dry-run] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20 stc lsp [--manifest-path <stc.toml|dir>]\n\
          \x20 stc dap [--manifest-path <stc.toml|dir>]\n\
+         \x20 stc serve [status|deploy|stop] [--work-dir <dir>] [--session <path>]\n\
+         \x20         [--control-endpoint <path>] [--manifest-path <stc.toml|dir>] [--locked]\n\
+         \x20         [--debug|--release] [--out-dir <dir>] [--cycles <n>] [--cycle-time <duration>]\n\
+         \x20         [--io null|memory|file|ethercat] [--io-file <path>] [--state-file <path>]\n\
+         \x20         [--debug-endpoint <path>] [--allow-write] [--allow-force]\n\
+         \x20         [--session-timeout <duration>] [--module <path>] [--deploy-manifest <path>]\n\
+         \x20         [--message-format human|json] [-v|-vv] [-q]\n\
          \x20 stc hir-dump <file>... [--output <path>] [--relaxed]\n\
          \x20              [--message-format human|json]\n\
          \x20 stc hir-dump --verify <dump.json> [--message-format human|json]\n\
@@ -1824,6 +2197,68 @@ mod tests {
                 .build
                 .mode_override,
             Some(BuildMode::Debug)
+        );
+    }
+
+    #[test]
+    fn serve_parses_start_status_deploy_and_stop() {
+        let start = invocation(&[
+            "serve",
+            "--work-dir",
+            "/tmp/stc",
+            "--manifest-path",
+            "demo/stc.toml",
+            "--cycles",
+            "10",
+            "--debug-endpoint",
+            "debug.json",
+            "--session",
+            "session.json",
+            "--control-endpoint",
+            "control.sock",
+            "--release",
+        ]);
+        assert_eq!(start.command, Command::Serve);
+        assert_eq!(start.serve.action, ServeAction::Start);
+        assert_eq!(start.debug.protocol, Some(DebugProtocol::Socket));
+        assert_eq!(start.build.run.cycles, Some(10));
+        assert_eq!(start.build.mode_override, Some(BuildMode::Release));
+        assert_eq!(start.serve.work_dir.as_deref(), Some("/tmp/stc"));
+        assert_eq!(start.serve.session.as_deref(), Some("session.json"));
+        assert_eq!(
+            start.serve.control_endpoint.as_deref(),
+            Some("control.sock")
+        );
+
+        let status = invocation(&["serve", "status", "--work-dir", "/tmp/stc"]);
+        assert_eq!(status.serve.action, ServeAction::Status);
+        let deploy = invocation(&[
+            "serve",
+            "deploy",
+            "--module",
+            "demo.so",
+            "--deploy-manifest",
+            "demo.json",
+        ]);
+        assert_eq!(deploy.serve.action, ServeAction::Deploy);
+        assert_eq!(deploy.serve.deploy_module.as_deref(), Some("demo.so"));
+        assert_eq!(deploy.serve.deploy_manifest.as_deref(), Some("demo.json"));
+        let stop = invocation(&["serve", "stop"]);
+        assert_eq!(stop.serve.action, ServeAction::Stop);
+
+        assert!(parse_error(&["serve", "--debug-protocol", "pipe"]).contains("socket"));
+        assert!(parse_error(&["serve", "status", "--cycles", "1"]).contains("does not accept"));
+        assert!(parse_error(&["serve", "deploy"]).contains("--module"));
+        assert!(
+            parse_error(&[
+                "serve",
+                "stop",
+                "--module",
+                "demo.so",
+                "--deploy-manifest",
+                "demo.json"
+            ])
+            .contains("only valid")
         );
     }
 

@@ -400,6 +400,8 @@ pub(crate) struct RemoteSession {
     pub(crate) debug_endpoint_file: RemotePath,
     /// Remote control endpoint (absolute).
     pub(crate) control_endpoint: RemotePath,
+    /// Remote user-only control-nonce file (absolute).
+    pub(crate) control_nonce_file: RemotePath,
     /// Build identity.
     pub(crate) build_id: String,
     /// Active generation.
@@ -484,6 +486,7 @@ impl RemoteSession {
             manifest: RemotePath::parse_absolute(&string("manifest")?)?,
             debug_endpoint_file: RemotePath::parse_absolute(&string("debug_endpoint_file")?)?,
             control_endpoint: RemotePath::parse_absolute(&string("control_endpoint")?)?,
+            control_nonce_file: RemotePath::parse_absolute(&string("control_nonce_file")?)?,
             build_id: string("build_id")?,
             generation: unsigned("generation")?,
             source_fingerprint: string("source_fingerprint")?,
@@ -500,11 +503,21 @@ impl RemoteSession {
     /// Serializes the descriptor as compact, key-sorted JSON with one newline.
     #[must_use]
     pub(crate) fn to_json_text(&self) -> String {
-        let object = Json::object([
+        format!("{}\n", self.to_json().render_compact())
+    }
+
+    /// Returns the descriptor as a sorted JSON object.
+    #[must_use]
+    pub(crate) fn to_json(&self) -> Json {
+        Json::object([
             ("build_id".into(), Json::string(self.build_id.clone())),
             (
                 "control_endpoint".into(),
                 Json::string(self.control_endpoint.as_str()),
+            ),
+            (
+                "control_nonce_file".into(),
+                Json::string(self.control_nonce_file.as_str()),
             ),
             (
                 "debug_endpoint_file".into(),
@@ -528,8 +541,7 @@ impl RemoteSession {
             ),
             ("stc_version".into(), Json::string(self.stc_version.clone())),
             ("work_dir".into(), Json::string(self.work_dir.as_str())),
-        ]);
-        format!("{}\n", object.render_compact())
+        ])
     }
 
     /// Validates cross-field invariants.
@@ -593,6 +605,7 @@ impl RemoteSession {
             ("manifest", &self.manifest),
             ("debug_endpoint_file", &self.debug_endpoint_file),
             ("control_endpoint", &self.control_endpoint),
+            ("control_nonce_file", &self.control_nonce_file),
         ] {
             if !path.is_absolute() {
                 return Err(remote_error(
@@ -1053,6 +1066,7 @@ mod tests {
             manifest: path("/home/r2k/stc-wl12/target/stc/debug/demo.stc-got.json"),
             debug_endpoint_file: path("/home/r2k/stc-wl12/stc-debug.endpoint"),
             control_endpoint: path("/home/r2k/stc-wl12/stc-control.sock"),
+            control_nonce_file: path("/home/r2k/stc-wl12/stc-control.nonce"),
             build_id: format!("0x{}", "11".repeat(16)),
             generation: 1,
             source_fingerprint: format!("0x{}", "22".repeat(32)),
