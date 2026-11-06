@@ -61,11 +61,12 @@ struct TestHostOptions {
     /// first cycle runs only after the file appears, so a single-cycle test
     /// cannot race the debugger.
     start_gate: Option<PathBuf>,
-    /// Budget for the adapter to release `start_gate`.
-    start_gate_timeout_ns: Option<u64>,
     control_endpoint: Option<String>,
     control_nonce: Option<String>,
 }
+
+/// Poll interval for the start gate.
+const START_GATE_POLL: Duration = Duration::from_millis(5);
 
 /// One recorded assertion site from the driver's sidecar.
 struct AssertSite {
@@ -254,15 +255,7 @@ fn run_test(
     // service delivers `manifest.get` through the cycle thread, so keep
     // pumping its command queue while the host is parked.
     if let Some(gate) = options.start_gate.as_deref() {
-        let timeout = options.start_gate_timeout_ns.map_or(
-            crate::start_gate::DEFAULT_START_GATE_TIMEOUT,
-            Duration::from_nanos,
-        );
-        if let Err(message) = crate::start_gate::wait_for_start_gate(&mut host, gate, timeout) {
-            eprintln!("stc: {message}");
-            let _ = host.shutdown();
-            return ResultLine::internal_error(message);
-        }
+        wait_for_start_gate(&mut host, gate);
     }
     let run = RunOptions {
         cycles: options.cycles.max(1),
@@ -515,6 +508,20 @@ fn trap_name(code: i32) -> String {
     format!("STC_TRAP_{}", crate::trap_name(code))
 }
 
+/// Blocks until the adapter writes the start gate.
+///
+/// The file is only used by the DAP per-test launch; a directly-run test host
+/// never receives `--start-gate`. The adapter kills the process if the gate
+/// cannot be released, so the wait is bounded by process lifetime. Debug
+/// commands queued by the adapter (`manifest.get`) are applied at this
+/// boundary so the session is fully described before the first cycle.
+fn wait_for_start_gate(host: &mut Host, path: &Path) {
+    while !path.exists() {
+        host.debug_pump_at(0);
+        std::thread::sleep(START_GATE_POLL);
+    }
+}
+
 fn parse_args(args: &[String]) -> Result<TestHostOptions, String> {
     let mut options = TestHostOptions {
         name: "test".into(),
@@ -537,7 +544,6 @@ fn parse_args(args: &[String]) -> Result<TestHostOptions, String> {
         debug_allow_force: false,
         debug_session_timeout_ns: None,
         start_gate: None,
-        start_gate_timeout_ns: None,
         control_endpoint: None,
         control_nonce: None,
     };
@@ -620,22 +626,7 @@ fn parse_args(args: &[String]) -> Result<TestHostOptions, String> {
                     .ok_or_else(|| format!("invalid debug session timeout `{text}`"))?;
                 options.debug_session_timeout_ns = Some(ns);
             }
-            "--start-gate" => {
-                let path = value("--start-gate")?;
-                if path.is_empty() {
-                    return Err("`--start-gate` requires a non-empty path".into());
-                }
-                options.start_gate = Some(PathBuf::from(path));
-            }
-            "--start-gate-timeout" => {
-                let text = value("--start-gate-timeout")?;
-                let ns = run::parse_duration_ns(&text)
-                    .ok_or_else(|| format!("invalid start gate timeout `{text}`"))?;
-                if ns == 0 {
-                    return Err("`--start-gate-timeout` must be positive".into());
-                }
-                options.start_gate_timeout_ns = Some(ns);
-            }
+            "--start-gate" => options.start_gate = Some(PathBuf::from(value("--start-gate")?)),
             "--control" => options.control_endpoint = Some(value("--control")?),
             "--control-nonce" => options.control_nonce = Some(value("--control-nonce")?),
             other => return Err(format!("unknown test-host option `{other}`")),
@@ -656,9 +647,6 @@ fn parse_args(args: &[String]) -> Result<TestHostOptions, String> {
     }
     if options.start_gate.is_some() && options.debug_endpoint.is_none() {
         return Err("`--start-gate` requires `--debug-endpoint`".into());
-    }
-    if options.start_gate_timeout_ns.is_some() && options.start_gate.is_none() {
-        return Err("`--start-gate-timeout` requires `--start-gate`".into());
     }
     Ok(options)
 }
@@ -889,8 +877,6 @@ mod tests {
             "3s",
             "--start-gate",
             "out/test.gate",
-            "--start-gate-timeout",
-            "2s",
             "--control",
             "out/test.control",
             "--control-nonce",
@@ -911,7 +897,6 @@ mod tests {
             options.start_gate.as_deref(),
             Some(Path::new("out/test.gate"))
         );
-        assert_eq!(options.start_gate_timeout_ns, Some(2_000_000_000));
         assert_eq!(
             options.control_endpoint.as_deref(),
             Some("out/test.control")
@@ -923,7 +908,6 @@ mod tests {
     fn debug_only_options_require_an_endpoint() {
         for items in [
             vec!["test", "--start-gate", "gate"],
-            vec!["test", "--start-gate", "gate", "--start-gate-timeout", "1s"],
             vec!["test", "--debug-allow-write"],
             vec!["test", "--debug-allow-force"],
             vec!["test", "--debug-session-timeout", "1s"],
@@ -958,23 +942,9 @@ mod tests {
             std::fs::write(&writer, b"start").expect("write gate");
         });
         let mut host = Host::new(host_platform(), ManifestStore::memory());
-        crate::start_gate::wait_for_start_gate(&mut host, &gate, Duration::from_secs(5))
-            .expect("gate release");
+        wait_for_start_gate(&mut host, &gate);
         thread.join().expect("gate writer");
-        assert!(!gate.exists(), "the host consumes the start gate");
-        std::fs::remove_dir_all(&directory).expect("clean up");
-    }
-
-    #[test]
-    fn start_gate_wait_is_bounded() {
-        let _state = crate::test_support::state_guard();
-        let directory = temp_dir("gate-timeout");
-        let gate = directory.join("missing.gate");
-        let mut host = Host::new(host_platform(), ManifestStore::memory());
-        let error =
-            crate::start_gate::wait_for_start_gate(&mut host, &gate, Duration::from_millis(30))
-                .expect_err("an unreleased gate must fail");
-        assert!(error.contains("not released"), "{error}");
+        assert!(gate.exists());
         std::fs::remove_dir_all(&directory).expect("clean up");
     }
 
@@ -1275,7 +1245,6 @@ mod tests {
             debug_allow_force: false,
             debug_session_timeout_ns: None,
             start_gate: None,
-            start_gate_timeout_ns: None,
             control_endpoint: None,
             control_nonce: None,
         };

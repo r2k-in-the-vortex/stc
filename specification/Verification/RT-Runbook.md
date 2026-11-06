@@ -4,7 +4,7 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-30  
 Status: Operational runbook for the untuned v2.0.0 protocol. Results are host- and
 configuration-specific; this is not a hard real-time guarantee and not a safety function.  
-Origin: v2.0.0 target WL-4, released 2026-11-04 ([RELEASE-NOTES.md](../../RELEASE-NOTES.md))  
+Parent: [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) §4 (WL-4)  
 Report: [RT-Host.md](RT-Host.md)  
 Evidence: [RT-Run-Manifest.md](RT-Run-Manifest.md)
 
@@ -379,4 +379,4 @@ committed evidence is [RT-Run-Manifest.md](RT-Run-Manifest.md).
 - [NON-SAFETY.md](../../NON-SAFETY.md) — the safety stance.
 - [Runtime and Execution](../Architecture/Runtime-and-Execution.md) — the cycle loop, thread classes, and host ABI.
 - [Online Change and GOT](../Architecture/Online-Change-and-GOT.md) — prepare/activate/rollback.
-- [RELEASE-NOTES.md](../../RELEASE-NOTES.md) — the delivered v2.0.0 target set and release status.
+- [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) — the v2.0.0 target set and the WL-4 completion status.

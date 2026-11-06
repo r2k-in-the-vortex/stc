@@ -1,33 +1,33 @@
 # Future Wishlist — post-v2.0.0
 
-Status: `stc` 2.0.0 is released (2026-11-04). The v3.0.0 target set is locked in
-[v3.0.0-plan.md](v3.0.0-plan.md): WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18 (F-19).
-The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, and WL-13; they stay here for a
-later release. This file is deliberately not a roadmap, a commitment, or a release plan. The
-delivered v2.0.0 scope and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
-[RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
+Status: the v2.0.0 target set is complete. Completed targets WL-1.1, WL-2, WL-3, WL-4,
+WL-5.1, WL-5.2, and WL-10 have been removed from the active wishlist; their delivered scope
+and evidence are in [V2.0.0-PLAN.md](V2.0.0-PLAN.md) and [RELEASE-NOTES.md](RELEASE-NOTES.md).
+This file now tracks the deferred candidates for future releases: WL-1.2, WL-6, WL-7, WL-8,
+WL-9, WL-11, WL-12, WL-13, WL-14, and WL-15.
 
-- Date: 2026-10-29; revised 2026-11-04 (v3 planning start)
-- Branch: `v3.0.0-planning`
-- Baseline: `stc` 2.0.0, released 2026-11-04; profile `stc-2013-oop-utf8-v1`
+- Date: 2026-10-29; revised 2026-11-04
+- Branch: `v2.0.0-planning`
+- Baseline: `stc` 2.0.0 target set; profile `stc-2013-oop-utf8-v1`
 
 ## 1. Purpose
 
-This file records candidate directions for releases after v2.0.0, while they are still ideas.
-It is deliberately not a roadmap, a commitment, or a release plan.
+The v2.0.0 target set is complete. This file now records candidate directions for later
+releases, while they are still ideas. It is deliberately not a roadmap, a commitment, or a
+release plan.
 
-The v3.0.0 target set was picked from this list and locked in
-[v3.0.0-plan.md](v3.0.0-plan.md) on 2026-11-04. Items that were not picked stay here for a
-later release. Append new entries with the next `WL-` id and change an entry's status rather
-than deleting it.
+When the next target set is selected, it is picked from this list and locked in a dedicated
+plan with scope, non-goals, work breakdown, exit criteria, evidence, risks, and effort. Items
+that are not picked stay here for a later release. Append new entries with the next `WL-` id
+and change an entry's status rather than deleting it.
 
 ## 2. Ground rules
 
 These apply to every candidate until a future target set is locked.
 
-- **The released v2.0.0 artifact and language profile are the compatibility baseline.** Future
-  work is additive around the released compiler, runtime, artifact formats, and language profile
-  unless a selected item explicitly says otherwise.
+- **The v2.0.0 artifact and language profile is the compatibility baseline.** Future work is
+  additive around the released compiler, runtime, artifact formats, and language profile unless
+  a selected item explicitly says otherwise.
 - **No core language or compiler feature work.** This wishlist contains no new ST language
   features, no codegen redesign, and no runtime architecture rewrite. Compiler changes are
   limited to bug fixes and to instrumentation required by a selected item (for example a stable
@@ -45,9 +45,9 @@ These apply to every candidate until a future target set is locked.
 
 ## 3. Selection and locking
 
-All entries start as `Candidate`. The v3.0.0 target set was locked on 2026-11-04 in
-[v3.0.0-plan.md](v3.0.0-plan.md). The completed v2.0.0 target set and its evidence remain in
-[RELEASE-NOTES.md](RELEASE-NOTES.md) and [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
+All entries start as `Candidate`. When the next target set is selected, those entries are
+locked in a dedicated plan. The completed v2.0.0 plans remain in
+[V2.0.0-PLAN.md](V2.0.0-PLAN.md) for reference.
 
 | Status | Meaning |
 | --- | --- |
@@ -85,27 +85,22 @@ more. They are order-of-magnitude estimates for comparison only.
 
 ## 4. Summary
 
-The delivered v2.0.0 targets are intentionally absent from this table; their scope and evidence
-are in [RELEASE-NOTES.md](RELEASE-NOTES.md). Entries marked `Locked` are the v3.0.0 target set
-in [v3.0.0-plan.md](v3.0.0-plan.md); the remaining entries are deferred candidates for a later
-release. Dependencies that name WL-1.1, WL-3, WL-4, WL-5.1, or WL-5.2 refer to delivered v2.0.0
-components.
+The completed v2.0.0 targets are intentionally absent from this table. The remaining entries
+are deferred candidates for a future release. Dependencies that name WL-1.1, WL-3, WL-4,
+WL-5.1, or WL-5.2 refer to delivered v2.0.0 components.
 
 | ID | Candidate | Area | Tentative size | Key dependency | Status |
 | --- | --- | --- | --- | --- | --- |
-| WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Locked |
-| WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Locked |
-| WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS test-only | Locked |
-| WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Locked |
-| WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Complete |
-| WL-17 | Manifest and task follow-ups from v2.0.0 | Tooling/IDE | S/M | WL-1.1 delivered; manifest/task contracts | Locked |
-| WL-18 | Language-server rename (F-19) | Tooling/IDE | M | WL-1.1 delivered; reference resolution | Locked |
+| WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Deferred |
 | WL-6 | Motion controller: coordinated multi-axis interpolated motion | Motion | L/XL | WL-5.2, WL-7, WL-4; robot-sim reuse | Deferred |
+| WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Deferred |
 | WL-8 | Tracing UI to watch and graph PLC variables | Tooling/observability | M/L | WL-9 WebUI | Deferred |
 | WL-9 | WebUI for basic runtime control | Tooling/operations | M/L | Runtime control API; network security | Deferred |
 | WL-11 | Modbus TCP client capability; separate from WL-5.1 server | Runtime/IO | M/L | WL-5.1 backend contract | Deferred |
 | WL-12 | Reduce cycle-thread wake-up jitter at sub-millisecond cycle times | Runtime/RT | M/L | WL-5.2 CT-sweep evidence; RT host | Deferred |
 | WL-13 | Lean security verification for the Modbus TCP server boundary | Verification/security | L/XL | WL-3 Lean infrastructure; WL-5.1 server | Deferred |
+| WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4/WL-12 harness; CI runners; macOS test-only | Deferred |
+| WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Deferred |
 
 ## 5. Candidate items
 
@@ -115,9 +110,7 @@ components.
 host: connect VS Code to a remote `stc` runtime over the network with authentication, transport
 security, and source mapping. This is a separate task.
 
-**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-10-29). The v2.0.0 WL-1.1
-follow-up F-21 (always-on runtime and attach-time deployment choice) is folded into this item
-rather than tracked separately.
+**Status.** Deferred to a future version (2026-10-29).
 
 **Why it matters.** The PREEMPT_RT host (WL-4) and deployed controllers are run-only targets, not
 development machines. A developer needs to set breakpoints, step, inspect variables, and read
@@ -280,7 +273,7 @@ integration, the ST API, and cycle/online-change behavior dominate.
 Information) files instead of hand-maintained channel and PDO metadata. This builds on the
 delivered WL-5.2 EtherCAT backend.
 
-**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-10-29).
+**Status.** Deferred to a future version (2026-10-29).
 
 **Why it matters.** An ESI file describes a slave's vendor/product/revision identity, object
 dictionary, PDO mapping, sync managers, distributed clocks, and mailbox behavior. Practical
@@ -535,8 +528,7 @@ investigation, not an EtherCAT protocol or backend change.
 
 **Selection.** Deferred on 2026-11-01. It is explicitly out of scope for the delivered WL-5.2
 work and the v2.0.0 target set. It is recorded because the WL-5.2 phase-5 CT sweep produced
-reproducible evidence that the remaining limit is wake-side scheduling, not the fieldbus. It
-also absorbs the tuned boot profile that WL-4 deferred when v2.0.0 shipped.
+reproducible evidence that the remaining limit is wake-side scheduling, not the fieldbus.
 
 **Why it matters.** WL-5.2's instrumented sweep maintained 150 µs with zero skipped periods,
 while 100 µs failed with 283 skipped periods. The 100 µs events had 53.4–133.3 µs wake lateness
@@ -548,9 +540,6 @@ delivered WL-5.2 scope.
 **Candidate scope.**
 
 - Reproduce the 150/100/75/50 µs sweep with the WL-5.2 DIEWU fixture and the installed wrappers.
-- Absorb the WL-4 tuned boot profile evaluation: the untuned triggers (R1 heavy mixed load and
-  osnoise) were met; measure whether a tuned boot profile removes the remaining stability limit
-  and record the configuration as host-specific evidence.
 - Instrument wake-up sources with `rtla timerlat`/`osnoise`, `cyclictest`, `perf sched`, and
   tracepoints; correlate wake lateness with the IgH master thread and IRQs, the runtime
   control/status/debug/metrics threads, C-states, isolation, and the timer source.
@@ -663,10 +652,9 @@ dependency or evidence).
 soft-real-time scheduling facilities on macOS and Windows to improve test and benchmark behavior,
 without adding macOS as a supported production host or claiming hard real-time behavior.
 
-**Selection.** Locked for v3.0.0 (2026-11-04). Previously deferred on 2026-11-02, beyond
-v2.0.0. The supported native hosts remain Windows x86-64, Linux x86-64, and Linux AArch64;
-macOS is test-only. This item is inspired by the audio/pro-audio use of thread priorities and
-time-constraint policies on Windows and macOS.
+**Selection.** Deferred on 2026-11-02, beyond v2.0.0. The supported native hosts remain Windows
+x86-64, Linux x86-64, and Linux AArch64; macOS is test-only. This item is inspired by the
+audio/pro-audio use of thread priorities and time-constraint policies on Windows and macOS.
 
 **Why it matters.** The current matrix has no macOS coverage, so portability regressions in the
 driver, runtime, or test harness can go unnoticed on a second soft-real-time-capable Unix. Windows
@@ -687,9 +675,9 @@ support matrix. The RT evidence remains host-specific and not a guarantee.
   - macOS: apply a Mach `THREAD_TIME_CONSTRAINT_POLICY` or appropriate QoS/priority to the
     cycle/test thread; document entitlement or privilege requirements and ARM64/x86-64
     differences.
-- Measure cycle timing, wake lateness, and request/scan jitter with the WL-4 harness on Windows
-  and macOS; compare baseline against scheduling mode; record host, OS, build form, metric, and
-  sample. Reuse the WL-12 harness if that work is selected later, but WL-12 is not a prerequisite.
+- Measure cycle timing, wake lateness, and request/scan jitter with the WL-4/WL-12 harness on
+  Windows and macOS; compare baseline against scheduling mode; record host, OS, build form,
+  metric, and sample.
 - Update the CI matrix, runbooks, and known limitations; state that macOS is test-only and that
   neither platform becomes a hard-real-time or safety platform.
 - Keep production scheduler behavior unchanged unless measured evidence and owner review approve
@@ -702,8 +690,6 @@ support matrix. The RT evidence remains host-specific and not a guarantee.
   policy without entitlements.
 - Windows MMCSS is designed for audio; its behavior for a PLC cycle thread must be measured, not
   assumed. Thread priority alone is not a real-time guarantee.
-- WL-12 is not in the selected v3 set; this item uses the existing WL-4 harness and does not
-  require the wake-jitter work.
 - The item does not add macOS to the supported-host list, change the language profile, or make a
   safety claim.
 
@@ -714,7 +700,7 @@ support matrix. The RT evidence remains host-specific and not a guarantee.
 - Is MMCSS appropriate for a cycle thread, or is `THREAD_PRIORITY_TIME_CRITICAL` sufficient?
 - Which tests run on macOS: full workspace, driver/project, selected runtime, or a smoke subset?
 - What metric and threshold justify an opt-in scheduling mode, and does it need a runtime flag?
-- Should the scheduling mode reuse WL-12's wake-lateness metrics if WL-12 is selected later?
+- Does this depend on WL-12's wake-jitter work, or can it run independently?
 
 **Related.** [RT-Host.md](specification/Verification/RT-Host.md),
 [RT-Runbook.md](specification/Verification/RT-Runbook.md),
@@ -732,9 +718,9 @@ measurement.
 topic/payload messages to the `stc` process image. The broker is external; this item does not
 implement a broker, an MQTT server, or a cloud connector.
 
-**Selection.** Locked for v3.0.0 (2026-11-04). Previously deferred on 2026-11-03, beyond
-v2.0.0. Recorded because the architecture already lists MQTT as a planned backend and because
-it complements the Modbus TCP server and EtherCAT backends.
+**Selection.** Deferred on 2026-11-03, beyond v2.0.0; it is not part of the v2.0.0 target set.
+Recorded because the architecture already lists MQTT as a planned backend and because it
+complements the Modbus TCP server and EtherCAT backends.
 
 **Why it matters.** MQTT is the common lightweight publish/subscribe transport for sensors,
 gateways, dashboards, and IT/cloud integration. A client backend lets `stc` consume remote
@@ -785,154 +771,10 @@ best-effort, and not suitable for interpolated motion or safety functions.
 **Tentative size.** M/L, dominated by MQTT client integration, mapping schema, security
 configuration, and broker-backed tests.
 
-### WL-16 — Debug session lifecycle: start-paused binding and exit status
-
-**Intent.** Close the two WL-1.1 debug-session follow-ups deferred from v2.0.0: bind breakpoints
-before the first cycle (F-9) and report session termination and exit in the Debug Console (F-15).
-Optionally surface the `[debug].session-timeout` budget as well.
-
-**Status.** Complete for v3.0.0 (2026-11-05); manually checked and approved. Locked 2026-11-04;
-previously deferred (2026-11-04); recorded from the v2.0.0 WL-1.1 post-completion follow-ups.
-
-**Why it matters.** Before WL-16, a launch with a breakpoint bound after one or two cycles, so the
-first stop could observe cycle-1 or cycle-2 values instead of cycle-0 values; startup logic was
-therefore not debugged deterministically. Separately, terminating a launch printed nothing in
-the Debug Console even though the host exited, so a normal exit and a failed session looked alike.
-
-**Candidate scope.**
-
-- Add a start-paused mode (or an equivalent ready/bind handshake) so breakpoints bind before the
-  first cycle; define launch/attach behavior, the time budget, and the failure path.
-- Report terminate and exit in the Debug Console and distinguish a user stop from a host exit,
-  trap, or connection loss.
-- Optionally surface the `[debug].session-timeout` budget or a warning when the opt-in timeout
-  is enabled.
-- Evidence: adapter/runtime integration tests with a breakpoint at cycle 0, terminate/exit and
-  timeout tests, and an extension smoke update.
-
-**Constraints and current state.**
-
-- WL-1.1 is delivered: the local DAP adapter and the `stc-debug/1` protocol exist, with the
-  additive `stc-debug/1.1` Locals revision. `stc-debug/1` must remain valid; start-paused is
-  either a protocol revision or an adapter-side handshake.
-- Debug is local-only and one session per host. Every swap, rollback, cold install, shutdown, or
-  target exit ends the session and clears forces and breakpoints.
-- `[debug].session-timeout` is opt-in and disabled by default because an automatic resume must
-  not restart machinery unexpectedly.
-- A paused session holds outputs. This is not a safety function.
-
-**Open questions.**
-
-- Is start-paused a new protocol message, a launch flag, or an adapter-side wait for a ready
-  event?
-- Does it apply to attach as well as launch, and to release monitoring?
-- Should the timeout warning be a Debug Console line, a notification, or both?
-- Does F-15 need a protocol change, or only adapter and extension reporting?
-
-**Related.** [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
-[IDE Integration](specification/Architecture/IDE-Integration.md),
-[Known limitations §3 and §4](KNOWN-LIMITATIONS.md), WL-1.1 (delivered), WL-1.2.
-
-**Tentative size.** S/M, dominated by the start-paused protocol/runtime handshake.
-
-### WL-17 — Manifest and task follow-ups from v2.0.0
-
-**Intent.** Close the remaining WL-1.1 close-out follow-ups that are local to the project loader,
-task provider, and extension: optional project items and empty source sets (F-23) and
-task-argument variable expansion (F-24).
-
-**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-11-04); recorded from the
-v2.0.0 WL-1.1 post-completion follow-ups. F-19 was split out to WL-18 when it was selected for
-v3; F-22 was fixed after v2.0.0 (`277f752`).
-
-**Why it matters.** Each is a small but visible developer-experience gap:
-
-- **F-23.** A declared source glob that matches no files is `STC-E-PROJECT-004` at project load,
-  so a project without tests must omit `[test]`; other optional project-file items may fail at
-  load in the same way.
-- **F-24.** The task provider expands `${workspaceFolder}`-style variables in `project` but
-  passes user-supplied `args` through unchanged, so expansion is not guaranteed for every task
-  type.
-
-**Candidate scope.**
-
-- F-23: audit required versus optional project-file items and empty source sets; allow a project
-  without tests and defer errors until the command that needs them. This amends
-  `STC-E-PROJECT-004`, the conformance profile, and the CLI and language-server documentation.
-- F-24: apply `expandTaskVariables` to each `args` entry and document the expansion so
-  configured tasks behave consistently.
-- Evidence: project-loader tests for empty and optional sets, task-provider tests, and
-  documentation updates.
-
-**Constraints and current state.**
-
-- Project loading is shared by the CLI, language server, and task provider; F-23 changes a
-  project error contract and needs a decision.
-- The extension is local-only and VSIX-only; no marketplace or remote behavior is implied.
-
-**Open questions.**
-
-- Which project items become lazy, and does that change `stc check` diagnostics?
-- Should all task arguments use one variable set, and how are unknown variables reported?
-
-**Related.** [IDE Integration](specification/Architecture/IDE-Integration.md),
-[CLI and Manifest](specification/Architecture/CLI-and-Manifest.md),
-[Known limitations §4](KNOWN-LIMITATIONS.md), WL-1.1 (delivered), WL-18.
-
-**Tentative size.** S/M.
-
-### WL-18 — Language-server rename (F-19)
-
-**Intent.** Add `textDocument/prepareRename` and `textDocument/rename` to `stc-lsp`, backed by
-the compiler's reference resolution and rename history, so Rename (F2) works in VS Code instead
-of doing nothing.
-
-**Status.** Locked for v3.0.0 (2026-11-04). Split out of WL-17.
-
-**Why it matters.** Rename (F2) currently does nothing and prints no message, even though the
-compiler and runtime carry rename history. It is the most visible missing editor action in the
-closed language-server capability set.
-
-**Candidate scope.**
-
-- Advertise `renameProvider` with `prepareProvider`; resolve the symbol at the cursor and return
-  a `WorkspaceEdit` that renames every resolved reference.
-- Reuse the compiler's reference resolution and rename history; do not build a second symbol
-  graph in the language server.
-- Handle the symbol kinds the compiler already supports (programs, functions, variables, fields,
-  and types as available) and reject unsupported symbols with a clear message rather than a
-  silent no-op.
-- Evidence: LSP rename tests over a multi-file project, prepare/rename negative cases, and an
-  editor smoke check.
-
-**Constraints and current state.**
-
-- WL-1.1 is delivered: the language server, reference resolution, and `stc rename` CLI exist;
-  the LSP capability set is closed and advertises no rename support. This item reopens the set
-  for rename only.
-- Rename across files must respect the project graph and source sets; renaming a symbol used by
-  an artifact or generated wrapper needs the same rules the CLI uses.
-- The extension is local-only and VSIX-only; no remote behavior is implied.
-
-**Open questions.**
-
-- Does the first slice cover every symbol kind the CLI rename supports, or a bounded subset?
-- Does rename apply to files outside the project source set, and how are ambiguous or unresolved
-  references reported?
-- Should the CLI and LSP share one rename operation, or is the CLI's behavior the reference?
-- Is a workspace-edit size limit needed for large projects?
-
-**Related.** [IDE Integration](specification/Architecture/IDE-Integration.md),
-[CLI and Manifest](specification/Architecture/CLI-and-Manifest.md),
-[Known limitations §4](KNOWN-LIMITATIONS.md), WL-1.1 (delivered), WL-17.
-
-**Tentative size.** M, dominated by reference-backed rename and its edge cases.
-
 ## 6. Cross-cutting notes
 
 - The v2.0.0 release delivered the local IDE, RT evidence, Modbus TCP server, and EtherCAT
-  backend. The candidates and selected items build on those contracts rather than re-planning
-  them.
+  backend. The deferred items below build on those contracts rather than re-planning them.
 - WL-1.2 remote debugging builds on the delivered WL-1.1 local debugger and shares its remote
   authentication design with the deferred WL-8 tracing UI and WL-9 WebUI.
 - WL-6 motion uses the delivered WL-5.2 EtherCAT backend and the deferred WL-7 ESI
@@ -940,24 +782,17 @@ closed language-server capability set.
 - WL-11 is the Modbus TCP client counterpart to the delivered WL-5.1 server. It has different
   outbound scheduling and failure behavior and should not be forced into the server code path.
 - WL-12 is a host/runtime scheduling investigation that reuses the delivered WL-5.2 CT-sweep
-  fixture and WL-4 tooling; it absorbs the deferred WL-4 tuned boot profile evaluation and does
-  not change the EtherCAT backend or the safety stance.
+  fixture and WL-4 tooling; it does not change the EtherCAT backend or the safety stance.
 - WL-13 extends the delivered WL-3 Lean program to the WL-5.1 protocol/register-bank boundary.
   It verifies protocol and write-authorization invariants, not authentication or TLS, and does
   not make the server a safety function.
-- WL-14 is macOS test-only; it does not become a supported production host. It is selected for
-  v3 and uses the existing WL-4 harness for opt-in scheduling experiments; WL-12 is not a
-  prerequisite. No hard-real-time or safety claim is made.
+- WL-14 is macOS test-only; it does not become a supported production host and uses the WL-4/WL-12
+  harness for opt-in scheduling experiments without a hard-real-time or safety claim.
 - WL-15 is an MQTT client for an external broker, not a broker or server. It shares the delivered
   multi-backend coordinator and needs an explicit payload, stale/cache, and security model.
 - WL-8 is a module of the deferred WL-9 WebUI, not a separate front end; both use the WebUI's
   authentication, packaging, and deployment and must not bypass the runtime control or debug
   contracts.
-- WL-16 and WL-17 cover the remaining WL-1.1 follow-ups deferred when v2.0.0 shipped: F-9 and
-  F-15 in WL-16, F-23 and F-24 in WL-17; F-19 is WL-18, and F-21 is part of WL-1.2. F-22 was
-  fixed after v2.0.0.
-- The v3.0.0 target set is locked: WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18
-  (2026-11-04); see [v3.0.0-plan.md](v3.0.0-plan.md).
 - The remaining items are additive around a stable compiler. None changes the ST language or the
   core compiler architecture unless a selected item explicitly says so.
 
@@ -970,11 +805,6 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
-| 2026-11-05 | WL-16 complete: launches are start-gated before cycle 0 and session teardown/exit is reported in the Debug Console; manual check approved. |
-| 2026-11-04 | Locked the v3.0.0 target set (WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18) and created [v3.0.0-plan.md](v3.0.0-plan.md) as the working plan. |
-| 2026-11-04 | Selected WL-16 (F-9, F-15) and WL-17 (F-23, F-24) for v3 (not yet locked). |
-| 2026-11-04 | Fixed F-22 (`277f752`): deterministic project-load errors no longer restart the language server and now show the manifest error with Open Output/Retry. Split F-19 out of WL-17 as WL-18 and selected WL-1.2, WL-7, WL-14, WL-15, and WL-18 for v3 (not yet locked); WL-17 now covers F-23 and F-24. |
-| 2026-11-04 | v2.0.0 released. Started v3 planning: retired the delivered v2.0.0 plan, moved its open follow-ups here as WL-16 (F-9, F-15) and WL-17 (F-19, F-22, F-23, F-24), folded F-21 into WL-1.2 and the deferred tuned boot profile into WL-12, and set the compatibility baseline to 2.0.0. |
 | 2026-11-04 | v2.0.0 target set complete. Removed completed targets WL-1.1, WL-2, WL-3, WL-4, WL-5.1, WL-5.2, and WL-10; retained the deferred candidates below. |
 | 2026-11-03 | Added WL-15 (MQTT client for process-image I/O) as deferred beyond v2.0.0. |
 | 2026-11-02 | Added WL-13 (Lean security verification for the Modbus TCP server boundary) and WL-14 (macOS CI and Windows/macOS soft-real-time scheduling) as deferred beyond v2.0.0. |

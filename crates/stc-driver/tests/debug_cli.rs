@@ -743,8 +743,7 @@ fn launch_batch_applies_initial_breakpoints_and_watches() {
     project.write(
         "requests.jsonl",
         "{\"op\":\"breakpoint.list\",\"params\":{}}\n\
-         {\"op\":\"watch.list\",\"params\":{}}\n\
-         {\"op\":\"var.read\",\"params\":{\"target\":{\"kind\":\"path\",\"key\":\"MAIN.TICKS\"}}}\n",
+         {\"op\":\"watch.list\",\"params\":{}}\n",
     );
     let output = project.run_with_runtime(&[
         "debug",
@@ -784,14 +783,6 @@ fn launch_batch_applies_initial_breakpoints_and_watches() {
         stderr(&output).contains("debug endpoint"),
         "launch mode prints the endpoint path on stderr:\n{}",
         stderr(&output)
-    );
-    // WL-16 F-9: the launch host is start-gated, so the batch reads cycle-0
-    // values even though the first statement increments TICKS.
-    let ticks = response_with(&lines, "value");
-    assert_eq!(
-        field(ticks, "result")["value"]["value"],
-        "0",
-        "the launch breakpoint binds before cycle 0: {ticks}"
     );
     assert!(stderr(&output).contains("not a safety PLC"), "{text}");
 }
