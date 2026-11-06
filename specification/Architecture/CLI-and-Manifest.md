@@ -496,15 +496,18 @@ prints an address, absolute path, or timestamp.
 targets use the same default. The server clamps the interval to its 50 ms minimum (Debug and
 Monitoring §13.5).
 
-**Launch versus attach.** Launch mode owns the target: on `quit` or EOF it stops the session,
-clears forces and breakpoints, shuts the host down, and returns 0 on a clean shutdown, 4 on a
-target trap, and 130 on interrupt. Attach mode stops the session (clearing state), detaches, and
-leaves the host running; it returns 0 on a clean detach. A session ended by a swap, a timeout, or
-a protocol error is reported with its `STC-E-DEBUG-*` code and exits 2. The CLI never prints the
-token; the endpoint path is printed on stderr in launch and server modes. The non-safety notice is
-printed at session start and included in `--help`; a stopped or forced controller may hold outputs
-indefinitely. `stc` may control machinery, but it is not a safety PLC and safety must be provided
-by a separate system and machine design as required by law and regulation.
+**Launch versus attach.** Launch mode owns the target: it starts the host gated and releases it
+only after the session is established and the `--break`/`--watch` setup is applied, so a launch
+breakpoint binds before cycle 0 (Debug and Monitoring §14.2.1). Attach cannot gate an
+already-running host; its breakpoints bind at the next checkpoint. On `quit` or EOF, launch mode
+stops the session, clears forces and breakpoints, shuts the host down, and returns 0 on a clean
+shutdown, 4 on a target trap, and 130 on interrupt. Attach mode stops the session (clearing state),
+detaches, and leaves the host running; it returns 0 on a clean detach. A session ended by a swap, a
+timeout, or a protocol error is reported with its `STC-E-DEBUG-*` code and exits 2. The CLI never
+prints the token; the endpoint path is printed on stderr in launch and server modes. The non-safety
+notice is printed at session start and included in `--help`; a stopped or forced controller may
+hold outputs indefinitely. `stc` may control machinery, but it is not a safety PLC and safety must
+be provided by a separate system and machine design as required by law and regulation.
 
 **`stc run --debug-server`.** `stc run` gains:
 
@@ -556,15 +559,18 @@ UTF-16 positions; the closed unsupported list is in IDE Integration §3.3.
 DAP messages (`project`, `noBuild`, `outDir`, `release`, `allowWrite`, `allowForce`, `sourceRoot`,
 `args`, `cwd`, `test` for a selected test, and `endpoint` for attach); `--manifest-path` is only a
 fallback project path. Launch builds the debug form by default and starts a local endpoint through
-the same driver plumbing as `stc debug`; `noBuild` launches existing artifacts. A launch with
-`test` builds only that discovered `{stc:test}` POU with the per-test debug harness (Testing and
-Verification §2.5) into `<artifact root>/debug/<artifact>`, applies breakpoints before releasing
-the test host's start gate, and cannot be combined with `noBuild`, `release`, or attach. The
-adapter translates DAP to `stc-debug/1.1` and falls back to `stc-debug/1`, reports unsupported
-capabilities honestly, and owns no compiler or debugger logic. `disconnect` stops the session and
-exits the adapter; a launch-owned host is shut down, while attach leaves it running. `stc dap` is
-distinct from `stc debug`: `stc debug` is the interactive CLI client, and `stc dap` is the editor
-server.
+the same driver plumbing as `stc debug`; `noBuild` launches existing artifacts. Every launch-owned
+host is start-gated: the adapter starts the session and applies the breakpoints before releasing
+cycle 0 (Debug and Monitoring §14.2.1). A launch with `test` builds only that discovered
+`{stc:test}` POU with the per-test debug harness (Testing and Verification §2.5) into
+`<artifact root>/debug/<artifact>`, applies breakpoints before releasing the test host's start
+gate, and cannot be combined with `noBuild`, `release`, or attach. The adapter translates DAP to
+`stc-debug/1.1` and falls back to `stc-debug/1`, reports unsupported capabilities honestly, and
+owns no compiler or debugger logic. `disconnect` stops the session and exits the adapter; a
+launch-owned host is shut down, while attach leaves it running. Teardown writes one Debug Console
+summary line that distinguishes a client stop, a host exit or trap, and a connection loss, and a
+launch-owned host's exit code is also sent as the DAP `exited` event. `stc dap` is distinct from
+`stc debug`: `stc debug` is the interactive CLI client, and `stc dap` is the editor server.
 
 `--diagnostic-paths` affects project-mode diagnostics only. `package` is the default and keeps
 `<package>/<relative>` names for human and JSON output; `absolute` names the source file by its

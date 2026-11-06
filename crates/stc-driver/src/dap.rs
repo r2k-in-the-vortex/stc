@@ -31,6 +31,10 @@ use crate::test;
 /// Deadline for the host to publish its endpoint file.
 const ENDPOINT_DEADLINE: Duration = Duration::from_secs(5);
 
+/// Budget for the adapter to release a launch start gate. The host parks
+/// before cycle 0 until the session is started and breakpoints are applied.
+const START_GATE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Runs the debug adapter over the process standard streams.
 pub(crate) fn run(manifest: Option<&str>) -> u8 {
     let mut launcher = DapLauncher {
@@ -203,9 +207,12 @@ fn no_build(project_path: &Path, arguments: &LaunchArguments) -> Result<ProjectB
 
 /// Spawns the runtime host with piped output and connects the debug client.
 ///
-/// `test` launches add a start gate: the test host publishes the debug endpoint
-/// and then waits for [`SessionHost::configuration_complete`] before its first
-/// cycle. A production launch runs immediately, exactly as before.
+/// Every launch-owned host starts with a start gate: it publishes the debug
+/// endpoint and then waits for [`SessionHost::configuration_complete`] before
+/// its first cycle. The adapter releases the gate after `session.start`,
+/// `manifest.get`, and all pre-configuration breakpoints are applied, so a
+/// launch breakpoint binds before cycle 0. A test launch uses the same gate; a
+/// production launch is otherwise unchanged.
 #[allow(clippy::too_many_arguments)]
 fn spawn_host(
     launcher: &Path,
@@ -218,10 +225,13 @@ fn spawn_host(
     let nonce = crate::debug::random_hex();
     let endpoint = out_dir.join(format!("stc-debug-{nonce}.endpoint"));
     let control = crate::debug::control_endpoint();
-    let gate = test.then(|| out_dir.join(format!("stc-test-start-{nonce}.gate")));
-    if let Some(gate) = &gate {
-        let _ = std::fs::remove_file(gate);
-    }
+    let gate_prefix = if test {
+        "stc-test-start"
+    } else {
+        "stc-debug-start"
+    };
+    let gate = out_dir.join(format!("{gate_prefix}-{nonce}.gate"));
+    let _ = std::fs::remove_file(&gate);
     let debug_options = DebugOptions {
         allow_write: arguments.allow_write,
         allow_force: arguments.allow_force,
@@ -234,9 +244,10 @@ fn spawn_host(
         manifest,
         &endpoint,
     ));
-    if let Some(gate) = &gate {
-        command.arg("--start-gate").arg(gate);
-    }
+    command.arg("--start-gate").arg(&gate);
+    command
+        .arg("--start-gate-timeout")
+        .arg(format!("{}s", START_GATE_TIMEOUT.as_secs()));
     command
         .arg("--control")
         .arg(&control)
@@ -295,7 +306,7 @@ fn spawn_host(
             child,
             control,
             nonce,
-            gate,
+            gate: Some(gate),
             readers,
             output: receiver,
         })),
@@ -343,7 +354,8 @@ struct DriverHost {
     child: Child,
     control: String,
     nonce: String,
-    /// Start gate for a per-test debug harness; `None` for production launches.
+    /// Start gate for a launch-owned host; released after the session is
+    /// configured. It is never present for attach (the adapter has no host).
     gate: Option<PathBuf>,
     /// Output reader threads; joined during shutdown so final lines reach DAP.
     readers: Vec<std::thread::JoinHandle<()>>,
@@ -363,13 +375,14 @@ impl SessionHost for DriverHost {
     }
 
     fn configuration_complete(&mut self) -> Result<(), String> {
-        if let Some(gate) = self.gate.take() {
-            std::fs::write(&gate, b"start").map_err(|error| {
+        if let Some(gate) = self.gate.as_ref() {
+            std::fs::write(gate, b"start").map_err(|error| {
                 format!(
-                    "cannot release the test start gate `{}`: {error}",
+                    "cannot release the host start gate `{}`: {error}",
                     gate.display()
                 )
             })?;
+            self.gate = None;
         }
         Ok(())
     }

@@ -49,6 +49,10 @@ const ENDPOINT_DEADLINE: Duration = Duration::from_secs(5);
 pub(crate) const CONTROL_DEADLINE: Duration = Duration::from_secs(10);
 const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);
 const DEFAULT_WATCH_INTERVAL_MS: u64 = 1000;
+/// Budget for the debugger to release a launch start gate. The host refuses to
+/// run cycle 0 until the driver has started the session and applied the initial
+/// breakpoints and watches.
+const START_GATE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Builds the launcher's debug-server arguments and the resolved endpoint
 /// path for `stc run --debug-server` (and `stc run --watch --debug-server`).
@@ -298,6 +302,12 @@ pub(crate) fn launch(
     }
     let control = control_endpoint();
     let nonce = random_hex();
+    // A launch-owned host parks before cycle 0 until this gate is written, so
+    // every breakpoint applied below binds before the first scan. Attach has no
+    // gate: its host is already running.
+    let gate_path = out_dir.join(format!("stc-debug-start-{nonce}.gate"));
+    let _ = std::fs::remove_file(&gate_path);
+    let mut gate = Some(gate_path);
     let json = reporter.is_json();
     let mut command = Command::new(exe);
     command.args(run_util::run_arguments(
@@ -307,6 +317,12 @@ pub(crate) fn launch(
         log.verbose(),
     ));
     command.args(server_arguments_for(debug, manifest, &endpoint));
+    if let Some(path) = gate.as_deref() {
+        command.arg("--start-gate").arg(path);
+        command
+            .arg("--start-gate-timeout")
+            .arg(format!("{}s", START_GATE_TIMEOUT.as_secs()));
+    }
     command
         .arg("--control")
         .arg(&control)
@@ -365,7 +381,7 @@ pub(crate) fn launch(
                     endpoint.display()
                 ),
             );
-            let _ = shutdown_host(&control, &nonce, &mut child);
+            let _ = shutdown_host(&control, &nonce, &mut child, &mut gate);
             return 2;
         }
     };
@@ -380,20 +396,29 @@ pub(crate) fn launch(
         &mut state,
     ) {
         let _ = stop_session(&mut client);
-        let _ = shutdown_host(&control, &nonce, &mut child);
+        let _ = shutdown_host(&control, &nonce, &mut child, &mut gate);
         return code;
     }
     if let Err(code) = apply_initial(&mut client, debug, json, reporter, &mut state) {
         let _ = stop_session(&mut client);
-        let _ = shutdown_host(&control, &nonce, &mut child);
+        let _ = shutdown_host(&control, &nonce, &mut child, &mut gate);
         return code;
+    }
+    // Breakpoints and watches are configured; let cycle 0 run.
+    if let Err(message) = release_start_gate(&mut gate) {
+        reporter.plain("STC-E-DEBUG-020", Severity::Error, &message);
+        let _ = stop_session(&mut client);
+        let _ = shutdown_host(&control, &nonce, &mut child, &mut gate);
+        return 2;
     }
     let outcome = if let Some(batch) = &debug.batch {
         run_batch(&mut client, batch, json, reporter, &mut state)
     } else {
         interactive(&mut client, json, reporter, &mut state)
     };
-    finish_launch(client, outcome, reporter, &control, &nonce, &mut child)
+    finish_launch(
+        client, outcome, reporter, &control, &nonce, &mut child, &mut gate,
+    )
 }
 
 /// Sends `session.start` and reports the result, capabilities, and warnings.
@@ -1726,6 +1751,7 @@ fn finish_launch(
     control: &str,
     nonce: &str,
     child: &mut Child,
+    gate: &mut Option<PathBuf>,
 ) -> u8 {
     let mut report: Option<(String, String)> = None;
     let code = match &outcome {
@@ -1751,7 +1777,7 @@ fn finish_launch(
         }
     };
     let _ = stop_session(&mut client);
-    let child_code = shutdown_host(control, nonce, child);
+    let child_code = shutdown_host(control, nonce, child, gate);
     if let Some((code, message)) = &report {
         reporter.plain(code, Severity::Error, message);
     }
@@ -1794,11 +1820,32 @@ fn stop_session(client: &mut DebugClient) -> std::io::Result<()> {
     Ok(())
 }
 
-fn shutdown_host(control: &str, nonce: &str, child: &mut Child) -> Option<u8> {
+fn shutdown_host(
+    control: &str,
+    nonce: &str,
+    child: &mut Child,
+    gate: &mut Option<PathBuf>,
+) -> Option<u8> {
+    // Release a host that is still parked for configuration; otherwise its
+    // control plane cannot process the stop request.
+    let _ = release_start_gate(gate);
     if let Ok(mut client) = ControlClient::connect(control, CONTROL_DEADLINE) {
         let _ = client.request(nonce, Json::object([("op".into(), Json::string("stop"))]));
     }
     wait_child(child)
+}
+
+/// Writes a launch start gate, releasing the host's first cycle.
+fn release_start_gate(gate: &mut Option<PathBuf>) -> Result<(), String> {
+    let Some(path) = gate.take() else {
+        return Ok(());
+    };
+    std::fs::write(&path, b"start").map_err(|error| {
+        format!(
+            "cannot release the debug start gate `{}`: {error}",
+            path.display()
+        )
+    })
 }
 
 pub(crate) fn wait_child(child: &mut Child) -> Option<u8> {

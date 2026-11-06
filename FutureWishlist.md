@@ -97,7 +97,7 @@ components.
 | WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Locked |
 | WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS test-only | Locked |
 | WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Locked |
-| WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Locked |
+| WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Complete |
 | WL-17 | Manifest and task follow-ups from v2.0.0 | Tooling/IDE | S/M | WL-1.1 delivered; manifest/task contracts | Locked |
 | WL-18 | Language-server rename (F-19) | Tooling/IDE | M | WL-1.1 delivered; reference resolution | Locked |
 | WL-6 | Motion controller: coordinated multi-axis interpolated motion | Motion | L/XL | WL-5.2, WL-7, WL-4; robot-sim reuse | Deferred |
@@ -791,13 +791,13 @@ configuration, and broker-backed tests.
 before the first cycle (F-9) and report session termination and exit in the Debug Console (F-15).
 Optionally surface the `[debug].session-timeout` budget as well.
 
-**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-11-04); recorded from the
-v2.0.0 WL-1.1 post-completion follow-ups.
+**Status.** Complete for v3.0.0 (2026-11-05); manually checked and approved. Locked 2026-11-04;
+previously deferred (2026-11-04); recorded from the v2.0.0 WL-1.1 post-completion follow-ups.
 
-**Why it matters.** A launch with a breakpoint currently binds after one or two cycles, so the
-first stop can observe cycle-1 or cycle-2 values instead of cycle-0 values; startup logic is
-therefore not debugged deterministically. Separately, terminating a launch prints nothing in
-the Debug Console even though the host exits, so a normal exit and a failed session look alike.
+**Why it matters.** Before WL-16, a launch with a breakpoint bound after one or two cycles, so the
+first stop could observe cycle-1 or cycle-2 values instead of cycle-0 values; startup logic was
+therefore not debugged deterministically. Separately, terminating a launch printed nothing in
+the Debug Console even though the host exited, so a normal exit and a failed session looked alike.
 
 **Candidate scope.**
 
@@ -970,6 +970,7 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-05 | WL-16 complete: launches are start-gated before cycle 0 and session teardown/exit is reported in the Debug Console; manual check approved. |
 | 2026-11-04 | Locked the v3.0.0 target set (WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18) and created [v3.0.0-plan.md](v3.0.0-plan.md) as the working plan. |
 | 2026-11-04 | Selected WL-16 (F-9, F-15) and WL-17 (F-23, F-24) for v3 (not yet locked). |
 | 2026-11-04 | Fixed F-22 (`277f752`): deterministic project-load errors no longer restart the language server and now show the manifest error with Open Output/Retry. Split F-19 out of WL-17 as WL-18 and selected WL-1.2, WL-7, WL-14, WL-15, and WL-18 for v3 (not yet locked); WL-17 now covers F-23 and F-24. |
