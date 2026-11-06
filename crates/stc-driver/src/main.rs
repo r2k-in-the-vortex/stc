@@ -22,6 +22,7 @@ mod metadata;
 mod new;
 mod online;
 mod project;
+mod remote;
 mod rename;
 mod report;
 mod run;

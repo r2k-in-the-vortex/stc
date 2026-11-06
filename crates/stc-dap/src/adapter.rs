@@ -473,6 +473,44 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             self.fail(request, "stopOnEntry is not supported");
             return;
         }
+        if arguments.remote.is_some() {
+            if attach
+                && arguments
+                    .endpoint
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+            {
+                self.fail(
+                    request,
+                    "a remote attach uses `remoteSession` or `remoteDir`, not a local `endpoint` file",
+                );
+                return;
+            }
+            if arguments.test.is_some() {
+                self.fail(
+                    request,
+                    "`test` launches are local only; remove `remote` or launch the test locally",
+                );
+                return;
+            }
+            if !attach && arguments.cwd.is_some() {
+                self.fail(
+                    request,
+                    "`cwd` is a local setting and cannot be combined with `remote`",
+                );
+                return;
+            }
+        } else if arguments.remote_dir.is_some()
+            || arguments.remote_stc.is_some()
+            || arguments.remote_deploy.is_some()
+            || arguments.remote_session.is_some()
+        {
+            self.fail(
+                request,
+                "`remoteDir`, `remoteStc`, `remoteDeploy`, and `remoteSession` require `remote`",
+            );
+            return;
+        }
         if let Some(test) = arguments.test.as_deref() {
             if test.is_empty() {
                 self.fail(request, "`test` must name a discovered test");

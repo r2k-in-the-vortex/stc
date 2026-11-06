@@ -105,6 +105,24 @@ pub mod codes {
     pub const W_DEBUG_MONITORING_ONLY: &str = "STC-W-DEBUG-004";
     /// A force targets a `RETAIN` root that normal shutdown may save.
     pub const W_DEBUG_RETAIN: &str = "STC-W-DEBUG-005";
+    /// Remote debug SSH, tunnel, or transport failure.
+    pub const REMOTE_TRANSPORT: &str = "STC-E-REMOTE-001";
+    /// Remote command failed or the remote tool/version is unsupported.
+    pub const REMOTE_COMMAND: &str = "STC-E-REMOTE-002";
+    /// Remote source or artifact identity does not match the local project.
+    pub const REMOTE_SOURCE_MISMATCH: &str = "STC-E-REMOTE-003";
+    /// Remote deployment was rejected or requires a cold download.
+    pub const REMOTE_DEPLOY: &str = "STC-E-REMOTE-004";
+    /// Remote session descriptor, endpoint, or permission is invalid.
+    pub const REMOTE_SESSION: &str = "STC-E-REMOTE-005";
+    /// Remote build failed.
+    pub const REMOTE_BUILD: &str = "STC-E-REMOTE-006";
+    /// Remote host or configuration is unsupported.
+    pub const REMOTE_UNSUPPORTED: &str = "STC-E-REMOTE-007";
+    /// Remote source drift was detected before attach.
+    pub const W_REMOTE_SOURCE_DRIFT: &str = "STC-W-REMOTE-001";
+    /// A remote deployment was performed for an attach.
+    pub const W_REMOTE_DEPLOYED: &str = "STC-W-REMOTE-002";
     /// Invalid run option or runtime scheduling configuration.
     pub const RUN_OPTION: &str = "STC-E-RUN-003";
     /// No baseline manifest; build uses a cold layout.
