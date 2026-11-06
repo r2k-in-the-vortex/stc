@@ -93,7 +93,7 @@ components.
 
 | ID | Candidate | Area | Tentative size | Key dependency | Status |
 | --- | --- | --- | --- | --- | --- |
-| WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Locked |
+| WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | In progress |
 | WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Locked |
 | WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS test-only | Locked |
 | WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Locked |
@@ -115,9 +115,9 @@ components.
 host: connect VS Code to a remote `stc` runtime over the network with authentication, transport
 security, and source mapping. This is a separate task.
 
-**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-10-29). The v2.0.0 WL-1.1
-follow-up F-21 (always-on runtime and attach-time deployment choice) is folded into this item
-rather than tracked separately.
+**Status.** In progress (2026-11-06; branch `WL-1.2`). Locked for v3.0.0 (2026-11-04);
+previously deferred (2026-10-29). The v2.0.0 WL-1.1 follow-up F-21 (always-on runtime and
+attach-time deployment choice) is folded into this item rather than tracked separately.
 
 **Why it matters.** The PREEMPT_RT host (WL-4) and deployed controllers are run-only targets, not
 development machines. A developer needs to set breakpoints, step, inspect variables, and read
@@ -970,6 +970,7 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-06 | Started WL-1.2 on branch `WL-1.2`; selected the SSH-tunnel transport to the remote loopback debug socket and recorded the phased plan in [v3.0.0-plan.md](v3.0.0-plan.md). |
 | 2026-11-05 | WL-16 complete: launches are start-gated before cycle 0 and session teardown/exit is reported in the Debug Console; manual check approved. |
 | 2026-11-04 | Locked the v3.0.0 target set (WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18) and created [v3.0.0-plan.md](v3.0.0-plan.md) as the working plan. |
 | 2026-11-04 | Selected WL-16 (F-9, F-15) and WL-17 (F-23, F-24) for v3 (not yet locked). |
