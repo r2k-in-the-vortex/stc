@@ -5,7 +5,7 @@ Date: 2026-11-02
 Status: Final for WL-5.1; all phases complete on `WL-5.1`; final phase-5 CI run
 [41500681839](https://github.com/r2k-in-the-vortex/stc/actions/runs/41500681839) succeeded on all
 three hosts.  
-Origin: v2.0.0 target WL-5.1, released 2026-11-04 ([RELEASE-NOTES.md](../../RELEASE-NOTES.md))  
+Parent: [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) (WL-5.1)  
 Contract: [I/O Routing and Backends](../Architecture/IO-Routing-and-Backends.md) §4.5,
 [CLI and Manifest](../Architecture/CLI-and-Manifest.md) §2.2.1  
 Decisions: [Decisions](../Decisions.md) §2, D-229–D-243  
@@ -392,7 +392,7 @@ network stack. Results are host-specific and indicative only.
 | Decisions | [Decisions](../Decisions.md) §2, D-229–D-243 |
 | Known limitations | [KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §10 |
 | Working plan | Retired after the WL-5.1 pull request merged; the permanent contract is [IO Routing and Backends](../Architecture/IO-Routing-and-Backends.md) §4.5. |
-| Parent plan | v2.0.0 target WL-5.1, recorded in [RELEASE-NOTES.md](../../RELEASE-NOTES.md) |
+| Parent plan | [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) §4 |
 
 ## 13. Limitations
 

@@ -3,7 +3,7 @@
 Profile: `stc-2013-oop-utf8-v1`  
 Date: 2026-11-01  
 Status: Final for WL-5.2; the phase-6 powered loopback and fault matrix passed on the fixed package.  
-Origin: v2.0.0 target WL-5.2, released 2026-11-04 ([RELEASE-NOTES.md](../../RELEASE-NOTES.md))  
+Parent: [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) (WL-5.2)  
 Evidence: [EtherCAT-Runbook.md](EtherCAT-Runbook.md) §8–§13,
 [PHASE6.md](../../tests/ethercat/diewu/PHASE6.md) §8
 

@@ -97,10 +97,9 @@ The launch configuration builds the project and starts a local debug session:
 ```
 
 Open `src/main.st`, set a breakpoint on line 39, press F5, and choose **stc:
-Launch sample**. A launch is start-gated, so the first stop is before cycle 0:
-`sum`, `cycles`, and `TOTAL` still have their initial values. The Globals scope
-shows `INCREMENT` and `TOTAL`; the program instance contains the program
-fields. Continue to line 19 to read the function's locals.
+Launch sample**. The Globals scope shows `INCREMENT` and `TOTAL`; the program
+instance contains the program fields. Continue to line 19 to read the
+function's locals.
 
 The attach example in `.vscode/launch.json` uses the endpoint path
 `${workspaceFolder}/target/stc/debug/debug.endpoint.json`. The `stc: run` task

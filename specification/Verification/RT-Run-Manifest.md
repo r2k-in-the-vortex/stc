@@ -4,7 +4,7 @@ Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-10-30  
 Status: Phase 4 evidence for the untuned v2.0.0 campaign. Raw samples remain in the
 local campaign archive; the report is the phase 5 deliverable.  
-Origin: v2.0.0 target WL-4, released 2026-11-04 ([RELEASE-NOTES.md](../../RELEASE-NOTES.md))  
+Parent: [V2.0.0-PLAN.md](../../V2.0.0-PLAN.md) §4 (WL-4)  
 Report: [RT-Host.md](RT-Host.md)  
 Runbook: [RT-Runbook.md](RT-Runbook.md)  
 Schema: `stc-rt-summary/1` and `stc-rt-metrics/1`

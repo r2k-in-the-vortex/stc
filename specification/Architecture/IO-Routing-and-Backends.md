@@ -7,7 +7,7 @@ Profile: `stc-2013-oop-utf8-v1`
 Related: [I/O and Devices](IO-and-Devices.md), [Runtime and Execution](Runtime-and-Execution.md),
 [CLI and Manifest](CLI-and-Manifest.md), [Online Change and GOT](Online-Change-and-GOT.md),
 [Architecture](Architecture.md), [WL-5.2 report](../Verification/EtherCAT-Host.md),
-[Decisions](../Decisions.md), [v2.0.0 release notes](../../RELEASE-NOTES.md)
+[Decisions](../Decisions.md), [v2.0.0 plan](../../V2.0.0-PLAN.md)
 
 ## 1. Scope and authority
 
