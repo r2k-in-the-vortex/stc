@@ -48,6 +48,8 @@ const SERVE_LOG: &str = "stc-serve.log";
 const SERVE_STATUS: &str = "stc-serve.status";
 /// Retained-state file shared by every remote serve start in the work dir.
 const STATE_FILE: &str = "stc-state.bin";
+/// Stable copy of the active GOT manifest used as a candidate baseline.
+const BASELINE_FILE: &str = "stc-baseline.manifest";
 
 /// A remote session connected through an SSH tunnel.
 pub(crate) struct RemoteConnection {
@@ -80,6 +82,7 @@ struct ResolvedRemote {
     serve_log: RemotePath,
     serve_status: RemotePath,
     state_file: RemotePath,
+    baseline_file: RemotePath,
 }
 
 impl ResolvedRemote {
@@ -111,6 +114,7 @@ impl ResolvedRemote {
             serve_log: work_dir.join(SERVE_LOG)?,
             serve_status: work_dir.join(SERVE_STATUS)?,
             state_file: work_dir.join(STATE_FILE)?,
+            baseline_file: work_dir.join(BASELINE_FILE)?,
             work_dir,
             session,
             stc,
@@ -204,12 +208,13 @@ fn status_report_with(
         match project_sync_files(project) {
             Ok(sync) => match sync_project(runner, &remote, &sync.files) {
                 Ok(()) => {
+                    let baseline = read_active_manifest(runner, &remote, &session).ok();
                     match build_candidate(
                         runner,
                         &remote,
                         &sync,
                         session.mode == "release",
-                        Some(&session.manifest),
+                        baseline.is_some().then_some(&session.manifest),
                     ) {
                         Ok(candidate) => {
                             if let Err(error) =
@@ -218,16 +223,19 @@ fn status_report_with(
                                 online = false;
                                 reason = Some(error.to_string());
                             } else {
-                                match read_active_manifest(runner, &remote, &session) {
-                                    Ok(baseline) => {
+                                match baseline {
+                                    Some(baseline) => {
                                         let (possible, why) =
                                             online_possible(&candidate.manifest_data, &baseline);
                                         online = possible;
                                         reason = why;
                                     }
-                                    Err(error) => {
+                                    None => {
                                         online = false;
-                                        reason = Some(error);
+                                        reason = Some(
+                                            "the remote host has no active baseline; a cold download is required"
+                                                .to_owned(),
+                                        );
                                     }
                                 }
                             }
@@ -513,6 +521,25 @@ fn build_candidate(
     release: bool,
     baseline: Option<&RemotePath>,
 ) -> Result<Candidate, String> {
+    // Copy the baseline before resetting the candidate directory: a cold
+    // restart may be running from that directory, so its manifest is also the
+    // active baseline for the next build.
+    let baseline = baseline.and_then(|source| {
+        let script = format!(
+            "cp -- {} {}",
+            shell_quote(source.as_str()),
+            shell_quote(remote.baseline_file.as_str())
+        );
+        runner
+            .run(
+                remote.target(),
+                &["sh".to_owned(), "-c".to_owned(), script],
+                STOP_TIMEOUT,
+            )
+            .ok()
+            .filter(|output| output.success())
+            .map(|_| remote.baseline_file.clone())
+    });
     reset_remote_dir(runner, remote, &remote.candidate_dir)?;
     let manifest = remote
         .source_dir
@@ -531,7 +558,7 @@ fn build_candidate(
     if release {
         argv.push("--release".to_owned());
     }
-    if let Some(baseline) = baseline {
+    if let Some(baseline) = &baseline {
         argv.push("--got-manifest".to_owned());
         argv.push(baseline.as_str().to_owned());
     }
@@ -634,18 +661,40 @@ fn read_active_manifest(
     remote: &ResolvedRemote,
     session: &RemoteSession,
 ) -> Result<stc_got::Manifest, String> {
-    let text = remote_text(runner, remote, &session.manifest)?;
-    stc_got::Manifest::decode_json(&text).map_err(|error| {
-        remote_error(
-            codes::REMOTE_DEPLOY,
-            format!(
-                "cannot read the active remote baseline `{}`: {}",
-                session.manifest.as_str(),
-                error.message
-            ),
-        )
-        .to_string()
-    })
+    let mut paths = Vec::new();
+    if let Some(stem) = session.manifest.as_str().strip_suffix(".stc-got.bin")
+        && let Ok(json) = RemotePath::parse_absolute(&format!("{stem}.stc-got.json"))
+    {
+        // Older descriptors (and `serve deploy` callers that pass only the
+        // binary) name the binary manifest; the build emits the JSON sibling.
+        paths.push(json);
+    }
+    paths.push(session.manifest.clone());
+    let mut last_error = None;
+    for path in paths {
+        let Ok(text) = remote_text(runner, remote, &path) else {
+            last_error = Some(format!(
+                "cannot read the active remote baseline `{}`",
+                path.as_str()
+            ));
+            continue;
+        };
+        match stc_got::Manifest::decode_json(&text) {
+            Ok(manifest) => return Ok(manifest),
+            Err(error) => {
+                last_error = Some(format!(
+                    "cannot read the active remote baseline `{}`: {}",
+                    path.as_str(),
+                    error.message
+                ));
+            }
+        }
+    }
+    Err(remote_error(
+        codes::REMOTE_DEPLOY,
+        last_error.unwrap_or_else(|| "cannot read the active remote baseline".to_owned()),
+    )
+    .to_string())
 }
 
 fn online_possible(
@@ -680,12 +729,25 @@ fn deploy_remote(
     allow_force: bool,
 ) -> Result<(RemoteSession, DebugEndpointFile), String> {
     let release = session.mode == "release";
-    let candidate = build_candidate(runner, remote, sync, release, Some(&session.manifest))?;
+    let baseline = read_active_manifest(runner, remote, session).ok();
+    let candidate = build_candidate(
+        runner,
+        remote,
+        sync,
+        release,
+        baseline.is_some().then_some(&session.manifest),
+    )?;
     compare_source_fingerprints(&sync.fingerprint, &candidate.fingerprint)
         .map_err(|error| error.to_string())?;
     match choice {
         crate::remote::RemoteDeploy::Online => {
-            let baseline = read_active_manifest(runner, remote, session)?;
+            let Some(baseline) = baseline else {
+                return Err(remote_error(
+                    codes::REMOTE_DEPLOY,
+                    "the remote host has no active baseline; a cold download is required",
+                )
+                .to_string());
+            };
             let (online, reason) = online_possible(&candidate.manifest_data, &baseline);
             if !online {
                 return Err(remote_error(
