@@ -93,7 +93,7 @@ components.
 
 | ID | Candidate | Area | Tentative size | Key dependency | Status |
 | --- | --- | --- | --- | --- | --- |
-| WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | In progress |
+| WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Complete (v3.0.0, 2026-11-07) |
 | WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Locked |
 | WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS test-only | Locked |
 | WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Locked |
@@ -115,11 +115,11 @@ components.
 host: connect VS Code to a remote `stc` runtime over the network with authentication, transport
 security, and source mapping. This is a separate task.
 
-**Status.** In progress (2026-11-06; branch `WL-1.2`). Phases 1–6 complete and CI-green (phase 6
-HIL run [42343615644](https://github.com/r2k-in-the-vortex/stc/actions/runs/42343615644), 39/39);
-phase 7 (final docs, manual check, PR) remains. Locked for v3.0.0 (2026-11-04);
-previously deferred (2026-10-29). The v2.0.0 WL-1.1 follow-up F-21 (always-on runtime and
-attach-time deployment choice) is folded into this item rather than tracked separately.
+**Status.** Complete for v3.0.0 (2026-11-07); manually checked and approved; PR pending against
+`v3.0.0-planning`. Final CI run [42397941737](https://github.com/r2k-in-the-vortex/stc/actions/runs/42397941737),
+39/39 jobs. Locked for v3.0.0 (2026-11-04); previously deferred (2026-10-29). The v2.0.0 WL-1.1
+follow-up F-21 (always-on runtime and attach-time deployment choice) is folded into this item
+rather than tracked separately.
 
 **Why it matters.** The PREEMPT_RT host (WL-4) and deployed controllers are run-only targets, not
 development machines. A developer needs to set breakpoints, step, inspect variables, and read
@@ -972,6 +972,7 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-07 | WL-1.2 complete; manual check approved; PR pending. Final CI run [42397941737](https://github.com/r2k-in-the-vortex/stc/actions/runs/42397941737), 39/39. Remote launch/attach, online/cold deployment, QuickPick, HIL evidence, threat model, and documentation are complete. |
 | 2026-11-07 | WL-1.2 phase 6 HIL complete and CI-green (run [42343615644](https://github.com/r2k-in-the-vortex/stc/actions/runs/42343615644), 39/39): launch, cycle-0 values, stepping, stack, function locals, globals, online/cold deployment, tunnel drop, and reattach verified on `r2k@ecat`; evidence in [Remote-Debug-Runbook.md](specification/Verification/Remote-Debug-Runbook.md). |
 | 2026-11-07 | WL-1.2 phases 3–5 complete and CI-green (run [42341503422](https://github.com/r2k-in-the-vortex/stc/actions/runs/42341503422), 39/39): remote launch/attach over the SSH tunnel, online/cold deployment with the extension QuickPick, security negative tests, threat model, and runbook skeleton. |
 | 2026-11-06 | Started WL-1.2 on branch `WL-1.2`; selected the SSH-tunnel transport to the remote loopback debug socket and recorded the phased plan in [v3.0.0-plan.md](v3.0.0-plan.md). |
