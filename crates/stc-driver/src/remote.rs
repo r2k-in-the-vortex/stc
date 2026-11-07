@@ -1967,6 +1967,23 @@ mod tests {
     }
 
     #[test]
+    fn project_sync_rejects_a_missing_project() {
+        let missing = std::env::temp_dir().join("stc-remote-no-such-project/stc.toml");
+        let error = project_sync_files(&missing).expect_err("missing project");
+        assert_eq!(error.code, codes::REMOTE_SOURCE_MISMATCH);
+        assert_eq!(common_ancestor(&[]), None);
+    }
+
+    #[test]
+    fn session_descriptor_round_trips_without_a_start_gate() {
+        let mut session = sample_session();
+        session.start_gate = None;
+        let text = session.to_json_text();
+        assert!(!text.contains("start_gate"), "{text}");
+        assert_eq!(RemoteSession::parse(&text).expect("parse"), session);
+    }
+
+    #[test]
     fn remote_program_accepts_bare_names_and_paths() {
         assert_eq!(RemoteProgram::parse("stc").expect("bare").as_str(), "stc");
         assert_eq!(

@@ -1804,6 +1804,7 @@ mod tests {
             std::fs::create_dir_all(&work).expect("work");
             std::fs::write(work.join("stc-serve.status"), "9\n").expect("status");
             let mut host = remote_host(&root, &stc, &work, true, false);
+            host.release_start_gate().expect("no gate on attach");
             host.stop();
             assert_eq!(SessionHost::try_exit(&mut host), None);
             assert!(SessionHost::attached(&host));
