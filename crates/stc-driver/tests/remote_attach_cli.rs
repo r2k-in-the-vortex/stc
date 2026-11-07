@@ -12,7 +12,7 @@ mod common;
 use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -218,13 +218,24 @@ fn wait_for_file(child: &mut Child, path: &Path, timeout: Duration) -> bool {
     true
 }
 
-fn attach(bin: &Path, project: &Path, work: &Path, deploy: &str, batch: &Path) -> Output {
+fn attach(
+    bin: &Path,
+    root: &Path,
+    project: &Path,
+    work: &Path,
+    deploy: &str,
+    batch: &Path,
+) -> (std::process::ExitStatus, String, String) {
     let path_env = format!(
         "{}:{}",
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    Command::new(stc())
+    let stdout_path = root.join(format!("attach-{deploy}.stdout"));
+    let stderr_path = root.join(format!("attach-{deploy}.stderr"));
+    let stdout = File::create(&stdout_path).expect("attach stdout");
+    let stderr = File::create(&stderr_path).expect("attach stderr");
+    let status = Command::new(stc())
         .args([
             "debug",
             "--attach",
@@ -246,8 +257,17 @@ fn attach(bin: &Path, project: &Path, work: &Path, deploy: &str, batch: &Path) -
         ])
         .current_dir(project)
         .env("PATH", path_env)
-        .output()
-        .expect("run remote attach")
+        .env("RUST_BACKTRACE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .status()
+        .expect("run remote attach");
+    (
+        status,
+        std::fs::read_to_string(&stdout_path).unwrap_or_default(),
+        std::fs::read_to_string(&stderr_path).unwrap_or_default(),
+    )
 }
 
 #[test]
@@ -314,35 +334,31 @@ fn remote_attach_online_and_cold_deploy() {
         "work/hello/src/main.st",
         &format!("{SOURCE}\n(* online attach drift *)\n"),
     );
-    let online = attach(&bin, &project, &work, "online", &batch);
+    let online = attach(&bin, &root.path, &project, &work, "online", &batch);
     assert!(
-        online.status.success(),
+        online.0.success(),
         "online attach failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&online.stdout),
-        String::from_utf8_lossy(&online.stderr)
+        online.1,
+        online.2
     );
     assert!(
-        String::from_utf8_lossy(&online.stderr).contains("attached remotely"),
+        online.2.contains("attached remotely"),
         "stderr: {}",
-        String::from_utf8_lossy(&online.stderr)
+        online.2
     );
-    assert!(
-        String::from_utf8_lossy(&online.stdout).contains("\"bound\":true"),
-        "stdout: {}",
-        String::from_utf8_lossy(&online.stdout)
-    );
+    assert!(online.1.contains("\"bound\":true"), "stdout: {}", online.1);
 
     root.write(
         "work/hello/src/main.st",
         &format!("{SOURCE}\n(* cold attach drift *)\n(* second change *)\n"),
     );
-    let cold = attach(&bin, &project, &work, "cold", &batch);
+    let cold = attach(&bin, &root.path, &project, &work, "cold", &batch);
     assert!(
-        cold.status.success(),
+        cold.0.success(),
         "cold attach failed ({:?})\nstdout:\n{}\nstderr:\n{}",
-        cold.status,
-        String::from_utf8_lossy(&cold.stdout),
-        String::from_utf8_lossy(&cold.stderr)
+        cold.0,
+        cold.1,
+        cold.2
     );
     assert!(session.is_file(), "the cold-restarted serve stays running");
 
