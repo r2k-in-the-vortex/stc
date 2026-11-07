@@ -1789,7 +1789,12 @@ mod tests {
             RemoteDeploy::parse(Some("never")).expect("never"),
             RemoteDeploy::Never
         );
-        assert!(RemoteDeploy::parse(Some("always")).is_err());
+        assert_eq!(
+            RemoteDeploy::parse(Some("always"))
+                .expect_err("invalid deploy")
+                .code,
+            codes::REMOTE_DEPLOY
+        );
     }
 
     #[test]
