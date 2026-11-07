@@ -312,10 +312,7 @@ fn remote_attach_online_and_cold_deploy() {
 
     root.write(
         "work/hello/src/main.st",
-        &SOURCE.replace(
-            "  ticks := ticks + 1;",
-            "  // online attach drift\n  ticks := ticks + 1;",
-        ),
+        &format!("{SOURCE}\n(* online attach drift *)\n"),
     );
     let online = attach(&bin, &project, &work, "online", &batch);
     assert!(
@@ -337,10 +334,7 @@ fn remote_attach_online_and_cold_deploy() {
 
     root.write(
         "work/hello/src/main.st",
-        &SOURCE.replace(
-            "  ticks := ticks + 1;",
-            "  // cold attach drift\n  ticks := ticks + 1;\n  ticks := ticks + 1;",
-        ),
+        &format!("{SOURCE}\n(* cold attach drift *)\n(* second change *)\n"),
     );
     let cold = attach(&bin, &project, &work, "cold", &batch);
     assert!(
