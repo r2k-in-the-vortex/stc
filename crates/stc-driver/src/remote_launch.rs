@@ -204,7 +204,13 @@ fn status_report_with(
         match project_sync_files(project) {
             Ok(sync) => match sync_project(runner, &remote, &sync.files) {
                 Ok(()) => {
-                    match build_candidate(runner, &remote, &sync, session.mode == "release") {
+                    match build_candidate(
+                        runner,
+                        &remote,
+                        &sync,
+                        session.mode == "release",
+                        Some(&session.manifest),
+                    ) {
                         Ok(candidate) => {
                             if let Err(error) =
                                 compare_source_fingerprints(&local, &candidate.fingerprint)
@@ -437,7 +443,8 @@ fn check_remote_version(runner: &SshRunner, remote: &ResolvedRemote) -> Result<(
 /// One remote candidate build ready for deployment.
 struct Candidate {
     module: RemotePath,
-    manifest: RemotePath,
+    /// Binary GOT manifest passed to the control deploy.
+    deploy_manifest: RemotePath,
     manifest_data: stc_got::Manifest,
     fingerprint: String,
 }
@@ -504,6 +511,7 @@ fn build_candidate(
     remote: &ResolvedRemote,
     sync: &crate::remote::ProjectSync,
     release: bool,
+    baseline: Option<&RemotePath>,
 ) -> Result<Candidate, String> {
     reset_remote_dir(runner, remote, &remote.candidate_dir)?;
     let manifest = remote
@@ -522,6 +530,10 @@ fn build_candidate(
     ];
     if release {
         argv.push("--release".to_owned());
+    }
+    if let Some(baseline) = baseline {
+        argv.push("--got-manifest".to_owned());
+        argv.push(baseline.as_str().to_owned());
     }
     let output = runner
         .run(remote.target(), &argv, SYNC_DEADLINE)
@@ -566,6 +578,10 @@ fn build_candidate(
         .candidate_dir
         .join(module_file)
         .map_err(|error| error.to_string())?;
+    let deploy_manifest = remote
+        .candidate_dir
+        .join(&format!("{}.stc-got.bin", sync.package_name))
+        .map_err(|error| error.to_string())?;
     let manifest = remote
         .candidate_dir
         .join(&format!("{}.stc-got.json", sync.package_name))
@@ -584,7 +600,7 @@ fn build_candidate(
     let fingerprint = manifest_data.header.source_fingerprint.to_hex();
     Ok(Candidate {
         module,
-        manifest,
+        deploy_manifest,
         manifest_data,
         fingerprint,
     })
@@ -664,7 +680,7 @@ fn deploy_remote(
     allow_force: bool,
 ) -> Result<(RemoteSession, DebugEndpointFile), String> {
     let release = session.mode == "release";
-    let candidate = build_candidate(runner, remote, sync, release)?;
+    let candidate = build_candidate(runner, remote, sync, release, Some(&session.manifest))?;
     compare_source_fingerprints(&sync.fingerprint, &candidate.fingerprint)
         .map_err(|error| error.to_string())?;
     match choice {
@@ -690,7 +706,7 @@ fn deploy_remote(
                 "--module".to_owned(),
                 candidate.module.as_str().to_owned(),
                 "--deploy-manifest".to_owned(),
-                candidate.manifest.as_str().to_owned(),
+                candidate.deploy_manifest.as_str().to_owned(),
                 "--message-format".to_owned(),
                 "json".to_owned(),
             ];

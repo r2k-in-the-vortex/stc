@@ -578,7 +578,16 @@ fn refresh_session_descriptor(
     updated.source_fingerprint = download.manifest().header.source_fingerprint.to_hex();
     updated.generation = generation;
     updated.module = RemotePath::parse_absolute(module).map_err(|error| error.to_string())?;
-    updated.manifest = RemotePath::parse_absolute(manifest).map_err(|error| error.to_string())?;
+    // The control deploy takes the binary manifest; status and compatibility
+    // use the JSON projection emitted by the same build. Keep the descriptor
+    // on the JSON path when it exists.
+    let descriptor_manifest = manifest
+        .strip_suffix(".stc-got.bin")
+        .map(|stem| format!("{stem}.stc-got.json"))
+        .filter(|json| Path::new(json).is_file())
+        .unwrap_or_else(|| manifest.to_owned());
+    updated.manifest =
+        RemotePath::parse_absolute(&descriptor_manifest).map_err(|error| error.to_string())?;
     updated.validate().map_err(|error| error.to_string())?;
     write_private_file(path, updated.to_json_text().as_bytes())
 }

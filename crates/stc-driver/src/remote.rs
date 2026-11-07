@@ -891,6 +891,25 @@ pub(crate) fn project_sync_files(project: &Path) -> Result<ProjectSync, Error> {
             })?;
             sources.push((package.name.clone(), source.relative.clone(), bytes));
         }
+        // Test sources are mirrored so the remote loader can satisfy a
+        // `[test] sources` glob, but they do not participate in the
+        // production source fingerprint.
+        for source in &package.test_sources {
+            if !source.path.starts_with(&package.root_dir) {
+                return Err(remote_error(
+                    codes::REMOTE_SOURCE_MISMATCH,
+                    format!(
+                        "the test source `{}` is outside the package root `{}`",
+                        source.path.display(),
+                        package.root_dir.display()
+                    ),
+                ));
+            }
+            files.insert(
+                join(&remote_relative(Path::new(&source.relative))?),
+                source.path.clone(),
+            );
+        }
         if package.is_root {
             root_manifest = Some(join(&manifest_relative));
             let renames = package.root_dir.join("stc.renames.toml");
@@ -1678,10 +1697,12 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(directory.join("src")).expect("create project");
+        std::fs::create_dir_all(directory.join("tests")).expect("create tests");
         std::fs::write(
             directory.join("stc.toml"),
             "schema = 1\n\n[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\
-             language = \"stc-2013-oop-utf8-v1\"\n\n[project]\nsources = [\"src/**/*.st\"]\n",
+             language = \"stc-2013-oop-utf8-v1\"\n\n[project]\nsources = [\"src/**/*.st\"]\n\
+             \n[test]\nsources = [\"tests/**/*.st\"]\n",
         )
         .expect("write manifest");
         std::fs::write(
@@ -1689,6 +1710,11 @@ mod tests {
             "PROGRAM Main\n  ;\nEND_PROGRAM\n",
         )
         .expect("write source");
+        std::fs::write(
+            directory.join("tests/main_test.st"),
+            "{stc:test}\nFUNCTION Works : BOOL\n  Works := TRUE;\nEND_FUNCTION\n",
+        )
+        .expect("write test source");
         directory
     }
 
@@ -2006,7 +2032,12 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             relative,
-            vec!["src/main.st", "stc.renames.toml", "stc.toml"]
+            vec![
+                "src/main.st",
+                "stc.renames.toml",
+                "stc.toml",
+                "tests/main_test.st",
+            ]
         );
         assert_eq!(sync.root_manifest, "stc.toml");
         assert!(
