@@ -13,14 +13,18 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use stc_dap::{LaunchArguments, LaunchedSession, OutputLine, SessionHost};
+use stc_diag::Severity;
 use stc_got::error::{Error, codes};
 use stc_runtime::TransportKind;
 use stc_runtime::debug_server::{DebugClient, DebugEndpointFile};
 
+use crate::cli::Invocation;
+use crate::report::Reporter;
+
 use crate::remote::{
-    RemotePath, RemoteProgram, RemoteSession, RemoteSettings, RemoteTarget, SshRunner, SshTunnel,
-    SyncFile, UPLOAD_TIMEOUT, compare_source_fingerprints, project_sync_files, remote_error,
-    shell_quote,
+    RemoteDeploy, RemotePath, RemoteProgram, RemoteSession, RemoteSettings, RemoteTarget,
+    SshRunner, SshTunnel, SyncFile, UPLOAD_TIMEOUT, compare_source_fingerprints,
+    project_sync_files, remote_error, shell_quote,
 };
 use crate::sha256;
 
@@ -36,10 +40,14 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const SOURCE_DIR: &str = "src";
 /// Name of the remote build output directory.
 const BUILD_DIR: &str = "build";
+/// Name of the remote candidate build directory (attach-time deployment).
+const CANDIDATE_DIR: &str = "candidate";
 /// Remote serve log, diagnostics only.
 const SERVE_LOG: &str = "stc-serve.log";
 /// Remote serve exit-status marker used while waiting for the descriptor.
 const SERVE_STATUS: &str = "stc-serve.status";
+/// Retained-state file shared by every remote serve start in the work dir.
+const STATE_FILE: &str = "stc-state.bin";
 
 /// A remote session connected through an SSH tunnel.
 pub(crate) struct RemoteConnection {
@@ -68,8 +76,10 @@ struct ResolvedRemote {
     stc: RemoteProgram,
     source_dir: RemotePath,
     build_dir: RemotePath,
+    candidate_dir: RemotePath,
     serve_log: RemotePath,
     serve_status: RemotePath,
+    state_file: RemotePath,
 }
 
 impl ResolvedRemote {
@@ -97,8 +107,10 @@ impl ResolvedRemote {
         Ok(Self {
             source_dir: work_dir.join(SOURCE_DIR)?,
             build_dir: work_dir.join(BUILD_DIR)?,
+            candidate_dir: work_dir.join(CANDIDATE_DIR)?,
             serve_log: work_dir.join(SERVE_LOG)?,
             serve_status: work_dir.join(SERVE_STATUS)?,
+            state_file: work_dir.join(STATE_FILE)?,
             work_dir,
             session,
             stc,
@@ -108,6 +120,164 @@ impl ResolvedRemote {
 
     fn target(&self) -> &RemoteTarget {
         &self.settings.target
+    }
+}
+
+/// Runs `stc remote status`.
+pub(crate) fn status_command(invocation: &Invocation, reporter: &mut Reporter) -> u8 {
+    let report = match status_report(invocation) {
+        Ok(report) => report,
+        Err(message) => {
+            report_remote_error(reporter, &message);
+            return 2;
+        }
+    };
+    if invocation.format == crate::report::Format::Json {
+        println!("{}", report.render_compact());
+    } else {
+        let string = |key: &str| report.as_object().and_then(|object| object.get(key));
+        let value = |key: &str| {
+            string(key)
+                .and_then(stc_got::Json::as_str)
+                .unwrap_or("-")
+                .to_owned()
+        };
+        let flag = |key: &str| {
+            string(key)
+                .and_then(stc_got::Json::as_bool)
+                .is_some_and(|value| value)
+        };
+        println!("remote {} drift {}", value("host"), flag("drift"));
+        println!(
+            "local {} remote {}",
+            value("local_fingerprint"),
+            value("remote_fingerprint")
+        );
+        println!(
+            "deploy {}",
+            if flag("drift") {
+                if flag("online") {
+                    "online or cold"
+                } else {
+                    "cold only"
+                }
+            } else {
+                "none (sources match)"
+            }
+        );
+        if let Some(reason) = string("reason").and_then(stc_got::Json::as_str) {
+            println!("reason {reason}");
+        }
+    }
+    0
+}
+
+fn status_report(invocation: &Invocation) -> Result<stc_got::Json, String> {
+    status_report_with(invocation, &SshRunner::default())
+}
+
+fn status_report_with(
+    invocation: &Invocation,
+    runner: &SshRunner,
+) -> Result<stc_got::Json, String> {
+    let Some(target) = invocation.remote.remote.as_deref() else {
+        return Err("`stc remote status` requires `--remote <user@host>`".to_owned());
+    };
+    let settings = RemoteSettings::from_strings(
+        target,
+        invocation.remote.remote_dir.as_deref(),
+        invocation.remote.remote_stc.as_deref(),
+        invocation.remote.remote_session.as_deref(),
+        invocation.remote.remote_deploy.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
+    let remote = ResolvedRemote::resolve(settings, runner).map_err(|error| error.to_string())?;
+    check_remote_version(runner, &remote)?;
+    let project = Path::new(invocation.manifest.as_deref().unwrap_or("stc.toml"));
+    let local =
+        crate::remote::local_source_fingerprint(project).map_err(|error| error.to_string())?;
+    let (session, _) = read_remote_session(runner, &remote)?;
+    let drift = session.source_fingerprint != local;
+    let mut online = true;
+    let mut reason: Option<String> = None;
+    if drift {
+        match project_sync_files(project) {
+            Ok(sync) => match sync_project(runner, &remote, &sync.files) {
+                Ok(()) => {
+                    match build_candidate(runner, &remote, &sync, session.mode == "release") {
+                        Ok(candidate) => {
+                            if let Err(error) =
+                                compare_source_fingerprints(&local, &candidate.fingerprint)
+                            {
+                                online = false;
+                                reason = Some(error.to_string());
+                            } else {
+                                match read_active_manifest(runner, &remote, &session) {
+                                    Ok(baseline) => {
+                                        let (possible, why) =
+                                            online_possible(&candidate.manifest_data, &baseline);
+                                        online = possible;
+                                        reason = why;
+                                    }
+                                    Err(error) => {
+                                        online = false;
+                                        reason = Some(error);
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            online = false;
+                            reason = Some(error);
+                        }
+                    }
+                }
+                Err(error) => {
+                    online = false;
+                    reason = Some(error);
+                }
+            },
+            Err(error) => {
+                online = false;
+                reason = Some(error.to_string());
+            }
+        }
+    }
+    Ok(stc_got::Json::object([
+        ("build_id".into(), stc_got::Json::string(session.build_id)),
+        ("cold_required".into(), stc_got::Json::Bool(!online)),
+        ("drift".into(), stc_got::Json::Bool(drift)),
+        (
+            "generation".into(),
+            stc_got::Json::unsigned(session.generation),
+        ),
+        ("host".into(), stc_got::Json::string(session.host)),
+        ("local_fingerprint".into(), stc_got::Json::string(local)),
+        ("mode".into(), stc_got::Json::string(session.mode)),
+        ("online".into(), stc_got::Json::Bool(online)),
+        (
+            "protocol".into(),
+            stc_got::Json::string("stc-remote-status/1"),
+        ),
+        (
+            "reason".into(),
+            stc_got::Json::optional(reason.map(stc_got::Json::string)),
+        ),
+        (
+            "remote_fingerprint".into(),
+            stc_got::Json::string(session.source_fingerprint),
+        ),
+    ]))
+}
+
+fn report_remote_error(reporter: &mut Reporter, message: &str) {
+    if let Some((code, detail)) = message
+        .split_once(": ")
+        .filter(|(code, _)| code.starts_with("STC-"))
+    {
+        reporter.plain(code, Severity::Error, detail);
+    } else {
+        reporter.plain(codes::REMOTE_TRANSPORT, Severity::Error, message);
     }
 }
 
@@ -131,7 +301,19 @@ pub(crate) fn launch(
     let sync = project_sync_files(&project).map_err(|error| error.to_string())?;
     sync_project(&runner, &remote, &sync.files)?;
     prepare_remote_session(&runner, &remote)?;
-    start_remote_serve(&runner, &remote, arguments, &sync.root_manifest)?;
+    start_remote_serve(
+        &runner,
+        &remote,
+        &ServeStart {
+            root_manifest: &sync.root_manifest,
+            out_dir: &remote.build_dir,
+            start_paused: true,
+            no_build: arguments.no_build,
+            release: arguments.release,
+            allow_write: arguments.allow_write,
+            allow_force: arguments.allow_force,
+        },
+    )?;
     let (session, endpoint) = wait_for_remote_session(&runner, &remote)?;
     finish_launch(&runner, &remote, session, endpoint, &sync.fingerprint)
 }
@@ -152,13 +334,50 @@ pub(crate) fn attach(
     let settings = settings(arguments)?;
     let runner = SshRunner::default();
     let remote = ResolvedRemote::resolve(settings, &runner).map_err(|error| error.to_string())?;
+    check_remote_version(&runner, &remote)?;
     let project = arguments.project_path(manifest_fallback);
     let local_fingerprint =
         crate::remote::local_source_fingerprint(&project).map_err(|error| error.to_string())?;
-    let (session, endpoint) = read_remote_session(&runner, &remote)?;
+    let (mut session, mut endpoint) = read_remote_session(&runner, &remote)?;
+    if compare_source_fingerprints(&local_fingerprint, &session.source_fingerprint).is_err() {
+        match remote.settings.deploy {
+            RemoteDeploy::Never => {
+                return Err(remote_error(
+                    codes::REMOTE_SOURCE_MISMATCH,
+                    "the remote source fingerprint differs and `remoteDeploy` is `never`",
+                )
+                .to_string());
+            }
+            RemoteDeploy::Ask => {
+                return Err(remote_error(
+                    codes::REMOTE_SOURCE_MISMATCH,
+                    "the remote source fingerprint differs; choose `remoteDeploy` `online` or `cold`",
+                )
+                .to_string());
+            }
+            RemoteDeploy::Online | RemoteDeploy::Cold => {
+                let sync = project_sync_files(&project).map_err(|error| error.to_string())?;
+                sync_project(&runner, &remote, &sync.files)?;
+                let deployed = deploy_remote(
+                    &runner,
+                    &remote,
+                    &session,
+                    &sync,
+                    remote.settings.deploy,
+                    arguments.allow_write,
+                    arguments.allow_force,
+                )?;
+                session = deployed.0;
+                endpoint = deployed.1;
+            }
+        }
+    }
     compare_source_fingerprints(&local_fingerprint, &session.source_fingerprint)
         .map_err(|error| error.to_string())?;
-    connect_tunnel(&runner, &remote, &endpoint, true)
+    let gate = session.start_gate.clone();
+    let mut connection = connect_tunnel(&runner, &remote, &endpoint, true)?;
+    connection.host.gate = gate;
+    Ok(connection)
 }
 
 fn settings(arguments: &LaunchArguments) -> Result<RemoteSettings, String> {
@@ -213,6 +432,314 @@ fn check_remote_version(runner: &SshRunner, remote: &ResolvedRemote) -> Result<(
         .to_string());
     }
     Ok(())
+}
+
+/// One remote candidate build ready for deployment.
+struct Candidate {
+    module: RemotePath,
+    manifest: RemotePath,
+    manifest_data: stc_got::Manifest,
+    fingerprint: String,
+}
+
+/// Reads a non-secret remote text file.
+fn remote_text(
+    runner: &SshRunner,
+    remote: &ResolvedRemote,
+    path: &RemotePath,
+) -> Result<String, String> {
+    let argv = vec!["cat".to_owned(), "--".to_owned(), path.as_str().to_owned()];
+    let output = runner
+        .run(remote.target(), &argv, SYNC_DEADLINE)
+        .map_err(|error| error.to_string())?;
+    if output.success() {
+        Ok(output.stdout)
+    } else {
+        Err(remote_error(
+            codes::REMOTE_COMMAND,
+            format!(
+                "cannot read the remote file `{}`: {}",
+                path.as_str(),
+                output.stderr.trim()
+            ),
+        )
+        .to_string())
+    }
+}
+
+fn reset_remote_dir(
+    runner: &SshRunner,
+    remote: &ResolvedRemote,
+    directory: &RemotePath,
+) -> Result<(), String> {
+    let script = format!(
+        "set -eu\nrm -rf -- {directory}\nmkdir -p -- {directory}",
+        directory = shell_quote(directory.as_str())
+    );
+    let output = runner
+        .run(
+            remote.target(),
+            &["sh".to_owned(), "-c".to_owned(), script],
+            SYNC_DEADLINE,
+        )
+        .map_err(|error| error.to_string())?;
+    if output.success() {
+        Ok(())
+    } else {
+        Err(remote_error(
+            codes::REMOTE_TRANSPORT,
+            format!(
+                "cannot prepare the remote directory `{}`: {}",
+                directory.as_str(),
+                output.stderr.trim()
+            ),
+        )
+        .to_string())
+    }
+}
+
+/// Builds the synced mirror into the remote candidate directory.
+fn build_candidate(
+    runner: &SshRunner,
+    remote: &ResolvedRemote,
+    sync: &crate::remote::ProjectSync,
+    release: bool,
+) -> Result<Candidate, String> {
+    reset_remote_dir(runner, remote, &remote.candidate_dir)?;
+    let manifest = remote
+        .source_dir
+        .join(&sync.root_manifest)
+        .map_err(|error| error.to_string())?;
+    let mut argv = vec![
+        remote.stc.as_str().to_owned(),
+        "build".to_owned(),
+        "--manifest-path".to_owned(),
+        manifest.as_str().to_owned(),
+        "--out-dir".to_owned(),
+        remote.candidate_dir.as_str().to_owned(),
+        "--message-format".to_owned(),
+        "json".to_owned(),
+    ];
+    if release {
+        argv.push("--release".to_owned());
+    }
+    let output = runner
+        .run(remote.target(), &argv, SYNC_DEADLINE)
+        .map_err(|error| error.to_string())?;
+    if !output.success() {
+        let detail = tail_text(&output.stdout, &output.stderr);
+        return Err(remote_error(
+            codes::REMOTE_BUILD,
+            format!("the remote candidate build failed{detail}"),
+        )
+        .to_string());
+    }
+    let metadata = remote
+        .candidate_dir
+        .join(&format!("{}.stc-meta.json", sync.package_name))
+        .map_err(|error| error.to_string())?;
+    let metadata = remote_text(runner, remote, &metadata)?;
+    let value = stc_got::json::parse(&metadata).map_err(|error| {
+        remote_error(
+            codes::REMOTE_BUILD,
+            format!(
+                "the remote candidate metadata is not valid JSON: {}",
+                error.message
+            ),
+        )
+        .to_string()
+    })?;
+    let module_file = value
+        .as_object()
+        .and_then(|object| object.get("module"))
+        .and_then(stc_got::Json::as_object)
+        .and_then(|object| object.get("file"))
+        .and_then(stc_got::Json::as_str)
+        .ok_or_else(|| {
+            remote_error(
+                codes::REMOTE_BUILD,
+                "the remote candidate metadata has no module file",
+            )
+            .to_string()
+        })?;
+    let module = remote
+        .candidate_dir
+        .join(module_file)
+        .map_err(|error| error.to_string())?;
+    let manifest = remote
+        .candidate_dir
+        .join(&format!("{}.stc-got.json", sync.package_name))
+        .map_err(|error| error.to_string())?;
+    let text = remote_text(runner, remote, &manifest)?;
+    let manifest_data = stc_got::Manifest::decode_json(&text).map_err(|error| {
+        remote_error(
+            codes::REMOTE_BUILD,
+            format!(
+                "the remote candidate manifest is invalid: {}",
+                error.message
+            ),
+        )
+        .to_string()
+    })?;
+    let fingerprint = manifest_data.header.source_fingerprint.to_hex();
+    Ok(Candidate {
+        module,
+        manifest,
+        manifest_data,
+        fingerprint,
+    })
+}
+
+fn tail_text(stdout: &str, stderr: &str) -> String {
+    let mut detail = String::new();
+    for text in [stderr, stdout] {
+        let text = text.trim();
+        if !text.is_empty() {
+            if !detail.is_empty() {
+                detail.push('\n');
+            }
+            let tail = text
+                .char_indices()
+                .rev()
+                .nth(2000)
+                .map_or(text, |(index, _)| &text[index..]);
+            detail.push_str(tail);
+        }
+    }
+    if detail.is_empty() {
+        String::new()
+    } else {
+        format!(": {detail}")
+    }
+}
+
+fn read_active_manifest(
+    runner: &SshRunner,
+    remote: &ResolvedRemote,
+    session: &RemoteSession,
+) -> Result<stc_got::Manifest, String> {
+    let text = remote_text(runner, remote, &session.manifest)?;
+    stc_got::Manifest::decode_json(&text).map_err(|error| {
+        remote_error(
+            codes::REMOTE_DEPLOY,
+            format!(
+                "cannot read the active remote baseline `{}`: {}",
+                session.manifest.as_str(),
+                error.message
+            ),
+        )
+        .to_string()
+    })
+}
+
+fn online_possible(
+    candidate: &stc_got::Manifest,
+    baseline: &stc_got::Manifest,
+) -> (bool, Option<String>) {
+    match stc_runtime::compare_manifests(candidate, Some(baseline)) {
+        Ok(diff)
+            if diff.decision == Some(stc_runtime::PlanDecision::Online) && diff.error.is_none() =>
+        {
+            (true, None)
+        }
+        Ok(diff) => {
+            let reason = diff.error.map_or_else(
+                || format!("the online-change plan verdict is {:?}", diff.verdict),
+                |error| format!("{}: {}", error.code, error.message),
+            );
+            (false, Some(reason))
+        }
+        Err(error) => (false, Some(format!("{}: {}", error.code, error.message))),
+    }
+}
+
+/// Deploys the synced mirror and returns the refreshed session and endpoint.
+fn deploy_remote(
+    runner: &SshRunner,
+    remote: &ResolvedRemote,
+    session: &RemoteSession,
+    sync: &crate::remote::ProjectSync,
+    choice: crate::remote::RemoteDeploy,
+    allow_write: bool,
+    allow_force: bool,
+) -> Result<(RemoteSession, DebugEndpointFile), String> {
+    let release = session.mode == "release";
+    let candidate = build_candidate(runner, remote, sync, release)?;
+    compare_source_fingerprints(&sync.fingerprint, &candidate.fingerprint)
+        .map_err(|error| error.to_string())?;
+    match choice {
+        crate::remote::RemoteDeploy::Online => {
+            let baseline = read_active_manifest(runner, remote, session)?;
+            let (online, reason) = online_possible(&candidate.manifest_data, &baseline);
+            if !online {
+                return Err(remote_error(
+                    codes::REMOTE_DEPLOY,
+                    format!(
+                        "the remote host requires a cold download: {}",
+                        reason.unwrap_or_else(|| "the online plan was rejected".to_owned())
+                    ),
+                )
+                .to_string());
+            }
+            let argv = vec![
+                remote.stc.as_str().to_owned(),
+                "serve".to_owned(),
+                "deploy".to_owned(),
+                "--session".to_owned(),
+                remote.session.as_str().to_owned(),
+                "--module".to_owned(),
+                candidate.module.as_str().to_owned(),
+                "--deploy-manifest".to_owned(),
+                candidate.manifest.as_str().to_owned(),
+                "--message-format".to_owned(),
+                "json".to_owned(),
+            ];
+            let output = runner
+                .run(remote.target(), &argv, SYNC_DEADLINE)
+                .map_err(|error| error.to_string())?;
+            if !output.success() {
+                let detail = tail_text(&output.stdout, &output.stderr);
+                return Err(remote_error(
+                    codes::REMOTE_DEPLOY,
+                    format!("the remote online deploy was rejected{detail}"),
+                )
+                .to_string());
+            }
+            if output.stdout.contains("\"cold_required\":true") {
+                return Err(remote_error(
+                    codes::REMOTE_DEPLOY,
+                    "the remote host requires a cold download",
+                )
+                .to_string());
+            }
+            read_remote_session(runner, remote)
+        }
+        crate::remote::RemoteDeploy::Cold => {
+            prepare_remote_session(runner, remote)?;
+            start_remote_serve(
+                runner,
+                remote,
+                &ServeStart {
+                    root_manifest: &sync.root_manifest,
+                    out_dir: &remote.candidate_dir,
+                    start_paused: false,
+                    no_build: true,
+                    release,
+                    allow_write,
+                    allow_force,
+                },
+            )?;
+            let (session, endpoint) = wait_for_remote_session(runner, remote)?;
+            compare_source_fingerprints(&sync.fingerprint, &session.source_fingerprint)
+                .map_err(|error| error.to_string())?;
+            Ok((session, endpoint))
+        }
+        crate::remote::RemoteDeploy::Never | crate::remote::RemoteDeploy::Ask => Err(remote_error(
+            codes::REMOTE_DEPLOY,
+            "the remote source fingerprint differs and deployment is disabled",
+        )
+        .to_string()),
+    }
 }
 
 /// Resets the remote source mirror and uploads every file, verifying hashes.
@@ -436,34 +963,49 @@ fn prepare_remote_session(runner: &SshRunner, remote: &ResolvedRemote) -> Result
     Ok(())
 }
 
+/// One remote `stc serve start` request.
+struct ServeStart<'a> {
+    root_manifest: &'a str,
+    out_dir: &'a RemotePath,
+    start_paused: bool,
+    no_build: bool,
+    release: bool,
+    allow_write: bool,
+    allow_force: bool,
+}
+
 fn start_remote_serve(
     runner: &SshRunner,
     remote: &ResolvedRemote,
-    arguments: &LaunchArguments,
-    root_manifest: &str,
+    start: &ServeStart<'_>,
 ) -> Result<(), String> {
     let manifest = remote
         .source_dir
-        .join(root_manifest)
+        .join(start.root_manifest)
         .map_err(|error| error.to_string())?;
     let mut command = format!(
-        "{} serve start --manifest-path {} --work-dir {} --session {} --out-dir {} --start-paused --message-format json",
+        "{} serve start --manifest-path {} --work-dir {} --session {} --out-dir {} --message-format json",
         shell_quote(remote.stc.as_str()),
         shell_quote(manifest.as_str()),
         shell_quote(remote.work_dir.as_str()),
         shell_quote(remote.session.as_str()),
-        shell_quote(remote.build_dir.as_str())
+        shell_quote(start.out_dir.as_str())
     );
-    if arguments.release {
+    command.push_str(" --state-file ");
+    command.push_str(&shell_quote(remote.state_file.as_str()));
+    if start.start_paused {
+        command.push_str(" --start-paused");
+    }
+    if start.release {
         command.push_str(" --release");
     }
-    if arguments.no_build {
+    if start.no_build {
         command.push_str(" --no-build");
     }
-    if arguments.allow_write {
+    if start.allow_write {
         command.push_str(" --allow-write");
     }
-    if arguments.allow_force {
+    if start.allow_force {
         command.push_str(" --allow-force");
     }
     let script = format!(
@@ -874,6 +1416,14 @@ mod tests {
         }
 
         fn tools(root: &Path, fail_serve: bool) -> (SshRunner, PathBuf, PathBuf) {
+            tools_with(root, fail_serve, false)
+        }
+
+        fn tools_with(
+            root: &Path,
+            fail_serve: bool,
+            fail_build: bool,
+        ) -> (SshRunner, PathBuf, PathBuf) {
             let bin = root.join("bin");
             let ssh = script(
                 &bin,
@@ -895,11 +1445,16 @@ mod tests {
             } else {
                 "exit 0"
             };
+            let build = if fail_build {
+                "echo 'remote candidate build failed' >&2\nexit 1"
+            } else {
+                "exit 0"
+            };
             let stc = script(
                 &bin,
                 "stc",
                 &format!(
-                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'stc %s\\n' '{version}'; exit 0; fi\nif [ \"$1\" = \"serve\" ] && [ \"$2\" = \"start\" ]; then {serve}; fi\nexit 0\n"
+                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'stc %s\\n' '{version}'; exit 0; fi\nif [ \"$1\" = \"serve\" ] && [ \"$2\" = \"start\" ]; then {serve}; fi\nif [ \"$1\" = \"build\" ]; then {build}; fi\nexit 0\n"
                 ),
             );
             (SshRunner::new(ssh.to_string_lossy().into_owned()), stc, bin)
@@ -997,8 +1552,15 @@ mod tests {
             start_remote_serve(
                 &runner,
                 &remote,
-                &LaunchArguments::default(),
-                &sync.root_manifest,
+                &ServeStart {
+                    root_manifest: &sync.root_manifest,
+                    out_dir: &remote.build_dir,
+                    start_paused: true,
+                    no_build: false,
+                    release: false,
+                    allow_write: false,
+                    allow_force: false,
+                },
             )
             .expect("start");
             let (session, endpoint) = wait_for_remote_session(&runner, &remote).expect("wait");
@@ -1020,8 +1582,15 @@ mod tests {
             start_remote_serve(
                 &runner,
                 &remote,
-                &LaunchArguments::default(),
-                &sync.root_manifest,
+                &ServeStart {
+                    root_manifest: &sync.root_manifest,
+                    out_dir: &remote.build_dir,
+                    start_paused: true,
+                    no_build: false,
+                    release: false,
+                    allow_write: false,
+                    allow_force: false,
+                },
             )
             .expect("start");
             let error = wait_for_remote_session(&runner, &remote).expect_err("serve failure");
@@ -1105,6 +1674,201 @@ mod tests {
                 .expect("home work directory");
             assert_eq!(error.code, codes::REMOTE_SESSION);
             std::fs::remove_dir_all(&root).expect("clean up");
+        }
+
+        #[test]
+        fn remote_host_releases_a_gate_and_reports_the_exit_status() {
+            let root = temp_dir("gate");
+            let (_probe, stc, _bin) = tools(&root, false);
+            let work = root.join("work");
+            std::fs::create_dir_all(&work).expect("work");
+            std::fs::write(work.join("stc-serve.status"), "7\n").expect("status");
+            let mut host = remote_host(&root, &stc, &work, false, true);
+            host.release_start_gate().expect("release");
+            assert!(host.gate.is_none());
+            host.release_start_gate().expect("released already");
+            host.stop();
+            assert_eq!(SessionHost::try_exit(&mut host), Some(7));
+            assert!(SessionHost::drain_output(&mut host).is_empty());
+            assert!(!SessionHost::attached(&host));
+            std::fs::remove_dir_all(&root).expect("clean up");
+        }
+
+        #[test]
+        fn attached_remote_host_does_not_stop_or_report_exit() {
+            let root = temp_dir("attached");
+            let (_probe, stc, _bin) = tools(&root, false);
+            let work = root.join("work");
+            std::fs::create_dir_all(&work).expect("work");
+            std::fs::write(work.join("stc-serve.status"), "9\n").expect("status");
+            let mut host = remote_host(&root, &stc, &work, true, false);
+            host.stop();
+            assert_eq!(SessionHost::try_exit(&mut host), None);
+            assert!(SessionHost::attached(&host));
+            std::fs::remove_dir_all(&root).expect("clean up");
+        }
+
+        #[test]
+        fn status_reports_a_match_and_build_failures_as_cold_only() {
+            let root = temp_dir("status");
+            let (_probe, stc, _bin) = tools(&root, false);
+            let work = root.join("work");
+            let manager = project(&root.join("project"));
+            let (remote, runner, _session) = work_and_settings(&root, &stc, &work);
+            let sync = project_sync_files(&manager).expect("sync");
+            write_fixtures(&remote, &sync.fingerprint);
+            let invocation = invocation(&[
+                "remote",
+                "status",
+                "--remote",
+                "r2k@ecat",
+                "--remote-dir",
+                &work.to_string_lossy(),
+                "--remote-stc",
+                &stc.to_string_lossy(),
+                "--manifest-path",
+                &manager.to_string_lossy(),
+                "--message-format",
+                "json",
+            ]);
+            let report = status_report_with(&invocation, &runner).expect("status");
+            assert_eq!(
+                report.as_object().and_then(|object| object.get("drift")),
+                Some(&stc_got::Json::Bool(false))
+            );
+            assert_eq!(
+                report.as_object().and_then(|object| object.get("online")),
+                Some(&stc_got::Json::Bool(true))
+            );
+
+            let (_probe, stc, _bin) = tools_with(&root, false, true);
+            let (remote, runner, _session) = work_and_settings(&root, &stc, &work);
+            write_fixtures(&remote, &format!("0x{}", "22".repeat(32)));
+            let report = status_report_with(&invocation, &runner).expect("drift status");
+            let object = report.as_object().expect("object");
+            assert_eq!(object.get("drift"), Some(&stc_got::Json::Bool(true)));
+            assert_eq!(
+                object.get("cold_required"),
+                Some(&stc_got::Json::Bool(true))
+            );
+            let reason = object
+                .get("reason")
+                .and_then(stc_got::Json::as_str)
+                .expect("reason");
+            assert!(reason.contains("STC-E-REMOTE-006"), "{reason}");
+            std::fs::remove_dir_all(&root).expect("clean up");
+        }
+
+        #[test]
+        fn sync_and_start_failures_are_reported() {
+            let root = temp_dir("sync-failures");
+            let (_probe, stc, _bin) = tools(&root, false);
+            let work = root.join("work");
+            let manager = project(&root.join("project"));
+            let (remote, _runner, _session) = work_and_settings(&root, &stc, &work);
+            let sync = project_sync_files(&manager).expect("sync");
+
+            let bin = root.join("failing-bin");
+            script(
+                &bin,
+                "ssh",
+                "#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=\"$arg\"; done\nexec /bin/sh -c \"$last\"\n",
+            );
+            script(&bin, "sftp", "#!/bin/sh\nexit 1\n");
+            let failing = SshRunner::new(bin.join("ssh").to_string_lossy().into_owned());
+            let error = sync_project(&failing, &remote, &sync.files).expect_err("upload");
+            assert!(error.contains("STC-E-REMOTE-001"), "{error}");
+
+            let missing = SshRunner::new("/nonexistent/stc-ssh");
+            let error = sync_project(&missing, &remote, &sync.files).expect_err("reset");
+            assert!(error.contains("STC-E-REMOTE-001"), "{error}");
+            let error = prepare_remote_session(&missing, &remote).expect_err("prepare");
+            assert!(error.contains("STC-E-REMOTE-001"), "{error}");
+            let error = start_remote_serve(
+                &missing,
+                &remote,
+                &ServeStart {
+                    root_manifest: &sync.root_manifest,
+                    out_dir: &remote.build_dir,
+                    start_paused: true,
+                    no_build: false,
+                    release: false,
+                    allow_write: false,
+                    allow_force: false,
+                },
+            )
+            .expect_err("start");
+            assert!(error.contains("STC-E-REMOTE-006"), "{error}");
+            std::fs::remove_dir_all(&root).expect("clean up");
+        }
+
+        #[test]
+        fn version_and_private_file_failures_are_classified() {
+            let root = temp_dir("version");
+            let bin = root.join("bin");
+            let bad = script(&bin, "badstc", "#!/bin/sh\nprintf 'stc 0.0.0\\n'\n");
+            let work = root.join("work");
+            let (_remote, _runner, _session) = work_and_settings(&root, &bad, &work);
+            let (remote, runner, _session2) = work_and_settings(&root, &bad, &work);
+            let error = check_remote_version(&runner, &remote).expect_err("mismatch");
+            assert!(error.contains("STC-E-REMOTE-002"), "{error}");
+            let (remote, runner, _session3) =
+                work_and_settings(&root, Path::new("/nonexistent/stc"), &work);
+            let error = check_remote_version(&runner, &remote).expect_err("missing");
+            assert!(error.contains("STC-E-REMOTE-002"), "{error}");
+
+            let manager = project(&root.join("project"));
+            let (remote, runner, _session4) = work_and_settings(&root, &bad, &work);
+            let sync = project_sync_files(&manager).expect("sync");
+            write_fixtures(&remote, &sync.fingerprint);
+            let path = work.join("stc-remote-session.json");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+            let error = read_remote_session(&runner, &remote).expect_err("permissions");
+            assert!(error.contains("STC-E-REMOTE-005"), "{error}");
+            std::fs::remove_dir_all(&root).expect("clean up");
+        }
+
+        #[test]
+        fn tail_text_limits_each_stream() {
+            assert_eq!(tail_text("", ""), "");
+            assert_eq!(tail_text("out", "err"), ": err\nout");
+            let long = "x".repeat(3000);
+            let detail = tail_text(&long, "");
+            assert!(detail.len() < 2100, "{}", detail.len());
+        }
+
+        fn remote_host(
+            root: &Path,
+            stc: &Path,
+            work: &Path,
+            attached: bool,
+            gate: bool,
+        ) -> RemoteHost {
+            let absolute = |path: &Path| {
+                RemotePath::parse_absolute(&path.to_string_lossy()).expect("remote path")
+            };
+            RemoteHost {
+                runner: SshRunner::new(root.join("bin/ssh").to_string_lossy().into_owned()),
+                target: RemoteTarget::parse("r2k@ecat").expect("target"),
+                stc: RemoteProgram::parse(&stc.to_string_lossy()).expect("stc"),
+                session: absolute(&work.join("stc-remote-session.json")),
+                status: absolute(&work.join("stc-serve.status")),
+                tunnel: None,
+                gate: gate.then(|| absolute(&work.join("stc-start.gate"))),
+                attached,
+                stopped: false,
+                exit_code: None,
+            }
+        }
+
+        fn invocation(args: &[&str]) -> Invocation {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            crate::cli::parse(&args)
+                .expect("parse")
+                .expect("invocation")
         }
 
         fn temp_dir(name: &str) -> PathBuf {

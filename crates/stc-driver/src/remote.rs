@@ -792,6 +792,8 @@ pub(crate) struct ProjectSync {
     pub(crate) fingerprint: String,
     /// Root manifest path relative to the mirror root.
     pub(crate) root_manifest: String,
+    /// Root package name (the artifact name).
+    pub(crate) package_name: String,
 }
 
 /// Lists the files that make up the remotely mirrored project.
@@ -939,6 +941,7 @@ pub(crate) fn project_sync_files(project: &Path) -> Result<ProjectSync, Error> {
         files,
         fingerprint: fingerprint.to_hex(),
         root_manifest,
+        package_name: graph.root_package().name.clone(),
     })
 }
 
@@ -954,6 +957,9 @@ fn common_ancestor(paths: &[&Path]) -> Option<PathBuf> {
             .take_while(|(left, right)| *left == right)
             .count();
         length = matched;
+    }
+    if length == 0 {
+        return None;
     }
     let mut common = PathBuf::new();
     for component in &components[..length] {
@@ -1319,7 +1325,6 @@ impl SshRunner {
                 "BatchMode=yes",
                 "-o",
                 "StrictHostKeyChecking=yes",
-                "--",
             ])
             .arg(target.spelling())
             .stdin(Stdio::piped())
@@ -1814,6 +1819,59 @@ mod tests {
         );
         assert!(arguments.iter().any(|argument| argument == "r2k@ecat"));
         assert!(arguments.iter().any(|argument| argument == "stc serve"));
+    }
+
+    #[test]
+    fn tunnel_arguments_forward_only_a_loopback_socket() {
+        let arguments = ssh_tunnel_arguments(&target(), "127.0.0.1:4000:127.0.0.1:7");
+        assert!(arguments.iter().any(|argument| argument == "-N"));
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-o", "ExitOnForwardFailure=yes"])
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-L", "127.0.0.1:4000:127.0.0.1:7"])
+        );
+        assert_eq!(arguments.last().map(String::as_str), Some("r2k@ecat"));
+
+        assert!(parse_loopback_endpoint("127.0.0.1:1234").is_ok());
+        assert!(parse_loopback_endpoint("[::1]:1234").is_ok());
+        assert_eq!(
+            parse_loopback_endpoint("0.0.0.0:1234")
+                .expect_err("exposed")
+                .code,
+            codes::REMOTE_UNSUPPORTED
+        );
+        assert!(parse_loopback_endpoint("localhost:1").is_err());
+
+        let runner = SshRunner::new("/nonexistent/stc-ssh");
+        assert_eq!(
+            runner
+                .open_tunnel(&target(), "192.0.2.1:1234")
+                .err()
+                .expect("exposed")
+                .code,
+            codes::REMOTE_UNSUPPORTED
+        );
+        assert_eq!(
+            runner
+                .open_tunnel(&target(), "127.0.0.1:1234")
+                .err()
+                .expect("missing client")
+                .code,
+            codes::REMOTE_TRANSPORT
+        );
+    }
+
+    #[test]
+    fn common_ancestor_requires_a_shared_root() {
+        assert_eq!(
+            common_ancestor(&[Path::new("alpha/x"), Path::new("beta/y")]),
+            None
+        );
     }
 
     #[test]

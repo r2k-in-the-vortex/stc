@@ -40,6 +40,8 @@ pub(crate) enum Command {
     OnlineDiff,
     /// Serve a persistent remote-debug runtime on the host.
     Serve,
+    /// Query a remote debug session from the development host.
+    Remote,
     /// Source-aware tracked rename.
     Rename,
     /// Serve the Language Server Protocol over standard input and output.
@@ -132,6 +134,31 @@ pub(crate) struct ServeOptions {
     pub(crate) deploy_manifest: Option<String>,
 }
 
+/// `stc remote` actions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RemoteAction {
+    /// Report the remote/local source identity and deployment options.
+    #[default]
+    Status,
+}
+
+/// `stc remote` options.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RemoteOptions {
+    /// Selected action.
+    pub(crate) action: RemoteAction,
+    /// SSH destination.
+    pub(crate) remote: Option<String>,
+    /// Remote work directory.
+    pub(crate) remote_dir: Option<String>,
+    /// Remote `stc` program or path.
+    pub(crate) remote_stc: Option<String>,
+    /// Attach-time deployment choice.
+    pub(crate) remote_deploy: Option<String>,
+    /// Remote session descriptor.
+    pub(crate) remote_session: Option<String>,
+}
+
 /// Debug-session options shared by `stc debug` and `stc run --debug-server`.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DebugOptions {
@@ -206,6 +233,8 @@ pub(crate) struct Invocation {
     pub(crate) online: OnlineOptions,
     /// `stc serve` options.
     pub(crate) serve: ServeOptions,
+    /// `stc remote` options.
+    pub(crate) remote: RemoteOptions,
     /// `fmt --check`.
     pub(crate) fmt_check: bool,
     /// `clean --test`: remove only the test artifact tree.
@@ -249,6 +278,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         "run" => Command::Run,
         "debug" => Command::Debug,
         "serve" => Command::Serve,
+        "remote" => Command::Remote,
         "test" => Command::Test,
         "fmt" => Command::Fmt,
         "clean" => Command::Clean,
@@ -285,6 +315,9 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     }
     if command == Command::Serve {
         return parse_serve(args, index);
+    }
+    if command == Command::Remote {
+        return parse_remote(args, index);
     }
 
     let mut format = Format::Human;
@@ -754,6 +787,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         dry_run,
         online,
         serve: ServeOptions::default(),
+        remote: RemoteOptions::default(),
         fmt_check,
         clean_test,
         build,
@@ -813,6 +847,7 @@ fn parse_lsp(args: &[String], mut index: usize) -> Result<Option<Invocation>, St
         dry_run: false,
         online: OnlineOptions::default(),
         serve: ServeOptions::default(),
+        remote: RemoteOptions::default(),
         fmt_check: false,
         clean_test: false,
         build: Request::default(),
@@ -872,6 +907,7 @@ fn parse_dap(args: &[String], mut index: usize) -> Result<Option<Invocation>, St
         dry_run: false,
         online: OnlineOptions::default(),
         serve: ServeOptions::default(),
+        remote: RemoteOptions::default(),
         fmt_check: false,
         clean_test: false,
         build: Request::default(),
@@ -881,11 +917,124 @@ fn parse_dap(args: &[String], mut index: usize) -> Result<Option<Invocation>, St
     }))
 }
 
+/// Parses `stc remote`.
+///
+/// The only action is `status`: it reports whether the remote serve matches
+/// the local source graph and whether an online change is compatible. The
+/// extension uses it before offering the attach-time deployment choice.
+fn parse_remote(args: &[String], mut index: usize) -> Result<Option<Invocation>, String> {
+    let mut remote = RemoteOptions::default();
+    if let Some(action) = args.get(index)
+        && action == "status"
+    {
+        remote.action = RemoteAction::Status;
+        index += 1;
+    }
+    let mut format = Format::Human;
+    let mut color = ColorChoice::Auto;
+    let mut quiet = false;
+    let mut verbosity = 0_u8;
+    let mut manifest = None;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        match argument {
+            "--help" | "-h" => {
+                print_help();
+                return Ok(None);
+            }
+            "--version" | "-V" => {
+                println!("stc {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            "--remote" => remote.remote = Some(next_value(args, &mut index, "--remote")?),
+            other if other.starts_with("--remote=") => {
+                remote.remote = Some(other["--remote=".len()..].to_owned());
+            }
+            "--remote-dir" => {
+                remote.remote_dir = Some(next_value(args, &mut index, "--remote-dir")?);
+            }
+            other if other.starts_with("--remote-dir=") => {
+                remote.remote_dir = Some(other["--remote-dir=".len()..].to_owned());
+            }
+            "--remote-stc" => {
+                remote.remote_stc = Some(next_value(args, &mut index, "--remote-stc")?);
+            }
+            other if other.starts_with("--remote-stc=") => {
+                remote.remote_stc = Some(other["--remote-stc=".len()..].to_owned());
+            }
+            "--remote-deploy" => {
+                remote.remote_deploy = Some(next_value(args, &mut index, "--remote-deploy")?);
+            }
+            other if other.starts_with("--remote-deploy=") => {
+                remote.remote_deploy = Some(other["--remote-deploy=".len()..].to_owned());
+            }
+            "--remote-session" => {
+                remote.remote_session = Some(next_value(args, &mut index, "--remote-session")?);
+            }
+            other if other.starts_with("--remote-session=") => {
+                remote.remote_session = Some(other["--remote-session=".len()..].to_owned());
+            }
+            "--manifest-path" => {
+                manifest = Some(next_value(args, &mut index, "--manifest-path")?);
+            }
+            other if other.starts_with("--manifest-path=") => {
+                manifest = Some(other["--manifest-path=".len()..].to_owned());
+            }
+            "--message-format" => {
+                format = parse_format(&next_value(args, &mut index, "--message-format")?)?;
+            }
+            other if other.starts_with("--message-format=") => {
+                format = parse_format(&other["--message-format=".len()..])?;
+            }
+            "--color" => color = ColorChoice::parse(&next_value(args, &mut index, "--color")?)?,
+            other if other.starts_with("--color=") => {
+                color = ColorChoice::parse(&other["--color=".len()..])?;
+            }
+            "-q" | "--quiet" => quiet = true,
+            "-v" | "--verbose" => verbosity = verbosity.max(1),
+            "-vv" => verbosity = 2,
+            other => return Err(format!("`stc remote` does not accept `{other}`")),
+        }
+        index += 1;
+    }
+    if remote.remote.is_none() {
+        return Err("`stc remote status` requires `--remote <user@host>`".into());
+    }
+    if format == Format::Short {
+        return Err("`stc remote` supports `--message-format human` or `json`".into());
+    }
+    Ok(Some(Invocation {
+        command: Command::Remote,
+        paths: Vec::new(),
+        format,
+        diagnostic_paths: DiagnosticPaths::Package,
+        color,
+        quiet,
+        verbosity,
+        relaxed: false,
+        ast: false,
+        manifest,
+        locked: false,
+        lints: LintOverrides::default(),
+        watch: false,
+        watch_timeout_ns: None,
+        dry_run: false,
+        online: OnlineOptions::default(),
+        serve: ServeOptions::default(),
+        remote,
+        fmt_check: false,
+        clean_test: false,
+        build: Request::default(),
+        test: TestOptions::default(),
+        debug: DebugOptions::default(),
+        hir_dump: HirDumpOptions::default(),
+    }))
+}
 /// Parses the `stc serve` command and its actions.
 ///
 /// `stc serve` is the remote-host runtime entry point. Its start action accepts
-/// the project build/run surface; `status`, `deploy`, and `stop` accept only
-/// the session/control/output options.
+/// the project build/run surface; `status`, `deploy`, `release`, and `stop`
+/// accept only the session/control/output options.
 fn parse_serve(args: &[String], mut index: usize) -> Result<Option<Invocation>, String> {
     let mut serve = ServeOptions::default();
     if let Some(action) = args.get(index) {
@@ -1188,6 +1337,7 @@ fn parse_serve(args: &[String], mut index: usize) -> Result<Option<Invocation>, 
         dry_run: false,
         online: OnlineOptions::default(),
         serve,
+        remote: RemoteOptions::default(),
         fmt_check: false,
         clean_test: false,
         build,
@@ -1698,9 +1848,9 @@ fn validate(
         | Command::Compliance
         | Command::OnlineDownload
         | Command::Debug => path_count == 0,
-        // `stc lsp`, `stc dap`, and `stc serve` are parsed separately and never
-        // reach validation.
-        Command::Lsp | Command::Dap | Command::Serve => false,
+        // `stc lsp`, `stc dap`, `stc serve`, and `stc remote` are parsed
+        // separately and never reach validation.
+        Command::Lsp | Command::Dap | Command::Serve | Command::Remote => false,
     };
     if !allowed {
         return Err(match command {
@@ -1915,6 +2065,7 @@ fn command_name(command: Command) -> &'static str {
         Command::OnlineDownload => "online download",
         Command::OnlineDiff => "online diff",
         Command::Serve => "serve",
+        Command::Remote => "remote",
         Command::Rename => "rename",
         Command::Lsp => "lsp",
         Command::Dap => "dap",
@@ -1991,6 +2142,9 @@ fn print_help() {
          \x20 stc rename <old> <new> [--dry-run] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20 stc lsp [--manifest-path <stc.toml|dir>]\n\
          \x20 stc dap [--manifest-path <stc.toml|dir>]\n\
+         \x20 stc remote status --remote <user@host> [--remote-dir <dir>]\n\
+         \x20         [--remote-stc <path>] [--remote-session <path>]\n\
+         \x20         [--manifest-path <stc.toml|dir>] [--message-format human|json]\n\
          \x20 stc serve [start|status|deploy|release|stop] [--work-dir <dir>] [--session <path>]\n\
          \x20         [--control-endpoint <path>] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20         [--debug|--release] [--out-dir <dir>] [--cycles <n>] [--cycle-time <duration>]\n\
@@ -2247,6 +2401,40 @@ mod tests {
         );
         let attach = parse_ok(&["debug", "--remote", "r2k@ecat", "--attach", "ep"]);
         assert_eq!(attach.debug.remote.as_deref(), Some("r2k@ecat"));
+    }
+
+    #[test]
+    fn remote_status_options_parse() {
+        let invocation = parse_ok(&[
+            "remote",
+            "status",
+            "--remote",
+            "r2k@ecat",
+            "--remote-dir",
+            "~/stc-wl12",
+            "--remote-stc",
+            "/home/r2k/stc-wl12/bin/stc",
+            "--remote-session",
+            "~/stc-wl12/stc-remote-session.json",
+            "--manifest-path",
+            "stc.toml",
+            "--message-format",
+            "json",
+        ]);
+        assert_eq!(command_name(invocation.command), "remote");
+        assert_eq!(invocation.remote.remote.as_deref(), Some("r2k@ecat"));
+        assert_eq!(invocation.remote.remote_dir.as_deref(), Some("~/stc-wl12"));
+        assert_eq!(
+            invocation.remote.remote_session.as_deref(),
+            Some("~/stc-wl12/stc-remote-session.json")
+        );
+        assert_eq!(invocation.manifest.as_deref(), Some("stc.toml"));
+        assert_eq!(invocation.format, Format::Json);
+        assert!(parse_error(&["remote", "status"]).contains("--remote"));
+        assert!(
+            parse_error(&["remote", "status", "--remote", "r2k@ecat", "--cycles", "1"])
+                .contains("does not accept")
+        );
     }
 
     #[test]

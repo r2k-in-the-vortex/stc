@@ -172,6 +172,7 @@ fn run(args: &[String]) -> ExitCode {
         Command::Debug if invocation.debug.remote.is_some() => crate::debug::remote_launch(
             invocation.manifest.as_deref(),
             &invocation.debug,
+            invocation.build.mode_override == Some(crate::build::BuildMode::Release),
             &mut reporter,
             log,
         ),
@@ -222,6 +223,7 @@ fn run(args: &[String]) -> ExitCode {
             log,
         ),
         Command::Serve => serve::run(&invocation, &mut reporter, log),
+        Command::Remote => crate::remote_launch::status_command(&invocation, &mut reporter),
         Command::HirDump => hir_dump::run(&invocation, &mut reporter, log),
         Command::Rename => rename::run(
             &invocation.paths[0],

@@ -493,6 +493,13 @@ fn deploy(invocation: &Invocation, reporter: &mut Reporter) -> u8 {
             return 2;
         }
     };
+    let session_path = match session_descriptor_path(invocation) {
+        Ok(path) => path,
+        Err(message) => {
+            reporter.plain(codes::REMOTE_SESSION, Severity::Error, &message);
+            return 2;
+        }
+    };
     let mut client =
         match ControlClient::connect(session.control_endpoint.as_str(), CONTROL_DEADLINE) {
             Ok(client) => client,
@@ -513,21 +520,67 @@ fn deploy(invocation: &Invocation, reporter: &mut Reporter) -> u8 {
             return 2;
         }
     };
+    let ok = response
+        .as_object()
+        .and_then(|object| object.get("ok"))
+        .and_then(Json::as_bool)
+        == Some(true);
+    if ok {
+        let generation = response
+            .as_object()
+            .and_then(|object| object.get("generation"))
+            .and_then(Json::as_number)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(session.generation);
+        if let Err(message) = refresh_session_descriptor(
+            &mut client,
+            &nonce,
+            &session,
+            &session_path,
+            module,
+            manifest,
+            generation,
+        ) {
+            reporter.plain(codes::REMOTE_SESSION, Severity::Error, &message);
+            return 2;
+        }
+    }
     if invocation.format == crate::report::Format::Json {
         println!("{}", response.render_compact());
     } else {
         println!("deploy {}", response.render_compact());
     }
-    if response
+    if ok { 0 } else { 2 }
+}
+
+/// Updates the session descriptor after an online deployment.
+fn refresh_session_descriptor(
+    client: &mut ControlClient,
+    nonce: &str,
+    session: &RemoteSession,
+    path: &Path,
+    module: &str,
+    manifest: &str,
+    generation: u64,
+) -> Result<(), String> {
+    let response = client.request(
+        nonce,
+        Json::object([("op".into(), Json::string("download"))]),
+    )?;
+    let download = response
         .as_object()
-        .and_then(|object| object.get("ok"))
-        .and_then(Json::as_bool)
-        == Some(true)
-    {
-        0
-    } else {
-        2
-    }
+        .and_then(|object| object.get("download"))
+        .and_then(Json::as_str)
+        .and_then(|text| Download::from_json_text(text).ok())
+        .ok_or_else(|| "the control download response is invalid".to_owned())?;
+    let mut updated = session.clone();
+    updated.build_id = download.deployment.build_id.to_hex();
+    updated.source_fingerprint = download.manifest().header.source_fingerprint.to_hex();
+    updated.generation = generation;
+    updated.module = RemotePath::parse_absolute(module).map_err(|error| error.to_string())?;
+    updated.manifest = RemotePath::parse_absolute(manifest).map_err(|error| error.to_string())?;
+    updated.validate().map_err(|error| error.to_string())?;
+    write_private_file(path, updated.to_json_text().as_bytes())
 }
 
 fn release(invocation: &Invocation, reporter: &mut Reporter) -> u8 {
@@ -594,12 +647,7 @@ fn load_session(invocation: &Invocation) -> Result<(RemoteSession, String), Stri
 }
 
 fn load_session_descriptor(invocation: &Invocation) -> Result<RemoteSession, String> {
-    let work_dir = resolve_work_dir(invocation)?;
-    let session_path = output_path(
-        &work_dir,
-        invocation.serve.session.as_deref(),
-        DEFAULT_SESSION_FILE,
-    )?;
+    let session_path = session_descriptor_path(invocation)?;
     let text = fs::read_to_string(&session_path).map_err(|error| {
         format!(
             "cannot read the serve session `{}`: {error}",
@@ -607,6 +655,15 @@ fn load_session_descriptor(invocation: &Invocation) -> Result<RemoteSession, Str
         )
     })?;
     RemoteSession::parse(&text).map_err(|error| error.to_string())
+}
+
+fn session_descriptor_path(invocation: &Invocation) -> Result<PathBuf, String> {
+    let work_dir = resolve_work_dir(invocation)?;
+    output_path(
+        &work_dir,
+        invocation.serve.session.as_deref(),
+        DEFAULT_SESSION_FILE,
+    )
 }
 
 fn resolve_work_dir(invocation: &Invocation) -> Result<PathBuf, String> {

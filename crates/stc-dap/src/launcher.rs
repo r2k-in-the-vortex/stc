@@ -34,8 +34,9 @@ pub trait SessionHost {
     /// Releases a launch-owned host that waits for debug configuration before
     /// its first cycle (WL-16). The adapter calls this after `session.start`,
     /// `manifest.get`, and `apply_all_breakpoints`, so every breakpoint
-    /// received before `configurationDone` binds before cycle 0. An attach
-    /// session has no owned host and never calls this.
+    /// received before `configurationDone` binds before cycle 0. A remote
+    /// attach may carry a start-paused serve gate; a local attach has no host
+    /// and never calls this.
     ///
     /// # Errors
     ///

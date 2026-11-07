@@ -706,8 +706,10 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
         }
         self.apply_all_breakpoints();
         // Every launch-owned host waits here for its first cycle, so a
-        // breakpoint set moments ago cannot lose the cycle-0 race. An attach
-        // session has no host and releases nothing.
+        // breakpoint set moments ago cannot lose the cycle-0 race. A remote
+        // attach may also carry a start gate (a start-paused serve); releasing
+        // it after the same configuration preserves that contract. A local
+        // attach has no host and releases nothing.
         if let Some(session) = self.session.as_mut()
             && let Some(host) = session.host.as_mut()
         {

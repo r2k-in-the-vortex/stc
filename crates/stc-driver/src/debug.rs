@@ -288,6 +288,7 @@ pub(crate) fn attach(options: &DebugOptions, reporter: &mut Reporter, log: Log) 
 pub(crate) fn remote_launch(
     manifest_path: Option<&str>,
     debug: &DebugOptions,
+    release: bool,
     reporter: &mut Reporter,
     log: Log,
 ) -> u8 {
@@ -309,7 +310,7 @@ pub(crate) fn remote_launch(
             }
         };
     let manifest = graph.root_package().manifest.clone();
-    let arguments = remote_arguments(path, debug);
+    let arguments = remote_arguments(path, debug, release);
     let connection = match crate::remote_launch::launch(&arguments, None) {
         Ok(connection) => connection,
         Err(message) => {
@@ -359,7 +360,7 @@ pub(crate) fn remote_launch(
 /// Attaches to an existing remote serve through the shared remote launcher.
 pub(crate) fn remote_attach(debug: &DebugOptions, reporter: &mut Reporter, log: Log) -> u8 {
     stc_runtime::signal::install_stop_handler();
-    let arguments = remote_arguments("stc.toml", debug);
+    let arguments = remote_arguments("stc.toml", debug, false);
     let connection = match crate::remote_launch::attach(&arguments, None) {
         Ok(connection) => connection,
         Err(message) => {
@@ -402,7 +403,7 @@ pub(crate) fn remote_attach(debug: &DebugOptions, reporter: &mut Reporter, log: 
     code
 }
 
-fn remote_arguments(project: &str, debug: &DebugOptions) -> LaunchArguments {
+fn remote_arguments(project: &str, debug: &DebugOptions, release: bool) -> LaunchArguments {
     LaunchArguments {
         project: Some(project.to_owned()),
         remote: debug.remote.clone(),
@@ -412,6 +413,7 @@ fn remote_arguments(project: &str, debug: &DebugOptions) -> LaunchArguments {
         remote_session: debug.remote_session.clone(),
         allow_write: debug.allow_write,
         allow_force: debug.allow_force,
+        release,
         ..LaunchArguments::default()
     }
 }
