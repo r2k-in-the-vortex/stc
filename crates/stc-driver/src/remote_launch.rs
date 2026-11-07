@@ -1896,7 +1896,7 @@ mod tests {
                 },
             )
             .expect_err("start");
-            assert!(error.contains("STC-E-REMOTE-006"), "{error}");
+            assert!(error.contains("STC-E-REMOTE-001"), "{error}");
             std::fs::remove_dir_all(&root).expect("clean up");
         }
 
