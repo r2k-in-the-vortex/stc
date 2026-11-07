@@ -339,7 +339,8 @@ fn remote_attach_online_and_cold_deploy() {
     let cold = attach(&bin, &project, &work, "cold", &batch);
     assert!(
         cold.status.success(),
-        "cold attach failed\nstdout:\n{}\nstderr:\n{}",
+        "cold attach failed ({:?})\nstdout:\n{}\nstderr:\n{}",
+        cold.status,
         String::from_utf8_lossy(&cold.stdout),
         String::from_utf8_lossy(&cold.stderr)
     );

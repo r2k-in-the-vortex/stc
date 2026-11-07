@@ -1107,7 +1107,7 @@ fn start_remote_serve(
         command.push_str(" --allow-force");
     }
     let script = format!(
-        "set -eu\nrm -f -- {log} {status}\nnohup sh -c {inner} >/dev/null 2>&1 &\nexit 0",
+        "set -eu\nrm -f -- {log} {status}\nnohup sh -c {inner} </dev/null >/dev/null 2>&1 &\nexit 0",
         log = shell_quote(remote.serve_log.as_str()),
         status = shell_quote(remote.serve_status.as_str()),
         inner = shell_quote(&format!(
