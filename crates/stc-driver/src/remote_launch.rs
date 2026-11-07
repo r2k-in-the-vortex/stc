@@ -1041,9 +1041,9 @@ fn prepare_remote_session(runner: &SshRunner, remote: &ResolvedRemote) -> Result
     // A missing or stale session is expected; the stop result is advisory.
     let _ = runner.run(remote.target(), &argv, STOP_TIMEOUT);
     let script = format!(
-        "set -eu\nrm -f -- {} {}",
-        shell_quote(remote.session.as_str()),
-        shell_quote(remote.serve_status.as_str())
+        "set -eu\ni=0\nwhile [ -f {session} ] && [ \"$i\" -lt 100 ]; do\n  i=$((i+1))\n  sleep 0.1\ndone\nrm -f -- {session} {status}",
+        session = shell_quote(remote.session.as_str()),
+        status = shell_quote(remote.serve_status.as_str())
     );
     let output = runner
         .run(
