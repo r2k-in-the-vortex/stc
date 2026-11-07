@@ -1284,4 +1284,115 @@ mod tests {
         assert_eq!(error.code, codes::REMOTE_SOURCE_MISMATCH);
         std::fs::remove_dir_all(&project).expect("clean up");
     }
+
+    #[test]
+    fn remote_program_accepts_bare_names_and_paths() {
+        assert_eq!(RemoteProgram::parse("stc").expect("bare").as_str(), "stc");
+        assert_eq!(
+            RemoteProgram::parse("/home/r2k/stc-wl12/bin/stc")
+                .expect("absolute")
+                .as_str(),
+            "/home/r2k/stc-wl12/bin/stc"
+        );
+        assert_eq!(
+            RemoteProgram::parse("~/stc-wl12/bin/stc")
+                .expect("home-relative")
+                .as_str(),
+            "~/stc-wl12/bin/stc"
+        );
+        for text in ["", "-stc", "a b", "stc;reboot"] {
+            assert!(RemoteProgram::parse(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn session_descriptor_rejects_malformed_json_and_wrong_protocol() {
+        assert!(RemoteSession::parse("not json").is_err());
+        let text = sample_session()
+            .to_json_text()
+            .replace("stc-remote/1", "stc-remote/2");
+        let error = RemoteSession::parse(&text).expect_err("protocol");
+        assert_eq!(error.code, codes::REMOTE_SESSION);
+        let text = sample_session()
+            .to_json_text()
+            .replace("\"format\":1", "\"format\":2");
+        assert!(RemoteSession::parse(&text).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn fake_ssh(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = std::env::temp_dir().join(format!(
+            "stc-remote-ssh-{}-{name}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir_all(&directory).expect("create fake ssh directory");
+        let script = directory.join("ssh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=\"$arg\"; done\nexec /bin/sh -c \"$last\"\n",
+        )
+        .expect("write fake ssh");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake ssh");
+        (directory, script)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ssh_runner_executes_remote_commands_and_reads_private_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let (directory, script) = fake_ssh("runner");
+        let runner = SshRunner::new(script.to_string_lossy().into_owned());
+        let output = runner
+            .run(
+                &target(),
+                &["printf".into(), "%s".into(), "hello".into()],
+                Duration::from_secs(5),
+            )
+            .expect("run");
+        assert_eq!(output.status, Some(0));
+        assert_eq!(output.stdout, "hello");
+        let home = runner.remote_home(&target()).expect("home");
+        assert!(home.is_absolute(), "{home:?}");
+
+        let nonce = directory.join("nonce");
+        std::fs::write(&nonce, b"secret\n").expect("write nonce");
+        std::fs::set_permissions(&nonce, std::fs::Permissions::from_mode(0o600)).expect("mode");
+        let path = RemotePath::parse_absolute(&nonce.to_string_lossy()).expect("path");
+        assert_eq!(
+            runner.read_private_file(&target(), &path).expect("read"),
+            "secret"
+        );
+        std::fs::set_permissions(&nonce, std::fs::Permissions::from_mode(0o644)).expect("mode");
+        let error = runner
+            .read_private_file(&target(), &path)
+            .expect_err("group access");
+        assert_eq!(error.code, codes::REMOTE_SESSION);
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ssh_runner_reports_timeouts_and_missing_programs() {
+        let (directory, script) = fake_ssh("timeout");
+        let runner = SshRunner::new(script.to_string_lossy().into_owned());
+        let error = runner
+            .run(
+                &target(),
+                &["sleep".into(), "1".into()],
+                Duration::from_millis(20),
+            )
+            .expect_err("timeout");
+        assert_eq!(error.code, codes::REMOTE_TRANSPORT);
+        let missing = SshRunner::new("/nonexistent/stc-ssh");
+        let error = missing
+            .run(&target(), &["true".into()], Duration::from_secs(1))
+            .expect_err("missing ssh");
+        assert_eq!(error.code, codes::REMOTE_TRANSPORT);
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
 }

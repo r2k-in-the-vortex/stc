@@ -681,3 +681,86 @@ fn cleanup(session: &Path, nonce: &Path) {
     let _ = fs::remove_file(session);
     let _ = fs::remove_file(nonce);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn temp_dir(name: &str) -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "stc-serve-unit-{}-{name}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).expect("create temp directory");
+        directory
+    }
+
+    #[test]
+    fn output_paths_join_under_the_work_directory_and_reject_parent_components() {
+        let work = Path::new("/home/r2k/stc-wl12");
+        assert_eq!(
+            output_path(work, None, "session.json").expect("default"),
+            work.join("session.json")
+        );
+        assert_eq!(
+            output_path(work, Some("debug.endpoint"), "unused").expect("relative"),
+            work.join("debug.endpoint")
+        );
+        assert_eq!(
+            output_path(work, Some("/tmp/endpoint"), "unused").expect("absolute"),
+            PathBuf::from("/tmp/endpoint")
+        );
+        assert!(output_path(work, Some("../escape"), "unused").is_err());
+    }
+
+    #[test]
+    fn canonical_string_resolves_relative_paths() {
+        let directory = temp_dir("canonical");
+        let file = directory.join("file.json");
+        fs::write(&file, b"{}").expect("write file");
+        let resolved = canonical_string(&file).expect("canonical");
+        assert!(Path::new(&resolved).is_absolute(), "{resolved}");
+        fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    #[test]
+    fn host_name_is_never_empty() {
+        assert!(!host_name().is_empty());
+    }
+
+    #[test]
+    fn cleanup_removes_both_private_files() {
+        let directory = temp_dir("cleanup");
+        let session = directory.join("session.json");
+        let nonce = directory.join("nonce");
+        fs::write(&session, b"{}").expect("session");
+        fs::write(&nonce, b"x").expect("nonce");
+        cleanup(&session, &nonce);
+        assert!(!session.exists());
+        assert!(!nonce.exists());
+        fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn private_files_round_trip_and_reject_group_access() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = temp_dir("private");
+        let path = directory.join("nonce");
+        write_private_file(&path, b"abc123\n").expect("write private");
+        assert_eq!(read_private_file(&path).expect("read private"), "abc123");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).expect("mode");
+        assert!(read_private_file(&path).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
+        fs::write(&path, b"   \n").expect("empty");
+        assert!(read_private_file(&path).is_err());
+        let missing = directory.join("missing");
+        assert!(read_private_file(&missing).is_err());
+        assert!(read_private_file(&directory).is_err());
+        fs::remove_dir_all(&directory).expect("clean up");
+    }
+}

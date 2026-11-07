@@ -13,7 +13,9 @@ crates/stc-manifest/src/host.rs | host filesystem path semantics (D-201)
 # Driver: toolchain discovery, artifact naming, and process handling.
 crates/stc-driver/src/build.rs | artifact names, PIC, linker flags, archive tools
 crates/stc-driver/src/debug.rs | platform debug-endpoint spelling
+crates/stc-driver/src/remote.rs | SSH runner, remote paths, and Unix private-file helpers
 crates/stc-driver/src/run.rs | Windows interrupt exit code
+crates/stc-driver/src/serve.rs | Unix serve host private files, work directory, and process handling
 crates/stc-driver/src/toolchain.rs | MSVC and GNU link arguments
 crates/stc-driver/src/watch.rs | Windows named-pipe and Unix socket endpoint spelling
 
