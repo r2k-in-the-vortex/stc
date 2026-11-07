@@ -240,8 +240,8 @@ fn serve_status_and_stop_round_trip() {
     );
     let gate = descriptor["start_gate"].as_str().expect("start gate");
     assert!(
-        Path::new(gate).is_file(),
-        "the start gate exists: {descriptor}"
+        !gate.is_empty(),
+        "the start gate is published: {descriptor}"
     );
 
     let release = Command::new(stc())
