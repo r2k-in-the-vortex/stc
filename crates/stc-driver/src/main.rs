@@ -22,9 +22,13 @@ mod metadata;
 mod new;
 mod online;
 mod project;
+mod remote;
+mod remote_launch;
 mod rename;
 mod report;
 mod run;
+mod serve;
+mod sha256;
 mod test;
 mod watch;
 
@@ -160,6 +164,18 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
+        Command::Debug
+            if invocation.debug.remote.is_some() && invocation.debug.attach.is_some() =>
+        {
+            crate::debug::remote_attach(&invocation.debug, &mut reporter, log)
+        }
+        Command::Debug if invocation.debug.remote.is_some() => crate::debug::remote_launch(
+            invocation.manifest.as_deref(),
+            &invocation.debug,
+            invocation.build.mode_override == Some(crate::build::BuildMode::Release),
+            &mut reporter,
+            log,
+        ),
         Command::Debug if invocation.debug.attach.is_some() => {
             crate::debug::attach(&invocation.debug, &mut reporter, log)
         }
@@ -206,6 +222,8 @@ fn run(args: &[String]) -> ExitCode {
             &mut reporter,
             log,
         ),
+        Command::Serve => serve::run(&invocation, &mut reporter, log),
+        Command::Remote => crate::remote_launch::status_command(&invocation, &mut reporter),
         Command::HirDump => hir_dump::run(&invocation, &mut reporter, log),
         Command::Rename => rename::run(
             &invocation.paths[0],

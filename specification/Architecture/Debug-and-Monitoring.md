@@ -212,7 +212,9 @@ and debug-information errors. Online-change diagnostics use their own
 ## 10. Non-goals
 
 - Safety functions, safety certification, automatic fail-safe outputs, or a safety watchdog.
-- Remote/network debugging in v1.
+- A network-facing debug listener. The v1 runtime never binds a non-loopback address; WL-1.2
+  adds remote access only through a driver-side OpenSSH local port-forward to the existing
+  loopback `socket` endpoint (§13.1.1).
 - Raw memory editing in the standard API.
 - Persistent breakpoints/forces across online swaps or restarts.
 - Reconstructing missing source or debug information from a manifest.
@@ -314,7 +316,8 @@ raised to format 2 by M6.5 phase 4 (D-180).
 This section fixes the v1 debug wire contract implemented in M6.5. The debug service is separate
 from the M6 control/status channel (D-155): a control endpoint, token, or message is never
 accepted as a debug endpoint, and the debug service performs no deployment or status operation.
-The protocol is local-only; remote debugging remains a non-goal (§10). The externally binding
+The protocol is local at the runtime boundary; remote debugging is provided by WL-1.2 through a
+driver-side SSH tunnel (§13.1.1), not by a new listener or wire revision. The externally binding
 choices are recorded as D-173–D-179.
 
 ### 13.1 Transport and endpoint
@@ -368,6 +371,32 @@ The endpoint file's `protocol` field remains the baseline `stc-debug/1` in forma
 baseline marker, not the negotiated session version: a host accepts both versions in §13.2 and
 negotiates the exact version on the first request, so a client must not infer 1.1 support from
 the endpoint file.
+
+#### 13.1.1 Remote sessions (WL-1.2)
+
+Remote access adds no runtime listener and no protocol revision. The host runs `stc serve`, which
+starts the ordinary loopback `socket` debug server plus a control endpoint and writes a user-only
+`stc-remote/1` session descriptor under the remote work directory. The descriptor contains the
+endpoint and control paths, build ID, generation, source fingerprint, and remote `stc` version,
+but never the debug token or control nonce; the token stays in the endpoint file and the nonce in
+a separate host-only file.
+
+The development host mirrors the project graph to the remote work directory, builds remotely with
+the packaged `stc`, checks the GOT production source fingerprint against the local graph, and
+opens an OpenSSH local port-forward
+(`ssh -N -T -L 127.0.0.1:<local>:127.0.0.1:<remote>`). The ordinary `stc-debug/1` client then
+connects to the local end of the tunnel. OpenSSH supplies encryption, host authentication, and
+user authentication; the driver uses `BatchMode=yes`, `StrictHostKeyChecking=yes`,
+`ExitOnForwardFailure=yes`, and keepalives, and refuses a non-loopback remote debug endpoint.
+
+Launch owns and stops the remote `stc serve`; attach leaves it running. An attach-time source
+drift is resolved by `remoteDeploy` (`ask|online|cold|never`): online deploy uses the control
+channel and is offered only when the candidate manifest plan is compatible, cold download stops
+the serve, installs the candidate, and restarts it, and `never` rejects the session with
+`STC-E-REMOTE-003`. Online and cold restarts end any existing debug session; reattach is always a
+new session with breakpoints re-applied (§14.6). The remote source mirror and candidate artifacts
+stay under the configured work directory, and the runtime code, debug protocol, and safety stance
+are unchanged.
 
 ### 13.2 Framing and version negotiation
 
@@ -781,6 +810,14 @@ does not rotate during a host run). Reconnect rules:
 The endpoint remains bound until host shutdown; a failed session does not require restarting the
 host. If the host is an executable launched by `stc debug` in launch mode, the CLI owns the host
 and normally shuts it down at quit; attach mode leaves it running.
+
+A remote session applies the same rules across the SSH tunnel. A tunnel loss, SSH failure, or
+endpoint failure closes the debug connection and ends the session with the driver's transport
+diagnostic; there is no automatic reconnect. An attached `stc serve` keeps running and a new
+attach opens a new tunnel and issues a new `session.start`; a launch-owned serve is stopped by
+the driver at teardown. An online swap, rollback, or cold install ends the session with
+`STC-E-DEBUG-019` (or the remote transport diagnostic if the host exits), and reattach re-applies
+breakpoints explicitly.
 
 ### 14.7 Clearing, host shutdown, and state interaction
 

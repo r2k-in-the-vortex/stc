@@ -93,6 +93,19 @@ pub struct LaunchArguments {
     pub cwd: Option<String>,
     /// Endpoint file for `attach`.
     pub endpoint: Option<String>,
+    /// SSH destination for a remote launch or attach (`user@host`).
+    ///
+    /// Remote sessions use an OpenSSH tunnel to the runtime's loopback debug
+    /// socket; the adapter itself contains no SSH logic.
+    pub remote: Option<String>,
+    /// Remote work directory; defaults to `~/stc-wl12`.
+    pub remote_dir: Option<String>,
+    /// Remote `stc` program or path; defaults to `stc` on the remote `PATH`.
+    pub remote_stc: Option<String>,
+    /// Attach-time deployment choice: `ask`, `online`, `cold`, or `never`.
+    pub remote_deploy: Option<String>,
+    /// Remote session descriptor; defaults under `remote_dir`.
+    pub remote_session: Option<String>,
     /// Client stop-on-entry request; this adapter does not support entry stops
     /// and rejects `true` explicitly.
     pub stop_on_entry: bool,
@@ -238,6 +251,25 @@ mod tests {
         let stopping: LaunchArguments =
             serde_json::from_value(json!({ "stopOnEntry": true })).expect("stopOnEntry");
         assert!(stopping.stop_on_entry);
+        let remote: LaunchArguments = serde_json::from_value(json!({
+            "remote": "r2k@ecat",
+            "remoteDir": "~/stc-wl12",
+            "remoteStc": "/home/r2k/stc-wl12/bin/stc",
+            "remoteDeploy": "online",
+            "remoteSession": "~/stc-wl12/stc-remote-session.json",
+        }))
+        .expect("remote arguments");
+        assert_eq!(remote.remote.as_deref(), Some("r2k@ecat"));
+        assert_eq!(remote.remote_dir.as_deref(), Some("~/stc-wl12"));
+        assert_eq!(
+            remote.remote_stc.as_deref(),
+            Some("/home/r2k/stc-wl12/bin/stc")
+        );
+        assert_eq!(remote.remote_deploy.as_deref(), Some("online"));
+        assert_eq!(
+            remote.remote_session.as_deref(),
+            Some("~/stc-wl12/stc-remote-session.json")
+        );
     }
 
     #[test]

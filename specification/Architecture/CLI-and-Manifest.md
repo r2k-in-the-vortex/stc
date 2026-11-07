@@ -76,7 +76,9 @@ output goes to stdout.
 | `stc online diff` | Compare a candidate manifest with the active baseline and print compatibility |
 | `stc rename` | Source-aware tracked rename that preserves `GotId` history |
 | `stc run --watch` | Watch sources, rebuild, and deploy an online change |
-| `stc debug` | Build and launch a local authenticated debug session, or attach with `--attach` (§1.7) |
+| `stc debug` | Build and launch a local or remote authenticated debug session, or attach with `--attach` (§1.7) |
+| `stc serve` | Host-side persistent remote-debug runtime: `start`, `status`, `deploy`, `release`, `stop` |
+| `stc remote` | Development-host query: `status` reports source drift and online-change compatibility |
 | `stc lsp` | Serve the Language Server Protocol for the local project over stdio (§1.8) |
 | `stc dap` | Serve the Debug Adapter Protocol for the local project over stdio; distinct from `stc debug` (§1.8) |
 
@@ -456,7 +458,12 @@ the command surface.
 
 | Option | Meaning |
 | --- | --- |
-| `--attach <endpoint-file>` | Attach to a running host; incompatible with build/launch options. |
+| `--attach <endpoint-file>` | Attach to a running host; incompatible with build/launch options. Omit the value for a remote attach. |
+| `--remote <user@host>` | Remote SSH target; use the remote launcher instead of a local host. Requires `--debug-protocol socket` when given. |
+| `--remote-dir <dir>` | Remote work directory; default `~/stc-wl12`. |
+| `--remote-stc <path>` | Remote `stc` program on `PATH` or an absolute path; default `stc`. |
+| `--remote-deploy <ask\|online\|cold\|never>` | Attach-time source-drift choice; default `ask`. |
+| `--remote-session <path>` | Remote session descriptor; defaults under `--remote-dir`. |
 | `--endpoint <path>` | Endpoint file to create in launch mode (default a per-run path under the out-dir). |
 | `--batch <file>` | Run request objects from a JSON-lines file, or `-` for stdin, and print responses/events as JSON lines; implies `--message-format json`. |
 | `--break <file>:<line>[:<column>]` | Add an initial source breakpoint; repeatable. |
@@ -509,6 +516,33 @@ notice is printed at session start and included in `--help`; a stopped or forced
 hold outputs indefinitely. `stc` may control machinery, but it is not a safety PLC and safety must
 be provided by a separate system and machine design as required by law and regulation.
 
+**Remote launch and attach (WL-1.2).** A `--remote` configuration selects the SSH transport in
+Debug and Monitoring §13.1.1. Launch mirrors the project graph to the remote work directory with
+SFTP, verifies each uploaded file with SHA-256, builds with the remote `stc`, starts a
+start-gated `stc serve`, checks the source fingerprint, and connects through the tunnel. Attach
+reads the `stc-remote/1` session descriptor and endpoint, verifies the source fingerprint, and
+opens the tunnel; no local host is built. `--attach` needs no endpoint value with `--remote`.
+`remoteDeploy=ask` fails with `STC-E-REMOTE-003` on drift and asks the caller to choose;
+`online` deploys a compatible candidate through the control channel, `cold` stops the serve,
+installs the candidate, and restarts it, and `never` rejects drift. The extension uses
+`stc remote status` to offer the Online/Cold/Cancel choice before starting the DAP attach.
+
+**`stc serve`.** Host-side persistent runtime for remote debugging. `start` builds (or reuses with
+`--no-build`), starts the loopback `socket` debug server plus a control endpoint, and writes a
+user-only `stc-remote/1` session descriptor; `--start-paused` gates cycle 0 until `release`.
+`status`, `deploy`, `release`, and `stop` read the descriptor and act through the control channel.
+`--work-dir`, `--session`, `--control-endpoint`, `--debug-endpoint`, `--out-dir`, `--state-file`,
+and the run/debug options select the paths and host behavior. The descriptor contains no debug
+token or control nonce; those remain in the user-only endpoint and nonce files. `stc serve` is
+Unix-host-only and requires `--debug-protocol socket`.
+
+**`stc remote status`.** Development-host query with `--remote`, `--remote-dir`, `--remote-stc`,
+`--remote-session`, and `--manifest-path`. It reads the remote descriptor and source fingerprint;
+when sources drift it syncs and builds a remote candidate without deploying and reports whether
+an online change is compatible. JSON output (`stc-remote-status/1`) carries `drift`, `online`,
+`cold_required`, the fingerprints, build ID, generation, mode, and an optional reason. A
+successful query exits 0 even when it reports drift; remote/transport failures exit 2.
+
 **`stc run --debug-server`.** `stc run` gains:
 
 | Option | Meaning |
@@ -557,8 +591,9 @@ UTF-16 positions; the closed unsupported list is in IDE Integration §3.3.
 
 **`stc dap`.** Serves the Debug Adapter Protocol over stdio. Launch and attach settings arrive as
 DAP messages (`project`, `noBuild`, `outDir`, `release`, `allowWrite`, `allowForce`, `sourceRoot`,
-`args`, `cwd`, `test` for a selected test, and `endpoint` for attach); `--manifest-path` is only a
-fallback project path. Launch builds the debug form by default and starts a local endpoint through
+`args`, `cwd`, `test` for a selected test, `endpoint` for a local attach, and `remote`,
+`remoteDir`, `remoteStc`, `remoteDeploy`, `remoteSession` for a remote session); `--manifest-path`
+is only a fallback project path. Launch builds the debug form by default and starts a local endpoint through
 the same driver plumbing as `stc debug`; `noBuild` launches existing artifacts. Every launch-owned
 host is start-gated: the adapter starts the session and applies the breakpoints before releasing
 cycle 0 (Debug and Monitoring §14.2.1). A launch with `test` builds only that discovered

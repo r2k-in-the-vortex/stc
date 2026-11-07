@@ -29,7 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.debug.registerDebugConfigurationProvider(
       'stc',
-      new StcDebugConfigurationProvider(),
+      new StcDebugConfigurationProvider(output),
     ),
   );
 

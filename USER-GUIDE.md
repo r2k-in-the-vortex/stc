@@ -259,6 +259,10 @@ and [`GOT-Artifacts.md`](specification/Architecture/GOT-Artifacts.md).
 stc debug                                   # build, launch, interactive session
 stc debug --break src/main.st:10            # initial breakpoint
 stc debug --attach <endpoint-file>          # attach to a running host
+stc debug --attach --remote r2k@ecat        # attach to a remote serve
+stc debug --remote r2k@ecat --remote-stc /opt/stc/bin/stc \
+  --remote-deploy online                    # remote launch or attach
+stc remote status --remote r2k@ecat         # drift and online-change report
 stc debug --batch commands.txt              # scripted commands
 stc run --debug-server --cycles 0           # run with a debug endpoint
 ```
@@ -299,9 +303,20 @@ include `print`, `set`, `force`, `release`, `release-all`, `watch`,
   executes, and ends when the test prints its result line and exits. `stc test`
   itself remains hook-free and its artifacts are unchanged. `test` cannot be
   combined with `noBuild`, `release`, or attach.
-- Debug is local only. There is no raw-memory access, unauthenticated mode, or
-  remote transport. The endpoint file is user-only and contains the per-run
-  token; never share it.
+- Debug is local by default. Remote debugging uses an OpenSSH local port-forward to the
+  existing loopback `socket` endpoint; the runtime opens no network listener and the wire
+  protocol is unchanged. `stc debug --remote <user@host>` owns a remote `stc serve` and stops it
+  at teardown; `--attach --remote` leaves it running. The remote work directory holds the source
+  mirror, build outputs, descriptor, and user-only endpoint/nonce files. The endpoint file still
+  contains the per-run token; never share it.
+- A remote attach with source drift chooses `remoteDeploy`: `ask` (the VS Code Online/Cold/Cancel
+  prompt), `online` (control-channel deploy when the plan is compatible), `cold` (stop, install,
+  restart), or `never` (reject drift with `STC-E-REMOTE-003`). `stc remote status` reports drift
+  and whether online is possible without changing the running host.
+- The remote session requires an SSH key/agent and a `known_hosts` entry; it never prompts for a
+  password or accepts an unknown host key. There is no automatic reconnect after a tunnel or host
+  loss; start a new attach and re-apply breakpoints. Remote debugging adds no safety claim.
+- There is no raw-memory access or unauthenticated mode.
 - Every swap/rollback/cold install/shutdown/exit ends the session.
 - The server accepts `stc-debug/1` and the additive `stc-debug/1.1` revision. A 1.1 client can
   list a stopped frame's local names, types, and liveness with `frame.locals`; values still come
@@ -405,6 +420,16 @@ Add a configuration to `.vscode/launch.json`:
       "name": "stc: Attach",
       "project": "${workspaceFolder}/stc.toml",
       "endpoint": "${workspaceFolder}/target/stc/debug/debug.endpoint.json"
+    },
+    {
+      "type": "stc",
+      "request": "attach",
+      "name": "stc: Attach remote",
+      "project": "${workspaceFolder}/stc.toml",
+      "remote": "r2k@ecat",
+      "remoteDir": "~/stc-wl12",
+      "remoteStc": "/home/r2k/stc-wl12/bin/stc",
+      "remoteDeploy": "ask"
     }
   ]
 }
@@ -427,6 +452,13 @@ under `target/stc/test/debug/<artifact>` (or under `<outDir>/debug/<artifact>`),
 `stc test` artifacts stay hook-free and unchanged. Breakpoints in test source bind before the test
 body runs, the test POU is the top frame, and the session ends after the test prints its result
 line and exits. `test` cannot be combined with `noBuild`, `release`, or attach.
+
+A remote attach (`remote` set) reads the remote session descriptor and source fingerprint and
+opens an SSH tunnel; `remoteDir`, `remoteStc`, `remoteSession`, and `remoteDeploy` are optional.
+When `remoteDeploy` is `ask`, the extension runs `stc remote status` before starting the session.
+If sources drifted it shows **Online change** (only when the host reports a compatible plan),
+**Cold download**, or **Cancel**; Cancel starts no session and changes no running host. The Rust
+driver performs the chosen deploy. A remote launch starts and stops its own `stc serve`.
 
 Writes are disabled by default. `allowWrite` requests the write scope and enables `setVariable` for
 writable live roots (globals, program-instance fields, and live split fields); the host must also

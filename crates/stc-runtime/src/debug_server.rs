@@ -3498,7 +3498,17 @@ impl DebugEndpointFile {
     /// format-1 endpoint object.
     pub fn read(path: &Path) -> std::io::Result<Self> {
         let text = std::fs::read_to_string(path)?;
-        let value = json::parse_protocol(&text)
+        Self::parse(&text)
+    }
+
+    /// Parses and validates endpoint-file text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the text is not a valid format-1 endpoint
+    /// object.
+    pub fn parse(text: &str) -> std::io::Result<Self> {
+        let value = json::parse_protocol(text)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.message))?;
         let object = value.as_object().ok_or_else(|| {
             std::io::Error::new(

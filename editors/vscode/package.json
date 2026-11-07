@@ -112,6 +112,35 @@
                 "default": "${workspaceFolder}/stc.toml",
                 "description": "Path to stc.toml, its directory, or a project directory."
               },
+              "remote": {
+                "type": "string",
+                "description": "SSH destination for a remote debug session ([user@]host)."
+              },
+              "remoteDir": {
+                "type": "string",
+                "default": "~/stc-wl12",
+                "description": "Remote work directory for the source mirror, build, and session descriptor."
+              },
+              "remoteStc": {
+                "type": "string",
+                "default": "stc",
+                "description": "Remote stc program name on PATH or an absolute path."
+              },
+              "remoteDeploy": {
+                "type": "string",
+                "enum": [
+                  "ask",
+                  "online",
+                  "cold",
+                  "never"
+                ],
+                "default": "ask",
+                "description": "Attach-time deployment when the remote source fingerprint differs."
+              },
+              "remoteSession": {
+                "type": "string",
+                "description": "Remote session descriptor; defaults under remoteDir."
+              },
               "test": {
                 "type": "string",
                 "description": "Exact test name from `stc test --list`; build and debug only that test. Cannot be combined with noBuild or release."
@@ -164,6 +193,35 @@
                 "type": "string",
                 "default": "${workspaceFolder}/stc.toml",
                 "description": "Path to stc.toml, its directory, or a project directory."
+              },
+              "remote": {
+                "type": "string",
+                "description": "SSH destination for a remote debug session ([user@]host)."
+              },
+              "remoteDir": {
+                "type": "string",
+                "default": "~/stc-wl12",
+                "description": "Remote work directory for the source mirror, build, and session descriptor."
+              },
+              "remoteStc": {
+                "type": "string",
+                "default": "stc",
+                "description": "Remote stc program name on PATH or an absolute path."
+              },
+              "remoteDeploy": {
+                "type": "string",
+                "enum": [
+                  "ask",
+                  "online",
+                  "cold",
+                  "never"
+                ],
+                "default": "ask",
+                "description": "Attach-time deployment when the remote source fingerprint differs."
+              },
+              "remoteSession": {
+                "type": "string",
+                "description": "Remote session descriptor; defaults under remoteDir."
               },
               "endpoint": {
                 "type": "string",

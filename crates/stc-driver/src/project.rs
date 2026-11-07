@@ -94,6 +94,12 @@ pub(crate) struct ProjectBuild {
     pub(crate) manifest: stc_manifest::Manifest,
     /// Root package directory.
     pub(crate) root_dir: PathBuf,
+    /// Root project manifest (`stc.toml`).
+    pub(crate) manifest_path: PathBuf,
+    /// GOT manifest written by the build.
+    pub(crate) got_manifest: PathBuf,
+    /// Loadable module written by the build, when the metadata names it.
+    pub(crate) module: Option<PathBuf>,
 }
 
 /// Runs a project command.
@@ -220,12 +226,18 @@ fn project_build(prepared: &Prepared) -> ProjectBuild {
     );
     let launcher = build::launcher_path(&out_dir, &prepared.name);
     let root = prepared.graph.root_package();
+    let got_manifest = out_dir.join(format!("{}.stc-got.json", prepared.name));
+    let metadata = out_dir.join(format!("{}.stc-meta.json", prepared.name));
+    let module = crate::watch::module_file(&metadata).map(|file| out_dir.join(file));
     ProjectBuild {
         launcher,
         out_dir,
         run: prepared.request.run.clone(),
         manifest: root.manifest.clone(),
         root_dir: root.root_dir.clone(),
+        manifest_path: root.manifest_path.clone(),
+        got_manifest,
+        module,
     }
 }
 

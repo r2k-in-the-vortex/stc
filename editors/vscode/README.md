@@ -294,6 +294,16 @@ Add a launch or attach configuration to `.vscode/launch.json`:
       "name": "stc: Attach",
       "project": "${workspaceFolder}/stc.toml",
       "endpoint": "${workspaceFolder}/target/stc/debug/debug.endpoint.json"
+    },
+    {
+      "type": "stc",
+      "request": "attach",
+      "name": "stc: Attach remote",
+      "project": "${workspaceFolder}/stc.toml",
+      "remote": "r2k@ecat",
+      "remoteDir": "~/stc-wl12",
+      "remoteStc": "/home/r2k/stc-wl12/bin/stc",
+      "remoteDeploy": "ask"
     }
   ]
 }
@@ -327,6 +337,20 @@ prints its result line and exits. Ordinary `stc test` artifacts stay hook-free.
 | `sourceRoot` | Override package-root source mapping. |
 | `args`, `cwd` | Extra host arguments and working directory. |
 | `endpoint` | Attach endpoint file. |
+| `remote` | SSH destination (`[user@]host`); selects the remote transport. |
+| `remoteDir` | Remote work directory; default `~/stc-wl12`. |
+| `remoteStc` | Remote `stc` on `PATH` or an absolute path; default `stc`. |
+| `remoteDeploy` | Remote attach source-drift choice: `ask`, `online`, `cold`, or `never`. |
+| `remoteSession` | Remote session descriptor; defaults under `remoteDir`. |
+
+A remote configuration uses an OpenSSH tunnel to a `stc serve` on the target;
+the extension opens no network connection of its own. With
+`remoteDeploy: "ask"`, a drifted remote attach first runs `stc remote status`
+and shows **Online change** (when compatible), **Cold download**, or **Cancel**.
+Cancel starts no session and leaves the running host unchanged. A remote launch
+owns and stops its `stc serve`; a remote attach leaves it running. Remote
+sessions require an SSH agent/key and an `ecat`-style `known_hosts` entry and do
+not reconnect automatically after a tunnel or host loss.
 
 Locals require a debug build and a `stc-debug/1.1` host; a release or
 hook-free build is monitoring-only and offers no breakpoints, stepping, or

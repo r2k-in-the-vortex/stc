@@ -269,7 +269,7 @@ fn debug_help_usage_and_option_incompatibilities() {
     assert_eq!(help.status.code(), Some(0), "{}", stderr(&help));
     let text = combined(&help);
     assert!(
-        text.contains("stc debug [--attach <endpoint-file>]"),
+        text.contains("stc debug [--attach [<endpoint-file>]]"),
         "{text}"
     );
     assert!(text.contains("stc run --debug-server"), "{text}");

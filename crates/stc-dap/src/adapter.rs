@@ -473,6 +473,44 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
             self.fail(request, "stopOnEntry is not supported");
             return;
         }
+        if arguments.remote.is_some() {
+            if attach
+                && arguments
+                    .endpoint
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+            {
+                self.fail(
+                    request,
+                    "a remote attach uses `remoteSession` or `remoteDir`, not a local `endpoint` file",
+                );
+                return;
+            }
+            if arguments.test.is_some() {
+                self.fail(
+                    request,
+                    "`test` launches are local only; remove `remote` or launch the test locally",
+                );
+                return;
+            }
+            if !attach && arguments.cwd.is_some() {
+                self.fail(
+                    request,
+                    "`cwd` is a local setting and cannot be combined with `remote`",
+                );
+                return;
+            }
+        } else if arguments.remote_dir.is_some()
+            || arguments.remote_stc.is_some()
+            || arguments.remote_deploy.is_some()
+            || arguments.remote_session.is_some()
+        {
+            self.fail(
+                request,
+                "`remoteDir`, `remoteStc`, `remoteDeploy`, and `remoteSession` require `remote`",
+            );
+            return;
+        }
         if let Some(test) = arguments.test.as_deref() {
             if test.is_empty() {
                 self.fail(request, "`test` must name a discovered test");
@@ -494,7 +532,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 return;
             }
         }
-        if attach && arguments.endpoint.as_deref().is_none_or(str::is_empty) {
+        if attach_requires_endpoint(&arguments, attach) {
             self.fail(request, "attach requires an `endpoint` file");
             return;
         }
@@ -668,8 +706,10 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
         }
         self.apply_all_breakpoints();
         // Every launch-owned host waits here for its first cycle, so a
-        // breakpoint set moments ago cannot lose the cycle-0 race. An attach
-        // session has no host and releases nothing.
+        // breakpoint set moments ago cannot lose the cycle-0 race. A remote
+        // attach may also carry a start gate (a start-paused serve); releasing
+        // it after the same configuration preserves that contract. A local
+        // attach has no host and releases nothing.
         if let Some(session) = self.session.as_mut()
             && let Some(host) = session.host.as_mut()
         {
@@ -1824,7 +1864,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
         self.stop_id = None;
         self.frames.clear();
         self.variables.clear();
-        let launched = session.host.is_some();
+        let launched = session.host.as_ref().is_some_and(|host| !host.attached());
         let _ = session.client.call_messages("session.stop", got_object([]));
         let mut exit_code = exit_code;
         if let Some(mut host) = session.host.take() {
@@ -1849,6 +1889,12 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
         self.send_exited(exit_code);
         self.send_terminated();
     }
+}
+
+fn attach_requires_endpoint(arguments: &LaunchArguments, attach: bool) -> bool {
+    // A remote attach reads its endpoint from the remote session descriptor;
+    // only a local attach needs a local endpoint file.
+    attach && arguments.remote.is_none() && arguments.endpoint.as_deref().is_none_or(str::is_empty)
 }
 
 enum ResumeKind {
@@ -2436,6 +2482,18 @@ mod tests {
             session_end_summary("pause-timeout", Some("STC-E-DEBUG-018"), None, true)
                 .contains("STC-E-DEBUG-018")
         );
+    }
+
+    #[test]
+    fn remote_attach_does_not_require_a_local_endpoint() {
+        let mut arguments = LaunchArguments::default();
+        assert!(attach_requires_endpoint(&arguments, true));
+        assert!(!attach_requires_endpoint(&arguments, false));
+        arguments.remote = Some("r2k@ecat".into());
+        assert!(!attach_requires_endpoint(&arguments, true));
+        arguments.remote = None;
+        arguments.endpoint = Some("debug.endpoint".into());
+        assert!(!attach_requires_endpoint(&arguments, true));
     }
 
     #[test]

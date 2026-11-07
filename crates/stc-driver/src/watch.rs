@@ -543,7 +543,7 @@ fn load_graph(manifest: &str, locked: bool, reporter: &mut Reporter) -> Option<P
     }
 }
 
-fn module_file(metadata_path: &Path) -> Option<String> {
+pub(crate) fn module_file(metadata_path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(metadata_path).ok()?;
     let value = stc_got::json::parse(&text).ok()?;
     value

@@ -55,6 +55,10 @@ struct DapLauncher {
 
 impl Launcher for DapLauncher {
     fn launch(&mut self, arguments: &LaunchArguments) -> Result<LaunchedSession, String> {
+        if arguments.remote.is_some() {
+            return crate::remote_launch::launch(arguments, self.manifest_path.as_deref())
+                .map(crate::remote_launch::RemoteConnection::into_launched_session);
+        }
         let project_path = arguments.project_path(self.manifest_path.as_deref());
         if let Some(test) = arguments.test.as_deref() {
             return launch_test(&project_path, test, arguments);
@@ -97,6 +101,10 @@ impl Launcher for DapLauncher {
     }
 
     fn attach(&mut self, arguments: &LaunchArguments) -> Result<LaunchedSession, String> {
+        if arguments.remote.is_some() {
+            return crate::remote_launch::attach(arguments, self.manifest_path.as_deref())
+                .map(crate::remote_launch::RemoteConnection::into_launched_session);
+        }
         let Some(endpoint) = arguments.endpoint.as_deref() else {
             return Err("attach requires an `endpoint` file".into());
         };
@@ -155,7 +163,10 @@ fn launch_test(
 }
 
 /// Resolves a `noBuild` launch from existing artifacts.
-fn no_build(project_path: &Path, arguments: &LaunchArguments) -> Result<ProjectBuild, String> {
+pub(crate) fn no_build(
+    project_path: &Path,
+    arguments: &LaunchArguments,
+) -> Result<ProjectBuild, String> {
     let graph = stc_manifest::load_project_readonly(project_path, &LoadOptions::default())
         .map_err(|error| {
             error.diagnostics.first().map_or_else(
@@ -196,12 +207,18 @@ fn no_build(project_path: &Path, arguments: &LaunchArguments) -> Result<ProjectB
         None => root.root_dir.join(build::default_out_dir(build_mode)),
     };
     let launcher = build::launcher_path(&out_dir, &root.name);
+    let got_manifest = out_dir.join(format!("{}.stc-got.json", root.name));
+    let metadata = out_dir.join(format!("{}.stc-meta.json", root.name));
+    let module = crate::watch::module_file(&metadata).map(|file| out_dir.join(file));
     Ok(ProjectBuild {
         launcher,
         out_dir,
         run: build::RunRequest::default(),
         manifest: root.manifest.clone(),
         root_dir: root.root_dir.clone(),
+        manifest_path: root.manifest_path.clone(),
+        got_manifest,
+        module,
     })
 }
 
