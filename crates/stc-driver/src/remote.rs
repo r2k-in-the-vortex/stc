@@ -912,12 +912,14 @@ impl SshRunner {
         let argv = vec!["sh".to_owned(), "-c".to_owned(), script];
         let output = self.run(target, &argv, SSH_COMMAND_TIMEOUT)?;
         match output.status {
-            Some(0) => String::from_utf8(output.stdout.into_bytes()).map_err(|_| {
-                remote_error(
-                    codes::REMOTE_SESSION,
-                    format!("the remote file `{}` is not valid UTF-8", path.as_str()),
-                )
-            }),
+            Some(0) => String::from_utf8(output.stdout.into_bytes())
+                .map(|text| text.trim().to_owned())
+                .map_err(|_| {
+                    remote_error(
+                        codes::REMOTE_SESSION,
+                        format!("the remote file `{}` is not valid UTF-8", path.as_str()),
+                    )
+                }),
             Some(3) => Err(remote_error(
                 codes::REMOTE_SESSION,
                 format!("the remote file `{}` is not user-only", path.as_str()),
