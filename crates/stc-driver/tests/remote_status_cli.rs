@@ -196,9 +196,9 @@ fn remote_status_detects_drift_and_online_compatibility() {
         return;
     };
     let project = TestDir::new("project");
-    let manifest = project.write("stc.toml", MANIFEST);
-    project.write("src/main.st", SOURCE);
     let work = project.path.join("work");
+    let manifest = project.write("work/hello/stc.toml", MANIFEST);
+    project.write("work/hello/src/main.st", SOURCE);
     std::fs::create_dir_all(&work).expect("work");
     let session = work.join("stc-remote-session.json");
     let stdout = File::create(project.path.join("serve.stdout")).expect("stdout");
@@ -255,7 +255,7 @@ fn remote_status_detects_drift_and_online_compatibility() {
     assert_eq!(matched["cold_required"], false, "{matched}");
 
     project.write(
-        "src/main.st",
+        "work/hello/src/main.st",
         &SOURCE.replace(
             "  ticks := ticks + 1;",
             "  // remote status drift test\n  ticks := ticks + 1;",
