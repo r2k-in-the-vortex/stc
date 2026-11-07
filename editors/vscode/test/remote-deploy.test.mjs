@@ -89,3 +89,17 @@ test('a missing cold_required flag follows the online flag', () => {
   );
   assert.equal(compatible.coldRequired, false);
 });
+
+test('workspaceFolder is expanded before the status query', () => {
+  assert.equal(
+    remote.expandWorkspaceFolder(
+      '${workspaceFolder}/stc.toml',
+      'C:\\work\\hello',
+    ),
+    'C:\\work\\hello/stc.toml',
+  );
+  assert.equal(
+    remote.expandWorkspaceFolder('/fixed/stc.toml', undefined),
+    '/fixed/stc.toml',
+  );
+});

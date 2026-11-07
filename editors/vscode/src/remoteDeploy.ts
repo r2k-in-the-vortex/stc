@@ -22,6 +22,23 @@ export interface RemoteStatusReport {
 /** A deployment action the user can choose. */
 export type RemoteDeployChoice = 'online' | 'cold' | 'cancel';
 
+/**
+ * Replaces `${workspaceFolder}` before VS Code's own variable substitution.
+ *
+ * The remote status query runs in `resolveDebugConfiguration`, which VS Code
+ * calls before it substitutes launch-configuration variables. A literal
+ * `${workspaceFolder}/stc.toml` would otherwise reach `stc` unchanged.
+ */
+export function expandWorkspaceFolder(
+  value: string,
+  folder: string | undefined,
+): string {
+  if (folder === undefined) {
+    return value;
+  }
+  return value.replace(/\$\{workspaceFolder\}/g, folder);
+}
+
 /** One QuickPick entry. */
 export interface RemoteChoiceItem {
   readonly label: string;

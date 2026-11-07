@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 
 import { resolveExecutable } from './executable';
 import {
+  expandWorkspaceFolder,
   parseRemoteStatus,
   remoteDeployChoices,
   type RemoteStatusReport,
@@ -56,6 +57,8 @@ export class StcDebugAdapterFactory implements vscode.DebugAdapterDescriptorFact
  * `launch.json` instead of starting an empty session.
  */
 export class StcDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
+  public constructor(private readonly output?: vscode.OutputChannel) {}
+
   public async resolveDebugConfiguration(
     folder: vscode.WorkspaceFolder | undefined,
     config: vscode.DebugConfiguration,
@@ -66,18 +69,39 @@ export class StcDebugConfigurationProvider implements vscode.DebugConfigurationP
     config.type = config.type || 'stc';
     config.request = config.request || 'launch';
     config.name = config.name || 'stc: Launch';
+    const workspaceFolder =
+      folder ?? vscode.workspace.workspaceFolders?.[0];
     if (!config.project) {
-      config.project = folder
-        ? `${folder.uri.fsPath}/stc.toml`
+      config.project = workspaceFolder
+        ? `${workspaceFolder.uri.fsPath}/stc.toml`
         : '${workspaceFolder}/stc.toml';
+    } else if (typeof config.project === 'string' && workspaceFolder) {
+      // The pre-launch status query runs before VS Code substitutes
+      // `${workspaceFolder}` in the configuration.
+      config.project = expandWorkspaceFolder(
+        config.project,
+        workspaceFolder.uri.fsPath,
+      );
     }
+    this.log(
+      `debug configuration ${String(config.request)}${config.remote ? ` remote=${String(config.remote)}` : ''}`,
+    );
     if (config.request === 'attach' && typeof config.remote === 'string') {
-      const proceed = await resolveRemoteDeploy(config, folder);
+      const proceed = await resolveRemoteDeploy(
+        config,
+        workspaceFolder,
+        (message) => this.log(message),
+      );
+      this.log(`remote deploy choice: ${String(config.remoteDeploy)}`);
       if (!proceed) {
         return undefined;
       }
     }
     return config;
+  }
+
+  private log(message: string): void {
+    this.output?.appendLine(`[debug] ${message}`);
   }
 }
 
@@ -92,6 +116,7 @@ export class StcDebugConfigurationProvider implements vscode.DebugConfigurationP
 async function resolveRemoteDeploy(
   config: vscode.DebugConfiguration,
   folder: vscode.WorkspaceFolder | undefined,
+  log: (message: string) => void,
 ): Promise<boolean> {
   const configured = config.remoteDeploy;
   if (configured !== undefined && configured !== 'ask') {
@@ -99,16 +124,21 @@ async function resolveRemoteDeploy(
   }
   const executable = resolveExecutable(stcExecutable());
   if (executable === undefined) {
+    log('remote status skipped: stc executable was not found');
     return true;
   }
-  const status = await runRemoteStatus(
+  const { status, detail } = await runRemoteStatus(
     executable,
     remoteStatusArguments(config),
     folder?.uri.fsPath,
   );
   if (status === undefined) {
+    log(`remote status failed: ${detail}`);
     return true;
   }
+  log(
+    `remote status: drift=${String(status.drift)} online=${String(status.online)}`,
+  );
   if (!status.drift) {
     config.remoteDeploy = 'never';
     return true;
@@ -152,22 +182,58 @@ function remoteStatusArguments(config: vscode.DebugConfiguration): string[] {
   return args;
 }
 
+interface RemoteStatusRun {
+  status: RemoteStatusReport | undefined;
+  detail: string;
+}
+
 function runRemoteStatus(
   executable: string,
   args: readonly string[],
   cwd: string | undefined,
-): Promise<RemoteStatusReport | undefined> {
+): Promise<RemoteStatusRun> {
   return new Promise((resolve) => {
-    const child = spawn(executable, [...args], {
-      cwd,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    let stderr = '';
+    const child = (() => {
+      try {
+        return spawn(executable, [...args], {
+          cwd,
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (error) {
+        resolve({
+          status: undefined,
+          detail: `cannot start ${executable}: ${String(error)}`,
+        });
+        return undefined;
+      }
+    })();
+    if (child === undefined) {
+      return;
+    }
     let stdout = '';
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
     });
-    child.on('error', () => resolve(undefined));
-    child.on('close', () => resolve(parseRemoteStatus(stdout)));
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => {
+      resolve({
+        status: undefined,
+        detail: `cannot start ${executable}: ${String(error)}`,
+      });
+    });
+    child.on('close', (code) => {
+      const status = parseRemoteStatus(stdout);
+      resolve({
+        status,
+        detail:
+          status === undefined
+            ? `exit ${String(code)}; stdout=${stdout.trim()}; stderr=${stderr.trim()}`
+            : `exit ${String(code)}`,
+      });
+    });
   });
 }
