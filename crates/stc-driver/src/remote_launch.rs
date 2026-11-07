@@ -49,7 +49,7 @@ const SERVE_STATUS: &str = "stc-serve.status";
 /// Retained-state file shared by every remote serve start in the work dir.
 const STATE_FILE: &str = "stc-state.bin";
 /// Stable copy of the active GOT manifest used as a candidate baseline.
-const BASELINE_FILE: &str = "stc-baseline.manifest";
+const BASELINE_FILE: &str = "stc-baseline.stc-got.json";
 
 /// A remote session connected through an SSH tunnel.
 pub(crate) struct RemoteConnection {
@@ -214,7 +214,7 @@ fn status_report_with(
                         &remote,
                         &sync,
                         session.mode == "release",
-                        baseline.is_some().then_some(&session.manifest),
+                        baseline.as_ref(),
                     ) {
                         Ok(candidate) => {
                             if let Err(error) =
@@ -482,6 +482,37 @@ fn remote_text(
     }
 }
 
+/// Writes a non-secret remote text file through the command's standard input.
+fn write_remote_file(
+    runner: &SshRunner,
+    remote: &ResolvedRemote,
+    path: &RemotePath,
+    contents: &str,
+) -> Result<(), String> {
+    let script = format!("set -eu\ncat > {}", shell_quote(path.as_str()));
+    let output = runner
+        .run_with_stdin(
+            remote.target(),
+            &["sh".to_owned(), "-c".to_owned(), script],
+            contents.as_bytes(),
+            STOP_TIMEOUT,
+        )
+        .map_err(|error| error.to_string())?;
+    if output.success() {
+        Ok(())
+    } else {
+        Err(remote_error(
+            codes::REMOTE_BUILD,
+            format!(
+                "cannot write the remote baseline `{}`: {}",
+                path.as_str(),
+                output.stderr.trim()
+            ),
+        )
+        .to_string())
+    }
+}
+
 fn reset_remote_dir(
     runner: &SshRunner,
     remote: &ResolvedRemote,
@@ -519,27 +550,22 @@ fn build_candidate(
     remote: &ResolvedRemote,
     sync: &crate::remote::ProjectSync,
     release: bool,
-    baseline: Option<&RemotePath>,
+    baseline: Option<&stc_got::Manifest>,
 ) -> Result<Candidate, String> {
-    // Copy the baseline before resetting the candidate directory: a cold
-    // restart may be running from that directory, so its manifest is also the
-    // active baseline for the next build.
-    let baseline = baseline.and_then(|source| {
-        let script = format!(
-            "cp -- {} {}",
-            shell_quote(source.as_str()),
-            shell_quote(remote.baseline_file.as_str())
-        );
-        runner
-            .run(
-                remote.target(),
-                &["sh".to_owned(), "-c".to_owned(), script],
-                STOP_TIMEOUT,
-            )
-            .ok()
-            .filter(|output| output.success())
-            .map(|_| remote.baseline_file.clone())
-    });
+    let baseline_path = match baseline {
+        Some(manifest) => {
+            let text = manifest.to_json_text().map_err(|error| {
+                remote_error(
+                    codes::REMOTE_BUILD,
+                    format!("cannot serialize the active baseline: {}", error.message),
+                )
+                .to_string()
+            })?;
+            write_remote_file(runner, remote, &remote.baseline_file, &text)?;
+            Some(remote.baseline_file.clone())
+        }
+        None => None,
+    };
     reset_remote_dir(runner, remote, &remote.candidate_dir)?;
     let manifest = remote
         .source_dir
@@ -558,7 +584,7 @@ fn build_candidate(
     if release {
         argv.push("--release".to_owned());
     }
-    if let Some(baseline) = &baseline {
+    if let Some(baseline) = &baseline_path {
         argv.push("--got-manifest".to_owned());
         argv.push(baseline.as_str().to_owned());
     }
@@ -730,13 +756,7 @@ fn deploy_remote(
 ) -> Result<(RemoteSession, DebugEndpointFile), String> {
     let release = session.mode == "release";
     let baseline = read_active_manifest(runner, remote, session).ok();
-    let candidate = build_candidate(
-        runner,
-        remote,
-        sync,
-        release,
-        baseline.is_some().then_some(&session.manifest),
-    )?;
+    let candidate = build_candidate(runner, remote, sync, release, baseline.as_ref())?;
     compare_source_fingerprints(&sync.fingerprint, &candidate.fingerprint)
         .map_err(|error| error.to_string())?;
     match choice {
