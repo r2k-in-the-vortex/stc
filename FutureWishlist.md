@@ -115,7 +115,9 @@ components.
 host: connect VS Code to a remote `stc` runtime over the network with authentication, transport
 security, and source mapping. This is a separate task.
 
-**Status.** In progress (2026-11-06; branch `WL-1.2`). Locked for v3.0.0 (2026-11-04);
+**Status.** In progress (2026-11-06; branch `WL-1.2`). Phases 1–5 complete and CI-green (run
+[42341503422](https://github.com/r2k-in-the-vortex/stc/actions/runs/42341503422), 39/39); phases
+6–7 (live HIL, final docs, manual check, PR) remain. Locked for v3.0.0 (2026-11-04);
 previously deferred (2026-10-29). The v2.0.0 WL-1.1 follow-up F-21 (always-on runtime and
 attach-time deployment choice) is folded into this item rather than tracked separately.
 
@@ -970,6 +972,7 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-07 | WL-1.2 phases 3–5 complete and CI-green (run [42341503422](https://github.com/r2k-in-the-vortex/stc/actions/runs/42341503422), 39/39): remote launch/attach over the SSH tunnel, online/cold deployment with the extension QuickPick, security negative tests, threat model, and runbook skeleton. |
 | 2026-11-06 | Started WL-1.2 on branch `WL-1.2`; selected the SSH-tunnel transport to the remote loopback debug socket and recorded the phased plan in [v3.0.0-plan.md](v3.0.0-plan.md). |
 | 2026-11-05 | WL-16 complete: launches are start-gated before cycle 0 and session teardown/exit is reported in the Debug Console; manual check approved. |
 | 2026-11-04 | Locked the v3.0.0 target set (WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18) and created [v3.0.0-plan.md](v3.0.0-plan.md) as the working plan. |
