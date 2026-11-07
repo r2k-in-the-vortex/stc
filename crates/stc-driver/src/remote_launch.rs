@@ -578,6 +578,10 @@ fn build_candidate(
         manifest.as_str().to_owned(),
         "--out-dir".to_owned(),
         remote.candidate_dir.as_str().to_owned(),
+        "--emit".to_owned(),
+        // The candidate must include the thin launcher `stc serve` starts
+        // from after a cold restart, plus the module it loads.
+        "module,exe".to_owned(),
         "--message-format".to_owned(),
         "json".to_owned(),
     ];
