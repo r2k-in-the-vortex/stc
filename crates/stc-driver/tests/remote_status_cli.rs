@@ -44,7 +44,10 @@ VAR
   ticks : DINT;
 END_VAR
   ticks := ticks + 1;
-  total := total + ticks;
+  IF ticks > 1000 THEN
+    ticks := 0;
+  END_IF;
+  total := ticks;
 END_PROGRAM
 ";
 
