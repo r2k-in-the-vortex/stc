@@ -93,7 +93,8 @@ Recorded results:
 ## 5. Cold download
 
 After an incompatible source change, an attach with `--remote-deploy cold` performed a stop,
-candidate build, restart from the candidate directory, tunnel attach, and breakpoint stop.
+candidate build into a unique `candidate-<nonce>` directory, restart from that directory, tunnel
+attach, and breakpoint stop.
 
 Recorded results:
 
@@ -101,16 +102,21 @@ Recorded results:
 - `session.start` reported `generation: 1` for the cold-restarted serve.
 - The breakpoint bound at `src/main.st:35` and the session exited `0`.
 - The restarted `stc serve` remained running after the attach (session descriptor still present).
+- A later online change against this cold build succeeded: each candidate build has its own
+  directory, so the status query no longer overwrites the active baseline. The earlier
+  `STC-E-ONLINE-008` parent-build mismatch was reproduced and fixed in the same HIL cycle.
 
 ## 6. Cancel and mismatch
 
 - With `remoteDeploy=never` and a changed local source, attach exited `2` with
   `STC-E-REMOTE-003` before opening a tunnel; the running serve was unchanged.
-- `remoteDeploy=ask` with drift returns the same error and asks the caller to choose `online` or
-  `cold`; the extension intercepts this with the Online/Cold/Cancel QuickPick. Cancel returns
-  without starting a debug session and performs no deploy. The QuickPick decision logic is
-  covered by `editors/vscode/test/remote-deploy.test.mjs`; the GUI click itself is not automated
-  in this runbook.
+- In VS Code, `remoteDeploy=ask` with drift showed the **Remote sources differ** QuickPick.
+  **Cancel** started no debug session and left the running serve unchanged; **Cold download**
+  restarted the serve and attached; **Online change** deployed and attached. The sequence was
+  rerun after a cold download to confirm online change against the stable cold baseline.
+- The extension's pre-launch status query expands `${workspaceFolder}` before VS Code variable
+  substitution; failure and drift information is logged in the **stc** output channel.
+- The QuickPick decision logic is also covered by `editors/vscode/test/remote-deploy.test.mjs`.
 
 ## 7. Tunnel drop and reattach
 
@@ -140,7 +146,7 @@ Stopping the remote serve during an attached session produced a `session-ended` 
 | Source mapping | Pass (`src/main.st` lines 14, 24, 35, 36) |
 | Online change | Pass (generation 2, breakpoint, clean exit) |
 | Cold download/restart | Pass (new build ID, serve left running, reattach works) |
-| Cancel / mismatch | Mismatch pass; cancel decision covered by extension unit tests |
+| Cancel / mismatch | Pass (VS Code Cancel, cold, and online all verified; mismatch returns `STC-E-REMOTE-003`) |
 | Tunnel drop and reattach | Pass (`STC-E-DEBUG-020`, no reconnect, explicit reattach) |
 
 The live run used packaged artifacts and a separate work directory. It did not change IgH, the

@@ -49,6 +49,7 @@ machine design as required by law and regulation.
 | One remote `stc serve` owns a work directory; launch and attach both use it | Stop the existing serve before starting another. Attach leaves it running; launch stops its own serve at teardown |
 | The remote source fingerprint covers production source files, not build settings or manifest text | A build-setting change is detected by the manifest comparison/build result, not the source hash alone; `remoteDeploy=ask` still prompts on source drift |
 | Remote online/cold deployment ends any active debug session | Reattach after deployment; online preserves compatible retained state, cold follows the runtime policy |
+| Each remote candidate build writes a unique `candidate-<nonce>` directory so a later status/build cannot overwrite the active baseline; old candidate directories are not garbage-collected | Remove stale `~/stc-wl12/candidate-*` directories when reclaiming disk. The descriptor names the active build directory, so do not remove that one while its serve is running |
 | There is no raw-memory read/write, arbitrary register write, or unauthenticated mode | Use typed identity-based reads/writes and the manifest-assisted split view |
 | One debug session per host | Stop the current session before starting another |
 | Starting a session does not stop the cycle; a stop/step/breakpoint holds outputs | The opt-in stop/idle bound (`[debug].session-timeout`, disabled by default) resumes the cycle and ends the session when configured; this is not a fail-safe timeout |

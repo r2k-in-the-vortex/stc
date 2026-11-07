@@ -40,8 +40,8 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const SOURCE_DIR: &str = "src";
 /// Name of the remote build output directory.
 const BUILD_DIR: &str = "build";
-/// Name of the remote candidate build directory (attach-time deployment).
-const CANDIDATE_DIR: &str = "candidate";
+/// Prefix for per-build candidate directories under the work directory.
+const CANDIDATE_PREFIX: &str = "candidate-";
 /// Remote serve log, diagnostics only.
 const SERVE_LOG: &str = "stc-serve.log";
 /// Remote serve exit-status marker used while waiting for the descriptor.
@@ -78,7 +78,6 @@ struct ResolvedRemote {
     stc: RemoteProgram,
     source_dir: RemotePath,
     build_dir: RemotePath,
-    candidate_dir: RemotePath,
     serve_log: RemotePath,
     serve_status: RemotePath,
     state_file: RemotePath,
@@ -110,7 +109,6 @@ impl ResolvedRemote {
         Ok(Self {
             source_dir: work_dir.join(SOURCE_DIR)?,
             build_dir: work_dir.join(BUILD_DIR)?,
-            candidate_dir: work_dir.join(CANDIDATE_DIR)?,
             serve_log: work_dir.join(SERVE_LOG)?,
             serve_status: work_dir.join(SERVE_STATUS)?,
             state_file: work_dir.join(STATE_FILE)?,
@@ -450,6 +448,9 @@ fn check_remote_version(runner: &SshRunner, remote: &ResolvedRemote) -> Result<(
 
 /// One remote candidate build ready for deployment.
 struct Candidate {
+    /// Per-build output directory; referenced by the session descriptor after
+    /// deployment and never reused by a later build.
+    dir: RemotePath,
     module: RemotePath,
     /// Binary GOT manifest passed to the control deploy.
     deploy_manifest: RemotePath,
@@ -566,7 +567,11 @@ fn build_candidate(
         }
         None => None,
     };
-    reset_remote_dir(runner, remote, &remote.candidate_dir)?;
+    let candidate_dir = remote
+        .work_dir
+        .join(&format!("{CANDIDATE_PREFIX}{}", crate::debug::random_hex()))
+        .map_err(|error| error.to_string())?;
+    reset_remote_dir(runner, remote, &candidate_dir)?;
     let manifest = remote
         .source_dir
         .join(&sync.root_manifest)
@@ -577,7 +582,7 @@ fn build_candidate(
         "--manifest-path".to_owned(),
         manifest.as_str().to_owned(),
         "--out-dir".to_owned(),
-        remote.candidate_dir.as_str().to_owned(),
+        candidate_dir.as_str().to_owned(),
         "--emit".to_owned(),
         // The candidate must include the thin launcher `stc serve` starts
         // from after a cold restart, plus the module it loads.
@@ -603,8 +608,7 @@ fn build_candidate(
         )
         .to_string());
     }
-    let metadata = remote
-        .candidate_dir
+    let metadata = candidate_dir
         .join(&format!("{}.stc-meta.json", sync.package_name))
         .map_err(|error| error.to_string())?;
     let metadata = remote_text(runner, remote, &metadata)?;
@@ -631,16 +635,13 @@ fn build_candidate(
             )
             .to_string()
         })?;
-    let module = remote
-        .candidate_dir
+    let module = candidate_dir
         .join(module_file)
         .map_err(|error| error.to_string())?;
-    let deploy_manifest = remote
-        .candidate_dir
+    let deploy_manifest = candidate_dir
         .join(&format!("{}.stc-got.bin", sync.package_name))
         .map_err(|error| error.to_string())?;
-    let manifest = remote
-        .candidate_dir
+    let manifest = candidate_dir
         .join(&format!("{}.stc-got.json", sync.package_name))
         .map_err(|error| error.to_string())?;
     let text = remote_text(runner, remote, &manifest)?;
@@ -656,6 +657,7 @@ fn build_candidate(
     })?;
     let fingerprint = manifest_data.header.source_fingerprint.to_hex();
     Ok(Candidate {
+        dir: candidate_dir,
         module,
         deploy_manifest,
         manifest_data,
@@ -823,7 +825,7 @@ fn deploy_remote(
                 remote,
                 &ServeStart {
                     root_manifest: &sync.root_manifest,
-                    out_dir: &remote.candidate_dir,
+                    out_dir: &candidate.dir,
                     start_paused: false,
                     no_build: true,
                     release,
