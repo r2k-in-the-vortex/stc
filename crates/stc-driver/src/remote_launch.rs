@@ -1904,6 +1904,11 @@ mod tests {
         fn version_and_private_file_failures_are_classified() {
             let root = temp_dir("version");
             let bin = root.join("bin");
+            script(
+                &bin,
+                "ssh",
+                "#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=\"$arg\"; done\nexec /bin/sh -c \"$last\"\n",
+            );
             let bad = script(&bin, "badstc", "#!/bin/sh\nprintf 'stc 0.0.0\\n'\n");
             let work = root.join("work");
             let (_remote, _runner, _session) = work_and_settings(&root, &bad, &work);
