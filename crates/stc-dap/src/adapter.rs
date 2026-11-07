@@ -532,7 +532,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
                 return;
             }
         }
-        if attach && arguments.endpoint.as_deref().is_none_or(str::is_empty) {
+        if attach_requires_endpoint(&arguments, attach) {
             self.fail(request, "attach requires an `endpoint` file");
             return;
         }
@@ -1891,6 +1891,12 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
     }
 }
 
+fn attach_requires_endpoint(arguments: &LaunchArguments, attach: bool) -> bool {
+    // A remote attach reads its endpoint from the remote session descriptor;
+    // only a local attach needs a local endpoint file.
+    attach && arguments.remote.is_none() && arguments.endpoint.as_deref().is_none_or(str::is_empty)
+}
+
 enum ResumeKind {
     Continue,
     Step(&'static str),
@@ -2476,6 +2482,18 @@ mod tests {
             session_end_summary("pause-timeout", Some("STC-E-DEBUG-018"), None, true)
                 .contains("STC-E-DEBUG-018")
         );
+    }
+
+    #[test]
+    fn remote_attach_does_not_require_a_local_endpoint() {
+        let mut arguments = LaunchArguments::default();
+        assert!(attach_requires_endpoint(&arguments, true));
+        assert!(!attach_requires_endpoint(&arguments, false));
+        arguments.remote = Some("r2k@ecat".into());
+        assert!(!attach_requires_endpoint(&arguments, true));
+        arguments.remote = None;
+        arguments.endpoint = Some("debug.endpoint".into());
+        assert!(!attach_requires_endpoint(&arguments, true));
     }
 
     #[test]
