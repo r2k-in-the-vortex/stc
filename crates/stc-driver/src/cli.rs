@@ -1039,6 +1039,10 @@ fn parse_serve(args: &[String], mut index: usize) -> Result<Option<Invocation>, 
     let mut serve = ServeOptions::default();
     if let Some(action) = args.get(index) {
         match action.as_str() {
+            "start" => {
+                serve.action = ServeAction::Start;
+                index += 1;
+            }
             "status" => {
                 serve.action = ServeAction::Status;
                 index += 1;
@@ -2540,6 +2544,8 @@ mod tests {
             start.serve.control_endpoint.as_deref(),
             Some("control.sock")
         );
+        let explicit = invocation(&["serve", "start", "--manifest-path", "demo/stc.toml"]);
+        assert_eq!(explicit.serve.action, ServeAction::Start);
 
         let status = invocation(&["serve", "status", "--work-dir", "/tmp/stc"]);
         assert_eq!(status.serve.action, ServeAction::Status);

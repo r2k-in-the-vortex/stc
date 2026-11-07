@@ -1888,6 +1888,14 @@ mod tests {
         let session = sample_session();
         let text = session.to_json_text();
         assert!(text.ends_with('\n'));
+        assert!(
+            !text.contains("\"token\""),
+            "the descriptor omits the token"
+        );
+        assert!(
+            !text.contains("\"nonce\""),
+            "the descriptor omits the nonce"
+        );
         assert_eq!(RemoteSession::parse(&text).expect("parse"), session);
     }
 
@@ -2088,6 +2096,86 @@ mod tests {
             .to_json_text()
             .replace("\"format\":1", "\"format\":2");
         assert!(RemoteSession::parse(&text).is_err());
+    }
+
+    #[test]
+    fn session_descriptor_rejects_every_missing_field() {
+        let text = sample_session().to_json_text();
+        for key in [
+            "build_id",
+            "control_endpoint",
+            "control_nonce_file",
+            "debug_endpoint_file",
+            "format",
+            "generation",
+            "host",
+            "manifest",
+            "mode",
+            "module",
+            "pid",
+            "project",
+            "protocol",
+            "source_fingerprint",
+            "stc_version",
+            "work_dir",
+        ] {
+            let mut value = stc_got::json::parse(&text).expect("parse");
+            let stc_got::Json::Object(fields) = &mut value else {
+                panic!("descriptor is an object");
+            };
+            fields.remove(key);
+            let error =
+                RemoteSession::parse(&value.render_compact()).expect_err(&format!("missing {key}"));
+            assert_eq!(error.code, codes::REMOTE_SESSION, "missing {key}");
+        }
+    }
+
+    #[test]
+    fn session_descriptor_rejects_invalid_scalar_values() {
+        let text = sample_session().to_json_text();
+        for (from, to) in [
+            ("\"generation\":1", "\"generation\":-1"),
+            ("\"format\":1", "\"format\":\"one\""),
+            ("\"host\":\"ecat-host\"", "\"host\":\"\""),
+            ("\"pid\":1234", "\"pid\":0"),
+            ("\"stc_version\":\"3.0.0\"", "\"stc_version\":\"\""),
+            (
+                "\"work_dir\":\"/home/r2k/stc-wl12\"",
+                "\"work_dir\":\"relative\"",
+            ),
+            (
+                "\"start_gate\":\"/home/r2k/stc-wl12/stc-start.gate\"",
+                "\"start_gate\":\"relative\"",
+            ),
+        ] {
+            let altered = text.replace(from, to);
+            assert_ne!(altered, text, "the fixture contains {from}");
+            assert!(
+                RemoteSession::parse(&altered).is_err(),
+                "{from} -> {to} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_path_helpers_reject_non_absolute_and_unsafe_values() {
+        assert!(RemotePath::parse_absolute("relative").is_err());
+        assert!(path("/home/r2k").is_shell_safe());
+        assert!(!path("/home/r2k/a b").is_shell_safe());
+        assert_eq!(
+            path("~/stc-wl12")
+                .resolve_home(&path("/home/r2k"))
+                .expect("home")
+                .as_str(),
+            "/home/r2k/stc-wl12"
+        );
+        assert_eq!(
+            path("/opt/stc")
+                .resolve_home(&path("/home/r2k"))
+                .expect("absolute")
+                .as_str(),
+            "/opt/stc"
+        );
     }
 
     #[cfg(target_os = "linux")]

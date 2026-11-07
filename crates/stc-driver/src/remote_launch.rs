@@ -1825,6 +1825,29 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
             let error = read_remote_session(&runner, &remote).expect_err("permissions");
             assert!(error.contains("STC-E-REMOTE-005"), "{error}");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+            let endpoint = work.join("stc-debug.endpoint");
+            std::fs::set_permissions(&endpoint, std::fs::Permissions::from_mode(0o644))
+                .expect("chmod");
+            let error = read_remote_session(&runner, &remote).expect_err("endpoint permissions");
+            assert!(error.contains("STC-E-REMOTE-005"), "{error}");
+            std::fs::remove_dir_all(&root).expect("clean up");
+        }
+
+        #[test]
+        fn ssh_auth_failure_is_reported_without_prompting() {
+            let root = temp_dir("auth");
+            let bin = root.join("bin");
+            script(
+                &bin,
+                "ssh",
+                "#!/bin/sh\necho 'Permission denied (publickey).' >&2\nexit 255\n",
+            );
+            let runner = SshRunner::new(bin.join("ssh").to_string_lossy().into_owned());
+            let target = RemoteTarget::parse("r2k@ecat").expect("target");
+            let error = runner.remote_home(&target).expect_err("auth failure");
+            assert_eq!(error.code, codes::REMOTE_TRANSPORT);
+            assert!(error.message.contains("Permission denied"), "{error}");
             std::fs::remove_dir_all(&root).expect("clean up");
         }
 

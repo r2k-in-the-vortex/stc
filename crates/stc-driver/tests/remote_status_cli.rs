@@ -256,7 +256,10 @@ fn remote_status_detects_drift_and_online_compatibility() {
 
     project.write(
         "src/main.st",
-        &SOURCE.replace("ticks := ticks + 1;", "ticks := ticks + 2;"),
+        &SOURCE.replace(
+            "  ticks := ticks + 1;",
+            "  // remote status drift test\n  ticks := ticks + 1;",
+        ),
     );
     let drifted = run_status(&work, &manifest, &path_env);
     assert_eq!(drifted["drift"], true, "{drifted}");
