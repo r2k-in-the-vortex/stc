@@ -231,6 +231,16 @@ Launch builds the project in the debug form by default and then starts the launc
 debug endpoint and control endpoint. `noBuild` uses the existing artifacts; `outDir` overrides their
 directory. Attach connects to an existing endpoint file and does not build or launch.
 
+A remote configuration names an SSH destination and remote work directory instead of a local
+endpoint. The Rust driver mirrors the project, builds remotely, starts or reads `stc serve`, and
+connects through an OpenSSH tunnel (Debug and Monitoring §13.1.1); the extension never speaks
+SSH and adds no network path of its own. A remote launch owns and stops its `stc serve`; a remote
+attach leaves an existing serve running. When a remote attach finds source drift, the extension's
+pre-launch hook runs `stc remote status --message-format json`, which syncs and builds a candidate
+without deploying, and offers **Online change**, **Cold download**, or **Cancel**. Online is
+offered only when the host reports a compatible plan. The chosen value is passed as
+`remoteDeploy`; cancel starts no session and changes no running host.
+
 A launch with `test` selects one discovered `{stc:test}` POU by exact name (`stc test --list`
 prints the names) and builds only that test as the per-test debug harness (Testing and
 Verification §2.5): breakpoints bind before the test body runs, the top stack frame is the test
@@ -253,7 +263,12 @@ operations.
 | `sourceRoot` | launch, attach | Override the source-path root instead of resolving package roots |
 | `args` | launch, attach | Extra arguments appended to the launched host |
 | `cwd` | launch, attach | Working directory for the launched host |
-| `endpoint` | attach | Endpoint file printed by `stc run --debug-server`; required for attach |
+| `endpoint` | attach | Endpoint file printed by `stc run --debug-server`; required for a local attach |
+| `remote` | launch, attach | SSH destination (`[user@]host`); selects the remote transport |
+| `remoteDir` | launch, attach | Remote work directory; default `~/stc-wl12` |
+| `remoteStc` | launch, attach | Remote `stc` program on `PATH` or an absolute path; default `stc` |
+| `remoteDeploy` | attach | Source-drift choice `ask`, `online`, `cold`, or `never`; default `ask` |
+| `remoteSession` | launch, attach | Session descriptor path; defaults under `remoteDir` |
 
 `stopOnEntry` is rejected explicitly. Every session start emits the runtime's non-safety notice as
 an `output` event, followed by one line naming the negotiated protocol and whether the Locals scope
@@ -382,8 +397,12 @@ the first cycle. A breakpoint set after configuration-complete binds at the next
   the stopped frame keeps its checkpoint source. A caller with no line map or an optimized-out
   function reports unavailable information honestly rather than a fabricated location.
 - `evaluate` does not parse ST expressions.
-- No remote transport, TLS, or authentication beyond the local endpoint token and user-only
-  endpoint file.
+- Remote debugging requires an OpenSSH client, an SSH agent/key, and a `known_hosts` entry on the
+  development host; the extension never prompts for a password or accepts an unknown host key.
+  The remote login account must own the packaged `stc`, the work directory, and the user-only
+  session files. One remote serve session at a time owns a work directory. There is no automatic
+  reconnect after a tunnel or host loss, and an online swap or cold install ends the session;
+  reattach starts a new session and re-applies breakpoints.
 - Debug write and force can hold outputs indefinitely; they are opt-in and never presented as
   safety functions.
 - A write made while the host is running takes effect at the next cycle boundary, not immediately.

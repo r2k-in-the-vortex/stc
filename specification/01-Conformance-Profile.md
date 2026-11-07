@@ -479,6 +479,25 @@ traceability allowlist. The four allowlisted rules are non-debug
 | `STC-W-DEBUG-004` | debug information or hooks unavailable; monitoring-only session | Debug and Monitoring §16.6 |
 | `STC-W-DEBUG-005` | forced retained value may be saved by normal shutdown; force table is not persisted | Debug and Monitoring §4, §14.7 |
 
+### 10.1.1 Remote debug diagnostics (WL-1.2)
+
+The `REMOTE` family belongs to the driver and host-side remote-debug transport of
+[Debug and Monitoring](Architecture/Debug-and-Monitoring.md) §13.1.1. It does not change the
+`DEBUG` protocol codes; a remote session that loses its transport normally reports the local
+transport diagnostic on the client side.
+
+| Code | Condition | Owner |
+| --- | --- | --- |
+| `STC-E-REMOTE-001` | SSH/tunnel transport failure: client start, command timeout, tunnel setup, or file transfer | Debug and Monitoring §13.1.1; CLI and Manifest §1.7 |
+| `STC-E-REMOTE-002` | remote command/tool/version failure: missing or mismatched remote `stc`, invalid command, or version drift | CLI and Manifest §1.7 |
+| `STC-E-REMOTE-003` | local and remote production source fingerprints differ, or a source/artifact identity check fails | Debug and Monitoring §13.1.1 |
+| `STC-E-REMOTE-004` | deployment rejected or cold required: incompatible online plan, failed control deploy, or disabled deployment with drift | CLI and Manifest §1.7 |
+| `STC-E-REMOTE-005` | session descriptor, path, or permission invalid: malformed `stc-remote/1`, non-private file, unsafe path, or outside the work directory | CLI and Manifest §1.7 |
+| `STC-E-REMOTE-006` | remote build or detached serve startup failure | CLI and Manifest §1.7 |
+| `STC-E-REMOTE-007` | unsupported host or endpoint: non-loopback debug endpoint, non-Unix serve host, or unsupported remote launch feature | Debug and Monitoring §13.1.1 |
+| `STC-W-REMOTE-001` | source drift detected; the session continues only after a deployment choice or matching attach | CLI and Manifest §1.7 |
+| `STC-W-REMOTE-002` | a remote deployment was applied and the session must be restarted/reattached | CLI and Manifest §1.7 |
+
 ### 10.2 Semantic analyzer diagnostics (M3)
 
 These families are owned by [AST](AST/AST.md) §7–§9 and enforced by `stc-sema`; the owning

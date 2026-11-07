@@ -74,7 +74,7 @@ A persistent `stc serve` was started from the original `hello` project. A local 
 source-only comment change was attached with:
 
 ```sh
-stc debug --attach dummy --remote r2k@ecat \
+stc debug --attach --remote r2k@ecat \
   --remote-dir '~/stc-wl12' \
   --remote-stc '/home/r2k/stc-wl12/stc-735f434/bin/stc' \
   --remote-deploy online \

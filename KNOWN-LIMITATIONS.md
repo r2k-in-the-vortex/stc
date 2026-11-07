@@ -44,7 +44,11 @@ machine design as required by law and regulation.
 
 | Limitation | Status / workaround |
 | --- | --- |
-| Debug is local only (`pipe` by default, loopback socket optional); there is no remote/network mode | Run the debugger on the host; local authentication, scopes, and audit are mandatory |
+| Debug is local by default (`pipe`, or loopback socket); remote access is an SSH tunnel to that loopback `socket` endpoint, not a new listener | Use `stc debug --remote <user@host>` or `stc serve` with an SSH client/agent and a `known_hosts` entry. The remote login account must own a packaged `stc` and a dedicated work directory. No TLS beyond SSH; no password prompt or unknown-host acceptance |
+| Remote debugging requires OpenSSH on the development host and the same `stc` version on both ends; it has no automatic reconnect | Install a matching packaged `stc` on the host; a version mismatch is `STC-E-REMOTE-002`. After tunnel/host loss, start a new attach and re-apply breakpoints |
+| One remote `stc serve` owns a work directory; launch and attach both use it | Stop the existing serve before starting another. Attach leaves it running; launch stops its own serve at teardown |
+| The remote source fingerprint covers production source files, not build settings or manifest text | A build-setting change is detected by the manifest comparison/build result, not the source hash alone; `remoteDeploy=ask` still prompts on source drift |
+| Remote online/cold deployment ends any active debug session | Reattach after deployment; online preserves compatible retained state, cold follows the runtime policy |
 | There is no raw-memory read/write, arbitrary register write, or unauthenticated mode | Use typed identity-based reads/writes and the manifest-assisted split view |
 | One debug session per host | Stop the current session before starting another |
 | Starting a session does not stop the cycle; a stop/step/breakpoint holds outputs | The opt-in stop/idle bound (`[debug].session-timeout`, disabled by default) resumes the cycle and ends the session when configured; this is not a fail-safe timeout |
@@ -62,7 +66,8 @@ machine design as required by law and regulation.
 
 | Limitation | Status / workaround |
 | --- | --- |
-| The VS Code extension and both servers are local only | No remote/network IDE access, remote source mapping, or remote attachments (WL-1.2); debug uses the local authenticated endpoint |
+| The VS Code extension and both servers are local processes; remote debugging is driven by the Rust driver over SSH | `remote`, `remoteDir`, `remoteStc`, `remoteDeploy`, and `remoteSession` select a remote launch or attach; the extension itself opens no network connection and needs an OpenSSH client, agent, and `known_hosts` entry |
+| A remote attach with `remoteDeploy=ask` runs `stc remote status` (sync plus candidate build) before showing the Online/Cold/Cancel prompt | The prompt appears only when sources drifted. Cancel starts no session and changes no running host. Online is offered only when the candidate plan is compatible; otherwise cold is the only deploy choice |
 | There is one debug session per host and one adapter session per launch | Stop the current session before starting another; a second session fails honestly |
 | Every online swap, rollback, cold install, shutdown, or target exit ends the editor session; breakpoints, forces, and watches do not migrate | Reconnect after the generation change and re-resolve targets |
 | Release and hook-free builds are monitoring-only | No breakpoints, stepping, or Locals scope; use the Debug Console for live Globals and target paths, and a debug build for a full session |
@@ -95,8 +100,8 @@ machine design as required by law and regulation.
 | GOT manifest format 1 is rejected | The documented cold download is the only upgrade path; there is no migration tool (D-192) |
 | Debug and release forms have distinct identities and are not a supported hot-swap pair | Keep separate stores; a release candidate against a debug baseline selects a cold layout, and the reverse direction is classified compatible but is not a supported deployment path |
 | M4-era code-linked artifacts are not loadable | Rebuild with the current module model |
-| There is no remote/network deployment, multi-user scheduling, or deploy/rollback UI; the IDE surface starts/stops the watch and shows the generation but offers no deploy/rollback controls | Online change is a local host API/CLI capability; use `stc run --watch` and `stc online` locally |
-| `stc run --watch`, the control channel, and the IDE online-change surface are local only | The debug protocol is a separate local endpoint; the extension adds no network path |
+| There is no general remote/network deployment UI, multi-user scheduling, or rollback UI; the IDE surface starts/stops the local watch and offers Online/Cold/Cancel only for a remote attach | Online change is a host API/CLI capability; remote attach deployment uses the SSH driver and the host control channel. Use `stc run --watch` and `stc online` for local watch operations |
+| `stc run --watch` and the local IDE online-change surface are local; remote control is available only through the WL-1.2 SSH driver | The debug protocol remains a separate loopback endpoint; the extension adds no network path of its own |
 | A missing, stale, or corrupt baseline forces a cold download | The runtime exports and downloads the active manifest; never execute manifest content |
 
 ## 6. State, I/O, and tests

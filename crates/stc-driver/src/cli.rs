@@ -453,7 +453,16 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
                 debug.protocol = Some(parse_debug_protocol(&other["--debug-protocol=".len()..])?);
             }
             "--attach" => {
-                debug.attach = Some(next_value(args, &mut index, "--attach")?);
+                // A remote attach has no local endpoint file, so the value is
+                // optional; a local attach still requires one at run time.
+                if args
+                    .get(index + 1)
+                    .is_some_and(|value| !value.starts_with('-'))
+                {
+                    debug.attach = Some(next_value(args, &mut index, "--attach")?);
+                } else {
+                    debug.attach = Some(String::new());
+                }
             }
             other if other.starts_with("--attach=") => {
                 debug.attach = Some(other["--attach=".len()..].to_owned());
@@ -2114,7 +2123,7 @@ fn print_help() {
          \x20         [--debug-protocol pipe|socket]\n\
          \x20 stc run --watch [--store <dir>] [--watch-timeout <duration>]\n\
          \x20         [--target <triple>] [--clang <path>] [--runtime <path>] [-v|-vv]\n\
-         \x20 stc debug [--attach <endpoint-file>] [--endpoint <path>]\n\
+         \x20 stc debug [--attach [<endpoint-file>]] [--endpoint <path>]\n\
          \x20         [--batch <file>|-] [--break <file>:<line>[:<column>]]...\n\
          \x20         [--watch <target>]... [--allow-write] [--allow-force]\n\
          \x20         [--session-timeout <duration>] [--debug-protocol pipe|socket]\n\
@@ -2405,6 +2414,8 @@ mod tests {
         );
         let attach = parse_ok(&["debug", "--remote", "r2k@ecat", "--attach", "ep"]);
         assert_eq!(attach.debug.remote.as_deref(), Some("r2k@ecat"));
+        let endpointless = parse_ok(&["debug", "--attach", "--remote", "r2k@ecat"]);
+        assert_eq!(endpointless.debug.attach.as_deref(), Some(""));
     }
 
     #[test]
