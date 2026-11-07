@@ -2178,6 +2178,10 @@ mod tests {
                 "\"start_gate\":\"/home/r2k/stc-wl12/stc-start.gate\"",
                 "\"start_gate\":\"relative\"",
             ),
+            (
+                "\"start_gate\":\"/home/r2k/stc-wl12/stc-start.gate\"",
+                "\"start_gate\":\"/tmp/gate\"",
+            ),
         ] {
             let altered = text.replace(from, to);
             assert_ne!(altered, text, "the fixture contains {from}");
@@ -2261,6 +2265,12 @@ mod tests {
         let error = runner
             .read_private_file(&target(), &path)
             .expect_err("group access");
+        assert_eq!(error.code, codes::REMOTE_SESSION);
+        std::fs::set_permissions(&nonce, std::fs::Permissions::from_mode(0o600)).expect("mode");
+        std::fs::write(&nonce, vec![b'x'; PRIVATE_FILE_LIMIT + 1]).expect("oversize");
+        let error = runner
+            .read_private_file(&target(), &path)
+            .expect_err("oversize");
         assert_eq!(error.code, codes::REMOTE_SESSION);
         std::fs::remove_dir_all(&directory).expect("clean up");
     }

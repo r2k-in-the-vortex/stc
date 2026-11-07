@@ -129,7 +129,11 @@ impl ResolvedRemote {
 
 /// Runs `stc remote status`.
 pub(crate) fn status_command(invocation: &Invocation, reporter: &mut Reporter) -> u8 {
-    let report = match status_report(invocation) {
+    status_command_with(invocation, reporter, &SshRunner::default())
+}
+
+fn status_command_with(invocation: &Invocation, reporter: &mut Reporter, runner: &SshRunner) -> u8 {
+    let report = match status_report_with(invocation, runner) {
         Ok(report) => report,
         Err(message) => {
             report_remote_error(reporter, &message);
@@ -174,10 +178,6 @@ pub(crate) fn status_command(invocation: &Invocation, reporter: &mut Reporter) -
         }
     }
     0
-}
-
-fn status_report(invocation: &Invocation) -> Result<stc_got::Json, String> {
-    status_report_with(invocation, &SshRunner::default())
 }
 
 fn status_report_with(
@@ -1955,6 +1955,57 @@ mod tests {
             let error = runner.remote_home(&target).expect_err("auth failure");
             assert_eq!(error.code, codes::REMOTE_TRANSPORT);
             assert!(error.message.contains("Permission denied"), "{error}");
+            std::fs::remove_dir_all(&root).expect("clean up");
+        }
+
+        #[test]
+        fn status_command_human_output_covers_drift_labels() {
+            let root = temp_dir("status-human");
+            let (_probe, stc, _bin) = tools_with(&root, false, true);
+            let work = root.join("work");
+            let manager = project(&root.join("project"));
+            let (remote, runner, _session) = work_and_settings(&root, &stc, &work);
+            write_fixtures(&remote, &format!("0x{}", "33".repeat(32)));
+            let invocation = invocation(&[
+                "remote",
+                "status",
+                "--remote",
+                "r2k@ecat",
+                "--remote-dir",
+                &work.to_string_lossy(),
+                "--remote-stc",
+                &stc.to_string_lossy(),
+                "--manifest-path",
+                &manager.to_string_lossy(),
+            ]);
+            let overrides = crate::report::LintOverrides::default();
+            let mut reporter = Reporter::new(
+                crate::report::Format::Human,
+                crate::report::ColorChoice::Never,
+                false,
+                &overrides,
+            );
+            assert_eq!(status_command_with(&invocation, &mut reporter, &runner), 0);
+            std::fs::remove_dir_all(&root).expect("clean up");
+        }
+
+        #[test]
+        fn remote_host_release_and_status_failures_are_tolerated() {
+            let root = temp_dir("host-failures");
+            let (_probe, _stc, _bin) = tools(&root, false);
+            let work = root.join("work");
+            std::fs::create_dir_all(&work).expect("work");
+            let bad = script(
+                &root.join("bin"),
+                "badstc",
+                "#!/bin/sh\nif [ \"$1\" = \"serve\" ] && [ \"$2\" = \"release\" ]; then echo 'denied' >&2; exit 1; fi\nexit 0\n",
+            );
+            std::fs::write(work.join("stc-serve.status"), "not-a-code\n").expect("status");
+            let mut host = remote_host(&root, &bad, &work, false, true);
+            let error = host.release_start_gate().expect_err("release");
+            assert!(error.contains("STC-E-REMOTE-002"), "{error}");
+            host.stop();
+            assert_eq!(SessionHost::try_exit(&mut host), None);
             std::fs::remove_dir_all(&root).expect("clean up");
         }
 
