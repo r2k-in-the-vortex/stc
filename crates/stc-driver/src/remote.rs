@@ -2130,6 +2130,52 @@ mod tests {
     }
 
     #[test]
+    fn session_validation_rejects_each_inconsistent_field() {
+        let mut session = sample_session();
+        session.host = " ".into();
+        assert_eq!(
+            session.validate().expect_err("empty host").code,
+            codes::REMOTE_SESSION
+        );
+        session = sample_session();
+        session.stc_version.clear();
+        assert_eq!(
+            session.validate().expect_err("empty version").code,
+            codes::REMOTE_SESSION
+        );
+        session = sample_session();
+        session.pid = 0;
+        assert_eq!(
+            session.validate().expect_err("zero pid").code,
+            codes::REMOTE_SESSION
+        );
+        session = sample_session();
+        session.build_id = "not-a-build".into();
+        assert_eq!(
+            session.validate().expect_err("bad build").code,
+            codes::REMOTE_SESSION
+        );
+        session = sample_session();
+        session.source_fingerprint = "not-a-digest".into();
+        assert_eq!(
+            session.validate().expect_err("bad fingerprint").code,
+            codes::REMOTE_SESSION
+        );
+        session = sample_session();
+        session.work_dir = RemotePath("relative".into());
+        assert_eq!(
+            session.validate().expect_err("relative work dir").code,
+            codes::REMOTE_SESSION
+        );
+        session = sample_session();
+        session.control_nonce_file = path("/tmp/nonce");
+        assert_eq!(
+            session.validate().expect_err("nonce outside").code,
+            codes::REMOTE_SESSION
+        );
+    }
+
+    #[test]
     fn session_descriptor_rejects_every_missing_field() {
         let text = sample_session().to_json_text();
         for key in [
@@ -2211,6 +2257,8 @@ mod tests {
                 .as_str(),
             "/opt/stc"
         );
+        assert!(path("/home/r2k").join("").is_err());
+        assert!(path("/home/r2k").join("/etc").is_err());
     }
 
     #[cfg(target_os = "linux")]
