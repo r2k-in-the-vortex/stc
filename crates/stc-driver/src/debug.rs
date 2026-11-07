@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use stc_dap::LaunchArguments;
 use stc_diag::Severity;
 use stc_got::Json;
 use stc_manifest::Manifest;
@@ -27,6 +28,7 @@ use stc_runtime::debug_server::DebugClient;
 
 use crate::build::RunRequest;
 use crate::cli::{DebugOptions, parse_break_spec};
+use crate::remote_launch::RemoteHost;
 use crate::report::{Log, Reporter};
 use crate::run as run_util;
 
@@ -280,6 +282,176 @@ pub(crate) fn attach(options: &DebugOptions, reporter: &mut Reporter, log: Log) 
         interactive(&mut client, json, reporter, &mut state)
     };
     finish_attach(&mut client, outcome, reporter)
+}
+
+/// Runs a remote launch through the shared SSH/SFTP launcher.
+pub(crate) fn remote_launch(
+    manifest_path: Option<&str>,
+    debug: &DebugOptions,
+    reporter: &mut Reporter,
+    log: Log,
+) -> u8 {
+    stc_runtime::signal::install_stop_handler();
+    let path = manifest_path.unwrap_or("stc.toml");
+    let graph =
+        match stc_manifest::load_project_readonly(path, &stc_manifest::LoadOptions::default()) {
+            Ok(graph) => graph,
+            Err(error) => {
+                let (code, message) = error.diagnostics.first().map_or(
+                    (
+                        "STC-E-PROJECT-010",
+                        format!("cannot load the project `{path}`"),
+                    ),
+                    |diagnostic| (diagnostic.code, diagnostic.message.clone()),
+                );
+                reporter.plain(code, Severity::Error, &message);
+                return 2;
+            }
+        };
+    let manifest = graph.root_package().manifest.clone();
+    let arguments = remote_arguments(path, debug);
+    let connection = match crate::remote_launch::launch(&arguments, None) {
+        Ok(connection) => connection,
+        Err(message) => {
+            report_remote_failure(reporter, &message);
+            return 2;
+        }
+    };
+    log.status(format!(
+        "remote debug session on {}",
+        debug.remote.as_deref().unwrap_or("the host")
+    ));
+    let mut client = connection.client;
+    let mut host = connection.host;
+    let json = reporter.is_json();
+    eprintln!("stc: {NOTICE}");
+    let mut state = StopState::default();
+    if let Err(code) = start_session(
+        &mut client,
+        &launch_scopes(debug, &manifest),
+        json,
+        reporter,
+        &mut state,
+    ) {
+        let _ = stop_session(&mut client);
+        host.stop();
+        return code;
+    }
+    if let Err(code) = apply_initial(&mut client, debug, json, reporter, &mut state) {
+        let _ = stop_session(&mut client);
+        host.stop();
+        return code;
+    }
+    if let Err(message) = host.release_start_gate() {
+        report_remote_failure(reporter, &message);
+        let _ = stop_session(&mut client);
+        host.stop();
+        return 2;
+    }
+    let outcome = if let Some(batch) = &debug.batch {
+        run_batch(&mut client, batch, json, reporter, &mut state)
+    } else {
+        interactive(&mut client, json, reporter, &mut state)
+    };
+    finish_remote(client, host, outcome, reporter)
+}
+
+/// Attaches to an existing remote serve through the shared remote launcher.
+pub(crate) fn remote_attach(debug: &DebugOptions, reporter: &mut Reporter, log: Log) -> u8 {
+    stc_runtime::signal::install_stop_handler();
+    let arguments = remote_arguments("stc.toml", debug);
+    let connection = match crate::remote_launch::attach(&arguments, None) {
+        Ok(connection) => connection,
+        Err(message) => {
+            report_remote_failure(reporter, &message);
+            return 2;
+        }
+    };
+    log.status(format!(
+        "attached remotely to {}",
+        debug.remote.as_deref().unwrap_or("the host")
+    ));
+    let mut client = connection.client;
+    // The host owns the SSH tunnel; keep it alive until the session ends, then
+    // dropping it closes the tunnel without stopping the remote serve.
+    let host = connection.host;
+    let json = reporter.is_json();
+    eprintln!("stc: {NOTICE}");
+    let mut state = StopState::default();
+    if let Err(code) = start_session(
+        &mut client,
+        &["observe", "control"],
+        json,
+        reporter,
+        &mut state,
+    ) {
+        let _ = stop_session(&mut client);
+        return code;
+    }
+    if let Err(code) = apply_initial(&mut client, debug, json, reporter, &mut state) {
+        let _ = stop_session(&mut client);
+        return code;
+    }
+    let outcome = if let Some(batch) = &debug.batch {
+        run_batch(&mut client, batch, json, reporter, &mut state)
+    } else {
+        interactive(&mut client, json, reporter, &mut state)
+    };
+    let code = finish_attach(&mut client, outcome, reporter);
+    drop(host);
+    code
+}
+
+fn remote_arguments(project: &str, debug: &DebugOptions) -> LaunchArguments {
+    LaunchArguments {
+        project: Some(project.to_owned()),
+        remote: debug.remote.clone(),
+        remote_dir: debug.remote_dir.clone(),
+        remote_stc: debug.remote_stc.clone(),
+        remote_deploy: debug.remote_deploy.clone(),
+        remote_session: debug.remote_session.clone(),
+        allow_write: debug.allow_write,
+        allow_force: debug.allow_force,
+        ..LaunchArguments::default()
+    }
+}
+
+fn report_remote_failure(reporter: &mut Reporter, message: &str) {
+    if let Some((code, detail)) = message
+        .split_once(": ")
+        .filter(|(code, _)| code.starts_with("STC-"))
+    {
+        reporter.plain(code, Severity::Error, detail);
+    } else {
+        reporter.plain("STC-E-DEBUG-020", Severity::Error, message);
+    }
+}
+
+fn finish_remote(
+    mut client: DebugClient,
+    mut host: RemoteHost,
+    outcome: Outcome,
+    reporter: &mut Reporter,
+) -> u8 {
+    let code = match &outcome {
+        Outcome::Clean => 0,
+        Outcome::Interrupted => 130,
+        Outcome::Ended(end) => {
+            report_end(end, reporter);
+            exit_for_end(end)
+        }
+        Outcome::Transport(message) => {
+            reporter.plain(
+                "STC-E-DEBUG-020",
+                Severity::Error,
+                &format!("the debug connection failed: {message}"),
+            );
+            2
+        }
+    };
+    let _ = stop_session(&mut client);
+    host.stop();
+    code
 }
 
 /// Launches the host, owns one debug session, and shuts the host down.

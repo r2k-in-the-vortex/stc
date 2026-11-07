@@ -23,10 +23,12 @@ mod new;
 mod online;
 mod project;
 mod remote;
+mod remote_launch;
 mod rename;
 mod report;
 mod run;
 mod serve;
+mod sha256;
 mod test;
 mod watch;
 
@@ -158,6 +160,17 @@ fn run(args: &[String]) -> ExitCode {
             invocation.locked,
             invocation.diagnostic_paths,
             &invocation.build,
+            &invocation.debug,
+            &mut reporter,
+            log,
+        ),
+        Command::Debug
+            if invocation.debug.remote.is_some() && invocation.debug.attach.is_some() =>
+        {
+            crate::debug::remote_attach(&invocation.debug, &mut reporter, log)
+        }
+        Command::Debug if invocation.debug.remote.is_some() => crate::debug::remote_launch(
+            invocation.manifest.as_deref(),
             &invocation.debug,
             &mut reporter,
             log,

@@ -35,13 +35,19 @@ pub trait SessionHost {
     /// its first cycle (WL-16). The adapter calls this after `session.start`,
     /// `manifest.get`, and `apply_all_breakpoints`, so every breakpoint
     /// received before `configurationDone` binds before cycle 0. An attach
-    /// session has no host and never calls this.
+    /// session has no owned host and never calls this.
     ///
     /// # Errors
     ///
     /// Returns a readable message when the start gate cannot be released.
     fn configuration_complete(&mut self) -> Result<(), String> {
         Ok(())
+    }
+    /// Returns `true` for an attach session that owns only a transport, not
+    /// the remote process. The adapter leaves such a host running and does not
+    /// send an `exited` event.
+    fn attached(&self) -> bool {
+        false
     }
     /// Stops the host through the control channel and reaps the process.
     fn shutdown(&mut self);

@@ -55,7 +55,10 @@ struct DapLauncher {
 
 impl Launcher for DapLauncher {
     fn launch(&mut self, arguments: &LaunchArguments) -> Result<LaunchedSession, String> {
-        reject_unimplemented_remote(arguments)?;
+        if arguments.remote.is_some() {
+            return crate::remote_launch::launch(arguments, self.manifest_path.as_deref())
+                .map(crate::remote_launch::RemoteConnection::into_launched_session);
+        }
         let project_path = arguments.project_path(self.manifest_path.as_deref());
         if let Some(test) = arguments.test.as_deref() {
             return launch_test(&project_path, test, arguments);
@@ -98,7 +101,10 @@ impl Launcher for DapLauncher {
     }
 
     fn attach(&mut self, arguments: &LaunchArguments) -> Result<LaunchedSession, String> {
-        reject_unimplemented_remote(arguments)?;
+        if arguments.remote.is_some() {
+            return crate::remote_launch::attach(arguments, self.manifest_path.as_deref())
+                .map(crate::remote_launch::RemoteConnection::into_launched_session);
+        }
         let Some(endpoint) = arguments.endpoint.as_deref() else {
             return Err("attach requires an `endpoint` file".into());
         };
@@ -111,28 +117,6 @@ impl Launcher for DapLauncher {
         })?;
         Ok(LaunchedSession { client, host: None })
     }
-}
-
-/// Validates remote launch settings and reports that the remote launcher is not
-/// wired yet. This keeps a configured remote session from silently launching a
-/// local host; replace this guard when the remote launcher lands.
-fn reject_unimplemented_remote(arguments: &LaunchArguments) -> Result<(), String> {
-    let Some(target) = arguments.remote.as_deref() else {
-        return Ok(());
-    };
-    let settings = crate::remote::RemoteSettings::from_strings(
-        target,
-        arguments.remote_dir.as_deref(),
-        arguments.remote_stc.as_deref(),
-        arguments.remote_session.as_deref(),
-        arguments.remote_deploy.as_deref(),
-    )
-    .map_err(|error| error.to_string())?;
-    Err(format!(
-        "remote debugging is not implemented in this build yet (target `{}`, work dir `{}`)",
-        settings.target.spelling(),
-        settings.work_dir.as_str()
-    ))
 }
 
 /// Builds one selected test as a debug harness and spawns its test host.

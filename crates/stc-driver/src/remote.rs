@@ -9,8 +9,9 @@
 
 #![allow(dead_code)] // Phase 1 foundations; these are wired by the remote launcher.
 
-use std::io::Read;
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -31,10 +32,14 @@ pub(crate) const DEFAULT_STC: &str = "stc";
 pub(crate) const DEFAULT_SESSION_FILE: &str = "stc-remote-session.json";
 /// SSH connect/command deadline for non-build commands.
 pub(crate) const SSH_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// Deadline for an SSH local port-forward to become ready.
+pub(crate) const TUNNEL_DEADLINE: Duration = Duration::from_secs(5);
+/// Deadline for one `scp` upload.
+pub(crate) const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 /// Maximum size of the session descriptor or debug endpoint file.
 pub(crate) const PRIVATE_FILE_LIMIT: usize = 64 * 1024;
 
-fn remote_error(code: &'static str, message: impl Into<String>) -> Error {
+pub(crate) fn remote_error(code: &'static str, message: impl Into<String>) -> Error {
     Error::new(code, message)
 }
 
@@ -245,6 +250,28 @@ impl RemotePath {
             .strip_prefix(&parent.0)
             .is_some_and(|rest| rest.starts_with('/'))
     }
+
+    /// Resolves a home-relative path against the remote home directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-REMOTE-005` when the joined path is not absolute.
+    pub(crate) fn resolve_home(&self, home: &RemotePath) -> Result<RemotePath, Error> {
+        if !self.is_home_relative() {
+            return Ok(self.clone());
+        }
+        let rest = self.0.strip_prefix('~').unwrap_or(&self.0);
+        let joined = format!("{}{rest}", home.0);
+        Self::parse_absolute(&joined)
+    }
+
+    /// Returns `true` when every character is safe for an `scp` remote path.
+    #[must_use]
+    pub(crate) fn is_shell_safe(&self) -> bool {
+        self.0
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._/-".contains(character))
+    }
 }
 
 /// A remote `stc` program: a bare command name or a remote path.
@@ -287,6 +314,19 @@ impl RemoteProgram {
     #[must_use]
     pub(crate) fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+
+    /// Resolves a home-relative program path against the remote home.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-REMOTE-005` when the resolved path is not absolute.
+    pub(crate) fn resolve_home(&self, home: &RemotePath) -> Result<Self, Error> {
+        if self.0.is_home_relative() {
+            Ok(Self(self.0.resolve_home(home)?))
+        } else {
+            Ok(self.clone())
+        }
     }
 }
 
@@ -402,6 +442,8 @@ pub(crate) struct RemoteSession {
     pub(crate) control_endpoint: RemotePath,
     /// Remote user-only control-nonce file (absolute).
     pub(crate) control_nonce_file: RemotePath,
+    /// Remote start-gate path when the host is launch-paused (absolute).
+    pub(crate) start_gate: Option<RemotePath>,
     /// Build identity.
     pub(crate) build_id: String,
     /// Active generation.
@@ -487,6 +529,10 @@ impl RemoteSession {
             debug_endpoint_file: RemotePath::parse_absolute(&string("debug_endpoint_file")?)?,
             control_endpoint: RemotePath::parse_absolute(&string("control_endpoint")?)?,
             control_nonce_file: RemotePath::parse_absolute(&string("control_nonce_file")?)?,
+            start_gate: match object.get("start_gate").and_then(Json::as_str) {
+                Some(text) => Some(RemotePath::parse_absolute(text)?),
+                None => None,
+            },
             build_id: string("build_id")?,
             generation: unsigned("generation")?,
             source_fingerprint: string("source_fingerprint")?,
@@ -509,7 +555,7 @@ impl RemoteSession {
     /// Returns the descriptor as a sorted JSON object.
     #[must_use]
     pub(crate) fn to_json(&self) -> Json {
-        Json::object([
+        let mut pairs = vec![
             ("build_id".into(), Json::string(self.build_id.clone())),
             (
                 "control_endpoint".into(),
@@ -541,7 +587,11 @@ impl RemoteSession {
             ),
             ("stc_version".into(), Json::string(self.stc_version.clone())),
             ("work_dir".into(), Json::string(self.work_dir.as_str())),
-        ])
+        ];
+        if let Some(start_gate) = &self.start_gate {
+            pairs.push(("start_gate".into(), Json::string(start_gate.as_str())));
+        }
+        Json::object(pairs)
     }
 
     /// Validates cross-field invariants.
@@ -619,6 +669,24 @@ impl RemoteSession {
                     format!(
                         "the remote session `{label}` path `{}` is outside the work directory `{}`",
                         path.as_str(),
+                        self.work_dir.as_str()
+                    ),
+                ));
+            }
+        }
+        if let Some(start_gate) = &self.start_gate {
+            if !start_gate.is_absolute() {
+                return Err(remote_error(
+                    codes::REMOTE_SESSION,
+                    "the remote session start_gate path must be absolute",
+                ));
+            }
+            if !start_gate.is_within(&self.work_dir) {
+                return Err(remote_error(
+                    codes::REMOTE_SESSION,
+                    format!(
+                        "the remote session start_gate path `{}` is outside the work directory `{}`",
+                        start_gate.as_str(),
                         self.work_dir.as_str()
                     ),
                 ));
@@ -706,6 +774,235 @@ pub(crate) fn local_source_fingerprint(project: &Path) -> Result<String, Error> 
     Ok(fingerprint.to_hex())
 }
 
+/// One source-mirror file uploaded to the remote work directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SyncFile {
+    /// Local file to upload.
+    pub(crate) local: PathBuf,
+    /// `/`-separated path under the remote mirror root.
+    pub(crate) relative: String,
+}
+
+/// The source mirror and identity for one remote build.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProjectSync {
+    /// Files to upload.
+    pub(crate) files: Vec<SyncFile>,
+    /// Production source fingerprint.
+    pub(crate) fingerprint: String,
+    /// Root manifest path relative to the mirror root.
+    pub(crate) root_manifest: String,
+}
+
+/// Lists the files that make up the remotely mirrored project.
+///
+/// The mirror preserves the relative layout of every package root, so relative
+/// path dependencies and `stc.lock` entries resolve unchanged on the host. Only
+/// manifests, production sources, the rename history, and the lockfile are
+/// included; build outputs, state files, and files outside the project graph
+/// are never uploaded.
+///
+/// # Errors
+///
+/// Returns `STC-E-REMOTE-003` when the project cannot be loaded or two packages
+/// do not share a filesystem root, or `STC-E-REMOTE-005` when a mirror path is
+/// unsafe for the remote transport.
+pub(crate) fn project_sync_files(project: &Path) -> Result<ProjectSync, Error> {
+    let graph = stc_manifest::load_project_readonly(project, &stc_manifest::LoadOptions::default())
+        .map_err(|error| {
+            let detail = error.diagnostics.first().map_or_else(
+                || "the project manifest could not be loaded".to_owned(),
+                |diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message),
+            );
+            remote_error(codes::REMOTE_SOURCE_MISMATCH, detail)
+        })?;
+    let roots = graph
+        .packages
+        .iter()
+        .map(|package| package.root_dir.as_path())
+        .collect::<Vec<_>>();
+    let common = common_ancestor(&roots).ok_or_else(|| {
+        remote_error(
+            codes::REMOTE_SOURCE_MISMATCH,
+            "the project packages do not share a filesystem root",
+        )
+    })?;
+    let mut files = BTreeMap::new();
+    let mut sources = Vec::new();
+    let mut root_manifest = None;
+    for package in &graph.packages {
+        let package_relative =
+            remote_relative(package.root_dir.strip_prefix(&common).map_err(|_| {
+                remote_error(
+                    codes::REMOTE_SOURCE_MISMATCH,
+                    format!(
+                        "the package `{}` is not under the project mirror root",
+                        package.name
+                    ),
+                )
+            })?)?;
+        let join = |child: &str| {
+            if package_relative.is_empty() {
+                child.to_owned()
+            } else {
+                format!("{package_relative}/{child}")
+            }
+        };
+        let manifest_relative = remote_relative(
+            package
+                .manifest_path
+                .strip_prefix(&package.root_dir)
+                .map_err(|_| {
+                    remote_error(
+                        codes::REMOTE_SOURCE_MISMATCH,
+                        format!(
+                            "the manifest `{}` is outside its package root",
+                            package.manifest_path.display()
+                        ),
+                    )
+                })?,
+        )?;
+        files.insert(join(&manifest_relative), package.manifest_path.clone());
+        for source in &package.sources {
+            if !source.path.starts_with(&package.root_dir) {
+                return Err(remote_error(
+                    codes::REMOTE_SOURCE_MISMATCH,
+                    format!(
+                        "the source `{}` is outside the package root `{}`",
+                        source.path.display(),
+                        package.root_dir.display()
+                    ),
+                ));
+            }
+            files.insert(
+                join(&remote_relative(Path::new(&source.relative))?),
+                source.path.clone(),
+            );
+            let bytes = std::fs::read(&source.path).map_err(|error| {
+                remote_error(
+                    codes::REMOTE_SOURCE_MISMATCH,
+                    format!(
+                        "cannot read the project source `{}`: {error}",
+                        source.path.display()
+                    ),
+                )
+            })?;
+            sources.push((package.name.clone(), source.relative.clone(), bytes));
+        }
+        if package.is_root {
+            root_manifest = Some(join(&manifest_relative));
+            let renames = package.root_dir.join("stc.renames.toml");
+            if renames.is_file() {
+                files.insert(join("stc.renames.toml"), renames);
+            }
+            if graph.lockfile_path.is_file() {
+                let lock_relative = graph
+                    .lockfile_path
+                    .strip_prefix(&package.root_dir)
+                    .map_err(|_| {
+                        remote_error(
+                            codes::REMOTE_SOURCE_MISMATCH,
+                            format!(
+                                "the lockfile `{}` is outside the root package",
+                                graph.lockfile_path.display()
+                            ),
+                        )
+                    })?;
+                files.insert(
+                    join(&remote_relative(lock_relative)?),
+                    graph.lockfile_path.clone(),
+                );
+            }
+        }
+    }
+    let fingerprint =
+        stc_codegen::module::project_source_fingerprint(&sources).map_err(|error| {
+            remote_error(
+                codes::REMOTE_SOURCE_MISMATCH,
+                format!(
+                    "cannot compute the project source fingerprint: {}",
+                    error.message
+                ),
+            )
+        })?;
+    let files = files
+        .into_iter()
+        .map(|(relative, local)| SyncFile { local, relative })
+        .collect();
+    let root_manifest = root_manifest.ok_or_else(|| {
+        remote_error(
+            codes::REMOTE_SOURCE_MISMATCH,
+            "the project graph has no root package manifest",
+        )
+    })?;
+    Ok(ProjectSync {
+        files,
+        fingerprint: fingerprint.to_hex(),
+        root_manifest,
+    })
+}
+
+/// Returns the deepest directory shared by every path.
+fn common_ancestor(paths: &[&Path]) -> Option<PathBuf> {
+    let first = paths.first()?;
+    let components = first.components().collect::<Vec<_>>();
+    let mut length = components.len();
+    for path in paths.iter().skip(1) {
+        let matched = components[..length]
+            .iter()
+            .zip(path.components())
+            .take_while(|(left, right)| *left == right)
+            .count();
+        length = matched;
+    }
+    let mut common = PathBuf::new();
+    for component in &components[..length] {
+        common.push(component.as_os_str());
+    }
+    Some(common)
+}
+
+/// Converts a local relative path to a safe `/`-separated remote mirror path.
+fn remote_relative(relative: &Path) -> Result<String, Error> {
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err(remote_error(
+                codes::REMOTE_SESSION,
+                format!(
+                    "the mirror path `{}` is not a plain relative path",
+                    relative.display()
+                ),
+            ));
+        };
+        let text = name.to_str().ok_or_else(|| {
+            remote_error(
+                codes::REMOTE_SESSION,
+                format!(
+                    "the mirror path `{}` is not valid UTF-8",
+                    relative.display()
+                ),
+            )
+        })?;
+        if text.is_empty()
+            || text == "."
+            || text == ".."
+            || !text
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "._-+@%,".contains(character))
+        {
+            return Err(remote_error(
+                codes::REMOTE_SESSION,
+                format!(
+                    "the mirror path component `{text}` is not supported by the remote transport"
+                ),
+            ));
+        }
+        parts.push(text);
+    }
+    Ok(parts.join("/"))
+}
+
 /// Quotes one remote command argument for a POSIX shell.
 #[must_use]
 pub(crate) fn shell_quote(value: &str) -> String {
@@ -781,7 +1078,82 @@ pub(crate) fn ssh_arguments(target: &RemoteTarget, command: &str) -> Vec<String>
     ]
 }
 
-/// Output of one non-interactive SSH command.
+/// An OpenSSH local port-forward to a remote loopback debug socket.
+pub(crate) struct SshTunnel {
+    child: Child,
+    local_endpoint: String,
+}
+
+impl SshTunnel {
+    /// Returns the local loopback address the tunnel forwards.
+    #[must_use]
+    pub(crate) fn local_endpoint(&self) -> &str {
+        &self.local_endpoint
+    }
+}
+
+impl Drop for SshTunnel {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+/// Returns the `ssh` argument vector for one local port forward.
+#[must_use]
+pub(crate) fn ssh_tunnel_arguments(target: &RemoteTarget, forward: &str) -> Vec<String> {
+    vec![
+        "-N".into(),
+        "-T".into(),
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=yes".into(),
+        "-o".into(),
+        "ConnectTimeout=10".into(),
+        "-o".into(),
+        "ExitOnForwardFailure=yes".into(),
+        "-o".into(),
+        "ServerAliveInterval=15".into(),
+        "-o".into(),
+        "ServerAliveCountMax=3".into(),
+        "-o".into(),
+        "LogLevel=ERROR".into(),
+        "-L".into(),
+        forward.to_owned(),
+        "--".into(),
+        target.spelling().to_owned(),
+    ]
+}
+
+/// Validates a remote debug endpoint and returns its port.
+///
+/// The remote endpoint must be a loopback socket address (`127.0.0.1:port`
+/// or `[::1]:port`); an endpoint on another interface is refused so the
+/// tunnel never forwards a network-exposed listener.
+///
+/// # Errors
+///
+/// Returns `STC-E-REMOTE-007` for a non-loopback or malformed endpoint.
+pub(crate) fn parse_loopback_endpoint(endpoint: &str) -> Result<std::net::SocketAddr, Error> {
+    let address: std::net::SocketAddr = endpoint.parse().map_err(|_| {
+        remote_error(
+            codes::REMOTE_UNSUPPORTED,
+            format!("the remote debug endpoint `{endpoint}` is not a socket address"),
+        )
+    })?;
+    if !address.ip().is_loopback() {
+        return Err(remote_error(
+            codes::REMOTE_UNSUPPORTED,
+            format!(
+                "the remote debug endpoint `{endpoint}` is not loopback; refusing to forward it"
+            ),
+        ));
+    }
+    Ok(address)
+}
 #[derive(Clone, Debug)]
 pub(crate) struct SshOutput {
     /// Process exit code, or `None` when terminated by a signal.
@@ -804,6 +1176,7 @@ impl SshOutput {
 #[derive(Clone, Debug)]
 pub(crate) struct SshRunner {
     program: String,
+    sftp_program: String,
 }
 
 impl Default for SshRunner {
@@ -816,8 +1189,19 @@ impl SshRunner {
     /// Creates a runner for an alternate `ssh` program (tests use a fake).
     #[must_use]
     pub(crate) fn new(program: impl Into<String>) -> Self {
+        let program = program.into();
+        let sibling = |name: &str| {
+            Path::new(&program)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map_or_else(
+                    || name.to_owned(),
+                    |parent| parent.join(name).to_string_lossy().into_owned(),
+                )
+        };
         Self {
-            program: program.into(),
+            sftp_program: sibling("sftp"),
+            program,
         }
     }
 
@@ -862,6 +1246,117 @@ impl SshRunner {
         })
     }
 
+    /// Runs one remote command with a byte payload on standard input.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-REMOTE-001` when SSH cannot start, the payload cannot be
+    /// sent, or the command does not finish within `timeout`, or
+    /// `STC-E-REMOTE-002` for an invalid command.
+    pub(crate) fn run_with_stdin(
+        &self,
+        target: &RemoteTarget,
+        argv: &[String],
+        input: &[u8],
+        timeout: Duration,
+    ) -> Result<SshOutput, Error> {
+        let command = remote_command(argv)?;
+        let mut child = Command::new(&self.program)
+            .args(ssh_arguments(target, &command))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                remote_error(
+                    codes::REMOTE_TRANSPORT,
+                    format!(
+                        "cannot start the SSH client `{}` for `{}`: {error}",
+                        self.program,
+                        target.spelling()
+                    ),
+                )
+            })?;
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(error) = stdin.write_all(input)
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(remote_error(
+                codes::REMOTE_TRANSPORT,
+                format!(
+                    "cannot send input to the remote command on `{}`: {error}",
+                    target.spelling()
+                ),
+            ));
+        }
+        let captured = wait_with_timeout(&mut child, timeout)?;
+        Ok(SshOutput {
+            status: captured.status,
+            stdout: String::from_utf8_lossy(&captured.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&captured.stderr).into_owned(),
+        })
+    }
+
+    /// Runs one SFTP batch (`-b -`) against the target.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-REMOTE-001` when SFTP cannot start, the batch cannot be
+    /// sent, or the batch does not finish within `timeout`.
+    pub(crate) fn sftp_batch(
+        &self,
+        target: &RemoteTarget,
+        batch: &str,
+        timeout: Duration,
+    ) -> Result<SshOutput, Error> {
+        let mut child = Command::new(&self.sftp_program)
+            .args([
+                "-q",
+                "-b",
+                "-",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "--",
+            ])
+            .arg(target.spelling())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                remote_error(
+                    codes::REMOTE_TRANSPORT,
+                    format!(
+                        "cannot start the SFTP client `{}` for `{}`: {error}",
+                        self.sftp_program,
+                        target.spelling()
+                    ),
+                )
+            })?;
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(error) = stdin.write_all(batch.as_bytes())
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(remote_error(
+                codes::REMOTE_TRANSPORT,
+                format!(
+                    "cannot send the SFTP batch to `{}`: {error}",
+                    target.spelling()
+                ),
+            ));
+        }
+        let captured = wait_with_timeout(&mut child, timeout)?;
+        Ok(SshOutput {
+            status: captured.status,
+            stdout: String::from_utf8_lossy(&captured.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&captured.stderr).into_owned(),
+        })
+    }
+
     /// Returns the remote login home directory as an absolute path.
     ///
     /// # Errors
@@ -885,6 +1380,96 @@ impl SshRunner {
             ));
         }
         RemotePath::parse_absolute(output.stdout.trim())
+    }
+
+    /// Opens an OpenSSH local port-forward to a remote loopback debug socket.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-REMOTE-007` for a non-loopback endpoint and
+    /// `STC-E-REMOTE-001` when the tunnel cannot be established.
+    pub(crate) fn open_tunnel(
+        &self,
+        target: &RemoteTarget,
+        remote_endpoint: &str,
+    ) -> Result<SshTunnel, Error> {
+        let address = parse_loopback_endpoint(remote_endpoint)?;
+        let remote_host = match address.ip() {
+            std::net::IpAddr::V4(ip) => ip.to_string(),
+            std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+        };
+        for attempt in 0..3 {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+                remote_error(
+                    codes::REMOTE_TRANSPORT,
+                    format!("cannot reserve a local tunnel port: {error}"),
+                )
+            })?;
+            let local_port = listener
+                .local_addr()
+                .map_err(|error| {
+                    remote_error(
+                        codes::REMOTE_TRANSPORT,
+                        format!("cannot read the local tunnel port: {error}"),
+                    )
+                })?
+                .port();
+            drop(listener);
+            let forward = format!("127.0.0.1:{local_port}:{remote_host}:{}", address.port());
+            let mut child = Command::new(&self.program)
+                .args(ssh_tunnel_arguments(target, &forward))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|error| {
+                    remote_error(
+                        codes::REMOTE_TRANSPORT,
+                        format!(
+                            "cannot start the SSH tunnel client `{}`: {error}",
+                            self.program
+                        ),
+                    )
+                })?;
+            let deadline = Instant::now() + TUNNEL_DEADLINE;
+            let mut ready = false;
+            while Instant::now() < deadline {
+                if let Ok(Some(status)) = child.try_wait() {
+                    return Err(remote_error(
+                        codes::REMOTE_TRANSPORT,
+                        format!(
+                            "the SSH tunnel to `{}` exited before it was ready (exit code {})",
+                            target.spelling(),
+                            status.code().unwrap_or(1)
+                        ),
+                    ));
+                }
+                if std::net::TcpStream::connect(("127.0.0.1", local_port)).is_ok() {
+                    ready = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if ready {
+                return Ok(SshTunnel {
+                    child,
+                    local_endpoint: format!("127.0.0.1:{local_port}"),
+                });
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            if attempt == 2 {
+                break;
+            }
+        }
+        Err(remote_error(
+            codes::REMOTE_TRANSPORT,
+            format!(
+                "cannot open an SSH tunnel to `{}` within {} seconds",
+                target.spelling(),
+                TUNNEL_DEADLINE.as_secs()
+            ),
+        ))
     }
 
     /// Reads a user-only remote file, rejecting non-private files.
@@ -1069,6 +1654,7 @@ mod tests {
             debug_endpoint_file: path("/home/r2k/stc-wl12/stc-debug.endpoint"),
             control_endpoint: path("/home/r2k/stc-wl12/stc-control.sock"),
             control_nonce_file: path("/home/r2k/stc-wl12/stc-control.nonce"),
+            start_gate: Some(path("/home/r2k/stc-wl12/stc-start.gate")),
             build_id: format!("0x{}", "11".repeat(16)),
             generation: 1,
             source_fingerprint: format!("0x{}", "22".repeat(32)),
@@ -1306,8 +1892,132 @@ mod tests {
         for text in ["", "-stc", "a b", "stc;reboot"] {
             assert!(RemoteProgram::parse(text).is_err(), "{text}");
         }
+        let home = path("/home/r2k");
+        assert_eq!(
+            RemoteProgram::parse("~/stc-wl12/bin/stc")
+                .expect("home-relative")
+                .resolve_home(&home)
+                .expect("resolved")
+                .as_str(),
+            "/home/r2k/stc-wl12/bin/stc"
+        );
+        assert!(path("/home/r2k/stc-wl12/src").is_shell_safe());
+        assert!(!path("/home/r2k/stc wl12/src").is_shell_safe());
     }
 
+    #[test]
+    fn common_ancestor_preserves_relative_package_layout() {
+        let common = common_ancestor(&[
+            Path::new("/workspace/app"),
+            Path::new("/workspace/lib"),
+            Path::new("/workspace/app/nested"),
+        ])
+        .expect("common");
+        assert_eq!(common, Path::new("/workspace"));
+        assert_eq!(
+            common_ancestor(&[Path::new("/workspace/app")]),
+            Some(std::path::PathBuf::from("/workspace/app"))
+        );
+        assert_eq!(
+            remote_relative(Path::new("app/src/main.st")).expect("relative"),
+            "app/src/main.st"
+        );
+        assert!(remote_relative(Path::new("../escape")).is_err());
+        assert!(remote_relative(Path::new("src/a b.st")).is_err());
+    }
+
+    #[test]
+    fn project_sync_includes_graph_files_only() {
+        let directory = temp_project("sync-single");
+        std::fs::create_dir_all(directory.join("target/debug")).expect("target");
+        std::fs::write(directory.join("target/debug/ignored.o"), b"ignored").expect("ignored");
+        std::fs::write(directory.join("stc.renames.toml"), b"").expect("renames");
+        let sync = project_sync_files(&directory.join("stc.toml")).expect("sync");
+        let relative = sync
+            .files
+            .iter()
+            .map(|file| file.relative.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            relative,
+            vec!["src/main.st", "stc.renames.toml", "stc.toml"]
+        );
+        assert_eq!(sync.root_manifest, "stc.toml");
+        assert!(
+            sync.files
+                .iter()
+                .all(|file| !file.relative.contains("target/"))
+        );
+        let fingerprint =
+            local_source_fingerprint(&directory.join("stc.toml")).expect("fingerprint");
+        assert_eq!(sync.fingerprint, fingerprint);
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    #[test]
+    fn project_sync_mirrors_dependency_packages_by_relative_layout() {
+        let workspace = temp_dir("sync-workspace");
+        let app = workspace.join("app");
+        let lib = workspace.join("lib");
+        for directory in [app.join("src"), lib.join("src")] {
+            std::fs::create_dir_all(directory).expect("package");
+        }
+        std::fs::write(
+            app.join("stc.toml"),
+            "schema = 1\n\n[package]\nname = \"app\"\nversion = \"0.1.0\"\n\
+             language = \"stc-2013-oop-utf8-v1\"\n\n[project]\nsources = [\"src/**/*.st\"]\n\
+             \n[dependencies]\nlib = { path = \"../lib\" }\n",
+        )
+        .expect("app manifest");
+        std::fs::write(app.join("src/main.st"), "PROGRAM Main\n  ;\nEND_PROGRAM\n")
+            .expect("app source");
+        std::fs::write(
+            lib.join("stc.toml"),
+            "schema = 1\n\n[package]\nname = \"lib\"\nversion = \"0.1.0\"\n\
+             language = \"stc-2013-oop-utf8-v1\"\n\n[project]\nsources = [\"src/**/*.st\"]\n",
+        )
+        .expect("lib manifest");
+        std::fs::write(
+            lib.join("src/lib.st"),
+            "FUNCTION Lib : INT\n  Lib := 1;\nEND_FUNCTION\n",
+        )
+        .expect("lib source");
+        stc_manifest::load_project(app.join("stc.toml"), &stc_manifest::LoadOptions::default())
+            .expect("write lockfile");
+        let sync = project_sync_files(&app.join("stc.toml")).expect("sync");
+        let relative = sync
+            .files
+            .iter()
+            .map(|file| file.relative.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            relative,
+            vec![
+                "app/src/main.st",
+                "app/stc.lock",
+                "app/stc.toml",
+                "lib/src/lib.st",
+                "lib/stc.toml",
+            ]
+        );
+        assert_eq!(sync.root_manifest, "app/stc.toml");
+        assert!(sync.files.iter().all(|file| file.local.is_file()));
+        std::fs::remove_dir_all(&workspace).expect("clean up");
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "stc-remote-{}-{name}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("create temp directory");
+        directory
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn session_descriptor_rejects_malformed_json_and_wrong_protocol() {
         assert!(RemoteSession::parse("not json").is_err());

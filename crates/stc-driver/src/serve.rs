@@ -49,6 +49,7 @@ pub(crate) fn run(invocation: &Invocation, reporter: &mut Reporter, log: Log) ->
         ServeAction::Start => start(invocation, reporter, log),
         ServeAction::Status => status(invocation, reporter),
         ServeAction::Deploy => deploy(invocation, reporter),
+        ServeAction::Release => release(invocation, reporter),
         ServeAction::Stop => stop(invocation, reporter),
     }
 }
@@ -95,6 +96,13 @@ fn start(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
         }
     };
     let nonce_path = work_dir.join(DEFAULT_NONCE_FILE);
+    let start_gate = invocation
+        .serve
+        .start_paused
+        .then(|| work_dir.join("stc-start.gate"));
+    if let Some(gate) = &start_gate {
+        let _ = fs::remove_file(gate);
+    }
     for (label, path) in [
         ("session", &session_path),
         ("debug endpoint", &debug_endpoint),
@@ -124,6 +132,25 @@ fn start(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
             ),
         );
         return 2;
+    }
+    if let Err(message) = crate::debug::prepare_debug_endpoint(&debug_endpoint) {
+        reporter.plain(codes::DEBUG_TRANSPORT, Severity::Error, &message);
+        return 2;
+    }
+    match fs::remove_file(&control_endpoint) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            reporter.plain(
+                codes::DEBUG_TRANSPORT,
+                Severity::Error,
+                &format!(
+                    "cannot remove the stale control endpoint `{}`: {error}",
+                    control_endpoint.display()
+                ),
+            );
+            return 2;
+        }
     }
 
     let build = match build(invocation, reporter, log) {
@@ -182,6 +209,10 @@ fn start(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
     args.push(control_endpoint.to_string_lossy().into_owned());
     args.push("--control-nonce-file".to_owned());
     args.push(nonce_path.to_string_lossy().into_owned());
+    if let Some(gate) = &start_gate {
+        args.push("--start-gate".to_owned());
+        args.push(gate.to_string_lossy().into_owned());
+    }
     let mut child = match Command::new(&build.launcher)
         .args(&args)
         .stdin(Stdio::null())
@@ -222,6 +253,7 @@ fn start(invocation: &Invocation, reporter: &mut Reporter, log: Log) -> u8 {
         &debug_endpoint,
         &control_endpoint,
         &nonce_path,
+        start_gate.as_deref(),
         &endpoint,
         &source_fingerprint,
         child.id(),
@@ -334,6 +366,7 @@ fn remote_session(
     debug_endpoint: &Path,
     control_endpoint: &Path,
     nonce_path: &Path,
+    start_gate: Option<&Path>,
     endpoint: &DebugEndpointFile,
     source_fingerprint: &str,
     pid: u32,
@@ -350,6 +383,7 @@ fn remote_session(
         debug_endpoint_file: path(debug_endpoint)?,
         control_endpoint: path(control_endpoint)?,
         control_nonce_file: path(nonce_path)?,
+        start_gate: start_gate.map(path).transpose()?,
         build_id: endpoint.build_id.clone(),
         generation: endpoint.generation,
         source_fingerprint: source_fingerprint.to_owned(),
@@ -496,6 +530,31 @@ fn deploy(invocation: &Invocation, reporter: &mut Reporter) -> u8 {
     }
 }
 
+fn release(invocation: &Invocation, reporter: &mut Reporter) -> u8 {
+    let session = match load_session_descriptor(invocation) {
+        Ok(session) => session,
+        Err(message) => {
+            reporter.plain(codes::REMOTE_SESSION, Severity::Error, &message);
+            return 2;
+        }
+    };
+    let Some(gate) = session.start_gate.as_ref() else {
+        reporter.plain(
+            codes::REMOTE_SESSION,
+            Severity::Error,
+            "the serve session is not start-paused",
+        );
+        return 2;
+    };
+    match write_private_file(Path::new(gate.as_str()), b"start\n") {
+        Ok(()) => 0,
+        Err(message) => {
+            reporter.plain(codes::REMOTE_SESSION, Severity::Error, &message);
+            2
+        }
+    }
+}
+
 fn stop(invocation: &Invocation, reporter: &mut Reporter) -> u8 {
     let (session, nonce) = match load_session(invocation) {
         Ok(session) => session,
@@ -529,6 +588,12 @@ fn stop(invocation: &Invocation, reporter: &mut Reporter) -> u8 {
 }
 
 fn load_session(invocation: &Invocation) -> Result<(RemoteSession, String), String> {
+    let session = load_session_descriptor(invocation)?;
+    let nonce = read_private_file(Path::new(session.control_nonce_file.as_str()))?;
+    Ok((session, nonce))
+}
+
+fn load_session_descriptor(invocation: &Invocation) -> Result<RemoteSession, String> {
     let work_dir = resolve_work_dir(invocation)?;
     let session_path = output_path(
         &work_dir,
@@ -541,9 +606,7 @@ fn load_session(invocation: &Invocation) -> Result<(RemoteSession, String), Stri
             session_path.display()
         )
     })?;
-    let session = RemoteSession::parse(&text).map_err(|error| error.to_string())?;
-    let nonce = read_private_file(Path::new(session.control_nonce_file.as_str()))?;
-    Ok((session, nonce))
+    RemoteSession::parse(&text).map_err(|error| error.to_string())
 }
 
 fn resolve_work_dir(invocation: &Invocation) -> Result<PathBuf, String> {

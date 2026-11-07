@@ -187,6 +187,7 @@ fn serve_status_and_stop_round_trip() {
             control_endpoint.to_str().unwrap(),
             "--session",
             session.to_str().unwrap(),
+            "--start-paused",
             "--message-format",
             "json",
         ])
@@ -236,6 +237,22 @@ fn serve_status_and_stop_round_trip() {
     assert!(
         Path::new(descriptor["control_nonce_file"].as_str().expect("nonce")).is_file(),
         "{descriptor}"
+    );
+    let gate = descriptor["start_gate"].as_str().expect("start gate");
+    assert!(
+        Path::new(gate).is_file(),
+        "the start gate exists: {descriptor}"
+    );
+
+    let release = Command::new(stc())
+        .args(["serve", "release", "--work-dir", work.to_str().unwrap()])
+        .output()
+        .expect("run release");
+    assert!(
+        release.status.success(),
+        "release failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&release.stdout),
+        String::from_utf8_lossy(&release.stderr)
     );
 
     let status = Command::new(stc())

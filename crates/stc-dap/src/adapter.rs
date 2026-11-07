@@ -1862,7 +1862,7 @@ impl<W: Write, L: Launcher> Adapter<'_, W, L> {
         self.stop_id = None;
         self.frames.clear();
         self.variables.clear();
-        let launched = session.host.is_some();
+        let launched = session.host.as_ref().is_some_and(|host| !host.attached());
         let _ = session.client.call_messages("session.stop", got_object([]));
         let mut exit_code = exit_code;
         if let Some(mut host) = session.host.take() {

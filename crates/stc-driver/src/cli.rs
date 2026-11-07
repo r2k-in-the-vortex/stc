@@ -105,6 +105,8 @@ pub(crate) enum ServeAction {
     Status,
     /// Deploy a module/manifest pair through the control channel.
     Deploy,
+    /// Release a launch-paused serve host.
+    Release,
     /// Stop the running session.
     Stop,
 }
@@ -122,6 +124,8 @@ pub(crate) struct ServeOptions {
     pub(crate) control_endpoint: Option<String>,
     /// Start from existing artifacts without building.
     pub(crate) no_build: bool,
+    /// Start paused and wait for `stc serve release`.
+    pub(crate) start_paused: bool,
     /// Deploy module path.
     pub(crate) deploy_module: Option<String>,
     /// Deploy GOT manifest path.
@@ -154,6 +158,16 @@ pub(crate) struct DebugOptions {
     pub(crate) server: bool,
     /// `stc run --debug-endpoint <path>`.
     pub(crate) server_endpoint: Option<String>,
+    /// SSH destination for a remote `stc debug` session (`user@host`).
+    pub(crate) remote: Option<String>,
+    /// Remote work directory.
+    pub(crate) remote_dir: Option<String>,
+    /// Remote `stc` program or path.
+    pub(crate) remote_stc: Option<String>,
+    /// Attach-time deployment choice.
+    pub(crate) remote_deploy: Option<String>,
+    /// Remote session descriptor.
+    pub(crate) remote_session: Option<String>,
 }
 
 /// A parsed invocation.
@@ -410,6 +424,36 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             }
             other if other.starts_with("--attach=") => {
                 debug.attach = Some(other["--attach=".len()..].to_owned());
+            }
+            "--remote" => {
+                debug.remote = Some(next_value(args, &mut index, "--remote")?);
+            }
+            other if other.starts_with("--remote=") => {
+                debug.remote = Some(other["--remote=".len()..].to_owned());
+            }
+            "--remote-dir" => {
+                debug.remote_dir = Some(next_value(args, &mut index, "--remote-dir")?);
+            }
+            other if other.starts_with("--remote-dir=") => {
+                debug.remote_dir = Some(other["--remote-dir=".len()..].to_owned());
+            }
+            "--remote-stc" => {
+                debug.remote_stc = Some(next_value(args, &mut index, "--remote-stc")?);
+            }
+            other if other.starts_with("--remote-stc=") => {
+                debug.remote_stc = Some(other["--remote-stc=".len()..].to_owned());
+            }
+            "--remote-deploy" => {
+                debug.remote_deploy = Some(next_value(args, &mut index, "--remote-deploy")?);
+            }
+            other if other.starts_with("--remote-deploy=") => {
+                debug.remote_deploy = Some(other["--remote-deploy=".len()..].to_owned());
+            }
+            "--remote-session" => {
+                debug.remote_session = Some(next_value(args, &mut index, "--remote-session")?);
+            }
+            other if other.starts_with("--remote-session=") => {
+                debug.remote_session = Some(other["--remote-session=".len()..].to_owned());
             }
             "--endpoint" => {
                 debug.endpoint = Some(next_value(args, &mut index, "--endpoint")?);
@@ -854,6 +898,10 @@ fn parse_serve(args: &[String], mut index: usize) -> Result<Option<Invocation>, 
                 serve.action = ServeAction::Deploy;
                 index += 1;
             }
+            "release" => {
+                serve.action = ServeAction::Release;
+                index += 1;
+            }
             "stop" => {
                 serve.action = ServeAction::Stop;
                 index += 1;
@@ -1037,6 +1085,7 @@ fn parse_serve(args: &[String], mut index: usize) -> Result<Option<Invocation>, 
                 serve.control_endpoint = Some(other["--control-endpoint=".len()..].to_owned());
             }
             "--no-build" => serve.no_build = true,
+            "--start-paused" => serve.start_paused = true,
             "--module" => serve.deploy_module = Some(next_value(args, &mut index, "--module")?),
             other if other.starts_with("--module=") => {
                 serve.deploy_module = Some(other["--module=".len()..].to_owned());
@@ -1075,9 +1124,9 @@ fn parse_serve(args: &[String], mut index: usize) -> Result<Option<Invocation>, 
     }
 
     if serve.action != ServeAction::Start {
-        if operation_option || serve.no_build {
+        if operation_option || serve.no_build || serve.start_paused {
             return Err(
-                "`stc serve status/deploy/stop` does not accept build, run, or debug options"
+                "`stc serve status/deploy/release/stop` does not accept build, run, or debug options"
                     .into(),
             );
         }
@@ -1213,6 +1262,31 @@ fn validate(
         || debug.batch.is_some()
         || !debug.breaks.is_empty()
         || !debug.watches.is_empty();
+    let debug_remote = debug.remote.is_some()
+        || debug.remote_dir.is_some()
+        || debug.remote_stc.is_some()
+        || debug.remote_deploy.is_some()
+        || debug.remote_session.is_some();
+    if debug_remote && debug.remote.is_none() {
+        return Err(
+            "`--remote-dir`, `--remote-stc`, `--remote-deploy`, and `--remote-session` require \
+             `--remote <user@host>`"
+                .into(),
+        );
+    }
+    if debug_remote && command != Command::Debug {
+        return Err("`--remote` is only valid with `stc debug`".into());
+    }
+    if debug.remote.is_some() && debug.endpoint.is_some() {
+        return Err("`--remote` cannot be combined with a local `--endpoint`".into());
+    }
+    if debug.remote.is_some()
+        && debug
+            .protocol
+            .is_some_and(|protocol| protocol != DebugProtocol::Socket)
+    {
+        return Err("remote debugging requires `--debug-protocol socket`".into());
+    }
     let debug_server = debug.server
         || debug.server_endpoint.is_some()
         || debug.protocol.is_some()
@@ -1889,6 +1963,8 @@ fn print_help() {
          \x20         [--batch <file>|-] [--break <file>:<line>[:<column>]]...\n\
          \x20         [--watch <target>]... [--allow-write] [--allow-force]\n\
          \x20         [--session-timeout <duration>] [--debug-protocol pipe|socket]\n\
+         \x20         [--remote <user@host>] [--remote-dir <dir>] [--remote-stc <path>]\n\
+         \x20         [--remote-deploy ask|online|cold|never] [--remote-session <path>]\n\
          \x20         [--debug|--release] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20         [--cycles <n>] [--cycle-time <duration>] [--io null|memory|file|ethercat]\n\
          \x20         [--io-file <path>] [--state-file <path>] [--reset-retain]\n\
@@ -1915,12 +1991,13 @@ fn print_help() {
          \x20 stc rename <old> <new> [--dry-run] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20 stc lsp [--manifest-path <stc.toml|dir>]\n\
          \x20 stc dap [--manifest-path <stc.toml|dir>]\n\
-         \x20 stc serve [status|deploy|stop] [--work-dir <dir>] [--session <path>]\n\
+         \x20 stc serve [start|status|deploy|release|stop] [--work-dir <dir>] [--session <path>]\n\
          \x20         [--control-endpoint <path>] [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20         [--debug|--release] [--out-dir <dir>] [--cycles <n>] [--cycle-time <duration>]\n\
          \x20         [--io null|memory|file|ethercat] [--io-file <path>] [--state-file <path>]\n\
          \x20         [--debug-endpoint <path>] [--allow-write] [--allow-force]\n\
-         \x20         [--session-timeout <duration>] [--module <path>] [--deploy-manifest <path>]\n\
+         \x20         [--session-timeout <duration>] [--start-paused]\n\
+         \x20         [--module <path>] [--deploy-manifest <path>]\n\
          \x20         [--message-format human|json] [-v|-vv] [-q]\n\
          \x20 stc hir-dump <file>... [--output <path>] [--relaxed]\n\
          \x20              [--message-format human|json]\n\
@@ -2102,6 +2179,22 @@ mod tests {
             (&["run", "--attach", "x"], "only valid with `stc debug`"),
             (&["run", "--break", "a.st:1"], "only valid with `stc debug`"),
             (
+                &["check", "--remote", "r2k@ecat"],
+                "only valid with `stc debug`",
+            ),
+            (
+                &["debug", "--remote-dir", "~/stc-wl12"],
+                "require `--remote",
+            ),
+            (
+                &["debug", "--remote", "r2k@ecat", "--endpoint", "x"],
+                "cannot be combined with a local",
+            ),
+            (
+                &["debug", "--remote", "r2k@ecat", "--debug-protocol", "pipe"],
+                "requires `--debug-protocol socket`",
+            ),
+            (
                 &["parse", "--message-format", "bogus"],
                 "unsupported message format",
             ),
@@ -2124,6 +2217,36 @@ mod tests {
                 "{args:?}: expected `{expected}` in `{error}`"
             );
         }
+    }
+
+    #[test]
+    fn remote_debug_options_parse() {
+        let invocation = parse_ok(&[
+            "debug",
+            "--remote",
+            "r2k@ecat",
+            "--remote-dir",
+            "~/stc-wl12",
+            "--remote-stc",
+            "/home/r2k/stc-wl12/bin/stc",
+            "--remote-deploy",
+            "online",
+            "--remote-session",
+            "~/stc-wl12/stc-remote-session.json",
+        ]);
+        assert_eq!(invocation.debug.remote.as_deref(), Some("r2k@ecat"));
+        assert_eq!(invocation.debug.remote_dir.as_deref(), Some("~/stc-wl12"));
+        assert_eq!(
+            invocation.debug.remote_stc.as_deref(),
+            Some("/home/r2k/stc-wl12/bin/stc")
+        );
+        assert_eq!(invocation.debug.remote_deploy.as_deref(), Some("online"));
+        assert_eq!(
+            invocation.debug.remote_session.as_deref(),
+            Some("~/stc-wl12/stc-remote-session.json")
+        );
+        let attach = parse_ok(&["debug", "--remote", "r2k@ecat", "--attach", "ep"]);
+        assert_eq!(attach.debug.remote.as_deref(), Some("r2k@ecat"));
     }
 
     #[test]
@@ -2245,9 +2368,14 @@ mod tests {
         assert_eq!(deploy.serve.deploy_manifest.as_deref(), Some("demo.json"));
         let stop = invocation(&["serve", "stop"]);
         assert_eq!(stop.serve.action, ServeAction::Stop);
+        let release = invocation(&["serve", "release"]);
+        assert_eq!(release.serve.action, ServeAction::Release);
+        let paused = invocation(&["serve", "--start-paused"]);
+        assert!(paused.serve.start_paused);
 
         assert!(parse_error(&["serve", "--debug-protocol", "pipe"]).contains("socket"));
         assert!(parse_error(&["serve", "status", "--cycles", "1"]).contains("does not accept"));
+        assert!(parse_error(&["serve", "release", "--start-paused"]).contains("does not accept"));
         assert!(parse_error(&["serve", "deploy"]).contains("--module"));
         assert!(
             parse_error(&[
