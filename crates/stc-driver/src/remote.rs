@@ -744,11 +744,11 @@ pub(crate) fn remote_command(argv: &[String]) -> Result<String, Error> {
     }
     if argv
         .iter()
-        .any(|argument| argument.chars().any(char::is_control))
+        .any(|argument| argument.chars().any(|character| character == '\0'))
     {
         return Err(remote_error(
             codes::REMOTE_COMMAND,
-            "a remote command argument must not contain control characters",
+            "a remote command argument must not contain a NUL character",
         ));
     }
     Ok(argv
@@ -1201,7 +1201,8 @@ mod tests {
             .expect("command"),
             "stc serve --work-dir '/home/r2k/a b'"
         );
-        assert!(remote_command(&["a\nb".into()]).is_err());
+        assert!(remote_command(&["a\nb".into()]).is_ok());
+        assert!(remote_command(&["a\0b".into()]).is_err());
         assert!(remote_command(&[]).is_err());
     }
 
