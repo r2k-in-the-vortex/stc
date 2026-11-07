@@ -238,7 +238,7 @@ fn attach(bin: &Path, project: &Path, work: &Path, deploy: &str, batch: &Path) -
             "--remote-deploy",
             deploy,
             "--break",
-            "src/main.st:35",
+            "src/main.st:9",
             "--batch",
             batch.to_str().unwrap(),
             "--message-format",
