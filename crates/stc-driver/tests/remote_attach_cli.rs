@@ -353,9 +353,10 @@ fn remote_attach_online_and_cold_deploy() {
         &format!("{SOURCE}\n(* cold attach drift *)\n(* second change *)\n"),
     );
     let cold = attach(&bin, &root.path, &project, &work, "cold", &batch);
+    let cold_log = std::fs::read_to_string(work.join("stc-serve.log")).unwrap_or_default();
     assert!(
         cold.0.success(),
-        "cold attach failed ({:?})\nstdout:\n{}\nstderr:\n{}",
+        "cold attach failed ({:?})\nstdout:\n{}\nstderr:\n{}\nserve log:\n{cold_log}",
         cold.0,
         cold.1,
         cold.2
