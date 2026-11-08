@@ -1,8 +1,11 @@
-//! Operating-system priority for host service threads (D-204).
+//! Operating-system priority for host service threads (D-204) and the RT
+//! metrics writer.
 //!
 //! The cycle thread runs at the process default priority. Control-server and
 //! debug-server accept/handler threads are lowered one class so maintenance
-//! and monitoring work cannot compete with the scan. The policy is advisory:
+//! and monitoring work cannot compete with the scan. The RT metrics writer
+//! uses a checked lowering so an opt-in measurement fails closed instead of
+//! inheriting the cycle thread's scheduling class. The policy is advisory:
 //! container or sandbox restrictions may reject it, and the runtime never
 //! fails a session because priority could not be changed.
 //!
@@ -33,6 +36,22 @@ pub(crate) fn lower_service_priority_checked() -> Result<(), String> {
     unsafe { platform::lower_checked() }
 }
 
+/// Lowers the calling RT metrics writer thread to the host writer class.
+///
+/// Windows uses `THREAD_PRIORITY_BELOW_NORMAL`; macOS sets the standard
+/// thread policy and nice +10. Unlike [`lower_service_priority`], this reports
+/// a failure so an opt-in measurement can fail closed.
+///
+/// # Errors
+///
+/// Returns a message when the priority or policy cannot be changed.
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) fn lower_writer_priority_checked() -> Result<(), String> {
+    // SAFETY: the platform function changes only the calling thread's
+    // scheduling priority.
+    unsafe { platform::lower_writer_checked() }
+}
+
 #[cfg(unix)]
 mod platform {
     use std::os::raw::c_int;
@@ -56,6 +75,23 @@ mod platform {
     #[cfg(target_os = "linux")]
     unsafe extern "C" {
         fn sched_setscheduler(pid: c_int, policy: c_int, param: *const SchedParam) -> c_int;
+    }
+
+    #[cfg(target_os = "macos")]
+    const THREAD_STANDARD_POLICY: u32 = 1;
+    #[cfg(target_os = "macos")]
+    const THREAD_STANDARD_POLICY_COUNT: u32 = 0;
+
+    #[cfg(target_os = "macos")]
+    unsafe extern "C" {
+        fn pthread_self() -> usize;
+        fn pthread_mach_thread_np(thread: usize) -> u32;
+        fn thread_policy_set(
+            thread: u32,
+            policy: u32,
+            policy_info: *const i32,
+            count: u32,
+        ) -> c_int;
     }
 
     pub(super) unsafe fn lower() {
@@ -103,6 +139,38 @@ mod platform {
         }
         Ok(())
     }
+
+    #[cfg(target_os = "macos")]
+    pub(super) unsafe fn lower_writer_checked() -> Result<(), String> {
+        use std::io;
+        // SAFETY: `pthread_self` returns the calling thread.
+        let thread = unsafe { pthread_mach_thread_np(pthread_self()) };
+        // SAFETY: the standard policy has no policy data and count zero.
+        let result = unsafe {
+            thread_policy_set(
+                thread,
+                THREAD_STANDARD_POLICY,
+                std::ptr::null(),
+                THREAD_STANDARD_POLICY_COUNT,
+            )
+        };
+        if result != 0 {
+            return Err(format!(
+                "cannot set the metrics writer thread to the standard policy: \
+                 kern_return {result}"
+            ));
+        }
+        // SAFETY: `PRIO_PROCESS` with id 0 selects the calling process;
+        // lowering the priority is permitted without privilege.
+        let result = unsafe { setpriority(PRIO_PROCESS, 0, SERVICE_NICE) };
+        if result != 0 {
+            return Err(format!(
+                "cannot lower the metrics writer thread priority: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
@@ -122,6 +190,20 @@ mod platform {
         unsafe {
             let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
         }
+    }
+
+    pub(super) unsafe fn lower_writer_checked() -> Result<(), String> {
+        use std::io;
+        // SAFETY: the pseudo-handle names the calling thread, and the
+        // priority class is a documented constant.
+        let result = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
+        if result == 0 {
+            return Err(format!(
+                "cannot lower the metrics writer thread priority: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -148,6 +230,18 @@ mod tests {
         let nice = handle.join().expect("thread");
         assert_eq!(nice, 10, "the service thread runs at nice +10 (D-204)");
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rt_writer_thread_runs_at_the_service_nice_level() {
+        let handle = std::thread::spawn(|| {
+            super::lower_writer_priority_checked().expect("lower the RT writer");
+            // SAFETY: `PRIO_PROCESS` with id 0 reads the calling thread.
+            unsafe { getpriority(0, 0) }
+        });
+        let nice = handle.join().expect("thread");
+        assert_eq!(nice, 10, "the RT writer runs at nice +10");
+    }
 }
 
 #[cfg(all(windows, test))]
@@ -172,6 +266,20 @@ mod tests {
         assert_eq!(
             priority, THREAD_PRIORITY_BELOW_NORMAL,
             "the service thread runs below normal priority (D-204)"
+        );
+    }
+
+    #[test]
+    fn rt_writer_thread_runs_below_normal_priority() {
+        let handle = std::thread::spawn(|| {
+            super::lower_writer_priority_checked().expect("lower the RT writer");
+            // SAFETY: the pseudo-handle names the calling thread.
+            unsafe { GetThreadPriority(GetCurrentThread()) }
+        });
+        let priority = handle.join().expect("thread");
+        assert_eq!(
+            priority, THREAD_PRIORITY_BELOW_NORMAL,
+            "the RT writer runs below normal priority"
         );
     }
 }

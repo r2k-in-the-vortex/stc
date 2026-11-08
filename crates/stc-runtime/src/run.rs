@@ -5,8 +5,9 @@
 //! to the next deadline when a cycle time is configured. A mock clock advances
 //! deterministically without sleeping; the test prelude's `set_cycle_time_ns`
 //! override is consumed at the next latch. When [`RunOptions::rt`] is set, the
-//! loop instead uses absolute `CLOCK_MONOTONIC` deadlines and the cycle thread
-//! runs FIFO; the default relative-sleep path is unchanged.
+//! loop instead uses the host's absolute monotonic clock and opt-in scheduling
+//! facility (Linux `SCHED_FIFO`, Windows time-critical/MMCSS, or macOS Mach
+//! time constraint); the default relative-sleep path is unchanged.
 //!
 //! Exit codes follow CLI-and-Manifest §1.3: `0` normal, `1` runtime failure,
 //! `4` trap, and `130` interrupted (D-154).
@@ -195,15 +196,7 @@ pub(crate) fn run_loop_with_control(
         .and_then(|ns| u64::try_from(ns).ok())
         .map(Duration::from_nanos);
     let rt_priority = options.rt_priority.unwrap_or(90);
-    let rt = if options.rt {
-        Some(
-            RtRuntime::enter(rt_priority, options.rt_cpu)
-                .map_err(|message| RunLoopError::Setup { message })?,
-        )
-    } else {
-        None
-    };
-    let rt_period_ns = if rt.is_some() {
+    let rt_period_ns = if options.rt {
         match options.cycle_time_ns {
             Some(ns) if ns > 0 => u64::try_from(ns).map_err(|_| RunLoopError::Setup {
                 message: "the RT cycle time is out of range".into(),
@@ -216,6 +209,14 @@ pub(crate) fn run_loop_with_control(
         }
     } else {
         0
+    };
+    let rt = if options.rt {
+        Some(
+            RtRuntime::enter(rt_priority, options.rt_cpu, rt_period_ns)
+                .map_err(|message| RunLoopError::Setup { message })?,
+        )
+    } else {
+        None
     };
     let mut metrics = match (&rt, &options.rt_metrics) {
         (Some(rt), Some(path)) => Some(
@@ -234,11 +235,12 @@ pub(crate) fn run_loop_with_control(
     } else {
         None
     };
-    if let Some(metrics) = metrics.as_mut() {
+    if let (Some(metrics), Some(rt)) = (metrics.as_mut(), rt.as_ref()) {
         let header = MetricsHeader {
             build_id: host.status().active_build_id.map(|build| build.to_hex()),
             cycle_time_ns: rt_period_ns,
-            priority: rt_priority,
+            priority: rt.priority(),
+            sched: rt.sched(),
             cpu: options.rt_cpu,
             started_ns: deadline_ns.unwrap_or(0),
         };

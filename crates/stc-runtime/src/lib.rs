@@ -311,6 +311,34 @@ struct LauncherOptions {
     snapshot: Option<PathBuf>,
 }
 
+#[cfg(target_os = "linux")]
+const RT_HELP: &str = "`--rt` sets the cycle thread to `SCHED_FIFO` (default priority 90) \
+                       and uses absolute monotonic sleeps; `--rt-cpu` pins it to one CPU.";
+#[cfg(windows)]
+const RT_HELP: &str = "`--rt` raises the cycle thread to `THREAD_PRIORITY_TIME_CRITICAL` and \
+                       registers it with MMCSS when available; `--rt-cpu`/`--rt-priority` are \
+                       Linux-only.";
+#[cfg(target_os = "macos")]
+const RT_HELP: &str = "`--rt` applies a Mach `THREAD_TIME_CONSTRAINT_POLICY`, falling back to an \
+                       interactive QoS class; `--rt-cpu`/`--rt-priority` are Linux-only.";
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+const RT_HELP: &str = "`--rt` is only supported on Linux, Windows, and macOS.";
+
+/// Prints the launcher's own help, including the host-specific RT text.
+fn print_launcher_help() {
+    println!(
+        "stc runtime launcher\n\
+         \n\
+         Usage: <launcher> [--module <path>] [--cycles <n>] [--cycle-time <duration>]\n\
+         \x20       [--io null|memory|file] [--io-file <path>] [--state-file <path>]\n\
+         \x20       [--reset-retain] [--no-retain] [--mock-clock <duration>] [--status]\n\
+         \x20       [--rt] [--rt-priority <1-99>] [--rt-cpu <0-63>]\n\
+         \x20       [--rt-metrics <path>]\n\
+         \n\
+         {RT_HELP}"
+    );
+}
+
 fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     let mut run = RunOptions::default();
     let mut module = None;
@@ -372,17 +400,29 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
             }
             "--rt" => run.rt = true,
             "--rt-priority" => {
+                if !cfg!(target_os = "linux") {
+                    return Err("`--rt-priority` is only supported on Linux".into());
+                }
                 let text = value("--rt-priority")?;
                 run.rt_priority = Some(parse_rt_priority(&text)?);
             }
             other if other.starts_with("--rt-priority=") => {
+                if !cfg!(target_os = "linux") {
+                    return Err("`--rt-priority` is only supported on Linux".into());
+                }
                 run.rt_priority = Some(parse_rt_priority(&other["--rt-priority=".len()..])?);
             }
             "--rt-cpu" => {
+                if !cfg!(target_os = "linux") {
+                    return Err("`--rt-cpu` is only supported on Linux".into());
+                }
                 let text = value("--rt-cpu")?;
                 run.rt_cpu = Some(parse_rt_cpu(&text)?);
             }
             other if other.starts_with("--rt-cpu=") => {
+                if !cfg!(target_os = "linux") {
+                    return Err("`--rt-cpu` is only supported on Linux".into());
+                }
                 run.rt_cpu = Some(parse_rt_cpu(&other["--rt-cpu=".len()..])?);
             }
             "--rt-metrics" => {
@@ -593,6 +633,16 @@ fn read_control_nonce_file(path: &Path) -> Result<String, String> {
 
 fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_char) -> i32 {
     let args = collect_args(argc, argv);
+    // Help is handled before module resolution so a generated launcher can
+    // print its options without a module path or a loadable module.
+    if args
+        .iter()
+        .skip(1)
+        .any(|argument| argument == "--help" || argument == "-h")
+    {
+        print_launcher_help();
+        return 0;
+    }
     let options = match parse_launcher_args(&args) {
         Ok(options) => options,
         Err(message) => {
@@ -1920,6 +1970,19 @@ mod tests {
                 "--rt",
                 "--cycle-time",
                 "1ms",
+                "--rt-metrics",
+                "metrics.jsonl",
+            ]))
+            .is_ok(),
+            "the portable RT option set is accepted"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            parse_launcher_args(&args(&[
+                "stc",
+                "--rt",
+                "--cycle-time",
+                "1ms",
                 "--rt-priority",
                 "90",
                 "--rt-cpu",
@@ -1928,12 +1991,29 @@ mod tests {
                 "metrics.jsonl",
             ]))
             .is_ok(),
-            "the full RT option set is accepted"
+            "the full RT option set is accepted on Linux"
         );
+        #[cfg(not(target_os = "linux"))]
+        for option in [
+            ["--rt-priority", "90"].as_slice(),
+            ["--rt-cpu", "3"].as_slice(),
+        ] {
+            let mut case = vec!["stc", "--rt", "--cycle-time", "1ms"];
+            case.extend_from_slice(option);
+            let error = match parse_launcher_args(&args(&case)) {
+                Ok(_) => panic!("the Linux-only option must fail"),
+                Err(error) => error,
+            };
+            assert!(
+                error.contains("only supported on Linux"),
+                "the error names the Linux-only option: {error}"
+            );
+        }
         assert!(
             parse_launcher_args(&args(&["stc", "--rt"])).is_err(),
             "RT requires a cycle time"
         );
+        #[cfg(target_os = "linux")]
         assert!(
             parse_launcher_args(&args(&["stc", "--rt-priority", "90"])).is_err(),
             "RT sub-options require --rt"
@@ -2011,10 +2091,6 @@ mod tests {
             "--reset-retain",
             "--no-retain",
             "--rt",
-            "--rt-priority",
-            "10",
-            "--rt-cpu",
-            "2",
             "--rt-metrics",
             "metrics.jsonl",
             "--status",
@@ -2052,12 +2128,26 @@ mod tests {
         assert!(options.run.reset_retain);
         assert!(options.run.no_retain);
         assert!(options.run.rt);
-        assert_eq!(options.run.rt_priority, Some(10));
-        assert_eq!(options.run.rt_cpu, Some(2));
         assert_eq!(
             options.run.rt_metrics.as_deref(),
             Some(Path::new("metrics.jsonl"))
         );
+        #[cfg(target_os = "linux")]
+        {
+            let linux = parse_launcher_args(&args(&[
+                "app",
+                "--rt",
+                "--cycle-time",
+                "1ms",
+                "--rt-priority",
+                "10",
+                "--rt-cpu",
+                "2",
+            ]))
+            .expect("Linux RT options");
+            assert_eq!(linux.run.rt_priority, Some(10));
+            assert_eq!(linux.run.rt_cpu, Some(2));
+        }
         assert!(options.run.status);
         assert_eq!(options.snapshot.as_deref(), Some(Path::new("snap.bin")));
         assert_eq!(options.module.as_deref(), Some("module.so"));
@@ -2116,13 +2206,27 @@ mod tests {
             "--rt",
             "--cycle-time",
             "1ms",
-            "--rt-priority=20",
-            "--rt-cpu=3",
             "--rt-metrics=out.jsonl",
         ]))
-        .expect("spaced rt options");
-        assert_eq!(spaced.run.rt_priority, Some(20));
-        assert_eq!(spaced.run.rt_cpu, Some(3));
+        .expect("spaced rt metrics");
+        assert_eq!(
+            spaced.run.rt_metrics.as_deref(),
+            Some(Path::new("out.jsonl"))
+        );
+        #[cfg(target_os = "linux")]
+        {
+            let spaced = parse_launcher_args(&args(&[
+                "app",
+                "--rt",
+                "--cycle-time",
+                "1ms",
+                "--rt-priority=20",
+                "--rt-cpu=3",
+            ]))
+            .expect("spaced Linux rt options");
+            assert_eq!(spaced.run.rt_priority, Some(20));
+            assert_eq!(spaced.run.rt_cpu, Some(3));
+        }
     }
 
     #[test]

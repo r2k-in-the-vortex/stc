@@ -75,11 +75,11 @@ pub(crate) struct RunRequest {
     pub no_retain: bool,
     /// `--mock-clock`; advances without sleeping when present.
     pub mock_clock_ns: Option<u64>,
-    /// `--rt`: opt-in Linux real-time measurement mode.
+    /// `--rt`: opt-in real-time measurement mode (Linux, Windows, macOS).
     pub rt: bool,
-    /// `--rt-priority`.
+    /// `--rt-priority`: Linux only.
     pub rt_priority: Option<u8>,
-    /// `--rt-cpu`.
+    /// `--rt-cpu`: Linux only.
     pub rt_cpu: Option<u32>,
     /// `--rt-metrics`.
     pub rt_metrics: Option<String>,

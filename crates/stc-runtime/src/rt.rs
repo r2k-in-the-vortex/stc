@@ -1,16 +1,20 @@
 //! Opt-in real-time pacing and cycle metrics (R-3).
 //!
-//! This module is active only when `RunOptions::rt` is set and only on Linux.
-//! It sets the calling (cycle) thread to `SCHED_FIFO`, optionally pins it to
-//! one CPU, and provides absolute `CLOCK_MONOTONIC` sleep for the run loop.
-//! The metrics writer emits one JSON header, one record per cycle, and a
-//! summary record as JSONL. A dedicated writer thread at `SCHED_OTHER` (below
-//! normal nice, off the cycle CPU) owns the file and its buffer, so the cycle
-//! thread never blocks on disk I/O.
+//! This module is active only when `RunOptions::rt` is set. On Linux it sets
+//! the calling (cycle) thread to `SCHED_FIFO`, optionally pins it to one CPU,
+//! and provides absolute `CLOCK_MONOTONIC` sleep for the run loop. On Windows
+//! it raises the cycle thread to `THREAD_PRIORITY_TIME_CRITICAL`, registers it
+//! with MMCSS when available, and waits on a high-resolution waitable timer.
+//! On macOS it applies a Mach `THREAD_TIME_CONSTRAINT_POLICY` (falling back to
+//! an interactive QoS class) and uses `mach_wait_until`. The metrics writer
+//! emits one JSON header, one record per cycle, and a summary record as JSONL.
+//! A dedicated writer thread at a lower priority owns the file and its buffer,
+//! so the cycle thread never blocks on disk I/O.
 //!
 //! The mode is measurement instrumentation. It does not change the ST clock,
 //! the generated modules, or the default run loop, which keeps the original
-//! relative sleep path when `--rt` is absent.
+//! relative sleep path when `--rt` is absent. It is advisory and is not a
+//! hard-real-time or safety guarantee.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -30,22 +34,30 @@ const METRICS_QUEUE_CAPACITY: usize = 8192;
 /// The entered RT mode.
 pub(crate) struct RtRuntime {
     background_affinity: Option<u64>,
+    sched: &'static str,
+    priority: u8,
+    state: platform::State,
 }
 
 impl RtRuntime {
-    /// Enters FIFO mode and optionally pins the calling thread.
+    /// Enters the host's opt-in scheduling mode and optionally pins the
+    /// calling thread (Linux only).
     ///
     /// When a cycle CPU is requested, the thread's affinity mask before the
     /// pin is captured without that CPU for the metrics writer thread.
     ///
     /// # Errors
     ///
-    /// Returns a message when the platform is unsupported or the syscall is
-    /// denied. The caller must not continue with an invalid measurement.
-    pub(crate) fn enter(priority: u8, cpu: Option<u32>) -> Result<Self, String> {
-        let background_affinity = platform::enter(priority, cpu)?;
+    /// Returns a message when the platform is unsupported, the facility is
+    /// denied, or a Linux-only option is used on another host. The caller
+    /// must not continue with an invalid measurement.
+    pub(crate) fn enter(priority: u8, cpu: Option<u32>, period_ns: u64) -> Result<Self, String> {
+        let entered = platform::enter(priority, cpu, period_ns)?;
         Ok(Self {
-            background_affinity,
+            background_affinity: entered.background_affinity,
+            sched: entered.sched,
+            priority: entered.priority,
+            state: entered.state,
         })
     }
 
@@ -54,7 +66,20 @@ impl RtRuntime {
         self.background_affinity
     }
 
-    /// Returns the current `CLOCK_MONOTONIC` time in nanoseconds.
+    /// Returns the scheduling facility recorded in the metrics header.
+    pub(crate) fn sched(&self) -> &'static str {
+        self.sched
+    }
+
+    /// Returns the header priority value.
+    ///
+    /// This is the FIFO priority on Linux and zero on hosts where no FIFO
+    /// priority applies; the `sched` field names the actual facility.
+    pub(crate) fn priority(&self) -> u8 {
+        self.priority
+    }
+
+    /// Returns the current monotonic time in nanoseconds.
     ///
     /// # Errors
     ///
@@ -63,22 +88,40 @@ impl RtRuntime {
         platform::now_ns()
     }
 
-    /// Sleeps until an absolute `CLOCK_MONOTONIC` deadline.
+    /// Sleeps until an absolute monotonic deadline.
     ///
     /// # Errors
     ///
-    /// Returns [`SleepError::Interrupted`] on `EINTR`; the caller decides
-    /// whether to retry or stop. Other failures return [`SleepError::Failed`].
+    /// Returns [`SleepError::Interrupted`] when the wait is aborted; the
+    /// caller decides whether to retry or stop. Other failures return
+    /// [`SleepError::Failed`].
     pub(crate) fn sleep_until(&self, deadline_ns: u64) -> Result<(), SleepError> {
-        platform::sleep_until(deadline_ns)
+        platform::sleep_until(&self.state, deadline_ns)
     }
+}
+
+impl Drop for RtRuntime {
+    fn drop(&mut self) {
+        platform::cleanup(&mut self.state);
+    }
+}
+
+/// One platform entry result.
+struct Entered {
+    background_affinity: Option<u64>,
+    sched: &'static str,
+    priority: u8,
+    state: platform::State,
 }
 
 /// Why an absolute sleep did not complete.
 #[derive(Debug)]
 pub(crate) enum SleepError {
-    /// The sleep was interrupted by a signal.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    /// The sleep was interrupted by a signal or an alertable wait.
+    #[cfg_attr(
+        not(any(target_os = "linux", windows, target_os = "macos")),
+        allow(dead_code)
+    )]
     Interrupted,
     /// The sleep failed for another reason.
     Failed(String),
@@ -154,6 +197,9 @@ pub(crate) struct MetricsHeader {
     pub(crate) build_id: Option<String>,
     pub(crate) cycle_time_ns: u64,
     pub(crate) priority: u8,
+    /// Applied scheduling facility: `fifo`, `mmcss`, `time_critical`,
+    /// `time_constraint`, or `qos`.
+    pub(crate) sched: &'static str,
     pub(crate) cpu: Option<u32>,
     pub(crate) started_ns: u64,
 }
@@ -418,8 +464,8 @@ fn format_header(buffer: &mut String, header: &MetricsHeader) {
     }
     let _ = write!(
         buffer,
-        ",\"cycle_time_ns\":{},\"priority\":{},\"cpu\":",
-        header.cycle_time_ns, header.priority
+        ",\"cycle_time_ns\":{},\"priority\":{},\"sched\":\"{}\",\"cpu\":",
+        header.cycle_time_ns, header.priority, header.sched
     );
     match header.cpu {
         Some(cpu) => {
@@ -553,6 +599,9 @@ mod platform {
     const SCHED_FIFO: c_int = 1;
     const EINTR: c_int = 4;
 
+    /// Linux keeps no state beyond the scheduling change.
+    pub(super) struct State;
+
     #[repr(C)]
     struct Timespec {
         tv_sec: i64,
@@ -577,7 +626,11 @@ mod platform {
         fn sched_setaffinity(pid: c_int, cpusetsize: usize, mask: *const u64) -> c_int;
     }
 
-    pub(super) fn enter(priority: u8, cpu: Option<u32>) -> Result<Option<u64>, String> {
+    pub(super) fn enter(
+        priority: u8,
+        cpu: Option<u32>,
+        _period_ns: u64,
+    ) -> Result<super::Entered, String> {
         let pinned = match cpu {
             Some(cpu) => {
                 let Some(mask) = 1_u64.checked_shl(cpu) else {
@@ -636,7 +689,12 @@ mod platform {
                 ));
             }
         }
-        Ok(background_affinity)
+        Ok(super::Entered {
+            background_affinity,
+            sched: "fifo",
+            priority,
+            state: State,
+        })
     }
 
     pub(super) fn background(affinity: Option<u64>) -> Result<(), String> {
@@ -677,7 +735,7 @@ mod platform {
             .ok_or_else(|| "CLOCK_MONOTONIC timestamp overflows u64".to_string())
     }
 
-    pub(super) fn sleep_until(deadline_ns: u64) -> Result<(), super::SleepError> {
+    pub(super) fn sleep_until(_state: &State, deadline_ns: u64) -> Result<(), super::SleepError> {
         let request = Timespec {
             tv_sec: i64::try_from(deadline_ns / 1_000_000_000).map_err(|_| {
                 super::SleepError::Failed("deadline seconds overflow i64".to_string())
@@ -707,12 +765,497 @@ mod platform {
             )))
         }
     }
+
+    pub(super) fn cleanup(_state: &mut State) {}
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
 mod platform {
-    pub(super) fn enter(_priority: u8, _cpu: Option<u32>) -> Result<Option<u64>, String> {
-        Err("--rt is only supported on Linux".into())
+    use std::ffi::c_void;
+    use std::io;
+
+    const THREAD_PRIORITY_TIME_CRITICAL: i32 = 15;
+    const THREAD_PRIORITY_ERROR_RETURN: i32 = 0x7fff_ffff;
+    const CREATE_WAITABLE_TIMER_HIGH_RESOLUTION: u32 = 0x0000_0002;
+    const TIMER_ALL_ACCESS: u32 = 0x001f_0003;
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_IO_COMPLETION: u32 = 0x0000_00c0;
+    const WAIT_FAILED: u32 = 0xffff_ffff;
+    const INFINITE: u32 = 0xffff_ffff;
+    const MMCSS_TASK_NAME: [u16; 6] = [0x41, 0x75, 0x64, 0x69, 0x6f, 0];
+
+    #[link(name = "avrt")]
+    unsafe extern "system" {
+        fn AvSetMmThreadCharacteristicsW(
+            task_name: *const u16,
+            task_index: *mut u32,
+        ) -> *mut c_void;
+        fn AvRevertMmThreadCharacteristics(handle: *mut c_void) -> i32;
+    }
+
+    unsafe extern "system" {
+        fn GetCurrentThread() -> *mut c_void;
+        fn GetThreadPriority(thread: *mut c_void) -> i32;
+        fn SetThreadPriority(thread: *mut c_void, priority: i32) -> i32;
+        fn CreateWaitableTimerExW(
+            attributes: *const c_void,
+            name: *const u16,
+            flags: u32,
+            desired_access: u32,
+        ) -> *mut c_void;
+        fn SetWaitableTimer(
+            timer: *mut c_void,
+            due_time: *const i64,
+            period: i32,
+            completion: *const c_void,
+            argument: *mut c_void,
+            resume: i32,
+        ) -> i32;
+        fn WaitForSingleObjectEx(handle: *mut c_void, milliseconds: u32, alertable: i32) -> u32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+        fn QueryPerformanceCounter(counter: *mut i64) -> i32;
+        fn QueryPerformanceFrequency(frequency: *mut i64) -> i32;
+    }
+
+    /// Windows state captured for `Drop`.
+    pub(super) struct State {
+        previous_priority: i32,
+        mmcss: Option<*mut c_void>,
+        timer: *mut c_void,
+    }
+
+    pub(super) fn enter(
+        _priority: u8,
+        cpu: Option<u32>,
+        _period_ns: u64,
+    ) -> Result<super::Entered, String> {
+        if cpu.is_some() {
+            return Err("`--rt-cpu` is only supported on Linux".into());
+        }
+        // SAFETY: the pseudo-handle names the calling thread.
+        let thread = unsafe { GetCurrentThread() };
+        // SAFETY: the pseudo-handle names the calling thread.
+        let previous_priority = unsafe { GetThreadPriority(thread) };
+        if previous_priority == THREAD_PRIORITY_ERROR_RETURN {
+            return Err(format!(
+                "cannot read the cycle thread priority: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: the pseudo-handle names the calling thread, and the priority
+        // class is a documented constant.
+        let result = unsafe { SetThreadPriority(thread, THREAD_PRIORITY_TIME_CRITICAL) };
+        if result == 0 {
+            return Err(format!(
+                "cannot set the cycle thread to THREAD_PRIORITY_TIME_CRITICAL: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let mut task_index = 0_u32;
+        // SAFETY: the task name is a static NUL-terminated wide string and the
+        // index points to a writable u32.
+        let mmcss =
+            unsafe { AvSetMmThreadCharacteristicsW(MMCSS_TASK_NAME.as_ptr(), &mut task_index) };
+        let (mmcss, sched) = if mmcss.is_null() {
+            eprintln!(
+                "warning: MMCSS registration failed ({}); --rt uses \
+                 THREAD_PRIORITY_TIME_CRITICAL only",
+                io::Error::last_os_error()
+            );
+            (None, "time_critical")
+        } else {
+            (Some(mmcss), "mmcss")
+        };
+        let timer = match create_timer(true) {
+            Ok(timer) => timer,
+            Err(high_resolution_error) => match create_timer(false) {
+                Ok(timer) => timer,
+                Err(error) => {
+                    // The timer is part of the RT setup, so undo the priority
+                    // and MMCSS changes before failing the run.
+                    if let Some(handle) = mmcss {
+                        // SAFETY: `handle` came from
+                        // `AvSetMmThreadCharacteristicsW`.
+                        unsafe {
+                            let _ = AvRevertMmThreadCharacteristics(handle);
+                        }
+                    }
+                    // SAFETY: the pseudo-handle names the calling thread.
+                    unsafe {
+                        let _ = SetThreadPriority(thread, previous_priority);
+                    }
+                    return Err(format!(
+                        "{error} (the high-resolution timer failed: {high_resolution_error})"
+                    ));
+                }
+            },
+        };
+        Ok(super::Entered {
+            background_affinity: None,
+            sched,
+            priority: 0,
+            state: State {
+                previous_priority,
+                mmcss,
+                timer,
+            },
+        })
+    }
+
+    fn create_timer(high_resolution: bool) -> Result<*mut c_void, String> {
+        let flags = if high_resolution {
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+        } else {
+            0
+        };
+        // SAFETY: null attributes and name are accepted; the access mask
+        // requests the rights needed to arm and wait on the timer.
+        let timer = unsafe {
+            CreateWaitableTimerExW(std::ptr::null(), std::ptr::null(), flags, TIMER_ALL_ACCESS)
+        };
+        if timer.is_null() {
+            Err(format!(
+                "cannot create the RT waitable timer: {}",
+                io::Error::last_os_error()
+            ))
+        } else {
+            Ok(timer)
+        }
+    }
+
+    pub(super) fn background(_affinity: Option<u64>) -> Result<(), String> {
+        crate::priority::lower_writer_priority_checked()
+    }
+
+    pub(super) fn now_ns() -> Result<u64, String> {
+        let mut counter = 0_i64;
+        let mut frequency = 0_i64;
+        // SAFETY: both functions write one i64 to the supplied pointer.
+        if unsafe { QueryPerformanceCounter(&mut counter) } == 0 {
+            return Err(format!(
+                "QueryPerformanceCounter failed: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: the function writes one i64 to the supplied pointer.
+        if unsafe { QueryPerformanceFrequency(&mut frequency) } == 0 {
+            return Err(format!(
+                "QueryPerformanceFrequency failed: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let counter = u64::try_from(counter)
+            .map_err(|_| "the performance counter is negative".to_string())?;
+        let frequency = u64::try_from(frequency)
+            .map_err(|_| "the performance counter frequency is not positive".to_string())?;
+        let nanos = u128::from(counter) * 1_000_000_000 / u128::from(frequency);
+        u64::try_from(nanos).map_err(|_| "the performance counter timestamp overflows u64".into())
+    }
+
+    pub(super) fn sleep_until(state: &State, deadline_ns: u64) -> Result<(), super::SleepError> {
+        let now = now_ns().map_err(super::SleepError::Failed)?;
+        let remaining_ns = deadline_ns.saturating_sub(now);
+        // A relative due time is negative and expressed in 100 ns units. Zero
+        // would disarm the timer, so an expired deadline waits one tick.
+        let hundred_ns = remaining_ns.saturating_add(99) / 100;
+        let due = -i64::try_from(hundred_ns).unwrap_or(i64::MAX).max(1);
+        // SAFETY: the timer handle is live and the due time is a valid i64.
+        let result = unsafe {
+            SetWaitableTimer(
+                state.timer,
+                &due,
+                0,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if result == 0 {
+            return Err(super::SleepError::Failed(format!(
+                "cannot arm the RT waitable timer: {}",
+                io::Error::last_os_error()
+            )));
+        }
+        // SAFETY: the timer handle is live; the wait is alertable so an APC
+        // can interrupt it.
+        let result = unsafe { WaitForSingleObjectEx(state.timer, INFINITE, 1) };
+        match result {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_IO_COMPLETION => Err(super::SleepError::Interrupted),
+            WAIT_FAILED => Err(super::SleepError::Failed(format!(
+                "the RT waitable timer wait failed: {}",
+                io::Error::last_os_error()
+            ))),
+            code => Err(super::SleepError::Failed(format!(
+                "the RT waitable timer wait returned unexpected code {code}"
+            ))),
+        }
+    }
+
+    pub(super) fn cleanup(state: &mut State) {
+        if let Some(handle) = state.mmcss.take() {
+            // SAFETY: `handle` came from `AvSetMmThreadCharacteristicsW` and
+            // has not been reverted.
+            unsafe {
+                let _ = AvRevertMmThreadCharacteristics(handle);
+            }
+        }
+        // SAFETY: the pseudo-handle names the calling thread.
+        let result = unsafe { SetThreadPriority(GetCurrentThread(), state.previous_priority) };
+        if result == 0 {
+            eprintln!(
+                "warning: cannot restore the cycle thread priority: {}",
+                io::Error::last_os_error()
+            );
+        }
+        let timer = std::mem::replace(&mut state.timer, std::ptr::null_mut());
+        if !timer.is_null() {
+            // SAFETY: `timer` came from `CreateWaitableTimerExW` and has not
+            // been closed.
+            unsafe {
+                let _ = CloseHandle(timer);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::io;
+    use std::os::raw::c_int;
+
+    const CLOCK_MONOTONIC: c_int = 6;
+    const KERN_SUCCESS: c_int = 0;
+    const KERN_ABORTED: c_int = 14;
+    const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+    const QOS_CLASS_UNSPECIFIED: u32 = 0;
+    const THREAD_STANDARD_POLICY: u32 = 1;
+    const THREAD_STANDARD_POLICY_COUNT: u32 = 0;
+    const THREAD_TIME_CONSTRAINT_POLICY: u32 = 2;
+    const THREAD_TIME_CONSTRAINT_POLICY_COUNT: u32 = 4;
+
+    #[repr(C)]
+    struct Timespec {
+        tv_sec: i64,
+        tv_nsec: i64,
+    }
+
+    #[repr(C)]
+    struct TimebaseInfo {
+        numer: u32,
+        denom: u32,
+    }
+
+    #[repr(C)]
+    struct TimeConstraintPolicy {
+        period: u32,
+        computation: u32,
+        constraint: u32,
+        preemptible: i32,
+    }
+
+    unsafe extern "C" {
+        fn clock_gettime(clockid: c_int, tp: *mut Timespec) -> c_int;
+        fn mach_absolute_time() -> u64;
+        fn mach_timebase_info(info: *mut TimebaseInfo) -> c_int;
+        fn mach_wait_until(deadline: u64) -> c_int;
+        fn pthread_self() -> usize;
+        fn pthread_mach_thread_np(thread: usize) -> u32;
+        fn pthread_get_qos_class_np(
+            thread: usize,
+            qos_class: *mut u32,
+            relative_priority: *mut c_int,
+        ) -> c_int;
+        fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: c_int) -> c_int;
+        fn thread_policy_set(
+            thread: u32,
+            policy: u32,
+            policy_info: *const i32,
+            count: u32,
+        ) -> c_int;
+    }
+
+    /// macOS state captured for `Drop`.
+    pub(super) struct State {
+        captured_qos: u32,
+        captured_relative_priority: c_int,
+    }
+
+    pub(super) fn enter(
+        _priority: u8,
+        cpu: Option<u32>,
+        period_ns: u64,
+    ) -> Result<super::Entered, String> {
+        if cpu.is_some() {
+            return Err("`--rt-cpu` is only supported on Linux".into());
+        }
+        // SAFETY: `pthread_self` returns the calling thread; the out pointers
+        // are writable.
+        let thread = unsafe { pthread_self() };
+        let mut captured_qos = QOS_CLASS_UNSPECIFIED;
+        let mut captured_relative_priority = 0;
+        // SAFETY: the thread is the calling thread and both out pointers are
+        // writable.
+        let result = unsafe {
+            pthread_get_qos_class_np(thread, &mut captured_qos, &mut captured_relative_priority)
+        };
+        if result != 0 {
+            return Err(format!(
+                "cannot read the cycle thread QoS class: error {result}"
+            ));
+        }
+        let info = timebase_info()?;
+        let policy = TimeConstraintPolicy {
+            period: clamp_u32(ns_to_ticks(period_ns.saturating_mul(2), &info)),
+            computation: clamp_u32(ns_to_ticks(period_ns / 2, &info)),
+            constraint: clamp_u32(ns_to_ticks(period_ns, &info)),
+            preemptible: 1,
+        };
+        // SAFETY: the thread port names the calling thread and the policy
+        // struct matches `thread_time_constraint_policy`.
+        let thread_port = unsafe { pthread_mach_thread_np(thread) };
+        // SAFETY: the thread port is valid for the call and the policy struct
+        // is `THREAD_TIME_CONSTRAINT_POLICY_COUNT` integers.
+        let result = unsafe {
+            thread_policy_set(
+                thread_port,
+                THREAD_TIME_CONSTRAINT_POLICY,
+                (&policy as *const TimeConstraintPolicy).cast::<i32>(),
+                THREAD_TIME_CONSTRAINT_POLICY_COUNT,
+            )
+        };
+        let sched = if result == KERN_SUCCESS {
+            "time_constraint"
+        } else {
+            eprintln!(
+                "warning: THREAD_TIME_CONSTRAINT_POLICY was rejected \
+                 (kern_return {result}); --rt falls back to \
+                 QOS_CLASS_USER_INTERACTIVE"
+            );
+            // SAFETY: the call changes only the calling thread's QoS class.
+            let result = unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+            if result != 0 {
+                return Err(format!(
+                    "cannot apply the interactive QoS fallback: error {result}"
+                ));
+            }
+            "qos"
+        };
+        Ok(super::Entered {
+            background_affinity: None,
+            sched,
+            priority: 0,
+            state: State {
+                captured_qos,
+                captured_relative_priority,
+            },
+        })
+    }
+
+    fn timebase_info() -> Result<TimebaseInfo, String> {
+        let mut info = TimebaseInfo { numer: 0, denom: 0 };
+        // SAFETY: the function writes one `mach_timebase_info_data_t`.
+        let result = unsafe { mach_timebase_info(&mut info) };
+        if result != KERN_SUCCESS || info.numer == 0 || info.denom == 0 {
+            return Err(format!("mach_timebase_info failed: kern_return {result}"));
+        }
+        Ok(info)
+    }
+
+    fn ns_to_ticks(ns: u64, info: &TimebaseInfo) -> u64 {
+        let ticks = u128::from(ns) * u128::from(info.denom) / u128::from(info.numer);
+        u64::try_from(ticks).unwrap_or(u64::MAX)
+    }
+
+    fn clamp_u32(value: u64) -> u32 {
+        u32::try_from(value).unwrap_or(u32::MAX).max(1)
+    }
+
+    pub(super) fn background(_affinity: Option<u64>) -> Result<(), String> {
+        crate::priority::lower_writer_priority_checked()
+    }
+
+    pub(super) fn now_ns() -> Result<u64, String> {
+        let mut timespec = Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `CLOCK_MONOTONIC` writes the supplied timespec.
+        let result = unsafe { clock_gettime(CLOCK_MONOTONIC, &mut timespec) };
+        if result != 0 {
+            return Err(format!(
+                "clock_gettime(CLOCK_MONOTONIC) failed: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let seconds = u64::try_from(timespec.tv_sec)
+            .map_err(|_| "CLOCK_MONOTONIC seconds are negative".to_string())?;
+        let nanos = u64::try_from(timespec.tv_nsec)
+            .map_err(|_| "CLOCK_MONOTONIC nanoseconds are negative".to_string())?;
+        seconds
+            .checked_mul(1_000_000_000)
+            .and_then(|value| value.checked_add(nanos))
+            .ok_or_else(|| "CLOCK_MONOTONIC timestamp overflows u64".to_string())
+    }
+
+    pub(super) fn sleep_until(_state: &State, deadline_ns: u64) -> Result<(), super::SleepError> {
+        let now = now_ns().map_err(super::SleepError::Failed)?;
+        let remaining_ns = deadline_ns.saturating_sub(now);
+        let info = timebase_info().map_err(super::SleepError::Failed)?;
+        let ticks = ns_to_ticks(remaining_ns, &info);
+        // SAFETY: `mach_absolute_time` reads the monotonic clock.
+        let deadline = unsafe { mach_absolute_time() }.saturating_add(ticks);
+        // SAFETY: the absolute deadline is in Mach time units.
+        match unsafe { mach_wait_until(deadline) } {
+            KERN_SUCCESS => Ok(()),
+            KERN_ABORTED => Err(super::SleepError::Interrupted),
+            code => Err(super::SleepError::Failed(format!(
+                "mach_wait_until failed with kern_return {code}"
+            ))),
+        }
+    }
+
+    pub(super) fn cleanup(state: &mut State) {
+        // SAFETY: `pthread_self` returns the calling thread.
+        let thread = unsafe { pthread_self() };
+        // SAFETY: the thread port names the calling thread; the standard
+        // policy has no policy data.
+        let thread_port = unsafe { pthread_mach_thread_np(thread) };
+        // SAFETY: the standard policy has no policy data and count zero.
+        let result = unsafe {
+            thread_policy_set(
+                thread_port,
+                THREAD_STANDARD_POLICY,
+                std::ptr::null(),
+                THREAD_STANDARD_POLICY_COUNT,
+            )
+        };
+        if result != KERN_SUCCESS {
+            eprintln!("warning: cannot restore the standard thread policy: kern_return {result}");
+        }
+        if state.captured_qos != QOS_CLASS_UNSPECIFIED {
+            // SAFETY: the call changes only the calling thread's QoS class.
+            let result = unsafe {
+                pthread_set_qos_class_self_np(state.captured_qos, state.captured_relative_priority)
+            };
+            if result != 0 {
+                eprintln!("warning: cannot restore the captured QoS class: error {result}");
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+mod platform {
+    /// Other hosts have no opt-in scheduling facility.
+    pub(super) struct State;
+
+    pub(super) fn enter(
+        _priority: u8,
+        _cpu: Option<u32>,
+        _period_ns: u64,
+    ) -> Result<super::Entered, String> {
+        Err("--rt is only supported on Linux, Windows, and macOS".into())
     }
 
     pub(super) fn background(_affinity: Option<u64>) -> Result<(), String> {
@@ -720,14 +1263,16 @@ mod platform {
     }
 
     pub(super) fn now_ns() -> Result<u64, String> {
-        Err("--rt is only supported on Linux".into())
+        Err("--rt is only supported on Linux, Windows, and macOS".into())
     }
 
-    pub(super) fn sleep_until(_deadline_ns: u64) -> Result<(), super::SleepError> {
+    pub(super) fn sleep_until(_state: &State, _deadline_ns: u64) -> Result<(), super::SleepError> {
         Err(super::SleepError::Failed(
-            "--rt is only supported on Linux".into(),
+            "--rt is only supported on Linux, Windows, and macOS".into(),
         ))
     }
+
+    pub(super) fn cleanup(_state: &mut State) {}
 }
 
 #[cfg(test)]
@@ -774,6 +1319,7 @@ mod tests {
                 build_id: Some("deadbeef".into()),
                 cycle_time_ns: 1_000_000,
                 priority: 90,
+                sched: "fifo",
                 cpu: Some(3),
                 started_ns: 123,
             };
@@ -818,6 +1364,7 @@ mod tests {
         assert!(lines[0].contains("\"record\":\"header\""));
         assert!(lines[0].contains("\"protocol\":\"stc-rt-metrics/1\""));
         assert!(lines[0].contains("\"build_id\":\"deadbeef\""));
+        assert!(lines[0].contains("\"sched\":\"fifo\""));
         assert!(lines[0].contains("\"cpu\":3"));
         assert!(lines[1].contains("\"record\":\"cycle\""));
         assert!(lines[1].contains("\"generation\":7"));
@@ -869,6 +1416,7 @@ mod tests {
             build_id: Some("deadbeef".into()),
             cycle_time_ns: 1_000_000,
             priority: 90,
+            sched: "fifo",
             cpu: Some(3),
             started_ns: 123,
         }
@@ -945,7 +1493,7 @@ mod tests {
     #[test]
     #[ignore = "requires Linux RT privileges; run explicitly with --ignored on the RT host"]
     fn rt_mode_enters_and_sleeps_to_an_absolute_deadline() {
-        let rt = match RtRuntime::enter(90, None) {
+        let rt = match RtRuntime::enter(90, None, 1_000_000) {
             Ok(rt) => rt,
             Err(message) => {
                 eprintln!("skipping RT smoke test: {message}");
@@ -957,5 +1505,253 @@ mod tests {
         rt.sleep_until(deadline).expect("absolute sleep");
         let finished = rt.now_ns().expect("CLOCK_MONOTONIC");
         assert!(finished >= deadline, "the absolute sleep returned early");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn rt_mode_rejects_the_linux_only_cpu_option() {
+        match RtRuntime::enter(90, Some(0), 1_000_000) {
+            Ok(_) => panic!("--rt-cpu must be rejected on this host"),
+            Err(message) => assert!(
+                message.contains("only supported on Linux"),
+                "the error names the Linux-only option: {message}"
+            ),
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn rt_mode_writes_metrics_on_non_linux_hosts() {
+        let path = metrics_path("host");
+        let rt = RtRuntime::enter(90, None, 1_000_000).expect("enter RT mode");
+        let started = rt.now_ns().expect("monotonic clock");
+        let mut writer = MetricsWriter::open(&path, rt.background_affinity()).expect("open");
+        writer
+            .write_header(MetricsHeader {
+                build_id: Some("deadbeef".into()),
+                cycle_time_ns: 1_000_000,
+                priority: rt.priority(),
+                sched: rt.sched(),
+                cpu: None,
+                started_ns: started,
+            })
+            .expect("header");
+        let mut previous = started;
+        for cycle in 1..=3 {
+            let deadline = previous.saturating_add(1_000_000);
+            rt.sleep_until(deadline).expect("absolute sleep");
+            let wake = rt.now_ns().expect("monotonic clock");
+            assert!(wake >= deadline, "the absolute sleep returned early");
+            assert!(wake >= previous, "the monotonic clock went backwards");
+            previous = wake;
+            writer.record(&CycleSample {
+                cycle,
+                generation: Some(7),
+                deadline_ns: deadline,
+                wake_ns: wake,
+                scan_start_ns: wake,
+                scan_end_ns: wake,
+                wake_lateness_ns: i64::try_from(wake.saturating_sub(deadline)).unwrap_or(0),
+                execution_ns: 0,
+                scan_overrun_ns: 0,
+                missed_deadline: false,
+                skipped_periods: 0,
+                faults: None,
+                allocations: None,
+            });
+        }
+        writer.finish().expect("finish");
+        drop(rt);
+        let text = std::fs::read_to_string(&path).expect("read metrics");
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 5, "header, three cycles, summary: {text:?}");
+        assert!(lines[0].contains("\"record\":\"header\""));
+        assert!(lines[0].contains("\"protocol\":\"stc-rt-metrics/1\""));
+        assert!(
+            lines[0].contains("\"sched\":\"mmcss\"")
+                || lines[0].contains("\"sched\":\"time_critical\"")
+                || lines[0].contains("\"sched\":\"time_constraint\"")
+                || lines[0].contains("\"sched\":\"qos\""),
+            "the header names the applied facility: {}",
+            lines[0]
+        );
+        assert!(lines[3].contains("\"record\":\"cycle\""));
+        assert!(lines[4].contains("\"record\":\"summary\""));
+        assert!(lines[4].contains("\"cycles\":3"), "{}", lines[4]);
+        assert!(lines[4].contains("\"missed_deadlines\":0"), "{}", lines[4]);
+    }
+
+    #[cfg(windows)]
+    mod windows_rt {
+        use super::super::RtRuntime;
+        use std::ffi::c_void;
+
+        const THREAD_PRIORITY_TIME_CRITICAL: i32 = 15;
+
+        unsafe extern "system" {
+            fn GetCurrentThread() -> *mut c_void;
+            fn GetThreadPriority(thread: *mut c_void) -> i32;
+        }
+
+        #[test]
+        fn rt_mode_sets_time_critical_priority_and_restores_it_on_drop() {
+            std::thread::spawn(|| {
+                // SAFETY: the pseudo-handle names the calling thread.
+                let before = unsafe { GetThreadPriority(GetCurrentThread()) };
+                assert_ne!(before, THREAD_PRIORITY_TIME_CRITICAL);
+                let rt = RtRuntime::enter(90, None, 1_000_000).expect("enter RT mode");
+                assert_eq!(rt.priority(), 0, "the header priority is zero");
+                assert!(
+                    matches!(rt.sched(), "mmcss" | "time_critical"),
+                    "the applied facility is recorded: {}",
+                    rt.sched()
+                );
+                // SAFETY: the pseudo-handle names the calling thread.
+                let during = unsafe { GetThreadPriority(GetCurrentThread()) };
+                if rt.sched() == "time_critical" {
+                    assert_eq!(
+                        during, THREAD_PRIORITY_TIME_CRITICAL,
+                        "the cycle thread runs at time-critical priority"
+                    );
+                } else {
+                    // MMCSS owns the final priority of a registered thread;
+                    // it may tune the value we set before registration.
+                    assert!(
+                        during > before,
+                        "MMCSS raised the cycle thread priority: {before} -> {during}"
+                    );
+                }
+                let started = rt.now_ns().expect("QPC");
+                let deadline = started.saturating_add(1_000_000);
+                rt.sleep_until(deadline).expect("waitable timer");
+                let finished = rt.now_ns().expect("QPC");
+                assert!(finished >= deadline, "the timer wait returned early");
+                assert!(finished >= started, "the QPC clock went backwards");
+                drop(rt);
+                // SAFETY: the pseudo-handle names the calling thread.
+                let after = unsafe { GetThreadPriority(GetCurrentThread()) };
+                assert_eq!(after, before, "Drop restores the previous priority");
+            })
+            .join()
+            .expect("RT thread");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    mod macos_rt {
+        use super::super::RtRuntime;
+        use std::os::raw::c_int;
+
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        const QOS_CLASS_UTILITY: u32 = 0x11;
+        const QOS_CLASS_UNSPECIFIED: u32 = 0;
+        const THREAD_TIME_CONSTRAINT_POLICY: u32 = 2;
+        const THREAD_TIME_CONSTRAINT_POLICY_COUNT: u32 = 4;
+
+        #[repr(C)]
+        struct TimeConstraintPolicy {
+            period: u32,
+            computation: u32,
+            constraint: u32,
+            preemptible: i32,
+        }
+
+        unsafe extern "C" {
+            fn pthread_self() -> usize;
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: c_int) -> c_int;
+            fn pthread_get_qos_class_np(
+                thread: usize,
+                qos_class: *mut u32,
+                relative_priority: *mut c_int,
+            ) -> c_int;
+            fn pthread_mach_thread_np(thread: usize) -> u32;
+            fn thread_policy_get(
+                thread: u32,
+                policy: u32,
+                policy_info: *mut i32,
+                count: *mut u32,
+                get_default: *mut i32,
+            ) -> c_int;
+        }
+
+        fn read_qos() -> (u32, c_int) {
+            let mut qos = QOS_CLASS_UNSPECIFIED;
+            let mut relative = 0;
+            // SAFETY: the thread is the calling thread and both out pointers
+            // are writable.
+            let result =
+                unsafe { pthread_get_qos_class_np(pthread_self(), &mut qos, &mut relative) };
+            assert_eq!(result, 0, "pthread_get_qos_class_np");
+            (qos, relative)
+        }
+
+        #[test]
+        fn rt_mode_applies_a_policy_or_qos_and_restores_it_on_drop() {
+            std::thread::spawn(|| {
+                // Start from a known class so the restore is observable.
+                // SAFETY: the call changes only the calling thread's QoS.
+                assert_eq!(
+                    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) },
+                    0
+                );
+                let rt = RtRuntime::enter(90, None, 1_000_000).expect("enter RT mode");
+                assert_eq!(rt.priority(), 0, "the header priority is zero");
+                assert!(
+                    matches!(rt.sched(), "time_constraint" | "qos"),
+                    "the applied facility is recorded: {}",
+                    rt.sched()
+                );
+                if rt.sched() == "time_constraint" {
+                    // SAFETY: the thread port names the calling thread and the
+                    // policy struct is writable.
+                    let thread = unsafe { pthread_mach_thread_np(pthread_self()) };
+                    let mut policy = TimeConstraintPolicy {
+                        period: 0,
+                        computation: 0,
+                        constraint: 0,
+                        preemptible: 0,
+                    };
+                    let mut count = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+                    let mut get_default = 0;
+                    // SAFETY: the thread port is valid for the call and the
+                    // policy struct is writable.
+                    let result = unsafe {
+                        thread_policy_get(
+                            thread,
+                            THREAD_TIME_CONSTRAINT_POLICY,
+                            (&mut policy as *mut TimeConstraintPolicy).cast::<i32>(),
+                            &mut count,
+                            &mut get_default,
+                        )
+                    };
+                    assert_eq!(result, 0, "the time-constraint policy is readable");
+                    assert_eq!(count, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+                    assert_eq!(policy.preemptible, 1);
+                    assert!(policy.period >= policy.constraint);
+                    assert!(policy.constraint >= policy.computation);
+                } else {
+                    let (qos, _) = read_qos();
+                    assert_eq!(
+                        qos, QOS_CLASS_USER_INTERACTIVE,
+                        "the fallback applies the interactive QoS class"
+                    );
+                }
+                let started = rt.now_ns().expect("CLOCK_MONOTONIC");
+                let deadline = started.saturating_add(1_000_000);
+                rt.sleep_until(deadline).expect("mach_wait_until");
+                let finished = rt.now_ns().expect("CLOCK_MONOTONIC");
+                assert!(finished >= deadline, "the absolute sleep returned early");
+                assert!(finished >= started, "the monotonic clock went backwards");
+                drop(rt);
+                let (qos, _) = read_qos();
+                assert_eq!(
+                    qos, QOS_CLASS_UTILITY,
+                    "Drop restores the captured QoS class"
+                );
+            })
+            .join()
+            .expect("RT thread");
+        }
     }
 }

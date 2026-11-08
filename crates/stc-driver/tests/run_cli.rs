@@ -228,3 +228,117 @@ fn run_option_validation_uses_exit_code_2() {
         assert_eq!(output.status.code(), Some(2), "{args:?}: {}", text(&output));
     }
 }
+
+fn assert_host_rt_help(text: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        assert!(
+            text.contains("`--rt` sets the cycle thread to `SCHED_FIFO` (default priority 90)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("uses absolute monotonic sleeps; `--rt-cpu` pins it to one CPU"),
+            "{text}"
+        );
+    }
+    #[cfg(windows)]
+    {
+        assert!(
+            text.contains("`--rt` raises the cycle thread to `THREAD_PRIORITY_TIME_CRITICAL`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("registers it with MMCSS when available"),
+            "{text}"
+        );
+        assert!(
+            text.contains("`--rt-cpu`/`--rt-priority` are Linux-only"),
+            "{text}"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    {
+        assert!(
+            text.contains("`--rt` applies a Mach `THREAD_TIME_CONSTRAINT_POLICY`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("falling back to an interactive QoS class"),
+            "{text}"
+        );
+        assert!(
+            text.contains("`--rt-cpu`/`--rt-priority` are Linux-only"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn launcher_help_names_the_host_rt_facility() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("launcher-help");
+    scaffold(&directory, "\n[run]\ncycles = 1\n");
+    let build = directory.run_with_runtime(&["build", "--emit", "exe,module,metadata"]);
+    assert_eq!(build.status.code(), Some(0), "{}", text(&build));
+    let launcher = directory.path.join(if cfg!(windows) {
+        "target/stc/debug/app.exe"
+    } else {
+        "target/stc/debug/app"
+    });
+    let output = Command::new(&launcher)
+        .arg("--help")
+        .output()
+        .expect("run the launcher");
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("stc runtime launcher"), "{text}");
+    assert_host_rt_help(&text);
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn rt_run_emits_metrics_on_windows_and_macos() {
+    if clang().is_none() {
+        return;
+    }
+    let directory = TestDir::new("rt-metrics");
+    scaffold(&directory, "\n[run]\ncycles = 3\ncycle-time = \"1ms\"\n");
+    let metrics = directory.path.join("rt.jsonl");
+    let output = directory.run_with_runtime(&[
+        "run",
+        "--rt",
+        "--cycle-time",
+        "1ms",
+        "--cycles",
+        "3",
+        "--rt-metrics",
+        metrics.to_str().expect("metrics path"),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let contents = std::fs::read_to_string(&metrics).expect("read metrics");
+    let lines: Vec<&str> = contents.lines().collect();
+    assert_eq!(lines.len(), 5, "header, three cycles, summary: {contents}");
+    let header = lines[0];
+    assert!(header.contains("\"record\":\"header\""), "{header}");
+    assert!(
+        header.contains("\"protocol\":\"stc-rt-metrics/1\""),
+        "{header}"
+    );
+    assert!(
+        header.contains("\"sched\":\"mmcss\"")
+            || header.contains("\"sched\":\"time_critical\"")
+            || header.contains("\"sched\":\"time_constraint\"")
+            || header.contains("\"sched\":\"qos\""),
+        "the header names the applied facility: {header}"
+    );
+    let cycles = lines
+        .iter()
+        .filter(|line| line.contains("\"record\":\"cycle\""))
+        .count();
+    assert_eq!(cycles, 3, "{contents}");
+    let summary = lines.last().expect("summary");
+    assert!(summary.contains("\"record\":\"summary\""), "{summary}");
+    assert!(summary.contains("\"cycles\":3"), "{summary}");
+}
