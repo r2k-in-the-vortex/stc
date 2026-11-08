@@ -145,6 +145,18 @@ detail is in
 | The control-disabled control-cost leg estimates its warm-up cycle boundary from the cycle count | The error is negligible over a 10 minute run; the control-enabled legs use fixed status boundaries |
 | The tuned boot profile was not executed in v2.0.0 | It remains a separate future-work scope decision; no tuned result is claimed |
 
+### Windows and macOS opt-in scheduling (WL-14 Phase 3)
+
+Added 2026-11-08. `stc run --rt` is measurement instrumentation, not a hard-real-time or safety
+guarantee. The applied facility is recorded in the metrics header's `sched` field.
+
+| Limitation | Status / workaround |
+| --- | --- |
+| Windows MMCSS registration and the final thread priority depend on the host; when MMCSS is unavailable, `--rt` keeps `THREAD_PRIORITY_TIME_CRITICAL` alone (`sched:"time_critical"`) | Advisory only; inspect `sched` and the measured wake lateness. Do not derive a deadline guarantee from the priority class |
+| macOS may reject `THREAD_TIME_CONSTRAINT_POLICY` (for example in a CI runner); `--rt` then falls back to `QOS_CLASS_USER_INTERACTIVE` (`sched:"qos"`) | Advisory only; the fallback is logged on stderr and recorded in `sched`. Time-constraint behavior depends on the host and runner |
+| Windows/macOS scheduling and timer resolution depend on the host and runner load | Use the metrics as host-specific evidence; no timing threshold or CI timing gate is defined |
+| `--rt-priority` and `--rt-cpu` are Linux-only and are rejected on Windows and macOS | Use the platform defaults; the launcher and `stc run --help` name the Linux-only options |
+
 ## 8. EtherCAT I/O (WL-5.2, v2.0.0)
 
 Added 2026-11-01; revised for v2.0.0. The v2.0.0 package carries the optional Linux EtherCAT

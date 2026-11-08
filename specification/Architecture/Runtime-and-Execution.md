@@ -353,6 +353,19 @@ not pin CPU affinity; placement belongs to the deployment's `cpuset` policy, so 
 its inherited processor mask. The policy is an advisory mitigation for maintenance jitter, not a
 real-time guarantee (D-204).
 
+The `stc run --rt` measurement mode is opt-in and leaves the default loop unchanged. On Linux it
+sets the cycle thread to `SCHED_FIFO` (default priority 90), optionally pins it with `--rt-cpu`,
+and paces with absolute `CLOCK_MONOTONIC` sleeps. On Windows it raises the cycle thread to
+`THREAD_PRIORITY_TIME_CRITICAL`, registers it with MMCSS `Audio` when available, and waits on a
+high-resolution waitable timer. On macOS it applies a Mach `THREAD_TIME_CONSTRAINT_POLICY` derived
+from the cycle time and falls back to `QOS_CLASS_USER_INTERACTIVE` when the policy is rejected,
+then waits with `mach_wait_until`. `--rt-priority` and `--rt-cpu` are Linux-only. All hosts write
+the same `stc-rt-metrics/1` JSONL stream when `--rt-metrics` is set; the header's `sched` field
+names the applied facility (`fifo`, `mmcss`, `time_critical`, `time_constraint`, or `qos`), and
+`priority` is the FIFO priority on Linux and zero where no FIFO priority applies. The mode is
+measurement instrumentation for tests and benchmarks, not a hard-real-time or safety guarantee
+(D-249); without `--rt` the run loop, priorities, and generated artifacts are unchanged.
+
 Traps are fatal for the current run or, during an online-change rollback window, cause the host
 to restore the previous generation. In executable mode the runtime prints
 `<file>:<line>:<column>: error[STC-RUN-xxx]: message` using the source map; in library mode it

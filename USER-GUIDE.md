@@ -643,10 +643,16 @@ The Modbus harness measures the public `latch_inputs`/`publish_outputs` seam wit
 8 loopback clients; the method and host-specific results are in
 [`specification/Verification/Modbus-Server.md`](specification/Verification/Modbus-Server.md) §11.
 
-On Linux, `stc run --rt --cycle-time 1ms --rt-priority 90 --rt-cpu 3 --rt-metrics rt.jsonl`
-runs the cycle thread with FIFO scheduling and absolute `CLOCK_MONOTONIC` pacing, and writes the
-JSONL metrics described in [specification/Verification/RT-Host.md](specification/Verification/RT-Host.md) §3.4. The mode is measurement-only;
-without `--rt` the run loop and the generated artifacts are unchanged.
+`stc run --rt --cycle-time 1ms --rt-metrics rt.jsonl` is an opt-in measurement mode; without
+`--rt` the run loop and the generated artifacts are unchanged. On Linux it sets the cycle thread
+to `SCHED_FIFO` (default priority 90), optionally pins it with `--rt-cpu`, and paces with absolute
+`CLOCK_MONOTONIC` sleeps. On Windows it raises the cycle thread to
+`THREAD_PRIORITY_TIME_CRITICAL`, registers it with MMCSS when available, and uses a
+high-resolution waitable timer. On macOS it applies a Mach `THREAD_TIME_CONSTRAINT_POLICY` and
+falls back to an interactive QoS class when the policy is rejected. `--rt-priority` and `--rt-cpu`
+are Linux-only. The JSONL metrics are described in
+[specification/Verification/RT-Host.md](specification/Verification/RT-Host.md) §3.4. The mode is
+measurement-only and is not a hard-real-time or safety guarantee; macOS remains a test-only host.
 
 ## 12. Troubleshooting
 
