@@ -40,7 +40,7 @@ pub(crate) fn register_modbus_tcp(registry: &mut BackendRegistry) {
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "linux")))]
 mod tests {
     use super::*;
     use crate::coordinator::Coordinator;
@@ -86,7 +86,6 @@ mod tests {
     /// the coordinator validates the configuration and routing without an IgH
     /// shim. Linux uses the shim-backed backend and is covered by the Linux
     /// suite.
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn non_linux_default_registry_uses_the_protocol_neutral_ethercat_mock() {
         let registry = BackendRegistry::with_defaults();

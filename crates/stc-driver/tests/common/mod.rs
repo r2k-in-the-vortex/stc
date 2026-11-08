@@ -17,11 +17,14 @@ use std::sync::OnceLock;
 ///
 /// macOS limits Unix-domain socket paths to 104 bytes. The system temporary
 /// directory there is long enough that a nested project can exceed that limit,
-/// so Unix tests that bind sockets use `/tmp` directly. Windows keeps the
-/// system temporary directory.
+/// so Unix tests that bind sockets use `/tmp` directly. On macOS `/tmp` is a
+/// symlink to `/private/tmp`; the base is canonicalized so the test and the
+/// host agree on the work directory. Windows keeps the system temporary
+/// directory.
 pub fn short_test_dir(prefix: &str, name: &str, unique: usize) -> PathBuf {
     let base = if cfg!(unix) {
-        PathBuf::from("/tmp")
+        let tmp = PathBuf::from("/tmp");
+        tmp.canonicalize().unwrap_or(tmp)
     } else {
         std::env::temp_dir()
     };
