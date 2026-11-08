@@ -45,7 +45,7 @@ fn run(args: &[String]) -> Result<(), String> {
 
 fn usage() -> &'static str {
     "usage:\n  \
-     cargo xtask test --suite ui|conformance|execution|projects|debug|cross-target [--locked] [-- <args>]\n  \
+     cargo xtask test --suite ui|conformance|execution|projects|debug|cross-target|macos [--locked] [-- <args>]\n  \
      cargo xtask package [--out <dir>]\n  \
      cargo xtask traceability [--check]\n  \
      cargo xtask host-audit [--check]"
@@ -90,6 +90,36 @@ fn suite_targets(suite: &str) -> Option<&'static [SuiteTarget]> {
         // with `clang --target`, driver object emission for the matrix, and
         // explicit rejection of cross-target executables/libraries.
         "cross-target" => Some(&[("stc-driver", "cross_target")]),
+        // macOS is a test-only host. This suite covers the functional,
+        // project, execution, and selected I/O paths; the debug/frame targets
+        // are added once the Mach-O frame-sidecar path is implemented.
+        "macos" => Some(&[
+            ("stc-driver", "cli"),
+            ("stc-driver", "cli_project"),
+            ("stc-driver", "conformance"),
+            ("stc-driver", "cross_target"),
+            ("stc-driver", "examples"),
+            ("stc-driver", "execution"),
+            ("stc-driver", "exact_vectors_cli"),
+            ("stc-driver", "fmt_cli"),
+            ("stc-driver", "hir_dump"),
+            ("stc-driver", "manifest_hardening"),
+            ("stc-driver", "modbus_e2e"),
+            ("stc-driver", "module_cli"),
+            ("stc-driver", "online_cli"),
+            ("stc-driver", "project_cli"),
+            ("stc-driver", "projects"),
+            ("stc-driver", "run_cli"),
+            ("stc-driver", "state_io_cli"),
+            ("stc-driver", "test_cli"),
+            ("stc-driver", "ui"),
+            ("stc-runtime", "descriptor_lifecycle"),
+            ("stc-runtime", "embedding_run"),
+            ("stc-runtime", "host_lifecycle"),
+            ("stc-runtime", "image_remap"),
+            ("stc-runtime", "modbus_online_change"),
+            ("stc-runtime", "scheduler"),
+        ]),
         _ => None,
     }
 }
@@ -133,7 +163,7 @@ fn test(args: &[String]) -> Result<(), String> {
     let targets = suite_targets(&suite).ok_or_else(|| {
         format!(
             "unknown suite `{suite}` (expected `ui`, `conformance`, `execution`, `projects`, \
-             `debug`, or `cross-target`)"
+             `debug`, `cross-target`, or `macos`)"
         )
     })?;
     for (package, test) in targets {

@@ -31,6 +31,7 @@ jobs:
       - fmt
       - clippy
       - test
+      - macos
       - coverage
       - online
       - ui
@@ -188,6 +189,37 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run workspace tests
         run: cargo test --workspace --locked
+
+  # macOS is a test-only host (WL-14). These jobs catch portability
+  # regressions in the compiler, project workflow, execution, and selected I/O
+  # paths. Release packaging and the supported-host claim are unchanged.
+  # The debug/frame targets are added once the Mach-O frame-sidecar path is
+  # implemented; the suite is explicit so nothing is silently skipped.
+  macos:
+    name: macOS tests (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run workspace unit tests
+        run: cargo test --workspace --lib --bins --locked
+      - name: Run the macOS integration suite
+        run: cargo xtask test --suite macos --locked
 
   # Coverage runs the same workspace tests under LLVM instrumentation. The
   # per-file summary is written to the job summary and the lcov/HTML reports
