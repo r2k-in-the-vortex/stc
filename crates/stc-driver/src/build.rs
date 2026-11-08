@@ -1901,6 +1901,7 @@ fn link_module(
         command.args(["-Xlinker", "/Brepro"]);
     }
     if target_triple.contains("apple-darwin") {
+        pin_object_timestamp(object)?;
         // Mach-O defaults a dylib's install name to the output path, which
         // makes identical builds in different directories differ. Pin it to
         // the artifact's file name. The object is linked from the output
@@ -1925,6 +1926,29 @@ fn link_module(
         }
     }
     run_tool(&mut command, log)
+}
+
+/// Fixed timestamp for generated objects on Apple targets.
+///
+/// The Mach-O debug map (`N_OSO`) records the object file's modification time,
+/// so two identical builds finish one second apart produce different modules.
+const PINNED_OBJECT_TIME_SECS: u64 = 86_400;
+
+/// Gives a generated object a fixed modification time.
+fn pin_object_timestamp(object: &Path) -> Result<(), String> {
+    let file = std::fs::File::options()
+        .write(true)
+        .open(object)
+        .map_err(|error| format!("cannot open `{}`: {error}", object.display()))?;
+    let time =
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(PINNED_OBJECT_TIME_SECS);
+    file.set_times(std::fs::FileTimes::new().set_modified(time))
+        .map_err(|error| {
+            format!(
+                "cannot pin the timestamp of `{}`: {error}",
+                object.display()
+            )
+        })
 }
 
 /// Rewrites the `LC_UUID` command of a thin Mach-O file to a deterministic
@@ -2031,6 +2055,9 @@ fn link_exe(
     let target_triple = target.map_or_else(stc_codegen::host_triple, str::to_owned);
     if target_triple.contains("windows") {
         command.args(["-Xlinker", "/Brepro"]);
+    }
+    if target_triple.contains("apple-darwin") {
+        pin_object_timestamp(object)?;
     }
     command.args(["-o"]).arg(output_arg);
     run_tool(&mut command, log)
@@ -2159,5 +2186,24 @@ mod tests {
         assert_eq!(input_name, "app.ll");
         assert_eq!(output_name, "app.o");
         assert!(relative_tool_dir(input, Path::new("/tmp/other/app.o")).is_none());
+    }
+
+    #[test]
+    fn object_timestamp_is_pinned() {
+        let path = std::env::temp_dir().join(format!("stc-mtime-{}.o", std::process::id()));
+        std::fs::write(&path, b"x").expect("write an object placeholder");
+        pin_object_timestamp(&path).expect("pin the timestamp");
+        let modified = std::fs::metadata(&path)
+            .expect("read metadata")
+            .modified()
+            .expect("read modification time");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            modified
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("time after the epoch")
+                .as_secs(),
+            PINNED_OBJECT_TIME_SECS
+        );
     }
 }
