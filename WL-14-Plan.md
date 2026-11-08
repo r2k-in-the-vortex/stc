@@ -1,6 +1,6 @@
 # WL-14 working plan — macOS CI and Windows/macOS soft-real-time scheduling for tests
 
-Status: **Approved 2026-11-07** (Phase 0 complete). Phase 1 in progress.
+Status: **Phase 1 complete 2026-11-08; Phase 2 paused for owner approval.**
 Branch: `WL-14`, created from `v3.0.0-planning` at `2388d1a`.
 Date: 2026-11-07.
 Profile: `stc-2013-oop-utf8-v1`.
@@ -459,8 +459,8 @@ host, OS, build form, metric, and sample, without adding a timing gate.
 | Phase | Status | Commit | CI run | Notes |
 | --- | --- | --- | --- | --- |
 | 0. Plan | Approved 2026-11-07 | — | — | Decisions 1–4 approved; existing no-threshold policy kept |
-| 1. macOS portability and CI | In progress | — | — | |
-| 2. Mach-O frame extraction | Not started | — | — | |
+| 1. macOS portability and CI | **Complete 2026-11-08** | `e5a6a99` | [42460413226](https://github.com/r2k-in-the-vortex/stc/actions/runs/42460413226) | Both macOS jobs, coverage, and the aggregate gate green. See [WL-14-Phase1-Report.md](WL-14-Phase1-Report.md). |
+| 2. Mach-O frame extraction | Paused for owner approval | — | — | Not started; hand-off in the Phase 1 report |
 | 3. Scheduling mode | Not started | — | — | |
 | 4. Measurements | Not started | — | — | |
 | 5. Docs, manual check, PR | Not started | — | — | |
