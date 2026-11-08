@@ -201,6 +201,7 @@ fn fake_tools(root: &Path) -> PathBuf {
          \x20   put) s=${first#\\\"}; s=${s%\\\"}; d=${second#\\\"}; d=${d%\\\"}; cp -- \"$s\" \"$d\" ;;\n\
          \x20 esac\ndone\n",
     );
+    common::fake_remote_gnu_tools(&bin);
     bin
 }
 
