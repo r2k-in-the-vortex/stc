@@ -191,10 +191,10 @@ jobs:
         run: cargo test --workspace --locked
 
   # macOS is a test-only host (WL-14). These jobs catch portability
-  # regressions in the compiler, project workflow, execution, and selected I/O
-  # paths. Release packaging and the supported-host claim are unchanged.
-  # The debug/frame targets are added once the Mach-O frame-sidecar path is
-  # implemented; the suite is explicit so nothing is silently skipped.
+  # regressions in the compiler, project workflow, execution, I/O, and
+  # debug/frame paths. Release packaging and the supported-host claim are
+  # unchanged. The suite is explicit so nothing is silently skipped, and the
+  # Mach-O frame sidecar requires llvm-dwarfdump on PATH.
   macos:
     name: macOS tests (${{ matrix.os }})
     needs: detect
@@ -222,6 +222,9 @@ jobs:
           echo "$llvm_bin" >> "$GITHUB_PATH"
           "$llvm_bin/llvm-objcopy" --version | head -n 1
           "$llvm_bin/llvm-ar" --version | head -n 1
+          # The frame-sidecar extractor must exist: without it the tests would
+          # silently skip instead of validating Mach-O DWARF.
+          "$llvm_bin/llvm-dwarfdump" --version | head -n 1
       - uses: Swatinem/rust-cache@v2
       - name: Run workspace unit tests
         run: cargo test --workspace --lib --bins --locked

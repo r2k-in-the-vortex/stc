@@ -630,10 +630,18 @@ fn debug_objects_are_deterministic_and_inspectable() {
             inspected = true;
         }
     } else {
-        assert!(
-            sections.contains(".debug_info") && sections.contains(".debug_line"),
-            "DWARF sections are missing:\n{sections}"
-        );
+        if cfg!(target_os = "macos") {
+            // Mach-O section names carry a double underscore.
+            assert!(
+                sections.contains("__debug_info") && sections.contains("__debug_line"),
+                "DWARF sections are missing:\n{sections}"
+            );
+        } else {
+            assert!(
+                sections.contains(".debug_info") && sections.contains(".debug_line"),
+                "DWARF sections are missing:\n{sections}"
+            );
+        }
         let (tool, info) = if tool_available("readelf") {
             (
                 "readelf",
@@ -707,6 +715,21 @@ fn debug_objects_are_deterministic_and_inspectable() {
                 contains(&lines, &[line.as_str()], "readelf --debug-dump=decodedline");
             }
             inspected = true;
+        } else if tool_available("llvm-dwarfdump") {
+            // Mach-O objects have no binutils reader; LLVM prints the same
+            // decoded address/line/file rows under `--debug-line`.
+            let lines = tool_output(
+                "llvm-dwarfdump",
+                &[OsStr::new("--debug-line"), first.as_os_str()],
+            );
+            contains(&lines, &["main.st"], "llvm-dwarfdump --debug-line");
+            let add_body_line = line_of("  sum := a + b;");
+            let main_body_line = line_of("  held.id := held.id + 1;");
+            for line in [add_body_line, main_body_line] {
+                let line = line.to_string();
+                contains(&lines, &[line.as_str()], "llvm-dwarfdump --debug-line");
+            }
+            inspected = true;
         }
     }
     if !inspected {
@@ -741,7 +764,15 @@ fn debug_disabled_objects_have_no_debug_sections() {
         eprintln!("note: no object-section inspection tool is available; skipping");
         return;
     };
-    for marker in [".debug$S", ".debug$T", ".debug_info", ".debug_line"] {
+    // Mach-O debug sections are named `__debug_*`; COFF and ELF use dots.
+    for marker in [
+        ".debug$S",
+        ".debug$T",
+        ".debug_info",
+        ".debug_line",
+        "__debug_info",
+        "__debug_line",
+    ] {
         assert!(
             !sections.contains(marker),
             "debug-disabled object contains `{marker}`:\n{sections}"

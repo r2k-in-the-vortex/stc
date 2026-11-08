@@ -91,17 +91,24 @@ fn suite_targets(suite: &str) -> Option<&'static [SuiteTarget]> {
         // explicit rejection of cross-target executables/libraries.
         "cross-target" => Some(&[("stc-driver", "cross_target")]),
         // macOS is a test-only host. This suite covers the functional,
-        // project, execution, and selected I/O paths; the debug/frame targets
-        // are added once the Mach-O frame-sidecar path is implemented.
+        // project, execution, I/O, and debug/frame paths; Mach-O DWARF frame
+        // extraction is exercised by the debug and frames targets.
         "macos" => Some(&[
+            ("stc-codegen", "checkpoints"),
+            ("stc-codegen", "debug_info"),
+            ("stc-codegen", "frames"),
             ("stc-driver", "cli"),
             ("stc-driver", "cli_project"),
             ("stc-driver", "conformance"),
             ("stc-driver", "cross_target"),
+            ("stc-driver", "dap_cli"),
+            ("stc-driver", "debug_cli"),
+            ("stc-driver", "debug_release"),
             ("stc-driver", "examples"),
             ("stc-driver", "execution"),
             ("stc-driver", "exact_vectors_cli"),
             ("stc-driver", "fmt_cli"),
+            ("stc-driver", "frames"),
             ("stc-driver", "hir_dump"),
             ("stc-driver", "manifest_hardening"),
             ("stc-driver", "modbus_e2e"),
@@ -113,6 +120,12 @@ fn suite_targets(suite: &str) -> Option<&'static [SuiteTarget]> {
             ("stc-driver", "state_io_cli"),
             ("stc-driver", "test_cli"),
             ("stc-driver", "ui"),
+            ("stc-got", "metadata_v2"),
+            ("stc-runtime", "debug_access"),
+            ("stc-runtime", "debug_protocol"),
+            ("stc-runtime", "debug_stop"),
+            ("stc-runtime", "debug_view"),
+            ("stc-runtime", "debug_write"),
             ("stc-runtime", "descriptor_lifecycle"),
             ("stc-runtime", "embedding_run"),
             ("stc-runtime", "host_lifecycle"),
@@ -1370,6 +1383,25 @@ let ports: u16 = 80;
         assert!(targets.contains(&("stc-driver", "projects")));
         assert!(targets.contains(&("stc-driver", "execution")));
         assert!(targets.contains(&("stc-runtime", "modbus_online_change")));
+        // The debug and frame targets run on macOS with Mach-O DWARF frame
+        // extraction; they are not silently filtered.
+        for target in [
+            ("stc-runtime", "debug_access"),
+            ("stc-runtime", "debug_write"),
+            ("stc-runtime", "debug_stop"),
+            ("stc-runtime", "debug_view"),
+            ("stc-runtime", "debug_protocol"),
+            ("stc-driver", "debug_cli"),
+            ("stc-driver", "dap_cli"),
+            ("stc-driver", "debug_release"),
+            ("stc-driver", "frames"),
+            ("stc-codegen", "debug_info"),
+            ("stc-codegen", "checkpoints"),
+            ("stc-codegen", "frames"),
+            ("stc-got", "metadata_v2"),
+        ] {
+            assert!(targets.contains(&target), "macOS suite lacks {target:?}");
+        }
         assert!(
             !targets
                 .iter()

@@ -188,6 +188,9 @@ fn has_service_13(candidate: &stc_runtime::Candidate) -> bool {
 fn debug_marker() -> &'static [u8] {
     if cfg!(windows) {
         b".debug$S"
+    } else if cfg!(target_os = "macos") {
+        // Mach-O section names carry a double underscore.
+        b"__debug_info"
     } else {
         b".debug_info"
     }
@@ -340,8 +343,10 @@ fn modules_expose_2_3_hooks_in_debug_and_2_1_without_hooks_in_release() {
     // On ELF the linked module keeps DWARF. On MSVC targets the object carries
     // `.debug$S`/`.debug$T`, but the current lld-link invocation (no `/DEBUG`)
     // neither copies CodeView into the DLL nor emits a PDB; that limitation is
-    // recorded in KNOWN-LIMITATIONS.md §3 and is not changed here.
-    if !cfg!(windows) {
+    // recorded in KNOWN-LIMITATIONS.md §3 and is not changed here. On Mach-O
+    // ld64 never copies DWARF sections into the linked image (it records a
+    // debug map instead), so the object is the only DWARF carrier there.
+    if !cfg!(windows) && !cfg!(target_os = "macos") {
         let debug_module = std::fs::read(project.path(&format!(
             "app/target/stc/debug/{}",
             debug_metadata["module"]["file"]
@@ -387,6 +392,9 @@ fn modules_expose_2_3_hooks_in_debug_and_2_1_without_hooks_in_release() {
         b".debug_line".as_slice(),
         b".debug_abbrev".as_slice(),
         b".zdebug_".as_slice(),
+        b"__debug_info".as_slice(),
+        b"__debug_line".as_slice(),
+        b"__debug_abbrev".as_slice(),
     ] {
         assert!(
             !contains(&release_module, marker),
@@ -738,7 +746,13 @@ fn has_debug_sections(file: &std::path::Path) -> bool {
         text.split(|character: char| {
             character.is_whitespace() || matches!(character, ',' | ']' | '[' | '"' | '\'')
         })
-        .any(|token| token.starts_with(".debug") && token != ".debug_gdb_scripts")
+        .any(|token| {
+            let normalized = token
+                .strip_prefix("__debug_")
+                .map(|rest| format!(".debug_{rest}"))
+                .unwrap_or_else(|| token.to_owned());
+            normalized.starts_with(".debug") && normalized != ".debug_gdb_scripts"
+        })
     })
 }
 

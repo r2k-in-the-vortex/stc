@@ -1715,9 +1715,9 @@ fn capture_locals(
 
 /// The host API service-13 entry point.
 ///
-/// x86-64 and AArch64 Linux builds capture the caller's frame pointer, stack
-/// pointer, and return address in an architecture trampoline and call
-/// [`debug_check_entry`]. Other architectures fall back to a call with no
+/// x86-64 and AArch64 (Linux and macOS) builds capture the caller's frame
+/// pointer, stack pointer, and return address in an architecture trampoline and
+/// call [`debug_check_entry`]. Other architectures fall back to a call with no
 /// register context; the checkpoint table then keeps stops unavailable rather
 /// than guessing frame rules.
 #[cfg(all(target_arch = "x86_64", windows))]
@@ -1763,12 +1763,13 @@ pub(crate) unsafe extern "C" fn debug_check_hook(_checkpoint_id: u32, _span_id: 
 /// The format-1 frame rule is the same as x86-64: the prologue stores x29 and
 /// x30 at `[x29]` and `[x29 + 8]`, so CFA is `fp + 16`, the saved frame
 /// pointer is `CFA - 16`, and the return address is `CFA - 8` (D-202).
-#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#[cfg(all(target_arch = "aarch64", any(target_os = "linux", target_os = "macos")))]
 #[unsafe(naked)]
 pub(crate) unsafe extern "C" fn debug_check_hook(_checkpoint_id: u32, _span_id: u32) {
     core::arch::naked_asm!(
-        // The host reaches this entry point through a function pointer; a
-        // BTI landing pad keeps an indirect call valid on hardened kernels.
+        // The host reaches this entry point through a function pointer; a BTI
+        // landing pad keeps an indirect call valid on hardened kernels and is a
+        // no-op hint elsewhere (including Apple silicon).
         "bti c",
         // x0/x1 are the checkpoint and span IDs; pass x29, sp, and x30 as the
         // third, fourth, and fifth arguments and tail-call the entry point.
@@ -1783,7 +1784,7 @@ pub(crate) unsafe extern "C" fn debug_check_hook(_checkpoint_id: u32, _span_id: 
 /// Fallback service-13 entry for targets without v1 frame rules.
 #[cfg(not(any(
     target_arch = "x86_64",
-    all(target_arch = "aarch64", target_os = "linux")
+    all(target_arch = "aarch64", any(target_os = "linux", target_os = "macos"))
 )))]
 pub(crate) unsafe extern "C" fn debug_check_hook(checkpoint_id: u32, span_id: u32) {
     // SAFETY: the caller uses the documented service-13 ABI; the fallback

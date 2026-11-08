@@ -52,6 +52,7 @@ pub(crate) struct ExtractRequest<'a> {
 enum Format {
     CodeView,
     Dwarf,
+    MachDwarf,
 }
 
 /// Extracts the sidecar text, or returns `None` when the target has no v1
@@ -66,12 +67,15 @@ pub(crate) fn extract(request: &ExtractRequest<'_>) -> Option<String> {
     }
     let format = if request.target_triple.contains("windows") {
         if !request.target_triple.contains("msvc") {
-            // v1 covers Windows MSVC (CodeView) and Linux (DWARF) only.
+            // v1 covers Windows MSVC (CodeView), ELF (DWARF), and Mach-O
+            // (DWARF) only.
             return None;
         }
         Format::CodeView
     } else if request.target_triple.contains("linux") {
         Format::Dwarf
+    } else if request.target_triple.contains("apple-darwin") {
+        Format::MachDwarf
     } else {
         return None;
     };
@@ -80,11 +84,16 @@ pub(crate) fn extract(request: &ExtractRequest<'_>) -> Option<String> {
     let mut backend = match format {
         Format::CodeView => parse_codeview(&text),
         Format::Dwarf => parse_dwarf(&text),
+        Format::MachDwarf => parse_mach_dwarf(&text),
     };
     if format == Format::Dwarf
-        && let Some(lines) = run_decoded_lines(&tool, request.object)
+        && let Some(lines) = run_decoded_lines(&tool, format, request.object)
     {
         attach_dwarf_lines(&mut backend, &lines);
+    } else if format == Format::MachDwarf
+        && let Some(lines) = run_decoded_lines(&tool, format, request.object)
+    {
+        attach_decoded_lines(&mut backend, parse_mach_decoded_lines(&lines));
     }
     render(request, &backend)
 }
@@ -104,7 +113,66 @@ fn tool_for(clang: &str, format: Format) -> Option<PathBuf> {
             Some(PathBuf::from("llvm-readobj"))
         }
         Format::Dwarf => Some(PathBuf::from("readelf")),
+        Format::MachDwarf => mach_dwarf_tool(clang),
     }
+}
+
+/// Resolves `llvm-dwarfdump` for a Mach-O target.
+///
+/// The command-line `PATH` wins (the macOS CI job pins Homebrew LLVM there),
+/// then the active Xcode developer directory, then the LLVM tools installed
+/// beside the configured clang. Returning `None` omits the sidecar rather than
+/// failing the build; CI asserts that the reader exists so the tests cannot
+/// skip silently.
+fn mach_dwarf_tool(clang: &str) -> Option<PathBuf> {
+    if let Some(tool) = find_on_path("llvm-dwarfdump") {
+        return Some(tool);
+    }
+    if let Some(tool) = xcrun_find("llvm-dwarfdump") {
+        return Some(tool);
+    }
+    let clang = resolve_program(clang)?;
+    let directory = clang.parent()?;
+    for name in ["llvm-dwarfdump", "llvm-dwarfdump.exe"] {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Finds a program on `PATH` without running it.
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for directory in std::env::split_paths(&path) {
+        for candidate in [name.to_owned(), format!("{name}.exe")] {
+            let candidate = directory.join(candidate);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Resolves a configured program name to a path when it is a bare name.
+fn resolve_program(program: &str) -> Option<PathBuf> {
+    let path = Path::new(program);
+    if path.is_absolute() || path.components().count() > 1 {
+        return Some(path.to_path_buf());
+    }
+    find_on_path(program)
+}
+
+/// Asks the active Xcode developer directory for a tool path.
+fn xcrun_find(name: &str) -> Option<PathBuf> {
+    let output = Command::new("xcrun").args(["--find", name]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 fn run_tool(tool: &Path, format: Format, object: &Path) -> Option<String> {
@@ -116,6 +184,9 @@ fn run_tool(tool: &Path, format: Format, object: &Path) -> Option<String> {
         Format::Dwarf => {
             command.args(["--debug-dump=info", "--wide"]).arg(object);
         }
+        Format::MachDwarf => {
+            command.arg("--debug-info").arg(object);
+        }
     }
     let output = command.output().ok()?;
     if !output.status.success() {
@@ -125,12 +196,18 @@ fn run_tool(tool: &Path, format: Format, object: &Path) -> Option<String> {
 }
 
 /// Reads the DWARF line program as decoded address/file/line rows.
-fn run_decoded_lines(tool: &Path, object: &Path) -> Option<String> {
-    let output = Command::new(tool)
-        .args(["--debug-dump=decodedline", "--wide"])
-        .arg(object)
-        .output()
-        .ok()?;
+fn run_decoded_lines(tool: &Path, format: Format, object: &Path) -> Option<String> {
+    let mut command = Command::new(tool);
+    match format {
+        Format::Dwarf => {
+            command.args(["--debug-dump=decodedline", "--wide"]);
+        }
+        Format::MachDwarf => {
+            command.arg("--debug-line");
+        }
+        Format::CodeView => return None,
+    }
+    let output = command.arg(object).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -654,6 +731,7 @@ struct DecodedLine {
     address: u64,
     file: String,
     line: u32,
+    column: u32,
 }
 
 /// Parses `readelf --debug-dump=decodedline --wide` text.
@@ -661,7 +739,7 @@ struct DecodedLine {
 /// Binutils prints one row per matrix entry with the file name, line number,
 /// and address before the optional `View` and `Stmt` columns. Parsing from the
 /// right keeps long file names (which overflow the fixed file-name column)
-/// intact.
+/// intact. Binutils does not print the column, so it is always zero.
 fn parse_decoded_lines(text: &str) -> Vec<DecodedLine> {
     let mut lines = Vec::new();
     for raw in text.lines() {
@@ -675,6 +753,7 @@ fn parse_decoded_lines(text: &str) -> Vec<DecodedLine> {
             address,
             file,
             line,
+            column: 0,
         });
     }
     lines
@@ -737,10 +816,395 @@ fn parse_line_address(token: &str) -> Option<u64> {
     u64::from_str_radix(token, 16).ok()
 }
 
+/// Parses `llvm-dwarfdump --debug-info` text for a Mach-O object.
+///
+/// LLVM prints one DIE line per entry (`0x<offset>: <indent>DW_TAG_…`) and one
+/// attribute line per attribute (twelve columns of offset padding, then the
+/// DIE indent plus one level, `DW_AT_…`, a tab, and a parenthesized value).
+/// Unlike binutils it resolves `DW_AT_high_pc` to the absolute end address, so
+/// the code size is the difference from `DW_AT_low_pc`.
+fn parse_mach_dwarf(text: &str) -> BTreeMap<String, BackendFunction> {
+    struct Subprogram {
+        depth: usize,
+        function: BackendFunction,
+        end_pc: Option<u64>,
+    }
+    struct Local {
+        depth: usize,
+        name: Option<String>,
+        offset: Option<i64>,
+        simple: bool,
+    }
+    let mut functions = BTreeMap::new();
+    let mut subprograms: Vec<Subprogram> = Vec::new();
+    let mut local: Option<Local> = None;
+    let mut last_is_subprogram = false;
+
+    let finish_local = |subprograms: &mut Vec<Subprogram>, local: &mut Option<Local>| {
+        if let Some(local) = local.take()
+            && local.simple
+            && let Some(name) = local.name
+            && let Some(offset) = local.offset
+            && let Some(subprogram) = subprograms
+                .iter_mut()
+                .find(|subprogram| subprogram.depth + 1 == local.depth)
+        {
+            subprogram
+                .function
+                .locals
+                .entry(name.to_ascii_uppercase())
+                .or_insert(offset);
+        }
+    };
+    let finish_subprogram =
+        |subprogram: Subprogram, functions: &mut BTreeMap<String, BackendFunction>| {
+            let Subprogram {
+                mut function,
+                end_pc,
+                ..
+            } = subprogram;
+            if function.code_size == 0
+                && let (Some(low_pc), Some(end_pc)) = (function.low_pc, end_pc)
+                && end_pc > low_pc
+            {
+                function.code_size = end_pc - low_pc;
+            }
+            if !function.symbol.is_empty() {
+                functions.insert(function.symbol.clone(), function);
+            }
+        };
+
+    for line in text.lines() {
+        if let Some((depth, tag)) = mach_die_tag(line) {
+            finish_local(&mut subprograms, &mut local);
+            while subprograms
+                .last()
+                .is_some_and(|subprogram| subprogram.depth >= depth)
+            {
+                if let Some(subprogram) = subprograms.pop() {
+                    finish_subprogram(subprogram, &mut functions);
+                }
+            }
+            match tag.as_str() {
+                "subprogram" => {
+                    subprograms.push(Subprogram {
+                        depth,
+                        function: BackendFunction::default(),
+                        end_pc: None,
+                    });
+                    last_is_subprogram = true;
+                }
+                "formal_parameter" | "variable" => {
+                    local = Some(Local {
+                        depth,
+                        name: None,
+                        offset: None,
+                        simple: true,
+                    });
+                    last_is_subprogram = false;
+                }
+                _ => {
+                    local = None;
+                    last_is_subprogram = false;
+                }
+            }
+            continue;
+        }
+        let Some(attribute) = mach_attribute_line(line) else {
+            continue;
+        };
+        if last_is_subprogram {
+            let Some(subprogram) = subprograms.last_mut() else {
+                continue;
+            };
+            if attribute.starts_with("DW_AT_linkage_name") {
+                if let Some(value) = mach_attribute_value(attribute)
+                    && let Some(symbol) = mach_string(value)
+                {
+                    // Mach-O object symbols carry one leading underscore that
+                    // front-end hints and the sidecar do not.
+                    subprogram.function.symbol = symbol
+                        .strip_prefix('_')
+                        .unwrap_or(symbol.as_str())
+                        .to_owned();
+                }
+            } else if attribute.starts_with("DW_AT_low_pc") {
+                if let Some(value) = mach_attribute_value(attribute) {
+                    subprogram.function.low_pc = mach_address(value);
+                }
+            } else if attribute.starts_with("DW_AT_high_pc") {
+                if let Some(value) = mach_attribute_value(attribute) {
+                    subprogram.end_pc = mach_address(value);
+                }
+            } else if attribute.starts_with("DW_AT_frame_base") {
+                if let Some(value) = mach_attribute_value(attribute) {
+                    subprogram.function.frame_pointer = mach_frame_pointer(value);
+                }
+            }
+        } else if let Some(local) = &mut local {
+            if attribute.starts_with("DW_AT_name") {
+                if let Some(value) = mach_attribute_value(attribute) {
+                    local.name = mach_string(value);
+                }
+            } else if attribute.starts_with("DW_AT_location") {
+                let offset = mach_attribute_value(attribute).and_then(mach_fbreg_offset);
+                if let Some(offset) = offset {
+                    local.offset = Some(offset);
+                } else {
+                    local.simple = false;
+                }
+            }
+        }
+    }
+    finish_local(&mut subprograms, &mut local);
+    while let Some(subprogram) = subprograms.pop() {
+        finish_subprogram(subprogram, &mut functions);
+    }
+    functions
+}
+
+/// Returns the DIE depth and tag for one LLVM `0x<offset>: <indent>DW_TAG_…`
+/// line. Unit headers (`…: Compile Unit: …`) and child terminators do not
+/// match.
+fn mach_die_tag(line: &str) -> Option<(usize, String)> {
+    let rest = line.strip_prefix("0x")?;
+    let (offset, rest) = rest.split_once(": ")?;
+    if offset.is_empty() || !offset.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    // LLVM indents each DIE level by two spaces after the fixed-width offset.
+    let spaces = rest.len() - rest.trim_start().len();
+    let tag = rest.trim_start().strip_prefix("DW_TAG_")?;
+    let tag = tag
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .next()?;
+    (!tag.is_empty()).then(|| (spaces / 2, tag.to_owned()))
+}
+
+/// Returns one LLVM attribute line (`DW_AT_…`) without its indentation.
+fn mach_attribute_line(line: &str) -> Option<&str> {
+    let attribute = line.trim_start();
+    (line.len() - attribute.len() >= 12 && attribute.starts_with("DW_AT_")).then_some(attribute)
+}
+
+/// Returns the parenthesized value of an LLVM attribute line.
+fn mach_attribute_value(attribute: &str) -> Option<&str> {
+    let (_, value) = attribute.split_once("\t(")?;
+    value.strip_suffix(')')
+}
+
+/// Reads an LLVM address value.
+///
+/// `DW_FORM_addr` prints a bare address. `DW_FORM_addrx` normally resolves to
+/// a bare address too; the `indexed (…) address = ` prefix only appears in
+/// verbose output or when the address table cannot be resolved, so accept it
+/// defensively.
+fn mach_address(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let value = value
+        .rsplit_once("address = ")
+        .map_or(value, |(_, address)| address.trim());
+    parse_hex(value)
+}
+
+/// Decodes a quoted, `raw_ostream::write_escaped`-escaped LLVM string value.
+fn mach_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    let value = value.strip_prefix('"')?.strip_suffix('"')?;
+    let mut decoded = String::with_capacity(value.len());
+    let mut characters = value.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            decoded.push(character);
+            continue;
+        }
+        match characters.next()? {
+            '\\' => decoded.push('\\'),
+            '"' => decoded.push('"'),
+            'n' => decoded.push('\n'),
+            't' => decoded.push('\t'),
+            digit @ '0'..='7' => {
+                // LLVM always emits a full three-digit octal escape.
+                let mut code = digit.to_digit(8)?;
+                for _ in 0..2 {
+                    code = code * 8 + characters.next()?.to_digit(8)?;
+                }
+                decoded.push(char::from(u8::try_from(code).ok()?));
+            }
+            other => decoded.push(other),
+        }
+    }
+    Some(decoded)
+}
+
+/// Returns `true` when a frame-base expression names the frame-pointer
+/// register: `DW_OP_reg6 RBP` on x86-64, `DW_OP_reg29 X29` on AArch64.
+fn mach_frame_pointer(value: &str) -> bool {
+    let (operation, name) = match value.trim().split_once(char::is_whitespace) {
+        Some((operation, name)) => (operation, name.trim()),
+        None => (value.trim(), ""),
+    };
+    match operation {
+        "DW_OP_reg6" => name.is_empty() || name.eq_ignore_ascii_case("rbp"),
+        "DW_OP_reg29" => name.is_empty() || name.eq_ignore_ascii_case("x29"),
+        _ => false,
+    }
+}
+
+/// Reads the signed `DW_OP_fbreg` operand LLVM prints after the opcode.
+fn mach_fbreg_offset(value: &str) -> Option<i64> {
+    let rest = value.trim().strip_prefix("DW_OP_fbreg")?;
+    let rest = rest.trim_start();
+    let end = rest
+        .find(|character: char| {
+            !(character.is_ascii_digit() || character == '-' || character == '+')
+        })
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+/// Parses `llvm-dwarfdump --debug-line` text for a Mach-O object.
+///
+/// Each `debug_line[0x…]` table starts with a prologue that lists its
+/// directories and file-name table, followed by fixed-width address rows.
+/// Rows name their file by the printed index directly; `end_sequence` rows
+/// mark the end of a sequence rather than a call site.
+fn parse_mach_decoded_lines(text: &str) -> Vec<DecodedLine> {
+    let mut lines = Vec::new();
+    let mut directories: BTreeMap<u32, String> = BTreeMap::new();
+    let mut files: BTreeMap<u32, (String, Option<u32>)> = BTreeMap::new();
+    let mut pending: Option<(u32, String, Option<u32>)> = None;
+    let mut in_table = false;
+
+    let finish_file = |pending: &mut Option<(u32, String, Option<u32>)>,
+                       files: &mut BTreeMap<u32, (String, Option<u32>)>| {
+        if let Some((index, name, dir_index)) = pending.take()
+            && !name.is_empty()
+        {
+            files.insert(index, (name, dir_index));
+        }
+    };
+
+    for raw in text.lines() {
+        let line = raw.trim_end();
+        if line.starts_with("debug_line[") {
+            finish_file(&mut pending, &mut files);
+            directories.clear();
+            files.clear();
+            in_table = true;
+            continue;
+        }
+        if !in_table {
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if let Some(value) = trimmed.strip_prefix("include_directories[") {
+            if let Some((index, value)) = value.split_once("] = ")
+                && let Ok(index) = index.trim().parse::<u32>()
+                && let Some(directory) = mach_string(value)
+            {
+                directories.insert(index, directory);
+            }
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("file_names[") {
+            finish_file(&mut pending, &mut files);
+            if let Some((index, _)) = value.split_once("]:")
+                && let Ok(index) = index.trim().parse::<u32>()
+            {
+                pending = Some((index, String::new(), None));
+            }
+            continue;
+        }
+        if let Some(file) = pending.as_mut() {
+            if let Some(value) = trimmed.strip_prefix("name: ") {
+                if let Some(name) = mach_string(value) {
+                    file.1 = name;
+                }
+                continue;
+            }
+            if let Some(value) = trimmed.strip_prefix("dir_index: ") {
+                file.2 = value.trim().parse::<u32>().ok();
+                continue;
+            }
+        }
+        // Address rows start with the fixed-width address column.
+        if !line.starts_with("0x") {
+            continue;
+        }
+        // The rows follow the prologue; commit the last file entry before the
+        // first row so a table with a single entry can resolve its rows.
+        finish_file(&mut pending, &mut files);
+        let tokens = line_tokens(line);
+        if tokens.len() < 7 {
+            continue;
+        }
+        let Some(address) = parse_line_address(tokens[0].1) else {
+            continue;
+        };
+        let Ok(line_number) = tokens[1].1.parse::<u32>() else {
+            continue;
+        };
+        let Ok(column) = tokens[2].1.parse::<u32>() else {
+            continue;
+        };
+        let Ok(file_index) = tokens[3].1.parse::<u32>() else {
+            continue;
+        };
+        if line_number < 1
+            || tokens
+                .iter()
+                .skip(7)
+                .any(|(_, token)| *token == "end_sequence")
+        {
+            continue;
+        }
+        let Some((name, dir_index)) = files.get(&file_index) else {
+            continue;
+        };
+        let Some(file) = mach_source_file(name, *dir_index, &directories) else {
+            continue;
+        };
+        lines.push(DecodedLine {
+            address,
+            file,
+            line: line_number,
+            column,
+        });
+    }
+    finish_file(&mut pending, &mut files);
+    lines
+}
+
+/// Resolves a Mach-O line-table file entry against its directory index.
+fn mach_source_file(
+    name: &str,
+    dir_index: Option<u32>,
+    directories: &BTreeMap<u32, String>,
+) -> Option<String> {
+    let path = if name.starts_with('/') {
+        name.to_owned()
+    } else if let Some(directory) = dir_index.and_then(|index| directories.get(&index)) {
+        if directory.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{directory}/{name}")
+        }
+    } else {
+        name.to_owned()
+    };
+    normalize_source_file(&path)
+}
+
 /// Attributes decoded line rows to functions by their relocated code range,
 /// converting each address to a function-relative offset.
 fn attach_dwarf_lines(backend: &mut BTreeMap<String, BackendFunction>, text: &str) {
-    let rows = parse_decoded_lines(text);
+    attach_decoded_lines(backend, parse_decoded_lines(text));
+}
+
+/// Attributes decoded line rows to functions by their relocated code range,
+/// converting each address to a function-relative offset.
+fn attach_decoded_lines(backend: &mut BTreeMap<String, BackendFunction>, rows: Vec<DecodedLine>) {
     if rows.is_empty() {
         return;
     }
@@ -752,6 +1216,11 @@ fn attach_dwarf_lines(backend: &mut BTreeMap<String, BackendFunction>, text: &st
         })
         .collect::<Vec<_>>();
     regions.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+    // Two functions that report the same entry address cannot be told apart;
+    // attributing rows to either would invent line data.
+    if regions.windows(2).any(|pair| pair[0].1 == pair[1].1) {
+        return;
+    }
     for row in rows {
         let index = regions.partition_point(|region| region.1 <= row.address);
         let Some(index) = index.checked_sub(1) else {
@@ -771,7 +1240,7 @@ fn attach_dwarf_lines(backend: &mut BTreeMap<String, BackendFunction>, text: &st
                 offset,
                 file: row.file.clone(),
                 line: row.line,
-                column: 0,
+                column: row.column,
             });
         }
     }
@@ -1079,5 +1548,242 @@ src/very/long/directory/name/main.st           12            0x000039   2       
         let functions = parse_dwarf(text);
         assert!(functions["stc_add"].locals.is_empty());
         assert!(!functions["stc_add"].frame_pointer);
+    }
+
+    #[test]
+    fn mach_dwarf_extracts_frame_pointer_locals() {
+        let text = r#"t.o:	file format Mach-O 64-bit x86-64
+
+.debug_info contents:
+0x00000000: Compile Unit: length = 0x0000007c, format = DWARF32, version = 0x0005, unit_type = DW_UT_compile, abbr_offset = 0x0000, addr_size = 0x08 (next unit at 0x00000080)
+
+0x0000000c: DW_TAG_compile_unit
+              DW_AT_producer	("clang version 18.1.8")
+              DW_AT_language	(DW_LANG_C11)
+              DW_AT_name	("t.c")
+              DW_AT_comp_dir	(".")
+              DW_AT_low_pc	(0x0000000000000000)
+              DW_AT_high_pc	(0x000000000000003b)
+
+0x0000002d:   DW_TAG_subprogram
+                DW_AT_low_pc	(0x0000000000000000)
+                DW_AT_high_pc	(0x0000000000000018)
+                DW_AT_frame_base	(DW_OP_reg6 RBP)
+                DW_AT_linkage_name	("stc_add")
+                DW_AT_name	("add")
+
+0x00000048:     DW_TAG_formal_parameter
+                  DW_AT_location	(DW_OP_fbreg -4)
+                  DW_AT_name	("a")
+
+0x00000056:     DW_TAG_formal_parameter
+                  DW_AT_location	(DW_OP_fbreg -8)
+                  DW_AT_name	("b")
+
+0x00000064:     DW_TAG_variable
+                  DW_AT_location	(DW_OP_fbreg -12)
+                  DW_AT_name	("sum")
+
+0x00000072:     NULL
+
+0x00000077:   DW_TAG_subprogram
+                DW_AT_low_pc	(0x0000000000000020)
+                DW_AT_high_pc	(0x0000000000000048)
+                DW_AT_frame_base	(DW_OP_reg6 RBP)
+                DW_AT_linkage_name	("_stc_second")
+                DW_AT_name	("second")
+
+0x0000009a:   DW_TAG_subprogram
+                DW_AT_low_pc	(0x0000000000000050)
+                DW_AT_high_pc	(0x0000000000000068)
+                DW_AT_frame_base	(DW_OP_call_frame_cfa)
+                DW_AT_linkage_name	("stc_leaf")
+"#;
+        let functions = parse_mach_dwarf(text);
+        let add = functions.get("stc_add").expect("add");
+        assert_eq!(add.low_pc, Some(0));
+        assert_eq!(add.code_size, 0x18);
+        assert!(add.frame_pointer);
+        assert_eq!(add.locals.get("A"), Some(&-4));
+        assert_eq!(add.locals.get("B"), Some(&-8));
+        assert_eq!(add.locals.get("SUM"), Some(&-12));
+        // The Mach-O symbol prefix is stripped; the sidecar keeps the
+        // front-end spelling.
+        let second = functions.get("stc_second").expect("second");
+        assert_eq!(second.code_size, 0x28);
+        assert!(second.frame_pointer);
+        let leaf = functions.get("stc_leaf").expect("leaf");
+        assert!(!leaf.frame_pointer);
+    }
+
+    #[test]
+    fn mach_dwarf_extracts_aarch64_frame_pointer_locals() {
+        let text = r#"t.o:	file format Mach-O 64-bit arm64
+
+.debug_info contents:
+0x0000000c: DW_TAG_compile_unit
+              DW_AT_name	("t.c")
+
+0x0000002d:   DW_TAG_subprogram
+                DW_AT_low_pc	(0x0000000000000000)
+                DW_AT_high_pc	(0x0000000000000028)
+                DW_AT_frame_base	(DW_OP_reg29 X29)
+                DW_AT_linkage_name	("stc_inner")
+
+0x00000048:     DW_TAG_formal_parameter
+                  DW_AT_location	(DW_OP_fbreg -4)
+                  DW_AT_name	("a")
+
+0x00000056:     DW_TAG_variable
+                  DW_AT_location	(DW_OP_fbreg -12)
+                  DW_AT_name	("x")
+"#;
+        let functions = parse_mach_dwarf(text);
+        let function = functions.get("stc_inner").expect("function");
+        assert_eq!(function.code_size, 0x28);
+        assert!(function.frame_pointer);
+        assert_eq!(function.locals.get("A"), Some(&-4));
+        assert_eq!(function.locals.get("X"), Some(&-12));
+    }
+
+    #[test]
+    fn mach_dwarf_line_rows_map_to_function_offsets() {
+        let info = r#"0x0000000c: DW_TAG_compile_unit
+              DW_AT_name	("t.c")
+
+0x0000002d:   DW_TAG_subprogram
+                DW_AT_low_pc	(0x0000000000000000)
+                DW_AT_high_pc	(0x0000000000000020)
+                DW_AT_frame_base	(DW_OP_reg6 RBP)
+                DW_AT_linkage_name	("stc_first")
+
+0x0000004a:   DW_TAG_subprogram
+                DW_AT_low_pc	(0x0000000000000020)
+                DW_AT_high_pc	(0x0000000000000040)
+                DW_AT_frame_base	(DW_OP_reg6 RBP)
+                DW_AT_linkage_name	("stc_second")
+"#;
+        let lines = r#"t.o:	file format Mach-O 64-bit x86-64
+
+.debug_line contents:
+debug_line[0x00000000]
+Line table prologue:
+    total_length: 0x00000094
+          format: DWARF32
+         version: 5
+    address_size: 8
+ seg_select_size: 0
+ prologue_length: 0x00000058
+ min_inst_length: 1
+max_ops_per_inst: 1
+ default_is_stmt: 1
+       line_base: -5
+      line_range: 14
+     opcode_base: 13
+standard_opcode_lengths[DW_LNS_copy] = 0
+include_directories[  0] = "."
+file_names[  0]:
+           name: "./src/main.st"
+      dir_index: 0
+   md5_checksum: 00000000000000000000000000000000
+file_names[  1]:
+           name: "/host/src/other.st"
+      dir_index: 0
+   md5_checksum: 00000000000000000000000000000000
+
+Address            Line   Column File   ISA Discriminator OpIndex Flags
+------------------ ------ ------ ------ --- ------------- ------- -------------
+0x0000000000000000      1      0      0   0             0       0  is_stmt
+0x0000000000000004      3      7      0   0             0       0  is_stmt
+0x0000000000000010      9      2      1   0             0       0  is_stmt
+0x0000000000000018      0      0      0   0             0       0  end_sequence
+0x0000000000000020     10      0      0   0             0       0  is_stmt
+0x0000000000000024     12      1      0   0             0       0  is_stmt
+0x0000000000000030      0      0      0   0             0       0  end_sequence
+"#;
+        let mut functions = parse_mach_dwarf(info);
+        attach_decoded_lines(&mut functions, parse_mach_decoded_lines(lines));
+        let first = &functions["stc_first"];
+        assert_eq!(
+            first
+                .lines
+                .iter()
+                .map(|line| (line.offset, line.line, line.column))
+                .collect::<Vec<_>>(),
+            vec![(0, 1, 0), (0x4, 3, 7)]
+        );
+        assert!(first.lines.iter().all(|line| line.file == "src/main.st"));
+        // The row at 0x10 names a host-absolute file and is dropped by the
+        // existing source-path rules; the end-sequence rows are not call
+        // sites.
+        let second = &functions["stc_second"];
+        assert_eq!(
+            second
+                .lines
+                .iter()
+                .map(|line| (line.offset, line.line, line.column))
+                .collect::<Vec<_>>(),
+            vec![(0, 10, 0), (0x4, 12, 1)]
+        );
+        assert_eq!(second.lines[1].file, "src/main.st");
+    }
+
+    #[test]
+    fn mach_dwarf_ambiguous_entry_addresses_drop_lines() {
+        let info = r#"0x0000002d:   DW_TAG_subprogram
+                DW_AT_low_pc	(0x0000000000000000)
+                DW_AT_high_pc	(0x0000000000000020)
+                DW_AT_frame_base	(DW_OP_reg6 RBP)
+                DW_AT_linkage_name	("stc_first")
+
+0x0000004a:   DW_TAG_subprogram
+                DW_AT_low_pc	(0x0000000000000000)
+                DW_AT_high_pc	(0x0000000000000020)
+                DW_AT_frame_base	(DW_OP_reg6 RBP)
+                DW_AT_linkage_name	("stc_second")
+"#;
+        let lines = r#"debug_line[0x00000000]
+include_directories[  0] = "."
+file_names[  0]:
+           name: "src/main.st"
+      dir_index: 0
+
+Address            Line   Column File   ISA Discriminator OpIndex Flags
+------------------ ------ ------ ------ --- ------------- ------- -------------
+0x0000000000000000      1      0      0   0             0       0  is_stmt
+"#;
+        let mut functions = parse_mach_dwarf(info);
+        assert_eq!(functions.len(), 2);
+        let rows = parse_mach_decoded_lines(lines);
+        assert_eq!(
+            rows.len(),
+            1,
+            "a table with one file entry must still resolve its rows"
+        );
+        assert_eq!(rows[0].file, "src/main.st");
+        attach_decoded_lines(&mut functions, rows);
+        assert!(
+            functions.values().all(|function| function.lines.is_empty()),
+            "an unresolved entry address must not attribute rows to a function"
+        );
+    }
+
+    #[test]
+    fn mach_address_accepts_resolved_and_indexed_forms() {
+        assert_eq!(mach_address("0x0000000000000020"), Some(0x20));
+        assert_eq!(
+            mach_address("indexed (00000001) address = 0x0000000000000020"),
+            Some(0x20)
+        );
+        assert_eq!(mach_address("<unresolved>"), None);
+    }
+
+    #[test]
+    fn mach_strings_decode_llvm_escapes() {
+        assert_eq!(mach_string(r#""a\\b""#).as_deref(), Some(r"a\b"));
+        assert_eq!(mach_string(r#""a\"b""#).as_deref(), Some("a\"b"));
+        assert_eq!(mach_string(r#""a\tb""#).as_deref(), Some("a\tb"));
+        assert_eq!(mach_string("\"a\\141b\"").as_deref(), Some("aab"));
+        assert_eq!(mach_string("not quoted"), None);
     }
 }
