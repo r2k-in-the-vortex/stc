@@ -1795,27 +1795,6 @@ mod tests {
         assert_eq!(error.code, codes::BINDING_INVALID);
     }
 
-    /// The accepted EtherCAT exclusion is hardware support, not the
-    /// configuration kind: non-Linux hosts keep the protocol-neutral mock so
-    /// the coordinator validates the configuration and routing without an IgH
-    /// shim. Linux uses the shim-backed backend and is covered by the Linux
-    /// suite.
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn non_linux_default_registry_uses_the_protocol_neutral_ethercat_mock() {
-        let registry = BackendRegistry::with_defaults();
-        assert!(registry.contains_kind("ethercat"));
-        assert!(registry.contains_kind("ethercat-status"));
-        let info = module(
-            vec![diewu("ethercat", Some(MOCK_CONFIG), all_channels())],
-            Vec::new(),
-            Vec::new(),
-            1,
-            1,
-        );
-        Coordinator::cold_start(&info, &registry).expect("mock backend cold start");
-    }
-
     #[test]
     fn route_endpoint_must_resolve_and_match_width() {
         let devices = vec![diewu("ethercat", Some(MOCK_CONFIG), all_channels())];

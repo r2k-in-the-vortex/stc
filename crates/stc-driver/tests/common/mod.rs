@@ -13,6 +13,21 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+/// Returns a test directory with a short absolute path.
+///
+/// macOS limits Unix-domain socket paths to 104 bytes. The system temporary
+/// directory there is long enough that a nested project can exceed that limit,
+/// so Unix tests that bind sockets use `/tmp` directly. Windows keeps the
+/// system temporary directory.
+pub fn short_test_dir(prefix: &str, name: &str, unique: usize) -> PathBuf {
+    let base = if cfg!(unix) {
+        PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    base.join(format!("{prefix}-{}-{name}-{unique}", std::process::id()))
+}
+
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
