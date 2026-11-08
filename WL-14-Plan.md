@@ -1,6 +1,6 @@
 # WL-14 working plan — macOS CI and Windows/macOS soft-real-time scheduling for tests
 
-Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 complete 2026-11-08, owner acceptance pending.**
+Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 accepted 2026-11-08.**
 Branch: `WL-14`, created from `v3.0.0-planning` at `2388d1a`.
 
 Owner clarification 2026-11-08: cross-target object emission and runtime-side linking for
@@ -466,7 +466,7 @@ host, OS, build form, metric, and sample, without adding a timing gate.
 | 0. Plan | Approved 2026-11-07 | — | — | Decisions 1–4 approved; existing no-threshold policy kept |
 | 1. macOS portability and CI | **Complete and accepted 2026-11-08** | `e5a6a99` | [42460413226](https://github.com/r2k-in-the-vortex/stc/actions/runs/42460413226) | Both macOS jobs, coverage, and the aggregate gate green. The Phase 1 report was deleted after acceptance. |
 | 2. Mach-O frame extraction | **Complete and accepted 2026-11-08** | `3a86b4e`, `e8bbcdc` | [42506252319](https://github.com/r2k-in-the-vortex/stc/actions/runs/42506252319) | Both macOS jobs, coverage, and the aggregate gate green, including the full `macos` suite through the debug/frame targets. The branch also carries `5477ec2`, the separate cross-platform E004 close fix outside WL-14 scope, included for the later merge. |
-| 3. Scheduling mode | **Complete 2026-11-08; owner acceptance pending** | `9526b92`, `c4a5345`, `3733082` | [42514854124](https://github.com/r2k-in-the-vortex/stc/actions/runs/42514854124) | Both macOS jobs, coverage, the aggregate gate, and the Windows/Linux jobs green. Host tests cover Windows priority/MMCSS/sleep/Drop restore and macOS time-constraint/QoS fallback, monotonic sleeps, and Drop restore; `--rt-cpu`/`--rt-priority` reject on non-Linux hosts; the full-path Windows/macOS `run_cli` metrics test passes. Windows observed `sched:"mmcss"` with final priority 13; macOS observed `sched:"time_constraint"` with the QoS fallback covered by code/tests (not exercised on the runners). |
+| 3. Scheduling mode | **Complete and accepted 2026-11-08** | `9526b92`, `c4a5345`, `3733082`, `ce2d4bc` | [42516443734](https://github.com/r2k-in-the-vortex/stc/actions/runs/42516443734) | Both macOS jobs, coverage, the aggregate gate, and the Windows/Linux jobs green on the final acceptance run. Host tests cover Windows priority/MMCSS/sleep/Drop restore and macOS time-constraint/QoS fallback, monotonic sleeps, and Drop restore; `--rt-cpu`/`--rt-priority` reject on non-Linux hosts; the full-path Windows/macOS `run_cli` metrics test passes. Windows observed `sched:"mmcss"` with final priority 13; macOS observed `sched:"time_constraint"` with the QoS fallback covered by code/tests (not exercised on the runners). |
 | 4. Measurements | Not started | — | — | |
 | 5. Docs, manual check, PR | Not started | — | — | |
 
