@@ -362,9 +362,15 @@ def analyze_metrics(parsed: dict, warmup_cycles: int) -> dict:
 
 
 def run_timeout_s(cycles: int, cycle_time_ns: int) -> float:
-    """Returns a generous wall-clock timeout for one launcher run."""
+    """Returns a generous wall-clock timeout for one launcher run.
+
+    The default loop sleeps with the platform's thread timer, and macOS can
+    round a 1 ms sleep up to several milliseconds. The timeout therefore uses
+    ten times the nominal duration plus a minute; that covers the observed
+    macOS granularity without hiding a genuinely hung launcher.
+    """
     expected_s = cycles * cycle_time_ns / 1_000_000_000
-    return max(30.0, expected_s * 3.0 + 30.0)
+    return max(120.0, expected_s * 10.0 + 60.0)
 
 
 def run_once(

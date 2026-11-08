@@ -129,6 +129,18 @@ class StatisticsTests(unittest.TestCase):
         self.assertIsNone(empty["p50"])
 
 
+class TimeoutTests(unittest.TestCase):
+    def test_timeout_covers_slow_macos_sleep_granularity(self) -> None:
+        # 20,000 cycles at 1 ms is 20 s nominal; the macOS default loop was
+        # observed at about 4.5 ms/cycle, so the cap must exceed 90 s.
+        self.assertGreaterEqual(
+            sched_compare.run_timeout_s(20_000, 1_000_000), 200.0
+        )
+
+    def test_timeout_has_a_floor(self) -> None:
+        self.assertGreaterEqual(sched_compare.run_timeout_s(1, 1_000_000), 120.0)
+
+
 class CommandTests(unittest.TestCase):
     def launcher(self) -> Path:
         return Path("build") / "rt-bench"
