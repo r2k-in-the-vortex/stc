@@ -951,6 +951,10 @@ fn quiet_and_verbose_output() {
             std::fs::read(project.path("app/target/stc/debug/app.o")).expect("read debug object");
         let marker: &[u8] = if cfg!(windows) {
             b".debug$S"
+        } else if cfg!(target_os = "macos") {
+            // Mach-O section names carry a double underscore and the DWARF
+            // section is `__debug_info`.
+            b"__debug_info"
         } else {
             b".debug_info"
         };

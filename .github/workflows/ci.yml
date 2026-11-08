@@ -215,6 +215,13 @@ jobs:
         run: |
           clang --version | head -n 1 || echo "clang unavailable"
           rustc --version || echo "rustc unavailable"
+      - name: Add the LLVM tools to PATH
+        shell: bash
+        run: |
+          llvm_bin="$(brew --prefix llvm@18)/bin"
+          echo "$llvm_bin" >> "$GITHUB_PATH"
+          "$llvm_bin/llvm-objcopy" --version | head -n 1
+          "$llvm_bin/llvm-ar" --version | head -n 1
       - uses: Swatinem/rust-cache@v2
       - name: Run workspace unit tests
         run: cargo test --workspace --lib --bins --locked
