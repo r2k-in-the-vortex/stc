@@ -936,10 +936,10 @@ fn parse_mach_dwarf(text: &str) -> BTreeMap<String, BackendFunction> {
                 if let Some(value) = mach_attribute_value(attribute) {
                     subprogram.end_pc = mach_address(value);
                 }
-            } else if attribute.starts_with("DW_AT_frame_base") {
-                if let Some(value) = mach_attribute_value(attribute) {
-                    subprogram.function.frame_pointer = mach_frame_pointer(value);
-                }
+            } else if attribute.starts_with("DW_AT_frame_base")
+                && let Some(value) = mach_attribute_value(attribute)
+            {
+                subprogram.function.frame_pointer = mach_frame_pointer(value);
             }
         } else if let Some(local) = &mut local {
             if attribute.starts_with("DW_AT_name") {
@@ -1038,7 +1038,11 @@ fn mach_string(value: &str) -> Option<String> {
 }
 
 /// Returns `true` when a frame-base expression names the frame-pointer
-/// register: `DW_OP_reg6 RBP` on x86-64, `DW_OP_reg29 X29` on AArch64.
+/// register: `DW_OP_reg6 RBP` on x86-64, `DW_OP_reg29 W29` on AArch64.
+///
+/// LLVM prints the AArch64 DWARF register 29 as `W29`; older toolchains and
+/// hand-written assembly may spell the same 64-bit register `X29`, so both are
+/// accepted.
 fn mach_frame_pointer(value: &str) -> bool {
     let (operation, name) = match value.trim().split_once(char::is_whitespace) {
         Some((operation, name)) => (operation, name.trim()),
@@ -1046,7 +1050,9 @@ fn mach_frame_pointer(value: &str) -> bool {
     };
     match operation {
         "DW_OP_reg6" => name.is_empty() || name.eq_ignore_ascii_case("rbp"),
-        "DW_OP_reg29" => name.is_empty() || name.eq_ignore_ascii_case("x29"),
+        "DW_OP_reg29" => {
+            name.is_empty() || name.eq_ignore_ascii_case("x29") || name.eq_ignore_ascii_case("w29")
+        }
         _ => false,
     }
 }
@@ -1618,6 +1624,8 @@ src/very/long/directory/name/main.st           12            0x000039   2       
 
     #[test]
     fn mach_dwarf_extracts_aarch64_frame_pointer_locals() {
+        // Captured from `llvm-dwarfdump --debug-info` (LLVM 18) on a macOS
+        // arm64 object: LLVM names DWARF register 29 `W29`.
         let text = r#"t.o:	file format Mach-O 64-bit arm64
 
 .debug_info contents:
@@ -1627,7 +1635,7 @@ src/very/long/directory/name/main.st           12            0x000039   2       
 0x0000002d:   DW_TAG_subprogram
                 DW_AT_low_pc	(0x0000000000000000)
                 DW_AT_high_pc	(0x0000000000000028)
-                DW_AT_frame_base	(DW_OP_reg29 X29)
+                DW_AT_frame_base	(DW_OP_reg29 W29)
                 DW_AT_linkage_name	("stc_inner")
 
 0x00000048:     DW_TAG_formal_parameter
@@ -1637,6 +1645,12 @@ src/very/long/directory/name/main.st           12            0x000039   2       
 0x00000056:     DW_TAG_variable
                   DW_AT_location	(DW_OP_fbreg -12)
                   DW_AT_name	("x")
+
+0x0000006a:   DW_TAG_subprogram
+                DW_AT_low_pc	(0x0000000000000100)
+                DW_AT_high_pc	(0x0000000000000120)
+                DW_AT_frame_base	(DW_OP_reg29 X29)
+                DW_AT_linkage_name	("stc_outer")
 "#;
         let functions = parse_mach_dwarf(text);
         let function = functions.get("stc_inner").expect("function");
@@ -1644,6 +1658,9 @@ src/very/long/directory/name/main.st           12            0x000039   2       
         assert!(function.frame_pointer);
         assert_eq!(function.locals.get("A"), Some(&-4));
         assert_eq!(function.locals.get("X"), Some(&-12));
+        let outer = functions.get("stc_outer").expect("outer function");
+        assert_eq!(outer.code_size, 0x20);
+        assert!(outer.frame_pointer);
     }
 
     #[test]
