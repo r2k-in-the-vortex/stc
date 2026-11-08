@@ -253,6 +253,42 @@ impl Connection {
             Self::Tcp(connection) => connection.stream.set_write_timeout(timeout),
         }
     }
+
+    /// Half-closes the server's write side, drains the peer's remaining input
+    /// for at most `budget`, and leaves the connection ready to drop.
+    ///
+    /// Closing a TCP or Unix socket that still has unread received data sends
+    /// a reset, and the reset can discard a response that was already written
+    /// but not yet read by the peer. Sending the write-side FIN first marks the
+    /// response complete, and draining until the peer closes or `budget`
+    /// expires leaves no unread input for the final close to reset. The drain
+    /// is deliberately bounded so a peer that never closes, or keeps sending,
+    /// cannot hold the handler thread.
+    ///
+    /// A Windows named pipe has no half-close primitive, but written bytes are
+    /// queued for the client independently of the server handle, so the pipe
+    /// only takes the bounded drain. Both steps are best effort: the caller is
+    /// about to close the connection in any case.
+    pub fn graceful_close(&mut self, budget: Duration) {
+        match self {
+            Self::Platform(connection) => {
+                let _ = connection.shutdown_write();
+            }
+            Self::Tcp(connection) => {
+                let _ = connection.stream.shutdown(std::net::Shutdown::Write);
+            }
+        }
+        let deadline = Instant::now() + budget;
+        let mut scratch = [0_u8; 16 * 1024];
+        while Instant::now() < deadline {
+            self.set_read_deadline(Some(deadline));
+            match self.read(&mut scratch) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+        self.set_read_deadline(None);
+    }
 }
 
 impl Read for Connection {
@@ -616,6 +652,11 @@ mod platform {
 
         pub(super) fn set_write_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
             self.stream.set_write_timeout(timeout)
+        }
+
+        /// Sends FIN after the data already written; the peer can still send.
+        pub(super) fn shutdown_write(&mut self) -> io::Result<()> {
+            self.stream.shutdown(std::net::Shutdown::Write)
         }
     }
 
@@ -1188,6 +1229,12 @@ mod platform {
         pub(super) fn set_write_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
             Ok(())
         }
+
+        /// Named pipes have no half-close. Written bytes stay queued for the
+        /// client until the handle closes, so there is nothing to signal here.
+        pub(super) fn shutdown_write(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     pub(super) struct ClientConnection {
@@ -1503,6 +1550,82 @@ mod platform {
             let revision = unsafe { *security.attributes.security_descriptor.cast::<u8>() };
             assert_eq!(u32::from(revision), SECURITY_DESCRIPTOR_REVISION);
         }
+    }
+}
+
+#[cfg(test)]
+mod graceful_close_tests {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::net::TcpStream;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    use super::Listener;
+
+    /// A response written just before the close must survive input the peer is
+    /// still sending; without the graceful path the reset discards it.
+    #[test]
+    fn graceful_close_keeps_a_queued_response_with_unread_input() {
+        let (mut listener, endpoint) = Listener::bind_tcp().expect("listener");
+        let response = "{\"status\":\"error\",\"code\":\"STC-E-DEBUG-004\"}\n";
+        let client = std::thread::spawn({
+            let response = response.to_owned();
+            move || {
+                let stream = TcpStream::connect(&endpoint).expect("connect");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("read timeout");
+                let mut writer = stream.try_clone().expect("clone");
+                let writing = std::thread::spawn(move || {
+                    let chunk = [b'{'; 16 * 1024];
+                    for _ in 0..65 {
+                        if writer.write_all(&chunk).is_err() {
+                            return;
+                        }
+                    }
+                    let _ = writer.write_all(b"\n");
+                });
+                let mut line = String::new();
+                BufReader::new(stream)
+                    .read_line(&mut line)
+                    .expect("response line");
+                writing.join().expect("writer thread");
+                assert_eq!(line, response);
+            }
+        });
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let mut connection = listener.accept(&shutdown).expect("accepted connection");
+        connection
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .expect("write timeout");
+        connection.write_all(response.as_bytes()).expect("response");
+        connection.flush().expect("flush");
+        connection.graceful_close(Duration::from_millis(250));
+        drop(connection);
+        client.join().expect("client thread");
+    }
+
+    /// A peer that keeps the connection open without sending cannot hold the
+    /// drain beyond the budget.
+    #[test]
+    fn graceful_close_drain_stops_at_the_budget() {
+        let (mut listener, endpoint) = Listener::bind_tcp().expect("listener");
+        let _client = TcpStream::connect(&endpoint).expect("connect");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let mut connection = listener.accept(&shutdown).expect("accepted connection");
+        let started = Instant::now();
+        connection.graceful_close(Duration::from_millis(100));
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(50),
+            "the drain waits for the peer or its budget: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the drain is bounded by its budget: {elapsed:?}"
+        );
+        drop(connection);
     }
 }
 

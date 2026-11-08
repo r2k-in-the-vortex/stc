@@ -68,6 +68,12 @@ const AUTH_FAIL_WINDOW: Duration = Duration::from_secs(60);
 const AUTH_REFUSAL: Duration = Duration::from_secs(60);
 const MAX_MALFORMED_FRAMES: usize = 3;
 const MAX_WATCH_INTERVAL_MS: i64 = 3_600_000;
+/// Bound on draining a rejected connection's remaining input. A framing error
+/// is reported while the peer is usually still streaming its frame; closing
+/// with unread input resets the socket and can discard the queued error
+/// response, so the rejection path half-closes and drains for this long at
+/// most before the connection is dropped.
+const FRAMING_DRAIN_DEADLINE: Duration = Duration::from_millis(250);
 
 // ---------------------------------------------------------------------------
 // Public configuration and host-facing information
@@ -1212,6 +1218,12 @@ impl Handler {
         self.send_error(connection, id, &error);
         let plan = self.close_plan("protocol-error", None, true, true);
         self.finish(connection, plan);
+        // The peer is usually still streaming the rejected frame. Closing a
+        // TCP socket with unread input sends a reset that can discard the
+        // queued E004 response (observed on macOS arm64), so half-close the
+        // write side and drain the remaining input for a bounded time before
+        // the connection is dropped.
+        connection.graceful_close(FRAMING_DRAIN_DEADLINE);
     }
 
     fn finish(&mut self, connection: &mut Connection, plan: ClosePlan) {
