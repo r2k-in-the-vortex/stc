@@ -52,13 +52,18 @@ impl RtRuntime {
     /// denied, or a Linux-only option is used on another host. The caller
     /// must not continue with an invalid measurement.
     pub(crate) fn enter(priority: u8, cpu: Option<u32>, period_ns: u64) -> Result<Self, String> {
-        let entered = platform::enter(priority, cpu, period_ns)?;
-        Ok(Self {
+        Ok(Self::from_entered(platform::enter(
+            priority, cpu, period_ns,
+        )?))
+    }
+
+    fn from_entered(entered: Entered) -> Self {
+        Self {
             background_affinity: entered.background_affinity,
             sched: entered.sched,
             priority: entered.priority,
             state: entered.state,
-        })
+        }
     }
 
     /// Returns the affinity mask for the metrics writer thread, if any.
@@ -1079,6 +1084,9 @@ mod platform {
     pub(super) struct State {
         captured_qos: u32,
         captured_relative_priority: c_int,
+        /// A successful time-constraint set makes the kernel remove the
+        /// thread's QoS policy; the captured class is then no longer valid.
+        time_constraint: bool,
     }
 
     pub(super) fn enter(
@@ -1148,6 +1156,7 @@ mod platform {
             state: State {
                 captured_qos,
                 captured_relative_priority,
+                time_constraint: sched == "time_constraint",
             },
         })
     }
@@ -1216,23 +1225,34 @@ mod platform {
     }
 
     pub(super) fn cleanup(state: &mut State) {
-        // SAFETY: `pthread_self` returns the calling thread.
-        let thread = unsafe { pthread_self() };
-        // SAFETY: the thread port names the calling thread; the standard
-        // policy has no policy data.
-        let thread_port = unsafe { pthread_mach_thread_np(thread) };
-        // SAFETY: the standard policy has no policy data and count zero.
-        let result = unsafe {
-            thread_policy_set(
-                thread_port,
-                THREAD_STANDARD_POLICY,
-                std::ptr::null(),
-                THREAD_STANDARD_POLICY_COUNT,
-            )
-        };
-        if result != KERN_SUCCESS {
-            eprintln!("warning: cannot restore the standard thread policy: kern_return {result}");
+        if state.time_constraint {
+            // SAFETY: `pthread_self` returns the calling thread.
+            let thread = unsafe { pthread_self() };
+            // SAFETY: the thread port names the calling thread; the standard
+            // policy has no policy data.
+            let thread_port = unsafe { pthread_mach_thread_np(thread) };
+            // SAFETY: the standard policy has no policy data and count zero.
+            let result = unsafe {
+                thread_policy_set(
+                    thread_port,
+                    THREAD_STANDARD_POLICY,
+                    std::ptr::null(),
+                    THREAD_STANDARD_POLICY_COUNT,
+                )
+            };
+            if result != KERN_SUCCESS {
+                eprintln!(
+                    "warning: cannot restore the standard thread policy: kern_return {result}"
+                );
+            }
+            // Applying the time-constraint policy made the kernel remove the
+            // thread's QoS policy, and `pthread_set_qos_class_self_np`
+            // refuses to re-create it. The captured class cannot be restored.
+            return;
         }
+        // The failed time-constraint set kept the standard policy and
+        // restored the captured QoS, and the fallback replaced that class.
+        // Restoring the captured class is therefore valid here.
         if state.captured_qos != QOS_CLASS_UNSPECIFIED {
             // SAFETY: the call changes only the calling thread's QoS class.
             let result = unsafe {
@@ -1295,6 +1315,13 @@ mod tests {
             Ok((4_000_000, 2))
         );
         assert!(advance_deadline(0, 0, 0).is_err());
+    }
+
+    #[test]
+    fn deadline_overflow_is_reported() {
+        assert!(advance_deadline(u64::MAX, 1, 0).is_err());
+        assert!(advance_deadline(0, 1, u64::MAX).is_err());
+        assert!(advance_deadline(0, 1 << 63, u64::MAX).is_err());
     }
 
     #[test]
@@ -1381,6 +1408,62 @@ mod tests {
         assert!(lines[3].contains("\"max_wake_lateness_ns\":77"));
         assert!(lines[3].contains("\"max_execution_ns\":200"));
         assert!(lines[3].contains("\"dropped_records\":0"));
+    }
+
+    #[test]
+    fn absent_optional_metrics_fields_encode_as_null() {
+        let mut header = String::new();
+        format_header(
+            &mut header,
+            &MetricsHeader {
+                build_id: None,
+                cycle_time_ns: 1_000_000,
+                priority: 0,
+                sched: "qos",
+                cpu: None,
+                started_ns: 0,
+            },
+        );
+        assert!(header.contains("\"build_id\":null"), "{header}");
+        assert!(header.contains("\"cpu\":null"), "{header}");
+        let mut cycle = String::new();
+        format_cycle(
+            &mut cycle,
+            &CycleSample {
+                cycle: 1,
+                generation: None,
+                deadline_ns: 0,
+                wake_ns: 0,
+                scan_start_ns: 0,
+                scan_end_ns: 0,
+                wake_lateness_ns: 0,
+                execution_ns: 0,
+                scan_overrun_ns: 0,
+                missed_deadline: false,
+                skipped_periods: 0,
+                faults: None,
+                allocations: None,
+            },
+        );
+        assert!(cycle.contains("\"generation\":null"), "{cycle}");
+        assert!(cycle.contains("\"minor_faults\":null"), "{cycle}");
+        assert!(cycle.contains("\"major_faults\":null"), "{cycle}");
+        assert!(cycle.contains("\"allocations\":null"), "{cycle}");
+        assert!(cycle.contains("\"frees\":null"), "{cycle}");
+    }
+
+    #[test]
+    fn metrics_file_creation_failure_is_reported() {
+        let path = std::env::temp_dir()
+            .join(format!("stc-rt-missing-{}", std::process::id()))
+            .join("metrics.jsonl");
+        match MetricsWriter::open(&path, None) {
+            Ok(_) => panic!("a missing parent directory must be rejected"),
+            Err(error) => assert!(
+                error.contains("cannot create the RT metrics file"),
+                "{error}"
+            ),
+        }
     }
 
     fn metrics_path(name: &str) -> std::path::PathBuf {
@@ -1491,6 +1574,22 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn malformed_process_stat_has_no_faults() {
+        assert_eq!(parse_faults("1234 (stc) S 1 2"), None);
+        assert_eq!(parse_faults("no closing parenthesis"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fault_counts_read_the_live_process_stat() {
+        assert!(
+            fault_counts().is_some(),
+            "/proc/self/stat exposes the page-fault counters"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     #[ignore = "requires Linux RT privileges; run explicitly with --ignored on the RT host"]
     fn rt_mode_enters_and_sleeps_to_an_absolute_deadline() {
         let rt = match RtRuntime::enter(90, None, 1_000_000) {
@@ -1505,6 +1604,87 @@ mod tests {
         rt.sleep_until(deadline).expect("absolute sleep");
         let finished = rt.now_ns().expect("CLOCK_MONOTONIC");
         assert!(finished >= deadline, "the absolute sleep returned early");
+    }
+
+    #[cfg(target_os = "linux")]
+    mod linux_rt {
+        use super::super::platform::State;
+        use super::super::{Entered, MetricsWriter, RtRuntime};
+        use super::{metrics_header, metrics_path};
+
+        #[test]
+        fn metadata_accessors_and_absolute_sleep_are_available_without_privileges() {
+            let rt = RtRuntime::from_entered(Entered {
+                background_affinity: Some(0b10),
+                sched: "fifo",
+                priority: 90,
+                state: State,
+            });
+            assert_eq!(rt.background_affinity(), Some(0b10));
+            assert_eq!(rt.sched(), "fifo");
+            assert_eq!(rt.priority(), 90);
+            let started = rt.now_ns().expect("CLOCK_MONOTONIC");
+            let deadline = started.saturating_add(1_000_000);
+            rt.sleep_until(deadline).expect("absolute sleep");
+            let finished = rt.now_ns().expect("CLOCK_MONOTONIC");
+            assert!(finished >= deadline, "the absolute sleep returned early");
+            assert!(finished >= started, "the monotonic clock went backwards");
+            drop(rt);
+        }
+
+        #[test]
+        fn metrics_writer_reports_the_background_affinity_result() {
+            let path = metrics_path("background-affinity");
+            match MetricsWriter::open(&path, Some(0b1)) {
+                Ok(mut writer) => {
+                    writer.write_header(metrics_header()).expect("header");
+                    writer.finish().expect("finish");
+                }
+                Err(message) => assert!(message.contains("metrics writer"), "{message}"),
+            }
+            let _ = std::fs::remove_file(&path);
+        }
+
+        #[test]
+        fn a_cpu_outside_the_supported_mask_is_rejected() {
+            match RtRuntime::enter(90, Some(64), 1_000_000) {
+                Ok(_) => panic!("--rt-cpu 64 must be rejected"),
+                Err(message) => assert!(message.contains("0..=63"), "{message}"),
+            }
+        }
+
+        #[test]
+        fn entering_without_a_cpu_reports_the_fifo_result() {
+            match RtRuntime::enter(90, None, 1_000_000) {
+                Ok(rt) => {
+                    assert_eq!(rt.sched(), "fifo");
+                    assert_eq!(rt.priority(), 90);
+                }
+                Err(message) => assert!(
+                    message.contains("SCHED_FIFO"),
+                    "the error names the denied scheduling change: {message}"
+                ),
+            }
+        }
+
+        #[test]
+        fn entering_with_a_cpu_reports_the_pin_result() {
+            match RtRuntime::enter(90, Some(0), 1_000_000) {
+                Ok(rt) => {
+                    assert_eq!(rt.sched(), "fifo");
+                    assert!(
+                        rt.background_affinity().is_some(),
+                        "the writer keeps the CPUs left after the pin"
+                    );
+                }
+                Err(message) => assert!(
+                    message.contains("SCHED_FIFO")
+                        || message.contains("affinity")
+                        || message.contains("CPU"),
+                    "the error names the denied pin or scheduling change: {message}"
+                ),
+            }
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -1697,12 +1877,12 @@ mod tests {
                 );
                 let rt = RtRuntime::enter(90, None, 1_000_000).expect("enter RT mode");
                 assert_eq!(rt.priority(), 0, "the header priority is zero");
+                let rt_sched = rt.sched();
                 assert!(
-                    matches!(rt.sched(), "time_constraint" | "qos"),
-                    "the applied facility is recorded: {}",
-                    rt.sched()
+                    matches!(rt_sched, "time_constraint" | "qos"),
+                    "the applied facility is recorded: {rt_sched}"
                 );
-                if rt.sched() == "time_constraint" {
+                if rt_sched == "time_constraint" {
                     // SAFETY: the thread port names the calling thread and the
                     // policy struct is writable.
                     let thread = unsafe { pthread_mach_thread_np(pthread_self()) };
@@ -1745,10 +1925,42 @@ mod tests {
                 assert!(finished >= started, "the monotonic clock went backwards");
                 drop(rt);
                 let (qos, _) = read_qos();
-                assert_eq!(
-                    qos, QOS_CLASS_UTILITY,
-                    "Drop restores the captured QoS class"
-                );
+                if rt_sched == "time_constraint" {
+                    assert_eq!(
+                        qos, QOS_CLASS_UNSPECIFIED,
+                        "the kernel removed the QoS policy when the time-constraint \
+                         policy was applied and userspace cannot restore it"
+                    );
+                    // SAFETY: the thread port names the calling thread and the
+                    // policy struct is writable.
+                    let thread = unsafe { pthread_mach_thread_np(pthread_self()) };
+                    let mut policy = TimeConstraintPolicy {
+                        period: 0,
+                        computation: 0,
+                        constraint: 0,
+                        preemptible: 0,
+                    };
+                    let mut count = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+                    let mut get_default = 0;
+                    // SAFETY: the thread port is valid for the call and the
+                    // policy struct is writable.
+                    let result = unsafe {
+                        thread_policy_get(
+                            thread,
+                            THREAD_TIME_CONSTRAINT_POLICY,
+                            (&mut policy as *mut TimeConstraintPolicy).cast::<i32>(),
+                            &mut count,
+                            &mut get_default,
+                        )
+                    };
+                    assert_eq!(result, 0, "the policy state is readable");
+                    assert_ne!(get_default, 0, "Drop restores the standard thread policy");
+                } else {
+                    assert_eq!(
+                        qos, QOS_CLASS_UTILITY,
+                        "Drop restores the captured QoS class in the fallback path"
+                    );
+                }
             })
             .join()
             .expect("RT thread");

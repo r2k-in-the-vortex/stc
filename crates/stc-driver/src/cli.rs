@@ -704,9 +704,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             }
             "--rt" => build.run.rt = true,
             "--rt-priority" => {
-                if !cfg!(target_os = "linux") {
-                    return Err("`--rt-priority` is only supported on Linux".into());
-                }
+                require_linux_rt_option("--rt-priority")?;
                 build.run.rt_priority = Some(parse_rt_priority(&next_value(
                     args,
                     &mut index,
@@ -714,21 +712,15 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
                 )?)?);
             }
             other if other.starts_with("--rt-priority=") => {
-                if !cfg!(target_os = "linux") {
-                    return Err("`--rt-priority` is only supported on Linux".into());
-                }
+                require_linux_rt_option("--rt-priority")?;
                 build.run.rt_priority = Some(parse_rt_priority(&other["--rt-priority=".len()..])?);
             }
             "--rt-cpu" => {
-                if !cfg!(target_os = "linux") {
-                    return Err("`--rt-cpu` is only supported on Linux".into());
-                }
+                require_linux_rt_option("--rt-cpu")?;
                 build.run.rt_cpu = Some(parse_rt_cpu(&next_value(args, &mut index, "--rt-cpu")?)?);
             }
             other if other.starts_with("--rt-cpu=") => {
-                if !cfg!(target_os = "linux") {
-                    return Err("`--rt-cpu` is only supported on Linux".into());
-                }
+                require_linux_rt_option("--rt-cpu")?;
                 build.run.rt_cpu = Some(parse_rt_cpu(&other["--rt-cpu=".len()..])?);
             }
             "--rt-metrics" => {
@@ -2110,6 +2102,18 @@ const RT_HELP: &str = "`--rt` applies a Mach `THREAD_TIME_CONSTRAINT_POLICY`, fa
                        interactive QoS class; `--rt-cpu`/`--rt-priority` are Linux-only.";
 #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 const RT_HELP: &str = "`--rt` is only supported on Linux, Windows, and macOS.";
+
+/// Accepts a Linux-only RT option on Linux.
+#[cfg(target_os = "linux")]
+fn require_linux_rt_option(_option: &str) -> Result<(), String> {
+    Ok(())
+}
+
+/// Rejects a Linux-only RT option on every other host.
+#[cfg(not(target_os = "linux"))]
+fn require_linux_rt_option(option: &str) -> Result<(), String> {
+    Err(format!("`{option}` is only supported on Linux"))
+}
 
 fn print_help() {
     println!(

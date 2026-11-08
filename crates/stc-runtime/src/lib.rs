@@ -324,6 +324,18 @@ const RT_HELP: &str = "`--rt` applies a Mach `THREAD_TIME_CONSTRAINT_POLICY`, fa
 #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 const RT_HELP: &str = "`--rt` is only supported on Linux, Windows, and macOS.";
 
+/// Accepts a Linux-only RT option on Linux.
+#[cfg(target_os = "linux")]
+fn require_linux_rt_option(_option: &str) -> Result<(), String> {
+    Ok(())
+}
+
+/// Rejects a Linux-only RT option on every other host.
+#[cfg(not(target_os = "linux"))]
+fn require_linux_rt_option(option: &str) -> Result<(), String> {
+    Err(format!("`{option}` is only supported on Linux"))
+}
+
 /// Prints the launcher's own help, including the host-specific RT text.
 fn print_launcher_help() {
     println!(
@@ -400,29 +412,21 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
             }
             "--rt" => run.rt = true,
             "--rt-priority" => {
-                if !cfg!(target_os = "linux") {
-                    return Err("`--rt-priority` is only supported on Linux".into());
-                }
+                require_linux_rt_option("--rt-priority")?;
                 let text = value("--rt-priority")?;
                 run.rt_priority = Some(parse_rt_priority(&text)?);
             }
             other if other.starts_with("--rt-priority=") => {
-                if !cfg!(target_os = "linux") {
-                    return Err("`--rt-priority` is only supported on Linux".into());
-                }
+                require_linux_rt_option("--rt-priority")?;
                 run.rt_priority = Some(parse_rt_priority(&other["--rt-priority=".len()..])?);
             }
             "--rt-cpu" => {
-                if !cfg!(target_os = "linux") {
-                    return Err("`--rt-cpu` is only supported on Linux".into());
-                }
+                require_linux_rt_option("--rt-cpu")?;
                 let text = value("--rt-cpu")?;
                 run.rt_cpu = Some(parse_rt_cpu(&text)?);
             }
             other if other.starts_with("--rt-cpu=") => {
-                if !cfg!(target_os = "linux") {
-                    return Err("`--rt-cpu` is only supported on Linux".into());
-                }
+                require_linux_rt_option("--rt-cpu")?;
                 run.rt_cpu = Some(parse_rt_cpu(&other["--rt-cpu=".len()..])?);
             }
             "--rt-metrics" => {

@@ -154,6 +154,7 @@ guarantee. The applied facility is recorded in the metrics header's `sched` fiel
 | --- | --- |
 | Windows MMCSS registration and the final thread priority depend on the host; when MMCSS is unavailable, `--rt` keeps `THREAD_PRIORITY_TIME_CRITICAL` alone (`sched:"time_critical"`) | Advisory only; inspect `sched` and the measured wake lateness. Do not derive a deadline guarantee from the priority class |
 | macOS may reject `THREAD_TIME_CONSTRAINT_POLICY` (for example in a CI runner); `--rt` then falls back to `QOS_CLASS_USER_INTERACTIVE` (`sched:"qos"`) | Advisory only; the fallback is logged on stderr and recorded in `sched`. Time-constraint behavior depends on the host and runner |
+| Applying a non-QoS scheduling policy makes the macOS kernel remove the thread's QoS policy, and unprivileged userspace cannot re-create it | In the time-constraint path, `Drop` removes the policy and restores the standard thread policy; the captured QoS class is gone. The QoS fallback path restores the captured class because the failed set leaves the QoS policy intact. Do not depend on the QoS class after a time-constraint run |
 | Windows/macOS scheduling and timer resolution depend on the host and runner load | Use the metrics as host-specific evidence; no timing threshold or CI timing gate is defined |
 | `--rt-priority` and `--rt-cpu` are Linux-only and are rejected on Windows and macOS | Use the platform defaults; the launcher and `stc run --help` name the Linux-only options |
 
