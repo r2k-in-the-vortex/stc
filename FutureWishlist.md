@@ -106,6 +106,7 @@ components.
 | WL-11 | Modbus TCP client capability; separate from WL-5.1 server | Runtime/IO | M/L | WL-5.1 backend contract | Deferred |
 | WL-12 | Reduce cycle-thread wake-up jitter at sub-millisecond cycle times | Runtime/RT | M/L | WL-5.2 CT-sweep evidence; RT host | Deferred |
 | WL-13 | Lean security verification for the Modbus TCP server boundary | Verification/security | L/XL | WL-3 Lean infrastructure; WL-5.1 server | Deferred |
+| WL-19 | Cross-target object emission and runtime-side linking for constrained targets | Tooling/runtime | M/L | Object ABI; runtime linker/loader; cold/online artifact flow | Deferred |
 
 ## 5. Candidate items
 
@@ -930,6 +931,66 @@ closed language-server capability set.
 
 **Tentative size.** M, dominated by reference-backed rename and its edge cases.
 
+### WL-19 — Cross-target object emission and runtime-side linking for constrained targets
+
+**Intent.** Let a development host compile a project to target objects and let a constrained
+runtime link or load them, so targets without a full clang or a full `stc` compiler can still run
+artifacts produced on another host. Review the cold-download and online-change artifact flow so
+it can carry objects/binaries instead of sources where the runtime cannot build.
+
+**Status.** Deferred. Not part of v3.0.0 and not part of WL-14; recorded 2026-11-08 from the
+WL-14 cross-platform discussion.
+
+**Why it matters.** Planned microcontroller targets may not have a full clang/LLVM toolchain or
+the `stc` compiler. The current cross-target surface is IR/object emission; executable and
+embedding-library emission are host-only, and the documented rule is to link and run on the
+target host. The WL-1.2 remote flow sends sources and builds natively on the runtime host. For a
+constrained runtime, the development host must emit the target object and the runtime must only
+link or load it. Cold download and online change need an artifact model that matches that split.
+
+**Candidate scope.**
+
+- Define the supported development-host → runtime target pairs and the object ABI, relocation,
+  section, and symbol contract.
+- Emit a target object plus manifest/GOT metadata on the development host; keep `stc` and clang
+  off the runtime where required.
+- Add runtime-side linking or loading of that object, including target, build-ID, and
+  compatibility validation.
+- Review cold download and online change: carry objects/binaries and metadata rather than
+  sources when the runtime cannot build; define candidate compatibility, state migration, and
+  rollback for that form.
+- Evidence: cross-target object emission, runtime link/load tests, cold-download and
+  online-change evidence, security/integrity checks, and documentation.
+
+**Constraints and current state.**
+
+- IR/object emission is supported for the cross-target matrix; `--emit=exe` and `--emit=lib`
+  are host-only, and module linking is documented as target-host work.
+- The runtime validates the module target; a host-default artifact is not portable.
+- Microcontroller targets are future work; their object formats, memory models, and linkers
+  differ from the current native hosts.
+- WL-14 is macOS test-only and does not add a runtime or change the support matrix.
+
+**Open questions.**
+
+- Which microcontroller targets and object formats come first; ELF/COFF or a custom image?
+- Does the runtime link the object with a target linker, or does a host-side link produce a
+  loadable image for the runtime to load?
+- How are build ID, source fingerprint, GOT/manifest compatibility, and retained state defined
+  for object-based cold/online deployment?
+- What is the security and integrity model for objects crossing the development/runtime
+  boundary?
+- How are debug/frame sidecars produced when the target cannot run a full debug toolchain?
+
+**Related.** [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md),
+[Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md),
+[Runtime and Execution](specification/Architecture/Runtime-and-Execution.md),
+[KNOWN-LIMITATIONS §2](KNOWN-LIMITATIONS.md), WL-1.2 (delivered remote flow), WL-7, WL-15,
+WL-14.
+
+**Tentative size.** M/L, dominated by the object/link contract, runtime loading, and
+cold/online artifact-flow changes.
+
 ## 6. Cross-cutting notes
 
 - The v2.0.0 release delivered the local IDE, RT evidence, Modbus TCP server, and EtherCAT
@@ -972,6 +1033,7 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-08 | Added WL-19 (cross-target object emission and runtime-side linking for constrained targets) from the WL-14 cross-platform discussion; it is not in v3.0.0 or WL-14. |
 | 2026-11-07 | WL-1.2 merged into `v3.0.0-planning` (PR #25, merge `d74bc89`); remote and local `WL-1.2` branches deleted. |
 | 2026-11-07 | WL-1.2 complete; manual check approved; PR #25 merged (`d74bc89`). Final CI run [42397941737](https://github.com/r2k-in-the-vortex/stc/actions/runs/42397941737), 39/39. Remote launch/attach, online/cold deployment, QuickPick, HIL evidence, threat model, and documentation are complete. |
 | 2026-11-07 | WL-1.2 phase 6 HIL complete and CI-green (run [42343615644](https://github.com/r2k-in-the-vortex/stc/actions/runs/42343615644), 39/39): launch, cycle-0 values, stepping, stack, function locals, globals, online/cold deployment, tunnel drop, and reattach verified on `r2k@ecat`; evidence in [Remote-Debug-Runbook.md](specification/Verification/Remote-Debug-Runbook.md). |
