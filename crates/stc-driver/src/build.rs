@@ -1854,11 +1854,20 @@ fn link_module(
         command.args(["-Xlinker", "/Brepro"]);
     }
     if target_triple.contains("apple-darwin") {
-        // Mach-O defaults a dylib's install name to the output path, which
-        // makes identical builds in different directories differ. Pin it to
-        // the artifact's file name. The default `LC_UUID` is content-derived
-        // and hashes only the output leaf name, so it stays deterministic;
-        // do not remove it, because dyld requires it to load a dylib.
+        // Mach-O records the object path in the debug map (`N_OSO`) and
+        // defaults a dylib's install name to the output path. Both make
+        // identical builds in different directories differ. Strip the build
+        // directory from the debug map and pin the install name. The default
+        // `LC_UUID` is content-derived and hashes only the output leaf name,
+        // so it stays deterministic; do not remove it, because dyld requires
+        // it to load a dylib.
+        if let Some(directory) = object.parent() {
+            let mut prefix = directory.display().to_string();
+            if !prefix.ends_with('/') {
+                prefix.push('/');
+            }
+            command.args(["-Xlinker", "-oso_prefix", "-Xlinker", &prefix]);
+        }
         let install_name = output.file_name().map_or_else(
             || "module".to_string(),
             |name| name.to_string_lossy().into_owned(),

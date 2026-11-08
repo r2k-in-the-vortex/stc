@@ -298,6 +298,42 @@ fn artifact_bytes(directory: &TestDir, file: &str) -> Vec<u8> {
         .unwrap_or_else(|error| panic!("cannot read artifact `{file}`: {error}"))
 }
 
+/// Compares two artifacts and reports the first differing byte and whether
+/// either copy embeds its build directory.
+fn assert_same_artifact(left: &[u8], right: &[u8], file: &str, left_dir: &Path, right_dir: &Path) {
+    if left == right {
+        return;
+    }
+    let offset = left
+        .iter()
+        .zip(right)
+        .position(|(left, right)| left != right)
+        .unwrap_or(left.len().min(right.len()));
+    let start = offset.saturating_sub(16);
+    let end = (offset + 16).min(left.len().max(right.len()));
+    let left_window = left.get(start..end.min(left.len())).unwrap_or_default();
+    let right_window = right.get(start..end.min(right.len())).unwrap_or_default();
+    let contains_path = |bytes: &[u8], directory: &Path| {
+        let path = directory.to_string_lossy();
+        !path.is_empty()
+            && bytes
+                .windows(path.len())
+                .any(|window| window == path.as_bytes())
+    };
+    panic!(
+        "artifact `{file}` differs at 0x{offset:x} (len {} vs {}); \
+         build directory present: left={}, right={}\n \
+         left:  {:02x?}\n \
+         right: {:02x?}",
+        left.len(),
+        right.len(),
+        contains_path(left, left_dir),
+        contains_path(right, right_dir),
+        left_window,
+        right_window
+    );
+}
+
 fn emitted_module(directory: &TestDir, name: &str) -> bool {
     let prefix = format!("{name}-");
     std::fs::read_dir(&directory.path)
@@ -341,11 +377,9 @@ fn double_builds_from_the_same_source_and_baseline_are_byte_identical() {
             format!("{name}.stc-meta.json"),
             format!("{name}.ll"),
         ] {
-            assert_eq!(
-                artifact_bytes(&first, &file),
-                artifact_bytes(&second, &file),
-                "artifact `{file}` differs between build directories"
-            );
+            let left = artifact_bytes(&first, &file);
+            let right = artifact_bytes(&second, &file);
+            assert_same_artifact(&left, &right, &file, &first.path, &second.path);
         }
 
         let left = first.manifest(name);
