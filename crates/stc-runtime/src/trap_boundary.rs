@@ -127,6 +127,14 @@ core::arch::global_asm!(
     "#
 );
 
+#[cfg(target_os = "macos")]
+core::arch::global_asm!(
+    r#"
+    .globl _stc_trap_boundary_run
+    .set _stc_trap_boundary_run, stc_trap_boundary_run
+    "#
+);
+
 #[cfg(not(any(
     all(
         target_arch = "x86_64",
