@@ -298,17 +298,21 @@ fn artifact_bytes(directory: &TestDir, file: &str) -> Vec<u8> {
         .unwrap_or_else(|error| panic!("cannot read artifact `{file}`: {error}"))
 }
 
-/// Compares two artifacts and reports the first differing byte and whether
+/// Compares two artifacts and reports the differing byte ranges and whether
 /// either copy embeds its build directory.
 fn assert_same_artifact(left: &[u8], right: &[u8], file: &str, left_dir: &Path, right_dir: &Path) {
     if left == right {
         return;
     }
-    let offset = left
+    let differing = left
         .iter()
         .zip(right)
-        .position(|(left, right)| left != right)
-        .unwrap_or(left.len().min(right.len()));
+        .enumerate()
+        .filter_map(|(index, (left, right))| (left != right).then_some(index))
+        .collect::<Vec<_>>();
+    let total = differing.len();
+    let shown = &differing[..differing.len().min(16)];
+    let offset = *shown.first().unwrap_or(&left.len().min(right.len()));
     let start = offset.saturating_sub(16);
     let end = (offset + 16).min(left.len().max(right.len()));
     let left_window = left.get(start..end.min(left.len())).unwrap_or_default();
@@ -321,8 +325,8 @@ fn assert_same_artifact(left: &[u8], right: &[u8], file: &str, left_dir: &Path, 
                 .any(|window| window == path.as_bytes())
     };
     panic!(
-        "artifact `{file}` differs at 0x{offset:x} (len {} vs {}); \
-         build directory present: left={}, right={}\n \
+        "artifact `{file}` has {total} differing byte(s) at {shown:02x?} \
+         (len {} vs {}); build directory present: left={}, right={}\n \
          left:  {:02x?}\n \
          right: {:02x?}",
         left.len(),

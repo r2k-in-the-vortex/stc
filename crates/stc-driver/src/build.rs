@@ -1031,6 +1031,11 @@ pub(crate) fn emit(
         ) {
             return build_failure(reporter, &message, &ir_path);
         }
+        if target_triple.contains("apple-darwin")
+            && let Err(message) = normalize_macho_uuid(&module_path)
+        {
+            return artifact_error(reporter, &message);
+        }
         if request.release
             && let Err(message) = strip_release_artifact(&clang, &module_path, log)
         {
@@ -1111,6 +1116,11 @@ pub(crate) fn emit(
             log,
         ) {
             return build_failure(reporter, &message, &launcher_ir_path);
+        }
+        if target_triple.contains("apple-darwin")
+            && let Err(message) = normalize_macho_uuid(&exe_path)
+        {
+            return artifact_error(reporter, &message);
         }
         if request.release
             && let Err(message) = strip_release_artifact(&clang, &exe_path, log)
@@ -1877,6 +1887,83 @@ fn link_module(
     run_tool(&mut command, log)
 }
 
+/// Rewrites the `LC_UUID` command of a thin Mach-O file to a deterministic
+/// value derived from the module's build ID.
+///
+/// Apple's `ld` initializes the UUID command before its content hash, so two
+/// otherwise identical links in different directories still produce different
+/// UUIDs. dyld requires an `LC_UUID` command, so `-no_uuid` is not an option.
+/// Patching the command after the link keeps the module loadable and
+/// byte-stable.
+fn normalize_macho_uuid(path: &Path) -> Result<(), String> {
+    const MH_MAGIC_64: u32 = 0xfeed_facf;
+    const LC_UUID: u32 = 0x1b;
+    let mut bytes = std::fs::read(path)
+        .map_err(|error| format!("cannot read `{}`: {error}", path.display()))?;
+    let header = bytes
+        .get(..32)
+        .ok_or_else(|| format!("`{}` is too short to be a Mach-O file", path.display()))?;
+    let magic = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+    if magic != MH_MAGIC_64 {
+        return Err(format!(
+            "`{}` is not a 64-bit little-endian Mach-O file",
+            path.display()
+        ));
+    }
+    let ncmds = u32::from_le_bytes([header[16], header[17], header[18], header[19]]) as usize;
+    let uuid = apple_module_uuid_bytes(path);
+    let mut offset = 32usize;
+    for _ in 0..ncmds {
+        let command = bytes
+            .get(offset..offset + 8)
+            .ok_or_else(|| format!("truncated Mach-O load command in `{}`", path.display()))?;
+        let cmd = u32::from_le_bytes([command[0], command[1], command[2], command[3]]);
+        let cmdsize = u32::from_le_bytes([command[4], command[5], command[6], command[7]]) as usize;
+        let end = offset
+            .checked_add(cmdsize)
+            .filter(|end| cmdsize >= 8 && *end <= bytes.len())
+            .ok_or_else(|| format!("invalid Mach-O load command in `{}`", path.display()))?;
+        if cmd == LC_UUID {
+            if cmdsize != 24 {
+                return Err(format!("invalid LC_UUID command in `{}`", path.display()));
+            }
+            bytes[offset + 8..offset + 24].copy_from_slice(&uuid);
+            std::fs::write(path, &bytes)
+                .map_err(|error| format!("cannot write `{}`: {error}", path.display()))?;
+            return Ok(());
+        }
+        offset = end;
+    }
+    Err(format!("`{}` has no LC_UUID command", path.display()))
+}
+
+/// Returns the deterministic UUID bytes for a Mach-O module.
+///
+/// Module file names end in the 32-hex-digit build ID. A short or nonstandard
+/// name uses a fixed fallback so the artifact is still loadable.
+fn apple_module_uuid_bytes(output: &Path) -> [u8; 16] {
+    let stem = output
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    let suffix: String = stem
+        .chars()
+        .rev()
+        .take(32)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    if suffix.len() == 32
+        && let Ok(value) = u128::from_str_radix(&suffix, 16)
+    {
+        return value.to_be_bytes();
+    }
+    [
+        0x53, 0x54, 0x43, 0x2d, 0x4d, 0x4f, 0x44, 0x55, 0x4c, 0x45, 0, 0, 0, 0, 0, 0,
+    ]
+}
+
 fn link_exe(
     clang: &str,
     object: &Path,
@@ -1957,4 +2044,45 @@ fn build_failure(reporter: &mut Reporter, message: &str, ir_path: &Path) -> u8 {
         ),
     );
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macho_uuid_is_derived_from_the_build_id() {
+        let bytes = apple_module_uuid_bytes(Path::new("app-0123456789abcdef0123456789abcdef.so"));
+        assert_eq!(
+            bytes,
+            [
+                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                0xcd, 0xef,
+            ]
+        );
+    }
+
+    #[test]
+    fn macho_uuid_normalization_rewrites_lc_uuid() {
+        let path = std::env::temp_dir().join(format!(
+            "stc-macho-uuid-{}-0123456789abcdef0123456789abcdef.dylib",
+            std::process::id()
+        ));
+        let mut bytes = vec![0_u8; 32 + 24];
+        bytes[0..4].copy_from_slice(&0xfeed_facf_u32.to_le_bytes());
+        bytes[16..20].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[32..36].copy_from_slice(&0x1b_u32.to_le_bytes());
+        bytes[36..40].copy_from_slice(&24_u32.to_le_bytes());
+        std::fs::write(&path, &bytes).expect("write synthetic Mach-O file");
+        normalize_macho_uuid(&path).expect("normalize the UUID");
+        let patched = std::fs::read(&path).expect("read normalized file");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            &patched[40..56],
+            &[
+                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                0xcd, 0xef,
+            ]
+        );
+    }
 }
