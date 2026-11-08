@@ -1904,12 +1904,25 @@ fn link_module(
         // Mach-O defaults a dylib's install name to the output path, which
         // makes identical builds in different directories differ. Pin it to
         // the artifact's file name. The object is linked from the output
-        // directory with a relative name, so the debug map is path-free.
+        // directory with a relative name, but ld still resolves it to an
+        // absolute path for the debug map, so strip both spellings of the
+        // directory from the `N_OSO` records.
         let install_name = output.file_name().map_or_else(
             || "module".to_string(),
             |name| name.to_string_lossy().into_owned(),
         );
         command.arg(format!("-Wl,-install_name,@rpath/{install_name}"));
+        if let Some(directory) = object.parent() {
+            // The linker resolves the object path against its (canonical)
+            // working directory; strip that spelling from `N_OSO`.
+            let directory =
+                std::fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+            let mut text = directory.display().to_string();
+            if !text.ends_with('/') {
+                text.push('/');
+            }
+            command.args(["-Xlinker", "-oso_prefix", "-Xlinker", &text]);
+        }
     }
     run_tool(&mut command, log)
 }

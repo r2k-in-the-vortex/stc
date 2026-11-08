@@ -317,7 +317,7 @@ fn assert_same_artifact(left: &[u8], right: &[u8], file: &str, left_dir: &Path, 
     let end = (offset + 16).min(left.len().max(right.len()));
     let left_window = left.get(start..end.min(left.len())).unwrap_or_default();
     let right_window = right.get(start..end.min(right.len())).unwrap_or_default();
-    let contains_path = |bytes: &[u8], directory: &Path| {
+    let find_path = |bytes: &[u8], directory: &Path| -> Option<usize> {
         let mut paths = vec![directory.to_string_lossy().into_owned()];
         if let Ok(canonical) = directory.canonicalize() {
             let canonical = canonical.to_string_lossy().into_owned();
@@ -325,22 +325,49 @@ fn assert_same_artifact(left: &[u8], right: &[u8], file: &str, left_dir: &Path, 
                 paths.push(canonical);
             }
         }
-        paths.iter().any(|path| {
-            !path.is_empty()
-                && bytes
+        paths
+            .iter()
+            .filter(|path| !path.is_empty())
+            .filter_map(|path| {
+                bytes
                     .windows(path.len())
-                    .any(|window| window == path.as_bytes())
-        })
+                    .position(|window| window == path.as_bytes())
+            })
+            .min()
     };
+    let ascii = |bytes: &[u8], offset: usize| -> String {
+        let start = offset.saturating_sub(64);
+        let end = (offset + 96).min(bytes.len());
+        bytes
+            .get(start..end)
+            .unwrap_or_default()
+            .iter()
+            .map(|byte| {
+                if byte.is_ascii_graphic() || *byte == b' ' {
+                    char::from(*byte)
+                } else {
+                    '.'
+                }
+            })
+            .collect()
+    };
+    let left_path = find_path(left, left_dir);
+    let right_path = find_path(right, right_dir);
+    let left_context = left_path
+        .map(|offset| ascii(left, offset))
+        .unwrap_or_default();
+    let right_context = right_path
+        .map(|offset| ascii(right, offset))
+        .unwrap_or_default();
     panic!(
         "artifact `{file}` has {total} differing byte(s) at {shown:02x?} \
-         (len {} vs {}); build directory present: left={}, right={}\n \
+         (len {} vs {}); build directory offsets: left={left_path:?}, right={right_path:?}\n \
+         left path context:  {left_context}\n \
+         right path context: {right_context}\n \
          left:  {:02x?}\n \
          right: {:02x?}",
         left.len(),
         right.len(),
-        contains_path(left, left_dir),
-        contains_path(right, right_dir),
         left_window,
         right_window
     );
