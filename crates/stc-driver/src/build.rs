@@ -1854,49 +1854,18 @@ fn link_module(
         command.args(["-Xlinker", "/Brepro"]);
     }
     if target_triple.contains("apple-darwin") {
-        // Mach-O records the output path as the install name and adds a
-        // linker-generated UUID. Both make identical builds in different
-        // directories differ. Pin the install name to the artifact's file
-        // name and derive the UUID from the build ID in that name; dyld
-        // requires an `LC_UUID` command, so `-no_uuid` is not an option for a
-        // loadable module.
+        // Mach-O defaults a dylib's install name to the output path, which
+        // makes identical builds in different directories differ. Pin it to
+        // the artifact's file name. The default `LC_UUID` is content-derived
+        // and hashes only the output leaf name, so it stays deterministic;
+        // do not remove it, because dyld requires it to load a dylib.
         let install_name = output.file_name().map_or_else(
             || "module".to_string(),
             |name| name.to_string_lossy().into_owned(),
         );
         command.arg(format!("-Wl,-install_name,@rpath/{install_name}"));
-        command.arg(format!("-Wl,-uuid,{}", apple_module_uuid(output)));
     }
     run_tool(&mut command, log)
-}
-
-/// Returns a deterministic Mach-O UUID for a module artifact.
-///
-/// Module file names end in the 32-hex-digit build ID, so the UUID is both
-/// stable across build directories and unique per build. A fixed fallback
-/// keeps a nonstandard output name loadable.
-fn apple_module_uuid(output: &Path) -> String {
-    let stem = output
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_default();
-    let suffix: String = stem
-        .chars()
-        .rev()
-        .take(32)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    if suffix.len() == 32
-        && suffix
-            .chars()
-            .all(|character| character.is_ascii_hexdigit())
-    {
-        suffix
-    } else {
-        "5354432d4d4f44554c45000000000000".to_string()
-    }
 }
 
 fn link_exe(
@@ -1918,10 +1887,6 @@ fn link_exe(
     let target_triple = target.map_or_else(stc_codegen::host_triple, str::to_owned);
     if target_triple.contains("windows") {
         command.args(["-Xlinker", "/Brepro"]);
-    }
-    if target_triple.contains("apple-darwin") {
-        // Keep identical builds in different directories byte-identical.
-        command.arg("-Wl,-no_uuid");
     }
     command.args(["-o"]).arg(output);
     run_tool(&mut command, log)
@@ -1983,23 +1948,4 @@ fn build_failure(reporter: &mut Reporter, message: &str, ir_path: &Path) -> u8 {
         ),
     );
     1
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn apple_module_uuid_uses_the_build_id_suffix() {
-        let uuid = apple_module_uuid(Path::new("app-0123456789abcdef0123456789abcdef.so"));
-        assert_eq!(uuid, "0123456789abcdef0123456789abcdef");
-    }
-
-    #[test]
-    fn apple_module_uuid_falls_back_for_a_short_name() {
-        assert_eq!(
-            apple_module_uuid(Path::new("app.so")),
-            "5354432d4d4f44554c45000000000000"
-        );
-    }
 }
