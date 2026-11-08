@@ -1797,11 +1797,20 @@ fn compile_ir(
     if let Some(target) = target {
         command.arg(format!("--target={target}"));
     }
-    command
-        .args(["-x", "ir"])
-        .arg(ir)
-        .args(["-c", "-o"])
-        .arg(object);
+    if let Some((directory, ir_name, object_name)) = relative_tool_dir(ir, object) {
+        command.current_dir(directory);
+        command
+            .args(["-x", "ir"])
+            .arg(ir_name)
+            .args(["-c", "-o"])
+            .arg(object_name);
+    } else {
+        command
+            .args(["-x", "ir"])
+            .arg(ir)
+            .args(["-c", "-o"])
+            .arg(object);
+    }
     if pic {
         command.arg("-fPIC");
     }
@@ -1850,7 +1859,16 @@ fn link_module(
     if let Some(target) = target {
         command.arg(format!("--target={target}"));
     }
-    command.arg(object).arg("-shared").arg("-o").arg(output);
+    if let Some((directory, object_name, output_name)) = relative_tool_dir(object, output) {
+        command.current_dir(directory);
+        command
+            .arg(object_name)
+            .arg("-shared")
+            .arg("-o")
+            .arg(output_name);
+    } else {
+        command.arg(object).arg("-shared").arg("-o").arg(output);
+    }
     let target_triple = target.map_or_else(stc_codegen::host_triple, str::to_owned);
     if target.is_none() || is_host_triple(&target_triple) {
         for argument in system_link_args() {
@@ -1864,20 +1882,10 @@ fn link_module(
         command.args(["-Xlinker", "/Brepro"]);
     }
     if target_triple.contains("apple-darwin") {
-        // Mach-O records the object path in the debug map (`N_OSO`) and
-        // defaults a dylib's install name to the output path. Both make
-        // identical builds in different directories differ. Strip the build
-        // directory from the debug map and pin the install name. The default
-        // `LC_UUID` is content-derived and hashes only the output leaf name,
-        // so it stays deterministic; do not remove it, because dyld requires
-        // it to load a dylib.
-        if let Some(directory) = object.parent() {
-            let mut prefix = directory.display().to_string();
-            if !prefix.ends_with('/') {
-                prefix.push('/');
-            }
-            command.args(["-Xlinker", "-oso_prefix", "-Xlinker", &prefix]);
-        }
+        // Mach-O defaults a dylib's install name to the output path, which
+        // makes identical builds in different directories differ. Pin it to
+        // the artifact's file name. The object is linked from the output
+        // directory with a relative name, so the debug map is path-free.
         let install_name = output.file_name().map_or_else(
             || "module".to_string(),
             |name| name.to_string_lossy().into_owned(),
@@ -1976,7 +1984,15 @@ fn link_exe(
     if let Some(target) = target {
         command.arg(format!("--target={target}"));
     }
-    command.arg(object).arg(runtime);
+    let relative = relative_tool_dir(object, output);
+    if let Some((directory, _, _)) = relative {
+        command.current_dir(directory);
+    }
+    let (object_arg, output_arg) = relative.map_or_else(
+        || (object.as_os_str(), output.as_os_str()),
+        |(_, object_name, output_name)| (object_name, output_name),
+    );
+    command.arg(object_arg).arg(runtime);
     for argument in system_link_args() {
         command.arg(argument);
     }
@@ -1984,7 +2000,7 @@ fn link_exe(
     if target_triple.contains("windows") {
         command.args(["-Xlinker", "/Brepro"]);
     }
-    command.args(["-o"]).arg(output);
+    command.args(["-o"]).arg(output_arg);
     run_tool(&mut command, log)
 }
 
@@ -2046,6 +2062,21 @@ fn build_failure(reporter: &mut Reporter, message: &str, ir_path: &Path) -> u8 {
     1
 }
 
+/// Returns a shared parent and relative names when the two paths are siblings.
+///
+/// Running clang and the linker from the artifact directory with relative
+/// names keeps host paths out of debug maps and Mach-O load commands.
+fn relative_tool_dir<'a>(
+    input: &'a Path,
+    output: &'a Path,
+) -> Option<(&'a Path, &'a std::ffi::OsStr, &'a std::ffi::OsStr)> {
+    let directory = input.parent()?;
+    if output.parent()? != directory {
+        return None;
+    }
+    Some((directory, input.file_name()?, output.file_name()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2084,5 +2115,17 @@ mod tests {
                 0xcd, 0xef,
             ]
         );
+    }
+
+    #[test]
+    fn relative_tool_paths_require_a_shared_parent() {
+        let input = Path::new("/tmp/out/app.ll");
+        let output = Path::new("/tmp/out/app.o");
+        let (directory, input_name, output_name) =
+            relative_tool_dir(input, output).expect("siblings");
+        assert_eq!(directory, Path::new("/tmp/out"));
+        assert_eq!(input_name, "app.ll");
+        assert_eq!(output_name, "app.o");
+        assert!(relative_tool_dir(input, Path::new("/tmp/other/app.o")).is_none());
     }
 }
