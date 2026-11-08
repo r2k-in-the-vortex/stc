@@ -1378,4 +1378,23 @@ let ports: u16 = 80;
         );
         assert!(suite_targets("not-a-suite").is_none());
     }
+
+    #[test]
+    fn every_suite_has_targets() {
+        for suite in [
+            "ui",
+            "conformance",
+            "execution",
+            "projects",
+            "debug",
+            "cross-target",
+            "macos",
+        ] {
+            assert!(
+                suite_targets(suite).is_some_and(|targets| !targets.is_empty()),
+                "{suite}"
+            );
+        }
+        assert!(usage().contains("macos"));
+    }
 }

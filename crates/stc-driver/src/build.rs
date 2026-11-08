@@ -1853,6 +1853,18 @@ fn link_module(
         // wall-clock time. /Brepro turns it into a content-derived value.
         command.args(["-Xlinker", "/Brepro"]);
     }
+    if target_triple.contains("apple-darwin") {
+        // Mach-O records the output path as the install name and adds a
+        // linker-generated UUID. Both make identical builds in different
+        // directories differ, so pin the install name to the artifact's file
+        // name and omit the UUID. The module is loaded by path.
+        let install_name = output.file_name().map_or_else(
+            || "module".to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        command.arg(format!("-Wl,-install_name,@rpath/{install_name}"));
+        command.arg("-Wl,-no_uuid");
+    }
     run_tool(&mut command, log)
 }
 
@@ -1875,6 +1887,10 @@ fn link_exe(
     let target_triple = target.map_or_else(stc_codegen::host_triple, str::to_owned);
     if target_triple.contains("windows") {
         command.args(["-Xlinker", "/Brepro"]);
+    }
+    if target_triple.contains("apple-darwin") {
+        // Keep identical builds in different directories byte-identical.
+        command.arg("-Wl,-no_uuid");
     }
     command.args(["-o"]).arg(output);
     run_tool(&mut command, log)
