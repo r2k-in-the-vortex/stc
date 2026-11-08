@@ -131,8 +131,10 @@ class StatisticsTests(unittest.TestCase):
 
 class TimeoutTests(unittest.TestCase):
     def test_timeout_covers_slow_macos_sleep_granularity(self) -> None:
-        # 20,000 cycles at 1 ms is 20 s nominal; the macOS default loop was
-        # observed at about 4.5 ms/cycle, so the cap must exceed 90 s.
+        # 20,000 cycles at 1 ms is 20 s nominal. The real macOS baseline is
+        # about 5.3-9.6 ms/cycle (p50 5.9-8.2 ms), so 20,000 cycles can take
+        # about 193 s. The earlier 4.5 ms/cycle figure was the old 90 s timeout
+        # divided by the requested cycles, not a measurement.
         self.assertGreaterEqual(
             sched_compare.run_timeout_s(20_000, 1_000_000), 200.0
         )
@@ -334,6 +336,22 @@ class RunTests(unittest.TestCase):
                     launcher, 1_000_000, 10, "baseline", 1, out, 2
                 )
             self.assertIn("status 2", record["error"])
+
+    def test_timeout_does_not_report_a_cycle_time(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            launcher = self.launcher(root)
+            out = root / "out"
+            with mock.patch.object(
+                sched_compare.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(["rt-bench"], 90.0),
+            ):
+                record = sched_compare.run_once(
+                    launcher, 1_000_000, 20_000, "baseline", 1, out, 0
+                )
+            self.assertIn("timed out", record["error"])
+            self.assertIsNone(record["wall_cycle_ns"]["mean"])
 
 
 class CollectTests(unittest.TestCase):

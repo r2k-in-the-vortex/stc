@@ -364,10 +364,12 @@ def analyze_metrics(parsed: dict, warmup_cycles: int) -> dict:
 def run_timeout_s(cycles: int, cycle_time_ns: int) -> float:
     """Returns a generous wall-clock timeout for one launcher run.
 
-    The default loop sleeps with the platform's thread timer, and macOS can
-    round a 1 ms sleep up to several milliseconds. The timeout therefore uses
-    ten times the nominal duration plus a minute; that covers the observed
-    macOS granularity without hiding a genuinely hung launcher.
+    The macOS baseline was observed at 5.3-9.6 ms/cycle for a 1 ms request
+    (p50 5.9 ms on the Intel runner and 8.2 ms on the ARM64 runner) because
+    the default loop uses a relative ``thread::sleep``. At 20,000 cycles that
+    is about 193 s. The timeout therefore uses ten times the nominal duration
+    plus a minute: 260 s for 20,000 cycles at 1 ms covers the observed
+    baseline without hiding a genuinely hung launcher.
     """
     expected_s = cycles * cycle_time_ns / 1_000_000_000
     return max(120.0, expected_s * 10.0 + 60.0)
@@ -411,6 +413,13 @@ def run_once(
     except OSError as os_error:
         error = f"cannot run the launcher: {os_error}"
     wall_time_ns = time.perf_counter_ns() - started
+    # A timeout or launch failure has no cycle time. Dividing the timeout
+    # budget by the requested cycles would fabricate a value that looks like a
+    # measurement (the failed run 42520335592 reported exactly 4.500 ms/cycle
+    # that way); leave the mean null instead.
+    mean_cycle_ns = None
+    if return_code is not None and cycles:
+        mean_cycle_ns = wall_time_ns // cycles
 
     record = {
         "run": run_index,
@@ -429,7 +438,7 @@ def run_once(
         "summary": None,
         "metrics": None,
         "wall_cycle_ns": {
-            "mean": wall_time_ns // cycles if cycles else None,
+            "mean": mean_cycle_ns,
         },
         "error": error,
     }
