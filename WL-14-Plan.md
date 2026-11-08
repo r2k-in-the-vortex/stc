@@ -1,13 +1,13 @@
 # WL-14 working plan — macOS CI and Windows/macOS soft-real-time scheduling for tests
 
-Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 accepted 2026-11-08.**
+Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 accepted 2026-11-08; Phase 4 complete 2026-11-08, owner acceptance pending.**
 Branch: `WL-14`, created from `v3.0.0-planning` at `2388d1a`.
 
 Owner clarification 2026-11-08: cross-target object emission and runtime-side linking for
 constrained targets (future microcontroller targets; no full clang or `stc` compiler on the
 runtime; review the cold-download and online-change artifact flow) is **not WL-14 scope**. It is
 recorded as WL-19 in `FutureWishlist.md`.
-Date: 2026-11-07.
+Date: 2026-11-07; revised 2026-11-08.
 Profile: `stc-2013-oop-utf8-v1`.
 
 This is a temporary working file. It is updated at the end of every phase and deleted after the
@@ -467,7 +467,7 @@ host, OS, build form, metric, and sample, without adding a timing gate.
 | 1. macOS portability and CI | **Complete and accepted 2026-11-08** | `e5a6a99` | [42460413226](https://github.com/r2k-in-the-vortex/stc/actions/runs/42460413226) | Both macOS jobs, coverage, and the aggregate gate green. The Phase 1 report was deleted after acceptance. |
 | 2. Mach-O frame extraction | **Complete and accepted 2026-11-08** | `3a86b4e`, `e8bbcdc` | [42506252319](https://github.com/r2k-in-the-vortex/stc/actions/runs/42506252319) | Both macOS jobs, coverage, and the aggregate gate green, including the full `macos` suite through the debug/frame targets. The branch also carries `5477ec2`, the separate cross-platform E004 close fix outside WL-14 scope, included for the later merge. |
 | 3. Scheduling mode | **Complete and accepted 2026-11-08** | `9526b92`, `c4a5345`, `3733082`, `ce2d4bc` | [42516443734](https://github.com/r2k-in-the-vortex/stc/actions/runs/42516443734) | Both macOS jobs, coverage, the aggregate gate, and the Windows/Linux jobs green on the final acceptance run. Host tests cover Windows priority/MMCSS/sleep/Drop restore and macOS time-constraint/QoS fallback, monotonic sleeps, and Drop restore; `--rt-cpu`/`--rt-priority` reject on non-Linux hosts; the full-path Windows/macOS `run_cli` metrics test passes. Windows observed `sched:"mmcss"` with final priority 13; macOS observed `sched:"time_constraint"` with the QoS fallback covered by code/tests (not exercised on the runners). |
-| 4. Measurements | Not started | — | — | |
+| 4. Measurements | **Complete, owner acceptance pending** | `9e894fd`, `e4079bd`, `29338a3`, `e57731b` | [42521471115](https://github.com/r2k-in-the-vortex/stc/actions/runs/42521471115) | `sched_compare.py` and its test suite landed in `9e894fd`; the macOS timeout fix landed in `e4079bd`; `29338a3` hardened the reporting so a timeout leaves `wall_cycle_ns.mean` null; the dispatch-only workflow was registered on `main` at `e57731b` (PR #26). All three labels green: Windows 6m57s, macOS-15 16m15s, macOS-15-intel 17m42s. Artifacts: `sched-measure-windows-2025`, `sched-measure-macos-15`, `sched-measure-macos-15-intel`. Baseline wall-cycle p50 1.531 ms Windows, 8.156 ms macOS ARM64, 5.916 ms macOS Intel; `--rt` p50 1.001/1.000/1.016 ms. Both macOS runners accepted `time_constraint`; no QoS fallback observed. The earlier run 42520335592 is a harness timeout, not evidence: the old 90 s cap killed all five macOS baseline runs and the old reporting divided 90 s by 20,000 requested cycles (4.500 ms), which is not a measurement; `e4079bd` raised the cap to 260 s and `29338a3` nulls the cycle mean when a run does not complete. `missed_deadline` is 90,000/90,000 because the strict counter counts any positive wake lateness; it is not a hard-miss count. No threshold added. Normal CI run recorded below after dispatch. |
 | 5. Docs, manual check, PR | Not started | — | — | |
 
 ## 9. CI procedure

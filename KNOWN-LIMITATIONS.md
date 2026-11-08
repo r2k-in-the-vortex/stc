@@ -1,7 +1,7 @@
 # Known limitations — `stc` 2.0.0
 
 Profile: `stc-2013-oop-utf8-v1`  
-Date: 2026-10-29; revised 2026-11-04
+Date: 2026-10-29; revised 2026-11-08
 
 This list is part of the release contract. Each entry is either an explicit
 profile boundary or a tested limitation with a documented workaround.
@@ -157,6 +157,27 @@ guarantee. The applied facility is recorded in the metrics header's `sched` fiel
 | Applying a non-QoS scheduling policy makes the macOS kernel remove the thread's QoS policy, and unprivileged userspace cannot re-create it | In the time-constraint path, `Drop` removes the policy and restores the standard thread policy; the captured QoS class is gone. The QoS fallback path restores the captured class because the failed set leaves the QoS policy intact. Do not depend on the QoS class after a time-constraint run |
 | Windows/macOS scheduling and timer resolution depend on the host and runner load | Use the metrics as host-specific evidence; no timing threshold or CI timing gate is defined |
 | `--rt-priority` and `--rt-cpu` are Linux-only and are rejected on Windows and macOS | Use the platform defaults; the launcher and `stc run --help` name the Linux-only options |
+
+### Windows and macOS scheduling measurement (WL-14 Phase 4)
+
+Added 2026-11-08. The campaign ran on GitHub-hosted `windows-2025`, `macos-15`, and
+`macos-15-intel` runners; the results and links are in
+[`specification/Verification/Performance.md`](specification/Verification/Performance.md). It is
+informational, defines no threshold, and is not a CI gate (D-193, D-249).
+
+| Limitation | Status / workaround |
+| --- | --- |
+| Baseline cannot emit per-cycle metrics because `--rt-metrics` is opt-in with `--rt` (D-249) | Compare baseline by wall-clock cycle time; use `--rt` for execution and wake-lateness percentiles |
+| The default loop's relative `thread::sleep` is coalesced and throttled on macOS: per-run means were 5.3–9.6 ms/cycle on the ARM64 runner and 5.5–5.9 ms/cycle on the Intel runner for a 1 ms request | Treat baseline wall-cycle figures as the platform sleep path, not execution cost; the harness timeout is `max(120 s, 10 × nominal + 60 s)` (260 s at 20,000 × 1 ms) |
+| The failed run 42520335592 is a harness timeout, not a baseline measurement: the old 90 s cap killed all five macOS baseline runs, and the old reporting divided 90 s by 20,000 requested cycles, producing exactly 4.500 ms/cycle | Do not use 42520335592 as evidence. The fix in `e4079bd` raised the cap to 260 s and leaves `wall_cycle_ns.mean` null when a run does not complete |
+| The Windows high-resolution timer floor is around 0.5 ms; this campaign measured only the 1 ms target | Treat the Windows 1 ms figures as comparative, not as a bound; use a 10 ms target or a host-specific measurement for finer periods |
+| Windows baseline p50 was 1.531 ms/cycle and `--rt` p50 was 1.001 ms; macOS `--rt` p50 was 1.000 ms (ARM64) and 1.016 ms (Intel) | These are shared-VM samples, not bounds; record the host block and image |
+| `--rt` execution p50 was 13.1 µs (Windows) and 27–28 µs (macOS); wake-lateness p50 was 95–350 µs and p99 was 218–717 µs | Soft scheduling on shared VMs; use the percentiles with the host label. No hard-real-time claim |
+| macOS Intel recorded a 291.868 ms maximum wake-lateness sample and 2,500 skipped periods over 90,000 measured cycles; Windows skipped 19 and macOS ARM64 skipped 20 | Isolated runner stalls are retained in the raw JSONL and are not bounds; p99.9 is 287 µs on Intel |
+| `missed_deadline` was 90,000 of 90,000 on every host because it counts any positive wake lateness or completion after `deadline + period` | It is a strict counter, not a hard-miss count; use the execution and wake-lateness percentiles and the skipped-period count |
+| Both macOS runners accepted `THREAD_TIME_CONSTRAINT_POLICY` (`sched:"time_constraint"`); no QoS fallback was observed | If a future runner rejects it, the launcher logs the exact error and reports `sched:"qos"`; record both. The fallback is covered by the host tests |
+| Shared GitHub-hosted runners vary by CPU model and load; the same `windows-2025` label reported EPYC 7763 in an earlier run and EPYC 9V74 in this campaign | Record the host block and image; do not compare across runs, labels, or images, and do not derive a threshold |
+| No timing threshold, pass/fail budget, or CI gate is defined | The campaign is evidence only; correctness gates remain the CI contract |
 
 ## 8. EtherCAT I/O (WL-5.2, v2.0.0)
 

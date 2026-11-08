@@ -176,6 +176,106 @@ floor. An untuned R1 p50 of about 2.6 ms at a 1 ms target and osnoise maxima of 
 the deferred tuned-profile trigger in [RT-Host.md](RT-Host.md) §6; the tuned profile was not
 executed in v2.0.0.
 
+## Windows and macOS scheduling comparison (WL-14 Phase 4)
+
+Measured 2026-11-08 by the dispatch-only `sched-measure` workflow
+([run 42521471115](https://github.com/r2k-in-the-vortex/stc/actions/runs/42521471115)) at
+`e4079bd` on `WL-14`; the workflow definition was registered on `main` at `e57731b` (PR #26).
+This is an informational comparison of the default run loop with `stc run --rt`, not a
+hard-real-time guarantee and not a CI gate (D-193, D-249). No timing threshold is defined.
+
+### Environment and sample
+
+| Runner | Host / CPU | OS / image | Launcher build ID | Launcher SHA-256 |
+| --- | --- | --- | --- | --- |
+| `windows-2025` | `runnervmm7ud1`; AMD EPYC 9V74 80-Core, 4 vCPU | Windows Server 2025, 10.0.26100; `win25-vs2026` 20261103.298.1 | `0xe97997a5cb8d59c2850a1b543f726e59` | `b06fe9a2f66ea3f572986b989e7deb2bee3590e7e8b95e05b0094a5cb61a57b0` |
+| `macos-15` (ARM64) | Apple M1 (Virtual), 3 vCPU | macOS 15.8.2 (24H232); `macos15` 20261104.0514.1 | `0x46a06f4fc859b522cc0df7cf33d418d8` | `eb4b91f1bff3b8ab82415baa76023433c72acb568de9358ae02ce7673c9f8979` |
+| `macos-15-intel` | Intel Core i7-8700B at 3.20 GHz, 4 vCPU | macOS 15.7.9 (24G830); `macos15` 20260824.0482.1 | `0xe2cc0ad2c93abbcfd7e8cbf0c40a37e4` | `8f402b422a553d70c38da5282f0ba0a306767b44ed44cdf54585477f0c0101de` |
+
+Release build form; 20,000 cycles per run at a 1 ms target; five runs per mode. The first 2,000
+cycles of every `--rt` run are discarded, leaving 18,000 measured cycles per run (90,000 per
+host). Baseline runs do not emit `stc-rt-metrics/1` because the stream is opt-in with `--rt`
+(D-249), so baseline is compared by wall-clock cycle time only; the `--rt` runs supply the
+execution and wake-lateness percentiles.
+
+### Wall-clock cycle time, baseline versus `--rt`
+
+Values are milliseconds; each baseline row aggregates the five per-run means.
+
+| Host | Mode | min | p50 | p90 | p99 | p99.9 | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `windows-2025` | baseline | 1.530 | 1.531 | 1.533 | 1.533 | 1.533 | 1.533 |
+| `windows-2025` | `--rt` | 1.001 | 1.001 | 1.001 | 1.001 | 1.001 | 1.001 |
+| `macos-15` (ARM64) | baseline | 5.341 | 8.156 | 9.647 | 9.647 | 9.647 | 9.647 |
+| `macos-15` (ARM64) | `--rt` | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| `macos-15-intel` | baseline | 5.493 | 5.916 | 5.946 | 5.946 | 5.946 | 5.946 |
+| `macos-15-intel` | `--rt` | 1.008 | 1.016 | 1.059 | 1.059 | 1.059 | 1.059 |
+
+The baseline column is the platform sleep path, not generated-code execution. The macOS default
+loop uses a relative `thread::sleep`, which the host coalesces and throttles: the per-run means
+were 5.341, 6.672, 8.156, 9.585, and 9.647 ms on the ARM64 runner and 5.493, 5.904, 5.916, 5.946,
+and 5.925 ms on the Intel runner. The ARM64 drift from 5.3 to 9.6 ms is part of that behavior, not
+a hang. The `--rt` path uses absolute deadline waits and holds the wall-cycle p50 at
+1.000–1.016 ms, with a maximum of 1.059 ms.
+
+The earlier dispatch
+[42520335592](https://github.com/r2k-in-the-vortex/stc/actions/runs/42520335592) is **not**
+campaign evidence. At `9e894fd` the per-run cap was 90 s, and all five macOS baseline runs were
+killed at that cap (each recorded about 90,003–90,012 ms wall time and
+`launcher timed out after 90.0s`). The old reporting then divided the 90 s timeout budget by the
+20,000 requested cycles and printed exactly 4.500 ms/cycle on both macOS architectures; that
+value was the timeout budget, not a measured cycle time. `e4079bd` raised the cap to 260 s for
+20,000 cycles at 1 ms and now leaves `wall_cycle_ns.mean` null when a run does not complete.
+
+### `--rt` execution and wake lateness
+
+Values are microseconds over the 90,000 measured cycles per host.
+
+| Host | Metric | min | p50 | p90 | p99 | p99.9 | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `windows-2025` | execution | 0.5 | 13.1 | 17.9 | 25.9 | 40.9 | 184.4 |
+| `windows-2025` | wake lateness | 13.2 | 350.5 | 558.3 | 717.3 | 825.3 | 1,095.3 |
+| `macos-15` (ARM64) | execution | 1.0 | 27.0 | 108.0 | 118.0 | 155.0 | 1,776.0 |
+| `macos-15` (ARM64) | wake lateness | 6.0 | 312.0 | 391.0 | 461.0 | 516.0 | 1,846.0 |
+| `macos-15-intel` | execution | 4.0 | 28.0 | 40.0 | 57.0 | 100.0 | 1,194.0 |
+| `macos-15-intel` | wake lateness | 25.0 | 95.0 | 185.0 | 218.0 | 287.0 | 291,868.0 |
+
+The Intel wake-lateness maximum is 291.868 ms; it is one isolated sample in 90,000, retained in
+the raw JSONL. The p99.9 is 287 µs. These are soft-scheduling samples from shared virtual
+machines, not bounds.
+
+### Counters and scheduling facility
+
+| Host | Measured cycles | Missed deadlines | Skipped periods | Dropped records | `sched` |
+| --- | --- | --- | --- | --- | --- |
+| `windows-2025` | 90,000 | 90,000 | 19 | 0 | `mmcss` |
+| `macos-15` (ARM64) | 90,000 | 90,000 | 20 | 0 | `time_constraint` |
+| `macos-15-intel` | 90,000 | 90,000 | 2,500 | 0 | `time_constraint` |
+
+`missed_deadline` is 90,000 of 90,000 on every host because Phase 3 defines it as any positive
+wake lateness or any completion after `deadline + period`. It is a strict counter, not a
+hard-miss count; the execution and wake-lateness percentiles and the skipped-period count are the
+primary evidence. On Windows the two largest per-run `max_scan_overrun_ns` values were 110.7 and
+116.9 µs while the wake-lateness p50 was about 350 µs. On the Intel runner, 2,500 periods were
+skipped and one wake sample reached 291.868 ms.
+
+Both macOS runners accepted `THREAD_TIME_CONSTRAINT_POLICY`; all ten macOS `--rt` runs reported
+`sched:"time_constraint"`. No rejection error and no QoS fallback were observed in this campaign.
+The fallback path remains covered by the host tests and is recorded in
+[KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md).
+
+The runners are shared GitHub-hosted VMs and the label does not pin a CPU model: the earlier
+`windows-2025` run reported an AMD EPYC 7763, while this campaign reported an EPYC 9V74. The
+macOS ARM64 baseline also varied by run as described above. Record the host block and image for
+every campaign; do not compare figures across runs, labels, or images, and do not derive a
+threshold from them.
+
+The artifacts are `sched-measure-windows-2025`, `sched-measure-macos-15`, and
+`sched-measure-macos-15-intel`; each contains `baseline/summary.json`, `baseline/summary.md`,
+`rt/summary.json`, `rt/summary.md`, and the raw `rt/rt/run-01.jsonl` to `run-05.jsonl` streams.
+The portable procedure and checksum steps are in
+[RT-Runbook.md](RT-Runbook.md#10-windows-and-macos-scheduling-comparison-wl-14-phase-4).
+
 ## Coverage instrumentation overhead (WL-10)
 
 Measured on the Windows development host with the `examples/coverage` suite (three tests) as a
@@ -210,3 +310,5 @@ overhead budget, threshold, or CI gate is defined.
   checkpoint counts without recording the difference.
 - WL-4 PREEMPT_RT figures are informational and host-specific; they are not a CI gate and do
   not establish a hard real-time guarantee (D-193).
+- WL-14 Windows/macOS figures are informational and host-specific; they define no threshold, are
+  not a CI gate, and do not establish a hard real-time guarantee (D-193, D-249).

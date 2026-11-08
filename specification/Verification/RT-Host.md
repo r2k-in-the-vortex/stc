@@ -424,7 +424,22 @@ the procedure for other hosts, is [RT-Runbook.md](RT-Runbook.md).
 5. Collect the raw results, gzip the JSONL streams if not already gzipped, compute SHA256, and
    keep the archive outside the repository.
 
-## 9. References
+## 9. Windows and macOS scheduling comparison (WL-14)
+
+The WL-14 Phase 4 campaign measured the default run loop against `stc run --rt` on
+`windows-2025`, `macos-15` (ARM64), and `macos-15-intel` (x86-64). It is a separate,
+informational campaign: it does not change the PREEMPT_RT results above, does not establish a
+hard-real-time or safety claim on Windows or macOS, and defines no timing threshold.
+
+The host table, sample, baseline-versus-`--rt` wall-cycle comparison, execution and wake-lateness
+percentiles, strict-counter note, and runner-noise note are in
+[Performance.md](Performance.md#windows-and-macos-scheduling-comparison-wl-14-phase-4). The
+portable procedure, workflow dispatch, and artifact checksum steps are in
+[RT-Runbook.md](RT-Runbook.md#10-windows-and-macos-scheduling-comparison-wl-14-phase-4).
+The measured limits and the no-threshold statement are in
+[KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md#windows-and-macos-scheduling-measurement-wl-14-phase-4).
+
+## 10. References
 
 - [RT-Runbook.md](RT-Runbook.md) — the portable runbook, reference-host baseline, and other-host
   procedure.
